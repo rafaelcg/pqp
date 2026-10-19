@@ -15,6 +15,13 @@ export const APP_JSON_MAX_DEPTH = 32;
 /** Longest data URL of a participant avatar, in characters. */
 export const APP_AVATAR_MAX_CHARS = 65536;
 
+/**
+ * Most avatar characters one participant list may carry in total (4 MiB). One
+ * avatar may be 65536, but 264 of them would be a 16 MiB message; the host
+ * downsizes avatars until the list fits.
+ */
+export const APP_PARTICIPANTS_AVATAR_BUDGET_CHARS = 4 * 1024 * 1024;
+
 /** Longest display name that reaches an app, in characters. */
 export const APP_DISPLAY_NAME_MAX_CHARS = 64;
 

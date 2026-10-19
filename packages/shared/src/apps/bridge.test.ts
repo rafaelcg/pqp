@@ -11,6 +11,7 @@ import { APP_END_REASONS, jsonProblem } from "./common.js";
 import {
   APP_AVATAR_MAX_CHARS,
   APP_MAX_PARTICIPANTS,
+  APP_PARTICIPANTS_AVATAR_BUDGET_CHARS,
 } from "./limits.js";
 import {
   APP_EVENT_MAX_BYTES,
@@ -283,16 +284,18 @@ const theme = { "--pqp-bg": "#101014", "--pqp-fg": "#fff" };
 
 /** One minimal valid example of every host to app message. */
 const hostMessages: Record<string, unknown> = {
-  "response ok (state.get)": { id: "r1", ok: true, result: { rev: 2, value: { a: 1 } } },
+  "response ok (state.get)": { id: "r1", ok: true, type: "state.get", result: { rev: 2, value: { a: 1 } } },
   "response ok (participants.get)": {
     id: "r1",
     ok: true,
+    type: "participants.get",
     result: { participants: [participant()] },
   },
-  "response ok (events.send)": { id: "r1", ok: true, result: null },
+  "response ok (events.send)": { id: "r1", ok: true, type: "events.send", result: null },
   "response ok (assets.get)": {
     id: "r1",
     ok: true,
+    type: "assets.get",
     result: { name: "core.wasm", bytes: new ArrayBuffer(4) },
   },
   "response error": { id: "r1", ok: false, error: "not-host" },
@@ -336,17 +339,65 @@ describe("host to app messages", () => {
     expect(Object.keys(results).sort()).toEqual(Object.keys(requests).sort());
     for (const [type, result] of Object.entries(results)) {
       expect(bridgeResultSchemas[type as keyof typeof bridgeResultSchemas].safeParse(result).success, type).toBe(true);
-      expect(bridgeHostMessageSchema.safeParse({ id: "r", ok: true, result }).success, type).toBe(true);
+      expect(bridgeHostMessageSchema.safeParse({ id: "r", ok: true, type, result }).success, type).toBe(true);
     }
+  });
+
+  it("never reads one call's result as another's, even when a newer host adds a field", () => {
+    const parsed = bridgeHostMessageSchema.parse({
+      id: "r",
+      ok: true,
+      type: "state.get",
+      result: { rev: 3, value: { n: 1 }, participants: [] },
+    });
+    expect(parsed).toMatchObject({ type: "state.get", result: { rev: 3, value: { n: 1 } } });
+    // a result that does not fit the call it claims to answer is refused
+    expect(
+      bridgeHostMessageSchema.safeParse({
+        id: "r",
+        ok: true,
+        type: "state.get",
+        result: { participants: [] },
+      }).success,
+    ).toBe(false);
+    // an ok response without the request type is refused
+    expect(
+      bridgeHostMessageSchema.safeParse({ id: "r", ok: true, result: { rev: 1, value: 1 } })
+        .success,
+    ).toBe(false);
+  });
+
+  it("bounds the avatars of one participant list in total", () => {
+    const prefix = "data:image/png;base64,";
+    const big = prefix + "A".repeat(APP_AVATAR_MAX_CHARS - prefix.length);
+    const list = (count: number) =>
+      Array.from({ length: count }, (_, i) =>
+        participant({ seatId: `seat${String(i).padStart(12, "0")}`, avatar: big }),
+      );
+    const budgetFits = Math.floor(APP_PARTICIPANTS_AVATAR_BUDGET_CHARS / APP_AVATAR_MAX_CHARS);
+    expect(
+      bridgeHostMessageSchema.safeParse({ type: "participants", participants: list(budgetFits) })
+        .success,
+    ).toBe(true);
+    expect(
+      bridgeHostMessageSchema.safeParse({
+        type: "participants",
+        participants: list(budgetFits + 1),
+      }).success,
+    ).toBe(false);
+    expect(
+      bridgeResultSchemas["participants.get"].safeParse({ participants: list(budgetFits + 1) })
+        .success,
+    ).toBe(false);
   });
 
   it("does not take an object that merely claims to be an ArrayBuffer", () => {
     const spoof = { [Symbol.toStringTag]: "ArrayBuffer" };
     expect(
-      bridgeHostMessageSchema.safeParse({ id: "r", ok: true, result: { bytes: spoof } }).success,
+      bridgeHostMessageSchema.safeParse({ id: "r", ok: true, type: "files.pickLocal", result: { bytes: spoof } }).success,
     ).toBe(false);
     expect(
-      bridgeHostMessageSchema.safeParse({ id: "r", ok: true, result: { bytes: new Uint8Array(2) } })
+      bridgeHostMessageSchema.safeParse({ id: "r", ok: true, type: "files.pickLocal", result: { bytes: new Uint8Array(2) } })
         .success,
     ).toBe(false);
   });
@@ -404,9 +455,15 @@ describe("host to app messages", () => {
     const state = bridgeHostMessageSchema.parse({
       id: "r",
       ok: true,
+      type: "state.get",
       result: { rev: 1, value: { a: 1 }, futureField: true },
     });
-    expect(state).toEqual({ id: "r", ok: true, result: { rev: 1, value: { a: 1 } } });
+    expect(state).toEqual({
+      id: "r",
+      ok: true,
+      type: "state.get",
+      result: { rev: 1, value: { a: 1 } },
+    });
     const hello = bridgeHostMessageSchema.parse({
       ...(hostMessages.hello as object),
       app: { id: "eco", version: "1.0.0", serverId: "s" },

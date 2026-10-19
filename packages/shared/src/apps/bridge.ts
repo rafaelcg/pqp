@@ -16,6 +16,7 @@ import {
   APP_AVATAR_MAX_CHARS,
   APP_DISPLAY_NAME_MAX_CHARS,
   APP_MAX_PARTICIPANTS,
+  APP_PARTICIPANTS_AVATAR_BUDGET_CHARS,
   APP_THEME_MAX_TOKENS,
   APP_UI_MAX_HEIGHT,
   APP_UI_MIN_HEIGHT,
@@ -162,7 +163,13 @@ export type BridgeParticipant = z.infer<typeof bridgeParticipantSchema>;
 
 export const bridgeParticipantListSchema = z
   .array(bridgeParticipantSchema)
-  .max(APP_MAX_PARTICIPANTS);
+  .max(APP_MAX_PARTICIPANTS)
+  .refine(
+    (list) =>
+      list.reduce((total, person) => total + (person.avatar?.length ?? 0), 0) <=
+      APP_PARTICIPANTS_AVATAR_BUDGET_CHARS,
+    { message: `avatars of one list add up to at most ${APP_PARTICIPANTS_AVATAR_BUDGET_CHARS} characters` },
+  );
 
 /** CSS custom property names to values, applied by the app on its own root. */
 export const bridgeThemeSchema = z
@@ -235,26 +242,36 @@ export const bridgeResultSchemas = {
   "session.end": z.null(),
 } as const satisfies Record<BridgeRequestType, z.ZodTypeAny>;
 
-const bridgeResultSchema = z.union([
-  bridgeResultSchemas["participants.get"],
-  bridgeResultSchemas["state.get"],
-  bridgeResultSchemas["state.patch"],
-  bridgeResultSchemas["assets.get"],
-  bridgeResultSchemas["files.pickLocal"],
-  bridgeResultSchemas["ui.resize"],
-  bridgeResultSchemas["ui.fullscreen"],
-  bridgeResultSchemas["share.request"],
-  bridgeResultSchemas["events.send"],
-  bridgeResultSchemas["session.end"],
-]);
+/** One successful response schema per request type. */
+function okResponse<T extends BridgeRequestType>(type: T) {
+  return z
+    .object({
+      id: bridgeRequestIdSchema,
+      ok: z.literal(true),
+      /** The request type this answers, so the result is never guessed from its shape. */
+      type: z.literal(type),
+      result: bridgeResultSchemas[type],
+    })
+    .strip();
+}
 
-export const bridgeResponseOkSchema = z
-  .object({
-    id: bridgeRequestIdSchema,
-    ok: z.literal(true),
-    result: bridgeResultSchema,
-  })
-  .strip();
+/**
+ * A successful response echoes the request `type`, so it is told apart by that
+ * key and a newer host that adds a field to one result can never make it parse
+ * as another call's result.
+ */
+export const bridgeResponseOkSchema = z.discriminatedUnion("type", [
+  okResponse("participants.get"),
+  okResponse("state.get"),
+  okResponse("state.patch"),
+  okResponse("events.send"),
+  okResponse("assets.get"),
+  okResponse("files.pickLocal"),
+  okResponse("ui.resize"),
+  okResponse("ui.fullscreen"),
+  okResponse("share.request"),
+  okResponse("session.end"),
+]);
 export const bridgeResponseErrorSchema = z
   .object({
     id: bridgeRequestIdSchema,
