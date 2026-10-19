@@ -134,6 +134,7 @@ import {
 } from "@/lib/utils";
 import { MessageListSkeleton } from "@/components/ui/skeleton";
 import { NudgeLine, NudgeNotice } from "@/components/chat/nudge-line";
+import { AppSessionTimelineRow } from "@/components/apps/app-session-timeline-row";
 import type {
   AuthorGoneCheck,
   MissingAuthor,
@@ -233,6 +234,9 @@ export interface MessageAuthorInfo {
    * that quietly drops a field.
    */
   customStatus?: string | null;
+  /** For the people on an app's card in the log, which names and draws them. */
+  displayName?: string | null;
+  avatarUrl?: string | null;
 }
 
 export interface MessageRoleColor {
@@ -1995,6 +1999,23 @@ export const MessageList = memo(function MessageList({
             // just sent, in the seconds after you sent it.
             const elementKey = row.message.nonce ?? rowId;
             const isOpening = forumOpeningId !== null && rowId === forumOpeningId;
+            if (row.message.systemKind === "app_session") {
+              return (
+                <Fragment key={elementKey}>
+                  {row.dayLabel ? <DaySeparator label={row.dayLabel} /> : null}
+                  <AppSessionTimelineRow
+                    messageId={rowId}
+                    channelId={row.message.channelId}
+                    serverId={serverId ?? null}
+                    createdAt={row.message.createdAt}
+                    authorName={row.message.authorName}
+                    viewerId={currentUserId}
+                    authors={authors}
+                    registerRow={registerRow}
+                  />
+                </Fragment>
+              );
+            }
             if (row.message.systemKind === "nudge") {
               const mine = row.message.authorId === currentUserId;
               const name = mine
