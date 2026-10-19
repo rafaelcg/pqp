@@ -35,6 +35,8 @@ const { ProfileSection, handleFromInput, usernameFromInput } = await import(
 );
 const { AVATAR_PRESETS } = await import("@/components/user/avatar-picker");
 const { TooltipProvider } = await import("@/components/ui/tooltip");
+const { frameAndSave, stubCropStepBrowser } = await import("@/test/crop-step");
+stubCropStepBrowser();
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
   true;
@@ -163,6 +165,8 @@ describe("Perfil uploads and focus", () => {
       act(() => upload.focus());
       const input = row(id).querySelector<HTMLInputElement>('input[type="file"]')!;
       await act(async () => pick(input));
+      // The crop step opens on top; Save closes it and hands focus back.
+      await frameAndSave();
       expect(upload.disabled).toBe(false);
       expect(upload.getAttribute("aria-disabled")).toBe("true");
       expect(document.activeElement).toBe(upload);

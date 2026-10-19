@@ -17,10 +17,10 @@ import { supportLinks, type SupportLinks } from "@/lib/support-links";
  * product does not change for anyone who gives. That is said on the page in
  * plain words because a donation page that hints at benefits is a store, and a
  * store has obligations (delivery, consumer law, receipts) this project is not
- * set up to carry. The copy names the real number, about US$350 a month (the
- * 2026-09-28 infra review: mostly the Vultr boxes for the API, the database,
- * the SFU and the egress), so the ask is sized to the truth rather than to what a reader might
- * fear.
+ * set up to carry. The copy says what the money pays for (the API, the
+ * database, the voice relays, the storage) but never how much it costs: the
+ * hosting bill is not published anywhere on the site, and the test beside this
+ * file keeps a figure from creeping back in.
  *
  * Both links come from `lib/support-links.ts`, which is empty on a self-hosted
  * build; `ApoieRoute` turns that into a redirect so nobody else's copy of the

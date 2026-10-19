@@ -530,6 +530,14 @@ private object Lucide {
         "M7 11h2",
         "M13 11h4",
     )
+    val audioLines by lucide(
+        "M2 10v3",
+        "M6 6v11",
+        "M10 3v18",
+        "M14 8v7",
+        "M18 5v13",
+        "M22 10v3",
+    )
     val type by lucide(
         "M12 4v16",
         "M4 7V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2",
@@ -725,6 +733,7 @@ object PqpIcons {
     val AddText get() = Lucide.type
     val Describe get() = Lucide.messageSquareText
     val Captions get() = Lucide.captions
+    val Soundboard get() = Lucide.audioLines
     val AddPhoto get() = Lucide.imagePlus
     val Stickers get() = Lucide.sticker
     val Draw get() = Lucide.brush

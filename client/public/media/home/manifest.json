@@ -1,0 +1,488 @@
+{
+  "generatedBy": "client/e2e/home-reels-record.spec.ts",
+  "recordedAt": "2026-10-17",
+  "note": "Real pqp app, dev-bypass accounts, pt-BR, dark theme, an evening clock. Clips are seamless loops; the .webp beside each clip is its first frame.",
+  "clips": [
+    {
+      "name": "appearance",
+      "description": "Settings, Apar\u00eancia e idioma: light then dark mode, the Lareira and Harmonia visuals, purple and pink accents, all applied live, then back to Cl\u00e1ssico.",
+      "appearance.mp4": {
+        "width": 1920,
+        "height": 1200,
+        "duration": 8.47,
+        "bytes": 543092
+      },
+      "appearance.webm": {
+        "width": 1920,
+        "height": 1200,
+        "duration": 8.47,
+        "bytes": 379298
+      },
+      "appearance-960.mp4": {
+        "width": 960,
+        "height": 600,
+        "duration": 8.47,
+        "bytes": 242858
+      },
+      "appearance-960.webm": {
+        "width": 960,
+        "height": 600,
+        "duration": 8.47,
+        "bytes": 168799
+      },
+      "appearance.webp": {
+        "width": 1920,
+        "height": 1200,
+        "bytes": 44178
+      },
+      "appearance-960.webp": {
+        "width": 960,
+        "height": 600,
+        "bytes": 18890
+      }
+    },
+    {
+      "name": "call-join",
+      "description": "Hero loop: in the voice channel Lobby, Bia, Caio, Nico, Duda and Leo drop into the call one by one and their speaking rings light up.",
+      "call-join.mp4": {
+        "width": 1920,
+        "height": 1200,
+        "duration": 7.97,
+        "bytes": 211770
+      },
+      "call-join.webm": {
+        "width": 1920,
+        "height": 1200,
+        "duration": 7.97,
+        "bytes": 248414
+      },
+      "call-join-960.mp4": {
+        "width": 960,
+        "height": 600,
+        "duration": 7.97,
+        "bytes": 86580
+      },
+      "call-join-960.webm": {
+        "width": 960,
+        "height": 600,
+        "duration": 7.97,
+        "bytes": 106630
+      },
+      "call-join.webp": {
+        "width": 1920,
+        "height": 1200,
+        "bytes": 43164
+      },
+      "call-join-960.webp": {
+        "width": 960,
+        "height": 600,
+        "bytes": 18700
+      }
+    },
+    {
+      "name": "chat",
+      "description": "#geral: messages arrive from the crew, a reply, \ud83d\ude4c reactions count up, Bia's poll gets votes (Zeca votes 20h) and Leo rolls 1d20 for initiative.",
+      "chat.mp4": {
+        "width": 1920,
+        "height": 1200,
+        "duration": 9.57,
+        "bytes": 372897
+      },
+      "chat.webm": {
+        "width": 1920,
+        "height": 1200,
+        "duration": 9.57,
+        "bytes": 398752
+      },
+      "chat-960.mp4": {
+        "width": 960,
+        "height": 600,
+        "duration": 9.57,
+        "bytes": 156824
+      },
+      "chat-960.webm": {
+        "width": 960,
+        "height": 600,
+        "duration": 9.57,
+        "bytes": 173155
+      },
+      "chat.webp": {
+        "width": 1920,
+        "height": 1200,
+        "bytes": 55144
+      },
+      "chat-960.webp": {
+        "width": 960,
+        "height": 600,
+        "bytes": 23536
+      }
+    },
+    {
+      "name": "profile",
+      "description": "Zeca's public profile page (/@zeca), scrolling gently down to the approved depoimentos and back.",
+      "profile.mp4": {
+        "width": 1920,
+        "height": 1200,
+        "duration": 8.73,
+        "bytes": 699920
+      },
+      "profile.webm": {
+        "width": 1920,
+        "height": 1200,
+        "duration": 8.73,
+        "bytes": 351132
+      },
+      "profile-960.mp4": {
+        "width": 960,
+        "height": 600,
+        "duration": 8.73,
+        "bytes": 253491
+      },
+      "profile-960.webm": {
+        "width": 960,
+        "height": 600,
+        "duration": 8.73,
+        "bytes": 230038
+      },
+      "profile.webp": {
+        "width": 1920,
+        "height": 1200,
+        "bytes": 37438
+      },
+      "profile-960.webp": {
+        "width": 960,
+        "height": 600,
+        "bytes": 15828
+      }
+    },
+    {
+      "name": "profile-phone",
+      "description": "Zeca's public profile page (/@zeca) as a phone draws it (390 wide), the avatar and the first depoimento at rest, scrolling down to both depoimentos and back.",
+      "profile-phone.mp4": {
+        "width": 960,
+        "height": 1422,
+        "duration": 8.97,
+        "bytes": 427429
+      },
+      "profile-phone.webm": {
+        "width": 960,
+        "height": 1422,
+        "duration": 8.97,
+        "bytes": 269207
+      },
+      "profile-phone.webp": {
+        "width": 960,
+        "height": 1422,
+        "bytes": 36024
+      }
+    },
+    {
+      "name": "raise-hand",
+      "description": "In a call with a screen share on the stage, Caio then Nico raise their hands; the 'Fila pra falar' card lists Caio first, Nico second.",
+      "raise-hand.mp4": {
+        "width": 1920,
+        "height": 1200,
+        "duration": 5.7,
+        "bytes": 230389
+      },
+      "raise-hand.webm": {
+        "width": 1920,
+        "height": 1200,
+        "duration": 5.7,
+        "bytes": 297195
+      },
+      "raise-hand-960.mp4": {
+        "width": 960,
+        "height": 600,
+        "duration": 5.7,
+        "bytes": 78370
+      },
+      "raise-hand-960.webm": {
+        "width": 960,
+        "height": 600,
+        "duration": 5.7,
+        "bytes": 103591
+      },
+      "raise-hand.webp": {
+        "width": 1920,
+        "height": 1200,
+        "bytes": 55740
+      },
+      "raise-hand-960.webp": {
+        "width": 960,
+        "height": 600,
+        "bytes": 23348
+      }
+    },
+    {
+      "name": "share",
+      "description": "Bia starts a screen share in the voice channel sessao-de-sabado: the painted rooftop at dusk fills the stage, with the people in the call and the call chat below it.",
+      "share.mp4": {
+        "width": 1920,
+        "height": 1200,
+        "duration": 8.93,
+        "bytes": 1788292
+      },
+      "share.webm": {
+        "width": 1920,
+        "height": 1200,
+        "duration": 8.93,
+        "bytes": 1238006
+      },
+      "share-960.mp4": {
+        "width": 960,
+        "height": 600,
+        "duration": 8.93,
+        "bytes": 677350
+      },
+      "share-960.webm": {
+        "width": 960,
+        "height": 600,
+        "duration": 8.93,
+        "bytes": 524852
+      },
+      "share.webp": {
+        "width": 1920,
+        "height": 1200,
+        "bytes": 55952
+      },
+      "share-960.webp": {
+        "width": 960,
+        "height": 600,
+        "bytes": 23712
+      }
+    }
+  ],
+  "stills": [
+    {
+      "file": "still-appearance-1440.webp",
+      "width": 1440,
+      "height": 900,
+      "bytes": 29182,
+      "description": "Settings, Apar\u00eancia e idioma: the Harmonia visual with a pink accent, applied live to the whole app. Smaller copy, 1440 wide."
+    },
+    {
+      "file": "still-appearance-960.webp",
+      "width": 960,
+      "height": 600,
+      "bytes": 16640,
+      "description": "Settings, Apar\u00eancia e idioma: the Harmonia visual with a pink accent, applied live to the whole app. Smaller copy, 960 wide."
+    },
+    {
+      "file": "still-appearance.webp",
+      "width": 2880,
+      "height": 1800,
+      "bytes": 79912,
+      "description": "Settings, Apar\u00eancia e idioma: the Harmonia visual with a pink accent, applied live to the whole app."
+    },
+    {
+      "file": "still-call-join-1440.webp",
+      "width": 1440,
+      "height": 900,
+      "bytes": 34676,
+      "description": "Voice channel Lobby in A Mesa with six people in the call, speaking rings lit, Lobby chat in the middle. Smaller copy, 1440 wide."
+    },
+    {
+      "file": "still-call-join-960.webp",
+      "width": 960,
+      "height": 600,
+      "bytes": 19338,
+      "description": "Voice channel Lobby in A Mesa with six people in the call, speaking rings lit, Lobby chat in the middle. Smaller copy, 960 wide."
+    },
+    {
+      "file": "still-call-join.webp",
+      "width": 2880,
+      "height": 1800,
+      "bytes": 102108,
+      "description": "Voice channel Lobby in A Mesa with six people in the call, speaking rings lit, Lobby chat in the middle."
+    },
+    {
+      "file": "still-chat-1440.webp",
+      "width": 1440,
+      "height": 900,
+      "bytes": 37704,
+      "description": "#geral in A Mesa: a reply, \ud83d\ude4c reactions, a poll with votes for the Saturday session and a 1d20 initiative roll. Smaller copy, 1440 wide."
+    },
+    {
+      "file": "still-chat-960.webp",
+      "width": 960,
+      "height": 600,
+      "bytes": 21446,
+      "description": "#geral in A Mesa: a reply, \ud83d\ude4c reactions, a poll with votes for the Saturday session and a 1d20 initiative roll. Smaller copy, 960 wide."
+    },
+    {
+      "file": "still-chat.webp",
+      "width": 2880,
+      "height": 1800,
+      "bytes": 109588,
+      "description": "#geral in A Mesa: a reply, \ud83d\ude4c reactions, a poll with votes for the Saturday session and a 1d20 initiative roll."
+    },
+    {
+      "file": "still-hero-1440.webp",
+      "width": 1440,
+      "height": 900,
+      "bytes": 72508,
+      "description": "Hero still: the full app with a voice call on the stage (Bia sharing the painted rooftop) and the call's chat side by side. Smaller copy, 1440 wide."
+    },
+    {
+      "file": "still-hero-960.webp",
+      "width": 960,
+      "height": 600,
+      "bytes": 42126,
+      "description": "Hero still: the full app with a voice call on the stage (Bia sharing the painted rooftop) and the call's chat side by side. Smaller copy, 960 wide."
+    },
+    {
+      "file": "still-hero.webp",
+      "width": 2880,
+      "height": 1800,
+      "bytes": 236122,
+      "description": "Hero still: the full app with a voice call on the stage (Bia sharing the painted rooftop) and the call's chat side by side."
+    },
+    {
+      "file": "still-import-1440.webp",
+      "width": 1440,
+      "height": 900,
+      "bytes": 23166,
+      "description": "The Discord template import dialog: paste a discord.new link or a template code to copy a server's layout. Smaller copy, 1440 wide."
+    },
+    {
+      "file": "still-import-960.webp",
+      "width": 960,
+      "height": 600,
+      "bytes": 12252,
+      "description": "The Discord template import dialog: paste a discord.new link or a template code to copy a server's layout. Smaller copy, 960 wide."
+    },
+    {
+      "file": "still-import.webp",
+      "width": 2880,
+      "height": 1800,
+      "bytes": 69534,
+      "description": "The Discord template import dialog: paste a discord.new link or a template code to copy a server's layout."
+    },
+    {
+      "file": "still-members.webp",
+      "width": 480,
+      "height": 1280,
+      "bytes": 28408,
+      "description": "Member list grouped by role colour: Dono (Zeca), Mestre (Bia), Jogadores, each with 'Na call: Lobby'."
+    },
+    {
+      "file": "still-phone-call-640.webp",
+      "width": 640,
+      "height": 1386,
+      "bytes": 23138,
+      "description": "Phone (390 wide): Lara's view of the Lobby call in A Mesa. Smaller copy, 640 wide."
+    },
+    {
+      "file": "still-phone-call.webp",
+      "width": 1170,
+      "height": 2532,
+      "bytes": 58230,
+      "description": "Phone (390 wide): Lara's view of the Lobby call in A Mesa."
+    },
+    {
+      "file": "still-phone-chat-640.webp",
+      "width": 640,
+      "height": 1386,
+      "bytes": 32380,
+      "description": "Phone (390 wide): #geral in A Mesa with the poll and the roll. Smaller copy, 640 wide."
+    },
+    {
+      "file": "still-phone-chat.webp",
+      "width": 1170,
+      "height": 2532,
+      "bytes": 81068,
+      "description": "Phone (390 wide): #geral in A Mesa with the poll and the roll."
+    },
+    {
+      "file": "still-phone-servers-640.webp",
+      "width": 640,
+      "height": 1386,
+      "bytes": 12920,
+      "description": "Phone (390 wide): the server rail and A Mesa's channel list. Smaller copy, 640 wide."
+    },
+    {
+      "file": "still-phone-servers.webp",
+      "width": 1170,
+      "height": 2532,
+      "bytes": 32764,
+      "description": "Phone (390 wide): the server rail and A Mesa's channel list."
+    },
+    {
+      "file": "still-profile-1440.webp",
+      "width": 1440,
+      "height": 900,
+      "bytes": 24030,
+      "description": "Zeca's public page at pqp.gg/@zeca with two approved depoimentos from Bia and Caio. Smaller copy, 1440 wide."
+    },
+    {
+      "file": "still-profile-960.webp",
+      "width": 960,
+      "height": 600,
+      "bytes": 13650,
+      "description": "Zeca's public page at pqp.gg/@zeca with two approved depoimentos from Bia and Caio. Smaller copy, 960 wide."
+    },
+    {
+      "file": "still-profile.webp",
+      "width": 2880,
+      "height": 1800,
+      "bytes": 69848,
+      "description": "Zeca's public page at pqp.gg/@zeca with two approved depoimentos from Bia and Caio."
+    },
+    {
+      "file": "still-raise-hand-1440.webp",
+      "width": 1440,
+      "height": 900,
+      "bytes": 45278,
+      "description": "Call with a screen share on the stage: Caio and Nico raised their hands and the 'Fila pra falar' card lists them in order. Smaller copy, 1440 wide."
+    },
+    {
+      "file": "still-raise-hand-960.webp",
+      "width": 960,
+      "height": 600,
+      "bytes": 25274,
+      "description": "Call with a screen share on the stage: Caio and Nico raised their hands and the 'Fila pra falar' card lists them in order. Smaller copy, 960 wide."
+    },
+    {
+      "file": "still-raise-hand.webp",
+      "width": 2880,
+      "height": 1800,
+      "bytes": 117116,
+      "description": "Call with a screen share on the stage: Caio and Nico raised their hands and the 'Fila pra falar' card lists them in order."
+    },
+    {
+      "file": "still-share-1440.webp",
+      "width": 1440,
+      "height": 900,
+      "bytes": 72446,
+      "description": "Bia's screen share on the stage of the sessao-de-sabado call, with the listener strip and the call chat. Smaller copy, 1440 wide."
+    },
+    {
+      "file": "still-share-960.webp",
+      "width": 960,
+      "height": 600,
+      "bytes": 42016,
+      "description": "Bia's screen share on the stage of the sessao-de-sabado call, with the listener strip and the call chat. Smaller copy, 960 wide."
+    },
+    {
+      "file": "still-share.webp",
+      "width": 2880,
+      "height": 1800,
+      "bytes": 235044,
+      "description": "Bia's screen share on the stage of the sessao-de-sabado call, with the listener strip and the call chat."
+    },
+    {
+      "file": "still-voice-list.webp",
+      "width": 656,
+      "height": 1520,
+      "bytes": 30002,
+      "description": "Channel sidebar of A Mesa: text channels, then Lobby with six people in the call and their speaking rings."
+    }
+  ],
+  "skipped": [
+    {
+      "name": "import",
+      "reason": "The Discord template import fetches the template from discord.com on the server, so there is no offline flow to film. still-import.webp shows the paste dialog instead."
+    }
+  ]
+}

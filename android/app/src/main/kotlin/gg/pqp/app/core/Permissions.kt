@@ -24,7 +24,7 @@ import kotlinx.serialization.Serializable
  * BITFIELDS ARE DECIMAL STRINGS ON THE WIRE, because the server holds them as
  * Postgres `BIGINT` and computes them as a JS `bigint` (`permissions.ts`'s own
  * doc: "Never do this math in JS number"). The highest bit defined today is
- * 28 (`MANAGE_EMOJI`), so a signed 64-bit [Long] carries every bit in use
+ * 29 (`USE_APPS`), so a signed 64-bit [Long] carries every bit in use
  * with headroom to spare -- no need for `java.math.BigInteger` unless the bit
  * count ever approaches 63.
  *
@@ -93,6 +93,13 @@ object Permission {
      * the composer's audience rows and tests.
      */
     const val POST_STORIES: Long = 1L shl 25
+
+    /**
+     * Start an app in a channel (the apps platform, behind the per-server
+     * `apps` flag). No screen asks for it yet; the constant keeps this file's
+     * table in step with `Permission.USE_APPS` (bit 29).
+     */
+    const val USE_APPS: Long = 1L shl 29
 }
 
 /**
@@ -115,3 +122,92 @@ fun hasPermission(perms: Long, bit: Long): Boolean = (perms and bit) == bit
  */
 fun PermissionsSnapshot.channelBits(channelId: String): Long =
     channels[channelId]?.let(::parsePermissionBits) ?: parsePermissionBits(server)
+
+/**
+ * Whether a composer is offered at all: the snapshot's SEND_MESSAGES bit for
+ * [channelId], the channel's own entry winning over the server-wide bits.
+ * UNKNOWN IS ALLOWED. Taking the box away from somebody who may type in it is
+ * the worse mistake (every channel would lose its composer for a moment on each
+ * open, or for good when the read fails), and the server stays the gate for the
+ * other case. Web's `canSendHere` and iOS's `SendGate` follow the same rule.
+ */
+object SendGate {
+    fun canSend(snapshot: PermissionsSnapshot?, channelId: String): Boolean =
+        snapshot == null || hasPermission(snapshot.channelBits(channelId), Permission.SEND_MESSAGES)
+}
+
+/**
+ * A server's snapshot kept for a short while, for the screens that only need
+ * one bit of it as they open (the chat composer's SEND_MESSAGES): opening
+ * channel after channel on one server reads it once, not once per channel.
+ * Keyed by account as well as server, so a second account on the same phone
+ * never reads the first one's bits. Fresh for [TTL_MS], and dropped at once by
+ * what says it is stale: a `permissions-update` or `server-removed` frame for
+ * the server ([AccountFrames.staleServer], wired in `SessionStore`), a socket
+ * that reconnected (frames were missed), and a sign-out.
+ */
+object PermissionsCache {
+    const val TTL_MS = 30_000L
+
+    private class Entry(val at: Long, val snapshot: PermissionsSnapshot)
+
+    /**
+     * What a read saw of the invalidations when it started: [global] counts [clear]s, [server] counts
+     * [invalidate]s of that one server. A write carrying a stamp that has since moved is a read that
+     * began before the bits were declared stale, and is dropped ([put]).
+     */
+    data class Stamp(val global: Long, val server: Long)
+
+    private val entries = java.util.concurrent.ConcurrentHashMap<String, Entry>()
+    private val serverGenerations = HashMap<String, Long>()
+    private var globalGeneration = 0L
+
+    private val _changes = kotlinx.coroutines.flow.MutableStateFlow(0L)
+
+    /**
+     * Counts every [invalidate] and [clear]. A screen that already holds a snapshot collects it and
+     * reads again when it moves: the cache is only what a screen consults as it opens, so dropping an
+     * entry tells a chat that is already showing the old bits nothing.
+     */
+    val changes: kotlinx.coroutines.flow.StateFlow<Long> = _changes
+
+    private fun key(userId: String?, serverId: String) = "${userId.orEmpty()}:$serverId"
+
+    fun fresh(userId: String?, serverId: String, now: Long): PermissionsSnapshot? =
+        entries[key(userId, serverId)]?.takeIf { now - it.at in 0 until TTL_MS }?.snapshot
+
+    /** Taken BEFORE the network read starts, and handed back to [put] with its result. */
+    @Synchronized
+    fun stamp(serverId: String): Stamp = Stamp(globalGeneration, serverGenerations[serverId] ?: 0L)
+
+    /** The server's bits may have changed, or the account left it: the next read goes to the network. */
+    @Synchronized
+    fun invalidate(serverId: String) {
+        serverGenerations[serverId] = (serverGenerations[serverId] ?: 0L) + 1
+        entries.keys.removeIf { it.endsWith(":$serverId") }
+        _changes.value += 1
+    }
+
+    /** Every entry, for a socket that reconnected (frames were missed) and for a sign-out. */
+    @Synchronized
+    fun clear() {
+        globalGeneration += 1
+        entries.clear()
+        _changes.value += 1
+    }
+
+    /**
+     * Keeps [snapshot] unless an [invalidate] of this server or a [clear] happened since [stamp] was
+     * taken: a read already in flight when the frame landed carries the bits from before it, and must
+     * not make them fresh again. Synchronized with both, so the check and the write cannot straddle
+     * one. Returns whether it was kept.
+     */
+    @Synchronized
+    fun put(userId: String?, serverId: String, snapshot: PermissionsSnapshot, now: Long, stamp: Stamp): Boolean {
+        if (stamp != Stamp(globalGeneration, serverGenerations[serverId] ?: 0L)) return false
+        // Expired entries go on every write, so the map holds at most the servers opened in the last [TTL_MS].
+        entries.values.removeIf { now - it.at !in 0 until TTL_MS }
+        entries[key(userId, serverId)] = Entry(now, snapshot)
+        return true
+    }
+}

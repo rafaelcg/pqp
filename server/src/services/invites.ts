@@ -148,6 +148,9 @@ export async function redeemInvite(
     await client.query("COMMIT");
     if (joinedNow) {
       invalidateServerAudience(invite.server_id, { joinedUserId: userId });
+      // The server bot's welcome, when it has one on. Not awaited: a post in a
+      // channel is no reason for the join to wait, and it never throws.
+      void import("./bots.js").then((bots) => bots.welcomeNewMember(invite.server_id, userId)).catch(() => {});
       // Funnel step `first_join`, and AFTER the commit on purpose: the stamp is
       // its own statement on the pool, never inside this transaction. Only a
       // real join (a fresh membership row) counts; re-opening an invite you

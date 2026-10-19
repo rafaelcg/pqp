@@ -50,6 +50,7 @@ loser. Do not add a pre-check — it would look safer and be exactly as racy.
 | `GET /api/public/communities/config` | **none** | `{ "enabled": boolean }` only, the `COMMUNITIES_ENABLED` switch for the signed-out landing; 200 even when off; `public, max-age=60` |
 | `GET /api/public/invites/:code` | **none** | invite preview: server name, icon, member count; 404 = unusable |
 | `GET\|HEAD /api/users/:userId/banner` | **none** | the banner bytes: a redirect for a plain GET; a HEAD or a ranged GET is served from the API (see below) |
+| `GET /api/users/:userId/banner-url` | session | `{ bannerUrl }` for the profile card in the app; null for no banner and for an unknown id alike |
 | `GET /api/users/by-handle/:handle` | session | handle → `publicUserSchema`, for "add me" |
 | `PATCH /api/me` `{ handle }` | session | claim or rename |
 | `POST /api/me/banner` → `…/claim`, `DELETE /api/me/banner` | session | the banner, mint / claim / clear |
@@ -95,6 +96,14 @@ therefore self-authorising, exactly as an avatar key is. It uses its own
 avatar cap cannot be spent through the larger banner signature. With no `S3_*`
 there is no upload and the page draws a gradient generated from the handle's own
 hue (`client/src/lib/hero-tint.ts`), which is a design rather than a placeholder.
+
+The profile card that opens on a name inside the app (member list, message
+author, voice roster, DM list, stories) draws the same banner. It reads
+`GET /api/users/:userId/banner-url` when it opens, rather than carrying the
+field on the member list or the message author, so the hot member-list read
+does not grow and a new banner shows the next time anybody opens the card.
+The band is the banner's own 3:1 with or without one, so the card does not
+change size when the picture arrives.
 
 ## SEO on a static SPA
 

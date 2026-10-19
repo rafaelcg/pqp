@@ -6,6 +6,7 @@ import {
 } from "@pqp/shared";
 import { claimUserBanner, createUserBannerUpload } from "@/lib/api";
 import { cropImageToRect } from "@/lib/avatar";
+import type { CropRegion } from "@/lib/image-crop";
 
 /**
  * A picked file, all the way to being this account's profile banner.
@@ -18,6 +19,10 @@ import { cropImageToRect } from "@/lib/avatar";
  *     database pool has no business buffering image uploads;
  *  3. `POST /api/me/banner/claim` HEADs the object and swaps the columns.
  *
+ * `region` is what the person framed in the crop step; without one it is the
+ * centre crop. `picture` is the crop step's decoded bitmap: given, the file is
+ * not decoded a second time, and the bitmap is closed here.
+ *
  * The crop happens before any of it, so what the server is asked to sign is the
  * length of the *cropped* JPEG — the browser cannot mint a URL for a 200 KB
  * banner and then push eight megabytes through it, because the length is in the
@@ -27,13 +32,18 @@ import { cropImageToRect } from "@/lib/avatar";
  * claim never happens is referenced by no row, and the account keeps the banner
  * it already had.
  */
-export async function uploadUserBanner(file: Blob): Promise<User> {
+export async function uploadUserBanner(
+  file: Blob,
+  region: CropRegion | null = null,
+  picture: ImageBitmap | null = null,
+): Promise<User> {
   let cropped: Blob;
   try {
     cropped = await cropImageToRect(
-      file,
+      picture ?? file,
       USER_BANNER_WIDTH,
       USER_BANNER_HEIGHT,
+      region,
     );
   } catch {
     // `createImageBitmap` refuses anything that is not a decodable image, which

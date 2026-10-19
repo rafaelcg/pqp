@@ -6316,6 +6316,15 @@ function micArchiveOutput(
 const MIC_ARCHIVE_QUICK_RETRY_MS = 3_000;
 const MIC_ARCHIVE_COOLDOWN_MS = 2 * 60 * 1000;
 const MIC_ARCHIVE_DEATH_WINDOW_MS = 5 * 60_000;
+/**
+ * How long the monitor keeps looking for the track after a death whose retry
+ * found nobody to record (the presenter's page went away with the egress, and
+ * the new page publishes `mic-archive` a beat AFTER its share). Past the
+ * presenter-return window (60 s) plus a page load and the mix starting, and
+ * bounded so a host whose mic stays off costs a `listParticipants` per tick
+ * for minutes, not for the whole film.
+ */
+const MIC_ARCHIVE_REJOIN_WAIT_MS = 3 * 60_000;
 const micArchiveDeaths = new Map<string, number[]>();
 const micArchiveRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 let micArchiveCooldownMs = MIC_ARCHIVE_COOLDOWN_MS;
@@ -6412,9 +6421,19 @@ async function retryMicArchive(
   }
   if (!tracks?.micArchiveTrackId) {
     // Nothing to record right now (the host's mic is off, or they left).
-    // Not hunted for on every tick: the track coming back is a roster event,
-    // and `reconcileMicArchive` restarts the archive then.
+    // The track coming back is normally a roster event, and
+    // `reconcileMicArchive` restarts the archive then. But a returning page
+    // publishes this track AFTER its share, i.e. after the reconcile the
+    // share triggered, and a presenter alone on stage produces no roster
+    // event after that: 2026-10-17 the voice stayed unrecorded until some
+    // unrelated event reconciled again. So the monitor looks for it for a
+    // bounded while (`tendMicArchive`'s window, which the death's stop had
+    // just closed), and starts the next run when it shows.
     room.micArchiveRestart = null;
+    room.micArchiveUntil = Math.max(
+      room.micArchiveUntil,
+      now + MIC_ARCHIVE_REJOIN_WAIT_MS,
+    );
     return;
   }
   await restartMicArchiveInPlace(

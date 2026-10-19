@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { attachmentSchema } from "./attachments.js";
 import { clampChatNewlines } from "./chat-text.js";
+import { botActionCardSchema } from "./bots.js";
 import { embedSchema } from "./embeds.js";
 import { handleSchema } from "./profiles.js";
 import { nicknameSchema } from "./permissions.js";
@@ -624,13 +625,15 @@ export const userSchema = z.object({
    */
   handleChangedAt: z.string().nullable().default(null),
   /**
-   * The banner across the top of this account's public page, or null.
+   * The banner across the top of this account's public page and profile card,
+   * or null.
    *
    * On `userSchema` and deliberately NOT on `publicUserSchema`, exactly as
-   * `handle` is: nothing in the app draws somebody else's banner, and the one
-   * surface that does — `pqp.gg/@rafa` — reads it from the public profile
-   * endpoint keyed by handle rather than from any user payload. Defaulted so a
-   * response from an API that predates banners still parses.
+   * `handle` is: no message row or member list draws somebody else's banner.
+   * The two surfaces that do read it on their own: `pqp.gg/@rafa` from the
+   * public profile endpoint keyed by handle, and the profile card from
+   * `GET /api/users/:userId/banner-url` when it opens. Defaulted so a response
+   * from an API that predates banners still parses.
    */
   bannerUrl: z.string().nullable().default(null),
   /**
@@ -996,6 +999,8 @@ export const messageSchema = z.object({
    * renders as its plaintext `body`. Defaulted so an older API still parses.
    */
   systemKind: messageSystemKindSchema,
+  /** A server bot's action card (`bots.ts`). Null on every other message. */
+  botCard: botActionCardSchema.nullable().optional().catch(null),
   /**
    * The story this message replies to (`POST /api/stories/:storyId/reply`),
    * or null. The quote is drawn from `GET /api/stories/:storyId/card`, which

@@ -158,6 +158,10 @@ class WireProtocolTest {
             // land looked sent, on the phone, until the app was restarted.
             "message-rejected",
             "sanction-notice",
+            // A server bot did not answer THIS member (a limit, or busy). Sent
+            // to them alone; losing the branch puts back the silence it exists
+            // to replace.
+            "bot-notice",
             // voice
             "welcome",
             "peer-joined",
@@ -289,11 +293,6 @@ class WireProtocolTest {
         // (docs/MUSIC.md), which is a feature and not a frame.
         "music" to "no music player on the phone yet",
         "channel-music" to "no now-playing row on the phone's channel list yet",
-        // A soundboard play. The clip is not in the frame: each web and
-        // desktop client plays a file it already has. The phone has no
-        // board and no local player for it yet, so dropping the frame is
-        // silence, not a missed message. See docs/SOUNDBOARD.md.
-        "soundboard-play" to "no soundboard on the phone yet; the clip is local playback, not a message",
         // "Alberto started streaming in #filminho", sent only to people the
         // server chose (flag `stream_start_notifications`, off by default).
         // The same notice reaches a phone with no socket as a push, whose tap

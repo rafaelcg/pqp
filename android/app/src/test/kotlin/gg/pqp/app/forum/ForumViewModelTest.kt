@@ -246,6 +246,24 @@ class ForumViewModelTest {
     }
 
     @Test
+    fun `without SEND_MESSAGES the forum is read-only, paused is a different reason`() = runTest {
+        val backend = FakeBackend().apply {
+            bits = 0L
+            pages += page()
+        }
+        val vm = model(backend)
+        assertFalse(vm.state.value.mayCreate)
+        assertTrue(vm.state.value.readOnly)
+
+        val paused = FakeBackend().apply {
+            bits = 0L
+            enabled = false
+            pages += page()
+        }
+        assertFalse(model(paused).state.value.readOnly)
+    }
+
+    @Test
     fun `a reconnect merges page 1 instead of resetting`() = runTest {
         val backend = FakeBackend().apply { pages += page(post("b", 2), post("a", 1)) }
         val vm = model(backend)

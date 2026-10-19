@@ -289,13 +289,29 @@ What ships now:
   know fails the suite.
 - **`robots.txt` + `sitemap.xml`** (`client/public/`): sitemap now lists all
   eight public routes including `/vs-discord` and `/status`.
-- **JSON-LD**: `WebSite` everywhere, `SoftwareApplication` on `/` only,
-  `FAQPage` on `/vs-discord` only, and only because the page renders that FAQ
-  as real copy (`vsDiscord.faq.*` in the i18n catalogue). Schema for copy a
-  visitor can read, never schema alone.
+- **JSON-LD**: `WebSite` and `Organization` everywhere, `SoftwareApplication`
+  on `/` only, and `FAQPage` on `/`, `/vs-discord`, `/tela`, `/vem` and
+  `/streamers` (with `/criadores`). Each FAQPage exists only because the page
+  renders that FAQ as real copy (`home.faq.*`, `vsDiscord.faq.*` and so on in
+  the i18n catalogue). Schema for copy a visitor can read, never schema alone.
+  The FAQ on `/` has seven questions, in page order: friends who stay on
+  Discord, chat history, price, phone, install, data, and what happens if pqp
+  shuts down. Four questions left with the October 2026 redesign: whether it
+  is safe to create an account, how to sign in, how many people fit in one
+  call, and whether you can bring a Discord server. They left the JSON-LD
+  with the page. The import claim moved into the chat history answer and the
+  import section of the page. The phone answer in the
+  JSON-LD is the Google Play wording (`home.faq.phone.a.play`), because the
+  hosted site links its Play listing and the edge only runs on the hosted
+  site.
 - **Duplication is test-pinned**: `marketing-meta.ts` cannot import the
   catalogue (esbuild outside the workspace), so its strings are duplicates and
-  `client/src/lib/marketing-meta.test.ts` pins every pair.
+  `client/src/lib/marketing-meta.test.ts` pins every pair. For `/`, a second
+  test pins the FAQ to the rendered page:
+  `client/src/pages/home/faq-parity.test.tsx` renders the FAQ section in all
+  three languages and compares its questions and answers, in order, with
+  `LANDING_FAQ`. When you change a `home.faq.*` value, change `LANDING_FAQ`
+  too. Both tests fail until the two agree.
 
 ## 2. Target queries (research, 2026-08-20)
 
@@ -372,7 +388,14 @@ page (crawl paths need internal links, and the footer already links
   product; revisit only per roadmap #5.
 - **The SPA body is JS-only, except on the pages that carry a no-JS body.**
   Edge injection fixes the *head*. The home page ships a prerendered first
-  screen (`prerender-hero.ts`). `/streamers`, `/contact`, `/tela`,
+  screen: the header and the hero, in all three languages
+  (`prerender-hero.ts`). React draws the rest of the page, including the FAQ,
+  so a crawler that runs no script reads the header, the hero and the head
+  (with the FAQPage JSON-LD), not the page's sections. The static header
+  links the section anchors, `/` and `/app?...`. It has no `/download` or
+  `/vs-discord` link, which the old static header had. The other marketing
+  pages' static chrome links both, and `public/sitemap.xml` lists the pages.
+  The effect on crawling has not been measured. `/streamers`, `/contact`, `/tela`,
   `/vs-discord` and `/download` get their copy, headings and internal links
   written into `#root` by the middleware (`marketing-prerender.ts`, PQP-17).
   Each block sits between a plain copy of the site's nav and footer, so a
@@ -390,8 +413,28 @@ page (crawl paths need internal links, and the footer already links
   real nav and footer in every language and switch state and fails when the
   static copy differs by one link, label or word.
   After changing a catalogue key those pages use, run
-  `pnpm --filter @pqp/client prerender:copy`. Every other route still serves
-  an empty body to a reader that runs no script.
+  `pnpm --filter @pqp/client prerender:copy`.
+- **The blog serves its words to a reader that runs no script (2026-10-16).**
+  `/blog`, every guide and every release note get a body in `#root` the same
+  way, plus a markdown twin. The prose is `.md`, which the middleware's esbuild
+  cannot import, so the BUILD renders it: `pqp-static-pages` in `vite.config.ts`
+  runs `src/lib/static-pages.ts` (the same `react-markdown` and `remark-gfm` as
+  the live page, no new dependency) and emits `prerender/blog/<slug>.<lang>.json`
+  (the page's `<main>`; `.json` because Pages 308s `.html`) and `/blog/<slug>.md`
+  (pt-BR), `.en.md`, `.es.md`, `/blog.md`. The middleware reads the fragment
+  through the asset binding and writes it between the plain nav and footer
+  (`injectPreBody`); with no fragment it serves the page as before. The head
+  carries `<link rel="alternate" type="text/markdown">` (no `hreflang`, so it is
+  not a language alternate), and `Accept: text/markdown` on any of those paths
+  answers the twin in the reader's language. Which pages exist, in which
+  languages, and what their fragment and twin are called is ONE list,
+  `src/lib/page-registry.ts`; a new kind of page (a `/compare`) gets an entry
+  there and a renderer in `static-pages.ts`. The build THROWS when a registered
+  page has no prose, or when a fragment (or a marketing page's no-JS body) has
+  under 200 visible characters, no `<h1>` or no internal link. No hydration is
+  involved (`main.tsx` is `createRoot`): the block is hidden before first paint
+  in any browser that runs the head script. Every other route still serves an
+  empty body to a reader that runs no script.
 - **`/app` is noindexed by robots** and must stay that way. **Superseded
   2026-09-17: it is noindexed by an edge `X-Robots-Tag` header now, not by
   `robots.txt`, because a `Disallow` a crawler never fetches could not

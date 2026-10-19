@@ -63,4 +63,108 @@ class PermissionsTest {
         val snapshot = PermissionsSnapshot(server = allBits.toString())
         assertTrue(hasPermission(snapshot.channelBits("any-channel"), Permission.START_WATCH_PARTY))
     }
+
+    @Test
+    fun `an unknown snapshot still offers the composer, the server is the gate`() {
+        assertTrue(SendGate.canSend(null, "forum"))
+    }
+
+    @Test
+    fun `server bits answer when the channel has no entry`() {
+        assertTrue(SendGate.canSend(PermissionsSnapshot(server = Permission.SEND_MESSAGES.toString()), "forum"))
+        assertFalse(SendGate.canSend(PermissionsSnapshot(server = "0"), "forum"))
+    }
+
+    @Test
+    fun `a channel overwrite denying send wins over the server bits, only there`() {
+        val snapshot = PermissionsSnapshot(
+            server = Permission.SEND_MESSAGES.toString(),
+            channels = mapOf("forum" to "0"),
+        )
+        assertFalse(SendGate.canSend(snapshot, "forum"))
+        assertTrue(SendGate.canSend(snapshot, "general"))
+    }
+
+    @Test
+    fun `the cache hands a snapshot back within its time, never to another account or server`() {
+        val snapshot = PermissionsSnapshot(server = "0")
+        putNow("me", "srv", snapshot, 1_000L)
+        assertEquals(snapshot, PermissionsCache.fresh("me", "srv", now = 1_000L + PermissionsCache.TTL_MS - 1))
+        assertEquals(null, PermissionsCache.fresh("me", "srv", now = 1_000L + PermissionsCache.TTL_MS))
+        assertEquals(null, PermissionsCache.fresh("somebody-else", "srv", now = 1_500L))
+        assertEquals(null, PermissionsCache.fresh("me", "other-server", now = 1_500L))
+        // A clock that went backwards is not a hit.
+        assertEquals(null, PermissionsCache.fresh("me", "srv", now = 500L))
+        // A later write evicts what has expired, so the map does not keep every server ever opened.
+        val later = 1_000L + PermissionsCache.TTL_MS + 5
+        putNow("me", "second", snapshot, later)
+        assertEquals(null, PermissionsCache.fresh("me", "srv", now = later))
+        assertEquals(snapshot, PermissionsCache.fresh("me", "second", now = later))
+    }
+
+    @Test
+    fun `invalidate drops one server for every account, clear drops all`() {
+        val snapshot = PermissionsSnapshot(server = "0")
+        putNow("me", "a", snapshot, 10L)
+        putNow("you", "a", snapshot, 10L)
+        putNow("me", "b", snapshot, 10L)
+        PermissionsCache.invalidate("a")
+        assertEquals(null, PermissionsCache.fresh("me", "a", now = 11L))
+        assertEquals(null, PermissionsCache.fresh("you", "a", now = 11L))
+        assertEquals(snapshot, PermissionsCache.fresh("me", "b", now = 11L))
+        // A server id that merely ends the same way is not the same server.
+        putNow("me", "xa", snapshot, 10L)
+        PermissionsCache.invalidate("a")
+        assertEquals(snapshot, PermissionsCache.fresh("me", "xa", now = 11L))
+        PermissionsCache.clear()
+        assertEquals(null, PermissionsCache.fresh("me", "b", now = 11L))
+    }
+
+    private fun putNow(user: String, server: String, snapshot: PermissionsSnapshot, now: Long) {
+        assertTrue(PermissionsCache.put(user, server, snapshot, now, PermissionsCache.stamp(server)))
+    }
+
+    @Test
+    fun `a fetch that started before an invalidate cannot repopulate the cache`() {
+        PermissionsCache.clear()
+        val old = PermissionsSnapshot(server = "0")
+        // The read starts (stamp taken), the permissions-update frame lands, then the read completes.
+        val stamp = PermissionsCache.stamp("srv")
+        PermissionsCache.invalidate("srv")
+        assertFalse(PermissionsCache.put("me", "srv", old, now = 10L, stamp = stamp))
+        assertEquals(null, PermissionsCache.fresh("me", "srv", now = 11L))
+        // A read that starts after the frame is kept.
+        assertTrue(PermissionsCache.put("me", "srv", old, now = 12L, stamp = PermissionsCache.stamp("srv")))
+        assertEquals(old, PermissionsCache.fresh("me", "srv", now = 13L))
+    }
+
+    @Test
+    fun `an invalidate of one server does not fence a fetch of another`() {
+        PermissionsCache.clear()
+        val stamp = PermissionsCache.stamp("b")
+        PermissionsCache.invalidate("a")
+        assertTrue(PermissionsCache.put("me", "b", PermissionsSnapshot(server = "0"), now = 10L, stamp = stamp))
+    }
+
+    @Test
+    fun `a fetch that started before a clear cannot repopulate the cache`() {
+        val stamp = PermissionsCache.stamp("srv")
+        PermissionsCache.clear()
+        assertFalse(PermissionsCache.put("me", "srv", PermissionsSnapshot(server = "0"), now = 10L, stamp = stamp))
+        assertEquals(null, PermissionsCache.fresh("me", "srv", now = 11L))
+    }
+
+    @Test
+    fun `invalidate and clear move the counter that open chats collect`() {
+        val before = PermissionsCache.changes.value
+        PermissionsCache.invalidate("srv")
+        PermissionsCache.clear()
+        assertEquals(before + 2, PermissionsCache.changes.value)
+    }
+
+    @Test
+    fun `a channel overwrite granting send wins over the server bits`() {
+        val snapshot = PermissionsSnapshot(server = "0", channels = mapOf("forum" to Permission.SEND_MESSAGES.toString()))
+        assertTrue(SendGate.canSend(snapshot, "forum"))
+    }
 }

@@ -12,6 +12,12 @@ enum RealtimeEvent: Sendable {
     case messageDeleted(channelId: String, messageId: String)
     case reaction(channelId: String, messageId: String, emoji: String, userId: String, added: Bool, displayName: String?)
     case typing(channelId: String, userId: String, displayName: String)
+    /// A `typing-broadcast` from a server bot that is working on a request:
+    /// it carries `activity`, which a person's never does. Kept apart from
+    /// `.typing` so a bot is never shown as "is typing".
+    case botActivity(channelId: String, userId: String, displayName: String, tool: String?)
+    /// `bot-notice`: a server bot did not answer YOU, and why. Unicast.
+    case botNotice(BotNotice)
     case presence(channelId: String, users: [PresenceUser])
     /// `channel-activity`. `preview` is set only for a conversation, and only
     /// when the reader has in-app previews on: the server leaves the text out
@@ -1010,6 +1016,9 @@ actor RealtimeClient {
         let retryAfterMs: Int?
         /// `message-rejected` with `reason: automod`: the rule's own copy.
         let automodMessage: String?
+        /// `typing-broadcast` from a server bot at work. Lossy: a shape this
+        /// build cannot read must not cost the typing frame itself.
+        let activity: Lossy<BotTypingActivity>?
 
         enum CodingKeys: String, CodingKey {
             case type, nonce, message, channelId, messageId, emoji, userId
@@ -1020,7 +1029,7 @@ actor RealtimeClient {
             case canSpeak, canStream
             case serverIds, origin, status
             case seq, size, joined, updated, left
-            case conversationId, kind, caller, reason, thread, retryAfterMs, automodMessage
+            case conversationId, kind, caller, reason, thread, retryAfterMs, automodMessage, activity
             // `self` is a Swift keyword, so the wire key is remapped.
             case selfPeer = "self"
         }
@@ -1206,6 +1215,15 @@ actor RealtimeClient {
             return
         }
 
+        // Unicast to the member the bot did not answer. A frame this build
+        // cannot read (a new reason, a missing field) is dropped, not guessed.
+        if probe.type == "bot-notice" {
+            if let notice = BotNotice.parse(data) {
+                continuation?.yield(.botNotice(notice))
+            }
+            return
+        }
+
         // BEFORE `Envelope`, for the same reason as `sanction-notice` above:
         // see `VoiceModerationFrame`.
         if probe.type == "voice-moderation" {
@@ -1354,7 +1372,12 @@ actor RealtimeClient {
         case "typing-broadcast":
             guard let channelId = envelope.channelId, let userId = envelope.userId,
                   let displayName = envelope.displayName else { return }
-            event = .typing(channelId: channelId, userId: userId, displayName: displayName)
+            if let activity = envelope.activity?.value {
+                event = .botActivity(channelId: channelId, userId: userId,
+                                     displayName: displayName, tool: activity.tool)
+            } else {
+                event = .typing(channelId: channelId, userId: userId, displayName: displayName)
+            }
         case "presence-update":
             guard let channelId = envelope.channelId else { return }
             let users = envelope.users ?? []

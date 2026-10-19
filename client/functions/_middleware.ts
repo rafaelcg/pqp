@@ -27,9 +27,15 @@ import {
 } from "../src/lib/marketing-meta";
 import {
   injectMarketingBody,
+  injectPreBody,
   PRERENDERED_MARKETING_PAGES,
   type MarketingChrome,
 } from "../src/lib/marketing-prerender";
+import {
+  fragmentPath,
+  pageLocaleFor,
+  registeredBlogPage,
+} from "../src/lib/page-registry";
 import type { EdgeConfig } from "../src/lib/edge-config";
 import {
   markdownTwinFor,
@@ -317,6 +323,82 @@ async function marketingChrome(context: PagesContext): Promise<MarketingChrome> 
         ? config.iosBetaUrl.trim()
         : undefined,
   };
+}
+
+/** How long a blog page waits for the optional nav and footer links. */
+const BLOG_CHROME_WAIT_MS = 300;
+
+/**
+ * The chrome a blog page's static body is written with, or undefined (the
+ * default: no optional links) when the lookup failed or is still running after
+ * `BLOG_CHROME_WAIT_MS`. Never rejects. A lookup already settled and memoized
+ * costs nothing here; only a cold one is ever cut short, and it keeps running to
+ * fill the cache for the next reader.
+ */
+async function boundedChrome(
+  chrome: Promise<MarketingChrome | undefined> | null,
+): Promise<MarketingChrome | undefined> {
+  if (!chrome) {
+    return undefined;
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      chrome,
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), BLOG_CHROME_WAIT_MS);
+      }),
+    ]);
+  } catch {
+    return undefined;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * The build's rendering of a blog page (`prerender/blog/<slug>.<lang>.json`),
+ * read through the asset binding, in the language this reader gets: their own
+ * when the page has a body in it, English for a Spanish reader of a page with
+ * no Spanish, Portuguese otherwise (`pageLocaleFor`, the same fallback the head
+ * and the live page use). Null on any failure, which serves the page as it was.
+ */
+async function blogBody(
+  context: PagesContext,
+  pathname: string,
+  locale: "pt-BR" | "en" | "es",
+): Promise<{
+  html: string;
+  lang: "pt-BR" | "en" | "es";
+  chromeLocale: "pt-BR" | "en" | "es";
+} | null> {
+  const assets = context.env.ASSETS;
+  const page = registeredBlogPage(pathname);
+  if (!assets || !page) {
+    return null;
+  }
+  const lang = pageLocaleFor(page, locale);
+  try {
+    const found = await assets.fetch(
+      new Request(new URL(`/${fragmentPath(page, lang)}`, context.request.url).toString()),
+    );
+    if (!found.ok) {
+      return null;
+    }
+    const fragment = (await found.json()) as { html?: unknown };
+    if (typeof fragment.html !== "string" || fragment.html === "") {
+      return null;
+    }
+    return {
+      html: fragment.html,
+      lang,
+      // The nav and footer speak the reader's language unless that is Spanish
+      // and the page is not, in which case they match the page's English.
+      chromeLocale: locale === "es" && lang !== "es" ? "en" : locale,
+    };
+  } catch {
+    return null;
+  }
 }
 
 async function fetchProfile(
@@ -631,7 +713,10 @@ async function handleRequest(context: PagesContext): Promise<Response> {
   // only when the twin is actually there: every failure falls through to the
   // ordinary HTML page.
   if (context.request.method === "GET" && prefersMarkdown(context.request.headers.get("accept"))) {
-    const twin = markdownTwinFor(url.pathname);
+    const twin = markdownTwinFor(
+      url.pathname,
+      preferredLocale(url.search, context.request.headers.get("accept-language")),
+    );
     const assets = context.env.ASSETS;
     if (twin && assets) {
       try {
@@ -644,7 +729,7 @@ async function handleRequest(context: PagesContext): Promise<Response> {
             headers: {
               "content-type": "text/markdown; charset=utf-8",
               "cache-control": "public, max-age=300",
-              vary: "accept",
+              vary: "accept, accept-language",
               // Rough, and honest about being rough: a whole-word-ish count is
               // within a factor the caller can budget with, and the header is
               // optional anyway.
@@ -694,6 +779,10 @@ async function handleRequest(context: PagesContext): Promise<Response> {
     marketing && PRERENDERED_MARKETING_PAGES.includes(marketing)
       ? marketingChrome(context)
       : null;
+  // The blog's nav and footer links are a nicety for a reader without a script,
+  // never a reason to slow or fail the page: a lookup that rejects is the
+  // default chrome, and `boundedChrome` stops waiting on one that is slow.
+  const blogChrome = blog ? marketingChrome(context).catch(() => undefined) : null;
   const response = await context.next();
   const contentType = response.headers.get("content-type") ?? "";
   if (!response.ok || !contentType.includes("text/html")) {
@@ -733,7 +822,23 @@ async function handleRequest(context: PagesContext): Promise<Response> {
     // title, summary and date are checked into the repository, so the head can
     // be written without asking the API anything.
     const html = await response.text();
-    return rewritten(response, injectBlogHead(html, blog, cardLocale, locale));
+    const withHead = injectBlogHead(html, blog, cardLocale, locale);
+    // And its words, for the reader that runs no script: the build wrote them
+    // as a fragment per page and language (`static-pages.ts`). A missing or
+    // unreadable fragment leaves the page as it was before this existed.
+    const body = await blogBody(context, url.pathname, locale);
+    return rewritten(
+      response,
+      body
+        ? injectPreBody(
+            withHead,
+            body.chromeLocale,
+            body.html,
+            await boundedChrome(blogChrome),
+            body.lang,
+          )
+        : withHead,
+    );
   }
 
   if (inviteCode) {
