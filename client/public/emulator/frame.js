@@ -162,6 +162,14 @@
     boot(data.file, typeof data.language === "string" ? data.language : "en-US");
   });
 
-  // Tell the page that opened us we can take a file now.
+  // Tell the page that opened us we can take a file now, and keep telling it
+  // until one arrives, so a message sent before it was listening is not lost.
   tell({ type: "pqp-emulator-ready" });
+  var readyTimer = window.setInterval(function () {
+    if (started) {
+      window.clearInterval(readyTimer);
+    } else {
+      tell({ type: "pqp-emulator-ready" });
+    }
+  }, 250);
 })();

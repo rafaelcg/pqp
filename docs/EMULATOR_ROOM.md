@@ -45,48 +45,61 @@ feature and needs its own review.
   (`useEmulatorEnabledFor`). Off, no entry and no emulator code is asked for.
 - The room (`components/emulator/emulator-room.tsx`) is a dialog with a file
   input (`.nes .gb .gbc .gba`). The system is chosen by the extension.
-- The emulator runs in an iframe, `public/emulator/frame.html`, with a
-  Content-Security-Policy that allows the network to this origin only
-  (`connect-src 'self' blob: data:`), no form submission and no remote host of
-  any kind. That is why "the file cannot leave" is a property the browser
-  enforces and not only a promise in our code. `frame.js` takes the `File` from
-  the embedding page with a `postMessage`, gives it to the emulator as an
-  in-memory object (no URL, no fetch) under a fixed name (`rom.<ext>`), and does
-  nothing else with it. It answers only the window that embedded it, from the
-  origin it was told.
-- **The frame is sandboxed into an opaque origin**: `sandbox="allow-scripts"`,
-  never `allow-same-origin`. The emulator is a third party runtime and a game
-  file is untrusted input, so if a hostile file ever got code running in it, that
-  code still could not read the app's cookies or storage, touch the parent page
-  or call the API as the signed-in person. The cost: the frame fetches its own
-  files with CORS, so `/emulator/ejs/*` (public static files) carries
-  `Access-Control-Allow-Origin: *` in `_headers` and in the dev middleware, and
-  the frame has no web storage at all. A test fails if the sandbox ever gains
-  `allow-same-origin`.
-- A frame that never says it is ready (its script failed to load) is given 10
-  seconds, and one that is ready but never finishes starting (core or game
-  failed to download) 90 seconds; the frame also reports the emulator's own
-  error text. Either way the file is dropped and the room says the emulator
-  could not start. A failed read of the flag counts as off, like an old API.
-- **A residual risk, stated plainly.** The policy blocks every request the page
-  could make (fetch, XHR, sockets, forms, images, fonts), and the sandbox keeps a
-  compromised emulator away from the app. It does not stop a document from
-  navigating itself: the one control for that (`navigate-to`) was removed from
-  browsers, and there is no supported replacement. So the guarantee "the file
-  cannot leave the browser" holds against pqp's own code and against ordinary
-  requests; it is not a proof against a hypothetical code-execution flaw in the
-  emulator triggered by a hostile file, which could navigate its own frame to
-  somewhere with the bytes of the very file the player chose from their own
-  disk. The asset that sandbox protects (the signed-in session, the app's data)
-  is the one that matters, and it is out of reach. Counts as a point for the
-  lawyer and for the privacy copy: do not promise more than this.
+- Three layers, from the app inwards:
+  1. **The app** embeds our own page `public/emulator/room.html` (same origin,
+     first-party). It hands it the picked `File` with a `postMessage` named to
+     the app's own origin.
+  2. **The room page** (`room.html`, `room.js`) carries `frame-src 'self'` and
+     creates the emulator's frame, then relays its startup messages up. Why it
+     exists: a frame cannot be stopped from navigating itself by its own policy
+     (`navigate-to` was removed from browsers), and a hostile game file that got
+     code running in the emulator could use that to send the file's bytes out in
+     an address. The one control that works is the `frame-src` of the page that
+     EMBEDS the frame, and the app page cannot carry it (it embeds YouTube and
+     others), so this small page does. `room.js` also removes a frame that loads
+     a second time, and repeats "ready" until the file arrives so the handshake
+     cannot race a listener.
+  3. **The emulator frame** (`frame.html`, `frame.js`) is created by the room
+     page with `sandbox="allow-scripts"`, never `allow-same-origin`: an opaque
+     origin. The emulator is a third party runtime and a game file is untrusted
+     input, so even a code execution flaw there could not read the app's cookies
+     or storage, touch the app page or call the API as the signed-in person.
+     Its own policy allows no network but its own public files
+     (`connect-src 'self' blob: data:`), no form and no remote host. It takes the
+     `File` with a `postMessage`, gives it to the emulator as an in-memory object
+     (no URL, no fetch) under a fixed name (`rom.<ext>`), and does nothing else
+     with it. The cost of the opaque origin: the frame fetches its files with
+     CORS, so `/emulator/ejs/*` (public static files) carries
+     `Access-Control-Allow-Origin: *` in `_headers` and in the dev middleware,
+     and it has no web storage at all.
+- Startup is bounded: a frame that never says ready (its script failed to load)
+  gets 10 seconds, one that is ready but never finishes starting (core or game
+  failed to download) 90 seconds, and the emulator's own error text is relayed.
+  Either way the file is dropped and the room says the emulator could not start.
+  A failed read of the flag counts as off, like an old API.
+- **Verified in a real browser (Chromium) with a crafted frame and a canary
+  server on another port**: a frame that runs `location.href = <canary>?d=...`
+  reached the canary when the room page had no `frame-src` and did not reach it
+  with `frame-src 'self'`. This is the same finding as the apps program's
+  sandbox spike (`spike-sandbox.md`, "Needs ONE addition on the EMBEDDING
+  page"). WebKit and Firefox were not run here; the apps program runs the same
+  crafted-frame test on all three.
+- **What is still not a proof.** The guarantee "the file cannot leave the
+  browser" now holds against pqp's own code, against every request a page can
+  make (fetch, XHR, sockets, forms, images, fonts, frames) and against
+  navigation, as far as the browsers' own enforcement goes. It is not a proof
+  against a bug in the browser, and a WebKit `preconnect` leak of a host name
+  (not a body) is documented in the spike. Do not promise more than this in the
+  privacy copy.
 - The files come from npm and are copied to `/emulator/ejs/` by the `pqp-emulator-room`
   plugin in `client/vite.config.ts` (served by middleware in dev, emitted as
   assets in a build). They are not precached by the service worker.
 - Tests: `components/emulator/emulator-room.test.tsx` (flag off draws nothing;
-  the picked file reaches the frame and no `fetch`, XHR or beacon is ever made;
-  the source has no way to send a file), `lib/emulator-frame.test.ts` (the
-  policy, `frame.js`, what is shipped, no game file under the new paths),
+  the picked file reaches the room page and no `fetch`, XHR or beacon is ever
+  made; the ready handshake and both startup timeouts; a failed flag read closes
+  the room; the source has no way to send a file), `lib/emulator-frame.test.ts`
+  (the room page's `frame-src`, the sandbox, the second-load rule, the frame's
+  policy and `frame.js`, what is shipped, no game file under the new paths),
   `lib/emulator/emulator-allowlist.test.ts` (empty), and the contract test above.
 
 What it is verified against: the two cores were run in a real browser behind the

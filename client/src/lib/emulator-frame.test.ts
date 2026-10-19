@@ -38,6 +38,75 @@ describe("the frame's policy", () => {
   });
 });
 
+describe("the room page that holds the frame", () => {
+  const roomHtml = readFileSync(path.join(publicDir, "room.html"), "utf8");
+  const roomJs = readFileSync(path.join(publicDir, "room.js"), "utf8");
+  const roomCode = roomJs.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  const roomCsp =
+    /http-equiv="Content-Security-Policy"\s+content="([^"]+)"/.exec(roomHtml)?.[1] ?? "";
+  const roomDirective = (name: string) =>
+    roomCsp
+      .split(";")
+      .map((part) => part.trim())
+      .find((part) => part.startsWith(`${name} `));
+
+  it("carries the frame-src that stops the emulator's frame navigating itself away", () => {
+    // A frame's navigations are checked against the page that EMBEDS it, which
+    // is the only control there is for self-navigation (there is no
+    // `navigate-to`). Verified in a real browser with a crafted frame and a
+    // canary server; see docs/EMULATOR_ROOM.md.
+    expect(roomDirective("frame-src")).toBe("frame-src 'self'");
+    expect(roomDirective("default-src")).toBe("default-src 'none'");
+    expect(roomDirective("script-src")).toBe("script-src 'self'");
+    expect(roomCsp).not.toMatch(/https?:|\*|unsafe-/);
+    expect(roomDirective("connect-src")).toBeUndefined();
+  });
+
+  it("creates the emulator's frame sandboxed to scripts only, never same-origin", () => {
+    expect(roomCode).toContain('element.setAttribute("sandbox", "allow-scripts")');
+    expect(roomCode).not.toContain("allow-same-origin");
+    expect(roomCode).not.toMatch(/allow-(top-navigation|popups|forms|modals|downloads|pointer-lock)/);
+    expect(roomCode).toContain('var FRAME_SRC = "/emulator/frame.html"');
+  });
+
+  it("removes a frame that loads a second time, and tells the app", () => {
+    expect(roomCode).toMatch(/frameLoads > 1/);
+    expect(roomCode).toMatch(/removeFrame\(\);\s*up\(\{ type: "pqp-emulator-error", reason: "navigated" \}\)/);
+  });
+
+  it("only trusts the app (same origin) and its own frame (opaque origin), and talks up to the app's origin", () => {
+    expect(roomCode).toMatch(/event\.source === window\.parent/);
+    expect(roomCode).toMatch(/event\.origin !== appOrigin/);
+    expect(roomCode).toMatch(/event\.source !== frame\.contentWindow \|\| event\.origin !== FRAME_ORIGIN/);
+    expect(roomCode).toContain("window.parent.postMessage(message, appOrigin)");
+    // The only "*" is the one to the frame, which has no nameable origin.
+    expect([...roomCode.matchAll(/"\*"/g)]).toHaveLength(1);
+  });
+
+  it("repeats ready until the file arrives, so the first message cannot be lost", () => {
+    expect(roomCode).toMatch(/setInterval\(function \(\) \{\s*up\(\{ type: "pqp-emulator-ready" \}\);/);
+    expect(roomCode).toContain("window.clearInterval(readyTimer)");
+  });
+
+  it("has no way to send, keep or log the file", () => {
+    for (const forbidden of [
+      /\bfetch\b/,
+      /\bXMLHttpRequest\b/,
+      /\bsendBeacon\b/,
+      /\bWebSocket\b/,
+      /\bFormData\b/,
+      /\blocalStorage\b/,
+      /\bsessionStorage\b/,
+      /\bindexedDB\b/,
+      /\bconsole\b/,
+      /\bcreateObjectURL\b/,
+      /\.name\b/,
+    ]) {
+      expect(roomCode, `room.js must not use ${forbidden}`).not.toMatch(forbidden);
+    }
+  });
+});
+
 describe("frame.js", () => {
   const code = script.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 
@@ -78,6 +147,10 @@ describe("frame.js", () => {
     expect(code).toContain("window.EJS_disableLocalStorage = true");
     expect(code).toMatch(/saveState: false/);
     expect(code).toMatch(/netplay: false/);
+  });
+
+  it("repeats ready until it has the file, so the first message cannot be lost", () => {
+    expect(code).toMatch(/setInterval\(function \(\) \{\s*if \(started\) \{\s*window\.clearInterval\(readyTimer\)/);
   });
 
   it("gives the emulator a fixed name, never the player's", () => {

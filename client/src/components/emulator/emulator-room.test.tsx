@@ -82,7 +82,7 @@ function pickFile(file: File) {
   });
 }
 
-/** The frame saying it can take a file, as frame.js does. */
+/** The room page (room.js) saying it can take a file. */
 function frameReady() {
   const target = frame()!.contentWindow!;
   const postMessage = vi.spyOn(target, "postMessage");
@@ -90,8 +90,8 @@ function frameReady() {
     window.dispatchEvent(
       new MessageEvent("message", {
         data: { type: "pqp-emulator-ready" },
-        // A sandboxed frame has an opaque origin, which a receiver sees as "null".
-        origin: "null",
+        // Our own room page: same origin as the app.
+        origin: window.location.origin,
         source: target,
       }),
     );
@@ -148,20 +148,18 @@ describe("the emulator room with the flag on", () => {
     const file = new File([new Uint8Array([1, 2, 3, 4])], "my-own-game.gba");
     pickFile(file);
 
-    // The frame is a fixed page: the file's name is nowhere in it, and it is
-    // sandboxed into an opaque origin (scripts only, never `allow-same-origin`).
+    // The app embeds our own room page, a fixed address: the file's name is
+    // nowhere in it. (The emulator is a sandboxed frame INSIDE that page.)
     const src = frame()!.getAttribute("src")!;
-    expect(src).toBe(`/emulator/frame.html?o=${encodeURIComponent(window.location.origin)}`);
+    expect(src).toBe("/emulator/room.html");
     expect(src).not.toContain("my-own-game");
-    expect(frame()!.getAttribute("sandbox")).toBe("allow-scripts");
     expect(frame()!.getAttribute("referrerpolicy")).toBe("no-referrer");
 
     const postMessage = frameReady();
     expect(postMessage).toHaveBeenCalledTimes(1);
     const [message, targetOrigin] = postMessage.mock.calls[0]!;
-    // An opaque-origin frame cannot be named as a target; the target is its
-    // window object, which only this page holds.
-    expect(targetOrigin).toBe("*");
+    // Named to our own origin, never "*".
+    expect(targetOrigin).toBe(window.location.origin);
     expect((message as { type: string }).type).toBe("pqp-emulator-load");
     expect((message as { file: File }).file).toBe(file);
 
@@ -189,24 +187,59 @@ describe("the emulator room with the flag on", () => {
           source: target,
         }),
       );
-      // The app's own origin is NOT the frame's: a frame that somehow shared it
-      // would be the isolation failing.
+      // An opaque-origin sender (the emulator's own sandboxed frame) never
+      // talks to the app directly, and neither does anything not in our frame.
       window.dispatchEvent(
         new MessageEvent("message", {
           data: { type: "pqp-emulator-ready" },
-          origin: window.location.origin,
+          origin: "null",
           source: target,
         }),
       );
       window.dispatchEvent(
         new MessageEvent("message", {
           data: { type: "pqp-emulator-ready" },
-          origin: "null",
+          origin: window.location.origin,
           source: window,
         }),
       );
     });
     expect(postMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe("the ready handshake", () => {
+  it("sends the file exactly once however many times the room page repeats ready", async () => {
+    configAnswer.enabled = true;
+    await mount(true);
+    pickFile(new File([new Uint8Array(4)], "x.nes"));
+    const target = frame()!.contentWindow!;
+    const postMessage = vi.spyOn(target, "postMessage");
+    for (let i = 0; i < 4; i += 1) {
+      act(() => {
+        window.dispatchEvent(
+          new MessageEvent("message", {
+            data: { type: "pqp-emulator-ready" },
+            origin: window.location.origin,
+            source: target,
+          }),
+        );
+      });
+    }
+    expect(postMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("listens from the moment the dialog mounts, before any frame exists, and adds no listener later", async () => {
+    const add = vi.spyOn(window, "addEventListener");
+    configAnswer.enabled = true;
+    await mount(true);
+    expect(frame()).toBeNull();
+    const atMount = add.mock.calls.filter(([type]) => type === "message").length;
+    expect(atMount).toBe(1);
+    pickFile(new File([new Uint8Array(4)], "x.nes"));
+    expect(add.mock.calls.filter(([type]) => type === "message").length).toBe(atMount);
+    expect(frameReady()).toHaveBeenCalledTimes(1);
+    add.mockRestore();
   });
 });
 
@@ -254,7 +287,7 @@ describe("a frame that never answers, and a flag that stops answering", () => {
         window.dispatchEvent(
           new MessageEvent("message", {
             data: { type: "pqp-emulator-initialized" },
-            origin: "null",
+            origin: window.location.origin,
             source: frame()!.contentWindow,
           }),
         );
@@ -274,7 +307,7 @@ describe("a frame that never answers, and a flag that stops answering", () => {
       window.dispatchEvent(
         new MessageEvent("message", {
           data: { type: "pqp-emulator-error", reason: "load" },
-          origin: "null",
+          origin: window.location.origin,
           source: frame()!.contentWindow,
         }),
       );
@@ -346,12 +379,12 @@ describe("the emulator room's source", () => {
     }
   });
 
-  it("sandboxes the frame without same-origin and names no same-origin allowance", () => {
+  it("never embeds the emulator itself: only our own room page, which sandboxes it", () => {
     const text = readFileSync(sources[0]!, "utf8");
-    expect(text).toContain('sandbox="allow-scripts"');
+    expect(text).toContain('const FRAME_SRC = "/emulator/room.html"');
     const code = text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    expect(code).not.toContain("frame.html");
     expect(code).not.toContain("allow-same-origin");
-    expect(code).not.toMatch(/allow-(top-navigation|popups|forms|modals|downloads)/);
   });
 
   it("never reads the picked file's name into anything but the extension check", () => {

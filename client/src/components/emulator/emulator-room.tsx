@@ -17,8 +17,10 @@ import type { Locale } from "@/lib/locale";
  *
  *  - pqp provides no game. There is no list, no link, no search, no download.
  *  - The game file is picked from the player's own disk with a file input and
- *    handed to the emulator in this browser, through a same-origin postMessage
- *    to a frame whose policy allows no other network (`public/emulator/
+ *    handed to the emulator in this browser, by postMessage, through our own
+ *    small page (`public/emulator/room.html`, whose `frame-src` keeps the
+ *    emulator's frame from navigating itself away) into a frame sandboxed to an
+ *    opaque origin whose policy allows no other network (`public/emulator/
  *    frame.html`). It is never uploaded, never sent to a pqp endpoint, never
  *    stored, and its name is never read into a log, an event or a request.
  *  - Nothing is shared. No room state, no netplay, no relay. One person, one
@@ -27,10 +29,12 @@ import type { Locale } from "@/lib/locale";
  * `client/src/components/emulator/emulator-room.test.tsx` pins the first two.
  */
 
-const FRAME_SRC = "/emulator/frame.html";
-
-/** What `event.origin` is for a message from a sandboxed (opaque-origin) frame. */
-const FRAME_ORIGIN = "null";
+/**
+ * Our own page that holds the emulator's sandboxed frame (same origin as the
+ * app, first-party code). The emulator is NOT embedded here directly: this page
+ * carries the `frame-src` policy that stops it navigating itself away.
+ */
+const FRAME_SRC = "/emulator/room.html";
 
 /** How long a frame has to say it is ready before the room gives up on it. */
 const FRAME_READY_TIMEOUT_MS = 10_000;
@@ -96,11 +100,15 @@ function EmulatorRoomDialog({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       const frame = frameRef.current?.contentWindow;
-      // The frame is sandboxed into an opaque origin, which is "null" here.
-      if (!frame || event.source !== frame || event.origin !== FRAME_ORIGIN) {
+      // Only our own room page, from our own origin. (The emulator itself is a
+      // sandboxed frame INSIDE that page and never talks to this one.)
+      if (!frame || event.source !== frame || event.origin !== window.location.origin) {
         return;
       }
       const type = (event.data as { type?: unknown } | null)?.type;
+      // The room page repeats "ready" until it gets the file, so a message sent
+      // before this listener was looking is not the only chance; the second and
+      // later ones find the file already handed over and do nothing.
       if (type === "pqp-emulator-ready" && fileRef.current) {
         readyRef.current = true;
         frame.postMessage(
@@ -109,11 +117,9 @@ function EmulatorRoomDialog({ onClose }: { onClose: () => void }) {
             file: fileRef.current,
             language: FRAME_LANGUAGE[localeRef.current],
           },
-          // The frame's origin is opaque and cannot be named; the target is
-          // the one window object, which only this page holds.
-          "*",
+          window.location.origin,
         );
-        // The frame has its own copy of the reference now.
+        // The room page has its own copy of the reference now.
         fileRef.current = null;
       } else if (type === "pqp-emulator-initialized") {
         initializedRef.current = true;
@@ -226,12 +232,9 @@ function EmulatorRoomDialog({ onClose }: { onClose: () => void }) {
           <iframe
             key={frameKey}
             ref={frameRef}
-            // Scripts only, NO `allow-same-origin`: the emulator and any game
-            // file that tries to attack it run in an opaque origin, with no
-            // access to this page, the app's cookies or storage, or the app's
-            // API as the signed-in person.
-            sandbox="allow-scripts"
-            src={`${FRAME_SRC}?o=${encodeURIComponent(window.location.origin)}`}
+            // Our own page, not the emulator: the emulator is a sandboxed
+            // (`allow-scripts`, never `allow-same-origin`) frame inside it.
+            src={FRAME_SRC}
             title={t("emulator.frameTitle")}
             allow="autoplay; fullscreen; gamepad"
             referrerPolicy="no-referrer"

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <!--
+      THE PAGE THAT HOLDS THE EMULATOR'S FRAME, AND WHY IT EXISTS.
+
+      The emulator itself runs in a sandboxed frame with an opaque origin
+      (frame.html). A hostile game file that managed to run code there could not
+      touch the app, but it could still make that frame NAVIGATE itself to
+      any address with the file's bytes in the query string, and no directive of
+      the frame's own policy stops a document from navigating itself (`navigate-to`
+      was removed from browsers). The one control that does is the EMBEDDING
+      page's `frame-src`: a frame's navigations are checked against the policy of
+      the document that holds it. The app page cannot carry that policy (it
+      embeds YouTube and others), so this small first-party page does, and the app
+      embeds this page instead of the emulator directly.
+
+      `frame-src 'self'` lets the emulator's frame be this site's own files and
+      nothing else; `connect-src`, `img-src` and the rest are `'none'` because
+      this page only relays messages. room.js also treats a second `load` of the
+      frame as hostile and removes it.
+
+      client/src/lib/emulator-frame.test.ts reads this tag.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; frame-src 'self'; form-action 'none'; base-uri 'none'"
+    />
+    <title>Emulator</title>
+    <link rel="stylesheet" href="/emulator/room.css" />
+  </head>
+  <body>
+    <div id="stage"></div>
+    <script src="/emulator/room.js"></script>
+  </body>
+</html>
