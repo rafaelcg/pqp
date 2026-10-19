@@ -300,6 +300,42 @@ describeDb("the sweeps of a live app session", () => {
       expect(await (await import("./next-host.js")).pickNextHost(id)).toBeNull();
     });
 
+    it("in a voice channel the next host must be able to CONNECT, even holding VIEW and USE_APPS", async () => {
+      const id = await start(world.owner, world.channels.lobby);
+      const hostRec = await join(id, world.owner);
+      const first = await join(id, world.member);
+      await settle(15);
+      await join(id, world.moderator);
+      await roles.upsertChannelOverwrite(
+        world.channels.lobby,
+        world.serverId,
+        "member",
+        world.member.id,
+        0n,
+        Permission.CONNECT,
+      );
+      await wsApps.handleAppSocketClose(hostRec.socket);
+      await sweep(0);
+      const { pickNextHost } = await import("./next-host.js");
+      // The longest seated cannot connect any more: the next one is chosen.
+      expect(await pickNextHost(id)).toBe(world.moderator.id);
+      void first;
+    });
+
+    it("the delete of a channel is stopped when its session cannot be ended", async () => {
+      const channel = await servers.createChannel(world.serverId, "to-keep", "text");
+      const id = await start(world.owner, channel.id);
+      // The end cannot be written: a constraint that refuses this reason.
+      await q(`ALTER TABLE app_sessions ADD CONSTRAINT apps_test_no_channel_gone
+                 CHECK (end_reason IS DISTINCT FROM 'channel-gone') NOT VALID`);
+      try {
+        await expect(sweeps.endSessionsOfChannel(channel.id)).rejects.toThrow();
+      } finally {
+        await q(`ALTER TABLE app_sessions DROP CONSTRAINT apps_test_no_channel_gone`);
+      }
+      expect((await row(id)).status).toBe("live");
+    });
+
     it("an app that is hostBound ends with host-gone after the same two minutes, and shows no handoff", async () => {
       const bound = await publishTestApp(modules, world.serverId, {
         id: "bound-app",

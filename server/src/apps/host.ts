@@ -53,7 +53,7 @@ export async function completeHandoff(
   logEvent("apps.session.handoff", { sessionId, via });
   // `isHost` flips in everybody's snapshot, and the strip's countdown clears.
   announceRoster(sessionId, row.channel_id);
-  void announceChannelApp(row.channel_id, { immediate: true });
+  void announceChannelApp(row.channel_id, { immediate: true }).catch(() => {});
   return true;
 }
 

@@ -12,6 +12,8 @@ import { loadPinnedManifest } from "./manifests.js";
 
 /** How long a session waits for its host before the role moves or the session ends. */
 export const APP_HANDOFF_GRACE_MS = 2 * 60_000;
+/** Permission reads in flight at once while looking for the next host. */
+const NEXT_HOST_WIDTH = 8;
 
 /**
  * Who would host next, right now: the longest seated participant (oldest
@@ -28,9 +30,12 @@ export async function pickNextHost(sessionId: string): Promise<string | null> {
     app_id: string;
     app_version: string;
     host_user_id: string | null;
+    channel_type: string;
   }>(
-    `SELECT server_id, channel_id, app_id, app_version, host_user_id
-       FROM app_sessions WHERE id = $1 AND status = 'live'`,
+    `SELECT s.server_id, s.channel_id, s.app_id, s.app_version, s.host_user_id,
+            c.type AS channel_type
+       FROM app_sessions s JOIN channels c ON c.id = s.channel_id
+      WHERE s.id = $1 AND s.status = 'live'`,
     [sessionId],
   );
   const row = session.rows[0];
@@ -48,19 +53,28 @@ export async function pickNextHost(sessionId: string): Promise<string | null> {
       ORDER BY joined_at, user_id`,
     [sessionId, row.host_user_id],
   );
-  for (const candidate of candidates.rows) {
-    const permissions = await computeMemberPermissions(
-      row.server_id,
-      candidate.user_id,
-      row.channel_id,
-    );
-    if (
+  // In a voice channel (or for an app that asks for it) a host must be able to
+  // CONNECT: the platform's join floor, so the role never goes to a seat that
+  // could not take one again.
+  const needsConnect = row.channel_type === "voice" || manifest.requires.join === "CONNECT";
+  const qualifies = async (userId: string): Promise<boolean> => {
+    const permissions = await computeMemberPermissions(row.server_id, userId, row.channel_id);
+    return (
       hasPermission(permissions, Permission.VIEW_CHANNEL) &&
       hasPermission(permissions, Permission.USE_APPS) &&
+      (!needsConnect || hasPermission(permissions, Permission.CONNECT)) &&
       (manifest.requires.start !== "MANAGE_CHANNELS" ||
         hasPermission(permissions, Permission.MANAGE_CHANNELS))
-    ) {
-      return candidate.user_id;
+    );
+  };
+  // Longest seated first, a few permission reads at a time: the answer is the
+  // first qualifying candidate in that order, never the fastest to answer.
+  for (let i = 0; i < candidates.rows.length; i += NEXT_HOST_WIDTH) {
+    const chunk = candidates.rows.slice(i, i + NEXT_HOST_WIDTH);
+    const answers = await Promise.all(chunk.map((candidate) => qualifies(candidate.user_id)));
+    const found = answers.indexOf(true);
+    if (found !== -1) {
+      return chunk[found]!.user_id;
     }
   }
   return null;

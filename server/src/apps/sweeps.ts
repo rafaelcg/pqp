@@ -22,7 +22,7 @@ import {
   recordAppParticipantsRemoved,
   recordAppSweep,
 } from "./metrics.js";
-import { APP_ORPHAN_HOLD_MS, touchEmpty } from "./participants.js";
+import { APP_ORPHAN_HOLD_MS, stampEmptySessions } from "./participants.js";
 import { endSessionRow } from "./sessions.js";
 
 /**
@@ -61,6 +61,8 @@ import { endSessionRow } from "./sessions.js";
  */
 
 export const APP_SWEEP_INTERVAL_MS = 15_000;
+/** Permission reads in flight at once while checking seats. */
+const CONNECT_CHECK_WIDTH = 8;
 export const APP_EMPTY_AFTER_MS = 5 * 60_000;
 export const APP_MAX_DURATION_MS = 12 * 60 * 60_000;
 
@@ -201,7 +203,6 @@ export async function runAppSweep(options: { now?: Date } = {}): Promise<AppSwee
         announceRoster(sessionId, channelId);
       }
     }
-    await touchEmpty([...new Set(removed.map((entry) => entry.sessionId))]);
   }
 
   // 5: the seats of an instance that is gone.
@@ -219,17 +220,21 @@ export async function runAppSweep(options: { now?: Date } = {}): Promise<AppSwee
         }
       }
     }
-    if (dead.released.length > 0) {
-      await touchEmpty([...new Set(dead.released.map((entry) => entry.sessionId))]);
+  }
+
+  // 6: the host. One read for every session, then a write only where something moved.
+  const hostStates = await readHostStates(sessions.map((s) => s.id));
+  for (const session of [...sessions]) {
+    const state = hostStates.get(session.id);
+    if (state) {
+      await sweepHost(session, state, now, result, end);
     }
   }
 
-  // 6: the host.
-  for (const session of [...sessions]) {
-    await sweepHost(session, now, result, end);
-  }
-
-  // 7: nobody here for five minutes.
+  // 7: nobody here for five minutes. The clock of every session with nobody is
+  // started first (idempotent: a write that failed earlier is repaired here),
+  // from the clock this sweep was handed.
+  await stampEmptySessions({ now });
   const stillLive = await getPool().query<{ id: string }>(
     `SELECT s.id FROM app_sessions s
       WHERE s.status = 'live' AND s.id = ANY($1::uuid[])
@@ -293,22 +298,31 @@ async function removeParticipantsWhoLostAccess(
       `SELECT user_id FROM app_session_participants WHERE session_id = $1 AND left_at IS NULL`,
       [session.id],
     );
-    for (const person of seated.rows) {
-      const permissions = await computeMemberPermissions(
-        session.server_id,
-        person.user_id,
-        session.channel_id,
+    // A few at a time: each is one cached permission read, and a voice session
+    // can seat dozens.
+    for (let i = 0; i < seated.rows.length; i += CONNECT_CHECK_WIDTH) {
+      const chunk = seated.rows.slice(i, i + CONNECT_CHECK_WIDTH);
+      const checked = await Promise.all(
+        chunk.map(async (person) => ({
+          person,
+          connects: hasPermission(
+            await computeMemberPermissions(session.server_id, person.user_id, session.channel_id),
+            Permission.CONNECT,
+          ),
+        })),
       );
-      if (hasPermission(permissions, Permission.CONNECT)) {
-        continue;
-      }
-      const gone = await getPool().query(
-        `UPDATE app_session_participants SET left_at = NOW()
-          WHERE session_id = $1 AND user_id = $2 AND left_at IS NULL`,
-        [session.id, person.user_id],
-      );
-      if (gone.rowCount) {
-        removed.push({ sessionId: session.id, userId: person.user_id });
+      for (const { person, connects } of checked) {
+        if (connects) {
+          continue;
+        }
+        const gone = await getPool().query(
+          `UPDATE app_session_participants SET left_at = NOW()
+            WHERE session_id = $1 AND user_id = $2 AND left_at IS NULL`,
+          [session.id, person.user_id],
+        );
+        if (gone.rowCount) {
+          removed.push({ sessionId: session.id, userId: person.user_id });
+        }
       }
     }
   }
@@ -362,32 +376,52 @@ async function sweepDeadInstanceSeats(now: Date): Promise<{
   return out;
 }
 
-async function sweepHost(
-  session: LiveSession,
-  now: Date,
-  result: AppSweepResult,
-  end: (session: LiveSession, reason: AppEndReason) => Promise<void>,
-): Promise<void> {
-  const fresh = await getPool().query<{
-    host_user_id: string | null;
-    host_gone_at: Date | null;
-    host_present: boolean;
-    seated: number;
-  }>(
-    `SELECT s.host_user_id, s.host_gone_at,
+/**
+ * Tell the channel's viewers where the countdown stands, and remember who was
+ * named only once that went out: a failed tell is made again on the next tick.
+ */
+async function tellCountdown(session: LiveSession, next: string | null): Promise<void> {
+  try {
+    await announceChannelApp(session.channel_id, { immediate: true });
+    announcedNext.set(session.id, next);
+  } catch (error) {
+    announcedNext.delete(session.id);
+    logEvent("apps.countdownTellFailed", { sessionId: session.id, error: String(error) });
+  }
+}
+
+interface HostState {
+  host_user_id: string | null;
+  host_gone_at: Date | null;
+  host_present: boolean;
+  seated: number;
+}
+
+/** Host presence and the seat count of every given live session, in one statement. */
+async function readHostStates(sessionIds: readonly string[]): Promise<Map<string, HostState>> {
+  if (sessionIds.length === 0) {
+    return new Map();
+  }
+  const result = await getPool().query<HostState & { id: string }>(
+    `SELECT s.id, s.host_user_id, s.host_gone_at,
             EXISTS (SELECT 1 FROM app_session_participants p
                      WHERE p.session_id = s.id AND p.user_id = s.host_user_id
                        AND p.left_at IS NULL AND p.orphaned_at IS NULL) AS host_present,
             (SELECT count(*)::int FROM app_session_participants p
               WHERE p.session_id = s.id AND p.left_at IS NULL) AS seated
-       FROM app_sessions s WHERE s.id = $1 AND s.status = 'live'`,
-    [session.id],
+       FROM app_sessions s WHERE s.id = ANY($1::uuid[]) AND s.status = 'live'`,
+    [[...sessionIds]],
   );
-  const state = fresh.rows[0];
-  if (!state) {
-    return;
-  }
+  return new Map(result.rows.map((row) => [row.id, row]));
+}
 
+async function sweepHost(
+  session: LiveSession,
+  state: HostState,
+  now: Date,
+  result: AppSweepResult,
+  end: (session: LiveSession, reason: AppEndReason) => Promise<void>,
+): Promise<void> {
   if (state.host_present) {
     if (state.host_gone_at !== null) {
       // The host is back (or a held seat was reclaimed): the countdown is over.
@@ -397,7 +431,7 @@ async function sweepHost(
         [session.id, state.host_user_id],
       );
       announcedNext.delete(session.id);
-      void announceChannelApp(session.channel_id, { immediate: true });
+      void announceChannelApp(session.channel_id, { immediate: true }).catch(() => {});
     }
     return;
   }
@@ -413,8 +447,7 @@ async function sweepHost(
       result.hostGoneStamped += 1;
       recordAppHostGone();
       logEvent("apps.session.hostGone", { sessionId: session.id });
-      announcedNext.set(session.id, await pickNextHost(session.id));
-      void announceChannelApp(session.channel_id, { immediate: true });
+      await tellCountdown(session, await pickNextHost(session.id));
     }
     return;
   }
@@ -422,8 +455,7 @@ async function sweepHost(
   // The countdown is running: tell everyone again if who is next changed.
   const next = await pickNextHost(session.id);
   if (!announcedNext.has(session.id) || announcedNext.get(session.id) !== next) {
-    announcedNext.set(session.id, next);
-    void announceChannelApp(session.channel_id, { immediate: true });
+    await tellCountdown(session, next);
   }
 
   if (now.getTime() - state.host_gone_at.getTime() < APP_HANDOFF_GRACE_MS) {
@@ -482,12 +514,11 @@ export async function endSessionsOfChannel(channelId: string): Promise<number> {
   );
   let ended = 0;
   for (const row of live.rows) {
-    try {
-      if ((await endSessionRow(row.id, "channel-gone", null)).ended) {
-        ended += 1;
-      }
-    } catch (error) {
-      logEvent("apps.channelGoneEndFailed", { sessionId: row.id, error: String(error) });
+    // A failure is NOT swallowed: the delete route calls this first, and a
+    // channel must not be deleted while its session could not be ended, or its
+    // viewers would never hear it was over.
+    if ((await endSessionRow(row.id, "channel-gone", null)).ended) {
+      ended += 1;
     }
   }
   return ended;
