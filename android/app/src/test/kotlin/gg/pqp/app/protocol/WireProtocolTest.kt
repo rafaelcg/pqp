@@ -158,6 +158,10 @@ class WireProtocolTest {
             // land looked sent, on the phone, until the app was restarted.
             "message-rejected",
             "sanction-notice",
+            // A server bot did not answer THIS member (a limit, or busy). Sent
+            // to them alone; losing the branch puts back the silence it exists
+            // to replace.
+            "bot-notice",
             // voice
             "welcome",
             "peer-joined",

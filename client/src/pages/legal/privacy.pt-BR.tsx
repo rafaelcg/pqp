@@ -27,7 +27,7 @@ export const privacyPtBr: LegalDocument = {
   description:
     "Como o pqp.gg trata dados pessoais: o que a gente coleta, as bases legais, onde os dados são tratados, por quanto tempo ficam e os seus direitos sob a LGPD e a lei de proteção de dados do Reino Unido.",
   heading: "Política de Privacidade",
-  updated: "12 de outubro de 2026",
+  updated: "18 de outubro de 2026",
   sections: [
     {
       id: "intro",
@@ -138,7 +138,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "what-we-collect",
-      sourceRev: "a1a0596f",
+      sourceRev: "edf70505",
       heading: "O que a gente coleta",
       body: (
         <>
@@ -270,6 +270,22 @@ export const privacyPtBr: LegalDocument = {
             gente. A gente nunca guarda o seu endereço IP nem a sua cidade para
             isso. Ele só serve para escolher onde rodam as chamadas de voz de um
             servidor: veja &quot;Chamadas de voz&quot;.
+          </p>
+          <p>
+            <strong>Qual app você usa.</strong> Quando o app se conecta, a
+            gente lê o user agent do seu navegador e guarda na sua conta só um
+            resumo curto: se você está na web, no app de desktop, no app do
+            iPhone ou no app do Android, a versão do nosso app quando ele
+            informa, a família do seu sistema operacional (por exemplo Windows
+            ou macOS) e a família do seu navegador (por exemplo Chrome ou
+            Firefox), e quando a gente viu isso pela última vez. A gente não
+            guarda o user agent em si, o seu endereço IP, o modelo do seu
+            aparelho nem números de versão do seu navegador ou do sistema. Só
+            quem opera esta instância pode ler, para descobrir por que uma
+            chamada ou um compartilhamento de tela não funciona para você. Não
+            aparece para outros membros nem no seu perfil. A gente apaga 90
+            dias depois de ver esse app pela última vez, e quando você apaga a
+            sua conta.
           </p>
           <p>
             <strong>Notificações push.</strong> Se você liga as notificações

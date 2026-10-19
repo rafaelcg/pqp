@@ -1,4 +1,11 @@
 import type {
+  CreateServerBotRequest,
+  ServerBotDto,
+  BotTestRequest,
+  BotTestResponse,
+  ServerBotOverview,
+  ServerBotsConfig,
+  UpdateServerBotRequest,
   ForumPostDetailResponse,
   ForumSettings,
   ForumTag,
@@ -3041,3 +3048,47 @@ export const deleteSoundboardSound = (serverId: string, soundId: string) =>
   apiFetch<{ ok: true }>(`/api/servers/${serverId}/soundboard/${soundId}`, {
     method: "DELETE",
   });
+
+// ------------------------------------------------------------ server bots
+
+/** `GET /api/bots/config?serverId=`: the `custom_bots` flag and a model to answer. */
+export const fetchBotsConfig = (serverId: string) =>
+  apiFetch<ServerBotsConfig>(`/api/bots/config?serverId=${encodeURIComponent(serverId)}`);
+
+export const fetchServerBots = (serverId: string) =>
+  apiFetch<{ bots: ServerBotDto[]; maxBots: number }>(`/api/servers/${serverId}/bots`);
+
+export const createServerBot = (serverId: string, body: CreateServerBotRequest) =>
+  post<{ bot: ServerBotDto; missingPermissions?: string }>(`/api/servers/${serverId}/bots`, body);
+
+export const updateServerBot = (
+  serverId: string,
+  botId: string,
+  body: UpdateServerBotRequest,
+) =>
+  patch<{ bot: ServerBotDto; missingPermissions?: string }>(
+    `/api/servers/${serverId}/bots/${botId}`,
+    body,
+  );
+
+/** One turn of the wizard's practice chat with a bot that does not exist yet. */
+export const testServerBot = (serverId: string, body: BotTestRequest) =>
+  post<BotTestResponse>(`/api/servers/${serverId}/bots/test`, body);
+
+/** The wizard's last step: post the bot's hello, as the bot, in one of its channels. */
+export const postBotIntro = (serverId: string, botId: string, body: { channelId: string; body: string; nonce?: string }) =>
+  post<{ messageId: string }>(`/api/servers/${serverId}/bots/${botId}/intro`, body);
+
+/** The bot settings page's first tab: today's numbers and recent activity. */
+export const fetchBotOverview = (serverId: string, botId: string) =>
+  apiFetch<ServerBotOverview>(`/api/servers/${serverId}/bots/${botId}/overview`);
+
+export const deleteServerBot = (serverId: string, botId: string) =>
+  apiFetch<{ ok: true }>(`/api/servers/${serverId}/bots/${botId}`, { method: "DELETE" });
+
+/** A bot plan card's Confirm or Cancel. 409 means already decided or expired. */
+export const decideBotPlan = (planId: string, decision: "yes" | "no") =>
+  post<{ ok: true }>(`/api/bots/plans/${planId}/decision`, { decision });
+
+export const answerBotAsk = (messageId: string, option: number) =>
+  post<{ ok: true }>(`/api/bots/asks/${messageId}/answer`, { option });

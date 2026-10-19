@@ -299,6 +299,43 @@ describeDb("the app catalog loader", () => {
     expect(await versions()).toHaveLength(1);
   });
 
+  it("a version that appears under a different hash between the read and the insert is refused", async () => {
+    const entry = testCatalogEntry(testManifest());
+    // Another writer wins the insert after this load read what existed.
+    const spy = console.error;
+    console.error = () => {};
+    const { getPool: pool } = await import("../db.js");
+    const real = pool();
+    const originalConnect = real.connect.bind(real);
+    let injected = false;
+    (real as unknown as { connect: unknown }).connect = async (...args: unknown[]) => {
+      const client = await (originalConnect as (...a: unknown[]) => Promise<any>)(...args);
+      const query = client.query.bind(client);
+      client.query = async (text: unknown, ...rest: unknown[]) => {
+        if (!injected && typeof text === "string" && text.includes("WITH ins AS (\n       INSERT INTO app_versions")) {
+          injected = true;
+          await query(
+            `INSERT INTO app_versions (app_id, version, manifest, manifest_sha256, entry_sha256)
+             VALUES ('pqp-eco', '1.0.0', $1::jsonb, $2, $3)`,
+            [JSON.stringify(entry.manifest), "e".repeat(64), "a".repeat(64)],
+          );
+        }
+        return query(text, ...rest);
+      };
+      return client;
+    };
+    try {
+      const result = await loadAppCatalog({ entries: [entry], dev: false });
+      expect(result.refused).toEqual([{ appId: "pqp-eco", version: "1.0.0", reason: "hash-changed" }]);
+      expect(result.versionsInserted).toBe(0);
+    } finally {
+      (real as unknown as { connect: unknown }).connect = originalConnect;
+      console.error = spy;
+    }
+    expect(injected).toBe(true);
+    expect((await versions())[0]!.manifest_sha256).toBe("e".repeat(64));
+  });
+
   it("two loads at once write one set of rows", async () => {
     const entry = testCatalogEntry(testManifest());
     const results = await Promise.all([

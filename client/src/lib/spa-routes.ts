@@ -42,6 +42,7 @@ const STATIC_PATHS: ReadonlySet<string> = new Set([
   "/vem/gratis",
   "/blog",
   "/qa/ui",
+  "/qa/bots",
   // Pages itself redirects this to `/`; a monitor may also request it.
   "/index.html",
   // Probes a monitor may point at the site. They answer with the shell today
