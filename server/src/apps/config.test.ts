@@ -185,6 +185,7 @@ describeDb("GET /api/apps/config", () => {
       presence: { phrase: "presence.phrase", short: "presence.short" },
       channelTypes: ["text", "voice"],
       players: { min: 1, max: 8, spectators: true },
+      requires: { start: "USE_APPS", join: "VIEW_CHANNEL" },
     });
     expect(app!.entry.url).toBe("https://apps.example.test/pqp-eco/1.0.0/index.html");
     expect(app!.assets).toEqual([

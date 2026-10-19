@@ -56,6 +56,8 @@ export const appConfigEntrySchema = z
     presence: shape.presence,
     channelTypes: shape.channelTypes,
     players: shape.players,
+    /** What starting and joining need, so the launcher can say so before the click. */
+    requires: shape.requires,
     capabilities: shape.capabilities,
     content: shape.content,
     hostBound: shape.hostBound,
