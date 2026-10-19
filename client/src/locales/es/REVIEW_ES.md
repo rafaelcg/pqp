@@ -22,15 +22,30 @@ For a friend in Mexico, Argentina, Colombia or Chile. You do not need to read co
 - Coin flip: "cara o cruz" (Mexico says "águila o sol", Argentina "cara o ceca").
 - `voice.watchParty.startingSoon.line4` keeps the censored swear the Portuguese has. Too much?
 
-## Landing
+## Home
+
+The page at `/` (`client/src/pages/home/`, keys `home.*`). Lines 1, 4 and 5 join a title and its accent the way the page shows them.
 
 | # | Key | Spanish | OK? |
 |---|---|---|---|
-| 1 | `landing.hero.title` | Voz, pantalla compartida y chat. Para tu gente, a tu manera. | |
-| 2 | `landing.hero.body` | Crea la comunidad, manda el link y súmate a la llamada. Pantalla compartida con sonido, watch parties para más de cien personas, y el código es abierto: el servidor puede ser tuyo. | |
-| 3 | `landing.hero.hint` | ¿Tienes un enlace de invitación? Ábrelo. ¿Ya tienes cuenta? Entra. | |
-| 4 | `landing.cta.title` | La sala está vacía. Arregla eso. | |
-| 5 | `landing.cta.body` | Arma una comunidad en menos de un minuto. Al caos lo invitas después. | |
+| 1 | `home.hero.title` | Tu gente en una sala que es de ustedes. | |
+| 2 | `home.hero.body` | Voz, pantalla compartida y chat, directo en el navegador. ¿Vienes de Discord? Pega el link de la plantilla y la estructura del servidor viene contigo. | |
+| 3 | `home.night.party.body` | El canal de watch party aguanta casa llena: uno comparte la pantalla, todos miran juntos y comentan en el mismo lugar. | |
+| 4 | `home.toys.title` | Los detalles que sostienen el caos. | |
+| 5 | `home.end.titleLead`, `home.end.title` | Se acabó la página. Llama a tu gente. | |
+
+What the voice pass of October 18, 2026 changed in Spanish. Check the After column too: write OK, or the line you would say instead.
+
+| Key | Before | After | OK? |
+|---|---|---|---|
+| `home.hero.body` | ...la estructura del servidor se viene contigo. | ...la estructura del servidor viene contigo. (same verb as the import title) | |
+| `home.night.share.title` | Comparte tu pantalla. En Chrome y Edge, el sonido va incluido. | Comparte tu pantalla. En Chrome y Edge, el sonido también va. | |
+| `home.night.party.body` | ...aguanta la sala llena... | ...aguanta casa llena... ("sala" now means only the group's place) | |
+| `home.move.lede`, `home.move.sample.intro`, `home.move.note` | enlace de la plantilla | link de la plantilla ("link" in casual copy) | |
+| `home.move.paste.label`, `home.move.steps.link` | Enlace de la plantilla de Discord, Enlace | Link de la plantilla de Discord, Link | |
+| `home.handle.hint.empty` | Sin acentos: la á queda a, la ñ queda n. | Sin acentos: á se vuelve a, ñ se vuelve n. | |
+| `home.code.ours.note` | Las salas de un servidor pasan al servidor de voz cuando la sala se llena. | Las llamadas de un servidor pasan al servidor de voz cuando se llenan. | |
+| `home.code.yours.note` | Sin servidor de medios, cada canal de voz aguanta unas ocho personas. | Sin servidor de voz, cada llamada aguanta unas ocho personas. (one name for the voice server) | |
 
 ## /vem (campaign)
 

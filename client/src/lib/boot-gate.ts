@@ -8,7 +8,8 @@
  * product screenshot) for the same slow link and the same main thread. So on
  * that route, and only on that route, the first React render waits for the page
  * to finish loading and the browser to be idle, or for the visitor's first
- * touch, click or key press, or for a hard ceiling, whichever comes first.
+ * touch, click, key press or wheel turn, or for a hard ceiling, whichever comes
+ * first.
  *
  * Every other route renders at once, exactly as before: there is nothing on
  * screen to protect, and `/app` in particular must not wait for anything.
@@ -16,15 +17,25 @@
  * The ceiling matters more than it looks. `load` waits for every subresource, so
  * one stalled request would otherwise hold the page on its static copy for as
  * long as the request hangs.
+ *
+ * This gate is not the whole wait. Once it opens, `main.tsx` also waits for the
+ * home page's own chunk, with no ceiling, because rendering without it would
+ * swap the static copy (plain links that already work) for the loading shell.
  */
 
-/** Longest the static copy is allowed to stand alone, in ms. */
+/** Longest this gate holds the first render, in ms. */
 export const HYDRATE_CEILING_MS = 4000;
 
 /** Longest wait, after `load`, for a quiet moment. */
 export const HYDRATE_IDLE_TIMEOUT_MS = 1500;
 
-const INTERACTIONS = ["pointerdown", "keydown", "touchstart"] as const;
+/**
+ * What counts as the visitor starting to use the page. "wheel" is there because
+ * on a computer the first thing a visitor does is often scroll with the mouse,
+ * and the live page is what animates the scroll; `defer-entry.ts` starts the
+ * bundle on the same list.
+ */
+export const INTERACTIONS = ["pointerdown", "keydown", "touchstart", "wheel"] as const;
 
 /** Whether this document is the home page with its prerendered first screen. */
 export function hasPrerenderedHero(doc: Document = document): boolean {
@@ -35,23 +46,45 @@ export function hasPrerenderedHero(doc: Document = document): boolean {
 }
 
 /**
- * Resolves once the prerendered block's visible pictures are decoded and a
- * couple of frames have been drawn, or after `timeoutMs`, whichever is first.
+ * Whether `img` is drawn inside the first viewport. A picture in a hidden
+ * language block has an empty box, and one below the fold (the hero frame on a
+ * short phone screen) is not on screen yet, so neither is waited for.
+ */
+export function isInFirstViewport(img: Element, width: number, height: number): boolean {
+  const r = img.getBoundingClientRect();
+  return (
+    r.width > 0 &&
+    r.height > 0 &&
+    r.bottom > 0 &&
+    r.right > 0 &&
+    r.top < height &&
+    r.left < width
+  );
+}
+
+/**
+ * Resolves once the prerendered block's pictures in the first viewport are
+ * decoded and a couple of frames have been drawn, or after `timeoutMs`,
+ * whichever is first.
  *
  * Replacing the static block before its pictures have painted would make the
  * live page's copy of them the largest contentful paint (a new element, found
  * by script, so its timing depends on the bundle) instead of the one already on
  * screen, and on a fast connection would show a frame with the picture missing.
- * Never rejects.
+ * A picture off screen cannot be either, and waiting for one would only hold
+ * the page until the ceiling. Never rejects.
  */
 export async function whenPrerenderPainted(
   doc: Document = document,
   timeoutMs = 1200,
 ): Promise<void> {
   try {
+    const view = doc.defaultView;
+    const width = view?.innerWidth ?? 0;
+    const height = view?.innerHeight ?? 0;
     const images = Array.from(
       doc.querySelectorAll<HTMLImageElement>("#pre-hero img"),
-    ).filter((img) => img.offsetParent !== null);
+    ).filter((img) => isInFirstViewport(img, width, height));
     const decoded = Promise.all(
       images.map((img) =>
         typeof img.decode === "function" ? img.decode().catch(() => {}) : undefined,

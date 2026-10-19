@@ -2885,6 +2885,17 @@ function logNoSharer(voiceChannelId: string, presenterPeerId: string): void {
     channelId: voiceChannelId,
     presenterPeerId,
     graceMs: noSharerGraceMs(),
+    // WHAT ACTUALLY APPLIES. `graceMs` alone read as "the broadcast ends in
+    // 5 s" (the 2026-10-17 question): for a presenter this process saw share,
+    // the grace is the larger of the two (`pushLiveHls`), i.e. the return
+    // window, and a socket drop never gets here at all (an orphaned seat still
+    // counts as the sharer).
+    effectiveGraceMs: Math.max(
+      noSharerGraceMs(),
+      lastPresenterByChannel.get(voiceChannelId)?.peerId === presenterPeerId
+        ? presenterReturnGraceMs()
+        : 0,
+    ),
     peers: getRoomPeers(voiceChannelId).map((peer) => ({
       id: peer.id,
       watchParty: peer.watchParty,

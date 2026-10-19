@@ -221,16 +221,28 @@
             for (var i = 0; i < langs.length && !loc; i++) loc = norm(langs[i]);
           }
           d.lang = loc || "en";
-          // Which download line the hero will show under its buttons, so the
-          // static block leaves the right amount of room for it (a store badge
-          // on a phone, one line of text elsewhere). Mirrors isAndroidDevice()
-          // and isIOSDevice() in src/lib/downloads.ts.
+          // Which download line the hero will show, so the static block leaves
+          // the same room for it (index.css, `data-pre-download`). "ios" and
+          // "android" mirror isIOSDevice() and isAndroidDevice() in
+          // src/lib/downloads.ts (the TestFlight pill and the Play badge
+          // under the footage on a phone). "mac" mirrors the Mac branch of
+          // detectPlatform() there (a "Macintosh" with touch is an iPad),
+          // outside the desktop app: the hero holds a taller box for it under
+          // a coarse pointer.
           var ua = navigator.userAgent || "";
           if (
-            /Android|iPhone|iPad|iPod/i.test(ua) ||
+            /iPhone|iPad|iPod/i.test(ua) ||
             (/Macintosh/.test(ua) && "ontouchend" in document)
           ) {
-            d.setAttribute("data-plat", "phone");
+            d.setAttribute("data-plat", "ios");
+          } else if (/Android/i.test(ua)) {
+            d.setAttribute("data-plat", "android");
+          } else if (
+            /Macintosh/i.test(ua) &&
+            !((navigator.maxTouchPoints || 0) > 1) &&
+            !/Electron\//.test(ua)
+          ) {
+            d.setAttribute("data-plat", "mac");
           }
         }
       } catch (e) {}

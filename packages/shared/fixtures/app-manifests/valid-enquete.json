@@ -1,0 +1,97 @@
+{
+  "manifestVersion": 1,
+  "id": "pqp-enquete",
+  "version": "1.2.0-beta.1",
+  "publisher": "pqp",
+  "platformApi": 1,
+  "name": "name",
+  "description": "description",
+  "icon": "poll",
+  "category": "tool",
+  "channelTypes": [
+    "text",
+    "voice"
+  ],
+  "players": {
+    "min": 1,
+    "max": 64,
+    "spectators": true,
+    "maxSpectators": 200
+  },
+  "requires": {
+    "start": "USE_APPS",
+    "join": "VIEW_CHANNEL"
+  },
+  "capabilities": {
+    "identity": "display",
+    "share": "none",
+    "localFiles": {
+      "allowed": false
+    },
+    "peer": "none"
+  },
+  "hostBound": false,
+  "state": {
+    "maxBytes": 8192,
+    "maxWritesPerSecond": 10,
+    "writers": "participants"
+  },
+  "events": {
+    "maxPerSecond": 5,
+    "maxBytes": 256
+  },
+  "presence": {
+    "phrase": "presence.phrase",
+    "short": "presence.short"
+  },
+  "content": {
+    "userText": true,
+    "userImages": false
+  },
+  "entry": {
+    "path": "index.html",
+    "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  },
+  "license": {
+    "spdx": "AGPL-3.0-only",
+    "source": "https://github.com/rafaelcg/pqp"
+  },
+  "store": {
+    "summary": "store.summary",
+    "screenshots": [
+      {
+        "path": "store/poll.png",
+        "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "alt": "store.shot1"
+      }
+    ],
+    "homepage": "https://pqp.gg/apps",
+    "support": "https://github.com/rafaelcg/pqp/issues"
+  },
+  "i18n": {
+    "pt-BR": {
+      "name": "Enquete",
+      "description": "Pergunta pra galera e v\u00ea o resultado na hora.",
+      "presence.phrase": "{name} tá numa enquete",
+      "presence.short": "Numa enquete",
+      "store.summary": "Uma enquete rápida no canal.",
+      "store.shot1": "A enquete com tr\u00eas opções votadas"
+    },
+    "en": {
+      "name": "Poll",
+      "description": "Ask the group and see the result right away.",
+      "presence.phrase": "{name} is in a poll",
+      "presence.short": "In a poll",
+      "store.summary": "A quick poll in the channel.",
+      "store.shot1": "The poll with three voted options"
+    },
+    "es": {
+      "name": "Encuesta",
+      "description": "Pregunta al grupo y mira el resultado al instante.",
+      "presence.phrase": "{name} está en una encuesta",
+      "presence.short": "En una encuesta",
+      "store.summary": "Una encuesta rápida en el canal.",
+      "store.shot1": "La encuesta con tres opciones votadas"
+    }
+  }
+}

@@ -147,6 +147,30 @@
   --color-flag-es-yellow: #f1bf00;
 
   /*
+   * Breu, the face of a server bot (`packages/shared/src/bot-face.ts`). An
+   * identifier like the marks above: a bot is lime or coral in every theme,
+   * and its dark body is the character, so it stays dark in light mode too.
+   * `-body` is the avatar's body, a step lighter and tinted so a 24 px face
+   * does not vanish on a dark panel. Mirrored as literals in bot-face.ts for
+   * the PNGs the phone apps draw.
+   */
+  --color-bot-lime: oklch(0.88 0.19 125);
+  --color-bot-lime-body: oklch(0.29 0.035 125);
+  --color-bot-coral: oklch(0.76 0.14 35);
+  --color-bot-coral-body: oklch(0.29 0.035 35);
+  --color-bot-sky: oklch(0.8 0.11 230);
+  --color-bot-sky-body: oklch(0.29 0.035 230);
+  --color-bot-grape: oklch(0.74 0.13 300);
+  --color-bot-grape-body: oklch(0.29 0.035 300);
+  --color-bot-sun: oklch(0.86 0.14 85);
+  --color-bot-sun-body: oklch(0.29 0.035 85);
+  --color-bot-mint: oklch(0.84 0.11 170);
+  --color-bot-mint-body: oklch(0.29 0.035 170);
+  --color-bot-body: oklch(0.2 0.014 250);
+  --color-bot-hole: oklch(0.13 0.012 250);
+  --color-bot-backdrop: oklch(0.17 0.012 250);
+
+  /*
    * Text and icons drawn ON a video: the watch party player's bar, its live
    * chip and its viewer count. A film is dark whatever the app's theme, so
    * these do not retint. Light on the black stage in every theme, the way
@@ -2168,99 +2192,33 @@ h2,
   }
 }
 
-@keyframes hero-drift {
-  from {
-    transform: scale(1.05) translate3d(0, 0, 0);
-  }
-  to {
-    transform: scale(1.12) translate3d(0, -1.5%, 0);
-  }
-}
-
 .animate-rise {
   --stagger: 0;
   animation: rise-in 0.65s var(--ease-emphasized) both;
   animation-delay: calc(var(--stagger) * 70ms);
 }
 
-.hero-parallax {
-  animation: hero-drift 18s cubic-bezier(0.25, 1, 0.5, 1) both;
-  will-change: transform;
-}
-
 /*
- * The landing hero's picture, one class for the prerendered block and the
- * React page so both request the same file (the second is a cache hit and
- * nothing flashes when React replaces the first). AVIF where the browser has
- * it, WebP where it does not, sized by the viewport: a phone gets about 20 kB
- * and a wide screen about 70 kB, where the old single JPEG was 520 kB for
- * everyone. The plain `url()` rules are the fallback for a browser without
- * `image-set()` type hints (see the `@supports` block below). Sources: public/images/hero/.
- */
-.hero-bg-art {
-  background-color: var(--color-ink);
-  background-image: url("/images/hero/hero-800.webp");
-  background-size: cover;
-  background-position: center;
-}
-
-@media (min-width: 641px) {
-  .hero-bg-art {
-    background-image: url("/images/hero/hero-1200.webp");
-  }
-}
-
-@media (min-width: 1101px) {
-  .hero-bg-art {
-    background-image: url("/images/hero/hero-1536.webp");
-  }
-}
-
-/* AVIF where the browser can tell us it has it. Safari before 17 and Chrome
-   before 113 do not understand `type()` inside `image-set()`, and a declaration
-   they do not understand is dropped whole, so the `@supports` guard keeps these
-   rules away from them and the WebP above stands. The WebP rules must come FIRST
-   and stay separate: the CSS minifier deletes a plain `url()` written right
-   before an `image-set()` in the same rule as an overridden duplicate, which is
-   how the picture went missing on those browsers. `prerender-hero.test.ts`
-   pins that the built CSS keeps them. */
-@supports (background-image: image-set(url("/x.avif") type("image/avif"))) {
-  .hero-bg-art {
-    background-image: image-set(
-      url("/images/hero/hero-800.avif") type("image/avif"),
-      url("/images/hero/hero-800.webp") type("image/webp")
-    );
-  }
-
-  @media (min-width: 641px) {
-    .hero-bg-art {
-      background-image: image-set(
-        url("/images/hero/hero-1200.avif") type("image/avif"),
-        url("/images/hero/hero-1200.webp") type("image/webp")
-      );
-    }
-  }
-
-  @media (min-width: 1101px) {
-    .hero-bg-art {
-      background-image: image-set(
-        url("/images/hero/hero-1536.avif") type("image/avif"),
-        url("/images/hero/hero-1536.webp") type("image/webp")
-      );
-    }
-  }
-}
-
-/*
- * The prerendered first screen of the landing page (lib/prerender-hero.ts).
+ * The prerendered first screen of the home page (lib/prerender-hero.ts).
  *
  * One block per language, shown by <html lang> (the edge writes it, and the
  * script in index.html settles it on the home route). English is the default,
  * so a document with no lang, or one this list does not know, still shows a
  * block. Every route but the home page hides the whole thing before the first
  * paint (`data-route` is set by the same script), and React replaces it when it
- * renders the landing page.
+ * renders the home page.
  */
+
+/* The live hero picks its layout with script: it pins its scenes where this
+   query matches (PIN_QUERY in pages/home/hero-media.ts) and stacks them
+   everywhere else. The static block cannot run that script before it paints,
+   so it carries both layouts' classes behind these two variants:
+   `pre-pin:absolute` applies only where the live hero pins, `pre-unpin:pt-16`
+   only where it does not. Keep the query equal to PIN_QUERY
+   (`prerender-hero-parity.test.tsx` checks it). */
+@custom-variant pre-pin (@media (min-width: 1024px) and (prefers-reduced-motion: no-preference));
+@custom-variant pre-unpin (@media not all and (min-width: 1024px) and (prefers-reduced-motion: no-preference));
+
 #pre-hero {
   display: contents;
 }
@@ -2295,47 +2253,36 @@ html[data-route] #pre-page {
   display: none;
 }
 
-/* Room for the hero's download line, which is one line of text on a computer
-   and a store badge or pill (44 to 56 px) on a phone. The phone value is a floor
-   under both, so the live page never ends up higher than the static one (see
-   the note on the screenshot in lib/prerender-hero.ts). `data-plat` is set by
-   the head script in index.html. */
-.pre-download {
-  height: 1.5rem;
-}
-
-html[data-plat] .pre-download {
-  height: 2.5rem;
-}
-
-/* Same start frame as `hero-drift`, held still, so the live page's drift
-   begins exactly where the static picture stands. */
-.hero-parallax-still {
-  transform: scale(1.05);
-}
-
-/* Reduced motion switches the live page's drift off (see the block near the end
-   of this file), which leaves it at scale 1. Hold the static picture there too. */
-@media (prefers-reduced-motion: reduce) {
-  .hero-parallax-still {
-    transform: none;
+/* The live hero's download box is `min-h-[4rem]`, and taller on a Mac with a
+   coarse pointer (`HERO_DOWNLOAD_BOX_MAC_TOUCH` in pages/home/hero-media.ts).
+   The static box holds the same room. `data-plat` is set by the head script in
+   index.html, where the live page reads `detectPlatform()`. */
+@media (pointer: coarse) {
+  html[data-plat="mac"] #pre-hero [data-pre-download] {
+    min-height: 5.25rem;
   }
+}
+
+/* Below sm the live download line sits under the footage instead, and its
+   height is the store's own: the TestFlight pill is 44px and Google Play's
+   badge 56px (hero-download.tsx). The static block holds that room too: the
+   sky is drawn at 74% of the scene's height, so a shorter static scene would
+   draw a shorter sky, and the live one would visibly grow it. */
+html[data-plat="ios"] #pre-hero [data-pre-download-below] {
+  min-height: 2.75rem;
+}
+
+html[data-plat="android"] #pre-hero [data-pre-download-below] {
+  min-height: 3.5rem;
 }
 
 /* The prerendered block is already on screen and does not animate, so the
    React copy that replaces it starts in its final state instead of fading in
    a second time. `data-pre` is set by main.tsx only when the block exists, and
-   stays for the session, so the rule is scoped to the hero (the first section
-   of `<main>`) and leaves every later entrance animation alone. */
-html[data-pre] #main > section:first-of-type .animate-rise {
+   stays for the session, so the rule is scoped to the hero scene
+   (`data-home-hero`) and leaves every later entrance animation alone. */
+html[data-pre] [data-home-hero] .animate-rise {
   animation: none;
-}
-
-.hero-grain {
-  opacity: 0.28;
-  mix-blend-mode: overlay;
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-  background-size: 180px 180px;
 }
 
 .cta-lift {
@@ -2352,6 +2299,83 @@ html[data-pre] #main > section:first-of-type .animate-rise {
 
 .cta-lift:active {
   transform: translateY(0);
+}
+
+/*
+ * The home page hero's own rules (pages/home/), here and not in the home
+ * chunk's CSS because the static first screen paints before that chunk
+ * arrives. Unlayered, like the rest of this file, so they win over utilities.
+ */
+
+/* A pinned scene: a tall runway with a sticky stage. Only on wide screens
+   that did not ask for less motion; elsewhere it is an ordinary block and its
+   content stacks. The stage clips sideways only, so a device's soft shadow
+   can spill past its bottom edge instead of ending in a hard line; wrap
+   anything that must not spill. */
+@media (min-width: 1024px) and (prefers-reduced-motion: no-preference) {
+  .cin-scene {
+    height: var(--scene-h, 200vh);
+  }
+  .cin-scene > .cin-stage {
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    height: 100svh;
+    overflow-x: clip;
+  }
+}
+
+/* The layered shadow under a device: a contact line, a near shadow, a far
+   one. Painted once into the layer, so moving the device never repaints it. */
+.cin-device {
+  box-shadow:
+    0 1px 2px color-mix(in oklch, black 40%, transparent),
+    0 12px 24px -8px color-mix(in oklch, black 45%, transparent),
+    0 40px 80px -24px color-mix(in oklch, black 55%, transparent),
+    0 90px 140px -50px color-mix(in oklch, black 65%, transparent);
+}
+
+.cin-clip-layer {
+  transition: opacity 700ms ease;
+}
+
+/* Phone framing (`focus`): below md the media layer crops into one point of
+   the footage. The point is aligned the same in the picture and in the box
+   (object-position), and the layer grows around it (transform-origin), so the
+   point stays put and the box stays covered. The layer wraps the still, the
+   poster and the video (and the static block's <picture>), never the pause
+   control. It wins over the Clip's `position` utility; a section's own
+   transform on the img or video multiplies with it. The 767px here is the
+   page's "below md"; no script reads it. */
+@media (max-width: 767px) {
+  .cin-clip-media[data-focus] {
+    transform: scale(var(--focus-zoom, 1));
+    transform-origin: var(--focus-x, 50%) var(--focus-y, 50%);
+  }
+  .cin-clip-media[data-focus] > img,
+  .cin-clip-media[data-focus] > picture > img,
+  .cin-clip-media[data-focus] > video {
+    object-position: var(--focus-x, 50%) var(--focus-y, 50%);
+  }
+}
+
+/* The press on the home page's buttons (`motion-safe:active:scale-[0.96]` in
+   pages/home/ui.tsx) moves `scale`, which `cta-lift`'s own transition list
+   leaves out: this adds it, so the press eases instead of snapping. After
+   `cta-lift` on purpose. Only with motion on; otherwise the house rule (no
+   transition on `cta-lift`, near the end of this file) stands. */
+@media (prefers-reduced-motion: no-preference) {
+  .cin-press,
+  .cta-lift.cin-press {
+    transition-property: transform, scale, background-color, box-shadow, color;
+    transition-duration: 220ms, 120ms, 220ms, 220ms, 220ms;
+    transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+  }
+}
+
+/* Fine grain over a flat field, from an inline SVG turbulence. No image file. */
+.hp-grain {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.06 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
 }
 
 /* The sidebar's now-playing title when it overflows: the text is drawn twice
@@ -3141,7 +3165,6 @@ html[data-pre] #main > section:first-of-type .animate-rise {
   .wp-art-reaction,
   .animate-rise,
   .animate-fade-in,
-  .hero-parallax,
   .music-eq-bar,
   .vem-word,
   .vem-rise,
@@ -4418,5 +4441,257 @@ html[data-immersive-stage] [data-immersive-hide] {
   }
   .story-trash[data-hot="true"] {
     transform: translateX(-50%);
+  }
+}
+
+/* A server bot at work (`BotActivityRows`): the label shimmers while a tool
+   runs. Plain muted text when motion is reduced. */
+@keyframes bot-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+.bot-shimmer {
+  color: var(--color-paper-muted);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .bot-shimmer {
+    background: linear-gradient(
+        90deg,
+        var(--color-paper-muted) 35%,
+        var(--color-paper) 50%,
+        var(--color-paper-muted) 65%
+      )
+      0 0 / 200% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: bot-shimmer 1.8s linear infinite;
+  }
+}
+
+/* A bot action card (`BotActionCard`): rows rise in one after another, and
+   each row's check pops once it lands. */
+@keyframes bot-step-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .bot-step-in {
+    animation: bot-step-in 0.28s var(--ease-emphasized) backwards;
+  }
+
+  .bot-step-pop {
+    animation: badge-pop 0.32s var(--ease-emphasized) both;
+  }
+}
+
+/* Breu, a server bot's face (`components/bots/bot-face.tsx`). The SVG fills
+   its box; `.bot-face-live` is set only on the faces allowed to move. */
+.bot-face > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.bot-face .bf-eyes {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.bot-face .bf-body {
+  transform-box: view-box;
+  transform-origin: 50% 88%;
+}
+
+.bot-face .bf-hand {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+@keyframes bot-blink {
+  0%,
+  91%,
+  100% {
+    transform: scaleY(1);
+  }
+  94% {
+    transform: scaleY(0.1);
+  }
+}
+
+@keyframes bot-breathe {
+  0%,
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
+  50% {
+    transform: translateY(-2.5%) scale(1.025, 0.975);
+  }
+}
+
+@keyframes bot-float {
+  0%,
+  100% {
+    transform: translateY(0) rotate(0);
+  }
+  50% {
+    transform: translateY(-6%) rotate(-8deg);
+  }
+}
+
+@keyframes bot-pop {
+  0% {
+    transform: scale(0.92, 1.06);
+  }
+  45% {
+    transform: scale(1.06, 0.94);
+  }
+  100% {
+    transform: scale(1, 1);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .bot-face-live .bf-eyes {
+    animation: bot-blink 4.6s var(--ease-standard) infinite;
+  }
+
+  .bot-face-live[data-variant="full"] .bf-body {
+    animation: bot-breathe 3.2s ease-in-out infinite;
+  }
+
+  .bot-face-live .bf-hand {
+    animation: bot-float 2.6s ease-in-out infinite;
+  }
+
+  /* A face under the pointer leans in, like it noticed. */
+  .bot-face > svg {
+    transition: transform var(--duration-base) var(--ease-emphasized);
+  }
+  .bot-face:hover > svg {
+    transform: rotate(-8deg) scale(1.06);
+  }
+
+  /* A new colour or face lands with a squash, keyed by remounting the face. */
+  .bot-face-pop > svg {
+    animation: bot-pop 0.52s var(--ease-emphasized) both;
+  }
+}
+
+/* Chat arrivals. Nothing in the conversation should pop into place: a new
+   message rises in, and a row that comes and goes under the log (typing, a
+   bot at work, a notice) opens and closes its own height, so the messages
+   above slide instead of jumping. `Reveal` (`components/ui/reveal.tsx`)
+   drives the second; a card's sections use `.chat-collapse`. Motion off:
+   everything is simply there, or not. */
+@keyframes chat-msg-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes chat-reveal-in {
+  from {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+  to {
+    grid-template-rows: 1fr;
+    opacity: 1;
+  }
+}
+
+@keyframes chat-reveal-out {
+  from {
+    grid-template-rows: 1fr;
+    opacity: 1;
+  }
+  to {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+}
+
+.chat-reveal {
+  display: grid;
+  grid-template-rows: 1fr;
+}
+
+.chat-reveal > *,
+.chat-collapse > * {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.chat-collapse {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  visibility: hidden;
+}
+
+.chat-collapse[data-open="true"] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  visibility: visible;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  /* `backwards`, not `both`: once it has landed the row keeps no transform,
+     which would make it a stacking context and trap its hover toolbar. */
+  .chat-msg-in {
+    animation: chat-msg-in 0.26s var(--ease-emphasized) backwards;
+  }
+
+  .chat-reveal[data-state="open"] {
+    animation: chat-reveal-in var(--duration-slow) var(--ease-emphasized) both;
+  }
+
+  .chat-reveal[data-state="closed"] {
+    animation: chat-reveal-out var(--duration-base) var(--ease-standard) both;
+  }
+
+  /* Swapped content (a label, a header) fades in where the old one was. */
+  .chat-swap-in {
+    animation: fade-in var(--duration-base) var(--ease-standard) backwards;
+  }
+
+  .chat-collapse {
+    transition:
+      grid-template-rows var(--duration-slow) var(--ease-emphasized),
+      opacity var(--duration-base) var(--ease-standard),
+      visibility 0s linear var(--duration-slow);
+  }
+
+  .chat-collapse[data-open="true"] {
+    transition:
+      grid-template-rows var(--duration-slow) var(--ease-emphasized),
+      opacity var(--duration-base) var(--ease-standard) 60ms,
+      visibility 0s;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-reveal[data-state="closed"] {
+    display: none;
   }
 }

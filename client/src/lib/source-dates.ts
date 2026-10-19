@@ -30,7 +30,8 @@ import path from "node:path";
  * footer change does not mean the page changed.
  */
 export const MARKETING_SOURCES: Record<string, readonly string[]> = {
-  "/": ["src/pages/landing-page.tsx"],
+  // The home page is a folder of sections (#1387), not one file.
+  "/": ["src/pages/home"],
   "/vs-discord": ["src/pages/vs-discord-page.tsx"],
   "/vem": ["src/pages/vem-page.tsx"],
   "/tela": ["src/pages/tela-page.tsx"],
@@ -140,7 +141,8 @@ function newest(a: string | null, b: string | null): string | null {
  * prefixes (`git log -G`) moves only the page whose copy was edited.
  */
 export const COPY_KEY_PREFIXES: Record<string, readonly string[]> = {
-  "/": ["landing"],
+  // `home.*` is the page's copy; `landing.seo.*` is the title and description it kept.
+  "/": ["home", "landing"],
   "/vs-discord": ["vsDiscord"],
   "/vem": ["vem"],
   "/tela": ["tela"],

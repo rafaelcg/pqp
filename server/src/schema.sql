@@ -1305,6 +1305,11 @@ CREATE INDEX IF NOT EXISTS idx_webhooks_channel ON webhooks (channel_id);
 -- sent with its own `embeds` array (this column) in the same request.
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS webhook_embeds JSONB;
 
+-- A server bot's action card (packages/shared/src/bots.ts): the plan waiting
+-- for "sim", or what each step did. Written only by the bot runner; the body
+-- keeps a plain-text copy for clients that do not draw it.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS bot_card JSONB;
+
 -- Discord's own webhooks let a single execution override the display name
 -- and avatar the webhook otherwise defaults to — one CI job posting as
 -- "Build Bot" and another as "Deploy Bot" through the same token. Per
@@ -5530,6 +5535,53 @@ BEGIN
 
   INSERT INTO data_migrations (name) VALUES ('soundboard_bits_2026_10b');
 END $$;
+
+-- USE_APPS (bit 29 = 536870912): start an app in a channel (the apps
+-- platform, behind the per-server `apps` flag; docs/APPS.md). One-shot, like
+-- soundboard_bits_2026_10b. It goes onto @everyone of servers that are NOT
+-- communities (a community only gets it when its owner grants it, so the bit
+-- is deliberately absent from PERMISSION_DEFAULT_EVERYONE and P2-A adds it at
+-- creation of a non-community server), and onto the manager, admin and
+-- moderator system roles everywhere. Owner already resolves to every bit in
+-- application code. Every server touched gets its permissions_version bumped
+-- so cached resolutions drop. The bit does nothing while `apps` is off.
+DO $$
+DECLARE
+  use_apps CONSTANT BIGINT := 536870912;
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM data_migrations WHERE name = 'use_apps_bit_2026_10'
+  ) THEN
+    RETURN;
+  END IF;
+
+  WITH changed AS (
+    UPDATE roles r
+       SET permissions = r.permissions | use_apps
+      FROM servers s
+     WHERE r.server_id = s.id
+       AND r.is_everyone
+       AND NOT COALESCE(s.is_community, FALSE)
+       AND (r.permissions & use_apps) = 0
+    RETURNING r.server_id
+  ),
+  staff AS (
+    UPDATE roles
+       SET permissions = permissions | use_apps
+     WHERE system_key IN ('manager', 'admin', 'moderator')
+       AND (permissions & use_apps) = 0
+    RETURNING server_id
+  )
+  UPDATE servers
+     SET permissions_version = permissions_version + 1
+   WHERE id IN (
+     SELECT server_id FROM changed
+     UNION
+     SELECT server_id FROM staff
+   );
+
+  INSERT INTO data_migrations (name) VALUES ('use_apps_bit_2026_10');
+END $$;
 -- THE ONE ROW THAT MAKES A START-OF-STREAM NOTICE HAPPEN ONCE. One row per
 -- channel: when a share has been stable long enough, every API machine that saw
 -- it races one upsert on this row, and only the one that finds
@@ -6602,3 +6654,529 @@ CREATE INDEX IF NOT EXISTS idx_bau_follow_deliveries_delivered
 -- (delivered in the last 90 days) read the ledger by time, not by post.
 CREATE INDEX IF NOT EXISTS idx_bau_follow_deliveries_delivered_at
   ON bau_follow_deliveries (delivered_at) WHERE delivered_at IS NOT NULL;
+
+-- Server bots (docs/plans/CUSTOM_BOTS.md). A bot is a `users` row with
+-- `is_character` (so it carries the bot mark, cannot DM, cannot join voice and
+-- is skipped by outgoing webhooks) plus this row, which says whose it is and
+-- what it knows. Nothing authenticates as it: pqp's own worker posts for it.
+-- One per server while pqp pays for every reply; the unique index is the rule,
+-- and dropping it is how that number goes up.
+CREATE TABLE IF NOT EXISTS server_bots (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  server_id   UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  persona     TEXT NOT NULL DEFAULT '',
+  knowledge   TEXT NOT NULL DEFAULT '',
+  -- The channels it answers in. Empty answers nowhere, so a new channel is
+  -- never one the bot talks in until somebody ticks it.
+  channel_ids UUID[] NOT NULL DEFAULT '{}',
+  enabled     BOOLEAN NOT NULL DEFAULT TRUE,
+  -- Also wake on the bot's name said as a whole word, not only on @handle.
+  -- Off by default: a name like "Caio" is also somebody in the room.
+  answer_to_name BOOLEAN NOT NULL DEFAULT FALSE,
+  -- `provider:model` from the deployment's offered list (BOTS_MODEL_CHOICES).
+  -- NULL, or a pick no longer offered, answers with the default.
+  model       TEXT,
+  -- The tools switched on (SERVER_BOT_TOOLS names). NULL is the default set,
+  -- so a tool added later reaches existing bots only through the default.
+  tools       TEXT[],
+  created_by  UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_server_bots_one_per_server
+  ON server_bots (server_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_server_bots_user ON server_bots (user_id);
+
+-- One reply to write. Enqueued after the triggering message commits, claimed
+-- with FOR UPDATE SKIP LOCKED plus a lease (the `speech_jobs` shape), and
+-- unique per (bot, message) so a replayed send never queues a second answer.
+-- The run id doubles as the reply's nonce, which is what keeps a run claimed
+-- twice (a model call that outlived its lease) from posting twice.
+CREATE TABLE IF NOT EXISTS server_bot_runs (
+  id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  bot_id           UUID NOT NULL REFERENCES server_bots(id) ON DELETE CASCADE,
+  channel_id       UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  -- SET NULL, not CASCADE: the member caps count these rows, and deleting
+  -- the question after its answer must not give the quota back.
+  message_id       UUID REFERENCES messages(id) ON DELETE SET NULL,
+  requester_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status           TEXT NOT NULL DEFAULT 'queued'
+                   CHECK (status IN ('queued', 'running', 'done', 'skipped', 'failed')),
+  attempts         INTEGER NOT NULL DEFAULT 0,
+  leased_by        TEXT,
+  lease_expires_at TIMESTAMPTZ,
+  outcome          TEXT,
+  -- Set on a run that answers a plan's confirmation ("sim" / "não") rather
+  -- than a question: it runs no model and executes or cancels that plan.
+  plan_id          UUID,
+  -- Not called by name: the member's next message after an answer. The model
+  -- may answer SKIP when it was meant for somebody else.
+  follow_up        BOOLEAN NOT NULL DEFAULT FALSE,
+  -- A plan card's button: 'yes' or 'no'. NULL reads the trigger's own text
+  -- ("sim" / "não").
+  decision         TEXT CHECK (decision IN ('yes', 'no')),
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  finished_at      TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_server_bot_runs_message
+  ON server_bot_runs (bot_id, message_id);
+-- Databases made before the line above changed: same rule, applied once.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conname = 'server_bot_runs_message_id_fkey' AND confdeltype = 'c'
+  ) THEN
+    ALTER TABLE server_bot_runs DROP CONSTRAINT server_bot_runs_message_id_fkey;
+    ALTER TABLE server_bot_runs ALTER COLUMN message_id DROP NOT NULL;
+    ALTER TABLE server_bot_runs ADD CONSTRAINT server_bot_runs_message_id_fkey
+      FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE SET NULL;
+  END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS idx_server_bot_runs_due
+  ON server_bot_runs (created_at) WHERE status IN ('queued', 'running');
+
+-- Replies per server per São Paulo day (bot-stats.ts `botDay`), reserved before the model is called (a
+-- conditional upsert, so two workers cannot both take the last one).
+CREATE TABLE IF NOT EXISTS server_bot_usage_daily (
+  day           DATE NOT NULL,
+  server_id     UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  replies       INTEGER NOT NULL DEFAULT 0,
+  refused       INTEGER NOT NULL DEFAULT 0,
+  input_tokens  BIGINT NOT NULL DEFAULT 0,
+  output_tokens BIGINT NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, server_id)
+);
+
+-- The whole deployment's model spend per São Paulo day, in millionths of a dollar.
+-- Each call reserves its worst case first and settles to the real cost after,
+-- so the ceiling holds across every worker even while calls are in flight.
+CREATE TABLE IF NOT EXISTS server_bot_spend_daily (
+  day             DATE PRIMARY KEY,
+  reserved_micros BIGINT NOT NULL DEFAULT 0,
+  calls           INTEGER NOT NULL DEFAULT 0,
+  refused         INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_server_bot_runs_requester
+  ON server_bot_runs (bot_id, requester_id, created_at);
+
+-- A batch of actions a bot staged for one request. Few and reversible runs at
+-- once (`executing` from birth); otherwise it waits `pending` for the
+-- requester's "sim". The actions and their wording are built by code at
+-- staging time, so what a "sim" approves is exactly what was shown. Claimed
+-- with a conditional UPDATE, so a double "sim" runs it once.
+CREATE TABLE IF NOT EXISTS server_bot_plans (
+  id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  bot_id           UUID NOT NULL REFERENCES server_bots(id) ON DELETE CASCADE,
+  server_id        UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  channel_id       UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  requester_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  -- The run that staged it. Unique so a re-claimed run finds its plan instead
+  -- of asking the model again.
+  run_id           UUID NOT NULL UNIQUE,
+  -- The bot's message that shows the plan, once posted: its card is updated
+  -- when the plan is decided, and a button's answer replies to it.
+  message_id       UUID,
+  actions          JSONB NOT NULL,
+  status           TEXT NOT NULL
+                   CHECK (status IN ('pending', 'executing', 'done', 'cancelled', 'expired')),
+  expires_at       TIMESTAMPTZ NOT NULL,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  finished_at      TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_server_bot_plans_pending
+  ON server_bot_plans (bot_id, channel_id, requester_id) WHERE status = 'pending';
+
+-- One row per executed step, written BEFORE the step runs. A worker that
+-- takes over a plan never runs a step that already has a row: `running` with
+-- no outcome means "may have happened" and is not retried.
+CREATE TABLE IF NOT EXISTS server_bot_actions (
+  plan_id          UUID NOT NULL REFERENCES server_bot_plans(id) ON DELETE CASCADE,
+  step             INTEGER NOT NULL,
+  bot_id           UUID NOT NULL REFERENCES server_bots(id) ON DELETE CASCADE,
+  tool             TEXT NOT NULL,
+  status           TEXT NOT NULL CHECK (status IN ('running', 'done', 'failed')),
+  result           JSONB,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (plan_id, step)
+);
+CREATE INDEX IF NOT EXISTS idx_server_bot_actions_hour
+  ON server_bot_actions (bot_id, created_at);
+
+-- The role a bot acts through, made with the bot: exactly the permissions its
+-- switched-on tools need, never more than whoever switched them on holds, at
+-- the lowest custom rank so it outranks nobody. Deleting the role takes those
+-- powers away (SET NULL); the next save of the bot's tools makes it again.
+ALTER TABLE server_bots ADD COLUMN IF NOT EXISTS role_id UUID REFERENCES roles(id) ON DELETE SET NULL;
+
+-- What started a run and what it cost, written as each model call returns.
+-- `trigger`: mention, reply, name, follow_up, decision (a plan's "sim") or
+-- answer (a question card's button, which posts no message).
+ALTER TABLE server_bot_runs ADD COLUMN IF NOT EXISTS trigger TEXT;
+ALTER TABLE server_bot_runs ADD COLUMN IF NOT EXISTS model TEXT;
+ALTER TABLE server_bot_runs ADD COLUMN IF NOT EXISTS turns INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE server_bot_runs ADD COLUMN IF NOT EXISTS input_tokens BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE server_bot_runs ADD COLUMN IF NOT EXISTS output_tokens BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE server_bot_runs ADD COLUMN IF NOT EXISTS cost_micros BIGINT NOT NULL DEFAULT 0;
+-- The part of input_tokens served from Anthropic's prompt cache (billed at a
+-- tenth) and written to it (1.25x). input_tokens stays the whole input.
+ALTER TABLE server_bot_runs ADD COLUMN IF NOT EXISTS cache_read_tokens BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE server_bot_runs ADD COLUMN IF NOT EXISTS cache_write_tokens BIGINT NOT NULL DEFAULT 0;
+
+-- A fixed welcome the bot posts when somebody joins (no model call, costs
+-- nothing): on or off, where, and the text staff wrote (null is the default).
+-- `server_bot_welcomes` remembers who was welcomed, so leaving and joining
+-- again is not welcomed twice, and caps a raid to a few posts an hour.
+ALTER TABLE server_bots ADD COLUMN IF NOT EXISTS welcome_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE server_bots ADD COLUMN IF NOT EXISTS welcome_channel_id UUID REFERENCES channels(id) ON DELETE SET NULL;
+ALTER TABLE server_bots ADD COLUMN IF NOT EXISTS welcome_message TEXT;
+CREATE TABLE IF NOT EXISTS server_bot_welcomes (
+  server_id   UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  welcomed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (server_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_server_bot_welcomes_recent ON server_bot_welcomes (server_id, welcomed_at);
+
+-- Reminders a server bot keeps (services/bot-reminders.ts): a member's own
+-- ("me lembra amanhã às 20h", kind 'me') and staff's repeating channel
+-- announcements (kind 'channel'). Posted by a job with no model call.
+-- `next_nonce` is the nonce of the next post, so a claim that ran out after
+-- posting finds its message instead of posting twice.
+CREATE TABLE IF NOT EXISTS server_bot_reminders (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  bot_id       UUID NOT NULL REFERENCES server_bots(id) ON DELETE CASCADE,
+  server_id    UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  channel_id   UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  requester_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  text         TEXT NOT NULL,
+  kind         TEXT NOT NULL CHECK (kind IN ('me', 'channel')),
+  due_at       TIMESTAMPTZ NOT NULL,
+  repeat       TEXT CHECK (repeat IN ('daily', 'weekly')),
+  status       TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'cancelled')),
+  next_nonce   TEXT NOT NULL DEFAULT gen_random_uuid()::text,
+  sent_count   INTEGER NOT NULL DEFAULT 0,
+  lease_until  TIMESTAMPTZ,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  finished_at  TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_server_bot_reminders_due ON server_bot_reminders (due_at) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_server_bot_reminders_open ON server_bot_reminders (server_id, requester_id) WHERE status = 'pending';
+
+-- The operator's history of bots (services/bot-stats.ts), per São Paulo day.
+-- No foreign keys on purpose: a deleted bot or server keeps its past here,
+-- while its runs, plans and actions cascade away with it.
+CREATE TABLE IF NOT EXISTS server_bot_stats_daily (
+  day             DATE NOT NULL,
+  server_id       UUID NOT NULL,
+  bot_user_id     UUID NOT NULL,
+  runs            INTEGER NOT NULL DEFAULT 0,
+  replies         INTEGER NOT NULL DEFAULT 0,
+  skipped         INTEGER NOT NULL DEFAULT 0,
+  failed          INTEGER NOT NULL DEFAULT 0,
+  asks            INTEGER NOT NULL DEFAULT 0,
+  plans           INTEGER NOT NULL DEFAULT 0,
+  plans_confirmed INTEGER NOT NULL DEFAULT 0,
+  plans_cancelled INTEGER NOT NULL DEFAULT 0,
+  actions_done    INTEGER NOT NULL DEFAULT 0,
+  actions_failed  INTEGER NOT NULL DEFAULT 0,
+  input_tokens    BIGINT NOT NULL DEFAULT 0,
+  output_tokens   BIGINT NOT NULL DEFAULT 0,
+  cost_micros     BIGINT NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, server_id, bot_user_id)
+);
+ALTER TABLE server_bot_stats_daily ADD COLUMN IF NOT EXISTS cache_read_tokens BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE server_bot_stats_daily ADD COLUMN IF NOT EXISTS cache_write_tokens BIGINT NOT NULL DEFAULT 0;
+
+-- Who asked, per day, only to count distinct people. Pruned after 90 days.
+CREATE TABLE IF NOT EXISTS server_bot_people_daily (
+  day       DATE NOT NULL,
+  server_id UUID NOT NULL,
+  user_id   UUID NOT NULL,
+  runs      INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, server_id, user_id)
+);
+
+-- Plan steps by tool: what bots are used for.
+CREATE TABLE IF NOT EXISTS server_bot_tools_daily (
+  day       DATE NOT NULL,
+  server_id UUID NOT NULL,
+  tool      TEXT NOT NULL,
+  done      INTEGER NOT NULL DEFAULT 0,
+  failed    INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, server_id, tool)
+);
+
+-- A bot's face (packages/shared/src/bot-face.ts): one of six colours and one
+-- of five base faces. `users.avatar_url` follows them as the PNG the phone
+-- apps draw; the web client draws the same face inline, and alive.
+ALTER TABLE server_bots ADD COLUMN IF NOT EXISTS color TEXT NOT NULL DEFAULT 'lime';
+ALTER TABLE server_bots ADD COLUMN IF NOT EXISTS face TEXT NOT NULL DEFAULT 'oi';
+
+-- The wizard's practice chat (services/bot-test.ts): turns per person per
+-- São Paulo day, reserved before the model is called.
+CREATE TABLE IF NOT EXISTS server_bot_test_usage (
+  day     DATE NOT NULL,
+  user_id UUID NOT NULL,
+  turns   INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, user_id)
+);
+
+-- ===================================================================== apps
+-- The apps platform (docs/APPS.md): small interactive things a person starts in
+-- a channel and others join. Behind the runtime flag `apps` (per server,
+-- default off); nothing reads these tables yet. Everything here is NEW tables,
+-- placed at the END of the file on purpose: creating a table with a foreign key
+-- takes a SHARE ROW EXCLUSIVE lock on the table it references (users, servers,
+-- channels, messages) until the file commits, so the later this block sits, the
+-- shorter that window is. No ALTER on any existing table (pitfall 22). Nothing
+-- here stores a game file, a file name, an app event or message text. Session
+-- state is set back to '{}' when a session ends and ended rows are deleted 30
+-- days later by the worker.
+
+-- Who ships an app. 'pqp' is first party. Third-party rows arrive only with the
+-- submission path; the columns exist so the catalog never needs a migration to
+-- tell first party from third party.
+CREATE TABLE IF NOT EXISTS app_publishers (
+  id TEXT PRIMARY KEY CHECK (id ~ '^[a-z][a-z0-9-]{1,30}[a-z0-9]$'),
+  display_name TEXT NOT NULL CHECK (char_length(display_name) BETWEEN 1 AND 64),
+  kind TEXT NOT NULL DEFAULT 'third_party' CHECK (kind IN ('first_party', 'third_party')),
+  -- The pqp account that owns a third-party publisher. NULL for 'pqp'.
+  owner_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  suspended_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_app_publishers_owner
+  ON app_publishers (owner_user_id) WHERE owner_user_id IS NOT NULL;
+
+-- One row per app id, forever. `status` is the operator's lifecycle switch and
+-- `global_enabled` the master switch on the dashboard; per server availability
+-- is `server_apps`. `current_version` is what NEW sessions pin: a live session
+-- keeps the version it started on.
+CREATE TABLE IF NOT EXISTS apps (
+  id TEXT PRIMARY KEY CHECK (id ~ '^[a-z][a-z0-9-]{1,30}[a-z0-9]$'),
+  publisher_id TEXT NOT NULL REFERENCES app_publishers(id),
+  status TEXT NOT NULL DEFAULT 'draft'
+    CHECK (status IN ('draft', 'review', 'live', 'retired')),
+  current_version TEXT,
+  global_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  -- Listed communities stay locked for every app until the operator records an
+  -- explicit safety decision for THIS app (docs/CONTENT_SAFETY.md). Even then a
+  -- community needs its own server_apps.operator_enabled.
+  community_unlocked BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- One row per (app, version). The manifest is stored verbatim, validated by
+-- `validateAppManifest` before the insert. A version is immutable: the same
+-- (app_id, version) with a different manifest_sha256 is refused by the loader.
+CREATE TABLE IF NOT EXISTS app_versions (
+  app_id TEXT NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
+  version TEXT NOT NULL CHECK (char_length(version) BETWEEN 5 AND 64),
+  manifest JSONB NOT NULL,
+  manifest_sha256 TEXT NOT NULL CHECK (manifest_sha256 ~ '^[0-9a-f]{64}$'),
+  entry_sha256 TEXT NOT NULL CHECK (entry_sha256 ~ '^[0-9a-f]{64}$'),
+  -- 'repo': built from apps/<id> in this repository and loaded from the
+  -- committed catalog at boot. 'submission': uploaded by a publisher (later).
+  source TEXT NOT NULL DEFAULT 'repo' CHECK (source IN ('repo', 'submission')),
+  review_status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (review_status IN ('pending', 'approved', 'rejected', 'withdrawn')),
+  -- One key per line of the review checklist, for example
+  -- {"sandbox": true, "noNetwork": true, "romPolicy": true, "license": true}.
+  review_checklist JSONB NOT NULL DEFAULT '{}'::jsonb,
+  reviewed_by TEXT,
+  reviewed_at TIMESTAMPTZ,
+  review_note TEXT CHECK (review_note IS NULL OR char_length(review_note) <= 2000),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (app_id, version)
+);
+
+-- `apps.current_version` must name an existing version of the same app. The two
+-- tables reference each other, so the constraint is added once both exist, and
+-- it is DEFERRED so one transaction can insert the app and its first version.
+-- A NULL current_version (an app with no version yet) is not checked. The
+-- guard keeps the file idempotent.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'apps_current_version_fk'
+  ) THEN
+    ALTER TABLE apps
+      ADD CONSTRAINT apps_current_version_fk
+      FOREIGN KEY (id, current_version) REFERENCES app_versions(app_id, version)
+      DEFERRABLE INITIALLY DEFERRED;
+  END IF;
+END $$;
+
+-- Per server availability. NULL means "not decided", which is OFF. The owner
+-- can only switch off what the operator switched on (owner_enabled FALSE),
+-- never the reverse. Availability is: flag `apps` AND apps.status = 'live' AND
+-- apps.global_enabled AND operator_enabled IS TRUE AND owner_enabled IS NOT
+-- FALSE AND (the server is not a listed community OR apps.community_unlocked).
+CREATE TABLE IF NOT EXISTS server_apps (
+  server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  app_id TEXT NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
+  operator_enabled BOOLEAN,
+  owner_enabled BOOLEAN,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (server_id, app_id)
+);
+CREATE INDEX IF NOT EXISTS idx_server_apps_app_on
+  ON server_apps (app_id) WHERE operator_enabled IS TRUE;
+
+-- A live app in a channel. One per channel (the partial unique index, the same
+-- shape as channel_sessions). `state` is the app's shared JSON, at most 16 KB,
+-- revisioned; it is set back to '{}' when the session ends. `summary` keeps
+-- what the quiet "terminou" card needs once the state is gone. The exact 16 KB
+-- cap (16384 bytes of compact JSON) is the application's job. The size CHECK is
+-- only a backstop and is deliberately looser: it measures the state as Postgres
+-- prints jsonb: one space after each colon and comma (`{"a": 1, "b": 2}`, up to
+-- 1.5 times the compact form) and every number written out in full (`1e-300`
+-- prints as 300 digits, up to about 50 times for the widest doubles). A limit
+-- tight to either could refuse a state the application accepted, so it is 1 MiB,
+-- above 16384 x 52, and only bounds a row that got past the application. That
+-- bound holds for what the application writes: JSON.stringify of a parsed value,
+-- whose numbers are doubles (at most 1.8e308, 309 digits printed), never the raw
+-- text a client sent (`1e100000` is valid numeric to Postgres, Infinity to JS).
+CREATE TABLE IF NOT EXISTS app_sessions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  channel_id UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  app_id TEXT NOT NULL,
+  app_version TEXT NOT NULL,
+  started_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  host_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  status TEXT NOT NULL DEFAULT 'live' CHECK (status IN ('live', 'ended')),
+  started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  ended_at TIMESTAMPTZ,
+  end_reason TEXT CHECK (end_reason IS NULL OR end_reason IN (
+    'host', 'moderator', 'operator', 'idle', 'host-gone', 'app-disabled',
+    'empty', 'max-duration', 'channel-gone', 'flag-off'
+  )),
+  ended_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  state JSONB NOT NULL DEFAULT '{}'::jsonb,
+  state_rev BIGINT NOT NULL DEFAULT 0,
+  -- When the host's last socket went away. The 2 minute handoff grace counts
+  -- from here; NULL while the host is present.
+  host_gone_at TIMESTAMPTZ,
+  -- When the last participant left. The 5 minute empty sweep counts from here.
+  empty_since TIMESTAMPTZ,
+  -- The system message (messages.system_kind = 'app_session') the timeline
+  -- card hangs on. Looked up by this column: messages gets no new column.
+  timeline_message_id UUID REFERENCES messages(id) ON DELETE SET NULL,
+  -- {"participants": 4, "durationSeconds": 1380} once ended.
+  summary JSONB,
+  FOREIGN KEY (app_id, app_version) REFERENCES app_versions(app_id, version),
+  CHECK ((status = 'ended') = (ended_at IS NOT NULL)),
+  CHECK ((status = 'ended') = (end_reason IS NOT NULL)),
+  CHECK (octet_length(state::text) <= 1048576)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_sessions_one_live_per_channel
+  ON app_sessions (channel_id) WHERE status = 'live';
+-- The next three also serve the cascades: deleting a server or a channel finds
+-- its sessions (retained ended ones too, for 30 days) through these, and a
+-- partial index on live rows would leave that delete scanning the table.
+CREATE INDEX IF NOT EXISTS idx_app_sessions_server
+  ON app_sessions (server_id, status);
+CREATE INDEX IF NOT EXISTS idx_app_sessions_channel
+  ON app_sessions (channel_id, started_at DESC);
+-- Deleting an account sets these to NULL; the lookup is by the column.
+CREATE INDEX IF NOT EXISTS idx_app_sessions_started_by
+  ON app_sessions (started_by) WHERE started_by IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_app_sessions_host_user
+  ON app_sessions (host_user_id) WHERE host_user_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_app_sessions_ended_by
+  ON app_sessions (ended_by) WHERE ended_by IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_app_sessions_live_by_app
+  ON app_sessions (app_id) WHERE status = 'live';
+CREATE INDEX IF NOT EXISTS idx_app_sessions_ended_at
+  ON app_sessions (ended_at) WHERE status = 'ended';
+CREATE INDEX IF NOT EXISTS idx_app_sessions_timeline_message
+  ON app_sessions (timeline_message_id) WHERE timeline_message_id IS NOT NULL;
+
+-- Who is in a session. `seat_id` is random per session and is the only
+-- identifier the app ever sees. `left_at` set means the person left on
+-- purpose. `orphaned_at` set means the socket went away: the seat is held for
+-- 90 s (the voice resume window) and then released by the sweep, the same split
+-- as voice_raised_hands. `instance_id` is the API process that owns the socket,
+-- so a per-instance sweep can reclaim its own rows (pitfall 13).
+CREATE TABLE IF NOT EXISTS app_session_participants (
+  session_id UUID NOT NULL REFERENCES app_sessions(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  seat_id TEXT NOT NULL CHECK (seat_id ~ '^[A-Za-z0-9_-]{16,32}$'),
+  role TEXT NOT NULL CHECK (role IN ('player', 'spectator')),
+  joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  left_at TIMESTAMPTZ,
+  orphaned_at TIMESTAMPTZ,
+  instance_id TEXT,
+  PRIMARY KEY (session_id, user_id),
+  UNIQUE (session_id, seat_id)
+);
+-- Host handoff picks the longest-seated active participant: this serves "the
+-- active participants of a session by joined_at".
+CREATE INDEX IF NOT EXISTS idx_app_participants_active
+  ON app_session_participants (session_id, joined_at)
+  WHERE left_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_app_participants_orphaned
+  ON app_session_participants (orphaned_at)
+  WHERE orphaned_at IS NOT NULL AND left_at IS NULL;
+-- Not partial: it is also how deleting an account finds every seat it held,
+-- the ones already left included.
+CREATE INDEX IF NOT EXISTS idx_app_participants_user
+  ON app_session_participants (user_id, left_at);
+-- The per-instance sweep reads the rows THIS process owns: its orphans past the
+-- hold and the ghosts its socket map no longer holds.
+CREATE INDEX IF NOT EXISTS idx_app_participants_instance_active
+  ON app_session_participants (instance_id)
+  WHERE left_at IS NULL AND instance_id IS NOT NULL;
+
+-- The join sheet is shown once per person per app. `identity_granted` is the
+-- optional "deixar este app ver o meu id" box (capabilities.identity
+-- 'user-id'), revocable in Configurações, Apps. The derived id is
+-- HMAC(derived key 'pqp-app-identity', app_id || user_id): computed, never
+-- stored.
+CREATE TABLE IF NOT EXISTS app_consents (
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  app_id TEXT NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
+  -- The manifest version whose capabilities the person accepted. A new version
+  -- that asks for MORE (a capability diff) shows the sheet again.
+  accepted_version TEXT NOT NULL,
+  identity_granted BOOLEAN NOT NULL DEFAULT FALSE,
+  consented_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  revoked_at TIMESTAMPTZ,
+  PRIMARY KEY (user_id, app_id)
+);
+
+-- Every operator or owner change to app availability or review, for the
+-- dashboard history and the "who switched this off" question.
+CREATE TABLE IF NOT EXISTS app_admin_audit (
+  id BIGSERIAL PRIMARY KEY,
+  actor_kind TEXT NOT NULL CHECK (actor_kind IN ('dashboard', 'moderator', 'owner', 'boot')),
+  actor_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  action TEXT NOT NULL CHECK (action IN (
+    'status', 'global', 'operator-server', 'owner-server', 'community-unlock',
+    'review', 'current-version', 'disable-everywhere', 'catalog-load'
+  )),
+  app_id TEXT NOT NULL,
+  app_version TEXT,
+  server_id UUID REFERENCES servers(id) ON DELETE SET NULL,
+  before JSONB,
+  after JSONB,
+  sessions_ended INT NOT NULL DEFAULT 0,
+  at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_app_admin_audit_app ON app_admin_audit (app_id, at DESC);
+-- Deleting a server or an account sets these to NULL; the lookup is by the column.
+CREATE INDEX IF NOT EXISTS idx_app_admin_audit_server
+  ON app_admin_audit (server_id) WHERE server_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_app_admin_audit_actor
+  ON app_admin_audit (actor_user_id) WHERE actor_user_id IS NOT NULL;
+
+-- The first-party publisher. Top-level DML, listed in BOOT_EVERY_TIME_SWEEPS:
+-- idempotent and cheap, and a test database that ran `TRUNCATE users CASCADE`
+-- gets it back on the next boot.
+INSERT INTO app_publishers (id, display_name, kind)
+VALUES ('pqp', 'pqp', 'first_party')
+ON CONFLICT (id) DO NOTHING;

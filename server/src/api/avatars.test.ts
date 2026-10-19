@@ -661,9 +661,10 @@ describeDb("avatars", () => {
       expect(me.body.bannerUrl).toMatch(
         new RegExp(`^/api/users/${alice.id}/banner\\?v=`),
       );
-      // `publicUserSchema` must not grow a banner: nothing in the app draws
-      // somebody else's, and the one page that does reads it by handle from
-      // the public profile endpoint.
+      // `publicUserSchema` must not grow a banner. Somebody else's banner has
+      // exactly two readers: the public profile endpoint, by handle, and the
+      // profile card, by id from `GET /api/users/:userId/banner-url`. Neither
+      // needs it on every member list and search result.
       const search = await call<{ users: Record<string, unknown>[] }>(
         bob,
         "GET",

@@ -27,15 +27,21 @@
  *
  * DELIBERATELY DEPENDENCY-FREE, like its two siblings: wrangler's esbuild
  * bundles this outside the pnpm workspace, so it cannot import the i18n
- * JSON. The strings below are duplicates of `landing.seo.*`,
+ * JSON. The strings below are duplicates of `landing.seo.*` (the two keys
+ * the home page keeps for its title and description),
  * `vsDiscord.seo.*`, `tela.seo.*`, `claim.seo.*`, `betaPage.seo.*`,
  * `androidPage.seo.*`, `downloadPage.seo.*`, `vsDiscord.faq.*` and
- * `tela.faq.*`, `landing.faq.*`, `streamersPage.seo.*`,
+ * `tela.faq.*`, `home.faq.*`, `streamersPage.seo.*`,
  * `streamersPage.faq.*`, `contactPage.seo.*`, and
- * `marketing-meta.test.ts` pins each pair against the JSON catalogues — the
+ * `marketing-meta.test.ts` pins each pair against the JSON catalogues, so the
  * duplication cannot drift without failing the suite.
+ *
+ * Its one import is `./server-bots-launch`, the homepage's bot launch
+ * switches, which has no imports of its own: the bot question joins the "/"
+ * FAQ JSON-LD only while those switches say so (`landingFaq`).
  */
 
+import { botFaqAnswer, type BotFaqAnswerKey, type ServerBotClaims, serverBotClaims } from "./server-bots-launch";
 import { FACTS_CHECKED } from "../content/compare-facts";
 
 /** One address for the index, wherever the bytes were served from. */
@@ -525,12 +531,18 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
 };
 
 /**
- * The homepage FAQ, duplicated from `landing.faq.*` in the JSON catalogues and
- * served as FAQPage JSON-LD, in the page's own order (`LANDING_FAQ_IDS` in
- * `pages/landing-page.tsx`). Same truth rules as the other two: product claims
- * only, the capacity answer says where the number came from, and the Discord
- * import answer says what does not come along. The suite pins every string
- * here against its JSON twin.
+ * The homepage FAQ, duplicated from `home.faq.*` in the JSON catalogues and
+ * served as FAQPage JSON-LD, in the page's own order (the `FAQ` list in
+ * `pages/home/perguntas.tsx`): friends, history, free, phone, install, data,
+ * future. Each answer is the plain text the page shows, so the page and the
+ * search snippet say the same thing. Links sit on their own line under an
+ * answer on the page (`home.faq.<id>.link`) and are not part of it. The phone
+ * answer is `home.faq.phone.a.play`: the hosted site links its Google Play
+ * listing (`playStoreUrl()` has a code default), and this middleware only
+ * runs on the hosted site. Same truth rules as the other FAQs: product claims
+ * only. The suite pins every string here against its JSON twin
+ * (`marketing-meta.test.ts`), and `pages/home/faq-parity.test.tsx` pins it
+ * against the rendered page.
  */
 export const LANDING_FAQ: Record<
   MarketingLocale,
@@ -538,116 +550,186 @@ export const LANDING_FAQ: Record<
 > = {
   "pt-BR": [
     {
-      question: "É seguro criar conta?",
+      question: "E meus amigos que não saem do Discord?",
       answer:
-        "É um site. Não precisa instalar nada. Chamada em DM e em servidor pequeno é direta entre as pessoas; em servidor maior ela passa por um servidor de voz nosso, em São Paulo, Miami ou Londres, o mais perto de onde está a maioria do pessoal daquele servidor. Você apaga a conta de dentro do app. O código é público se um dia você quiser olhar. Não precisa ler pra usar.",
+        "Não precisam sair. Dá pra usar os dois ao mesmo tempo, e o Discord continua igual. Você manda o link do convite no grupo, e quem clicar cria a conta em um minuto e entra pelo navegador, sem instalar nada.",
     },
     {
-      question: "O pqp é de graça mesmo?",
+      question: "Perco o histórico?",
       answer:
-        "É. Código aberto sob AGPL, sem plano pago e sem limite artificial de sala. Dá pra apoiar o projeto com uma doação, e doar não desbloqueia nada.",
+        "O histórico continua no Discord, onde sempre esteve. A importação traz a estrutura do servidor: nome e ícone, categorias, canais na mesma ordem, cargos e permissões. Mensagens, anexos e membros não vêm junto, então a conversa no pqp começa do zero.",
     },
     {
-      question: "Como eu entro?",
+      question: "É grátis mesmo?",
       answer:
-        "Escolhe Google, Apple ou Twitch, autoriza e pronto. Se alguém te mandou um link de convite, abre ele e entra por lá.",
+        "Sim, é de graça, e não tem plano pago.",
     },
     {
-      question: "Preciso instalar alguma coisa?",
+      question: "Funciona no celular?",
       answer:
-        "Não. Funciona no navegador, no computador e no celular. Tem app de desktop pra Mac, Windows e Linux, o app de Android na Google Play, e um beta de iPhone se preferir.",
+        "Funciona no navegador do celular. No Android, tem app na Google Play. No iPhone, o app está em beta pelo TestFlight.",
     },
     {
-      question: "Quantas pessoas cabem numa call?",
+      question: "Precisa instalar alguma coisa?",
       answer:
-        "Mais de cem numa sala só, com tela compartilhada rodando, já aconteceu no pqp.gg. Uma cópia auto-hospedada sem servidor de mídia fica em torno de oito por canal.",
+        "Não. O pqp roda no navegador. Se preferir um app, tem pra Mac, Windows e Linux.",
     },
     {
-      question: "Dá pra trazer o meu servidor do Discord?",
+      question: "O que o pqp coleta e onde ficam meus dados?",
       answer:
-        "Dá pra trazer o layout: cola um link de template discord.new e o pqp recria as categorias, os canais e as permissões principais. Mensagens e membros não vêm junto.",
+        "O pqp.gg hospedado usa análise de visitas sem cookies (Umami e Cloudflare Web Analytics), relatório de erros (Grafana Faro) e a tag do Google Ads, que usa cookies. Essa tag conta cadastros e informa as visualizações de página ao Google, que pode usar isso para remarketing. No pqp.gg, os dados ficam no nosso banco em São Paulo, com backups na América do Norte. Você exporta os seus quando quiser e apaga a conta de dentro do app.",
     },
     {
-      question: "O que acontece com os meus dados?",
+      question: "E se o pqp acabar?",
       answer:
-        "A sua conta e a sua comunidade ficam no nosso servidor em São Paulo, com backups noturnos na América do Norte. Quando a chamada de voz é repassada, ela passa pelo servidor de mídia mais perto de onde está a maioria do pessoal daquele servidor (São Paulo, Miami ou Londres). Chamada em DM e em servidor pequeno é direta entre as pessoas, sem servidor de mídia no meio. Você exporta a sua conta e a sua comunidade quando quiser, e apaga a conta de dentro do app. Ou roda a sua própria cópia e fica com tudo na sua máquina. O pqp.gg hospedado também usa analytics sem cookie e relatório de erros, além da tag do Google Ads, que usa cookies; está tudo em pqp.gg/privacy.",
+        "O código é aberto, sob a AGPL, e está público no GitHub. Você pode exportar seus dados e rodar uma cópia do pqp na sua máquina.",
     },
   ],
   en: [
     {
-      question: "Is it safe to create an account?",
+      question: "What about my friends who won't leave Discord?",
       answer:
-        "It's a website. You don't have to install anything. Calls in DMs and small servers go direct between people; bigger servers relay through a voice server we run, in São Paulo, Miami or London, whichever is closest to where most of that server's people are. You can delete the account from inside the app. The code is public if you ever want to look. You don't have to read it to use the site.",
+        "They don't have to leave. You can use both at the same time, and Discord stays exactly as it is. Drop the invite link in the group chat: whoever clicks it makes an account in a minute and joins from the browser, with nothing to install.",
     },
     {
-      question: "Is pqp really free?",
+      question: "Do I lose our chat history?",
       answer:
-        "Yes. Open source under AGPL, no paid plan and no artificial room limit. You can support the project with a donation, and donating unlocks nothing.",
+        "Your history stays on Discord, where it always was. The import brings the server's layout: name and icon, categories, channels in the same order, roles and permissions. Messages, attachments and members don't come along, so the conversation on pqp starts fresh.",
     },
     {
-      question: "How do I sign in?",
+      question: "Is it really free?",
       answer:
-        "Pick Google, Apple or Twitch, authorize, and you're in. If somebody sent you an invite link, open it and sign in from there.",
+        "Yes, it's free, and there's no paid plan.",
     },
     {
-      question: "Do I need to install anything?",
+      question: "Does it work on my phone?",
       answer:
-        "No. It works in the browser, on the computer and on the phone. There is a desktop app for Mac, Windows and Linux, the Android app on Google Play, and an iPhone beta if you prefer.",
+        "It works in your phone's browser. On Android, there's an app on Google Play. On iPhone, the app is in beta on TestFlight.",
     },
     {
-      question: "How many people fit in one call?",
+      question: "Do I have to install anything?",
       answer:
-        "Over a hundred in one room, with a screen share running, has already happened on pqp.gg. A self-hosted copy without a media server stays around eight per channel.",
+        "No. pqp runs in the browser. If you'd rather have an app, there's one for Mac, Windows and Linux.",
     },
     {
-      question: "Can I bring my Discord server?",
+      question: "What does pqp collect, and where does my data live?",
       answer:
-        "You can bring the layout: paste a discord.new template link and pqp recreates the categories, channels and the main permissions. Messages and members do not come along.",
+        "Hosted pqp.gg uses cookie-less visit analytics (Umami and Cloudflare Web Analytics), error reports (Grafana Faro) and the Google Ads tag, which uses cookies. That tag counts sign-ups and reports page views to Google, which can use them for remarketing. On pqp.gg, your data lives in our database in São Paulo, with backups in North America. You can export yours whenever you want, and delete your account from inside the app.",
     },
     {
-      question: "What happens to my data?",
+      question: "What if pqp shuts down?",
       answer:
-        "Your account and community live on our server in São Paulo, with nightly backups in North America. When a voice call is relayed, it goes through the media server closest to where most of that server's people are (São Paulo, Miami or London). DM calls and calls in small servers go direct between people, with no media server in between. You can export your account and your community whenever you want, and delete the account from inside the app. Or run your own copy and keep everything on your machine. Hosted pqp.gg also runs cookie-less analytics and error reporting, plus the Google Ads tag, which does set cookies; all of it is at pqp.gg/privacy.",
+        "The code is open source under the AGPL, and it's public on GitHub. You can export your data and run your own copy of pqp on your machine.",
     },
   ],
-  es: [
+  "es": [
     {
-      question: "¿Es seguro crear una cuenta?",
+      question: "¿Y mis amigos que no quieren salir de Discord?",
       answer:
-        "Es un sitio web. No tienes que instalar nada. Las llamadas de mensajes directos y de servidores chicos son directas entre las personas; en los servidores más grandes pasan por un servidor de voz nuestro, en São Paulo, Miami o Londres, el más cercano a donde está la mayoría de la gente de ese servidor. Puedes eliminar la cuenta desde la app. El código es público por si algún día quieres echarle un ojo. No necesitas leerlo para usar el sitio.",
+        "No tienen que salirse. Pueden usar los dos al mismo tiempo, y Discord sigue igual. Mandas el link de invitación al grupo, y quien le dé clic crea su cuenta en un minuto y entra desde el navegador, sin instalar nada.",
     },
     {
-      question: "¿pqp de verdad es gratis?",
+      question: "¿Pierdo el historial?",
       answer:
-        "Sí. Código abierto bajo AGPL, sin plan de pago y sin límite artificial de salas. Puedes apoyar el proyecto con una donación, y donar no desbloquea nada.",
+        "El historial se queda en Discord, donde siempre estuvo. La importación trae la estructura del servidor: nombre e ícono, categorías, canales en el mismo orden, roles y permisos. Los mensajes, los archivos adjuntos y los miembros no vienen, así que la conversación en pqp empieza de cero.",
     },
     {
-      question: "¿Cómo entro?",
+      question: "¿De verdad es gratis?",
       answer:
-        "Elige Google, Apple o Twitch, autoriza y listo. Si alguien te mandó un link de invitación, ábrelo y entra desde ahí.",
+        "Sí, es gratis, y no hay plan de pago.",
     },
     {
-      question: "¿Tengo que instalar algo?",
+      question: "¿Funciona en el celular?",
       answer:
-        "No. Funciona en el navegador, en la computadora y en el celular. Hay una app de escritorio para Mac, Windows y Linux, la app de Android en Google Play, y una beta para iPhone si lo prefieres.",
+        "Funciona en el navegador del celular. En Android, hay app en Google Play. En iPhone, la app está en beta a través de TestFlight.",
     },
     {
-      question: "¿Cuántas personas caben en una llamada?",
+      question: "¿Hay que instalar algo?",
       answer:
-        "Más de cien en una sola sala, con una pantalla compartida corriendo, ya pasó en pqp.gg. Una copia self-host sin servidor de medios se queda en unas ocho por canal.",
+        "No. pqp corre en el navegador. Si prefieres una app, hay para Mac, Windows y Linux.",
     },
     {
-      question: "¿Puedo traer mi servidor de Discord?",
+      question: "¿Qué recopila pqp y dónde quedan mis datos?",
       answer:
-        "Puedes traer la estructura: pega un link de plantilla de discord.new y pqp recrea las categorías, los canales y los permisos principales. Los mensajes y los miembros no se vienen.",
+        "El pqp.gg alojado usa analítica de visitas sin cookies (Umami y Cloudflare Web Analytics), reportes de errores (Grafana Faro) y la etiqueta de Google Ads, que usa cookies. Esa etiqueta cuenta registros e informa a Google de las páginas vistas, y Google puede usarlas para remarketing. En pqp.gg, tus datos viven en nuestra base de datos en São Paulo, con respaldos en Norteamérica. Puedes exportar los tuyos cuando quieras y eliminar tu cuenta desde la app.",
     },
     {
-      question: "¿Qué pasa con mis datos?",
+      question: "¿Y si pqp se acaba?",
       answer:
-        "Tu cuenta y tu comunidad viven en nuestro servidor en São Paulo, con respaldos nocturnos en Norteamérica. Cuando una llamada de voz se retransmite, pasa por el servidor de medios más cercano a donde está la mayoría de la gente de ese servidor (São Paulo, Miami o Londres). Las llamadas de mensajes directos y de servidores chicos son directas entre las personas, sin servidor de medios en el medio. Puedes exportar tu cuenta y tu comunidad cuando quieras, y eliminar la cuenta desde la app. O corre tu propia copia y quédate con todo en tu máquina. El pqp.gg alojado también usa analítica sin cookies y reporte de errores, además de la etiqueta de Google Ads, que sí usa cookies; todo está en pqp.gg/privacy.",
+        "El código es abierto, bajo la AGPL, y es público en GitHub. Puedes exportar tus datos y correr una copia de pqp en tu máquina.",
     },
   ],
 };
+
+/**
+ * The homepage's server-bot question, duplicated from `home.faq.bot.*`: the
+ * question and the four sentences its answer is built from (one of
+ * `.a.actions` / `.a.replies`, then one of `.a.gradual` / `.a.everyone`,
+ * joined by `botFaqAnswer`, the same join the page uses). It is served only
+ * while the launch switches are on (`landingFaq`). Pinned against the
+ * catalogues in `marketing-meta.test.ts`.
+ */
+// depends on PR#1188 shipping
+export const LANDING_BOT_FAQ: Record<
+  MarketingLocale,
+  { question: string; answers: Record<BotFaqAnswerKey, string> }
+> = {
+  "pt-BR": {
+    question: "O bot do servidor lê as nossas conversas?",
+    answers: {
+      "home.faq.bot.a.replies":
+        "Só se quem cuida do servidor criar um bot, e só nos canais onde ele foi colocado. Quando alguém chama, ele lê as mensagens recentes daquele canal. Isso pode incluir imagens e, se a transcrição estiver ligada e quem gravou tiver permitido, mensagens de voz. Canal que o cargo dele não vê fica de fora. Quem processa é a Anthropic (Claude), e nada disso treina modelos.",
+      "home.faq.bot.a.actions":
+        "Só se quem cuida do servidor criar um bot, e só nos canais onde ele foi colocado. Quando alguém chama, ele lê as mensagens recentes daquele canal. Isso pode incluir imagens e, se a transcrição estiver ligada e quem gravou tiver permitido, mensagens de voz. Se você pedir, ele também lê outros canais que você e ele podem ver. Canal que o cargo dele não vê fica de fora. Quem processa é a Anthropic (Claude), e nada disso treina modelos.",
+      "home.faq.bot.a.gradual": "Ele é novo, está em beta e chega servidor por servidor.",
+      "home.faq.bot.a.everyone": "Ele é novo e está em beta.",
+    },
+  },
+  en: {
+    question: "Does the server bot read our chats?",
+    answers: {
+      "home.faq.bot.a.replies":
+        "Only if whoever runs the server creates a bot, and only in the channels where it was added. When someone calls it, it reads that channel's recent messages. That can include images and, if transcription is on and whoever recorded them allowed it, voice messages. A channel its role can't see stays out. Anthropic (Claude) processes it, and none of it trains models.",
+      "home.faq.bot.a.actions":
+        "Only if whoever runs the server creates a bot, and only in the channels where it was added. When someone calls it, it reads that channel's recent messages. That can include images and, if transcription is on and whoever recorded them allowed it, voice messages. If you ask, it also reads other channels that both you and it can see. A channel its role can't see stays out. Anthropic (Claude) processes it, and none of it trains models.",
+      "home.faq.bot.a.gradual": "It's new, in beta, and rolling out server by server.",
+      "home.faq.bot.a.everyone": "It's new and in beta.",
+    },
+  },
+  es: {
+    question: "¿El bot del servidor lee nuestras conversaciones?",
+    answers: {
+      "home.faq.bot.a.replies":
+        "Solo si quien administra el servidor crea un bot, y solo en los canales donde lo agregaron. Cuando alguien lo llama, lee los mensajes recientes de ese canal. Eso puede incluir imágenes y, si la transcripción está activada y quien grabó lo permitió, mensajes de voz. El canal que su rol no ve queda fuera. Lo procesa Anthropic (Claude), y nada de eso entrena modelos.",
+      "home.faq.bot.a.actions":
+        "Solo si quien administra el servidor crea un bot, y solo en los canales donde lo agregaron. Cuando alguien lo llama, lee los mensajes recientes de ese canal. Eso puede incluir imágenes y, si la transcripción está activada y quien grabó lo permitió, mensajes de voz. Si se lo pides, también lee otros canales que tú y él pueden ver. El canal que su rol no ve queda fuera. Lo procesa Anthropic (Claude), y nada de eso entrena modelos.",
+      "home.faq.bot.a.gradual": "Es nuevo, está en beta y llega servidor por servidor.",
+      "home.faq.bot.a.everyone": "Es nuevo y está en beta.",
+    },
+  },
+};
+
+/** Where the bot question goes in `LANDING_FAQ`: right after the data question (index 5). */
+const LANDING_BOT_FAQ_AT = 6;
+
+/**
+ * The "/" FAQ as the JSON-LD serves it: `LANDING_FAQ`, plus the server-bot
+ * question after the data question while the launch switches are on. The
+ * claims are read at call time, so the edge and the tests follow the switch.
+ */
+export function landingFaq(
+  locale: MarketingLocale,
+  claims: ServerBotClaims | null = serverBotClaims(),
+): { question: string; answer: string }[] {
+  const faq = LANDING_FAQ[locale];
+  if (!claims) return faq;
+  const bot = LANDING_BOT_FAQ[locale];
+  return [
+    ...faq.slice(0, LANDING_BOT_FAQ_AT),
+    { question: bot.question, answer: botFaqAnswer((key) => bot.answers[key], claims) },
+    ...faq.slice(LANDING_BOT_FAQ_AT),
+  ];
+}
 
 /**
  * The `/vs-discord` FAQ, duplicated from `vsDiscord.faq.*` in the JSON
@@ -1196,12 +1278,14 @@ export function escapeHtml(value: string): string {
  * `sameAs` is for pages anyone can already land on, so the App Store is
  * absent: TestFlight is a beta enrollment, not a public listing.
  *
- * The landing adds SoftwareApplication — the page is the product — mirroring
+ * The home page adds SoftwareApplication (the page is the product), mirroring
  * what the shipped `index.html` says (`applicationCategory`, a zero-price
- * Offer) and, since the redesign, its own FAQPage, with the same `sameAs`. `/vs-discord`
- * adds FAQPage too, whose questions are the FAQ section actually rendered on
- * the page — schema for copy a visitor can read, never schema alone. `/tela`
- * does the same with its own seven.
+ * Offer), with the same `sameAs`. It also adds a FAQPage whose questions are
+ * the ones its FAQ section renders (`landingFaq`: the seven of `LANDING_FAQ`,
+ * plus the server-bot question only while the launch switches are on). `/vs-discord` adds
+ * FAQPage too, built the same way: the questions are the FAQ section actually
+ * rendered on the page. That is schema for copy a visitor can read, never
+ * schema alone. `/tela` does the same with its own seven.
  */
 const ORGANIZATION_SAME_AS = [
   "https://github.com/rafaelcg/pqp",
@@ -1209,11 +1293,12 @@ const ORGANIZATION_SAME_AS = [
 ];
 
 /**
- * Where pqp runs, for `SoftwareApplication.operatingSystem`. The landing says
- * "Web, desktop, iPhone and Android" (`landing.proof.platforms`): desktop is
- * the Electron builds for all three systems, iPhone the TestFlight beta, and
- * Android the Google Play app. `client/index.html` carries the same string for every page
- * the edge does not rewrite, and `marketing-meta.test.ts` keeps the two equal.
+ * Where pqp runs, for `SoftwareApplication.operatingSystem`. The home page's
+ * install and phone answers (`home.faq.install.a`, `home.faq.phone.a.play`)
+ * name the same set: the browser, the Electron builds for Mac, Windows and
+ * Linux, the iPhone TestFlight beta and the Android app on Google Play.
+ * `client/index.html` carries the same string for every page the edge does
+ * not rewrite, and `marketing-meta.test.ts` keeps the two equal.
  */
 export const SOFTWARE_OPERATING_SYSTEMS = "Web, Windows, macOS, Linux, Android, iOS";
 
@@ -1301,7 +1386,7 @@ function jsonLdFor(page: MarketingPage, locale: MarketingLocale): string {
   }
   const faq =
     page === "/"
-      ? LANDING_FAQ[locale]
+      ? landingFaq(locale)
       : page === "/compare"
         ? COMPARE_FAQ[locale]
       : page === "/vs-discord"

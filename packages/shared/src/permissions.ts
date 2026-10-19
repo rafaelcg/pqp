@@ -76,12 +76,22 @@ export const Permission = {
    * (USE_SOUNDBOARD, MANAGE_SOUNDBOARD).
    */
   MANAGE_EMOJI: 1n << 28n,
+  /**
+   * Start an app in a channel (the launcher of the apps platform, behind the
+   * per-server `apps` flag; see docs/APPS.md). Joining a running app needs
+   * only VIEW_CHANNEL, and ending somebody else's session needs
+   * MANAGE_CHANNELS. A channel overwrite applies, like START_WATCH_PARTY.
+   * Granted on `@everyone` of private servers by the backfill and at server
+   * creation, never by default on a community until its owner grants it, so it
+   * is deliberately NOT in `PERMISSION_DEFAULT_EVERYONE`. Bit 29.
+   */
+  USE_APPS: 1n << 29n,
 } as const;
 
 export type PermissionBit = (typeof Permission)[keyof typeof Permission];
 
 /** Every defined bit. Owner and Administrator resolve to this. */
-export const PERMISSION_ALL = (1n << 29n) - 1n;
+export const PERMISSION_ALL = (1n << 30n) - 1n;
 
 /**
  * Default `@everyone` mask: chat, react, attach, history, voice, own nick,
@@ -125,7 +135,8 @@ export const PERMISSION_DEFAULT_MODERATOR =
   Permission.MANAGE_MESSAGES |
   Permission.MANAGE_NICKNAMES |
   Permission.START_WATCH_PARTY |
-  Permission.MANAGE_MUSIC;
+  Permission.MANAGE_MUSIC |
+  Permission.USE_APPS;
 
 export const ROLE_SYSTEM_KEYS = [
   "everyone",
@@ -277,6 +288,7 @@ export const PERMISSION_FLAGS = [
   { bit: Permission.USE_SOUNDBOARD, key: "USE_SOUNDBOARD" },
   { bit: Permission.MANAGE_SOUNDBOARD, key: "MANAGE_SOUNDBOARD" },
   { bit: Permission.MANAGE_EMOJI, key: "MANAGE_EMOJI" },
+  { bit: Permission.USE_APPS, key: "USE_APPS" },
 ] as const;
 
 export type PermissionFlagKey = (typeof PERMISSION_FLAGS)[number]["key"];

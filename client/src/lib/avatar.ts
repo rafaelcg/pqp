@@ -1,4 +1,5 @@
 import { AVATAR_IMAGE_SIZE } from "@pqp/shared";
+import { regionToRect, type CropRegion } from "@/lib/image-crop";
 import { getApiBaseUrl } from "@/lib/utils";
 
 /**
@@ -106,8 +107,35 @@ export function centerCropRectForAspect(
   };
 }
 
+/**
+ * A chosen rectangle as the square `cropImageToSquare` draws from. Rounding
+ * can leave a chosen square a pixel off true; the shorter side wins, so the
+ * face is never stretched by that pixel.
+ */
+function squareOf(rect: { x: number; y: number; width: number; height: number }): {
+  x: number;
+  y: number;
+  size: number;
+} {
+  return { x: rect.x, y: rect.y, size: Math.min(rect.width, rect.height) };
+}
+
 /** JPEG quality for the upload. High enough that a 512px face holds up. */
 const AVATAR_JPEG_QUALITY = 0.85;
+
+/**
+ * What a crop draws from: a file to decode, or a picture the crop step already
+ * decoded (`ImageCropDialog` hands its bitmap on, so a phone photo is never
+ * decoded twice). A bitmap passed in is the crop's to close.
+ */
+export type CropSource = Blob | ImageBitmap;
+
+function decodeForCrop(source: CropSource): Promise<ImageBitmap> {
+  if (typeof ImageBitmap !== "undefined" && source instanceof ImageBitmap) {
+    return Promise.resolve(source);
+  }
+  return createImageBitmap(source, { imageOrientation: "from-image" });
+}
 
 /**
  * A picked file, centre-cropped to a square and scaled to 512, as a JPEG.
@@ -128,16 +156,22 @@ const AVATAR_JPEG_QUALITY = 0.85;
  * main thread and — the part that matters — it honours EXIF orientation with
  * `imageOrientation: "from-image"`, without which every photo taken in portrait
  * on an iPhone uploads rotated ninety degrees.
+ *
+ * `region` is what the person chose in the crop step (`ImageCropDialog`), as
+ * fractions of the oriented picture. Without one the centre crop above is
+ * used, which is also what the crop step starts from. `source` may be the
+ * crop step's own bitmap, decoded the same way (`CropSource`).
  */
 export async function cropImageToSquare(
-  file: Blob,
+  source: CropSource,
   size: number = AVATAR_IMAGE_SIZE,
+  region: CropRegion | null = null,
 ): Promise<Blob> {
-  const bitmap = await createImageBitmap(file, {
-    imageOrientation: "from-image",
-  });
+  const bitmap = await decodeForCrop(source);
   try {
-    const crop = centerCropRect(bitmap.width, bitmap.height);
+    const crop = region
+      ? squareOf(regionToRect(region, bitmap.width, bitmap.height))
+      : centerCropRect(bitmap.width, bitmap.height);
     const canvas = document.createElement("canvas");
     canvas.width = size;
     canvas.height = size;
@@ -183,21 +217,21 @@ export async function cropImageToSquare(
  * the app that is *downscaled by a large factor and then drawn wide* — a 4000px
  * phone photo into 1024px — and the default box filter leaves visible aliasing
  * on any hard edge at that ratio, which an avatar at 40px never shows.
+ *
+ * `region` and `source` are the crop step's, exactly as for
+ * `cropImageToSquare`.
  */
 export async function cropImageToRect(
-  file: Blob,
+  source: CropSource,
   width: number,
   height: number,
+  region: CropRegion | null = null,
 ): Promise<Blob> {
-  const bitmap = await createImageBitmap(file, {
-    imageOrientation: "from-image",
-  });
+  const bitmap = await decodeForCrop(source);
   try {
-    const crop = centerCropRectForAspect(
-      bitmap.width,
-      bitmap.height,
-      width / height,
-    );
+    const crop = region
+      ? regionToRect(region, bitmap.width, bitmap.height)
+      : centerCropRectForAspect(bitmap.width, bitmap.height, width / height);
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;

@@ -1,0 +1,97 @@
+/*
+ * Motion for the DOM product mocks on the homepage previews. Only role
+ * tokens and color-mix: a colour literal here fails the token bench.
+ * The grain (`hp-grain`) is in src/index.css: the static first screen
+ * (lib/prerender-hero.ts) draws it before this file arrives.
+ */
+
+@keyframes hp-speak {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in oklch, var(--color-accent) 55%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 10px color-mix(in oklch, var(--color-accent) 0%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in oklch, var(--color-accent) 0%, transparent);
+  }
+}
+
+@keyframes hp-eq {
+  0%,
+  100% {
+    transform: scaleY(0.3);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+@keyframes hp-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+@keyframes hp-pop {
+  0% {
+    opacity: 0;
+    transform: translateY(8px) scale(0.96);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes hp-marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+.hp-speaking {
+  animation: hp-speak 1.4s ease-out infinite;
+}
+
+/* The pictures are 16 by 16 pixel grids: scale them up with hard edges. */
+.hp-avatar-img {
+  image-rendering: pixelated;
+}
+
+.hp-eq-bar {
+  transform-origin: bottom;
+  animation: hp-eq 0.9s ease-in-out infinite;
+}
+
+.hp-float {
+  animation: hp-float 5s ease-in-out infinite;
+}
+
+.hp-pop {
+  animation: hp-pop 420ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.hp-marquee {
+  animation: hp-marquee 40s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hp-speaking,
+  .hp-eq-bar,
+  .hp-float,
+  .hp-pop,
+  .hp-marquee {
+    animation: none;
+  }
+  .hp-speaking {
+    box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-accent) 45%, transparent);
+  }
+}

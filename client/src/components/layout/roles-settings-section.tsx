@@ -68,6 +68,7 @@ const FLAG_LABEL: Record<PermissionFlagKey, MessageKey> = {
   USE_SOUNDBOARD: "roles.perm.USE_SOUNDBOARD",
   MANAGE_SOUNDBOARD: "roles.perm.MANAGE_SOUNDBOARD",
   MANAGE_EMOJI: "roles.perm.MANAGE_EMOJI",
+  USE_APPS: "roles.perm.USE_APPS",
 };
 
 /** One-liners for flags whose names collide or oversell. Labels stay for the rest. */
@@ -96,6 +97,7 @@ const FLAG_HINT: Partial<Record<PermissionFlagKey, MessageKey>> = {
   USE_SOUNDBOARD: "roles.permHint.USE_SOUNDBOARD",
   MANAGE_SOUNDBOARD: "roles.permHint.MANAGE_SOUNDBOARD",
   MANAGE_EMOJI: "roles.permHint.MANAGE_EMOJI",
+  USE_APPS: "roles.permHint.USE_APPS",
 };
 
 /** Display order. Bit numbers stay as defined in `@pqp/shared`. */
@@ -146,6 +148,7 @@ const PERMISSION_GROUPS = [
       "MANAGE_MUSIC",
       "USE_SOUNDBOARD",
       "MANAGE_SOUNDBOARD",
+      "USE_APPS",
     ],
   },
 ] as const satisfies readonly {
@@ -173,12 +176,20 @@ const UNENFORCED_FLAGS = new Set<PermissionFlagKey>([
 ]);
 
 /**
+ * Bits of the apps platform. The bit exists and is granted, but no editor
+ * lists it until the `apps` flag is on for the server (docs/APPS.md, the
+ * Phase 4 UI work); until then a toggle would offer a switch for a feature
+ * nobody can see.
+ */
+const APPS_HIDDEN_FLAGS = new Set<PermissionFlagKey>(["USE_APPS"]);
+
+/**
  * Bits for a feature behind a per-server runtime flag: enforced, but drawn
  * only where the feature is on, so a server without stories never sees a
  * toggle for something it cannot use.
  */
 function flagGatedOff(key: PermissionFlagKey, storiesOn: boolean): boolean {
-  return key === "POST_STORIES" && !storiesOn;
+  return (key === "POST_STORIES" && !storiesOn) || APPS_HIDDEN_FLAGS.has(key);
 }
 
 const EVERYONE_LOCKED_KEYS = new Set<PermissionFlagKey>([

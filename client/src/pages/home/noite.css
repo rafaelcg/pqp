@@ -1,0 +1,85 @@
+/*
+ * The night's own rules. Only role tokens, the words black, white and
+ * transparent, and color-mix: a colour literal here fails the token bench.
+ */
+
+/* The camera inside a frame layer: it moves the footage (the still and the
+   video under a Clip), never the Clip's own pause button, which stays put in
+   its corner. `--cam` is a transform built from the scene's progress. */
+.noite-cam img,
+.noite-cam video {
+  transform: var(--cam, none);
+  transform-origin: var(--cam-origin, 50% 50%);
+}
+
+/* 21:40, the voice room (VoiceRoom): the channel list still with the server
+   rail (its first 22%) and the sidebar's right edge clipped off. The
+   column's middle is held at the middle of the box, and the pinned scene's
+   `--vl-zoom` pushes in around that same point. On a phone the square holds
+   VOZ down to Leo; from md the wider frame centres on the whole voice block. */
+.noite-voice img {
+  --vl-x: 60.8%;
+  --vl-y: 54%;
+  clip-path: inset(0 0.5% 0 22.1%);
+  transform: translate(calc(-1 * var(--vl-x)), calc(-1 * var(--vl-y))) scale(var(--vl-zoom, 1));
+  transform-origin: var(--vl-x) var(--vl-y);
+  will-change: transform;
+}
+@media (min-width: 768px) {
+  .noite-voice img {
+    --vl-y: 55.9%;
+  }
+}
+
+/* 23:00, the watch party capture (WatchParty), 1440 by 850. In the 16:10
+   frame the cover crop takes its 80 spare columns almost all from the left,
+   which is the server rail, and the pinned scene's `--party-zoom` pushes in
+   towards the stage and keeps the title row in. On a phone the
+   4:3 box keeps the right of the window: the title with AO VIVO, the stage
+   and the chat, with the channel sidebar trimmed off.
+   The 1.11 is a base crop at every width: the capture's activity row (about
+   row 785 of 850, a clock reading 08:35 PM from the afternoon it was taken)
+   must stay out of frame, because the beat it sits in is 23:00. It scales
+   about the top, so the bottom 9% goes (the capture is height-fit at 16:10,
+   so there is no slack for object-position to use). The same capture serves
+   /streamers, so the image is left alone and only this crop hides the row. */
+.noite-party img {
+  object-position: 90% 50%;
+  transform: scale(calc(var(--party-zoom, 1) * 1.11));
+  transform-origin: 55% 6%;
+  will-change: transform;
+}
+@media (max-width: 767px) {
+  .noite-party img {
+    object-position: 100% 0;
+    transform: scale(1.11);
+    transform-origin: 35% 0;
+  }
+}
+
+/* A stacked hour (StackedNight): on a phone its heading, then its picture,
+   then the rest of its words. From lg the picture takes one column and the
+   words sit centred against it, on alternating sides (`data-flip`). */
+.noite-hour {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "head" "media" "body";
+}
+@media (min-width: 1024px) {
+  .noite-hour {
+    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+    grid-template-rows: 1fr auto auto 1fr;
+    grid-template-areas: ". media" "head media" "body media" ". media";
+    column-gap: 3.5rem;
+  }
+  .noite-hour[data-flip] {
+    grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+    grid-template-areas: "media ." "media head" "media body" "media .";
+  }
+}
+
+/* The equaliser bars in the drawn music view keep still unless the drawing is
+   on screen (`data-live`), so an idle page restyles nothing. */
+.noite-music[data-live="false"] .hp-eq-bar {
+  animation-play-state: paused;
+}

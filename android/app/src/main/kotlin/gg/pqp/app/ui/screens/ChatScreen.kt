@@ -171,6 +171,7 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
@@ -283,20 +284,34 @@ fun ChatScreen(
             value = null
             return@produceState
         }
-        val cached = PermissionsCache.fresh(me?.id, id, System.currentTimeMillis())
-        value = cached
-        if (cached != null) return@produceState
-        // Not runCatching: a read cancelled by the next server must end this
-        // producer, not write a null over the one that replaced it.
-        val read = try {
-            session.api.serverPermissions(id)
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            null
+        var initial = true
+        // Also read again whenever the cache is invalidated (a permissions-update or
+        // server-removed frame, a reconnect, a sign-out): this chat holds its snapshot
+        // for as long as it is open, and the 30 s TTL only ever applies to the next
+        // screen that opens. The collector emits once on subscribe, which is the
+        // initial load; a later emission keeps the bits on screen until the new read
+        // lands instead of blanking them. collectLatest cancels a read the frame
+        // outdated, and the stamp drops one that was already past cancelling.
+        PermissionsCache.changes.collectLatest {
+            val cached = PermissionsCache.fresh(me?.id, id, System.currentTimeMillis())
+            if (initial || cached != null) value = cached
+            initial = false
+            if (cached != null) return@collectLatest
+            val stamp = PermissionsCache.stamp(id)
+            // Not runCatching: a read cancelled by the next server must end this
+            // producer, not write a null over the one that replaced it.
+            val read = try {
+                session.api.serverPermissions(id)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                null
+            }
+            // A refused put means a frame landed while the read was in flight: its bits are
+            // already out of date, and the emission that frame caused is reading again.
+            if (read != null && !PermissionsCache.put(me?.id, id, read, System.currentTimeMillis(), stamp)) return@collectLatest
+            value = read
         }
-        if (read != null) PermissionsCache.put(me?.id, id, read, System.currentTimeMillis())
-        value = read
     }
     val canSendHere = SendGate.canSend(sendSnapshot, extras?.primaryChannelId ?: channelId)
     // Encaminhar is offered while the runtime flag is on (read per use, kept a
@@ -556,6 +571,9 @@ fun ChatScreen(
     val firstUnreadId = remember(state.messages, unreadSince, me?.id) {
         gg.pqp.app.forum.ForumLanding.firstUnread(state.messages, unreadSince, me?.id)?.id
     }
+    // Who is still a member, for the "removido" mark on a bot's messages: one
+    // set per roster, so each message is a lookup and not a scan.
+    val memberIds = remember(state.members) { state.members.mapTo(HashSet()) { it.id } }
     val unreadCount = remember(state.messages, unreadSince, me?.id) {
         gg.pqp.app.forum.ForumLanding.unreadCount(state.messages, unreadSince, me?.id)
     }
@@ -658,6 +676,8 @@ fun ChatScreen(
                     onExpired = model::clearNudgeRefusal,
                 )
                 TypingStrip(state.typing)
+                gg.pqp.app.bots.ui.BotActivityStrip(state.botWork.values)
+                gg.pqp.app.bots.ui.BotNoticeStrip(state.botNotice, onDismiss = model::dismissBotNotice)
                 // A locked post, for somebody who may not reply: the reason in
                 // place of the box, never a box that refuses on send.
                 val replacement = extras?.composerReplacement
@@ -873,6 +893,13 @@ fun ChatScreen(
                                         api = session.api,
                                         badge = extras?.authorBadge?.invoke(message),
                                         highlighted = message.id == extras?.highlightedMessageId,
+                                        serverBot = gg.pqp.app.bots.ServerBots.isServerBot(message),
+                                        // "removido" only once the member list has
+                                        // actually loaded: an empty list is not a
+                                        // roster, and would mark every bot gone.
+                                        botGone = state.membersLoaded &&
+                                            gg.pqp.app.bots.ServerBots.isServerBot(message) &&
+                                            message.authorId !in memberIds,
                                         flash = message.id == flashId,
                                     )
                                     if (message.id == extras?.belowMessageId) {
@@ -1282,6 +1309,10 @@ private fun MessageRow(
     badge: String? = null,
     /** The success edge: the reply a forum post marked as its answer. */
     highlighted: Boolean = false,
+    /** Written by a server bot: BOT and BETA ride beside the name. */
+    serverBot: Boolean = false,
+    /** A server bot that is no longer a member: "removido" in place of BETA. */
+    botGone: Boolean = false,
     /** A jump link just landed here: a wash of the signal colour that fades out. */
     flash: Boolean = false,
 ) {
@@ -1351,6 +1382,10 @@ private fun MessageRow(
                         text = message.authorName,
                         style = MaterialTheme.typography.titleSmall,
                     )
+                    if (serverBot) {
+                        Spacer(Modifier.width(Spacing.xs + 2.dp))
+                        gg.pqp.app.bots.ui.ServerBotTags(gone = botGone)
+                    }
                     if (badge != null) {
                         Spacer(Modifier.width(Spacing.xs + 2.dp))
                         Text(

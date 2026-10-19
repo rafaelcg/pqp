@@ -1,0 +1,85 @@
+/*
+ * The homepage's motion kit. Only role tokens, the words black, white and
+ * transparent, and color-mix: a colour literal here fails the token bench.
+ * Everything that moves animates transform, opacity or clip-path. No glows
+ * and no lime light: the pointer tilt, its spotlight, the magnetic pull and
+ * the devices' rim light were removed on October 17, 2026 (rules in ui.tsx).
+ *
+ * The rules the hero needs before this chunk arrives (the scene pin, the
+ * device shadow, the clip's fade and phone crop, the button press) live in
+ * src/index.css, because the static first screen (lib/prerender-hero.ts)
+ * paints with that stylesheet alone. Only the reveal is here.
+ */
+
+/* ----------------------------------------------------------------- Reveal */
+
+/* Reveal moves with the individual `translate` and `scale` properties, never
+   `transform`, so it composes with whatever the content does itself. Its
+   transitions are dropped once the entrance is over (`data-done`), so the
+   content's own transitions take over again. The page uses it only on a few
+   figures: never on a header, a grid or a list (the motion rule in ui.tsx). */
+.cin-reveal {
+  --reveal-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --reveal-ms: 900ms;
+  --reveal-step: 90ms;
+}
+.cin-reveal > *:nth-child(2) { --i: 1; }
+.cin-reveal > *:nth-child(3) { --i: 2; }
+.cin-reveal > *:nth-child(4) { --i: 3; }
+.cin-reveal > *:nth-child(5) { --i: 4; }
+.cin-reveal > *:nth-child(6) { --i: 5; }
+.cin-reveal > *:nth-child(7) { --i: 6; }
+.cin-reveal > *:nth-child(8) { --i: 7; }
+.cin-reveal > *:nth-child(9) { --i: 8; }
+.cin-reveal > *:nth-child(10) { --i: 9; }
+.cin-reveal > *:nth-child(11) { --i: 10; }
+.cin-reveal > *:nth-child(n + 12) { --i: 11; }
+
+@media (prefers-reduced-motion: no-preference) {
+  /* The animated unit: the block itself, or each child when staggered. */
+  .cin-reveal:not([data-stagger]):not([data-done]),
+  .cin-reveal[data-stagger]:not([data-done]) > * {
+    transition:
+      opacity var(--reveal-ms) var(--reveal-ease),
+      translate var(--reveal-ms) var(--reveal-ease),
+      scale var(--reveal-ms) var(--reveal-ease),
+      clip-path var(--reveal-ms) var(--reveal-ease);
+    transition-delay: calc(var(--reveal-delay, 0ms) + var(--i, 0) * var(--reveal-step));
+  }
+
+  .cin-reveal:not([data-in]):not([data-stagger]),
+  .cin-reveal[data-stagger]:not([data-in]) > * {
+    opacity: 0;
+  }
+
+  .cin-reveal[data-variant="rise"]:not([data-in]):not([data-stagger]),
+  .cin-reveal[data-variant="rise"][data-stagger]:not([data-in]) > * {
+    translate: 0 32px;
+  }
+
+  .cin-reveal[data-variant="scale"]:not([data-in]):not([data-stagger]),
+  .cin-reveal[data-variant="scale"][data-stagger]:not([data-in]) > * {
+    translate: 0 24px;
+    scale: 0.94;
+  }
+
+  .cin-reveal[data-variant="wipe"]:not([data-in]):not([data-stagger]),
+  .cin-reveal[data-variant="wipe"][data-stagger]:not([data-in]) > * {
+    translate: 0 16px;
+    clip-path: inset(0 0 100% 0);
+  }
+  .cin-reveal[data-variant="wipe"][data-in]:not([data-done]):not([data-stagger]),
+  .cin-reveal[data-variant="wipe"][data-stagger][data-in]:not([data-done]) > * {
+    clip-path: inset(0 0 0 0);
+  }
+}
+
+@media print {
+  .cin-reveal,
+  .cin-reveal > * {
+    opacity: 1 !important;
+    translate: none !important;
+    scale: none !important;
+    clip-path: none !important;
+  }
+}

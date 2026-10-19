@@ -19,6 +19,15 @@ function routePaths(): string[] {
   );
 }
 
+/**
+ * The homepage design previews are mounted only in dev builds (`HomePreviewRoute`
+ * in `main.tsx` is null in production). A production edge has no such route, so
+ * these paths must stay unknown and are skipped by the route check below.
+ */
+function isDevOnlyRoute(pattern: string): boolean {
+  return /^\/preview\/home(?:\/|$)/.test(pattern);
+}
+
 /** A concrete address for a route pattern. */
 function sample(pattern: string): string | null {
   if (pattern === "*") return null; // the catch-all IS "unknown"
@@ -36,6 +45,7 @@ describe("isUnknownSpaPath", () => {
   it("recognises every route main.tsx declares", () => {
     const missed: string[] = [];
     for (const pattern of routePaths()) {
+      if (isDevOnlyRoute(pattern)) continue;
       const path = sample(pattern);
       if (path && isUnknownSpaPath(path)) {
         missed.push(`${pattern} (${path})`);
@@ -106,6 +116,9 @@ describe("isUnknownSpaPath", () => {
       "/@a/b",
       "/qa",
       "/vem/extra",
+      // Dev-only routes: a production build has no route for them.
+      "/preview/home",
+      "/preview/home/a",
     ]) {
       expect(isUnknownSpaPath(path), path).toBe(true);
     }

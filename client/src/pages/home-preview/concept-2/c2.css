@@ -1,0 +1,252 @@
+/*
+ * Lambe-lambe: the street-poster kit for the homepage concept at
+ * /preview/home/c2. Paper sheets, tape, rubber stamps, ruled notes.
+ * Role tokens and color-mix only: a colour literal here fails the token bench.
+ * Everything that moves is transform or opacity, and all of it has a
+ * reduced-motion answer that shows the finished state.
+ */
+
+/* A sheet is pasted on: it lands a hair late and a hair crooked, then settles. */
+.c2-paste {
+  opacity: 0;
+  transform: translate3d(0, 26px, 0) rotate(calc(var(--r, 0deg) + 1.4deg));
+  transition:
+    opacity 480ms ease-out var(--d, 0ms),
+    transform 640ms cubic-bezier(0.2, 0.8, 0.2, 1) var(--d, 0ms);
+}
+.c2-paste[data-in="true"] {
+  opacity: 1;
+  transform: translate3d(0, 0, 0) rotate(var(--r, 0deg));
+}
+
+/* Fine black grain over paper. One small tiled SVG, no image file. */
+.c2-grain::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.09 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+}
+
+/* The fold lines a poster keeps from being carried rolled up. */
+.c2-crease::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    linear-gradient(
+      to right,
+      transparent calc(50% - 1px),
+      color-mix(in oklch, black 9%, transparent) 50%,
+      color-mix(in oklch, white 26%, transparent) calc(50% + 1px),
+      transparent calc(50% + 2px)
+    ),
+    linear-gradient(
+      to bottom,
+      transparent calc(50% - 1px),
+      color-mix(in oklch, black 7%, transparent) 50%,
+      color-mix(in oklch, white 22%, transparent) calc(50% + 1px),
+      transparent calc(50% + 2px)
+    );
+}
+
+/* Hand-torn bottom edge. Flat paste, so no shadow to clip. */
+.c2-torn-b {
+  clip-path: polygon(
+    0 0,
+    100% 0,
+    100% calc(100% - 7px),
+    97% calc(100% - 1px),
+    93% calc(100% - 8px),
+    89% calc(100% - 2px),
+    84% calc(100% - 7px),
+    79% 100%,
+    74% calc(100% - 6px),
+    69% calc(100% - 1px),
+    63% calc(100% - 8px),
+    58% calc(100% - 3px),
+    52% calc(100% - 7px),
+    46% 100%,
+    41% calc(100% - 6px),
+    35% calc(100% - 2px),
+    30% calc(100% - 8px),
+    24% calc(100% - 1px),
+    19% calc(100% - 6px),
+    13% calc(100% - 2px),
+    8% calc(100% - 8px),
+    3% calc(100% - 2px),
+    0 calc(100% - 6px)
+  );
+}
+
+/* Masking tape: translucent, with torn ends and a faint sheen. */
+.c2-tape {
+  display: block;
+  height: 30px;
+  transform: rotate(var(--r, -4deg));
+  clip-path: polygon(
+    0 0,
+    3% 12%,
+    0 25%,
+    3% 37%,
+    0 50%,
+    3% 62%,
+    0 75%,
+    3% 87%,
+    0 100%,
+    100% 100%,
+    97% 87%,
+    100% 75%,
+    97% 62%,
+    100% 50%,
+    97% 37%,
+    100% 25%,
+    97% 12%,
+    100% 0
+  );
+}
+.c2-tape--light {
+  background-image: linear-gradient(
+    100deg,
+    color-mix(in oklch, var(--color-paper) 40%, transparent),
+    color-mix(in oklch, var(--color-paper) 58%, transparent) 45%,
+    color-mix(in oklch, var(--color-paper) 40%, transparent)
+  );
+}
+.c2-tape--lime {
+  background-image: linear-gradient(
+    100deg,
+    color-mix(in oklch, var(--color-accent) 62%, transparent),
+    color-mix(in oklch, var(--color-accent) 80%, transparent) 45%,
+    color-mix(in oklch, var(--color-accent) 62%, transparent)
+  );
+}
+.c2-tape--dark {
+  background-image: linear-gradient(
+    100deg,
+    color-mix(in oklch, black 22%, transparent),
+    color-mix(in oklch, black 34%, transparent) 45%,
+    color-mix(in oklch, black 22%, transparent)
+  );
+}
+
+/* Rubber stamp: heavy caps, a double border, ink that lands with a thump. */
+.c2-stamp {
+  display: inline-block;
+  transform: rotate(var(--r, -6deg));
+  border: 3px solid currentColor;
+  border-radius: 0.5rem;
+  padding: 0.32rem 0.7rem 0.26rem;
+  font-family: var(--font-brand);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  line-height: 1;
+  white-space: nowrap;
+  outline: 1.5px solid currentColor;
+  outline-offset: 3px;
+  opacity: 0.94;
+}
+.c2-stamp[data-in="false"] {
+  opacity: 0;
+  transform: rotate(var(--r, -6deg)) scale(1.5);
+}
+.c2-stamp[data-in="true"] {
+  animation: c2-slam 420ms cubic-bezier(0.2, 0.9, 0.25, 1) both;
+}
+@keyframes c2-slam {
+  0% {
+    opacity: 0;
+    transform: rotate(var(--r, -6deg)) scale(1.6);
+  }
+  55% {
+    opacity: 0.96;
+    transform: rotate(calc(var(--r, -6deg) - 1.5deg)) scale(0.93);
+  }
+  100% {
+    opacity: 0.94;
+    transform: rotate(var(--r, -6deg)) scale(1);
+  }
+}
+
+/* A pasted photo: a paper margin around a capture. */
+.c2-photo {
+  background-color: var(--color-paper);
+  padding: 7px;
+  box-shadow:
+    0 1px 0 color-mix(in oklch, black 25%, transparent),
+    0 16px 30px -14px color-mix(in oklch, black 70%, transparent);
+}
+
+/* Ruled note paper. The text must sit on the lines: same 28px step. */
+.c2-ruled {
+  line-height: 28px;
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0 27px,
+    color-mix(in oklch, var(--color-ink) 14%, transparent) 27px 28px
+  );
+  background-position: 0 8px;
+}
+
+/* Coarse halftone for big fields: a radial-gradient dot tile that fades out. */
+.c2-dots {
+  background-image: radial-gradient(circle, currentColor 1.6px, transparent 2.2px);
+  background-size: 11px 11px;
+}
+.c2-dots--fade-b {
+  mask-image: linear-gradient(to bottom, black, transparent 92%);
+}
+.c2-dots--fade-l {
+  mask-image: linear-gradient(to left, black 10%, transparent 95%);
+}
+.c2-dots--fade-r {
+  mask-image: linear-gradient(to right, black 10%, transparent 95%);
+}
+
+/* Wall seams: the faint rectangles of posters that were here before. */
+.c2-ghost {
+  border: 1px solid color-mix(in oklch, var(--color-paper) 7%, transparent);
+  background-color: color-mix(in oklch, var(--color-paper) 2.5%, transparent);
+}
+
+@keyframes c2-marquee-back {
+  from {
+    transform: translateX(-50%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+.c2-marquee {
+  animation: hp-marquee 55s linear infinite;
+}
+.c2-marquee--back {
+  animation: c2-marquee-back 70s linear infinite;
+}
+.c2-marquee[data-run="false"],
+.c2-marquee--back[data-run="false"] {
+  animation-play-state: paused;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .c2-paste,
+  .c2-paste[data-in="true"] {
+    opacity: 1;
+    transform: rotate(var(--r, 0deg));
+    transition: none;
+  }
+  .c2-stamp,
+  .c2-stamp[data-in="false"],
+  .c2-stamp[data-in="true"] {
+    opacity: 0.94;
+    transform: rotate(var(--r, -6deg));
+    animation: none;
+  }
+  .c2-marquee,
+  .c2-marquee--back {
+    animation: none;
+  }
+}
