@@ -255,6 +255,144 @@ describeDb("the watch-party host's grace clock across two instances", () => {
     );
   });
 
+  it("a stamp that lands after the host reconnected on the sibling is taken back", async () => {
+    // THE RECONNECT THAT CHANGES MACHINES. The host's socket closes on A while
+    // the new one is opening on B. A asks "is anybody connected" (no: B's
+    // socket is not registered yet), then writes the stamp. If B's whole
+    // arrival, including the `onHostSocketOpened` clear, runs between A's
+    // question and A's UPDATE landing, the stamp arrives AFTER the clear and
+    // nothing clears it again: a connected host on a running clock, Assumir
+    // offered to every co-host, and the sweep ending the party in five
+    // minutes. The gate below holds A's UPDATE exactly in that window.
+    const a = await bootInstance();
+    const b = await bootInstance();
+    a.events.setHostPresenceRecheckMsForTests(20);
+    const hostId = await makeUser();
+    const channelId = await seedLiveParty(hostId);
+
+    const laptop = await connect(a, hostId);
+
+    const pool = a.db.getPool();
+    const realQuery = pool.query.bind(pool) as (...args: unknown[]) => unknown;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let held = false;
+    (pool as unknown as { query: (...args: unknown[]) => unknown }).query = async (
+      ...args: unknown[]
+    ) => {
+      const sql = typeof args[0] === "string" ? args[0] : "";
+      if (sql.includes("host_disconnected_at = NOW()")) {
+        held = true;
+        await gate;
+      }
+      return realQuery(...args);
+    };
+
+    // A: the laptop closes, nobody else is connected, the stamp is in flight.
+    const closing = disconnect(a, laptop, hostId);
+    await waitFor(async () => held, "A's stamp to be in flight");
+
+    // B: the phone arrives and runs the arrival's clear (nothing to clear yet).
+    await connect(b, hostId);
+    await b.events.onHostSocketOpened(hostId).catch(() => {});
+    expect(await disconnectedAt(channelId)).toBeNull();
+
+    // The stamp lands now, after the clear. A's own second look, after the
+    // bus window, finds the host on B and takes it back.
+    release();
+    await closing;
+
+    await waitFor(
+      async () => (await disconnectedAt(channelId)) === null,
+      "the late stamp to be retracted",
+    );
+  });
+
+  /** Hold or break the queries of one instance whose SQL contains `needle`. */
+  function interceptPool(
+    instance: Instance,
+    needle: string,
+    behave: () => Promise<void>,
+  ): void {
+    const pool = instance.db.getPool();
+    const realQuery = pool.query.bind(pool) as (...args: unknown[]) => unknown;
+    (pool as unknown as { query: (...args: unknown[]) => unknown }).query = async (
+      ...args: unknown[]
+    ) => {
+      const sql = typeof args[0] === "string" ? args[0] : "";
+      if (sql.includes(needle)) {
+        await behave();
+      }
+      return realQuery(...args);
+    };
+  }
+
+  it("a close that races the retraction is not lost", async () => {
+    // The stamp is set, the host is on B, and A is mid-retraction when B's
+    // socket closes. B's close finds the stamp still set, so its idempotent
+    // stamp writes nothing and is consumed; A's clear then removes the only
+    // stamp. Without the re-check the host is gone with no clock, forever.
+    const a = await bootInstance();
+    const b = await bootInstance();
+    a.events.setHostPresenceRecheckMsForTests(20);
+    b.events.setHostPresenceRecheckMsForTests(20);
+    const hostId = await makeUser();
+    const channelId = await seedLiveParty(hostId);
+
+    const laptop = await connect(a, hostId);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let held = false;
+    interceptPool(a, "host_disconnected_at = NULL", async () => {
+      held = true;
+      await gate;
+    });
+
+    await disconnect(a, laptop, hostId);
+    expect(await disconnectedAt(channelId)).not.toBeNull();
+    const phone = await connect(b, hostId);
+    await waitFor(async () => held, "A's retraction to be in flight");
+
+    await disconnect(b, phone, hostId);
+    release();
+
+    await waitFor(
+      async () => (await disconnectedAt(channelId)) !== null,
+      "the clock the racing close would have started",
+    );
+  });
+
+  it("a retraction that fails once is retried", async () => {
+    const a = await bootInstance();
+    const b = await bootInstance();
+    a.events.setHostPresenceRecheckMsForTests(20);
+    const hostId = await makeUser();
+    const channelId = await seedLiveParty(hostId);
+
+    const laptop = await connect(a, hostId);
+    let failures = 0;
+    interceptPool(a, "host_disconnected_at = NULL", async () => {
+      if (failures === 0) {
+        failures += 1;
+        throw new Error("transient");
+      }
+    });
+
+    await disconnect(a, laptop, hostId);
+    expect(await disconnectedAt(channelId)).not.toBeNull();
+    await connect(b, hostId);
+
+    await waitFor(
+      async () => (await disconnectedAt(channelId)) === null,
+      "the retry to clear the stamp",
+    );
+    expect(failures).toBe(1);
+  });
+
   it("one machine behaves exactly as it always did", async () => {
     // The bus is what carries the other instance's contribution, so with it
     // closed this is a single-instance deployment: the local socket map is

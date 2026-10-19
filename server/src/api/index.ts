@@ -371,6 +371,17 @@ import {
   resetLivePreviewRateLimits,
 } from "./live-preview-routes.js";
 import {
+  ADMIN_APP_REVIEW_PATH,
+  ADMIN_APP_SERVERS_PATH,
+  ADMIN_APPS_PATH,
+  ADMIN_SERVER_APPS_PATH,
+  adminListAppServers,
+  adminListApps,
+  adminReviewAppVersion,
+  adminSetApp,
+  adminSetServerApp,
+} from "./app-admin-routes.js";
+import {
   livePreviewChannelAvailable,
   livePreviewOnFor,
   livePreviewPlaylistAllowed,
@@ -2671,6 +2682,49 @@ router.put(ADMIN_FLAG_OVERRIDE_PATH, async ({ req, user }) => {
   });
 });
 
+// ------------------------------------------------- the apps catalog (operator)
+//
+// `apps/admin.ts` and `app-admin-routes.ts`. Two reads and three writes, same
+// gate and same two ways in as the flags above. Every write is audited in
+// `app_admin_audit` in its own transaction; an unreviewed app cannot go live
+// (409 `not-reviewed`) and a public community cannot be switched on for an app
+// that is not unlocked for communities (409 `community-locked`).
+
+router.get(ADMIN_APPS_PATH, async ({ user }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  return adminListApps();
+});
+
+router.put(ADMIN_APPS_PATH, async ({ req, user }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  return adminSetApp(req, { kind: "moderator", userId: user.id });
+});
+
+router.put(ADMIN_APP_REVIEW_PATH, async ({ req, user }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  return adminReviewAppVersion(req, { kind: "moderator", userId: user.id });
+});
+
+router.get(ADMIN_APP_SERVERS_PATH, async ({ url, user }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  return adminListAppServers(url.searchParams);
+});
+
+router.put(ADMIN_SERVER_APPS_PATH, async ({ req, user }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  return adminSetServerApp(req, { kind: "moderator", userId: user.id });
+});
+
 /**
  * EVERYTHING the operator dashboard's machine token can reach, and nothing
  * else, as a flat table of exact (method, pathname) pairs.
@@ -2815,6 +2869,34 @@ const ADMIN_MACHINE_ROUTES: {
         kind: "dashboard",
       });
     },
+  },
+  // The apps catalog: the list, one app's switches, a version's review, one
+  // app's servers, and one server's operator switch. The app id is in the body
+  // or the query, never in the path (see `app-admin-routes.ts`).
+  {
+    method: "GET",
+    path: ADMIN_APPS_PATH,
+    run: async () => adminListApps(),
+  },
+  {
+    method: "PUT",
+    path: ADMIN_APPS_PATH,
+    run: async (req) => adminSetApp(req, { kind: "dashboard" }),
+  },
+  {
+    method: "PUT",
+    path: ADMIN_APP_REVIEW_PATH,
+    run: async (req) => adminReviewAppVersion(req, { kind: "dashboard" }),
+  },
+  {
+    method: "GET",
+    path: ADMIN_APP_SERVERS_PATH,
+    run: async (_req, query) => adminListAppServers(query),
+  },
+  {
+    method: "PUT",
+    path: ADMIN_SERVER_APPS_PATH,
+    run: async (req) => adminSetServerApp(req, { kind: "dashboard" }),
   },
 ];
 
