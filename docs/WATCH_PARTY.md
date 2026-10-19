@@ -1878,6 +1878,17 @@ The row's `runs` records when each run started (`base`, ms after `startedAt`;
 nothing renders a `mic` row as a playlist). An inherited session still never
 starts a FIRST archive mid-film, and the flag going off stops it for good.
 
+**A presenter who is away when the retry runs is waited for (2026-10-17).**
+The presenter's page went away, its LiveKit participant with it, and the
+archive's egress ended (`hlsMicArchiveDied retryInMs=3000`). The 3 s retry
+found no track, and used to give up for good: the window that makes the
+monitor look had been closed by the stop, and a returning page publishes
+`mic-archive` after its share, so no reconcile saw it either. The retry now
+leaves the monitor looking for three minutes (`MIC_ARCHIVE_REJOIN_WAIT_MS`),
+and the next run starts as `mic-track-returned`. `voice.hlsSharerVanished`
+also says `effectiveGraceMs` now: `graceMs` is the base 5 s, but for a known
+presenter the return window (60 s) is what applies.
+
 **Nor does the presenter moving machines** (since 2026-09-25, after rehearsal D
 lost its whole voice file). A page reload that lands on the other API replica
 takes the presenter out of LiveKit, so the archive's egress has ended by the
