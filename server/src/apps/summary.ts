@@ -142,14 +142,20 @@ export async function readLiveSummaryById(
 /** Every live session of one server, with the channel each one is in. */
 export async function readLiveSummariesForServer(
   serverId: string,
-  options: { db?: Queryable; handoffFor?: HandoffFor } = {},
+  options: {
+    db?: Queryable;
+    handoffFor?: HandoffFor;
+    /** Only these channels: a caller that can see some of them reads no others. */
+    channelIds?: readonly string[];
+  } = {},
 ): Promise<Array<{ channelId: string; summary: AppSessionSummary }>> {
   const db = options.db ?? getPool();
   const result = await db.query<SessionRow>(
     `SELECT ${SESSION_COLUMNS} FROM app_sessions
       WHERE server_id = $1 AND status = 'live'
+        AND ($2::uuid[] IS NULL OR channel_id = ANY($2::uuid[]))
       ORDER BY started_at, id`,
-    [serverId],
+    [serverId, options.channelIds ? [...options.channelIds] : null],
   );
   const participants = await participantsOf(
     db,
@@ -159,4 +165,16 @@ export async function readLiveSummariesForServer(
     channelId: row.channel_id,
     summary: build(row, participants.get(row.id) ?? [], options.handoffFor),
   }));
+}
+
+/** The channels of a server that have a live session: one cheap read, no participants. */
+export async function readLiveChannelIdsForServer(
+  serverId: string,
+  db: Queryable = getPool(),
+): Promise<string[]> {
+  const result = await db.query<{ channel_id: string }>(
+    `SELECT channel_id FROM app_sessions WHERE server_id = $1 AND status = 'live'`,
+    [serverId],
+  );
+  return result.rows.map((row) => row.channel_id);
 }
