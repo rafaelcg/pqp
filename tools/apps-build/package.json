@@ -1,0 +1,25 @@
+{
+  "name": "@pqp/apps-build",
+  "version": "0.0.1",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "description": "Builds the first-party pqp apps under apps/: deterministic Vite output, SRI, hashes, the built manifests, the _headers file and server/src/apps/catalog.json.",
+  "type": "module",
+  "scripts": {
+    "build": "tsx src/cli.mts build",
+    "check": "tsx src/cli.mts check",
+    "dev": "tsx src/cli.mts dev",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@pqp/shared": "workspace:*",
+    "vite": "6.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^4.1.10"
+  }
+}

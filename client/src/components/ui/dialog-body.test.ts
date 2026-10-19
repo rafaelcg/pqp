@@ -36,6 +36,7 @@ const FULL_BLEED: Record<string, string> = {
   "search/search-dialog.tsx": "draws its own header and result chrome",
   "conversations/quick-switcher.tsx": "a command palette: field, results and key hints edge to edge",
   "onboarding/onboarding-flow.tsx": "each step pads itself as it slides in",
+  "bots/bot-wizard.tsx": "a form column beside a stage that runs to the panel edge",
 };
 
 function tsxFiles(dir: string): string[] {

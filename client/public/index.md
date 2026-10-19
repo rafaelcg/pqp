@@ -24,7 +24,8 @@ Voice, screen share and chat for your group of friends. Open source (AGPL), Braz
 
 ## Read more
 
-- Why not Discord: https://pqp.gg/vs-discord
+- Feature table against Discord, Stoat, TeamSpeak 6 and Slack huddles, with sources and dates: https://pqp.gg/compare
+- pqp vs Discord, feature by feature: https://pqp.gg/vs-discord
 - Screen share from the browser: https://pqp.gg/tela
 - Release notes: https://pqp.gg/blog
 - Source: https://github.com/rafaelcg/pqp

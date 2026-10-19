@@ -388,9 +388,14 @@ private struct MemberRow: View {
                     StatusDot(status: member.status)
                 }
             VStack(alignment: .leading, spacing: 2) {
-                Text(member.displayName)
-                    .font(Typography.bodyMedium)
-                    .foregroundStyle(Palette.paper)
+                HStack(spacing: 6) {
+                    Text(member.displayName)
+                        .font(Typography.bodyMedium)
+                        .foregroundStyle(Palette.paper)
+                    if member.isServerBot {
+                        ServerBotTags()
+                    }
+                }
                 if let tag = member.tag {
                     Text(tag).font(Typography.mono).foregroundStyle(Palette.paperMuted)
                 }
