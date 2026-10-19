@@ -291,7 +291,10 @@ async function hydrate(
         : Promise.resolve(new Set<string>()),
       listThreadsForMessages(messageIds),
       listPollsForMessages(messageIds, viewerId),
-      // One statement, and none for a page with no app card on it.
+      // One statement, and none for a page with no app card on it. It never
+      // rejects: a failed lookup is logged (`apps.cardSessionsUnread`) and
+      // returns no sessions, so the cards read as their plain-text body and
+      // this Promise.all cannot fail the page over a card.
       listAppSessionsForMessages(rows),
     ]);
   return {
@@ -1363,6 +1366,7 @@ async function hydrateOne(
     // --- threads --- pin/unpin broadcasts are whole messages too.
     listThreadsForMessages([message.id]),
     listPollsForMessages([message.id], viewerId),
+    // never rejects (see the page read above): a card is not worth the message
     listAppSessionsForMessages([message]),
   ]);
   return {

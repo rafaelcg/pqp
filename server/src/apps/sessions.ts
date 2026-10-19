@@ -27,6 +27,7 @@ import {
   readServerFacts,
 } from "./availability.js";
 import { recordAppEnd, recordAppStart, recordAppStartRefused } from "./metrics.js";
+import { retryAfterCommit } from "./post-commit-retry.js";
 import { readLiveSummary, readLiveSummaryById } from "./summary.js";
 
 /**
@@ -233,21 +234,25 @@ export async function startAppSession(
   // After the commit, and each leg on its own: a failure to tell people is
   // logged and never undoes (or re-answers) a session that exists.
   invalidateLatestMessages(channelId);
-  // The card's broadcast is tried three times: a read that failed once (a pool
-  // blip) must not leave the channel without the card until somebody reloads.
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    try {
-      const hydrated = await getHydratedMessage(messageId);
-      if (hydrated) {
-        await announceServiceMessage(mapMessage(hydrated));
-      }
-      break;
-    } catch (error) {
-      logEvent("apps.timelineAnnounceFailed", { sessionId, attempt, error: String(error) });
-      if (attempt < 2) {
-        await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)));
-      }
+  // The card's broadcast is tried once inline, so in the usual case it reaches
+  // the channel before the `channel-app` frame. A read that fails (a pool blip,
+  // or the database gone for a minute) hands it to `retryAfterCommit`, which
+  // keeps trying in the background for about two minutes without holding this
+  // answer, so the channel is not left without the card until somebody reloads.
+  const announceCard = async () => {
+    const hydrated = await getHydratedMessage(messageId);
+    if (hydrated) {
+      await announceServiceMessage(mapMessage(hydrated));
     }
+  };
+  try {
+    await announceCard();
+  } catch (error) {
+    logEvent("apps.timelineAnnounceFailed", { sessionId, attempt: 0, error: String(error) });
+    void retryAfterCommit(announceCard, {
+      event: "apps.timelineAnnounceFailed",
+      fields: { sessionId },
+    });
   }
   void announceChannelApp(channelId, { immediate: true }).catch(() => {});
 

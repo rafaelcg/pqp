@@ -1,6 +1,7 @@
 import type { WebSocket } from "ws";
 import { z } from "zod";
 import { appEndedSchema, type AppEnded } from "@pqp/shared";
+import { retryAfterCommit } from "../apps/post-commit-retry.js";
 import { readLiveSummary } from "../apps/summary.js";
 import { isBusEnabled, publishToCluster, subscribeToCluster } from "../lib/bus.js";
 import { logEvent } from "../lib/log.js";
@@ -189,27 +190,33 @@ async function deliverEndedLocally(frame: AppEnded): Promise<void> {
   if (!hasAuthenticatedSockets()) {
     return;
   }
-  // The audience is asked for up to three times: a lookup that failed once must
-  // not leave every viewer's card live. Seated sockets already have the frame.
-  let audience: Awaited<ReturnType<typeof getChannelAudience>> = null;
-  for (let attempt = 0; attempt < 3 && !audience; attempt += 1) {
-    audience = await getChannelAudience(frame.channelId).catch((error: unknown) => {
-      logEvent("apps.endedAudienceFailed", { sessionId: frame.sessionId, attempt, error: String(error) });
-      return null;
+  // Seated sockets already have the frame. The rest of the channel's viewers
+  // need the audience, and a lookup that fails must not leave every viewer's
+  // card live: it is tried once here and, when that fails (a pool blip, or the
+  // database gone for a minute), kept trying in the background for about two
+  // minutes by `retryAfterCommit` instead of being read as an empty audience.
+  const fanOut = async () => {
+    // a failed read throws and is retried; null means the channel no longer exists,
+    // so there is nobody left to tell
+    const audience = await getChannelAudience(frame.channelId);
+    if (!audience) {
+      return;
+    }
+    forEachAuthenticatedSocket((socket, user) => {
+      if (!seated.has(socket) && audience.has(user.id)) {
+        sendEncoded(socket, payload);
+      }
     });
-    if (!audience && attempt < 2) {
-      await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)));
-    }
+  };
+  try {
+    await fanOut();
+  } catch (error) {
+    logEvent("apps.endedAudienceFailed", { sessionId: frame.sessionId, attempt: 0, error: String(error) });
+    void retryAfterCommit(fanOut, {
+      event: "apps.endedAudienceFailed",
+      fields: { sessionId: frame.sessionId },
+    });
   }
-  if (!audience) {
-    return;
-  }
-  const viewers = audience;
-  forEachAuthenticatedSocket((socket, user) => {
-    if (!seated.has(socket) && viewers.has(user.id)) {
-      sendEncoded(socket, payload);
-    }
-  });
 }
 
 /** `app-ended` to the participants of the session and to the channel's viewers, on every instance. */
