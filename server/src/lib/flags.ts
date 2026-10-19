@@ -492,6 +492,29 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/voice/config?serverId= (soundboard)",
   },
+  custom_bots: {
+    description:
+      "Bots do servidor: a staff cria um bot com nome, personalidade e conhecimento, e ele responde quando alguém menciona ou responde a ele nos canais escolhidos (a pqp paga o modelo; desligado: a aba some e nenhum bot responde).",
+    env: "CUSTOM_BOTS",
+    parseEnv: exactTrue,
+    // Off: every reply is a model call pqp pays for. One server first (its
+    // override), then everybody once the daily ceilings are proven.
+    codeDefault: false,
+    // Every reader knows the server: the trigger reads the channel's server,
+    // the runner re-reads it before calling the model (so off silences a reply
+    // already queued), and the client asks `GET /api/bots/config?serverId=`.
+    perServer: true,
+    clientVia: "GET /api/bots/config?serverId= (enabled)",
+  },
+  bot_test_chat: {
+    description:
+      "Conversa de teste no assistente de bot: antes de criar, a staff troca umas mensagens com o bot pra ver o jeito dele (cada turno é uma chamada de modelo; limite diário por pessoa).",
+    env: "BOT_TEST_CHAT",
+    parseEnv: exactTrue,
+    codeDefault: false,
+    perServer: true,
+    clientVia: "GET /api/bots/config?serverId= (testChat)",
+  },
   voice_audio_self_heal: {
     description:
       "Call que se conserta sozinha: percebe mic que parou de mandar som e call que parou de tocar, tenta arrumar sem ninguém notar e, se não der, mostra \"Arrumar\" com um toque (desligado: nada disso roda).",
@@ -874,9 +897,24 @@ export const FEATURE_FLAGS = {
     // session belongs to a channel that belongs to a server, and the admin
     // routes name one.
     perServer: true,
-    // No `clientVia` yet: `GET /api/apps/config?serverId=` (enabled) arrives
-    // with the session routes. Adding it earlier would fail the contract test
-    // that every served field is read by the client.
+    clientVia: "GET /api/apps/config?serverId= (enabled)",
+  },
+  locadora_share: {
+    description:
+      "Locadora compartilhando a tela do jogo: deixa o Locadora (e qualquer app de emulador) compartilhar o painel do jogo e deixa a galera assistir. Fica desligado até a resposta do advogado (Portão Legal L1b). Desligado, o servidor recusa o compartilhamento e a entrada como plateia nesses apps.",
+    env: "LOCADORA_SHARE",
+    parseEnv: exactTrue,
+    // Off: showing a running game to other people is an open legal question
+    // (docs/EMULATOR_ROOM.md item 6), so this waits for the lawyer's written
+    // answer. Only `true` turns it on. It acts on apps of `category:
+    // "emulator"` only; every other app shares through the ordinary path.
+    codeDefault: false,
+    // Every reader knows the server: a session belongs to a channel that
+    // belongs to a server, and `appShareAllowed` takes the server id.
+    perServer: true,
+    // No `clientVia` field yet: the config carries it as `shareAllowed` per
+    // app, and the client that reads it arrives with the product UI. Naming a
+    // field here before a client mentions it fails the contract test.
   },
 } as const satisfies Record<string, FlagDefinition>;
 

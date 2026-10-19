@@ -504,3 +504,51 @@ describe("the stories flags", () => {
     expect(service).toMatch(/isEnabled\("stories_friends"\)/);
   });
 });
+
+/**
+ * `apps` and `locadora_share`, born with the apps platform. `apps` is per
+ * server, off by default, and served as `enabled` by `GET /api/apps/config`
+ * (its route lives in `api/app-routes.ts`, mounted from `api/index.ts`).
+ * `locadora_share` has no `(field)` in `clientVia` until a client reads the
+ * per-app `shareAllowed`, which the generic check above would rightly fail; the
+ * server half (the field, the read) is pinned here instead.
+ */
+describe("apps and locadora_share against the config the client reads", () => {
+  it("apps is per server, off by default, and served as `enabled`", () => {
+    const def = FEATURE_FLAGS.apps;
+    expect(def.perServer).toBe(true);
+    expect(def.codeDefault).toBe(false);
+    expect(def.clientVia).toBe("GET /api/apps/config?serverId= (enabled)");
+  });
+
+  it("the route is mounted from the router file and asked per server", () => {
+    const api = readFileSync(path.join(serverSrc, "api/index.ts"), "utf8");
+    expect(api).toMatch(/registerAppRoutes\(router\)/);
+    const routes = readFileSync(path.join(serverSrc, "api/app-routes.ts"), "utf8");
+    const route = /router\.get\("\/api\/apps\/config"[\s\S]*?\n {2}\}\);/.exec(routes)?.[0];
+    expect(route, "GET /api/apps/config is not mounted").toBeTruthy();
+    expect(route).toContain('searchParams.get("serverId")');
+    expect(route).toContain("appsConfigForServer(");
+    const config = readFileSync(path.join(serverSrc, "apps/config.ts"), "utf8");
+    expect(config).toMatch(/isEnabled\("apps",\s*\{\s*serverId\s*\}\)/);
+  });
+
+  it("locadora_share is per server, off, and read by appShareAllowed which the config serves as shareAllowed", () => {
+    const def = FEATURE_FLAGS.locadora_share;
+    expect(def.perServer).toBe(true);
+    expect(def.codeDefault).toBe(false);
+    const availability = readFileSync(path.join(serverSrc, "apps/availability.ts"), "utf8");
+    expect(availability).toMatch(/isEnabled\("locadora_share",\s*\{\s*serverId\s*\}\)/);
+    const config = readFileSync(path.join(serverSrc, "apps/config.ts"), "utf8");
+    expect(config).toMatch(/shareAllowed:\s*appShareAllowed\(/);
+  });
+
+  it("the dashboard has a note for both", () => {
+    const dashboard = readFileSync(
+      path.resolve(here, "../../../tools/admin-dashboard/site/novo.js"),
+      "utf8",
+    );
+    expect(dashboard).toMatch(/\bapps:\s*"/);
+    expect(dashboard).toMatch(/\blocadora_share:\s*"/);
+  });
+});

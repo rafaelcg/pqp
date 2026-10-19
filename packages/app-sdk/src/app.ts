@@ -82,11 +82,32 @@ export interface PqpApp {
   on<K extends keyof AppEventMap>(event: K, callback: (value: AppEventMap[K]) => void): Unsubscribe;
 }
 
-function field<T>(result: unknown, key: string): T {
-  if (typeof result === "object" && result !== null && key in result) {
-    return (result as Record<string, T>)[key] as T;
+type FieldKind = "number" | "boolean" | "string" | "array" | "buffer" | "json";
+
+function isKind(value: unknown, kind: FieldKind): boolean {
+  switch (kind) {
+    case "number":
+      return typeof value === "number" && Number.isFinite(value);
+    case "boolean":
+      return typeof value === "boolean";
+    case "string":
+      return typeof value === "string";
+    case "array":
+      return Array.isArray(value);
+    case "buffer":
+      return typeof value === "object" && value !== null && Object.prototype.toString.call(value) === "[object ArrayBuffer]";
+    case "json":
+      return value !== undefined;
   }
-  throw new PqpAppError("unavailable", `pqp host answered without ${key}`);
+}
+
+/** One field of a host answer, refused when it is missing or the wrong kind of value. */
+function field<T>(result: unknown, key: string, kind: FieldKind): T {
+  if (typeof result === "object" && result !== null && key in result) {
+    const value = (result as Record<string, unknown>)[key];
+    if (isKind(value, kind)) return value as T;
+  }
+  throw new PqpAppError("unavailable", `pqp host answered without a usable ${key}`);
 }
 
 /** Builds the app object over a port whose `hello` push has already arrived. */
@@ -109,7 +130,7 @@ export function createApp(client: PortClient, hello: BridgeHello): PqpApp {
     },
     participants: {
       async get() {
-        return field<Participant[]>(await client.request("participants.get"), "participants");
+        return field<Participant[]>(await client.request("participants.get"), "participants", "array");
       },
       on(callback) {
         return client.on("participants", (push) => callback(push.participants as Participant[]));
@@ -118,12 +139,12 @@ export function createApp(client: PortClient, hello: BridgeHello): PqpApp {
     state: {
       async get() {
         const result = await client.request<StateSnapshot>("state.get");
-        return { rev: field<number>(result, "rev"), value: field<JsonValue>(result, "value") };
+        return { rev: field<number>(result, "rev", "number"), value: field<JsonValue>(result, "value", "json") };
       },
       async patch(patch, options) {
         const params: Record<string, unknown> = { patch };
         if (options?.baseRev !== undefined) params.baseRev = options.baseRev;
-        return { rev: field<number>(await client.request("state.patch", params), "rev") };
+        return { rev: field<number>(await client.request("state.patch", params), "rev", "number") };
       },
       on(callback) {
         return client.on("state", (push) =>
@@ -149,14 +170,14 @@ export function createApp(client: PortClient, hello: BridgeHello): PqpApp {
     },
     assets: {
       async get(name) {
-        return field<ArrayBuffer>(await client.request("assets.get", { name }), "bytes");
+        return field<ArrayBuffer>(await client.request("assets.get", { name }), "bytes", "buffer");
       },
     },
     files: {
       async pickLocal() {
         try {
           const result = await client.request("files.pickLocal");
-          return { bytes: field<ArrayBuffer>(result, "bytes"), ext: field<string>(result, "ext") };
+          return { bytes: field<ArrayBuffer>(result, "bytes", "buffer"), ext: field<string>(result, "ext", "string") };
         } catch (error) {
           if (error instanceof PqpAppError && error.code === "cancelled") return null;
           throw error;
@@ -165,15 +186,15 @@ export function createApp(client: PortClient, hello: BridgeHello): PqpApp {
     },
     ui: {
       async resize(height) {
-        return field<number>(await client.request("ui.resize", { height }), "height");
+        return field<number>(await client.request("ui.resize", { height }), "height", "number");
       },
       async fullscreen(on) {
-        return field<boolean>(await client.request("ui.fullscreen", { on }), "on");
+        return field<boolean>(await client.request("ui.fullscreen", { on }), "on", "boolean");
       },
     },
     share: {
       async request(on) {
-        return field<boolean>(await client.request("share.request", { on }), "on");
+        return field<boolean>(await client.request("share.request", { on }), "on", "boolean");
       },
     },
     async end() {

@@ -20,8 +20,10 @@ Under it, one line of provenance: which account kinds the numbers exclude, the
 server's cache window (and that the capacity card sits outside it), and the
 page's own refresh interval.
 
-Then a **rail** on the left with six sections. The whole payload still arrives
-in one read, so choosing a section is a pane toggle and never a request; the
+Then a **rail** on the left with seven sections. The whole payload still arrives
+in one read, so choosing a section is a pane toggle and never a request (the
+exceptions are the ones that carry a memory or a write, each with a read of its
+own: **ao longo do tempo**, **bots · beta**, **controles** and **moderação**); the
 choice lives in the URL hash, so a reload or a link to yourself opens where you
 left off, and arrow keys move between them.
 
@@ -40,6 +42,7 @@ one screen.
 | **ao longo do tempo** | What has been changing (the only part of the page with a memory) |
 | **controles** | What can I turn on and off, right now, without a deploy |
 | **pessoas e conteúdo** | Who showed up, who came back, what they wrote |
+| **bots · beta** | Are the server bots used, answering, and affordable |
 | **moderação** | What is queued |
 | **infra** | What is deployed, where, and how available it has been |
 
@@ -132,6 +135,7 @@ read as nine equals.
 | **agora** | the three verdicts and the raw-numbers note, the health table (24 h latency per component, its own p50, uptime, with `/ready` and the host in the footer), **capacity right now** (open WebSockets and the Postgres pool, see below), **voz / sfu** (the media server, see below), and the rooms open *right now* with each one's media path, who is sharing a screen, and how long it has been open |
 | **ao longo do tempo** | the six headline metrics with sparklines, the two 24-hour charts, and **quantas pessoas em chamada**, the one chart on this page with a memory (see below) |
 | **pessoas e conteúdo** | who is actually active (24h and 7d), the returning-writer share, what people filled in (handle / avatar / banner / game account / age check), first-touch acquisition, game connections, text-vs-voice composition, the busiest text channels, the shape of the instance (direct and group conversations, private channels, channels that never received a message), the community directory (off by default, and it says so), the five most active servers, the full call-quality distribution with notes, and **apps e produto** (Android APK clicks + GitHub downloads, friendships, attachments, invites, push), and **mensagens de voz** (see below) |
+| **bots · beta** | the server bots: a verdict (healthy, spending fast or failing a lot), adoption, use and spend per day, the funnel from call to action, what the bots are asked to do, cost against the day's ceiling, and what the limits held back (see "Server bots" below). This is the `/` view; `/novo` does not carry the section yet |
 | **moderação** | the report queue (open / actioned / dismissed / new today), bans, timeouts in force, and the full feedback queue (see "The feedback queue" below). The rail carries a count badge when anything is open |
 | **infra** | the deployed commit, region, database latency, worst-component uptime over 24h and 7d, and availability per component |
 
@@ -188,6 +192,34 @@ Above them, **o que está no ar**: how many transcodes this process is running
 (from `/metrics`, so it moves on the 30-second poll), how many servers have
 been decided either way (from `/operator/servers`), and the waitlist headline
 (see below).
+
+### apps: the catalog, the review and the per-server release
+
+The apps platform (`docs/APPS.md`, the program plan) is dark everywhere until
+somebody here releases an app, server by server. The API side is five routes on
+the same machine token (and the same instance-moderator session) as the levers
+above, in `server/src/api/app-admin-routes.ts` and `server/src/apps/admin.ts`.
+Like every other route on that token they are **exact pathnames**: the app id
+travels in the body or the query (`PUT /api/admin/apps {appId, ...}`, the way a
+flag key does), never as `/api/admin/apps/:id`.
+
+| Route | What it does |
+|---|---|
+| `GET /api/admin/apps` | every app: publisher, status, `globalEnabled`, `communityUnlocked`, `currentVersion`, its versions (manifest summary, review status, checklist, reviewer, date, note), how many servers have it on, how many live sessions, and the last 20 audit rows |
+| `PUT /api/admin/apps` `{appId, status?, globalEnabled?, communityUnlocked?, currentVersion?}` | the app's own switches. `status: "live"` and `globalEnabled: true` need an approved current version, otherwise **409 `not-reviewed`** (the switch disabled with the reason written) |
+| `PUT /api/admin/app-review` `{appId, version, reviewStatus, checklist, note?}` | a version's review. `approved` needs every checklist line (`sandbox`, `noNetwork`, `license`, `i18n`, `presence`, plus `romPolicy` for an emulator app), otherwise **409 `checklist-incomplete`**. The approval of the version a live app stands on cannot be taken away (**409 `version-in-use`**) |
+| `GET /api/admin/app-servers?appId=&q=&on=1&limit=&offset=` | one app's servers: search by name or id, only the ones switched on, paged (what is on first, then by name, so a page is cut before anything is counted). Each row has member count, `isCommunity`, the operator and owner switches and `locked` |
+| `PUT /api/admin/server-apps` `{serverId, appId, operatorEnabled: true \| false \| null}` | the operator's switch for one server. A public community (`servers.is_community`) needs the app's `communityUnlocked` first, otherwise **409 `community-locked`** |
+
+Every write adds one `app_admin_audit` row per field that actually changed, in
+the same transaction as the write: who (`dashboard` with a NULL user for the
+token, `moderator` and the user id for a session), what, before and after. A
+write that changes nothing adds none. After the commit an `apps.changed` frame
+goes out on the cluster bus so a sibling process drops anything it cached about
+availability (`server/src/apps/changed.ts`). Turning an app on for one server,
+as an operator does tomorrow: review the version (`app-review`, `approved`), set
+the app `live` and `globalEnabled`, then `server-apps` for the server, and turn
+the `apps` flag on for that server (`PUT /api/admin/flag-overrides`).
 
 ### lista de espera: turning "somebody asked" into "somebody can now stream"
 
@@ -597,6 +629,75 @@ Live, from `GET https://api.pqp.gg/api/admin/user-activity` (proxied as
   it scans months of messages.
 - Server side: `server/src/services/user-activity.ts`.
 
+### Server bots
+
+Live, from `GET https://api.pqp.gg/api/admin/bots` (proxied as `/bots`, same
+machine token, no query forwarded). It is a read, and counts and money only:
+no persona, no knowledge text, no message, no user id and no bot id. Server
+names are the one label, as in "most active servers". Nothing in the payload
+says who asked what.
+
+The window is the 30 São Paulo days before today plus today, 31 days, every one
+present (a day with nothing is a row of zeroes). Those are the same days the
+daily reply cap and the dollar ceiling reset on. Every "window" total covers
+all 31. Distinct people and servers are counted once over the window, never as
+a sum of daily counts.
+
+The section shows:
+
+1. **A verdict**, from `botsHealth` in `site/insights.js` (tested in
+   `test/bots-health.test.js`). Failing a lot needs at least 10 runs and a 10%
+   failure rate (25% is bad), for the last seven days and for today on its own.
+   Spending fast is against the ceiling: 70% of it spent, a projection past it
+   (only after four hours of the day and a quarter of the ceiling), or three
+   times the previous seven days' average. A refused call or a spent ceiling is
+   bad. No bots, or no runs in seven days, is "off", not "healthy".
+2. **Adoption**: bots that exist now, how many are on, servers with a bot,
+   bots created in the window, and bots that ran in the window and no longer
+   exist. Two honest limits: a bot deleted before it ever ran leaves nothing
+   to count, and "created" counts only bots that still exist.
+3. **Use per day**: runs, replies and failures as lines, distinct people and
+   servers per day, and today's distinct counts.
+4. **The funnel**, today and over the window: called (runs), answered,
+   staged a plan, confirmed, actions done. The stages do not nest. A small
+   reversible plan runs without a "sim", so "confirmed" is smaller than
+   "staged". "Actions done" counts steps, and one plan has several. A "sim" is
+   itself a run.
+5. **What it is used for**: plan steps by tool (window) and runs by trigger
+   (mention, reply, name, follow-up, decision; last seven days).
+6. **Cost**: spend per day against the ceiling (`BOTS_MAX_USD_PER_DAY`), today
+   as a bar with the time until it resets, dollars per 1,000 replies, cost by
+   model for the last seven days, and the ten servers that cost the most.
+7. **Limits**: replies the per-server cap refused (`BOTS_REPLIES_PER_SERVER_DAY`)
+   and calls the dollar ceiling refused. The notice a member sees when a limit
+   holds an answer is sent to their sockets and stored nowhere, so there is no
+   count of notices, and none is invented.
+
+Where each number comes from decides what a deleted bot does to it:
+
+- History is the rollups with no foreign key (`server_bot_stats_daily`,
+  `server_bot_tools_daily`, `server_bot_people_daily`) and the usage and spend
+  tables. A deleted bot or server keeps its past there. A deleted server shows
+  as "servidor apagado" in the cost table.
+- The trigger mix and the cost by model read `server_bot_runs`, which goes
+  away with its bot. A bot deleted last week is in last week's usage and not
+  in this week's mix.
+- Spend per day is `server_bot_spend_daily.reserved_micros`: what the instance
+  reserved and then settled to the real cost of each call, on the same books as
+  the ceiling. Dollars per 1,000 replies divide it by replies posted, so a call
+  that ended in a skip, a question or a failure costs money and adds no reply.
+  Cost by model and cost by server come from two different tables, so their
+  totals need not match.
+- The people rows are pruned after 90 days. The window is shorter.
+
+Read when the tab opens, then at most once a minute while it has been opened,
+and on **atualizar**. The API caches the report for 30 seconds. An API that
+predates the route answers 401 or 404 and the section says so instead of
+drawing zeroes.
+
+Server side: `server/src/services/bot-admin.ts`. The plan is
+`docs/plans/CUSTOM_BOTS.md`.
+
 ### The feedback queue
 
 Live, from `GET /api/admin/feedback` (proxied as `/operator/feedback`, only
@@ -625,6 +726,55 @@ The iOS and Android apps have no feedback box yet.
 This is the first route on the machine token that names a person. That is why
 it is its own read, fetched when **moderação** is opened, and not a field on
 `/metrics`.
+
+### Which app a user is on
+
+For "I can't hear" and "my share has no sound" reports: the latest platform
+and app a named person connected from. Two ways in, one payload:
+
+- `GET /api/admin/users/:userId/client`, for an **instance moderator**
+  (`INSTANCE_MODERATOR_CLERK_IDS`). Anybody else, including the person asked
+  about, gets the same 404 as the rest of `/api/admin` (the deployment's
+  operators are not a fact to confirm), and a signed-out caller a 401.
+- `GET /api/admin/user-client?userId=` (or `handle=`, or `tag=name#1234`), for
+  the **machine token**; the Worker proxies it as `GET /operator/user-client`.
+  A GET and nothing else: there is no write. No page draws it yet; use it
+  from the command line:
+
+  ```bash
+  curl -s -H "Authorization: Bearer $ADMIN_METRICS_TOKEN" \
+    "https://api.pqp.gg/api/admin/user-client?handle=rafa" | jq .
+  ```
+
+The answer is `latest` (the most recently seen client), `clients` (one per
+platform seen in the last 90 days, newest first) and `notRecorded`. Each
+client carries `platform` (`web`, `desktop`, `ios` or `android`), `appVersion`,
+`osFamily` (`windows`, `macos`, `linux`, `ios`, `android`, `chromeos`),
+`browserFamily` (`chrome`, `edge`, `firefox`, `safari`, `opera`, `samsung`,
+`electron`), `firstSeenAt` and `lastSeenAt`.
+
+What is stored, and what is not:
+
+- One row per (account, platform) in `user_client_platforms`, written when a
+  WebSocket authenticates, batched once a minute per process. `lastSeenAt` is
+  accurate to about an hour (a fact already written is not written again for
+  an hour), so it says "was on this recently", not "is online now".
+- It is the families parsed from the upgrade request's `User-Agent`
+  (`server/src/lib/client-agent.ts`). The string itself, the IP address, a
+  device model and browser or OS versions are never stored. Rows not seen for
+  90 days are deleted daily; deleting the account deletes the rest.
+- **What the apps do not tell us today.** No app sends its version on the
+  socket, so the version is only what the server can already see. The desktop
+  shell's version comes from Electron's user agent (`pqp/0.2.7`). The iOS app
+  gives its **build number** (URLSession's user agent), not the marketing
+  version. The Android app (OkHttp's default agent) gives its platform and
+  **no version**, and the web client gives no build id: for the web the
+  question "which deploy was that tab on" is still not answerable from here.
+  The `auth` frame accepts an optional `client: { platform, version }`, so an
+  app can start declaring both with no server release; nothing sends it yet.
+- Never on a public profile, in `/api/me`, or visible to a member or a server
+  owner. Disclosed in the privacy policy ("Which app you use").
+- Server side: `server/src/services/client-platforms.ts`.
 
 Live, from `GET /api/admin/servers` and `GET /api/admin/server-channels`
 (proxied as `/operator/servers` and `/operator/channels`, same machine token),
@@ -805,7 +955,7 @@ The classic page at `/` is unchanged and stays while both exist.
    the section (`#tempo` opens `#crescimento`).
 3. `/?classico=1` always opens the classic page and saves "classico".
 
-### Five screens
+### Six screens
 
 | Screen | Leads with | Details layer (closed rows) |
 |---|---|---|
@@ -813,6 +963,7 @@ The classic page at `/` is unchanged and stays while both exist.
 | **Crescimento** | actives (DAU, WAU, MAU) with a 30/90/180-day chart, the activation funnel, cohort retention, sources with the share that stays | the base, the last 24 hours by hour, signups by day, campaigns, landing pages, 7-day returning |
 | **Produto** | call rating and its distribution, low-rating notes, profile completeness rings, top text channels | top servers, communities, game accounts, instance shape, apps and product, calls and rings, Discord imports |
 | **Fila** | the feedback inbox: list on the left, the whole item with author and context on the right, confirm and close | report counts, with a link to the full report queue in the app |
+| **Apps** | the apps catalog: every app with its state, the global switch, "N de M servidores" and the review; an app opens into its servers (search, only the ones on, a switch each), its review checklist, the public-community unlock and its history | the confirmation of "Desligar em todos" (it says how many sessions end), the reason a switch is locked, written under it |
 | **Sistema** | services with 24-hour latency lines and uptime, capacity (pool, WebSockets, SFU), the feature switches | infra, who changed which switch, watch party transmission, and a link to the per-server controls |
 
 ### What is real
@@ -831,6 +982,28 @@ illustrative.
   Hoje opens).
 - **Before actives are tracked**, the actives cards show who wrote, and say
   when actives start.
+- **Apps** (`/novo#apps`, nothing in the classic page): the catalog and its
+  writes go through the Worker's `/operator/apps`, `/operator/app-review`,
+  `/operator/app-servers`, `/operator/server-apps`,
+  `/operator/app-disable-everywhere` and `/operator/app-session-end` routes,
+  which forward to the apps routes of the API. A switch changes at once and
+  goes back, with the reason in an alert, when the API refuses (a 409 says why:
+  `not-reviewed`, `community-locked`, `checklist-incomplete`,
+  `version-in-use`). "Desligar em todos" and the community unlock ask first in
+  an alertdialog (Cancelar has the first focus, Esc cancels, Enter does not
+  confirm). Writes run one at a time, in the order they were asked for. The
+  sentences and switch states are in `novo-model.js` and pinned by
+  `test/apps-model.test.js`.
+- **Every write through the Worker** (not only Apps) must declare
+  `application/json` and come from this origin (`src/write-guard.js`, pinned by
+  `test/write-guard.test.js`). The browser holds the Basic Auth credentials, so
+  without it a page on another site could send a "simple" cross-site POST that
+  the Worker would forward with the machine token. A request with a JSON type
+  from another site needs a preflight, and the Worker sends no CORS headers.
+  On top of that every write carries `X-PQP-Admin: 1`, added by the page's own
+  scripts: a header outside the CORS safelist cannot be sent by a plain form or
+  a no-cors fetch from another site, so it holds even when a browser sends no
+  `Origin`. A request without it is a 403.
 - **Writes**: confirm or close a feedback item, and turn a feature switch on
   or off globally. Per-server watch party, low latency, the waitlist and
   channel pins stay on the classic page for now, and the new page links there.
@@ -861,7 +1034,7 @@ wrote**, and the feedback queue names **who wrote each item** (tag and handle)
 and the device they used.
 All of that is more than the public status page is ever allowed to say, and
 since the **controles** section landed the password also guards two writes. So
-the Worker gates the page, `/metrics`, `/occupancy`, `/activity`, `/health` and every
+the Worker gates the page, `/metrics`, `/occupancy`, `/activity`, `/bots`, `/health` and every
 `/operator/*` route behind HTTP Basic Auth, compared in constant time, and
 refuses to serve anything at all (503) while the password is unset. The
 `/operator/*` routes are an exact (method, path) table in `src/index.ts`, not a
@@ -886,7 +1059,7 @@ Nothing secret lives in this directory, in `wrangler.jsonc`, or in the HTML.
 |---|---|---|---|
 | Worker | `ADMIN_DASH_PASSWORD` | secret | Basic Auth password. Unset: the Worker serves nothing. |
 | Worker | `ADMIN_DASH_USER` | var (in `wrangler.jsonc`) | Basic Auth username, default `operador`. |
-| Worker | `ADMIN_METRICS_TOKEN` | secret | Bearer token sent to the API on `/metrics`, `/occupancy`, `/activity` and the `/operator/*` routes. Never reaches the page. Since the controls landed it can WRITE two columns; what it can reach is the table in `server/src/api/index.ts`. |
+| Worker | `ADMIN_METRICS_TOKEN` | secret | Bearer token sent to the API on `/metrics`, `/occupancy`, `/activity`, `/bots` and the `/operator/*` routes. Never reaches the page. Since the controls landed it can WRITE two columns; what it can reach is the table in `server/src/api/index.ts`. |
 | Worker | `API_ORIGIN` | var (in `wrangler.jsonc`) | `https://api.pqp.gg` |
 | Worker | `MONTHLY_COST_USD` | secret | What the hosted instance costs a month, in US dollars, for "custo por ativo". A secret only because the repo is public. Unset: the card asks for it. |
 | Worker | `APK_CLICKS` | KV | Click counter for `POST /apk-click`. Binding in `wrangler.jsonc`. |

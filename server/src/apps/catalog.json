@@ -53,7 +53,7 @@
         },
         "entry": {
           "path": "index.html",
-          "sha256": "a4b89f3612b531caa0e8912b3237a3ed21643d20b98fc77a3316b226c35c3dae"
+          "sha256": "ead6a8b1899f1e000f53a3530327069abdc3bf86af639d1ea9a4017e61bb9f0f"
         },
         "platforms": [
           "web",
@@ -84,7 +84,7 @@
           }
         }
       },
-      "manifestSha256": "2f258d9a1946b65ee98f521ddef35124613f4369dfaaa2d49508b24a1e7d634c"
+      "manifestSha256": "501caa5b6b83c521e48805bc1b14a7c0e2ee631ea4c882e71f43d8d5bb315ec0"
     },
     {
       "manifest": {
@@ -140,7 +140,7 @@
         "notice": "notice",
         "entry": {
           "path": "index.html",
-          "sha256": "d9539a619b29282bea0d1aa812a1d8e9938ccfbc7bfdbbd2e7467c0b58573024"
+          "sha256": "d664ed5f44e9676cad1dbd8e273474f261974897bdce36c9b29d035ce4b09d9e"
         },
         "platforms": [
           "web",
@@ -174,7 +174,7 @@
           }
         }
       },
-      "manifestSha256": "120d4c0dfab6bd980d57436ba584ddb93094af4b3ccce69a48326d22f0bedcc3"
+      "manifestSha256": "ff28778e33af27c71cfa1fbeaa21387bd86c4c76567226ff4ac0b60d3ebc6025"
     }
   ]
 }

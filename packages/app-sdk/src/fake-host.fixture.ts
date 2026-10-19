@@ -44,10 +44,14 @@ export class FakeHost {
   private channel = new MessageChannel();
   private readonly hostPort = this.channel.port1;
   private waiting: Array<() => void> = [];
+  /** The type of every request seen, so an answer can echo it the way the real host does. */
+  private readonly types = new Map<string, string>();
 
   constructor() {
     this.hostPort.onmessage = (event: MessageEvent) => {
-      this.requests.push(event.data as Request);
+      const request = event.data as Request;
+      this.types.set(request.id, request.type);
+      this.requests.push(request);
       for (const wake of this.waiting.splice(0)) wake();
     };
   }
@@ -75,8 +79,10 @@ export class FakeHost {
     this.hostPort.postMessage(message);
   }
 
-  respond(id: string, result: unknown, transfer: Transferable[] = []): void {
-    this.hostPort.postMessage({ id, ok: true, result }, transfer);
+  /** A success answer. `type` is the request's own unless a test says otherwise (`null` leaves it out). */
+  respond(id: string, result: unknown, transfer: Transferable[] = [], type?: string | null): void {
+    const echoed = type === undefined ? this.types.get(id) : type;
+    this.hostPort.postMessage({ id, ok: true, ...(echoed === null ? {} : { type: echoed }), result }, transfer);
   }
 
   fail(id: string, error: string): void {

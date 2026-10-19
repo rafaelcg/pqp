@@ -2,10 +2,12 @@ import type { JsonValue } from "@pqp/shared";
 import { applyTheme, connect, PqpAppError, type Participant, type PqpApp } from "@pqp/app-sdk";
 import { formatPing, pickLocale, STRINGS, type Strings } from "./i18n";
 import { incrementPatch, initialOf, readCount } from "./model";
+import { createSessionView, loadInitial, type UiState } from "./session";
 
 const FLASH_MS = 1800;
 const PING_COOLDOWN_MS = 250;
 const STALE_RETRIES = 3;
+const CONNECT_ATTEMPTS = 4;
 
 function el<T extends HTMLElement>(id: string): T {
   const node = document.getElementById(id);
@@ -26,7 +28,7 @@ function label(id: string, text: string) {
   el(id).textContent = text;
 }
 
-function setUi(state: "connecting" | "online" | "reconnecting" | "ended" | "outside") {
+function setUi(state: UiState) {
   root.dataset.state = state;
   const interactive = state === "online";
   plusButton.disabled = !interactive;
@@ -44,12 +46,20 @@ async function main() {
   statusLine.textContent = t.connecting;
   setUi("connecting");
 
-  let app: PqpApp;
-  try {
-    app = await connect();
-  } catch {
+  // Not inside a frame at all is final; a host that is slow or briefly unreachable is tried again
+  let app: PqpApp | null = null;
+  if (window.parent !== window) {
+    for (let attempt = 0; attempt < CONNECT_ATTEMPTS && !app; attempt += 1) {
+      try {
+        app = await connect();
+      } catch {
+        if (attempt + 1 < CONNECT_ATTEMPTS) await new Promise((resolve) => setTimeout(resolve, 1500 * (attempt + 1)));
+      }
+    }
+  }
+  if (!app) {
     statusLine.textContent = "";
-    ended.textContent = t.outside;
+    ended.textContent = window.parent === window ? t.outside : t.connectFailed;
     ended.hidden = false;
     setUi("outside");
     return;
@@ -73,9 +83,17 @@ async function main() {
   let rev = 0;
   let count = 0;
 
+  // an ended session stays ended: the view refuses every connection event after `ended`,
+  // and `ended` is listened for before `connection`, so no ordering can turn the buttons back on
+  const view = createSessionView(setUi);
+  app.on("ended", () => {
+    view.end();
+    statusLine.textContent = "";
+    ended.textContent = t.ended;
+    ended.hidden = false;
+  });
   const showConnection = (status: "online" | "reconnecting") => {
-    statusLine.textContent = status === "online" ? t.online : t.reconnecting;
-    setUi(status);
+    if (view.connection(status)) statusLine.textContent = status === "online" ? t.online : t.reconnecting;
   };
   showConnection(app.connection);
   app.on("connection", showConnection);
@@ -157,14 +175,16 @@ async function main() {
     if (fromSeatId === selfSeat) return;
     showPing(nameOf(fromSeatId));
   });
-  app.on("ended", () => {
-    setUi("ended");
-    statusLine.textContent = "";
-    ended.textContent = t.ended;
-    ended.hidden = false;
-  });
-  setRoster(await app.participants.get());
-  applyState(await app.state.get());
+  // the handlers below are installed whatever these reads do: a host that is slow to answer
+  // must not leave the buttons dead, and a later push still brings the values in. Each read
+  // stands alone, so a failed roster read does not skip the counter's.
+  await loadInitial(
+    [async () => setRoster(await app.participants.get()), async () => applyState(await app.state.get())],
+    () => view.ended,
+    () => {
+      statusLine.textContent = t.failed;
+    },
+  );
 
   let busy = false;
   plusButton.addEventListener("click", async () => {
@@ -174,11 +194,16 @@ async function main() {
       // a merge patch is not an atomic increment, so write against the revision we read
       for (let attempt = 0; attempt <= STALE_RETRIES; attempt += 1) {
         try {
+          const next = count + 1;
           const written = await app.state.patch(incrementPatch(count), { baseRev: rev });
-          rev = Math.max(rev, written.rev);
-          count += 1;
-          countOut.value = String(count);
-          countOut.textContent = String(count);
+          // the host may have pushed this very write's state before the call resolved; then the
+          // authoritative value is already shown, and adding one again would put it a step ahead
+          if (rev < written.rev) {
+            rev = written.rev;
+            count = next;
+            countOut.value = String(count);
+            countOut.textContent = String(count);
+          }
           return;
         } catch (error) {
           if (error instanceof PqpAppError && error.code === "stale-rev" && attempt < STALE_RETRIES) {
@@ -204,11 +229,12 @@ async function main() {
     setTimeout(() => {
       cooling = false;
     }, PING_COOLDOWN_MS);
-    showPing(nameOf(selfSeat));
     try {
       await app.events.send("ping", {});
+      // shown once the host took it, so a refused ping is never shown as sent
+      showPing(nameOf(selfSeat));
     } catch (error) {
-      if (!(error instanceof PqpAppError) || error.code !== "rate-limited") statusLine.textContent = t.failed;
+      statusLine.textContent = error instanceof PqpAppError && error.code === "rate-limited" ? t.slowDown : t.failed;
     }
   });
 }

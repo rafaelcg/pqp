@@ -359,8 +359,8 @@
   }
 
   // ---------------------------------------------------------------- routing
-  var SCREENS = ["hoje", "crescimento", "produto", "fila", "sistema"];
-  var TO_CLASSIC = { hoje: "agora", crescimento: "tempo", produto: "pessoas", fila: "moderacao", sistema: "controles" };
+  var SCREENS = ["hoje", "crescimento", "produto", "fila", "apps", "sistema"];
+  var TO_CLASSIC = { hoje: "agora", crescimento: "tempo", produto: "pessoas", fila: "moderacao", apps: "controles", sistema: "controles" };
   function show(name) {
     if (SCREENS.indexOf(name) < 0) {
       name = "hoje";
@@ -387,6 +387,7 @@
     if (name === "hoje") loadHeat();
     if (name === "fila" && !S.fb.loaded) loadFeedback(false);
     if (name === "sistema" && !S.flags) loadFlags();
+    if (name === "apps") { loadApps(false); renderApps(); }
     renderScreen(name);
   }
   window.addEventListener("hashchange", function () { show(location.hash.slice(1)); });
@@ -425,6 +426,8 @@
       else if (name === "crescimento") renderCrescimento();
       else if (name === "produto") renderProduto();
       else if (name === "fila") renderFila();
+      // A poll never rebuilds an opened app: its forms hold what somebody is typing.
+      else if (name === "apps") { if (!A.open && !A.dialog) renderApps(); }
       else if (name === "sistema") renderSistema();
     } catch (e) {
       if (window.console) console.error("[novo] render " + name, e);
@@ -452,6 +455,8 @@
     // over at midnight on a page left open.
     if (S.screen === "hoje" || S.screen === "crescimento") loadActivity(false);
     if (S.screen === "hoje") loadHeat();
+    // The apps list re-reads on the poll only while it is the list: an opened app holds forms.
+    if (S.screen === "apps" && !A.open && !A.dialog && !A.busy) loadApps(true);
     var healthReq = fetchJson("/health").then(function (d) { S.health = d; }).catch(function (e) {
       S.health = { _err: e && e.message ? e.message : "erro", components: [] };
     });
@@ -1248,7 +1253,7 @@
     // resolved whole or not at all. `resolve` never hands this more ids than
     // the API accepts (MAX_GROUP_WRITE).
     var body = entry.ids.length === 1 ? { id: String(entry.ids[0]), status: entry.status } : { ids: entry.ids.map(String), status: entry.status };
-    fetch("/operator/feedback-resolve", { method: "PUT", cache: "no-store", credentials: "same-origin", keepalive: !!keepalive, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+    fetch("/operator/feedback-resolve", { method: "PUT", cache: "no-store", credentials: "same-origin", keepalive: !!keepalive, headers: { "Content-Type": "application/json", "X-PQP-Admin": "1" }, body: JSON.stringify(body) })
       .then(function (r) { if (!r.ok) throw new Error("http " + r.status); })
       .then(function () { done(true); if (!keepalive && !S.pending.length) loadFeedback(false); })
       .catch(function (e) {
@@ -1276,6 +1281,553 @@
     clearTimeout(S.toastTimer);
     S.toastTimer = setTimeout(function () { t.classList.remove("on"); u.hidden = true; }, undo ? left : 4200);
   }
+
+  // ---------------------------------------------------------------- APPS
+  //
+  // The apps catalog (mock 05): the list, one app opened with its servers and
+  // its review, and the two decisions that need a dialog first ("Desligar em
+  // todos" and letting public communities have an app). Switches change at
+  // once and go back, with the reason in an alert, when the API refuses.
+  // Nothing re-reads while a dialog is open, a write is in flight or an app is
+  // open, so a poll never rebuilds a form somebody is typing in.
+  var A = {
+    list: null, err: null, seq: 0, open: null, busy: false, pending: 0, chain: Promise.resolve(), dirty: false, needServers: false, dialog: false, retry: null, savedTimer: null,
+    drafts: {},
+    srv: { q: "", on: false, rows: [], matched: 0, enabledCount: 0, offset: 0, limit: 25, loading: false, err: null, communityUnlocked: false, seq: 0, timer: null }
+  };
+  var APPS_PAGE = 25;
+  var BLANK = "";
+
+  function appById(id) { return A.list && A.list.apps ? A.list.apps.filter(function (a) { return a.id === id; })[0] || null : null; }
+  function serverCount() { return A.list ? A.list.serverCount : 0; }
+
+  function loadApps(silent) {
+    var seq = ++A.seq;
+    // A read that a newer one replaced is not an answer: it takes the outcome of
+    // the newest read (`A.listRead`), so a reconciliation is never reported done
+    // on the strength of a response nobody used.
+    var read = fetchJson("/operator/apps").then(function (r) {
+      if (seq !== A.seq) return A.listRead;
+      A.list = r; A.err = null;
+      renderApps();
+      return true;
+    }).catch(function (e) {
+      if (seq !== A.seq) return A.listRead;
+      if (!A.list || !silent) A.err = e && e.status === 404 ? "a API ainda não tem as rotas de apps" : (e && e.message ? e.message : "erro");
+      renderApps();
+      return false;
+    });
+    A.listRead = read;
+    return read;
+  }
+
+  /** What a server read answers when the app it was for was closed meanwhile. */
+  var SUPERSEDED = "superseded";
+  function loadAppServers(reset) {
+    var a = A.open; if (!a) return Promise.resolve(SUPERSEDED);
+    var st = A.srv;
+    if (reset) { st.offset = 0; st.rows = []; }
+    var seq = ++st.seq;
+    st.loading = true; st.err = null;
+    renderServerRows();
+    var qs = "?appId=" + encodeURIComponent(a) + (st.q ? "&q=" + encodeURIComponent(st.q) : "") + (st.on ? "&on=1" : "") + "&limit=" + APPS_PAGE + "&offset=" + st.offset;
+    var read = fetchJson("/operator/app-servers" + qs).then(function (r) {
+      // A read that another one replaced is not an answer: it takes the outcome
+      // of the one that did, so a refresh is never reported done on the strength
+      // of a response nobody used. A read for an app that is no longer open is
+      // neither a success nor a failure: it answers SUPERSEDED, and the app now
+      // open shows the outcome of its own read.
+      if (A.open !== a) return SUPERSEDED;
+      if (seq !== st.seq) return st.current;
+      st.rows = st.offset === 0 ? r.servers : st.rows.concat(r.servers);
+      st.matched = r.matched; st.enabledCount = r.enabledCount; st.communityUnlocked = r.communityUnlocked;
+      st.loading = false;
+      renderServerRows();
+      return true;
+    }).catch(function (e) {
+      if (A.open !== a) return SUPERSEDED;
+      if (seq !== st.seq) return st.current;
+      st.loading = false; st.err = e && e.message ? e.message : "erro";
+      renderServerRows();
+      return false;
+    });
+    st.current = read;
+    return read;
+  }
+
+  function renderApps() { withFocus(renderAppsNow); }
+  function renderAppsNow() {
+    var body = clear($("aBody"));
+    $("aSessions").textContent = A.list ? M.sessionsLine(A.list.liveSessions) : BLANK;
+    if (!A.list) {
+      body.appendChild(h("p", { class: "empty", text: A.err ? "A leitura falhou: " + A.err : "Lendo os apps…" }));
+      return;
+    }
+    var app = A.open ? appById(A.open) : null;
+    if (A.open && !app) A.open = null;
+    if (app) renderAppDetail(body, app); else renderAppList(body);
+  }
+
+  function appTile(app, size) {
+    return h("span", { class: "tile" + (size === "lg" ? " lg" : ""), "aria-hidden": "true", text: M.initials(app.name) });
+  }
+  function statusBadge(app) {
+    var st = M.appStatus(app.status);
+    return h("span", { class: "badge nowrap " + (st.tone === "neutral" ? "" : st.tone), text: st.label });
+  }
+
+  function globalControl(app) {
+    var sw = M.globalSwitch(app);
+    var reasonId = "gr-" + app.id;
+    var msg = sw.reason || sw.note;
+    var btn = h("button", {
+      type: "button", class: "switch", role: "switch", "aria-checked": sw.checked ? "true" : "false",
+      "aria-label": app.name + ", global", "aria-disabled": sw.disabled ? "true" : null, "aria-describedby": msg ? reasonId : null,
+      "data-id": "gsw:" + app.id,
+      onclick: function () { if (sw.disabled) return; setGlobal(app.id, !sw.checked); }
+    });
+    return h("div", { class: "sw-cell" }, [btn, msg ? h("p", { class: "sw-reason" + (sw.reason ? " blocked" : ""), id: reasonId, text: msg }) : null]);
+  }
+
+  function renderAppList(body) {
+    var apps = A.list.apps;
+    if (!apps.length) {
+      body.appendChild(h("section", { class: "card", "aria-label": "Nenhum app cadastrado" }, [
+        h("h2", { text: "Nenhum app cadastrado" }),
+        h("p", { class: "foot", style: "font-size:13.5px;color:var(--muted);max-width:640px", text: "Apps entram aqui quando o manifesto é registrado e revisado. Enquanto isso, ninguém vê o botão de apps em lugar nenhum." })
+      ]));
+      return;
+    }
+    var head = ["App", "Estado", "Global", "Servidores", "Revisão", "Abrir"];
+    var table = h("table", { class: "apps-table" }, [
+      h("caption", { class: "sr", text: "Apps do pqp" }),
+      h("thead", null, [h("tr", null, head.map(function (t, i) { return h("th", { scope: "col" }, [i === 5 ? h("span", { class: "sr", text: t }) : t]); }))]),
+      h("tbody", null, apps.map(function (app) {
+        var review = M.reviewSummary(app);
+        return h("tr", { "data-app": app.id }, [
+          h("th", { scope: "row" }, [h("div", { class: "app-id" }, [
+            appTile(app),
+            h("div", { class: "app-name" }, [h("b", { title: app.name, text: app.name }), h("span", { text: M.appSubtitle(app) })])
+          ])]),
+          h("td", { "data-label": "Estado" }, [statusBadge(app)]),
+          h("td", { "data-label": "Global" }, [globalControl(app)]),
+          h("td", { "data-label": "Servidores", class: "num", text: M.serversText(app, serverCount()) }),
+          h("td", { "data-label": "Revisão" }, [h("div", { class: "review-col" }, [
+            h("span", { class: "rv-text " + review.tone, text: review.text }),
+            review.chips.length ? h("span", { class: "chips" }, review.chips.map(function (c) { return h("span", { class: "badge ok", text: c.label }); })) : null
+          ])]),
+          h("td", { "data-label": "" }, [h("button", { type: "button", class: "btn small", "aria-label": "Abrir " + app.name, "data-id": "open:" + app.id, text: "Abrir", onclick: function () { openApp(app.id); } })])
+        ]);
+      }))
+    ]);
+    body.appendChild(h("section", { class: "card tablecard", "aria-label": "apps" }, [h("div", { class: "scroll" }, [table])]));
+  }
+
+  function openApp(id) {
+    A.open = id;
+    A.srv = { q: "", on: false, rows: [], matched: 0, enabledCount: 0, offset: 0, limit: APPS_PAGE, loading: false, err: null, communityUnlocked: false, seq: A.srv.seq, timer: null };
+    renderApps();
+    loadAppServers(true);
+    var hd = $("aHeadline"); if (hd) hd.focus({ preventScroll: false });
+  }
+  function closeApp() {
+    var id = A.open;
+    A.open = null;
+    renderApps();
+    var back = document.querySelector('[data-id="open:' + id + '"]');
+    if (back) back.focus(); else { var hd = $("aHeadline"); if (hd) hd.focus(); }
+  }
+
+  function renderAppDetail(body, app) {
+    var on = app.globalEnabled;
+    body.appendChild(h("div", { class: "head-row" }, [
+      h("button", { type: "button", class: "ghost back", onclick: closeApp, text: "Voltar para os apps" })
+    ]));
+
+    // The app itself: state, the global switch and the one big red button.
+    var statusSelect = h("select", { class: "select", "aria-label": "Estado de " + app.name, "data-id": "status:" + app.id,
+      onchange: function (ev) { var v = ev.target.value; if (v !== app.status) setStatus(app.id, v); } },
+      ["draft", "review", "live", "retired"].map(function (value) {
+        var opt = h("option", { value: value, text: M.appStatus(value).label, selected: value === app.status ? true : null, disabled: value === "live" && app.goLiveBlocker && app.status !== "live" ? true : null });
+        return opt;
+      }));
+    var canDisable = on || app.serversOn > 0 || app.liveSessions > 0;
+    body.appendChild(h("section", { class: "card", "aria-label": app.name }, [
+      h("div", { class: "app-head" }, [
+        h("div", { class: "app-id" }, [appTile(app, "lg"), h("div", { class: "app-name" }, [h("b", { text: app.name }), h("span", { text: M.appSubtitle(app) })])]),
+        statusBadge(app),
+        h("div", { class: "grow-space" }),
+        h("label", { class: "field" }, [h("span", { text: "Estado" }), statusSelect]),
+        h("div", { class: "field" }, [h("span", { text: "Global" }), globalControl(app)]),
+        h("button", { type: "button", class: "btn warn", "data-id": "disable:" + app.id, "aria-disabled": canDisable ? null : "true",
+          onclick: function () { if (canDisable) askDisableEverywhere(app); }, text: "Desligar em todos" })
+      ]),
+      h("p", { class: "foot", style: "font-size:13px", text: M.appSummary(app, serverCount()) })
+    ]));
+
+    // Servers.
+    var st = A.srv;
+    var search = h("input", { type: "search", class: "input", id: "aSrvQ", "aria-label": "Buscar servidor por nome ou id", placeholder: "Buscar servidor por nome ou id", value: st.q, autocomplete: "off",
+      oninput: function (ev) { st.q = ev.target.value.trim(); clearTimeout(st.timer); st.timer = setTimeout(function () { loadAppServers(true); }, 250); } });
+    var onlyOn = h("button", { type: "button", class: "chip" + (st.on ? " on" : ""), "aria-pressed": st.on ? "true" : "false", id: "aSrvOn", text: "Só os ligados",
+      onclick: function () { st.on = !st.on; loadAppServers(true); renderApps(); var again = $("aSrvOn"); if (again) again.focus(); } });
+    body.appendChild(h("section", { class: "card", "aria-label": "servidores de " + app.name }, [
+      h("h2", null, ["servidores", h("span", { class: "aside", id: "aSrvCount", "aria-live": "polite" })]),
+      h("div", { class: "toolbar" }, [search, onlyOn]),
+      h("div", { id: "aSrvRows" }),
+      h("p", { class: "foot lock-note", id: "aLockNote", text: M.LOCK_NOTE }),
+      h("button", { type: "button", class: "ghost", id: "aSrvMore", hidden: true, text: "Carregar mais", onclick: function () { st.offset = st.rows.length; loadAppServers(false); } })
+    ]));
+    renderServerRows();
+
+    body.appendChild(reviewCard(app));
+    body.appendChild(communityCard(app));
+    body.appendChild(historyCard(app));
+  }
+
+  function renderServerRows() {
+    var host = $("aSrvRows"); if (!host) return;
+    var app = appById(A.open); if (!app) return;
+    var st = A.srv;
+    clear(host);
+    var count = $("aSrvCount");
+    if (count) count.textContent = st.loading && !st.rows.length ? "buscando…" : fmt(st.matched) + (st.matched === 1 ? " servidor" : " servidores");
+    var more = $("aSrvMore"); if (more) more.hidden = st.rows.length >= st.matched || st.loading;
+    if (st.err) { host.appendChild(h("p", { class: "empty", text: "A busca falhou: " + st.err })); return; }
+    if (!st.rows.length) { host.appendChild(h("p", { class: "empty", text: st.loading ? "Buscando servidores…" : (st.q || st.on ? "Nenhum servidor com esse filtro." : "Nenhum servidor.") })); return; }
+    var list = h("ul", { class: "srv-list" });
+    st.rows.forEach(function (row) {
+      var m = M.serverRow(row);
+      var on = row.operatorEnabled === true;
+      var btn = h("button", { type: "button", class: "switch", role: "switch", "aria-checked": on ? "true" : "false", "aria-label": row.name + ", " + app.name,
+        "aria-disabled": m.locked ? "true" : null, "aria-describedby": m.locked ? "aLockNote" : null, "data-id": "srvsw:" + row.id,
+        onclick: function () { if (m.locked) return; setServerSwitch(app.id, row.id, !on); } });
+      list.appendChild(h("li", { class: "srv-row", role: "group", "aria-label": row.name }, [
+        h("span", { class: "tile sm", "aria-hidden": "true", text: m.initials }),
+        h("div", { class: "srv-name" }, [
+          h("div", { class: "srv-title" }, [h("b", { text: row.name }), m.badge ? h("span", { class: "badge " + m.badge.tone, text: m.badge.text }) : null]),
+          h("span", { text: m.subtitle }),
+          m.chips.length ? h("span", { class: "chips" }, m.chips.map(function (c) { return h("span", { class: "badge " + c.tone, text: c.text }); })) : null
+        ]),
+        btn
+      ]));
+    });
+    host.appendChild(list);
+  }
+
+  // The review: the checklist is what an approval needs, line by line.
+  function draftOf(app, v) {
+    var key = app.id + "@" + v.version;
+    if (!A.drafts[key]) {
+      var cl = {};
+      M.checklistItems(v.manifest && v.manifest.category).forEach(function (i) { cl[i.key] = !!(v.reviewChecklist && v.reviewChecklist[i.key] === true); });
+      A.drafts[key] = { status: v.reviewStatus, checklist: cl, note: v.reviewNote || "" };
+    }
+    return A.drafts[key];
+  }
+  var REVIEW_LABEL = { pending: "Pendente", approved: "Aprovada", rejected: "Reprovada", withdrawn: "Retirada" };
+
+  function reviewCard(app) {
+    var box = h("section", { class: "card", "aria-label": "revisão de " + app.name }, [h("h2", { text: "revisão" })]);
+    if (!app.versions.length) { box.appendChild(h("p", { class: "empty", text: "Esse app ainda não tem versão registrada." })); return box; }
+    app.versions.forEach(function (v) {
+      var d = draftOf(app, v);
+      var category = v.manifest && v.manifest.category;
+      var msgId = "rvmsg-" + app.id + "-" + v.version;
+      var save = h("button", { type: "button", class: "btn primary", text: "Salvar revisão", "data-id": "rvsave:" + v.version, onclick: function () { saveReview(app, v, d); } });
+      var warn = h("p", { class: "sw-reason blocked", id: msgId, role: "status" });
+      function sync() {
+        var incomplete = d.status === "approved" && !M.checklistComplete(d.checklist, category);
+        warn.textContent = incomplete ? M.appsWriteError("checklist-incomplete") : "";
+        if (incomplete) save.setAttribute("aria-disabled", "true"); else save.removeAttribute("aria-disabled");
+      }
+      var items = M.checklistItems(category).map(function (item) {
+        return h("label", { class: "check" }, [
+          h("input", { type: "checkbox", checked: d.checklist[item.key] ? true : null, onchange: function (ev) { d.checklist[item.key] = ev.target.checked; sync(); } }),
+          h("span", { text: item.label })
+        ]);
+      });
+      var select = h("select", { class: "select", "aria-label": "Resultado da revisão da v" + v.version, onchange: function (ev) { d.status = ev.target.value; sync(); } },
+        ["pending", "approved", "rejected", "withdrawn"].map(function (value) { return h("option", { value: value, text: REVIEW_LABEL[value], selected: value === d.status ? true : null }); }));
+      var note = h("textarea", { class: "input note-area", rows: "2", maxlength: "2000", "aria-label": "Nota da revisão da v" + v.version, placeholder: "Nota da revisão (opcional)", oninput: function (ev) { d.note = ev.target.value; } });
+      note.value = d.note;
+      box.appendChild(h("div", { class: "version" }, [
+        h("div", { class: "version-head" }, [
+          h("b", { text: "v" + v.version }),
+          v.isCurrent ? h("span", { class: "badge accent", text: "atual" }) : h("button", { type: "button", class: "ghost small", text: "Tornar atual", onclick: function () { setCurrentVersion(app.id, v.version); } }),
+          h("span", { class: "foot", text: v.reviewedAt ? "revisada " + ago(v.reviewedAt) + (v.reviewedBy ? " por " + v.reviewedBy.replace(/^moderator:.*/, "moderador") : "") : "ainda sem revisão" })
+        ]),
+        h("div", { class: "checks" }, items),
+        h("div", { class: "version-foot" }, [select, note]),
+        warn,
+        h("div", { class: "actions" }, [save])
+      ]));
+      sync();
+    });
+    return box;
+  }
+
+  function communityCard(app) {
+    var open = !!app.communityUnlocked;
+    var btn = h("button", { type: "button", class: "switch", role: "switch", "aria-checked": open ? "true" : "false", "aria-label": "Comunidades públicas, " + app.name, "data-id": "community:" + app.id,
+      onclick: function () { askCommunity(app, !open); } });
+    return h("section", { class: "card", "aria-label": "comunidades" }, [
+      h("h2", { text: "comunidades" }),
+      h("div", { class: "row-between" }, [
+        h("p", { class: "foot", style: "font-size:13px;color:var(--muted);max-width:640px", text: open ? "Liberado: uma comunidade pública pode ligar este app, servidor por servidor." : "Travado: nenhuma comunidade pública liga este app, e liberar muda o tipo de risco da instância." }),
+        btn
+      ])
+    ]);
+  }
+
+  function historyCard(app) {
+    var rows = (A.list.audit || []).filter(function (r) { return r.appId === app.id; });
+    var box = h("section", { class: "card", "aria-label": "histórico" }, [h("h2", { text: "histórico", }, [])]);
+    if (!rows.length) { box.appendChild(h("p", { class: "empty", text: "Sem mudanças ainda." })); return box; }
+    var list = h("ul", { class: "history" });
+    rows.forEach(function (r) {
+      list.appendChild(h("li", null, [
+        h("span", { text: M.auditText(r) }),
+        h("span", { class: "foot", text: (r.actorKind === "dashboard" ? "painel" : r.actorKind === "moderator" ? "moderador" : r.actorKind) + " · " + ago(r.at) })
+      ]));
+    });
+    box.appendChild(list);
+    return box;
+  }
+
+  // ------------------------------------------------------------- the writes
+  function writeJson(method, path, body) {
+    return fetch(path, { method: method, cache: "no-store", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-PQP-Admin": "1" }, body: JSON.stringify(body) })
+      .then(function (r) {
+        return r.text().then(function (t) {
+          var j = null; try { j = t ? JSON.parse(t) : null; } catch { /* not json */ }
+          if (!r.ok) { var e = new Error((j && j.error) || "http " + r.status); e.status = r.status; e.code = (j && j.error) || null; throw e; }
+          return j;
+        });
+      });
+  }
+  function showAlert(text, retry) {
+    $("aAlertText").textContent = text;
+    $("aAlert").hidden = false;
+    A.retry = retry || null;
+    $("aAlertRetry").hidden = !retry;
+  }
+  function hideAlert() { $("aAlert").hidden = true; A.retry = null; }
+  function savedNote() {
+    $("aSaved").textContent = "Salvo. Vale em até 10 s.";
+    clearTimeout(A.savedTimer);
+    A.savedTimer = setTimeout(function () { $("aSaved").textContent = BLANK; }, 3000);
+  }
+  /**
+   * Writes run ONE AT A TIME, in the order they were asked for. A second
+   * click while the first is in the air waits its turn, so two optimistic
+   * changes to one thing can never settle in a different order than the
+   * operator chose, and one finishing never marks the page idle while another
+   * is still in flight (`A.busy` is a count of the ones waiting or running).
+   */
+  function serial(fn) {
+    A.pending += 1; A.busy = true;
+    var run = A.chain.then(fn);
+    A.chain = run.catch(function () {});
+    return run.catch(function () {}).then(function () {
+      A.pending -= 1; A.busy = A.pending > 0;
+      // Re-read ONCE, when the last queued write is done, not after each: a run
+      // of switches is N writes and one refresh, not three requests apiece.
+      if (A.pending === 0 && A.dirty) return reconcile();
+    });
+  }
+  /**
+   * After writes: read the list (and the servers of the opened app) again, and
+   * say so when the read fails, so a screen that may be stale is never left
+   * under a "Salvo".
+   */
+  function reconcile() {
+    A.dirty = false;
+    return loadApps(true).then(function (ok) {
+      if (!ok) { showAlert("Salvo, mas não deu pra reler a lista agora. Confere antes de seguir.", function () { hideAlert(); A.dirty = true; reconcile(); }); return; }
+      if (A.open && A.needServers) {
+        // Kept until the servers were read: a failed read leaves the flag set and says so.
+        return loadAppServers(true).then(function (okServers) {
+          // A read for an app since closed owes nothing: that view is gone, and the
+          // app now open read its servers from scratch, with its own outcome.
+          if (okServers === true || okServers === SUPERSEDED) { A.needServers = false; return; }
+          showAlert("Salvo, mas não deu pra reler os servidores agora. Confere antes de seguir.", function () { hideAlert(); A.dirty = true; reconcile(); });
+        });
+      }
+    });
+  }
+  /** The app that came back from a write replaces the one on screen. */
+  function mergeApp(res) {
+    if (!res || !res.app || !A.list) return;
+    A.list.apps = A.list.apps.map(function (a) { return a.id === res.app.id ? res.app : a; });
+  }
+  /**
+   * One write. `apply` changes what the page shows before the answer and
+   * returns the function that puts it back when the API says no (read at the
+   * moment it runs, so a rollback restores what THIS write replaced). A
+   * refusal that the same request would only repeat (409) does not offer to
+   * try again. If the write worked and re-reading the list did not, it says so
+   * rather than leaving a stale screen under a "Salvo".
+   */
+  function appWrite(o) {
+    return serial(function () {
+      var revert = o.apply ? o.apply() : null;
+      hideAlert();
+      if (o.apply) renderApps();
+      return writeJson(o.method, o.path, o.body).then(function (res) {
+        if (o.done) o.done(res);
+        mergeApp(res);
+        savedNote();
+        A.dirty = true;
+        if (o.reloadServers) A.needServers = true;
+      }, function (e) {
+        if (revert) revert();
+        renderApps();
+        showAlert(M.appsWriteError(e.code), e.status === 409 || e.status === 404 ? null : function () { hideAlert(); appWrite(o); });
+      });
+    });
+  }
+
+  function setGlobal(appId, on) {
+    appWrite({
+      method: "PUT", path: "/operator/apps",
+      body: on ? { appId: appId, status: "live", globalEnabled: true } : { appId: appId, globalEnabled: false },
+      apply: function () {
+        var app = appById(appId); if (!app) return null;
+        var before = { globalEnabled: app.globalEnabled, status: app.status };
+        app.globalEnabled = on; if (on) app.status = "live";
+        return function () { var a = appById(appId); if (a) { a.globalEnabled = before.globalEnabled; a.status = before.status; } };
+      }
+    });
+  }
+  function setStatus(appId, status) {
+    appWrite({
+      method: "PUT", path: "/operator/apps", body: { appId: appId, status: status },
+      apply: function () {
+        var app = appById(appId); if (!app) return null;
+        var before = app.status;
+        app.status = status;
+        return function () { var a = appById(appId); if (a) a.status = before; };
+      }
+    });
+  }
+  function setCurrentVersion(appId, version) {
+    appWrite({ method: "PUT", path: "/operator/apps", body: { appId: appId, currentVersion: version } });
+  }
+  function setServerSwitch(appId, serverId, value) {
+    var step = value ? 1 : -1;
+    appWrite({
+      method: "PUT", path: "/operator/server-apps", body: { serverId: serverId, appId: appId, operatorEnabled: value },
+      reloadServers: A.srv.on,
+      apply: function () {
+        var app = appById(appId);
+        var row = A.srv.rows.filter(function (r) { return r.id === serverId; })[0];
+        if (!app || !row) return null;
+        var before = row.operatorEnabled;
+        row.operatorEnabled = value;
+        app.serversOn = Math.max(0, app.serversOn + step);
+        A.srv.enabledCount = Math.max(0, A.srv.enabledCount + step);
+        return function () {
+          var a = appById(appId);
+          row.operatorEnabled = before;
+          if (a) a.serversOn = Math.max(0, a.serversOn - step);
+          A.srv.enabledCount = Math.max(0, A.srv.enabledCount - step);
+        };
+      }
+    });
+  }
+  function saveReview(app, v, d) {
+    var category = v.manifest && v.manifest.category;
+    // The line under the checklist already says what is missing.
+    if (d.status === "approved" && !M.checklistComplete(d.checklist, category)) return;
+    var checklist = {};
+    M.checklistItems(category).forEach(function (i) { checklist[i.key] = !!d.checklist[i.key]; });
+    // The API wants every base line; a line the app never shows is false.
+    ["sandbox", "noNetwork", "license", "i18n", "presence"].forEach(function (k) { if (checklist[k] === undefined) checklist[k] = false; });
+    appWrite({
+      method: "PUT", path: "/operator/app-review",
+      body: { appId: app.id, version: v.version, reviewStatus: d.status, checklist: checklist, note: d.note ? d.note : null },
+      done: function () { delete A.drafts[app.id + "@" + v.version]; }
+    });
+  }
+
+  function askDisableEverywhere(app) {
+    var spec = M.disableConfirm(app, app.liveSessions, app.serversOn);
+    spec.onConfirm = function () {
+      hideAlert();
+      serial(function () {
+        return writeJson("POST", "/operator/app-disable-everywhere", { appId: app.id }).then(function (res) {
+          var n = res && typeof res.sessionsEnded === "number" ? res.sessionsEnded : 0;
+          toast(app.name + " desligado em todos os servidores" + (n ? ", " + n + (n === 1 ? " sessão encerrada" : " sessões encerradas") : ""));
+          savedNote();
+          A.dirty = true; A.needServers = true;
+        }, function (e) {
+          // "Nada mudou" only for an answer that comes before the API touches
+          // anything (`M.disableFailure`). Anything else may have come after the
+          // switch went off and sessions ended, so it says that, re-reads, and
+          // offers no retry: whoever clicks again sees the true count first.
+          var failure = M.disableFailure(e && e.status);
+          if (!failure.known) {
+            // Say what is known only after the list was read again.
+            loadApps(true).then(function (ok) {
+              if (ok && A.open) loadAppServers(true);
+              showAlert(ok
+                ? "Não deu pra confirmar se desligou. Reli a lista: confere as sessões antes de tentar de novo."
+                : "Não deu pra confirmar se desligou, e a lista também não carregou. Confere antes de tentar de novo.", null);
+            });
+            return;
+          }
+          showAlert(failure.text, null);
+        });
+      });
+    };
+    openDialog(spec, "disable:" + app.id);
+  }
+  function askCommunity(app, unlock) {
+    var spec = M.communityConfirm(app, unlock);
+    spec.onConfirm = function () {
+      appWrite({ method: "PUT", path: "/operator/apps", body: { appId: app.id, communityUnlocked: unlock }, reloadServers: true });
+    };
+    openDialog(spec, "community:" + app.id);
+  }
+
+  /**
+   * The confirmation: an alertdialog, Cancelar has the first focus, Esc
+   * cancels, Enter does not confirm what is destructive (only a focused button
+   * does), Tab stays inside and focus returns to where it was.
+   */
+  function openDialog(spec, returnKey) {
+    var scrim = h("div", { class: "scrim" + (reduceMotion ? "" : " in") });
+    var cancel = h("button", { type: "button", class: "btn", text: spec.cancel, onclick: function () { close(); } });
+    var ok = h("button", { type: "button", class: "btn warn", text: spec.confirm, onclick: function () { close(); spec.onConfirm(); } });
+    var box = h("div", { class: "dialog", role: "alertdialog", "aria-modal": "true", "aria-labelledby": "dlgTitle", "aria-describedby": "dlgBody" }, [
+      h("h2", { id: "dlgTitle", text: spec.title }),
+      h("div", { id: "dlgBody" }, spec.lines.map(function (line) { return h("p", { text: line }); })),
+      h("div", { class: "actions" }, [cancel, ok])
+    ]);
+    function onKey(ev) {
+      if (ev.key === "Escape") { ev.preventDefault(); close(); return; }
+      if (ev.key === "Tab") {
+        var first = cancel, last = ok;
+        if (ev.shiftKey && document.activeElement === first) { ev.preventDefault(); last.focus(); }
+        else if (!ev.shiftKey && document.activeElement === last) { ev.preventDefault(); first.focus(); }
+      }
+    }
+    function close() {
+      document.removeEventListener("keydown", onKey, true);
+      if (scrim.parentNode) scrim.parentNode.removeChild(scrim);
+      A.dialog = false;
+      var back = returnKey ? document.querySelector('[data-id="' + returnKey + '"]') : null;
+      if (back) back.focus();
+    }
+    A.dialog = true;
+    scrim.appendChild(box);
+    document.body.appendChild(scrim);
+    document.addEventListener("keydown", onKey, true);
+    cancel.focus();
+  }
+  $("aAlertClose").addEventListener("click", hideAlert);
+  $("aAlertRetry").addEventListener("click", function () { var r = A.retry; if (r) r(); });
 
   // ---------------------------------------------------------------- SISTEMA
   function loadFlags() {
@@ -1380,6 +1932,7 @@
     nudge: "Desligado por padrão. Ligado, em DM entre amigos aparece o botão Chamar a atenção: a janela do outro dá uma chacoalhada curta com som e fica uma linha na conversa. Regras no servidor: só amigos, só DM de duas pessoas, 1 a cada 10 s por conversa, no máximo 3 seguidas sem resposta, nunca pra quem está em não perturbe, bloqueou ou desligou a opção. Desligar aqui recusa na hora; abas abertas escondem o botão no próximo refresh da config. Os contadores nudge em /api/admin/metrics mostram enviados e recusados por motivo.",
     stream_start_notifications: "Desligado por padrão, e é o que pode incomodar gente: ligado, quem pediu é avisado quando alguém começa a transmitir (só depois de 20 s de transmissão estável, no máximo 1 aviso por canal a cada 30 min, nunca pra quem compartilha, está na sala, em não perturbe ou com o servidor mutado). Servidor com mais de 200 membros e comunidade não avisam ninguém que não ligou o aviso por conta própria. Ligue primeiro num servidor pequeno; o contador streamAlerts em /api/admin/metrics mostra o que foi enviado.",
     apps: "Desligado por padrão. Ligado num servidor, o canal ganha a plataforma de apps (o botão de apps, o cartão ao vivo na conversa e o Entrar). Desligado, nada aparece e toda rota de apps responde 404. Cada app ainda precisa ser liberado por servidor, e o Locadora ainda precisa da chave emulator_room. Ligue primeiro só num servidor de teste (o override do servidor).",
+    locadora_share: "Desligado por padrão, e fica assim até o advogado responder (Portão Legal L1b). Ligado num servidor, o Locadora pode compartilhar a tela do jogo e a galera pode assistir. Desligado, o servidor recusa o compartilhamento e a entrada como plateia nos apps de emulador; jogar sozinho continua como está. Só liga com a resposta por escrito.",
     live_preview: "Desligado por padrão. Só vale em comunidade (endereço público ligado, não suspensa) e só em canal de watch party que o @everyone vê. Ligado, quem abre o link da comunidade ou um convite dela sem conta, enquanto a watch party está no ar, confirma a idade e assiste o filme no navegador por alguns minutos (LIVE_PREVIEW_SECONDS, padrão 5 min), sem chat, sem microfone e sem aparecer na contagem. Quando acaba, é chamado a criar conta e cai direto no canal. Ligue primeiro numa comunidade só; o contador livePreview em /api/admin/metrics mostra quantos começaram e por que alguém foi recusado."
   };
   function flagName(f) { return String(f.description || f.key).replace(/\s*\([^)]*\)\s*$/, "").replace(/\.$/, ""); }
@@ -1458,7 +2011,7 @@
     if (S.flagBusy) return;
     S.flagBusy = true;
     $("sSwitchMsg").textContent = "gravando…";
-    fetch("/operator/flags", { method: "PUT", cache: "no-store", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: f.key, enabled: enabled }) })
+    fetch("/operator/flags", { method: "PUT", cache: "no-store", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-PQP-Admin": "1" }, body: JSON.stringify({ key: f.key, enabled: enabled }) })
       .then(function (r) { if (!r.ok) throw new Error("http " + r.status); return r.json(); })
       .then(function (row) {
         S.flagBusy = false; S.flagPending = null;

@@ -158,6 +158,10 @@ class WireProtocolTest {
             // land looked sent, on the phone, until the app was restarted.
             "message-rejected",
             "sanction-notice",
+            // A server bot did not answer THIS member (a limit, or busy). Sent
+            // to them alone; losing the branch puts back the silence it exists
+            // to replace.
+            "bot-notice",
             // voice
             "welcome",
             "peer-joined",
@@ -311,6 +315,15 @@ class WireProtocolTest {
         // yet — same follow-up as the warning itself, and no correctness
         // gap: the phone was never showing a stale countdown to begin with.
         "voice-idle-warning-cancelled" to "no warning banner on the phone yet to cancel; same follow-up as voice-idle-warning",
+        // Apps in channels (docs/APPS.md), behind the per-server `apps` flag
+        // and built for web and desktop first. `channel-app` is the live
+        // summary of the app running in a channel (the card, the strip, the
+        // presence line) and `app-ended` tells its participants it is over.
+        // The phone has no launcher and cannot run the sandboxed page, and
+        // the card falls back to the plain-text system message the server
+        // also writes.
+        "channel-app" to "apps run on web and desktop first; the phone shows the plain-text system message",
+        "app-ended" to "apps run on web and desktop first; the phone never joins a session",
     )
 
     /**

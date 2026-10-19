@@ -257,7 +257,7 @@ describeDb("POST /api/live-hls/telemetry", () => {
         sessionId: "session-v2",
         samples: [
           { rung: "ll", latencyMs: 9_000, startup: true, stalls: 1, rebufferMs: 1_500, windowMs: 5_000, playerMode: "ll-segments" },
-          { rung: "ll", latencyMs: 9_000, startup: false, stalls: 1, rebufferMs: 250, windowMs: 5_000, rebuilds: 0, holeSkips: 1, hidden: false, muted: true, playerMode: "ll-segments" },
+          { rung: "ll", latencyMs: 9_000, startup: false, stalls: 1, rebufferMs: 250, windowMs: 5_000, rebuilds: 0, holeSkips: 1, hidden: false, muted: true, playerMode: "ll-segments", targetLatencyMs: 8_000 },
         ],
       },
       viewer,
@@ -273,6 +273,8 @@ describeDb("POST /api/live-hls/telemetry", () => {
         holeSkips: 1,
         playerModes: ["ll-segments"],
         mutedSamples: 1,
+        medianTargetLatencyMs: 8_000,
+        medianLatencyOverTargetMs: 1_000,
       }),
     );
     logEvent.mockClear();

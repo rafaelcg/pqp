@@ -10,6 +10,13 @@ final class ChatModel {
     private(set) var isSending = false
     private(set) var hasMore = false
     private(set) var typingNames: [String: Date] = [:]
+    /// Server bots at work in this channel, by user id, oldest first on screen.
+    /// Empty (and never touched) in a channel with no bot.
+    private(set) var botWork: [String: BotWork] = [:]
+    /// A bot's "I did not answer you", shown above the composer until it is
+    /// dismissed, the bot speaks, or its retry time passes. Only this member
+    /// ever receives one.
+    var botNotice: BotNotice?
     var draft = ""
     var error: String?
 
@@ -116,6 +123,11 @@ final class ChatModel {
         case 2: return String(localized: "\(names[0]) and \(names[1]) are typing")
         default: return String(localized: "Several people are typing")
         }
+    }
+
+    /// The bots at work, by name, so rows do not swap places between frames.
+    var botWorkRows: [BotWork] {
+        botWork.values.sorted { ($0.name, $0.userId) < ($1.name, $1.userId) }
     }
 
     func isGrouped(at index: Int) -> Bool {
@@ -804,6 +816,10 @@ final class ChatModel {
         switch event {
         case .messageCreated(let message, let nonce):
             guard message.channelId == channelId else { return }
+            // A bot's "working" row ends with its message, not with a timer,
+            // and so does a notice about that bot.
+            if !botWork.isEmpty { botWork[message.authorId] = nil }
+            if botNotice?.botUserId == message.authorId { botNotice = nil }
             // Replace our optimistic row if this is the echo of it; the server
             // copy has the real id, timestamp and any resolved embeds. If a
             // history page already delivered that copy, the optimistic row is
@@ -875,6 +891,14 @@ final class ChatModel {
         case .typing(let typingChannelId, _, let displayName):
             guard typingChannelId == channelId else { return }
             typingNames[displayName] = Date()
+
+        case .botActivity(let activityChannelId, let userId, let displayName, let tool):
+            guard activityChannelId == channelId, userId != session?.currentUser?.id else { return }
+            botWork[userId] = BotWork(userId: userId, name: displayName, tool: tool, updatedAt: Date())
+
+        case .botNotice(let notice):
+            guard notice.channelId == channelId, !notice.isExpired() else { return }
+            botNotice = notice
 
         case .threadUpdate(let parentChannelId, let messageId, let thread):
             // The chip on the origin message, live. `channelId` on this frame
@@ -1062,6 +1086,11 @@ final class ChatModel {
                 guard let self else { return }
                 let cutoff = Date().addingTimeInterval(-4)
                 self.typingNames = self.typingNames.filter { $0.value > cutoff }
+                if !self.botWork.isEmpty {
+                    let botCutoff = Date().addingTimeInterval(-BotWork.lifetime)
+                    self.botWork = self.botWork.filter { $0.value.updatedAt > botCutoff }
+                }
+                if let notice = self.botNotice, notice.isExpired() { self.botNotice = nil }
             }
         }
     }

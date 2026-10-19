@@ -1,7 +1,9 @@
 import {
   AUTOMOD_CLERK_ID,
   buildReplyExcerpt,
+  botActionCardSchema,
   chanceResultSchema,
+  type BotActionCard,
   clampChatNewlines,
   extractMentions,
   formatChanceBody,
@@ -17,6 +19,7 @@ import {
   type Embed,
   type MessageForward,
   type MessagePinnedBy,
+  type MessageAppSession,
   type MessageSystemKind,
   type MessageReaction,
   type MessageReplyRef,
@@ -43,6 +46,7 @@ import { listReactionsForMessages } from "./reactions.js";
 import { listThreadsForMessages } from "./threads.js";
 import { applyChannelDeck } from "./decks.js";
 import { insertPoll, listPollsForMessages } from "./polls.js";
+import { listAppSessionsForMessages } from "../apps/message-sessions.js";
 import {
   ATTACHMENT_OBJECT_KEYS,
   ATTACHMENT_VOICE_JOIN,
@@ -69,6 +73,8 @@ export interface MessageInteractive {
    * what every client that predates the kind renders.
    */
   systemKind?: MessageSystemKind;
+  /** A server bot's action card. Set by the bot runner only. */
+  botCard?: BotActionCard;
   /**
    * The snapshot a forward carries (`POST /api/forwards`), stored in
    * `messages.forward`. Only the forward route builds one.
@@ -105,6 +111,8 @@ export type HydratedMessage = Omit<DbMessage, "chance"> & {
   thread?: ThreadSummary | null;
   chance?: ChanceResult | null;
   poll?: Poll | null;
+  /** The session behind an `app_session` card, null once retained away. */
+  appSession?: MessageAppSession | null;
 };
 
 /** Parent columns every read path needs to build a quote header. */
@@ -134,7 +142,7 @@ const MESSAGE_SELECT = `SELECT m.id, m.channel_id, m.author_id, m.body, m.create
             (u.clerk_id = '${AUTOMOD_CLERK_ID}') as author_is_automod,
             m.webhook_embeds, m.webhook_username, m.webhook_avatar_url,
             m.mention_everyone, m.mention_here,
-            m.chance, m.system_kind, m.story_id, m.forward,
+            m.chance, m.bot_card, m.system_kind, m.story_id, m.forward,
             ${REPLY_COLUMNS},
             ${PIN_COLUMNS}
      FROM messages m
@@ -264,6 +272,7 @@ async function hydrate(
     // --- threads --- one grouped query per page, same shape as reactions.
     threadsByMessage,
     pollsByMessage,
+    appSessionsByMessage,
   ] =
     await Promise.all([
       listReactionsForMessages(messageIds, viewerId),
@@ -282,6 +291,11 @@ async function hydrate(
         : Promise.resolve(new Set<string>()),
       listThreadsForMessages(messageIds),
       listPollsForMessages(messageIds, viewerId),
+      // One statement, and none for a page with no app card on it. It never
+      // rejects: a failed lookup is logged (`apps.cardSessionsUnread`) and
+      // returns no sessions, so the cards read as their plain-text body and
+      // this Promise.all cannot fail the page over a card.
+      listAppSessionsForMessages(rows),
     ]);
   return {
     hasMore,
@@ -295,6 +309,7 @@ async function hydrate(
       thread: threadsByMessage.get(row.id) ?? null,
       chance: parseStoredChance(row.chance),
       poll: pollsByMessage.get(row.id) ?? null,
+      appSession: appSessionsByMessage.get(row.id) ?? null,
     })),
   };
 }
@@ -806,14 +821,14 @@ async function insertMessage(
     // parent lookup hangs off.
     const result = await client.query<DbMessage>(
       `WITH inserted AS (
-         INSERT INTO messages (channel_id, author_id, body, reply_to_id, mention_everyone, mention_here, chance, nonce, system_kind, story_id, forward)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         INSERT INTO messages (channel_id, author_id, body, reply_to_id, mention_everyone, mention_here, chance, nonce, system_kind, story_id, bot_card, forward)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
          ON CONFLICT (channel_id, author_id, nonce) WHERE nonce IS NOT NULL DO NOTHING
          RETURNING id, channel_id, author_id, body, created_at, edited_at, reply_to_id,
-                   mention_everyone, mention_here, chance, system_kind, story_id, forward
+                   mention_everyone, mention_here, chance, bot_card, system_kind, story_id, forward
        )
        SELECT m.id, m.channel_id, m.author_id, m.body, m.created_at, m.edited_at,
-              m.mention_everyone, m.mention_here, m.chance, m.system_kind, m.story_id, m.forward,
+              m.mention_everyone, m.mention_here, m.chance, m.bot_card, m.system_kind, m.story_id, m.forward,
               ${REPLY_COLUMNS}
        FROM inserted m
        JOIN channels msg_ch ON msg_ch.id = m.channel_id
@@ -829,6 +844,7 @@ async function insertMessage(
         nonce ?? null,
         interactive?.systemKind ?? null,
         storyId,
+        interactive?.botCard ? JSON.stringify(interactive.botCard) : null,
         interactive?.forward ? JSON.stringify(interactive.forward) : null,
       ],
     );
@@ -955,14 +971,14 @@ export async function updateMessageBody(
        UPDATE messages SET body = $2, edited_at = NOW()
        WHERE id = $1 AND system_kind IS NULL
        RETURNING id, channel_id, author_id, body, created_at, edited_at, reply_to_id,
-                 pinned_at, pinned_by, chance, system_kind, forward
+                 pinned_at, pinned_by, chance, bot_card, system_kind, forward
      )
      SELECT m.id, m.channel_id, m.author_id, m.body, m.created_at, m.edited_at,
             COALESCE(NULLIF(author_sm.nickname, ''), u.display_name) as author_name,
             u.username as author_username,
             u.discriminator as author_discriminator,
             u.avatar_url as author_avatar_url,
-            m.chance, m.system_kind, m.forward,
+            m.chance, m.bot_card, m.system_kind, m.forward,
             ${REPLY_COLUMNS},
             ${PIN_COLUMNS}
      FROM updated m
@@ -1244,6 +1260,7 @@ export function mapMessage(
     blocked?: boolean;
     thread?: ThreadSummary | null;
     poll?: Poll | null;
+    appSession?: MessageAppSession | null;
   },
 ) {
   return {
@@ -1281,6 +1298,9 @@ export function mapMessage(
     chance: parseStoredChance(m.chance),
     poll: m.poll ?? null,
     systemKind: parseStoredSystemKind(m.system_kind),
+    botCard: parseStoredBotCard(m.bot_card),
+    // Only on an app's timeline card (null once its session was retained away).
+    ...(m.system_kind === "app_session" ? { appSession: m.appSession ?? null } : {}),
     // Only on a story reply; absent everywhere else, so no other payload grows.
     ...(m.story_id ? { storyId: m.story_id } : {}),
     // Only on a forward; absent everywhere else, so no other payload grows.
@@ -1312,6 +1332,14 @@ function parseStoredSystemKind(value: unknown): MessageSystemKind | null {
     : null;
 }
 
+function parseStoredBotCard(value: unknown): BotActionCard | null {
+  if (value == null) {
+    return null;
+  }
+  const parsed = botActionCardSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
 function parseStoredChance(value: unknown): ChanceResult | null {
   if (value == null) {
     return null;
@@ -1331,16 +1359,19 @@ async function hydrateOne(
   message: DbMessage,
   viewerId?: string,
 ): Promise<HydratedMessage> {
-  const [reactions, attachments, embeds, threads, polls] = await Promise.all([
+  const [reactions, attachments, embeds, threads, polls, appSessions] = await Promise.all([
     listReactionsForMessages([message.id], viewerId),
     listAttachmentsForMessages([message.id], viewerId),
     listEmbedsForMessages([message]),
     // --- threads --- pin/unpin broadcasts are whole messages too.
     listThreadsForMessages([message.id]),
     listPollsForMessages([message.id], viewerId),
+    // never rejects (see the page read above): a card is not worth the message
+    listAppSessionsForMessages([message]),
   ]);
   return {
     ...message,
+    appSession: appSessions.get(message.id) ?? null,
     reactions: reactions.get(message.id) ?? [],
     attachments: attachments.get(message.id) ?? [],
     embeds: embeds.get(message.id) ?? [],
@@ -1396,14 +1427,14 @@ export async function pinMessage(
            pinned_by = COALESCE(pinned_by, $2)
        WHERE id = $1
        RETURNING id, channel_id, author_id, body, created_at, edited_at, reply_to_id,
-                 pinned_at, pinned_by, chance, system_kind, forward
+                 pinned_at, pinned_by, chance, bot_card, system_kind, forward
      )
      SELECT m.id, m.channel_id, m.author_id, m.body, m.created_at, m.edited_at,
             COALESCE(NULLIF(author_sm.nickname, ''), u.display_name) as author_name,
             u.username as author_username,
             u.discriminator as author_discriminator,
             u.avatar_url as author_avatar_url,
-            m.chance, m.system_kind, m.forward,
+            m.chance, m.bot_card, m.system_kind, m.forward,
             ${REPLY_COLUMNS},
             ${PIN_COLUMNS}
      FROM updated m
@@ -1429,14 +1460,14 @@ export async function unpinMessage(
        UPDATE messages SET pinned_at = NULL, pinned_by = NULL
        WHERE id = $1
        RETURNING id, channel_id, author_id, body, created_at, edited_at, reply_to_id,
-                 pinned_at, pinned_by, chance, system_kind, forward
+                 pinned_at, pinned_by, chance, bot_card, system_kind, forward
      )
      SELECT m.id, m.channel_id, m.author_id, m.body, m.created_at, m.edited_at,
             COALESCE(NULLIF(author_sm.nickname, ''), u.display_name) as author_name,
             u.username as author_username,
             u.discriminator as author_discriminator,
             u.avatar_url as author_avatar_url,
-            m.chance, m.system_kind, m.forward,
+            m.chance, m.bot_card, m.system_kind, m.forward,
             ${REPLY_COLUMNS},
             ${PIN_COLUMNS}
      FROM updated m

