@@ -60,6 +60,8 @@ export interface AppWireLink {
 }
 
 interface PendingJoin {
+  /** What every caller waiting on this join holds (a remount asks again while one is in flight). */
+  promise: Promise<SessionSnapshot>;
   resolve(snapshot: SessionSnapshot): void;
   reject(error: AppTransportError): void;
   timer: ReturnType<typeof setTimeout>;
@@ -245,8 +247,11 @@ export function createAppSessionWire(link: { current: AppWireLink | null }): App
   function makeTransport(record: SessionRecord): AppSessionTransport {
     return {
       join(options) {
+        // A second ask while one is in flight (React mounts, unmounts and
+        // mounts a frame again in development) waits for the same answer
+        // instead of sending a second `app-join`.
         if (record.pendingJoin) {
-          return Promise.reject(new AppTransportError("rate-limited"));
+          return record.pendingJoin.promise;
         }
         record.asSpectator = options.asSpectator === true;
         if (
@@ -259,12 +264,17 @@ export function createAppSessionWire(link: { current: AppWireLink | null }): App
         ) {
           return Promise.reject(new AppTransportError("unavailable"));
         }
-        return new Promise<SessionSnapshot>((resolve, reject) => {
-          const timer = setTimeout(() => {
-            settleJoin(record, new AppTransportError("unavailable"));
-          }, JOIN_TIMEOUT_MS);
-          record.pendingJoin = { resolve, reject, timer };
+        let resolve!: PendingJoin["resolve"];
+        let reject!: PendingJoin["reject"];
+        const promise = new Promise<SessionSnapshot>((res, rej) => {
+          resolve = res;
+          reject = rej;
         });
+        const timer = setTimeout(() => {
+          settleJoin(record, new AppTransportError("unavailable"));
+        }, JOIN_TIMEOUT_MS);
+        record.pendingJoin = { promise, resolve, reject, timer };
+        return promise;
       },
       leave() {
         const wasSeated = record.seated;
