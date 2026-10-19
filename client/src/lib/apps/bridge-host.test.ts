@@ -88,7 +88,7 @@ describe("hello", () => {
       self: { seatId: SELF_SEAT, role: "player", isHost: true },
       connection: "online",
     });
-    expect((hello.theme as Record<string, string>)["--color-text"]).toBe("#eee");
+    expect((hello.theme as Record<string, string>)["--color-text"]).toBe("paper");
     const seen = walk(hello);
     expect(seen.strings).not.toContain(SELF_USER);
   });
@@ -517,12 +517,12 @@ describe("connection, theme and the end", () => {
     r.theme.listener!();
     await r.app.settle();
     expect(r.app.pushes.filter((p) => p.type === "theme")).toHaveLength(0);
-    r.theme.theme = { "--color-text": "#111", "--pqp-color-scheme": "light" };
+    r.theme.theme = { "--color-text": "ink", "--pqp-color-scheme": "light" };
     r.theme.listener!();
     await r.app.settle();
     expect(r.app.pushes.find((p) => p.type === "theme")).toEqual({
       type: "theme",
-      theme: { "--color-text": "#111", "--pqp-color-scheme": "light" },
+      theme: { "--color-text": "ink", "--pqp-color-scheme": "light" },
     });
   });
 
