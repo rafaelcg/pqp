@@ -1,0 +1,113 @@
+{
+  "manifestVersion": 1,
+  "id": "pqp-locadora",
+  "version": "1.0.0",
+  "publisher": "pqp",
+  "platformApi": 1,
+  "name": "name",
+  "description": "description",
+  "icon": "gamepad",
+  "category": "emulator",
+  "channelTypes": [
+    "text",
+    "voice"
+  ],
+  "players": {
+    "min": 1,
+    "max": 8,
+    "spectators": false,
+    "maxSpectators": 0
+  },
+  "requires": {
+    "start": "USE_APPS",
+    "join": "VIEW_CHANNEL"
+  },
+  "capabilities": {
+    "identity": "display",
+    "share": "none",
+    "localFiles": {
+      "allowed": true,
+      "accept": [
+        ".nes",
+        ".gb",
+        ".gbc",
+        ".gba"
+      ],
+      "maxBytes": 33554432
+    },
+    "peer": "none"
+  },
+  "hostBound": true,
+  "state": {
+    "maxBytes": 1024,
+    "maxWritesPerSecond": 5,
+    "writers": "host"
+  },
+  "events": {
+    "maxPerSecond": 0,
+    "maxBytes": 0
+  },
+  "presence": {
+    "phrase": "presence.phrase",
+    "short": "presence.short"
+  },
+  "content": {
+    "userText": false,
+    "userImages": false
+  },
+  "notice": "notice",
+  "entry": {
+    "path": "index.html",
+    "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "assets": [
+    {
+      "name": "core.wasm",
+      "path": "assets/core.wasm",
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "bytes": 2097152
+    },
+    {
+      "name": "core-worker.js",
+      "path": "assets/core-worker.js",
+      "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "bytes": 65536
+    }
+  ],
+  "sandbox": {
+    "wasm": true,
+    "localBlobs": true
+  },
+  "platforms": [
+    "web",
+    "desktop"
+  ],
+  "license": {
+    "spdx": "AGPL-3.0-only AND GPL-2.0-or-later AND MPL-2.0 AND GPL-3.0-only",
+    "source": "https://github.com/rafaelcg/pqp",
+    "notices": "NOTICES.txt"
+  },
+  "i18n": {
+    "pt-BR": {
+      "name": "Locadora",
+      "description": "Abre um jogo do teu computador e joga com a galera.",
+      "presence.phrase": "{name} tá na Locadora",
+      "presence.short": "Na Locadora",
+      "notice": "Teu jogo fica no teu computador. O pqp não guarda nem envia jogos."
+    },
+    "en": {
+      "name": "Locadora",
+      "description": "Open a game from your computer and play with your friends.",
+      "presence.phrase": "{name} is at the Locadora",
+      "presence.short": "At the Locadora",
+      "notice": "Your game stays on your computer. pqp never stores or sends games."
+    },
+    "es": {
+      "name": "Locadora",
+      "description": "Abre un juego de tu computadora y juega con tus amigos.",
+      "presence.phrase": "{name} está en la Locadora",
+      "presence.short": "En la Locadora",
+      "notice": "Tu juego se queda en tu computadora. pqp no guarda ni envía juegos."
+    }
+  }
+}

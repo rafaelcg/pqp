@@ -3157,6 +3157,81 @@ describe("LIVE_HLS_MIC_ARCHIVE", () => {
       expect(reopen).toBeDefined();
     });
 
+    /**
+     * 2026-10-17, channel 318a0954: the presenter's page went away, the
+     * archive's Track Egress ended with their LiveKit participant
+     * (`hlsMicArchiveStopped reason=egress-ended`, `hlsMicArchiveDied
+     * retryInMs=3000`), and the 3 s retry found no track because the presenter
+     * was not back yet. That retry used to give up for good: the window that
+     * makes the monitor look for the track had been closed by the stop, and
+     * the page's new `mic-archive` track lands a beat AFTER its share, i.e.
+     * after the reconcile the share triggered. So the voice stayed unrecorded
+     * until some unrelated roster event happened to reconcile again.
+     */
+    it("keeps looking for the track after a death whose retry found the presenter gone", async () => {
+      enableHls();
+      process.env.LIVE_HLS_MIC_ARCHIVE = "true";
+      const lk = fakeLiveKit();
+      let published = true;
+      setLiveHlsTestHooks({
+        egress: lk.api,
+        findTracks: async () =>
+          published
+            ? { videoTrackId: "TR_V", micArchiveTrackId: "TR_M" }
+            : { videoTrackId: "TR_V" },
+      });
+
+      await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+      await vi.advanceTimersByTimeAsync(20_000);
+      // The presenter's page goes: the track is gone and the egress with it.
+      published = false;
+      lk.kill((await lk.startTrack.mock.results[0]!.value).egressId);
+      await checkLiveHlsHealth();
+      // The 3 s retry finds nothing to record.
+      await vi.advanceTimersByTimeAsync(3_100);
+      expect(lk.startTrack).toHaveBeenCalledTimes(1);
+
+      // They come back 40 s later. NO reconcile runs (nothing a roster event
+      // would have caused); only the monitor ticks.
+      await vi.advanceTimersByTimeAsync(40_000);
+      published = true;
+      await checkLiveHlsHealth();
+
+      expect(lk.startTrack).toHaveBeenCalledTimes(2);
+      expect(lk.startTrack.mock.calls[1]![2]).toBe("TR_M");
+      expect(lk.startTrack.mock.calls[1]![1]!.filepath).toMatch(/-mic-r\d+\.ogg$/);
+      expect(liveHlsActivity().micArchives).toBe(1);
+      expect(inPlaceLogs()[0]![1]).toMatchObject({ reason: "mic-track-returned" });
+    });
+
+    it("stops looking after the rejoin window, rather than listing participants for the whole film", async () => {
+      enableHls();
+      process.env.LIVE_HLS_MIC_ARCHIVE = "true";
+      const lk = fakeLiveKit();
+      let published = true;
+      setLiveHlsTestHooks({
+        egress: lk.api,
+        findTracks: async () =>
+          published
+            ? { videoTrackId: "TR_V", micArchiveTrackId: "TR_M" }
+            : { videoTrackId: "TR_V" },
+      });
+
+      await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+      await vi.advanceTimersByTimeAsync(20_000);
+      published = false;
+      lk.kill((await lk.startTrack.mock.results[0]!.value).egressId);
+      await checkLiveHlsHealth();
+      await vi.advanceTimersByTimeAsync(3_100);
+
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      published = true;
+      await checkLiveHlsHealth();
+      // Past the window the monitor no longer asks; a later reconcile still
+      // would (`reconcileMicArchive`), which is the ordinary roster-event path.
+      expect(lk.startTrack).toHaveBeenCalledTimes(1);
+    });
+
     it("waits the cooldown when the new run dies again inside five minutes", async () => {
       enableHls();
       process.env.LIVE_HLS_MIC_ARCHIVE = "true";

@@ -13,6 +13,7 @@ import {
   PERMISSION_DEFAULT_EVERYONE,
   PERMISSION_DEFAULT_MANAGER,
   PERMISSION_DEFAULT_MODERATOR,
+  PERMISSION_FLAGS,
   STAFF_ROLE_COLORS,
   STAFF_ROLE_NAMES,
   defaultRoleColor,
@@ -33,7 +34,7 @@ describe("permission bitfields", () => {
   it("round-trips as a decimal string, never a JS number", () => {
     expect(serializePermissions(PERMISSION_DEFAULT_EVERYONE)).toBe("103331521");
     expect(parsePermissions("103331521")).toBe(PERMISSION_DEFAULT_EVERYONE);
-    expect(serializePermissions(PERMISSION_ALL)).toBe("536870911");
+    expect(serializePermissions(PERMISSION_ALL)).toBe("1073741823");
     expect(parsePermissions(PERMISSION_ALL)).toBe(PERMISSION_ALL);
   });
 
@@ -71,6 +72,31 @@ describe("permission bitfields", () => {
           roleOverwrites: [],
         }),
         Permission.MANAGE_EMOJI,
+      ),
+    ).toBe(true);
+  });
+
+  it("makes USE_APPS bit 29: in ALL, Manager and Moderator, never in the @everyone default", () => {
+    expect(Permission.USE_APPS).toBe(1n << 29n);
+    expect(hasPermission(PERMISSION_ALL, Permission.USE_APPS)).toBe(true);
+    expect(PERMISSION_ALL).toBe((1n << 30n) - 1n);
+    expect(
+      hasPermission(PERMISSION_DEFAULT_MANAGER, Permission.USE_APPS),
+    ).toBe(true);
+    expect(
+      hasPermission(PERMISSION_DEFAULT_MODERATOR, Permission.USE_APPS),
+    ).toBe(true);
+    expect(
+      hasPermission(defaultRolePermissions("admin"), Permission.USE_APPS),
+    ).toBe(true);
+    // A new server is not a community at birth, so the default mask would
+    // carry the bit into every future community. Server creation grants it.
+    expect(
+      hasPermission(PERMISSION_DEFAULT_EVERYONE, Permission.USE_APPS),
+    ).toBe(false);
+    expect(
+      PERMISSION_FLAGS.some(
+        (flag) => flag.key === "USE_APPS" && flag.bit === Permission.USE_APPS,
       ),
     ).toBe(true);
   });

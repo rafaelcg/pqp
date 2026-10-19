@@ -882,6 +882,25 @@ export const FEATURE_FLAGS = {
     clientVia:
       "GET /api/onboarding/config (discordImportNotice) and GET /api/servers/:id/import-arrivals (imported)",
   },
+  apps: {
+    description:
+      "Apps nos canais: liga a plataforma de apps pra este servidor (o botão de apps, o cartão ao vivo na conversa e o Entrar). Desligado, nada aparece e toda rota de apps responde 404. Cada app ainda precisa ser liberado por ti, servidor a servidor.",
+    env: "APPS",
+    parseEnv: exactTrue,
+    // Off: the whole platform is dark. Turned on for ONE server first (its
+    // override), then wider. It is the first of two gates: an app also needs the
+    // operator's per server release (`server_apps.operator_enabled`), and
+    // Locadora needs `emulator_room` on top. Nothing reads it in the change that
+    // adds it; the sessions and config routes arrive with it as their kill switch.
+    codeDefault: false,
+    // Every reader knows the server: the config route takes `?serverId=`, a
+    // session belongs to a channel that belongs to a server, and the admin
+    // routes name one.
+    perServer: true,
+    // No `clientVia` yet: `GET /api/apps/config?serverId=` (enabled) arrives
+    // with the session routes. Adding it earlier would fail the contract test
+    // that every served field is read by the client.
+  },
 } as const satisfies Record<string, FlagDefinition>;
 
 export type FlagKey = keyof typeof FEATURE_FLAGS;
