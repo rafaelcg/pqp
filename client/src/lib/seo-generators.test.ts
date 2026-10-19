@@ -104,7 +104,11 @@ describe("the dates a marketing page gets", () => {
     };
     expect(marketingLastmod(probe, "/vs-discord")).toBe("2026-10-09");
     const copyCall = calls.find((c) => c.some((a) => a.startsWith("-G")))!;
-    const pattern = copyCall.find((a) => a.startsWith("-G"))!.slice(2);
+    const posix = copyCall.find((a) => a.startsWith("-G"))!.slice(2);
+    // POSIX, not GNU, whitespace: a backslash-s matches nothing in some gits (see `gitLastModified`).
+    expect(posix).not.toContain("\\s");
+    // JavaScript has no POSIX classes, so the one class used is translated for the checks below.
+    const pattern = posix.replace("[[:space:]]", "\\s");
     // The regex matches that page's lines in a catalogue and nobody else's.
     expect(new RegExp(pattern).test(`  "vsDiscord.hero.title": "x",`)).toBe(true);
     expect(new RegExp(pattern).test(`  "tela.hero.title": "x",`)).toBe(false);
@@ -127,8 +131,19 @@ describe("the dates a marketing page gets", () => {
     // Skipped where the clone is shallow (the generator itself then says nothing).
     const probe = realProbe(client);
     if (probe.git(["rev-parse", "--is-shallow-repository"]) !== "false") return;
-    const copy = gitLastModified(probe, [], ["vsDiscord"]);
-    expect(copy).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    // Watch the copy query itself: with no page files the overall answer is the repo's last commit
+    // whatever the pattern did, so only the `-G` search's own answer proves the pattern matches.
+    let copyDay: string | null = "not asked";
+    const spy: Probe = {
+      read: probe.read,
+      git(args) {
+        const out = probe.git(args);
+        if (args.some((a) => a.startsWith("-G"))) copyDay = out;
+        return out;
+      },
+    };
+    gitLastModified(spy, [], ["vsDiscord"]);
+    expect(copyDay).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 
   it("says nothing rather than guess: a shallow clone, no git, or an unknown page", () => {

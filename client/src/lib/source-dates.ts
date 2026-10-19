@@ -184,8 +184,10 @@ export function gitLastModified(
   if (prefixes.length === 0) {
     return fromFiles;
   }
-  // A line such as `  "vsDiscord.hero.title": "...",` added or removed.
-  const pattern = `^\\s*"(${prefixes.join("|")})\\.`;
+  // A line such as `  "vsDiscord.hero.title": "...",` added or removed. `git log -G` takes a POSIX
+  // extended regex, where a backslash-s is a GNU extension: on a git linked against another libc it
+  // matches nothing and every copy edit would go unseen, so the whitespace is the POSIX class.
+  const pattern = `^[[:space:]]*"(${prefixes.join("|")})\\.`;
   const fromCopy = valid(
     probe.git(["log", "-1", "--format=%cs", `-G${pattern}`, "--", ...CATALOGUES]),
   );
