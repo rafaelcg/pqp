@@ -1,1 +1,90 @@
-{ "apps": [] }
+{
+  "apps": [
+    {
+      "manifest": {
+        "manifestVersion": 1,
+        "id": "pqp-eco",
+        "version": "1.0.0",
+        "publisher": "pqp",
+        "platformApi": 1,
+        "name": "name",
+        "description": "description",
+        "icon": "sparkles",
+        "category": "tool",
+        "channelTypes": [
+          "text",
+          "voice"
+        ],
+        "players": {
+          "min": 1,
+          "max": 8,
+          "spectators": true,
+          "maxSpectators": 50
+        },
+        "requires": {
+          "start": "USE_APPS",
+          "join": "VIEW_CHANNEL"
+        },
+        "capabilities": {
+          "identity": "display",
+          "share": "none",
+          "localFiles": {
+            "allowed": false
+          },
+          "peer": "none"
+        },
+        "hostBound": false,
+        "state": {
+          "maxBytes": 4096,
+          "maxWritesPerSecond": 10,
+          "writers": "participants"
+        },
+        "events": {
+          "maxPerSecond": 10,
+          "maxBytes": 256
+        },
+        "presence": {
+          "phrase": "presence.phrase",
+          "short": "presence.short"
+        },
+        "content": {
+          "userText": false,
+          "userImages": false
+        },
+        "entry": {
+          "path": "index.html",
+          "sha256": "ead6a8b1899f1e000f53a3530327069abdc3bf86af639d1ea9a4017e61bb9f0f"
+        },
+        "platforms": [
+          "web",
+          "desktop"
+        ],
+        "license": {
+          "spdx": "AGPL-3.0-only",
+          "source": "https://github.com/rafaelcg/pqp/tree/main/apps/eco"
+        },
+        "i18n": {
+          "pt-BR": {
+            "name": "Eco",
+            "description": "Um app de teste: um contador que todo mundo mexe junto e um ping que aparece pra todos.",
+            "presence.phrase": "{name} tá no Eco",
+            "presence.short": "No Eco"
+          },
+          "en": {
+            "name": "Eco",
+            "description": "A test app: a counter everybody moves together and a ping everybody sees.",
+            "presence.phrase": "{name} is in Eco",
+            "presence.short": "In Eco"
+          },
+          "es": {
+            "name": "Eco",
+            "description": "Una app de prueba: un contador que todos mueven juntos y un ping que ven todos.",
+            "presence.phrase": "{name} está en Eco",
+            "presence.short": "En Eco"
+          }
+        }
+      },
+      "manifestSha256": "501caa5b6b83c521e48805bc1b14a7c0e2ee631ea4c882e71f43d8d5bb315ec0"
+    }
+  ]
+}

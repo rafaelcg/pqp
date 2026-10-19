@@ -837,6 +837,12 @@ import {
   voiceOccupancyReport,
 } from "../services/voice-occupancy.js";
 import {
+  ADMIN_USER_CLIENT_PATH,
+  resolveUserClientTarget,
+  userClientReport,
+  type UserClientTarget,
+} from "../services/client-platforms.js";
+import {
   ADMIN_USER_ACTIVITY_PATH,
   clampActivityDays,
   clampCohortWeeks,
@@ -2530,6 +2536,59 @@ router.get(ADMIN_USER_ACTIVITY_PATH, async ({ url, user }) => {
 });
 
 /**
+ * Which app a person last connected from: platform, our app version where the
+ * client says it, OS and browser family, and when. For support debugging "I
+ * can't hear" / "my share has no sound". A read about ONE named person, so it
+ * is its own route and not a field on `/metrics`, and it is gated like every
+ * other operator read: instance moderators here (a 404 for everybody else,
+ * same as the rest of `/api/admin`), the dashboard's machine token through
+ * `ADMIN_USER_CLIENT_PATH` below. Never on a profile, never to a member or to
+ * a server's owner. See services/client-platforms.ts for what is and is not
+ * recorded.
+ */
+const userClientIdSchema = z.string().uuid();
+
+async function operatorUserClient(target: UserClientTarget) {
+  const userId = await resolveUserClientTarget(target);
+  if (!userId) {
+    throw new NotFound("User not found");
+  }
+  return userClientReport(userId);
+}
+
+/** `?userId=`, `?handle=` or `?tag=name#1234`, whichever the operator has. */
+function operatorUserClientTarget(params: URLSearchParams): UserClientTarget {
+  const userId = params.get("userId");
+  if (userId) {
+    const parsed = userClientIdSchema.safeParse(userId);
+    if (!parsed.success) {
+      throw new HttpError(400, "userId must be a uuid");
+    }
+    return { userId: parsed.data };
+  }
+  const handle = params.get("handle");
+  if (handle) {
+    return { handle };
+  }
+  const tag = params.get("tag");
+  if (tag) {
+    return { tag };
+  }
+  throw new HttpError(400, "userId, handle or tag is required");
+}
+
+router.get("/api/admin/users/:userId/client", async ({ user }, { userId }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  const parsed = userClientIdSchema.safeParse(userId);
+  if (!parsed.success) {
+    throw new NotFound("User not found");
+  }
+  return operatorUserClient({ userId: parsed.data });
+});
+
+/**
  * Server bots for the operator: adoption, use, the funnel, cost against the
  * day's ceiling, and the limits that stopped an answer. Counts and money only,
  * no persona, no message, no person. The dashboard's "bots · beta" section.
@@ -2751,6 +2810,14 @@ const ADMIN_MACHINE_ROUTES: {
     method: "GET",
     path: ADMIN_USER_ACTIVITY_PATH,
     run: async (_req, query) => userActivityReport(userActivityQuery(query)),
+  },
+  // Which app one named person is on (platform, app version, OS and browser
+  // family, last seen). Names a person, so it takes a target and is not on
+  // /metrics. A read only; there is no write for it anywhere.
+  {
+    method: "GET",
+    path: ADMIN_USER_CLIENT_PATH,
+    run: async (_req, query) => operatorUserClient(operatorUserClientTarget(query)),
   },
   // Server bots: counts and money, no persona, no message, no person.
   {
