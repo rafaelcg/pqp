@@ -18,6 +18,14 @@ import { publishToCluster, subscribeToCluster } from "../lib/bus.js";
  *
  * Publishing is fire and forget and happens AFTER the transaction commits, so
  * a sibling that reloads on the frame reads the new rows.
+ *
+ * IT IS A HINT, NOT A GUARANTEE, the same contract as `flags.changed`: a
+ * process that dies between the commit and the publish, or a bus that is
+ * reconnecting, drops it. Whatever listens must therefore keep its own TTL as
+ * the backstop (`FEATURE_FLAGS_TTL_MS` is the model), and today the availability
+ * check reads the rows on every call and caches nothing, so a lost hint costs
+ * nothing. A transactional outbox would buy certainty for a cache that does not
+ * exist yet; if one is ever added, the TTL is the rule, not the frame.
  */
 export const APPS_BUS_TOPIC = "apps.changed";
 
