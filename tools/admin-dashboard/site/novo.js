@@ -1317,7 +1317,7 @@
   }
 
   function loadAppServers(reset) {
-    var a = A.open; if (!a) return;
+    var a = A.open; if (!a) return Promise.resolve(true);
     var st = A.srv;
     if (reset) { st.offset = 0; st.rows = []; }
     var seq = ++st.seq;
@@ -1325,15 +1325,17 @@
     renderServerRows();
     var qs = "?appId=" + encodeURIComponent(a) + (st.q ? "&q=" + encodeURIComponent(st.q) : "") + (st.on ? "&on=1" : "") + "&limit=" + APPS_PAGE + "&offset=" + st.offset;
     return fetchJson("/operator/app-servers" + qs).then(function (r) {
-      if (seq !== st.seq || A.open !== a) return;
+      if (seq !== st.seq || A.open !== a) return true;
       st.rows = st.offset === 0 ? r.servers : st.rows.concat(r.servers);
       st.matched = r.matched; st.enabledCount = r.enabledCount; st.communityUnlocked = r.communityUnlocked;
       st.loading = false;
       renderServerRows();
+      return true;
     }).catch(function (e) {
-      if (seq !== st.seq) return;
+      if (seq !== st.seq) return true;
       st.loading = false; st.err = e && e.message ? e.message : "erro";
       renderServerRows();
+      return false;
     });
   }
 
@@ -1627,7 +1629,13 @@
     A.dirty = false;
     return loadApps(true).then(function (ok) {
       if (!ok) { showAlert("Salvo, mas não deu pra reler a lista agora. Confere antes de seguir.", function () { hideAlert(); A.dirty = true; reconcile(); }); return; }
-      if (A.open && A.needServers) { A.needServers = false; loadAppServers(true); }
+      if (A.open && A.needServers) {
+        // Kept until the servers were read: a failed read leaves the flag set and says so.
+        return loadAppServers(true).then(function (okServers) {
+          if (okServers) { A.needServers = false; return; }
+          showAlert("Salvo, mas não deu pra reler os servidores agora. Confere antes de seguir.", function () { hideAlert(); A.dirty = true; reconcile(); });
+        });
+      }
     });
   }
   /** The app that came back from a write replaces the one on screen. */
