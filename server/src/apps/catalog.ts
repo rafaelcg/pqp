@@ -109,7 +109,11 @@ interface ParsedSemver {
   pre: string[];
 }
 
-function parseSemver(version: string): ParsedSemver {
+function parseSemver(rawVersion: string): ParsedSemver {
+  // Build metadata (`+build.7`) does not take part in precedence. The manifest
+  // validator refuses it today; this keeps the comparison from throwing if a
+  // version with one ever reaches it.
+  const version = rawVersion.split("+")[0] ?? rawVersion;
   const dash = version.indexOf("-");
   const core = dash === -1 ? version : version.slice(0, dash);
   const [major = "0", minor = "0", patch = "0"] = core.split(".");
