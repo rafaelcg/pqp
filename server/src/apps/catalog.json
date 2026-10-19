@@ -175,6 +175,135 @@
         }
       },
       "manifestSha256": "120d4c0dfab6bd980d57436ba584ddb93094af4b3ccce69a48326d22f0bedcc3"
+    },
+    {
+      "manifest": {
+        "manifestVersion": 1,
+        "id": "pqp-locadora",
+        "version": "1.0.0",
+        "publisher": "pqp",
+        "platformApi": 1,
+        "name": "name",
+        "description": "description",
+        "icon": "gamepad",
+        "category": "emulator",
+        "channelTypes": [
+          "text",
+          "voice"
+        ],
+        "players": {
+          "min": 1,
+          "max": 8,
+          "spectators": true,
+          "maxSpectators": 50
+        },
+        "requires": {
+          "start": "USE_APPS",
+          "join": "VIEW_CHANNEL"
+        },
+        "capabilities": {
+          "identity": "display",
+          "share": "pane",
+          "localFiles": {
+            "allowed": true,
+            "accept": [
+              ".nes",
+              ".gb",
+              ".gbc",
+              ".gba"
+            ],
+            "maxBytes": 33554432
+          },
+          "peer": "none"
+        },
+        "hostBound": false,
+        "state": {
+          "maxBytes": 0,
+          "maxWritesPerSecond": 1,
+          "writers": "participants"
+        },
+        "events": {
+          "maxPerSecond": 0,
+          "maxBytes": 0
+        },
+        "presence": {
+          "phrase": "presence.phrase",
+          "short": "presence.short"
+        },
+        "content": {
+          "userText": false,
+          "userImages": true
+        },
+        "notice": "notice",
+        "entry": {
+          "path": "index.html",
+          "sha256": "b4875fe879786a42a68e8f116919bba509ce9336d2c3fe4b5ffe83bfcc80c09c"
+        },
+        "assets": [
+          {
+            "name": "fceumm-core.pqpc",
+            "path": "cores/fceumm-core.pqpc",
+            "sha256": "48bdff98dd6609aa912460307b1612f6d41ec7915fa2e8c388d11ada5bc42801",
+            "bytes": 1414972
+          },
+          {
+            "name": "fceumm.json",
+            "path": "cores/fceumm.json",
+            "sha256": "13dbbfba0ea1bea087c97c38f47dd49c3fb8f16c3f5ed5678dd75d352b737132",
+            "bytes": 120
+          },
+          {
+            "name": "mgba-core.pqpc",
+            "path": "cores/mgba-core.pqpc",
+            "sha256": "89690f501cccb1ae31e5524811f0842dd0651bece4039b15705a1440640f855f",
+            "bytes": 1424164
+          },
+          {
+            "name": "mgba.json",
+            "path": "cores/mgba.json",
+            "sha256": "08219f6c855a9d996f04ed21169bb0c5ac64d469a8a536468b9876205b5c268d",
+            "bytes": 118
+          }
+        ],
+        "sandbox": {
+          "wasm": true,
+          "blobWorkers": false,
+          "localBlobs": true
+        },
+        "platforms": [
+          "web",
+          "desktop"
+        ],
+        "license": {
+          "spdx": "AGPL-3.0-only AND GPL-2.0-or-later AND MPL-2.0 AND GPL-3.0-only",
+          "source": "https://github.com/rafaelcg/pqp/tree/main/apps/locadora",
+          "notices": "notices.txt"
+        },
+        "i18n": {
+          "pt-BR": {
+            "name": "Locadora",
+            "description": "Um emulador de NES e Game Boy. Cada pessoa abre o seu jogo no seu computador. O pqp não fornece jogo nenhum.",
+            "notice": "Isso é só um emulador. O pqp não fornece jogo: abre só um que tu tem direito de jogar. O arquivo fica no teu computador e nunca é enviado.",
+            "presence.phrase": "{name} tá na Locadora",
+            "presence.short": "Na Locadora"
+          },
+          "en": {
+            "name": "Locadora",
+            "description": "An NES and Game Boy emulator. Everyone opens their own game on their own computer. pqp does not provide any game.",
+            "notice": "This is only an emulator. pqp does not provide games: only open one you have the right to play. The file stays on your computer and is never sent.",
+            "presence.phrase": "{name} is at the Locadora",
+            "presence.short": "At the Locadora"
+          },
+          "es": {
+            "name": "Locadora",
+            "description": "Un emulador de NES y Game Boy. Cada persona abre su juego en su computadora. pqp no proporciona ningún juego.",
+            "notice": "Esto es solo un emulador. pqp no proporciona juegos: abre solo uno que tengas derecho a jugar. El archivo se queda en tu computadora y nunca se envía.",
+            "presence.phrase": "{name} está en la Locadora",
+            "presence.short": "En la Locadora"
+          }
+        }
+      },
+      "manifestSha256": "962c47c328a25de8083f57a2e50105c49dccff7b8ab2d7170518495f948be853"
     }
   ]
 }

@@ -1,5 +1,6 @@
-import { mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, posix, relative, sep } from "node:path";
+import { pathToFileURL } from "node:url";
 import { build } from "vite";
 import {
   type AppManifest,
@@ -78,6 +79,22 @@ export async function buildApp(appDir: string, outRoot: string): Promise<BuiltAp
   const outDir = join(outRoot, source.id, source.version);
   rmSync(outDir, { recursive: true, force: true });
   mkdirSync(outDir, { recursive: true });
+
+  // An app that has a generated half (Locadora vendors and patches an emulator
+  // frontend) says so with a `prepare.mts` beside its manifest: it runs before
+  // Vite and writes what it generates into the app's own `public/` folder,
+  // which Vite copies as it is. It must be deterministic and write only what
+  // is derived from the lockfile's packages.
+  const prepareFile = join(realpathSync(appDir), "prepare.mts");
+  if (existsSync(prepareFile)) {
+    const prepared = (await import(pathToFileURL(prepareFile).href)) as {
+      default?: (context: { appDir: string }) => Promise<void>;
+    };
+    if (typeof prepared.default !== "function") {
+      throw new Error(`${prepareFile} must export a default async function`);
+    }
+    await prepared.default({ appDir: realpathSync(appDir) });
+  }
 
   await build({
     // Vite compares real paths, so a symlinked folder (macOS /var, a linked checkout) must be resolved first

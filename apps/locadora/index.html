@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Locadora</title>
+    <!-- the generated half of the bundle (apps/locadora/prepare.mts): plain scripts, so the packager gives them SRI -->
+    <script src="/ejs/core-sri.js"></script>
+    <script src="/ejs/emulator.min.js"></script>
+  </head>
+  <body>
+    <main class="loc" id="loc" data-view="connecting">
+      <header class="loc-head">
+        <h1 class="loc-title" id="title">Locadora</h1>
+        <p class="loc-status" id="status" role="status"></p>
+      </header>
+
+      <section class="loc-shelf" id="v-shelf" aria-labelledby="title" hidden>
+        <div class="loc-tape" aria-hidden="true">
+          <span class="loc-tape-notch"></span>
+          <span class="loc-tape-label"></span>
+          <span class="loc-tape-pins"></span>
+        </div>
+        <p class="loc-lead" id="intro"></p>
+        <button class="loc-button" id="choose" type="button"></button>
+        <ul class="loc-notes">
+          <li id="privacy"></li>
+          <li id="rights"></li>
+          <li id="systems"></li>
+          <li id="solo"></li>
+        </ul>
+        <p class="loc-problem" id="problem" role="alert" hidden></p>
+      </section>
+
+      <section class="loc-loading" id="v-loading" hidden>
+        <p class="loc-lead" id="loading" role="status"></p>
+      </section>
+
+      <section class="loc-play" id="v-play" hidden>
+        <div class="loc-stage"><div class="loc-game" id="game"></div></div>
+        <p class="loc-hint" id="start-hint"></p>
+      </section>
+
+      <div class="loc-bar" id="bar" hidden>
+        <button class="loc-button loc-button-quiet" id="controls-toggle" type="button" aria-expanded="false" aria-controls="controls"></button>
+        <button class="loc-button loc-button-quiet" id="fullscreen" type="button" hidden></button>
+        <button class="loc-button loc-button-quiet" id="choose-another" type="button" hidden></button>
+      </div>
+
+      <ul class="loc-controls" id="controls" hidden>
+        <li id="control-dpad"></li>
+        <li id="control-a"></li>
+        <li id="control-b"></li>
+        <li id="control-start"></li>
+        <li id="control-select"></li>
+        <li id="control-shoulders"></li>
+        <li id="control-gamepad"></li>
+      </ul>
+
+      <p class="loc-ended" id="ended" role="status" hidden></p>
+    </main>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

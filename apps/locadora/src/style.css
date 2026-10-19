@@ -1,0 +1,296 @@
+/*
+ * Locadora's look. Every colour, radius and font is a custom property the host
+ * sends in `hello` (the pqp design tokens: `--color-surface-0`, `--color-text`,
+ * `--color-accent`, ...). The fallbacks are what shows before the first push
+ * and on a host that does not send a token; they are never the design.
+ */
+:root {
+  color-scheme: dark light;
+  --loc-bg: var(--color-surface-0, #14161c);
+  --loc-card: var(--color-surface-1, #1b1e26);
+  --loc-raised: var(--color-surface-2, #242833);
+  --loc-border: var(--color-border, #2d3240);
+  --loc-text: var(--color-text, #ece9de);
+  --loc-text-2: var(--color-text-secondary, #cfcbbd);
+  --loc-text-3: var(--color-text-tertiary, #a9a597);
+  --loc-accent: var(--color-accent, #c8f55a);
+  --loc-on-accent: var(--color-on-accent, #14161c);
+  --loc-ring: var(--color-focus-ring, rgba(200, 245, 90, 0.6));
+  --loc-danger: var(--color-danger, #ee5d4b);
+  --loc-warning: var(--color-warning, #e5b94a);
+  --loc-radius: var(--radius-card, 0.5rem);
+  --loc-control: var(--radius-control, 0.375rem);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--loc-bg);
+  color: var(--loc-text);
+  font-family: var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif);
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+.loc {
+  display: grid;
+  gap: 12px;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+.loc-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.loc-title {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.loc-status {
+  margin: 0;
+  color: var(--loc-text-3);
+  font-size: 0.8125rem;
+}
+
+.loc[data-connection="reconnecting"] .loc-status {
+  color: var(--loc-warning);
+}
+
+/* ---- the shelf: pick a tape ---- */
+
+.loc-shelf {
+  display: grid;
+  justify-items: start;
+  gap: 14px;
+  padding: 18px;
+  background: var(--loc-card);
+  border: 1px solid var(--loc-border);
+  border-radius: var(--loc-radius);
+}
+
+.loc-lead {
+  margin: 0;
+  max-width: 56ch;
+  font-size: 1rem;
+}
+
+/* A cartridge drawn with borders and gradients only: no image, nothing that names anything. */
+.loc-tape {
+  position: relative;
+  width: 132px;
+  height: 108px;
+  background: linear-gradient(180deg, var(--loc-raised), var(--loc-card));
+  border: 2px solid var(--loc-text-3);
+  border-radius: 10px 10px 6px 6px;
+  box-shadow: 0 6px 0 -2px var(--loc-border);
+  transition: transform 160ms ease-out;
+}
+
+.loc-tape-notch {
+  position: absolute;
+  top: -2px;
+  left: 50%;
+  width: 54px;
+  height: 12px;
+  background: var(--loc-card);
+  border: 2px solid var(--loc-text-3);
+  border-top: 0;
+  border-radius: 0 0 8px 8px;
+  transform: translateX(-50%);
+}
+
+.loc-tape-label {
+  position: absolute;
+  inset: 22px 14px 30px;
+  background: var(--loc-accent);
+  border-radius: 4px;
+  opacity: 0.9;
+}
+
+.loc-tape-pins {
+  position: absolute;
+  right: 14px;
+  bottom: 8px;
+  left: 14px;
+  height: 10px;
+  background: repeating-linear-gradient(90deg, var(--loc-text-3) 0 5px, transparent 5px 9px);
+  border-radius: 2px;
+}
+
+.loc-shelf:has(#choose:hover) .loc-tape,
+.loc-shelf:has(#choose:focus-visible) .loc-tape {
+  transform: translateY(-3px) rotate(-2deg);
+}
+
+.loc-notes {
+  display: grid;
+  gap: 6px;
+  max-width: 60ch;
+  margin: 0;
+  padding: 0 0 0 1.1em;
+  color: var(--loc-text-2);
+  font-size: 0.875rem;
+}
+
+.loc-problem {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--loc-raised);
+  border-left: 3px solid var(--loc-danger);
+  border-radius: var(--loc-control);
+  font-size: 0.875rem;
+}
+
+/* ---- loading, playing ---- */
+
+.loc-loading {
+  padding: 24px 18px;
+  background: var(--loc-card);
+  border: 1px solid var(--loc-border);
+  border-radius: var(--loc-radius);
+}
+
+.loc-play {
+  display: grid;
+  gap: 8px;
+}
+
+.loc-stage {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  max-height: calc(100vh - 150px);
+  min-height: 220px;
+  overflow: hidden;
+  background: #000;
+  border: 1px solid var(--loc-border);
+  border-radius: var(--loc-radius);
+}
+
+.loc-game {
+  width: 100%;
+  height: 100%;
+}
+
+.loc-hint {
+  margin: 0;
+  color: var(--loc-text-3);
+  font-size: 0.8125rem;
+}
+
+/* ---- buttons and the bar ---- */
+
+.loc-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.loc-button {
+  min-height: 44px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: var(--loc-control);
+  background: var(--loc-accent);
+  color: var(--loc-on-accent);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.loc-button:hover:not(:disabled) {
+  filter: brightness(0.92);
+}
+
+.loc-button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.loc-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.loc-button:focus-visible {
+  outline: 2px solid var(--loc-ring);
+  outline-offset: 2px;
+}
+
+.loc-button-quiet {
+  background: transparent;
+  color: var(--loc-text-2);
+  border: 1px solid var(--loc-border);
+  font-weight: 600;
+}
+
+.loc-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 6px 16px;
+  margin: 0;
+  padding: 12px 14px 12px 28px;
+  background: var(--loc-card);
+  border: 1px solid var(--loc-border);
+  border-radius: var(--loc-radius);
+  color: var(--loc-text-2);
+  font-size: 0.875rem;
+}
+
+.loc-ended {
+  margin: 0;
+  padding: 12px 14px;
+  background: var(--loc-raised);
+  border: 1px solid var(--loc-border);
+  border-radius: var(--loc-radius);
+  font-weight: 600;
+}
+
+/* Motion is decoration here, so it goes away on request, from the OS or from pqp. */
+@media (prefers-reduced-motion: reduce) {
+  .loc-tape {
+    transition: none;
+  }
+  .loc-shelf:has(#choose:hover) .loc-tape,
+  .loc-shelf:has(#choose:focus-visible) .loc-tape {
+    transform: none;
+  }
+  .loc-button:active:not(:disabled) {
+    transform: none;
+  }
+}
+
+:root[data-reduced-motion="true"] .loc-tape {
+  transition: none;
+}
+
+:root[data-reduced-motion="true"] .loc-shelf:has(#choose:hover) .loc-tape,
+:root[data-reduced-motion="true"] .loc-shelf:has(#choose:focus-visible) .loc-tape {
+  transform: none;
+}
+
+:root[data-reduced-motion="true"] .loc-button:active:not(:disabled) {
+  transform: none;
+}
+
+@media (max-width: 420px) {
+  .loc {
+    padding: 12px;
+  }
+  .loc-shelf {
+    padding: 14px;
+  }
+}
