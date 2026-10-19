@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   appEndReasonSchema,
+  appResultSchema,
   appParticipantConnectionSchema,
   appRoleSchema,
   appUserIdSchema,
@@ -180,6 +181,8 @@ export const appEndedSchema = z
       .object({
         participants: z.number().int().min(0),
         durationSeconds: z.number().int().min(0),
+        /** What the app left in `state.result`, copied at the end (at most 512 bytes). */
+        result: appResultSchema,
       })
       .strip(),
   })

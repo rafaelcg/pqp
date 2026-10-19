@@ -51,4 +51,22 @@ describe("the apps frames in the chat server union", () => {
     expect(messageSystemKindSchema.parse("nudge")).toBe("nudge");
     expect(messageSystemKindSchema.parse("a-future-kind")).toBeNull();
   });
+
+  it("app-ended carries a small object result, and a bad one reads as none", () => {
+    const frame = (result: unknown) =>
+      chatServerMessageSchema.safeParse({
+        type: "app-ended",
+        sessionId: uuid,
+        channelId: uuid,
+        reason: "host",
+        summary: { participants: 2, durationSeconds: 90, result },
+      });
+    const ok = frame({ winner: "a" });
+    expect(ok.success && ok.data.type === "app-ended" && ok.data.summary.result).toEqual({ winner: "a" });
+    for (const bad of [[1], "x", 3, { blob: "x".repeat(600) }]) {
+      const parsed = frame(bad);
+      expect(parsed.success).toBe(true);
+      expect(parsed.success && parsed.data.type === "app-ended" && parsed.data.summary.result).toBeUndefined();
+    }
+  });
 });

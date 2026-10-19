@@ -445,6 +445,100 @@ describeDb("app sessions: start and end", () => {
         summary: { participants: 0 },
       });
     });
+
+    it("app-ended reaches everybody who can view the channel (D13), once, and nobody who cannot", async () => {
+      const seated = recordingSocket(modules, world.member);
+      const viewer = recordingSocket(modules, world.moderator);
+      const stranger = recordingSocket(modules, world.stranger);
+      const hidden = recordingSocket(modules, world.noApps);
+      const result = await start(world.member, world.channels.general);
+      wsApps.addSessionSocket(result.body.id, seated.socket);
+      await settle();
+      await call(world.member, "POST", `/api/app-sessions/${result.body.id}/end`);
+      await settle();
+      for (const rec of [seated, viewer, hidden]) {
+        expect(rec.ofType("app-ended"), "a viewer").toHaveLength(1);
+        expect(appEndedSchema.parse(rec.ofType("app-ended")[0])).toMatchObject({
+          sessionId: result.body.id,
+          reason: "host",
+          summary: { participants: 0 },
+        });
+      }
+      expect(stranger.ofType("app-ended")).toEqual([]);
+    });
+  });
+
+  describe("the card on the timeline carries its session", () => {
+    const card = async (channelId: string) => {
+      const page = await (await import("../services/messages.js")).listMessages(channelId, {
+        viewerId: world.member.id,
+      });
+      return page.messages.find((m) => m.system_kind === "app_session");
+    };
+    const mapped = async (channelId: string) => {
+      const { mapMessage } = await import("../services/messages.js");
+      const found = await card(channelId);
+      return found ? mapMessage(found) : undefined;
+    };
+
+    it("is live while the session runs, then the quiet record, then null once retained away", async () => {
+      const started = await start(world.member, world.channels.general);
+      const live = await mapped(world.channels.general);
+      expect(live).toMatchObject({
+        systemKind: "app_session",
+        appSession: {
+          id: started.body.id,
+          appId: "pqp-eco",
+          appVersion: "1.0.0",
+          status: "live",
+          endReason: null,
+          summary: null,
+          startedBy: world.member.id,
+        },
+      });
+      await call(world.manager, "POST", `/api/app-sessions/${started.body.id}/end`);
+      expect((await mapped(world.channels.general))!.appSession).toMatchObject({
+        status: "ended",
+        endReason: "moderator",
+        summary: { participants: 0 },
+      });
+      await q(`DELETE FROM app_sessions WHERE id = $1`, [started.body.id]);
+      const gone = (await mapped(world.channels.general))!;
+      expect(gone.systemKind).toBe("app_session");
+      expect(gone.appSession).toBeNull();
+    });
+
+    it("is on the single read, and the live fan-out of the card", async () => {
+      const viewing = recordingSocket(modules, world.moderator);
+      const chat = await import("../ws/chat.js");
+      await chat.handleChatMessage(
+        { socket: viewing.socket, user: world.moderator },
+        { type: "join-channel", channelId: world.channels.general },
+      );
+      viewing.frames.length = 0;
+      const started = await start(world.member, world.channels.general);
+      await settle();
+      const broadcast = (viewing.ofType("message-broadcast")[0] as any).message;
+      expect(broadcast.appSession).toMatchObject({ id: started.body.id, status: "live" });
+      const { getHydratedMessage, mapMessage } = await import("../services/messages.js");
+      const again = await getHydratedMessage(broadcast.id);
+      expect(mapMessage(again!).appSession).toMatchObject({ id: started.body.id });
+    });
+
+    it("never appears on an ordinary message, and costs a page with no card no extra read", async () => {
+      const { mapMessage } = await import("../services/messages.js");
+      const plain = mapMessage({
+        id: "m",
+        channel_id: "c",
+        author_id: "a",
+        body: "hi",
+        created_at: new Date(),
+        edited_at: null,
+      } as never);
+      expect("appSession" in plain).toBe(false);
+      const { listAppSessionsForMessages } = await import("./message-sessions.js");
+      expect((await listAppSessionsForMessages([{ id: "x", system_kind: null }])).size).toBe(0);
+    });
   });
 
   describe("ending a session", () => {
@@ -484,6 +578,59 @@ describeDb("app sessions: start and end", () => {
         (await q(`SELECT 1 FROM app_session_participants WHERE left_at IS NULL`)).rowCount,
       ).toBe(0);
       expect(metrics.appCountersSnapshot().ends).toEqual({ host: 1 });
+    });
+
+    it("copies a small state.result into the summary before the state is cleared, and tells everybody", async () => {
+      const id = await liveSession();
+      const viewer = recordingSocket(modules, world.moderator);
+      await q(
+        `UPDATE app_sessions SET state = $2::jsonb WHERE id = $1`,
+        [id, JSON.stringify({ votes: { a: 3 }, result: { winner: "a", tally: { a: 3, b: 1 } } })],
+      );
+      await call(world.member, "POST", `/api/app-sessions/${id}/end`);
+      await settle();
+      const row = (await q(`SELECT state, summary FROM app_sessions WHERE id = $1`, [id])).rows[0]!;
+      expect(row.state).toEqual({});
+      expect(row.summary).toMatchObject({
+        participants: 0,
+        result: { winner: "a", tally: { a: 3, b: 1 } },
+      });
+      const frame = appEndedSchema.parse(viewer.ofType("app-ended")[0]);
+      expect(frame.summary.result).toEqual({ winner: "a", tally: { a: 3, b: 1 } });
+      const { listMessages, mapMessage } = await import("../services/messages.js");
+      const page = await listMessages(world.channels.general, { viewerId: world.member.id });
+      const card = mapMessage(page.messages.find((m) => m.system_kind === "app_session")!);
+      expect((card.appSession as { summary: { result: unknown } }).summary.result).toEqual({
+        winner: "a",
+        tally: { a: 3, b: 1 },
+      });
+    });
+
+    it("drops a state.result that is not a small object: too big, an array, a scalar", async () => {
+      const cases: unknown[] = [
+        { blob: "x".repeat(600) },
+        [1, 2, 3],
+        "text",
+        42,
+      ];
+      for (const result of cases) {
+        sessions.resetAppSessionLimitsForTests();
+        const id = await liveSession(world.member, world.channels.lobby);
+        await q(`UPDATE app_sessions SET state = jsonb_build_object('result', $2::jsonb) WHERE id = $1`, [
+          id,
+          JSON.stringify(result),
+        ]);
+        await call(world.member, "POST", `/api/app-sessions/${id}/end`);
+        const summary = (await q(`SELECT summary FROM app_sessions WHERE id = $1`, [id])).rows[0]!
+          .summary as Record<string, unknown>;
+        expect("result" in summary, JSON.stringify(result).slice(0, 30)).toBe(false);
+      }
+      // The pure rule, including the NUL jsonb itself cannot hold.
+      expect(sessions.keptResult({ a: 1 })).toEqual({ a: 1 });
+      expect(sessions.keptResult({ bad: "a\u0000b" })).toBeNull();
+      expect(sessions.keptResult({ blob: "x".repeat(600) })).toBeNull();
+      expect(sessions.keptResult({ blob: "x".repeat(490) })).not.toBeNull();
+      expect(sessions.keptResult(null)).toBeNull();
     });
 
     it("MANAGE_CHANNELS ends somebody else's: reason moderator", async () => {
