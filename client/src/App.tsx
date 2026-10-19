@@ -245,6 +245,9 @@ import { useVoiceConfig } from "@/hooks/use-voice-config";
 import { useForumConfig } from "@/hooks/use-forum-config";
 import { useAppsSessionsSync } from "@/hooks/use-apps-sessions-sync";
 import { AppLauncher } from "@/components/apps/app-launcher";
+import { AppsHint } from "@/components/layout/apps-hint";
+import { isAppsHintSeen } from "@/lib/apps/apps-hint";
+import { useAppsConfig } from "@/hooks/use-apps-config";
 import {
   handleAppsFrame,
   noteAppsReconnected,
@@ -1757,6 +1760,10 @@ function MainAppContent({
   // `onDismiss` below is: on localhost `lib/hints.ts` remembers no dismissal
   // on purpose, so this card wanted the corner on every load and the in-call
   // tips could not be drawn once.
+  // The apps card: only where the `apps` flag is on for the open server, once.
+  const [wantsAppsHint, setWantsAppsHint] = useState(
+    () => !isAutomatedBrowser() && !isAppsHintSeen(),
+  );
   const [wantsCargosHint, setWantsCargosHint] = useState(
     () => !isAutomatedBrowser() && !isCargosHintSeen(),
   );
@@ -8396,6 +8403,7 @@ function MainAppContent({
   // join leaves the page (`app-join` over the socket until the join sheet and
   // the pane take it over).
   useAppsSessionsSync(selectedServerId, channels);
+  const appsHere = useAppsConfig(selectedServerId);
   useEffect(() => {
     setAppsViewer(user?.id ?? null);
   }, [user?.id]);
@@ -11327,6 +11335,16 @@ function MainAppContent({
       seasonalLookOffer !== null && qgHintReady && !campaignsYield,
     mobileBeta: wantsMobileBeta && !campaignsYield,
     whatsNew: wantsWhatsNew && !campaignsYield,
+    // News about a button in the composer: only where the platform is on for
+    // the server being looked at, in a channel that has the button.
+    appsNews:
+      wantsAppsHint &&
+      appsHere.enabled &&
+      appsHere.apps.length > 0 &&
+      selectedChannel?.kind === "server" &&
+      (selectedChannel.type === "text" || selectedChannel.type === "voice") &&
+      qgHintReady &&
+      !campaignsYield,
     cargos:
       wantsCargosHint &&
       qgHintReady &&
@@ -14651,6 +14669,10 @@ function MainAppContent({
         look={seasonalLookOffer}
         enabled={effectiveCornerHint === "seasonalLook"}
         onDismiss={dismissSeasonalLook}
+      />
+      <AppsHint
+        enabled={effectiveCornerHint === "appsNews"}
+        onDismiss={() => setWantsAppsHint(false)}
       />
       <CargosHint
         enabled={effectiveCornerHint === "cargos"}

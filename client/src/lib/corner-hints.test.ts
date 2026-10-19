@@ -69,3 +69,12 @@ describe("winningCornerHint", () => {
     ).toBe("communityHomePost");
   });
 });
+
+describe("the apps news card", () => {
+  it("goes after Novidades and before cargos and the shortcut map", () => {
+    expect(winningCornerHint({ whatsNew: true, appsNews: true, cargos: true })).toBe("whatsNew");
+    expect(winningCornerHint({ appsNews: true, cargos: true })).toBe("appsNews");
+    expect(winningCornerHint({ appsNews: true, shortcuts: true })).toBe("appsNews");
+    expect(winningCornerHint({ qg: true, appsNews: true })).toBe("qg");
+  });
+});

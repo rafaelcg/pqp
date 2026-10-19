@@ -36,6 +36,7 @@ import {
 } from "@/lib/api";
 import { displayRoleName } from "@/lib/role-labels";
 import { loadServerStoriesEnabled } from "@/lib/stories/config";
+import { useAppsConfig } from "@/hooks/use-apps-config";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 
 const FLAG_LABEL: Record<PermissionFlagKey, MessageKey> = {
@@ -176,20 +177,25 @@ const UNENFORCED_FLAGS = new Set<PermissionFlagKey>([
 ]);
 
 /**
- * Bits of the apps platform. The bit exists and is granted, but no editor
- * lists it until the `apps` flag is on for the server (docs/APPS.md, the
- * Phase 4 UI work); until then a toggle would offer a switch for a feature
- * nobody can see.
+ * Bits of the apps platform. The bit exists and is granted on every server, but
+ * no editor lists it until the `apps` flag is on for that server (docs/APPS.md):
+ * a toggle would offer a switch for a feature nobody can see.
  */
-const APPS_HIDDEN_FLAGS = new Set<PermissionFlagKey>(["USE_APPS"]);
+const APPS_FLAGS = new Set<PermissionFlagKey>(["USE_APPS"]);
 
 /**
  * Bits for a feature behind a per-server runtime flag: enforced, but drawn
  * only where the feature is on, so a server without stories never sees a
  * toggle for something it cannot use.
  */
-function flagGatedOff(key: PermissionFlagKey, storiesOn: boolean): boolean {
-  return (key === "POST_STORIES" && !storiesOn) || APPS_HIDDEN_FLAGS.has(key);
+export function flagGatedOff(
+  key: PermissionFlagKey,
+  gates: { storiesOn: boolean; appsOn: boolean },
+): boolean {
+  return (
+    (key === "POST_STORIES" && !gates.storiesOn) ||
+    (APPS_FLAGS.has(key) && !gates.appsOn)
+  );
 }
 
 const EVERYONE_LOCKED_KEYS = new Set<PermissionFlagKey>([
@@ -269,6 +275,7 @@ export function RolesSettingsSection({ serverId }: { serverId: string }) {
   const [saving, setSaving] = useState(false);
   const [tab, setTab] = useState<RoleEditorTab>("display");
   const [storiesOn, setStoriesOn] = useState(false);
+  const appsOn = useAppsConfig(serverId).enabled;
 
   useEffect(() => {
     let alive = true;
@@ -650,7 +657,7 @@ export function RolesSettingsSection({ serverId }: { serverId: string }) {
               </div>
               {PERMISSION_GROUPS.map((group) => {
                 const keys = group.keys.filter(
-                  (key) => !UNENFORCED_FLAGS.has(key) && !flagGatedOff(key, storiesOn),
+                  (key) => !UNENFORCED_FLAGS.has(key) && !flagGatedOff(key, { storiesOn, appsOn }),
                 );
                 if (keys.length === 0) {
                   return null;
