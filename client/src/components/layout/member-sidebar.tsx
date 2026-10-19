@@ -51,6 +51,7 @@ import {
 import { ApiError, memberDisplayName, memberMatchesQuery, updateMemberNickname, type ServerMember, type ServerRole } from "@/lib/api";
 import { highestRoleColor, identityMarks, rankBadges } from "@/lib/author-display";
 import { useTranslation } from "@/lib/i18n";
+import { useAppPresenceLine } from "@/lib/apps/presence";
 import { displayRoleName } from "@/lib/role-labels";
 import {
   MEMBER_PAGE_SIZE,
@@ -607,6 +608,7 @@ export const MemberSidebar = memo(function MemberSidebar({
             items={menuFor(member)}
             nameColor={highestRoleColor(member.roleIds, roles)}
             roles={roles}
+            serverId={serverId}
             onOpenProfile={(anchor) => openProfile(subjectOf(member), anchor)}
             onMessage={
               onMessageMember &&
@@ -821,6 +823,8 @@ interface MemberRowProps {
   items: ContextMenuItemDef[];
   nameColor: string | null;
   roles: readonly ServerRole[];
+  /** The server this list is of: an app line counts only this server's channels. */
+  serverId?: string | null;
   onOpenProfile: (anchor: HTMLElement) => void;
   /** Conversas: the row's "Mensagem" door. Absent for yourself and a block. */
   onMessage?: () => void;
@@ -858,6 +862,7 @@ function MemberRow({
   items,
   nameColor,
   roles,
+  serverId,
   onOpenProfile,
   onMessage,
 }: MemberRowProps) {
@@ -869,6 +874,10 @@ function MemberRow({
   // only shape it will ever see: an empty string would draw a blank line that
   // makes one row taller than its neighbours for no visible reason.
   const recado = blocked ? null : member.customStatus?.trim() || null;
+  // In an app, that app is the line (decision 6) and the recado returns when
+  // the person leaves it. Only this server's channels count for this list.
+  const appLine = useAppPresenceLine(member.id, shown, "short", serverId);
+  const statusLine = appLine ?? recado;
 
   return (
     <ContextMenu items={items}>
@@ -926,13 +935,14 @@ function MemberRow({
                 })}
               />
             </span>
-            {recado && (
+            {statusLine && (
               <span
                 className="block truncate text-[11px] text-paper-muted"
-                title={recado}
-                data-member-custom-status={member.id}
+                title={statusLine}
+                data-member-custom-status={appLine ? undefined : member.id}
+                data-member-app-presence={appLine ? member.id : undefined}
               >
-                {recado}
+                {statusLine}
               </span>
             )}
             {voiceChannelName && (
