@@ -1305,6 +1305,11 @@ CREATE INDEX IF NOT EXISTS idx_webhooks_channel ON webhooks (channel_id);
 -- sent with its own `embeds` array (this column) in the same request.
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS webhook_embeds JSONB;
 
+-- A server bot's action card (packages/shared/src/bots.ts): the plan waiting
+-- for "sim", or what each step did. Written only by the bot runner; the body
+-- keeps a plain-text copy for clients that do not draw it.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS bot_card JSONB;
+
 -- Discord's own webhooks let a single execution override the display name
 -- and avatar the webhook otherwise defaults to — one CI job posting as
 -- "Build Bot" and another as "Deploy Bot" through the same token. Per
@@ -5344,6 +5349,32 @@ CREATE TABLE IF NOT EXISTS user_activity_days (
 CREATE INDEX IF NOT EXISTS idx_user_activity_days_day
   ON user_activity_days (day);
 
+-- Which app an account last connected from, for support ("I can't hear",
+-- "my share has no sound"). One row per (account, platform), so a person on
+-- the web and on a phone has two. Written when a WebSocket authenticates,
+-- batched once a minute, from the connection's user agent REDUCED to families
+-- at the door: platform (web / desktop / ios / android), our app version where
+-- the client says it, the OS family and the browser family. No user agent
+-- string, no IP, no device model, no browser version is ever stored.
+--
+-- Readable only by instance moderators and the operator token
+-- (`services/client-platforms.ts`); never on a profile, never to a member.
+-- Rows not seen for 90 days are deleted by a daily job, and the cascade
+-- removes the rest with an art. 18 account deletion. A few dozen bytes a row.
+CREATE TABLE IF NOT EXISTS user_client_platforms (
+  user_id        UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  platform       TEXT NOT NULL,
+  app_version    TEXT,
+  os_family      TEXT,
+  browser_family TEXT,
+  first_seen_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_seen_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (user_id, platform)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_client_platforms_last_seen
+  ON user_client_platforms (last_seen_at);
+
 -- Per person, per São Paulo day: what the Retrospectiva needs and nothing
 -- else kept. Counts only. No room, no channel, no other person: who was in a
 -- call with whom is never recorded. `voice_seconds` and `share_seconds` come
@@ -6649,6 +6680,274 @@ CREATE INDEX IF NOT EXISTS idx_bau_follow_deliveries_delivered
 -- (delivered in the last 90 days) read the ledger by time, not by post.
 CREATE INDEX IF NOT EXISTS idx_bau_follow_deliveries_delivered_at
   ON bau_follow_deliveries (delivered_at) WHERE delivered_at IS NOT NULL;
+
+-- Server bots (docs/plans/CUSTOM_BOTS.md). A bot is a `users` row with
+-- `is_character` (so it carries the bot mark, cannot DM, cannot join voice and
+-- is skipped by outgoing webhooks) plus this row, which says whose it is and
+-- what it knows. Nothing authenticates as it: pqp's own worker posts for it.
+-- One per server while pqp pays for every reply; the unique index is the rule,
+-- and dropping it is how that number goes up.
+CREATE TABLE IF NOT EXISTS server_bots (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  server_id   UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  persona     TEXT NOT NULL DEFAULT '',
+  knowledge   TEXT NOT NULL DEFAULT '',
+  -- The channels it answers in. Empty answers nowhere, so a new channel is
+  -- never one the bot talks in until somebody ticks it.
+  channel_ids UUID[] NOT NULL DEFAULT '{}',
+  enabled     BOOLEAN NOT NULL DEFAULT TRUE,
+  -- Also wake on the bot's name said as a whole word, not only on @handle.
+  -- Off by default: a name like "Caio" is also somebody in the room.
+  answer_to_name BOOLEAN NOT NULL DEFAULT FALSE,
+  -- `provider:model` from the deployment's offered list (BOTS_MODEL_CHOICES).
+  -- NULL, or a pick no longer offered, answers with the default.
+  model       TEXT,
+  -- The tools switched on (SERVER_BOT_TOOLS names). NULL is the default set,
+  -- so a tool added later reaches existing bots only through the default.
+  tools       TEXT[],
+  created_by  UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_server_bots_one_per_server
+  ON server_bots (server_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_server_bots_user ON server_bots (user_id);
+
+-- One reply to write. Enqueued after the triggering message commits, claimed
+-- with FOR UPDATE SKIP LOCKED plus a lease (the `speech_jobs` shape), and
+-- unique per (bot, message) so a replayed send never queues a second answer.
+-- The run id doubles as the reply's nonce, which is what keeps a run claimed
+-- twice (a model call that outlived its lease) from posting twice.
+CREATE TABLE IF NOT EXISTS server_bot_runs (
+  id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  bot_id           UUID NOT NULL REFERENCES server_bots(id) ON DELETE CASCADE,
+  channel_id       UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  -- SET NULL, not CASCADE: the member caps count these rows, and deleting
+  -- the question after its answer must not give the quota back.
+  message_id       UUID REFERENCES messages(id) ON DELETE SET NULL,
+  requester_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status           TEXT NOT NULL DEFAULT 'queued'
+                   CHECK (status IN ('queued', 'running', 'done', 'skipped', 'failed')),
+  attempts         INTEGER NOT NULL DEFAULT 0,
+  leased_by        TEXT,
+  lease_expires_at TIMESTAMPTZ,
+  outcome          TEXT,
+  -- Set on a run that answers a plan's confirmation ("sim" / "não") rather
+  -- than a question: it runs no model and executes or cancels that plan.
+  plan_id          UUID,
+  -- Not called by name: the member's next message after an answer. The model
+  -- may answer SKIP when it was meant for somebody else.
+  follow_up        BOOLEAN NOT NULL DEFAULT FALSE,
+  -- A plan card's button: 'yes' or 'no'. NULL reads the trigger's own text
+  -- ("sim" / "não").
+  decision         TEXT CHECK (decision IN ('yes', 'no')),
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  finished_at      TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_server_bot_runs_message
+  ON server_bot_runs (bot_id, message_id);
+-- Databases made before the line above changed: same rule, applied once.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conname = 'server_bot_runs_message_id_fkey' AND confdeltype = 'c'
+  ) THEN
+    ALTER TABLE server_bot_runs DROP CONSTRAINT server_bot_runs_message_id_fkey;
+    ALTER TABLE server_bot_runs ALTER COLUMN message_id DROP NOT NULL;
+    ALTER TABLE server_bot_runs ADD CONSTRAINT server_bot_runs_message_id_fkey
+      FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE SET NULL;
+  END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS idx_server_bot_runs_due
+  ON server_bot_runs (created_at) WHERE status IN ('queued', 'running');
+
+-- Replies per server per São Paulo day (bot-stats.ts `botDay`), reserved before the model is called (a
+-- conditional upsert, so two workers cannot both take the last one).
+CREATE TABLE IF NOT EXISTS server_bot_usage_daily (
+  day           DATE NOT NULL,
+  server_id     UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  replies       INTEGER NOT NULL DEFAULT 0,
+  refused       INTEGER NOT NULL DEFAULT 0,
+  input_tokens  BIGINT NOT NULL DEFAULT 0,
+  output_tokens BIGINT NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, server_id)
+);
+
+-- The whole deployment's model spend per São Paulo day, in millionths of a dollar.
+-- Each call reserves its worst case first and settles to the real cost after,
+-- so the ceiling holds across every worker even while calls are in flight.
+CREATE TABLE IF NOT EXISTS server_bot_spend_daily (
+  day             DATE PRIMARY KEY,
+  reserved_micros BIGINT NOT NULL DEFAULT 0,
+  calls           INTEGER NOT NULL DEFAULT 0,
+  refused         INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_server_bot_runs_requester
+  ON server_bot_runs (bot_id, requester_id, created_at);
+
+-- A batch of actions a bot staged for one request. Few and reversible runs at
+-- once (`executing` from birth); otherwise it waits `pending` for the
+-- requester's "sim". The actions and their wording are built by code at
+-- staging time, so what a "sim" approves is exactly what was shown. Claimed
+-- with a conditional UPDATE, so a double "sim" runs it once.
+CREATE TABLE IF NOT EXISTS server_bot_plans (
+  id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  bot_id           UUID NOT NULL REFERENCES server_bots(id) ON DELETE CASCADE,
+  server_id        UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  channel_id       UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  requester_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  -- The run that staged it. Unique so a re-claimed run finds its plan instead
+  -- of asking the model again.
+  run_id           UUID NOT NULL UNIQUE,
+  -- The bot's message that shows the plan, once posted: its card is updated
+  -- when the plan is decided, and a button's answer replies to it.
+  message_id       UUID,
+  actions          JSONB NOT NULL,
+  status           TEXT NOT NULL
+                   CHECK (status IN ('pending', 'executing', 'done', 'cancelled', 'expired')),
+  expires_at       TIMESTAMPTZ NOT NULL,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  finished_at      TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_server_bot_plans_pending
+  ON server_bot_plans (bot_id, channel_id, requester_id) WHERE status = 'pending';
+
+-- One row per executed step, written BEFORE the step runs. A worker that
+-- takes over a plan never runs a step that already has a row: `running` with
+-- no outcome means "may have happened" and is not retried.
+CREATE TABLE IF NOT EXISTS server_bot_actions (
+  plan_id          UUID NOT NULL REFERENCES server_bot_plans(id) ON DELETE CASCADE,
+  step             INTEGER NOT NULL,
+  bot_id           UUID NOT NULL REFERENCES server_bots(id) ON DELETE CASCADE,
+  tool             TEXT NOT NULL,
+  status           TEXT NOT NULL CHECK (status IN ('running', 'done', 'failed')),
+  result           JSONB,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (plan_id, step)
+);
+CREATE INDEX IF NOT EXISTS idx_server_bot_actions_hour
+  ON server_bot_actions (bot_id, created_at);
+
+-- The role a bot acts through, made with the bot: exactly the permissions its
+-- switched-on tools need, never more than whoever switched them on holds, at
+-- the lowest custom rank so it outranks nobody. Deleting the role takes those
+-- powers away (SET NULL); the next save of the bot's tools makes it again.
+ALTER TABLE server_bots ADD COLUMN IF NOT EXISTS role_id UUID REFERENCES roles(id) ON DELETE SET NULL;
+
+-- What started a run and what it cost, written as each model call returns.
+-- `trigger`: mention, reply, name, follow_up, decision (a plan's "sim") or
+-- answer (a question card's button, which posts no message).
+ALTER TABLE server_bot_runs ADD COLUMN IF NOT EXISTS trigger TEXT;
+ALTER TABLE server_bot_runs ADD COLUMN IF NOT EXISTS model TEXT;
+ALTER TABLE server_bot_runs ADD COLUMN IF NOT EXISTS turns INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE server_bot_runs ADD COLUMN IF NOT EXISTS input_tokens BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE server_bot_runs ADD COLUMN IF NOT EXISTS output_tokens BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE server_bot_runs ADD COLUMN IF NOT EXISTS cost_micros BIGINT NOT NULL DEFAULT 0;
+-- The part of input_tokens served from Anthropic's prompt cache (billed at a
+-- tenth) and written to it (1.25x). input_tokens stays the whole input.
+ALTER TABLE server_bot_runs ADD COLUMN IF NOT EXISTS cache_read_tokens BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE server_bot_runs ADD COLUMN IF NOT EXISTS cache_write_tokens BIGINT NOT NULL DEFAULT 0;
+
+-- A fixed welcome the bot posts when somebody joins (no model call, costs
+-- nothing): on or off, where, and the text staff wrote (null is the default).
+-- `server_bot_welcomes` remembers who was welcomed, so leaving and joining
+-- again is not welcomed twice, and caps a raid to a few posts an hour.
+ALTER TABLE server_bots ADD COLUMN IF NOT EXISTS welcome_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE server_bots ADD COLUMN IF NOT EXISTS welcome_channel_id UUID REFERENCES channels(id) ON DELETE SET NULL;
+ALTER TABLE server_bots ADD COLUMN IF NOT EXISTS welcome_message TEXT;
+CREATE TABLE IF NOT EXISTS server_bot_welcomes (
+  server_id   UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  welcomed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (server_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_server_bot_welcomes_recent ON server_bot_welcomes (server_id, welcomed_at);
+
+-- Reminders a server bot keeps (services/bot-reminders.ts): a member's own
+-- ("me lembra amanhã às 20h", kind 'me') and staff's repeating channel
+-- announcements (kind 'channel'). Posted by a job with no model call.
+-- `next_nonce` is the nonce of the next post, so a claim that ran out after
+-- posting finds its message instead of posting twice.
+CREATE TABLE IF NOT EXISTS server_bot_reminders (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  bot_id       UUID NOT NULL REFERENCES server_bots(id) ON DELETE CASCADE,
+  server_id    UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  channel_id   UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  requester_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  text         TEXT NOT NULL,
+  kind         TEXT NOT NULL CHECK (kind IN ('me', 'channel')),
+  due_at       TIMESTAMPTZ NOT NULL,
+  repeat       TEXT CHECK (repeat IN ('daily', 'weekly')),
+  status       TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'cancelled')),
+  next_nonce   TEXT NOT NULL DEFAULT gen_random_uuid()::text,
+  sent_count   INTEGER NOT NULL DEFAULT 0,
+  lease_until  TIMESTAMPTZ,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  finished_at  TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_server_bot_reminders_due ON server_bot_reminders (due_at) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_server_bot_reminders_open ON server_bot_reminders (server_id, requester_id) WHERE status = 'pending';
+
+-- The operator's history of bots (services/bot-stats.ts), per São Paulo day.
+-- No foreign keys on purpose: a deleted bot or server keeps its past here,
+-- while its runs, plans and actions cascade away with it.
+CREATE TABLE IF NOT EXISTS server_bot_stats_daily (
+  day             DATE NOT NULL,
+  server_id       UUID NOT NULL,
+  bot_user_id     UUID NOT NULL,
+  runs            INTEGER NOT NULL DEFAULT 0,
+  replies         INTEGER NOT NULL DEFAULT 0,
+  skipped         INTEGER NOT NULL DEFAULT 0,
+  failed          INTEGER NOT NULL DEFAULT 0,
+  asks            INTEGER NOT NULL DEFAULT 0,
+  plans           INTEGER NOT NULL DEFAULT 0,
+  plans_confirmed INTEGER NOT NULL DEFAULT 0,
+  plans_cancelled INTEGER NOT NULL DEFAULT 0,
+  actions_done    INTEGER NOT NULL DEFAULT 0,
+  actions_failed  INTEGER NOT NULL DEFAULT 0,
+  input_tokens    BIGINT NOT NULL DEFAULT 0,
+  output_tokens   BIGINT NOT NULL DEFAULT 0,
+  cost_micros     BIGINT NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, server_id, bot_user_id)
+);
+ALTER TABLE server_bot_stats_daily ADD COLUMN IF NOT EXISTS cache_read_tokens BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE server_bot_stats_daily ADD COLUMN IF NOT EXISTS cache_write_tokens BIGINT NOT NULL DEFAULT 0;
+
+-- Who asked, per day, only to count distinct people. Pruned after 90 days.
+CREATE TABLE IF NOT EXISTS server_bot_people_daily (
+  day       DATE NOT NULL,
+  server_id UUID NOT NULL,
+  user_id   UUID NOT NULL,
+  runs      INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, server_id, user_id)
+);
+
+-- Plan steps by tool: what bots are used for.
+CREATE TABLE IF NOT EXISTS server_bot_tools_daily (
+  day       DATE NOT NULL,
+  server_id UUID NOT NULL,
+  tool      TEXT NOT NULL,
+  done      INTEGER NOT NULL DEFAULT 0,
+  failed    INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, server_id, tool)
+);
+
+-- A bot's face (packages/shared/src/bot-face.ts): one of six colours and one
+-- of five base faces. `users.avatar_url` follows them as the PNG the phone
+-- apps draw; the web client draws the same face inline, and alive.
+ALTER TABLE server_bots ADD COLUMN IF NOT EXISTS color TEXT NOT NULL DEFAULT 'lime';
+ALTER TABLE server_bots ADD COLUMN IF NOT EXISTS face TEXT NOT NULL DEFAULT 'oi';
+
+-- The wizard's practice chat (services/bot-test.ts): turns per person per
+-- São Paulo day, reserved before the model is called.
+CREATE TABLE IF NOT EXISTS server_bot_test_usage (
+  day     DATE NOT NULL,
+  user_id UUID NOT NULL,
+  turns   INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, user_id)
+);
 
 -- ===================================================================== apps
 -- The apps platform (docs/APPS.md): small interactive things a person starts in

@@ -770,17 +770,27 @@ timeline. Behind `APPS` (default off, **per server**, born as a flag). It is the
 first of the platform's gates: an app is also released by the operator per server
 (`server_apps.operator_enabled`), and Locadora needs `emulator_room` on top.
 
-**Nothing reads it yet.** The change that registers it only adds the tables
-(`apps`, `app_versions`, `server_apps`, `app_sessions`, and their neighbours in
-`schema.sql`) and the flag; no route, frame or client code consults it. Once the
-platform lands, off means nothing renders and every apps route answers 404, and
-turning it off ends the live sessions of that server. The client will learn it
-from `GET /api/apps/config?serverId=` (`enabled`), which arrives with the
-session routes and is when `clientVia` is added here.
+Off means nothing renders and every apps route answers 404, except
+`GET /api/apps/config?serverId=` (`enabled`), which answers `{ enabled: false }`
+so a client hides the launcher without a 404 storm. See `docs/APPS.md`
+§"Availability" for the full list of gates and the reason each one gives.
+Turning it off for a server ends that server's live sessions on the next
+sweep (the session engine).
 
 Turn it on for one server with `PUT /api/admin/flag-overrides
 { key: "apps", serverId, enabled: true }` or from controles → interruptores,
 and only after the rest of the platform is in.
+
+## `locadora_share` (per server)
+
+Whether an app of `category: "emulator"` (Locadora) may share its game pane and
+admit spectators, so people can watch a game that is running (`LOCADORA_SHARE`,
+default **off**, per server). A running game shown to other people is an open
+legal question (`docs/EMULATOR_ROOM.md` item 6), so this stays off until the
+lawyer's written answer (Legal Gate L1b). Every other app shares through the
+ordinary path and never reads it. Read by `appShareAllowed` in
+`server/src/apps/availability.ts`, served per app as `shareAllowed` on
+`GET /api/apps/config`. It does nothing while `apps` is off.
 
 ## `stories` (per server) and `stories_friends` (global)
 
@@ -807,3 +817,31 @@ Turn the QG on from controles → interruptores (the server's override) or
 `PUT /api/admin/flag-overrides { key: "stories", serverId, enabled: true }`;
 friends with `PUT /api/admin/flags { key: "stories_friends", enabled: true }`.
 Clients read `GET /api/stories/config[?serverId=]` and the strips themselves.
+
+## `custom_bots` and `bot_test_chat` (per server)
+
+Server bots: one AI bot per server that members talk to in chat
+(`docs/plans/CUSTOM_BOTS.md`). Both flags were born as flags and both default
+**off**.
+
+- **`custom_bots`** (`CUSTOM_BOTS`) is the whole feature. Clients read
+  `enabled` on `GET /api/bots/config?serverId=`. Off for a server: the settings
+  tab and the member list row are hidden, creating a bot or switching one on
+  answers 403 `bots_disabled`, and no bot answers, welcomes or reminds there.
+  The runner reads the flag again before each model call, so off also silences
+  a reply already queued. Staff can still edit or switch off a bot that exists.
+- **`bot_test_chat`** (`BOT_TEST_CHAT`) is the wizard's practice chat. Every
+  turn is a model call, so it is separate.
+
+Off everywhere (the default) costs nothing: a chat message never reaches the
+database for bots, and the run poller and the reminder job return before they
+query. Off is a rollout switch, not a verdict, so it **deletes nothing**: a
+reminder that falls due while its server is off waits and goes out when the
+flag comes back. More than six hours late, it does not post: a repeating one
+moves on to its next slot, and a one-off is dropped.
+
+Turn one server on with `PUT /api/admin/flag-overrides { key: "custom_bots",
+serverId, enabled: true }` or from controles → interruptores, then
+`bot_test_chat` the same way. Production also needs `ANTHROPIC_API_KEY`: with
+no model offered, the config answers `enabled: false` whatever the flag says.
+

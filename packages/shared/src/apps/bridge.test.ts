@@ -41,6 +41,18 @@ describe("handshake", () => {
     expect(bridgeAppPortSchema.safeParse({ pqp: "app-port", platformApi: 1 }).success).toBe(true);
   });
 
+  it("answers files.pickLocal with bytes and a closed-list extension, never a name", () => {
+    const schema = bridgeResultSchemas["files.pickLocal"];
+    const bytes = new ArrayBuffer(1);
+    expect(schema.safeParse({ bytes, ext: ".gba" }).success).toBe(true);
+    expect(schema.safeParse({ bytes }).success).toBe(false);
+    expect(schema.safeParse({ bytes, ext: "gba" }).success).toBe(false);
+    expect(schema.safeParse({ bytes, ext: ".GBA" }).success).toBe(false);
+    expect(schema.safeParse({ bytes, ext: "mario.gba" }).success).toBe(false);
+    // a stray key is stripped, so a file name cannot ride along
+    expect(schema.parse({ bytes, ext: ".gba", name: "x.gba" })).not.toHaveProperty("name");
+  });
+
   it("rejects unknown keys and a platform api the host does not speak", () => {
     expect(
       bridgeAppHelloSchema.safeParse({ pqp: "app-hello", platformApi: 1, x: 1 }).success,
@@ -330,7 +342,7 @@ describe("host to app messages", () => {
       "state.patch": { rev: 2 },
       "events.send": null,
       "assets.get": { name: "core.wasm", bytes: new ArrayBuffer(1) },
-      "files.pickLocal": { bytes: new ArrayBuffer(1) },
+      "files.pickLocal": { bytes: new ArrayBuffer(1), ext: ".gba" },
       "ui.resize": { height: 300 },
       "ui.fullscreen": { on: true },
       "share.request": { on: true },

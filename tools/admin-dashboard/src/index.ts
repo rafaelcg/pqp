@@ -16,19 +16,22 @@
  *     `/occupancy` is `${API_ORIGIN}/api/admin/voice-occupancy` with the same
  *     token and only the `days` and `day` parameters forwarded;
  *     `/activity` is `${API_ORIGIN}/api/admin/user-activity` the same way
- *     (`days`, `weeks`), plus the operator's `MONTHLY_COST_USD`; `/health`
+ *     (`days`, `weeks`), plus the operator's `MONTHLY_COST_USD`; `/bots` is
+ *     `${API_ORIGIN}/api/admin/bots` (server bots: counts and money, no
+ *     query forwarded); `/health`
  *     is `${API_ORIGIN}/status.json`. The page only ever talks to its own
  *     origin and never holds a credential.
  *
- *     Nineteen `/operator/*` routes join them, and they are this Worker's FIRST
- *     WRITES. Seven reads (find a server, list its voice channels, the watch
- *     party waitlist, the runtime feature flags, the feedback queue, the apps
- *     catalog, one app's servers) and twelve writes (watch party availability
- *     and low latency per server, a channel's transport pin, a channel's SFU
- *     region, declining a server's waitlist, a feature flag globally, a
- *     feature flag for one server, confirming or closing a feedback item, and
- *     for apps: an app's switches, a version's review, a server's switch, and
- *     the two POSTs that end sessions). They are in `OPERATOR_ROUTES` below, an
+ *     Twenty `/operator/*` routes join them, and they are this Worker's FIRST
+ *     WRITES. Eight reads (find a server, list its voice channels, the watch
+ *     party waitlist, the runtime feature flags, the feedback queue, which
+ *     app one named person is on, the apps catalog, one app's servers) and
+ *     twelve writes (watch party availability and low latency per server, a
+ *     channel's transport pin, a channel's SFU region, declining a server's
+ *     waitlist, a feature flag globally, a feature flag for one server,
+ *     confirming or closing a feedback item, and for apps: an app's switches,
+ *     a version's review, a server's switch, and the two POSTs that end
+ *     sessions). They are in `OPERATOR_ROUTES` below, an
  *     exact (method, path) table for the same reason the API keeps one: the
  *     blast radius of the password plus the machine token should be readable
  *     in one glance, and a prefix is a thing somebody widens by accident.
@@ -392,6 +395,22 @@ const OPERATOR_ROUTES: {
     path: "/operator/feedback-resolve",
     forward: (_url, origin) => `${origin}/api/admin/feedback/resolve`,
   },
+  // Which app one named person is on (platform, app version, OS and browser
+  // family, last seen), for support. A read about a person, so one target
+  // parameter at a time is forwarded and nothing else. No page draws it yet:
+  // it is `GET /operator/user-client?handle=` behind the same Basic password.
+  {
+    method: "GET",
+    path: "/operator/user-client",
+    forward: (url, origin) => {
+      const upstream = new URL(`${origin}/api/admin/user-client`);
+      for (const name of ["userId", "handle", "tag"]) {
+        const value = url.searchParams.get(name);
+        if (value) upstream.searchParams.set(name, value);
+      }
+      return upstream.toString();
+    },
+  },
   // Runtime feature flags ("interruptores"): the list with effective values,
   // overrides and the audit trail; a global decision; a per-server override.
   // The API only parses keys in its own registry, so this cannot invent one.
@@ -597,6 +616,17 @@ export default {
       return json(200, {
         ...report,
         operatingCost: { monthlyUsd: parseMonthlyCost(env.MONTHLY_COST_USD) },
+      });
+    }
+
+    // Server bots (`/api/admin/bots`), fetched when "bots · beta" opens.
+    // Counts and money, no query forwarded: the window is fixed on the API.
+    if (path === "/bots") {
+      if (!origin || !env.ADMIN_METRICS_TOKEN) {
+        return json(503, { error: "bots not configured" });
+      }
+      return proxyJson(`${origin}/api/admin/bots`, {
+        Authorization: `Bearer ${env.ADMIN_METRICS_TOKEN}`,
       });
     }
 

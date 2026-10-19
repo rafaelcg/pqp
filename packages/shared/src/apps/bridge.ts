@@ -235,7 +235,14 @@ export const bridgeResultSchemas = {
   "assets.get": z
     .object({ name: z.string().min(1).max(64), bytes: arrayBufferSchema })
     .strip(),
-  "files.pickLocal": z.object({ bytes: arrayBufferSchema }).strip(),
+  /**
+   * `ext` is the picked file's lower-cased extension, with its dot, taken from
+   * the manifest's closed `localFiles.accept` list (never from the file name),
+   * so an app can pick a decoder without the name crossing the bridge.
+   */
+  "files.pickLocal": z
+    .object({ bytes: arrayBufferSchema, ext: z.string().regex(/^\.[a-z0-9]{1,8}$/) })
+    .strip(),
   "ui.resize": z.object({ height: z.number().int() }).strip(),
   "ui.fullscreen": z.object({ on: z.boolean() }).strip(),
   "share.request": z.object({ on: z.boolean() }).strip(),

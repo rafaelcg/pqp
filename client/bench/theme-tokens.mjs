@@ -338,6 +338,8 @@ function cssRoleTokens(css) {
     // connection marks above, not a themed role, so it is exempt the same
     // way.
     if (name.startsWith("--color-flag-")) continue;
+    // Breu's colours: a bot's identity, the same in every theme.
+    if (name.startsWith("--color-bot-")) continue;
     names.add(name);
   }
   for (const [, name] of css.matchAll(/(--[\w-]+)\s*:/g)) {

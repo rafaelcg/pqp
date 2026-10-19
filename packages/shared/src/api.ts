@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { attachmentSchema } from "./attachments.js";
 import { clampChatNewlines } from "./chat-text.js";
+import { botActionCardSchema } from "./bots.js";
 import { embedSchema } from "./embeds.js";
 import { handleSchema } from "./profiles.js";
 import { nicknameSchema } from "./permissions.js";
@@ -998,6 +999,8 @@ export const messageSchema = z.object({
    * renders as its plaintext `body`. Defaulted so an older API still parses.
    */
   systemKind: messageSystemKindSchema,
+  /** A server bot's action card (`bots.ts`). Null on every other message. */
+  botCard: botActionCardSchema.nullable().optional().catch(null),
   /**
    * The story this message replies to (`POST /api/stories/:storyId/reply`),
    * or null. The quote is drawn from `GET /api/stories/:storyId/card`, which

@@ -1,5 +1,6 @@
 import { DEV_AUTH_TOKEN } from "@pqp/shared";
 import WebSocket from "ws";
+import { enableDevAppsForServer } from "../apps/catalog.js";
 import { isDevAuthBypassEnabled } from "../auth/clerk.js";
 import { getPool, type DbUser } from "../db.js";
 import { logEvent } from "../lib/log.js";
@@ -94,6 +95,10 @@ export async function seedDevHall(options: { port: number }): Promise<void> {
 
   const owner = await ensureAccount("dev_local_user", "Dev User", false);
   const serverId = await ensureHall(owner.id);
+  // Local only: release the first-party apps on this hall (never production).
+  await enableDevAppsForServer(serverId).catch((error: unknown) => {
+    console.error("[dev-seed] could not release the apps:", error);
+  });
   await ensureExtraChannel(serverId, "off-topic", "text");
   const roles = await listRoles(serverId);
   const byKey = Object.fromEntries(

@@ -82,9 +82,11 @@ import {
 } from "./voice/hls-egress.js";
 import { hlsViewerCounter } from "./voice/hls-viewer-counts.js";
 import { userActivity } from "./services/user-activity.js";
+import { clientPlatforms, noteSocketClient } from "./services/client-platforms.js";
 import { userStats } from "./services/user-stats.js";
 import { processRole, runsColdJobs, servesTraffic } from "./lib/process-role.js";
 import { startFeatureFlags } from "./lib/flags.js";
+import { startAppCatalogLoad } from "./apps/catalog.js";
 import { checkReadiness, READINESS_PATH } from "./services/readiness.js";
 import {
   READY_PATH,
@@ -413,6 +415,10 @@ wss.on("connection", (socket, req) => {
   // on every deployment so the dashboard can prove the header arrives before
   // any region is routed on it; nothing reads it without `LIVEKIT_REGIONS`.
   noteSocketCountry(socket, req.headers);
+  // The app behind the socket, reduced to families at once; the user agent
+  // string is not kept. Read at `auth` to record it for support
+  // (`services/client-platforms.ts`).
+  noteSocketClient(socket, req.headers);
   // Liveness bookkeeping lives in `handleWsConnection`
   // (`trackSocketLiveness`), which is the half `startHeartbeat` below reads.
   handleWsConnection(socket, clientAddress(req as never));
@@ -711,6 +717,7 @@ function startVoiceRegistry(): (() => Promise<void>) | null {
 let stopVoiceHeartbeat: (() => Promise<void>) | null = null;
 let stopHlsViewerCounter: (() => Promise<void>) | null = null;
 let stopUserActivity: (() => Promise<void>) | null = null;
+let stopClientPlatforms: (() => Promise<void>) | null = null;
 let stopUserStats: (() => Promise<void>) | null = null;
 
 async function main() {
@@ -750,6 +757,12 @@ async function main() {
   // lands during boot is already a reload). A failed load is not fatal: the
   // environment answers until a later read gets through.
   await startFeatureFlags();
+
+  // The apps catalog (`apps/catalog.ts`): first-party apps merged INSERT-ONLY
+  // into `apps` / `app_versions`. Never fatal: a load that fails (the database
+  // was down) is retried in the background with a bounded backoff, and until
+  // then the platform has the apps it already had.
+  await startAppCatalogLoad();
 
   // Live HLS: a restart does not stop the media box, so before anything else
   // this process ADOPTS the egresses still running for sessions it owns (a
@@ -804,6 +817,9 @@ async function main() {
   // Who opened the app today: noted at WS auth, flushed once a minute as one
   // statement. Wherever the sockets are.
   stopUserActivity = userActivity.start();
+  // Which app each account connected from, for support: noted at WS auth,
+  // flushed once a minute. Wherever the sockets are.
+  stopClientPlatforms = clientPlatforms.start();
   // Tracks queued in calls, for the Retrospectiva: noted where a music write
   // is accepted, flushed once a minute. Wherever the sockets are.
   stopUserStats = userStats.start();
@@ -920,6 +936,7 @@ async function shutdown(signal: string) {
   // The last minute of viewer sightings, before the pool goes.
   await stopHlsViewerCounter?.();
   await stopUserActivity?.();
+  await stopClientPlatforms?.();
   await stopUserStats?.();
   // Last, so the presence withdrawals that closing those sockets produces still
   // have a bus to travel on. Best-effort — anything that misses the window is
