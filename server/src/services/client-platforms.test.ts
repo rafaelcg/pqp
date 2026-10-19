@@ -224,6 +224,42 @@ describeDb("client platforms", () => {
       expect(await rows(ana)).toHaveLength(1);
     });
 
+    it("stamps a new row's first sighting with the observation, not the flush", async () => {
+      const ana = await person("ana");
+      const observed = Date.now() - 10 * 60_000;
+      const recorder = createClientPlatformRecorder({ now: () => observed });
+      recorder.note(ana, CHROME_WIN);
+      await recorder.flush();
+      const result = await getPool().query<{ same: boolean; before_flush: boolean }>(
+        `SELECT first_seen_at = last_seen_at AS same,
+                first_seen_at < NOW() - INTERVAL '9 minutes' AS before_flush
+           FROM user_client_platforms WHERE user_id = $1`,
+        [ana],
+      );
+      expect(result.rows).toEqual([{ same: true, before_flush: true }]);
+    });
+
+    it("does not treat a skipped older write as landed: the next sighting is queued", async () => {
+      const ana = await person("ana");
+      const base = Date.now();
+      let earlyNow = base;
+      const early = createClientPlatformRecorder({ now: () => earlyNow });
+      const late = createClientPlatformRecorder({ now: () => base + 5_000 });
+      early.note(ana, FIREFOX_WIN);
+      late.note(ana, CHROME_WIN);
+      await late.flush();
+      // The older Firefox observation loses to Chrome at the row...
+      expect(await early.flush()).toBe(0);
+      expect((await rows(ana))[0]).toMatchObject({ browser_family: "chrome" });
+      // ...and is not remembered as stored, so Firefox again, later than the
+      // Chrome one, is written instead of being suppressed for an hour.
+      earlyNow = base + 10_000;
+      early.note(ana, FIREFOX_WIN);
+      expect(early.stats().pending).toBe(1);
+      await early.flush();
+      expect((await rows(ana))[0]).toMatchObject({ browser_family: "firefox" });
+    });
+
     it("skips the house cast and survives an account deleted before the flush", async () => {
       const ana = await person("ana");
       const cast = await person("cast");

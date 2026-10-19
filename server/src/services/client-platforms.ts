@@ -177,11 +177,12 @@ export function createClientPlatformRecorder(
         // key, and so bots, webhooks and the house cast never get a row.
         // `(user_id, platform)` is unique within a batch (the Map key), which
         // `ON CONFLICT DO UPDATE` requires.
-        const result = await pool().query(
+        const result = await pool().query<{ user_id: string; platform: string }>(
           `INSERT INTO user_client_platforms
-             (user_id, platform, app_version, os_family, browser_family, last_seen_at)
+             (user_id, platform, app_version, os_family, browser_family,
+              first_seen_at, last_seen_at)
            SELECT v.user_id, v.platform, v.app_version, v.os_family, v.browser_family,
-                  v.seen_at
+                  v.seen_at, v.seen_at
              FROM unnest($1::uuid[], $2::text[], $3::text[], $4::text[], $5::text[],
                          $6::timestamptz[])
                   AS v(user_id, platform, app_version, os_family, browser_family, seen_at)
@@ -191,10 +192,18 @@ export function createClientPlatformRecorder(
              SET app_version    = EXCLUDED.app_version,
                  os_family      = EXCLUDED.os_family,
                  browser_family = EXCLUDED.browser_family,
+                 -- The first sighting is the OBSERVATION time (an insert waits
+                 -- for the minute flush, so the column default would put it
+                 -- after last_seen_at), and only ever moves earlier.
+                 first_seen_at  = LEAST(user_client_platforms.first_seen_at,
+                                        EXCLUDED.first_seen_at),
                  last_seen_at   = EXCLUDED.last_seen_at
              -- Two API processes flush on their own clocks: the observation
              -- that happened LAST wins, not the flush that ran last.
-             WHERE user_client_platforms.last_seen_at <= EXCLUDED.last_seen_at`,
+             WHERE user_client_platforms.last_seen_at <= EXCLUDED.last_seen_at
+             -- Only rows that were inserted or updated come back: a skipped
+             -- (older) observation and a row the join dropped do not.
+             RETURNING user_id, platform`,
           [
             slice.map(([, e]) => e.userId),
             slice.map(([, e]) => e.facts.platform),
@@ -205,14 +214,25 @@ export function createClientPlatformRecorder(
           ],
         );
         written += result.rowCount ?? 0;
+        const stored = new Set(
+          (result.rows ?? []).map((row) => `${row.user_id}|${row.platform}`.toLowerCase()),
+        );
         for (const [key, entry] of slice) {
           batch.delete(key);
-          // Landed, unless something newer was noted for the key meanwhile
-          // (then `known` already names that one, still queued).
+          // Unless something newer was noted for the key meanwhile (then
+          // `known` already names that one, still queued), settle this one.
           const current = known.get(key);
           if (current && current.sig === signature(entry.facts)) {
-            current.landed = true;
-            current.at = now();
+            if (stored.has(key.toLowerCase())) {
+              current.landed = true;
+              current.at = now();
+            } else {
+              // Not written: another process holds a later observation, or
+              // the account is gone. Marking it landed would suppress this
+              // client's next sighting for an hour while the row names the
+              // other one, so forget it and let the next note queue again.
+              known.delete(key);
+            }
           }
         }
       }
