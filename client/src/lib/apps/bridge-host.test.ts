@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { APP_AVATAR_MAX_CHARS } from "@pqp/shared";
-import { cleanDisplayName, mapTransportError } from "./bridge-host";
+import { APP_AVATAR_MAX_CHARS, APP_PARTICIPANTS_AVATAR_BUDGET_CHARS } from "@pqp/shared";
+import { cleanDisplayName, fitAvatarBudget, mapTransportError } from "./bridge-host";
 import {
   BIA_SEAT,
   BIA_USER,
@@ -38,6 +38,42 @@ function walk(value: unknown, out: { keys: string[]; strings: string[] } = { key
   }
   return out;
 }
+
+describe("responses", () => {
+  it("a successful answer echoes the request type, so its result is never guessed from its shape", async () => {
+    const r = await make();
+    expect(await r.app.call({ type: "state.get" })).toMatchObject({ ok: true, type: "state.get" });
+    expect(await r.app.call({ type: "participants.get" })).toMatchObject({ ok: true, type: "participants.get" });
+    expect(await r.app.call({ type: "events.send", name: "ping", data: 1 })).toMatchObject({ ok: true, type: "events.send", result: null });
+    // an error carries no type: there is no result to read
+    expect(await r.app.call({ type: "nope" })).not.toHaveProperty("type");
+  });
+});
+
+describe("fitAvatarBudget", () => {
+  const person = (seat: string, avatar: string | null) =>
+    ({ seatId: seat, displayName: seat, avatar, role: "player", isHost: false, connection: "present" }) as const;
+
+  it("leaves a roster that fits alone, as the same list", () => {
+    const list = [person("a", "data:image/png;base64,AA"), person("b", null)];
+    expect(fitAvatarBudget([...list])).toEqual(list);
+  });
+
+  it("drops the largest avatars first until the list fits the budget", () => {
+    const big = `data:image/png;base64,${"A".repeat(APP_AVATAR_MAX_CHARS - 30)}`;
+    const small = "data:image/png;base64,AA";
+    // 70 big ones are far past 4 MiB; the small one stays
+    const list = [...Array.from({ length: 70 }, (_, i) => person(`big${i}`, big)), person("small", small)];
+    const fitted = fitAvatarBudget(list);
+    const total = fitted.reduce((sum, p) => sum + (p.avatar?.length ?? 0), 0);
+    expect(total).toBeLessThanOrEqual(APP_PARTICIPANTS_AVATAR_BUDGET_CHARS);
+    expect(fitted.at(-1)!.avatar).toBe(small);
+    expect(fitted.filter((p) => p.avatar === null).length).toBeGreaterThan(0);
+    expect(fitted.map((p) => p.seatId)).toEqual(list.map((p) => p.seatId));
+    // nothing about the people changed but the avatar
+    expect(fitted[0]).toMatchObject({ displayName: "big0", role: "player" });
+  });
+});
 
 describe("hello", () => {
   it("carries the seat, the locale, the theme and reduced motion, and no user id", async () => {
