@@ -1303,17 +1303,22 @@
 
   function loadApps(silent) {
     var seq = ++A.seq;
-    return fetchJson("/operator/apps").then(function (r) {
-      if (seq !== A.seq) return true;
+    // A read that a newer one replaced is not an answer: it takes the outcome of
+    // the newest read (`A.listRead`), so a reconciliation is never reported done
+    // on the strength of a response nobody used.
+    var read = fetchJson("/operator/apps").then(function (r) {
+      if (seq !== A.seq) return A.listRead;
       A.list = r; A.err = null;
       renderApps();
       return true;
     }).catch(function (e) {
-      if (seq !== A.seq) return true;
+      if (seq !== A.seq) return A.listRead;
       if (!A.list || !silent) A.err = e && e.status === 404 ? "a API ainda não tem as rotas de apps" : (e && e.message ? e.message : "erro");
       renderApps();
       return false;
     });
+    A.listRead = read;
+    return read;
   }
 
   function loadAppServers(reset) {
