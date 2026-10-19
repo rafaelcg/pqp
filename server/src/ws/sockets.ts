@@ -184,6 +184,11 @@ export function countAuthenticatedSockets(cap: string): {
   return { sockets: sockets.size, withCap };
 }
 
+/** Whether this process holds any authenticated socket at all (the worker holds none). */
+export function hasAuthenticatedSockets(): boolean {
+  return sockets.size > 0;
+}
+
 export function forEachAuthenticatedSocket(
   callback: (socket: WebSocket, user: DbUser, caps: ReadonlySet<string>) => void,
 ): void {
