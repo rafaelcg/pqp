@@ -57,6 +57,17 @@ describe("summarizeHlsTelemetryBatch (telemetry v2)", () => {
     expect(summary.medianLatencyOverTargetMs).toBe(900);
   });
 
+  it("averages the two central values when a batch has an even number of targets", () => {
+    const summary = summarizeHlsTelemetryBatch([
+      { rung: "ll", latencyMs: 8_100, targetLatencyMs: 8_000 },
+      { rung: "ll", latencyMs: 20_300, targetLatencyMs: 20_000 },
+    ]);
+    // Midpoint, not the upper of the two (20 s).
+    expect(summary.medianTargetLatencyMs).toBe(14_000);
+    // Offsets 100 and 300: 200, not 300.
+    expect(summary.medianLatencyOverTargetMs).toBe(200);
+  });
+
   it("leaves the target fields undefined when no sample carries one", () => {
     const summary = summarizeHlsTelemetryBatch([{ rung: "720p30", latencyMs: 12_000 }]);
     expect(summary.medianTargetLatencyMs).toBeUndefined();

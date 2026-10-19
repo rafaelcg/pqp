@@ -52,7 +52,13 @@ function median(values: number[]): number | undefined {
     return undefined;
   }
   const sorted = [...values].sort((a, b) => a - b);
-  return sorted[Math.floor(sorted.length / 2)];
+  const middle = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 1) {
+    return sorted[middle];
+  }
+  // An even count has two central values: the conventional median is their
+  // midpoint, in whole milliseconds so the log field stays an integer.
+  return Math.round((sorted[middle - 1] + sorted[middle]) / 2);
 }
 
 const FATAL_DETAIL = /^[A-Za-z0-9_-]{1,48}$/;
