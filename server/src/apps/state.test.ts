@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonValue } from "@pqp/shared";
 import { testManifest } from "./testing.js";
 import { applyMergePatch, compactBytes, containsNul, stateCap } from "./state.js";
@@ -290,6 +290,17 @@ describeDb("the coalescing writer", () => {
     await t.advance(0);
     expect(t.refused).toEqual([{ code: "ended", patch: { a: 1 } }]);
     expect(t.committed).toEqual([]);
+  });
+
+  it("a pool that cannot hand out a connection tells every sender unavailable", async () => {
+    const t = rig();
+    const connect = vi.spyOn(getPool(), "connect").mockRejectedValueOnce(new Error("pool down"));
+    t.writer.submit(host({ a: 1 }));
+    t.writer.submit(player({ b: 2 }));
+    await t.advance(0);
+    connect.mockRestore();
+    expect(t.refused.map((r) => r.code)).toEqual(["unavailable", "unavailable"]);
+    expect((await row()).state_rev).toBe("0");
   });
 
   it("dispose drops what waits and stops the timer", async () => {

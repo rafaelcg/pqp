@@ -46,6 +46,11 @@ export interface JoinOptions {
   /** The client asked to watch. */
   asSpectator: boolean;
   /**
+   * The person may watch and not act (a timeout): a seat they already hold as a
+   * player is demoted to spectator, so resuming it cannot dodge the sanction.
+   */
+  forceSpectator?: boolean;
+  /**
    * Whether this server may have spectators of this app at all (D14: an
    * emulator app only when `locadora_share` is on). The manifest's own
    * `players.spectators` is checked on top of it.
@@ -80,7 +85,7 @@ export async function joinSession(options: JoinOptions): Promise<JoinOutcome> {
       left_at: Date | null;
     }>(
       `SELECT seat_id, role, left_at FROM app_session_participants
-        WHERE session_id = $1 AND user_id = $2`,
+        WHERE session_id = $1 AND user_id = $2 FOR UPDATE`,
       [sessionId, userId],
     );
     const row = existing.rows[0];
@@ -88,13 +93,19 @@ export async function joinSession(options: JoinOptions): Promise<JoinOutcome> {
     let outcome: JoinOutcome;
     if (row && row.left_at === null) {
       // Still seated, held or not: the same seat, the same role.
+      const demote = options.forceSpectator === true && row.role === "player";
       await client.query(
         `UPDATE app_session_participants
-            SET orphaned_at = NULL, instance_id = $3
+            SET orphaned_at = NULL, instance_id = $3, role = $4
           WHERE session_id = $1 AND user_id = $2`,
-        [sessionId, userId, instanceId],
+        [sessionId, userId, instanceId, demote ? "spectator" : row.role],
       );
-      outcome = { ok: true, seatId: row.seat_id, role: row.role, resumed: true };
+      outcome = {
+        ok: true,
+        seatId: row.seat_id,
+        role: demote ? "spectator" : row.role,
+        resumed: true,
+      };
     } else {
       const counts = await client.query<{ role: AppRole; n: number }>(
         `SELECT role, count(*)::int AS n FROM app_session_participants
@@ -163,36 +174,83 @@ export async function joinSession(options: JoinOptions): Promise<JoinOutcome> {
   }
 }
 
+const NO_ACTIVE_SEAT = `NOT EXISTS (
+  SELECT 1 FROM app_session_participants p
+   WHERE p.session_id = s.id AND p.left_at IS NULL)`;
+
 /**
- * Start the empty clock when the last seat is gone. Seats that are only held
- * (orphaned) still count, so a session whose people all reloaded is not empty.
+ * Start the empty clock for every live session that has no seat and no clock
+ * (or for the named ones). Seats that are only held (orphaned) still count, so
+ * a session whose people all reloaded is not empty. Idempotent, so a sweep that
+ * runs it every tick also repairs a clock a failed write never started.
+ *
+ * Lock first, then judge: the sessions are locked in one statement and the
+ * emptiness is asked again in the NEXT one, with a fresh snapshot, so a join
+ * that held the lock and committed a seat is seen and the clock is not set
+ * from a snapshot taken before it.
  */
-async function touchEmpty(sessionIds: readonly string[]): Promise<void> {
-  if (sessionIds.length === 0) {
-    return;
+export async function stampEmptySessions(
+  options: { sessionIds?: readonly string[]; now?: Date } = {},
+): Promise<number> {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const locked = await client.query<{ id: string }>(
+      `SELECT s.id FROM app_sessions s
+        WHERE s.status = 'live' AND s.empty_since IS NULL AND ${NO_ACTIVE_SEAT}
+          AND ($1::uuid[] IS NULL OR s.id = ANY($1::uuid[]))
+        ORDER BY s.id FOR UPDATE`,
+      [options.sessionIds ? [...options.sessionIds] : null],
+    );
+    let stamped = 0;
+    if (locked.rows.length > 0) {
+      const updated = await client.query(
+        `UPDATE app_sessions s SET empty_since = $2::timestamptz
+          WHERE s.id = ANY($1::uuid[]) AND s.empty_since IS NULL AND ${NO_ACTIVE_SEAT}`,
+        [locked.rows.map((row) => row.id), (options.now ?? new Date()).toISOString()],
+      );
+      stamped = updated.rowCount ?? 0;
+    }
+    await client.query("COMMIT");
+    return stamped;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
   }
-  await getPool().query(
-    `UPDATE app_sessions s
-        SET empty_since = COALESCE(s.empty_since, NOW())
-      WHERE s.id = ANY($1::uuid[]) AND s.status = 'live'
-        AND NOT EXISTS (
-          SELECT 1 FROM app_session_participants p
-           WHERE p.session_id = s.id AND p.left_at IS NULL)`,
-    [[...sessionIds]],
-  );
 }
 
-/** `app-leave`: the person left on purpose. Not held. True when a seat was released. */
+/**
+ * `app-leave`: the person left on purpose. Not held. The seat and the empty
+ * clock change in ONE transaction under the session's lock, so a leave can
+ * never commit without the clock it owes. True when a seat was released.
+ */
 export async function leaveSeat(sessionId: string, userId: string): Promise<boolean> {
-  const result = await getPool().query(
-    `UPDATE app_session_participants SET left_at = NOW()
-      WHERE session_id = $1 AND user_id = $2 AND left_at IS NULL`,
-    [sessionId, userId],
-  );
-  if (result.rowCount) {
-    await touchEmpty([sessionId]);
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(`SELECT 1 FROM app_sessions WHERE id = $1 FOR UPDATE`, [sessionId]);
+    const left = await client.query(
+      `UPDATE app_session_participants SET left_at = NOW()
+        WHERE session_id = $1 AND user_id = $2 AND left_at IS NULL`,
+      [sessionId, userId],
+    );
+    if (left.rowCount) {
+      await client.query(
+        `UPDATE app_sessions s SET empty_since = COALESCE(s.empty_since, NOW())
+          WHERE s.id = $1 AND s.status = 'live' AND ${NO_ACTIVE_SEAT}`,
+        [sessionId],
+      );
+    }
+    await client.query("COMMIT");
+    return (left.rowCount ?? 0) > 0;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
   }
-  return (result.rowCount ?? 0) > 0;
 }
 
 /**
@@ -233,11 +291,17 @@ export async function reclaimLiveSeat(
   return (result.rowCount ?? 0) > 0;
 }
 
+export interface OwnSweepEntry {
+  sessionId: string;
+  userId: string;
+  channelId: string;
+}
+
 export interface OwnSweepResult {
   /** Rows this process owns with no socket behind them, now held for the window. */
-  orphaned: Array<{ sessionId: string; userId: string }>;
+  orphaned: OwnSweepEntry[];
   /** Held seats past the window, released. */
-  released: Array<{ sessionId: string; userId: string }>;
+  released: OwnSweepEntry[];
 }
 
 /**
@@ -245,13 +309,16 @@ export interface OwnSweepResult {
  *
  *  - a row that is not orphaned, owned here, whose person has no socket in this
  *    process's map, is a ghost (a close that never reached the row): it is held
- *    for the window like any other close;
- *  - a held row past the window is released.
+ *    for the window like any other close, all of them in one statement;
+ *  - a held row past the window is released, in one statement;
+ *  - any session left with nobody gets its empty clock (idempotent, so a clock
+ *    a failed write never started is started on the next tick).
  *
  * `isLive` answers "does this process hold a socket for this person in this
  * session"; `isJoining` is the grace for a join whose row is written and whose
  * socket is not registered yet. Rows owned by other instances are never read
- * here: judging them from this process's map is pitfall 19.
+ * here: judging them from this process's map is pitfall 19. Each entry names
+ * its channel, so the caller can tell people without another read.
  */
 export async function sweepOwnParticipants(options: {
   instanceId: string;
@@ -272,32 +339,51 @@ export async function sweepOwnParticipants(options: {
       WHERE p.instance_id = $1 AND p.left_at IS NULL AND p.orphaned_at IS NULL`,
     [options.instanceId],
   );
-  for (const row of owned.rows) {
-    if (
-      options.isLive(row.session_id, row.user_id) ||
-      options.isJoining(row.session_id, row.user_id)
-    ) {
-      continue;
-    }
-    if (await orphanSeat(row.session_id, row.user_id, options.instanceId)) {
-      result.orphaned.push({ sessionId: row.session_id, userId: row.user_id });
+  const ghosts = owned.rows.filter(
+    (row) =>
+      !options.isLive(row.session_id, row.user_id) &&
+      !options.isJoining(row.session_id, row.user_id),
+  );
+  if (ghosts.length > 0) {
+    const held = await getPool().query<{ session_id: string; user_id: string; channel_id: string }>(
+      `UPDATE app_session_participants p SET orphaned_at = NOW()
+         FROM app_sessions s,
+              unnest($1::uuid[], $2::uuid[]) AS ghost(session_id, user_id)
+        WHERE s.id = p.session_id
+          AND p.session_id = ghost.session_id AND p.user_id = ghost.user_id
+          AND p.instance_id = $3 AND p.left_at IS NULL AND p.orphaned_at IS NULL
+        RETURNING p.session_id, p.user_id, s.channel_id`,
+      [ghosts.map((g) => g.session_id), ghosts.map((g) => g.user_id), options.instanceId],
+    );
+    for (const row of held.rows) {
+      result.orphaned.push({
+        sessionId: row.session_id,
+        userId: row.user_id,
+        channelId: row.channel_id,
+      });
     }
   }
 
   // Held seats past the window, released in one statement: a person who came
   // back since has cleared `orphaned_at` and is not matched, so the check and
   // the release cannot be split by their return.
-  const released = await getPool().query<{ session_id: string; user_id: string }>(
-    `UPDATE app_session_participants SET left_at = NOW()
-      WHERE instance_id = $1 AND left_at IS NULL
-        AND orphaned_at IS NOT NULL AND orphaned_at <= $2::timestamptz
-      RETURNING session_id, user_id`,
+  const released = await getPool().query<{ session_id: string; user_id: string; channel_id: string }>(
+    `UPDATE app_session_participants p SET left_at = NOW()
+       FROM app_sessions s
+      WHERE s.id = p.session_id
+        AND p.instance_id = $1 AND p.left_at IS NULL
+        AND p.orphaned_at IS NOT NULL AND p.orphaned_at <= $2::timestamptz
+      RETURNING p.session_id, p.user_id, s.channel_id`,
     [options.instanceId, new Date(now.getTime() - holdMs).toISOString()],
   );
   for (const row of released.rows) {
-    result.released.push({ sessionId: row.session_id, userId: row.user_id });
+    result.released.push({
+      sessionId: row.session_id,
+      userId: row.user_id,
+      channelId: row.channel_id,
+    });
   }
-  await touchEmpty([...new Set(result.released.map((entry) => entry.sessionId))]);
+  await stampEmptySessions();
   return result;
 }
 

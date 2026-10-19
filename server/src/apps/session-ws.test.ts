@@ -227,7 +227,8 @@ describeDb("app sessions over the socket", () => {
       for (let i = 0; i < 12; i += 1) {
         await wsApps.handleAppFrame(rec.socket, world.member, { type: "app-join", sessionId: id });
       }
-      expect(errors(rec).filter((e) => e.code === "rate-limited").length).toBeGreaterThan(0);
+      // Over the limit a join is dropped before any read, and without an answer.
+      expect(errors(rec)).toEqual([]);
       expect(metrics.appCountersSnapshot().framesDropped["join-rate"]).toBeGreaterThan(0);
     });
   });
@@ -397,6 +398,74 @@ describeDb("app sessions over the socket", () => {
         data: {},
       });
       expect(errors(rec)).toEqual([expect.objectContaining({ op: "event", code: "not-allowed" })]);
+    });
+  });
+
+  describe("a timeout issued after the join", () => {
+    it("stops state writes and events within the recheck window, and a rejoin cannot resume a player seat", async () => {
+      const id = await startSession(world.owner);
+      const rec = await join(id, world.member);
+      const other = await join(id, world.moderator);
+      await settle(100);
+      other.frames.length = 0;
+      expect(wsApps.seatOf(id, rec.socket)!.role).toBe("player");
+
+      await q(
+        `INSERT INTO member_timeouts (server_id, user_id, expires_at)
+         VALUES ($1, $2, NOW() + interval '1 hour')`,
+        [world.serverId, world.member.id],
+      );
+      // The seat's last look was a moment ago: age it past the window.
+      wsApps.seatOf(id, rec.socket)!.timeoutCheckedAt = Date.now() - wsApps.APP_TIMEOUT_RECHECK_MS - 1;
+      await wsApps.handleAppFrame(rec.socket, world.member, {
+        type: "app-state-patch",
+        sessionId: id,
+        patch: { a: 1 },
+      });
+      await wsApps.handleAppFrame(rec.socket, world.member, {
+        type: "app-event-send",
+        sessionId: id,
+        name: "ping",
+        data: {},
+      });
+      await settle(200);
+      expect(errors(rec).map((e) => [e.op, e.code])).toEqual([
+        ["state", "not-allowed"],
+        ["event", "not-allowed"],
+      ]);
+      expect(other.ofType("app-state")).toEqual([]);
+      expect(other.ofType("app-event")).toEqual([]);
+      expect((await q(`SELECT state_rev FROM app_sessions WHERE id = $1`, [id])).rows[0]!.state_rev).toBe("0");
+
+      // Back in on a fresh socket: still the same seat, no longer a player.
+      const again = await join(id, world.member);
+      expect(snapshot(again).role).toBe("spectator");
+      expect((await rowOf(id, world.member)).role).toBe("spectator");
+    });
+  });
+
+  describe("the empty clock", () => {
+    it("is started for a session with nobody and not for one with a seat, and a leave starts it in the same write", async () => {
+      const { stampEmptySessions } = await import("./participants.js");
+      const quiet = await startSession(world.owner, world.channels.general);
+      const busy = await startSession(world.owner, world.channels.lobby);
+      await join(busy, world.member);
+      expect(await stampEmptySessions()).toBe(1);
+      const clocks = async () =>
+        (await q(`SELECT id, empty_since FROM app_sessions`)).rows.reduce<Record<string, unknown>>(
+          (acc, r) => ({ ...acc, [r.id as string]: r.empty_since }),
+          {},
+        );
+      expect((await clocks())[quiet]).toBeInstanceOf(Date);
+      expect((await clocks())[busy]).toBeNull();
+      // Again: nothing to do, the clock is not moved.
+      const first = (await clocks())[quiet];
+      expect(await stampEmptySessions()).toBe(0);
+      expect((await clocks())[quiet]).toEqual(first);
+
+      const rec = recordingSocket(modules, world.member);
+      await wsApps.handleAppFrame(rec.socket, world.member, { type: "app-leave", sessionId: busy });
+      expect((await clocks())[busy]).toBeInstanceOf(Date);
     });
   });
 

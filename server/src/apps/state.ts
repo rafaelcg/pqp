@@ -1,4 +1,5 @@
 import { APP_STATE_MAX_BYTES, type AppManifest, type AppRole, type JsonValue } from "@pqp/shared";
+import type { PoolClient } from "pg";
 import { getPool } from "../db.js";
 
 /**
@@ -158,8 +159,11 @@ export function createStateWriter(deps: StateWriterDeps): StateWriter {
     lastWrite = deps.now();
     const refusals: Array<[StatePatchItem, StateErrorCode]> = [];
     let committed: { rev: number; value: JsonValue } | null = null;
-    const client = await getPool().connect();
+    // Connecting is inside the try: a pool that cannot hand out a connection
+    // must tell every sender `unavailable`, not drop their patches in silence.
+    let client: PoolClient | undefined;
     try {
+      client = await getPool().connect();
       await client.query("BEGIN");
       const row = await client.query<{
         state: JsonValue;
@@ -215,13 +219,13 @@ export function createStateWriter(deps: StateWriterDeps): StateWriter {
         await client.query("COMMIT");
       }
     } catch (error) {
-      await client.query("ROLLBACK").catch(() => {});
+      await client?.query("ROLLBACK").catch(() => {});
       for (const item of items) {
         deps.refused(item, "unavailable");
       }
       throw error;
     } finally {
-      client.release();
+      client?.release();
     }
     if (committed) {
       deps.onWrite?.();

@@ -207,7 +207,13 @@ export interface SeatInfo {
   userId: string;
   seatId: string;
   role: AppRole;
+  /** When this seat's person was last checked against the server's timeouts (ms). */
+  timeoutCheckedAt?: number;
+  timedOut?: boolean;
 }
+
+/** A timeout binds a seat within this long of being issued: one indexed read per seat per window. */
+export const APP_TIMEOUT_RECHECK_MS = 10_000;
 
 const UNSEATED: SeatInfo = { userId: "", seatId: "", role: "player" };
 
@@ -242,7 +248,7 @@ export function addSessionSocket(
     sockets = new Map();
     sessionSockets.set(sessionId, sockets);
   }
-  sockets.set(socket, seat);
+  sockets.set(socket, seat === UNSEATED ? { ...UNSEATED } : seat);
   let sessions = socketSessions.get(socket);
   if (!sessions) {
     sessions = new Set();
@@ -664,15 +670,17 @@ async function handleJoin(
   frame: Extract<AppClientFrame, { type: "app-join" }>,
 ): Promise<void> {
   const { sessionId } = frame;
+  // Before any database read: an excess join, for a session that exists or not,
+  // costs nothing but the counter. It is dropped without an answer, because
+  // answering would tell a flag-off server's caller that something is there.
+  if (!joinLimiter.take(user.id)) {
+    recordAppFrameDropped("join-rate");
+    return;
+  }
   const ctx = await readJoinContext(sessionId);
   // A session that does not exist, or whose server has the platform off, is
   // answered with nothing at all: with the flag off no frame is sent.
   if (!ctx || !isEnabled("apps", { serverId: ctx.serverId })) {
-    return;
-  }
-  if (!joinLimiter.take(user.id)) {
-    recordAppFrameDropped("join-rate");
-    refuseJoin(socket, sessionId, "rate-limited");
     return;
   }
   // D13: joining needs VIEW_CHANNEL, plus CONNECT in a voice channel (an app is
@@ -711,6 +719,7 @@ async function handleJoin(
       instanceId: INSTANCE_ID,
       manifest,
       asSpectator: frame.asSpectator === true || timedOut,
+      forceSpectator: timedOut,
       // D14: an emulator app admits spectators only where `locadora_share` is on.
       spectatorsAllowed: appShareAllowed(ctx.serverId, manifest),
     });
@@ -739,9 +748,18 @@ async function handleJoin(
 
   // The snapshot goes to the joiner at once; everybody else hears of it in the
   // coalesced roster, and the channel's viewers in the coalesced summary.
-  const rows = await readSessionSnapshotRows(sessionId);
-  if (rows) {
-    sendSnapshot(socket, sessionId, rows, seatOf(sessionId, socket)!, new Set([user.id]));
+  // The seat is committed and the socket registered: a read that fails now must
+  // not report the join as failed. The roster below reaches this socket too.
+  try {
+    const rows = await readSessionSnapshotRows(sessionId);
+    const seat = seatOf(sessionId, socket);
+    if (rows && seat) {
+      seat.timeoutCheckedAt = Date.now();
+      seat.timedOut = timedOut;
+      sendSnapshot(socket, sessionId, rows, seat, new Set([user.id]));
+    }
+  } catch (error) {
+    logEvent("apps.joinSnapshotUnread", { sessionId, error: String(error) });
   }
   announceRoster(sessionId, ctx.channelId);
 }
@@ -756,22 +774,40 @@ async function handleLeave(
   if (!ctx || !isEnabled("apps", { serverId: ctx.serverId })) {
     return;
   }
-  // The person leaves, not one tab: every socket of theirs on this process
-  // stops being seated, and the other machine's drop out at the next roster.
+  // The row first: if it cannot be written the person is still seated here and
+  // is told so. Then the person leaves, not one tab: every socket of theirs on
+  // this process stops being seated, and the other machine's drop out at the
+  // next roster.
+  const released = await leaveSeat(sessionId, user.id);
   for (const [other, seat] of [...(sessionSockets.get(sessionId) ?? [])]) {
     if (seat.userId === user.id) {
       removeSessionSocket(sessionId, other);
     }
   }
-  if (await leaveSeat(sessionId, user.id)) {
+  if (released) {
     announceRoster(sessionId, ctx.channelId);
   }
 }
 
-function handleStatePatch(
+/**
+ * Whether a seat's person is under a timeout now. A timeout can be issued after
+ * the person joined, so the answer is re-asked: at most once per window per
+ * seat, from memory in between (a frame at the event cap costs no read).
+ */
+async function seatTimedOut(seat: SeatInfo, channelId: string): Promise<boolean> {
+  const now = Date.now();
+  if (seat.timeoutCheckedAt !== undefined && now - seat.timeoutCheckedAt < APP_TIMEOUT_RECHECK_MS) {
+    return seat.timedOut === true;
+  }
+  seat.timeoutCheckedAt = now;
+  seat.timedOut = (await findTimeoutForChannel(seat.userId, channelId)) !== null;
+  return seat.timedOut;
+}
+
+async function handleStatePatch(
   socket: WebSocket,
   frame: Extract<AppClientFrame, { type: "app-state-patch" }>,
-): void {
+): Promise<void> {
   const { sessionId } = frame;
   const seat = seatOf(sessionId, socket);
   const meta = sessionMeta.get(sessionId);
@@ -783,6 +819,11 @@ function handleStatePatch(
   if (!isEnabled("apps", { serverId: meta.serverId })) {
     return;
   }
+  if (await seatTimedOut(seat, meta.channelId)) {
+    recordAppFrameDropped("state-timed-out");
+    sendError(socket, sessionId, "state", "not-allowed");
+    return;
+  }
   writerFor(sessionId, meta).submit({
     userId: seat.userId,
     role: seat.role,
@@ -792,10 +833,10 @@ function handleStatePatch(
   } satisfies StatePatchItem);
 }
 
-function handleEventSend(
+async function handleEventSend(
   socket: WebSocket,
   frame: Extract<AppClientFrame, { type: "app-event-send" }>,
-): void {
+): Promise<void> {
   const { sessionId } = frame;
   const seat = seatOf(sessionId, socket);
   const meta = sessionMeta.get(sessionId);
@@ -808,6 +849,13 @@ function handleEventSend(
   if (seat.role !== "player" || caps.maxPerSecond === 0) {
     recordAppFrameDropped("event-not-allowed");
     sendError(socket, sessionId, "event", "not-allowed");
+    return;
+  }
+  if (await seatTimedOut(seat, meta.channelId)) {
+    recordAppFrameDropped("event-timed-out");
+    if (eventErrorLimiter.take(`${sessionId}:${seat.seatId}`)) {
+      sendError(socket, sessionId, "event", "not-allowed");
+    }
     return;
   }
   if (Buffer.byteLength(JSON.stringify(frame.data), "utf8") > caps.maxBytes) {
@@ -861,10 +909,10 @@ export async function handleAppFrame(
         await handleLeave(user, frame);
         return;
       case "app-state-patch":
-        handleStatePatch(socket, frame);
+        await handleStatePatch(socket, frame);
         return;
       case "app-event-send":
-        handleEventSend(socket, frame);
+        await handleEventSend(socket, frame);
         return;
     }
   } catch (error) {
@@ -925,15 +973,12 @@ export async function sweepOwnAppParticipants(
     isLive: hasLocalSocketFor,
     isJoining: (sessionId, userId) => joining.has(`${sessionId}:${userId}`),
   });
-  const touched = new Set([...result.orphaned, ...result.released].map((entry) => entry.sessionId));
-  if (touched.size > 0) {
-    const channels = await getPool().query<{ id: string; channel_id: string }>(
-      `SELECT id, channel_id FROM app_sessions WHERE id = ANY($1::uuid[])`,
-      [[...touched]],
-    );
-    for (const row of channels.rows) {
-      announceRoster(row.id, row.channel_id);
-    }
+  const channels = new Map<string, string>();
+  for (const entry of [...result.orphaned, ...result.released]) {
+    channels.set(entry.sessionId, entry.channelId);
+  }
+  for (const [sessionId, channelId] of channels) {
+    announceRoster(sessionId, channelId);
   }
   return { orphaned: result.orphaned.length, released: result.released.length };
 }
