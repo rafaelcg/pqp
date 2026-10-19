@@ -11,7 +11,13 @@
  *    cross-site page that sets it triggers a preflight, and this Worker answers
  *    no CORS headers, so the browser never sends the real request;
  *  - a request that names an `Origin` or a `Sec-Fetch-Site` must be from this
- *    very origin (`Sec-Fetch-Site: none` is the address bar, never a page).
+ *    very origin (`Sec-Fetch-Site: none` is the address bar, never a page);
+ *  - it must carry the custom header `X-PQP-Admin: 1`, which the dashboard's own
+ *    scripts add to every write. A header outside the safelist forces a CORS
+ *    preflight from any other origin, and a plain HTML form cannot set one at all,
+ *    so this holds even where a browser sends no `Origin` or `Sec-Fetch-Site`.
+ *    It is a marker, not a secret: what keeps it out of an attacker's hands is
+ *    that only same-origin script may send it.
  *
  * Plain JS with a `.d.ts` beside it, the way `tools/hls-edge` keeps what CI can
  * run under `node --test` (see `test/write-guard.test.js`).
@@ -24,6 +30,9 @@ export function writeRefusal(headers, workerOrigin) {
   const type = headers.get("Content-Type") ?? "";
   if (!/^application\/json\s*(;|$)/i.test(type)) {
     return { status: 415, error: "writes must be application/json" };
+  }
+  if (headers.get("X-PQP-Admin") !== "1") {
+    return { status: 403, error: "missing admin header" };
   }
   const origin = headers.get("Origin");
   if (origin !== null && origin !== workerOrigin) {

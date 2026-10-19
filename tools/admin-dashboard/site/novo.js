@@ -1253,7 +1253,7 @@
     // resolved whole or not at all. `resolve` never hands this more ids than
     // the API accepts (MAX_GROUP_WRITE).
     var body = entry.ids.length === 1 ? { id: String(entry.ids[0]), status: entry.status } : { ids: entry.ids.map(String), status: entry.status };
-    fetch("/operator/feedback-resolve", { method: "PUT", cache: "no-store", credentials: "same-origin", keepalive: !!keepalive, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+    fetch("/operator/feedback-resolve", { method: "PUT", cache: "no-store", credentials: "same-origin", keepalive: !!keepalive, headers: { "Content-Type": "application/json", "X-PQP-Admin": "1" }, body: JSON.stringify(body) })
       .then(function (r) { if (!r.ok) throw new Error("http " + r.status); })
       .then(function () { done(true); if (!keepalive && !S.pending.length) loadFeedback(false); })
       .catch(function (e) {
@@ -1588,7 +1588,7 @@
 
   // ------------------------------------------------------------- the writes
   function writeJson(method, path, body) {
-    return fetch(path, { method: method, cache: "no-store", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+    return fetch(path, { method: method, cache: "no-store", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-PQP-Admin": "1" }, body: JSON.stringify(body) })
       .then(function (r) {
         return r.text().then(function (t) {
           var j = null; try { j = t ? JSON.parse(t) : null; } catch { /* not json */ }
@@ -2002,7 +2002,7 @@
     if (S.flagBusy) return;
     S.flagBusy = true;
     $("sSwitchMsg").textContent = "gravando…";
-    fetch("/operator/flags", { method: "PUT", cache: "no-store", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: f.key, enabled: enabled }) })
+    fetch("/operator/flags", { method: "PUT", cache: "no-store", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-PQP-Admin": "1" }, body: JSON.stringify({ key: f.key, enabled: enabled }) })
       .then(function (r) { if (!r.ok) throw new Error("http " + r.status); return r.json(); })
       .then(function (row) {
         S.flagBusy = false; S.flagPending = null;

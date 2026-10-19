@@ -878,6 +878,10 @@ illustrative.
   without it a page on another site could send a "simple" cross-site POST that
   the Worker would forward with the machine token. A request with a JSON type
   from another site needs a preflight, and the Worker sends no CORS headers.
+  On top of that every write carries `X-PQP-Admin: 1`, added by the page's own
+  scripts: a header outside the CORS safelist cannot be sent by a plain form or
+  a no-cors fetch from another site, so it holds even when a browser sends no
+  `Origin`. A request without it is a 403.
 - **Writes**: confirm or close a feedback item, and turn a feature switch on
   or off globally. Per-server watch party, low latency, the waitlist and
   channel pins stay on the classic page for now, and the new page links there.
