@@ -30,7 +30,7 @@ import path from "node:path";
  * footer change does not mean the page changed.
  */
 export const MARKETING_SOURCES: Record<string, readonly string[]> = {
-  // The home page is a folder of sections (#1387), not one file.
+  // The home page is a folder of sections (PR 1387), not one file.
   "/": ["src/pages/home"],
   "/vs-discord": ["src/pages/vs-discord-page.tsx"],
   "/vem": ["src/pages/vem-page.tsx"],
