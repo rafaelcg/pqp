@@ -6,6 +6,7 @@ import { incrementPatch, initialOf, readCount } from "./model";
 const FLASH_MS = 1800;
 const PING_COOLDOWN_MS = 250;
 const STALE_RETRIES = 3;
+const CONNECT_ATTEMPTS = 4;
 
 function el<T extends HTMLElement>(id: string): T {
   const node = document.getElementById(id);
@@ -44,12 +45,20 @@ async function main() {
   statusLine.textContent = t.connecting;
   setUi("connecting");
 
-  let app: PqpApp;
-  try {
-    app = await connect();
-  } catch {
+  // Not inside a frame at all is final; a host that is slow or briefly unreachable is tried again
+  let app: PqpApp | null = null;
+  if (window.parent !== window) {
+    for (let attempt = 0; attempt < CONNECT_ATTEMPTS && !app; attempt += 1) {
+      try {
+        app = await connect();
+      } catch {
+        if (attempt + 1 < CONNECT_ATTEMPTS) await new Promise((resolve) => setTimeout(resolve, 1500 * (attempt + 1)));
+      }
+    }
+  }
+  if (!app) {
     statusLine.textContent = "";
-    ended.textContent = t.outside;
+    ended.textContent = window.parent === window ? t.outside : t.connectFailed;
     ended.hidden = false;
     setUi("outside");
     return;
@@ -74,6 +83,8 @@ async function main() {
   let count = 0;
 
   const showConnection = (status: "online" | "reconnecting") => {
+    // an ended session stays ended: a connection event that arrives after it must not enable the buttons
+    if (root.dataset.state === "ended") return;
     statusLine.textContent = status === "online" ? t.online : t.reconnecting;
     setUi(status);
   };

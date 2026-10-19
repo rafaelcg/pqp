@@ -15,6 +15,7 @@ export interface Strings {
   connecting: string;
   ended: string;
   outside: string;
+  connectFailed: string;
   failed: string;
   slowDown: string;
 }
@@ -35,6 +36,7 @@ export const STRINGS = {
     connecting: "Conectando...",
     ended: "A sessão acabou.",
     outside: "Abre o Eco dentro do pqp.",
+    connectFailed: "Não consegui conectar. Fecha e abre o Eco de novo.",
     failed: "Não deu certo. Tenta de novo.",
     slowDown: "Calma, tá mandando rápido demais.",
   },
@@ -53,6 +55,7 @@ export const STRINGS = {
     connecting: "Connecting...",
     ended: "The session ended.",
     outside: "Open Eco inside pqp.",
+    connectFailed: "Could not connect. Close and reopen Eco.",
     failed: "That did not work. Try again.",
     slowDown: "Slow down, that was too fast.",
   },
@@ -71,6 +74,7 @@ export const STRINGS = {
     connecting: "Conectando...",
     ended: "La sesión terminó.",
     outside: "Abre Eco dentro de pqp.",
+    connectFailed: "No pude conectar. Cierra y abre Eco otra vez.",
     failed: "No funcionó. Prueba otra vez.",
     slowDown: "Más despacio, vas muy rápido.",
   },

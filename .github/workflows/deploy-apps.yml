@@ -15,6 +15,10 @@ on:
       - "apps/**"
       - "packages/app-sdk/**"
       - "tools/apps-build/**"
+      # a toolchain bump in the lockfile changes the bundle hashes (apps:check), and the
+      # catalog the API loads must not name a bundle Pages does not serve
+      - "pnpm-lock.yaml"
+      - "server/src/apps/catalog.json"
       - ".github/workflows/deploy-apps.yml"
   workflow_dispatch:
 

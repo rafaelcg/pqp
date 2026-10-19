@@ -53,7 +53,7 @@
         },
         "entry": {
           "path": "index.html",
-          "sha256": "bf2f4dfe21b36dba0bb413b74fec4a4445acb5c678ccda24d47abea9b0412d9d"
+          "sha256": "6dec9ced25b4589583bde0c5fcedbf7e0e429d177da82b737209e361e426785c"
         },
         "platforms": [
           "web",
@@ -84,7 +84,7 @@
           }
         }
       },
-      "manifestSha256": "e67e0ffedb4c137cb3b0f2c8554ef488874d2f89fb8c535afe9769e306d6c3a9"
+      "manifestSha256": "a1b7ebf1cd46da7a4d91e7d086f3731e9ba270ae1fd08d122d4cfed9ca1e787c"
     }
   ]
 }
