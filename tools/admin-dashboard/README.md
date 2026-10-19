@@ -869,8 +869,15 @@ illustrative.
   `not-reviewed`, `community-locked`, `checklist-incomplete`,
   `version-in-use`). "Desligar em todos" and the community unlock ask first in
   an alertdialog (Cancelar has the first focus, Esc cancels, Enter does not
-  confirm). The sentences and switch states are in `novo-model.js` and pinned
-  by `test/apps-model.test.js`.
+  confirm). Writes run one at a time, in the order they were asked for. The
+  sentences and switch states are in `novo-model.js` and pinned by
+  `test/apps-model.test.js`.
+- **Every write through the Worker** (not only Apps) must declare
+  `application/json` and come from this origin (`src/write-guard.js`, pinned by
+  `test/write-guard.test.js`). The browser holds the Basic Auth credentials, so
+  without it a page on another site could send a "simple" cross-site POST that
+  the Worker would forward with the machine token. A request with a JSON type
+  from another site needs a preflight, and the Worker sends no CORS headers.
 - **Writes**: confirm or close a feedback item, and turn a feature switch on
   or off globally. Per-server watch party, low latency, the waitlist and
   channel pins stay on the classic page for now, and the new page links there.

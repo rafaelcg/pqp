@@ -60,6 +60,7 @@ import {
   isAllowedClickOrigin,
   type ApkClickState,
 } from "./distribution.js";
+import { writeRefusal } from "./write-guard.js";
 
 export interface Env {
   ASSETS: Fetcher;
@@ -505,6 +506,13 @@ export default {
     // forwarded on the same machine token; the page never holds either.
     const operatorRoute = matchOperatorRoute(request.method, path);
     if (operatorRoute) {
+      // Every write, before it is forwarded: see `write-guard.js`.
+      if (operatorRoute.method !== "GET") {
+        const refusal = writeRefusal(request.headers, url.origin);
+        if (refusal) {
+          return json(refusal.status, { error: refusal.error });
+        }
+      }
       if (!origin || !env.ADMIN_METRICS_TOKEN) {
         return json(503, { error: "operator controls not configured" });
       }

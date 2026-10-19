@@ -1291,7 +1291,7 @@
   // Nothing re-reads while a dialog is open, a write is in flight or an app is
   // open, so a poll never rebuilds a form somebody is typing in.
   var A = {
-    list: null, err: null, seq: 0, open: null, busy: false, dialog: false, retry: null, savedTimer: null,
+    list: null, err: null, seq: 0, open: null, busy: false, pending: 0, chain: Promise.resolve(), dialog: false, retry: null, savedTimer: null,
     drafts: {},
     srv: { q: "", on: false, rows: [], matched: 0, enabledCount: 0, offset: 0, limit: 25, loading: false, err: null, communityUnlocked: false, seq: 0, timer: null }
   };
@@ -1304,13 +1304,15 @@
   function loadApps(silent) {
     var seq = ++A.seq;
     return fetchJson("/operator/apps").then(function (r) {
-      if (seq !== A.seq) return;
+      if (seq !== A.seq) return true;
       A.list = r; A.err = null;
       renderApps();
+      return true;
     }).catch(function (e) {
-      if (seq !== A.seq) return;
+      if (seq !== A.seq) return true;
       if (!A.list || !silent) A.err = e && e.status === 404 ? "a API ainda não tem as rotas de apps" : (e && e.message ? e.message : "erro");
       renderApps();
+      return false;
     });
   }
 
@@ -1364,7 +1366,7 @@
       type: "button", class: "switch", role: "switch", "aria-checked": sw.checked ? "true" : "false",
       "aria-label": app.name + ", global", "aria-disabled": sw.disabled ? "true" : null, "aria-describedby": msg ? reasonId : null,
       "data-id": "gsw:" + app.id,
-      onclick: function () { if (sw.disabled || A.busy) return; setGlobal(app, !sw.checked); }
+      onclick: function () { if (sw.disabled) return; setGlobal(app.id, !sw.checked); }
     });
     return h("div", { class: "sw-cell" }, [btn, msg ? h("p", { class: "sw-reason" + (sw.reason ? " blocked" : ""), id: reasonId, text: msg }) : null]);
   }
@@ -1426,7 +1428,7 @@
 
     // The app itself: state, the global switch and the one big red button.
     var statusSelect = h("select", { class: "select", "aria-label": "Estado de " + app.name, "data-id": "status:" + app.id,
-      onchange: function (ev) { var v = ev.target.value; if (v !== app.status) setStatus(app, v); } },
+      onchange: function (ev) { var v = ev.target.value; if (v !== app.status) setStatus(app.id, v); } },
       ["draft", "review", "live", "retired"].map(function (value) {
         var opt = h("option", { value: value, text: M.appStatus(value).label, selected: value === app.status ? true : null, disabled: value === "live" && app.goLiveBlocker && app.status !== "live" ? true : null });
         return opt;
@@ -1481,7 +1483,7 @@
       var on = row.operatorEnabled === true;
       var btn = h("button", { type: "button", class: "switch", role: "switch", "aria-checked": on ? "true" : "false", "aria-label": row.name + ", " + app.name,
         "aria-disabled": m.locked ? "true" : null, "aria-describedby": m.locked ? "aLockNote" : null, "data-id": "srvsw:" + row.id,
-        onclick: function () { if (m.locked || A.busy) return; setServerSwitch(app, row, !on); } });
+        onclick: function () { if (m.locked) return; setServerSwitch(app.id, row.id, !on); } });
       list.appendChild(h("li", { class: "srv-row", role: "group", "aria-label": row.name }, [
         h("span", { class: "tile sm", "aria-hidden": "true", text: m.initials }),
         h("div", { class: "srv-name" }, [
@@ -1534,7 +1536,7 @@
       box.appendChild(h("div", { class: "version" }, [
         h("div", { class: "version-head" }, [
           h("b", { text: "v" + v.version }),
-          v.isCurrent ? h("span", { class: "badge accent", text: "atual" }) : h("button", { type: "button", class: "ghost small", text: "Tornar atual", onclick: function () { setCurrentVersion(app, v.version); } }),
+          v.isCurrent ? h("span", { class: "badge accent", text: "atual" }) : h("button", { type: "button", class: "ghost small", text: "Tornar atual", onclick: function () { setCurrentVersion(app.id, v.version); } }),
           h("span", { class: "foot", text: v.reviewedAt ? "revisada " + ago(v.reviewedAt) + (v.reviewedBy ? " por " + v.reviewedBy.replace(/^moderator:.*/, "moderador") : "") : "ainda sem revisão" })
         ]),
         h("div", { class: "checks" }, items),
@@ -1550,7 +1552,7 @@
   function communityCard(app) {
     var open = !!app.communityUnlocked;
     var btn = h("button", { type: "button", class: "switch", role: "switch", "aria-checked": open ? "true" : "false", "aria-label": "Comunidades públicas, " + app.name, "data-id": "community:" + app.id,
-      onclick: function () { if (A.busy) return; askCommunity(app, !open); } });
+      onclick: function () { askCommunity(app, !open); } });
     return h("section", { class: "card", "aria-label": "comunidades" }, [
       h("h2", { text: "comunidades" }),
       h("div", { class: "row-between" }, [
@@ -1599,56 +1601,98 @@
     A.savedTimer = setTimeout(function () { $("aSaved").textContent = BLANK; }, 3000);
   }
   /**
-   * One write. `apply` changes what the page shows before the answer, `revert`
-   * puts it back when the API says no. A refusal that the same request would
-   * only repeat (409) does not offer to try again.
+   * Writes run ONE AT A TIME, in the order they were asked for. A second
+   * click while the first is in the air waits its turn, so two optimistic
+   * changes to one thing can never settle in a different order than the
+   * operator chose, and one finishing never marks the page idle while another
+   * is still in flight (`A.busy` is a count of the ones waiting or running).
+   */
+  function serial(fn) {
+    A.pending += 1; A.busy = true;
+    var run = A.chain.then(fn);
+    A.chain = run.catch(function () {});
+    return run.catch(function () {}).then(function () { A.pending -= 1; A.busy = A.pending > 0; });
+  }
+  /** The app that came back from a write replaces the one on screen. */
+  function mergeApp(res) {
+    if (!res || !res.app || !A.list) return;
+    A.list.apps = A.list.apps.map(function (a) { return a.id === res.app.id ? res.app : a; });
+  }
+  /**
+   * One write. `apply` changes what the page shows before the answer and
+   * returns the function that puts it back when the API says no (read at the
+   * moment it runs, so a rollback restores what THIS write replaced). A
+   * refusal that the same request would only repeat (409) does not offer to
+   * try again. If the write worked and re-reading the list did not, it says so
+   * rather than leaving a stale screen under a "Salvo".
    */
   function appWrite(o) {
-    if (o.apply) o.apply();
-    hideAlert();
-    A.busy = true;
-    if (o.apply) renderApps();
-    return writeJson(o.method, o.path, o.body).then(function (res) {
-      A.busy = false;
-      if (o.done) o.done(res);
-      savedNote();
-      return loadApps(true).then(function () { if (A.open && o.reloadServers) loadAppServers(true); });
-    }).catch(function (e) {
-      A.busy = false;
-      if (o.revert) o.revert();
-      renderApps();
-      var msg = o.failText && !e.code ? o.failText(e) : M.appsWriteError(e.code);
-      showAlert(msg, e.status === 409 || e.status === 404 ? null : function () { hideAlert(); appWrite(o); });
+    return serial(function () {
+      var revert = o.apply ? o.apply() : null;
+      hideAlert();
+      if (o.apply) renderApps();
+      return writeJson(o.method, o.path, o.body).then(function (res) {
+        if (o.done) o.done(res);
+        mergeApp(res);
+        savedNote();
+        return loadApps(true).then(function (ok) {
+          if (!ok) showAlert("Salvo, mas não deu pra reler a lista agora. Confere antes de seguir.", function () { hideAlert(); loadApps(false); });
+          else if (A.open && o.reloadServers) loadAppServers(true);
+        });
+      }, function (e) {
+        if (revert) revert();
+        renderApps();
+        showAlert(M.appsWriteError(e.code), e.status === 409 || e.status === 404 ? null : function () { hideAlert(); appWrite(o); });
+      });
     });
   }
 
-  function setGlobal(app, on) {
-    var before = { globalEnabled: app.globalEnabled, status: app.status };
+  function setGlobal(appId, on) {
     appWrite({
       method: "PUT", path: "/operator/apps",
-      body: on ? { appId: app.id, status: "live", globalEnabled: true } : { appId: app.id, globalEnabled: false },
-      apply: function () { app.globalEnabled = on; if (on) app.status = "live"; },
-      revert: function () { app.globalEnabled = before.globalEnabled; app.status = before.status; }
+      body: on ? { appId: appId, status: "live", globalEnabled: true } : { appId: appId, globalEnabled: false },
+      apply: function () {
+        var app = appById(appId); if (!app) return null;
+        var before = { globalEnabled: app.globalEnabled, status: app.status };
+        app.globalEnabled = on; if (on) app.status = "live";
+        return function () { var a = appById(appId); if (a) { a.globalEnabled = before.globalEnabled; a.status = before.status; } };
+      }
     });
   }
-  function setStatus(app, status) {
-    var before = app.status;
+  function setStatus(appId, status) {
     appWrite({
-      method: "PUT", path: "/operator/apps", body: { appId: app.id, status: status },
-      apply: function () { app.status = status; },
-      revert: function () { app.status = before; }
+      method: "PUT", path: "/operator/apps", body: { appId: appId, status: status },
+      apply: function () {
+        var app = appById(appId); if (!app) return null;
+        var before = app.status;
+        app.status = status;
+        return function () { var a = appById(appId); if (a) a.status = before; };
+      }
     });
   }
-  function setCurrentVersion(app, version) {
-    appWrite({ method: "PUT", path: "/operator/apps", body: { appId: app.id, currentVersion: version } });
+  function setCurrentVersion(appId, version) {
+    appWrite({ method: "PUT", path: "/operator/apps", body: { appId: appId, currentVersion: version } });
   }
-  function setServerSwitch(app, row, value) {
-    var before = row.operatorEnabled;
+  function setServerSwitch(appId, serverId, value) {
+    var step = value ? 1 : -1;
     appWrite({
-      method: "PUT", path: "/operator/server-apps", body: { serverId: row.id, appId: app.id, operatorEnabled: value },
+      method: "PUT", path: "/operator/server-apps", body: { serverId: serverId, appId: appId, operatorEnabled: value },
       reloadServers: A.srv.on,
-      apply: function () { row.operatorEnabled = value; app.serversOn = Math.max(0, app.serversOn + (value ? 1 : -1)); A.srv.enabledCount = Math.max(0, A.srv.enabledCount + (value ? 1 : -1)); },
-      revert: function () { row.operatorEnabled = before; app.serversOn = Math.max(0, app.serversOn + (value ? -1 : 1)); A.srv.enabledCount = Math.max(0, A.srv.enabledCount + (value ? -1 : 1)); }
+      apply: function () {
+        var app = appById(appId);
+        var row = A.srv.rows.filter(function (r) { return r.id === serverId; })[0];
+        if (!app || !row) return null;
+        var before = row.operatorEnabled;
+        row.operatorEnabled = value;
+        app.serversOn = Math.max(0, app.serversOn + step);
+        A.srv.enabledCount = Math.max(0, A.srv.enabledCount + step);
+        return function () {
+          var a = appById(appId);
+          row.operatorEnabled = before;
+          if (a) a.serversOn = Math.max(0, a.serversOn - step);
+          A.srv.enabledCount = Math.max(0, A.srv.enabledCount - step);
+        };
+      }
     });
   }
   function saveReview(app, v, d) {
@@ -1670,18 +1714,27 @@
     var spec = M.disableConfirm(app, app.liveSessions, app.serversOn);
     spec.onConfirm = function () {
       hideAlert();
-      A.busy = true;
-      writeJson("POST", "/operator/app-disable-everywhere", { appId: app.id }).then(function (res) {
-        A.busy = false;
-        var n = res && typeof res.sessionsEnded === "number" ? res.sessionsEnded : 0;
-        toast(app.name + " desligado em todos os servidores" + (n ? ", " + n + (n === 1 ? " sessão encerrada" : " sessões encerradas") : ""));
-        savedNote();
-        loadApps(true).then(function () { if (A.open) loadAppServers(true); });
-      }).catch(function (e) {
-        A.busy = false;
-        var missing = e.status === 404 || e.status === 401;
-        var msg = missing ? "Esta versão da API ainda não encerra sessões por aqui. Nada mudou." : "Não deu pra desligar. Nada mudou.";
-        showAlert(msg, missing ? null : function () { hideAlert(); askDisableEverywhere(app); });
+      serial(function () {
+        return writeJson("POST", "/operator/app-disable-everywhere", { appId: app.id }).then(function (res) {
+          var n = res && typeof res.sessionsEnded === "number" ? res.sessionsEnded : 0;
+          toast(app.name + " desligado em todos os servidores" + (n ? ", " + n + (n === 1 ? " sessão encerrada" : " sessões encerradas") : ""));
+          savedNote();
+          return loadApps(true).then(function () { if (A.open) loadAppServers(true); });
+        }, function (e) {
+          // "Nada mudou" only where the API answered no. A lost answer or a
+          // 5xx may have come after sessions ended, so it says that, re-reads,
+          // and offers no retry: whoever clicks again sees the true count first.
+          var status = e && e.status;
+          var msg;
+          if (status === 404) msg = "Esta versão da API ainda não tem esse botão. Nada mudou.";
+          else if (status === 401) msg = "A API recusou o acesso do painel (401). Nada mudou.";
+          else if (status && status < 500) msg = "Não deu pra desligar. Nada mudou.";
+          else {
+            msg = "Não deu pra confirmar se desligou. Reli a lista: confere as sessões antes de tentar de novo.";
+            loadApps(true).then(function () { if (A.open) loadAppServers(true); });
+          }
+          showAlert(msg, null);
+        });
       });
     };
     openDialog(spec, "disable:" + app.id);
