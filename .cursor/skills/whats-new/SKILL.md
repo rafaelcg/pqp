@@ -44,7 +44,7 @@ Slug: lowercase Portuguese, hyphenated, never reused.
 1. `client/src/content/blog/<slug>.pt-BR.md` and `.en.md`
 2. Entry at the **top** of `POSTS` in `client/src/lib/blog/posts.ts` (title + one or two sentence summary)
 3. Both importers in `BODIES` in `client/src/lib/blog/bodies.ts`
-4. URL + `lastmod` at the top of the blog urls in `client/public/sitemap.xml`
+4. Nothing for the sitemap or the feed: `sitemap.xml`, `/feed.xml` and `/feed.en.xml` are generated at build from `POSTS` (the entry's `date` is the `lastmod`). Do not recreate `client/public/sitemap.xml`
 5. Optional shots in `client/public/blog/<slug>/`, referenced as `/blog/<slug>/file.webp`
 
 Do not import markdown from `posts.ts`. The Pages middleware cannot load `.md`. See the header of `posts.ts`.

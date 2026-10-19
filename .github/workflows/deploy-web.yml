@@ -35,6 +35,11 @@ jobs:
           # deploy-api-fly.yml does so two close merges cannot ship a SHA
           # whose CI has not finished.
           ref: ${{ github.event.workflow_run.head_sha || github.ref }}
+          # Full history: the sitemap's `lastmod` for a marketing page is the day
+          # of the last commit that touched its file (`src/lib/source-dates.ts`).
+          # A shallow clone would answer every file with the deploy day, so the
+          # build leaves the date out instead when it finds the clone shallow.
+          fetch-depth: 0
 
       - name: Setup pnpm
         # Version comes from the root package.json "packageManager" field.

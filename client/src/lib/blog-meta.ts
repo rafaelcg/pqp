@@ -25,7 +25,9 @@
 import { escapeHtml } from "./marketing-meta";
 import {
   markdownTwinPath,
+  pageAlternates,
   pageLocaleFor,
+  postLocales,
   registeredBlogPage,
   type PageLocale,
 } from "./page-registry";
@@ -51,7 +53,8 @@ import {
 const CANONICAL_ORIGIN = "https://pqp.gg";
 
 /** Whose name goes on a release note. There is one person. */
-const AUTHOR = "Rafael Cammarano Guglielmi";
+export const BLOG_AUTHOR = "Rafael Cammarano Guglielmi";
+const AUTHOR = BLOG_AUTHOR;
 
 export type BlogTarget =
   | { kind: "index" }
@@ -217,6 +220,24 @@ function postCardLocale(
   return postLocale(post, servedLocale === "es" ? "es" : locale);
 }
 
+/**
+ * The registry's view of a target, for the hreflang set. A guide is declared in
+ * both languages even when it has only a Portuguese body (the head has always
+ * said so); a release note adds Spanish when it was written in it.
+ */
+function pageFor(target: BlogTarget): {
+  path: string;
+  locales: readonly PageLocale[];
+} {
+  if (target.kind === "post") {
+    return { path: `/blog/${target.post.slug}`, locales: postLocales(target.post) };
+  }
+  if (target.kind === "article") {
+    return { path: `/blog/${target.article.slug}`, locales: ["pt-BR", "en"] };
+  }
+  return { path: "/blog", locales: ["pt-BR", "en"] };
+}
+
 function markdownAlternate(
   url: string,
   locale: BlogLocale,
@@ -274,12 +295,15 @@ export function renderBlogHead(
     `<title>${e(title)}</title>`,
     `<meta name="description" content="${e(description)}" />`,
     `<link rel="canonical" href="${e(url)}" />`,
-    `<link rel="alternate" hreflang="x-default" href="${e(url)}" />`,
-    `<link rel="alternate" hreflang="pt-BR" href="${e(url)}?lang=pt-BR" />`,
-    `<link rel="alternate" hreflang="en" href="${e(url)}?lang=en" />`,
-    ...(isPost && target.post.title.es
-      ? [`<link rel="alternate" hreflang="es" href="${e(url)}?lang=es" />`]
-      : []),
+    ...pageAlternates(pageFor(target)).map(
+      (alt) =>
+        `<link rel="alternate" hreflang="${alt.hreflang}" href="${e(alt.href)}" />`,
+    ),
+    // The release-note feeds (`seo-files.ts`), one per language they exist in,
+    // so a reader or an agent on any blog page can find them. Not language
+    // alternates of the page, hence the type.
+    `<link rel="alternate" type="application/atom+xml" title="pqp: notas de versão" href="${CANONICAL_ORIGIN}/feed.xml" />`,
+    `<link rel="alternate" type="application/atom+xml" title="pqp: release notes" href="${CANONICAL_ORIGIN}/feed.en.xml" />`,
     // `article` rather than `website` for a post or a guide: it is what puts
     // the date and the byline on the card in every unfurler that shows them.
     `<meta property="og:type" content="${isPost || isArticle ? "article" : "website"}" />`,

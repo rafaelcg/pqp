@@ -131,3 +131,8 @@ Content-Signal: search=yes, ai-input=yes, ai-train=no
 Agentmap: https://pqp.gg/.well-known/ai-catalog.json
 
 Sitemap: https://pqp.gg/sitemap.xml
+# Google reads an Atom feed as a sitemap, so the release notes are listed here
+# for a crawler that only ever opens this file. Both files are generated at
+# build time (src/lib/seo-files.ts).
+Sitemap: https://pqp.gg/feed.xml
+Sitemap: https://pqp.gg/feed.en.xml
