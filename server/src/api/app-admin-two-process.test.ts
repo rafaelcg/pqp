@@ -58,7 +58,11 @@ async function startApi(name: string): Promise<Api> {
     DATABASE_URL,
     CLUSTER_BUS: "postgres",
     VOICE_REGISTRY: "postgres",
-    DEV_AUTH_BYPASS: "true",
+    // Off on purpose: with the bypass on, the catalog loader's dev convenience
+    // makes every `pqp` app live, global and community-unlocked at boot, which
+    // is exactly the review gate this test exercises. The machine token needs
+    // no dev account.
+    DEV_AUTH_BYPASS: "false",
     DEV_SEED: "false",
     NODE_ENV: "development",
     ADMIN_METRICS_TOKEN: TOKEN,
@@ -158,6 +162,7 @@ describeDb("an apps write on one API process, seen from the other and on the bus
   let b: Api | undefined;
   let serverId = "";
   const frames: BusFrame[] = [];
+  const sessionFrames: BusFrame[] = [];
   let observer: PostgresBusTransport | undefined;
 
   beforeAll(async () => {
@@ -166,6 +171,8 @@ describeDb("an apps write on one API process, seen from the other and on the bus
     await db.initDb();
     const pool = db.getPool();
     await pool.query(`DELETE FROM apps`);
+    // The audit trail names an app by id and outlives it, so a rerun starts clean.
+    await pool.query(`DELETE FROM app_admin_audit`);
     await pool.query(
       `INSERT INTO app_publishers (id, display_name, kind)
        VALUES ('pqp', 'pqp', 'first_party') ON CONFLICT (id) DO NOTHING`,
@@ -194,6 +201,9 @@ describeDb("an apps write on one API process, seen from the other and on the bus
     observer.onFrame((frame) => {
       if (frame.topic === "apps.changed") {
         frames.push(frame);
+      }
+      if (frame.topic === "apps.ended" || frame.topic === "apps.channel") {
+        sessionFrames.push(frame);
       }
     });
     await observer.whenConnected();
@@ -282,5 +292,47 @@ describeDb("an apps write on one API process, seen from the other and on the bus
       "review",
     ]);
     expect(list.body.audit.every((row) => row.actorKind === "dashboard")).toBe(true);
+  }, 30_000);
+
+  it("Desligar em todos on A ends the session for the whole cluster: the bus carries the end, B reads it ended", async () => {
+    const db = await import("../db.js");
+    const pool = db.getPool();
+    const channel = await pool.query<{ id: string }>(
+      `INSERT INTO channels (server_id, name, type) VALUES ($1, 'sala', 'text') RETURNING id`,
+      [serverId],
+    );
+    const session = await pool.query<{ id: string }>(
+      `INSERT INTO app_sessions (server_id, channel_id, app_id, app_version)
+       VALUES ($1, $2, 'enquete', '1.0.0') RETURNING id`,
+      [serverId, channel.rows[0]!.id],
+    );
+    const sessionId = session.rows[0]!.id;
+    await db.closePool();
+    sessionFrames.length = 0;
+
+    const before = await call<{ apps: { liveSessions: number }[] }>(b!, "GET", "/api/admin/apps", TOKEN);
+    expect(before.body.apps[0]!.liveSessions).toBe(1);
+
+    const off = await call<{ sessionsEnded: number }>(a!, "POST", "/api/admin/app-disable-everywhere", TOKEN, {
+      appId: "enquete",
+    });
+    expect(off.status).toBe(200);
+    expect(off.body.sessionsEnded).toBe(1);
+
+    const deadline = Date.now() + 5_000;
+    while (sessionFrames.length < 2 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    const ended = sessionFrames.find((f) => f.topic === "apps.ended");
+    expect(ended?.data).toMatchObject({ frame: { type: "app-ended", sessionId, reason: "app-disabled" } });
+    expect(sessionFrames.some((f) => f.topic === "apps.channel")).toBe(true);
+
+    const after = await call<{ apps: { globalEnabled: boolean; liveSessions: number; serversOn: number }[] }>(
+      b!,
+      "GET",
+      "/api/admin/apps",
+      TOKEN,
+    );
+    expect(after.body.apps[0]).toMatchObject({ globalEnabled: false, liveSessions: 0, serversOn: 1 });
   }, 30_000);
 });

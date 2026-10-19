@@ -375,7 +375,11 @@ import {
   ADMIN_APP_REVIEW_PATH,
   ADMIN_APP_SERVERS_PATH,
   ADMIN_APPS_PATH,
+  ADMIN_APP_DISABLE_EVERYWHERE_PATH,
+  ADMIN_APP_SESSION_END_PATH,
   ADMIN_SERVER_APPS_PATH,
+  adminDisableEverywhere,
+  adminEndSession,
   adminListAppServers,
   adminListApps,
   adminReviewAppVersion,
@@ -2695,6 +2699,23 @@ router.put(ADMIN_SERVER_APPS_PATH, async ({ req, user }) => {
   return adminSetServerApp(req, { kind: "moderator", userId: user.id });
 });
 
+// The two that END something people are in the middle of: the master switch off
+// with every live session of the app ended (`app-disabled`), and one session
+// ended by the operator (`operator`). The dashboard confirms both first.
+router.post(ADMIN_APP_DISABLE_EVERYWHERE_PATH, async ({ req, user }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  return adminDisableEverywhere(req, { kind: "moderator", userId: user.id });
+});
+
+router.post(ADMIN_APP_SESSION_END_PATH, async ({ req, user }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  return adminEndSession(req, { kind: "moderator", userId: user.id });
+});
+
 /**
  * EVERYTHING the operator dashboard's machine token can reach, and nothing
  * else, as a flat table of exact (method, pathname) pairs.
@@ -2861,6 +2882,17 @@ const ADMIN_MACHINE_ROUTES: {
     method: "PUT",
     path: ADMIN_SERVER_APPS_PATH,
     run: async (req) => adminSetServerApp(req, { kind: "dashboard" }),
+  },
+  // The two that end live sessions: "Desligar em todos" and one session.
+  {
+    method: "POST",
+    path: ADMIN_APP_DISABLE_EVERYWHERE_PATH,
+    run: async (req) => adminDisableEverywhere(req, { kind: "dashboard" }),
+  },
+  {
+    method: "POST",
+    path: ADMIN_APP_SESSION_END_PATH,
+    run: async (req) => adminEndSession(req, { kind: "dashboard" }),
   },
 ];
 

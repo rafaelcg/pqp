@@ -308,6 +308,8 @@ describeDb("operator apps routes", () => {
         ["PUT", "/api/admin/app-review"],
         ["GET", "/api/admin/app-servers"],
         ["PUT", "/api/admin/server-apps"],
+        ["POST", "/api/admin/app-disable-everywhere"],
+        ["POST", "/api/admin/app-session-end"],
       ] as const) {
         expect(matchAdminMachineRoute(method, path)).not.toBeNull();
       }
@@ -319,6 +321,10 @@ describeDb("operator apps routes", () => {
         ["PUT", "/api/admin/apps/sala-de-jogos/versions/1.0.0/review"],
         ["GET", "/api/admin/server-apps"],
         ["POST", "/api/admin/app-review"],
+        ["PUT", "/api/admin/app-disable-everywhere"],
+        ["GET", "/api/admin/app-session-end"],
+        ["POST", "/api/admin/apps/sala-de-jogos/disable-everywhere"],
+        ["POST", "/api/admin/app-sessions/00000000-0000-4000-8000-000000000001/end"],
       ] as const) {
         expect(matchAdminMachineRoute(method, path)).toBeNull();
       }
@@ -845,6 +851,182 @@ describeDb("operator apps routes", () => {
     it("an unknown app is a 404", async () => {
       const response = await asMachine("GET", "/api/admin/app-servers?appId=nao-existe");
       expect(response.status).toBe(404);
+    });
+  });
+
+  describe("ending sessions", () => {
+    let channelSeq = 0;
+
+    /** A live session of `appId` in a fresh channel of `serverId`. */
+    async function liveSession(serverId: string, appId: string, hostId?: string): Promise<string> {
+      channelSeq += 1;
+      const channel = await getPool().query<{ id: string }>(
+        `INSERT INTO channels (server_id, name, type) VALUES ($1, $2, 'text') RETURNING id`,
+        [serverId, `sala${channelSeq}`],
+      );
+      const session = await getPool().query<{ id: string }>(
+        `INSERT INTO app_sessions (server_id, channel_id, app_id, app_version, host_user_id)
+         VALUES ($1, $2, $3, '1.0.0', $4) RETURNING id`,
+        [serverId, channel.rows[0]!.id, appId, hostId ?? null],
+      );
+      return session.rows[0]!.id;
+    }
+
+    async function sessionRow(id: string) {
+      const rows = await getPool().query<{
+        status: string;
+        end_reason: string | null;
+        ended_by: string | null;
+        state: unknown;
+      }>(`SELECT status, end_reason, ended_by, state FROM app_sessions WHERE id = $1`, [id]);
+      return rows.rows[0]!;
+    }
+
+    async function goLive(appId: string) {
+      await approve(appId);
+      await asMachine("PUT", "/api/admin/apps", { appId, status: "live", globalEnabled: true });
+    }
+
+    it("Desligar em todos turns the master off and ends every live session of THAT app only", async () => {
+      await goLive("enquete");
+      await goLive("sala-de-jogos");
+      const a = await liveSession(privateId, "enquete");
+      const b = await liveSession(otherPrivateId, "enquete");
+      const other = await liveSession(privateId, "sala-de-jogos");
+      await asMachine("PUT", "/api/admin/server-apps", { serverId: privateId, appId: "enquete", operatorEnabled: true });
+
+      const response = await asMachine<{ sessionsEnded: number; app: AppView }>(
+        "POST",
+        "/api/admin/app-disable-everywhere",
+        { appId: "enquete" },
+      );
+      expect(response.status).toBe(200);
+      expect(response.body.sessionsEnded).toBe(2);
+      expect(response.body.app).toMatchObject({ globalEnabled: false, status: "live", liveSessions: 0 });
+
+      for (const id of [a, b]) {
+        expect(await sessionRow(id)).toMatchObject({ status: "ended", end_reason: "app-disabled", ended_by: null, state: {} });
+      }
+      expect((await sessionRow(other)).status).toBe("live");
+      // The per server switches stay as they were: the master back on brings the same servers back.
+      const server = await getPool().query<{ operator_enabled: boolean }>(
+        `SELECT operator_enabled FROM server_apps WHERE server_id = $1 AND app_id = 'enquete'`,
+        [privateId],
+      );
+      expect(server.rows[0]!.operator_enabled).toBe(true);
+
+      const audit = (await auditRows()).filter((r) => r.action === "disable-everywhere");
+      expect(audit).toHaveLength(1);
+      expect(audit[0]).toMatchObject({
+        actor_kind: "dashboard",
+        actor_user_id: null,
+        app_id: "enquete",
+        before: { globalEnabled: true, serversOn: 1 },
+        after: { globalEnabled: false },
+      });
+      const counted = await getPool().query<{ sessions_ended: number }>(
+        `SELECT sessions_ended FROM app_admin_audit WHERE action = 'disable-everywhere'`,
+      );
+      expect(counted.rows[0]!.sessions_ended).toBe(2);
+      expect(frames.at(-1)).toEqual({ topic: APPS_BUS_TOPIC, data: { appId: "enquete", serverId: null } });
+    });
+
+    it("is audited and safe to repeat: the second call ends nothing and says 0", async () => {
+      await goLive("enquete");
+      await liveSession(privateId, "enquete");
+      await asMachine("POST", "/api/admin/app-disable-everywhere", { appId: "enquete" });
+      const again = await asMachine<{ sessionsEnded: number }>("POST", "/api/admin/app-disable-everywhere", {
+        appId: "enquete",
+      });
+      expect(again.status).toBe(200);
+      expect(again.body.sessionsEnded).toBe(0);
+      const counts = await getPool().query<{ sessions_ended: number }>(
+        `SELECT sessions_ended FROM app_admin_audit WHERE action = 'disable-everywhere' ORDER BY id`,
+      );
+      expect(counts.rows.map((r) => r.sessions_ended)).toEqual([1, 0]);
+    });
+
+    it("works with no session, an app already off, an unknown app (404) and a bad body (400)", async () => {
+      const off = await asMachine<{ sessionsEnded: number }>("POST", "/api/admin/app-disable-everywhere", { appId: "enquete" });
+      expect(off.status).toBe(200);
+      expect(off.body.sessionsEnded).toBe(0);
+      expect((await asMachine("POST", "/api/admin/app-disable-everywhere", { appId: "nao-existe" })).status).toBe(404);
+      expect((await asMachine("POST", "/api/admin/app-disable-everywhere", {})).status).toBe(400);
+    });
+
+    it("a moderator does it as themselves, a non-moderator and a wrong token get the 404", async () => {
+      await goLive("enquete");
+      const id = await liveSession(privateId, "enquete");
+      expect((await asUser(ana, "POST", "/api/admin/app-disable-everywhere", { appId: "enquete" })).status).toBe(404);
+      expect(
+        (await asMachine("POST", "/api/admin/app-disable-everywhere", { appId: "enquete" }, WRONG_TOKEN)).status,
+      ).toBe(404);
+      expect((await sessionRow(id)).status).toBe("live");
+
+      const done = await asUser<{ sessionsEnded: number }>(operator, "POST", "/api/admin/app-disable-everywhere", {
+        appId: "enquete",
+      });
+      expect(done.status).toBe(200);
+      expect(done.body.sessionsEnded).toBe(1);
+      expect(await sessionRow(id)).toMatchObject({ end_reason: "app-disabled", ended_by: operator.id });
+      const audit = (await auditRows()).filter((r) => r.action === "disable-everywhere");
+      expect(audit[0]).toMatchObject({ actor_kind: "moderator", actor_user_id: operator.id });
+    });
+
+    it("the operator ends one session with the reason operator, and again is a no-op", async () => {
+      const id = await liveSession(privateId, "enquete", ana.id);
+      const response = await asMachine<{ ended: boolean; appId: string; serverId: string }>(
+        "POST",
+        "/api/admin/app-session-end",
+        { sessionId: id },
+      );
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({ ended: true, appId: "enquete", serverId: privateId });
+      expect(await sessionRow(id)).toMatchObject({ status: "ended", end_reason: "operator", ended_by: null, state: {} });
+
+      const again = await asUser<{ ended: boolean }>(operator, "POST", "/api/admin/app-session-end", { sessionId: id });
+      expect(again.status).toBe(200);
+      expect(again.body.ended).toBe(false);
+      expect((await sessionRow(id)).ended_by).toBeNull();
+    });
+
+    it("ending one session never touches the apps flag or another session, and needs a real id", async () => {
+      const a = await liveSession(privateId, "enquete");
+      const b = await liveSession(otherPrivateId, "enquete");
+      // The `apps` flag is off everywhere in this suite; an operator still ends it.
+      expect((await asMachine("POST", "/api/admin/app-session-end", { sessionId: a })).status).toBe(200);
+      expect((await sessionRow(b)).status).toBe("live");
+      expect((await asMachine("POST", "/api/admin/app-session-end", { sessionId: "00000000-0000-4000-8000-000000000001" })).status).toBe(404);
+      expect((await asMachine("POST", "/api/admin/app-session-end", { sessionId: "nope" })).status).toBe(400);
+      expect((await asUser(ana, "POST", "/api/admin/app-session-end", { sessionId: b })).status).toBe(404);
+      expect((await sessionRow(b)).status).toBe("live");
+    });
+
+    it("taking the app away from one server ends that server's sessions and records the count on its audit row", async () => {
+      await goLive("enquete");
+      for (const serverId of [privateId, otherPrivateId]) {
+        await asMachine("PUT", "/api/admin/server-apps", { serverId, appId: "enquete", operatorEnabled: true });
+      }
+      const here = await liveSession(privateId, "enquete");
+      const there = await liveSession(otherPrivateId, "enquete");
+
+      const off = await asMachine<{ sessionsEnded: number; changed: boolean }>("PUT", "/api/admin/server-apps", {
+        serverId: privateId,
+        appId: "enquete",
+        operatorEnabled: false,
+      });
+      expect(off.body).toMatchObject({ changed: true, sessionsEnded: 1 });
+      expect(await sessionRow(here)).toMatchObject({ status: "ended", end_reason: "app-disabled" });
+      expect((await sessionRow(there)).status).toBe("live");
+      const audit = await getPool().query<{ sessions_ended: number }>(
+        `SELECT sessions_ended FROM app_admin_audit WHERE action = 'operator-server' AND after = '{"operatorEnabled": false}'::jsonb`,
+      );
+      expect(audit.rows.map((r) => r.sessions_ended)).toEqual([1]);
+
+      // Turning it ON, or a repeat of off, ends nothing.
+      const live2 = await liveSession(privateId, "enquete");
+      await asMachine("PUT", "/api/admin/server-apps", { serverId: privateId, appId: "enquete", operatorEnabled: false });
+      expect((await sessionRow(live2)).status).toBe("live");
     });
   });
 

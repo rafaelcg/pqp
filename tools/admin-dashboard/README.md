@@ -192,7 +192,7 @@ been decided either way (from `/operator/servers`), and the waitlist headline
 ### apps: the catalog, the review and the per-server release
 
 The apps platform (`docs/APPS.md`, the program plan) is dark everywhere until
-somebody here releases an app, server by server. The API side is five routes on
+somebody here releases an app, server by server. The API side is seven routes on
 the same machine token (and the same instance-moderator session) as the levers
 above, in `server/src/api/app-admin-routes.ts` and `server/src/apps/admin.ts`.
 Like every other route on that token they are **exact pathnames**: the app id
@@ -205,7 +205,9 @@ flag key does), never as `/api/admin/apps/:id`.
 | `PUT /api/admin/apps` `{appId, status?, globalEnabled?, communityUnlocked?, currentVersion?}` | the app's own switches. `status: "live"` and `globalEnabled: true` need an approved current version, otherwise **409 `not-reviewed`** (the switch disabled with the reason written) |
 | `PUT /api/admin/app-review` `{appId, version, reviewStatus, checklist, note?}` | a version's review. `approved` needs every checklist line (`sandbox`, `noNetwork`, `license`, `i18n`, `presence`, plus `romPolicy` for an emulator app), otherwise **409 `checklist-incomplete`**. The approval of the version a live app stands on cannot be taken away (**409 `version-in-use`**) |
 | `GET /api/admin/app-servers?appId=&q=&on=1&limit=&offset=` | one app's servers: search by name or id, only the ones switched on, paged. Each row has member count, `isCommunity`, the operator and owner switches and `locked` |
-| `PUT /api/admin/server-apps` `{serverId, appId, operatorEnabled: true \| false \| null}` | the operator's switch for one server. A public community (`servers.is_community`) needs the app's `communityUnlocked` first, otherwise **409 `community-locked`** |
+| `PUT /api/admin/server-apps` `{serverId, appId, operatorEnabled: true \| false \| null}` | the operator's switch for one server. A public community (`servers.is_community`) needs the app's `communityUnlocked` first, otherwise **409 `community-locked`**. Switching a server OFF also ends that server's live sessions of the app (`app-disabled`), and the answer says how many (`sessionsEnded`) |
+| `POST /api/admin/app-disable-everywhere` `{appId}` | the master switch off and **every live session of the app ended** with `app-disabled`: `{app, sessionsEnded}`. The switch goes first, so nothing new starts meanwhile; the per server switches are left alone, so the master back on brings the same servers back. Audited, with the count written back on the row. Safe to repeat |
+| `POST /api/admin/app-session-end` `{sessionId}` | one session ended by the operator, reason `operator`, not behind the server's `apps` flag. Idempotent (`ended: false` when it was already over). The session row carries the record (`end_reason`, `ended_by`, NULL for the token) |
 
 Every write adds one `app_admin_audit` row per field that actually changed, in
 the same transaction as the write: who (`dashboard` with a NULL user for the

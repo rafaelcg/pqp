@@ -5,6 +5,7 @@ import { HttpError } from "../lib/http.js";
 import { isEnabled } from "../lib/flags.js";
 import { logEvent } from "../lib/log.js";
 import { publishAppsChanged } from "./changed.js";
+import { endSessionRow } from "./sessions.js";
 
 /**
  * THE OPERATOR'S SIDE OF THE APPS CATALOG (PLAN D2, D10, Phase 5): the reads
@@ -564,12 +565,13 @@ export async function writeAppAudit(
   client: Queryable,
   actor: AppAdminActor,
   input: AuditInput,
-): Promise<void> {
-  await client.query(
+): Promise<string> {
+  const written = await client.query<{ id: string }>(
     `INSERT INTO app_admin_audit
        (actor_kind, actor_user_id, action, app_id, app_version, server_id,
         before, after, sessions_ended)
-     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9)`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9)
+     RETURNING id::text`,
     [
       actor.kind,
       actor.kind === "moderator" ? actor.userId : null,
@@ -582,6 +584,53 @@ export async function writeAppAudit(
       input.sessionsEnded ?? 0,
     ],
   );
+  return written.rows[0]!.id;
+}
+
+/** The count a write learns only after it ended the sessions, written back on its audit row. */
+async function recordSessionsEnded(auditId: string, count: number): Promise<void> {
+  await getPool().query(`UPDATE app_admin_audit SET sessions_ended = $2 WHERE id = $1::bigint`, [
+    auditId,
+    count,
+  ]);
+}
+
+/**
+ * Ends every live session of an app (in one server, or everywhere) with
+ * `app-disabled`, through the one place a session ends (`endSessionRow`: the
+ * state cleared, `app-ended` to the people inside, the channel's card gone, on
+ * every machine). It reads again until nothing is live, up to three rounds,
+ * because a start that passed its availability check an instant before the
+ * switch landed inserts its row just after the first read. `progress` counts
+ * what ended so far, so a caller that fails half way can still record it.
+ */
+async function endLiveSessions(
+  appId: string,
+  serverId: string | null,
+  endedBy: string | null,
+  progress: { ended: number },
+): Promise<void> {
+  for (let round = 0; round < 3; round += 1) {
+    const live = await getPool().query<{ id: string }>(
+      serverId === null
+        ? `SELECT id FROM app_sessions WHERE app_id = $1 AND status = 'live'`
+        : `SELECT id FROM app_sessions WHERE app_id = $1 AND status = 'live' AND server_id = $2`,
+      serverId === null ? [appId] : [appId, serverId],
+    );
+    if (live.rows.length === 0) {
+      return;
+    }
+    for (const row of live.rows) {
+      const result = await endSessionRow(row.id, "app-disabled", endedBy);
+      if (result.ended) {
+        progress.ended += 1;
+      }
+    }
+  }
+}
+
+function actorUserId(actor: AppAdminActor): string | null {
+  return actor.kind === "moderator" ? actor.userId : null;
 }
 
 export async function inAppsTransaction<T>(
@@ -860,6 +909,8 @@ export interface ServerAppWriteResult {
   operatorEnabled: boolean | null;
   ownerEnabled: boolean | null;
   changed: boolean;
+  /** Live sessions ended because the switch went from on to off. */
+  sessionsEnded: number;
 }
 
 /** `PUT /api/admin/server-apps`. */
@@ -868,6 +919,7 @@ export async function operatorSetServerApp(
   actor: AppAdminActor,
 ): Promise<ServerAppWriteResult> {
   const result = await inAppsTransaction(async (client) => {
+    let auditId: string | null = null;
     const app = await lockApp(client, input.appId);
     const server = await client.query<{ is_community: boolean }>(
       `SELECT is_community FROM servers WHERE id = $1`,
@@ -903,7 +955,7 @@ export async function operatorSetServerApp(
            SET operator_enabled = EXCLUDED.operator_enabled, updated_at = NOW()`,
         [input.serverId, input.appId, input.operatorEnabled],
       );
-      await writeAppAudit(client, actor, {
+      auditId = await writeAppAudit(client, actor, {
         action: "operator-server",
         appId: input.appId,
         serverId: input.serverId,
@@ -911,9 +963,10 @@ export async function operatorSetServerApp(
         after: { operatorEnabled: input.operatorEnabled },
       });
     }
-    return { changed, owner };
+    return { changed, owner, auditId, wasOn: before === true };
   });
 
+  const progress = { ended: 0 };
   if (result.changed) {
     logEvent("apps.admin.server", {
       appId: input.appId,
@@ -922,6 +975,18 @@ export async function operatorSetServerApp(
       actor: actor.kind,
     });
     publishAppsChanged({ appId: input.appId, serverId: input.serverId });
+    // Taking an app away from a server ends what is running there, the way the
+    // owner's switch and "Desligar em todos" do: a session that outlives the
+    // switch that allowed it is a switch that does not mean what it says.
+    if (result.wasOn && input.operatorEnabled !== true) {
+      try {
+        await endLiveSessions(input.appId, input.serverId, actorUserId(actor), progress);
+      } finally {
+        if (result.auditId) {
+          await recordSessionsEnded(result.auditId, progress.ended).catch(() => {});
+        }
+      }
+    }
   }
   return {
     serverId: input.serverId,
@@ -929,6 +994,105 @@ export async function operatorSetServerApp(
     operatorEnabled: input.operatorEnabled,
     ownerEnabled: result.owner,
     changed: result.changed,
+    sessionsEnded: progress.ended,
+  };
+}
+
+export const disableEverywhereSchema = z.object({ appId: appIdSchema });
+export const endSessionSchema = z.object({ sessionId: z.string().uuid() });
+
+export interface DisableEverywhereResult {
+  app: AppAdminView | null;
+  sessionsEnded: number;
+}
+
+/**
+ * `POST /api/admin/app-disable-everywhere`: the master switch off and every live
+ * session of the app ended with `app-disabled`. The switch goes first, in its
+ * own transaction with its audit row, so no new session can start while the
+ * old ones are being ended; the audit row's `sessions_ended` is written back
+ * with what really ended (even when ending stopped half way, which an operator
+ * re-running it finishes: ending is idempotent). It never touches the per
+ * server switches: turning the master back on brings the same servers back.
+ */
+export async function operatorDisableEverywhere(
+  input: z.infer<typeof disableEverywhereSchema>,
+  actor: AppAdminActor,
+): Promise<DisableEverywhereResult> {
+  const written = await inAppsTransaction(async (client) => {
+    const app = await lockApp(client, input.appId);
+    const on = await client.query<{ n: number }>(
+      `SELECT COUNT(*)::int AS n FROM server_apps WHERE app_id = $1 AND operator_enabled IS TRUE`,
+      [input.appId],
+    );
+    if (app.global_enabled) {
+      await client.query(
+        `UPDATE apps SET global_enabled = FALSE, updated_at = NOW() WHERE id = $1`,
+        [input.appId],
+      );
+    }
+    const auditId = await writeAppAudit(client, actor, {
+      action: "disable-everywhere",
+      appId: input.appId,
+      before: { globalEnabled: app.global_enabled, serversOn: on.rows[0]?.n ?? 0 },
+      after: { globalEnabled: false },
+    });
+    return { auditId };
+  });
+  publishAppsChanged({ appId: input.appId, serverId: null });
+
+  const progress = { ended: 0 };
+  try {
+    await endLiveSessions(input.appId, null, actorUserId(actor), progress);
+  } finally {
+    await recordSessionsEnded(written.auditId, progress.ended).catch(() => {});
+    logEvent("apps.admin.disableEverywhere", {
+      appId: input.appId,
+      sessionsEnded: progress.ended,
+      actor: actor.kind,
+    });
+  }
+  return { app: await loadOne(input.appId), sessionsEnded: progress.ended };
+}
+
+export interface OperatorEndSessionResult {
+  sessionId: string;
+  appId: string;
+  serverId: string;
+  channelId: string;
+  /** False when it was already over: nothing was written and nobody was told. */
+  ended: boolean;
+}
+
+/**
+ * `POST /api/admin/app-session-end`: the operator ends one session, reason
+ * `operator`. Not behind the server's `apps` flag (an operator ends a session
+ * on a server that has since turned the flag off) and idempotent. The session
+ * row itself carries the record: `end_reason` and `ended_by` (the moderator's
+ * id, NULL for the dashboard's token, which has no account).
+ */
+export async function operatorEndSession(
+  input: z.infer<typeof endSessionSchema>,
+  actor: AppAdminActor,
+): Promise<OperatorEndSessionResult> {
+  const found = await getPool().query<{ app_id: string; server_id: string; channel_id: string }>(
+    `SELECT app_id, server_id, channel_id FROM app_sessions WHERE id = $1`,
+    [input.sessionId],
+  );
+  const row = found.rows[0];
+  if (!row) {
+    throw new HttpError(404, "Session not found");
+  }
+  const result = await endSessionRow(input.sessionId, "operator", actorUserId(actor));
+  if (result.ended) {
+    logEvent("apps.admin.sessionEnded", { sessionId: input.sessionId, appId: row.app_id, actor: actor.kind });
+  }
+  return {
+    sessionId: input.sessionId,
+    appId: row.app_id,
+    serverId: row.server_id,
+    channelId: row.channel_id,
+    ended: result.ended,
   };
 }
 

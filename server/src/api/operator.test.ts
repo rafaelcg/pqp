@@ -115,7 +115,7 @@ async function asUser<T = Record<string, unknown>>(
 }
 
 describe("matchAdminMachineRoute", () => {
-  it("is exactly the twenty-one routes, and account deletion is not one of them", () => {
+  it("is exactly the twenty-three routes, and account deletion is not one of them", () => {
     const reachable = [
       ["GET", "/api/admin/metrics"],
       ["GET", "/api/admin/voice-occupancy"],
@@ -138,6 +138,8 @@ describe("matchAdminMachineRoute", () => {
       ["PUT", "/api/admin/app-review"],
       ["GET", "/api/admin/app-servers"],
       ["PUT", "/api/admin/server-apps"],
+      ["POST", "/api/admin/app-disable-everywhere"],
+      ["POST", "/api/admin/app-session-end"],
     ] as const;
     for (const [method, path] of reachable) {
       expect(matchAdminMachineRoute(method, path)).not.toBeNull();
