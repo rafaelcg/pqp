@@ -58,6 +58,9 @@ export const appConfigEntrySchema = z
     players: shape.players,
     /** What starting and joining need, so the launcher can say so before the click. */
     requires: shape.requires,
+    /** The app's own caps, so the host enforces them and not only the platform's ceilings. */
+    state: shape.state,
+    events: shape.events,
     capabilities: shape.capabilities,
     content: shape.content,
     hostBound: shape.hostBound,
