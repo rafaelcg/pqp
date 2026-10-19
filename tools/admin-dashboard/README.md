@@ -727,6 +727,55 @@ This is the first route on the machine token that names a person. That is why
 it is its own read, fetched when **moderação** is opened, and not a field on
 `/metrics`.
 
+### Which app a user is on
+
+For "I can't hear" and "my share has no sound" reports: the latest platform
+and app a named person connected from. Two ways in, one payload:
+
+- `GET /api/admin/users/:userId/client`, for an **instance moderator**
+  (`INSTANCE_MODERATOR_CLERK_IDS`). Anybody else, including the person asked
+  about, gets the same 404 as the rest of `/api/admin` (the deployment's
+  operators are not a fact to confirm), and a signed-out caller a 401.
+- `GET /api/admin/user-client?userId=` (or `handle=`, or `tag=name#1234`), for
+  the **machine token**; the Worker proxies it as `GET /operator/user-client`.
+  A GET and nothing else: there is no write. No page draws it yet; use it
+  from the command line:
+
+  ```bash
+  curl -s -H "Authorization: Bearer $ADMIN_METRICS_TOKEN" \
+    "https://api.pqp.gg/api/admin/user-client?handle=rafa" | jq .
+  ```
+
+The answer is `latest` (the most recently seen client), `clients` (one per
+platform seen in the last 90 days, newest first) and `notRecorded`. Each
+client carries `platform` (`web`, `desktop`, `ios` or `android`), `appVersion`,
+`osFamily` (`windows`, `macos`, `linux`, `ios`, `android`, `chromeos`),
+`browserFamily` (`chrome`, `edge`, `firefox`, `safari`, `opera`, `samsung`,
+`electron`), `firstSeenAt` and `lastSeenAt`.
+
+What is stored, and what is not:
+
+- One row per (account, platform) in `user_client_platforms`, written when a
+  WebSocket authenticates, batched once a minute per process. `lastSeenAt` is
+  accurate to about an hour (a fact already written is not written again for
+  an hour), so it says "was on this recently", not "is online now".
+- It is the families parsed from the upgrade request's `User-Agent`
+  (`server/src/lib/client-agent.ts`). The string itself, the IP address, a
+  device model and browser or OS versions are never stored. Rows not seen for
+  90 days are deleted daily; deleting the account deletes the rest.
+- **What the apps do not tell us today.** No app sends its version on the
+  socket, so the version is only what the server can already see. The desktop
+  shell's version comes from Electron's user agent (`pqp/0.2.7`). The iOS app
+  gives its **build number** (URLSession's user agent), not the marketing
+  version. The Android app (OkHttp's default agent) gives its platform and
+  **no version**, and the web client gives no build id: for the web the
+  question "which deploy was that tab on" is still not answerable from here.
+  The `auth` frame accepts an optional `client: { platform, version }`, so an
+  app can start declaring both with no server release; nothing sends it yet.
+- Never on a public profile, in `/api/me`, or visible to a member or a server
+  owner. Disclosed in the privacy policy ("Which app you use").
+- Server side: `server/src/services/client-platforms.ts`.
+
 Live, from `GET /api/admin/servers` and `GET /api/admin/server-channels`
 (proxied as `/operator/servers` and `/operator/channels`, same machine token),
 and written back through `PUT /operator/server-live-hls`,
@@ -906,7 +955,7 @@ The classic page at `/` is unchanged and stays while both exist.
    the section (`#tempo` opens `#crescimento`).
 3. `/?classico=1` always opens the classic page and saves "classico".
 
-### Five screens
+### Six screens
 
 | Screen | Leads with | Details layer (closed rows) |
 |---|---|---|
@@ -914,6 +963,7 @@ The classic page at `/` is unchanged and stays while both exist.
 | **Crescimento** | actives (DAU, WAU, MAU) with a 30/90/180-day chart, the activation funnel, cohort retention, sources with the share that stays | the base, the last 24 hours by hour, signups by day, campaigns, landing pages, 7-day returning |
 | **Produto** | call rating and its distribution, low-rating notes, profile completeness rings, top text channels | top servers, communities, game accounts, instance shape, apps and product, calls and rings, Discord imports |
 | **Fila** | the feedback inbox: list on the left, the whole item with author and context on the right, confirm and close | report counts, with a link to the full report queue in the app |
+| **Apps** | the apps catalog: every app with its state, the global switch, "N de M servidores" and the review; an app opens into its servers (search, only the ones on, a switch each), its review checklist, the public-community unlock and its history | the confirmation of "Desligar em todos" (it says how many sessions end), the reason a switch is locked, written under it |
 | **Sistema** | services with 24-hour latency lines and uptime, capacity (pool, WebSockets, SFU), the feature switches | infra, who changed which switch, watch party transmission, and a link to the per-server controls |
 
 ### What is real
@@ -932,6 +982,28 @@ illustrative.
   Hoje opens).
 - **Before actives are tracked**, the actives cards show who wrote, and say
   when actives start.
+- **Apps** (`/novo#apps`, nothing in the classic page): the catalog and its
+  writes go through the Worker's `/operator/apps`, `/operator/app-review`,
+  `/operator/app-servers`, `/operator/server-apps`,
+  `/operator/app-disable-everywhere` and `/operator/app-session-end` routes,
+  which forward to the apps routes of the API. A switch changes at once and
+  goes back, with the reason in an alert, when the API refuses (a 409 says why:
+  `not-reviewed`, `community-locked`, `checklist-incomplete`,
+  `version-in-use`). "Desligar em todos" and the community unlock ask first in
+  an alertdialog (Cancelar has the first focus, Esc cancels, Enter does not
+  confirm). Writes run one at a time, in the order they were asked for. The
+  sentences and switch states are in `novo-model.js` and pinned by
+  `test/apps-model.test.js`.
+- **Every write through the Worker** (not only Apps) must declare
+  `application/json` and come from this origin (`src/write-guard.js`, pinned by
+  `test/write-guard.test.js`). The browser holds the Basic Auth credentials, so
+  without it a page on another site could send a "simple" cross-site POST that
+  the Worker would forward with the machine token. A request with a JSON type
+  from another site needs a preflight, and the Worker sends no CORS headers.
+  On top of that every write carries `X-PQP-Admin: 1`, added by the page's own
+  scripts: a header outside the CORS safelist cannot be sent by a plain form or
+  a no-cors fetch from another site, so it holds even when a browser sends no
+  `Origin`. A request without it is a 403.
 - **Writes**: confirm or close a feedback item, and turn a feature switch on
   or off globally. Per-server watch party, low latency, the waitlist and
   channel pins stay on the classic page for now, and the new page links there.

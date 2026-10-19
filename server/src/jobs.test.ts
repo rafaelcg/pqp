@@ -35,6 +35,9 @@ vi.mock("./services/retention.js", () => ({
 vi.mock("./services/slow-mode.js", () => ({
   sweepSlowModeClocks: vi.fn(async () => 0),
 }));
+vi.mock("./services/client-platforms.js", () => ({
+  sweepClientPlatforms: vi.fn(async () => 0),
+}));
 vi.mock("./services/forums.js", () => ({
   sweepForumPostShells: vi.fn(async () => 0),
 }));
@@ -154,6 +157,7 @@ import { pruneAuditLog } from "./services/audit.js";
 import { pruneExpiredServerIdempotencyKeys } from "./services/idempotency-keys.js";
 import { sweepMessageRetention } from "./services/retention.js";
 import { sweepSlowModeClocks } from "./services/slow-mode.js";
+import { sweepClientPlatforms } from "./services/client-platforms.js";
 import { sweepForumPostShells } from "./services/forums.js";
 import { sweepSoundboardUploads } from "./services/soundboard.js";
 import { deliverDueOutgoingWebhooks } from "./services/outgoing-webhooks.js";
@@ -263,11 +267,12 @@ describe("cold jobs", () => {
     // (15 minutes), both asserted below; 30 with the Seguir delivery tick (10 s,
     // asserted below); 31 with the server bot run poller (adaptive, like the
     // speech poller); 32 with the bot people prune (six hours, asserted
-    // below); 33 with the bot reminders (30 s, below).
+    // below); 33 with the bot reminders (30 s, below); 34 with the client-platform
+    // retention sweep (daily, asserted below).
     // Bump this when a job is added, and assert the new job's cadence below
     // rather than only moving the number: a count on its own passes for a
     // job that is registered and never fires.
-    expect(jobs.count).toBe(33);
+    expect(jobs.count).toBe(34);
 
     // The Baú translation sweep: one a minute, none at boot (nothing to
     // catch up on a process that has only just started reading the flag).
@@ -329,6 +334,7 @@ describe("cold jobs", () => {
     expect(pruneAuditLog).toHaveBeenCalledTimes(1);
     expect(sweepMessageRetention).toHaveBeenCalledTimes(1);
     expect(sweepSlowModeClocks).toHaveBeenCalledTimes(1);
+    expect(sweepClientPlatforms).toHaveBeenCalledTimes(1);
     expect(pruneExpiredServerIdempotencyKeys).toHaveBeenCalledTimes(1);
     // Refilled cluster rate-limit buckets: rows, not disk pages, and nothing
     // depends on the tick landing — a refilled row is spent exactly like an
