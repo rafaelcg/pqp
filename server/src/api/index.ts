@@ -370,6 +370,7 @@ import {
   resetLivePreviewRateLimits,
 } from "./live-preview-routes.js";
 import { registerAppRoutes } from "./app-routes.js";
+import { endSessionsOfChannel } from "../apps/sweeps.js";
 import { Created, HttpErrorWithDetail } from "../lib/route-results.js";
 import {
   livePreviewChannelAvailable,
@@ -7655,6 +7656,10 @@ router.delete("/api/channels/:channelId", async ({ user }, { channelId }) => {
     [channelId!],
     { carriesChildren: true },
   );
+  // An app running here ends first, while the channel can still say who may
+  // hear of it: the cascade would take the row with the channel, and with it
+  // the only way to tell the viewers.
+  await endSessionsOfChannel(channelId!);
   await deleteChannel(channelId!);
   evictVoiceChannel(channelId!);
   evictChannelViewers(channelId!);

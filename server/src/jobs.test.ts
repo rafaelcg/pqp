@@ -31,6 +31,13 @@ vi.mock("./services/idempotency-keys.js", () => ({
 }));
 vi.mock("./services/retention.js", () => ({
   sweepMessageRetention: vi.fn(async () => 0),
+  sweepAppSessionRetention: vi.fn(async () => 0),
+}));
+// What the apps sweep does is pinned in `apps/sweeps.test.ts`; here only that it
+// is scheduled, every 15 s.
+vi.mock("./apps/sweeps.js", () => ({
+  APP_SWEEP_INTERVAL_MS: 15_000,
+  runAppSweepJob: vi.fn(async () => null),
 }));
 vi.mock("./services/slow-mode.js", () => ({
   sweepSlowModeClocks: vi.fn(async () => 0),
@@ -143,7 +150,8 @@ import { sweepCommunityHomeCaptions } from "./services/community-home-captions.j
 import { sweepPendingAccountDeletions } from "./services/account.js";
 import { pruneAuditLog } from "./services/audit.js";
 import { pruneExpiredServerIdempotencyKeys } from "./services/idempotency-keys.js";
-import { sweepMessageRetention } from "./services/retention.js";
+import { sweepAppSessionRetention, sweepMessageRetention } from "./services/retention.js";
+import { APP_SWEEP_INTERVAL_MS, runAppSweepJob } from "./apps/sweeps.js";
 import { sweepSlowModeClocks } from "./services/slow-mode.js";
 import { sweepForumPostShells } from "./services/forums.js";
 import { sweepSoundboardUploads } from "./services/soundboard.js";
@@ -250,11 +258,12 @@ describe("cold jobs", () => {
     // 27 with the custom emoji quarantine sweep (hourly, asserted below); 29
     // with the Retrospectiva's seat sampler (a minute) and watched-party copy
     // (15 minutes), both asserted below; 30 with the Seguir delivery tick (10 s,
-    // asserted below).
+    // asserted below); 32 with the apps sweep (15 s) and the ended app sessions
+    // retention (daily), both asserted below.
     // Bump this when a job is added, and assert the new job's cadence below
     // rather than only moving the number: a count on its own passes for a
     // job that is registered and never fires.
-    expect(jobs.count).toBe(30);
+    expect(jobs.count).toBe(32);
 
     // The Baú translation sweep: one a minute, none at boot (nothing to
     // catch up on a process that has only just started reading the flag).
@@ -293,6 +302,10 @@ describe("cold jobs", () => {
     expect(runBauFollowTick).toHaveBeenCalledTimes(24);
     // The soundboard upload sweep: a minute, so four, and none at boot.
     expect(sweepSoundboardUploads).toHaveBeenCalledTimes(4);
+    // The apps sweep: every 15 s, none at boot, so sixteen in four minutes.
+    expect(APP_SWEEP_INTERVAL_MS).toBe(15_000);
+    expect(runAppSweepJob).toHaveBeenCalledTimes(16);
+    expect(sweepAppSessionRetention).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(PENDING_DELETION_SWEEP_INTERVAL_MS);
     expect(sweepPendingAccountDeletions).toHaveBeenCalledTimes(1);
@@ -310,6 +323,7 @@ describe("cold jobs", () => {
     await vi.advanceTimersByTimeAsync(DAILY_MS);
     expect(pruneAuditLog).toHaveBeenCalledTimes(1);
     expect(sweepMessageRetention).toHaveBeenCalledTimes(1);
+    expect(sweepAppSessionRetention).toHaveBeenCalledTimes(1);
     expect(sweepSlowModeClocks).toHaveBeenCalledTimes(1);
     expect(pruneExpiredServerIdempotencyKeys).toHaveBeenCalledTimes(1);
     // Refilled cluster rate-limit buckets: rows, not disk pages, and nothing
