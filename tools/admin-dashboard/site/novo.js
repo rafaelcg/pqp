@@ -1321,8 +1321,10 @@
     return read;
   }
 
+  /** What a server read answers when the app it was for was closed meanwhile. */
+  var SUPERSEDED = "superseded";
   function loadAppServers(reset) {
-    var a = A.open; if (!a) return Promise.resolve(true);
+    var a = A.open; if (!a) return Promise.resolve(SUPERSEDED);
     var st = A.srv;
     if (reset) { st.offset = 0; st.rows = []; }
     var seq = ++st.seq;
@@ -1332,8 +1334,10 @@
     var read = fetchJson("/operator/app-servers" + qs).then(function (r) {
       // A read that another one replaced is not an answer: it takes the outcome
       // of the one that did, so a refresh is never reported done on the strength
-      // of a response nobody used.
-      if (A.open !== a) return true;
+      // of a response nobody used. A read for an app that is no longer open is
+      // neither a success nor a failure: it answers SUPERSEDED, and the app now
+      // open shows the outcome of its own read.
+      if (A.open !== a) return SUPERSEDED;
       if (seq !== st.seq) return st.current;
       st.rows = st.offset === 0 ? r.servers : st.rows.concat(r.servers);
       st.matched = r.matched; st.enabledCount = r.enabledCount; st.communityUnlocked = r.communityUnlocked;
@@ -1341,7 +1345,7 @@
       renderServerRows();
       return true;
     }).catch(function (e) {
-      if (A.open !== a) return true;
+      if (A.open !== a) return SUPERSEDED;
       if (seq !== st.seq) return st.current;
       st.loading = false; st.err = e && e.message ? e.message : "erro";
       renderServerRows();
@@ -1644,7 +1648,9 @@
       if (A.open && A.needServers) {
         // Kept until the servers were read: a failed read leaves the flag set and says so.
         return loadAppServers(true).then(function (okServers) {
-          if (okServers) { A.needServers = false; return; }
+          // A read for an app since closed owes nothing: that view is gone, and the
+          // app now open read its servers from scratch, with its own outcome.
+          if (okServers === true || okServers === SUPERSEDED) { A.needServers = false; return; }
           showAlert("Salvo, mas não deu pra reler os servidores agora. Confere antes de seguir.", function () { hideAlert(); A.dirty = true; reconcile(); });
         });
       }
@@ -1756,15 +1762,12 @@
           savedNote();
           A.dirty = true; A.needServers = true;
         }, function (e) {
-          // "Nada mudou" only where the API answered no. A lost answer or a
-          // 5xx may have come after sessions ended, so it says that, re-reads,
-          // and offers no retry: whoever clicks again sees the true count first.
-          var status = e && e.status;
-          var msg;
-          if (status === 404) msg = "Esta versão da API ainda não tem esse botão. Nada mudou.";
-          else if (status === 401) msg = "A API recusou o acesso do painel (401). Nada mudou.";
-          else if (status && status < 500) msg = "Não deu pra desligar. Nada mudou.";
-          else {
+          // "Nada mudou" only for an answer that comes before the API touches
+          // anything (`M.disableFailure`). Anything else may have come after the
+          // switch went off and sessions ended, so it says that, re-reads, and
+          // offers no retry: whoever clicks again sees the true count first.
+          var failure = M.disableFailure(e && e.status);
+          if (!failure.known) {
             // Say what is known only after the list was read again.
             loadApps(true).then(function (ok) {
               if (ok && A.open) loadAppServers(true);
@@ -1774,7 +1777,7 @@
             });
             return;
           }
-          showAlert(msg, null);
+          showAlert(failure.text, null);
         });
       });
     };

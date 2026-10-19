@@ -197,8 +197,22 @@ test("the line under an opened app says where it stands, on or off", () => {
 test("no sentence on this screen has an em dash or the word você", () => {
   const all = [
     M.sessionsLine(0), M.LOCK_NOTE, ...M.disableConfirm(app(), 2, 2).lines, ...M.communityConfirm(app(), true).lines,
-    ...M.communityConfirm(app(), false).lines, M.appsWriteError("x"), M.appsWriteError("not-reviewed")
+    ...M.communityConfirm(app(), false).lines, M.appsWriteError("x"), M.appsWriteError("not-reviewed"),
+    M.disableFailure(404).text, M.disableFailure(401).text, M.disableFailure(400).text
   ].join(" ");
   assert.equal(all.includes("—"), false);
   assert.equal(/voc[eê]/i.test(all), false);
+});
+
+test("a failed 'Desligar em todos' says 'Nada mudou' only for an answer that comes before any change", () => {
+  // answered before the API touches anything: the Worker's guard, access, a missing route, a bad body, the limiter
+  for (const status of [400, 401, 403, 404, 415, 429]) {
+    const f = M.disableFailure(status);
+    assert.equal(f.known, true, String(status));
+    assert.match(f.text, /Nada mudou\.$/);
+  }
+  // may come after the switch went off and sessions ended: never "Nada mudou"
+  for (const status of [undefined, 0, 409, 410, 422, 500, 502, 503]) {
+    assert.deepEqual(M.disableFailure(status), { known: false, text: null }, String(status));
+  }
 });

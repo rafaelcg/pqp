@@ -623,6 +623,22 @@
     }
   }
 
+  /**
+   * What a failed "Desligar em todos" may say. "Nada mudou" only for an answer
+   * that comes before the API touches anything: the Worker's write guard (403,
+   * 415), the panel's access (401), a route this API does not have (404), a body
+   * it could not read (400) and the rate limiter (429). Every other answer, a 409
+   * or another 4xx included, a 5xx and a lost answer, may come after the switch
+   * went off and some sessions ended, so it is "unknown": the page re-reads and
+   * says it could not confirm, and offers no retry.
+   */
+  function disableFailure(status) {
+    if (status === 404) return { known: true, text: "Esta versão da API ainda não tem esse botão. Nada mudou." };
+    if (status === 401) return { known: true, text: "A API recusou o acesso do painel (401). Nada mudou." };
+    if (status === 400 || status === 403 || status === 415 || status === 429) return { known: true, text: "Não deu pra desligar. Nada mudou." };
+    return { known: false, text: null };
+  }
+
   /** The history line for one audit row, before and after. */
   function auditText(row) {
     var b = row.before || {}, a = row.after || {};
@@ -648,7 +664,7 @@
     appStatus: appStatus, checklistItems: checklistItems, checklistComplete: checklistComplete, currentVersionOf: currentVersionOf,
     appSubtitle: appSubtitle, reviewSummary: reviewSummary, globalSwitch: globalSwitch, serversText: serversText, sessionsLine: sessionsLine,
     disableConfirm: disableConfirm, communityConfirm: communityConfirm, serverRow: serverRow, initials: initials, appsWriteError: appsWriteError,
-    auditText: auditText, appSummary: appSummary, LOCK_NOTE: LOCK_NOTE
+    disableFailure: disableFailure, auditText: auditText, appSummary: appSummary, LOCK_NOTE: LOCK_NOTE
   };
   root.PQPNovo = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
