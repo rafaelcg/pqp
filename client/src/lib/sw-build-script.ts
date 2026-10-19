@@ -81,6 +81,7 @@ export const NAVIGATE_DENYLIST: RegExp[] = [
   /^\/blog(\/[^/]+)?\.(?:(?:pt-BR|en|es)\.)?md$/,
   /^\/robots\.txt$/,
   /^\/sitemap\.xml$/,
+  /^\/feed(\.en)?\.xml$/,
   // Standalone diagnostic pages in client/public (share-*.html).
   /^\/share-diagnostic/,
   /^\/share-audio-tone/,

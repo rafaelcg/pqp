@@ -2,7 +2,7 @@
 // `sitemap.xml`, the same way `blog-meta.test.ts` reads the real
 // `index.html`: against the bytes that ship, not a description of them.
 import robotsTxt from "../../public/robots.txt?raw";
-import sitemapXml from "../../public/sitemap.xml?raw";
+import { GENERATED_SITEMAP as sitemapXml } from "../test/generated-sitemap";
 import { describe, expect, it } from "vitest";
 
 /**
