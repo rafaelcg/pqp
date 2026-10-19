@@ -402,6 +402,14 @@ jobs:
           - suite: stale-bundle
             label: real service worker
             stale: true
+          # No lanes: the app frame suite (client/playwright.app-frame.config.ts)
+          # runs the real frame controller, bridge host and SDK in a sandboxed
+          # frame, and the page's frame-src policy against a canary server. It
+          # needs no API and no database. Chromium and Firefox here; WebKit is
+          # local-only like the iPhone project.
+          - suite: app-frame
+            label: sandboxed frame policy
+            appframe: true
 
     services:
       postgres:
@@ -453,7 +461,7 @@ jobs:
       # needs it. Its own cache key: the Chromium cache above is immutable once
       # saved and cannot pick Firefox up.
       - name: Cache Playwright Firefox
-        if: matrix.stale
+        if: matrix.stale || matrix.appframe
         id: playwright-firefox-cache
         uses: actions/cache@v4
         with:
@@ -461,11 +469,11 @@ jobs:
           key: playwright-firefox-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
 
       - name: Install Playwright Firefox
-        if: matrix.stale && steps.playwright-firefox-cache.outputs.cache-hit != 'true'
+        if: (matrix.stale || matrix.appframe) && steps.playwright-firefox-cache.outputs.cache-hit != 'true'
         run: pnpm --filter @pqp/client exec playwright install --with-deps firefox
 
       - name: Install Playwright Firefox system deps
-        if: matrix.stale && steps.playwright-firefox-cache.outputs.cache-hit == 'true'
+        if: (matrix.stale || matrix.appframe) && steps.playwright-firefox-cache.outputs.cache-hit == 'true'
         run: pnpm --filter @pqp/client exec playwright install-deps firefox
 
       - name: E2E (${{ matrix.suite }} ${{ matrix.label }})
@@ -477,6 +485,12 @@ jobs:
       - name: E2E stale bundle (real service worker)
         if: matrix.stale
         run: pnpm --filter @pqp/client e2e:stale-bundle
+
+      # The sandboxed app frame, the bridge and the page's frame-src policy in
+      # real browsers (client/e2e/app-frame/), no API and no database.
+      - name: E2E app frame (sandbox, frame-src policy, bridge)
+        if: matrix.appframe
+        run: pnpm --filter @pqp/client e2e:app-frame --project=chromium --project=firefox
 
       # The presenter's camera held to the film, measured off the pictures
       # (client/playwright.camera-sync.config.ts): the real watch player on a
