@@ -61,7 +61,7 @@ export const NUDGE_FRESH_MS = 15_000;
  * client built itself) and null both mean "an ordinary message", and every
  * reader asks `systemKind === "nudge"`, so neither needs to be spelled out.
  */
-export const MESSAGE_SYSTEM_KINDS = ["nudge"] as const;
+export const MESSAGE_SYSTEM_KINDS = ["nudge", "app_session"] as const;
 export const messageSystemKindSchema = z
   .enum(MESSAGE_SYSTEM_KINDS)
   .nullish()

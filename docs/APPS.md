@@ -75,7 +75,7 @@ Schema failures use `schema-unknown-key`, `schema-required`, `schema-type`, `sch
 
 ## The bridge
 
-The bridge is the message API (v1, `APP_PLATFORM_API = 1`) between the pqp page, the host, and a sandboxed app frame. The app is untrusted. Contract: `packages/shared/src/apps/bridge.ts`. The WebSocket frames between the pqp client and the API are in `packages/shared/src/apps/frames.ts` and are not part of the chat unions yet.
+The bridge is the message API (v1, `APP_PLATFORM_API = 1`) between the pqp page, the host, and a sandboxed app frame. The app is untrusted. Contract: `packages/shared/src/apps/bridge.ts`. The WebSocket frames between the pqp client and the API are in `packages/shared/src/apps/frames.ts`, listed in the chat unions as the session engine ships them (see "Sessions").
 
 ### Handshake
 
@@ -170,6 +170,23 @@ On a dev box only (`DEV_AUTH_BYPASS=true` and `NODE_ENV` not `production`) apps 
 ### Who may start
 
 `USE_APPS` is on `@everyone` of every server created from now on (`PERMISSION_NEW_SERVER_EVERYONE`), and on the moderator, manager and admin staff roles, which is what a new server is seeded with. It is not in `PERMISSION_DEFAULT_EVERYONE`, so a community only has it when its owner grants it.
+
+## Sessions
+
+One live session per channel, decided by the partial unique index `idx_app_sessions_one_live_per_channel`. Code: `server/src/apps/sessions.ts` (start, end), `server/src/apps/summary.ts` (the summary read from the rows), `server/src/ws/apps.ts` (fan-out), routes in `server/src/api/app-routes.ts`. Everything is behind the `apps` flag: with it off for the server, every route below answers 404 and no frame is sent.
+
+| Route | Answers |
+|---|---|
+| `POST /api/channels/:channelId/app-sessions` `{ appId }` | 201 with an `AppSessionSummary`. 404 channel unknown, not a server channel, not viewable, or flag off. 403 `app_unavailable` with `reason` (see Availability). 403 `cannot_start`. 409 `session_live` with `session`, the live one. 429 `rate_limited`. |
+| `GET /api/channels/:channelId/app-session` | The channel's `AppSessionSummary`, or `null`. |
+| `POST /api/app-sessions/:sessionId/end` | 200 `{ ended }`: `false` when it was already over. 403 `cannot_end`. |
+| `GET /api/servers/:serverId/app-sessions` | `{ sessions: [{ channelId, session }] }` for every channel of the server the caller can VIEW. The client asks on server open and on socket reconnect; the `/ws` welcome carries none of it. |
+
+A start checks, in order: the channel exists and the person can VIEW it; the flag; the app is available for the channel's type; the person holds the manifest's `requires.start` in THIS channel (USE_APPS always, so channel overwrites apply; `MANAGE_CHANNELS` on top when the manifest says so); no live session. In one transaction it inserts the session (`server_id` from the channel row, never from the request; the version pinned to `apps.current_version` at that instant) and a system message (`system_kind = 'app_session'`, body `<name> começou um app` for clients that do not know the kind), links it as `timeline_message_id`, and after the commit tells the channel (`message-broadcast`, then `channel-app`). The starter is host and is not joined.
+
+An end (`endSessionRow`) sets `status = 'ended'`, `end_reason`, `ended_by`, clears the state to `{}`, writes `summary = { participants, durationSeconds }` and stamps everyone still seated as left. Who may end: the host (`host`), someone with MANAGE_CHANNELS in the channel (`moderator`), an instance moderator (`operator`); the system ends with the other reasons. Ending a session that is over is a 200 no-op that tells nobody.
+
+Frames: `channel-app` `{ channelId, session: AppSessionSummary | null }` goes to every socket whose account can VIEW the channel (decision D13), on every instance, not only to sockets looking at the channel. A start and an end are sent at once and are never dropped; changes to a count are coalesced to one summary per 250 ms per channel. `app-ended` goes to the sockets seated in the session. Row first, bus hint second: the bus carries only "this channel changed" and each instance reads the rows for its own sockets.
 
 ## Where things live
 

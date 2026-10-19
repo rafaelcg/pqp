@@ -13,6 +13,7 @@ import {
   formatNoteDuration,
   type Channel,
   type DmSummary,
+  type MessageSystemKind,
   type PublicUser,
   type UnreadCounts,
 } from "@pqp/shared";
@@ -158,7 +159,7 @@ export interface ConversationMessage {
   createdAt: string;
   attachments: readonly { contentType: string; voice?: { durationMs: number } }[];
   /** A nudge reads as what happened, not as its stored `📳` body. */
-  systemKind?: "nudge" | null;
+  systemKind?: MessageSystemKind | null;
 }
 
 /**
@@ -297,7 +298,7 @@ export function formatMessagePreview(
     isVoice?: boolean;
     voiceDurationMs?: number | null;
     /** Optional: rows from a server that predates nudges omit it. */
-    systemKind?: "nudge" | null;
+    systemKind?: MessageSystemKind | null;
   },
   options: {
     viewerId: string | null;
