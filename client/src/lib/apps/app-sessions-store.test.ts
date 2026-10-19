@@ -7,18 +7,17 @@ import {
   applyCatchUp,
   applyChannelApp,
   dropAppSessionsOfServer,
-  endedSessionOfMessage,
+  endedSessionById,
   getAppSessionsSnapshot,
   handleAppsFrame,
   joinAppSession,
-  liveSessionOfMessage,
+  liveSessionById,
   registerAppJoinInterceptor,
   registerAppJoinTransport,
   requestAppJoin,
   resetAppSessionsForTests,
   setAppsOnline,
   setAppsViewer,
-  startedWith,
 } from "./app-sessions-store";
 
 const SERVER = "00000000-0000-4000-8000-0000000000a1";
@@ -126,16 +125,30 @@ describe("the live store: frames", () => {
     expect(getAppSessionsSnapshot().live.size).toBe(1);
   });
 
-  it("finds a session's message by the instant they share", () => {
+  it("finds a session by the id its timeline message carries", () => {
     applyChannelApp(CH1, session(S1));
     const snap = getAppSessionsSnapshot();
-    expect(liveSessionOfMessage(snap, CH1, T0)?.id).toBe(S1);
-    expect(liveSessionOfMessage(snap, CH1, "2026-10-19T09:00:00.000Z")).toBeUndefined();
-    expect(liveSessionOfMessage(snap, CH2, T0)).toBeUndefined();
-    expect(startedWith(T0, "2026-10-19T10:00:00.400Z")).toBe(true);
-    expect(startedWith(T0, "garbage")).toBe(false);
+    expect(liveSessionById(snap, CH1, S1)?.id).toBe(S1);
+    expect(liveSessionById(snap, CH1, S2)).toBeUndefined();
+    expect(liveSessionById(snap, CH2, S1)).toBeUndefined();
     applyChannelApp(CH1, null);
-    expect(endedSessionOfMessage(getAppSessionsSnapshot(), CH1, T0)?.sessionId).toBe(S1);
+    expect(liveSessionById(getAppSessionsSnapshot(), CH1, S1)).toBeUndefined();
+    expect(endedSessionById(getAppSessionsSnapshot(), S1)?.sessionId).toBe(S1);
+  });
+
+  it("keeps how a session ended even when this tab never saw it live", () => {
+    applyAppEnded({
+      sessionId: S1,
+      channelId: CH1,
+      reason: "host",
+      summary: { participants: 3, durationSeconds: 600, result: { winner: "a" } },
+    });
+    const ended = endedSessionById(getAppSessionsSnapshot(), S1);
+    expect(ended).toMatchObject({ reason: "host", appId: null, startedAt: null });
+    expect(ended?.summary).toEqual({ participants: 3, durationSeconds: 600, result: { winner: "a" } });
+    // The channel-app that follows (and finds nothing live) changes none of it.
+    applyChannelApp(CH1, null);
+    expect(endedSessionById(getAppSessionsSnapshot(), S1)?.reason).toBe("host");
   });
 
   it("starts a new session in a channel as the end of the one before", () => {

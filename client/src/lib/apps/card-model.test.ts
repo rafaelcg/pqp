@@ -1,4 +1,4 @@
-import type { AppConfigEntry, AppSessionSummary } from "@pqp/shared";
+import type { AppConfigEntry, AppSessionSummary, MessageAppSession } from "@pqp/shared";
 import { describe, expect, it } from "vitest";
 import type { EndedAppSession } from "./app-sessions-store";
 import {
@@ -92,9 +92,24 @@ function live(over: Partial<AppSessionSummary> = {}): AppSessionSummary {
   };
 }
 
+/** What `message.appSession` says about this session. */
+function carried(over: Partial<MessageAppSession> = {}): MessageAppSession {
+  return {
+    id: SESSION,
+    appId: "pqp-eco",
+    appVersion: "1.0.0",
+    status: "live",
+    endReason: null,
+    summary: null,
+    startedBy: BIA,
+    ...over,
+  };
+}
+
 function build(over: Partial<CardInput> = {}): CardModel {
   return buildCardModel({
     message: { authorName: "bia", createdAt: STARTED },
+    session: carried(),
     live: live(),
     app: app(),
     viewerId: ME,
@@ -359,7 +374,7 @@ describe("estado 9: app desligado", () => {
 
 describe("a session the page never saw", () => {
   it("is the generic 'terminou' with who started it", () => {
-    const model = asEnded(build({ live: undefined, ended: undefined, app: undefined }));
+    const model = asEnded(build({ live: undefined, ended: undefined, app: undefined, session: null }));
     expect(model.gone).toBe(true);
     expect(model.disabled).toBe(false);
     expect(model.starterName).toBe("bia");
@@ -374,5 +389,70 @@ describe("formatting", () => {
     expect(formatSessionDuration(20)).toBe("1 min");
     expect(formatSessionDuration(3600)).toBe("1 h");
     expect(formatSessionDuration(3600 + 5 * 60)).toBe("1 h 05 min");
+  });
+});
+
+describe("a card that the message alone describes", () => {
+  it("is the quiet record, with the app, how it went and why, from the message", () => {
+    const model = asEnded(
+      build({
+        live: undefined,
+        session: carried({
+          status: "ended",
+          endReason: "host",
+          summary: { participants: 4, durationSeconds: 1380, result: { winner: "bia" } },
+        }),
+      }),
+    );
+    expect(model.gone).toBe(false);
+    expect(model.disabled).toBe(false);
+    expect(model.app.name).toBe("Sala de jogos");
+    expect(model.summary).toEqual({ participants: 4, durationSeconds: 1380, result: { winner: "bia" } });
+    expect(model.starterName).toBe("bia");
+  });
+
+  it("is the switched-off card when the message says the app was turned off", () => {
+    for (const endReason of ["app-disabled", "flag-off"] as const) {
+      const model = asEnded(
+        build({ live: undefined, session: carried({ status: "ended", endReason }) }),
+      );
+      expect(model.disabled).toBe(true);
+    }
+  });
+
+  it("says it ended, without a number, when the message still says live and this tab has nothing running", () => {
+    const model = asEnded(build({ live: undefined, session: carried({ status: "live" }) }));
+    expect(model.gone).toBe(false);
+    expect(model.summary).toBeNull();
+    expect(model.disabled).toBe(false);
+    expect(model.app.name).toBe("Sala de jogos");
+  });
+
+  it("prefers what this tab heard at the end over what the message said when it was read", () => {
+    const model = asEnded(
+      build({
+        live: undefined,
+        session: carried({ status: "live" }),
+        ended: {
+          sessionId: SESSION,
+          channelId: "c",
+          appId: null,
+          startedAt: null,
+          startedBy: null,
+          hostUserId: null,
+          endedAt: NOW,
+          reason: "host",
+          summary: { participants: 2, durationSeconds: 120 },
+          participantIds: [BIA, LEO],
+        },
+      }),
+    );
+    expect(model.summary).toEqual({ participants: 2, durationSeconds: 120 });
+    expect(model.people.map((one) => one.displayName)).toEqual(["bia", "leo"]);
+  });
+
+  it("is the generic card for a session retained away", () => {
+    const model = asEnded(build({ live: undefined, session: null }));
+    expect(model.gone).toBe(true);
   });
 });

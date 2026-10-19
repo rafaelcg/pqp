@@ -1,12 +1,13 @@
+import type { MessageAppSession } from "@pqp/shared";
 import { memo, useCallback, useMemo, useState } from "react";
 import { AppSessionCard, AppSessionSystemLine } from "@/components/apps/app-session-card";
 import { useNow } from "@/hooks/use-now";
 import { useAppsConfig } from "@/hooks/use-apps-config";
 import {
-  endedSessionOfMessage,
+  endedSessionById,
   focusAppPane,
   leaveAppSession,
-  liveSessionOfMessage,
+  liveSessionById,
   requestAppJoin,
   useAppSessions,
 } from "@/lib/apps/app-sessions-store";
@@ -33,6 +34,12 @@ export interface AppSessionTimelineRowProps {
   serverId: string | null;
   createdAt: string;
   authorName: string;
+  /**
+   * The session the message carries (`message.appSession`). `undefined` is a
+   * message without the field (an API that predates it, a bubble this client
+   * built): the line alone, no card. `null` is a session retained away.
+   */
+  appSession: MessageAppSession | null | undefined;
   viewerId: string | null;
   /** The server's roster, for names and pictures. */
   authors?: ReadonlyMap<string, AppSessionPeople>;
@@ -45,15 +52,21 @@ export const AppSessionTimelineRow = memo(function AppSessionTimelineRow({
   serverId,
   createdAt,
   authorName,
+  appSession,
   viewerId,
   authors,
   registerRow,
 }: AppSessionTimelineRowProps) {
   const { locale } = useTranslation();
   const config = useAppsConfig(serverId);
-  const live = useAppSessions((state) => liveSessionOfMessage(state, channelId, createdAt));
-  const ended = useAppSessions((state) => endedSessionOfMessage(state, channelId, createdAt));
-  const sessionId = live?.id ?? ended?.sessionId ?? null;
+  const carriedId = appSession?.id ?? null;
+  const live = useAppSessions((state) =>
+    carriedId ? liveSessionById(state, channelId, carriedId) : undefined,
+  );
+  const ended = useAppSessions((state) =>
+    carriedId ? endedSessionById(state, carriedId) : undefined,
+  );
+  const sessionId = live?.id ?? null;
   const join = useAppSessions((state) => (sessionId ? state.join.get(sessionId) : undefined));
   const online = useAppSessions((state) => state.online);
   const offlineSince = useAppSessions((state) => state.offlineSince);
@@ -84,15 +97,19 @@ export const AppSessionTimelineRow = memo(function AppSessionTimelineRow({
   );
 
   const app = useMemo(
-    () => config.apps.find((one) => one.id === (live?.appId ?? ended?.appId)),
-    [config.apps, live?.appId, ended?.appId],
+    () =>
+      config.apps.find(
+        (one) => one.id === (live?.appId ?? appSession?.appId ?? ended?.appId),
+      ),
+    [config.apps, live?.appId, appSession?.appId, ended?.appId],
   );
 
   const model = useMemo(
     () =>
-      config.enabled && loaded
+      config.enabled && loaded && appSession !== undefined
         ? buildCardModel({
             message: { authorName, createdAt },
+            session: appSession ?? null,
             live,
             ended,
             app,
@@ -108,6 +125,7 @@ export const AppSessionTimelineRow = memo(function AppSessionTimelineRow({
     [
       config.enabled,
       loaded,
+      appSession,
       authorName,
       createdAt,
       live,

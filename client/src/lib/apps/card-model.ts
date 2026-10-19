@@ -4,10 +4,12 @@ import {
   type AppConfigEntry,
   type AppEndReason,
   type AppSessionSummary,
+  type MessageAppSession,
 } from "@pqp/shared";
 import {
   APP_RESUME_WINDOW_MS,
   isSeated,
+  type AppEndSummary,
   type AppJoinFailure,
   type AppJoinState,
   type EndedAppSession,
@@ -101,7 +103,8 @@ export interface EndedCardModel {
   gone: boolean;
   /** The app was switched off, or is gone from the list, while it ran. */
   disabled: boolean;
-  summary: { participants: number; durationSeconds: number } | null;
+  /** How it went, with the app's own small `result` when it left one. */
+  summary: AppEndSummary | null;
   starterName: string;
   startedAt: string;
   people: readonly CardPerson[];
@@ -113,7 +116,15 @@ export type CardModel = LiveCardModel | EndedCardModel;
 export interface CardInput {
   /** The timeline message: its author is the starter, its time the start. */
   message: { authorName: string; createdAt: string };
+  /**
+   * The session the message carries (`message.appSession`): its app, status,
+   * how it ended and the quiet record's summary. `null` is a session the server
+   * has retained away, which reads as the generic "terminou".
+   */
+  session: MessageAppSession | null;
+  /** The live session with that id, from the store. */
   live?: AppSessionSummary;
+  /** What this tab heard of its end, from the store. */
   ended?: EndedAppSession;
   /** The app's config entry, undefined when it is no longer in the list. */
   app?: AppConfigEntry;
@@ -207,14 +218,21 @@ export function buildCardModel(input: CardInput): CardModel {
     return liveModel(input, live, app);
   }
 
-  if (ended) {
-    return endedModel(input, ended.appId, ended.startedAt, ended.startedBy, {
-      summary: ended.summary,
-      disabled: endedByOperatorSwitch(ended.reason),
-      participantIds: ended.participantIds,
-    });
+  // Over: what this tab heard first (the frame says why, to every viewer),
+  // then what the message itself carries. A message that still says `live`
+  // while the store has no live session is one this tab has not heard end yet:
+  // it ended, we just do not know how.
+  const session = input.session;
+  const appId = session?.appId ?? ended?.appId ?? null;
+  if (!appId) {
+    return goneModel(input);
   }
-  return goneModel(input);
+  const reason = ended?.reason ?? session?.endReason ?? null;
+  return endedModel(input, appId, ended?.startedAt ?? input.message.createdAt, ended?.startedBy ?? session?.startedBy ?? null, {
+    summary: ended?.summary ?? session?.summary ?? null,
+    disabled: endedByOperatorSwitch(reason),
+    participantIds: ended?.participantIds ?? [],
+  });
 }
 
 function goneModel(input: CardInput): EndedCardModel {

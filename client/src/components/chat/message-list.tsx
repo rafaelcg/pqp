@@ -2009,6 +2009,7 @@ export const MessageList = memo(function MessageList({
                     serverId={serverId ?? null}
                     createdAt={row.message.createdAt}
                     authorName={row.message.authorName}
+                    appSession={row.message.appSession}
                     viewerId={currentUserId}
                     authors={authors}
                     registerRow={registerRow}

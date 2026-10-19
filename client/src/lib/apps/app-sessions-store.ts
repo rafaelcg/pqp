@@ -35,18 +35,26 @@ export const APP_JOIN_TIMEOUT_MS = 8_000;
 /** Ended sessions remembered for cards that are still on screen. */
 const ENDED_MEMORY = 60;
 
+/** What the end of a session leaves behind (`app-ended`, and the timeline message). */
+export interface AppEndSummary {
+  participants: number;
+  durationSeconds: number;
+  /** What the app left in `state.result` at the end (a poll's tally), at most 512 bytes. */
+  result?: unknown;
+}
+
 export interface EndedAppSession {
   sessionId: string;
   channelId: string;
-  appId: string;
-  startedAt: string;
+  /** Null for a session this tab only heard end, never saw live. */
+  appId: string | null;
+  startedAt: string | null;
   startedBy: string | null;
   hostUserId: string | null;
   endedAt: number;
-  /** Only the people who were seated hear why (`app-ended`); the rest see none. */
+  /** Why it ended: `app-ended` reaches every viewer of the channel, `null` until it does. */
   reason: AppEndReason | null;
-  /** Same: `null` for a viewer who was not in it. */
-  summary: { participants: number; durationSeconds: number } | null;
+  summary: AppEndSummary | null;
   /** Who was in it the last time this tab heard. */
   participantIds: readonly string[];
 }
@@ -139,44 +147,22 @@ export function isSeated(session: AppSessionSummary, userId: string | null): boo
   return userId !== null && session.participants.some((one) => one.userId === userId);
 }
 
-/**
- * The server writes a session and its timeline message in one transaction, and
- * both columns default to `NOW()`, so they carry the same instant. That is the
- * link from a message in the log to its session: nothing about the session id
- * travels on the message itself. A second of slack covers a round trip through
- * a clock that stored less precision, never two real sessions: a channel holds
- * one live session and ends one before the next starts.
- */
-const TIMELINE_MATCH_MS = 1_000;
-
-export function startedWith(startedAt: string, messageCreatedAt: string): boolean {
-  const a = Date.parse(startedAt);
-  const b = Date.parse(messageCreatedAt);
-  return Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= TIMELINE_MATCH_MS;
-}
-
-/** The live session whose timeline message is the one created at `createdAt`. */
-export function liveSessionOfMessage(
+/** The live session with this id, if it is the one running in `channelId`. */
+export function liveSessionById(
   state: AppSessionsSnapshot,
   channelId: string,
-  createdAt: string,
+  sessionId: string,
 ): AppSessionSummary | undefined {
   const live = state.live.get(channelId);
-  return live && startedWith(live.startedAt, createdAt) ? live : undefined;
+  return live && live.id === sessionId ? live : undefined;
 }
 
-/** The ended session whose timeline message is the one created at `createdAt`. */
-export function endedSessionOfMessage(
+/** What this tab heard about a session that ended, by id. */
+export function endedSessionById(
   state: AppSessionsSnapshot,
-  channelId: string,
-  createdAt: string,
+  sessionId: string,
 ): EndedAppSession | undefined {
-  for (const one of state.ended.values()) {
-    if (one.channelId === channelId && startedWith(one.startedAt, createdAt)) {
-      return one;
-    }
-  }
-  return undefined;
+  return state.ended.get(sessionId);
 }
 
 // ---------------------------------------------------------------------------
@@ -274,7 +260,7 @@ export function applyAppEnded(frame: {
   sessionId: string;
   channelId: string;
   reason: AppEndReason;
-  summary: { participants: number; durationSeconds: number };
+  summary: AppEndSummary;
 }): void {
   frameClock += 1;
   frameStampOfChannel.set(frame.channelId, frameClock);
@@ -288,8 +274,21 @@ export function applyAppEnded(frame: {
         : undefined;
   if (!base) {
     // Not seen live on this tab (a tab opened after it started): the frame is
-    // all there is, enough for a card to say how it went but not to find the
-    // card, which needs the start time.
+    // all there is, and it is enough: the card finds its session by id.
+    commit({
+      ended: rememberEnded(snapshot.ended, {
+        sessionId: frame.sessionId,
+        channelId: frame.channelId,
+        appId: null,
+        startedAt: null,
+        startedBy: null,
+        hostUserId: null,
+        endedAt: Date.now(),
+        reason: frame.reason,
+        summary: frame.summary,
+        participantIds: [],
+      }),
+    });
     return;
   }
   const live = new Map(snapshot.live);
