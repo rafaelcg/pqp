@@ -130,7 +130,12 @@ final class ForumPostModel {
     func start(session: SessionStore) async {
         self.session = session
         // "Pin post (N of 3)" counts the whole forum, not what a filter shows.
-        if let home { Task { await home.refreshPinnedTotal() } }
+        // Read it only when it is not known yet, and quietly: the home model
+        // keeps a known count current from frames and on reconnect, and a loud
+        // read would clear it and flash a bare "Pin post" on every post open
+        // under a filter. The pin action re-reads at pin time regardless, so
+        // skipping here cannot let a stale count authorise anything.
+        if let home, home.unfilteredPinned == nil { Task { await home.refreshPinnedTotal(quiet: true) } }
         let key = handlerKey
         session.eventHandlers[key] = { [weak self, weak session] event in
             guard let self else {

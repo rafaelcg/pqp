@@ -44,9 +44,19 @@ struct ForumPinnedTracker: Equatable {
 
     /// A frame about one post says whether it is pinned. True when that moved
     /// the set (and so superseded any read in flight).
+    ///
+    /// While the set is unknown a non-quiet read is in flight (`ids` is nil from
+    /// `beginRead` until its answer lands). The frame cannot be applied to a set
+    /// that is not there, but the read's snapshot may predate it, so the frame
+    /// still supersedes that read: the generation moves, the answer is dropped
+    /// and `readPinnedTotalForCap` reads again. Returns false, nothing changed.
     @discardableResult
     mutating func observe(postId: String, isPinned: Bool) -> Bool {
-        guard var known = ids, known.contains(postId) != isPinned else { return false }
+        guard var known = ids else {
+            generation += 1
+            return false
+        }
+        guard known.contains(postId) != isPinned else { return false }
         if isPinned { known.insert(postId) } else { known.remove(postId) }
         ids = known
         generation += 1

@@ -52,6 +52,21 @@ final class ForumPinnedTrackerTests: XCTestCase {
         XCTAssertFalse(tracker.forget(postId: "faq"))
     }
 
+    func testAFrameDuringAnUnknownCountReadSupersedesTheOlderResponse() {
+        // A non-quiet read is in flight (the set is unknown) and a pin frame
+        // arrives: the response, a snapshot from before the frame, must not land
+        // or authorise a pin from the superseded count.
+        var tracker = loaded(["a", "b"])
+        let generation = tracker.beginRead(quiet: false)
+        XCTAssertNil(tracker.count)
+        XCTAssertFalse(tracker.observe(postId: "c", isPinned: true))  // nothing to apply it to
+        XCTAssertNil(tracker.finishRead(["a", "b"], generation: generation))
+        XCTAssertNil(tracker.count)
+        // The retry reads again, after the frame, and is an authority.
+        let retry = tracker.beginRead(quiet: false)
+        XCTAssertEqual(tracker.finishRead(["a", "b", "c"], generation: retry)?.count, 3)
+    }
+
     func testFramesAreIgnoredWhileTheSetIsUnknown() {
         var tracker = ForumPinnedTracker()
         XCTAssertFalse(tracker.observe(postId: "a", isPinned: true))
