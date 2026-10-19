@@ -20,7 +20,9 @@ import {
 const REAL = {
   "server/tsconfig.build.json": JSON.stringify({
     extends: "./tsconfig.json",
-    exclude: ["src/**/*.test.ts"],
+    // The apps session tests' own support files (a fixture manifest, a small
+    // world) ship in no build.
+    exclude: ["src/**/*.test.ts", "src/apps/testing*.ts"],
   }),
   "packages/shared/tsconfig.build.json": JSON.stringify({
     extends: "./tsconfig.json",
@@ -106,6 +108,21 @@ test("infrastructure files deploy", () => {
   ]) {
     assert.equal(decide([file], matchers()).needed, true, file);
   }
+});
+
+test("a diff of only the apps tests and their support files does not deploy", () => {
+  const { needed } = decide(
+    [
+      "server/src/apps/sessions.test.ts",
+      "server/src/apps/testing.ts",
+      "server/src/apps/testing-world.ts",
+    ],
+    matchers(),
+  );
+  assert.equal(needed, false);
+  // But the same folder's real code does.
+  assert.equal(decide(["server/src/apps/sessions.ts"], matchers()).needed, true);
+  assert.equal(decide(["server/src/apps/testing-notes.md"], matchers()).needed, true);
 });
 
 test("an unreadable tsconfig excludes nothing, so everything deploys", () => {
