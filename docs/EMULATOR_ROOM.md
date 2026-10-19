@@ -84,6 +84,14 @@ feature and needs its own review.
   sandbox spike (`spike-sandbox.md`, "Needs ONE addition on the EMBEDDING
   page"). WebKit and Firefox were not run here; the apps program runs the same
   crafted-frame test on all three.
+- **A same-origin navigation still goes through.** `frame-src 'self'` keeps the
+  frame from reaching any other host, but it can still navigate to a URL on our
+  own static host with bytes in the query string (CSP path sources ignore the
+  query, so a path allowlist would not help). That request goes to pqp's own
+  static origin, never to a third party, and the room page removes the frame
+  when it loads a second time. Closing it fully needs the frame on its own
+  origin, which is what the apps program's Locadora does; this legacy room does
+  not have one. A point for the lawyer review, not a thing to promise away.
 - **What is still not a proof.** The guarantee "the file cannot leave the
   browser" now holds against pqp's own code, against every request a page can
   make (fetch, XHR, sockets, forms, images, fonts, frames) and against
