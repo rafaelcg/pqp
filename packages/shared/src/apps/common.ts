@@ -166,3 +166,16 @@ export const stateSnapshotSchema = z
   .object({ rev: stateRevSchema, value: stateValueSchema })
   .strip();
 export type AppStateSnapshot = z.infer<typeof stateSnapshotSchema>;
+
+/** Largest `state.result` the end path copies into a session's summary, in compact bytes. */
+export const APP_RESULT_MAX_BYTES = 512;
+
+/**
+ * The small result an app leaves in `state.result` when it ends (a closed vote's
+ * tally): a JSON object of at most `APP_RESULT_MAX_BYTES`. Tolerant on the way
+ * out: anything else reads as no result rather than failing the frame or the card.
+ */
+export const appResultSchema = jsonValueSchema(APP_RESULT_MAX_BYTES)
+  .refine((value) => typeof value === "object" && value !== null && !Array.isArray(value))
+  .optional()
+  .catch(undefined);

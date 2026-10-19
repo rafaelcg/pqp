@@ -173,26 +173,50 @@ export function dropSessionSockets(sessionId: string): void {
   sessionSockets.delete(sessionId);
 }
 
-function deliverEndedLocally(frame: AppEnded): void {
+/**
+ * `app-ended` on this process: the sockets seated in the session first, at once,
+ * then every other socket whose account can VIEW the channel (D13: the card on
+ * everybody's timeline turns into the quiet record, with the reason and the
+ * summary, whether they were in the session or not).
+ */
+async function deliverEndedLocally(frame: AppEnded): Promise<void> {
   const payload = encodeFrame(frame);
-  for (const socket of sessionSocketsOf(frame.sessionId)) {
+  const seated = sessionSocketsOf(frame.sessionId);
+  for (const socket of seated) {
     sendEncoded(socket, payload);
   }
   dropSessionSockets(frame.sessionId);
+  if (!hasAuthenticatedSockets()) {
+    return;
+  }
+  const audience = await getChannelAudience(frame.channelId).catch(() => null);
+  if (!audience) {
+    return;
+  }
+  forEachAuthenticatedSocket((socket, user) => {
+    if (!seated.has(socket) && audience.has(user.id)) {
+      sendEncoded(socket, payload);
+    }
+  });
 }
 
-/** `app-ended` to the participants of the session, on every instance. */
-export function announceAppEnded(frame: AppEnded): void {
-  deliverEndedLocally(frame);
+/** `app-ended` to the participants of the session and to the channel's viewers, on every instance. */
+export async function announceAppEnded(frame: AppEnded): Promise<void> {
+  const local = deliverEndedLocally(frame).catch((error: unknown) => {
+    logEvent("apps.endedFailed", { sessionId: frame.sessionId, error: String(error) });
+  });
   if (isBusEnabled()) {
     publishToCluster(SESSION_ENDED_TOPIC, { frame });
   }
+  await local;
 }
 
 subscribeToCluster(SESSION_ENDED_TOPIC, (data) => {
   const hint = endedHintSchema.safeParse(data);
   if (hint.success) {
-    deliverEndedLocally(hint.data.frame);
+    void deliverEndedLocally(hint.data.frame).catch((error: unknown) => {
+      logEvent("apps.endedFailed", { error: String(error) });
+    });
   }
 });
 

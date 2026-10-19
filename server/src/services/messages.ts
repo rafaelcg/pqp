@@ -17,6 +17,7 @@ import {
   type Embed,
   type MessageForward,
   type MessagePinnedBy,
+  type MessageAppSession,
   type MessageSystemKind,
   type MessageReaction,
   type MessageReplyRef,
@@ -43,6 +44,7 @@ import { listReactionsForMessages } from "./reactions.js";
 import { listThreadsForMessages } from "./threads.js";
 import { applyChannelDeck } from "./decks.js";
 import { insertPoll, listPollsForMessages } from "./polls.js";
+import { listAppSessionsForMessages } from "../apps/message-sessions.js";
 import {
   ATTACHMENT_OBJECT_KEYS,
   ATTACHMENT_VOICE_JOIN,
@@ -105,6 +107,8 @@ export type HydratedMessage = Omit<DbMessage, "chance"> & {
   thread?: ThreadSummary | null;
   chance?: ChanceResult | null;
   poll?: Poll | null;
+  /** The session behind an `app_session` card, null once retained away. */
+  appSession?: MessageAppSession | null;
 };
 
 /** Parent columns every read path needs to build a quote header. */
@@ -264,6 +268,7 @@ async function hydrate(
     // --- threads --- one grouped query per page, same shape as reactions.
     threadsByMessage,
     pollsByMessage,
+    appSessionsByMessage,
   ] =
     await Promise.all([
       listReactionsForMessages(messageIds, viewerId),
@@ -282,6 +287,8 @@ async function hydrate(
         : Promise.resolve(new Set<string>()),
       listThreadsForMessages(messageIds),
       listPollsForMessages(messageIds, viewerId),
+      // One statement, and none for a page with no app card on it.
+      listAppSessionsForMessages(rows),
     ]);
   return {
     hasMore,
@@ -295,6 +302,7 @@ async function hydrate(
       thread: threadsByMessage.get(row.id) ?? null,
       chance: parseStoredChance(row.chance),
       poll: pollsByMessage.get(row.id) ?? null,
+      appSession: appSessionsByMessage.get(row.id) ?? null,
     })),
   };
 }
@@ -1244,6 +1252,7 @@ export function mapMessage(
     blocked?: boolean;
     thread?: ThreadSummary | null;
     poll?: Poll | null;
+    appSession?: MessageAppSession | null;
   },
 ) {
   return {
@@ -1281,6 +1290,8 @@ export function mapMessage(
     chance: parseStoredChance(m.chance),
     poll: m.poll ?? null,
     systemKind: parseStoredSystemKind(m.system_kind),
+    // Only on an app's timeline card (null once its session was retained away).
+    ...(m.system_kind === "app_session" ? { appSession: m.appSession ?? null } : {}),
     // Only on a story reply; absent everywhere else, so no other payload grows.
     ...(m.story_id ? { storyId: m.story_id } : {}),
     // Only on a forward; absent everywhere else, so no other payload grows.
@@ -1331,16 +1342,18 @@ async function hydrateOne(
   message: DbMessage,
   viewerId?: string,
 ): Promise<HydratedMessage> {
-  const [reactions, attachments, embeds, threads, polls] = await Promise.all([
+  const [reactions, attachments, embeds, threads, polls, appSessions] = await Promise.all([
     listReactionsForMessages([message.id], viewerId),
     listAttachmentsForMessages([message.id], viewerId),
     listEmbedsForMessages([message]),
     // --- threads --- pin/unpin broadcasts are whole messages too.
     listThreadsForMessages([message.id]),
     listPollsForMessages([message.id], viewerId),
+    listAppSessionsForMessages([message]),
   ]);
   return {
     ...message,
+    appSession: appSessions.get(message.id) ?? null,
     reactions: reactions.get(message.id) ?? [],
     attachments: attachments.get(message.id) ?? [],
     embeds: embeds.get(message.id) ?? [],
