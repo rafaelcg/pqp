@@ -150,6 +150,7 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   discord_import_notice: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
   apps: (raw) => raw === "true",
+  locadora_share: (raw) => raw === "true",
 };
 
 const SAMPLES = [

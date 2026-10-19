@@ -369,6 +369,7 @@ import {
   handleLivePreviewRoute,
   resetLivePreviewRateLimits,
 } from "./live-preview-routes.js";
+import { registerAppRoutes } from "./app-routes.js";
 import {
   livePreviewChannelAvailable,
   livePreviewOnFor,
@@ -1674,6 +1675,9 @@ async function refuseForumPost(channel: { id: string; type: string }) {
 }
 
 const router = createRouter();
+
+// The apps platform's routes (`app-routes.ts`), behind the `apps` flag.
+registerAppRoutes(router);
 
 /**
  * The two account-lifecycle routes a character must not reach.

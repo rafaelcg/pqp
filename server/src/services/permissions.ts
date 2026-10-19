@@ -38,6 +38,19 @@ function asBigInt(value: unknown): bigint {
   return 0n;
 }
 
+/**
+ * What `@everyone` holds on a server created today: the member defaults plus
+ * USE_APPS (decision 1 of the apps program). Every server is born private (a
+ * community is a private server that turned its address on later), and a
+ * community only holds USE_APPS when its owner grants it, which is why the bit
+ * is NOT in `PERMISSION_DEFAULT_EVERYONE`. The staff rows come from
+ * `PERMISSION_DEFAULT_MODERATOR` / `_MANAGER` / `_ALL`, which already carry it.
+ * The legacy fallback `pqp_ensure_staff_ladder` (halls with no ladder at all)
+ * never runs for a server made here, because these rows exist.
+ */
+export const PERMISSION_NEW_SERVER_EVERYONE =
+  PERMISSION_DEFAULT_EVERYONE | Permission.USE_APPS;
+
 export async function seedDefaultRoles(
   db: Queryable,
   serverId: string,
@@ -46,7 +59,7 @@ export async function seedDefaultRoles(
     `INSERT INTO roles (server_id, name, permissions, position, is_everyone, system_key, mentionable)
      VALUES ($1, 'everyone', $2, 0, TRUE, 'everyone', FALSE)
      ON CONFLICT DO NOTHING`,
-    [serverId, serializePermissions(PERMISSION_DEFAULT_EVERYONE)],
+    [serverId, serializePermissions(PERMISSION_NEW_SERVER_EVERYONE)],
   );
   await db.query(
     `INSERT INTO roles (server_id, name, permissions, position, is_everyone, system_key, mentionable, hoist, show_badge, color)

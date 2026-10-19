@@ -20,6 +20,7 @@ import { startColdJobs, type ColdJobs } from "./jobs.js";
 import { createWorkerHealthServer } from "./worker-health.js";
 import { closeBus, INSTANCE_ID, setBusTransport } from "./lib/bus.js";
 import { startFeatureFlags } from "./lib/flags.js";
+import { loadAppCatalog } from "./apps/catalog.js";
 import {
   createPostgresBusTransport,
   type PostgresBusTransport,
@@ -160,6 +161,11 @@ async function startJobsWhenBusIsReady(): Promise<void> {
   // process only publishes on the bus and never listens, so it follows a
   // flip by the TTL alone, and a slow first load must not hold the jobs.
   void startFeatureFlags();
+  // Same insert-only catalog merge the API runs at boot (`apps/catalog.ts`),
+  // under an advisory lock, so whichever process boots first writes the rows.
+  void loadAppCatalog().catch((error: unknown) => {
+    console.error("[apps] catalog load failed:", error);
+  });
   jobs = startColdJobs();
   console.log(
     `pqp worker: ${jobs.count} job(s) scheduled, ` +
