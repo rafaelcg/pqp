@@ -1461,7 +1461,7 @@
     var search = h("input", { type: "search", class: "input", id: "aSrvQ", "aria-label": "Buscar servidor por nome ou id", placeholder: "Buscar servidor por nome ou id", value: st.q, autocomplete: "off",
       oninput: function (ev) { st.q = ev.target.value.trim(); clearTimeout(st.timer); st.timer = setTimeout(function () { loadAppServers(true); }, 250); } });
     var onlyOn = h("button", { type: "button", class: "chip" + (st.on ? " on" : ""), "aria-pressed": st.on ? "true" : "false", id: "aSrvOn", text: "Só os ligados",
-      onclick: function () { st.on = !st.on; loadAppServers(true); renderApps(); $("aSrvOn") && $("aSrvOn").focus(); } });
+      onclick: function () { st.on = !st.on; loadAppServers(true); renderApps(); var again = $("aSrvOn"); if (again) again.focus(); } });
     body.appendChild(h("section", { class: "card", "aria-label": "servidores de " + app.name }, [
       h("h2", null, ["servidores", h("span", { class: "aside", id: "aSrvCount", "aria-live": "polite" })]),
       h("div", { class: "toolbar" }, [search, onlyOn]),
