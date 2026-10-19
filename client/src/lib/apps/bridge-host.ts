@@ -1,6 +1,7 @@
 import {
   APP_EVENT_MAX_BYTES,
   APP_EVENT_MAX_PER_SECOND,
+  APP_PARTICIPANTS_AVATAR_BUDGET_CHARS,
   APP_PLATFORM_API,
   APP_STATE_MAX_BYTES,
   APP_STATE_MAX_WRITES_PER_SECOND,
@@ -10,7 +11,7 @@ import {
   bridgeParticipantSchema,
   bridgePushSchema,
   bridgeRequestIdSchema,
-  bridgeResultSchemas,
+  bridgeResponseOkSchema,
   jsonByteLength,
   type AppEndReason,
   type BridgeAppMessage,
@@ -127,6 +128,27 @@ export function mapTransportError(code: AppErrorCode, forEnd = false): BridgeErr
       // `full` and `unavailable`: nothing an app can act on except trying again
       return "unavailable";
   }
+}
+
+/**
+ * A roster's avatars add up to at most `APP_PARTICIPANTS_AVATAR_BUDGET_CHARS`
+ * characters (the bridge schema refuses a longer list). Past that, the largest
+ * avatars are left out (the app draws its own fallback) until the rest fit.
+ */
+export function fitAvatarBudget(list: BridgeParticipant[]): BridgeParticipant[] {
+  let total = list.reduce((sum, person) => sum + (person.avatar?.length ?? 0), 0);
+  if (total <= APP_PARTICIPANTS_AVATAR_BUDGET_CHARS) return list;
+  const bySize = list
+    .map((person, index) => ({ index, size: person.avatar?.length ?? 0 }))
+    .filter((entry) => entry.size > 0)
+    .sort((a, b) => b.size - a.size || a.index - b.index);
+  const dropped = new Set<number>();
+  for (const entry of bySize) {
+    if (total <= APP_PARTICIPANTS_AVATAR_BUDGET_CHARS) break;
+    dropped.add(entry.index);
+    total -= entry.size;
+  }
+  return list.map((person, index) => (dropped.has(index) ? { ...person, avatar: null } : person));
 }
 
 function sameParticipants(a: BridgeParticipant[], b: BridgeParticipant[]): boolean {
@@ -325,7 +347,7 @@ export class BridgeHost {
       }),
     );
     if (seq !== this.rosterSeq || this.detached) return; // a newer snapshot superseded this one
-    const next = mapped.filter((entry): entry is BridgeParticipant => entry !== null);
+    const next = fitAvatarBudget(mapped.filter((entry): entry is BridgeParticipant => entry !== null));
     if (sameParticipants(this.roster, next)) return;
     this.roster = next;
     this.pushToApp({ type: "participants", participants: next });
@@ -379,13 +401,14 @@ export class BridgeHost {
     result: unknown,
     transfer: Transferable[] = [],
   ): void {
-    const parsed = bridgeResultSchemas[type].safeParse(result);
+    // the whole response goes through its schema: a successful one echoes the request type
+    const parsed = bridgeResponseOkSchema.safeParse({ id, ok: true, type, result });
     if (!parsed.success) {
       this.log(`the ${type} answer failed its schema`, parsed.error.issues[0]);
       this.fail(id, "unavailable");
       return;
     }
-    this.port?.postMessage({ id, ok: true, result: parsed.data }, transfer);
+    this.port?.postMessage(parsed.data, transfer);
   }
 
   // ---------------------------------------------------------------------------
