@@ -94,7 +94,7 @@ export interface AppSessionWire {
    * Feed every server frame here. Returns true for a frame that is about a
    * session this wire holds (so a caller may stop it), false for anything else.
    */
-  dispatch(message: { type: string }): boolean;
+  dispatch(message: object): boolean;
   /** The link to the server went down (false) or is up (true). */
   setOnline(online: boolean): void;
   /** The socket authenticated again: resume every seat. Call after `setOnline(true)`. */

@@ -168,6 +168,9 @@ const DesktopLoginPage = lazy(() =>
     default: m.DesktopLoginPage,
   })),
 );
+const QaAppsPage = lazy(() =>
+  import("./pages/qa-apps-page").then((m) => ({ default: m.QaAppsPage })),
+);
 const UiTokensPage = lazy(() =>
   import("./pages/ui-tokens-page").then((m) => ({ default: m.UiTokensPage })),
 );
@@ -415,6 +418,8 @@ function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
             is for. `UiTokensPage` gates itself on the dev auth bypass and
             otherwise redirects the way the catch-all below does. */}
         <Route path="/qa/ui" element={<UiTokensPage />} />
+        {/* The apps session strip in every state; same gate as the sheet above. */}
+        <Route path="/qa/apps" element={<QaAppsPage />} />
         <Route
           path="*"
           element={<Navigate to={isDesktopApp() ? "/app" : "/"} replace />}

@@ -76,8 +76,12 @@ export interface AppSessionLayoutProps {
 
 /** How long an ended strip stays before it collapses by itself (mock 03). */
 export const ENDED_STRIP_MS = 8_000;
-/** How recent an end must be to be drawn on arrival at the channel. */
-const ENDED_FRESH_MS = 8_000;
+/**
+ * How recent an end must be to be drawn at all. Longer than the strip's own
+ * life, so the collapse (which starts at `ENDED_STRIP_MS`) is what takes it
+ * away and not this rule cutting it off a frame early.
+ */
+const ENDED_FRESH_MS = ENDED_STRIP_MS + 1_000;
 
 function endedHere(
   ended: ReadonlyMap<string, EndedAppSession>,

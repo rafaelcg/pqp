@@ -5,7 +5,7 @@ import {
   Square,
   Users,
 } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AppIconTile } from "@/components/apps/app-icon";
 import "@/components/apps/apps-strip.css";
 import { Button } from "@/components/ui/button";
@@ -201,7 +201,9 @@ function Spinner({ className }: { className?: string }) {
 }
 
 function AvatarStack({ model }: { model: LiveStripModel }) {
-  if (model.people.length === 0) return null;
+  if (model.people.length === 0 || model.phase === "reconnecting" || model.phase === "lost") {
+    return null;
+  }
   return (
     <span className="flex shrink-0 items-center max-[959px]:hidden" aria-hidden>
       {model.people.map((person, index) => (
@@ -299,7 +301,7 @@ function PeopleDialog({
       size="sm"
       onClose={onClose}
     >
-      <ul className="flex flex-col gap-1">
+      <ul className="flex flex-col gap-1 px-5 py-4">
         {model.roster.map((person) => (
           <li key={person.userId} className="flex items-center gap-3 py-1.5">
             <UserAvatar
@@ -625,7 +627,8 @@ function CompactStrip(props: AppSessionStripProps & { model: LiveStripModel }) {
   const opener = useRef<HTMLButtonElement>(null);
 
   const summary =
-    model.line.kind === "hostIs" || model.line.kind === "host" || model.line.kind === "watching"
+    model.seated &&
+    (model.line.kind === "hostIs" || model.line.kind === "host" || model.line.kind === "watching")
       ? `${lineText(model.line, t)}, ${countText(model.count, t)}`
       : reconnecting
         ? t("apps.strip.reconnectingShort")
@@ -662,7 +665,7 @@ function CompactStrip(props: AppSessionStripProps & { model: LiveStripModel }) {
           )}
         >
           {reconnecting ? <Dot tone="off" /> : null}
-          <span className="min-w-0 truncate" title={summary}>
+          <span className="line-clamp-2 min-w-0 [overflow-wrap:anywhere]" title={summary}>
             {summary}
           </span>
         </span>
@@ -687,7 +690,7 @@ function CompactStrip(props: AppSessionStripProps & { model: LiveStripModel }) {
         <span className="pr-3">
           <Spinner className="h-4 w-4" />
         </span>
-      ) : (
+      ) : model.seated || model.actions.end || model.actions.leave ? (
         <button
           ref={opener}
           type="button"
@@ -699,7 +702,7 @@ function CompactStrip(props: AppSessionStripProps & { model: LiveStripModel }) {
         >
           <ChevronDown aria-hidden className="h-5 w-5" />
         </button>
-      )}
+      ) : null}
       {props.error ? (
         <p role="alert" className="w-full text-xs text-on-danger-soft">
           {props.error}
@@ -759,12 +762,9 @@ function CompactStrip(props: AppSessionStripProps & { model: LiveStripModel }) {
           </div>
         }
       >
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-3 px-5 py-4">
           <p className="text-[13px] text-text-tertiary">{lineText(model.line, t)}</p>
-          <div className="flex items-center gap-3">
-            <AvatarRow model={model} />
-            <span className="text-[15px] text-text">{countText(model.count, t)}</span>
-          </div>
+          <p className="text-[15px] text-text">{countText(model.count, t)}</p>
           <ul className="flex flex-col">
             {model.roster.map((person) => (
               <li key={person.userId} className="flex min-h-11 items-center gap-3">
@@ -797,23 +797,5 @@ function CompactStrip(props: AppSessionStripProps & { model: LiveStripModel }) {
         onConfirm={() => props.onEnd?.()}
       />
     </section>
-  );
-}
-
-function AvatarRow({ model }: { model: LiveStripModel }): ReactNode {
-  if (model.people.length === 0) return null;
-  return (
-    <span className="flex items-center" aria-hidden>
-      {model.people.map((person, index) => (
-        <UserAvatar
-          key={person.userId}
-          name={person.displayName}
-          avatarUrl={person.avatarUrl}
-          rounded="full"
-          className={cn("h-8 w-8 ring-2 ring-surface-2", index > 0 && "-ml-2")}
-          fallbackClassName="bg-surface-3 text-xs text-text-secondary"
-        />
-      ))}
-    </span>
   );
 }
