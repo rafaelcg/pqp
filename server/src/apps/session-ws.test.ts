@@ -740,6 +740,108 @@ describeDb("app sessions over the socket", () => {
       });
     });
 
+    /**
+     * Park every `reclaimLiveSeat` statement until `open()`, leaving the rest of
+     * the pool alone. The close handler's own statement is NOT parked, so a test
+     * can run the whole close while the reclaim is still on its way, which is the
+     * order a lock cannot give (the lock queues the close behind the reclaim).
+     */
+    function parkReclaims() {
+      const pool = db.getPool() as unknown as {
+        query: (text: unknown, ...rest: unknown[]) => Promise<unknown>;
+      };
+      const original = pool.query;
+      const waiting: Array<() => void> = [];
+      let all = false;
+      pool.query = function (this: unknown, text: unknown, ...rest: unknown[]) {
+        if (typeof text === "string" && text.includes("orphaned_at = NULL, instance_id") && !all) {
+          return new Promise<void>((resolve) => waiting.push(resolve)).then(() =>
+            original.call(this, text, ...rest),
+          );
+        }
+        return original.call(this, text, ...rest);
+      };
+      return {
+        /** Let the oldest parked reclaim through. */
+        next: () => waiting.shift()?.(),
+        /** Let everything through, now and later. */
+        open: () => {
+          all = true;
+          while (waiting.length) waiting.shift()?.();
+        },
+        restore: () => {
+          pool.query = original;
+        },
+      };
+    }
+
+    it("a socket whose close was fully handled before the reclaim lands leaves the seat held again", async () => {
+      const id = await startSession(world.owner);
+      const mine = await join(id, world.member);
+      await q(
+        `UPDATE app_session_participants SET orphaned_at = NOW(), instance_id = 'the-other-instance'
+          WHERE session_id = $1 AND user_id = $2`,
+        [id, world.member.id],
+      );
+      const parked = parkReclaims();
+      try {
+        await join(id, world.owner);
+        await settle(700);
+        // The whole close, while the reclaim is parked: the row is still the other
+        // machine's, so its orphan statement matches nothing and no mapping is left.
+        (mine.socket as unknown as { readyState: number }).readyState = 3;
+        await wsApps.handleAppSocketClose(mine.socket);
+        expect(wsApps.hasLocalSocketFor(id, world.member.id)).toBe(false);
+        parked.open();
+        await settle(500);
+      } finally {
+        parked.open();
+        parked.restore();
+      }
+      const row = await rowOf(id, world.member);
+      expect(row.orphaned_at).not.toBeNull();
+      expect(wsApps.hasLocalSocketFor(id, world.member.id)).toBe(false);
+      // And the sweep owns it like any held seat.
+      const held = row.orphaned_at as Date;
+      const swept = await wsApps.sweepOwnAppParticipants({ now: new Date(held.getTime() + 91_000) });
+      expect(swept.released).toBe(1);
+    });
+
+    it("one tab dying during a reclaim does not make the person look disconnected while another tab is open", async () => {
+      const id = await startSession(world.owner);
+      const steady = await join(id, world.member);
+      const dying = await join(id, world.member);
+      await q(
+        `UPDATE app_session_participants SET orphaned_at = NOW(), instance_id = 'the-other-instance'
+          WHERE session_id = $1 AND user_id = $2`,
+        [id, world.member.id],
+      );
+      const parked = parkReclaims();
+      const watcher = recordingSocket(modules, world.owner);
+      try {
+        await wsApps.handleAppFrame(watcher.socket, world.owner, { type: "app-join", sessionId: id });
+        await settle(700);
+        // The steady tab's reclaim goes through; the dying tab's is next in line.
+        parked.next();
+        await settle(300);
+        (dying.socket as unknown as { readyState: number }).readyState = 3;
+        parked.open();
+        await settle(700);
+      } finally {
+        parked.open();
+        parked.restore();
+      }
+      const row = await rowOf(id, world.member);
+      // The steady tab is the evidence: the seat is the person's again.
+      expect(row.orphaned_at).toBeNull();
+      expect(wsApps.hasLocalSocketFor(id, world.member.id)).toBe(true);
+      const mineInRoster = snapshot(watcher).participants.find(
+        (p: any) => p.userId === world.member.id,
+      );
+      expect(mineInRoster.connection).toBe("present");
+      void steady;
+    });
+
     it("the sweep never touches a row another instance owns", async () => {
       const id = await startSession(world.owner);
       await q(

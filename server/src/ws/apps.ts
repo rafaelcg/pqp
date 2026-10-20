@@ -458,6 +458,8 @@ async function deliverRosterNow(sessionId: string): Promise<void> {
   }
   const byUser = new Map(rows.participants.map((p) => [p.userId, p]));
   const liveUsers = new Set<string>();
+  // Kept past the close, which may drop the session's meta with its last socket.
+  const lateChannelId = sessionMeta.get(sessionId)?.channelId;
   for (const [socket, seat] of [...sockets]) {
     // A socket that is already gone is evidence of nothing: it is released the
     // way its close would have, and never counted as live or allowed to take a
@@ -471,17 +473,27 @@ async function deliverRosterNow(sessionId: string): Promise<void> {
       removeSessionSocket(sessionId, socket);
       continue;
     }
-    liveUsers.add(seat.userId);
     if (row.orphanedAt !== null) {
       await reclaimLiveSeat(sessionId, seat.userId, INSTANCE_ID).catch(() => false);
-      // The socket may have closed while the write was in flight: its close
-      // found the seat already held (nothing to stamp) and the reclaim then
-      // cleared the hold. Hold it again, unless the person has another socket.
+      // The socket may have closed while the write was in flight. Its close
+      // found a seat that was already held by the other machine (nothing it
+      // could stamp, or no mapping left at all), and the reclaim then cleared
+      // the hold. Hold it again, unless the person has another socket here.
       if (socketGone(socket)) {
-        liveUsers.delete(seat.userId);
         await handleAppSocketClose(socket);
+        if (!hasLocalSocketFor(sessionId, seat.userId)) {
+          const held = await orphanSeat(sessionId, seat.userId, INSTANCE_ID).catch(() => false);
+          if (held && lateChannelId) {
+            announceRoster(sessionId, lateChannelId);
+          }
+        }
       }
     }
+  }
+  // Who is live is read AFTER the loop, from the sockets that are still here:
+  // one tab dying must never erase the evidence of another tab of the same person.
+  for (const seat of sessionSockets.get(sessionId)?.values() ?? []) {
+    liveUsers.add(seat.userId);
   }
   for (const [socket, seat] of sessionSockets.get(sessionId) ?? []) {
     sendSnapshot(socket, sessionId, rows, seat, liveUsers, true);
