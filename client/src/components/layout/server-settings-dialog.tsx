@@ -6,6 +6,7 @@ import type {
 } from "@pqp/shared";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
+  Bot,
   Globe,
   Image as ImageIcon,
   KeyRound,
@@ -33,6 +34,7 @@ import { CommunitySettingsSection } from "@/components/communities/community-set
 import { RolesSettingsSection } from "@/components/layout/roles-settings-section";
 import { SoundboardSettingsSection } from "@/components/layout/soundboard-settings-section";
 import { OutgoingWebhooksSection } from "@/components/layout/outgoing-webhooks-section";
+import { BotsSettingsSection } from "@/components/layout/bots-settings-section";
 import { useCommunitiesEnabled } from "@/components/communities/use-communities-enabled";
 import { shouldShowCommunityHomeSettingsRow } from "@/lib/community-home";
 import { useTranslation, type MessageKey, type Translator } from "@/lib/i18n";
@@ -42,6 +44,7 @@ import {
   deleteServer,
   exportServerData,
   fetchAuditLog,
+  fetchBotsConfig,
   fetchMembers,
   updateServer,
   type ServerMember,
@@ -132,6 +135,9 @@ const AUDIT_ACTION_KEYS: Record<AuditAction, MessageKey> = {
   "soundboard.create": "serverSettings.audit.action.soundboard.create",
   "soundboard.update": "serverSettings.audit.action.soundboard.update",
   "soundboard.delete": "serverSettings.audit.action.soundboard.delete",
+  "bot.create": "serverSettings.audit.action.bot.create",
+  "bot.update": "serverSettings.audit.action.bot.update",
+  "bot.delete": "serverSettings.audit.action.bot.delete",
   "bau_follow.create": "serverSettings.audit.action.bau_follow.create",
   "bau_follow.delete": "serverSettings.audit.action.bau_follow.delete",
   "bau_follow.pause": "serverSettings.audit.action.bau_follow.pause",
@@ -291,6 +297,7 @@ export type SectionId =
   | "access"
   | "roles"
   | "soundboard"
+  | "bots"
   | "integrations"
   | "moderation"
   | "automod"
@@ -351,6 +358,13 @@ const SECTIONS: SectionDef[] = [
     label: "serverSettings.section.soundboard",
     description: "serverSettings.soundboard.description",
     icon: PartyPopper,
+    ownerOnly: false,
+  },
+  {
+    id: "bots",
+    label: "serverSettings.section.bots",
+    description: "serverSettings.bots.description",
+    icon: Bot,
     ownerOnly: false,
   },
   {
@@ -587,7 +601,9 @@ interface ServerSettingsDialogProps {
   /** Manage Messages: sees AutoMod read-only, with the test box. */
   canManageMessages?: boolean;
   /** Land on this pane when the dialog opens, if the viewer can see it. */
-  requestedSection?: "roles" | "community";
+  requestedSection?: "roles" | "community" | "bots";
+  /** The Bots pane's "create": the app closes settings and opens the bot wizard. */
+  onCreateBot?: () => void;
   onClose: () => void;
   onRenamed: (server: Server) => void;
   /** `COMMUNITY_HOME_ENABLED` on this instance, from the config probe. */
@@ -615,6 +631,7 @@ export function ServerSettingsDialog({
   canModerateQueue = false,
   canManageMessages = false,
   requestedSection,
+  onCreateBot,
   onClose,
   onRenamed,
   communityHomeFeatureOn = false,
@@ -668,6 +685,26 @@ export function ServerSettingsDialog({
   const canSeeRoles = canManageRoles;
   const canSeeSoundboard = canManageSoundboard;
   const canSeeIntegrations = canManageWebhooks;
+  // Bots: Manage Server, on a server where the `custom_bots` flag is on.
+  const [botsOn, setBotsOn] = useState(false);
+  useEffect(() => {
+    if (!open || !serverId || !canManageServer) {
+      setBotsOn(false);
+      return;
+    }
+    let live = true;
+    void fetchBotsConfig(serverId)
+      .then((config) => {
+        if (live) setBotsOn(config.enabled);
+      })
+      .catch(() => {
+        if (live) setBotsOn(false);
+      });
+    return () => {
+      live = false;
+    };
+  }, [open, serverId, canManageServer]);
+  const canSeeBots = canManageServer && botsOn;
   const canSeeModeration = canModerateQueue || isOwner;
   const canSeeAudit = canManageServer;
   const canEditAutomod = isOwner || canManageServer;
@@ -679,6 +716,7 @@ export function ServerSettingsDialog({
     canSeeEmoji ||
     canSeeRoles ||
     canSeeSoundboard ||
+    canSeeBots ||
     canSeeIntegrations ||
     canSeeModeration ||
     canSeeAudit;
@@ -737,7 +775,9 @@ export function ServerSettingsDialog({
       ? "roles"
       : requestedSection === "community" && canSeeCommunity
         ? "community"
-        : firstSection;
+        : requestedSection === "bots" && canSeeBots
+          ? "bots"
+          : firstSection;
   // Apply on the closed→open render so the first paint is the requested pane,
   // not a frame of Overview. The effect still catches reopen / role changes.
   if (open && !wasOpenRef.current && section !== openingSection) {
@@ -933,6 +973,8 @@ export function ServerSettingsDialog({
         return canSeeRoles;
       case "soundboard":
         return canSeeSoundboard;
+      case "bots":
+        return canSeeBots;
       case "integrations":
         return canSeeIntegrations;
       case "moderation":
@@ -1151,6 +1193,10 @@ export function ServerSettingsDialog({
 
           {active.id === "soundboard" && serverId && (
             <SoundboardSettingsSection key={serverId} serverId={serverId} />
+          )}
+
+          {active.id === "bots" && serverId && (
+            <BotsSettingsSection key={serverId} serverId={serverId} onCreate={onCreateBot ?? (() => {})} />
           )}
 
           {active.id === "integrations" && serverId && (

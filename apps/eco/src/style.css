@@ -1,0 +1,233 @@
+/*
+ * Eco's look. Every colour, radius and font is a custom property the host
+ * sends in `hello` (the pqp design tokens: `--color-surface-0`, `--color-text`,
+ * `--color-accent`, ...). The fallbacks are what shows before the first push
+ * and on a host that does not send a token; they are never the design.
+ */
+:root {
+  color-scheme: dark light;
+  --eco-bg: var(--color-surface-0, #14161c);
+  --eco-card: var(--color-surface-1, #1b1e26);
+  --eco-raised: var(--color-surface-2, #242833);
+  --eco-border: var(--color-border, #2d3240);
+  --eco-text: var(--color-text, #ece9de);
+  --eco-text-2: var(--color-text-secondary, #cfcbbd);
+  --eco-text-3: var(--color-text-tertiary, #a9a597);
+  --eco-accent: var(--color-accent, #c8f55a);
+  --eco-on-accent: var(--color-on-accent, #14161c);
+  --eco-ring: var(--color-focus-ring, rgba(200, 245, 90, 0.6));
+  --eco-danger: var(--color-danger, #ee5d4b);
+  --eco-radius: var(--radius-card, 0.5rem);
+  --eco-control: var(--radius-control, 0.375rem);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--eco-bg);
+  color: var(--eco-text);
+  font-family: var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif);
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.eco {
+  display: grid;
+  gap: 12px;
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+.eco-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.eco-title {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.eco-status {
+  margin: 0;
+  color: var(--eco-text-3);
+  font-size: 0.8125rem;
+}
+
+.eco[data-state="reconnecting"] .eco-status {
+  color: var(--color-warning, #e5b94a);
+}
+
+.eco-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  background: var(--eco-card);
+  border: 1px solid var(--eco-border);
+  border-radius: var(--eco-radius);
+}
+
+.eco-label {
+  margin: 0;
+  color: var(--eco-text-2);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.eco-count {
+  font-size: 3rem;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.eco-button {
+  min-height: 44px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: var(--eco-control);
+  background: var(--eco-accent);
+  color: var(--eco-on-accent);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  justify-self: start;
+}
+
+.eco-button:hover:not(:disabled) {
+  filter: brightness(0.92);
+}
+
+.eco-button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.eco-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.eco-button:focus-visible {
+  outline: 2px solid var(--eco-ring);
+  outline-offset: 2px;
+}
+
+.eco-flash {
+  min-height: 1.4em;
+  margin: 0;
+  color: var(--eco-accent);
+  font-weight: 600;
+}
+
+.eco-flash.is-on {
+  animation: eco-flash 1.8s ease-out both;
+}
+
+@keyframes eco-flash {
+  0% {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+  12% {
+    opacity: 1;
+    transform: none;
+  }
+  80% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.eco-people {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.eco-person {
+  display: grid;
+  grid-template-columns: 32px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  background: var(--eco-raised);
+  border-radius: var(--eco-control);
+}
+
+.eco-person[data-reconnecting="true"] {
+  opacity: 0.6;
+}
+
+.eco-avatar {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--eco-border);
+  color: var(--eco-text);
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+
+.eco-avatar img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.eco-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.eco-tags {
+  color: var(--eco-text-3);
+  font-size: 0.75rem;
+}
+
+.eco-ended {
+  margin: 0;
+  padding: 12px 14px;
+  background: var(--eco-raised);
+  border: 1px solid var(--eco-danger);
+  border-radius: var(--eco-radius);
+}
+
+[hidden] {
+  display: none !important;
+}
+
+/* Motion is decoration here, so it goes away on request, from the OS or from pqp. */
+@media (prefers-reduced-motion: reduce) {
+  .eco-flash.is-on {
+    animation: none;
+  }
+  .eco-button:active:not(:disabled) {
+    transform: none;
+  }
+}
+
+:root[data-reduced-motion="true"] .eco-flash.is-on {
+  animation: none;
+}
+
+:root[data-reduced-motion="true"] .eco-button:active:not(:disabled) {
+  transform: none;
+}

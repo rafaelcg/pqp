@@ -61,7 +61,7 @@ struct StoryAltSheet: View {
                 .submitLabel(.done)
                 .accessibilityIdentifier("alt.input")
             HStack {
-                Text("\(left) left")
+                Text("Characters left: \(left)")
                     .font(Typography.caption)
                     .monospacedDigit()
                     .foregroundStyle(left <= 20 ? Palette.paper : Palette.paperMuted)

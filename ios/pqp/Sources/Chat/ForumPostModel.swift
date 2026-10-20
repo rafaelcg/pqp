@@ -111,7 +111,7 @@ final class ForumPostModel {
     /// Tags this person may put on or take off: staff-only ones are staff's.
     var editableTags: [ForumTag] { isStaff ? tags : tags.filter { !$0.moderated } }
 
-    var pinnedCount: Int { home?.pinnedCount ?? 0 }
+    var pinnedCount: Int? { home?.pinnedCount }
 
     var link: URL? {
         URL(string: "https://pqp.gg/app/server/\(serverId)/channel/\(forumId)/post/\(postId)")
@@ -129,6 +129,13 @@ final class ForumPostModel {
     /// transcript's through `ChatModel`'s thread slot.
     func start(session: SessionStore) async {
         self.session = session
+        // "Pin post (N of 3)" counts the whole forum, not what a filter shows.
+        // Read it only when it is not known yet, and quietly: the home model
+        // keeps a known count current from frames and on reconnect, and a loud
+        // read would clear it and flash a bare "Pin post" on every post open
+        // under a filter. The pin action re-reads at pin time regardless, so
+        // skipping here cannot let a stale count authorise anything.
+        if let home, home.unfilteredPinned == nil { Task { await home.refreshPinnedTotal(quiet: true) } }
         let key = handlerKey
         session.eventHandlers[key] = { [weak self, weak session] event in
             guard let self else {
@@ -359,12 +366,47 @@ final class ForumPostModel {
         )
     }
 
-    func setPinned(_ pinned: Bool) async {
-        if pinned, home != nil, pinnedCount >= ForumLimits.maxPinned {
-            notice = String(localized: "\(ForumLimits.maxPinned) posts are already pinned. Unpin one first.")
-            return
+    /// Whether one more post may be pinned. The cap needs the forum-wide
+    /// count, read now and never guessed from a filtered list: under a filter
+    /// it comes with the generation it was read under, and the pin is only
+    /// authorised if that still holds when the write starts (a frame or a newer
+    /// read in between means asking again). A post opened from a link has no
+    /// list, so the server is asked directly.
+    private func mayPin() async -> Bool {
+        var decision: ForumPinnedCount.Gate = .unknown
+        for _ in 0..<3 {
+            if let home {
+                if home.filters.isNarrowing {
+                    guard let reading = await home.readPinnedTotalForCap() else { break }
+                    decision = ForumPinnedCount.gate(count: reading.count, max: ForumLimits.maxPinned)
+                    // No suspension between this check and the write that follows.
+                    if decision == .allow, !home.isCurrent(reading) { decision = .unknown; continue }
+                } else {
+                    decision = ForumPinnedCount.gate(count: home.pinnedCount, max: ForumLimits.maxPinned)
+                }
+            } else if let session {
+                let page = try? await session.api.forumPosts(forumId: forumId, filters: ForumFilters(), limit: 1)
+                decision = ForumPinnedCount.gate(count: page?.pinned.count, max: ForumLimits.maxPinned)
+            }
+            break
         }
+        switch decision {
+        case .allow:
+            return true
+        case .full:
+            notice = String(localized: "\(ForumLimits.maxPinned) posts are already pinned. Unpin one first.")
+        case .unknown:
+            // The server would refuse a pin over the cap, but not knowing is a
+            // reason to ask again, not to try.
+            notice = String(localized: "Couldn't check how many posts are pinned. Try again.")
+        }
+        return false
+    }
+
+    func setPinned(_ pinned: Bool) async {
+        if pinned, !(await mayPin()) { return }
         await save(optimistic: { $0.pinnedAt = pinned ? Date() : nil }, patch: .init(pinned: pinned))
+        await home?.refreshPinnedTotal()
     }
 
     func setLocked(_ locked: Bool) async {

@@ -164,7 +164,8 @@ struct ForumPostChrome: ViewModifier {
                             Label("Unpin post", systemImage: "pin.slash")
                         } else {
                             Label(
-                                String(localized: "Pin post (\(model.pinnedCount) of \(ForumLimits.maxPinned))"),
+                                model.pinnedCount.map { String(localized: "Pin post (\($0) of \(ForumLimits.maxPinned))") }
+                                    ?? String(localized: "Pin post"),
                                 systemImage: "pin"
                             )
                         }
@@ -202,6 +203,10 @@ enum ForumCopy {
         case 1: String(localized: "1 reply")
         default: String(localized: "\(count) replies")
         }
+    }
+
+    static func newReplies(_ count: Int) -> String {
+        count == 1 ? String(localized: "1 new reply") : String(localized: "\(count) new replies")
     }
 
     static func posts(_ count: Int) -> String {

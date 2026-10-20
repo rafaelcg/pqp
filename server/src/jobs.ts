@@ -44,6 +44,7 @@ import { pruneExpiredTimeouts } from "./services/sanctions.js";
 import { sweepAppSessionRetention, sweepMessageRetention } from "./services/retention.js";
 import { APP_SWEEP_INTERVAL_MS, runAppSweepJob } from "./apps/sweeps.js";
 import { sweepSlowModeClocks } from "./services/slow-mode.js";
+import { sweepClientPlatforms } from "./services/client-platforms.js";
 import { sweepForumPostShells } from "./services/forums.js";
 import { sweepSoundboardUploads } from "./services/soundboard.js";
 import { sweepRateLimitBuckets } from "./lib/cluster-rate-limit.js";
@@ -54,6 +55,9 @@ import {
 } from "./services/outgoing-webhooks.js";
 import { startOutgoingWebhookPoller } from "./services/outgoing-webhook-poller.js";
 import { startSpeechJobPoller } from "./services/speech-worker.js";
+import { startBotRunPoller } from "./services/bot-runner.js";
+import { pruneBotPeopleDaily } from "./services/bot-stats.js";
+import { BOT_REMINDERS_INTERVAL_MS, deliverDueReminders } from "./services/bot-reminders.js";
 import {
   OCCUPANCY_SAMPLE_INTERVAL_MS,
   recordVoiceOccupancySample,
@@ -195,6 +199,9 @@ export const BAU_FOLLOW_INTERVAL_MS = 10_000;
  * that module for why.
  */
 export const OUTGOING_WEBHOOK_PRUNE_INTERVAL_MS = 60 * 60_000;
+
+/** Who asked a server bot, per day, is kept 90 days (`bot-stats.ts`). */
+export const BOT_PEOPLE_PRUNE_INTERVAL_MS = 6 * 60 * 60_000;
 
 /**
  * Every minute: the default retention window is ten minutes, so this needs
@@ -399,6 +406,10 @@ export function startColdJobs(): ColdJobs {
     // inert, because enforcement compares it against the channel's current
     // interval. Rows, not disk pages, is the point.
     every(DAILY_MS, "slow-mode", sweepSlowModeClocks),
+    // Which app a person connected from, for support: a row not seen for 90
+    // days goes. Nothing depends on this running (the read filters on the
+    // same window); it is the retention promise made in the privacy policy.
+    every(DAILY_MS, "client-platforms", sweepClientPlatforms),
     every(FORUM_SHELL_SWEEP_INTERVAL_MS, "forum-shells", sweepForumPostShells),
     every(SOUNDBOARD_UPLOAD_SWEEP_INTERVAL_MS, "soundboard-uploads", sweepSoundboardUploads),
     every(DAILY_MS, "connections", sweepExpiredConnectionStates),
@@ -445,11 +456,20 @@ export function startColdJobs(): ColdJobs {
       const poller = startSpeechJobPoller();
       return () => poller.stop();
     })(),
+    // Server bot replies (`server_bot_runs`, services/bot-runner.ts). Same
+    // adaptive shape, woken by the NOTIFY the trigger sends on enqueue. A
+    // process with no model provider (production without a key) claims nothing.
+    (() => {
+      const poller = startBotRunPoller();
+      return () => poller.stop();
+    })(),
     every(
       OUTGOING_WEBHOOK_PRUNE_INTERVAL_MS,
       "outgoing-webhooks",
       pruneDeliveredOutgoingWebhooks,
     ),
+    every(BOT_PEOPLE_PRUNE_INTERVAL_MS, "bot-people", pruneBotPeopleDaily),
+    every(BOT_REMINDERS_INTERVAL_MS, "bot-reminders", deliverDueReminders),
     every(
       CHANNEL_SESSION_REMINDER_INTERVAL_MS,
       "channel-sessions",

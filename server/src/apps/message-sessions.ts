@@ -1,5 +1,6 @@
 import type { MessageAppSession } from "@pqp/shared";
 import { getPool } from "../db.js";
+import { logEvent } from "../lib/log.js";
 
 /**
  * The session behind each timeline card, for the message read paths: one
@@ -16,7 +17,9 @@ export async function listAppSessionsForMessages(
   if (ids.length === 0) {
     return out;
   }
-  const result = await getPool().query<{
+  let result;
+  try {
+    result = await getPool().query<{
     timeline_message_id: string;
     id: string;
     app_id: string;
@@ -30,6 +33,13 @@ export async function listAppSessionsForMessages(
        FROM app_sessions WHERE timeline_message_id = ANY($1::uuid[])`,
     [ids],
   );
+  } catch (error) {
+    // A card is decoration on a message: a failed lookup must never fail the
+    // read of the whole page. The cards then read as their plain-text body,
+    // and the next read has them.
+    logEvent("apps.cardSessionsUnread", { error: String(error) });
+    return out;
+  }
   for (const row of result.rows) {
     out.set(row.timeline_message_id, {
       id: row.id,

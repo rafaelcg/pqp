@@ -1,0 +1,125 @@
+name: Deploy Apps
+
+# Publishes the first-party apps (apps/*) to the apps origin: a separate
+# Cloudflare Pages project, so a bundle runs on another registrable domain than
+# pqp.gg (PLAN D4). The bundles are immutable per version folder and carry their
+# own Content-Security-Policy through the generated `_headers` file.
+#
+# Off until the repository variable APPS_PAGES_PROJECT names the Pages project
+# (for example `pqp-apps`): with it empty the job skips cleanly, so merging this
+# workflow changes nothing. Manual dispatch is for a redeploy of what is on main.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/**"
+      - "packages/app-sdk/**"
+      - "tools/apps-build/**"
+      # a toolchain bump in the lockfile changes the bundle hashes (apps:check), and the
+      # catalog the API loads must not name a bundle Pages does not serve
+      - "pnpm-lock.yaml"
+      - "server/src/apps/catalog.json"
+      - ".github/workflows/deploy-apps.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-apps
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Build & deploy the apps origin
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Only the protected main branch deploys: a manual dispatch from any other ref
+    # would otherwise check that ref out and publish it as the production branch.
+    if: github.ref == 'refs/heads/main'
+    # The guard above only binds this file as it is on main. A branch can carry its
+    # own copy of a workflow, so the Cloudflare credentials belong to this environment
+    # with a deployment branch policy of `main` (Settings > Environments): then no
+    # other ref can read them, whatever its workflow file says. Until the secrets are
+    # moved there, the repository secrets of the same name are used, as today.
+    environment: apps-production
+    permissions:
+      contents: read
+      deployments: write
+    env:
+      APPS_PAGES_PROJECT: ${{ vars.APPS_PAGES_PROJECT }}
+
+    steps:
+      - name: Skip when no Pages project is configured
+        id: gate
+        run: |
+          if [ -z "$APPS_PAGES_PROJECT" ]; then
+            echo "APPS_PAGES_PROJECT is empty: the apps origin is not set up, nothing to deploy."
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        if: steps.gate.outputs.go == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          # no GITHUB_TOKEN left in .git/config for the install scripts below to read;
+          # the repository is public, so the later fetch of main needs no credential
+          persist-credentials: false
+
+      - name: Setup pnpm
+        if: steps.gate.outputs.go == 'true'
+        # Version comes from the root package.json "packageManager" field.
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        if: steps.gate.outputs.go == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        if: steps.gate.outputs.go == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Build shared
+        if: steps.gate.outputs.go == 'true'
+        run: pnpm --filter @pqp/shared build
+
+      # `build` fails when a released (id, version) would change its bytes, so
+      # fetch main for that comparison. The deploy is the same build `apps:check`
+      # ran in CI; the catalog it writes here is not committed.
+      - name: Build the apps
+        if: steps.gate.outputs.go == 'true'
+        run: |
+          git fetch --no-tags --depth=1 origin main:refs/remotes/origin/main || true
+          pnpm apps:build
+
+      # Install wrangler outside the pnpm workspace (npm + workspace:* fails), the
+      # way deploy-web.yml does. No credentials in this step: npm runs the install
+      # scripts of everything it fetches, so the token must not be in its environment.
+      - name: Install wrangler
+        if: steps.gate.outputs.go == 'true'
+        run: |
+          TMP="$(mktemp -d)"
+          (cd "$TMP" && npm init -y >/dev/null && npm install wrangler@4 --ignore-scripts --no-fund --no-audit)
+          echo "WRANGLER=$TMP/node_modules/.bin/wrangler" >> "$GITHUB_ENV"
+
+      - name: Deploy to Cloudflare Pages
+        if: steps.gate.outputs.go == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error::Missing secret CLOUDFLARE_API_TOKEN."
+            exit 1
+          fi
+          if [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::error::Missing secret CLOUDFLARE_ACCOUNT_ID"
+            exit 1
+          fi
+          "$WRANGLER" pages deploy dist-apps \
+            --project-name "$APPS_PAGES_PROJECT" \
+            --branch main \
+            --commit-dirty=true

@@ -191,6 +191,26 @@
         }
       }
     },
+    "1 new reply" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 resposta nova"
+          }
+        }
+      }
+    },
+    "1 reaction · gone in %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 reação · some em %@"
+          }
+        }
+      }
+    },
     "Add a comment" : {
       "localizations" : {
         "pt-BR" : {
@@ -277,6 +297,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Canais"
+          }
+        }
+      }
+    },
+    "Characters left: %lld" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Restam %lld"
+          }
+        }
+      }
+    },
+    "Couldn't check how many posts are pinned. Try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra conferir quantos posts estão fixados. Tenta de novo."
           }
         }
       }
@@ -967,6 +1007,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Só quem é dono liga ou desliga o diretório. O endereço público aqui em cima tu edita normal."
+          }
+        }
+      }
+    },
+    "Pin post" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fixar post"
           }
         }
       }
@@ -14049,6 +14099,396 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Verde-azulado"
+          }
+        }
+      }
+    },
+    "%@ did not answer: this server used its %lld answers for today." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ não respondeu: o servidor usou as %lld respostas de hoje."
+          }
+        }
+      }
+    },
+    "%@ did not answer: this server used its %lld answers for today. It answers again at %@." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ não respondeu: o servidor usou as %lld respostas de hoje. Ele volta a responder às %@."
+          }
+        }
+      }
+    },
+    "%@ did not answer: you reached the limit of %lld questions an hour." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ não respondeu: tu chegou no limite de %lld perguntas por hora."
+          }
+        }
+      }
+    },
+    "%@ did not answer: you reached the limit of %lld questions an hour. It answers you again at %@." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ não respondeu: tu chegou no limite de %lld perguntas por hora. Ele volta a te responder às %@."
+          }
+        }
+      }
+    },
+    "%@ is banning a member" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ está banindo um membro"
+          }
+        }
+      }
+    },
+    "%@ is checking the channels" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ está consultando os canais"
+          }
+        }
+      }
+    },
+    "%@ is creating a channel" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ está criando um canal"
+          }
+        }
+      }
+    },
+    "%@ is creating a poll" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ está criando uma enquete"
+          }
+        }
+      }
+    },
+    "%@ is creating an invite" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ está criando um convite"
+          }
+        }
+      }
+    },
+    "%@ is deleting a channel" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ está apagando um canal"
+          }
+        }
+      }
+    },
+    "%@ is deleting a message" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ está apagando uma mensagem"
+          }
+        }
+      }
+    },
+    "%@ is editing a channel" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ está editando um canal"
+          }
+        }
+      }
+    },
+    "%@ is kicking a member" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ está expulsando um membro"
+          }
+        }
+      }
+    },
+    "%@ is lifting a timeout" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ está tirando um castigo"
+          }
+        }
+      }
+    },
+    "%@ is looking at a forum" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ está olhando um fórum"
+          }
+        }
+      }
+    },
+    "%@ is looking up bans" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ está vendo os banidos"
+          }
+        }
+      }
+    },
+    "%@ is looking up members" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ está procurando membros"
+          }
+        }
+      }
+    },
+    "%@ is moving a channel" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ está movendo um canal"
+          }
+        }
+      }
+    },
+    "%@ is opening a thread" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ está abrindo um tópico"
+          }
+        }
+      }
+    },
+    "%@ is paused for today." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ está pausado por hoje."
+          }
+        }
+      }
+    },
+    "%@ is paused for today. It answers again at %@." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ está pausado por hoje. Ele volta a responder às %@."
+          }
+        }
+      }
+    },
+    "%@ is pinning a message" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ está fixando uma mensagem"
+          }
+        }
+      }
+    },
+    "%@ is posting a message" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ está postando uma mensagem"
+          }
+        }
+      }
+    },
+    "%@ is posting in the forum" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ está publicando no fórum"
+          }
+        }
+      }
+    },
+    "%@ is posting on the Baú" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ está publicando no Baú"
+          }
+        }
+      }
+    },
+    "%@ is reading a channel" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ está lendo um canal"
+          }
+        }
+      }
+    },
+    "%@ is reading a poll" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ está lendo uma enquete"
+          }
+        }
+      }
+    },
+    "%@ is replying in a forum post" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ está respondendo num post do fórum"
+          }
+        }
+      }
+    },
+    "%@ is still answering your earlier questions. Send this one again once it replies." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ ainda tá respondendo tuas perguntas anteriores. Manda essa de novo quando ele responder."
+          }
+        }
+      }
+    },
+    "%@ is timing out a member" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ está silenciando um membro"
+          }
+        }
+      }
+    },
+    "%@ is unbanning a member" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ está desbanindo um membro"
+          }
+        }
+      }
+    },
+    "%@ is voting" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ está votando"
+          }
+        }
+      }
+    },
+    "%@ is working" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ está trabalhando"
+          }
+        }
+      }
+    },
+    "%@ is writing a question" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ está escrevendo uma pergunta"
+          }
+        }
+      }
+    },
+    "Beta" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Beta"
+          }
+        }
+      }
+    },
+    "Bot" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bot"
+          }
+        }
+      }
+    },
+    "Only you can see this." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Só tu tá vendo isto."
+          }
+        }
+      }
+    },
+    "The bot" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O bot"
+          }
+        }
+      }
+    },
+    "Thinking…" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pensando…"
           }
         }
       }
