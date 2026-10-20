@@ -91,7 +91,7 @@ export function LocadoraPageBody() {
         aria-labelledby="locadora-title"
       >
         <div
-          className="relative isolate overflow-hidden bg-[oklch(0.2_0.03_300)] sm:rounded-[var(--radius-panel)] sm:shadow-[var(--shadow-2)]"
+          className="relative isolate overflow-hidden bg-black sm:rounded-[var(--radius-panel)] sm:shadow-[var(--shadow-2)]"
           data-locadora-hero=""
         >
           <img

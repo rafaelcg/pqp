@@ -326,10 +326,34 @@ const APPS_FLAG_MEMO_MS = 60_000;
 const APPS_FLAG_MISS_MS = 10_000;
 let appsFlagMemo: { at: number; ttl: number; value: boolean | null } | null = null;
 
+/**
+ * The request this isolate has on the way, shared by every page that arrives
+ * meanwhile, so a burst on a cold isolate (or just past the memo) costs one API
+ * call, not one per visitor. Trusted no longer than the request's own timeout:
+ * on Workers, work a cancelled request started may never settle.
+ */
+let appsFlagInFlight: { at: number; request: Promise<boolean | null> } | null = null;
+
 async function appsLandingEnabled(context: PagesContext): Promise<boolean | null> {
   if (appsFlagMemo && Date.now() - appsFlagMemo.at < appsFlagMemo.ttl) {
     return appsFlagMemo.value;
   }
+  if (appsFlagInFlight && Date.now() - appsFlagInFlight.at < API_TIMEOUT_MS) {
+    return appsFlagInFlight.request;
+  }
+  const request = askAppsLanding(context);
+  const inFlight = { at: Date.now(), request };
+  appsFlagInFlight = inFlight;
+  void request.then(() => {
+    if (appsFlagInFlight === inFlight) {
+      appsFlagInFlight = null;
+    }
+  });
+  return request;
+}
+
+/** One request to the API. Never rejects, settles within `API_TIMEOUT_MS`, remembers its answer. */
+async function askAppsLanding(context: PagesContext): Promise<boolean | null> {
   let value: boolean | null = null;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);

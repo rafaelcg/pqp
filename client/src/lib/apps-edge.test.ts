@@ -123,6 +123,27 @@ describe("the Apps pages at the edge, flag unknown", () => {
     expect(html).toContain("<head>");
   });
 
+  it("a burst on a cold isolate costs one API call, not one per visitor", async () => {
+    let release: (response: Response) => void = () => {};
+    const fetchMock = vi.fn(
+      () => new Promise<Response>((resolve) => (release = resolve)),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const onRequest = await freshMiddleware();
+    const burst = Promise.all([
+      onRequest(ctx("/apps")),
+      onRequest(ctx("/apps/locadora")),
+      onRequest(ctx("/locadora")),
+      onRequest(ctx("/apps")),
+    ]);
+    // Let every request reach the flag before the API answers.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    release(Response.json({ enabled: true }));
+    const responses = await burst;
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    for (const response of responses) expect(response.status).toBe(200);
+  });
+
   it("remembers the answer for the isolate, so a visit does not cost a request each", async () => {
     const fetchMock = vi.fn(async () => Response.json({ enabled: true }));
     vi.stubGlobal("fetch", fetchMock);

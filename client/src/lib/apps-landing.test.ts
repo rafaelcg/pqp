@@ -7,9 +7,12 @@ import {
 } from "./acquisition";
 import {
   APPS_DOOR_VIEW_EVENT,
+  ANSWER_TTL_MS,
   APPS_LANDING_REF,
   LOCADORA_LANDING_REF,
+  REQUEST_TIMEOUT_MS,
   appsCtaHref,
+  probeAppsLandingDetailed,
   appsDocsUrlFrom,
   cachedAppsLanding,
   probeAppsLanding,
@@ -100,6 +103,35 @@ describe("probeAppsLanding", () => {
       }),
     );
     expect(await probeAppsLanding()).toBe(false);
+  });
+
+  it("a request that never settles is aborted and becomes a handled failure that can be retried", async () => {
+    const fetchMock = vi.fn(
+      (_url: string, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const pending = probeAppsLandingDetailed();
+    await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS + 1);
+    expect(await pending).toBeNull();
+    // `force` skips the failure window, so a caller can try once more at once.
+    fetchMock.mockImplementation(async () => json(200, { enabled: true }));
+    expect(await probeAppsLandingDetailed(true)).toBe(true);
+  });
+
+  it("a clean answer expires with the endpoint's own cache lifetime", async () => {
+    const fetchMock = vi.fn(async () => json(200, { enabled: true }));
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await probeAppsLanding()).toBe(true);
+    vi.advanceTimersByTime(ANSWER_TTL_MS - 1);
+    expect(cachedAppsLanding()).toBe(true);
+    vi.advanceTimersByTime(2);
+    expect(cachedAppsLanding()).toBeNull();
+    fetchMock.mockImplementation(async () => json(200, { enabled: false }));
+    expect(await probeAppsLanding()).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("shares one request between concurrent callers", async () => {

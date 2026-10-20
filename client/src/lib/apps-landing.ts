@@ -96,22 +96,33 @@ export function appsDocsUrl(): string | null {
 
 // ------------------------------------------------------------------ the flag
 
+/** A failed probe is not asked again for this long (unless the caller forces it). */
 export const RETRY_AFTER_MS = 5_000;
+/** A clean answer is trusted for as long as the endpoint says it may be cached. */
+export const ANSWER_TTL_MS = 60_000;
+/** A request that never settles is a failure, not a blank page. */
+export const REQUEST_TIMEOUT_MS = 8_000;
 
 let answer: boolean | null = null;
-let inflight: Promise<boolean> | null = null;
+let answeredAt = 0;
+let inflight: Promise<boolean | null> | null = null;
 let failedAt = 0;
 
 export function resetAppsLandingProbe(): void {
   answer = null;
+  answeredAt = 0;
   inflight = null;
   failedAt = 0;
 }
 
-async function ask(): Promise<boolean> {
+/** True or false on a clean answer, null on any failure. Never rejects. */
+async function ask(): Promise<boolean | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
     const response = await fetch(`${getApiBaseUrl()}/api/public/apps/config`, {
       headers: { accept: "application/json" },
+      signal: controller.signal,
     });
     // Drain the body even for an answer that is thrown away, so the request is
     // not left "in flight" (it keeps `networkidle` from ever firing).
@@ -120,20 +131,41 @@ async function ask(): Promise<boolean> {
     const body = JSON.parse(text) as { enabled?: unknown };
     if (typeof body.enabled !== "boolean") throw new Error("malformed");
     answer = body.enabled;
+    answeredAt = Date.now();
     failedAt = 0;
     return answer;
   } catch {
     failedAt = Date.now();
-    return false;
+    return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
-/** True only on a clean 200 `{ enabled: true }`. */
-export function probeAppsLanding(): Promise<boolean> {
-  if (answer !== null) return Promise.resolve(answer);
+/**
+ * What the last clean answer said, or null when nothing has answered yet or the
+ * answer is older than the endpoint's own cache lifetime. Expiring it is what
+ * lets an operator's flip reach a tab that keeps navigating: the next entry to
+ * one of the pages asks again.
+ */
+export function cachedAppsLanding(): boolean | null {
+  if (answer !== null && Date.now() - answeredAt >= ANSWER_TTL_MS) {
+    answer = null;
+  }
+  return answer;
+}
+
+/**
+ * The answer, with a failure kept apart from a "no": `null` means the question
+ * could not be answered (the API is down or too slow), which the page may want
+ * to try again before it gives up. `force` skips the failure window.
+ */
+export function probeAppsLandingDetailed(force = false): Promise<boolean | null> {
+  const known = cachedAppsLanding();
+  if (known !== null) return Promise.resolve(known);
   if (inflight) return inflight;
-  if (failedAt && Date.now() - failedAt < RETRY_AFTER_MS) {
-    return Promise.resolve(false);
+  if (!force && failedAt && Date.now() - failedAt < RETRY_AFTER_MS) {
+    return Promise.resolve(null);
   }
   inflight = ask().finally(() => {
     inflight = null;
@@ -141,7 +173,7 @@ export function probeAppsLanding(): Promise<boolean> {
   return inflight;
 }
 
-/** What the last clean answer said, or null while nothing has answered yet. */
-export function cachedAppsLanding(): boolean | null {
-  return answer;
+/** True only on a clean 200 `{ enabled: true }`. */
+export async function probeAppsLanding(): Promise<boolean> {
+  return (await probeAppsLandingDetailed()) === true;
 }
