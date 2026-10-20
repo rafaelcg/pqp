@@ -246,6 +246,14 @@ import { VoiceAudioSinks } from "@/components/voice/voice-audio-sinks";
 import type { AudienceModeHostControls } from "@/components/voice/audience-mode";
 import { useVoiceConfig } from "@/hooks/use-voice-config";
 import { useForumConfig } from "@/hooks/use-forum-config";
+import { useAppsSessionsSync } from "@/hooks/use-apps-sessions-sync";
+import {
+  handleAppsFrame,
+  noteAppsReconnected,
+  registerAppJoinTransport,
+  setAppsOnline,
+  setAppsViewer,
+} from "@/lib/apps/app-sessions-store";
 import { VoiceChannelStage } from "@/components/voice/voice-channel-stage";
 import { CallDockOutlet, CallDockProvider } from "@/components/voice/call-dock";
 import { CreateWatchPartyDialog } from "@/components/watch-party/create-watch-party-dialog";
@@ -4134,6 +4142,7 @@ function MainAppContent({
         isCharacter: member.isCharacter,
         handle: member.handle ?? null,
         customStatus: member.customStatus ?? null,
+        displayName: member.displayName,
         avatarUrl: member.avatarUrl ?? null,
       });
     }
@@ -6091,9 +6100,12 @@ function MainAppContent({
 
           // Apps in channels (behind the per-server `apps` flag): a channel's
           // live summary, and a session's snapshot, state, events, end and
-          // refusals. Nothing in the app draws them yet, and they are chat
+          // refusals. The store takes every one of them (it ignores `app-state`
+          // and `app-event`, which nothing draws yet), and they are chat
           // frames, not voice ones, so they stop here rather than reach the
-          // voice controller.
+          // voice controller. The store sees the frame BEFORE the return:
+          // `app-session` and `app-error` are what end a join, and a frame
+          // swallowed ahead of the store leaves every join to time out.
           if (
             message.type === "channel-app" ||
             message.type === "app-ended" ||
@@ -6102,6 +6114,7 @@ function MainAppContent({
             message.type === "app-event" ||
             message.type === "app-error"
           ) {
+            handleAppsFrame(message);
             return;
           }
 
@@ -6123,6 +6136,7 @@ function MainAppContent({
 
         transport.onStatusChange((status) => {
           setConnection(status);
+          setAppsOnline(status === "online");
           if (status === "online") {
             setAppError(null);
           }
@@ -6164,6 +6178,9 @@ function MainAppContent({
           // Re-subscribe and re-sync: messages sent while we were offline were
           // never delivered, so the local list is stale.
           chat.resubscribe();
+          // Apps: a `channel-app` sent while we were away is gone, so the open
+          // server's live sessions are re-read (jittered, in the sync hook).
+          noteAppsReconnected();
           // --- threads --- the secondary slot re-announces itself the same
           // way; the panel's window is refreshed by its next open.
           threadChat.resubscribe();
@@ -8401,6 +8418,40 @@ function MainAppContent({
   // `forum_channels` for this server: the "+" menu's Fórum, and whether an
   // open forum takes new posts. Asked here, once, for every surface.
   const forumConfig = useForumConfig(selectedServerId);
+  // Apps: who this tab is, the live sessions of the open server, and how a
+  // join leaves the page (`app-join` over the socket until the join sheet and
+  // the pane take it over).
+  useAppsSessionsSync(selectedServerId, channels);
+  useEffect(() => {
+    setAppsViewer(user?.id ?? null);
+  }, [user?.id]);
+  useEffect(
+    () =>
+      registerAppJoinTransport({
+        sendJoin: (sessionId, options) => {
+          if (transport.getStatus() !== "online") {
+            return false;
+          }
+          transport.sendChat({
+            type: "app-join",
+            sessionId,
+            ...(options.asSpectator ? { asSpectator: true } : {}),
+          } as unknown as Parameters<typeof transport.sendChat>[0]);
+          return true;
+        },
+        sendLeave: (sessionId) => {
+          if (transport.getStatus() !== "online") {
+            return false;
+          }
+          transport.sendChat({
+            type: "app-leave",
+            sessionId,
+          } as unknown as Parameters<typeof transport.sendChat>[0]);
+          return true;
+        },
+      }),
+    [transport],
+  );
   const [audienceBusy, setAudienceBusy] = useState(false);
   // Tied to the call and the session it answered for, so a warning from one
   // call is never drawn over the next one.
