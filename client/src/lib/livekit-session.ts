@@ -579,6 +579,32 @@ export async function connectLiveKit({
   }
   /** Track we published, kept so we can replace/mute it later. */
   let published: InstanceType<typeof LocalAudioTrack> | null = null;
+  /**
+   * One microphone publish at a time, in the order they were asked for.
+   *
+   * A publish is an unpublish of the current clone and a publish of a new
+   * one, with two awaits in between, and Settings can ask for several in a
+   * second (pick a noise mode, flip echo cancellation, pick another mode:
+   * each one is a `swapPipeline`, and each new pipeline stops the one
+   * before it). Interleaved, the later call's `unpublishTrack` of the same
+   * old clone returns at once while the earlier one's is still negotiating,
+   * so the earlier call reached `published = ...` LAST: it unpublished the
+   * live microphone the later call had just put up and published its own
+   * clone of a track the later swap had already stopped. The room then got
+   * no packets at all from that person until their next mic change
+   * (measured 2026-10-20, five changes in a row, LiveKit 1.13.10). Run in
+   * order, the last request is always the one left on the wire.
+   *
+   * A request that has not started yet when a newer one arrives is dropped
+   * in its favour: its pipeline is already stopped by then, and publishing
+   * it anyway would make the setting the person actually ended on wait
+   * behind a full unpublish and publish cycle per click. Both callers then
+   * settle with the newer publish.
+   */
+  let micPublishing: Promise<void> | null = null;
+  /** The publish waiting its turn, if any. A newer request takes it over. */
+  let pendingMicPublish: { stream: MediaStream; done: Promise<void> } | null =
+    null;
   /** Where the audio self-repair's receiver reads resume next tick. */
   let audioReadCursor = 0;
   /** The watch-party voice archive publication, kept so it can be withdrawn. */
@@ -927,6 +953,55 @@ export async function connectLiveKit({
    */
   const qualities = new Map<string, VoiceLinkQuality>();
 
+  /**
+   * Which publication filed each stream above, so an unsubscribe only ever
+   * removes the stream it filed itself.
+   *
+   * The four maps are keyed by PERSON, one slot per source, and a person
+   * republishing a source (a microphone change in Settings, a noise mode, a
+   * device recovery, the camera ladder, the screen plan) is an unpublish
+   * followed by a publish of a NEW publication. On the listener's side the
+   * two events do not arrive in that order: measured against LiveKit
+   * 1.13.10 on 2026-10-20, the new publication's `TrackSubscribed` lands
+   * first and the old one's `TrackUnsubscribed` after it, every time. A
+   * handler that cleared the slot by person then deleted the NEW stream, so
+   * every listener's `<audio>` lost its `srcObject` while the packets kept
+   * arriving, and nothing filed it again until somebody rejoined. That was
+   * "a gente mexe nas configs e para de ouvir" in the QG.
+   */
+  type FiledPublication = { readonly trackSid?: string };
+  const filedBy = new WeakMap<MediaStream, FiledPublication>();
+
+  function fileStream(
+    map: Map<string, MediaStream>,
+    peerId: string,
+    stream: MediaStream,
+    pub: FiledPublication,
+  ) {
+    filedBy.set(stream, pub);
+    map.set(peerId, stream);
+  }
+
+  /** Drop `peerId`'s stream from `map` only when `pub` is what filed it. */
+  function releaseStream(
+    map: Map<string, MediaStream>,
+    peerId: string,
+    pub: FiledPublication,
+  ) {
+    const filed = map.get(peerId);
+    if (!filed) {
+      return;
+    }
+    const owner = filedBy.get(filed);
+    const sameOwner =
+      owner === undefined ||
+      owner === pub ||
+      (Boolean(owner.trackSid) && owner.trackSid === pub.trackSid);
+    if (sameOwner) {
+      map.delete(peerId);
+    }
+  }
+
   function snapshot() {
     const peers: RemotePeer[] = [];
     for (const participant of room.remoteParticipants.values()) {
@@ -971,10 +1046,10 @@ export async function connectLiveKit({
           applyReceiveQuality(pub);
         }
         if (pub.source === Track.Source.ScreenShare) {
-          screenStreams.set(participant.identity, stream);
+          fileStream(screenStreams, participant.identity, stream, pub);
           snapshot();
         } else if (pub.source === Track.Source.Camera) {
-          cameraStreams.set(participant.identity, stream);
+          fileStream(cameraStreams, participant.identity, stream, pub);
           snapshot();
         }
         return;
@@ -1011,9 +1086,9 @@ export async function connectLiveKit({
       // lands in the slot the participant's voice is played and metered from.
       const screenAudio = pub.source === Track.Source.ScreenShareAudio;
       if (screenAudio) {
-        screenAudioStreams.set(participant.identity, stream);
+        fileStream(screenAudioStreams, participant.identity, stream, pub);
       } else {
-        streams.set(participant.identity, stream);
+        fileStream(streams, participant.identity, stream, pub);
       }
       // Delivered until the listener's plan says otherwise. Registered after
       // the stream is filed so a plan that arrives in the same tick finds a
@@ -1028,11 +1103,13 @@ export async function connectLiveKit({
     .on(RoomEvent.TrackUnsubscribed, (track, pub, participant) => {
       if (track.kind === Track.Kind.Video) {
         delivery.unregister(pub);
+        // Only the stream THIS publication filed: a republish's new
+        // subscription has usually landed already (see `filedBy`).
         if (pub.source === Track.Source.ScreenShare) {
-          screenStreams.delete(participant.identity);
+          releaseStream(screenStreams, participant.identity, pub);
           snapshot();
         } else if (pub.source === Track.Source.Camera) {
-          cameraStreams.delete(participant.identity);
+          releaseStream(cameraStreams, participant.identity, pub);
           snapshot();
         }
         return;
@@ -1041,10 +1118,14 @@ export async function connectLiveKit({
         return;
       }
       audioDelivery.unregister(pub);
+      // Only the stream THIS publication filed. A microphone changed in
+      // Settings arrives here AFTER its replacement was subscribed and
+      // filed, and clearing the slot by person is what left the whole room
+      // unable to hear whoever touched their settings (see `filedBy`).
       if (pub.source === Track.Source.ScreenShareAudio) {
-        screenAudioStreams.delete(participant.identity);
+        releaseStream(screenAudioStreams, participant.identity, pub);
       } else {
-        streams.delete(participant.identity);
+        releaseStream(streams, participant.identity, pub);
       }
       snapshot();
     })
@@ -2611,7 +2692,33 @@ export async function connectLiveKit({
     }
   }
 
-  async function publish(stream: MediaStream) {
+  function publish(stream: MediaStream): Promise<void> {
+    if (pendingMicPublish) {
+      pendingMicPublish.stream = stream;
+      return pendingMicPublish.done;
+    }
+    const entry: { stream: MediaStream; done: Promise<void> } = {
+      stream,
+      done: Promise.resolve(),
+    };
+    const result = (micPublishing ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(() => {
+        if (pendingMicPublish === entry) {
+          pendingMicPublish = null;
+        }
+        return publishMicNow(entry.stream);
+      });
+    entry.done = result;
+    pendingMicPublish = entry;
+    micPublishing = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  async function publishMicNow(stream: MediaStream) {
     const [audioTrack] = stream.getAudioTracks();
     if (!audioTrack) {
       throw new Error("No audio track to publish");
