@@ -65,6 +65,10 @@ export function AppsSettingsSection({ serverId }: { serverId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<ServerAppDto | null>(null);
   const seq = useRef(0);
+  /** Moves when the page leaves a server (or unmounts): a re-read from before is dropped. */
+  const serverEpoch = useRef(0);
+  /** Per app, how many writes it has had: a re-read after a failed write only counts while it is the last. */
+  const writeGen = useRef(new Map<string, number>());
   const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Another server on the same mounted page: nothing of the last one may stay.
   const [shownServer, setShownServer] = useState(serverId);
@@ -96,6 +100,7 @@ export function AppsSettingsSection({ serverId }: { serverId: string }) {
     load();
     return () => {
       seq.current += 1;
+      serverEpoch.current += 1;
       if (savedTimer.current) {
         clearTimeout(savedTimer.current);
       }
@@ -106,9 +111,12 @@ export function AppsSettingsSection({ serverId }: { serverId: string }) {
     setBusyId(app.id);
     setError(null);
     setSaved(false);
-    // A read still in flight (the load, or the re-read after a failed write)
-    // saw the state before this write: it must not draw over it.
+    // A load still in flight saw the state before this write: it must not
+    // draw over it. And a re-read of THIS app after an earlier failed write is
+    // stale from here on (`gen`).
     seq.current += 1;
+    const gen = (writeGen.current.get(app.id) ?? 0) + 1;
+    writeGen.current.set(app.id, gen);
     // At once; put back below if the server says no.
     setApps((list) =>
       list ? list.map((a) => (a.id === app.id ? { ...a, enabled } : a)) : list,
@@ -137,11 +145,19 @@ export function AppsSettingsSection({ serverId }: { serverId: string }) {
       // A failure after the server committed the switch (the cleanup of its
       // sessions can fail on its own) must not leave the old position drawn:
       // ask again what the server holds, quietly (a failed read changes nothing).
-      const mine = ++seq.current;
+      // Only THIS app's entry is taken from the answer, and only while no
+      // later write touched it and the page is still on this server, so a slow
+      // answer can neither undo another switch nor be dropped by one.
+      const epoch = serverEpoch.current;
       fetchServerApps(serverId)
         .then((answer) => {
-          if (mine === seq.current) {
-            setApps(answer.apps);
+          const fresh = answer.apps.find((a) => a.id === app.id);
+          if (
+            fresh &&
+            epoch === serverEpoch.current &&
+            writeGen.current.get(app.id) === gen
+          ) {
+            setApps((list) => (list ? list.map((a) => (a.id === app.id ? fresh : a)) : list));
           }
         })
         .catch(() => {});

@@ -186,6 +186,31 @@ describe("switching off", () => {
     expect(switches()[0]!.getAttribute("aria-checked")).toBe("false");
   });
 
+  it("a later switch of ANOTHER app neither loses the failed app's re-read nor is undone by it", async () => {
+    write.mockRejectedValueOnce(new Error("500"));
+    await mount(<AppsSettingsSection serverId="s1" />);
+    let release: (value: { apps: ReturnType<typeof app>[] }) => void = () => {};
+    state.hold = new Promise((resolve) => {
+      release = resolve;
+    });
+    await click(switches()[0]!);
+    // The second app is switched off while the re-read of the first is still out.
+    write.mockResolvedValue({ appId: "jogos", enabled: false, changed: true, sessionsEnded: 0 });
+    await click(switches()[1]!);
+    const confirm = Array.from(document.querySelectorAll("button")).find((b) => b.textContent === "Switch off");
+    if (confirm) {
+      await click(confirm);
+    }
+    expect(switches()[1]!.getAttribute("aria-checked")).toBe("false");
+    // The re-read saw the first app stored off, and the second still on.
+    await act(async () => {
+      release({ apps: [app("poll", { enabled: false }), app("jogos", { liveSessions: 2 })] });
+      await Promise.resolve();
+    });
+    expect(switches()[0]!.getAttribute("aria-checked")).toBe("false");
+    expect(switches()[1]!.getAttribute("aria-checked")).toBe("false");
+  });
+
   it("a slow re-read after a failed write never draws over a later switch", async () => {
     write.mockRejectedValueOnce(new Error("500"));
     await mount(<AppsSettingsSection serverId="s1" />);
