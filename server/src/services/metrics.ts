@@ -12,6 +12,7 @@ import {
   type StreamAlertMetrics,
 } from "./stream-alerts.js";
 import { livePreviewMetrics } from "./live-preview.js";
+import { appsMetrics, type AppsMetrics } from "../apps/metrics.js";
 import { nudgeMetrics, type NudgeMetrics } from "./nudge.js";
 import { channelLayoutReport, type ChannelLayoutReport } from "./channel-layout.js";
 import {
@@ -380,6 +381,13 @@ export interface AdminMetrics {
    * the 30 s cache.
    */
   nudge: NudgeMetrics;
+  /**
+   * Apps in channels (`apps/metrics.ts`): live sessions and seats from the
+   * table, and since this process started the starts, ends by reason, handoffs,
+   * joins refused by code, frames dropped by a cap, state writes coalesced and
+   * the sweeps. Live, never from the 30 s cache.
+   */
+  apps: AppsMetrics;
   /**
    * The mixed channel list (`services/channel-layout.ts`): the flag's global
    * answer, servers migrated and reverted (from the table), and since this
@@ -1269,6 +1277,7 @@ type CachedMetrics = Omit<
   | "livePreview"
   | "nudge"
   | "channelLayout"
+  | "apps"
 >;
 
 async function computeAdminMetrics(): Promise<CachedMetrics> {
@@ -2061,6 +2070,7 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     communityHomeCaptions,
     stories,
     channelLayout,
+    apps,
   ] = await Promise.all([
     getCachedMetrics(),
     checkReady(),
@@ -2071,6 +2081,7 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     communityHomeCaptionsMetrics(),
     storiesMetrics(),
     channelLayoutReport(),
+    appsMetrics(),
   ]);
   const runtime = runtimeSnapshot();
   const cluster = await clusterMetrics(runtime);
@@ -2091,6 +2102,7 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     livePreview: livePreviewMetrics(),
     nudge: nudgeMetrics(),
     channelLayout,
+    apps,
   };
 }
 

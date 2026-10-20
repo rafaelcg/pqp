@@ -102,10 +102,12 @@ describe("the embeds the client really renders stay allowed", () => {
     };
     walk(root);
     // The YouTube IFrame API player (music queue) creates its iframe from script, so it has no literal here;
-    // its origin, www.youtube.com, is in the list above.
+    // its origin, www.youtube.com, is in the list above. The emulator room frames
+    // our own `/emulator/room.html`, which `frame-src 'self'` already covers.
     expect(found.sort()).toEqual([
       "components/communities/community-featured-media.tsx",
       "components/community-home/community-home-media.tsx",
+      "components/emulator/emulator-room.tsx",
     ]);
   });
 });

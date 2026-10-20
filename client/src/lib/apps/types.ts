@@ -20,7 +20,7 @@ export interface AppRuntimeConfig {
   id: string;
   version: string;
   entry: { url: string };
-  capabilities: Pick<AppCapabilities, "share" | "localFiles">;
+  capabilities: Pick<AppCapabilities, "share" | "localFiles" | "deviceStore">;
   /** The manifest's caps. Missing means the hard platform caps. */
   state?: { maxBytes: number; maxWritesPerSecond?: number; writers?: "host" | "participants" };
   events?: { maxPerSecond: number; maxBytes: number };

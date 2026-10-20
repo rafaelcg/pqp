@@ -81,4 +81,18 @@ describe("overwriteBitsForChannel", () => {
     expect(bits).not.toContain("STREAM");
     expect(overwriteBitsForChannel("voice")).not.toContain("START_WATCH_PARTY");
   });
+
+  it("offers USE_APPS in text and voice channels only while the apps flag is on", () => {
+    expect(overwriteBitsForChannel("text")).not.toContain("USE_APPS");
+    expect(overwriteBitsForChannel("voice")).not.toContain("USE_APPS");
+    expect(overwriteBitsForChannel("text", { appsOn: false })).not.toContain("USE_APPS");
+    expect(overwriteBitsForChannel("text", { appsOn: true })).toContain("USE_APPS");
+    expect(overwriteBitsForChannel("voice", { appsOn: true })).toContain("USE_APPS");
+    // A watch party hosts no app, flag or not, and the rest of the list is unchanged.
+    expect(overwriteBitsForChannel("watch_party", { appsOn: true })).not.toContain("USE_APPS");
+    expect(overwriteBitsForChannel("text", { appsOn: true })).toEqual([
+      ...overwriteBitsForChannel("text"),
+      "USE_APPS",
+    ]);
+  });
 });

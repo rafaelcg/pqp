@@ -10,6 +10,7 @@ import {
   Globe,
   Image as ImageIcon,
   KeyRound,
+  LayoutGrid,
   PartyPopper,
   ScrollText,
   ShieldBan,
@@ -33,6 +34,10 @@ import { DiscordImportSettingsRow } from "@/components/layout/discord-import-set
 import { CommunitySettingsSection } from "@/components/communities/community-settings-section";
 import { RolesSettingsSection } from "@/components/layout/roles-settings-section";
 import { SoundboardSettingsSection } from "@/components/layout/soundboard-settings-section";
+import {
+  AppsSettingsSection,
+  useServerAppsEnabled,
+} from "@/components/layout/apps-settings-section";
 import { OutgoingWebhooksSection } from "@/components/layout/outgoing-webhooks-section";
 import { BotsSettingsSection } from "@/components/layout/bots-settings-section";
 import { useCommunitiesEnabled } from "@/components/communities/use-communities-enabled";
@@ -298,6 +303,7 @@ export type SectionId =
   | "roles"
   | "soundboard"
   | "bots"
+  | "apps"
   | "integrations"
   | "moderation"
   | "automod"
@@ -365,6 +371,15 @@ const SECTIONS: SectionDef[] = [
     label: "serverSettings.section.bots",
     description: "serverSettings.bots.description",
     icon: Bot,
+    ownerOnly: false,
+  },
+  {
+    // The apps the operator released here, each with a switch the owner can
+    // only turn off. Drawn only while the `apps` flag is on for the server.
+    id: "apps",
+    label: "serverSettings.section.apps",
+    description: "serverSettings.apps.description",
+    icon: LayoutGrid,
     ownerOnly: false,
   },
   {
@@ -770,6 +785,9 @@ export function ServerSettingsDialog({
       });
   const canSeeCommunity =
     communitiesEnabled && Boolean(serverId) && (isOwner || canManageServer);
+  // Hidden unless the platform is on for THIS server (`GET /api/apps/config`).
+  const appsOn = useServerAppsEnabled(serverId, open && (isOwner || canManageServer));
+  const canSeeApps = appsOn && (isOwner || canManageServer);
   const openingSection: SectionId =
     requestedSection === "roles" && canSeeRoles
       ? "roles"
@@ -975,6 +993,8 @@ export function ServerSettingsDialog({
         return canSeeSoundboard;
       case "bots":
         return canSeeBots;
+      case "apps":
+        return canSeeApps;
       case "integrations":
         return canSeeIntegrations;
       case "moderation":
@@ -1197,6 +1217,9 @@ export function ServerSettingsDialog({
 
           {active.id === "bots" && serverId && (
             <BotsSettingsSection key={serverId} serverId={serverId} onCreate={onCreateBot ?? (() => {})} />
+          )}
+          {active.id === "apps" && serverId && (
+            <AppsSettingsSection key={serverId} serverId={serverId} />
           )}
 
           {active.id === "integrations" && serverId && (

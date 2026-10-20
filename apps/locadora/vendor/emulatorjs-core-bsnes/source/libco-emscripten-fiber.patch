@@ -1,0 +1,113 @@
+--- a/libco/emscripten_fiber.c
++++ b/libco/emscripten_fiber.c
+@@ -2,6 +2,13 @@
+   libco.emscripten (2020-02-27)
+   authors: Toad King
+   license: public domain
++
++  pqp (2026-10-20): co_derive and co_serializable added. bsnes calls co_derive on
++  every power cycle after the first (reset, and loading a state) and
++  co_serializable on every state save; without them the emscripten link leaves
++  both as stubs that abort the runtime. Each fiber now keeps its own stacks so
++  co_derive can re-initialise it in place and co_delete can free all of it.
++  This file stays public domain.
+ */
+ 
+ #define LIBCO_C
+@@ -13,8 +20,16 @@
+ 
+ #define ASYNCIFY_STACK_SIZE (131072)
+ 
+-static emscripten_fiber_t *co_active_;
++typedef struct
++{
++   emscripten_fiber_t fiber; /* first: a cothread_t is also an emscripten_fiber_t* */
++   void *c_stack;
++   unsigned int c_stack_size;
++   void *asyncify_stack;
++} co_fiber_t;
+ 
++static co_fiber_t *co_active_;
++
+ static void co_thunk(void *coentry)
+ {
+    ((void (*)(void))coentry)();
+@@ -24,10 +39,10 @@
+ {
+    if (!co_active_)
+    {
+-      emscripten_fiber_t *co_primary = calloc(1, sizeof(emscripten_fiber_t));
+-      void *asyncify_stack = malloc(ASYNCIFY_STACK_SIZE);
++      co_fiber_t *co_primary = calloc(1, sizeof(co_fiber_t));
++      co_primary->asyncify_stack = malloc(ASYNCIFY_STACK_SIZE);
+ 
+-      emscripten_fiber_init_from_current_context(co_primary, asyncify_stack, ASYNCIFY_STACK_SIZE);
++      emscripten_fiber_init_from_current_context(&co_primary->fiber, co_primary->asyncify_stack, ASYNCIFY_STACK_SIZE);
+       co_active_ = co_primary;
+    }
+ }
+@@ -42,23 +57,55 @@
+ {
+    co_init();
+ 
+-   emscripten_fiber_t *fiber = calloc(1, sizeof(emscripten_fiber_t));
+-   void *asyncify_stack = malloc(ASYNCIFY_STACK_SIZE);
+-   void *c_stack = memalign(16, stacksize);
+-   emscripten_fiber_init(fiber, co_thunk, coentry, c_stack, stacksize, asyncify_stack, ASYNCIFY_STACK_SIZE);
++   co_fiber_t *co = calloc(1, sizeof(co_fiber_t));
++   co->asyncify_stack = malloc(ASYNCIFY_STACK_SIZE);
++   co->c_stack = memalign(16, stacksize);
++   co->c_stack_size = stacksize;
++   emscripten_fiber_init(&co->fiber, co_thunk, coentry, co->c_stack, stacksize, co->asyncify_stack, ASYNCIFY_STACK_SIZE);
+ 
+-   return (cothread_t)fiber;
++   return (cothread_t)co;
+ }
+ 
++/* `memory` is a thread from co_create (bsnes passes its previous thread back); it is
++   re-initialised to start at `coentry`, or replaced when it is missing, too small,
++   or the one running now. */
++cothread_t co_derive(void *memory, unsigned int stacksize, void (*coentry)(void))
++{
++   co_fiber_t *co = (co_fiber_t *)memory;
++
++   co_init();
++   if (!co || co == co_active_ || !co->c_stack || co->c_stack_size < stacksize)
++   {
++      if (co && co != co_active_)
++         co_delete(co);
++      return co_create(stacksize, coentry);
++   }
++   emscripten_fiber_init(&co->fiber, co_thunk, coentry, co->c_stack, co->c_stack_size, co->asyncify_stack, ASYNCIFY_STACK_SIZE);
++   return (cothread_t)co;
++}
++
+ void co_delete(cothread_t cothread)
+ {
+-   free(cothread);
++   co_fiber_t *co = (co_fiber_t *)cothread;
++
++   if (!co)
++      return;
++   free(co->c_stack);
++   free(co->asyncify_stack);
++   free(co);
+ }
+ 
+ void co_switch(cothread_t cothread)
+ {
+-   emscripten_fiber_t *old_fiber = co_active_;
+-   co_active_ = (emscripten_fiber_t *)cothread;
++   co_fiber_t *old_fiber = co_active_;
++   co_active_ = (co_fiber_t *)cothread;
+ 
+-   emscripten_fiber_swap(old_fiber, co_active_);
++   emscripten_fiber_swap(&old_fiber->fiber, &co_active_->fiber);
+ }
++
++/* A fiber's asyncify stack cannot be saved and restored byte for byte, so bsnes
++   takes its synchronised path (run every thread to a save point first). */
++int co_serializable(void)
++{
++   return 0;
++}

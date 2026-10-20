@@ -73,6 +73,29 @@ const requests: Record<string, Record<string, unknown>> = {
   "events.send": { name: "ping", data: { x: 1 } },
   "assets.get": { name: "core.wasm" },
   "files.pickLocal": {},
+  "store.get": { key: "rom:abc" },
+  "store.put": { key: "sram:abc", bytes: new ArrayBuffer(4), meta: { slot: 1 } },
+  "store.delete": { key: "rom:abc" },
+  "store.list": { prefix: "state:abc:" },
+  "store.usage": {},
+  "files.saveLocal": { bytes: new ArrayBuffer(4), ext: ".locadora" },
+  "sync.status": {},
+  "sync.list": { game: "a".repeat(64) },
+  "sync.get": { save: "5b7b9f4e-8c0d-4f0a-9d6e-2a1c4d3b8e11" },
+  "sync.put": {
+    game: "a".repeat(64),
+    kind: "state",
+    slot: 1,
+    baseRev: 0,
+    bytes: new ArrayBuffer(4),
+    thumb: new ArrayBuffer(2),
+    platform: "nes",
+    core: "fceumm",
+    coreVersion: "4.2.3",
+  },
+  "sync.delete": { save: "5b7b9f4e-8c0d-4f0a-9d6e-2a1c4d3b8e11" },
+  "sync.restore": { save: "5b7b9f4e-8c0d-4f0a-9d6e-2a1c4d3b8e11", baseRev: 2 },
+  "sync.clear": {},
   "ui.resize": { height: 480 },
   "ui.fullscreen": { on: true },
   "share.request": { on: false },
@@ -84,6 +107,18 @@ function req(type: string, extra: Record<string, unknown> = {}) {
 }
 
 describe("app to host requests", () => {
+  it("sync.put carries a save, never a game: no name, no extra field, at most 1 MiB and a 16 KiB picture", () => {
+    expect(bridgeAppMessageSchema.safeParse(req("sync.put", { name: "game.gba" })).success).toBe(false);
+    expect(bridgeAppMessageSchema.safeParse(req("sync.put", { bytes: new ArrayBuffer(1024 * 1024 + 1) })).success).toBe(false);
+    expect(bridgeAppMessageSchema.safeParse(req("sync.put", { thumb: new ArrayBuffer(16 * 1024 + 1) })).success).toBe(false);
+    expect(bridgeAppMessageSchema.safeParse(req("sync.put", { game: "not-a-hash" })).success).toBe(false);
+    expect(bridgeAppMessageSchema.safeParse(req("sync.put", { slot: 5 })).success).toBe(false);
+    expect(bridgeAppMessageSchema.safeParse(req("sync.put", { kind: "rom" })).success).toBe(false);
+    expect(bridgeAppMessageSchema.safeParse(req("sync.clear", { game: "a".repeat(64) })).success).toBe(true);
+    // the save is named `save`: `id` is the request's own and cannot carry it
+    expect(bridgeAppMessageSchema.safeParse({ id: "r1", type: "sync.get" }).success).toBe(false);
+  });
+
   it.each(Object.keys(requests))("accepts %s", (type) => {
     expect(bridgeAppMessageSchema.safeParse(req(type)).success).toBe(true);
   });
@@ -280,6 +315,75 @@ describe("app to host requests", () => {
       false,
     );
   });
+
+  describe("the device store", () => {
+    const ok = (type: string, extra: Record<string, unknown> = {}) =>
+      bridgeAppMessageSchema.safeParse(req(type, extra)).success;
+
+    it("takes keys of 1 to 128 characters of a-z 0-9 : . _ - and nothing else", () => {
+      for (const key of ["a", "rom:abc", "state:abc:1", "prefs", "seen:onboarding", "a".repeat(128)]) {
+        expect(ok("store.get", { key }), key).toBe(true);
+      }
+      for (const key of ["", "A", "rom abc", "rom/abc", "../x", "a".repeat(129), "ro\u0000m", "ROM:abc", "chaveé"]) {
+        expect(ok("store.get", { key }), JSON.stringify(key)).toBe(false);
+        expect(ok("store.delete", { key }), JSON.stringify(key)).toBe(false);
+        expect(ok("store.put", { key }), JSON.stringify(key)).toBe(false);
+      }
+      expect(ok("store.get", { key: 5 })).toBe(false);
+    });
+
+    it("takes a prefix of 0 to 128 characters of the same alphabet", () => {
+      for (const prefix of ["", "rom:", "a".repeat(128)]) expect(ok("store.list", { prefix }), prefix).toBe(true);
+      for (const prefix of ["A", "a b", "a".repeat(129), "*"]) expect(ok("store.list", { prefix }), prefix).toBe(false);
+      expect(bridgeAppMessageSchema.safeParse({ id: "r", type: "store.list" }).success).toBe(false);
+    });
+
+    it("takes the value as an ArrayBuffer only, a view or a string is refused", () => {
+      expect(ok("store.put", { bytes: new Uint8Array(4) })).toBe(false);
+      expect(ok("store.put", { bytes: "abcd" })).toBe(false);
+      expect(ok("store.put", { bytes: [1, 2] })).toBe(false);
+      expect(ok("files.saveLocal", { bytes: new Uint8Array(4) })).toBe(false);
+      expect(bridgeAppMessageSchema.safeParse({ id: "r", type: "store.put", key: "a" }).success).toBe(false);
+    });
+
+    it("holds meta to JSON of at most 2048 bytes, exactly 2048 passing", () => {
+      const fit = { s: "x".repeat(2048 - 8) }; // {"s":"..."} is 8 bytes of frame
+      expect(new TextEncoder().encode(JSON.stringify(fit)).length).toBe(2048);
+      expect(ok("store.put", { meta: fit })).toBe(true);
+      expect(ok("store.put", { meta: { s: "x".repeat(2048 - 7) } })).toBe(false);
+      expect(ok("store.put", { meta: undefined })).toBe(true);
+      expect(ok("store.put", { meta: () => 1 })).toBe(false);
+      expect(ok("store.put", { meta: new Date() })).toBe(false);
+    });
+
+    it("takes a save extension of the closed shape and no name", () => {
+      expect(ok("files.saveLocal", { ext: ".locadora" })).toBe(true);
+      for (const ext of ["locadora", ".", ".LOCADORA", ".a.b", "../x", ".toolongextension"]) {
+        expect(ok("files.saveLocal", { ext }), ext).toBe(false);
+      }
+      expect(ok("files.saveLocal", { name: "save.locadora" })).toBe(false);
+    });
+
+    it("answers store.list with at most 500 entries and a key in the alphabet", () => {
+      const entry = { key: "rom:abc", size: 1, meta: null, updatedAt: 1 };
+      const schema = bridgeResultSchemas["store.list"];
+      expect(schema.safeParse(Array.from({ length: 500 }, () => entry)).success).toBe(true);
+      expect(schema.safeParse(Array.from({ length: 501 }, () => entry)).success).toBe(false);
+      expect(schema.safeParse([{ ...entry, key: "Rom" }]).success).toBe(false);
+    });
+
+    it("answers store.get with null for a missing key and never reads one call's result as another's", () => {
+      const parsed = bridgeHostMessageSchema.parse({ id: "r", ok: true, type: "store.get", result: null });
+      expect(parsed).toMatchObject({ type: "store.get", result: null });
+      expect(
+        bridgeHostMessageSchema.safeParse({ id: "r", ok: true, type: "store.get", result: { used: 1, cap: 2, persisted: true } })
+          .success,
+      ).toBe(false);
+      expect(
+        bridgeHostMessageSchema.safeParse({ id: "r", ok: true, type: "store.usage", result: null }).success,
+      ).toBe(false);
+    });
+  });
 });
 
 const participant = (extra: Record<string, unknown> = {}) => ({
@@ -343,6 +447,38 @@ describe("host to app messages", () => {
       "events.send": null,
       "assets.get": { name: "core.wasm", bytes: new ArrayBuffer(1) },
       "files.pickLocal": { bytes: new ArrayBuffer(1), ext: ".gba" },
+      "store.get": { bytes: new ArrayBuffer(1), meta: null },
+      "store.put": { usage: { used: 1, cap: 512, persisted: false } },
+      "store.delete": null,
+      "store.list": [{ key: "rom:abc", size: 1, meta: { a: 1 }, updatedAt: 1 }],
+      "store.usage": { used: 0, cap: 512, persisted: true },
+      "files.saveLocal": null,
+      "sync.status": { mode: "on", used: 0, cap: 8, device: "computer" },
+      "sync.list": {
+        entries: [
+          {
+            id: "5b7b9f4e-8c0d-4f0a-9d6e-2a1c4d3b8e11",
+            kind: "sram",
+            slot: 0,
+            rev: 1,
+            size: 8,
+            hash: "b".repeat(64),
+            savedAt: 1,
+            device: "phone",
+            thisDevice: false,
+            thumb: false,
+            platform: "gba",
+            core: "mgba",
+            coreVersion: "4.2.3",
+            history: 0,
+          },
+        ],
+      },
+      "sync.get": { rev: 1, bytes: new ArrayBuffer(1), thumb: null },
+      "sync.put": { id: "5b7b9f4e-8c0d-4f0a-9d6e-2a1c4d3b8e11", rev: 1, used: 1, cap: 8 },
+      "sync.delete": { used: 0, cap: 8 },
+      "sync.restore": { id: "5b7b9f4e-8c0d-4f0a-9d6e-2a1c4d3b8e11", rev: 3 },
+      "sync.clear": { deleted: 1, used: 0, cap: 8 },
       "ui.resize": { height: 300 },
       "ui.fullscreen": { on: true },
       "share.request": { on: true },

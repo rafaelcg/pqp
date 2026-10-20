@@ -106,6 +106,35 @@ describe("buildApp on fixtures", () => {
     ]);
   });
 
+  it("runs an app's prepare.mts first: what it writes into public/ is in the bundle and in assets[]", async () => {
+    const root = fixtureApp(
+      "pqp-fixture-prepare",
+      {
+        "index.html": PAGE,
+        "main.js": "console.log(1)",
+        "prepare.mts":
+          'import { mkdirSync, writeFileSync } from "node:fs";\nimport { join } from "node:path";\n' +
+          'export default async function prepare({ appDir }: { appDir: string }) {\n' +
+          '  mkdirSync(join(appDir, "public", "gen"), { recursive: true });\n' +
+          '  writeFileSync(join(appDir, "public", "gen", "core.bin"), "generated");\n}\n',
+      },
+      { assets: [{ name: "core.bin", path: "gen/core.bin" }] },
+    );
+    const built = await buildApp(root, temp("pqp-out-"));
+    expect(built.manifest.assets).toEqual([
+      { name: "core.bin", path: "gen/core.bin", sha256: sha256Hex("generated"), bytes: 9 },
+    ]);
+  });
+
+  it("refuses a prepare.mts that exports no function", async () => {
+    const root = fixtureApp("pqp-fixture-badprepare", {
+      "index.html": PAGE,
+      "main.js": "1",
+      "prepare.mts": "export const nothing = 1;\n",
+    });
+    await expect(buildApp(root, temp("pqp-out-"))).rejects.toThrow(/default async function/);
+  });
+
   it("refuses an asset that is not in the bundle", async () => {
     const root = fixtureApp(
       "pqp-fixture-missing",

@@ -1,0 +1,1356 @@
+/*
+ * flow.css: the wire-up's own pieces (L8): putting a cartridge in, our Start
+ * button, the errors of the loading, the notices dialog, the controller map
+ * over a game, and the few rules that keep EmulatorJS's own chrome out of
+ * sight. Built on the tokens and the page grid of base.css; imported from main.ts.
+ *
+ * Motion (SPEC 7), all of it CSS because the frame's CSP has no inline style:
+ *  - the cartridge slides into the console's slot in 300 ms;
+ *  - when the first frame is up, two black shutters part from a 1 px white
+ *    line across the middle, in 300 ms, over the picture;
+ *  - with reduced motion (the system setting or the host's `data-reduced-motion`)
+ *    both are one 150 ms crossfade.
+ */
+
+/* ---- EmulatorJS's own chrome: our HUD replaces its bar, its pill is hidden by the runtime ---- */
+
+.loc-game .ejs_menu_bar,
+.loc-game .ejs_menu_bar_hidden,
+.loc-game .ejs_context_menu {
+  display: none !important;
+}
+
+/*
+ * ---- the overlay over the stage while the cartridge goes in ----
+ *
+ * One column on the shop's room out of focus (shop-interior.webp, the shelf's own backdrop, blurred and dimmed), on
+ * an 8 px rhythm: the console with the cartridge going in (the first visit's step 4, ui/cartridge.ts), 24, the title,
+ * 8, the console's name, 24, the stepper, 32, the action. "Voltar" sits in the top-left corner on every state but the
+ * error, which has its own way back. Dark in every theme: it is the room, not a card of the host's.
+ */
+
+.loc-load {
+  container: load / size;
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  isolation: isolate;
+  display: grid;
+  padding: 72px 24px;
+  overflow: auto;
+  color: var(--loc-wall-text);
+  text-align: center;
+}
+
+/* the two shutters: black halves that part in the reveal, under the room */
+.loc-load::before,
+.loc-load::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: -2;
+  background: #000;
+}
+
+.loc-load::before {
+  top: 0;
+  height: 50%;
+}
+
+.loc-load::after {
+  bottom: 0;
+  height: 50%;
+}
+
+/* the room: the picture out of focus and at 70% of its light, then a scrim that is darkest at the edges */
+.loc-load-bg {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  background: #08090d;
+}
+
+.loc-load-bg::before {
+  content: "";
+  position: absolute;
+  inset: -32px;
+  background: url("../art/shop-interior.webp") 50% 55% / cover no-repeat;
+  filter: blur(12px) brightness(0.7) saturate(1.1);
+}
+
+.loc-load-bg::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(120% 90% at 50% 40%, transparent 30%, rgba(8, 9, 13, 0.55) 100%),
+    rgba(8, 9, 13, 0.62);
+}
+
+/*
+ * The step before the overlay: the file is being read (`#v-loading`, a line of status and nothing else, for the
+ * moment it takes). The same room, so reading, booting and Start are one place that changes, not three screens.
+ */
+.loc-loading {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  background: #08090d;
+}
+
+.loc-loading::before,
+.loc-loading::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+}
+
+.loc-loading::before {
+  inset: -32px;
+  background: url("../art/shop-interior.webp") 50% 55% / cover no-repeat;
+  filter: blur(12px) brightness(0.7) saturate(1.1);
+}
+
+.loc-loading::after {
+  inset: 0;
+  background:
+    radial-gradient(120% 90% at 50% 40%, transparent 30%, rgba(8, 9, 13, 0.55) 100%),
+    rgba(8, 9, 13, 0.62);
+}
+
+/* a pink dot that breathes beside the line: something is happening, never a spinner */
+.loc-loading .loc-load-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--loc-wall-text);
+  font-weight: 600;
+}
+
+.loc-loading .loc-load-status::before {
+  content: "";
+  width: 12px;
+  height: 12px;
+  background: var(--loc-neon-pink);
+  border-radius: 50%;
+  box-shadow: 0 0 0 4px rgba(255, 95, 200, 0.22), 0 0 12px rgba(255, 95, 200, 0.55);
+  animation: loc-load-breathe 1.6s ease-in-out infinite alternate;
+}
+
+.loc-loading .loc-load-status:empty::before {
+  display: none;
+}
+
+/* the column; auto margins centre it and give way to the scroll when it is taller than the stage */
+.loc-load-main {
+  display: grid;
+  justify-items: center;
+  width: min(600px, 100%);
+  margin: auto;
+}
+
+.loc-load-hero,
+.loc-load-act {
+  display: grid;
+  justify-items: center;
+  width: 100%;
+}
+
+.loc-load-act:has(> .loc-load-extra:empty + .loc-load-body:empty) {
+  display: none;
+}
+
+/*
+ * A question in the Start's place (pick up where you left off, the account's newer autosave, a battery save that
+ * changed on both sides) on a wide stage: what is going in on the left, the question on the right, both centred on
+ * one line, so the question is never pushed under the fold.
+ */
+@container load (min-width: 820px) {
+  .loc-load-main:has(.loc-load-continue, .loc-conflict) {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    align-items: center;
+    column-gap: 56px;
+    width: min(1080px, 100%);
+  }
+  .loc-load-main:has(.loc-load-continue, .loc-conflict) .loc-load-act > :first-child {
+    margin-top: 0;
+  }
+  .loc-load-main:has(.loc-load-continue, .loc-conflict) .loc-load-extra:empty + .loc-load-body {
+    margin-top: 0;
+  }
+}
+
+/* in one column, a question makes room for itself: the console steps down a size, more with the name field above it */
+@container load (max-width: 819px) {
+  .loc-load-main:has(.loc-load-continue, .loc-conflict) {
+    --load-slot: clamp(128px, min(26cqh, 52cqw), 240px);
+  }
+  .loc-load-main:has(.loc-load-continue, .loc-conflict):has(.loc-load-extra:not(:empty)) {
+    --load-slot: clamp(112px, min(18cqh, 44cqw), 180px);
+  }
+}
+
+/* the way back: quiet, in the corner, a 44 px target */
+.loc-load-back {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 16px 0 12px;
+  color: var(--loc-wall-text);
+  font: inherit;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  background: rgba(8, 9, 13, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: var(--loc-pill);
+  cursor: pointer;
+  transition:
+    background var(--loc-fast) var(--loc-ease),
+    border-color var(--loc-fast) var(--loc-ease);
+}
+
+.loc-load-back:hover {
+  background: rgba(30, 33, 42, 0.85);
+  border-color: rgba(255, 255, 255, 0.32);
+}
+
+.loc-load-back:focus-visible {
+  outline: 2px solid var(--loc-ring);
+  outline-offset: 2px;
+}
+
+.loc-load-back[hidden],
+.loc-load[data-phase="error"] .loc-load-back {
+  display: none;
+}
+
+/* the console: tall enough to read, short enough that the column fits the stage */
+.loc-load-slot {
+  width: var(--load-slot, clamp(152px, min(36cqh, 62cqw), 300px));
+  line-height: 0;
+}
+
+.loc-load-box {
+  display: block;
+  line-height: 0;
+}
+
+/* the cartridge goes in once, from over the slot: SPEC 7's 300 ms */
+.loc-load .loc-ins-cart {
+  animation: loc-load-insert var(--loc-slow) var(--loc-ease-out) both;
+}
+
+@keyframes loc-load-insert {
+  from {
+    transform: translateY(var(--ins-out)) var(--ins-skew);
+  }
+}
+
+/*
+ * The console's light says the phase: off while the cartridge goes in, a slow amber breath while the console boots
+ * (one change in more than a second, never a blink), green when the game is ready, red on an error.
+ */
+.loc-load[data-phase="boot"] .loc-ins-led {
+  opacity: 1;
+  background: var(--loc-neon-amber);
+  box-shadow:
+    0 0 0.6cqw 0.2cqw rgba(255, 194, 74, 0.9),
+    0 0 3cqw 1cqw rgba(255, 194, 74, 0.3);
+  animation: loc-load-breathe 1.6s ease-in-out infinite alternate;
+}
+
+.loc-load[data-phase="ready"] .loc-ins-led,
+.loc-load[data-phase="reveal"] .loc-ins-led {
+  opacity: 1;
+}
+
+.loc-load[data-phase="error"] .loc-ins-led {
+  opacity: 1;
+  background: #ff5f5f;
+  box-shadow:
+    0 0 0.6cqw 0.2cqw rgba(255, 95, 95, 0.9),
+    0 0 3cqw 1cqw rgba(255, 95, 95, 0.3);
+}
+
+@keyframes loc-load-breathe {
+  from {
+    opacity: 0.4;
+  }
+}
+
+.loc-load-text {
+  display: grid;
+  justify-items: center;
+  width: 100%;
+  margin-top: 24px;
+}
+
+.loc-load-title {
+  margin: 0;
+  max-width: 24ch;
+  font-family: var(--loc-font-sign);
+  font-size: clamp(1.375rem, 1rem + 1.4cqw, 2.25rem);
+  font-weight: 400;
+  line-height: 1.15;
+  letter-spacing: 0.01em;
+  overflow-wrap: break-word;
+  text-wrap: balance;
+}
+
+/* the console's name, a chip under the title */
+.loc-load-sub {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  margin: 8px 0 0;
+  padding: 0 12px;
+  color: var(--loc-wall-text-2);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: var(--loc-pill);
+}
+
+/* the phase, for assistive tech; on screen the stepper says it */
+.loc-load .loc-load-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* the stepper: three equal columns, so the middle step is the column's middle and every gap is the same */
+.loc-load-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  width: min(440px, 100%);
+  margin: 24px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.loc-load-step {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 0 4px;
+  color: var(--loc-wall-text-2);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.25;
+}
+
+/* the line from the step before, dot edge to dot edge */
+.loc-load-step + .loc-load-step::before {
+  content: "";
+  position: absolute;
+  top: 7px;
+  left: calc(-50% + 16px);
+  right: calc(50% + 16px);
+  height: 2px;
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 1px;
+  transition: background var(--loc-base) var(--loc-ease);
+}
+
+.loc-load-step:is([data-state="done"], [data-state="active"]) + .loc-load-step:is([data-state="done"], [data-state="active"])::before {
+  background: var(--loc-neon-cyan);
+}
+
+.loc-load-dot {
+  position: relative;
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  background: #0b0d12;
+  border: 2px solid rgba(255, 255, 255, 0.28);
+  border-radius: 50%;
+  transition:
+    background var(--loc-base) var(--loc-ease),
+    border-color var(--loc-base) var(--loc-ease),
+    box-shadow var(--loc-base) var(--loc-ease);
+}
+
+.loc-load-step[data-state="done"] .loc-load-dot {
+  background: var(--loc-neon-cyan);
+  border-color: var(--loc-neon-cyan);
+}
+
+.loc-load-step[data-state="active"] {
+  color: var(--loc-wall-text);
+  font-weight: 700;
+}
+
+.loc-load-step[data-state="active"] .loc-load-dot {
+  background: var(--loc-neon-pink);
+  border-color: var(--loc-neon-pink);
+  box-shadow: 0 0 0 4px rgba(255, 95, 200, 0.22), 0 0 12px rgba(255, 95, 200, 0.55);
+}
+
+/* ready: the last step takes the console's green */
+.loc-load[data-phase="ready"] .loc-load-step[data-state="active"] .loc-load-dot {
+  background: var(--loc-wall-accent);
+  border-color: var(--loc-wall-accent);
+  box-shadow: 0 0 0 4px rgba(200, 245, 90, 0.2), 0 0 12px rgba(200, 245, 90, 0.5);
+}
+
+.loc-load[data-phase="error"] .loc-load-steps {
+  display: none;
+}
+
+.loc-load-extra:empty,
+.loc-load-body:empty {
+  display: none;
+}
+
+/* the name field (NES): a card of the host's, as everywhere else it is drawn */
+.loc-load-extra {
+  width: min(460px, 100%);
+  margin-top: 32px;
+  padding: 12px 16px;
+  background: var(--loc-card);
+  color: var(--loc-text);
+  border: 1px solid var(--loc-border);
+  border-radius: var(--loc-radius);
+  text-align: left;
+}
+
+.loc-load-body {
+  display: grid;
+  justify-items: center;
+  gap: 16px;
+  width: 100%;
+  margin-top: 32px;
+}
+
+.loc-load-extra:not(:empty) + .loc-load-body {
+  margin-top: 24px;
+}
+
+.loc-load-press {
+  margin: 0;
+  max-width: 36ch;
+  color: var(--loc-wall-text-2);
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+
+/* our own Start (SPEC 4.3): the click that lets the sound run. The wall's green, as on step 4: the room is dark in every theme */
+.loc-start {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: min(160px, 100%);
+  max-width: 100%;
+  min-height: 48px;
+  padding: 0 24px;
+  border: 0;
+  border-radius: var(--loc-pill);
+  background: var(--loc-wall-accent);
+  color: var(--loc-wall-on-accent);
+  font: inherit;
+  font-family: var(--loc-font-sign);
+  font-size: 1.0625rem;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  transition:
+    transform var(--loc-fast) var(--loc-ease),
+    filter var(--loc-fast) var(--loc-ease);
+}
+
+.loc-start-big {
+  min-width: min(224px, 100%);
+  min-height: 56px;
+  padding: 0 32px;
+  font-size: 1.25rem;
+  box-shadow: 0 0 0 1px rgba(200, 245, 90, 0.35), 0 0 32px rgba(200, 245, 90, 0.25), 0 10px 28px rgba(0, 0, 0, 0.4);
+}
+
+.loc-start:hover {
+  filter: brightness(0.94);
+  transform: translateY(-1px);
+}
+
+.loc-start:active {
+  transform: translateY(1px);
+}
+
+.loc-start:focus-visible {
+  outline: 2px solid var(--loc-wall-text);
+  outline-offset: 3px;
+}
+
+.loc-start-cap {
+  display: inline-grid;
+}
+
+.loc-start svg {
+  flex: none;
+}
+
+.loc-start-quiet {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--loc-wall-text);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  box-shadow: none;
+  font-family: var(--loc-font);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.loc-start-quiet:hover {
+  filter: none;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* "Continuar de onde parou?": the autosave's picture beside the question, on the room's dark glass */
+.loc-load-continue {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 20px;
+  width: 100%;
+  padding: 16px;
+  background: rgba(14, 16, 22, 0.88);
+  color: var(--loc-wall-text);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 16px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+  text-align: left;
+}
+
+.loc-load-continue:not(:has(.loc-load-thumb)) {
+  grid-template-columns: minmax(0, 1fr);
+  text-align: center;
+}
+
+/* the picture on a small dark screen, a bezel around it */
+.loc-load-shot {
+  display: block;
+  padding: 6px;
+  background: #05060a;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  line-height: 0;
+}
+
+.loc-load-thumb {
+  display: block;
+  width: 152px;
+  max-width: 100%;
+  height: auto;
+  background: #000;
+  border-radius: 4px;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+.loc-load-ask {
+  margin: 0;
+  font-size: 1.0625rem;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.loc-load-continue .loc-muted {
+  margin: 4px 0 0;
+  color: var(--loc-wall-text-2);
+  font-size: 0.875rem;
+}
+
+.loc-load-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.loc-load-continue .loc-load-actions {
+  justify-content: flex-start;
+}
+
+.loc-load-continue:not(:has(.loc-load-thumb)) .loc-load-actions {
+  justify-content: center;
+}
+
+.loc-load-continue .loc-start {
+  min-width: 0;
+  min-height: 48px;
+  padding: 0 20px;
+  font-size: 0.9375rem;
+}
+
+/* a narrow stage: the picture over the question, all of it centred */
+@container load (max-width: 520px) {
+  .loc-load {
+    padding-inline: 16px;
+  }
+  /* the picture beside the question and its line, the two buttons on a row of their own under both */
+  .loc-load-continue:not(.loc-load-remote) {
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas: "shot ask" "shot saved" "actions actions";
+    gap: 4px 16px;
+    padding: 12px;
+  }
+  .loc-load-continue:not(.loc-load-remote):not(:has(.loc-load-thumb)) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "ask" "saved" "actions";
+  }
+  .loc-load-continue:not(.loc-load-remote) .loc-load-continue-text {
+    display: contents;
+  }
+  .loc-load-continue:not(.loc-load-remote) .loc-load-shot {
+    grid-area: shot;
+    padding: 4px;
+  }
+  .loc-load-continue:not(.loc-load-remote) .loc-load-thumb {
+    width: 104px;
+  }
+  .loc-load-continue:not(.loc-load-remote) .loc-load-ask {
+    grid-area: ask;
+    align-self: end;
+  }
+  .loc-load-continue:not(.loc-load-remote) .loc-muted {
+    grid-area: saved;
+    align-self: start;
+  }
+  .loc-load-continue:not(.loc-load-remote) .loc-load-actions {
+    grid-area: actions;
+    flex-direction: column;
+    align-items: stretch;
+    margin-top: 12px;
+  }
+}
+
+/* a short stage: the console gives up height first, then the gaps */
+@container load (max-height: 620px) {
+  .loc-load {
+    padding-top: 64px;
+    padding-bottom: 16px;
+  }
+  .loc-load-text {
+    margin-top: 16px;
+  }
+  .loc-load-steps {
+    margin-top: 16px;
+  }
+  .loc-load-body,
+  .loc-load-extra {
+    margin-top: 24px;
+  }
+  .loc-load-extra:not(:empty) + .loc-load-body {
+    margin-top: 16px;
+  }
+}
+
+/*
+ * A pane, not a page: pqp docks the app beside the chat, and on a laptop next to a narrow chat or on a phone the
+ * stage can be 260 px wide or 360 px tall. Very narrow, the continue card stacks; very short, the console sits beside
+ * the title instead of over it, so the stepper and Start are still in view without a scroll.
+ */
+@container load (max-width: 360px) and (min-height: 481px) {
+  .loc-load-continue:not(.loc-load-remote) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "shot" "ask" "saved" "actions";
+    justify-items: center;
+    text-align: center;
+  }
+  .loc-load-continue:not(.loc-load-remote) .loc-load-shot {
+    margin-bottom: 8px;
+  }
+  .loc-load-continue:not(.loc-load-remote) .loc-load-actions {
+    justify-self: stretch;
+  }
+  .loc-load-step {
+    font-size: 0.75rem;
+  }
+}
+
+/* narrow AND short (a phone's docked pane): the question and its two buttons, the picture left out */
+@container load (max-width: 360px) and (max-height: 480px) {
+  .loc-load-continue:not(.loc-load-remote) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "ask" "saved" "actions";
+    text-align: center;
+  }
+  .loc-load-continue:not(.loc-load-remote) .loc-load-shot {
+    display: none;
+  }
+}
+
+@container load (max-height: 480px) {
+  .loc-load {
+    padding-top: 64px;
+    padding-bottom: 16px;
+  }
+  .loc-load-hero {
+    grid-template-columns: auto minmax(min(128px, 50%), max-content);
+    grid-template-areas: "slot title" "slot sub" "steps steps";
+    align-items: center;
+    justify-content: center;
+    column-gap: 16px;
+  }
+  .loc-load-slot {
+    grid-area: slot;
+    width: clamp(80px, min(26cqh, 36cqw), 132px);
+  }
+  .loc-load-text {
+    display: contents;
+  }
+  .loc-load-title {
+    grid-area: title;
+    align-self: end;
+    font-size: 1.125rem;
+    text-align: left;
+  }
+  .loc-load-sub {
+    grid-area: sub;
+    align-self: start;
+    justify-self: start;
+  }
+  .loc-load-steps {
+    grid-area: steps;
+    justify-self: center;
+    margin-top: 12px;
+  }
+  .loc-load-body,
+  .loc-load-extra {
+    margin-top: 16px;
+  }
+  .loc-load-body {
+    gap: 8px;
+  }
+  .loc-start-big {
+    min-height: 48px;
+    font-size: 1.0625rem;
+  }
+  .loc-load-continue:not(.loc-load-remote) .loc-load-thumb {
+    width: 88px;
+  }
+}
+.loc-load-error {
+  margin: 0;
+  max-width: 44ch;
+  padding: 12px 16px;
+  background: #22161a;
+  color: var(--loc-wall-text);
+  border: 1px solid rgba(255, 95, 95, 0.45);
+  border-radius: var(--loc-radius);
+  font-size: 0.9375rem;
+  text-align: center;
+}
+
+/* the error's two ways out are one size: the quiet one is not a smaller kind of button */
+.loc-load[data-phase="error"] .loc-load-actions {
+  margin-top: 0;
+}
+
+.loc-load[data-phase="error"] .loc-load-actions .loc-start {
+  min-width: 0;
+  min-height: 48px;
+  padding: 0 24px;
+  font-family: var(--loc-font);
+  font-size: 0.9375rem;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+/* the reveal: text out fast, shutters apart from a 1 px line */
+.loc-load-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  z-index: 1;
+  height: 1px;
+  background: #fff;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.loc-load[data-phase="reveal"] > *:not(.loc-load-line) {
+  opacity: 0;
+  transition: opacity 100ms var(--loc-ease);
+  pointer-events: none;
+}
+
+.loc-load[data-phase="reveal"]::before {
+  animation: loc-shutter-up var(--loc-slow) var(--loc-ease) forwards;
+}
+
+.loc-load[data-phase="reveal"]::after {
+  animation: loc-shutter-down var(--loc-slow) var(--loc-ease) forwards;
+}
+
+.loc-load[data-phase="reveal"] .loc-load-line {
+  animation: loc-line var(--loc-slow) var(--loc-ease) forwards;
+}
+
+@keyframes loc-shutter-up {
+  to {
+    transform: translateY(-100%);
+  }
+}
+
+@keyframes loc-shutter-down {
+  to {
+    transform: translateY(100%);
+  }
+}
+
+@keyframes loc-line {
+  0% {
+    opacity: 1;
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes loc-load-fade {
+  to {
+    opacity: 0;
+  }
+}
+
+/* reduced motion: no slide, no breath, no shutters, one short crossfade; the cartridge is in from the start */
+@media (prefers-reduced-motion: reduce) {
+  .loc-load .loc-ins-cart,
+  .loc-load .loc-ins-led,
+  .loc-loading .loc-load-status::before {
+    animation: none;
+  }
+  .loc-load[data-phase="reveal"] {
+    animation: loc-load-fade 150ms var(--loc-ease) forwards;
+  }
+  .loc-load[data-phase="reveal"]::before,
+  .loc-load[data-phase="reveal"]::after,
+  .loc-load[data-phase="reveal"] .loc-load-line {
+    animation: none;
+  }
+  .loc-load[data-phase="reveal"] .loc-load-line {
+    display: none;
+  }
+  .loc-start,
+  .loc-load-back,
+  .loc-load-dot,
+  .loc-load-step + .loc-load-step::before {
+    transition: none;
+  }
+}
+
+:root[data-reduced-motion="true"] .loc-load .loc-ins-cart,
+:root[data-reduced-motion="true"] .loc-load .loc-ins-led,
+:root[data-reduced-motion="true"] .loc-loading .loc-load-status::before {
+  animation: none;
+}
+
+:root[data-reduced-motion="true"] .loc-load[data-phase="reveal"] {
+  animation: loc-load-fade 150ms var(--loc-ease) forwards;
+}
+
+:root[data-reduced-motion="true"] .loc-load[data-phase="reveal"]::before,
+:root[data-reduced-motion="true"] .loc-load[data-phase="reveal"]::after {
+  animation: none;
+}
+
+:root[data-reduced-motion="true"] .loc-load[data-phase="reveal"] .loc-load-line {
+  display: none;
+}
+
+:root[data-reduced-motion="true"] .loc-start,
+:root[data-reduced-motion="true"] .loc-load-back,
+:root[data-reduced-motion="true"] .loc-load-dot,
+:root[data-reduced-motion="true"] .loc-load-step + .loc-load-step::before {
+  transition: none;
+}
+
+/* ---- the licenses: a dialog over whichever screen is up ---- */
+
+.loc .loc-notices {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.64);
+}
+
+.loc-notices-card {
+  display: grid;
+  gap: 10px;
+  width: min(760px, 100%);
+  max-height: 100%;
+  min-height: 0;
+  padding: 16px;
+  overflow: hidden;
+  background: var(--loc-card);
+  color: var(--loc-text);
+  border: 1px solid var(--loc-border-strong);
+  border-radius: var(--loc-panel);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.loc-notices-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.loc-notices-title {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 700;
+}
+
+.loc-notices-card .loc-button-quiet {
+  color: var(--loc-text);
+}
+
+.loc-notices-card .loc-notices-text {
+  max-height: none;
+  min-height: 0;
+}
+
+/* ---- "Levar pra outro aparelho": export and import, a dialog over the Balcão or the saves drawer ---- */
+
+.loc-export {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  /* `safe`: a sheet taller than the frame (a phone in landscape, the two choices and the import row) scrolls instead of being cut off at both ends */
+  place-content: safe center;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.64);
+}
+
+.loc-export > * {
+  box-sizing: border-box;
+  width: min(460px, calc(100vw - 32px));
+  background: var(--loc-card);
+  color: var(--loc-text);
+  border: 1px solid var(--loc-border-strong);
+}
+
+.loc-export__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px 10px;
+  border-bottom: 0;
+  border-radius: var(--loc-panel) var(--loc-panel) 0 0;
+  border-bottom-color: transparent;
+}
+
+.loc-export__title {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 700;
+}
+
+.loc-export__body {
+  display: grid;
+  gap: 10px;
+  padding: 4px 16px 16px;
+  border-top: 0;
+  border-radius: 0 0 var(--loc-panel) var(--loc-panel);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
+}
+
+.loc-export__note {
+  margin: 0;
+  color: var(--loc-text-2);
+  font-size: 0.875rem;
+}
+
+.loc-export__check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 0 12px;
+  background: var(--loc-bg);
+  border: 1px solid var(--loc-border);
+  border-radius: var(--loc-control);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.loc-export__check:hover {
+  border-color: var(--loc-border-strong);
+}
+
+.loc-export__check input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--loc-accent);
+}
+
+/* "Exportar pra arquivo": the lead says it is a file, then two choices as cards, each with what it is and how big */
+.loc-export__lead {
+  margin: 0;
+  color: var(--loc-text);
+  font-size: 0.9375rem;
+  line-height: 1.45;
+}
+
+.loc-export__choices {
+  display: grid;
+  gap: 8px;
+}
+
+.loc-export__choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-height: 44px;
+  padding: 10px 12px;
+  background: var(--loc-bg);
+  color: var(--loc-text);
+  border: 1px solid var(--loc-border);
+  border-radius: var(--loc-control);
+  cursor: pointer;
+}
+
+.loc-export__choice:hover {
+  border-color: var(--loc-border-strong);
+}
+
+.loc-export__choice:has(input:checked) {
+  border-color: var(--loc-accent);
+  background: color-mix(in oklab, var(--loc-accent) 8%, var(--loc-bg));
+}
+
+.loc-export__choice:has(input:focus-visible) {
+  outline: 2px solid var(--loc-ring);
+  outline-offset: 2px;
+}
+
+.loc-export__choice input {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin: 2px 0 0;
+  accent-color: var(--loc-accent);
+}
+
+.loc-export__choice-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.loc-export__choice-text strong {
+  font-weight: 700;
+}
+
+.loc-export__hint {
+  color: var(--loc-text-2);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+
+/* what the file means for the saves: they already follow the account, or the file is the only way */
+.loc-export__cloud {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--loc-control);
+  border: 1px solid var(--loc-border);
+  color: var(--loc-text);
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+
+.loc-export__cloud--on {
+  border-color: var(--loc-border-strong);
+  background: color-mix(in oklab, var(--loc-success) 9%, var(--loc-card));
+}
+
+/* the way back in, at the foot of the same sheet, set apart by a line */
+.loc-export__import-row {
+  display: grid;
+  gap: 8px;
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--loc-border);
+}
+
+.loc-export__import {
+  justify-self: start;
+  min-height: 44px;
+}
+
+.loc-export .loc-button {
+  min-height: 44px;
+}
+
+/* the head's Fechar is a small quiet button, not a second call to action */
+.loc-export__head .loc-button {
+  min-height: 44px;
+  padding: 0 12px;
+  font-size: 0.875rem;
+}
+
+/* the import's counts read as one small table: a line between each */
+.loc-export__body > .loc-export__note + .loc-export__note {
+  padding-top: 10px;
+  border-top: 1px solid var(--loc-border);
+}
+
+.loc-export__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.loc-export .loc-button:not(.loc-button--primary) {
+  background: transparent;
+  color: var(--loc-text);
+  border: 1px solid var(--loc-border-strong);
+}
+
+.loc-export .loc-button[aria-disabled="true"] {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* ---- toasts on the Balcão: the game's own toaster lives in its stage, this one over the shelf ---- */
+
+.loc-shelf-toasts {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  z-index: 75;
+  display: grid;
+  justify-items: center;
+  max-width: calc(100% - 24px);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+/* ---- the controller map over a game (F1): the first-visit panel, put over the stage ---- */
+
+.loc .loc-onboarding[data-overlay="game"] {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  margin: 0;
+  padding: 12px;
+  background: rgba(8, 9, 13, 0.94);
+}
+
+/* the map alone (Controles): the rail is hidden, so the one column left must take the whole panel */
+.loc-onb-panel:has(> .loc-onb-side[hidden]) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/*
+ * Saves na conta (SPEC 10). The "Tu parou no computador" prompt draws the account's picture and this device's side
+ * by side, the account's first; the conflict sheet asks which of two saves stays, on the load overlay (the battery
+ * save, before the game boots) or over the game (a slot of the drawer). Only colours of the card, so it follows the
+ * host's light or dark theme like the drawer does.
+ */
+/* one column: the pictures on a row above the question, so the question and its buttons get the card's width */
+.loc-load-remote {
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: center;
+  text-align: center;
+  gap: 10px;
+}
+
+.loc-load-remote-pics {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 8px;
+}
+
+.loc-load-remote-pics:empty {
+  display: none;
+}
+
+.loc-load-remote-pics .loc-load-thumb[data-side="remote"] {
+  width: 112px;
+}
+
+/* this device's own autosave, smaller and quieter: the question is about the other one */
+.loc-load-remote-pics .loc-load-thumb[data-side="local"] {
+  width: 64px;
+  opacity: 0.7;
+}
+
+.loc-load-remote .loc-load-continue-text {
+  display: grid;
+  justify-items: center;
+}
+
+.loc-load-remote .loc-load-ask {
+  max-width: 34ch;
+  font-size: 0.9375rem;
+  line-height: 1.4;
+}
+
+.loc-conflict {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(8, 9, 12, 0.72);
+  animation: loc-conflict-in var(--loc-slow) var(--loc-ease-out) backwards;
+}
+
+/* inside the load overlay it is the panel in the Start's place, not a second overlay */
+.loc-load-body .loc-conflict {
+  position: static;
+  padding: 0;
+  background: transparent;
+}
+
+.loc-conflict-panel {
+  width: min(520px, 100%);
+  max-height: 100%;
+  overflow: auto;
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  background: var(--loc-card);
+  color: var(--loc-text);
+  border: 1px solid var(--loc-border-strong);
+  border-radius: var(--loc-radius);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+  text-align: start;
+}
+
+.loc-conflict-eyebrow {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--loc-accent-text);
+}
+
+.loc-conflict-title {
+  margin: 0;
+  font: 700 1.0625rem/1.35 var(--loc-font);
+}
+
+.loc-conflict-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.loc-conflict-card {
+  margin: 0;
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border-radius: var(--loc-control);
+  border: 1px solid var(--loc-border);
+  background: var(--loc-raised);
+}
+
+.loc-conflict-thumb {
+  aspect-ratio: 10 / 9;
+  background: #000;
+  border-radius: 4px;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+}
+
+.loc-conflict-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+.loc-conflict-card figcaption {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--loc-text-2);
+}
+
+.loc-conflict-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.loc-conflict-actions .loc-button-quiet {
+  color: var(--loc-text);
+}
+
+.loc-conflict-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--loc-text-2);
+}
+
+.loc-conflict .loc-link {
+  justify-self: start;
+  min-height: 32px;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  color: var(--loc-text-2);
+  font: inherit;
+  font-size: 13px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+@keyframes loc-conflict-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loc-conflict {
+    animation: none;
+  }
+}
+
+:root[data-reduced-motion="true"] .loc-conflict {
+  animation: none;
+}

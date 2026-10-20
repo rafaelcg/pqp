@@ -11,6 +11,12 @@ export default tseslint.config(
       "**/node_modules/**",
       "**/release/**",
       "client/public/**",
+      // The packager's output, and the generated half of an app (Locadora's
+      // vendored, patched emulator frontend and cores land in apps/*/public).
+      "dist-apps/**",
+      "apps/*/public/**",
+      // a browser page that stands in for the pqp host in an app's e2e test
+      "apps/*/e2e/host/**",
       "**/*.tsbuildinfo",
       // `wrangler dev` writes a bundled copy of the Worker here. It is
       // generated, it is git-ignored, and linting it fails the whole run for

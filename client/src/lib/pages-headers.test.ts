@@ -55,6 +55,23 @@ describe("_headers: what decides the build is never cached", () => {
     expect(cacheControl("/assets/index-C1HA6RSd.js")).not.toContain("no-cache");
   });
 
+  it("serves the emulator room's page and files revalidated, with exactly one policy", () => {
+    expect(cacheControl("/emulator/frame.html")).toBe("no-cache");
+    expect(cacheControl("/emulator/frame.js", "text/javascript")).toBe("no-cache");
+    expect(cacheControl("/emulator/ejs/cores/mgba-wasm.data", "application/octet-stream")).toBe(
+      "no-cache",
+    );
+    // The frame is sandboxed into an opaque origin: its own fetches of the
+    // emulator's public files are cross-origin and need CORS, and only they.
+    expect(headersFor(rules, "/emulator/ejs/cores/mgba-wasm.data", "application/octet-stream")[
+      "access-control-allow-origin"
+    ]).toBe("*");
+    expect(
+      headersFor(rules, "/emulator/frame.html", "text/html")["access-control-allow-origin"],
+    ).toBeUndefined();
+    expect(headersFor(rules, "/api/me", "application/json")["access-control-allow-origin"]).toBeUndefined();
+  });
+
   it("leaves an SPA route on the Pages default: revalidated", () => {
     expect(cacheControl("/app")).toBe("public, max-age=0, must-revalidate");
   });

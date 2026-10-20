@@ -90,6 +90,13 @@ export const appConfigEntrySchema = z
      * control when false; the server refuses either way.
      */
     shareAllowed: z.boolean(),
+    /**
+     * Saves na conta: true only for Locadora where `locadora_save_sync` is on
+     * for this server. It changes what the join sheet says (the saves, never
+     * the game, are kept on the account); the host still asks the API before
+     * moving a byte. An older server sends nothing, which reads as false.
+     */
+    saveSync: z.boolean().default(false),
   })
   .strip();
 export type AppConfigEntry = z.infer<typeof appConfigEntrySchema>;

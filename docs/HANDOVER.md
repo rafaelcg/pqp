@@ -28,6 +28,10 @@ This top section is the current state. The section after it (2026-10-12) and eve
 | Android share bug | Foreground service type below Android 14 (#1184), shipped | Phynack reply is drafted in the session notes; post after promotion |
 | Voice | Cross-machine roster fix (#1186) | **Decision: no one-voice-seat-per-person limit.** Only fix ghost seats if they recur |
 
+## Apps platform and Locadora (2026-10-21, everything dark)
+
+The apps platform's remaining layers and Locadora, the retro game app, are on `main` in one PR that folded the stacked ones (#1390, #1404, #1409 to #1416). Nothing is visible to anybody until flags go on: `apps` (per server, the platform), `emulator_room` (per server, Locadora and the old emulator dialog), `locadora_share` (per server, watching a game) and `locadora_save_sync` (per server, Saves na conta), all default off. The rollout plan is `apps` and `emulator_room` on the QG only, from controles, interruptores, and only after the lawyer answers items 1 to 4 of `docs/EMULATOR_ROOM.md`; `locadora_share` waits for item 7 and `locadora_save_sync` for item 9 plus Rafael's go on amending rule 7, and the bucket's CORS must allow GET and PUT from the web origin first. Eco went to 1.0.1 (the SDK changed its bytes); Enquete was removed, so its 1.0.0 row stays `draft` in the production catalog and is no longer served. Reading order: `docs/APPS.md`, then `docs/EMULATOR_ROOM.md`.
+
 ## Mobile releases
 
 - iOS latest **1.0.32** (Encaminhar, Compartilhar, picker fixes; 1.0.30 had the story reveal, 1.0.29 fast posting, 1.0.28 the camera freeze fix). Tag `ios-vX.Y.Z` on `main`.

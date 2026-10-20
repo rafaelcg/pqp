@@ -1,0 +1,829 @@
+/*
+ * hud.css: the HUD, its bar, the pause overlay, the turbo flag, the toasts and
+ * the full screen hint (mocks 3 and 4).
+ * Built on the tokens and the page grid of base.css; imported from main.ts.
+ *
+ * The HUD fades by opacity, never by visibility: Tab from the game has to
+ * reach a faded button, and focusing it is what brings the HUD back. While it
+ * is faded it also stops taking the pointer, so a tap on the picture is a tap
+ * on the picture and wakes it (hud.ts listens on the host).
+ */
+
+.loc-hud-host {
+  position: relative;
+  /* the bar and the labels follow the stage's own width, not the page's: a drawer docked beside it shrinks it at any page size */
+  container: hud / inline-size;
+}
+
+/* ---- the layer: covers the stage, takes the pointer only on its own parts ---- */
+
+.loc-hud {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  opacity: 1;
+  transition:
+    opacity var(--loc-fast) var(--loc-ease);
+}
+
+.loc-hud > * {
+  pointer-events: auto;
+}
+
+.loc-hud[data-hud="hidden"] {
+  opacity: 0;
+  transition-duration: var(--loc-slow);
+}
+
+.loc-hud[data-hud="hidden"] > * {
+  pointer-events: none;
+}
+
+/* in full screen the cursor goes away with the HUD */
+.loc-hud-host[data-fs="true"][data-hud="hidden"] {
+  cursor: none;
+}
+
+/* ---- the top row ---- */
+
+.loc-hud-top {
+  position: absolute;
+  top: 14px;
+  left: 16px;
+  right: 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.loc-hud-spacer {
+  flex: 1;
+}
+
+.loc-hud-chip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 6px 12px;
+  color: var(--loc-wall-text);
+  background: var(--loc-hud);
+  border: 1px solid var(--loc-border-strong);
+  border-radius: 12px;
+  backdrop-filter: blur(10px);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+}
+
+.loc-hud-chip[hidden] {
+  display: none;
+}
+
+.loc-hud-art {
+  display: block;
+  flex: none;
+  width: 30px;
+  height: 38px;
+  margin-inline-start: -6px;
+  overflow: hidden;
+  border-radius: 4px;
+}
+
+.loc-hud-art > * {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.loc-hud-art[hidden] {
+  display: none;
+}
+
+.loc-hud-title {
+  display: block;
+  min-width: 0;
+}
+
+.loc-hud-title b,
+.loc-hud-title small {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.loc-hud-title b {
+  font-size: 0.875rem;
+  line-height: 18px;
+}
+
+.loc-hud-title small {
+  color: var(--loc-wall-text-3);
+  font-size: 0.75rem;
+}
+
+.loc-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  box-sizing: border-box;
+  min-height: 44px;
+  padding: 0 14px;
+  color: var(--loc-wall-text-2);
+  background: var(--loc-hud);
+  border: 1px solid var(--loc-border-strong);
+  border-radius: var(--loc-pill);
+  backdrop-filter: blur(10px);
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.loc-pill[hidden] {
+  display: none;
+}
+
+.loc-pill:hover {
+  color: var(--loc-wall-text);
+}
+
+.loc-pill:focus-visible,
+.loc-hb:focus-visible,
+.loc-slot-step:focus-visible,
+.loc-toast-action:focus-visible,
+.loc-pause-resume:focus-visible {
+  outline: 2px solid var(--loc-ring);
+  outline-offset: 2px;
+}
+
+.loc-pill[aria-pressed="true"]:not(.loc-pill-turbo) {
+  color: var(--loc-wall-text);
+  background: rgba(95, 242, 255, 0.1);
+  border-color: rgba(95, 242, 255, 0.5);
+}
+
+/* turbo: amber, static, never blinking */
+.loc-pill-turbo {
+  color: #1d1405;
+  background: var(--loc-neon-amber);
+  border-color: var(--loc-neon-amber);
+  box-shadow: 0 0 16px rgba(255, 194, 74, 0.45);
+}
+
+.loc-pill kbd,
+.loc-hb kbd {
+  font: 700 0.5625rem/1 var(--loc-mono);
+}
+
+.loc-pill kbd {
+  padding: 2px 4px;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+}
+
+/* ---- the bar ---- */
+
+.loc-hud-bar {
+  position: absolute;
+  bottom: 18px;
+  left: 50%;
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  box-sizing: border-box;
+  max-width: calc(100% - 16px);
+  padding: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  background: var(--loc-hud);
+  border: 1px solid var(--loc-border-strong);
+  border-radius: 12px;
+  backdrop-filter: blur(10px);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+  transform: translateX(-50%);
+}
+
+.loc-hud-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.loc-hb {
+  position: relative;
+  display: grid;
+  flex: none;
+  gap: 3px;
+  align-content: center;
+  justify-items: center;
+  box-sizing: border-box;
+  min-width: 56px;
+  min-height: 52px;
+  padding: 6px 8px 5px;
+  color: var(--loc-wall-text-2);
+  background: transparent;
+  border: 0;
+  border-radius: 9px;
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.loc-hb:hover,
+.loc-hb:focus-visible {
+  color: var(--loc-wall-text);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.loc-hb-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.loc-hb kbd {
+  position: absolute;
+  top: 3px;
+  right: 4px;
+  color: var(--loc-wall-text-3);
+}
+
+.loc-hb[aria-pressed="true"] {
+  color: var(--loc-neon-amber);
+  background: rgba(255, 194, 74, 0.16);
+}
+
+.loc-hb-primary {
+  color: var(--loc-wall-accent);
+  background: rgba(200, 245, 90, 0.14);
+}
+
+.loc-hb[aria-expanded="true"] {
+  color: var(--loc-wall-text);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.loc-hud-sep {
+  flex: none;
+  width: 1px;
+  margin: 8px 4px;
+  background: var(--loc-border-strong);
+}
+
+.loc-slotpick {
+  display: grid;
+  flex: none;
+  grid-template-columns: 44px auto 44px;
+  align-items: center;
+  gap: 0;
+  padding: 0 2px;
+  color: var(--loc-wall-text);
+  font-size: 0.75rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.loc-slot-step {
+  width: 44px;
+  height: 44px;
+  color: var(--loc-wall-text-3);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 1.125rem;
+  cursor: pointer;
+}
+
+.loc-slot-step:hover {
+  color: var(--loc-wall-text);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/*
+ * ---- the short bar (SPEC 13) ----
+ * When the whole bar does not fit the stage, hud.ts moves the secondary buttons into the "Mais" menu and the bar
+ * is five buttons and that one. Nothing scrolls: a bar that scrolls sideways hides its own buttons.
+ */
+
+.loc-hud-bar[data-compact="true"] {
+  overflow: visible;
+}
+
+.loc-hud-bar[data-compact="true"] .loc-hb {
+  min-width: 52px;
+  padding-inline: 4px;
+}
+
+.loc-hb-more {
+  position: relative;
+  display: flex;
+}
+
+.loc-more-menu {
+  position: absolute;
+  right: -6px;
+  bottom: calc(100% + 14px);
+  z-index: 4;
+  display: grid;
+  gap: 2px;
+  box-sizing: border-box;
+  width: min(260px, calc(100vw - 24px));
+  padding: 6px;
+  color: var(--loc-wall-text-2);
+  background: rgba(14, 16, 22, 0.97);
+  border: 1px solid var(--loc-border-strong);
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+
+.loc-more-menu[hidden] {
+  display: none;
+}
+
+.loc-more-menu .loc-hb {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: flex-start;
+  width: 100%;
+  min-height: 48px;
+  padding: 8px 12px;
+  text-align: start;
+}
+
+.loc-more-menu .loc-hb-label {
+  font-size: 0.8125rem;
+}
+
+.loc-more-menu .loc-hb kbd {
+  position: static;
+  order: 3;
+  margin-inline-start: auto;
+}
+
+.loc-more-menu .loc-slotpick {
+  grid-template-columns: 48px 1fr 48px;
+  justify-items: center;
+  padding: 0;
+}
+
+.loc-more-menu .loc-slot-step {
+  width: 48px;
+  height: 48px;
+}
+
+/* a stage too narrow even for five labelled buttons: icons only, the names stay as accessible names */
+@container hud (max-width: 339px) {
+  .loc-hud-bar[data-compact="true"] .loc-hb-label,
+  .loc-hud-bar[data-compact="true"] .loc-hb kbd {
+    display: none;
+  }
+
+  .loc-hud-bar[data-compact="true"] {
+    gap: 0;
+    padding: 4px;
+  }
+
+  .loc-hud-bar[data-compact="true"] .loc-hb {
+    min-width: 44px;
+    min-height: 44px;
+    padding-inline: 0;
+  }
+}
+
+/* ---- the Turbo button and its chevron: one split control in the bar ---- */
+
+.loc-hb-split {
+  display: flex;
+  flex: none;
+  align-items: stretch;
+}
+
+.loc-hb-split > .loc-hb {
+  border-start-end-radius: 0;
+  border-end-end-radius: 0;
+}
+
+.loc-hb-caret {
+  display: grid;
+  flex: none;
+  place-items: center;
+  box-sizing: border-box;
+  width: 28px;
+  padding: 0;
+  color: var(--loc-wall-text-3);
+  background: transparent;
+  border: 0;
+  border-inline-start: 1px solid var(--loc-border);
+  border-start-end-radius: 9px;
+  border-end-end-radius: 9px;
+  cursor: pointer;
+}
+
+.loc-hb-caret svg {
+  width: 14px;
+  height: 14px;
+}
+
+.loc-hb-caret:hover,
+.loc-hb-caret:focus-visible {
+  color: var(--loc-wall-text);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.loc-hb-caret:focus-visible {
+  outline: 2px solid var(--loc-ring);
+  outline-offset: 2px;
+}
+
+.loc-hb-caret[aria-expanded="true"] {
+  color: var(--loc-wall-text);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.loc-hb-caret[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+/* at 1x the turbo does nothing: the button reads as resting, not as a turbo that is merely off */
+.loc-hb[data-idle="true"] {
+  color: var(--loc-wall-text-3);
+}
+
+.loc-hb[data-idle="true"]:hover,
+.loc-hb[data-idle="true"]:focus-visible {
+  color: var(--loc-wall-text);
+}
+
+/* ---- the turbo popover: a readout, a slider from 1x to 10x, the quick picks, a note about the sound ---- */
+
+.loc-turbo-menu {
+  /* `hud.ts` places it over the button that opened it; this is only its size */
+  width: min(280px, calc(100% - 16px));
+  padding: 12px 14px 12px;
+}
+
+.loc-turbo-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.loc-turbo-title {
+  color: var(--loc-wall-text-3);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.loc-turbo-readout {
+  color: var(--loc-neon-amber);
+  font: 800 1.5rem/1 var(--loc-mono);
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 10px rgba(255, 194, 74, 0.45);
+}
+
+.loc-turbo-menu[data-idle="true"] .loc-turbo-readout {
+  color: var(--loc-wall-text-3);
+  text-shadow: none;
+}
+
+.loc-turbo-slider {
+  --loc-turbo-fill: 25%;
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  height: 44px;
+  margin: 4px 0 0;
+  padding: 0;
+  background: transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  touch-action: pan-y;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.loc-turbo-slider:focus-visible {
+  outline: 2px solid var(--loc-ring);
+  outline-offset: 0;
+}
+
+.loc-turbo-slider::-webkit-slider-runnable-track {
+  height: 6px;
+  background: linear-gradient(to right, var(--loc-neon-amber) var(--loc-turbo-fill), var(--loc-border-strong) var(--loc-turbo-fill));
+  border-radius: 3px;
+}
+
+.loc-turbo-slider::-webkit-slider-thumb {
+  width: 24px;
+  height: 24px;
+  margin-top: -9px;
+  background: var(--loc-wall-text);
+  border: 3px solid var(--loc-neon-amber);
+  border-radius: 50%;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  box-sizing: border-box;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.loc-turbo-slider::-moz-range-track {
+  height: 6px;
+  background: var(--loc-border-strong);
+  border-radius: 3px;
+}
+
+.loc-turbo-slider::-moz-range-progress {
+  height: 6px;
+  background: var(--loc-neon-amber);
+  border-radius: 3px;
+}
+
+.loc-turbo-slider::-moz-range-thumb {
+  width: 24px;
+  height: 24px;
+  background: var(--loc-wall-text);
+  border: 3px solid var(--loc-neon-amber);
+  border-radius: 50%;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  box-sizing: border-box;
+}
+
+/* a finger needs a 44 px thumb (WCAG 2.5.8 and the platform guides); the track stays slim */
+@media (pointer: coarse) {
+  .loc-turbo-slider {
+    height: 52px;
+  }
+
+  .loc-turbo-slider::-webkit-slider-thumb {
+    width: 44px;
+    height: 44px;
+    margin-top: -19px;
+  }
+
+  .loc-turbo-slider::-moz-range-thumb {
+    width: 44px;
+    height: 44px;
+  }
+}
+
+.loc-turbo-scale {
+  display: flex;
+  justify-content: space-between;
+  margin: 4px 2px 0;
+  color: var(--loc-wall-text-3);
+  font: 700 0.6875rem/1 var(--loc-mono);
+}
+
+.loc-turbo-chips {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.loc-turbo-chip {
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 4px;
+  color: var(--loc-wall-text-2);
+  background: transparent;
+  border: 1px solid var(--loc-border-strong);
+  border-radius: var(--loc-pill);
+  font: 700 0.8125rem/1 var(--loc-mono);
+  cursor: pointer;
+}
+
+.loc-turbo-chip:hover {
+  color: var(--loc-wall-text);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.loc-turbo-chip:focus-visible {
+  outline: 2px solid var(--loc-ring);
+  outline-offset: 2px;
+}
+
+.loc-turbo-chip[aria-pressed="true"] {
+  color: #1d1405;
+  background: var(--loc-neon-amber);
+  border-color: var(--loc-neon-amber);
+}
+
+.loc-turbo-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 0 0;
+  color: var(--loc-wall-text-2);
+  font-size: 0.75rem;
+  line-height: 1.2;
+}
+
+.loc-turbo-note svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+
+/* the room for the note is always there, so the popover does not jump while the thumb crosses 3x */
+.loc-turbo-note[data-on="false"] {
+  visibility: hidden;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .loc-turbo-chip,
+  .loc-hb-caret {
+    transition:
+      background var(--loc-fast) var(--loc-ease),
+      color var(--loc-fast) var(--loc-ease);
+  }
+
+  .loc-hb-caret svg {
+    transition: transform var(--loc-fast) var(--loc-ease);
+  }
+}
+
+/* ---- the turbo flag: a static amber mark in the stage corner ---- */
+
+.loc-turbo-flag {
+  position: absolute;
+  right: 12px;
+  bottom: 10px;
+  z-index: 4;
+  font: 900 0.75rem/1 var(--loc-mono);
+  letter-spacing: 0.1em;
+  color: var(--loc-neon-amber);
+  text-shadow: 0 0 8px rgba(255, 194, 74, 0.7);
+  pointer-events: none;
+}
+
+.loc-turbo-flag[hidden] {
+  display: none;
+}
+
+/* ---- pause: the picture dims to 70 % with a card in the middle ---- */
+
+.loc-pause {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.loc-pause[hidden] {
+  display: none;
+}
+
+.loc-pause-card {
+  display: grid;
+  gap: 12px;
+  justify-items: center;
+  padding: 20px 28px;
+  color: var(--loc-wall-text);
+  background: var(--loc-hud);
+  border: 1px solid var(--loc-border-strong);
+  border-radius: 16px;
+  backdrop-filter: blur(10px);
+}
+
+.loc-pause-title {
+  margin: 0;
+  font-family: var(--loc-font-sign);
+  font-size: 1.125rem;
+  letter-spacing: 0.04em;
+}
+
+.loc-pause-resume {
+  min-height: 44px;
+  padding: 0 20px;
+  color: var(--loc-wall-on-accent);
+  background: var(--loc-wall-accent);
+  border: 0;
+  border-radius: var(--loc-control);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+/* ---- toasts: above the bar, one at a time ---- */
+
+.loc-hud-toasts {
+  position: absolute;
+  bottom: 96px;
+  left: 50%;
+  z-index: 6;
+  display: grid;
+  justify-items: center;
+  max-width: calc(100% - 24px);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.loc-toast {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  box-sizing: border-box;
+  padding: 10px 12px 10px 16px;
+  color: var(--loc-wall-text);
+  background: var(--loc-hud);
+  border: 1px solid var(--loc-border-strong);
+  border-radius: 12px;
+  backdrop-filter: blur(10px);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+  font-size: 0.8125rem;
+  pointer-events: auto;
+}
+
+.loc-toast-action {
+  min-height: 44px;
+  padding: 0 10px;
+  color: var(--loc-wall-accent);
+  background: transparent;
+  border: 0;
+  border-radius: var(--loc-control);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+/* ---- phones: the top row drops its console line, the bar scrolls sideways under the thumb ---- */
+
+@media (max-width: 560px) {
+  .loc-hud-top {
+    top: 8px;
+    right: 8px;
+    left: 8px;
+    gap: 6px;
+  }
+
+  .loc-hud-title small {
+    display: none;
+  }
+
+  .loc-pill {
+    padding-inline: 10px;
+  }
+
+  .loc-hud-bar {
+    bottom: 8px;
+  }
+
+  .loc-hud-toasts {
+    bottom: 80px;
+  }
+}
+
+/* ---- motion: in 150 ms, out 300 ms; toast rises 8 px; reduced motion makes all of it instant ---- */
+
+@media (prefers-reduced-motion: no-preference) {
+  .loc-toast {
+    animation: loc-toast-in var(--loc-base) var(--loc-ease-out) backwards;
+  }
+
+  .loc-hb,
+  .loc-pill,
+  .loc-slot-step {
+    transition:
+      background var(--loc-fast) var(--loc-ease),
+      color var(--loc-fast) var(--loc-ease);
+  }
+}
+
+@keyframes loc-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loc-hud,
+  .loc-hud[data-hud="hidden"] {
+    transition: none;
+  }
+
+  .loc-toast {
+    animation: none;
+  }
+}
+
+:root[data-reduced-motion="true"] .loc-hud,
+:root[data-reduced-motion="true"] .loc-hud[data-hud="hidden"],
+:root[data-reduced-motion="true"] .loc-hb,
+:root[data-reduced-motion="true"] .loc-pill,
+:root[data-reduced-motion="true"] .loc-slot-step {
+  transition: none;
+}
+
+:root[data-reduced-motion="true"] .loc-toast {
+  animation: none;
+}

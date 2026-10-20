@@ -7206,3 +7206,89 @@ CREATE INDEX IF NOT EXISTS idx_app_admin_audit_actor
 INSERT INTO app_publishers (id, display_name, kind)
 VALUES ('pqp', 'pqp', 'first_party')
 ON CONFLICT (id) DO NOTHING;
+
+-- SAVES NA CONTA (Locadora, runtime flag `locadora_save_sync`, per server,
+-- default off; docs/EMULATOR_ROOM.md rule 7, server/src/apps/locadora-saves.ts).
+-- What lives here is a person's own battery saves and save states and their
+-- small thumbnails, never a game file, its title or its box art. A save is
+-- keyed by `game_key = HMAC-SHA256(salt, sha256 of the game file)`, computed in
+-- the person's browser: the raw hash never arrives. The bytes are objects in
+-- the attachments bucket under `locadora-saves/<user id>/`, PUT and GET by the
+-- browser with presigned URLs; these rows only name them.
+CREATE TABLE IF NOT EXISTS locadora_save_salts (
+  user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  salt BYTEA NOT NULL CHECK (octet_length(salt) = 32),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  -- The last time the person asked with the flag ON. With the flag off, reads
+  -- and deletes keep working for 30 days from here (the read-only window).
+  last_on_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS locadora_saves (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  game_key TEXT NOT NULL CHECK (game_key ~ '^[A-Za-z0-9_-]{43}$'),
+  kind TEXT NOT NULL CHECK (kind IN ('sram', 'state')),
+  -- 0: the battery save, or the rolling autosave; 1 to 4: the manual slots.
+  slot SMALLINT NOT NULL CHECK (slot BETWEEN 0 AND 4),
+  rev INT NOT NULL CHECK (rev >= 1),
+  size INT NOT NULL CHECK (size >= 0),
+  sha256 TEXT NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+  object_key TEXT NOT NULL,
+  thumb_key TEXT,
+  thumb_size INT NOT NULL DEFAULT 0 CHECK (thumb_size >= 0),
+  platform TEXT NOT NULL CHECK (platform ~ '^[A-Za-z0-9._+-]{1,32}$'),
+  core TEXT NOT NULL CHECK (core ~ '^[A-Za-z0-9._+-]{1,32}$'),
+  core_version TEXT NOT NULL CHECK (core_version ~ '^[A-Za-z0-9._+-]{1,32}$'),
+  device_kind TEXT NOT NULL CHECK (device_kind IN ('computer', 'phone', 'tablet')),
+  -- A random id the browser keeps for itself, so "from another device" can be
+  -- told. Not a fingerprint.
+  device_id TEXT NOT NULL CHECK (device_id ~ '^[A-Za-z0-9_-]{16,32}$'),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CHECK (kind <> 'sram' OR slot = 0),
+  UNIQUE (user_id, game_key, kind, slot)
+);
+-- The 365 day retention sweep.
+CREATE INDEX IF NOT EXISTS idx_locadora_saves_updated ON locadora_saves (updated_at);
+
+-- The three older versions of a battery save, so "used the other one" can be
+-- undone. Counted in the 8 MB.
+CREATE TABLE IF NOT EXISTS locadora_save_history (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  save_id UUID NOT NULL REFERENCES locadora_saves(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  rev INT NOT NULL,
+  size INT NOT NULL CHECK (size >= 0),
+  sha256 TEXT NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+  object_key TEXT NOT NULL,
+  device_kind TEXT NOT NULL CHECK (device_kind IN ('computer', 'phone', 'tablet')),
+  device_id TEXT NOT NULL CHECK (device_id ~ '^[A-Za-z0-9_-]{16,32}$'),
+  saved_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_locadora_save_history_save ON locadora_save_history (save_id, rev DESC);
+CREATE INDEX IF NOT EXISTS idx_locadora_save_history_user ON locadora_save_history (user_id);
+
+-- An upload handed a presigned PUT and not committed yet. Counted in the quota
+-- while it is young; the sweep drops it (and its object) after an hour.
+CREATE TABLE IF NOT EXISTS locadora_save_uploads (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  game_key TEXT NOT NULL CHECK (game_key ~ '^[A-Za-z0-9_-]{43}$'),
+  kind TEXT NOT NULL CHECK (kind IN ('sram', 'state')),
+  slot SMALLINT NOT NULL CHECK (slot BETWEEN 0 AND 4),
+  base_rev INT NOT NULL CHECK (base_rev >= 0),
+  size INT NOT NULL CHECK (size >= 1),
+  sha256 TEXT NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+  object_key TEXT NOT NULL,
+  thumb_key TEXT,
+  thumb_size INT NOT NULL DEFAULT 0 CHECK (thumb_size >= 0),
+  platform TEXT NOT NULL,
+  core TEXT NOT NULL,
+  core_version TEXT NOT NULL,
+  device_kind TEXT NOT NULL CHECK (device_kind IN ('computer', 'phone', 'tablet')),
+  device_id TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_locadora_save_uploads_user ON locadora_save_uploads (user_id);
+CREATE INDEX IF NOT EXISTS idx_locadora_save_uploads_created ON locadora_save_uploads (created_at);

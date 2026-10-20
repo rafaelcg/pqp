@@ -68,3 +68,36 @@ export async function sweepMessageRetention(): Promise<number> {
   }
   return totalDeleted;
 }
+
+/** Ended app sessions are kept this long: enough for a report to name one. */
+export const APP_SESSION_RETENTION_DAYS = 30;
+
+/**
+ * Delete app sessions that ended more than 30 days ago, 500 at a time (their
+ * participant rows go with them through the foreign key). What stays: the
+ * timeline message, which keeps its generic card ("terminou"), and nothing
+ * else about the session. Live sessions are never touched, however old: the
+ * 12 hour sweep ends them first. Returns how many were deleted.
+ */
+export async function sweepAppSessionRetention(): Promise<number> {
+  let total = 0;
+  for (let batch = 0; batch < MAX_BATCHES_PER_SERVER; batch++) {
+    const result = await getPool().query(
+      `DELETE FROM app_sessions
+        WHERE id IN (
+          SELECT id FROM app_sessions
+           WHERE status = 'ended'
+             AND ended_at < NOW() - ($1 || ' days')::interval
+           ORDER BY ended_at
+           LIMIT $2
+        )`,
+      [String(APP_SESSION_RETENTION_DAYS), BATCH_SIZE],
+    );
+    const deleted = result.rowCount ?? 0;
+    total += deleted;
+    if (deleted < BATCH_SIZE) {
+      break;
+    }
+  }
+  return total;
+}

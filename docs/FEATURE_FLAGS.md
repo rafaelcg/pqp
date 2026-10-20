@@ -780,7 +780,7 @@ pins the route, the field and the create guard.
 
 ## `apps` (per server)
 
-The apps platform: small interactive things (Locadora, a poll) that a person
+The apps platform: small interactive things (Locadora, a game room) that a person
 starts in a text or voice channel and others join from a live card in the
 timeline. Behind `APPS` (default off, **per server**, born as a flag). It is the
 first of the platform's gates: an app is also released by the operator per server
@@ -807,6 +807,35 @@ lawyer's written answer (Legal Gate L1b). Every other app shares through the
 ordinary path and never reads it. Read by `appShareAllowed` in
 `server/src/apps/availability.ts`, served per app as `shareAllowed` on
 `GET /api/apps/config`. It does nothing while `apps` is off.
+
+## `locadora_save_sync` (per server)
+
+Saves na conta: Locadora copies a person's battery saves and save states (and a
+small picture of each) to their account, so the same game on another device
+picks up where they stopped. Never the game file, its name or its title
+(`LOCADORA_SAVE_SYNC`, default **off**, per server, only `true` turns it on). It
+amends rule 7 of `docs/EMULATOR_ROOM.md`, so it waits for Rafael's go and the
+one-line lawyer check there (item 9). Read by `saveContext` in
+`server/src/apps/locadora-saves.ts` for the server of the session a request names,
+on every route under `/api/apps/pqp-locadora/saves`, and served per app as
+`saveSync` on `GET /api/apps/config` (true only for Locadora), which the join
+sheet reads. Needs `apps`, `emulator_room` and the attachments bucket (`S3_*`);
+without any of them every route is a 404 and the app says the saves stay on the
+device. Off after being on: nothing new goes up, and an account that used it in
+the last 30 days can still take its saves back and delete them. The daily
+retention sweep runs whatever the flag says. Before turning it on anywhere, the
+bucket's CORS must allow GET and PUT from the web origin (the page fetches the
+presigned URLs itself).
+
+## `emulator_room` (per server)
+
+The emulator room: a window in the server menu where a person opens a game
+**from their own disk** in an emulator that runs in their browser. Behind
+`EMULATOR_ROOM` (default off, **per server**, born as a flag). Served as `enabled`
+on `GET /api/emulator/config?serverId=` (`server/src/lib/emulator-config.ts`).
+That route is the whole server side: no route sees a game file. **Do not turn it
+on before the lawyer review in `docs/EMULATOR_ROOM.md` is done.** Off, the menu
+item is gone and nothing else changes.
 
 ## `stories` (per server) and `stories_friends` (global)
 

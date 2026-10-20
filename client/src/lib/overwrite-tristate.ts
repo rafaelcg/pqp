@@ -47,15 +47,23 @@ export type ChannelOverwriteBit = (typeof CHANNEL_OVERWRITE_BITS_TEXT)[number]
   | (typeof CHANNEL_OVERWRITE_BITS_VOICE)[number]
   | (typeof CHANNEL_OVERWRITE_BITS_WATCH_PARTY)[number];
 
+/**
+ * `appsOn`: the runtime flag `apps` is on for this server, which is the only
+ * time a channel can say who may start an app in it (USE_APPS is enforced per
+ * channel, overwrites included). Text and voice both host apps; a watch party
+ * does not. Off, the bit is not offered, so a server without apps never sees a
+ * switch for something it cannot use.
+ */
 export function overwriteBitsForChannel(
   type: string,
+  options: { appsOn?: boolean } = {},
 ): readonly PermissionFlagKey[] {
   if (isWatchPartyChannelType(type)) {
     return CHANNEL_OVERWRITE_BITS_WATCH_PARTY;
   }
-  return type === "voice"
-    ? CHANNEL_OVERWRITE_BITS_VOICE
-    : CHANNEL_OVERWRITE_BITS_TEXT;
+  const base =
+    type === "voice" ? CHANNEL_OVERWRITE_BITS_VOICE : CHANNEL_OVERWRITE_BITS_TEXT;
+  return options.appsOn ? [...base, "USE_APPS"] : base;
 }
 
 export function overwriteState(

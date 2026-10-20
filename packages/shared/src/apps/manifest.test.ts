@@ -46,6 +46,14 @@ const EXPECTED: Record<string, Expected> = {
     path: "capabilities.localFiles.accept",
   },
   "invalid-rule-players-max-lt-min": { code: "players-range", path: "players.max" },
+  "invalid-rule-device-store-no-max": {
+    code: "device-store-max-bytes-required",
+    path: "capabilities.deviceStore.maxBytes",
+  },
+  "invalid-schema-device-store-over-ceiling": {
+    code: "schema-range",
+    path: "capabilities.deviceStore.maxBytes",
+  },
 };
 
 const names = fixtureNames();
@@ -130,6 +138,21 @@ describe("validateAppManifest", () => {
     expect(result.manifest.state.maxWritesPerSecond).toBe(10);
     expect(result.manifest.state.writers).toBe("participants");
     expect(result.manifest.platforms).toEqual(["web", "desktop"]);
+  });
+
+  it("reads a manifest with no deviceStore as one that does not keep anything, and refuses a cap on a closed store", () => {
+    const eco = readFixture("valid-eco") as { capabilities: Record<string, unknown> };
+    expect(eco.capabilities.deviceStore).toBeUndefined();
+    const closed = JSON.parse(JSON.stringify(eco)) as typeof eco;
+    closed.capabilities.deviceStore = { allowed: false, maxBytes: 1024 };
+    const result = validateAppManifest(closed);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.issues.map(({ code, path }) => ({ code, path }))).toEqual([
+      { code: "device-store-unexpected", path: "capabilities.deviceStore.maxBytes" },
+    ]);
+    closed.capabilities.deviceStore = { allowed: false };
+    expect(validateAppManifest(closed).ok).toBe(true);
   });
 
   it("rejects non-objects without throwing", () => {

@@ -518,7 +518,7 @@ describe("estado 2: ja tem um app rolando", () => {
 
   it("another tile can not start while one runs", async () => {
     await mount(
-      [entry(), entry({ id: "pqp-enquete", i18n: { "pt-BR": {}, en: { name: "Poll" }, es: {} } })],
+      [entry(), entry({ id: "pqp-quadro", i18n: { "pt-BR": {}, en: { name: "Board" }, es: {} } })],
     );
     applyChannelApp(CHANNEL, summary());
     await openPanel();

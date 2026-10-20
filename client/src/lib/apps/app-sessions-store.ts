@@ -345,6 +345,11 @@ export function applyCatchUp(
   commit({ live, ended, join, loadedServers });
 }
 
+/** Which server a channel belongs to, as far as a catch-up has told this tab. */
+export function serverOfAppChannel(channelId: string): string | undefined {
+  return serverOfChannel.get(channelId);
+}
+
 /** The clock a catch-up reads before it asks, to hand back to `applyCatchUp`. */
 export function appFrameClock(): number {
   return frameClock;

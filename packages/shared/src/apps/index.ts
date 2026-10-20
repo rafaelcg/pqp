@@ -6,3 +6,5 @@ export * from "./manifest.js";
 export * from "./message.js";
 export * from "./presence.js";
 export * from "./config.js";
+export * from "./consents.js";
+export * from "./locadora-saves.js";

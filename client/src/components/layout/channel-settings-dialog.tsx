@@ -28,6 +28,7 @@ import { ChannelBauFollowsSection } from "@/components/layout/channel-bau-follow
 import { ApiError, fetchChannelBauFollows } from "@/lib/api";
 import { channelTakesWebhooks } from "@/lib/channel-webhooks";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { useAppsConfig } from "@/hooks/use-apps-config";
 import {
   fetchChannelMembers,
   fetchChannelOverwrites,
@@ -152,6 +153,7 @@ export function ChannelSettingsDialog({
   onChannelUpdated: (channel: Channel) => void;
 }) {
   const { t } = useTranslation();
+  const appsConfig = useAppsConfig(serverId);
   const [section, setSection] =
     useState<ChannelSettingsSectionId>("overview");
   const wasOpenRef = useRef(false);
@@ -789,6 +791,7 @@ export function ChannelSettingsDialog({
           )}
           {active?.id === "permissions" && (
             <ChannelPermissionsSection
+              appsOn={appsConfig.enabled}
               channelId={channel.id}
               channelType={channel.type}
               isPrivate={channel.isPrivate}

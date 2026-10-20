@@ -41,6 +41,7 @@ import { useProfilePopover } from "@/components/user/user-profile-popover";
 import { publicProfileHref, type ProfileSubject } from "@/components/user/profile-relations";
 import { highestRoleColor, identityMarks, rankBadges } from "@/lib/author-display";
 import { translateMessage, useTranslation } from "@/lib/i18n";
+import { useAppPresenceLine } from "@/lib/apps/presence";
 import {
   ApiError,
   assignMemberRole,
@@ -225,9 +226,11 @@ function MemberRow({
   roles,
   dim,
   nameColor,
+  serverId,
   onOpen,
   onMenuOpenChange,
 }: {
+  serverId?: string | null;
   member: ServerMember;
   items: ContextMenuItemDef[];
   timeoutLine: string | null;
@@ -241,6 +244,7 @@ function MemberRow({
 }) {
   const { t } = useTranslation();
   const shown = memberDisplayName(member);
+  const appLine = useAppPresenceLine(member.id, shown, "short", serverId);
   const [menuOpen, setMenuOpen] = useState(false);
   return (
     <ContextMenu
@@ -296,6 +300,15 @@ function MemberRow({
                 })}
               />
             </span>
+            {appLine && (
+              <span
+                className="block truncate text-[11px] text-paper-muted"
+                title={appLine}
+                data-member-app-presence={member.id}
+              >
+                {appLine}
+              </span>
+            )}
             {timeoutLine && (
               <span
                 className="block truncate text-[11px] text-warning"
@@ -1472,6 +1485,7 @@ export function MembersPanel({
                         roles={roles}
                         dim={!isAround(member.status)}
                         nameColor={highestRoleColor(member.roleIds, roles)}
+                        serverId={serverId}
                         onOpen={(anchor) =>
                           openProfile(subjectOf(member), anchor)
                         }

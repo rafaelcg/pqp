@@ -53,6 +53,7 @@ const PERM_HINTS: Partial<Record<string, MessageKey>> = {
   SPEAK: "roles.permHint.SPEAK",
   STREAM: "roles.permHint.STREAM",
   START_WATCH_PARTY: "roles.permHint.START_WATCH_PARTY",
+  USE_APPS: "roles.permHint.USE_APPS",
   MANAGE_MUSIC: "roles.permHint.MANAGE_MUSIC",
   USE_SOUNDBOARD: "roles.permHint.USE_SOUNDBOARD",
   MANAGE_SOUNDBOARD: "roles.permHint.MANAGE_SOUNDBOARD",
@@ -208,7 +209,10 @@ export function ChannelPermissionsSection({
   onPrivateChange,
   privateBusy,
   reloadOverwrites,
+  appsOn = false,
 }: {
+  /** The `apps` flag is on for this server: only then is USE_APPS offered. */
+  appsOn?: boolean;
   channelId: string;
   channelType: string;
   isPrivate: boolean;
@@ -262,7 +266,7 @@ export function ChannelPermissionsSection({
     }
   }, [forceAdvancedOpen, recipe.kind]);
 
-  const bits = overwriteBitsForChannel(channelType);
+  const bits = overwriteBitsForChannel(channelType, { appsOn });
   const targets = useMemo(() => {
     const overwriteByKey = new Map<TargetKey, ChannelOverwrite>();
     for (const row of overwrites) {

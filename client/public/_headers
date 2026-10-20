@@ -131,6 +131,18 @@
   Cache-Control: public, max-age=3600, stale-while-revalidate=86400
   Content-Type: text/markdown; charset=utf-8
 
+# The emulator room: its frame page, the frame's script, and the emulator and
+# cores the build copies from npm to `/emulator/ejs/` (no content hash in the
+# names, so revalidated, never immutable). Not precached by the worker.
+/emulator/*
+  Cache-Control: no-cache
+
+# The emulator runs in a sandboxed frame with an opaque origin (no
+# `allow-same-origin`), so its own fetches of these public files are
+# cross-origin and need CORS. Public static files, no credentials: `*` is right.
+/emulator/ejs/*
+  Access-Control-Allow-Origin: *
+
 # Standalone diagnostic pages (`share-*.html`, served at the extensionless URL
 # too). Pages, not assets: revalidated, like every other page.
 /share-diagnostic*

@@ -29,6 +29,28 @@ export interface PickedFile {
   ext: string;
 }
 
+/** What the device store holds, in bytes, and whether the browser promised not to evict it. */
+export interface StoreUsage {
+  used: number;
+  cap: number;
+  persisted: boolean;
+}
+
+export interface StoredValue {
+  bytes: ArrayBuffer;
+  /** The JSON stored beside the value, or `null` when none was. */
+  meta: JsonValue;
+}
+
+export interface StoreEntry {
+  key: string;
+  /** Bytes of the value. */
+  size: number;
+  meta: JsonValue;
+  /** Epoch milliseconds of the last write. */
+  updatedAt: number;
+}
+
 /** What `app.on(...)` can listen for, with the argument each callback receives. */
 export interface AppEventMap {
   connection: BridgeConnectionStatus;
@@ -66,6 +88,36 @@ export interface PqpApp {
   readonly files: {
     /** Opens pqp's own file picker. Resolves to `null` when the person cancels. */
     pickLocal(): Promise<PickedFile | null>;
+    /**
+     * Hands the person a file to keep (the host triggers the download and names
+     * it). `ext` has its dot and must be one the platform allows for saving
+     * (today `.locadora`) AND one of the manifest's `localFiles.accept`. Rejects
+     * with `not-allowed` otherwise, `too-large` past the manifest's cap.
+     */
+    saveLocal(bytes: ArrayBuffer | ArrayBufferView, ext: string): Promise<null>;
+  };
+  /**
+   * Named blobs kept on the person's device, for apps whose manifest declares
+   * `capabilities.deviceStore`. Per app id: no other app sees these, and pqp
+   * never reads or sends them. Keys are `a-z 0-9 : . _ -`, 1 to 128 characters.
+   *
+   * Every call rejects with `not-allowed` when the manifest does not declare the
+   * capability, and with `invalid` on a host that predates it: in that case keep
+   * the data in memory and carry on.
+   */
+  readonly store: {
+    /** Resolves to `null` when the key holds nothing. */
+    get(key: string): Promise<StoredValue | null>;
+    /**
+     * Writes (or replaces) a value, with up to 2048 bytes of JSON `meta`. The
+     * bytes are copied, your buffer stays yours. Rejects with `too-large` when the
+     * value, or the store with it, would pass the manifest's cap.
+     */
+    put(key: string, bytes: ArrayBuffer | ArrayBufferView, meta?: JsonValue): Promise<StoreUsage>;
+    delete(key: string): Promise<null>;
+    /** Entries whose key starts with `prefix` (empty for all), at most 500, no bytes. */
+    list(prefix?: string): Promise<StoreEntry[]>;
+    usage(): Promise<StoreUsage>;
   };
   readonly ui: {
     /** Asks for the frame to be `height` CSS pixels tall (120 to 2000). Resolves to the height applied. */
@@ -108,6 +160,24 @@ function field<T>(result: unknown, key: string, kind: FieldKind): T {
     if (isKind(value, kind)) return value as T;
   }
   throw new PqpAppError("unavailable", `pqp host answered without a usable ${key}`);
+}
+
+/** An ArrayBuffer for the wire: a view is copied to its own buffer, a buffer goes as it is. */
+function wireBytes(bytes: ArrayBuffer | ArrayBufferView): ArrayBuffer {
+  if (ArrayBuffer.isView(bytes)) {
+    const copy = new Uint8Array(bytes.byteLength);
+    copy.set(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength));
+    return copy.buffer;
+  }
+  return bytes;
+}
+
+function usageOf(result: unknown): StoreUsage {
+  return {
+    used: field<number>(result, "used", "number"),
+    cap: field<number>(result, "cap", "number"),
+    persisted: field<boolean>(result, "persisted", "boolean"),
+  };
 }
 
 /** Builds the app object over a port whose `hello` push has already arrived. */
@@ -182,6 +252,45 @@ export function createApp(client: PortClient, hello: BridgeHello): PqpApp {
           if (error instanceof PqpAppError && error.code === "cancelled") return null;
           throw error;
         }
+      },
+      async saveLocal(bytes, ext) {
+        await client.request("files.saveLocal", { bytes: wireBytes(bytes), ext });
+        return null;
+      },
+    },
+    store: {
+      async get(key) {
+        const result = await client.request<unknown>("store.get", { key });
+        if (result === null) return null;
+        return {
+          bytes: field<ArrayBuffer>(result, "bytes", "buffer"),
+          meta: field<JsonValue>(result, "meta", "json"),
+        };
+      },
+      async put(key, bytes, meta) {
+        const params: Record<string, unknown> = { key, bytes: wireBytes(bytes) };
+        if (meta !== undefined) params.meta = meta;
+        const result = await client.request<unknown>("store.put", params);
+        return usageOf(field<unknown>(result, "usage", "json"));
+      },
+      async delete(key) {
+        await client.request("store.delete", { key });
+        return null;
+      },
+      async list(prefix = "") {
+        const result = await client.request<unknown>("store.list", { prefix });
+        if (!Array.isArray(result)) {
+          throw new PqpAppError("unavailable", "pqp host answered store.list without a list");
+        }
+        return result.map((entry): StoreEntry => ({
+          key: field<string>(entry, "key", "string"),
+          size: field<number>(entry, "size", "number"),
+          meta: field<JsonValue>(entry, "meta", "json"),
+          updatedAt: field<number>(entry, "updatedAt", "number"),
+        }));
+      },
+      async usage() {
+        return usageOf(await client.request<unknown>("store.usage"));
       },
     },
     ui: {

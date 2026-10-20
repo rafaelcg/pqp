@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { APP_AVATAR_MAX_CHARS, APP_PARTICIPANTS_AVATAR_BUDGET_CHARS } from "@pqp/shared";
-import { cleanDisplayName, fitAvatarBudget, mapTransportError } from "./bridge-host";
+import { cleanDisplayName, fitAvatarBudget, mapTransportError, savedFileName } from "./bridge-host";
+import { DeviceStore, openIdbBackend } from "./device-store";
+import { createFakeIdb } from "./fake-idb.fixture";
 import {
   BIA_SEAT,
   BIA_USER,
@@ -542,6 +544,285 @@ describe("connection, theme and the end", () => {
     const r = await make();
     r.host.leave();
     expect(r.transport.left).toBe(1);
+  });
+});
+
+describe("the device store", () => {
+  const grant = { allowed: true as const, maxBytes: 100 };
+  const caps = (deviceStore?: { allowed: boolean; maxBytes?: number }) => ({
+    share: "none" as const,
+    localFiles: { allowed: false as const },
+    ...(deviceStore ? { deviceStore } : {}),
+  });
+  const buf = (...values: number[]) => new Uint8Array(values).buffer;
+  const sized = (n: number) => new Uint8Array(n).fill(3).buffer;
+  /** Hosts built over one shared fake IndexedDB, the way every frame of a page shares the real one. */
+  function world() {
+    const idb = createFakeIdb();
+    const opened: Array<{ appId: string; cap: number }> = [];
+    const openStore = (appId: string, cap: number) => {
+      opened.push({ appId, cap });
+      return new DeviceStore({ backend: openIdbBackend(appId, idb.env), capBytes: cap, storage: null });
+    };
+    return { idb, opened, openStore };
+  }
+  const put = (r: Rig, key: string, bytes: ArrayBuffer, extra: Record<string, unknown> = {}) =>
+    r.app.call({ type: "store.put", key, bytes, ...extra }, [bytes]);
+
+  it("is not-allowed for an app that did not declare the capability, and opens nothing", async () => {
+    const { openStore, opened } = world();
+    for (const declared of [undefined, { allowed: false }]) {
+      const r = await make({ app: { capabilities: caps(declared) }, host: { openStore } });
+      for (const message of [
+        { type: "store.get", key: "a" },
+        { type: "store.list", prefix: "" },
+        { type: "store.usage" },
+        { type: "store.delete", key: "a" },
+      ]) {
+        expect(await r.app.call(message), JSON.stringify(message)).toMatchObject({ ok: false, error: "not-allowed" });
+      }
+      expect(await put(r, "a", buf(1))).toMatchObject({ ok: false, error: "not-allowed" });
+    }
+    expect(opened).toEqual([]);
+  });
+
+  it("is not-allowed for a declared store with no cap, whatever the host options", async () => {
+    const { openStore, opened } = world();
+    const r = await make({ app: { capabilities: caps({ allowed: true }) }, host: { openStore } });
+    expect(await r.app.call({ type: "store.usage" })).toMatchObject({ error: "not-allowed" });
+    expect(opened).toEqual([]);
+  });
+
+  it("round-trips a value with its meta, answers null for a missing key, and transfers the bytes", async () => {
+    const { openStore } = world();
+    const r = await make({ app: { capabilities: caps(grant) }, host: { openStore } });
+    expect(await r.app.call({ type: "store.get", key: "rom:abc" })).toMatchObject({ ok: true, type: "store.get", result: null });
+    const stored = await put(r, "rom:abc", buf(1, 2, 3), { meta: { name: "x" } });
+    expect(stored).toMatchObject({ ok: true, type: "store.put", result: { usage: { used: 3, cap: 100, persisted: false } } });
+    const got = await r.app.call({ type: "store.get", key: "rom:abc" });
+    const result = got.result as { bytes: ArrayBuffer; meta: unknown };
+    expect(Array.from(new Uint8Array(result.bytes))).toEqual([1, 2, 3]);
+    expect(result.meta).toEqual({ name: "x" });
+    expect(Object.keys(result).sort()).toEqual(["bytes", "meta"]);
+    expect(await r.app.call({ type: "store.delete", key: "rom:abc" })).toMatchObject({ ok: true, result: null });
+    expect(await r.app.call({ type: "store.get", key: "rom:abc" })).toMatchObject({ result: null });
+  });
+
+  it("lists by prefix and reports usage against the manifest's cap", async () => {
+    const { openStore } = world();
+    const r = await make({ app: { capabilities: caps(grant) }, host: { openStore } });
+    await put(r, "state:a:2", buf(1, 2), { meta: { slot: 2 } });
+    await put(r, "state:a:1", buf(1));
+    await put(r, "rom:a", buf(1, 2, 3, 4));
+    const listed = await r.app.call({ type: "store.list", prefix: "state:" });
+    const entries = listed.result as Array<Record<string, unknown>>;
+    expect(entries.map((e) => e.key)).toEqual(["state:a:1", "state:a:2"]);
+    expect(Object.keys(entries[1]!).sort()).toEqual(["key", "meta", "size", "updatedAt"]);
+    expect(entries[1]).toMatchObject({ size: 2, meta: { slot: 2 } });
+    expect(await r.app.call({ type: "store.usage" })).toMatchObject({ result: { used: 7, cap: 100, persisted: false } });
+  });
+
+  it("answers too-large for a put that would pass the cap, and keeps what was stored", async () => {
+    const { openStore } = world();
+    const r = await make({ app: { capabilities: caps(grant) }, host: { openStore } });
+    expect(await put(r, "a", sized(60))).toMatchObject({ ok: true });
+    expect(await put(r, "b", sized(41))).toMatchObject({ ok: false, error: "too-large" });
+    expect(await r.app.call({ type: "store.get", key: "b" })).toMatchObject({ result: null });
+    expect(await r.app.call({ type: "store.usage" })).toMatchObject({ result: { used: 60 } });
+    // replacing a value does not count the old one
+    expect(await put(r, "a", sized(100))).toMatchObject({ ok: true });
+    expect(await put(r, "c", sized(1))).toMatchObject({ error: "too-large" });
+  });
+
+  it("answers too-large for one value over 64 MiB before it reaches the store", async () => {
+    const put64 = vi.fn();
+    const r = await make({
+      app: { capabilities: caps({ allowed: true, maxBytes: 1024 * 1024 * 1024 }) },
+      host: { openStore: () => ({ put: put64 }) as never },
+    });
+    const huge = new ArrayBuffer(64 * 1024 * 1024 + 1);
+    expect(await put(r, "rom:x", huge)).toMatchObject({ ok: false, error: "too-large" });
+    expect(put64).not.toHaveBeenCalled();
+  });
+
+  it("keeps app A's keys from app B, in reading, listing, usage, deleting and quota", async () => {
+    const { openStore, idb, opened } = world();
+    const a = await make({ app: { id: "app-aaa", capabilities: caps({ allowed: true, maxBytes: 10 }) }, host: { openStore } });
+    const b = await make({ app: { id: "app-bbb", capabilities: caps({ allowed: true, maxBytes: 1000 }) }, host: { openStore } });
+    await put(a, "rom:secret", buf(1, 2, 3), { meta: { who: "a" } });
+    await put(a, "prefs", buf(9));
+    expect(await b.app.call({ type: "store.get", key: "rom:secret" })).toMatchObject({ ok: true, result: null });
+    expect(await b.app.call({ type: "store.list", prefix: "" })).toMatchObject({ result: [] });
+    expect(await b.app.call({ type: "store.usage" })).toMatchObject({ result: { used: 0, cap: 1000 } });
+    await put(b, "rom:secret", buf(7, 7), { meta: { who: "b" } });
+    await b.app.call({ type: "store.delete", key: "prefs" });
+    const mine = await a.app.call({ type: "store.get", key: "rom:secret" });
+    expect((mine.result as { meta: unknown }).meta).toEqual({ who: "a" });
+    expect(await a.app.call({ type: "store.get", key: "prefs" })).not.toMatchObject({ result: null });
+    // each host opened the store of its own manifest id, with its own cap, and nothing else
+    expect(opened).toEqual([
+      { appId: "app-aaa", cap: 10 },
+      { appId: "app-bbb", cap: 1000 },
+    ]);
+    expect(idb.stores().sort()).toEqual(["app-aaa", "app-bbb"]);
+    // the caps are not shared: a is full at 4 of 10 only after 7 more, b is far from its own
+    expect(await put(a, "more", sized(7))).toMatchObject({ error: "too-large" });
+    expect(await put(b, "more", sized(500))).toMatchObject({ ok: true });
+  });
+
+  it("refuses a key, a prefix or a meta outside the contract as invalid, and an app id in a message", async () => {
+    const { openStore } = world();
+    const r = await make({ app: { capabilities: caps(grant) }, host: { openStore } });
+    expect(await r.app.call({ type: "store.get", key: "../other-app/rom" })).toMatchObject({ error: "invalid" });
+    expect(await r.app.call({ type: "store.get", key: "A" })).toMatchObject({ error: "invalid" });
+    expect(await r.app.call({ type: "store.list", prefix: "a/b" })).toMatchObject({ error: "invalid" });
+    expect(await r.app.call({ type: "store.get", key: "a", appId: "app-bbb" })).toMatchObject({ error: "invalid" });
+    expect(await r.app.call({ type: "store.get", key: "a", store: "app-bbb" })).toMatchObject({ error: "invalid" });
+    expect(await put(r, "a", buf(1), { meta: { s: "x".repeat(3000) } })).toMatchObject({ error: "invalid" });
+    expect(await r.app.call({ type: "store.put", key: "a", bytes: new Uint8Array(2) })).toMatchObject({ error: "invalid" });
+  });
+
+  it("answers unavailable when this browser has no storage, and when the store fails", async () => {
+    const none = await make({ app: { capabilities: caps(grant) }, host: { openStore: () => null } });
+    expect(await none.app.call({ type: "store.usage" })).toMatchObject({ ok: false, error: "unavailable" });
+    const broken = await make({
+      app: { capabilities: caps(grant) },
+      host: {
+        openStore: () =>
+          new DeviceStore({
+            backend: {
+              read: async () => {
+                throw new Error("disk");
+              },
+              write: async () => undefined,
+              remove: async () => undefined,
+              scan: async () => [],
+            },
+            capBytes: 100,
+            storage: null,
+          }),
+      },
+    });
+    expect(await broken.app.call({ type: "store.get", key: "a" })).toMatchObject({ error: "unavailable" });
+  });
+
+  it("answers rate-limited past the burst, and recovers with time", async () => {
+    let clock = 0;
+    const { openStore } = world();
+    const r = await make({ app: { capabilities: caps(grant) }, host: { openStore }, now: () => clock });
+    const answers: string[] = [];
+    for (let i = 0; i < 70; i += 1) {
+      const answer = await r.app.call({ type: "store.usage" });
+      answers.push(answer.ok === true ? "ok" : String(answer.error));
+    }
+    expect(answers.filter((a) => a === "ok").length).toBe(60);
+    expect(answers.filter((a) => a === "rate-limited").length).toBe(10);
+    clock += 1000;
+    expect(await r.app.call({ type: "store.usage" })).toMatchObject({ ok: true });
+  });
+
+  it("is refused after the session ended, like every other call", async () => {
+    const { openStore } = world();
+    const r = await make({ app: { capabilities: caps(grant) }, host: { openStore } });
+    r.transport.handlers!.onEnded("host");
+    await r.app.settle();
+    expect(await r.app.call({ type: "store.usage" })).toMatchObject({ error: "ended" });
+  });
+
+  it("names no pqp identity in anything it answers", async () => {
+    const { openStore } = world();
+    const r = await make({ app: { capabilities: caps(grant) }, host: { openStore } });
+    const answers = [
+      await put(r, "a", buf(1), { meta: { n: 1 } }),
+      await r.app.call({ type: "store.get", key: "a" }),
+      await r.app.call({ type: "store.list", prefix: "" }),
+      await r.app.call({ type: "store.usage" }),
+      await r.app.call({ type: "store.delete", key: "a" }),
+    ];
+    const { keys, strings } = walk(answers);
+    for (const forbidden of ["userId", "user_id", "email", "token", "serverId", "channelId"]) {
+      expect(keys, forbidden).not.toContain(forbidden);
+    }
+    expect(strings.join(" ")).not.toContain(SELF_USER);
+  });
+});
+
+describe("files.saveLocal", () => {
+  const files = { allowed: true as const, accept: [".nes", ".locadora"], maxBytes: 64 };
+  const buf = (n: number) => new Uint8Array(n).fill(5).buffer;
+  const save = (r: Rig, bytes: ArrayBuffer, ext: string, extra: Record<string, unknown> = {}) =>
+    r.app.call({ type: "files.saveLocal", bytes, ext, ...extra }, [bytes]);
+  const withFiles = (saveFile: (file: { appId: string; bytes: ArrayBuffer; ext: string }) => void, localFiles: Record<string, unknown> = files) =>
+    make({ app: { capabilities: { share: "none", localFiles: localFiles as never } }, host: { saveFile } });
+
+  it("hands the host the bytes, the extension and the app id, and answers null", async () => {
+    const saveFile = vi.fn();
+    const r = await withFiles(saveFile);
+    expect(await save(r, buf(4), ".locadora")).toMatchObject({ ok: true, type: "files.saveLocal", result: null });
+    expect(saveFile).toHaveBeenCalledTimes(1);
+    const handed = saveFile.mock.calls[0]![0] as { appId: string; bytes: ArrayBuffer; ext: string };
+    expect(handed.appId).toBe("pqp-eco");
+    expect(handed.ext).toBe(".locadora");
+    expect(handed.bytes.byteLength).toBe(4);
+    expect(Object.keys(handed).sort()).toEqual(["appId", "bytes", "ext"]);
+  });
+
+  it("is not-allowed when the manifest allows no files, or does not accept the extension", async () => {
+    const closed = vi.fn();
+    const r1 = await make({ host: { saveFile: closed } });
+    expect(await save(r1, buf(4), ".locadora")).toMatchObject({ error: "not-allowed" });
+    const noAccept = vi.fn();
+    const r2 = await withFiles(noAccept, { allowed: true, accept: [".nes"], maxBytes: 64 });
+    expect(await save(r2, buf(4), ".locadora")).toMatchObject({ error: "not-allowed" });
+    expect(closed).not.toHaveBeenCalled();
+    expect(noAccept).not.toHaveBeenCalled();
+  });
+
+  it("is not-allowed for an extension that is accepted for picking but not on the platform's save list", async () => {
+    const saveFile = vi.fn();
+    const r = await withFiles(saveFile);
+    for (const ext of [".nes", ".html", ".exe", ".js", ".svg"]) {
+      expect(await save(r, buf(4), ext), ext).toMatchObject({ error: "not-allowed" });
+    }
+    expect(saveFile).not.toHaveBeenCalled();
+  });
+
+  it("refuses a name, an empty file and one over the manifest's cap", async () => {
+    const saveFile = vi.fn();
+    const r = await withFiles(saveFile);
+    expect(await save(r, buf(4), ".locadora", { name: "save.locadora" })).toMatchObject({ error: "invalid" });
+    expect(await save(r, new ArrayBuffer(0), ".locadora")).toMatchObject({ error: "invalid" });
+    expect(await save(r, buf(65), ".locadora")).toMatchObject({ error: "too-large" });
+    expect(await save(r, buf(64), ".locadora")).toMatchObject({ ok: true });
+    expect(saveFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("limits downloads to three at once, then one every five seconds", async () => {
+    let clock = 0;
+    const saveFile = vi.fn();
+    const r = await make({
+      app: { capabilities: { share: "none", localFiles: files } },
+      host: { saveFile },
+      now: () => clock,
+    });
+    const answers: unknown[] = [];
+    for (let i = 0; i < 5; i += 1) answers.push((await save(r, buf(4), ".locadora")).ok);
+    expect(answers).toEqual([true, true, true, false, false]);
+    clock += 5000;
+    expect(await save(r, buf(4), ".locadora")).toMatchObject({ ok: true });
+    expect(saveFile).toHaveBeenCalledTimes(4);
+  });
+
+  it("answers unavailable when the download cannot be started", async () => {
+    const saveFile = vi.fn(() => {
+      throw new Error("blocked");
+    });
+    const r = await withFiles(saveFile);
+    expect(await save(r, buf(4), ".locadora")).toMatchObject({ ok: false, error: "unavailable" });
+  });
+
+  it("names the file itself, from the app id and the time, never from the app", () => {
+    expect(savedFileName("pqp-locadora", ".locadora", new Date("2026-10-19T14:05:33Z"))).toBe("pqp-locadora-20261019-1405.locadora");
   });
 });
 

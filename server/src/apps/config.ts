@@ -1,6 +1,7 @@
 import {
   APP_REQUIRED_LOCALES,
   appString,
+  LOCADORA_APP_ID,
   type AppConfigEntry,
   type AppManifest,
   type AppsConfig,
@@ -112,6 +113,7 @@ export async function appsConfigForServer(serverId: string): Promise<AppsConfig>
       available: verdict.available,
       reason: verdict.reason,
       shareAllowed: appShareAllowed(serverId, manifest),
+      saveSync: manifest.id === LOCADORA_APP_ID && isEnabled("locadora_save_sync", { serverId }),
     });
   }
   return { enabled: true, origin, apps };

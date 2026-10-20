@@ -4,7 +4,7 @@
       "manifest": {
         "manifestVersion": 1,
         "id": "pqp-eco",
-        "version": "1.0.0",
+        "version": "1.0.1",
         "publisher": "pqp",
         "platformApi": 1,
         "name": "name",
@@ -53,7 +53,7 @@
         },
         "entry": {
           "path": "index.html",
-          "sha256": "ead6a8b1899f1e000f53a3530327069abdc3bf86af639d1ea9a4017e61bb9f0f"
+          "sha256": "0b50f1d3e2fe4fe7729b5b93d67b2ac6d2247ad6670589e4dec86eafe7a5af62"
         },
         "platforms": [
           "web",
@@ -84,28 +84,28 @@
           }
         }
       },
-      "manifestSha256": "501caa5b6b83c521e48805bc1b14a7c0e2ee631ea4c882e71f43d8d5bb315ec0"
+      "manifestSha256": "3f36437e977db2e3c30b5281c27602e4dee0716fcfd89e4b0418f328293b5a7e"
     },
     {
       "manifest": {
         "manifestVersion": 1,
-        "id": "pqp-enquete",
+        "id": "pqp-locadora",
         "version": "1.0.0",
         "publisher": "pqp",
         "platformApi": 1,
         "name": "name",
         "description": "description",
-        "icon": "poll",
-        "category": "tool",
+        "icon": "gamepad",
+        "category": "emulator",
         "channelTypes": [
           "text",
           "voice"
         ],
         "players": {
           "min": 1,
-          "max": 64,
+          "max": 8,
           "spectators": true,
-          "maxSpectators": 64
+          "maxSpectators": 50
         },
         "requires": {
           "start": "USE_APPS",
@@ -113,16 +113,30 @@
         },
         "capabilities": {
           "identity": "display",
-          "share": "none",
+          "share": "pane",
           "localFiles": {
-            "allowed": false
+            "allowed": true,
+            "accept": [
+              ".nes",
+              ".gb",
+              ".gbc",
+              ".gba",
+              ".sfc",
+              ".smc",
+              ".locadora"
+            ],
+            "maxBytes": 67108864
           },
-          "peer": "none"
+          "peer": "none",
+          "deviceStore": {
+            "allowed": true,
+            "maxBytes": 536870912
+          }
         },
         "hostBound": false,
         "state": {
-          "maxBytes": 12288,
-          "maxWritesPerSecond": 10,
+          "maxBytes": 0,
+          "maxWritesPerSecond": 1,
           "writers": "participants"
         },
         "events": {
@@ -134,47 +148,97 @@
           "short": "presence.short"
         },
         "content": {
-          "userText": true,
-          "userImages": false
+          "userText": false,
+          "userImages": true
         },
         "notice": "notice",
         "entry": {
           "path": "index.html",
-          "sha256": "d664ed5f44e9676cad1dbd8e273474f261974897bdce36c9b29d035ce4b09d9e"
+          "sha256": "a39a55d05b56cf3c12e01f9f5ea6f6c523523a9b1ab9d30a8ac176c14fab7df8"
+        },
+        "assets": [
+          {
+            "name": "fceumm-core.pqpc",
+            "path": "cores/fceumm-core.pqpc",
+            "sha256": "48bdff98dd6609aa912460307b1612f6d41ec7915fa2e8c388d11ada5bc42801",
+            "bytes": 1414972
+          },
+          {
+            "name": "fceumm.json",
+            "path": "cores/fceumm.json",
+            "sha256": "13dbbfba0ea1bea087c97c38f47dd49c3fb8f16c3f5ed5678dd75d352b737132",
+            "bytes": 120
+          },
+          {
+            "name": "mgba-core.pqpc",
+            "path": "cores/mgba-core.pqpc",
+            "sha256": "89690f501cccb1ae31e5524811f0842dd0651bece4039b15705a1440640f855f",
+            "bytes": 1424164
+          },
+          {
+            "name": "mgba.json",
+            "path": "cores/mgba.json",
+            "sha256": "08219f6c855a9d996f04ed21169bb0c5ac64d469a8a536468b9876205b5c268d",
+            "bytes": 118
+          },
+          {
+            "name": "bsnes-core.pqpc",
+            "path": "cores/bsnes-core.pqpc",
+            "sha256": "98a1617bdee5bd15da5ef735211a0f1f7716a60fadd3c9bf35d8cf9af85fce1f",
+            "bytes": 1700893
+          },
+          {
+            "name": "bsnes.json",
+            "path": "cores/bsnes.json",
+            "sha256": "9b1a67c69802a96f9a217fe5e8fedf91b18294f0b5c6f687412bfef76c165d97",
+            "bytes": 119
+          },
+          {
+            "name": "notices.txt",
+            "path": "notices.txt",
+            "sha256": "8f5991a0da5dacf2efe562456d373c1c76571ee0ced7f147a02ac1daadc4a7fb",
+            "bytes": 185913
+          }
+        ],
+        "sandbox": {
+          "wasm": true,
+          "blobWorkers": false,
+          "localBlobs": true
         },
         "platforms": [
           "web",
           "desktop"
         ],
         "license": {
-          "spdx": "AGPL-3.0-only",
-          "source": "https://github.com/rafaelcg/pqp/tree/main/apps/enquete"
+          "spdx": "AGPL-3.0-only AND GPL-2.0-or-later AND MPL-2.0 AND GPL-3.0-only AND OFL-1.1 AND MIT AND GPL-3.0-or-later AND ISC AND LGPL-2.1-or-later",
+          "source": "https://github.com/rafaelcg/pqp/tree/main/apps/locadora",
+          "notices": "notices.txt"
         },
         "i18n": {
           "pt-BR": {
-            "name": "Enquete",
-            "description": "Uma votação ao vivo: o host faz a pergunta, todo mundo vota e o resultado aparece na hora.",
-            "notice": "A pergunta e as opções que o host escrever aparecem pra todo mundo na sessão.",
-            "presence.phrase": "{name} tá votando na enquete",
-            "presence.short": "Votando na enquete"
+            "name": "Locadora",
+            "description": "Um emulador de NES, SNES e Game Boy. Cada pessoa abre o seu jogo no seu computador. O pqp não fornece jogo nenhum.",
+            "notice": "Isso é só um emulador. O pqp não fornece jogo: abre só um que tu tem direito de jogar. O arquivo fica neste aparelho e nunca é enviado.",
+            "presence.phrase": "{name} tá na Locadora",
+            "presence.short": "Na Locadora"
           },
           "en": {
-            "name": "Poll",
-            "description": "A live vote: the host asks, everybody votes and the result shows right away.",
-            "notice": "The question and options the host writes are shown to everyone in the session.",
-            "presence.phrase": "{name} is voting in a poll",
-            "presence.short": "Voting in a poll"
+            "name": "Locadora",
+            "description": "An NES, SNES and Game Boy emulator. Everyone opens their own game on their own computer. pqp does not provide any game.",
+            "notice": "This is only an emulator. pqp does not provide games: only open one you have the right to play. The file stays on this device and is never sent.",
+            "presence.phrase": "{name} is at the Locadora",
+            "presence.short": "At the Locadora"
           },
           "es": {
-            "name": "Encuesta",
-            "description": "Una votación en vivo: el host pregunta, todos votan y el resultado aparece al instante.",
-            "notice": "La pregunta y las opciones que escriba el host las ve todo el mundo en la sesión.",
-            "presence.phrase": "{name} está votando en una encuesta",
-            "presence.short": "Votando en una encuesta"
+            "name": "Locadora",
+            "description": "Un emulador de NES, SNES y Game Boy. Cada persona abre su juego en su computadora. pqp no proporciona ningún juego.",
+            "notice": "Esto es solo un emulador. pqp no proporciona juegos: abre solo uno que tengas derecho a jugar. El archivo se queda en este dispositivo y nunca se envía.",
+            "presence.phrase": "{name} está en la Locadora",
+            "presence.short": "En la Locadora"
           }
         }
       },
-      "manifestSha256": "ff28778e33af27c71cfa1fbeaa21387bd86c4c76567226ff4ac0b60d3ebc6025"
+      "manifestSha256": "9f3025bea20057e58ac142b23523f6ff29a3ba41bcb6cc57303669b436fb32d7"
     }
   ]
 }

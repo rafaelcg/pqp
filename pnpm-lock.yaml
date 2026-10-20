@@ -4,6 +4,16 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  '@emulatorjs/emulatorjs>@node-minify/clean-css': '-'
+  '@emulatorjs/emulatorjs>@node-minify/core': '-'
+  '@emulatorjs/emulatorjs>@node-minify/terser': '-'
+  '@emulatorjs/emulatorjs>http-server': '-'
+  '@emulatorjs/emulatorjs>node-7z': '-'
+  '@emulatorjs/emulatorjs>node-fetch': '-'
+  '@emulatorjs/emulatorjs>nipplejs': '-'
+  '@emulatorjs/emulatorjs>socket.io': '-'
+
 importers:
 
   .:
@@ -49,12 +59,30 @@ importers:
         specifier: ^4.1.10
         version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@30.0.1(@noble/hashes@1.8.0))(vite@6.4.3(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.49.2)(tsx@4.23.0))
 
-  apps/enquete:
+  apps/locadora:
     dependencies:
+      '@emulatorjs/core-fceumm':
+        specifier: 4.2.3
+        version: 4.2.3
+      '@emulatorjs/core-mgba':
+        specifier: 4.2.3
+        version: 4.2.3
+      '@emulatorjs/emulatorjs':
+        specifier: 4.2.3
+        version: 4.2.3
+      '@pqp-vendor/emulatorjs-core-bsnes':
+        specifier: link:./vendor/emulatorjs-core-bsnes
+        version: link:vendor/emulatorjs-core-bsnes
       '@pqp/app-sdk':
         specifier: workspace:*
         version: link:../../packages/app-sdk
+      fflate:
+        specifier: 0.8.3
+        version: 0.8.3
     devDependencies:
+      '@playwright/test':
+        specifier: ^1.62.1
+        version: 1.62.1
       '@pqp/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -155,6 +183,15 @@ importers:
         specifier: ^0.185.1
         version: 0.185.1
     devDependencies:
+      '@emulatorjs/core-fceumm':
+        specifier: 4.2.3
+        version: 4.2.3
+      '@emulatorjs/core-mgba':
+        specifier: 4.2.3
+        version: 4.2.3
+      '@emulatorjs/emulatorjs':
+        specifier: 4.2.3
+        version: 4.2.3
       '@grafana/faro-rollup-plugin':
         specifier: 0.12.0
         version: 0.12.0
@@ -1076,6 +1113,15 @@ packages:
     peerDependencies:
       emoji-mart: ^5.2
       react: ^16.8 || ^17 || ^18
+
+  '@emulatorjs/core-fceumm@4.2.3':
+    resolution: {integrity: sha512-XX9Vv2N/hzp0TstNMCTSppEs+sg+1lpJpPdSDuRqIO/cwdt7dUcF+WjNX1yQJLRbP5+XwcNHZ6K4BKy8CJpndQ==}
+
+  '@emulatorjs/core-mgba@4.2.3':
+    resolution: {integrity: sha512-daiHzZQKEr+P9fra7j5YoEAXiyYUEtBhFQ8EAV/SeCtrkvqtayU7GQ9LYgoSgzkKSwsbNSskApqGuA9EGARYPA==}
+
+  '@emulatorjs/emulatorjs@4.2.3':
+    resolution: {integrity: sha512-7z3qaA4LwyurhuGvdMUDF9xJpEbxC3SNy9+E9tSaOsRo8FCS2QXam/0k/lc9kqHWRFIlLKWahNjPAStyL0rFnw==}
 
   '@esbuild/aix-ppc64@0.25.12':
     resolution: {integrity: sha512-Hhmwd6CInZ3dwpuGTF8fJG6yoWmsToE+vYgD4nytZVxcu1ulHpUQRAB1UJ8+N1Am3Mz4+xOByoQoSZf4D+CpkA==}
@@ -5607,6 +5653,9 @@ packages:
   zwitch@2.0.4:
     resolution: {integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==}
 
+ignoredOptionalDependencies:
+  - '@emulatorjs/cores'
+
 snapshots:
 
   '@anthropic-ai/sdk@0.133.0(zod@3.25.76)':
@@ -6544,6 +6593,16 @@ snapshots:
     dependencies:
       emoji-mart: 5.6.0
       react: 19.2.7
+
+  '@emulatorjs/core-fceumm@4.2.3':
+    dependencies:
+      '@emulatorjs/emulatorjs': 4.2.3
+
+  '@emulatorjs/core-mgba@4.2.3':
+    dependencies:
+      '@emulatorjs/emulatorjs': 4.2.3
+
+  '@emulatorjs/emulatorjs@4.2.3': {}
 
   '@esbuild/aix-ppc64@0.25.12':
     optional: true

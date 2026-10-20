@@ -255,8 +255,8 @@ describeDb("apps tables", () => {
       const other = await getPool().connect();
       try {
         await other.query("BEGIN");
-        await other.query(`INSERT INTO apps (id, publisher_id) VALUES ('enquete', 'pqp')`);
-        await other.query(`UPDATE apps SET current_version = '1.0.0' WHERE id = 'enquete'`);
+        await other.query(`INSERT INTO apps (id, publisher_id) VALUES ('quadro', 'pqp')`);
+        await other.query(`UPDATE apps SET current_version = '1.0.0' WHERE id = 'quadro'`);
         await expect(other.query("COMMIT")).rejects.toMatchObject({ code: "23503" });
       } finally {
         await other.query("ROLLBACK").catch(() => {});
@@ -265,7 +265,7 @@ describeDb("apps tables", () => {
 
       // The app and its first version in one transaction commits, and an app
       // with no version yet (NULL) is allowed.
-      await q(`INSERT INTO apps (id, publisher_id) VALUES ('enquete', 'pqp')`);
+      await q(`INSERT INTO apps (id, publisher_id) VALUES ('quadro', 'pqp')`);
       expect(await count(`SELECT count(*) AS n FROM apps`)).toBe(2);
     });
 

@@ -1,0 +1,109 @@
+diff --git a/retroarch.c b/retroarch.c
+index 17ec9fb..f702491 100644
+--- a/retroarch.c
++++ b/retroarch.c
+@@ -6106,6 +6106,8 @@ void rwebaudio_recalibrate_time(void);
+ bool EJS_PAUSED = false;
+ bool EJS_MAINLOOP_PAUSED = false;
+ bool EJS_PENDING_SCREENSHOT = false;
++extern bool EJS_PENDING_STATE; /* pqp: see save_state_info in tasks/task_save.c */
++void ejs_serve_state(void);
+ void ejs_check_save(void);
+ #endif
+ static unsigned emscripten_frame_count = 0;
+@@ -6123,6 +6125,8 @@ void emscripten_mainloop(void)
+       }
+       EJS_PENDING_SCREENSHOT = false;
+    }
++   if (EJS_PENDING_STATE)
++      ejs_serve_state();
+    if (EJS_PAUSED && !EJS_MAINLOOP_PAUSED) {
+       emscripten_pause_main_loop();
+       EJS_MAINLOOP_PAUSED = true;
+diff --git a/tasks/task_save.c b/tasks/task_save.c
+index 3014786..1528a33 100644
+--- a/tasks/task_save.c
++++ b/tasks/task_save.c
+@@ -1833,32 +1833,66 @@ void set_save_state_in_background(bool state)
+ 
+ #ifdef EMULATORJS
+ 
+-char* save_state_info(void)
++/* pqp (2026-10-20): two changes to how the page reads a state.
++ *  - The string used to be a local array returned by address, which clang -O3 turns
++ *    into a null pointer, so every state read as "". It is malloc'd now (the 4.3
++ *    frontend frees it; 4.2.3 leaks these few bytes per call).
++ *  - Serialising is done by the main loop, not by this call. A core whose threads are
++ *    fibers (bsnes on libco) switches them while it serialises, and under asyncify a
++ *    fiber may only switch inside the main loop: called straight from JavaScript, the
++ *    switch unwinds back into the page with the state half written. So the first call
++ *    asks the main loop for a state and answers "pending||2"; the main loop serialises
++ *    at the top of its next tick (ejs_serve_state); a later call answers
++ *    "size|pointer|1" once. The data stays valid until the next state is served.
++ *    Nothing here may ask the core for its size either: bsnes serialises to answer. */
++bool EJS_PENDING_STATE = false;
++static void  *ejs_state_data  = NULL;
++static size_t ejs_state_size  = 0;
++static int    ejs_state_ready = 0; /* 1 served, -1 failed, 0 nothing waiting */
++
++void ejs_serve_state(void)
+ {
+-   void* save_data = NULL;
+-   char state_data[300]; // This should NEVER overflow. If it does we are doing something very wrong.
+-   memset(state_data, '\0', sizeof(state_data));
+-
+    size_t serial_size;
+ 
+-   if (!core_info_current_supports_savestate()) {
+-      strcpy(state_data, "Not supported||0");
+-      return state_data;
++   EJS_PENDING_STATE = false;
++   if (ejs_state_data)
++   {
++      free(ejs_state_data);
++      ejs_state_data = NULL;
+    }
++   serial_size    = core_serialize_size();
++   ejs_state_data = serial_size ? content_get_serialized_data(&serial_size) : NULL;
++   ejs_state_size = ejs_state_data ? serial_size : 0;
++   ejs_state_ready = ejs_state_data ? 1 : -1;
++}
++
++char* save_state_info(void)
++{
++   char* state_data = (char*)calloc(300, 1);
+ 
+-   serial_size = core_serialize_size();
+-   if (serial_size == 0) {
+-      strcpy(state_data, "Size is zero||0");
++   if (!state_data)
++      return NULL;
++
++   if (ejs_state_ready == 1)
++   {
++      ejs_state_ready = 0;
++      snprintf(state_data, 300, "%zu|%zu|1", ejs_state_size, (size_t)ejs_state_data);
+       return state_data;
+    }
+-
+-   save_data = content_get_serialized_data(&serial_size);
+-   if (!save_data) {
++   if (ejs_state_ready == -1)
++   {
++      ejs_state_ready = 0;
+       strcpy(state_data, "Error writing data||0");
+       return state_data;
+    }
+-   sprintf(state_data, "%zu|%zu|1", serial_size, (unsigned long)save_data);
+-   return state_data; // This must be freed by the JavaScript side!
++   if (!core_info_current_supports_savestate()) {
++      strcpy(state_data, "Not supported||0");
++      return state_data;
++   }
++   /* no core_serialize_size() here: bsnes answers it by serialising, which switches fibers */
++   EJS_PENDING_STATE = true;
++   strcpy(state_data, "pending||2");
++   return state_data;
+ }
+ 
+ bool supports_states(void)

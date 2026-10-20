@@ -1,0 +1,511 @@
+/*
+ * slots.css: the saves drawer.
+ * Built on the tokens and the page grid of base.css; imported from main.ts.
+ *
+ * The drawer is one grid cell on the right of the stage (mock 3). Under 720 px
+ * wide it becomes a bottom sheet instead (mock 4), because a phone has no room
+ * beside the game. Motion is one short slide-in, off for reduced motion.
+ */
+
+.loc-slots-drawer {
+  border-left: 1px solid var(--loc-border);
+  background: var(--loc-card);
+  color: var(--loc-text);
+  display: grid;
+  grid-template-rows: auto auto 1fr auto;
+  min-height: 0;
+  min-width: 0;
+  animation: loc-slots-in var(--loc-slow) var(--loc-ease-out) backwards;
+}
+
+/* each part has its row, so a drawer without the battery note does not hand the list's 1fr to the foot */
+.loc-slots-head {
+  grid-row: 1;
+}
+
+.loc-slots-sram {
+  grid-row: 2;
+}
+
+.loc-slots-list {
+  grid-row: 3;
+}
+
+.loc-slots-foot {
+  grid-row: 4;
+}
+
+.loc-slots-drawer[hidden] {
+  display: none;
+}
+
+@keyframes loc-slots-in {
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+}
+
+.loc-slots-head {
+  padding: 16px 16px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.loc-slots-head h2 {
+  margin: 0;
+  font: 700 18px/1.3 var(--loc-font);
+}
+
+.loc-slots-chip {
+  font-size: 11px;
+  color: var(--loc-accent-text);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  padding: 0 9px;
+  border-radius: 999px;
+  border: 1px solid var(--loc-border-strong);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* Saves na conta: a dot that says synced (green), on its way (amber, breathing) or out of reach (red) */
+.loc-slots-chip-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--loc-success);
+}
+
+.loc-slots-chip[data-state="busy"] .loc-slots-chip-dot {
+  background: var(--loc-warning);
+  animation: loc-sync-breathe 1.4s ease-in-out infinite;
+}
+
+.loc-slots-chip[data-state="error"] {
+  color: var(--loc-danger-text);
+}
+
+.loc-slots-chip[data-state="error"] .loc-slots-chip-dot {
+  background: var(--loc-danger);
+}
+
+.loc-slots-chip[data-state="read-only"] .loc-slots-chip-dot {
+  background: var(--loc-text-3);
+}
+
+@keyframes loc-sync-breathe {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loc-slots-chip-dot {
+    animation: none !important;
+  }
+}
+
+:root[data-reduced-motion="true"] .loc-slots-chip-dot {
+  animation: none !important;
+}
+
+/* the head wraps so the note takes the whole width under the title, the chip and the close button */
+.loc-slots-head:has(.loc-slots-sync-note) {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+.loc-slots-sync-note {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--loc-text-2);
+}
+
+.loc-slots-confirm {
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in oklab, var(--loc-danger) 38%, var(--loc-border));
+  background: color-mix(in oklab, var(--loc-danger) 7%, var(--loc-card));
+}
+
+.loc-slots-confirm p {
+  margin: 0;
+  color: var(--loc-text);
+  line-height: 1.45;
+}
+
+.loc-slots-confirm-actions {
+  display: inline-flex;
+  gap: 6px;
+}
+
+
+.loc-slots-close {
+  margin-left: auto;
+  width: 44px;
+  height: 44px;
+  margin-block: -6px;
+  margin-right: -8px;
+  border-radius: var(--loc-control);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--loc-text-2);
+  font: inherit;
+  cursor: pointer;
+}
+
+.loc-slots-close:hover {
+  background: var(--loc-raised);
+  color: var(--loc-text);
+}
+
+.loc-slots-sram {
+  margin: 0 16px 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--loc-bg);
+  border: 1px solid var(--loc-border);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--loc-text-2);
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  gap: 8px;
+}
+
+.loc-slots-sram small {
+  display: block;
+  margin-top: 2px;
+  color: var(--loc-text-3);
+}
+
+.loc-slots-tick {
+  color: var(--loc-success-text);
+  font-weight: 800;
+}
+
+.loc-slots-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 10px 10px;
+  overflow: auto;
+  display: grid;
+  gap: 6px;
+  align-content: start;
+}
+
+.loc-slot {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: 10px;
+  padding: 6px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+}
+
+.loc-slot:hover {
+  background: var(--loc-raised);
+}
+
+.loc-slot[data-selected] {
+  border-color: color-mix(in srgb, var(--loc-accent) 55%, transparent);
+  background: color-mix(in srgb, var(--loc-accent) 8%, transparent);
+}
+
+.loc-slot-thumb {
+  position: relative;
+  width: 96px;
+  aspect-ratio: 3 / 2;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #000;
+  border: 1px solid var(--loc-border-strong);
+}
+
+.loc-slot-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  image-rendering: pixelated;
+  display: block;
+}
+
+.loc-slot-thumb[data-empty] {
+  display: grid;
+  place-items: center;
+  border-style: dashed;
+  background: transparent;
+  color: var(--loc-text-3);
+  font-size: 11px;
+}
+
+.loc-slot-key {
+  position: absolute;
+  left: 4px;
+  top: 4px;
+  font: 800 10px/1 var(--loc-mono);
+  background: rgba(10, 12, 16, 0.85);
+  color: #f0ede4;
+  padding: 3px 4px;
+  border-radius: 3px;
+}
+
+.loc-slot-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.loc-slot-name,
+.loc-slot-pick {
+  font: 700 13px/1.3 var(--loc-font);
+  color: var(--loc-text);
+  text-align: left;
+}
+
+.loc-slot-pick {
+  align-self: flex-start;
+  min-height: 28px;
+  padding: 0 4px;
+  margin-left: -4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.loc-slot-pick:hover {
+  background: var(--loc-raised);
+}
+
+.loc-slot-pick[aria-pressed="true"]::after {
+  content: "\2022";
+  margin-left: 6px;
+  color: var(--loc-accent-text);
+}
+
+.loc-slot-detail {
+  color: var(--loc-text-3);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.loc-slot-warn {
+  color: var(--loc-warning-text);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.loc-slot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.loc-slots-drawer .loc-mini {
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid var(--loc-border-strong);
+  background: transparent;
+  font: 700 12px/1 var(--loc-font);
+  color: var(--loc-text);
+  cursor: pointer;
+}
+
+/* the three dots: a square, so a slot's three actions fit on one line at the docked width */
+.loc-slots-drawer .loc-slot-more {
+  width: 32px;
+  padding: 0;
+}
+
+.loc-slots-drawer .loc-mini:hover {
+  background: var(--loc-raised);
+}
+
+.loc-slots-drawer .loc-mini-go {
+  background: var(--loc-accent);
+  border-color: var(--loc-accent);
+  color: var(--loc-on-accent);
+}
+
+.loc-slots-drawer .loc-mini-go:hover {
+  background: var(--loc-accent);
+  filter: brightness(1.08);
+}
+
+/* "Apagar" on "Apagar tudo da conta?": after `.loc-mini`, which would otherwise win on order */
+.loc-slots-drawer .loc-mini-danger {
+  background: var(--loc-danger-solid);
+  border-color: var(--loc-danger-solid);
+  color: var(--loc-on-danger-solid);
+}
+
+.loc-slots-drawer .loc-mini-danger:hover {
+  background: var(--loc-danger-solid);
+  filter: brightness(1.08);
+}
+
+.loc-slot-menu-wrap {
+  position: relative;
+}
+
+.loc-slot-menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 4px);
+  z-index: 3;
+  min-width: 120px;
+  padding: 4px;
+  border-radius: 8px;
+  background: var(--loc-raised);
+  border: 1px solid var(--loc-border-strong);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+}
+
+.loc-menu-delete {
+  width: 100%;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--loc-danger-text);
+  font: 700 13px/1 var(--loc-font);
+  text-align: left;
+  cursor: pointer;
+}
+
+.loc-menu-delete:hover {
+  background: color-mix(in srgb, var(--loc-danger) 14%, transparent);
+}
+
+.loc-slots-foot {
+  padding: 12px 16px;
+  border-top: 1px solid var(--loc-border);
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--loc-text-3);
+}
+
+.loc-slots-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.loc-slots-drawer .loc-switch {
+  position: relative;
+  flex: none;
+  width: 40px;
+  height: 24px;
+  padding: 0;
+  border-radius: 12px;
+  border: 1px solid var(--loc-border-strong);
+  background: var(--loc-raised);
+  cursor: pointer;
+  transition: background var(--loc-fast) var(--loc-ease);
+}
+
+.loc-slots-drawer .loc-switch[aria-checked="true"] {
+  background: var(--loc-accent);
+  border-color: var(--loc-accent);
+}
+
+.loc-switch-knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--loc-text-2);
+  transition: transform var(--loc-fast) var(--loc-ease);
+}
+
+.loc-switch[aria-checked="true"] .loc-switch-knob {
+  transform: translateX(16px);
+  background: var(--loc-on-accent);
+}
+
+.loc-slots-drawer .loc-link {
+  min-height: 32px;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  color: var(--loc-text-2);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.loc-slots-drawer button:focus-visible {
+  outline: 2px solid var(--loc-ring);
+  outline-offset: 2px;
+}
+
+/* a phone: a bottom sheet over the stage */
+@media (max-width: 720px) {
+  .loc-slots-drawer {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 20;
+    max-height: min(80dvh, 640px);
+    border-left: 0;
+    border-top: 1px solid var(--loc-border-strong);
+    border-radius: 20px 20px 0 0;
+    box-shadow: 0 -20px 50px rgba(0, 0, 0, 0.5);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    animation-name: loc-slots-up;
+  }
+
+  .loc-slot-thumb {
+    width: 96px;
+  }
+
+  .loc-slot {
+    grid-template-columns: 96px 1fr;
+  }
+}
+
+@keyframes loc-slots-up {
+  from {
+    transform: translateY(24px);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loc-slots-drawer {
+    animation: none;
+  }
+  .loc-slots-drawer .loc-switch,
+  .loc-switch-knob {
+    transition: none;
+  }
+}
+
+:root[data-reduced-motion="true"] .loc-slots-drawer {
+  animation: none;
+}
+
+:root[data-reduced-motion="true"] .loc-slots-drawer .loc-switch,
+:root[data-reduced-motion="true"] .loc-switch-knob {
+  transition: none;
+}

@@ -39,7 +39,8 @@ import { endSessionRow } from "./sessions.js";
 
 export type AppAdminActor =
   | { kind: "dashboard" }
-  | { kind: "moderator"; userId: string };
+  | { kind: "moderator"; userId: string }
+  | { kind: "owner"; userId: string };
 
 export const APP_STATUSES = ["draft", "review", "live", "retired"] as const;
 export const APP_REVIEW_STATUSES = [
@@ -573,7 +574,7 @@ export async function writeAppAudit(
      RETURNING id::text`,
     [
       actor.kind,
-      actor.kind === "moderator" ? actor.userId : null,
+      actorUserId(actor),
       input.action,
       input.appId,
       input.appVersion ?? null,
@@ -587,7 +588,7 @@ export async function writeAppAudit(
 }
 
 /** The count a write learns only after it ended the sessions, written back on its audit row. */
-async function recordSessionsEnded(auditId: string, count: number): Promise<void> {
+export async function recordSessionsEnded(auditId: string, count: number): Promise<void> {
   await getPool().query(`UPDATE app_admin_audit SET sessions_ended = $2 WHERE id = $1::bigint`, [
     auditId,
     count,
@@ -603,7 +604,7 @@ async function recordSessionsEnded(auditId: string, count: number): Promise<void
  * switch landed inserts its row just after the first read. `progress` counts
  * what ended so far, so a caller that fails half way can still record it.
  */
-async function endLiveSessions(
+export async function endLiveSessions(
   appId: string,
   serverId: string | null,
   endedBy: string | null,
@@ -628,8 +629,9 @@ async function endLiveSessions(
   }
 }
 
-function actorUserId(actor: AppAdminActor): string | null {
-  return actor.kind === "moderator" ? actor.userId : null;
+/** The account behind a write, or NULL for the dashboard's token, which has none. */
+export function actorUserId(actor: AppAdminActor): string | null {
+  return actor.kind === "dashboard" ? null : actor.userId;
 }
 
 export async function inAppsTransaction<T>(

@@ -141,6 +141,140 @@ describe("requests", () => {
     expect((await rejection(refused)).code).toBe("not-allowed");
   });
 
+  it("store.get returns the bytes and the meta, and null for a key with nothing", async () => {
+    const bytes = new Uint8Array([7, 8]).buffer;
+    const got = await exchange(
+      () => app.store.get("rom:abc"),
+      (r) => {
+        expect(r).toEqual({ id: r.id, type: "store.get", key: "rom:abc" });
+        host.respond(r.id, { bytes, meta: { n: 1 } }, [bytes]);
+      },
+    );
+    expect(Array.from(new Uint8Array(got!.bytes))).toEqual([7, 8]);
+    expect(got!.meta).toEqual({ n: 1 });
+
+    expect(
+      await exchange(
+        () => app.store.get("rom:none"),
+        (r) => host.respond(r.id, null),
+      ),
+    ).toBeNull();
+  });
+
+  it("store.put sends a copy of the bytes, a view as its own buffer, and returns the usage", async () => {
+    const mine = new Uint8Array([1, 2, 3, 4, 5, 6]);
+    const view = mine.subarray(2, 5);
+    const usage = await exchange(
+      () => app.store.put("sram:abc", view, { slot: 1 }),
+      (r) => {
+        expect(r).toMatchObject({ type: "store.put", key: "sram:abc", meta: { slot: 1 } });
+        expect(Array.from(new Uint8Array(r.bytes as ArrayBuffer))).toEqual([3, 4, 5]);
+        expect((r.bytes as ArrayBuffer).byteLength).toBe(3);
+        host.respond(r.id, { usage: { used: 3, cap: 512, persisted: false } });
+      },
+    );
+    expect(usage).toEqual({ used: 3, cap: 512, persisted: false });
+    // the caller's buffer was not detached
+    expect(mine.byteLength).toBe(6);
+
+    const whole = new Uint8Array([9]).buffer;
+    await exchange(
+      () => app.store.put("prefs", whole),
+      (r) => {
+        expect(r).not.toHaveProperty("meta");
+        host.respond(r.id, { usage: { used: 1, cap: 512, persisted: true } });
+      },
+    );
+    expect(whole.byteLength).toBe(1);
+  });
+
+  it("store.put rejects with too-large, store calls with not-allowed and invalid, as the host says", async () => {
+    const big = exchange(
+      () => app.store.put("rom:x", new ArrayBuffer(1)),
+      (r) => host.fail(r.id, "too-large"),
+    );
+    expect((await rejection(big)).code).toBe("too-large");
+    const closed = exchange(
+      () => app.store.usage(),
+      (r) => host.fail(r.id, "not-allowed"),
+    );
+    expect((await rejection(closed)).code).toBe("not-allowed");
+    const old = exchange(
+      () => app.store.list(),
+      (r) => host.fail(r.id, "invalid"),
+    );
+    expect((await rejection(old)).code).toBe("invalid");
+  });
+
+  it("store.delete resolves to null, and refuses a reply that is not null", async () => {
+    expect(
+      await exchange(
+        () => app.store.delete("rom:abc"),
+        (r) => {
+          expect(r).toEqual({ id: r.id, type: "store.delete", key: "rom:abc" });
+          host.respond(r.id, null);
+        },
+      ),
+    ).toBeNull();
+    const odd = exchange(
+      () => app.store.delete("rom:abc"),
+      (r) => host.respond(r.id, { ok: 1 }),
+    );
+    expect((await rejection(odd)).code).toBe("unavailable");
+  });
+
+  it("store.list sends a prefix (empty by default) and returns the entries", async () => {
+    const entries = [{ key: "state:abc:1", size: 10, meta: null, updatedAt: 1700 }];
+    expect(
+      await exchange(
+        () => app.store.list("state:abc:"),
+        (r) => {
+          expect(r).toMatchObject({ type: "store.list", prefix: "state:abc:" });
+          host.respond(r.id, entries);
+        },
+      ),
+    ).toEqual(entries);
+    await exchange(
+      () => app.store.list(),
+      (r) => {
+        expect(r).toMatchObject({ prefix: "" });
+        host.respond(r.id, []);
+      },
+    );
+    const bad = exchange(
+      () => app.store.list(),
+      (r) => host.respond(r.id, { entries: [] }),
+    );
+    expect((await rejection(bad)).code).toBe("unavailable");
+  });
+
+  it("store.usage returns used, cap and persisted", async () => {
+    expect(
+      await exchange(
+        () => app.store.usage(),
+        (r) => host.respond(r.id, { used: 5, cap: 100, persisted: true }),
+      ),
+    ).toEqual({ used: 5, cap: 100, persisted: true });
+  });
+
+  it("files.saveLocal sends the bytes and the extension and resolves to null", async () => {
+    const out = await exchange(
+      () => app.files.saveLocal(new Uint8Array([4, 5]), ".locadora"),
+      (r) => {
+        expect(r).toMatchObject({ type: "files.saveLocal", ext: ".locadora" });
+        expect(Array.from(new Uint8Array(r.bytes as ArrayBuffer))).toEqual([4, 5]);
+        expect(r).not.toHaveProperty("name");
+        host.respond(r.id, null);
+      },
+    );
+    expect(out).toBeNull();
+    const refused = exchange(
+      () => app.files.saveLocal(new ArrayBuffer(1), ".zip"),
+      (r) => host.fail(r.id, "not-allowed"),
+    );
+    expect((await rejection(refused)).code).toBe("not-allowed");
+  });
+
   it("ui.resize, ui.fullscreen and share.request answer with what the host applied", async () => {
     expect(
       await exchange(

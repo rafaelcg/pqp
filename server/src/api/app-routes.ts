@@ -1,5 +1,8 @@
 import { z } from "zod";
+import { appConsentBodySchema } from "@pqp/shared";
 import { appsConfigForServer, DISABLED_APPS_CONFIG } from "../apps/config.js";
+import { listConsents, recordConsent, revokeConsent } from "../apps/consents.js";
+import { takeHostAs } from "../apps/host.js";
 import { endAppSessionAs, startAppSession } from "../apps/sessions.js";
 import {
   readLiveChannelIdsForServer,
@@ -11,6 +14,7 @@ import { HttpError, readJsonBody } from "../lib/http.js";
 import { Created } from "../lib/route-results.js";
 import type { Router } from "../lib/router.js";
 import { getChannel } from "../services/servers.js";
+import { registerLocadoraSaveRoutes } from "./locadora-save-routes.js";
 import { accessibleChannelIds, canAccessChannel, getMemberRole } from "../services/users.js";
 
 /**
@@ -28,6 +32,15 @@ import { accessibleChannelIds, canAccessChannel, getMemberRole } from "../servic
  *  - `GET  /api/channels/:channelId/app-session`    `AppSessionSummary` or `null`
  *  - `POST /api/app-sessions/:sessionId/end`        -> 200 `{ ended }`
  *  - `GET  /api/servers/:serverId/app-sessions`     `{ sessions: [{ channelId, session }] }`
+ *  - `POST /api/app-sessions/:sessionId/take-host`  -> 200 `{ host: true }`
+ *  - `GET  /api/me/app-consents`                    `{ consents }`: what this person accepted
+ *  - `POST /api/apps/:app/consent`                `{ identityGranted? }` -> 200, the join sheet's Entrar
+ *  - `DELETE /api/apps/:app/consent`              -> 200 `{ revoked }`, from Configurações, Apps
+ *
+ * The consent routes are about a person and an app, not a server, so they are
+ * not behind the per-server flag: they answer 404 for an app that does not
+ * exist (or has no version), and what they return is only what the person
+ * themselves accepted.
  *
  * The summaries are the `channel-app` frame's, so a client keeps one shape.
  */
@@ -37,9 +50,14 @@ const startBodySchema = z.object({
   appId: z.string().regex(/^[a-z][a-z0-9-]{1,30}[a-z0-9]$/),
 });
 
+const appIdSchema = z.string().regex(/^[a-z][a-z0-9-]{1,30}[a-z0-9]$/);
+
 const notFoundChannel = () => new HttpError(404, "Channel not found");
 
 export function registerAppRoutes(router: Router): void {
+  // Saves na conta (Locadora, flag `locadora_save_sync`): its own file, its own gate.
+  registerLocadoraSaveRoutes(router);
+
   // What a client needs to draw the launcher and run an app for one server.
   // A missing or malformed `serverId` is the disabled answer (nothing to ask
   // about); a server the caller is not in is a 404 like every server route.
@@ -80,6 +98,47 @@ export function registerAppRoutes(router: Router): void {
   // End a session. Idempotent: ending one that is over answers 200 `{ ended: false }`.
   router.post("/api/app-sessions/:sessionId/end", async ({ user }, { sessionId }) => {
     return { ended: (await endAppSessionAs(user, sessionId!)).ended };
+  });
+
+  // "Assumir agora": the person the host countdown named takes the role before
+  // the two minutes are up. 404 if the caller cannot see the session or the
+  // flag is off; 409 `host_present` / `host_bound` / `host_changed`; 403
+  // `not_next_host` for anybody else. See `apps/host.ts`.
+  router.post("/api/app-sessions/:sessionId/take-host", async ({ user }, { sessionId }) => {
+    return takeHostAs(user, sessionId!);
+  });
+
+  // What this person has accepted, newest first, for Configurações, Apps. A
+  // consent whose app has since asked for something different is `stale`: the
+  // join sheet shows again for it.
+  router.get("/api/me/app-consents", async ({ user }) => {
+    return { consents: await listConsents(user.id) };
+  });
+
+  // The join sheet's Entrar, the first time. Records the version on the sheet
+  // and whether the person ticked the id box (ignored for an app with none).
+  router.post("/api/apps/:app/consent", async ({ req, user }, { app }) => {
+    // The param is not called `appId` on purpose: the router insists that a
+    // parameter ending in `Id` is a uuid, and an app id is a slug.
+    const id = appIdSchema.safeParse(app);
+    if (!id.success) {
+      throw new HttpError(404, "App not found");
+    }
+    const body = appConsentBodySchema.parse(await readJsonBody(req));
+    const result = await recordConsent(user.id, id.data, body.identityGranted === true);
+    if (!result.ok) {
+      throw new HttpError(404, "App not found");
+    }
+    return { appId: id.data, identityGranted: result.identityGranted };
+  });
+
+  // Take the acceptance back. The next Entrar shows the sheet again.
+  router.delete("/api/apps/:app/consent", async ({ user }, { app }) => {
+    const id = appIdSchema.safeParse(app);
+    if (!id.success) {
+      throw new HttpError(404, "App not found");
+    }
+    return { revoked: await revokeConsent(user.id, id.data) };
   });
 
   // Every live app on a server, for the channels the caller can VIEW. The

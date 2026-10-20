@@ -1,0 +1,97 @@
+{
+  "manifestVersion": 1,
+  "id": "pqp-store-sample",
+  "version": "1.2.0-beta.1",
+  "publisher": "pqp",
+  "platformApi": 1,
+  "name": "name",
+  "description": "description",
+  "icon": "sparkles",
+  "category": "tool",
+  "channelTypes": [
+    "text",
+    "voice"
+  ],
+  "players": {
+    "min": 1,
+    "max": 64,
+    "spectators": true,
+    "maxSpectators": 200
+  },
+  "requires": {
+    "start": "USE_APPS",
+    "join": "VIEW_CHANNEL"
+  },
+  "capabilities": {
+    "identity": "display",
+    "share": "none",
+    "localFiles": {
+      "allowed": false
+    },
+    "peer": "none"
+  },
+  "hostBound": false,
+  "state": {
+    "maxBytes": 8192,
+    "maxWritesPerSecond": 10,
+    "writers": "participants"
+  },
+  "events": {
+    "maxPerSecond": 5,
+    "maxBytes": 256
+  },
+  "presence": {
+    "phrase": "presence.phrase",
+    "short": "presence.short"
+  },
+  "content": {
+    "userText": true,
+    "userImages": false
+  },
+  "entry": {
+    "path": "index.html",
+    "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  },
+  "license": {
+    "spdx": "AGPL-3.0-only",
+    "source": "https://github.com/rafaelcg/pqp"
+  },
+  "store": {
+    "summary": "store.summary",
+    "screenshots": [
+      {
+        "path": "store/sample.png",
+        "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "alt": "store.shot1"
+      }
+    ],
+    "homepage": "https://pqp.gg/apps",
+    "support": "https://github.com/rafaelcg/pqp/issues"
+  },
+  "i18n": {
+    "pt-BR": {
+      "name": "Exemplo",
+      "description": "Um app de exemplo com uma vitrine na loja.",
+      "presence.phrase": "{name} tá num exemplo",
+      "presence.short": "Num exemplo",
+      "store.summary": "Um exemplo de vitrine.",
+      "store.shot1": "A tela do exemplo"
+    },
+    "en": {
+      "name": "Sample",
+      "description": "A sample app with a store listing.",
+      "presence.phrase": "{name} is in a sample",
+      "presence.short": "In a sample",
+      "store.summary": "A sample store listing.",
+      "store.shot1": "The sample screen"
+    },
+    "es": {
+      "name": "Ejemplo",
+      "description": "Una app de ejemplo con ficha en la tienda.",
+      "presence.phrase": "{name} está en un ejemplo",
+      "presence.short": "En un ejemplo",
+      "store.summary": "Un ejemplo de ficha.",
+      "store.shot1": "La pantalla del ejemplo"
+    }
+  }
+}
