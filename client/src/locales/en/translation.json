@@ -3271,6 +3271,7 @@
   "settings.voice.cameraMissing": "Camera {name} not found, using the default.",
   "settings.voice.cameraMissingUnnamed": "The saved camera was not found, using the default.",
   "settings.voice.processing.noise.offHint": "No filter. The sound goes out as it comes in.",
+  "settings.voice.processing.noise.defaultNote": "On by default on this device.",
   "settings.voice.pttRecommend": "Recommended: an F key.",
   "settings.voice.pttRecommendDesktop": "Recommended: an F key or a mouse button.",
   "settings.voice.pttModifierWarning": "{key} alone opens the mic in every shortcut that uses it (like Ctrl+C and Ctrl+V). Prefer an F key.",

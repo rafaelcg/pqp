@@ -528,6 +528,21 @@ export const FEATURE_FLAGS = {
     perServer: false,
     clientVia: "GET /api/voice/config (audioSelfHeal)",
   },
+  clean_voice_default: {
+    description:
+      "Voz limpa como padrão do microfone: quem nunca escolheu a redução de ruído neste aparelho começa na Voz limpa (RNNoise), se o navegador aguenta e o aparelho tem 4 núcleos ou mais; quem já escolheu um modo fica onde está (desligado: volta pro filtro do navegador na hora, até no meio da call).",
+    env: "CLEAN_VOICE_DEFAULT",
+    parseEnv: onUnlessOff,
+    // On: decided 2026-10-20. The kill switch is for what the doc said had to
+    // be heard first (a low-end Android, a two-hour call): off moves every
+    // device that never chose back to the browser's suppressor on the next
+    // config refresh, because a default is never written to storage. Global,
+    // not per server: the microphone belongs to the device, and a DM call has
+    // no server. Client-only.
+    codeDefault: true,
+    perServer: false,
+    clientVia: "GET /api/voice/config (cleanVoiceDefault)",
+  },
   watch_now_banner: {
     description:
       "Faixa \"Assistir\" (só cliente: quem está num canal de texto vê que alguém compartilha a tela ou que uma watch party está no ar, e entra com um toque, sem microfone).",

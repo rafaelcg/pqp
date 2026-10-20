@@ -17,8 +17,10 @@
  * what it is hearing, and the result is worse than either alone.
  *
  * Everything here is lazy on purpose. The wasm (~150 kB) and the worklet
- * (~63 kB) are only fetched once somebody picks `advanced`, so a default
- * install downloads nothing and runs no new code at all.
+ * (~63 kB) are only fetched once a microphone opens in `advanced`, which is
+ * somebody picking it or, since 2026-10-20, the default on a capable device
+ * that never chose (`./clean-voice-default`, flag `clean_voice_default`).
+ * A device on `browser` or `off` downloads nothing and runs no new code.
  */
 
 import rnnoiseWasmUrl from "@sapphi-red/web-noise-suppressor/rnnoise.wasm?url";
@@ -27,8 +29,9 @@ import rnnoiseWorkletUrl from "@sapphi-red/web-noise-suppressor/rnnoiseWorklet.j
 
 /**
  * `off` is no suppressor at all (a boom arm in a treated room).
- * `browser` is the `getUserMedia` constraint, the default, what everyone has.
- * `advanced` is RNNoise in a worklet, opt-in.
+ * `browser` is the `getUserMedia` constraint, the fallback default.
+ * `advanced` is RNNoise in a worklet ("Voz limpa"), the default where
+ * `./clean-voice-default` says so.
  */
 export type NoiseSuppressionMode = "off" | "browser" | "advanced";
 

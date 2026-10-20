@@ -28,6 +28,15 @@ import { isEnabled } from "./flags.js";
  * tab read it here, and the play gate reads it on every click, so a flip
  * either way needs no rejoin. The seat's `canUseSoundboard` is the bit alone.
  *
+ * `cleanVoiceDefault`: a device with no stored noise-suppression choice
+ * starts on "Voz limpa" (RNNoise, `docs/NOISE_SUPPRESSION.md` §"The default")
+ * instead of the browser's suppressor, when the browser can run it and the
+ * machine has the cores. Runtime flag `clean_voice_default`, global, on by
+ * default, `CLEAN_VOICE_DEFAULT` as its environment default. Global because
+ * the microphone belongs to the device, not to a server. Off is the kill
+ * switch: a default is never persisted, so every device that never chose
+ * goes back to the browser's suppressor on its next config refresh.
+ *
  * `serverId` absent (a DM call) or not a uuid is read as absent: the answer is
  * then the global value, and a DM call has no audience mode anyway.
  */
@@ -35,6 +44,7 @@ export interface VoiceConfig {
   audienceMode: boolean;
   audioSelfHeal: boolean;
   soundboard: boolean;
+  cleanVoiceDefault: boolean;
 }
 
 const serverIdSchema = z.string().uuid();
@@ -46,5 +56,6 @@ export function voiceConfigForServer(rawServerId: string | null): VoiceConfig {
     audienceMode: isEnabled("audience_mode", { serverId }),
     audioSelfHeal: isEnabled("voice_audio_self_heal"),
     soundboard: isEnabled("soundboard", { serverId }),
+    cleanVoiceDefault: isEnabled("clean_voice_default"),
   };
 }

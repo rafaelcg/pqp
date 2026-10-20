@@ -3269,6 +3269,7 @@
   "settings.voice.cameraMissing": "Câmera {name} não encontrada, usando a padrão.",
   "settings.voice.cameraMissingUnnamed": "A câmera salva não foi encontrada, usando a padrão.",
   "settings.voice.processing.noise.offHint": "Sem filtro. O som sai como entra.",
+  "settings.voice.processing.noise.defaultNote": "Ligada por padrão neste aparelho.",
   "settings.voice.pttRecommend": "Recomendado: uma tecla F.",
   "settings.voice.pttRecommendDesktop": "Recomendado: uma tecla F ou um botão do mouse.",
   "settings.voice.pttModifierWarning": "{key} sozinho abre o mic em todo atalho que usa essa tecla (como Ctrl+C e Ctrl+V). Prefira uma tecla F.",

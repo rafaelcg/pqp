@@ -7,7 +7,11 @@ import { clampReleaseDelayMs, DEFAULT_RELEASE_DELAY_MS } from "@/lib/ptt-release
 import type { VoiceInputMode } from "@/hooks/use-voice";
 import { parseVadThreshold, SPEAKING_THRESHOLD } from "@/lib/voice-audio";
 import { defaultMicProcessing, type MicProcessing } from "@/lib/audio-devices";
-import { parseNoiseSuppressionMode } from "../../lib/noise-suppression";
+import type { NoiseSuppressionMode } from "../../lib/noise-suppression";
+import {
+  currentDefaultNoiseSuppression,
+  resolveNoiseSuppression,
+} from "../../lib/clean-voice-default";
 import { adoptNotificationPreferences } from "@/lib/notifications";
 import { adoptSoundPreferences } from "@/lib/sounds";
 
@@ -77,8 +81,22 @@ export interface LocalSettings {
    * the platform default (Cmd on Apple, Ctrl elsewhere).
    */
   shortcuts: ShortcutOverrides;
-  /** getUserMedia processing flags. Also pending a shared-schema key. */
+  /**
+   * getUserMedia processing flags. Also pending a shared-schema key.
+   *
+   * `micProcessing.noiseSuppression` is the EFFECTIVE mode, what the
+   * microphone opens with. When `noiseSuppressionChosen` is false it is the
+   * current default (`lib/clean-voice-default.ts`) and follows it as the flag
+   * moves; it is then never written to storage, so a default is never
+   * mistaken for a choice on the next load.
+   */
   micProcessing: MicProcessing;
+  /**
+   * Somebody on this device picked a noise-suppression mode (Settings, or the
+   * Voz limpa nudge), or a build before the default existed stored one. Not
+   * persisted as its own key: the presence of the stored mode is the record.
+   */
+  noiseSuppressionChosen: boolean;
   /**
    * What the camera is asked for. Device-local for the same reason the device
    * ids are: it describes this machine's webcam and this machine's uplink, and
@@ -113,19 +131,49 @@ export const defaultLocalSettings: LocalSettings = {
   pttGlobal: true,
   shortcuts: {},
   micProcessing: defaultMicProcessing,
+  noiseSuppressionChosen: false,
   // Auto, always. A default that pins a size would be a default that is wrong
   // on somebody's uplink.
   videoQuality: DEFAULT_VIDEO_QUALITY,
   screenFrameRate: DEFAULT_SCREEN_FRAME_RATE,
 };
 
+/**
+ * A device that never chose a noise-suppression mode runs the current default;
+ * a device that chose keeps its choice. Returns the same object when nothing
+ * moves, so a caller can tell "no change" by identity.
+ */
+export function withEffectiveNoiseSuppression(
+  settings: LocalSettings,
+  defaultMode: NoiseSuppressionMode = currentDefaultNoiseSuppression(),
+): LocalSettings {
+  if (
+    settings.noiseSuppressionChosen ||
+    settings.micProcessing.noiseSuppression === defaultMode
+  ) {
+    return settings;
+  }
+  return {
+    ...settings,
+    micProcessing: { ...settings.micProcessing, noiseSuppression: defaultMode },
+  };
+}
+
 export function loadLocalSettings(): LocalSettings {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) {
-      return defaultLocalSettings;
+      return withEffectiveNoiseSuppression(defaultLocalSettings);
     }
     const parsed = JSON.parse(raw) as Partial<LocalSettings>;
+    // Was a boolean until Sep 2026: `true` reads as the browser's own
+    // suppressor, `false` as none, and either is a choice, because a stored
+    // `true` cannot be told apart from somebody who ticked the box. Only
+    // NOTHING stored takes the default (`lib/clean-voice-default.ts`).
+    const noise = resolveNoiseSuppression({
+      stored: parsed.micProcessing?.noiseSuppression,
+      defaultMode: currentDefaultNoiseSuppression(),
+    });
     return {
       ...defaultLocalSettings,
       ...parsed,
@@ -171,26 +219,36 @@ export function loadLocalSettings(): LocalSettings {
       shortcuts: parseShortcutOverrides(parsed.shortcuts),
       micProcessing: {
         echoCancellation: parsed.micProcessing?.echoCancellation !== false,
-        // Was a boolean until Sep 2026: `true` and a missing value both read
-        // as the browser's own suppressor, `false` as none, which is what
-        // every stored blob out there says today.
-        noiseSuppression: parseNoiseSuppressionMode(
-          parsed.micProcessing?.noiseSuppression,
-        ),
+        noiseSuppression: noise.mode,
         autoGainControl: parsed.micProcessing?.autoGainControl !== false,
       },
+      noiseSuppressionChosen: noise.chosen,
       // Hand-edited storage, or a level a later build stopped offering, falls
       // back to auto rather than to a size nothing knows how to ask for.
       videoQuality: parseVideoQuality(parsed.videoQuality),
       screenFrameRate: parseScreenFrameRate(parsed.screenFrameRate),
     };
   } catch {
-    return defaultLocalSettings;
+    return withEffectiveNoiseSuppression(defaultLocalSettings);
   }
 }
 
+/**
+ * What goes into `localStorage`. The noise-suppression mode only when it was
+ * chosen: a default written down would read back as a choice and pin the
+ * device to it, and the kill switch could no longer move it.
+ */
+export function serializeLocalSettings(settings: LocalSettings): string {
+  const { noiseSuppressionChosen, ...rest } = settings;
+  if (noiseSuppressionChosen) {
+    return JSON.stringify(rest);
+  }
+  const { echoCancellation, autoGainControl } = rest.micProcessing;
+  return JSON.stringify({ ...rest, micProcessing: { echoCancellation, autoGainControl } });
+}
+
 export function saveLocalSettings(settings: LocalSettings) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+  localStorage.setItem(STORAGE_KEY, serializeLocalSettings(settings));
 }
 
 /**

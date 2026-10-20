@@ -544,8 +544,24 @@ const BITRATE: Record<VoiceNoteFormat["contentType"], number> = {
   "audio/ogg": 32_000,
 } as Record<VoiceNoteFormat["contentType"], number>;
 
+/**
+ * The recorder runs no RNNoise worklet, and Voz limpa (`advanced`) turns the
+ * browser's own suppressor OFF so the two never stack. Recorded as is, a note
+ * from a Voz limpa microphone would have no noise suppression at all, so here
+ * `advanced` asks the browser to do it instead. Mattered little while Voz
+ * limpa was opt-in; it is the default now (`lib/clean-voice-default.ts`).
+ */
+export function voiceNoteProcessing(
+  processing: MicProcessing | undefined,
+): MicProcessing | undefined {
+  return processing?.noiseSuppression === "advanced"
+    ? { ...processing, noiseSuppression: "browser" }
+    : processing;
+}
+
 async function openMic(options: VoiceNoteRecorderOptions): Promise<MediaStream> {
-  const constraints = buildAudioConstraints(options.deviceId || undefined, options.processing);
+  const processing = voiceNoteProcessing(options.processing);
+  const constraints = buildAudioConstraints(options.deviceId || undefined, processing);
   try {
     return await navigator.mediaDevices.getUserMedia({ audio: constraints, video: false });
   } catch (error) {
@@ -553,7 +569,7 @@ async function openMic(options: VoiceNoteRecorderOptions): Promise<MediaStream> 
     const name = error instanceof Error ? error.name : "";
     if (options.deviceId && (name === "NotFoundError" || name === "OverconstrainedError")) {
       return navigator.mediaDevices.getUserMedia({
-        audio: buildAudioConstraints(undefined, options.processing),
+        audio: buildAudioConstraints(undefined, processing),
         video: false,
       });
     }

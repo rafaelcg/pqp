@@ -2001,11 +2001,22 @@ export function VoiceSection({
           label={t("settings.voice.processing.noise")}
           htmlFor={noiseId}
           badge={
-            showVoiceCleanBadge ? (
+            // No NOVO dot pointing at a mode the microphone already runs.
+            showVoiceCleanBadge &&
+            draftLocal.micProcessing.noiseSuppression !== "advanced" ? (
               <SettingsBadge>{t("voiceClean.badge")}</SettingsBadge>
             ) : undefined
           }
-          description={t(noiseHintKey[draftLocal.micProcessing.noiseSuppression])}
+          description={
+            // The select shows the EFFECTIVE mode. When nobody on this device
+            // chose it and it is Voz limpa, say it is the default, so the
+            // row is truthful about why it is on (`lib/clean-voice-default.ts`).
+            // "Padrão (navegador)" already says so for the browser default.
+            !draftLocal.noiseSuppressionChosen &&
+            draftLocal.micProcessing.noiseSuppression === "advanced"
+              ? `${t(noiseHintKey.advanced)} ${t("settings.voice.processing.noise.defaultNote")}`
+              : t(noiseHintKey[draftLocal.micProcessing.noiseSuppression])
+          }
           control={
             <SettingsSelect
               id={noiseId}
@@ -2017,6 +2028,9 @@ export function VoiceSection({
                     ...draftLocal.micProcessing,
                     noiseSuppression: parseNoiseSuppressionMode(e.target.value),
                   },
+                  // Picking a mode is a choice: stored, and never moved by
+                  // the default again.
+                  noiseSuppressionChosen: true,
                 })
               }
             >

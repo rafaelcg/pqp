@@ -202,6 +202,22 @@ the API takes `mediaQuality.audioHealth` on a call rating, which feeds
 `callRatings.audioHealthSinceBoot` on `GET /api/admin/metrics` and the Faro
 event `voice.audioHealth`.
 
+Born as a flag (no old reader): `CLEAN_VOICE_DEFAULT` (`clean_voice_default`,
+default **on**, global, client-only, since 2026-10-20), "Voz limpa" (RNNoise,
+`advanced`) as the microphone's noise suppression for a device that never
+chose one (`client/src/lib/clean-voice-default.ts`). Served as
+`cleanVoiceDefault` on the global `GET /api/voice/config`; unknown or absent
+(an older API) is off. The default lands only where the browser has
+AudioWorklet and WebAssembly and `navigator.hardwareConcurrency` is at least 4
+(unknown passes). A stored choice of any mode, including the legacy boolean,
+is never moved, and the default itself is never written to storage, so **off
+is the kill switch for everybody it moved**: on the next config refresh every
+defaulted device goes back to the browser's suppressor, a call already running
+included (the pipeline is swapped in place, no rejoin). It exists for what
+`docs/NOISE_SUPPRESSION.md` said had to be heard first, a low-end Android and a
+two-hour call: turn it off on reports of choppy audio or hot phones. Only
+`false` / `0` / `off` turn the variable off.
+
 Born as a flag (no old reader): `WATCH_CAMERA_SYNC` (`watch_camera_sync`,
 default off, **per server**, client-only), the presenter's camera held to the
 film's wall clock in a viewer's browser (`client/src/lib/camera-sync.ts`),

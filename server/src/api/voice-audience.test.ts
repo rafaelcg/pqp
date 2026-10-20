@@ -135,12 +135,14 @@ describeDb("audience mode routes", () => {
       audienceMode: true,
       audioSelfHeal: true,
       soundboard: false,
+      cleanVoiceDefault: true,
     });
     process.env.AUDIENCE_MODE = "false";
     expect((await call(owner, "GET", `/api/voice/config?serverId=${serverId}`)).body).toEqual({
       audienceMode: false,
       audioSelfHeal: true,
       soundboard: false,
+      cleanVoiceDefault: true,
     });
   });
 
@@ -181,6 +183,31 @@ describeDb("audience mode routes", () => {
         delete process.env.VOICE_AUDIO_SELF_HEAL;
       } else {
         process.env.VOICE_AUDIO_SELF_HEAL = previous;
+      }
+    }
+  });
+
+  it("GET /api/voice/config answers cleanVoiceDefault without a server, on unless its variable says off", async () => {
+    const { serverId } = await makeServer();
+    const previous = process.env.CLEAN_VOICE_DEFAULT;
+    try {
+      delete process.env.CLEAN_VOICE_DEFAULT;
+      expect((await call(owner, "GET", "/api/voice/config")).body).toMatchObject({
+        cleanVoiceDefault: true,
+      });
+      process.env.CLEAN_VOICE_DEFAULT = "off";
+      expect((await call(owner, "GET", "/api/voice/config")).body).toMatchObject({
+        cleanVoiceDefault: false,
+      });
+      // Global: a server in the query answers the same thing.
+      expect(
+        (await call(owner, "GET", `/api/voice/config?serverId=${serverId}`)).body,
+      ).toMatchObject({ cleanVoiceDefault: false });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.CLEAN_VOICE_DEFAULT;
+      } else {
+        process.env.CLEAN_VOICE_DEFAULT = previous;
       }
     }
   });
