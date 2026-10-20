@@ -364,12 +364,10 @@ struct ForumPostCard: View {
         if post.isLocked { parts.append(String(localized: "Closed")) }
         if post.isPinned { parts.append(String(localized: "Pinned")) }
         parts.append(String(localized: "by \(authorName)"))
-        parts.append(post.replyCount == 0
-                     ? String(localized: "No replies")
-                     : String(localized: "\(post.replyCount) replies"))
+        parts.append(ForumCopy.replies(post.replyCount))
         parts.append(ForumTime.short(post.lastActivityAt))
         if unread == .new { parts.append(String(localized: "new")) }
-        if newReplies > 0 { parts.append(String(localized: "\(newReplies) new replies")) }
+        if newReplies > 0 { parts.append(ForumCopy.newReplies(newReplies)) }
         return parts.joined(separator: ", ")
     }
 }

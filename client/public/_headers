@@ -211,3 +211,15 @@
 /prerender/*
   X-Robots-Tag: noindex
   Cache-Control: no-cache
+
+# Generated at build time (src/lib/seo-files.ts). Pages would guess `application/xml`
+# from the extension; an Atom feed has a media type of its own, and feed readers
+# and the validators that grade them check it.
+/feed.xml
+  Content-Type: application/atom+xml; charset=utf-8
+  Cache-Control: public, max-age=3600, stale-while-revalidate=86400
+/feed.en.xml
+  Content-Type: application/atom+xml; charset=utf-8
+  Cache-Control: public, max-age=3600, stale-while-revalidate=86400
+/sitemap.xml
+  Content-Type: application/xml; charset=utf-8

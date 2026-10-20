@@ -191,6 +191,26 @@
         }
       }
     },
+    "1 new reply" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 resposta nova"
+          }
+        }
+      }
+    },
+    "1 reaction · gone in %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 reação · some em %@"
+          }
+        }
+      }
+    },
     "Add a comment" : {
       "localizations" : {
         "pt-BR" : {
@@ -277,6 +297,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Canais"
+          }
+        }
+      }
+    },
+    "Characters left: %lld" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Restam %lld"
+          }
+        }
+      }
+    },
+    "Couldn't check how many posts are pinned. Try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra conferir quantos posts estão fixados. Tenta de novo."
           }
         }
       }
@@ -967,6 +1007,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Só quem é dono liga ou desliga o diretório. O endereço público aqui em cima tu edita normal."
+          }
+        }
+      }
+    },
+    "Pin post" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fixar post"
           }
         }
       }

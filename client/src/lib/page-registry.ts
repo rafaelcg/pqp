@@ -23,6 +23,7 @@
 
 import { ARTICLES, type BlogArticle } from "./blog/articles";
 import { POSTS, type BlogPost } from "./blog/posts";
+const CANONICAL_ORIGIN = "https://pqp.gg";
 
 /** The three languages the site speaks. */
 export type PageLocale = "pt-BR" | "en" | "es";
@@ -120,6 +121,32 @@ export function fragmentPath(page: { path: string }, locale: PageLocale): string
 export function markdownTwinPath(page: { path: string }, locale: PageLocale): string {
   const base = page.path === "/blog" ? "/blog" : page.path;
   return locale === "pt-BR" ? `${base}.md` : `${base}.${locale}.md`;
+}
+
+export interface Alternate {
+  hreflang: string;
+  href: string;
+}
+
+/**
+ * The hreflang set a blog page declares, in the head (`blog-meta.ts`) and in the
+ * sitemap (`sitemap-pages.ts`), from this one function so the two cannot
+ * disagree. The bare URL is `x-default`; Portuguese and English are always
+ * declared, Spanish only for a page written in it.
+ */
+export function pageAlternates(page: {
+  path: string;
+  locales: readonly PageLocale[];
+}): Alternate[] {
+  const url = `${CANONICAL_ORIGIN}${page.path}`;
+  return [
+    { hreflang: "x-default", href: url },
+    { hreflang: "pt-BR", href: `${url}?lang=pt-BR` },
+    { hreflang: "en", href: `${url}?lang=en` },
+    ...(page.locales.includes("es")
+      ? [{ hreflang: "es", href: `${url}?lang=es` }]
+      : []),
+  ];
 }
 
 /** The registered page behind a path, or null. A plain lookup, no I/O. */
