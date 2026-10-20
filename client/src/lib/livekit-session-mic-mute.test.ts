@@ -428,38 +428,32 @@ describe("the standalone microphone publication's clone lifecycle", () => {
     expect(clones[0]!.stopped).toBe(true);
   });
 
-  it("unpublishes itself if another publish() wins the shared pointer while it is still in flight", async () => {
+  it("runs a second publish() after the first, so the last one asked for is the one left up", async () => {
     const sfu = await session();
     const trackA = fakeMicTrack("mic-a");
     const trackB = fakeMicTrack("mic-b");
     const release = gatePublish();
 
-    // A's publishTrack is now blocked. A second publish — a device swap
-    // landing mid-retry, or a fast mute/unmute cycle — runs to completion
-    // in the meantime and becomes the room's current publication.
+    // A's publishTrack is now blocked. A second publish (a device swap
+    // landing mid-retry, or a second Settings change a moment later) waits
+    // for it instead of racing it. Racing is what used to leave the room
+    // hearing nothing: see `livekit-session-republish.test.ts`.
     const publishA = sfu.publish(micStream(trackA));
-    await sfu.publish(micStream(trackB));
-    expect(clones).toHaveLength(2);
+    const publishB = sfu.publish(micStream(trackB));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(clones).toHaveLength(1);
     const cloneA = clones[0]!;
-    const cloneB = clones[1]!;
 
     release();
-    await publishA;
+    await Promise.all([publishA, publishB]);
+    expect(clones).toHaveLength(2);
+    const cloneB = clones[1]!;
 
-    // A's publishTrack DID succeed once unblocked — LiveKit now holds a
-    // real, live sender for cloneA — but B already won the shared pointer
-    // first. A has to tear its own publication down rather than leave two
-    // live microphones on the wire with only one of them tracked. (B's own
-    // opening `if (published) unpublishTrack(...)` also targets cloneA
-    // here, harmlessly, since A had not registered a publication yet at
-    // that point — the real SDK no-ops on an unregistered track too.)
+    // A went up, then B replaced it: one unpublish, of A's clone, and B's
+    // publication is the one still live.
     expect(published).toHaveLength(2);
-    expect(unpublishCalls.length).toBeGreaterThanOrEqual(1);
-    expect(
-      unpublishCalls.every((t) => t.mediaStreamTrack === cloneA),
-    ).toBe(true);
+    expect(unpublishCalls.map((t) => t.mediaStreamTrack)).toEqual([cloneA]);
     expect(cloneA.stopped).toBe(true);
-    // B's publication is left alone.
     expect(cloneB.stopped).toBe(false);
   });
 
