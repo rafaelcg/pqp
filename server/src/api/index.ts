@@ -1370,6 +1370,15 @@ const publicCommunitiesConfigLimiter = createRateLimiter({
   refillPerSecond: 1,
 });
 /**
+ * `GET /api/public/apps/config` (`servePublicAppsConfig`). Same shape and same
+ * size as its communities twin: a public page fetches it once per load, and it
+ * sits UNDER `anonLimiter`.
+ */
+const publicAppsConfigLimiter = createRateLimiter({
+  capacity: 30,
+  refillPerSecond: 1,
+});
+/**
  * Tab-close leave beacon. Unauthenticated on purpose: `pagehide` cannot wait
  * for Clerk, and the resume HMAC is the credential. Own bucket so a flood
  * here cannot spend the public-profile or webhook budgets.
@@ -1435,6 +1444,7 @@ export function resetApiRateLimits(): void {
   writeLimiter.reset();
   anonLimiter.reset();
   publicCommunitiesConfigLimiter.reset();
+  publicAppsConfigLimiter.reset();
   gifLimiter.reset();
   connectionLimiter.reset();
   desktopHandoffLimiter.reset();
@@ -14644,6 +14654,51 @@ function servePublicCommunitiesConfig(
   res.end(payload);
 }
 
+const PUBLIC_APPS_CONFIG_PATH = "/api/public/apps/config";
+
+/**
+ * `GET /api/public/apps/config`: whether the public pages of pqp Apps
+ * (`pqp.gg/apps`, `/apps/locadora`, `/locadora`) exist yet. The signed-out
+ * twin in spirit of `GET /api/apps/config?serverId=`, which is a different
+ * question (is the platform on for THIS server) and wants a session.
+ *
+ * Body is `{ enabled }` and nothing else, from the global runtime flag
+ * `apps_landing`. Off answers 200 `{ enabled: false }`, not 404: a 404 is what
+ * a missing route looks like on an older API, and the client reads that as
+ * "unknown, stay dark" anyway. Never reads Authorization, never sets a cookie,
+ * identical for every caller, so it is publicly cacheable for a minute (the
+ * edge Worker holds it; a flip shows within a minute). Matched before any
+ * router, so a bad token cannot veto it.
+ */
+function servePublicAppsConfig(
+  req: IncomingMessage,
+  res: ServerResponse,
+): void {
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    res.setHeader("Allow", "GET, HEAD, OPTIONS");
+    sendError(res, 405, "Method not allowed", req);
+    return;
+  }
+  const address = clientAddress(req as never);
+  if (!publicAppsConfigLimiter.take(`apps-config:${address}`)) {
+    res.setHeader(
+      "Retry-After",
+      String(publicAppsConfigLimiter.retryAfter(`apps-config:${address}`)),
+    );
+    sendError(res, 429, "Too many requests", req);
+    return;
+  }
+  const payload = JSON.stringify({ enabled: isEnabled("apps_landing") });
+  res.writeHead(200, {
+    "Content-Type": "application/json",
+    "Content-Length": String(Buffer.byteLength(payload)),
+    "Cache-Control": "public, max-age=60",
+    ...SECURITY_HEADERS,
+    ...corsHeaders(req),
+  });
+  res.end(payload);
+}
+
 const WEBHOOK_EXECUTE_PATH =
   /^\/api\/webhooks\/([0-9a-f-]{36})\/([A-Za-z0-9_-]+)$/;
 
@@ -14886,6 +14941,11 @@ export async function handleApi(
 
   if (pathname === PUBLIC_COMMUNITIES_CONFIG_PATH) {
     servePublicCommunitiesConfig(req, res);
+    return;
+  }
+
+  if (pathname === PUBLIC_APPS_CONFIG_PATH) {
+    servePublicAppsConfig(req, res);
     return;
   }
 

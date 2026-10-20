@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { useTranslation } from "@/lib/i18n";
+import { appsPageFromMetaPath, appsUrlsFor } from "@/lib/apps-meta";
 import { marketingPageFromMetaPath, marketingUrlsFor } from "@/lib/marketing-meta";
 
 interface SeoProps {
@@ -54,8 +55,13 @@ export function Seo({
     // other page (profiles, communities, blog) keeps one canonical and the
     // bare-path alternates, as before.
     const marketingPage = marketingPageFromMetaPath(path);
-    if (marketingPage) {
-      const urls = marketingUrlsFor(marketingPage, locale);
+    const appsPage = marketingPage ? null : appsPageFromMetaPath(path);
+    if (marketingPage || appsPage) {
+      // The pqp Apps pages are flag-gated and so are not in the marketing
+      // registry, but they write the same self-referencing set at the edge.
+      const urls = marketingPage
+        ? marketingUrlsFor(marketingPage, locale)
+        : appsUrlsFor(appsPage!, locale);
       setLink("canonical", urls.canonical);
       setMeta("og:url", urls.canonical, "property");
       // Recomputed on every route change: a page with no Spanish copy has no

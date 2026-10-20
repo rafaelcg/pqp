@@ -133,6 +133,12 @@ const StreamersPage = lazy(() =>
     default: m.StreamersPage,
   })),
 );
+const AppsPage = lazy(() =>
+  import("./pages/apps-page").then((m) => ({ default: m.AppsPage })),
+);
+const LocadoraPage = lazy(() =>
+  import("./pages/locadora-page").then((m) => ({ default: m.LocadoraPage })),
+);
 const ContactPage = lazy(() =>
   import("./pages/contact-page").then((m) => ({ default: m.ContactPage })),
 );
@@ -395,6 +401,16 @@ function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
             (`marketing-meta.ts`). Both words are in RESERVED_HANDLES. */}
         <Route path="/streamers" element={<StreamersPage />} />
         <Route path="/criadores" element={<StreamersPage />} />
+        {/* pqp Apps: `/apps`, `/apps/locadora` and the short link `/locadora`
+            (the same page, canonicalised to `/apps/locadora`). Role tokens, so
+            they follow the visitor's theme. Each page wraps itself in
+            `AppsLandingGate`: with the runtime flag `apps_landing` off, or
+            unknown, the route is a redirect to `/` and no link anywhere points
+            at it. Both words are in RESERVED_HANDLES. The Google tag does not
+            load on these paths (`lib/google-ads-tag.ts`). */}
+        <Route path="/apps" element={<AppsPage />} />
+        <Route path="/apps/locadora" element={<LocadoraPage />} />
+        <Route path="/locadora" element={<LocadoraPage />} />
         <Route
           path="/discord"
           element={<Navigate to="/vem#importar" replace />}

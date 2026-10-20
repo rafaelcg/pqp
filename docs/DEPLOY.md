@@ -127,6 +127,8 @@ Do **not** put `CLERK_SECRET_KEY`, database URLs, TURN credentials, or `S3_ACCES
 
 **Donations page (hosted-only).** `VITE_SPONSOR_URL`, `VITE_PIX_KEY` and `VITE_PIX_BRCODE` build the `/apoie` and `/support` page and its footer link. `deploy-web.yml` sets the Sponsors URL inline and reads the two Pix values from repository **variables** (`gh variable set VITE_PIX_KEY`), not secrets, because all three are public and printed on the page. Leave all three empty on a self-host: with the sponsor URL and the Pix key both empty, the routes redirect to `/` and the footer link disappears, so a fork never carries pqp.gg's donation links, the same rule as the analytics and advertising tags. See `client/src/lib/support-links.ts`.
 
+**pqp Apps pages docs link (hosted-only in spirit).** `VITE_APPS_DOCS_URL` is the apps documentation link in the "Build yours" section of `/apps`: an absolute http(s) URL, public, optional. Empty hides the link (anything that is not an http(s) URL counts as empty). Set it in the Pages build env (`deploy-web.yml`, a repository variable) once the docs site is up; a self-host leaves it empty. The pages themselves are behind the runtime flag `apps_landing` (`docs/FEATURE_FLAGS.md`), not a build variable, and the Google Ads tag does not load on `/apps*` or `/locadora*` (`client/src/lib/google-ads-tag.ts`). The artwork lives in `client/public/images/apps/` (not `assets/`, which is the immutable-cache namespace for hashed build output).
+
 ## Server-side env (Railway / Docker / VPS)
 
 These live on the API, never in the client build. Names only — see [`../.env.example`](../.env.example).

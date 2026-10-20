@@ -13,6 +13,11 @@ import {
   type BauPostTarget,
 } from "../src/lib/bau-post-meta";
 import {
+  appsPageFromMetaPath,
+  injectAppsHead,
+  type AppsPage,
+} from "../src/lib/apps-meta";
+import {
   communitySlugFromMetaPath,
   injectCommunityHead,
   type CommunityMeta,
@@ -306,6 +311,83 @@ async function communitiesEnabled(context: PagesContext): Promise<boolean> {
   ]);
   clearTimeout(timer);
   return answer === true;
+}
+
+/**
+ * `GET /api/public/apps/config` (`{ enabled }`, the runtime flag `apps_landing`),
+ * read for `/apps`, `/apps/locadora` and `/locadora`. Three answers, and the
+ * third matters: true (inject the head), false (redirect home), and null for
+ * "could not tell" (an API down, an older API with no such route), which serves
+ * the page untouched and lets the browser, which asks the same question, decide.
+ * Remembered per isolate for a minute, a miss for ten seconds, so a down API is
+ * not asked on every visit. The API answers `public, max-age=60` itself.
+ */
+const APPS_FLAG_MEMO_MS = 60_000;
+const APPS_FLAG_MISS_MS = 10_000;
+let appsFlagMemo: { at: number; ttl: number; value: boolean | null } | null = null;
+
+async function appsLandingEnabled(context: PagesContext): Promise<boolean | null> {
+  if (appsFlagMemo && Date.now() - appsFlagMemo.at < appsFlagMemo.ttl) {
+    return appsFlagMemo.value;
+  }
+  let value: boolean | null = null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+  try {
+    const apiOrigin = await resolveApiOrigin(context);
+    if (apiOrigin) {
+      const response = await fetch(`${apiOrigin}/api/public/apps/config`, {
+        signal: controller.signal,
+        headers: { accept: "application/json" },
+      });
+      if (response.ok) {
+        const body = (await response.json()) as { enabled?: unknown };
+        value = typeof body.enabled === "boolean" ? body.enabled : null;
+      }
+    }
+  } catch {
+    value = null;
+  } finally {
+    clearTimeout(timer);
+  }
+  appsFlagMemo = {
+    at: Date.now(),
+    ttl: value === null ? APPS_FLAG_MISS_MS : APPS_FLAG_MEMO_MS,
+    value,
+  };
+  return value;
+}
+
+/**
+ * The three pqp Apps pages. Flag off: a real redirect to `/`, so nothing about
+ * a page that is not open yet reaches an index or a link preview. Flag on: the
+ * page's own head, in the visitor's language. Anything else, including a
+ * non-HTML answer: whatever the asset layer said.
+ */
+async function handleAppsPage(
+  context: PagesContext,
+  url: URL,
+  page: AppsPage,
+): Promise<Response> {
+  const [enabled, response] = await Promise.all([
+    appsLandingEnabled(context),
+    context.next(),
+  ]);
+  if (enabled === false) {
+    return new Response(null, {
+      status: 302,
+      headers: { location: "/", "cache-control": "no-store" },
+    });
+  }
+  const contentType = response.headers.get("content-type") ?? "";
+  if (enabled !== true || !response.ok || !contentType.includes("text/html")) {
+    return response;
+  }
+  const locale = preferredLocale(
+    url.search,
+    context.request.headers.get("accept-language"),
+  );
+  return rewritten(response, injectAppsHead(await response.text(), page, locale));
 }
 
 /** What the live nav and footer would show, as far as the edge can tell. */
@@ -743,6 +825,11 @@ async function handleRequest(context: PagesContext): Promise<Response> {
     }
   }
 
+  const appsPage = appsPageFromMetaPath(url.pathname);
+  if (appsPage && context.request.method === "GET") {
+    return handleAppsPage(context, url, appsPage);
+  }
+
   const handle = handleFromMetaPath(url.pathname);
   const slug = handle ? null : communitySlugFromMetaPath(url.pathname);
   const bauPost: BauPostTarget | null =
@@ -942,7 +1029,8 @@ async function handleRequest(context: PagesContext): Promise<Response> {
 /** Every path this middleware writes a card for. Pure string checks. */
 function isCardPath(pathname: string): boolean {
   return Boolean(
-    handleFromMetaPath(pathname) ||
+    appsPageFromMetaPath(pathname) ||
+      handleFromMetaPath(pathname) ||
       communitySlugFromMetaPath(pathname) ||
       bauPostFromMetaPath(pathname) ||
       marketingPageFromMetaPath(pathname) ||

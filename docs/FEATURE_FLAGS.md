@@ -861,3 +861,37 @@ serverId, enabled: true }` or from controles → interruptores, then
 `bot_test_chat` the same way. Production also needs `ANTHROPIC_API_KEY`: with
 no model offered, the config answers `enabled: false` whatever the flag says.
 
+
+## `apps_landing` (global, default off)
+
+The front door of pqp Apps: `pqp.gg/apps`, `pqp.gg/apps/locadora` and the short
+link `pqp.gg/locadora`. Behind `APPS_LANDING` (only `true` turns it on), born as
+a flag. **Global**, because a visitor has no server and the page is the same for
+everyone; it is also independent of `apps` (the per-server platform switch): it
+decides only whether the shop window exists, not whether anything can be opened.
+
+- **Served by** `GET /api/public/apps/config` -> `{ enabled }` and nothing
+  else. Unauthenticated (never reads `Authorization`, so a dead token cannot
+  veto it), its own address bucket under the anon backstop, `public,
+  max-age=60`. Off answers 200 `{ enabled: false }`, never 404.
+- **Off is dark.** The three client routes redirect to `/` (`AppsRoute`, which
+  also treats a failed or unreadable answer as off, like the donation page and
+  the communities band), nothing in the site links to them (this change adds no link at all; the pages
+  are for outreach and the short link), the Pages
+  middleware answers them with a redirect to `/` once it has read `enabled:
+  false`, and the sitemap does not list them. Reaching `/apps` on an older API
+  that has no such route is the same as off.
+- **On.** The edge injects the page's title, description, canonical, Open Graph
+  and Twitter tags (`client/src/lib/apps-meta.ts`, in the visitor's language,
+  with `hreflang`).
+- **Measurement is the spec's, nothing more.** One closed Umami event through
+  `track()` (`apps_door_view`), no properties, no ids. The Google Ads tag does
+  not load on `/apps*` or `/locadora*` (decision D3, see
+  `lib/google-ads-tag.ts`).
+- **Sitemap.** Not listed on purpose: the sitemap is built into the bundle and
+  this flag is runtime, so a listed page could answer a redirect. List the three
+  paths (`EXTRA_PAGES` in `lib/sitemap-pages.ts`) once the flag is on for good.
+
+Turn it on: controles -> interruptores, or `PUT /api/admin/flags { key:
+"apps_landing", enabled: true }` with the machine token. An open tab follows
+within the config refresh (a page reads it when it loads); the edge within a minute.

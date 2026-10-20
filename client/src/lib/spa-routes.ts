@@ -35,6 +35,12 @@ const STATIC_PATHS: ReadonlySet<string> = new Set([
   "/",
   "/apoie",
   "/support",
+  // The pqp Apps pages. Routes of their own whatever the runtime flag says: the
+  // router redirects home when it is off, and the edge does it with a real 302
+  // once it has read the flag (`apps-meta.ts`), so neither is a soft 404.
+  "/apps",
+  "/apps/locadora",
+  "/locadora",
   "/desktop-login",
   "/discord",
   "/ven",

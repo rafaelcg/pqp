@@ -931,6 +931,20 @@ export const FEATURE_FLAGS = {
     // app, and the client that reads it arrives with the product UI. Naming a
     // field here before a client mentions it fails the contract test.
   },
+  apps_landing: {
+    description:
+      "Páginas públicas do pqp Apps: pqp.gg/apps, pqp.gg/apps/locadora e o atalho pqp.gg/locadora. Desligado, as três redirecionam pra página inicial, não entram em lugar nenhum e nenhum link do site aponta pra elas.",
+    env: "APPS_LANDING",
+    parseEnv: exactTrue,
+    // Off: the pages describe a product that is not open to everybody yet, so
+    // they go on when Rafael says so. Only `true` turns it on.
+    codeDefault: false,
+    // GLOBAL: a visitor has no server, and the page is the same for everyone.
+    // It is independent of `apps` (the per-server platform switch): this one
+    // only decides whether the front door exists.
+    perServer: false,
+    clientVia: "GET /api/public/apps/config (enabled)",
+  },
 } as const satisfies Record<string, FlagDefinition>;
 
 export type FlagKey = keyof typeof FEATURE_FLAGS;
