@@ -21,7 +21,7 @@
  *
  * Logic only, no DOM: the dialog is `ui/export-dialog.ts`.
  */
-import { zipSync, unzipSync } from "fflate";
+import { unzipSync, Zip, ZipDeflate } from "fflate";
 import {
   loadLibrary,
   metaKey,
@@ -74,6 +74,53 @@ interface Manifest {
   items: ManifestItem[];
 }
 
+/**
+ * A zip written one file at a time, that gives up as soon as what it wrote passes the cap: an export
+ * that cannot fit stops at the file that tipped it over, without first reading and packing the whole
+ * shelf. Each file is read just before it is packed, so the page holds the packed output and one file.
+ */
+function boundedZip(cap: number) {
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  let failed = false;
+  const zip = new Zip((error, chunk) => {
+    if (error) {
+      failed = true;
+      return;
+    }
+    chunks.push(chunk);
+    size += chunk.length;
+  });
+  return {
+    /** False once the archive is over the cap (or broke): stop adding. */
+    add(name: string, bytes: Uint8Array): boolean {
+      if (failed || size > cap) return false;
+      const file = new ZipDeflate(name, { level: 6 });
+      zip.add(file);
+      file.push(bytes, true);
+      return !failed && size <= cap;
+    },
+    finish(): Uint8Array | null {
+      if (failed || size > cap) {
+        zip.terminate();
+        return null;
+      }
+      zip.end();
+      if (failed || size > cap) return null;
+      const out = new Uint8Array(size);
+      let at = 0;
+      for (const chunk of chunks) {
+        out.set(chunk, at);
+        at += chunk.length;
+      }
+      return out;
+    },
+    abort(): void {
+      zip.terminate();
+    },
+  };
+}
+
 /** Every game on the shelf with its saves; the game file only when `withRom`. */
 export async function exportBundle(
   store: DeviceStore,
@@ -82,7 +129,11 @@ export async function exportBundle(
   const library = await loadLibrary(store);
   if (library.length === 0) return { ok: false, reason: "empty" };
 
-  const files: Record<string, Uint8Array> = {};
+  const zip = boundedZip(BUNDLE_MAX_BYTES);
+  const tooLarge = (): ExportResult => {
+    zip.abort();
+    return { ok: false, reason: "too-large" };
+  };
   const items: ManifestItem[] = [];
   let saves = 0;
 
@@ -94,14 +145,14 @@ export async function exportBundle(
     if (options.withRom) {
       const rom = await store.get(romKey(item.sha256));
       if (rom) {
-        files[`${dir}/rom.bin`] = rom.bytes;
+        if (!zip.add(`${dir}/rom.bin`, rom.bytes)) return tooLarge();
         entry.rom = true;
       }
     }
 
     const sram = await store.get(sramKey(item.sha256));
     if (sram) {
-      files[`${dir}/sram.bin`] = sram.bytes;
+      if (!zip.add(`${dir}/sram.bin`, sram.bytes)) return tooLarge();
       entry.sram = sram.meta ?? {};
       saves += 1;
     }
@@ -109,9 +160,9 @@ export async function exportBundle(
     for (const { slot } of item.slots) {
       const state = await store.get(stateKey(item.sha256, slot));
       if (!state) continue;
-      files[`${dir}/state-${slot}.bin`] = state.bytes;
+      if (!zip.add(`${dir}/state-${slot}.bin`, state.bytes)) return tooLarge();
       const thumb = await store.get(thumbKey(item.sha256, slot));
-      if (thumb) files[`${dir}/thumb-${slot}.png`] = thumb.bytes;
+      if (thumb && !zip.add(`${dir}/thumb-${slot}.png`, thumb.bytes)) return tooLarge();
       entry.slots.push({ slot, meta: state.meta ?? {}, thumb: thumb ? (thumb.meta ?? {}) : null });
       saves += 1;
     }
@@ -125,10 +176,9 @@ export async function exportBundle(
     createdAt: options.now ?? Date.now(),
     items,
   };
-  files["manifest.json"] = new TextEncoder().encode(JSON.stringify(manifest));
-
-  const bytes = zipSync(files);
-  if (bytes.length > BUNDLE_MAX_BYTES) return { ok: false, reason: "too-large" };
+  if (!zip.add("manifest.json", new TextEncoder().encode(JSON.stringify(manifest)))) return tooLarge();
+  const bytes = zip.finish();
+  if (!bytes) return { ok: false, reason: "too-large" };
   return { ok: true, bytes, games: items.length, saves, withRom: items.some((i) => i.rom) };
 }
 

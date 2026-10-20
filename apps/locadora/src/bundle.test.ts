@@ -97,6 +97,36 @@ describe("export then import", () => {
     expect(keys).toEqual(expect.arrayContaining([metaKey(source.sha), sramKey(source.sha), stateKey(source.sha, "1")]));
   });
 
+  it("stops packing at the file that takes the export past 64 MB, without reading the rest", async () => {
+    const store = memoryStore(512 * 1024 * 1024);
+    // three game files that do not compress, 34 MB each: the second one already tips the bundle over
+    for (let seed = 1; seed <= 3; seed += 1) {
+      const bytes = fakeNes(seed);
+      const big = new Uint8Array(34 * 1024 * 1024);
+      big.set(bytes.subarray(0, 16));
+      let x = seed * 2654435761;
+      for (let i = 16; i < big.length; i += 1) {
+        x ^= x << 13;
+        x ^= x >>> 17;
+        x ^= x << 5;
+        big[i] = x & 0xff;
+      }
+      const added = await addToLibrary(store, { bytes: big, ext: ".nes", fallbackTitle: `Jogo ${seed}`, now: seed });
+      if (!added) throw new Error("the test game was refused");
+    }
+    let romReads = 0;
+    const counting: DeviceStore = {
+      ...store,
+      durable: store.durable,
+      get: (key) => {
+        if (key.startsWith("rom:")) romReads += 1;
+        return store.get(key);
+      },
+    };
+    expect(await exportBundle(counting, { withRom: true })).toEqual({ ok: false, reason: "too-large" });
+    expect(romReads).toBe(2);
+  }, 60_000);
+
   it("says the shelf is empty rather than writing an empty bundle", async () => {
     const result = await exportBundle(memoryStore(), { withRom: true });
     expect(result).toEqual({ ok: false, reason: "empty" });

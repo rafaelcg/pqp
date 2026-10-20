@@ -141,7 +141,8 @@ export function createAppSessionWire(link: { current: AppWireLink | null }): App
         pendingJoin: null,
         holders: 0,
         patches: [],
-        connection: "online",
+        // a record made while the link is down (a retry through a kept transport) says so to its first subscriber
+        connection: online ? "online" : "reconnecting",
         transport: null,
         end: end ?? ends.get(sessionId) ?? (() => Promise.reject(new AppTransportError("unavailable"))),
       };

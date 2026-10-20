@@ -172,6 +172,20 @@ describe("the app session wire", () => {
     expect(wire.isSeated(SESSION)).toBe(true);
   });
 
+  it("a record made while the link is down tells its subscriber so, and the answer brings it back", async () => {
+    const { wire } = setup();
+    wire.setOnline(false);
+    const h = handlers();
+    const transport = wire.transportFor(SESSION, async () => {});
+    transport.subscribe(h);
+    expect(h.calls).toContainEqual(["connection", "reconnecting"]);
+    wire.setOnline(true);
+    const joined = transport.join({});
+    wire.dispatch(snapshotFrame());
+    await joined;
+    expect(h.calls.at(-1)).toEqual(["connection", "online"]);
+  });
+
   it("rejects at once when the socket cannot take the frame", async () => {
     const { wire, setLinkUp } = setup();
     setLinkUp(false);
