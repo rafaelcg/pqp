@@ -23,7 +23,13 @@ const app = (id: string, over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-const state = { apps: [] as ReturnType<typeof app>[], config: { enabled: true }, fail: false };
+const state = {
+  apps: [] as ReturnType<typeof app>[],
+  config: { enabled: true },
+  fail: false,
+  /** When set, the next read waits for it (and then answers with what it resolves to). */
+  hold: null as Promise<{ apps: ReturnType<typeof app>[] }> | null,
+};
 const fetchApps = vi.fn();
 const write = vi.fn();
 const fetchConfig = vi.fn();
@@ -36,6 +42,11 @@ vi.mock("@/lib/api", async (importOriginal) => ({
   },
   fetchServerApps: (...args: unknown[]) => {
     fetchApps(...args);
+    if (state.hold) {
+      const held = state.hold;
+      state.hold = null;
+      return held;
+    }
     return state.fail ? Promise.reject(new Error("down")) : Promise.resolve({ apps: state.apps });
   },
   setServerAppOwnerSwitch: (...args: unknown[]) => write(...args),
@@ -68,6 +79,7 @@ beforeEach(() => {
   state.apps = [app("poll"), app("jogos", { liveSessions: 2 })];
   state.config = { enabled: true };
   state.fail = false;
+  state.hold = null;
 });
 
 afterEach(async () => {
@@ -171,6 +183,26 @@ describe("switching off", () => {
       await Promise.resolve();
     });
     expect(fetchApps).toHaveBeenCalledTimes(2);
+    expect(switches()[0]!.getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("a slow re-read after a failed write never draws over a later switch", async () => {
+    write.mockRejectedValueOnce(new Error("500"));
+    await mount(<AppsSettingsSection serverId="s1" />);
+    // The re-read is held until after the next write has finished.
+    let release: (value: { apps: ReturnType<typeof app>[] }) => void = () => {};
+    const stale = { apps: [app("poll"), app("jogos", { liveSessions: 2 })] };
+    state.hold = new Promise((resolve) => {
+      release = resolve;
+    });
+    await click(switches()[0]!);
+    write.mockResolvedValue({ appId: "poll", enabled: false, changed: true, sessionsEnded: 0 });
+    await click(switches()[0]!);
+    expect(switches()[0]!.getAttribute("aria-checked")).toBe("false");
+    await act(async () => {
+      release(stale);
+      await Promise.resolve();
+    });
     expect(switches()[0]!.getAttribute("aria-checked")).toBe("false");
   });
 });

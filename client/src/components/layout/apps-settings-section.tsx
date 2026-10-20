@@ -106,6 +106,9 @@ export function AppsSettingsSection({ serverId }: { serverId: string }) {
     setBusyId(app.id);
     setError(null);
     setSaved(false);
+    // A read still in flight (the load, or the re-read after a failed write)
+    // saw the state before this write: it must not draw over it.
+    seq.current += 1;
     // At once; put back below if the server says no.
     setApps((list) =>
       list ? list.map((a) => (a.id === app.id ? { ...a, enabled } : a)) : list,
