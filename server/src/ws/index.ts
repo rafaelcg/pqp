@@ -11,6 +11,7 @@ import {
 import { isEnabled } from "../lib/flags.js";
 import { logEvent, nextConnectionId } from "../lib/log.js";
 import { createRateLimiter, limitFromEnv } from "../lib/rate-limit.js";
+import { handleAppSocketClose } from "./apps.js";
 import { handleChatMessage } from "./chat.js";
 import { recordUserCountry } from "../voice/region-audience.js";
 import { userActivity } from "../services/user-activity.js";
@@ -126,6 +127,10 @@ const ACTIVITY_FRAME_TYPES: ReadonlySet<string> = new Set([
   "live-reaction",
   "soundboard-play",
   "voice-still-here",
+  // Taking part in an app counts as somebody being there.
+  "app-join",
+  "app-state-patch",
+  "app-event-send",
 ]);
 
 // Derived from `voiceClientMessageSchema` (see `VOICE_CLIENT_MESSAGE_TYPES`
@@ -690,6 +695,11 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
       wasInVoice: isSocketInVoice(socket),
     });
     removeVoicePeerBySocket(socket);
+    // An app session this socket was seated in holds the seat for the resume
+    // window; a reload comes back to it.
+    void handleAppSocketClose(socket).catch((error) => {
+      console.error("[apps] socket close failed:", error);
+    });
     // Before `deleteAuthenticatedSocket`, though it does not depend on it: the
     // status registry keeps its own socket→user index precisely so that closing
     // order can never leave a user stuck online because the identity was

@@ -62,7 +62,23 @@ export const RELAY_BUDGET = {
   refillPerSecond: Math.ceil(((MESH_VOICE_LIMIT - 1) * RELAY_FRAMES_PER_PEER) / 10),
 } as const;
 
-export type FrameBucket = "general" | "relay";
+/**
+ * The frames an app session sends while it runs: shared-state patches (a
+ * session takes at most 10 writes a second) and ephemeral events (up to 20 a
+ * second per participant). Together that is more than the general bucket's
+ * 20 a second sustained, which would hang up a perfectly well-behaved game, so
+ * they draw from their own. Joining and leaving are rare and stay general.
+ * Everything the server refuses here is refused before any database work.
+ */
+export const APP_FRAME_TYPES: ReadonlySet<string> = new Set([
+  "app-state-patch",
+  "app-event-send",
+]);
+
+/** Headroom over a participant sending events and patches both at their caps. */
+export const APPS_BUDGET = { capacity: 120, refillPerSecond: 40 } as const;
+
+export type FrameBucket = "general" | "relay" | "apps";
 
 /** How many recent frame types a flood log line summarises. */
 const RECENT_TYPES = 64;
@@ -88,6 +104,7 @@ export function createFrameBudget(
 ): FrameBudget {
   const general = createRateLimiter({ ...GENERAL_BUDGET, now });
   const relay = createRateLimiter({ ...RELAY_BUDGET, now });
+  const apps = createRateLimiter({ ...APPS_BUDGET, now });
   const recent: string[] = [];
 
   return {
@@ -101,6 +118,9 @@ export function createFrameBudget(
       }
       if (type !== undefined && RELAY_FRAME_TYPES.has(type)) {
         return relay.take("self") ? null : "relay";
+      }
+      if (type !== undefined && APP_FRAME_TYPES.has(type)) {
+        return apps.take("self") ? null : "apps";
       }
       return general.take("self") ? null : "general";
     },

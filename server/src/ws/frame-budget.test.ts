@@ -2,6 +2,7 @@ import { MESH_VOICE_LIMIT } from "@pqp/shared";
 import { describe, expect, it } from "vitest";
 import { createRateLimiter } from "../lib/rate-limit.js";
 import {
+  APPS_BUDGET,
   GENERAL_BUDGET,
   RELAY_BUDGET,
   createFrameBudget,
@@ -146,5 +147,49 @@ describe("per-connection frame budget", () => {
     budget.take("x".repeat(5_000));
     budget.take(undefined);
     expect(budget.recentSummary()).toBe("ice-candidate:10,offer:1,other:1,unparsed:1");
+  });
+
+  it("gives an app session's state patches and events a bucket of their own", () => {
+    const time = clock();
+    const budget = createFrameBudget(new Set([...KNOWN, "app-state-patch", "app-event-send"]), time.now);
+    // A participant at both caps for a long while: 20 events and 10 patches a second.
+    for (let second = 0; second < 30; second += 1) {
+      for (let i = 0; i < 20; i += 1) {
+        expect(budget.take("app-event-send")).toBeNull();
+      }
+      for (let i = 0; i < 10; i += 1) {
+        expect(budget.take("app-state-patch")).toBeNull();
+      }
+      time.advance(1000);
+    }
+    // None of it spent the general bucket, which is still full.
+    for (let i = 0; i < GENERAL_BUDGET.capacity; i += 1) {
+      expect(budget.take("typing")).toBeNull();
+    }
+    expect(budget.take("typing")).toBe("general");
+  });
+
+  it("closes a socket that floods app frames, and names the bucket", () => {
+    const time = clock();
+    const budget = createFrameBudget(new Set([...KNOWN, "app-event-send"]), time.now);
+    let verdict: string | null = null;
+    let admitted = 0;
+    for (let i = 0; i < 1000 && verdict === null; i += 1) {
+      verdict = budget.take("app-event-send");
+      if (verdict === null) {
+        admitted += 1;
+      }
+    }
+    expect(verdict).toBe("apps");
+    expect(admitted).toBe(APPS_BUDGET.capacity);
+  });
+
+  it("leaves joining and leaving on the general bucket", () => {
+    const time = clock();
+    const budget = createFrameBudget(new Set([...KNOWN, "app-join", "app-leave"]), time.now);
+    for (let i = 0; i < GENERAL_BUDGET.capacity; i += 1) {
+      expect(budget.take(i % 2 === 0 ? "app-join" : "app-leave")).toBeNull();
+    }
+    expect(budget.take("app-join")).toBe("general");
   });
 });
