@@ -40,8 +40,15 @@ export function shouldOfferVoiceCleanNudge(input: {
   presentingWatchParty: boolean;
   /** `window.innerWidth >= VOICE_CLEAN_NUDGE_MIN_WIDTH_PX`. */
   isDesktopViewport: boolean;
+  /**
+   * The microphone already runs Voz limpa, by choice or because it is the
+   * default on this device (`lib/clean-voice-default.ts`): the card would
+   * offer something the person already has.
+   */
+  alreadyOn: boolean;
 }): boolean {
   return (
+    !input.alreadyOn &&
     !input.dismissed &&
     !input.automated &&
     input.inCall &&

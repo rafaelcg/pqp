@@ -84,7 +84,10 @@ describe("buildAudioConstraints", () => {
     ).toMatchObject({ deviceId: { exact: "mic-1" } });
   });
 
-  it("defaults to the browser suppressor, so the new mode ships off", () => {
+  it("the static fallback is the browser suppressor: what a device runs before the flag answers, or with it off", () => {
+    // Voz limpa as the default is decided at runtime (`lib/clean-voice-default.ts`,
+    // flag `clean_voice_default`), never by this constant: a constant would
+    // ship RNNoise to a device before the kill switch could be heard.
     expect(defaultMicProcessing.noiseSuppression).toBe("browser");
     expect(buildAudioConstraints(undefined)).toMatchObject({
       noiseSuppression: true,

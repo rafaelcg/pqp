@@ -619,6 +619,40 @@ describe("VoiceSection sound processing", () => {
     expect(hints.size).toBe(3);
     expect(hints.has("")).toBe(false);
   });
+
+  it("says Voz limpa is the default when nobody on this device chose it, and not when somebody did", async () => {
+    const hint = () =>
+      host!.querySelector('[data-settings-row="noise-suppression"] p')!.textContent ?? "";
+    const advanced = {
+      ...defaultLocalSettings,
+      micProcessing: { ...defaultLocalSettings.micProcessing, noiseSuppression: "advanced" as const },
+    };
+    await mount({ settings: { ...advanced, noiseSuppressionChosen: false } });
+    expect(hint()).toMatch(/by default on this device|por padrão neste aparelho|por defecto en este dispositivo/);
+    expect(
+      host!.querySelector<HTMLSelectElement>('[data-settings-row="noise-suppression"] select')!.value,
+    ).toBe("advanced");
+    act(() => root?.unmount());
+    host?.remove();
+    await mount({ settings: { ...advanced, noiseSuppressionChosen: true } });
+    expect(hint()).not.toMatch(/by default on this device|por padrão neste aparelho|por defecto en este dispositivo/);
+  });
+
+  it("picking a mode records it as a choice", async () => {
+    const patches: Partial<LocalSettings>[] = [];
+    await mount({ patchLocal: (partial) => patches.push(partial) });
+    const select = host!.querySelector<HTMLSelectElement>(
+      '[data-settings-row="noise-suppression"] select',
+    )!;
+    act(() => {
+      select.value = "off";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(patches.at(-1)).toMatchObject({
+      micProcessing: { noiseSuppression: "off" },
+      noiseSuppressionChosen: true,
+    });
+  });
 });
 
 /* -------------------------------------------------------------- push-to-talk */

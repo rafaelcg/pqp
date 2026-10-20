@@ -1122,6 +1122,12 @@ export interface VoiceConfig {
    * tab. Per server, default off. The play gate on the server reads it too.
    */
   soundboard?: boolean;
+  /**
+   * `clean_voice_default`: a device with no stored noise-suppression choice
+   * starts on Voz limpa (`lib/clean-voice-default.ts`). Global, on by
+   * default; absent (an older API) reads as off, which is the old default.
+   */
+  cleanVoiceDefault?: boolean;
 }
 
 export const fetchVoiceConfig = (serverId: string) =>

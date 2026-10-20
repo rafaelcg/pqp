@@ -174,6 +174,13 @@ export interface MicProcessing {
   autoGainControl: boolean;
 }
 
+/**
+ * The static fallback. `noiseSuppression: "browser"` is what a device runs
+ * before the `clean_voice_default` flag has answered, with it off, or below
+ * the device guard. Voz limpa as the default is decided at runtime in
+ * `lib/clean-voice-default.ts`, never by flipping this constant, so the
+ * dashboard can take it back without a deploy.
+ */
 export const defaultMicProcessing: MicProcessing = {
   echoCancellation: true,
   noiseSuppression: "browser",

@@ -11,7 +11,25 @@ import {
   readWebmDurationMs,
   resamplePeaks,
   voiceNoteErrorFromMedia,
+  voiceNoteProcessing,
 } from "./voice-note-recorder";
+import { buildAudioConstraints, defaultMicProcessing } from "@/lib/audio-devices";
+
+describe("voiceNoteProcessing", () => {
+  it("asks the browser to suppress when the call runs Voz limpa, since a note has no worklet", () => {
+    const processing = voiceNoteProcessing({ ...defaultMicProcessing, noiseSuppression: "advanced" });
+    expect(processing?.noiseSuppression).toBe("browser");
+    expect(buildAudioConstraints(undefined, processing)).toMatchObject({ noiseSuppression: true });
+  });
+
+  it("leaves off and browser alone", () => {
+    for (const noiseSuppression of ["off", "browser"] as const) {
+      const input = { ...defaultMicProcessing, noiseSuppression };
+      expect(voiceNoteProcessing(input)).toBe(input);
+    }
+    expect(voiceNoteProcessing(undefined)).toBeUndefined();
+  });
+});
 
 describe("pickVoiceNoteFormat", () => {
   it("prefers AAC in MP4 when the recorder can make it (Safari, recent Chrome)", () => {

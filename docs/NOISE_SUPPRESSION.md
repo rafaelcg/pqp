@@ -12,9 +12,11 @@ description that carries it in parentheses (`settings.voice.processing.noise.adv
 (`components/voice/voice-clean-hint.tsx`, `lib/voice-clean.ts`), it is "Voz
 limpa" / "Clean voice".
 
-`Padrão` is the default and is what every account already has. **Nothing about
-this feature runs until somebody picks `Avançada`** — no wasm is fetched, no
-worklet is registered, and the audio graph is the same graph it was before.
+Since 2026-10-20 **Voz limpa is the default** on a capable device that never
+chose a mode, behind a kill switch (see "The default" below); everywhere else
+`Padrão` is. On a microphone running `Padrão` or `Desligada` nothing about this
+feature runs: no wasm is fetched, no worklet is registered, and the audio
+graph is the same graph it was before.
 
 ## Why
 
@@ -123,16 +125,48 @@ away. What they prove is that the node is in the chain and is doing work. The
 number that matters is a person in a room with a mechanical keyboard, and that
 one is judged by ear.
 
-## Flipping the default later
+## The default
 
-One line: `defaultMicProcessing.noiseSuppression` in
-`client/src/lib/audio-devices.ts`, from `"browser"` to `"advanced"`. It changes
-the default only — `parseNoiseSuppressionMode` reads a stored choice back
-first, so nobody who has picked a mode is moved.
+Since **2026-10-20** Voz limpa is the default for a device that never chose a
+mode, behind the runtime flag `clean_voice_default` (env `CLEAN_VOICE_DEFAULT`,
+global, code default on, flipped from the dashboard's controles →
+interruptores with no deploy). Code: `client/src/lib/clean-voice-default.ts`.
 
-Do not flip it before the advanced path has been heard on a low-end Android and
-on a two-hour call. The cost is a few percent of a core *per participant who
-turns it on*, and it is paid on the machine least able to afford it.
+- **The flag.** The client reads `cleanVoiceDefault` off the global
+  `GET /api/voice/config` at sign-in and on every config refresh. Unknown (not
+  answered yet, an older API, a failed first ask) is off.
+- **The guard.** The default lands only where `advancedNoiseSuppressionSupported()`
+  holds (AudioWorklet and WebAssembly, the same probe the pipeline runs, so a
+  default never produces the "not supported" notice) and
+  `navigator.hardwareConcurrency >= 4` when the browser tells. An unknown core
+  count passes. Below the bar the default stays `browser`; the person can
+  still pick Voz limpa by hand.
+- **A stored choice always wins.** See "Migrating the stored setting" below for
+  what counts as stored.
+- **A default is never written down.** `saveLocalSettings` leaves
+  `micProcessing.noiseSuppression` out of the blob until somebody picks a mode
+  (the Settings select, or "Ativar" on the nudge). That is what makes the kill
+  switch work: turning the flag off moves every defaulted device back to the
+  browser's suppressor on its next config refresh, a call already running
+  included (`setMicProcessing` swaps the pipeline in place, no rejoin).
+- Settings shows the effective mode and, when it is Voz limpa by default,
+  says so under the select (`settings.voice.processing.noise.defaultNote`,
+  "Ligada por padrão neste aparelho."). The one-time nudge is not offered to a
+  microphone already on Voz limpa, by default or by choice, and neither is the
+  NOVO dot.
+- Voice notes run no worklet, so a note recorded from a Voz limpa microphone
+  asks the browser's suppressor instead (`voiceNoteProcessing` in
+  `client/src/lib/voice-note-recorder.ts`) rather than recording with none.
+
+`defaultMicProcessing.noiseSuppression` in `client/src/lib/audio-devices.ts`
+stays `"browser"`: it is the static fallback, not the switch.
+
+The old condition for flipping it, that the advanced path be heard on a
+low-end Android and on a two-hour call first, is what the kill switch is for.
+The cost is a few percent of a core per participant, paid on the machine least
+able to afford it, and the core guard is only a proxy for that. **On reports of
+choppy audio, a hot phone or a laptop fan in calls, turn `clean_voice_default`
+off** and nothing else changes.
 
 ## Migrating the stored setting
 
@@ -140,7 +174,21 @@ turns it on*, and it is paid on the machine least able to afford it.
 `"off" | "browser" | "advanced"`. Every blob in the wild says `true` or
 `false`, and `parseNoiseSuppressionMode` reads `true` (and a missing value,
 which the old loader also read as on) as `browser` and `false` as `off`.
-Anything unrecognised lands on `browser`. The shared preferences schema in
+Anything unrecognised lands on `browser`.
+
+With Voz limpa as the default, the question is which stored values are a
+choice. **Only a device with nothing stored takes the default** (no
+`pqp-local-settings` at all, or a blob with no
+`micProcessing.noiseSuppression`). A stored `true` or `"browser"` is kept, and
+that is deliberate: every save before this change wrote the whole blob,
+default included, and the App writes it on every sign-in, so a stored
+`"browser"` from somebody who never touched the row cannot be told apart from
+somebody who tried Voz limpa and went back. In practice the new default
+reaches new devices and new accounts, not devices that already ran the app.
+The noise-suppression value is not part of the account's synced preferences,
+so a new browser on an old account is a new device here.
+
+The shared preferences schema in
 `packages/shared` still declares the old boolean and is deliberately untouched:
 nothing reads that field yet, and this is a client-only change that must not
 restart the API.

@@ -476,6 +476,11 @@ import { startConfigRefresh } from "@/lib/config-refresh";
 import { startNotifyConfig } from "@/lib/notify-config";
 import { startAudioSelfHealFlag } from "@/lib/audio-self-heal-flag";
 import {
+  startCleanVoiceDefaultFlag,
+  useCleanVoiceDefaultMode,
+} from "@/lib/clean-voice-default";
+import { withEffectiveNoiseSuppression } from "@/components/settings/local-settings";
+import {
   WatchPartyApprovedToasts,
   type WatchPartyApprovedCard,
 } from "@/components/watch-party/waitlist/watch-party-approved-toasts";
@@ -2972,6 +2977,12 @@ function MainAppContent({
     () => (notifyConfigUserId ? startAudioSelfHealFlag() : undefined),
     [notifyConfigUserId],
   );
+  // `clean_voice_default` (`lib/clean-voice-default.ts`): Voz limpa as the
+  // default for a device that never chose. Same refresh, same reason to wait.
+  useEffect(
+    () => (notifyConfigUserId ? startCleanVoiceDefaultFlag() : undefined),
+    [notifyConfigUserId],
+  );
   // Modo 2005's kill switch (`retro_look`), asked only by a browser that found
   // the look, and its Konami door. See `lib/retro-look.ts`.
   useEffect(
@@ -3274,6 +3285,30 @@ function MainAppContent({
   useEffect(() => {
     void voice.setVideoQuality(localSettings.videoQuality);
   }, [localSettings.videoQuality, voice]);
+
+  /**
+   * A device that never chose a noise suppression follows the default as it
+   * moves: the flag's first answer after boot, and the dashboard turning
+   * `clean_voice_default` off (or on) later. A functional update, so it lands
+   * on whatever the load or the account merge just set rather than on a
+   * stale copy. A stored choice is returned untouched.
+   */
+  const cleanVoiceDefaultMode = useCleanVoiceDefaultMode();
+  useEffect(() => {
+    setLocalSettings((current) =>
+      withEffectiveNoiseSuppression(current, cleanVoiceDefaultMode),
+    );
+  }, [cleanVoiceDefaultMode]);
+  // And a call already running hears it: `setMicProcessing` swaps the
+  // pipeline in place (no rejoin, nobody sees you leave) and returns at once
+  // when nothing changed or no call is up. Only for a defaulted device: a
+  // choice reaches the controller through `handleAudioSettingsLive`.
+  useEffect(() => {
+    if (localSettings.noiseSuppressionChosen) {
+      return;
+    }
+    void voice.setMicProcessing(localSettings.micProcessing);
+  }, [localSettings.micProcessing, localSettings.noiseSuppressionChosen, voice]);
 
   useEffect(() => {
     void voice.setCameraDevice(localSettings.cameraDeviceId);
@@ -8655,7 +8690,10 @@ function MainAppContent({
     void handleConversationCall(channelId, !live);
   }
 
-  function handleAudioSettingsLive(next: LocalSettings) {
+  function handleAudioSettingsLive(incoming: LocalSettings) {
+    // A draft opened before the default moved still carries the old one; a
+    // device that never chose runs the default as it is now.
+    const next = withEffectiveNoiseSuppression(incoming);
     const prevDeviceId = localSettings.inputDeviceId;
     setLocalSettings(next);
     saveLocalSettings(next);
@@ -9302,6 +9340,8 @@ function MainAppContent({
         ...localSettings.micProcessing,
         noiseSuppression: "advanced",
       },
+      // "Ativar" is a choice, so it is stored and outlives the flag.
+      noiseSuppressionChosen: true,
     };
     setLocalSettings(next);
     saveLocalSettings(next);
@@ -11318,6 +11358,8 @@ function MainAppContent({
       presentingWatchParty:
         voiceChannel?.type === "watch_party" && voiceState.isSharingScreen,
       isDesktopViewport: voiceCleanDesktopViewport,
+      // Already on it, by default or by choice: nothing to offer.
+      alreadyOn: localSettings.micProcessing.noiseSuppression === "advanced",
     });
   /** A live party, or the watch-now strip: no campaign card takes the corner. */
   const campaignsYield =

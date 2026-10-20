@@ -16,6 +16,7 @@ function baseInput() {
     micOn: true,
     presentingWatchParty: false,
     isDesktopViewport: true,
+    alreadyOn: false,
   };
 }
 
@@ -32,6 +33,12 @@ function memoryStorage(initial: Record<string, string> = {}) {
 describe("shouldOfferVoiceCleanNudge", () => {
   it("offers the card when every condition is met", () => {
     expect(shouldOfferVoiceCleanNudge(baseInput())).toBe(true);
+  });
+
+  it("never offers Voz limpa to a microphone already on it, by default or by choice", () => {
+    expect(
+      shouldOfferVoiceCleanNudge({ ...baseInput(), alreadyOn: true }),
+    ).toBe(false);
   });
 
   it("stays quiet once dismissed", () => {
@@ -82,6 +89,7 @@ describe("shouldOfferVoiceCleanNudge", () => {
         micOn: false,
         presentingWatchParty: true,
         isDesktopViewport: false,
+        alreadyOn: true,
       }),
     ).toBe(false);
   });

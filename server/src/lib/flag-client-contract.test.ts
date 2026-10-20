@@ -178,6 +178,30 @@ describe("GET /api/voice/config against the client that reads it", () => {
     );
     expect(dashboard).toMatch(/\baudience_mode:\s*"/);
   });
+
+  it("clean_voice_default is global, on by default, read off the global config and handed to the settings resolver", () => {
+    const def = FEATURE_FLAGS.clean_voice_default;
+    expect(def.perServer).toBe(false);
+    expect(def.codeDefault).toBe(true);
+    expect(def.clientVia).toBe("GET /api/voice/config (cleanVoiceDefault)");
+    expect(served).toContain("cleanVoiceDefault");
+    const flag = readFileSync(path.join(clientSrc, "lib/clean-voice-default.ts"), "utf8");
+    // The global ask (no server), and the field read by name off it.
+    expect(flag).toContain("fetchGlobalVoiceConfig()");
+    expect(flag).toMatch(/answer\.cleanVoiceDefault === true/);
+    // The answer reaches what the microphone is opened with: the stored
+    // settings resolve through it, and the app re-resolves when it moves.
+    const local = readFileSync(path.join(clientSrc, "components/settings/local-settings.ts"), "utf8");
+    expect(local).toContain("currentDefaultNoiseSuppression()");
+    const app = readFileSync(path.join(clientSrc, "App.tsx"), "utf8");
+    expect(app).toContain("startCleanVoiceDefaultFlag()");
+    expect(app).toContain("useCleanVoiceDefaultMode()");
+    const dashboard = readFileSync(
+      path.resolve(here, "../../../tools/admin-dashboard/site/novo.js"),
+      "utf8",
+    );
+    expect(dashboard).toMatch(/\bclean_voice_default:\s*"/);
+  });
 });
 
 describe("every flag that says it reaches the client", () => {
