@@ -238,6 +238,23 @@ const sessionMeta = new Map<string, SessionMeta>();
 const socketSessions = new Map<WebSocket, Set<string>>();
 /** `sessionId:userId` for a join whose row is written and whose socket is not registered yet. */
 const joining = new Set<string>();
+/**
+ * Sockets whose close handler has run. The close handler is not on the socket's
+ * frame chain (`ws/index.ts` runs it from the `close` event), so a join that
+ * awaits its way through a dozen reads can finish AFTER the close handler found
+ * nothing to release. A socket in this set, or one no longer OPEN, must never be
+ * registered as a seat's live socket: `hasLocalSocketFor` would stay true for a
+ * socket that will never close again, and the ghost sweep (which judges by that
+ * map, pitfall 13) would never hold the row. Weak, so it never keeps a socket alive.
+ */
+const closedSockets = new WeakSet<WebSocket>();
+
+const SOCKET_OPEN = 1;
+
+/** True once the socket has closed, or is closing, or its close handler ran. */
+function socketGone(socket: WebSocket): boolean {
+  return closedSockets.has(socket) || socket.readyState !== SOCKET_OPEN;
+}
 
 export function addSessionSocket(
   sessionId: string,
@@ -442,6 +459,13 @@ async function deliverRosterNow(sessionId: string): Promise<void> {
   const byUser = new Map(rows.participants.map((p) => [p.userId, p]));
   const liveUsers = new Set<string>();
   for (const [socket, seat] of [...sockets]) {
+    // A socket that is already gone is evidence of nothing: it is released the
+    // way its close would have, and never counted as live or allowed to take a
+    // held seat back.
+    if (socketGone(socket)) {
+      await handleAppSocketClose(socket);
+      continue;
+    }
     const row = byUser.get(seat.userId);
     if (!row) {
       removeSessionSocket(sessionId, socket);
@@ -450,6 +474,13 @@ async function deliverRosterNow(sessionId: string): Promise<void> {
     liveUsers.add(seat.userId);
     if (row.orphanedAt !== null) {
       await reclaimLiveSeat(sessionId, seat.userId, INSTANCE_ID).catch(() => false);
+      // The socket may have closed while the write was in flight: its close
+      // found the seat already held (nothing to stamp) and the reclaim then
+      // cleared the hold. Hold it again, unless the person has another socket.
+      if (socketGone(socket)) {
+        liveUsers.delete(seat.userId);
+        await handleAppSocketClose(socket);
+      }
     }
   }
   for (const [socket, seat] of sessionSockets.get(sessionId) ?? []) {
@@ -730,9 +761,16 @@ async function handleJoin(
   // spectator, who can neither write state nor send events.
   const timedOut = (await findTimeoutForChannel(user.id, ctx.channelId)) !== null;
 
+  // The socket may have closed during the reads above (a reload right after
+  // `app-join`, a deploy drain): write no seat for a socket that is gone.
+  if (socketGone(socket)) {
+    recordAppFrameDropped("join-socket-gone");
+    return;
+  }
   const joinKey = `${sessionId}:${user.id}`;
   joining.add(joinKey);
   let outcome;
+  let socketLeft = false;
   try {
     outcome = await joinSession({
       sessionId,
@@ -744,7 +782,13 @@ async function handleJoin(
       // D14: an emulator app admits spectators only where `locadora_share` is on.
       spectatorsAllowed: appShareAllowed(ctx.serverId, manifest),
     });
-    if (outcome.ok) {
+    // Checked AFTER the row write, the last await, and acted on with no await
+    // between the check and the registration: the close handler runs outside
+    // this socket's frame chain, so a close during `joinSession` has already
+    // looked for this socket in the map, found nothing and returned.
+    if (outcome.ok && socketGone(socket)) {
+      socketLeft = true;
+    } else if (outcome.ok) {
       sessionMeta.set(sessionId, {
         serverId: ctx.serverId,
         channelId: ctx.channelId,
@@ -760,6 +804,22 @@ async function handleJoin(
     }
   } finally {
     joining.delete(joinKey);
+  }
+  if (outcome.ok && socketLeft) {
+    // The row says seated and no socket will ever hold it: hold it for the
+    // resume window exactly as the close would have, unless the person has
+    // another socket seated here (then that one is the seat's evidence).
+    recordAppFrameDropped("join-socket-gone");
+    if (!hasLocalSocketFor(sessionId, user.id)) {
+      try {
+        if (await orphanSeat(sessionId, user.id, INSTANCE_ID)) {
+          announceRoster(sessionId, ctx.channelId);
+        }
+      } catch (error) {
+        logEvent("apps.orphanFailed", { sessionId, error: String(error) });
+      }
+    }
+    return;
   }
   if (!outcome.ok) {
     refuseJoin(socket, sessionId, outcome.code);
@@ -832,9 +892,11 @@ async function handleStatePatch(
   const { sessionId } = frame;
   const seat = seatOf(sessionId, socket);
   const meta = sessionMeta.get(sessionId);
+  // Silent, like `app-event-send`: an unseated socket has no session on this
+  // process to read the flag from, so answering would tell a flag-off server's
+  // caller (or anyone guessing a session id) that something is there.
   if (!seat || !meta) {
     recordAppFrameDropped("state-unseated");
-    sendError(socket, sessionId, "state", "not-allowed");
     return;
   }
   if (!isEnabled("apps", { serverId: meta.serverId })) {
@@ -955,6 +1017,9 @@ export async function handleAppFrame(
  * to it) and everybody hears the person is reconnecting.
  */
 export async function handleAppSocketClose(socket: WebSocket): Promise<void> {
+  // First and synchronous, before any await: a join still in flight on this
+  // socket reads it at its own check and releases what it wrote.
+  closedSockets.add(socket);
   const sessions = socketSessions.get(socket);
   if (!sessions) {
     return;

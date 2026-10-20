@@ -578,6 +578,168 @@ describeDb("app sessions over the socket", () => {
       expect(second.released).toBe(1);
     });
 
+    /**
+     * Hold a row lock in another connection until `release()`, so a handler that
+     * needs the row is frozen mid-flight and a test can close its socket THERE,
+     * deterministically, instead of racing a timer.
+     */
+    async function holdLock(query: string, values: unknown[]) {
+      const client = await db.getPool().connect();
+      await client.query("BEGIN");
+      await client.query(query, values);
+      let released = false;
+      return {
+        release: async () => {
+          if (released) return;
+          released = true;
+          await client.query("COMMIT");
+          client.release();
+        },
+      };
+    }
+
+    const lockSession = (id: string) =>
+      holdLock(`SELECT 1 FROM app_sessions WHERE id = $1 FOR UPDATE`, [id]);
+
+    describe("a socket that closes while its app-join is in flight", () => {
+      it("closing during the seat write leaves a held seat, not a live ghost", async () => {
+        const id = await startSession(world.owner);
+        const rec = recordingSocket(modules, world.member);
+        const lock = await lockSession(id);
+        // The join passes every read and freezes inside `joinSession`.
+        const joining = wsApps.handleAppFrame(rec.socket, world.member, {
+          type: "app-join",
+          sessionId: id,
+        });
+        await settle(300);
+        await wsApps.handleAppSocketClose(rec.socket);
+        await lock.release();
+        await joining;
+        await settle();
+
+        const row = await rowOf(id, world.member);
+        expect(row.left_at).toBeNull();
+        // Held for the resume window, exactly as the close would have.
+        expect(row.orphaned_at).not.toBeNull();
+        // The dead socket is not registered as the seat's live evidence.
+        expect(wsApps.seatOf(id, rec.socket)).toBeUndefined();
+        expect(wsApps.hasLocalSocketFor(id, world.member.id)).toBe(false);
+        expect(rec.ofType("app-session")).toEqual([]);
+
+        // The sweep treats it as any held seat: kept inside the window, released after.
+        const held = row.orphaned_at as Date;
+        expect(await wsApps.sweepOwnAppParticipants({ now: new Date(held.getTime() + 60_000) })).toEqual({
+          orphaned: 0,
+          released: 0,
+        });
+        const swept = await wsApps.sweepOwnAppParticipants({ now: new Date(held.getTime() + 91_000) });
+        expect(swept.released).toBe(1);
+        expect((await rowOf(id, world.member)).left_at).not.toBeNull();
+        const session = (await q(`SELECT empty_since FROM app_sessions WHERE id = $1`, [id])).rows[0]!;
+        expect(session.empty_since).not.toBeNull();
+      });
+
+      it("a socket that is closing (readyState 3) with no close handler run yet is treated the same", async () => {
+        const id = await startSession(world.owner);
+        const rec = recordingSocket(modules, world.member);
+        const lock = await lockSession(id);
+        const joining = wsApps.handleAppFrame(rec.socket, world.member, {
+          type: "app-join",
+          sessionId: id,
+        });
+        await settle(300);
+        (rec.socket as unknown as { readyState: number }).readyState = 3;
+        await lock.release();
+        await joining;
+        await settle();
+
+        const row = await rowOf(id, world.member);
+        expect(row.orphaned_at).not.toBeNull();
+        expect(wsApps.hasLocalSocketFor(id, world.member.id)).toBe(false);
+        expect(wsApps.seatOf(id, rec.socket)).toBeUndefined();
+      });
+
+      it("closing before the seat is written writes no seat at all", async () => {
+        const id = await startSession(world.owner);
+        const rec = recordingSocket(modules, world.member);
+        const joining = wsApps.handleAppFrame(rec.socket, world.member, {
+          type: "app-join",
+          sessionId: id,
+        });
+        await wsApps.handleAppSocketClose(rec.socket);
+        await joining;
+        await settle(100);
+        expect(await rowOf(id, world.member)).toBeUndefined();
+        expect(wsApps.hasLocalSocketFor(id, world.member.id)).toBe(false);
+      });
+
+      it("a person with another tab seated keeps the seat: the dead socket is simply not registered", async () => {
+        const id = await startSession(world.owner);
+        const tabOne = await join(id, world.member);
+        const tabTwo = recordingSocket(modules, world.member);
+        const lock = await lockSession(id);
+        const joining = wsApps.handleAppFrame(tabTwo.socket, world.member, {
+          type: "app-join",
+          sessionId: id,
+        });
+        await settle(300);
+        await wsApps.handleAppSocketClose(tabTwo.socket);
+        await lock.release();
+        await joining;
+        await settle();
+
+        expect((await rowOf(id, world.member)).orphaned_at).toBeNull();
+        expect(wsApps.seatOf(id, tabTwo.socket)).toBeUndefined();
+        expect(wsApps.seatOf(id, tabOne.socket)).toBeDefined();
+        // And the surviving tab's close still holds the seat as usual.
+        await wsApps.handleAppSocketClose(tabOne.socket);
+        expect((await rowOf(id, world.member)).orphaned_at).not.toBeNull();
+      });
+
+      it("a dead socket cannot take a held seat back at the roster", async () => {
+        const id = await startSession(world.owner);
+        const mine = await join(id, world.member);
+        // The socket died without its close handler having run, and the other
+        // machine stamped the row as held.
+        (mine.socket as unknown as { readyState: number }).readyState = 3;
+        await q(
+          `UPDATE app_session_participants SET orphaned_at = NOW(), instance_id = 'the-other-instance'
+            WHERE session_id = $1 AND user_id = $2`,
+          [id, world.member.id],
+        );
+        await join(id, world.owner);
+        await settle();
+        const row = await rowOf(id, world.member);
+        expect(row.orphaned_at).not.toBeNull();
+        expect(row.instance_id).toBe("the-other-instance");
+        expect(wsApps.seatOf(id, mine.socket)).toBeUndefined();
+        expect(wsApps.hasLocalSocketFor(id, world.member.id)).toBe(false);
+      });
+
+      it("a socket that dies while the reclaim write is in flight leaves the seat held again", async () => {
+        const id = await startSession(world.owner);
+        const mine = await join(id, world.member);
+        await q(
+          `UPDATE app_session_participants SET orphaned_at = NOW(), instance_id = 'the-other-instance'
+            WHERE session_id = $1 AND user_id = $2`,
+          [id, world.member.id],
+        );
+        // Freeze the reclaim on the person's row, then let the socket die there.
+        const lock = await holdLock(
+          `SELECT 1 FROM app_session_participants WHERE session_id = $1 AND user_id = $2 FOR UPDATE`,
+          [id, world.member.id],
+        );
+        await join(id, world.owner);
+        await settle(700);
+        (mine.socket as unknown as { readyState: number }).readyState = 3;
+        await lock.release();
+        await settle();
+        const row = await rowOf(id, world.member);
+        expect(row.orphaned_at).not.toBeNull();
+        expect(wsApps.hasLocalSocketFor(id, world.member.id)).toBe(false);
+      });
+    });
+
     it("the sweep never touches a row another instance owns", async () => {
       const id = await startSession(world.owner);
       await q(
@@ -701,11 +863,18 @@ describeDb("app sessions over the socket", () => {
       expect((await stateRow(id)).state_rev).toBe("0");
     });
 
-    it("an unseated socket is refused", async () => {
+    it("an unseated socket is answered with nothing, flag on or off, and writes nothing", async () => {
       const id = await startSession(world.owner);
       const stranger = recordingSocket(modules, world.member);
+      const answered = () => stranger.frames.filter((f) => f.type !== 'channel-app');
       await patch(stranger, world.member, id, { a: 1 });
-      expect(errors(stranger)[0]).toMatchObject({ op: "state", code: "not-allowed" });
+      expect(answered()).toEqual([]);
+      // The flag off for the server changes nothing about that: still silent.
+      await flags.setServerFlagOverride("apps", world.serverId, false, { kind: "dashboard" });
+      await patch(stranger, world.member, id, { a: 1 });
+      expect(answered()).toEqual([]);
+      await settle(150);
+      expect((await stateRow(id)).state_rev).toBe("0");
     });
 
     it("`baseRev` is a compare-and-set: the right revision applies, a stale one is `stale-rev`", async () => {
