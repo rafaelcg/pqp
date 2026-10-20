@@ -157,6 +157,22 @@ describe("switching off", () => {
     const alert = host.querySelector('[role="alert"]');
     expect(alert?.textContent).toContain("Could not save. The switch went back to how it was.");
   });
+
+  it("a write that failed after the server committed it shows what the server holds", async () => {
+    // The session cleanup of an off can fail on its own, after the switch is stored.
+    write.mockImplementation(() => {
+      state.apps = [app("poll", { enabled: false }), app("jogos", { liveSessions: 2 })];
+      return Promise.reject(new Error("500"));
+    });
+    await mount(<AppsSettingsSection serverId="s1" />);
+    expect(fetchApps).toHaveBeenCalledTimes(1);
+    await click(switches()[0]!);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(fetchApps).toHaveBeenCalledTimes(2);
+    expect(switches()[0]!.getAttribute("aria-checked")).toBe("false");
+  });
 });
 
 describe("switching back on", () => {

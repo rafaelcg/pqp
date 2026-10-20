@@ -131,6 +131,17 @@ export function AppsSettingsSection({ serverId }: { serverId: string }) {
         list ? list.map((a) => (a.id === app.id ? { ...a, enabled: app.enabled } : a)) : list,
       );
       setError(t("serverSettings.apps.saveFailed"));
+      // A failure after the server committed the switch (the cleanup of its
+      // sessions can fail on its own) must not leave the old position drawn:
+      // ask again what the server holds, quietly (a failed read changes nothing).
+      const mine = ++seq.current;
+      fetchServerApps(serverId)
+        .then((answer) => {
+          if (mine === seq.current) {
+            setApps(answer.apps);
+          }
+        })
+        .catch(() => {});
     } finally {
       setBusyId(null);
     }
