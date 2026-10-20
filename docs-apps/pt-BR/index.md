@@ -56,12 +56,15 @@ app.state.on(show); // primeiro os listeners...
 show(await app.state.get()); // ...depois o valor de antes deles
 
 document.querySelector("#plus")!.addEventListener("click", async () => {
-  const { rev, value } = await app.state.get();
-  const count = (value as { count?: number } | null)?.count ?? 0;
-  try {
-    await app.state.patch({ count: count + 1 }, { baseRev: rev });
-  } catch (error) {
-    if (!(error instanceof PqpAppError) || error.code !== "stale-rev") throw error; // alguém foi mais rápido
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const { rev, value } = await app.state.get();
+    const count = (value as { count?: number } | null)?.count ?? 0;
+    try {
+      await app.state.patch({ count: count + 1 }, { baseRev: rev }); // um merge patch, escrito contra a revisão que lemos
+      return;
+    } catch (error) {
+      if (!(error instanceof PqpAppError) || error.code !== "stale-rev") throw error; // alguém foi mais rápido: lê de novo
+    }
   }
 });
 ```

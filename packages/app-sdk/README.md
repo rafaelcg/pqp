@@ -35,12 +35,15 @@ app.state.on(show); // listeners first...
 show(await app.state.get()); // ...then the value from before them
 
 document.querySelector("#plus")!.addEventListener("click", async () => {
-  const { rev, value } = await app.state.get();
-  const count = (value as { count?: number } | null)?.count ?? 0;
-  try {
-    await app.state.patch({ count: count + 1 }, { baseRev: rev }); // a merge patch, written against the revision we read
-  } catch (error) {
-    if (!(error instanceof PqpAppError) || error.code !== "stale-rev") throw error; // somebody was faster
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const { rev, value } = await app.state.get();
+    const count = (value as { count?: number } | null)?.count ?? 0;
+    try {
+      await app.state.patch({ count: count + 1 }, { baseRev: rev }); // a merge patch, written against the revision we read
+      return;
+    } catch (error) {
+      if (!(error instanceof PqpAppError) || error.code !== "stale-rev") throw error; // somebody was faster: read again
+    }
   }
 });
 ```

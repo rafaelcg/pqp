@@ -77,7 +77,7 @@ Lê em quatro partes.
 
 **Listeners primeiro, depois o `get`.** Um push que chega antes do listener existir não é reenviado. Por isso o script registra `state.on`, `participants.on` e `events.on` logo depois do `connect()`, e só então lê o valor atual com `state.get()` e `participants.get()`. A checagem de `rev` impede que um snapshot velho passe por cima de um novo.
 
-**Escrevendo estado.** O estado compartilhado é um JSON só, e o `state.patch` é um JSON Merge Patch: `{ count: 5 }` muda uma chave e deixa o resto, `null` apaga uma chave. O "+1" é ler, somar, escrever, então duas pessoas clicando juntas podiam se atropelar. Passar o `baseRev` faz a escrita depender da revisão que tu leu, e a página responde `stale-rev` quando alguém foi mais rápido. O laço lê de novo e tenta outra vez. Os eventos (`app.events.send`) são outra coisa: efêmeros, nunca guardados, entregues pros outros na sessão.
+**Escrevendo estado.** O estado compartilhado é um JSON só, e o `state.patch` é um JSON Merge Patch: `{ count: 5 }` muda uma chave e deixa o resto, `null` apaga uma chave. O "+1" é ler, somar, escrever, então duas pessoas clicando juntas podiam se atropelar. Passar o `baseRev` faz a escrita depender da revisão que tu leu, e a página responde `stale-rev` quando alguém foi mais rápido. O laço lê de novo e tenta outra vez. Qualquer outra falha, timeout incluído, não é repetida no escuro: a escrita pode ter passado, então o app pede pra pessoa conferir o número em vez de somar uma segunda vez. Os eventos (`app.events.send`) são outra coisa: efêmeros, nunca guardados, entregues pros outros na sessão.
 
 ## 4. Builda e confere
 

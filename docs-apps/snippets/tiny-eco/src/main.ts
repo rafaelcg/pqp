@@ -1,4 +1,4 @@
-import { applyTheme, connect, PqpAppError, type Participant, type PqpApp } from "@pqp/app-sdk";
+import { applyTheme, connect, PqpAppError, type Participant, type PqpApp, type StateSnapshot } from "@pqp/app-sdk";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const status = $("status");
@@ -36,11 +36,13 @@ async function main() {
   // 1. Register every listener first. A push that arrives before its listener exists is not replayed.
   let rev = -1;
   let roster: Participant[] = [];
-  app.state.on((next) => {
+  // One door for every snapshot, pushed or read: an older one never overwrites a newer one.
+  const applyState = (next: StateSnapshot) => {
     if (next.rev < rev) return;
     rev = next.rev;
     count.textContent = String(readCount(next.value));
-  });
+  };
+  app.state.on(applyState);
   app.participants.on(renderPeople);
   app.events.on("ping", ({ fromSeatId }) => showPing(fromSeatId));
   app.on("connection", (connection) => {
@@ -51,14 +53,15 @@ async function main() {
     status.textContent = "The session ended.";
     setButtons(false);
   });
-
-  // 2. Then read what was there before the listeners existed.
-  renderPeople(await app.participants.get());
-  const first = await app.state.get();
-  rev = Math.max(rev, first.rev);
-  count.textContent = String(readCount(first.value));
   status.textContent = app.connection === "online" ? "Connected" : "Reconnecting...";
   setButtons(app.connection === "online");
+
+  // 2. Then read what was there before the listeners existed. Each read stands alone: if one fails,
+  //    the listeners above still bring the values in with the next push.
+  const [peopleRead, first] = await Promise.allSettled([app.participants.get(), app.state.get()]);
+  if (peopleRead.status === "fulfilled") renderPeople(peopleRead.value);
+  if (first.status === "fulfilled") applyState(first.value);
+  if (peopleRead.status === "rejected" || first.status === "rejected") status.textContent = "Could not load everything.";
 
   function renderPeople(next: Participant[]) {
     roster = next;
@@ -79,19 +82,22 @@ async function main() {
   }
 
   // +1 is read, add, write, so two people clicking at once could overwrite each other. `baseRev` makes the
-  // write conditional on the revision we read; `stale-rev` means somebody was faster, so read again.
+  // write conditional on the revision we read; `stale-rev` means somebody was faster, so read again and retry.
   plus.addEventListener("click", async () => {
-    for (let attempt = 0; attempt < 4; attempt += 1) {
-      const { rev: seen, value } = await app.state.get();
-      try {
-        await app.state.patch({ count: readCount(value) + 1 }, { baseRev: seen });
-        return;
-      } catch (error) {
-        if (!(error instanceof PqpAppError) || error.code !== "stale-rev") {
-          status.textContent = "That did not work. Try again.";
+    try {
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        const { rev: seen, value } = await app.state.get();
+        try {
+          await app.state.patch({ count: readCount(value) + 1 }, { baseRev: seen });
           return;
+        } catch (error) {
+          if (!(error instanceof PqpAppError) || error.code !== "stale-rev") throw error;
         }
       }
+      status.textContent = "Too many people at once. Try again.";
+    } catch {
+      // after a timeout the write may still have gone through, so do not say "try again": say what to check
+      status.textContent = "Could not confirm that. Check the number.";
     }
   });
 

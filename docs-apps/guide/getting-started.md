@@ -77,7 +77,7 @@ Read it in four parts.
 
 **Listeners first, then `get`.** A push that arrives before its listener exists is not replayed. So the script registers `state.on`, `participants.on` and `events.on` right after `connect()`, and only then reads the current value with `state.get()` and `participants.get()`. The `rev` check keeps an older snapshot from overwriting a newer one.
 
-**Writing state.** The shared state is one JSON value, and `state.patch` is a JSON Merge Patch: `{ count: 5 }` sets one key and leaves the others alone, `null` deletes a key. "+1" is read, add, write, so two people clicking at once could overwrite each other. Passing `baseRev` makes the write conditional on the revision you read, and the host answers `stale-rev` when somebody was faster. The loop reads again and retries. Events (`app.events.send`) are different: ephemeral, never stored, delivered to the other people in the session.
+**Writing state.** The shared state is one JSON value, and `state.patch` is a JSON Merge Patch: `{ count: 5 }` sets one key and leaves the others alone, `null` deletes a key. "+1" is read, add, write, so two people clicking at once could overwrite each other. Passing `baseRev` makes the write conditional on the revision you read, and the host answers `stale-rev` when somebody was faster. The loop reads again and retries. Any other failure, a timeout included, is not retried blindly: the write may have gone through, so the app tells the person to check the number instead of adding one a second time. Events (`app.events.send`) are different: ephemeral, never stored, delivered to the other people in the session.
 
 ## 4. Build and check
 
