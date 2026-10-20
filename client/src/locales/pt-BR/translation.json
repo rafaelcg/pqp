@@ -1658,6 +1658,7 @@
   "music.stop": "Parar a música",
   "music.remove": "Tirar da fila",
   "music.volume": "Volume da música",
+  "music.volume.valueText": "{percent} por cento",
   "music.openSource": "Abrir no Spotify",
   "music.tapToPlay": "Toque para tocar",
   "music.queued": "Adicionada à fila",

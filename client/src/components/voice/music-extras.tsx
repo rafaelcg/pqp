@@ -14,7 +14,6 @@ import {
   Square,
   Users,
   Volume2,
-  VolumeX,
   X,
 } from "lucide-react";
 import type { MusicRepeat, MusicState, MusicTrack } from "@pqp/shared";
@@ -24,7 +23,6 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
 import { Menu } from "@/components/ui/menu";
-import { Slider } from "@/components/ui/slider";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { setMusicDucking } from "@/lib/music-prefs";
@@ -190,73 +188,6 @@ export function MusicShuffleButton({
         <Shuffle className="h-4 w-4" aria-hidden="true" />
       </Button>
     </Tooltip>
-  );
-}
-
-/**
- * Local volume: the icon mutes, the slider sets the level.
- *
- * It was a popover holding a slider, a ducking switch and Parar de ouvir,
- * which made the level a two-click job and hid two personal settings behind
- * a speaker. The level is inline now, the way every player draws it, and
- * the two settings live in the one overflow under "Só pra você". The
- * slider hides on a narrow bar, where its width belongs to the title.
- */
-export function MusicSpeakerControl({
-  volume,
-  muted,
-  slider = false,
-  onMute,
-  onVolume,
-}: {
-  volume: number;
-  muted: boolean;
-  /** The composer bar has the width for it; the sidebar radio does not. */
-  slider?: boolean;
-  onMute: () => void;
-  onVolume: (value: number) => void;
-}) {
-  const { t } = useTranslation();
-  const shown = muted || volume === 0 ? 0 : volume;
-
-  return (
-    <div className="flex shrink-0 items-center gap-1">
-      <Tooltip label={muted ? t("music.unmute") : t("music.mute")}>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          data-music-speaker=""
-          className="h-8 w-8 shrink-0"
-          aria-pressed={shown === 0}
-          aria-label={muted ? t("music.unmute") : t("music.mute")}
-          onClick={onMute}
-          onWheel={(event) => {
-            event.preventDefault();
-            const delta = event.deltaY > 0 ? -5 : 5;
-            onVolume(Math.min(100, Math.max(0, shown + delta)));
-          }}
-        >
-          {shown === 0 ? (
-            <VolumeX className="h-4 w-4" aria-hidden="true" />
-          ) : (
-            <Volume2 className="h-4 w-4" aria-hidden="true" />
-          )}
-        </Button>
-      </Tooltip>
-      {slider ? (
-        <Slider
-          variant="volume"
-          data-music-volume=""
-          value={shown}
-          min={0}
-          max={100}
-          aria-label={t("music.volume")}
-          className="hidden w-20 shrink-0 @min-[40rem]:flex"
-          onValueChange={onVolume}
-        />
-      ) : null}
-    </div>
   );
 }
 
