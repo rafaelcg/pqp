@@ -59,8 +59,29 @@ needed to change.
 
 Switching modes goes through `swapPipeline`, the same path the device picker
 uses: a new pipeline is built, and only once it exists is the old one stopped
-and the track handed to `replaceTrack`. No renegotiation, no gap, nobody sees
-you leave.
+and the track handed to `replaceTrack`. Nobody sees you leave.
+
+What `replaceTrack` is depends on the room. On a mesh room it is
+`RTCRtpSender.replaceTrack` on every peer: no renegotiation, no gap. On a
+LiveKit room it is NOT an in-place swap: `livekit-session.ts` unpublishes the
+current microphone clone and publishes a new one, so every listener sees one
+publication go and another arrive. Two rules keep that inaudible, and both
+were production bugs before they were rules (QG, 2026-10-20: "mexe nas configs
+e para de ouvir, tem que sair da call"):
+
+- **A listener files the new voice before it hears that the old one left.**
+  LiveKit delivers the new publication's `TrackSubscribed` before the old
+  one's `TrackUnsubscribed`, so an unsubscribe only removes the stream its own
+  publication filed (`filedBy` / `releaseStream`). Clearing the person's slot
+  instead made whoever changed a setting inaudible to the whole room until
+  they rejoined.
+- **Microphone publishes run one at a time, in order** (`micPublishing`).
+  Several changes in a row are several `swapPipeline` calls, each stopping the
+  pipeline before it; interleaved, an earlier publish could finish last and
+  leave a clone of a stopped track on the wire, so the room got no packets.
+
+Both are pinned by `client/src/lib/livekit-session-republish.test.ts`. The
+same holds for a camera or screen share republished in place.
 
 Advanced mode is the only thing that asks for a specific `AudioContext` sample
 rate (48 kHz, which is what RNNoise is trained at).
