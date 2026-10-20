@@ -22,7 +22,17 @@
  * Logic only, no DOM: the dialog is `ui/export-dialog.ts`.
  */
 import { zipSync, unzipSync } from "fflate";
-import { loadLibrary, metaKey, parseStoredItem, romKey, sramKey, stateKey, thumbKey, type StoredItem } from "./library";
+import {
+  loadLibrary,
+  metaKey,
+  parseStoredItem,
+  romKey,
+  sha256Hex,
+  sramKey,
+  stateKey,
+  thumbKey,
+  type StoredItem,
+} from "./library";
 import { LIST_MAX, META_MAX_BYTES, type DeviceStore, type StoreMeta } from "./store";
 
 export const BUNDLE_FORMAT = "locadora-bundle";
@@ -275,6 +285,8 @@ export interface PlannedWrite {
   meta?: StoreMeta;
   /** The device already holds different bytes under this key. */
   conflict: boolean;
+  /** How many bytes the key held when the plan was made: what a replacing write gives back. */
+  replaces: number;
 }
 
 export interface ImportGame {
@@ -322,17 +334,26 @@ export async function planImport(store: DeviceStore, bundle: ParsedBundle): Prom
     const gameWrites: PlannedWrite[] = [];
 
     let hasFile = (await store.get(romKey(sha))) !== null;
-    if (item.rom && !hasFile) {
-      gameWrites.push({ key: romKey(sha), bytes: item.rom, conflict: false });
+    // the game file is only ever kept under the hash of its own bytes: a bundle that names one sha and carries
+    // other bytes does not get to put them on the shelf (its saves still arrive and wait for the real file)
+    if (item.rom && !hasFile && (await sha256Hex(item.rom)) === sha) {
+      gameWrites.push({ key: romKey(sha), bytes: item.rom, conflict: false, replaces: 0 });
       hasFile = true;
     }
     game.missingFile = !hasFile;
 
     if (item.sram) {
       const here = await store.get(sramKey(sha));
-      if (!here) gameWrites.push({ key: sramKey(sha), bytes: item.sram.bytes, meta: item.sram.meta ?? undefined, conflict: false });
-      else if (!same(here.bytes, item.sram.bytes)) {
-        gameWrites.push({ key: sramKey(sha), bytes: item.sram.bytes, meta: item.sram.meta ?? undefined, conflict: true });
+      if (!here) {
+        gameWrites.push({ key: sramKey(sha), bytes: item.sram.bytes, meta: item.sram.meta ?? undefined, conflict: false, replaces: 0 });
+      } else if (!same(here.bytes, item.sram.bytes)) {
+        gameWrites.push({
+          key: sramKey(sha),
+          bytes: item.sram.bytes,
+          meta: item.sram.meta ?? undefined,
+          conflict: true,
+          replaces: here.bytes.length,
+        });
       }
       if (!here || !same(here.bytes, item.sram.bytes)) game.saves += 1;
     }
@@ -341,8 +362,17 @@ export async function planImport(store: DeviceStore, bundle: ParsedBundle): Prom
       const here = await store.get(stateKey(sha, slot.slot));
       if (here && same(here.bytes, slot.bytes)) continue;
       const conflict = here !== null;
-      gameWrites.push({ key: stateKey(sha, slot.slot), bytes: slot.bytes, meta: slot.meta, conflict });
-      if (slot.thumb) gameWrites.push({ key: thumbKey(sha, slot.slot), bytes: slot.thumb.bytes, meta: slot.thumb.meta ?? undefined, conflict });
+      gameWrites.push({ key: stateKey(sha, slot.slot), bytes: slot.bytes, meta: slot.meta, conflict, replaces: here?.bytes.length ?? 0 });
+      if (slot.thumb) {
+        const picture = conflict ? await store.get(thumbKey(sha, slot.slot)) : null;
+        gameWrites.push({
+          key: thumbKey(sha, slot.slot),
+          bytes: slot.thumb.bytes,
+          meta: slot.thumb.meta ?? undefined,
+          conflict,
+          replaces: picture?.bytes.length ?? 0,
+        });
+      }
       game.saves += 1;
     }
 
@@ -350,7 +380,7 @@ export async function planImport(store: DeviceStore, bundle: ParsedBundle): Prom
     game.conflicts = gameWrites.filter((w) => w.conflict && !w.key.startsWith("thumb:")).length;
     writes.push(...gameWrites);
     // the item row goes last, so a cut-short import never shows a half-written game
-    if (game.isNew) writes.push({ key: metaKey(sha), bytes: MARKER, meta: { ...item.meta }, conflict: false });
+    if (game.isNew) writes.push({ key: metaKey(sha), bytes: MARKER, meta: { ...item.meta }, conflict: false, replaces: 0 });
     games.push(game);
   }
 
@@ -369,6 +399,11 @@ export type ApplyResult =
 /**
  * Writes the plan. Collisions follow `choice`; everything else is written. Refuses up front when
  * the device has no room for what it would write, so a full device is told before anything lands.
+ *
+ * The device is read again key by key as it is written: a save that appeared or changed since the
+ * plan (another tab, the game still running) is a collision too and follows `choice`, and a game
+ * file or an item row already there is never written over. A write that fails puts back what this
+ * import had already written, so a failure never leaves half a game behind.
  */
 export async function applyImport(
   store: DeviceStore,
@@ -376,23 +411,59 @@ export async function applyImport(
   choice: CollisionChoice = "keep",
 ): Promise<ApplyResult> {
   const pending = plan.writes.filter((w) => !(w.conflict && choice === "keep"));
-  const need = pending.reduce((sum, w) => sum + w.bytes.length, 0);
-  const usage = await store.usage();
-  if (usage.used + need > usage.cap) return { ok: false, reason: "full" };
+  // what the device has to find room for: a write over a key gives that key's bytes back
+  const need = pending.reduce((sum, w) => sum + Math.max(0, w.bytes.length - w.replaces), 0);
+  try {
+    const usage = await store.usage();
+    if (usage.used + need > usage.cap) return { ok: false, reason: "full" };
+  } catch {
+    return { ok: false, reason: "failed" };
+  }
 
+  const done: WrittenKey[] = [];
   let written = 0;
+  let skipped = plan.writes.length - pending.length;
+  // a slot's picture follows its state: a state left as it was keeps its own picture too
+  const keptStates = new Set<string>();
   for (const write of pending) {
     try {
+      if (write.key.startsWith("thumb:") && keptStates.has(`state:${write.key.slice("thumb:".length)}`)) {
+        skipped += 1;
+        continue;
+      }
+      const here = await store.get(write.key);
+      if (here) {
+        const isRow = write.key.startsWith("rom:") || write.key.startsWith("meta:");
+        if (isRow || same(here.bytes, write.bytes) || (!write.conflict && choice === "keep")) {
+          if (write.key.startsWith("state:")) keptStates.add(write.key);
+          skipped += 1;
+          continue;
+        }
+      }
       await store.put(write.key, write.bytes, write.meta);
+      done.push({ key: write.key, before: here ? { bytes: here.bytes, meta: here.meta ?? null } : null });
     } catch {
+      await rollBack(store, done);
       return { ok: false, reason: "failed" };
     }
     written += 1;
   }
-  return {
-    ok: true,
-    games: plan.games.length,
-    written,
-    skipped: plan.writes.length - pending.length,
-  };
+  return { ok: true, games: plan.games.length, written, skipped };
+}
+
+interface WrittenKey {
+  key: string;
+  before: { bytes: Uint8Array; meta: StoreMeta | null } | null;
+}
+
+/** Best effort, newest first: what was there goes back, what was not goes away. */
+async function rollBack(store: DeviceStore, done: readonly WrittenKey[]): Promise<void> {
+  for (const { key, before } of [...done].reverse()) {
+    try {
+      if (before) await store.put(key, before.bytes, before.meta ?? undefined);
+      else await store.delete(key);
+    } catch {
+      // the store is failing; stop trying for this key and go on with the others
+    }
+  }
 }

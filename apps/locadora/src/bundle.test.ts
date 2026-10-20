@@ -147,6 +147,91 @@ describe("export then import", () => {
   });
 });
 
+describe("importing safely", () => {
+  async function bundleOf(withRom: boolean, seed = 1) {
+    const source = await seeded(seed);
+    const exported = await exportBundle(source.store, { withRom });
+    if (!exported.ok) throw new Error("export failed");
+    const read = readBundle(exported.bytes);
+    if (!read.ok) throw new Error("the bundle should read");
+    return { source, bundle: read.bundle };
+  }
+
+  it("keeps a game file only under the hash of its own bytes", async () => {
+    const { source, bundle } = await bundleOf(true);
+    // a bundle that names this game's sha and carries other bytes
+    bundle.items[0]!.rom = fakeNes(99);
+    const target = memoryStore();
+    const plan = await planImport(target, bundle);
+    expect(plan.writes.some((w) => w.key === romKey(source.sha))).toBe(false);
+    expect(plan.games[0]!.missingFile).toBe(true);
+    await applyImport(target, plan);
+    expect(await target.get(romKey(source.sha))).toBeNull();
+    // the saves still arrive and wait for the real file
+    expect(await target.get(sramKey(source.sha))).not.toBeNull();
+  });
+
+  it("a write that fails puts back what the import had already written", async () => {
+    const { source, bundle } = await bundleOf(true);
+    const target = memoryStore();
+    const plan = await planImport(target, bundle);
+    let puts = 0;
+    const failing: DeviceStore = {
+      ...target,
+      durable: target.durable,
+      get: (key) => target.get(key),
+      list: (prefix) => target.list(prefix),
+      usage: () => target.usage(),
+      delete: (key) => target.delete(key),
+      put: async (key, bytes, meta) => {
+        puts += 1;
+        if (puts === 3) throw new Error("disk went away");
+        return target.put(key, bytes, meta);
+      },
+    };
+    expect(await applyImport(failing, plan)).toEqual({ ok: false, reason: "failed" });
+    expect(await target.list("")).toEqual([]);
+    expect(await target.get(metaKey(source.sha))).toBeNull();
+  });
+
+  it("says failed, not throws, when the device cannot say how full it is", async () => {
+    const { bundle } = await bundleOf(false);
+    const target = memoryStore();
+    const plan = await planImport(target, bundle);
+    const broken: DeviceStore = { ...target, durable: target.durable, usage: () => Promise.reject(new Error("no")) };
+    await expect(applyImport(broken, plan)).resolves.toEqual({ ok: false, reason: "failed" });
+  });
+
+  it("a replacing save is counted by what it adds, so a nearly full device can still take it", async () => {
+    const { source, bundle } = await bundleOf(false);
+    // a device with just enough room for this shelf, where the same slot holds other bytes of the same size
+    const first = memoryStore();
+    await applyImport(first, await planImport(first, bundle));
+    const used = (await first.usage()).used;
+    const tight = memoryStore(used);
+    await applyImport(tight, await planImport(tight, bundle));
+    await tight.put(stateKey(source.sha, "1"), new Uint8Array([7, 7, 7, 7]), { core: "fceumm", coreVersion: "4.2.3" });
+    const plan = await planImport(tight, bundle);
+    expect(plan.conflicts).toBe(1);
+    const result = await applyImport(tight, plan, "replace");
+    expect(result.ok).toBe(true);
+    expect([...(await tight.get(stateKey(source.sha, "1")))!.bytes]).toEqual([1, 2, 3, 4]);
+  });
+
+  it("a save that appears after the plan is a collision too, kept by default", async () => {
+    const { source, bundle } = await bundleOf(false);
+    const target = memoryStore();
+    const plan = await planImport(target, bundle);
+    // the game, still running in another tab, saved slot 1 after the plan was read
+    await target.put(stateKey(source.sha, "1"), new Uint8Array([42]), { core: "fceumm", coreVersion: "4.2.3" });
+    await target.put(thumbKey(source.sha, "1"), new Uint8Array([1]), { savedAt: 9_000 });
+    const result = await applyImport(target, plan, "keep");
+    expect(result.ok).toBe(true);
+    expect([...(await target.get(stateKey(source.sha, "1")))!.bytes]).toEqual([42]);
+    expect([...(await target.get(thumbKey(source.sha, "1")))!.bytes]).toEqual([1]);
+  });
+});
+
 describe("reading a bundle", () => {
   it("refuses bytes that are not a zip", () => {
     expect(readBundle(strToU8("isto nao e um zip"))).toEqual({ ok: false, reason: "not-zip" });
