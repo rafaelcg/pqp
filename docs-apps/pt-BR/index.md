@@ -66,6 +66,7 @@ document.querySelector("#plus")!.addEventListener("click", async () => {
       if (!(error instanceof PqpAppError) || error.code !== "stale-rev") throw error; // alguém foi mais rápido: lê de novo
     }
   }
+  console.warn("muita escrita ao mesmo tempo, esse clique não foi aplicado"); // all four attempts lost a race: say so, never drop it silently
 });
 ```
 
