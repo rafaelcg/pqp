@@ -43,4 +43,34 @@ describe("summarizeHlsTelemetryBatch (telemetry v2)", () => {
     // Only plain identifiers reach a log line.
     expect(summary.fatal).toEqual(["fragLoadTimeOut"]);
   });
+
+  it("reports the player's own target beside the measured latency (LL batches)", () => {
+    const summary = summarizeHlsTelemetryBatch([
+      { rung: "ll", latencyMs: 20_900, targetLatencyMs: 20_000, playerMode: "ll-segments" },
+      { rung: "ll", latencyMs: 21_200, targetLatencyMs: 20_000, playerMode: "ll-segments" },
+      { rung: "ll", latencyMs: 20_400, targetLatencyMs: 20_000, playerMode: "ll-segments" },
+      // An old client: no target, left out of both medians.
+      { rung: "ll", latencyMs: 5_000 },
+    ]);
+    expect(summary.medianTargetLatencyMs).toBe(20_000);
+    // Holding its target to within a second: the 21 s is where it was told to sit.
+    expect(summary.medianLatencyOverTargetMs).toBe(900);
+  });
+
+  it("averages the two central values when a batch has an even number of targets", () => {
+    const summary = summarizeHlsTelemetryBatch([
+      { rung: "ll", latencyMs: 8_100, targetLatencyMs: 8_000 },
+      { rung: "ll", latencyMs: 20_300, targetLatencyMs: 20_000 },
+    ]);
+    // Midpoint, not the upper of the two (20 s).
+    expect(summary.medianTargetLatencyMs).toBe(14_000);
+    // Offsets 100 and 300: 200, not 300.
+    expect(summary.medianLatencyOverTargetMs).toBe(200);
+  });
+
+  it("leaves the target fields undefined when no sample carries one", () => {
+    const summary = summarizeHlsTelemetryBatch([{ rung: "720p30", latencyMs: 12_000 }]);
+    expect(summary.medianTargetLatencyMs).toBeUndefined();
+    expect(summary.medianLatencyOverTargetMs).toBeUndefined();
+  });
 });

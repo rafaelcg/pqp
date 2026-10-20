@@ -26,7 +26,6 @@ struct ForumHomeView: View {
     @State private var showingRules = false
     @State private var searching = false
     @State private var searchText = ""
-    @FocusState private var searchFocused: Bool
     @State private var fabVisible = true
     @State private var lastOffset: CGFloat = 0
 
@@ -175,8 +174,9 @@ struct ForumHomeView: View {
                     .tint(Palette.paperMuted)
             } else {
                 Button {
+                    // The field takes focus itself once it is on screen (see
+                    // `searchField`).
                     withAnimation(Motion.standard) { searching = true }
-                    searchFocused = true
                 } label: {
                     Image(systemName: "magnifyingglass")
                 }
@@ -199,12 +199,11 @@ struct ForumHomeView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 13))
                 .foregroundStyle(Palette.paperMuted)
-            TextField("Search titles", text: $searchText)
-                .font(.system(size: 16))
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .submitLabel(.search)
-                .focused($searchFocused)
+            // UIKit-backed: a SwiftUI `@FocusState` field inside a toolbar
+            // item cannot be focused from code (the magnifier opened the
+            // field and no keyboard came up), so this one takes focus itself
+            // the moment it is on screen.
+            FocusOnAppearTextField(text: $searchText, placeholder: String(localized: "Search titles"))
                 .accessibilityIdentifier("forum.searchField")
             if !searchText.isEmpty {
                 Button {
@@ -223,7 +222,6 @@ struct ForumHomeView: View {
     }
 
     private func endSearch() {
-        searchFocused = false
         searchText = ""
         withAnimation(Motion.standard) { searching = false }
         if !model.filters.query.isEmpty {

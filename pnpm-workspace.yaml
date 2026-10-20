@@ -3,7 +3,10 @@ packages:
   - client
   - electron
   - packages/shared
+  - packages/app-sdk
   - tools/watch-party-load
+  - tools/apps-build
+  - apps/*
 
 allowBuilds:
   "@clerk/shared": true

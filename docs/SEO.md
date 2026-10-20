@@ -414,6 +414,30 @@ page (crawl paths need internal links, and the footer already links
   static copy differs by one link, label or word.
   After changing a catalogue key those pages use, run
   `pnpm --filter @pqp/client prerender:copy`.
+- **`sitemap.xml` and the release-note feeds are generated (2026-10-16).**
+  `client/public/sitemap.xml` is gone; the `pqp-static-pages` build plugin writes
+  `sitemap.xml`, `feed.xml` (pt-BR) and `feed.en.xml` from the same registries
+  the head and the edge read (`sitemap-pages.ts`: `canonicalMarketingPages()` in
+  `marketing-meta.ts`, plus `page-registry.ts`). A page added to `PAGE_COPY`, a
+  guide or a release note is in the sitemap with nothing else to touch. Each URL
+  carries its hreflang alternates as `xhtml:link` (the blog's from
+  `pageAlternates`, the same function its head uses; the marketing pages' from
+  `marketingUrlsFor`) and a real `lastmod`: a blog page's is its own content date,
+  a policy's is the date the document prints, and any other marketing page's is
+  the day of the last commit that touched its page file (`source-dates.ts`).
+  Where that cannot be known (a shallow clone, no repository history, a page
+  with no source listed) `<lastmod>` is OMITTED, never guessed; `deploy-web.yml`
+  and `deploy-staging.yml` fetch full history for this. No `changefreq`. Not
+  listed: `/app/*`, profiles, communities, invites, aliases (`/claim`,
+  `/contato`...), the `.md` twins and `prerender/*`. The feeds are Atom 1.0,
+  release notes only, newest first, full HTML content plus a text summary,
+  `updated` at noon UTC of the note's day, per language (pt-BR is the default
+  `feed.xml`; Spanish readers get English, as they do on the blog). Both are
+  discoverable from every blog page and `index.html`
+  (`<link rel="alternate" type="application/atom+xml">`) and listed in
+  `robots.txt` (Google reads a feed as a sitemap). `seo-generators.test.ts` pins
+  dates, escaping, alternates and exclusions, and runs `xmllint` when it is
+  installed.
 - **The blog serves its words to a reader that runs no script (2026-10-16).**
   `/blog`, every guide and every release note get a body in `#root` the same
   way, plus a markdown twin. The prose is `.md`, which the middleware's esbuild
@@ -441,4 +465,4 @@ page (crawl paths need internal links, and the footer already links
   actually keep an externally-linked URL out of the index. See "What this PR
   fixes" §1 above.**
 - **Profiles/communities stay out of the sitemap**, see the comment in
-  `client/public/sitemap.xml`; the enumeration-surface argument outranks SEO.
+  `client/src/lib/sitemap-pages.ts`; the enumeration-surface argument outranks SEO.

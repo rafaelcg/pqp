@@ -3,7 +3,10 @@ import INDEX_HTML from "../../index.html?raw";
 import en from "../locales/en/translation.json";
 import es from "../locales/es/translation.json";
 import ptBR from "../locales/pt-BR/translation.json";
-import SITEMAP from "../../public/sitemap.xml?raw";
+import { GENERATED_SITEMAP as SITEMAP } from "../test/generated-sitemap";
+import { cookiesEn } from "../pages/legal/cookies.en";
+import { privacyEn } from "../pages/legal/privacy.en";
+import { termsEn } from "../pages/legal/terms.en";
 /**
  * What the home page is allowed to say, pinned where it was found wrong by the
  * 2026-09-30 reviews. Each of these is a claim that was false, stale or
@@ -263,8 +266,12 @@ describe("sitemap dates", () => {
       new RegExp(
         `<loc>https://pqp\\.gg${path}</loc>\\s*<lastmod>([^<]+)</lastmod>`,
       ).exec(SITEMAP)?.[1];
-    expect(lastmod("/privacy")).toBe("2026-09-29");
-    expect(lastmod("/terms")).toBe("2026-09-27");
-    expect(lastmod("/cookies")).toBe("2026-09-29");
+    // "12 October 2026" as the document prints it, read independently of the
+    // build's own parser so the two cannot be wrong together.
+    const day = (printed: string) =>
+      new Date(`${printed} UTC`).toISOString().slice(0, 10);
+    expect(lastmod("/privacy")).toBe(day(privacyEn.updated));
+    expect(lastmod("/terms")).toBe(day(termsEn.updated));
+    expect(lastmod("/cookies")).toBe(day(cookiesEn.updated));
   });
 });

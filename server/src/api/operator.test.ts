@@ -62,6 +62,8 @@ const { handleApi, resetApiRateLimits, matchAdminMachineRoute } = await import(
 );
 const { getPool, initDb, closePool } = await import("../db.js");
 const { upsertUser } = await import("../services/users.js");
+const { createClientPlatformRecorder } = await import("../services/client-platforms.js");
+const { parseClientAgent } = await import("../lib/client-agent.js");
 
 const TOKEN = "0123456789abcdef0123456789abcdef";
 const WRONG_TOKEN = "ffffffffffffffffffffffffffffffff";
@@ -120,6 +122,8 @@ describe("matchAdminMachineRoute", () => {
       ["GET", "/api/admin/metrics"],
       ["GET", "/api/admin/voice-occupancy"],
       ["GET", "/api/admin/user-activity"],
+      ["GET", "/api/admin/bots"],
+      ["GET", "/api/admin/user-client"],
       ["GET", "/api/admin/feedback"],
       ["PUT", "/api/admin/feedback/resolve"],
       ["GET", "/api/admin/servers"],
@@ -150,10 +154,17 @@ describe("matchAdminMachineRoute", () => {
     const refused = [
       ["DELETE", "/api/admin/users/00000000-0000-4000-8000-000000000001"],
       ["GET", "/api/admin/acquisition"],
+      // The path-parameter form is the moderator's alone; the token's is the
+      // query form above, and it has no write of any kind.
+      ["GET", "/api/admin/users/00000000-0000-4000-8000-000000000001/client"],
+      ["POST", "/api/admin/user-client"],
+      ["DELETE", "/api/admin/user-client"],
       ["POST", "/api/admin/server-live-hls"],
       ["DELETE", "/api/admin/server-live-hls"],
       ["GET", "/api/admin/server-live-hls"],
       ["PUT", "/api/admin/metrics"],
+      ["PUT", "/api/admin/bots"],
+      ["GET", "/api/admin/bots/"],
       ["GET", "/api/admin/servers/"],
       ["GET", "/api/servers"],
       ["POST", "/api/admin/watch-party-waitlist"],
@@ -720,6 +731,28 @@ describeDb("the operator's two levers", () => {
     });
   });
 
+  describe("the bots read", () => {
+    it("answers the machine token and a moderator, and nobody else", async () => {
+      const { resetBotsAdminReportCache } = await import("../services/bot-admin.js");
+      resetBotsAdminReportCache();
+      const machine = await asMachine<{
+        adoption: { bots: number };
+        usage: { days: unknown[] };
+      }>("GET", "/api/admin/bots");
+      expect(machine.status).toBe(200);
+      expect(machine.body.adoption.bots).toBe(0);
+      expect(machine.body.usage.days).toHaveLength(31);
+
+      const session = await asUser(operator, "GET", "/api/admin/bots");
+      expect(session.status).toBe(200);
+
+      expect((await asUser(ana, "GET", "/api/admin/bots")).status).toBe(404);
+      expect((await asMachine("GET", "/api/admin/bots", undefined, WRONG_TOKEN)).status).toBe(404);
+      // A read, not a lever: the token cannot write to it.
+      expect((await asMachine("PUT", "/api/admin/bots", {})).status).toBe(401);
+    });
+  });
+
   describe("runtime feature flags", () => {
     afterEach(async () => {
       // Neither the rows nor the snapshot a write loaded may answer for a
@@ -879,6 +912,112 @@ describeDb("the operator's two levers", () => {
         `SELECT actor_kind, actor_id FROM feature_flag_audit`,
       );
       expect(audit.rows).toEqual([{ actor_kind: "moderator", actor_id: operator.id }]);
+    });
+  });
+
+  describe("which app a person is on", () => {
+    interface ClientBody {
+      userId: string;
+      latest: { platform: string; appVersion: string | null; browserFamily: string | null } | null;
+      clients: { platform: string; osFamily: string | null }[];
+      notRecorded: string[];
+    }
+
+    async function seed() {
+      const recorder = createClientPlatformRecorder();
+      recorder.note(
+        ana.id,
+        parseClientAgent(
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+        ),
+      );
+      recorder.note(ana.id, parseClientAgent("pqp/412 CFNetwork/1568.200.51 Darwin/24.1.0"));
+      await recorder.flush();
+    }
+
+    it("shows a moderator the platform, version and families, by id", async () => {
+      await seed();
+      const result = await asUser<ClientBody>(
+        operator,
+        "GET",
+        `/api/admin/users/${ana.id}/client`,
+      );
+      expect(result.status).toBe(200);
+      expect(result.body.userId).toBe(ana.id);
+      expect(result.body.clients.map((c) => c.platform).sort()).toEqual(["ios", "web"]);
+      expect(result.body.clients.find((c) => c.platform === "ios")).toMatchObject({
+        appVersion: "412",
+        osFamily: "ios",
+      });
+      expect(result.body.notRecorded.length).toBeGreaterThan(0);
+      // Families, never the string or an address.
+      expect(JSON.stringify(result.body)).not.toMatch(/Mozilla|CFNetwork|127\.0\.0\.1/);
+    });
+
+    it("is 404 for an ordinary account, whoever the target is, and for a bad id", async () => {
+      await seed();
+      expect((await asUser(ana, "GET", `/api/admin/users/${ana.id}/client`)).status).toBe(404);
+      expect((await asUser(ana, "GET", `/api/admin/users/${operator.id}/client`)).status).toBe(404);
+      expect((await asUser(null, "GET", `/api/admin/users/${ana.id}/client`)).status).toBe(401);
+      expect((await asUser(operator, "GET", "/api/admin/users/not-a-uuid/client")).status).toBe(404);
+      expect(
+        (
+          await asUser(
+            operator,
+            "GET",
+            "/api/admin/users/00000000-0000-4000-8000-000000000001/client",
+          )
+        ).status,
+      ).toBe(404);
+    });
+
+    it("answers the machine token by id, handle or tag, and refuses a wrong one", async () => {
+      await seed();
+      await getPool().query(`UPDATE users SET handle = 'anabela' WHERE id = $1`, [ana.id]);
+      const tag = await getPool().query<{ username: string; discriminator: string }>(
+        `SELECT username, discriminator FROM users WHERE id = $1`,
+        [ana.id],
+      );
+      const byId = await asMachine<ClientBody>("GET", `/api/admin/user-client?userId=${ana.id}`);
+      expect(byId.status).toBe(200);
+      expect(byId.body.clients).toHaveLength(2);
+      const byHandle = await asMachine<ClientBody>("GET", "/api/admin/user-client?handle=anabela");
+      expect(byHandle.body.userId).toBe(ana.id);
+      const byTag = await asMachine<ClientBody>(
+        "GET",
+        `/api/admin/user-client?tag=${encodeURIComponent(
+          `${tag.rows[0]!.username}#${tag.rows[0]!.discriminator}`,
+        )}`,
+      );
+      expect(byTag.body.userId).toBe(ana.id);
+
+      expect((await asMachine("GET", "/api/admin/user-client")).status).toBe(400);
+      expect((await asMachine("GET", "/api/admin/user-client?userId=nope")).status).toBe(400);
+      expect((await asMachine("GET", "/api/admin/user-client?handle=ghost")).status).toBe(404);
+      expect(
+        (await asMachine("GET", `/api/admin/user-client?userId=${ana.id}`, undefined, WRONG_TOKEN))
+          .status,
+      ).not.toBe(200);
+      // There is no write: the token's one verb here is GET.
+      expect(
+        (await asMachine("POST", `/api/admin/user-client?userId=${ana.id}`, {})).status,
+      ).not.toBe(200);
+    });
+
+    it("never reaches the public profile or the account's own /api/me", async () => {
+      await seed();
+      await getPool().query(`UPDATE users SET handle = 'anabela' WHERE id = $1`, [ana.id]);
+      const me = await asUser(ana, "GET", "/api/me");
+      const profile = await fetch(`${baseUrl}/api/public/profiles/anabela`);
+      for (const text of [JSON.stringify(me.body), await profile.text()]) {
+        expect(text).not.toMatch(/browser_family|browserFamily|os_family|osFamily|app_version/);
+      }
+    });
+
+    it("answers an empty list, not an error, for somebody never seen", async () => {
+      const result = await asUser<ClientBody>(operator, "GET", `/api/admin/users/${ana.id}/client`);
+      expect(result.status).toBe(200);
+      expect(result.body).toMatchObject({ latest: null, clients: [] });
     });
   });
 

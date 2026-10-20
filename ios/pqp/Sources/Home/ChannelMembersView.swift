@@ -84,6 +84,9 @@ struct ChannelMembersView: View {
         HStack(spacing: 12) {
             Avatar(name: name, seed: seed, size: 36, url: avatarUrl)
             Text(name).font(Typography.bodyMedium).foregroundStyle(Palette.paper)
+            if ServerBot.isFaceAvatar(avatarUrl) {
+                ServerBotTags()
+            }
             Spacer()
             // Resolved here rather than passed in as copy: a localised title
             // cannot also be the flag that picks the tint, which is what

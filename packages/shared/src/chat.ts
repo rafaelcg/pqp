@@ -17,8 +17,20 @@ import {
   voiceNoteListenedSchema,
   voiceNoteTranscriptSchema,
 } from "./attachments.js";
-import { appEndedSchema, channelAppSchema } from "./apps/frames.js";
+import {
+  appEndedSchema,
+  appErrorSchema,
+  appEventSchema,
+  appEventSendSchema,
+  appJoinSchema,
+  appLeaveSchema,
+  appSessionSchema,
+  appStatePatchSchema,
+  appStateSchema,
+  channelAppSchema,
+} from "./apps/frames.js";
 import { embedSchema } from "./embeds.js";
+import { botActionCardSchema, botNoticeSchema } from "./bots.js";
 import { messageForwardFieldSchema } from "./forward.js";
 import { friendActivitySchema } from "./friends.js";
 import { permissionsUpdateSchema } from "./permissions.js";
@@ -196,6 +208,8 @@ const broadcastMessageSchema = z.object({
   poll: pollSchema.nullable().default(null),
   /** Same field as `messageSchema.systemKind`: `nudge`, or null. */
   systemKind: messageSystemKindSchema,
+  /** A server bot's action card (`bots.ts`). Null on every other message. */
+  botCard: botActionCardSchema.nullable().optional().catch(null),
   /** See `messageSchema.storyId`: the story a reply quotes. */
   storyId: z.string().uuid().nullable().optional(),
   /** See `messageSchema.forward`: the snapshot a forwarded message carries. */
@@ -350,6 +364,11 @@ export const typingBroadcastSchema = z.object({
   channelId: z.string().uuid(),
   userId: z.string().uuid(),
   displayName: z.string(),
+  /**
+   * A server bot at work: the tool it is running, or null while it thinks.
+   * Optional, so a client that predates it still shows plain "typing".
+   */
+  activity: z.object({ tool: z.string().max(40).nullable() }).optional(),
 });
 
 /**
@@ -737,12 +756,21 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   // Addressed to the sender only, like `message-rejected`: a nudge that did
   // not land, and why. See `nudge.ts`, and its absence from the list below.
   nudgeRefusedSchema,
+  // Per person: why a server bot did not answer them. See `bots.ts`.
+  botNoticeSchema,
   // Apps in channels (`apps/frames.ts`, docs/APPS.md). `channel-app` goes to
   // every socket whose account can VIEW the channel, which is wider than the
   // sockets looking at it, so it is delivered per socket and is absent from
   // the channel relay below. `app-ended` goes to the session's participants.
   channelAppSchema,
   appEndedSchema,
+  // To the one socket that joined: its seat and the session's snapshot. Then to
+  // a session's participants only, on every instance: the state, an event, the
+  // roster again. `app-error` answers one client frame, to its sender only.
+  appSessionSchema,
+  appStateSchema,
+  appEventSchema,
+  appErrorSchema,
 ]);
 
 /**
@@ -773,6 +801,13 @@ const chatClientFrameUnion = z.discriminatedUnion("type", [
   pollCloseMessageSchema,
   // Chamar a atenção: one tap, no body. The server writes the message.
   nudgeFrameSchema,
+  // Apps in channels (docs/APPS.md): join and leave a session, write its
+  // shared state, send an ephemeral event. Strict, like every frame a client
+  // sends: the server validates what a less trusted side hands it.
+  appJoinSchema,
+  appLeaveSchema,
+  appStatePatchSchema,
+  appEventSendSchema,
 ]);
 
 export const chatClientMessageSchema = chatClientFrameUnion.superRefine(

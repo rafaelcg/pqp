@@ -147,6 +147,30 @@
   --color-flag-es-yellow: #f1bf00;
 
   /*
+   * Breu, the face of a server bot (`packages/shared/src/bot-face.ts`). An
+   * identifier like the marks above: a bot is lime or coral in every theme,
+   * and its dark body is the character, so it stays dark in light mode too.
+   * `-body` is the avatar's body, a step lighter and tinted so a 24 px face
+   * does not vanish on a dark panel. Mirrored as literals in bot-face.ts for
+   * the PNGs the phone apps draw.
+   */
+  --color-bot-lime: oklch(0.88 0.19 125);
+  --color-bot-lime-body: oklch(0.29 0.035 125);
+  --color-bot-coral: oklch(0.76 0.14 35);
+  --color-bot-coral-body: oklch(0.29 0.035 35);
+  --color-bot-sky: oklch(0.8 0.11 230);
+  --color-bot-sky-body: oklch(0.29 0.035 230);
+  --color-bot-grape: oklch(0.74 0.13 300);
+  --color-bot-grape-body: oklch(0.29 0.035 300);
+  --color-bot-sun: oklch(0.86 0.14 85);
+  --color-bot-sun-body: oklch(0.29 0.035 85);
+  --color-bot-mint: oklch(0.84 0.11 170);
+  --color-bot-mint-body: oklch(0.29 0.035 170);
+  --color-bot-body: oklch(0.2 0.014 250);
+  --color-bot-hole: oklch(0.13 0.012 250);
+  --color-bot-backdrop: oklch(0.17 0.012 250);
+
+  /*
    * Text and icons drawn ON a video: the watch party player's bar, its live
    * chip and its viewer count. A film is dark whatever the app's theme, so
    * these do not retint. Light on the black stage in every theme, the way
@@ -2606,6 +2630,78 @@ html[data-pre] [data-home-hero] .animate-rise {
   animation: nudge-pulse 0.8s var(--ease-standard) both;
 }
 
+/* The card an app leaves in the conversation (components/apps). */
+@keyframes app-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes app-card-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes app-avatar-in {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes app-avatar-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes app-count-swap {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.app-card-in {
+  animation: app-card-in 240ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.app-card-settle {
+  animation: app-card-fade 300ms ease-out both;
+}
+
+.app-avatar-in {
+  animation: app-avatar-in 220ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+.app-avatar-out {
+  animation: app-avatar-out 120ms ease-in both;
+}
+
+.app-count-swap {
+  animation: app-count-swap 160ms ease-out both;
+}
+
 .nudge-line-in {
   animation: nudge-line-in 0.32s var(--ease-emphasized) both;
 }
@@ -3159,6 +3255,18 @@ html[data-pre] [data-home-hero] .animate-rise {
   .nudge-wiggle,
   .nudge-pending,
   .nudge-cooldown-bar {
+    animation: none;
+  }
+
+  /* An app card appears with opacity alone; every other move is a plain swap. */
+  .app-card-in {
+    animation: app-card-fade 240ms ease-out both;
+  }
+
+  .app-card-settle,
+  .app-avatar-in,
+  .app-avatar-out,
+  .app-count-swap {
     animation: none;
   }
 
@@ -4417,5 +4525,257 @@ html[data-immersive-stage] [data-immersive-hide] {
   }
   .story-trash[data-hot="true"] {
     transform: translateX(-50%);
+  }
+}
+
+/* A server bot at work (`BotActivityRows`): the label shimmers while a tool
+   runs. Plain muted text when motion is reduced. */
+@keyframes bot-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+.bot-shimmer {
+  color: var(--color-paper-muted);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .bot-shimmer {
+    background: linear-gradient(
+        90deg,
+        var(--color-paper-muted) 35%,
+        var(--color-paper) 50%,
+        var(--color-paper-muted) 65%
+      )
+      0 0 / 200% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: bot-shimmer 1.8s linear infinite;
+  }
+}
+
+/* A bot action card (`BotActionCard`): rows rise in one after another, and
+   each row's check pops once it lands. */
+@keyframes bot-step-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .bot-step-in {
+    animation: bot-step-in 0.28s var(--ease-emphasized) backwards;
+  }
+
+  .bot-step-pop {
+    animation: badge-pop 0.32s var(--ease-emphasized) both;
+  }
+}
+
+/* Breu, a server bot's face (`components/bots/bot-face.tsx`). The SVG fills
+   its box; `.bot-face-live` is set only on the faces allowed to move. */
+.bot-face > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.bot-face .bf-eyes {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.bot-face .bf-body {
+  transform-box: view-box;
+  transform-origin: 50% 88%;
+}
+
+.bot-face .bf-hand {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+@keyframes bot-blink {
+  0%,
+  91%,
+  100% {
+    transform: scaleY(1);
+  }
+  94% {
+    transform: scaleY(0.1);
+  }
+}
+
+@keyframes bot-breathe {
+  0%,
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
+  50% {
+    transform: translateY(-2.5%) scale(1.025, 0.975);
+  }
+}
+
+@keyframes bot-float {
+  0%,
+  100% {
+    transform: translateY(0) rotate(0);
+  }
+  50% {
+    transform: translateY(-6%) rotate(-8deg);
+  }
+}
+
+@keyframes bot-pop {
+  0% {
+    transform: scale(0.92, 1.06);
+  }
+  45% {
+    transform: scale(1.06, 0.94);
+  }
+  100% {
+    transform: scale(1, 1);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .bot-face-live .bf-eyes {
+    animation: bot-blink 4.6s var(--ease-standard) infinite;
+  }
+
+  .bot-face-live[data-variant="full"] .bf-body {
+    animation: bot-breathe 3.2s ease-in-out infinite;
+  }
+
+  .bot-face-live .bf-hand {
+    animation: bot-float 2.6s ease-in-out infinite;
+  }
+
+  /* A face under the pointer leans in, like it noticed. */
+  .bot-face > svg {
+    transition: transform var(--duration-base) var(--ease-emphasized);
+  }
+  .bot-face:hover > svg {
+    transform: rotate(-8deg) scale(1.06);
+  }
+
+  /* A new colour or face lands with a squash, keyed by remounting the face. */
+  .bot-face-pop > svg {
+    animation: bot-pop 0.52s var(--ease-emphasized) both;
+  }
+}
+
+/* Chat arrivals. Nothing in the conversation should pop into place: a new
+   message rises in, and a row that comes and goes under the log (typing, a
+   bot at work, a notice) opens and closes its own height, so the messages
+   above slide instead of jumping. `Reveal` (`components/ui/reveal.tsx`)
+   drives the second; a card's sections use `.chat-collapse`. Motion off:
+   everything is simply there, or not. */
+@keyframes chat-msg-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes chat-reveal-in {
+  from {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+  to {
+    grid-template-rows: 1fr;
+    opacity: 1;
+  }
+}
+
+@keyframes chat-reveal-out {
+  from {
+    grid-template-rows: 1fr;
+    opacity: 1;
+  }
+  to {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+}
+
+.chat-reveal {
+  display: grid;
+  grid-template-rows: 1fr;
+}
+
+.chat-reveal > *,
+.chat-collapse > * {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.chat-collapse {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  visibility: hidden;
+}
+
+.chat-collapse[data-open="true"] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  visibility: visible;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  /* `backwards`, not `both`: once it has landed the row keeps no transform,
+     which would make it a stacking context and trap its hover toolbar. */
+  .chat-msg-in {
+    animation: chat-msg-in 0.26s var(--ease-emphasized) backwards;
+  }
+
+  .chat-reveal[data-state="open"] {
+    animation: chat-reveal-in var(--duration-slow) var(--ease-emphasized) both;
+  }
+
+  .chat-reveal[data-state="closed"] {
+    animation: chat-reveal-out var(--duration-base) var(--ease-standard) both;
+  }
+
+  /* Swapped content (a label, a header) fades in where the old one was. */
+  .chat-swap-in {
+    animation: fade-in var(--duration-base) var(--ease-standard) backwards;
+  }
+
+  .chat-collapse {
+    transition:
+      grid-template-rows var(--duration-slow) var(--ease-emphasized),
+      opacity var(--duration-base) var(--ease-standard),
+      visibility 0s linear var(--duration-slow);
+  }
+
+  .chat-collapse[data-open="true"] {
+    transition:
+      grid-template-rows var(--duration-slow) var(--ease-emphasized),
+      opacity var(--duration-base) var(--ease-standard) 60ms,
+      visibility 0s;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-reveal[data-state="closed"] {
+    display: none;
   }
 }

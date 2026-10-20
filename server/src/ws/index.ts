@@ -11,9 +11,11 @@ import {
 import { isEnabled } from "../lib/flags.js";
 import { logEvent, nextConnectionId } from "../lib/log.js";
 import { createRateLimiter, limitFromEnv } from "../lib/rate-limit.js";
+import { handleAppSocketClose } from "./apps.js";
 import { handleChatMessage } from "./chat.js";
 import { recordUserCountry } from "../voice/region-audience.js";
 import { userActivity } from "../services/user-activity.js";
+import { clientPlatforms, socketClient } from "../services/client-platforms.js";
 import {
   listServerChannelIds,
   onAudienceInvalidated,
@@ -125,6 +127,10 @@ const ACTIVITY_FRAME_TYPES: ReadonlySet<string> = new Set([
   "live-reaction",
   "soundboard-play",
   "voice-still-here",
+  // Taking part in an app counts as somebody being there.
+  "app-join",
+  "app-state-patch",
+  "app-event-send",
 ]);
 
 // Derived from `voiceClientMessageSchema` (see `VOICE_CLIENT_MESSAGE_TYPES`
@@ -450,6 +456,11 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
       const caps = Array.isArray(declared)
         ? declared.filter((cap): cap is string => typeof cap === "string").slice(0, 16)
         : [];
+      // What the client says about itself, if it says anything. Nothing
+      // sends this yet; an app can start with no server release
+      // (`lib/client-agent.ts`). Only enum platforms and plain versions
+      // survive the parse.
+      const declaredClient = (parsed as { client?: unknown }).client;
       const authHeader =
         isDevAuthBypassEnabled() && token === DEV_AUTH_TOKEN
           ? `Bearer ${DEV_AUTH_TOKEN}`
@@ -466,7 +477,7 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
         rostersSent = resolve;
       });
       void wsAuthGate
-        .run(() => arriveAuthenticated(authHeader, caps, rostersSent))
+        .run(() => arriveAuthenticated(authHeader, caps, declaredClient, rostersSent))
         .catch((error: unknown) => {
           console.error("[ws] auth arrival failed:", error);
         })
@@ -523,6 +534,7 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
   async function arriveAuthenticated(
     authHeader: string,
     caps: string[],
+    declaredClient: unknown,
     onRostersSent: () => void,
   ): Promise<void> {
     // Queued behind a herd and gone before its turn: nothing to do for it.
@@ -571,6 +583,9 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
     // Opened the app today, for the dashboard's actives and retention
     // (`services/user-activity.ts`). A Map.set; flushed once a minute.
     userActivity.note(resolved.user.id);
+    // Which app this was, for support (`services/client-platforms.ts`).
+    // Families only, a Map.set, flushed once a minute.
+    clientPlatforms.note(resolved.user.id, socketClient(socket, declaredClient));
     // A host reconnecting stops the grace clock on their live party, and a
     // client connecting mid-show is told about every party it may see. Neither
     // holds up `ready`, and the worst case is a sidebar block that arrives
@@ -680,6 +695,11 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
       wasInVoice: isSocketInVoice(socket),
     });
     removeVoicePeerBySocket(socket);
+    // An app session this socket was seated in holds the seat for the resume
+    // window; a reload comes back to it.
+    void handleAppSocketClose(socket).catch((error) => {
+      console.error("[apps] socket close failed:", error);
+    });
     // Before `deleteAuthenticatedSocket`, though it does not depend on it: the
     // status registry keeps its own socket→user index precisely so that closing
     // order can never leave a user stuck online because the identity was

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { Readable } from "node:stream";
 import {
   STORY_IDS_MAX,
   STORY_POSTS_PER_MINUTE,
@@ -841,11 +842,18 @@ import {
   voiceOccupancyReport,
 } from "../services/voice-occupancy.js";
 import {
+  ADMIN_USER_CLIENT_PATH,
+  resolveUserClientTarget,
+  userClientReport,
+  type UserClientTarget,
+} from "../services/client-platforms.js";
+import {
   ADMIN_USER_ACTIVITY_PATH,
   clampActivityDays,
   clampCohortWeeks,
   userActivityReport,
 } from "../services/user-activity.js";
+import { ADMIN_BOTS_PATH, botsAdminReport } from "../services/bot-admin.js";
 import {
   ADMIN_METRICS_PATH,
   getAdminMetrics,
@@ -2535,6 +2543,72 @@ router.get(ADMIN_USER_ACTIVITY_PATH, async ({ url, user }) => {
 });
 
 /**
+ * Which app a person last connected from: platform, our app version where the
+ * client says it, OS and browser family, and when. For support debugging "I
+ * can't hear" / "my share has no sound". A read about ONE named person, so it
+ * is its own route and not a field on `/metrics`, and it is gated like every
+ * other operator read: instance moderators here (a 404 for everybody else,
+ * same as the rest of `/api/admin`), the dashboard's machine token through
+ * `ADMIN_USER_CLIENT_PATH` below. Never on a profile, never to a member or to
+ * a server's owner. See services/client-platforms.ts for what is and is not
+ * recorded.
+ */
+const userClientIdSchema = z.string().uuid();
+
+async function operatorUserClient(target: UserClientTarget) {
+  const userId = await resolveUserClientTarget(target);
+  if (!userId) {
+    throw new NotFound("User not found");
+  }
+  return userClientReport(userId);
+}
+
+/** `?userId=`, `?handle=` or `?tag=name#1234`, whichever the operator has. */
+function operatorUserClientTarget(params: URLSearchParams): UserClientTarget {
+  const userId = params.get("userId");
+  if (userId) {
+    const parsed = userClientIdSchema.safeParse(userId);
+    if (!parsed.success) {
+      throw new HttpError(400, "userId must be a uuid");
+    }
+    return { userId: parsed.data };
+  }
+  const handle = params.get("handle");
+  if (handle) {
+    return { handle };
+  }
+  const tag = params.get("tag");
+  if (tag) {
+    return { tag };
+  }
+  throw new HttpError(400, "userId, handle or tag is required");
+}
+
+router.get("/api/admin/users/:userId/client", async ({ user }, { userId }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  const parsed = userClientIdSchema.safeParse(userId);
+  if (!parsed.success) {
+    throw new NotFound("User not found");
+  }
+  return operatorUserClient({ userId: parsed.data });
+});
+
+/**
+ * Server bots for the operator: adoption, use, the funnel, cost against the
+ * day's ceiling, and the limits that stopped an answer. Counts and money only,
+ * no persona, no message, no person. The dashboard's "bots · beta" section.
+ * See services/bot-admin.ts.
+ */
+router.get(ADMIN_BOTS_PATH, async ({ user }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  return botsAdminReport();
+});
+
+/**
  * Aggregate counts for the operator dashboard. Same gate, same 404. The other
  * way in, a machine token, is resolved in `handleApi` before Clerk runs, so
  * this handler only ever sees a signed-in moderator. See services/metrics.ts
@@ -2760,6 +2834,20 @@ const ADMIN_MACHINE_ROUTES: {
     method: "GET",
     path: ADMIN_USER_ACTIVITY_PATH,
     run: async (_req, query) => userActivityReport(userActivityQuery(query)),
+  },
+  // Which app one named person is on (platform, app version, OS and browser
+  // family, last seen). Names a person, so it takes a target and is not on
+  // /metrics. A read only; there is no write for it anywhere.
+  {
+    method: "GET",
+    path: ADMIN_USER_CLIENT_PATH,
+    run: async (_req, query) => operatorUserClient(operatorUserClientTarget(query)),
+  },
+  // Server bots: counts and money, no persona, no message, no person.
+  {
+    method: "GET",
+    path: ADMIN_BOTS_PATH,
+    run: async () => botsAdminReport(),
   },
   // The feedback queue: the whole text, the author's tag and handle, and
   // where they were. The first route on this token that names a person,
@@ -4039,6 +4127,403 @@ router.get("/api/music/related", async (ctx) => {
     throw error;
   }
 });
+
+// ------------------------------------------------------------ server bots
+
+import {
+  botPlanDecisionSchema,
+  botAskAnswerSchema,
+  botIntroSchema,
+  botTestSchema,
+  createServerBotSchema,
+  SERVER_BOTS_MAX,
+  serializePermissions as serializeBotPermissions,
+  updateServerBotSchema,
+  type BotTestResponse,
+  type ServerBotOverview,
+  type ServerBotsConfig,
+} from "@pqp/shared";
+import {
+  BotError,
+  createServerBot,
+  deleteServerBot,
+  getServerBot,
+  listAnsweringBotUserIds,
+  listServerBots,
+  queuePlanDecision,
+  updateServerBot,
+} from "../services/bots.js";
+import { botModelChoices, botProviderConfigured } from "../services/bot-llm.js";
+import { answerBotAsk } from "../services/bot-runner.js";
+import { deleteBotRole, renameBotRole, syncBotRole } from "../services/bot-role.js";
+import { readBotFacePng } from "../services/bot-faces.js";
+import { readBotOverview } from "../services/bot-stats.js";
+import { botTestTurnsPerDay, runBotTestTurn } from "../services/bot-test.js";
+
+function botsEnabled(serverId: string): boolean {
+  return isEnabled("custom_bots", { serverId }) && botProviderConfigured();
+}
+
+/** A model pick must be one the deployment offers right now. */
+function requireOfferedModel(model: string | null | undefined): void {
+  if (model && !botModelChoices().some((choice) => choice.id === model)) {
+    throw new HttpError(400, "model");
+  }
+}
+
+function botHttpError(error: BotError): HttpError {
+  switch (error.code) {
+    case "limit":
+      return new HttpError(409, "limit");
+    case "missing":
+      return new NotFound("Bot not found");
+    case "channel":
+      return new HttpError(400, "channel");
+    case "name":
+      return new HttpError(409, "name");
+  }
+}
+
+router.get("/api/bots/config", async ({ url }): Promise<ServerBotsConfig> => {
+  const serverId = url.searchParams.get("serverId");
+  return {
+    enabled: !!serverId && isUuid(serverId) && botsEnabled(serverId),
+    maxBots: SERVER_BOTS_MAX,
+    models: botModelChoices().map((choice) => ({ id: choice.id, label: choice.label })),
+    testChat:
+      !!serverId && isUuid(serverId) && botsEnabled(serverId) && isEnabled("bot_test_chat", { serverId }),
+    testTurnsPerDay: botTestTurnsPerDay(),
+  };
+});
+
+/** One turn of the wizard's practice chat. Staff only, like making the bot. */
+router.post("/api/servers/:serverId/bots/test", async ({ req, user }, { serverId }): Promise<BotTestResponse> => {
+  await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+  if (!botsEnabled(serverId!) || !isEnabled("bot_test_chat", { serverId: serverId! })) {
+    throw new HttpError(403, "bot_test_disabled");
+  }
+  const body = botTestSchema.parse(await readJsonBody(req));
+  requireOfferedModel(body.model);
+  const server = await getServer(serverId!);
+  const result = await runBotTestTurn({
+    userId: user.id,
+    serverName: server?.name ?? "",
+    name: body.name,
+    persona: body.persona,
+    knowledge: body.knowledge,
+    model: body.model ?? null,
+    messages: body.messages,
+  });
+  if (!result.ok) {
+    throw new HttpError(result.reason === "limit" || result.reason === "budget" ? 429 : 503, `bot_test_${result.reason}`);
+  }
+  return { reply: result.reply, turnsLeft: result.turnsLeft };
+});
+
+// Manage Server, for reading too: the persona and the knowledge are staff
+// notes, not something every member should be able to pull.
+router.get("/api/servers/:serverId/bots", async ({ user }, { serverId }) => {
+  await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+  return { bots: await listServerBots(serverId!), maxBots: SERVER_BOTS_MAX };
+});
+
+router.get(
+  "/api/servers/:serverId/bots/:botId/overview",
+  async ({ user }, { serverId, botId }): Promise<ServerBotOverview> => {
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    if (!isUuid(botId!)) {
+      throw new NotFound("Bot not found");
+    }
+    const bot = await getServerBot(serverId!, botId!);
+    const overview = bot ? await readBotOverview(bot.id) : null;
+    if (!bot || !overview) {
+      throw new NotFound("Bot not found");
+    }
+    return {
+      ...overview,
+      repliesToday: bot.repliesToday,
+      repliesPerDay: bot.repliesPerDay,
+    };
+  },
+);
+
+/**
+ * The bot introduces itself: staff read and edit the hello on the wizard's last
+ * step, and it is posted as the bot in one of the channels it lives in. The
+ * text is the staff member's, so the audit log says who posted it.
+ */
+router.post("/api/servers/:serverId/bots/:botId/intro", async ({ req, user }, { serverId, botId }) => {
+  await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+  if (!isUuid(botId!)) {
+    throw new NotFound("Bot not found");
+  }
+  const body = botIntroSchema.parse(await readJsonBody(req));
+  const bot = await getServerBot(serverId!, botId!);
+  if (!bot) {
+    throw new NotFound("Bot not found");
+  }
+  if (!bot.channelIds.includes(body.channelId)) {
+    throw new HttpError(400, "The bot does not live in that channel");
+  }
+  if (!botsEnabled(serverId!)) {
+    throw new HttpError(403, "bots_disabled");
+  }
+  // The hello is the staff member's words: they post it as the bot only where
+  // they could post it themselves.
+  const introPerms = await computeMemberPermissions(serverId!, user.id, body.channelId);
+  if (!hasPermission(introPerms, Permission.VIEW_CHANNEL) || !hasPermission(introPerms, Permission.SEND_MESSAGES)) {
+    throw new Forbidden("You cannot post in that channel");
+  }
+  const author = await getUserById(bot.userId);
+  if (!author) {
+    throw new NotFound("Bot not found");
+  }
+  const posted = await postChannelMessage({
+    author,
+    channelId: body.channelId,
+    body: body.body.trim(),
+    ...(body.nonce ? { nonce: body.nonce } : {}),
+  });
+  if (!posted.ok) {
+    throw new HttpError(409, posted.reason);
+  }
+  await logAudit({
+    serverId: serverId!,
+    actorId: user.id,
+    action: "bot.update",
+    targetType: "server_bot",
+    targetId: bot.id,
+    changes: [{ key: "intro", old: null, new: posted.message.id }],
+  });
+  return { messageId: posted.message.id };
+});
+
+/** A plan card's Confirm or Cancel. Only the member who asked may press them. */
+router.post("/api/bots/plans/:planId/decision", async ({ req, user }, { planId }) => {
+  if (!isUuid(planId!)) {
+    throw new NotFound("Plan not found");
+  }
+  const { decision } = botPlanDecisionSchema.parse(await readJsonBody(req));
+  const outcome = await queuePlanDecision({ planId: planId!, userId: user.id, decision });
+  if (outcome === "missing" || outcome === "off") {
+    throw new NotFound("Plan not found");
+  }
+  if (outcome === "not-yours") {
+    throw new Forbidden("Only the member who asked can decide");
+  }
+  if (outcome === "refused") {
+    throw new Forbidden("You are in timeout");
+  }
+  if (outcome === "decided" || outcome === "expired") {
+    throw new HttpError(409, outcome);
+  }
+  return new Accepted({ ok: true });
+});
+
+/** A question card's answer button. Only the member who was asked may press it. */
+router.post("/api/bots/asks/:messageId/answer", async ({ req, user }, { messageId }) => {
+  if (!isUuid(messageId!)) {
+    throw new NotFound("Question not found");
+  }
+  const { option } = botAskAnswerSchema.parse(await readJsonBody(req));
+  const outcome = await answerBotAsk({ messageId: messageId!, user, option });
+  if (outcome === "missing" || outcome === "off") {
+    throw new NotFound("Question not found");
+  }
+  if (outcome === "not-yours") {
+    throw new Forbidden("Only the member who was asked can answer");
+  }
+  if (outcome === "decided" || outcome === "expired" || outcome === "refused") {
+    throw new HttpError(409, outcome);
+  }
+  return { ok: true };
+});
+
+router.post("/api/servers/:serverId/bots", async ({ req, user }, { serverId }) => {
+  await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+  if (!botsEnabled(serverId!)) {
+    throw new HttpError(403, "bots_disabled");
+  }
+  const body = createServerBotSchema.parse(await readJsonBody(req));
+  requireOfferedModel(body.model);
+  try {
+    const bot = await createServerBot({
+      serverId: serverId!,
+      createdBy: user.id,
+      name: body.name,
+      persona: body.persona,
+      knowledge: body.knowledge,
+      channelIds: body.channelIds,
+      answerToName: body.answerToName,
+      model: body.model ?? null,
+      ...(body.tools ? { tools: body.tools } : {}),
+      ...(body.color ? { color: body.color } : {}),
+      ...(body.face ? { face: body.face } : {}),
+      tagline: body.tagline ?? null,
+    });
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "bot.create",
+      targetType: "server_bot",
+      targetId: bot.id,
+      changes: [{ key: "name", old: null, new: bot.name }],
+    });
+    // Its own role, so its tools can act. A failure here leaves a bot that
+    // can talk and not act; saving its tools again retries.
+    const role = await syncBotRole({ serverId: serverId!, botId: bot.id, actorId: user.id, previousTools: [] }).catch(
+      (error: unknown) => {
+        logEvent("bots.roleSyncFailed", { serverId, botId: bot.id, message: String(error) });
+        return null;
+      },
+    );
+    if (role?.changed) {
+      pingPermissions(serverId!);
+    }
+    return {
+      bot: role ? { ...bot, roleId: role.roleId } : bot,
+      // What its tools still lack because the creator could not grant it.
+      missingPermissions: serializeBotPermissions(role?.missing ?? 0n),
+    };
+  } catch (error) {
+    if (error instanceof BotError) {
+      throw botHttpError(error);
+    }
+    throw error;
+  }
+});
+
+router.patch(
+  "/api/servers/:serverId/bots/:botId",
+  async ({ req, user }, { serverId, botId }) => {
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    if (!isUuid(botId!)) {
+      throw new NotFound("Bot not found");
+    }
+    const body = updateServerBotSchema.parse(await readJsonBody(req));
+    requireOfferedModel(body.model);
+    // Switching a bot off, or editing it, stays open with the flag off: staff
+    // can always quiet their own bot. Switching it ON needs the feature.
+    if (body.enabled === true && !botsEnabled(serverId!)) {
+      throw new HttpError(403, "bots_disabled");
+    }
+    try {
+      const updated = await updateServerBot({ serverId: serverId!, botId: botId!, ...body });
+      if (!updated) {
+        throw new NotFound("Bot not found");
+      }
+      let { bot } = updated;
+      let missing = 0n;
+      const { before, renamed, restyled } = updated;
+      // New tool switches move the role with them (and make one again if
+      // somebody deleted it). The bot is already saved, so a failure here is
+      // logged rather than turned into an error for a save that worked.
+      if (body.tools !== undefined) {
+        const role = await syncBotRole({
+          serverId: serverId!,
+          botId: bot.id,
+          actorId: user.id,
+          previousTools: before.tools,
+        }).catch((error: unknown) => {
+          logEvent("bots.roleSyncFailed", { serverId, botId: bot.id, message: String(error) });
+          return null;
+        });
+        if (role) {
+          bot = { ...bot, roleId: role.roleId };
+          missing = role.missing;
+          if (role.changed) {
+            pingPermissions(serverId!);
+          }
+        }
+      }
+      if (renamed && bot.roleId && bot.username !== before.username) {
+        const roleRenamed = await renameBotRole({
+          serverId: serverId!,
+          roleId: bot.roleId,
+          oldUsername: before.username,
+          newUsername: bot.username,
+          actorId: user.id,
+        }).catch(() => false);
+        if (roleRenamed) {
+          pingPermissions(serverId!);
+        }
+      }
+      // A new name (and handle) repaints chat and the member list everywhere,
+      // the same frame a person's own rename sends.
+      if (renamed || restyled) {
+        const account = await getUserById(bot.userId);
+        if (account) {
+          await announceProfile(account);
+        }
+      }
+      const changes = [
+        ...(bot.name !== before.name ? [{ key: "name", old: before.name, new: bot.name }] : []),
+        ...(bot.enabled !== before.enabled
+          ? [{ key: "enabled", old: before.enabled, new: bot.enabled }]
+          : []),
+        ...(bot.persona !== before.persona ? [{ key: "persona", old: null, new: null }] : []),
+        ...(bot.knowledge !== before.knowledge ? [{ key: "knowledge", old: null, new: null }] : []),
+        ...(bot.model !== before.model ? [{ key: "model", old: before.model, new: bot.model }] : []),
+        ...(bot.color !== before.color ? [{ key: "color", old: before.color, new: bot.color }] : []),
+        ...(bot.face !== before.face ? [{ key: "face", old: before.face, new: bot.face }] : []),
+        ...(bot.tagline !== before.tagline
+          ? [{ key: "tagline", old: before.tagline, new: bot.tagline }]
+          : []),
+        ...(bot.tools.join() !== before.tools.join()
+          ? [{ key: "tools", old: before.tools.join(", "), new: bot.tools.join(", ") }]
+          : []),
+        ...(bot.channelIds.join() !== before.channelIds.join()
+          ? [{ key: "channels", old: before.channelIds.length, new: bot.channelIds.length }]
+          : []),
+      ];
+      if (changes.length > 0) {
+        await logAudit({
+          serverId: serverId!,
+          actorId: user.id,
+          action: "bot.update",
+          targetType: "server_bot",
+          targetId: bot.id,
+          changes: [{ key: "bot", old: null, new: bot.name }, ...changes],
+        });
+      }
+      return { bot, missingPermissions: serializeBotPermissions(missing) };
+    } catch (error) {
+      if (error instanceof BotError) {
+        throw botHttpError(error);
+      }
+      throw error;
+    }
+  },
+);
+
+router.delete(
+  "/api/servers/:serverId/bots/:botId",
+  async ({ user }, { serverId, botId }) => {
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    if (!isUuid(botId!)) {
+      throw new NotFound("Bot not found");
+    }
+    const removed = await deleteServerBot(serverId!, botId!);
+    if (!removed) {
+      throw new NotFound("Bot not found");
+    }
+    if (
+      removed.roleId &&
+      (await deleteBotRole({ serverId: serverId!, roleId: removed.roleId, actorId: user.id }))
+    ) {
+      pingPermissions(serverId!);
+    }
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "bot.delete",
+      targetType: "server_bot",
+      targetId: removed.id,
+      changes: [{ key: "name", old: removed.name, new: null }],
+    });
+    return { ok: true };
+  },
+);
 
 // ------------------------------------------------------------ soundboard
 
@@ -10925,9 +11410,16 @@ async function resolveMemberStatuses(
   members: ReadonlyArray<{ id: string; isCharacter: boolean }>,
 ): Promise<Map<string, UserStatus>> {
   const statuses = resolveStatuses(members.map((member) => member.id));
-  const hookListening = members.some((member) => member.isCharacter)
+  const hasCharacter = members.some((member) => member.isCharacter);
+  const hookListening = hasCharacter
     ? await serverHasActiveOutgoingWebhook(serverId)
     : false;
+  // A server bot has no socket either. It is online while it would answer:
+  // enabled, the flag on here, and a model to call.
+  const answeringBots =
+    hasCharacter && botsEnabled(serverId)
+      ? await listAnsweringBotUserIds(serverId)
+      : new Set<string>();
   const out = new Map<string, UserStatus>();
   for (const member of members) {
     out.set(
@@ -10935,7 +11427,7 @@ async function resolveMemberStatuses(
       statusWithCharacterHook(
         statuses.get(member.id) ?? "offline",
         member.isCharacter,
-        hookListening,
+        hookListening || answeringBots.has(member.id),
       ),
     );
   }
@@ -13455,6 +13947,36 @@ async function serveEmbedImage(
   }
 }
 
+const BOT_FACE_PATH = /^\/api\/bot-faces\/([a-z]+)\/([a-z]+)\.png$/;
+
+/**
+ * A server bot's face as a PNG (`users.avatar_url` for every bot), for the
+ * clients that only draw images: the phone apps, and anything else that is
+ * handed an avatar URL. Unauthenticated for the same reason as the avatar
+ * route below (an `<img>` cannot send a token), and it discloses nothing: the
+ * thirty pictures are the same for every server. The path names a colour and
+ * a face from fixed lists, never a file. Cached for a year because the URL
+ * carries `?v=`, bumped whenever the drawings change.
+ */
+async function serveBotFace(
+  req: IncomingMessage,
+  res: ServerResponse,
+  color: string,
+  face: string,
+): Promise<void> {
+  const png = await readBotFacePng(color, face);
+  if (!png) {
+    sendError(res, 404, "Not found", req);
+    return;
+  }
+  res.writeHead(200, {
+    "content-type": "image/png",
+    "content-length": png.length,
+    "cache-control": "public, max-age=31536000, immutable",
+  });
+  res.end(req.method === "HEAD" ? undefined : png);
+}
+
 /**
  * How long a redirect, or a served picture, may be cached. The signature behind
  * a redirect is good for at least `STABLE_IMAGE_WINDOW_SECONDS` (six hours) from
@@ -14318,6 +14840,12 @@ export async function handleApi(
   // crawler HEADs an address before it fetches it and reads a 401 as "nothing
   // here"; without this a HEAD fell through to the authenticated router.
   const readsPublic = req.method === "GET" || req.method === "HEAD";
+
+  const botFaceMatch = readsPublic ? BOT_FACE_PATH.exec(pathname) : null;
+  if (botFaceMatch) {
+    await serveBotFace(req, res, botFaceMatch[1]!, botFaceMatch[2]!);
+    return;
+  }
 
   const avatarMatch = readsPublic ? AVATAR_OBJECT_PATH.exec(pathname) : null;
   if (avatarMatch) {
@@ -15206,3 +15734,70 @@ router.patch(
     return { ok: true, showOnProfile: body.showOnProfile };
   },
 );
+
+/**
+ * Run one route as `user`, in process, for a server bot's actions
+ * (`services/bot-actions.ts`). The route does everything it does for a person:
+ * its own permission and rank checks, its audit row, its broadcast. What
+ * `handleApi` does BEFORE the router is not repeated here, on purpose: the
+ * caller has no Bearer to resolve, and it re-applies the gates that matter for
+ * a bot itself (the bot's timeout, its own hourly cap).
+ *
+ * Never reached from the network, and the caller builds every path and body
+ * itself from a fixed table; nothing here takes a path from a model.
+ */
+export async function invokeApiAsUser(
+  user: DbUser,
+  method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE",
+  path: string,
+  body?: unknown,
+): Promise<{ status: number; body: unknown }> {
+  const url = new URL(path, "http://localhost");
+  const matched = router.match(method, url.pathname);
+  if (!matched) {
+    return { status: 404, body: { error: "Not found" } };
+  }
+  const payload = body === undefined ? "" : JSON.stringify(body);
+  const req = Object.assign(Readable.from(payload ? [Buffer.from(payload)] : []), {
+    method,
+    url: `${url.pathname}${url.search}`,
+    headers: {
+      "content-type": "application/json",
+      "content-length": String(Buffer.byteLength(payload)),
+    },
+  }) as unknown as IncomingMessage;
+  const headers = new Map<string, string>();
+  const res = {
+    setHeader(name: string, value: string) {
+      headers.set(name.toLowerCase(), String(value));
+    },
+    getHeader(name: string) {
+      return headers.get(name.toLowerCase());
+    },
+  } as unknown as ServerResponse;
+  try {
+    const ctx: RequestContext = { req, res, url, user, ageGate: "passed" };
+    const result = await runWithRoute(`${method} ${matched.routePath}`, () =>
+      matched.handler(ctx, matched.params),
+    );
+    if (result instanceof Created) return { status: 201, body: result.body };
+    if (result instanceof Accepted) return { status: 202, body: result.body };
+    if (result instanceof Etagged) return { status: 200, body: result.body };
+    if (result instanceof NoContent) return { status: 204, body: null };
+    if (result instanceof StreamedResponse || result instanceof RawResponse) {
+      return { status: 500, body: { error: "Unsupported response" } };
+    }
+    return { status: 200, body: result };
+  } catch (error) {
+    if (error instanceof HttpErrorWithDetail || error instanceof ForumError) {
+      return { status: error.status, body: { error: error.message, ...error.detail } };
+    }
+    if (error instanceof HttpError) {
+      return { status: error.status, body: { error: error.message } };
+    }
+    if (error && typeof error === "object" && "name" in error && error.name === "ZodError") {
+      return { status: 400, body: { error: "Invalid request" } };
+    }
+    throw error;
+  }
+}

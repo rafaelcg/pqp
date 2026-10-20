@@ -39,9 +39,9 @@ import type { BlogLocale } from "./posts";
  * "Perguntas frequentes" section.
  *
  * ADDING A GUIDE: write the markdown under `content/blog/`, add an importer
- * to `ARTICLE_BODIES` in `article-bodies.ts`, add an entry here, add the URL
- * to `client/public/sitemap.xml`, and add the query it targets to
- * `docs/SEO.md`.
+ * to `ARTICLE_BODIES` in `article-bodies.ts`, add an entry here (the sitemap
+ * and the page's static body are generated from this list at build), and add
+ * the query it targets to `docs/SEO.md`.
  */
 
 /** Portuguese required, English optional — see the file comment on why. */

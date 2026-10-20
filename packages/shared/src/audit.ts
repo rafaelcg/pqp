@@ -226,6 +226,13 @@ export const AUDIT_ACTIONS = [
   "soundboard.update",
   "soundboard.delete",
   /**
+   * A server bot created, edited (name, persona, knowledge, channels, on/off)
+   * or deleted. Target is the `server_bots` row; `changes` names the bot.
+   */
+  "bot.create",
+  "bot.update",
+  "bot.delete",
+  /**
    * Seguir (following a Baú into a channel). Written in the DESTINATION server
    * for a follow set up or removed there, and for one that paused itself
    * (`actorId` null: the system). Target is the follow; `changes` names the
