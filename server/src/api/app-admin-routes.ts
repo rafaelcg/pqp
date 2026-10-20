@@ -2,8 +2,12 @@ import type { IncomingMessage } from "node:http";
 import { readJsonBody } from "../lib/http.js";
 import {
   appServersQuery,
+  disableEverywhereSchema,
+  endSessionSchema,
   listAppServersForOperator,
   listAppsForOperator,
+  operatorDisableEverywhere,
+  operatorEndSession,
   operatorReviewAppVersion,
   operatorSetApp,
   operatorSetServerApp,
@@ -33,6 +37,8 @@ export const ADMIN_APPS_PATH = "/api/admin/apps";
 export const ADMIN_APP_REVIEW_PATH = "/api/admin/app-review";
 export const ADMIN_APP_SERVERS_PATH = "/api/admin/app-servers";
 export const ADMIN_SERVER_APPS_PATH = "/api/admin/server-apps";
+export const ADMIN_APP_DISABLE_EVERYWHERE_PATH = "/api/admin/app-disable-everywhere";
+export const ADMIN_APP_SESSION_END_PATH = "/api/admin/app-session-end";
 
 export async function adminListApps(): Promise<unknown> {
   return listAppsForOperator();
@@ -67,4 +73,23 @@ export async function adminSetServerApp(
     setServerAppSchema.parse(await readJsonBody(req)),
     actor,
   );
+}
+
+/** "Desligar em todos": the master switch off, every live session of the app ended. */
+export async function adminDisableEverywhere(
+  req: IncomingMessage,
+  actor: AppAdminActor,
+): Promise<unknown> {
+  return operatorDisableEverywhere(
+    disableEverywhereSchema.parse(await readJsonBody(req)),
+    actor,
+  );
+}
+
+/** The operator ends one session. */
+export async function adminEndSession(
+  req: IncomingMessage,
+  actor: AppAdminActor,
+): Promise<unknown> {
+  return operatorEndSession(endSessionSchema.parse(await readJsonBody(req)), actor);
 }
