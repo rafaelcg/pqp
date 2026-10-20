@@ -12,7 +12,12 @@ import {
   resetAppSessionsForTests,
   setAppsOnline,
 } from "@/lib/apps/app-sessions-store";
-import { AppLauncher, APP_START_TIMEOUT_MS, type AppLauncherProps } from "./app-launcher";
+import {
+  AppLauncher,
+  APP_START_TIMEOUT_MS,
+  resetAppStartsForTests,
+  type AppLauncherProps,
+} from "./app-launcher";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -160,6 +165,7 @@ beforeEach(() => {
   stubMedia(true);
   resetAppsConfigForTests();
   resetAppSessionsForTests();
+  resetAppStartsForTests();
   api.fetchAppsConfig.mockReset();
   api.startAppSessionRequest.mockReset();
 });
@@ -333,6 +339,68 @@ describe("estados 4 e 5: comecando e falhou", () => {
     });
     expect(panel()!.querySelector('[role="alert"]')).not.toBeNull();
     expect(footerButton().textContent).toBe("Try again");
+  });
+
+  it("Tentar de novo after the eight seconds waits for the same request instead of sending another", async () => {
+    let resolve!: (value: AppSessionSummary) => void;
+    api.startAppSessionRequest.mockReturnValue(
+      new Promise<AppSessionSummary>((done) => {
+        resolve = done;
+      }),
+    );
+    const joined: string[] = [];
+    registerAppJoinInterceptor((id) => joined.push(id));
+    await mount([entry()]);
+    await openPanel();
+    await act(async () => footerButton().click());
+    await act(async () => {
+      vi.advanceTimersByTime(APP_START_TIMEOUT_MS + 1);
+    });
+    expect(footerButton().textContent).toBe("Try again");
+
+    await act(async () => footerButton().click());
+    await act(async () => footerButton().click());
+    expect(api.startAppSessionRequest).toHaveBeenCalledTimes(1);
+    expect(footerButton().textContent).toBe("Starting");
+
+    // The first request answers late: it is the one that is used, and joined.
+    await act(async () => {
+      resolve(summary());
+    });
+    expect(api.startAppSessionRequest).toHaveBeenCalledTimes(1);
+    expect(panel()).toBeNull();
+    expect(joined).toEqual([SESSION]);
+  });
+
+  it("a request that answers after the panel is closed is still adopted and joined, and a new panel sends no second one", async () => {
+    let resolve!: (value: AppSessionSummary) => void;
+    api.startAppSessionRequest.mockReturnValue(
+      new Promise<AppSessionSummary>((done) => {
+        resolve = done;
+      }),
+    );
+    const joined: string[] = [];
+    registerAppJoinInterceptor((id) => joined.push(id));
+    await mount([entry()]);
+    await openPanel();
+    await act(async () => footerButton().click());
+    await act(async () => {
+      vi.advanceTimersByTime(APP_START_TIMEOUT_MS + 1);
+    });
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    expect(panel()).toBeNull();
+
+    await openPanel();
+    await act(async () => footerButton().click());
+    expect(api.startAppSessionRequest).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolve(summary());
+    });
+    expect(joined).toEqual([SESSION]);
+    expect(panel()).toBeNull();
   });
 
   it("someone else got there first: the panel turns into 'already running' instead of failing", async () => {

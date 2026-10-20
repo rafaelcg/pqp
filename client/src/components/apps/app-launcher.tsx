@@ -21,6 +21,7 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
+import type { AppSessionSummary } from "@pqp/shared";
 import { AppIconTile, appIconFor } from "@/components/apps/app-icon";
 import { Avatars, countText } from "@/components/apps/app-session-card";
 import { Button } from "@/components/ui/button";
@@ -67,6 +68,59 @@ import { cn } from "@/lib/utils";
 
 /** Past this a start that has not answered is a failure, not a spinner for ever. */
 export const APP_START_TIMEOUT_MS = 8_000;
+
+/**
+ * One start request per channel, shared by every press and every panel. A
+ * request that outlives the eight seconds is not abandoned and not repeated:
+ * "Tentar de novo" attaches to the same request, so a stalled API never gets a
+ * second one on top. The answer is adopted here, once, whoever is still
+ * looking: the store gets the session and the starter joins it, so a late
+ * success can never leave a session started and un-joined.
+ */
+interface StartInFlight {
+  appId: string;
+  promise: Promise<AppSessionSummary>;
+}
+const startsInFlight = new Map<string, StartInFlight>();
+
+function startOnce(channelId: string, appId: string): StartInFlight {
+  const existing = startsInFlight.get(channelId);
+  if (existing) {
+    return existing;
+  }
+  const promise = startAppSessionRequest(channelId, appId).then(
+    (session) => {
+      // The card and the strip read the store; put the answer there before
+      // anything else so they never wait for the frame. The starter is host
+      // and is not seated: join straight away.
+      applyChannelApp(channelId, session);
+      requestAppJoin(session.id);
+      return session;
+    },
+    (error: unknown) => {
+      if (error instanceof AppStartError && error.code === "session_live" && error.session) {
+        // Somebody else got there first: the store learns of their session.
+        applyChannelApp(channelId, error.session);
+      }
+      throw error;
+    },
+  );
+  const entry: StartInFlight = { appId, promise };
+  startsInFlight.set(channelId, entry);
+  const done = () => {
+    if (startsInFlight.get(channelId) === entry) {
+      startsInFlight.delete(channelId);
+    }
+  };
+  promise.then(done, done);
+  return entry;
+}
+
+/** Test seam: forget any request still in flight. */
+export function resetAppStartsForTests() {
+  startsInFlight.clear();
+}
+
 const PANEL_WIDTH = 620;
 const GRID_COLUMNS = 3;
 
@@ -251,7 +305,8 @@ function LauncherPanel(props: PanelProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
   const [startState, setStartState] = useState<StartState>({ status: "idle" });
-  const startAttempt = useRef(0);
+  const attached = useRef<Promise<AppSessionSummary> | null>(null);
+  const unmounted = useRef(false);
   const startTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const tiles = useMemo(
@@ -289,14 +344,15 @@ function LauncherPanel(props: PanelProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    unmounted.current = false;
+    return () => {
+      unmounted.current = true;
       if (startTimer.current) {
         clearTimeout(startTimer.current);
       }
-    },
-    [],
-  );
+    };
+  }, []);
 
   // Esc closes, and a click outside does, except while a start is waiting.
   const starting = startState.status === "starting";
@@ -329,54 +385,58 @@ function LauncherPanel(props: PanelProps) {
   }, [modal, starting, onClose, props.anchor]);
 
   const start = useCallback(
-    async (tile: AppTile) => {
-      const attempt = (startAttempt.current += 1);
-      setStartState({ status: "starting", appId: tile.id });
-      startTimer.current = setTimeout(() => {
-        if (startAttempt.current === attempt) {
-          setStartState({ status: "failed", appId: tile.id, code: "failed" });
-        }
-      }, APP_START_TIMEOUT_MS);
-      try {
-        const session = await startAppSessionRequest(channelId, tile.id);
-        // The card and the strip read the store; put the answer there before
-        // anything else so they never wait for the frame.
-        applyChannelApp(channelId, session);
-        if (startAttempt.current !== attempt) {
-          return;
-        }
-        if (startTimer.current) {
-          clearTimeout(startTimer.current);
-        }
-        setStartState({ status: "idle" });
-        onClose();
-        // The starter is host and is not seated: join straight away.
-        requestAppJoin(session.id);
-      } catch (error) {
-        if (startAttempt.current !== attempt) {
-          return;
-        }
-        if (startTimer.current) {
-          clearTimeout(startTimer.current);
-        }
-        if (error instanceof AppStartError && error.code === "session_live") {
-          // Somebody else got there first: the panel turns into "já tem um app".
-          if (error.session) {
-            applyChannelApp(channelId, error.session);
-          }
-          setStartState({ status: "idle" });
-          return;
-        }
-        const code =
-          error instanceof AppStartError
-            ? error.code === "cannot_start"
-              ? "permission"
-              : error.code === "rate_limited"
-                ? "rate-limited"
-                : "failed"
-            : "failed";
-        setStartState({ status: "failed", appId: tile.id, code });
+    (tile: AppTile) => {
+      // A request already in flight for this channel (a retry after the eight
+      // seconds) is the one this press waits for: nothing second is sent.
+      const request = startOnce(channelId, tile.id);
+      setStartState({ status: "starting", appId: request.appId });
+      if (startTimer.current) {
+        clearTimeout(startTimer.current);
       }
+      startTimer.current = setTimeout(() => {
+        setStartState({ status: "failed", appId: request.appId, code: "failed" });
+      }, APP_START_TIMEOUT_MS);
+      if (attached.current === request.promise) {
+        return;
+      }
+      attached.current = request.promise;
+      const settled = () => {
+        if (attached.current !== request.promise) {
+          return false;
+        }
+        attached.current = null;
+        if (startTimer.current) {
+          clearTimeout(startTimer.current);
+        }
+        return !unmounted.current;
+      };
+      request.promise.then(
+        () => {
+          if (settled()) {
+            setStartState({ status: "idle" });
+            onClose();
+          }
+        },
+        (error: unknown) => {
+          if (!settled()) {
+            return;
+          }
+          if (error instanceof AppStartError && error.code === "session_live") {
+            // The panel turns into "já tem um app".
+            setStartState({ status: "idle" });
+            return;
+          }
+          const code =
+            error instanceof AppStartError
+              ? error.code === "cannot_start"
+                ? "permission"
+                : error.code === "rate_limited"
+                  ? "rate-limited"
+                  : "failed"
+              : "failed";
+          setStartState({ status: "failed", appId: request.appId, code });
+        },
+      );
     },
     [channelId, onClose],
   );
