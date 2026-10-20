@@ -115,6 +115,9 @@ export function AppsSettingsSection({ serverId }: { serverId: string }) {
     // draw over it. And a re-read of THIS app after an earlier failed write is
     // stale from here on (`gen`).
     seq.current += 1;
+    // Taken before the write is awaited: a page that left this server while it
+    // was out must not apply the re-read to the next one's list.
+    const epoch = serverEpoch.current;
     const gen = (writeGen.current.get(app.id) ?? 0) + 1;
     writeGen.current.set(app.id, gen);
     // At once; put back below if the server says no.
@@ -148,7 +151,6 @@ export function AppsSettingsSection({ serverId }: { serverId: string }) {
       // Only THIS app's entry is taken from the answer, and only while no
       // later write touched it and the page is still on this server, so a slow
       // answer can neither undo another switch nor be dropped by one.
-      const epoch = serverEpoch.current;
       fetchServerApps(serverId)
         .then((answer) => {
           const fresh = answer.apps.find((a) => a.id === app.id);
