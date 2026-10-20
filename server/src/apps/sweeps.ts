@@ -467,7 +467,7 @@ async function sweepHost(
     return;
   }
   if (next) {
-    if (await completeHandoff(session.id, state.host_user_id, next, "sweep")) {
+    if (await completeHandoff(session.id, state.host_user_id, next, "sweep", state.host_gone_at)) {
       result.handoffs += 1;
       announcedNext.delete(session.id);
     }

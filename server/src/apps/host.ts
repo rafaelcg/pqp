@@ -37,13 +37,24 @@ export async function completeHandoff(
   from: string | null,
   to: string,
   via: "sweep" | "take",
+  goneAt: Date,
 ): Promise<boolean> {
+  // `goneAt` is the countdown the caller judged (stamped from the process's
+  // clock in whole milliseconds, so it round-trips exactly). A countdown that
+  // was cleared and started again since is a different one with its own two
+  // minutes, and a caller holding the old reading must not end it early. The
+  // person also still has to hold a present seat, so the role never lands on
+  // somebody who left between choosing and moving.
   const result = await getPool().query<{ channel_id: string }>(
-    `UPDATE app_sessions SET host_user_id = $3, host_gone_at = NULL
-      WHERE id = $1 AND status = 'live' AND host_gone_at IS NOT NULL
-        AND host_user_id IS NOT DISTINCT FROM $2
-      RETURNING channel_id`,
-    [sessionId, from, to],
+    `UPDATE app_sessions s SET host_user_id = $3, host_gone_at = NULL
+      WHERE s.id = $1 AND s.status = 'live' AND s.host_gone_at = $4::timestamptz
+        AND s.host_user_id IS NOT DISTINCT FROM $2
+        AND EXISTS (
+          SELECT 1 FROM app_session_participants p
+           WHERE p.session_id = s.id AND p.user_id = $3
+             AND p.left_at IS NULL AND p.orphaned_at IS NULL)
+      RETURNING s.channel_id`,
+    [sessionId, from, to, goneAt.toISOString()],
   );
   const row = result.rows[0];
   if (!row) {
@@ -101,7 +112,7 @@ export async function takeHostAs(
   if ((await pickNextHost(sessionId)) !== user.id) {
     throw new HttpError(403, "not_next_host");
   }
-  if (!(await completeHandoff(sessionId, row.host_user_id, user.id, "take"))) {
+  if (!(await completeHandoff(sessionId, row.host_user_id, user.id, "take", row.host_gone_at))) {
     // Somebody else moved first (the sweep, or the old host came back).
     throw new HttpErrorWithDetail(409, "host_changed", {});
   }

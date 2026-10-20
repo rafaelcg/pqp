@@ -284,6 +284,37 @@ describeDb("the sweeps of a live app session", () => {
       expect((await row(id)).host_user_id).toBe(world.owner.id);
     });
 
+    it("a handoff judged on an old countdown cannot move the role during a newer one, nor to a seat that is gone", async () => {
+      const { id, hostRec } = await room();
+      await wsApps.handleAppSocketClose(hostRec.socket);
+      await sweep(0);
+      const old = (await row(id)).host_gone_at as Date;
+      // The host came back and left again: a new countdown with its own two minutes.
+      await q(`UPDATE app_sessions SET host_gone_at = $2 WHERE id = $1`, [id, at(90 * SECOND)]);
+      expect(await host.completeHandoff(id, world.owner.id, world.member.id, "sweep", old)).toBe(false);
+      expect((await row(id)).host_user_id).toBe(world.owner.id);
+
+      // The chosen person left between choosing and moving.
+      await q(`UPDATE app_session_participants SET left_at = NOW() WHERE session_id = $1 AND user_id = $2`, [
+        id,
+        world.member.id,
+      ]);
+      expect(
+        await host.completeHandoff(id, world.owner.id, world.member.id, "sweep", at(90 * SECOND)),
+      ).toBe(false);
+      expect((await row(id)).host_user_id).toBe(world.owner.id);
+
+      // Control: the same call with the current countdown and a present seat moves it.
+      await q(`UPDATE app_session_participants SET left_at = NULL WHERE session_id = $1 AND user_id = $2`, [
+        id,
+        world.member.id,
+      ]);
+      expect(
+        await host.completeHandoff(id, world.owner.id, world.member.id, "sweep", at(90 * SECOND)),
+      ).toBe(true);
+      expect((await row(id)).host_user_id).toBe(world.member.id);
+    });
+
     it("clears a countdown whose host is present again even if no join cleared it", async () => {
       const { id } = await room();
       await q(`UPDATE app_sessions SET host_gone_at = $2 WHERE id = $1`, [id, at(0)]);
