@@ -594,8 +594,17 @@ export async function connectLiveKit({
    * no packets at all from that person until their next mic change
    * (measured 2026-10-20, five changes in a row, LiveKit 1.13.10). Run in
    * order, the last request is always the one left on the wire.
+   *
+   * A request that has not started yet when a newer one arrives is dropped
+   * in its favour: its pipeline is already stopped by then, and publishing
+   * it anyway would make the setting the person actually ended on wait
+   * behind a full unpublish and publish cycle per click. Both callers then
+   * settle with the newer publish.
    */
   let micPublishing: Promise<void> | null = null;
+  /** The publish waiting its turn, if any. A newer request takes it over. */
+  let pendingMicPublish: { stream: MediaStream; done: Promise<void> } | null =
+    null;
   /** Where the audio self-repair's receiver reads resume next tick. */
   let audioReadCursor = 0;
   /** The watch-party voice archive publication, kept so it can be withdrawn. */
@@ -2684,9 +2693,24 @@ export async function connectLiveKit({
   }
 
   function publish(stream: MediaStream): Promise<void> {
+    if (pendingMicPublish) {
+      pendingMicPublish.stream = stream;
+      return pendingMicPublish.done;
+    }
+    const entry: { stream: MediaStream; done: Promise<void> } = {
+      stream,
+      done: Promise.resolve(),
+    };
     const result = (micPublishing ?? Promise.resolve())
       .catch(() => undefined)
-      .then(() => publishMicNow(stream));
+      .then(() => {
+        if (pendingMicPublish === entry) {
+          pendingMicPublish = null;
+        }
+        return publishMicNow(entry.stream);
+      });
+    entry.done = result;
+    pendingMicPublish = entry;
     micPublishing = result.then(
       () => undefined,
       () => undefined,

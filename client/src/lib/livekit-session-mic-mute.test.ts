@@ -439,6 +439,7 @@ describe("the standalone microphone publication's clone lifecycle", () => {
     // for it instead of racing it. Racing is what used to leave the room
     // hearing nothing: see `livekit-session-republish.test.ts`.
     const publishA = sfu.publish(micStream(trackA));
+    await new Promise((resolve) => setTimeout(resolve, 0));
     const publishB = sfu.publish(micStream(trackB));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(clones).toHaveLength(1);

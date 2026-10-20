@@ -416,4 +416,42 @@ describe("the room keeps hearing somebody who changes settings several times in 
       "two-clone-0",
     ]);
   });
+
+  it("skips a change that a newer one replaced before it started", async () => {
+    const sfu = await session();
+    await sfu.publish(micStream(makeTrack("first")));
+
+    const releaseUnpublish = gate((p) => {
+      unpublishGate = p;
+    });
+    const one = makeTrack("one");
+    const replaceOne = sfu.replaceTrack(micStream(one));
+    await settle();
+
+    // Two more clicks while the first replacement is still negotiating. The
+    // middle one never gets a turn: only the setting they ended on does.
+    const two = makeTrack("two");
+    let twoCloned = 0;
+    const cloneTwo = two.clone;
+    two.clone = () => {
+      twoCloned += 1;
+      return cloneTwo();
+    };
+    const three = makeTrack("three");
+    const replaceTwo = sfu.replaceTrack(micStream(two));
+    const replaceThree = sfu.replaceTrack(micStream(three));
+
+    releaseUnpublish();
+    await Promise.all([replaceOne, replaceTwo, replaceThree]);
+    await settle();
+
+    const live = [...registered].filter(
+      (track) => track.mediaStreamTrack.readyState === "live",
+    );
+    expect(live.map((track) => track.mediaStreamTrack.id)).toEqual([
+      "three-clone-0",
+    ]);
+    // Never cloned, so never published: no SFU cycle spent on it.
+    expect(twoCloned).toBe(0);
+  });
 });
