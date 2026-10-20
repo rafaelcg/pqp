@@ -473,8 +473,11 @@ function ConversationRow({
         </button>
         {/* The call entry point. Always visible while a call is live in this
             conversation (green, meaning "join"); otherwise revealed on
-            hover/focus like every quiet row action. Hidden entirely for a
-            blocked 1:1 — the server would refuse the join anyway, and showing
+            hover/focus like every quiet row action. A touch screen has no
+            hover, so there the idle phone is not drawn at all: an invisible
+            button still takes the tap, and a tap at the end of the row rang
+            the other person. The conversation header has the call button.
+            Hidden entirely for a blocked 1:1 — the server would refuse the join anyway, and showing
             a phone that cannot ring is worse than no phone. */}
         {onStartCall && !blocked && (
           /* The row you are pointing at is named right next to the pointer,
@@ -493,7 +496,7 @@ function ConversationRow({
                 "flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-control)]",
                 hasActiveCall
                   ? "text-success"
-                  : "text-text-tertiary opacity-0 hover:bg-surface-2 hover:text-text focus-visible:opacity-100 group-hover:opacity-100",
+                  : "text-text-tertiary opacity-0 hover:bg-surface-2 hover:text-text focus-visible:opacity-100 group-hover:opacity-100 [@media(hover:none)]:hidden",
               )}
               onClick={onStartCall}
             >

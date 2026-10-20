@@ -4114,11 +4114,13 @@ function ChannelRow({
               className={cn(
                 CHANNEL_ACTION_TILE,
                 // The pin slides in from the right edge on hover and stays
-                // put once the channel is pinned.
+                // put once the channel is pinned. A touch screen never hovers,
+                // so there an unpinned channel draws no pin: an invisible one
+                // still took the tap. Fixar is in the long-press menu.
                 "transition-[opacity,transform] duration-150 ease-out motion-reduce:transition-none",
                 isFavorite
                   ? "text-paper"
-                  : "translate-x-2 text-paper-muted opacity-0 group-hover:translate-x-0 group-hover:opacity-100 group-focus-within:translate-x-0 group-focus-within:opacity-100",
+                  : "translate-x-2 text-paper-muted opacity-0 group-hover:translate-x-0 group-hover:opacity-100 group-focus-within:translate-x-0 group-focus-within:opacity-100 [@media(hover:none)]:hidden",
               )}
               aria-label={
                 isFavorite ? t("chrome.unpinChannel") : t("chrome.pinChannel")
@@ -4144,9 +4146,11 @@ function ChannelRow({
               className={cn(
                 CHANNEL_ACTION_TILE,
                 "text-paper-muted transition-opacity duration-150 ease-out motion-reduce:transition-none",
+                // Same as the pin: not drawn on a touch screen unless the
+                // channel is selected. Settings is in the long-press menu.
                 selected
                   ? "opacity-100"
-                  : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
+                  : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:hidden",
               )}
               aria-label={t("chrome.channelSettings")}
               onClick={(event) => {

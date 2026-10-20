@@ -616,7 +616,10 @@ function ConversationHomeRow({
           </span>
         </button>
         {/* The call door, where the time sits, on hover or focus; always on
-            while a call is live here. Hidden for a blocked 1:1, as before. */}
+            while a call is live here. Hidden for a blocked 1:1, as before.
+            Not drawn on a touch screen: with no hover it would stay invisible
+            over the time and still take the tap. The conversation has its own
+            call button. */}
         {onStartCall && !blocked && (
           <Tooltip
             label={t(hasActiveCall ? "call.panel.join" : "call.startVoice")}
@@ -626,7 +629,7 @@ function ConversationHomeRow({
               type="button"
               data-conversations-call=""
               className={cn(
-                "absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-[var(--radius-control)] hover:bg-surface-3 focus-visible:opacity-100",
+                "absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-[var(--radius-control)] hover:bg-surface-3 focus-visible:opacity-100 [@media(hover:none)]:hidden",
                 hasActiveCall
                   ? "text-success opacity-0 group-hover:opacity-100"
                   : "text-text-tertiary opacity-0 hover:text-text group-focus-within:opacity-100 group-hover:opacity-100",
