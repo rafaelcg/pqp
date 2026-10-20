@@ -213,6 +213,9 @@ import {
   rememberWhatsNewFeed,
 } from "@/lib/whats-new-feed";
 import { ServerSettingsDialog } from "@/components/layout/server-settings-dialog";
+import { BotWizard } from "@/components/bots/bot-wizard";
+import { BotIntroHint } from "@/components/bots/bot-intro-hint";
+import { useBotInvite } from "@/lib/use-bot-invite";
 import { CreateServerDialog } from "@/components/layout/create-server-dialog";
 import { DiscordImportHost } from "@/components/layout/discord-import-host";
 import {
@@ -1790,8 +1793,16 @@ function MainAppContent({
   }, []);
   const [membersOpen, setMembersOpen] = useState(false);
   const [serverSettingsSection, setServerSettingsSection] = useState<
-    "roles" | undefined
+    "roles" | "bots" | undefined
   >(undefined);
+  // Creating a server bot is its own full-size flow, opened from the Bots
+  // pane or the member list, never on top of settings.
+  const [botWizardOpen, setBotWizardOpen] = useState(false);
+  const openBotWizard = useCallback(() => {
+    setServerSettingsOpen(false);
+    setServerSettingsSection(undefined);
+    setBotWizardOpen(true);
+  }, []);
   // The always-there roster down the right. Its own hook because the state is a
   // per-device preference plus a media query, and the button that flips it lives
   // in the channel header rather than in the panel.
@@ -3102,6 +3113,15 @@ function MainAppContent({
     [startScreenShareGated],
   );
   const perms = usePermissions(selectedServerId);
+  const rosterBotCount = serverMembers.filter((member) => member.isCharacter).length;
+  // Before any early return: the member list's "create a bot" row.
+  const botInviteOffered = useBotInvite(
+    selection.kind === "server" ? selectedServerId : null,
+    perms.can(Permission.MANAGE_SERVER),
+    // Asked again when either place a bot is made or deleted closes, and when
+    // the roster's bots change (one made or deleted from another tab).
+    `${botWizardOpen}:${serverSettingsOpen}:${rosterBotCount}`,
+  );
   const permsRef = useRef(perms);
   permsRef.current = perms;
   /**
@@ -5549,7 +5569,8 @@ function MainAppContent({
             message.type === "presence-delta" ||
             message.type === "typing-broadcast" ||
             message.type === "poll-update" ||
-            message.type === "message-rejected"
+            message.type === "message-rejected" ||
+            message.type === "bot-notice"
           ) {
             // Somebody else's message landed in the channel on screen. It is
             // read once the reader can see it (tab visible, list at its live
@@ -6078,17 +6099,23 @@ function MainAppContent({
             return;
           }
 
-          // Apps in channels (behind the per-server `apps` flag): the live
-          // summary of a channel's app, the end of a session and the answers to
-          // a join. They are chat frames, not voice ones, so they stop here
-          // rather than reach the voice controller.
-          if (message.type === "channel-app" || message.type === "app-ended") {
+          // Apps in channels (behind the per-server `apps` flag): a channel's
+          // live summary, and a session's snapshot, state, events, end and
+          // refusals. The store takes every one of them (it ignores `app-state`
+          // and `app-event`, which nothing draws yet), and they are chat
+          // frames, not voice ones, so they stop here rather than reach the
+          // voice controller. The store sees the frame BEFORE the return:
+          // `app-session` and `app-error` are what end a join, and a frame
+          // swallowed ahead of the store leaves every join to time out.
+          if (
+            message.type === "channel-app" ||
+            message.type === "app-ended" ||
+            message.type === "app-session" ||
+            message.type === "app-state" ||
+            message.type === "app-event" ||
+            message.type === "app-error"
+          ) {
             handleAppsFrame(message);
-            return;
-          }
-          // The join answers (`app-session`, `app-error`) are not in the chat
-          // union until the session socket ships; they are read by type.
-          if (handleAppsFrame(message as { type: string })) {
             return;
           }
 
@@ -12722,6 +12749,8 @@ function MainAppContent({
         isLoadingOlder={chat.isLoadingOlder()}
         isLoadingNewer={chat.isLoadingNewer()}
         typingUsers={chat.getTypingUsers()}
+        botNotice={chat.getBotNotice()}
+        onDismissBotNotice={chat.dismissBotNotice}
         canModerate={canManageMessages}
         blockedAuthorIds={blockedUserIds}
         highlightMessageId={highlightMessageId}
@@ -12805,6 +12834,15 @@ function MainAppContent({
       {/* Against the composer it explains, not floating in a corner: the frame
           names the channel the refused action happened in, so a notice from
           another room would be answering a question nobody asked here. */}
+      {/* Staff made the bot; the tip is for everybody else. */}
+      {selection.kind === "server" && selectedServerId && !canManageServer && (
+        <BotIntroHint
+          serverId={selectedServerId}
+          messages={chat.getMessages()}
+          members={serverMembers}
+          onSayHi={(username) => setComposerInsert(`@${username} oi!`)}
+        />
+      )}
       {sanctionNotice && sanctionNotice.channelId === selectedChannel.id && (
         <SanctionNoticeBar
           notice={sanctionNotice}
@@ -14103,6 +14141,7 @@ function MainAppContent({
           open={memberSidebar.open}
           wide={memberSidebar.wide}
           onClose={memberSidebar.close}
+          onCreateBot={botInviteOffered ? openBotWizard : null}
           serverId={
             selection.kind === "server" ? selectedServerId : null
           }
@@ -14183,6 +14222,18 @@ function MainAppContent({
         }}
       />
 
+      {selectedServer && (
+        <BotWizard
+          open={botWizardOpen}
+          serverId={selectedServer.id}
+          serverName={selectedServer.name}
+          onClose={() => setBotWizardOpen(false)}
+          onAdjust={() => {
+            setServerSettingsSection("bots");
+            setServerSettingsOpen(true);
+          }}
+        />
+      )}
       <ServerSettingsDialog
         open={serverSettingsOpen}
         server={selectedServer ?? null}
@@ -14199,6 +14250,7 @@ function MainAppContent({
         }
         canManageMessages={canManageMessages}
         requestedSection={serverSettingsSection}
+        onCreateBot={openBotWizard}
         onClose={() => {
           setServerSettingsOpen(false);
           setServerSettingsSection(undefined);

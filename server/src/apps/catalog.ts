@@ -168,19 +168,6 @@ export function compareSemver(a: string, b: string): number {
   return 0;
 }
 
-async function audit(
-  client: PoolClient,
-  appId: string,
-  version: string | null,
-  after: Record<string, unknown>,
-): Promise<void> {
-  await client.query(
-    `INSERT INTO app_admin_audit (actor_kind, action, app_id, app_version, before, after)
-     VALUES ('boot', 'catalog-load', $1, $2, NULL, $3::jsonb)`,
-    [appId, version, JSON.stringify(after)],
-  );
-}
-
 function refuse(
   result: CatalogLoadResult,
   refusal: CatalogRefusal,
@@ -372,18 +359,19 @@ async function mergeEntry(
   }
 
   if (knownPublisher === undefined) {
+    // The row and its audit line in ONE statement: half the round trips, and a
+    // line exists exactly when the row was inserted.
     const created = await client.query(
-      `INSERT INTO apps (id, publisher_id) VALUES ($1, $2)
-       ON CONFLICT (id) DO NOTHING`,
-      [manifest.id, manifest.publisher],
+      `WITH ins AS (
+         INSERT INTO apps (id, publisher_id) VALUES ($1, $2)
+         ON CONFLICT (id) DO NOTHING RETURNING id)
+       INSERT INTO app_admin_audit (actor_kind, action, app_id, app_version, before, after)
+       SELECT 'boot', 'catalog-load', ins.id, NULL, NULL, $3::jsonb FROM ins`,
+      [manifest.id, manifest.publisher, JSON.stringify({ status: "draft", publisher: manifest.publisher })],
     );
     if (created.rowCount) {
       known.apps.set(manifest.id, manifest.publisher);
       result.appsInserted += 1;
-      await audit(client, manifest.id, null, {
-        status: "draft",
-        publisher: manifest.publisher,
-      });
     } else {
       // The id appeared after the known state was read: whoever owns it is
       // whoever inserted it, and an entry under another publisher is refused.
@@ -400,29 +388,44 @@ async function mergeEntry(
     }
   }
 
+  // The version and its audit line in one statement. A conflict means another
+  // writer inserted this (id, version) after the known state was read: the
+  // stored hash is read again and compared, so a different one is refused
+  // exactly as one seen at the start would have been.
   const inserted = await client.query(
-    `INSERT INTO app_versions (app_id, version, manifest, manifest_sha256, entry_sha256, source)
-     VALUES ($1, $2, $3::jsonb, $4, $5, 'repo')
-     ON CONFLICT (app_id, version) DO NOTHING`,
+    `WITH ins AS (
+       INSERT INTO app_versions (app_id, version, manifest, manifest_sha256, entry_sha256, source)
+       VALUES ($1, $2, $3::jsonb, $4, $5, 'repo')
+       ON CONFLICT (app_id, version) DO NOTHING RETURNING app_id, version)
+     INSERT INTO app_admin_audit (actor_kind, action, app_id, app_version, before, after)
+     SELECT 'boot', 'catalog-load', ins.app_id, ins.version, NULL, $6::jsonb FROM ins`,
     [
       manifest.id,
       manifest.version,
       JSON.stringify(manifest),
       manifestSha256,
       manifest.entry.sha256,
+      JSON.stringify({ reviewStatus: "pending", source: "repo", manifestSha256 }),
     ],
   );
-  known.versions.set(versionKey(manifest.id, manifest.version), manifestSha256);
   if (inserted.rowCount) {
+    known.versions.set(versionKey(manifest.id, manifest.version), manifestSha256);
     result.versionsInserted += 1;
     const versions = insertedByApp.get(manifest.id) ?? [];
     versions.push(manifest.version);
     insertedByApp.set(manifest.id, versions);
-    await audit(client, manifest.id, manifest.version, {
-      reviewStatus: "pending",
-      source: "repo",
-      manifestSha256,
-    });
+    return;
+  }
+  const stored = await client.query<{ manifest_sha256: string }>(
+    `SELECT manifest_sha256 FROM app_versions WHERE app_id = $1 AND version = $2`,
+    [manifest.id, manifest.version],
+  );
+  const storedNow = stored.rows[0]?.manifest_sha256;
+  if (storedNow !== undefined) {
+    known.versions.set(versionKey(manifest.id, manifest.version), storedNow);
+    if (storedNow !== manifestSha256) {
+      refuse(result, { ...ref, reason: "hash-changed" }, { stored: storedNow, offered: manifestSha256 });
+    }
   }
 }
 

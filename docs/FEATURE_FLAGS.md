@@ -817,3 +817,31 @@ Turn the QG on from controles → interruptores (the server's override) or
 `PUT /api/admin/flag-overrides { key: "stories", serverId, enabled: true }`;
 friends with `PUT /api/admin/flags { key: "stories_friends", enabled: true }`.
 Clients read `GET /api/stories/config[?serverId=]` and the strips themselves.
+
+## `custom_bots` and `bot_test_chat` (per server)
+
+Server bots: one AI bot per server that members talk to in chat
+(`docs/plans/CUSTOM_BOTS.md`). Both flags were born as flags and both default
+**off**.
+
+- **`custom_bots`** (`CUSTOM_BOTS`) is the whole feature. Clients read
+  `enabled` on `GET /api/bots/config?serverId=`. Off for a server: the settings
+  tab and the member list row are hidden, creating a bot or switching one on
+  answers 403 `bots_disabled`, and no bot answers, welcomes or reminds there.
+  The runner reads the flag again before each model call, so off also silences
+  a reply already queued. Staff can still edit or switch off a bot that exists.
+- **`bot_test_chat`** (`BOT_TEST_CHAT`) is the wizard's practice chat. Every
+  turn is a model call, so it is separate.
+
+Off everywhere (the default) costs nothing: a chat message never reaches the
+database for bots, and the run poller and the reminder job return before they
+query. Off is a rollout switch, not a verdict, so it **deletes nothing**: a
+reminder that falls due while its server is off waits and goes out when the
+flag comes back. More than six hours late, it does not post: a repeating one
+moves on to its next slot, and a one-off is dropped.
+
+Turn one server on with `PUT /api/admin/flag-overrides { key: "custom_bots",
+serverId, enabled: true }` or from controles → interruptores, then
+`bot_test_chat` the same way. Production also needs `ANTHROPIC_API_KEY`: with
+no model offered, the config answers `enabled: false` whatever the flag says.
+

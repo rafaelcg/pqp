@@ -1704,7 +1704,7 @@ export function MessageComposer({
           isFormatBarOpen) && (
           <div className="max-h-[min(40dvh,100%)] overflow-y-auto px-2 pt-2">
         {replyTarget && (
-          <div className="mb-2 flex items-center gap-2 rounded-[var(--radius-control)] bg-surface-3/60 px-2.5 py-1.5 text-xs text-text-secondary">
+          <div className="chat-msg-in mb-2 flex items-center gap-2 rounded-[var(--radius-control)] bg-surface-3/60 px-2.5 py-1.5 text-xs text-text-secondary">
             <CornerUpLeft className="h-3.5 w-3.5 shrink-0 text-accent" />
             <span className="min-w-0 flex-1 truncate">
               {t("composer.replying", { name: replyTarget.authorName })}
@@ -2048,7 +2048,7 @@ function AttachmentChip({
   const percent = Math.round(attachment.progress * 100);
 
   return (
-    <li className="relative flex w-44 items-center gap-2 rounded-md border border-ink-4 bg-ink-3/60 p-1.5">
+    <li className="chat-msg-in relative flex w-44 items-center gap-2 rounded-md border border-ink-4 bg-ink-3/60 p-1.5">
       <span className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded bg-ink-4/60">
         {isImage ? (
           <img

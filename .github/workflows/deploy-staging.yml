@@ -38,6 +38,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Full history for the sitemap's lastmod; see deploy-web.yml.
+          fetch-depth: 0
 
       - name: Setup pnpm
         # Version comes from the root package.json "packageManager" field.

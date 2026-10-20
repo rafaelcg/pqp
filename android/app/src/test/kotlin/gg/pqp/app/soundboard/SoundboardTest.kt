@@ -148,6 +148,71 @@ class SoundboardTest {
         assertEquals(ChannelOwners.Lookup.Found("s1"), owners.find("c-s1", listOf("s1", "s2"), up))
     }
 
+    @Test
+    fun `a server's channel list is trusted for a minute, not for ever`() = kotlinx.coroutines.test.runTest {
+        var clock = 0L
+        val owners = ChannelOwners(now = { clock })
+        var channels = listOf("old" to "s1")
+        var reads = 0
+        val fetch: suspend (String) -> List<Pair<String, String>>? = { reads += 1; channels }
+        assertEquals(ChannelOwners.Lookup.None, owners.find("new", listOf("s1"), fetch))
+        // A channel is added to the server; inside the window the old answer stands (no request storm)...
+        channels = listOf("old" to "s1", "new" to "s1")
+        clock = ChannelOwners.READ_TTL_MS - 1
+        assertEquals(ChannelOwners.Lookup.None, owners.find("new", listOf("s1"), fetch))
+        assertEquals(1, reads)
+        // ...and once it is stale the server is read again and the channel is found.
+        clock = ChannelOwners.READ_TTL_MS
+        assertEquals(ChannelOwners.Lookup.Found("s1"), owners.find("new", listOf("s1"), fetch))
+        assertEquals(2, reads)
+    }
+
+    @Test
+    fun `freshness is trusted for its window, and forgotten on request`() {
+        var clock = 0L
+        val fresh = Freshness({ clock }, windowMs = 1_000, cap = 16)
+        assertFalse(fresh.isFresh("a"))
+        fresh.mark("a")
+        clock = 999
+        assertTrue(fresh.isFresh("a"))
+        clock = 1_000
+        assertFalse(fresh.isFresh("a"))
+        fresh.mark("a")
+        fresh.forget("a")
+        assertFalse(fresh.isFresh("a"))
+    }
+
+    @Test
+    fun `visiting many channels does not accumulate, stale entries go and the oldest past the cap`() {
+        var clock = 0L
+        val fresh = Freshness({ clock }, windowMs = 1_000, cap = 4)
+        // Past the cap inside the window: the oldest go first.
+        listOf("a", "b", "c", "d", "e", "f").forEach { fresh.mark(it); clock += 10 }
+        assertEquals(4, fresh.size)
+        assertFalse(fresh.isFresh("a"))
+        assertFalse(fresh.isFresh("b"))
+        assertTrue(fresh.isFresh("f"))
+        // Past the window: the next mark drops everything stale.
+        clock += 5_000
+        fresh.mark("z")
+        assertEquals(1, fresh.size)
+    }
+
+    @Test
+    fun `a channel whose link failed is distrusted until its catalog is read again, and the list is bounded`() {
+        val suspect = SuspectLinks(cap = 2)
+        assertFalse(suspect.contains("a"))
+        suspect.add("a")
+        assertTrue(suspect.contains("a"))
+        suspect.clear("a")
+        assertFalse(suspect.contains("a"))
+        // Past the cap the oldest is dropped.
+        listOf("a", "b", "c").forEach { suspect.add(it) }
+        assertEquals(2, suspect.size)
+        assertFalse(suspect.contains("a"))
+        assertTrue(suspect.contains("c"))
+    }
+
     // --- one download per clip ---
 
     @Test

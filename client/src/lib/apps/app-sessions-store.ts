@@ -564,6 +564,12 @@ export function handleAppsFrame<T extends { type: string }>(frame: T): boolean {
       }
       return true;
     }
+    case "app-state":
+    case "app-event":
+      // The shared state and the relayed events belong to the frame host,
+      // which draws nothing yet. Swallowed here so they stop at the apps
+      // branch of the shell and never reach the voice controller.
+      return true;
     default:
       return false;
   }

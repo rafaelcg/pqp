@@ -27,6 +27,7 @@ import {
   readServerFacts,
 } from "./availability.js";
 import { recordAppEnd, recordAppStart, recordAppStartRefused } from "./metrics.js";
+import { retryAfterCommit } from "./post-commit-retry.js";
 import { readLiveSummary, readLiveSummaryById } from "./summary.js";
 
 /**
@@ -177,6 +178,15 @@ export async function startAppSession(
        SELECT $1, $2, a.id, a.current_version, $3, $3
          FROM apps a
         WHERE a.id = $4 AND a.status = 'live' AND a.current_version IS NOT NULL
+          -- The gates are asked again INSIDE the write, not only before it: an
+          -- operator or owner switch, or a community lock, that moved while the
+          -- checks above ran stops this insert.
+          AND a.global_enabled
+          AND EXISTS (SELECT 1 FROM server_apps sa
+                       WHERE sa.server_id = $1 AND sa.app_id = a.id
+                         AND sa.operator_enabled IS TRUE AND sa.owner_enabled IS NOT FALSE)
+          AND (a.community_unlocked
+               OR NOT COALESCE((SELECT is_community FROM servers WHERE id = $1), FALSE))
        RETURNING id, app_version, started_at`,
       [serverId, channelId, user.id, appId],
     );
@@ -200,6 +210,12 @@ export async function startAppSession(
       sessionId,
       messageId,
     ]);
+    // The runtime flag last, in memory, as close to the commit as it gets: a
+    // server switched off while this ran gets nothing.
+    if (!isEnabled("apps", { serverId })) {
+      await client.query("ROLLBACK");
+      throw notFoundChannel();
+    }
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK").catch(() => {});
@@ -218,13 +234,28 @@ export async function startAppSession(
   // After the commit, and each leg on its own: a failure to tell people is
   // logged and never undoes (or re-answers) a session that exists.
   invalidateLatestMessages(channelId);
-  try {
+  // The card's broadcast is tried once inline, so in the usual case it reaches
+  // the channel before the `channel-app` frame. A read that fails (a pool blip,
+  // or the database gone for a while) hands it to `retryAfterCommit`, which
+  // keeps trying in the background without holding this answer, waits out an
+  // open database breaker instead of spending attempts on it, and gives up only
+  // past its horizon, so the channel is not left without the card until
+  // somebody reloads.
+  const announceCard = async () => {
     const hydrated = await getHydratedMessage(messageId);
     if (hydrated) {
       await announceServiceMessage(mapMessage(hydrated));
     }
+  };
+  try {
+    await announceCard();
   } catch (error) {
-    logEvent("apps.timelineAnnounceFailed", { sessionId, error: String(error) });
+    logEvent("apps.timelineAnnounceFailed", { sessionId, attempt: 0, error: String(error) });
+    void retryAfterCommit(announceCard, {
+      event: "apps.timelineAnnounceFailed",
+      key: `card:${sessionId}`,
+      fields: { sessionId },
+    });
   }
   void announceChannelApp(channelId, { immediate: true }).catch(() => {});
 

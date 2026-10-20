@@ -12,6 +12,8 @@ const entry = {
   channelTypes: ["text", "voice"],
   players: { min: 1, max: 8, spectators: true, maxSpectators: 50 },
   requires: { start: "USE_APPS", join: "VIEW_CHANNEL" },
+  state: { maxBytes: 4096, maxWritesPerSecond: 10, writers: "participants" },
+  events: { maxPerSecond: 10, maxBytes: 256 },
   capabilities: {
     identity: "display",
     share: "none",

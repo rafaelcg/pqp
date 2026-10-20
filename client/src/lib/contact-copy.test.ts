@@ -2,7 +2,7 @@ import { validateHandle } from "@pqp/shared";
 import { describe, expect, it } from "vitest";
 import REDIRECTS from "../../public/_redirects?raw";
 import ROBOTS from "../../public/robots.txt?raw";
-import SITEMAP from "../../public/sitemap.xml?raw";
+import { GENERATED_SITEMAP as SITEMAP } from "../test/generated-sitemap";
 import LLMS from "../../public/llms.txt?raw";
 import mainSource from "../main.tsx?raw";
 import en from "../locales/en/translation.json";
