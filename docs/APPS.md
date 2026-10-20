@@ -270,6 +270,31 @@ What a build does, per app:
 
 **Deploy.** `.github/workflows/deploy-apps.yml` runs on a push to `main` that touches `apps/`, `packages/app-sdk/` or `tools/apps-build/`, builds and publishes `dist-apps` with `wrangler pages deploy` to the Pages project named by the repository variable `APPS_PAGES_PROJECT` (hosted: `pqp-apps`, served at `https://pqp-apps.pages.dev`). With the variable empty the job skips cleanly. The API finds the bundles through `APPS_ORIGIN` (dev `http://localhost:5175`, unset means apps cannot run). A Pages deploy replaces the whole site, so a version that is no longer built from `apps/` stops being served; a session pinned to it (at most 12 hours old) cannot load the frame for a late joiner. Keep a released version buildable until its last session is over, or accept that.
 
+## Enquete, the live poll
+
+`apps/enquete/` (id `pqp-enquete`, "Enquete" in pt-BR, "Poll" in en, "Encuesta" in es) is a show of hands that lives as long as its session, distinct from the durable poll message (`packages/shared/src/polls.ts`, whose limits it shares: a question of at most 300 characters, 2 to 10 options of at most 55). Text or voice channels, 1 to 64 players plus 64 spectators, `content.userText: true` (so it stays off listed communities), `state.writers: participants`, identity `display`, no share, no files, no network.
+
+The host writes a question and the options and picks one choice or several; everybody votes; the bars move live; the host closes the vote (a confirm first) and then ends the poll. The state, all of it written through merge patches:
+
+| Key | Who writes it | What |
+|---|---|---|
+| `poll` | the host, once | `{ question, options, multi }` |
+| `votes` | every seat, its own key only | `{ [seatId]: bitmask }`, bit `i` set when option `i` is chosen; `null` takes the vote back |
+| `closed` | the host, on close | `{ counts, voters }`, the frozen tally the screen shows from then on |
+| `result` | the host, with `closed` | `{ text, question, winners, votes, voters }`, at most 512 bytes; `text` is the closing line (at most 200 characters) in the host's language |
+
+Votes are per SEAT, not per user: the app never knows who anybody is, and someone who leaves and comes back is a new seat. A vote is a patch of that seat's key alone, so two people voting at once never overwrite each other and no `baseRev` is needed; the host's close is written against the revision its counts were read from, so the frozen counts are exactly the votes the state held. Votes that land after the close are ignored by the screen. The largest state (a 300 character question and ten 55 character options in a four-byte script, 128 seats with every option ticked) is under 12 KB, which is the manifest's `state.maxBytes`.
+
+The frame is sandboxed without `allow-forms`, and in that case a `<form>` never fires its `submit` event (Chromium blocks the submission before the page sees it), so the host's setup is plain inputs and a button, not a form. A test keeps `index.html` free of `<form>`.
+
+### The result of a session
+
+The quiet "terminou" card needs something to say once the state is gone, and `app_sessions.summary` is `{ participants, durationSeconds }`. The convention (decided by the program's orchestrator): an app that has something to show writes `state.result`, an object of at most 512 bytes of compact JSON, before the session ends, with `text`, a plain string of at most 200 characters, which is the only field the card renders. The end path copies `state.result` into `summary.result` before it clears the state (server work of the session engine, #1401, not part of the app PRs). Enquete writes it at the moment the vote closes, so whichever way the session ends afterwards (the host, a moderator, the idle sweep) it is already there: `text` is "Ganhou: Pizza, 5 votos" (en "Winner: Pizza, 5 votes", es "Ganó: Pizza, 5 votos"), "Empate: Pizza, Sushi, 3 votos cada" for a tie (three names, then an ellipsis), "Ninguém votou" when nobody did. The other fields (`question`, `winners`, `votes`, `voters`) are the poll's own record and are shrunk until the whole object fits.
+
+## The result of a session
+
+The quiet "terminou" card needs something to say once the state is gone, and `app_sessions.summary` is `{ participants, durationSeconds }`. An app that has something to show writes it in its state under the key `result`, an object of at most 512 bytes of compact JSON, before the session ends. Enquete writes it at the moment the vote closes (the question, the winning option names and their votes, how many people voted), so whichever way the session ends afterwards (the host, a moderator, the idle sweep) the result is already there. The end path copies a valid `state.result` into `summary.result` before it clears the state; an absent, oversize or non-object `result` is dropped and the card shows what it always showed. That copy is server work of the session engine and is not in this PR; until it lands the poll's own screen is where the result is read.
+
 ## Where things live
 
 - The frame host: `client/src/lib/apps/` (`bridge-host.ts`, `frame-controller.ts`, `frame-policy.ts`, `types.ts` for the transport interface), `client/src/components/apps/app-frame.tsx`; browser suite `client/e2e/app-frame/`.
