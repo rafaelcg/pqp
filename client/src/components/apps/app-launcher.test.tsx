@@ -403,6 +403,30 @@ describe("estados 4 e 5: comecando e falhou", () => {
     expect(panel()).toBeNull();
   });
 
+  it("a pending start of one app is never taken for another: pressing Começar on B shows A still starting", async () => {
+    api.startAppSessionRequest.mockReturnValue(new Promise(() => {}));
+    await mount([entry(), entry({ id: "pqp-other", name: "name" })]);
+    await openPanel();
+    const firstIndex = tiles().findIndex((tile) => tile.getAttribute("aria-selected") === "true");
+    const otherIndex = firstIndex === 0 ? 1 : 0;
+    await act(async () => footerButton().click());
+    await act(async () => {
+      vi.advanceTimersByTime(APP_START_TIMEOUT_MS + 1);
+    });
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    await openPanel();
+    await act(async () => tiles()[otherIndex]!.click());
+    expect(tiles()[otherIndex]!.getAttribute("aria-selected")).toBe("true");
+    await act(async () => footerButton().click());
+
+    expect(api.startAppSessionRequest).toHaveBeenCalledTimes(1);
+    expect(tiles()[firstIndex]!.getAttribute("aria-selected")).toBe("true");
+    expect(tiles()[otherIndex]!.getAttribute("aria-selected")).toBe("false");
+    expect(footerButton().textContent).toBe("Starting");
+  });
+
   it("someone else got there first: the panel turns into 'already running' instead of failing", async () => {
     api.startAppSessionRequest.mockRejectedValueOnce(
       new AppStartError(409, "session_live", summary({ participants: [], players: 0 }), null),

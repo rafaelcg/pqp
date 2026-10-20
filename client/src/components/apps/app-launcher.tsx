@@ -389,6 +389,12 @@ function LauncherPanel(props: PanelProps) {
       // A request already in flight for this channel (a retry after the eight
       // seconds) is the one this press waits for: nothing second is sent.
       const request = startOnce(channelId, tile.id);
+      if (request.appId !== tile.id) {
+        // Another app's start is still pending here. It is not this press's
+        // request, so it is never silently taken for it: the selection moves
+        // to the app that is actually starting and the panel says so.
+        setSelectedId(request.appId);
+      }
       setStartState({ status: "starting", appId: request.appId });
       if (startTimer.current) {
         clearTimeout(startTimer.current);
@@ -438,7 +444,7 @@ function LauncherPanel(props: PanelProps) {
         },
       );
     },
-    [channelId, onClose],
+    [channelId, onClose, setSelectedId],
   );
 
   // A failure puts focus back on the button that retries.
