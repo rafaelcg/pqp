@@ -97,3 +97,9 @@ local.properties
 # Windows share-audio add-on: node-gyp output and CI-built binaries
 electron/native/win-share-audio/build/
 electron/native/win-share-audio/prebuilds/
+
+# @pqp/app-sdk: the folder npm would publish (pnpm --filter @pqp/app-sdk package), and the docs site cache
+packages/app-sdk/publish/
+packages/app-sdk/*.tgz
+docs-apps/.vitepress/cache/
+docs-apps/.vitepress/dist/

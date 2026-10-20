@@ -1,4 +1,4 @@
-import type { BridgeErrorCode } from "@pqp/shared";
+import type { BridgeErrorCode } from "./types.js";
 import { isErrorCode, PqpAppError } from "./errors.js";
 
 /** How long a request may wait for the host before it rejects with `unavailable`. */

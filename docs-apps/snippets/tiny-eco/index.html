@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Tiny Eco</title>
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <main>
+      <p id="status" role="status">Connecting...</p>
+      <h1 id="count" aria-label="Shared counter">0</h1>
+      <div class="row">
+        <button id="plus" type="button" disabled>+1</button>
+        <button id="ping" type="button" disabled>Ping</button>
+      </div>
+      <p id="flash" role="status" aria-live="polite"></p>
+      <ul id="people"></ul>
+    </main>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

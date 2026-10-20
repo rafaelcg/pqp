@@ -22,6 +22,7 @@ For current product status and open work, see [`docs/HANDOVER.md`](./docs/HANDOV
 | `server/` | `@pqp/server` | API, WS chat + voice signaling, optional static serve |
 | `packages/shared/` | `@pqp/shared` | Shared types / Zod / voice config |
 | `electron/` | `@pqp/electron` | Desktop shell |
+| `docs-apps/` | `@pqp/apps-docs` | Public docs site for people who build pqp apps (VitePress, `pnpm docs:apps`). Not deployed yet, see its README |
 | `ios/` | (Xcode) | Native SwiftUI iOS client |
 | `android/` | (Gradle) | Native Kotlin + Compose Android client |
 
