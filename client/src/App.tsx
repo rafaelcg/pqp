@@ -247,6 +247,7 @@ import type { AudienceModeHostControls } from "@/components/voice/audience-mode"
 import { useVoiceConfig } from "@/hooks/use-voice-config";
 import { useForumConfig } from "@/hooks/use-forum-config";
 import { useAppsSessionsSync } from "@/hooks/use-apps-sessions-sync";
+import { AppLauncher } from "@/components/apps/app-launcher";
 import {
   handleAppsFrame,
   noteAppsReconnected,
@@ -345,7 +346,7 @@ import { useVoiceStateSync } from "@/components/voice/voice-state-sync";
 import { VoiceStatusBar } from "@/components/voice/voice-status-bar";
 import { MusicMiniPlayer } from "@/components/voice/music-mini-player";
 import { MusicComposer } from "@/components/voice/music-composer";
-import { useMusicDock } from "@/lib/music-store";
+import { setMusicOpen, useMusicDock } from "@/lib/music-store";
 import {
   isCameraAtCap,
   isScreenShareAtCap,
@@ -11158,6 +11159,37 @@ function MainAppContent({
   );
   const musicInComposer =
     voiceState.status === "connected" && viewingThisCall;
+  // The two things the apps launcher offers as shortcuts rather than apps: the
+  // music queue (it lives in the call this person is in) and the server's
+  // watch party channel (open the one there is, or create it where allowed).
+  const watchPartyChannelHere = isWatchPartyChannelsEnabled()
+    ? channels.find((one) => isWatchPartyChannelType(one.type))
+    : undefined;
+  const appLauncherBuiltIns = {
+    music: {
+      inCallHere: musicInComposer && selectedChannel?.type === "voice",
+      open: () => setMusicOpen(true),
+    },
+    watchParty: !isWatchPartyChannelsEnabled()
+      ? null
+      : watchPartyChannelHere
+        ? {
+            label: "open" as const,
+            run: () => void selectChannel(watchPartyChannelHere.id),
+          }
+        : canManageChannels
+          ? {
+              label: "create" as const,
+              run: () =>
+                setChannelPrompt({
+                  mode: "create",
+                  type: "watch_party",
+                  isPrivate: false,
+                  parentId: null,
+                }),
+            }
+          : null,
+  };
   const voiceIsDmCall = Boolean(
     voiceState.voiceChannelId &&
       conversations.some((one) => one.channelId === voiceState.voiceChannelId),
@@ -12912,6 +12944,40 @@ function MainAppContent({
         dock={canSendHere ? <CallDockOutlet channelId={selectedChannel.id} /> : undefined}
         music={
           musicInComposer && canSendHere ? <MusicComposer voiceState={voiceState} /> : undefined
+        }
+        appsLauncher={
+          selectedChannel.kind === "server" &&
+          selectedServerId &&
+          (selectedChannel.type === "text" || selectedChannel.type === "voice") &&
+          !isWatchPartySplit
+            ? (buttonClassName) => (
+                <AppLauncher
+                  key={selectedChannel.id}
+                  serverId={selectedServerId}
+                  channelId={selectedChannel.id}
+                  channelName={selectedChannel.name}
+                  channelType={selectedChannel.type as "text" | "voice"}
+                  viewerId={user?.id ?? null}
+                  canStart={
+                    perms.serverBits === 0n ||
+                    perms.can(Permission.USE_APPS, selectedChannel.id)
+                  }
+                  canManageChannels={
+                    perms.serverBits === 0n ||
+                    perms.can(Permission.MANAGE_CHANNELS, selectedChannel.id)
+                  }
+                  canManageServer={canManageServer}
+                  people={messageAuthors}
+                  buttonClassName={buttonClassName}
+                  disabled={!selectedChannelId || messagesLoading}
+                  builtIns={appLauncherBuiltIns}
+                  onRequestAccess={() => {
+                    setSettingsSection("feedback");
+                    setSettingsOpen(true);
+                  }}
+                />
+              )
+            : undefined
         }
       />
       </div>

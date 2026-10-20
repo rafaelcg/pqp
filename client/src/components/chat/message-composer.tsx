@@ -244,6 +244,13 @@ interface MessageComposerProps {
   music?: ReactNode;
   /** See `EmbeddedComposer`. Null is the ordinary chat composer. */
   embedded?: EmbeddedComposer | null;
+  /**
+   * The apps button and its panel (`AppLauncher`), drawn beside the + so the
+   * composer's furniture stays in one row. Built by the shell, which knows the
+   * channel and the permissions; the composer only gives it a place and its
+   * own icon-button size. Absent in a thread, a DM, a forum and stream chat.
+   */
+  appsLauncher?: (buttonClassName: string) => ReactNode;
 }
 
 /**
@@ -414,6 +421,7 @@ export function MessageComposer({
   variant = "default",
   dock,
   music,
+  appsLauncher,
   embedded = null,
 }: MessageComposerProps) {
   const { t } = useTranslation();
@@ -1889,6 +1897,7 @@ export function MessageComposer({
             )}
           </div>
           )}
+          {variant !== "stream" && appsLauncher?.(iconButtonClass)}
           {variant !== "stream" && (
           <Tooltip label={t("composer.format")}>
             <Button
