@@ -50,6 +50,7 @@ import { ComposerFormatPreview } from "@/components/chat/composer-format-preview
 import { MusicHintHostProvider } from "@/components/voice/call-dock";
 import { FeatureHint, useFeatureHintEnabled } from "@/components/layout/feature-hint";
 import { rememberFeatureHint } from "@/lib/feature-hints";
+import { registerComposerActivity } from "@/lib/hint-quiet";
 import { VoiceNoteTranscriptionNotice } from "@/components/chat/voice-note-transcription-notice";
 import { PollComposer } from "@/components/chat/poll-composer";
 import {
@@ -527,6 +528,25 @@ export function MessageComposer({
       rememberFeatureHint("composerFormat");
     }
   }, [isFormatBarOpen]);
+
+  // Tells the hint queue (`lib/hint-quiet.ts`) whether somebody is in the
+  // middle of a message: focus in the box, or text waiting in it. App cannot
+  // read either, the composer owns its value. A report is two booleans and
+  // never the text.
+  const activityRef = useRef<ReturnType<typeof registerComposerActivity> | null>(
+    null,
+  );
+  useEffect(() => {
+    const activity = registerComposerActivity();
+    activityRef.current = activity;
+    return () => {
+      activity.release();
+      activityRef.current = null;
+    };
+  }, []);
+  useEffect(() => {
+    activityRef.current?.report({ draft: body.trim() !== "" });
+  }, [body]);
 
   useEffect(() => {
     if (!slowModeUntil || slowModeUntil <= Date.now()) {
@@ -1830,6 +1850,8 @@ export function MessageComposer({
             // Arrow keys and clicks move the caret without changing the value, and
             // the active `@token` is defined by where the caret is.
             onSelect={(e) => syncCaret(e.currentTarget)}
+            onFocus={() => activityRef.current?.report({ focused: true })}
+            onBlur={() => activityRef.current?.report({ focused: false })}
             onPaste={handlePaste}
             disabled={disabled || isRunningSlash}
             maxLength={MESSAGE_MAX_LENGTH}

@@ -126,6 +126,7 @@ import { translateMessage, useTranslation, type MessageKey } from "@/lib/i18n";
 import { toggleMessageSelection } from "@/lib/message-selection";
 import { splitArrivals } from "@/lib/message-arrivals";
 import { scrollWithin } from "@/lib/scroll-within";
+import { hintDietHides, useHintDiet } from "@/lib/hint-diet";
 import { shouldOpenUp } from "@/lib/menu-flip";
 import {
   cn,
@@ -2651,6 +2652,11 @@ function EmptyState({
   const { t } = useTranslation();
   const [state, setState] = useState<"idle" | "busy" | "copied" | "failed">("idle");
   const timer = useRef<number | null>(null);
+  // The hint diet drops the button: the arrival banner above carries the
+  // same "Copiar convite" and two of them a screen apart is the audit's
+  // first-second finding. The line of text stays.
+  useHintDiet();
+  const showCopyButton = !hintDietHides("ownerInviteButton");
 
   useEffect(
     () => () => {
@@ -2691,24 +2697,26 @@ function EmptyState({
             ? t("chat.empty.owner.failed")
             : t("chat.empty.owner.body")}
         </p>
-        <Button
-          // Secondary: the owner banner above carries the loud copy of this
-          // same action, and two accent buttons a screen apart compete.
-          variant="secondary"
-          className="mt-3"
-          data-empty-copy-invite=""
-          disabled={state === "busy"}
-          onClick={() => void copy()}
-        >
-          {state === "copied" ? (
-            <Check aria-hidden="true" className="animate-icon-swap h-4 w-4" />
-          ) : (
-            <Copy aria-hidden="true" className="h-4 w-4" />
-          )}
-          {state === "copied"
-            ? t("chat.empty.owner.copied")
-            : t("chat.empty.owner.copy")}
-        </Button>
+        {showCopyButton ? (
+          <Button
+            // Secondary: the owner banner above carries the loud copy of this
+            // same action, and two accent buttons a screen apart compete.
+            variant="secondary"
+            className="mt-3"
+            data-empty-copy-invite=""
+            disabled={state === "busy"}
+            onClick={() => void copy()}
+          >
+            {state === "copied" ? (
+              <Check aria-hidden="true" className="animate-icon-swap h-4 w-4" />
+            ) : (
+              <Copy aria-hidden="true" className="h-4 w-4" />
+            )}
+            {state === "copied"
+              ? t("chat.empty.owner.copied")
+              : t("chat.empty.owner.copy")}
+          </Button>
+        ) : null}
       </div>
     );
   }

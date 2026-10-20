@@ -405,6 +405,43 @@ describe("discord_import_notice against the onboarding config the client reads",
 });
 
 /**
+ * `hint_diet` and `hint_budget`, the hints audit's two switches. Global client
+ * flags on the onboarding config route, read by one client module.
+ */
+describe("hint_diet and hint_budget against the onboarding config the client reads", () => {
+  it("are global, off by default, and named under the fields the route serves", () => {
+    for (const [key, field] of [
+      ["hint_diet", "hintDiet"],
+      ["hint_budget", "hintBudget"],
+    ] as const) {
+      const def = FEATURE_FLAGS[key];
+      expect(def.perServer, key).toBe(false);
+      expect(def.codeDefault, key).toBe(false);
+      expect(def.clientVia, key).toBe(`GET /api/onboarding/config (${field})`);
+    }
+  });
+
+  it("the config route answers from both flags", () => {
+    const api = readFileSync(path.join(serverSrc, "api/index.ts"), "utf8");
+    const route = /router\.get\("\/api\/onboarding\/config"[\s\S]*?\);/.exec(api)?.[0];
+    expect(route, "GET /api/onboarding/config is not mounted").toBeTruthy();
+    expect(route).toContain('hintDiet: isEnabled("hint_diet")');
+    expect(route).toContain('hintBudget: isEnabled("hint_budget")');
+  });
+
+  it("the client asks that route, reads both fields, and App starts the reader", () => {
+    const config = readFileSync(path.join(clientSrc, "lib/hint-config.ts"), "utf8");
+    expect(config).toContain("/api/onboarding/config");
+    const diet = readFileSync(path.join(clientSrc, "lib/hint-diet.ts"), "utf8");
+    expect(diet).toMatch(/\.hintDiet === true/);
+    const quiet = readFileSync(path.join(clientSrc, "lib/hint-quiet.ts"), "utf8");
+    expect(quiet).toMatch(/\.hintBudget === true/);
+    const app = readFileSync(path.join(clientSrc, "App.tsx"), "utf8");
+    expect(app).toMatch(/newcomerInviteUserId \? startHintConfig\(\) : undefined/);
+  });
+});
+
+/**
  * `conversations_home` and `conversations_home_phone_tabs`, Conversas. Two
  * global client flags served on one route that web, iOS and Android all read.
  */
