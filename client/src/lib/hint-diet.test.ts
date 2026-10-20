@@ -1,5 +1,9 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+// `startHintConfig` asks the real fetcher; here it never answers, so the only
+// answers in a test are the ones the test hands `loadHintConfig` itself.
+vi.mock("@/lib/api", () => ({ apiFetch: () => new Promise(() => {}) }));
 import {
   CORNER_HINT_ORDER,
   winningCornerHint,
@@ -25,7 +29,12 @@ import {
   resetHintDietForTests,
   setHintDiet,
 } from "./hint-diet";
-import { resetHintConfigForTests, loadHintConfig } from "./hint-config";
+import {
+  isHintConfigSettled,
+  loadHintConfig,
+  resetHintConfigForTests,
+  startHintConfig,
+} from "./hint-config";
 import { isHintBudgetOn, resetHintQuietForTests } from "./hint-quiet";
 
 /*
@@ -141,6 +150,26 @@ describe("the flag read", () => {
     await loadHintConfig(async () => ({}));
     expect(isHintDietOn()).toBe(false);
     expect(isHintBudgetOn()).toBe(false);
+  });
+
+  it("a request that outlives its lifecycle neither applies nor releases the queues", async () => {
+    let release!: (value: { hintDiet: boolean }) => void;
+    const stop1 = startHintConfig();
+    // The first lifecycle's own request is the real fetcher; start a pending one by hand.
+    const pending = loadHintConfig(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    stop1(); // the account signed out
+    const stop2 = startHintConfig(); // and another signed in; its answer has not come
+    expect(isHintConfigSettled()).toBe(false);
+    release({ hintDiet: true });
+    await pending;
+    expect(isHintDietOn()).toBe(false);
+    expect(isHintConfigSettled()).toBe(false);
+    stop2();
   });
 
   it("a slow stale answer cannot undo a newer one", async () => {

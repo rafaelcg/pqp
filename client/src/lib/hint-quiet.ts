@@ -223,6 +223,41 @@ export function isModalDialogOpen(
   }
 }
 
+function nodeIsOrHoldsModal(node: Node): boolean {
+  if (node.nodeType !== 1) {
+    return false;
+  }
+  const element = node as Element;
+  return element.matches(MODAL_SELECTOR) || element.querySelector(MODAL_SELECTOR) !== null;
+}
+
+/**
+ * Whether a batch of DOM mutations could have changed the answer to "is a
+ * modal open": the marker attribute moved, or a node that is a modal (or holds
+ * one) was added or removed. Everything else, the vast majority of a chat
+ * page's churn, is ignored without touching the rest of the document.
+ */
+export function mutationsTouchModal(
+  records: ReadonlyArray<Pick<MutationRecord, "type" | "addedNodes" | "removedNodes">>,
+): boolean {
+  for (const record of records) {
+    if (record.type === "attributes") {
+      return true;
+    }
+    for (const node of record.addedNodes) {
+      if (nodeIsOrHoldsModal(node)) {
+        return true;
+      }
+    }
+    for (const node of record.removedNodes) {
+      if (nodeIsOrHoldsModal(node)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 /**
  * Whether a modal is on screen. Watches the DOM only while `enabled`, so with
  * the budget flag off no observer exists at all.
@@ -240,14 +275,22 @@ export function useModalDialogOpen(enabled: boolean): boolean {
       setOpen(isModalDialogOpen());
     };
     check();
-    const observer = new MutationObserver(() => {
-      // Coalesced to one read per frame: a transcript streaming in mutates the
-      // DOM constantly and the question only changes when a dialog mounts.
-      if (frame === 0) {
+    const observer = new MutationObserver((records) => {
+      // A transcript streaming in mutates the DOM constantly and the answer
+      // only changes when a modal mounts, leaves, or flips its marker. So the
+      // records are filtered first (each looks only inside the nodes it
+      // touched, never the whole document) and the one real read is
+      // coalesced to a frame.
+      if (frame === 0 && mutationsTouchModal(records)) {
         frame = window.requestAnimationFrame(check);
       }
     });
-    observer.observe(document.body, { childList: true, subtree: true });
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["aria-modal"],
+    });
     return () => {
       observer.disconnect();
       if (frame !== 0) {

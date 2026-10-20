@@ -24,6 +24,7 @@ import {
   hintsAreQuiet,
   isComposerBusy,
   isModalDialogOpen,
+  mutationsTouchModal,
   registerComposerActivity,
   resetHintQuietForTests,
   useComposerBusy,
@@ -308,6 +309,45 @@ describe("a modal dialog", () => {
     await rerender(<Probe enabled={false} />);
     await settle();
     expect(open()).toBe("false");
+  });
+});
+
+describe("which DOM mutations can change the modal answer", () => {
+  const record = (init: {
+    type?: "childList" | "attributes";
+    added?: Node[];
+    removed?: Node[];
+  }) =>
+    ({
+      type: init.type ?? "childList",
+      addedNodes: init.added ?? [],
+      removedNodes: init.removed ?? [],
+    }) as unknown as MutationRecord;
+  const el = (html: string) => {
+    const wrap = document.createElement("div");
+    wrap.innerHTML = html;
+    return wrap.firstElementChild as Element;
+  };
+
+  it("ignores the churn of an ordinary chat page", () => {
+    const row = el('<li class="message"><p>hi</p></li>');
+    expect(mutationsTouchModal([record({ added: [row] }), record({ removed: [row] })])).toBe(
+      false,
+    );
+    expect(mutationsTouchModal([record({ added: [document.createTextNode("x")] })])).toBe(false);
+    expect(mutationsTouchModal([])).toBe(false);
+  });
+
+  it("notices a modal arriving, leaving, or arriving inside a bigger subtree", () => {
+    const modal = el('<div role="dialog" aria-modal="true"></div>');
+    const portal = el('<div><section><div aria-modal="true"></div></section></div>');
+    expect(mutationsTouchModal([record({ added: [modal] })])).toBe(true);
+    expect(mutationsTouchModal([record({ removed: [modal] })])).toBe(true);
+    expect(mutationsTouchModal([record({ added: [portal] })])).toBe(true);
+  });
+
+  it("notices the marker itself changing", () => {
+    expect(mutationsTouchModal([record({ type: "attributes" })])).toBe(true);
   });
 });
 

@@ -64,6 +64,13 @@ export function useHintConfigSettled(): boolean {
  */
 let asked = 0;
 let applied = 0;
+/**
+ * One per signed-in account's stay on the page (`startHintConfig` to its
+ * teardown). A request that finishes after its lifecycle ended answers for an
+ * account that is gone: it may neither apply its flags nor release the queues
+ * of the lifecycle that replaced it.
+ */
+let lifecycle = 0;
 
 export async function loadHintConfig(
   fetcher: () => Promise<{
@@ -73,9 +80,10 @@ export async function loadHintConfig(
 ): Promise<void> {
   asked += 1;
   const mine = asked;
+  const mineLifecycle = lifecycle;
   try {
     const answer = await fetcher();
-    if (mine > applied) {
+    if (mine > applied && mineLifecycle === lifecycle) {
       applied = mine;
       setHintDiet(hintDietFromConfig(answer));
       setHintBudget(hintBudgetFromConfig(answer));
@@ -83,20 +91,29 @@ export async function loadHintConfig(
   } catch {
     // An older API (404) or a blip: keep the last answer.
   } finally {
-    setSettled(true);
+    if (mineLifecycle === lifecycle) {
+      setSettled(true);
+    }
   }
 }
 
 /** Ask now and on every config refresh. Returns the teardown. */
 export function startHintConfig(): () => void {
+  lifecycle += 1;
+  const mine = lifecycle;
   void loadHintConfig();
-  const settleTimer = setTimeout(() => setSettled(true), SETTLE_MAX_MS);
+  const settleTimer = setTimeout(() => {
+    if (mine === lifecycle) {
+      setSettled(true);
+    }
+  }, SETTLE_MAX_MS);
   const stop = onConfigRefresh(() => {
     void loadHintConfig();
   });
   return () => {
     stop();
     clearTimeout(settleTimer);
+    lifecycle += 1;
     setSettled(false);
     // The answer belongs to the account that asked.
     asked += 1;
@@ -110,6 +127,7 @@ export function startHintConfig(): () => void {
 export function resetHintConfigForTests(): void {
   asked = 0;
   applied = 0;
+  lifecycle = 0;
   settled = false;
   settledListeners.clear();
 }
