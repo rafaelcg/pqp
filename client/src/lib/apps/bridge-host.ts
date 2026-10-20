@@ -341,7 +341,8 @@ export class BridgeHost {
       }
       this.applySnapshot(snapshot);
     } catch (error) {
-      this.unsubscribe();
+      // `detach()` may have run while the join was in flight and dropped it already
+      this.unsubscribe?.();
       this.unsubscribe = null;
       throw error;
     }

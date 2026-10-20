@@ -65,6 +65,8 @@ interface PendingJoin {
   resolve(snapshot: SessionSnapshot): void;
   reject(error: AppTransportError): void;
   timer: ReturnType<typeof setTimeout>;
+  /** How many callers are waiting on it: each one holds the seat once it lands. */
+  waiters: number;
 }
 
 interface PendingPatch {
@@ -80,6 +82,12 @@ interface SessionRecord {
   seated: boolean;
   asSpectator: boolean;
   pendingJoin: PendingJoin | null;
+  /**
+   * How many joins the seat was handed to. A frame remounted while its join was
+   * in flight shares that join, so two frames hold one seat, and only the last
+   * of them to leave may release it.
+   */
+  holders: number;
   patches: PendingPatch[];
   /** What the handlers were last told about the link. */
   connection: BridgeConnectionStatus;
@@ -110,6 +118,8 @@ export interface AppSessionWire {
 
 export function createAppSessionWire(link: { current: AppWireLink | null }): AppSessionWire {
   const records = new Map<string, SessionRecord>();
+  /** How each session is ended, kept apart from its record so a record made again still has it. */
+  const ends = new Map<string, () => Promise<void>>();
   let online = true;
 
   const send = (frame: AppClientFrame): boolean => {
@@ -129,10 +139,11 @@ export function createAppSessionWire(link: { current: AppWireLink | null }): App
         seated: false,
         asSpectator: false,
         pendingJoin: null,
+        holders: 0,
         patches: [],
         connection: "online",
         transport: null,
-        end: end ?? (() => Promise.reject(new AppTransportError("unavailable"))),
+        end: end ?? ends.get(sessionId) ?? (() => Promise.reject(new AppTransportError("unavailable"))),
       };
       records.set(sessionId, record);
     } else if (end) {
@@ -149,6 +160,7 @@ export function createAppSessionWire(link: { current: AppWireLink | null }): App
     if (outcome instanceof AppTransportError) {
       pending.reject(outcome);
     } else {
+      record.holders += pending.waiters;
       pending.resolve(outcome);
     }
   }
@@ -171,6 +183,7 @@ export function createAppSessionWire(link: { current: AppWireLink | null }): App
     settleJoin(record, new AppTransportError("ended"));
     failPatches(record, "ended");
     record.seated = false;
+    record.holders = 0;
     for (const handlers of [...record.handlers]) handlers.onEnded(reason);
     records.delete(record.sessionId);
   }
@@ -244,13 +257,28 @@ export function createAppSessionWire(link: { current: AppWireLink | null }): App
     }
   }
 
-  function makeTransport(record: SessionRecord): AppSessionTransport {
-    return {
+  /**
+   * A transport is held by the UI for as long as the session id is the same
+   * (the layout memoises it), but its record is dropped from the map when the
+   * last subscriber leaves without a seat, which is exactly what a failed join
+   * does. So every call looks the record up by id, and makes it again when it is
+   * gone: a transport bound to a record that is no longer in the map would send
+   * `app-join` and never hear the answer, and every retry would time out.
+   */
+  function makeTransport(sessionId: string): AppSessionTransport {
+    const current = () => {
+      const record = recordFor(sessionId);
+      record.transport ??= transport;
+      return record;
+    };
+    const transport: AppSessionTransport = {
       join(options) {
+        const record = current();
         // A second ask while one is in flight (React mounts, unmounts and
         // mounts a frame again in development) waits for the same answer
         // instead of sending a second `app-join`.
         if (record.pendingJoin) {
+          record.pendingJoin.waiters += 1;
           return record.pendingJoin.promise;
         }
         record.asSpectator = options.asSpectator === true;
@@ -273,10 +301,19 @@ export function createAppSessionWire(link: { current: AppWireLink | null }): App
         const timer = setTimeout(() => {
           settleJoin(record, new AppTransportError("unavailable"));
         }, JOIN_TIMEOUT_MS);
-        record.pendingJoin = { promise, resolve, reject, timer };
+        record.pendingJoin = { promise, resolve, reject, timer, waiters: 1 };
         return promise;
       },
       leave() {
+        const record = records.get(sessionId);
+        if (!record) return;
+        // A frame remounted while its join was in flight shared that join, so
+        // the one that was removed must not release the seat the other just got.
+        if (record.holders > 1) {
+          record.holders -= 1;
+          return;
+        }
+        record.holders = 0;
         const wasSeated = record.seated;
         record.seated = false;
         failPatches(record, "unavailable");
@@ -286,7 +323,8 @@ export function createAppSessionWire(link: { current: AppWireLink | null }): App
         settleJoin(record, new AppTransportError("unavailable"));
       },
       patchState(patch: JsonValue, baseRev: number | undefined) {
-        if (!online || !record.seated) {
+        const record = records.get(sessionId);
+        if (!record || !online || !record.seated) {
           return Promise.reject(new AppTransportError("unavailable"));
         }
         const sent = send({
@@ -310,30 +348,39 @@ export function createAppSessionWire(link: { current: AppWireLink | null }): App
         });
       },
       sendEvent(name, data) {
-        if (!online || !record.seated) return;
+        const record = records.get(sessionId);
+        if (!record || !online || !record.seated) return;
         send({ type: "app-event-send", sessionId: record.sessionId, name, data });
       },
       end() {
-        return record.end();
+        return current().end();
       },
       subscribe(handlers) {
+        const record = current();
         record.handlers.add(handlers);
         // a late subscriber learns the link's state at once
         if (record.connection !== "online") handlers.onConnection(record.connection);
         return () => {
           record.handlers.delete(handlers);
-          if (record.handlers.size === 0 && !record.seated && !record.pendingJoin) {
-            records.delete(record.sessionId);
+          if (
+            records.get(sessionId) === record &&
+            record.handlers.size === 0 &&
+            !record.seated &&
+            !record.pendingJoin
+          ) {
+            records.delete(sessionId);
           }
         };
       },
     };
+    return transport;
   }
 
   return {
     transportFor(sessionId, end) {
+      ends.set(sessionId, end);
       const record = recordFor(sessionId, end);
-      record.transport ??= makeTransport(record);
+      record.transport ??= makeTransport(sessionId);
       return record.transport;
     },
     dispatch(message) {
@@ -383,6 +430,7 @@ export function createAppSessionWire(link: { current: AppWireLink | null }): App
         failPatches(record, "unavailable");
       }
       records.clear();
+      ends.clear();
       online = true;
     },
   };

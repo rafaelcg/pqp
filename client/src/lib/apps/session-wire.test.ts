@@ -131,6 +131,47 @@ describe("the app session wire", () => {
     expect(await outcome).toBeInstanceOf(AppTransportError);
   });
 
+  it("a transport kept after a failed join (the pane's Try again) still hears the next answer", async () => {
+    const { wire, sent } = setup();
+    // the layout memoises the transport for as long as the session id is the same
+    const transport = wire.transportFor(SESSION, async () => {});
+    const off = transport.subscribe(handlers());
+    const first = transport.join({}).catch((error) => error);
+    await vi.advanceTimersByTimeAsync(JOIN_TIMEOUT_MS + 1);
+    expect(await first).toBeInstanceOf(AppTransportError);
+    // the failed frame lets go, which drops the record from the wire
+    off();
+    // the retry uses the same transport object
+    const h = handlers();
+    transport.subscribe(h);
+    const again = transport.join({});
+    expect(sent.filter((frame) => frame.type === "app-join")).toHaveLength(2);
+    expect(wire.dispatch(snapshotFrame())).toBe(true);
+    await expect(again).resolves.toMatchObject({ seatId: SEAT });
+    expect(wire.isSeated(SESSION)).toBe(true);
+    expect(h.calls).toContainEqual(["session", SEAT]);
+  });
+
+  it("a frame removed while its join was in flight does not release the seat its remount holds", async () => {
+    const { wire, sent } = setup();
+    const transport = wire.transportFor(SESSION, async () => {});
+    // the first frame subscribes and asks
+    const offFirst = transport.subscribe(handlers());
+    const first = transport.join({});
+    // it is removed and mounted again before the answer: the second shares the join
+    offFirst();
+    const second = handlers();
+    transport.subscribe(second);
+    const again = transport.join({});
+    wire.dispatch(snapshotFrame());
+    await expect(first).resolves.toMatchObject({ seatId: SEAT });
+    await expect(again).resolves.toMatchObject({ seatId: SEAT });
+    // the removed frame finds itself detached and lets the seat go: nothing is sent
+    transport.leave();
+    expect(sent.filter((frame) => frame.type === "app-leave")).toHaveLength(0);
+    expect(wire.isSeated(SESSION)).toBe(true);
+  });
+
   it("rejects at once when the socket cannot take the frame", async () => {
     const { wire, setLinkUp } = setup();
     setLinkUp(false);
