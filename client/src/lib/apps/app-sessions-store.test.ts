@@ -271,6 +271,32 @@ describe("the live store: joining", () => {
     expect(sent).toEqual([{ op: "join", id: S1, spectator: true }]);
   });
 
+  it("reads an app-session: the snapshot that seats the viewer ends the join", () => {
+    joinAppSession(S1);
+    expect(getAppSessionsSnapshot().join.get(S1)?.status).toBe("joining");
+    const stopped = handleAppsFrame({
+      type: "app-session",
+      sessionId: S1,
+      seatId: "abcdefghijklmnop12345_",
+      role: "player",
+      isHost: false,
+      state: { rev: 1, value: {} },
+      participants: [],
+    });
+    expect(stopped).toBe(true);
+    expect(getAppSessionsSnapshot().join.has(S1)).toBe(false);
+  });
+
+  it("swallows app-state and app-event without touching the join", () => {
+    joinAppSession(S1);
+    expect(handleAppsFrame({ type: "app-state", sessionId: S1, rev: 2, value: {} })).toBe(true);
+    expect(
+      handleAppsFrame({ type: "app-event", sessionId: S1, fromSeatId: "x", name: "n", data: 1 }),
+    ).toBe(true);
+    expect(getAppSessionsSnapshot().join.get(S1)?.status).toBe("joining");
+    expect(handleAppsFrame({ type: "voice-roster" })).toBe(false);
+  });
+
   it("a session that ends clears its join", () => {
     joinAppSession(S1);
     applyChannelApp(CH1, null);

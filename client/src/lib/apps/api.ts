@@ -32,15 +32,20 @@ export async function fetchServerAppSessions(
   );
   const rows = (raw as { sessions?: unknown } | null)?.sessions;
   if (!Array.isArray(rows)) {
-    return [];
+    // A 200 with no list is not "nothing is live": it is an answer this client
+    // cannot read. Throwing keeps `applyCatchUp` from dropping live sessions.
+    throw new Error("app-sessions: the answer has no sessions array");
   }
-  // One row the schema cannot read is skipped, never the whole answer.
   const out: Array<{ channelId: string; session: AppSessionSummary }> = [];
   for (const row of rows as Array<{ channelId?: unknown; session?: unknown }>) {
     const parsed = appSessionSummarySchema.safeParse(row?.session);
-    if (parsed.success && typeof row.channelId === "string") {
-      out.push({ channelId: row.channelId, session: parsed.data });
+    if (!parsed.success || typeof row?.channelId !== "string") {
+      // One unreadable row makes the whole read incomplete. A catch-up treats
+      // every session missing from it as ended, so a partial list must not
+      // reach it: the caller keeps what the frames said and asks again later.
+      throw new Error("app-sessions: a row could not be read");
     }
+    out.push({ channelId: row.channelId, session: parsed.data });
   }
   return out;
 }

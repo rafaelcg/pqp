@@ -85,6 +85,96 @@
         }
       },
       "manifestSha256": "501caa5b6b83c521e48805bc1b14a7c0e2ee631ea4c882e71f43d8d5bb315ec0"
+    },
+    {
+      "manifest": {
+        "manifestVersion": 1,
+        "id": "pqp-enquete",
+        "version": "1.0.0",
+        "publisher": "pqp",
+        "platformApi": 1,
+        "name": "name",
+        "description": "description",
+        "icon": "poll",
+        "category": "tool",
+        "channelTypes": [
+          "text",
+          "voice"
+        ],
+        "players": {
+          "min": 1,
+          "max": 64,
+          "spectators": true,
+          "maxSpectators": 64
+        },
+        "requires": {
+          "start": "USE_APPS",
+          "join": "VIEW_CHANNEL"
+        },
+        "capabilities": {
+          "identity": "display",
+          "share": "none",
+          "localFiles": {
+            "allowed": false
+          },
+          "peer": "none"
+        },
+        "hostBound": false,
+        "state": {
+          "maxBytes": 12288,
+          "maxWritesPerSecond": 10,
+          "writers": "participants"
+        },
+        "events": {
+          "maxPerSecond": 0,
+          "maxBytes": 0
+        },
+        "presence": {
+          "phrase": "presence.phrase",
+          "short": "presence.short"
+        },
+        "content": {
+          "userText": true,
+          "userImages": false
+        },
+        "notice": "notice",
+        "entry": {
+          "path": "index.html",
+          "sha256": "d664ed5f44e9676cad1dbd8e273474f261974897bdce36c9b29d035ce4b09d9e"
+        },
+        "platforms": [
+          "web",
+          "desktop"
+        ],
+        "license": {
+          "spdx": "AGPL-3.0-only",
+          "source": "https://github.com/rafaelcg/pqp/tree/main/apps/enquete"
+        },
+        "i18n": {
+          "pt-BR": {
+            "name": "Enquete",
+            "description": "Uma votação ao vivo: o host faz a pergunta, todo mundo vota e o resultado aparece na hora.",
+            "notice": "A pergunta e as opções que o host escrever aparecem pra todo mundo na sessão.",
+            "presence.phrase": "{name} tá votando na enquete",
+            "presence.short": "Votando na enquete"
+          },
+          "en": {
+            "name": "Poll",
+            "description": "A live vote: the host asks, everybody votes and the result shows right away.",
+            "notice": "The question and options the host writes are shown to everyone in the session.",
+            "presence.phrase": "{name} is voting in a poll",
+            "presence.short": "Voting in a poll"
+          },
+          "es": {
+            "name": "Encuesta",
+            "description": "Una votación en vivo: el host pregunta, todos votan y el resultado aparece al instante.",
+            "notice": "La pregunta y las opciones que escriba el host las ve todo el mundo en la sesión.",
+            "presence.phrase": "{name} está votando en una encuesta",
+            "presence.short": "Votando en una encuesta"
+          }
+        }
+      },
+      "manifestSha256": "ff28778e33af27c71cfa1fbeaa21387bd86c4c76567226ff4ac0b60d3ebc6025"
     }
   ]
 }

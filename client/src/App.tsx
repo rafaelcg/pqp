@@ -6098,17 +6098,23 @@ function MainAppContent({
             return;
           }
 
-          // Apps in channels (behind the per-server `apps` flag): the live
-          // summary of a channel's app, the end of a session and the answers to
-          // a join. They are chat frames, not voice ones, so they stop here
-          // rather than reach the voice controller.
-          if (message.type === "channel-app" || message.type === "app-ended") {
+          // Apps in channels (behind the per-server `apps` flag): a channel's
+          // live summary, and a session's snapshot, state, events, end and
+          // refusals. The store takes every one of them (it ignores `app-state`
+          // and `app-event`, which nothing draws yet), and they are chat
+          // frames, not voice ones, so they stop here rather than reach the
+          // voice controller. The store sees the frame BEFORE the return:
+          // `app-session` and `app-error` are what end a join, and a frame
+          // swallowed ahead of the store leaves every join to time out.
+          if (
+            message.type === "channel-app" ||
+            message.type === "app-ended" ||
+            message.type === "app-session" ||
+            message.type === "app-state" ||
+            message.type === "app-event" ||
+            message.type === "app-error"
+          ) {
             handleAppsFrame(message);
-            return;
-          }
-          // The join answers (`app-session`, `app-error`) are not in the chat
-          // union until the session socket ships; they are read by type.
-          if (handleAppsFrame(message as { type: string })) {
             return;
           }
 

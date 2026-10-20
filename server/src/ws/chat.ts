@@ -1,4 +1,5 @@
 import type { WebSocket } from "ws";
+import { handleAppFrame, isAppClientFrame } from "./apps.js";
 import { z } from "zod";
 import {
   channelsUpdateSchema,
@@ -2868,6 +2869,13 @@ export async function handleChatMessage(
 
   const conn = ensureConnection(session.socket, session.user);
   const payload = message.data;
+
+  // Apps in channels: join, leave, state, events. Their own module, their own
+  // rules (the platform's flag, the session's seat); nothing below applies.
+  if (isAppClientFrame(payload)) {
+    await handleAppFrame(session.socket, session.user, payload);
+    return;
+  }
 
   // ------------------------------------------------------ the timeout gate
   //
