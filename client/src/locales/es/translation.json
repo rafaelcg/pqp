@@ -1664,6 +1664,7 @@
   "music.stop": "Detener la música",
   "music.remove": "Quitar de la cola",
   "music.volume": "Volumen de la música",
+  "music.volume.valueText": "{percent} por ciento",
   "music.openSource": "Abrir en Spotify",
   "music.tapToPlay": "Toca para reproducir",
   "music.queued": "Agregada a la cola",

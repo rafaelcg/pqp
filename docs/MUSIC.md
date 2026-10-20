@@ -370,7 +370,7 @@ and leaves out the ones that would break sync.
 | Play and pause, clicking the video, `k` and space | Play and pause on the music bar, for the whole room. Clicking the tile goes fullscreen instead. |
 | Seek bar, `j`, `l`, arrows, `0` to `9` | The seek bar on the music bar. Only someone who manages music may seek, on purpose. |
 | Next video | Skip on the bar. A member without the right gets vote skip. |
-| Volume, mute, `m` | The speaker and slider on the bar. Personal. |
+| Volume, mute, `m` | The speaker on the bar (`music-speaker-control.tsx`), in the sidebar radio and the composer alike. Personal: this machine's iframe, never the socket, kept in `localStorage` (`pqp:music-volume`, and `pqp:music-volume-restore`, the last audible level) and applied on ready and on every new track. On a mouse the click mutes and a slider floats up on hover or keyboard focus (arrows in 5% steps, Home, End, PageUp, PageDown; the wheel over the speaker moves 5% a notch). On touch or a window under 640px a tap opens a popover with the slider and a mute switch. Unmuting from a level dragged to 0 goes back to the last audible one. The model is `client/src/lib/music-volume.ts`. |
 | Current time and length | The clocks under the bar. |
 | Fullscreen, `f` | The fullscreen button on the stage tile. |
 | CC button, `c`, Settings > Subtitles | The captions button on the stage tile. Personal, see below. |

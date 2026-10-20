@@ -32,9 +32,9 @@ import {
   MusicOverflowMenu,
   MusicRepeatButton,
   MusicAutoplayButton,
-  MusicSpeakerControl,
   MusicVoteSkipButton,
 } from "@/components/voice/music-extras";
+import { MusicSpeakerControl } from "@/components/voice/music-speaker-control";
 
 export function formatMusicClock(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));

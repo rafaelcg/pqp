@@ -33,6 +33,11 @@ import {
   YT_STATE,
   type YTPlayer,
 } from "@/lib/youtube-iframe";
+import {
+  MUSIC_VOLUME_KEY,
+  readMusicVolume,
+  writeMusicVolume,
+} from "@/lib/music-volume";
 import { getMusicEmbedHost } from "@/components/voice/music-embed-host";
 
 /**
@@ -45,34 +50,7 @@ import { getMusicEmbedHost } from "@/components/voice/music-embed-host";
 
 const DRIFT_MS = 2_500;
 const REPORT_MS = 10_000;
-export const MUSIC_VOLUME_KEY = "pqp:music-volume";
-
-function readStored(key: string): string | null {
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-function writeStored(key: string, value: string) {
-  try {
-    localStorage.setItem(key, value);
-  } catch {
-    // per-viewer convenience only
-  }
-}
-
-/** One parser for the slider and for onReady. Default 40. */
-export function readMusicVolume(): number {
-  const parsed = Number(readStored(MUSIC_VOLUME_KEY) ?? NaN);
-  return Number.isFinite(parsed) ? Math.min(100, Math.max(0, parsed)) : 40;
-}
-
-export function writeMusicVolume(value: number): void {
-  const next = Math.min(100, Math.max(0, value));
-  writeStored(MUSIC_VOLUME_KEY, String(next));
-}
+export { MUSIC_VOLUME_KEY, readMusicVolume, writeMusicVolume };
 
 type VolumeTarget = {
   setVolume(volume: number): void;
@@ -531,6 +509,10 @@ export function MusicPlayer({
   isActorRef.current = isActor;
   const mutedRef = useRef(muted);
   mutedRef.current = muted;
+  /* The store's level, not storage's: a browser with no localStorage still
+     has a level the person chose this session. */
+  const volumeRef = useRef(volume);
+  volumeRef.current = volume;
   const [ready, setReady] = useState(false);
   const [failed, setFailed] = useState(false);
   const { t, locale } = useTranslation();
@@ -588,7 +570,7 @@ export function MusicPlayer({
               }
               playerRef.current = event.target;
               applyYouTubeVolume(event.target, {
-                volume: readMusicVolume(),
+                volume: volumeRef.current,
                 muted: mutedRef.current,
                 duckGain: 1,
               });
@@ -963,8 +945,6 @@ export function MusicPlayer({
     speakingPeerCount,
     transmitting,
   });
-  const volumeRef = useRef(volume);
-  volumeRef.current = volume;
   const speechRef = useRef(duckSpeech);
   speechRef.current = duckSpeech;
   const gainRef = useRef(1);
@@ -979,7 +959,9 @@ export function MusicPlayer({
     } else {
       player.unMute();
     }
-  }, [ready, muted, playerRef]);
+    // A new track re-applies it too: the iframe is one player for the whole
+    // call, but a load is the moment a level can be lost.
+  }, [ready, muted, playerRef, trackId]);
 
   useEffect(() => {
     if (!ready) {
@@ -1015,7 +997,7 @@ export function MusicPlayer({
       }
     }, MUSIC_DUCK_TICK_MS);
     return () => window.clearInterval(timer);
-  }, [ready, duckEnabled, duckSpeech, volume, muted, playerRef]);
+  }, [ready, duckEnabled, duckSpeech, volume, muted, playerRef, trackId]);
 
   const frame = (
     <div className="relative h-full w-full overflow-hidden bg-surface-0">

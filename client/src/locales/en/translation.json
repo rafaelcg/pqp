@@ -1658,6 +1658,7 @@
   "music.stop": "Stop the music",
   "music.remove": "Remove from the queue",
   "music.volume": "Music volume",
+  "music.volume.valueText": "{percent} percent",
   "music.openSource": "Open on Spotify",
   "music.tapToPlay": "Tap to play",
   "music.queued": "Added to the queue",

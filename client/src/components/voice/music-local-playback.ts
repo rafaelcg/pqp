@@ -1,6 +1,13 @@
 import { useSyncExternalStore } from "react";
 import type { YTPlayer } from "@/lib/youtube-iframe";
-import { readMusicVolume, writeMusicVolume } from "@/components/voice/music-player-embed";
+import {
+  readStoredVolumeModel,
+  toggledMuted,
+  withMuted,
+  withVolume,
+  writeStoredVolumeModel,
+  type MusicVolumeModel,
+} from "@/lib/music-volume";
 
 /**
  * THIS MACHINE'S SPEAKER, SHARED BY THE EMBED AND THE CHROME.
@@ -13,17 +20,25 @@ import { readMusicVolume, writeMusicVolume } from "@/components/voice/music-play
 export interface MusicLocalPlayback {
   volume: number;
   muted: boolean;
+  /** The last audible level: where an unmute from zero goes back to. */
+  restoreVolume: number;
   needsTap: boolean;
   /** The embed reported that YouTube will not play the current video here. */
   playbackFailed: boolean;
 }
 
-let snapshot: MusicLocalPlayback = {
-  volume: readMusicVolume(),
-  muted: false,
-  needsTap: false,
-  playbackFailed: false,
-};
+function freshSnapshot(): MusicLocalPlayback {
+  const stored = readStoredVolumeModel();
+  return {
+    volume: stored.volume,
+    muted: false,
+    restoreVolume: stored.restoreVolume,
+    needsTap: false,
+    playbackFailed: false,
+  };
+}
+
+let snapshot: MusicLocalPlayback = freshSnapshot();
 let player: YTPlayer | null = null;
 const listeners = new Set<() => void>();
 
@@ -37,23 +52,40 @@ export function setMusicLocalPlayer(next: YTPlayer | null): void {
   player = next;
 }
 
-export function setMusicLocalVolume(volume: number): void {
-  const next = Math.min(100, Math.max(0, volume));
-  snapshot = { ...snapshot, volume: next, muted: false };
-  writeMusicVolume(next);
+function model(): MusicVolumeModel {
+  return {
+    volume: snapshot.volume,
+    muted: snapshot.muted,
+    restoreVolume: snapshot.restoreVolume,
+  };
+}
+
+/** Takes a model change: stores what is persistent, tells whoever listens. */
+function commit(next: MusicVolumeModel): void {
+  const current = model();
+  if (
+    next.volume === current.volume &&
+    next.muted === current.muted &&
+    next.restoreVolume === current.restoreVolume
+  ) {
+    return;
+  }
+  snapshot = { ...snapshot, ...next };
+  writeStoredVolumeModel(next);
   emit();
+}
+
+/** A level chosen on purpose: clamped, remembered, and it unmutes. */
+export function setMusicLocalVolume(volume: number): void {
+  commit(withVolume(model(), volume));
 }
 
 export function setMusicLocalMuted(muted: boolean): void {
-  if (snapshot.muted === muted) {
-    return;
-  }
-  snapshot = { ...snapshot, muted };
-  emit();
+  commit(withMuted(model(), muted));
 }
 
 export function toggleMusicLocalMuted(): void {
-  setMusicLocalMuted(!snapshot.muted);
+  commit(toggledMuted(model()));
 }
 
 export function setMusicLocalNeedsTap(needsTap: boolean): void {
@@ -108,7 +140,7 @@ export function useMusicLocalPlayback(): MusicLocalPlayback {
 }
 
 export function resetMusicLocalPlaybackForTests(): void {
-  snapshot = { volume: readMusicVolume(), muted: false, needsTap: false, playbackFailed: false };
+  snapshot = freshSnapshot();
   player = null;
   listeners.clear();
 }
