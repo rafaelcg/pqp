@@ -466,7 +466,7 @@ function LiveStrip(props: AppSessionStripProps & { model: LiveStripModel }) {
         </span>
       ) : null}
 
-      <div className="ml-auto flex shrink-0 items-center gap-2">
+      <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-x-2 gap-y-1">
         {share?.visible ? <ShareControl share={share} onChange={onShareChange} /> : null}
         {share?.visible ? (
           <span aria-hidden className="h-5 w-px bg-border" />
@@ -580,7 +580,9 @@ function ShareControl({
         <span
           role="status"
           data-testid="app-strip-share-reason"
-          className="max-w-[22ch] text-xs leading-4 text-text-secondary @min-[1100px]/strip:max-w-[40ch]"
+          // Wide: beside the switch. Under 760 px it is a line of its own above the controls, so the group wraps instead of
+          // running past the strip's edge and under the Chat toggle.
+          className="max-w-[22ch] text-xs leading-4 text-text-secondary @min-[1100px]/strip:max-w-[40ch] @max-[759px]/strip:order-first @max-[759px]/strip:max-w-none @max-[759px]/strip:basis-full @max-[759px]/strip:text-right"
         >
           {blockedReason}
         </span>
