@@ -99,6 +99,11 @@ describe("the frame's audio hub", () => {
     (context as { state: string }).state = "closed";
     hub.setSilent(true);
     expect(hub.size).toBe(0);
+    // its master is let go with it: a later switch does not touch it, so nothing of it is held for the frame's life
+    const master = context.destination as unknown as FakeGain;
+    master.gain.value = 0.5;
+    hub.setSilent(false);
+    expect(master.gain.value).toBe(0.5);
   });
 
   it("never suspends a context: a core waiting on its audio clock would freeze", () => {

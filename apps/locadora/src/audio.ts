@@ -50,8 +50,8 @@ export function installAudioHub(target: AudioTarget = window as unknown as Audio
   const existing = (target as unknown as Record<symbol, AudioHub | undefined>)[HUB];
   if (existing) return existing;
 
-  const masters = new Set<HubGain>();
-  const contexts = new Set<HubContext>();
+  /** Each held context with the master gain in front of its speakers: a closed context takes its master with it. */
+  const held = new Map<HubContext, HubGain>();
   let silent = false;
 
   const level = () => (silent ? 0 : OPEN);
@@ -75,8 +75,7 @@ export function installAudioHub(target: AudioTarget = window as unknown as Audio
       const channels = (real as { maxChannelCount?: number } | null)?.maxChannelCount;
       if (typeof channels === "number") Object.defineProperty(master, "maxChannelCount", { configurable: true, value: channels });
       Object.defineProperty(context, "destination", { configurable: true, get: () => master });
-      masters.add(master);
-      contexts.add(context);
+      held.set(context, master);
     } catch {
       // a context that will not take the master is left as it is: the frontend's own volume still reaches the stock cores
     }
@@ -85,16 +84,16 @@ export function installAudioHub(target: AudioTarget = window as unknown as Audio
   const hub: AudioHub = {
     setSilent(next) {
       silent = next;
-      for (const context of [...contexts]) {
-        if (context.state === "closed") contexts.delete(context);
+      for (const [context, master] of [...held]) {
+        if (context.state === "closed") held.delete(context);
+        else apply(master);
       }
-      for (const master of masters) apply(master);
     },
     get silent() {
       return silent;
     },
     get size() {
-      return contexts.size;
+      return held.size;
     },
   };
 
