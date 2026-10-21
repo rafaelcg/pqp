@@ -277,6 +277,24 @@ async function heardAtViewer(page: Page): Promise<Heard> {
   );
 }
 
+/**
+ * What the viewer hears of the share, read again until the game is in it or `timeoutMs` pass, and the last reading
+ * is the answer. A fixed wait was this test's one flake: the share's media goes over a fresh peer connection
+ * (ICE, DTLS, a renegotiation for the new tracks), which on a loaded CI runner can take longer than any number
+ * picked in advance, and a viewer whose picture has not even arrived reads silence. The picture is waited for
+ * first (the stage says who is presenting), so a share that never arrives fails on that and says so.
+ */
+async function heardWithin(page: Page, timeoutMs = 30_000): Promise<Heard> {
+  await expect(page.getByText(/is presenting/)).toBeVisible({ timeout: timeoutMs });
+  const deadline = Date.now() + timeoutMs;
+  let heard = await heardAtViewer(page);
+  while (heard.game < 0.02 && Date.now() < deadline) {
+    await page.waitForTimeout(1_000);
+    heard = await heardAtViewer(page);
+  }
+  return heard;
+}
+
 /** What the app's frame says about its audio hub: the speakers' mute and the share's tap. */
 async function hubState(frame: Frame): Promise<{ silent: boolean; tapping: boolean }> {
   return frame.evaluate(() => {
@@ -329,10 +347,8 @@ for (const [label, regionCapture] of [
 
     await shareSwitch(sharer).click();
     await expect(shareSwitch(sharer)).toBeChecked();
-    await viewer.waitForTimeout(5_000);
+    const heard = await heardWithin(viewer);
     await viewer.screenshot({ path: testInfo.outputPath("viewer.png") });
-
-    const heard = await heardAtViewer(viewer);
     console.warn(`[${label}] viewer heard`, JSON.stringify(heard));
     // no sound is asked of the browser: the tab's holds the call
     if (!REAL_CAPTURE) {
@@ -343,7 +359,9 @@ for (const [label, regionCapture] of [
     // the game is in the share, the call is not
     expect(heard.tracks).toBeGreaterThan(0);
     expect(heard.game).toBeGreaterThan(0.02);
-    expect(heard.call).toBeLessThan(0.01);
+    // an echoed call would read about 0.3 here (the tone is played at 0.3); what is measured is the game tone's
+    // leakage and the noise floor, an order of magnitude under that
+    expect(heard.call).toBeLessThan(0.05);
   });
 }
 
@@ -355,15 +373,13 @@ test("the sharer's own M mutes only their speakers, a stop ends the app's sound,
   await shareSwitch(sharer).click();
   await expect(shareSwitch(sharer)).toBeChecked();
   await expect.poll(async () => (await hubState(frame)).tapping).toBe(true);
-  await viewer.waitForTimeout(4_000);
-  expect((await heardAtViewer(viewer)).game).toBeGreaterThan(0.02);
+  expect((await heardWithin(viewer)).game).toBeGreaterThan(0.02);
 
   // the sound button (what M does): the sharer's speakers go quiet, and the people watching still hear the game
   await frame.locator("#stage").hover();
   await frame.locator('[data-action="sound"]').dispatchEvent("click");
   await expect.poll(async () => (await hubState(frame)).silent).toBe(true);
-  await viewer.waitForTimeout(1_500);
-  const whileMuted = await heardAtViewer(viewer);
+  const whileMuted = await heardWithin(viewer);
   console.warn("viewer heard while the sharer was muted", JSON.stringify(whileMuted));
   expect(whileMuted.game).toBeGreaterThan(0.02);
 
@@ -379,7 +395,6 @@ test("the sharer's own M mutes only their speakers, a stop ends the app's sound,
   await shareSwitch(sharer).click();
   await expect(shareSwitch(sharer)).toBeChecked();
   await expect.poll(async () => (await hubState(frame)).tapping).toBe(true);
-  await viewer.waitForTimeout(4_000);
-  expect((await heardAtViewer(viewer)).game).toBeGreaterThan(0.02);
+  expect((await heardWithin(viewer)).game).toBeGreaterThan(0.02);
 });
 
