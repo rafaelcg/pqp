@@ -12431,25 +12431,42 @@ router.post(
     }
     let lowered = 0;
     let skipped = 0;
-    for (const targetId of await listVoiceRaisedHandUserIds(channelId!)) {
-      if (targetId !== user.id) {
-        try {
-          await requireOutranked(
-            channel.server_id,
-            user.id,
-            targetId,
-            "lower hand",
-          );
-        } catch (error) {
-          if (error instanceof Forbidden) {
-            skipped += 1;
-            continue;
+    // A few at a time rather than one after another: each hand is a rank
+    // check and a row write plus a roster fan-out, and a queue of forty
+    // should not be forty round trips in a row. Bounded, so a very long
+    // queue cannot take the pool; per-person authorization still runs for
+    // every hand.
+    const HANDS_AT_ONCE = 8;
+    const raised = await listVoiceRaisedHandUserIds(channelId!);
+    for (let start = 0; start < raised.length; start += HANDS_AT_ONCE) {
+      const results = await Promise.all(
+        raised.slice(start, start + HANDS_AT_ONCE).map(async (targetId) => {
+          if (targetId !== user.id) {
+            try {
+              await requireOutranked(
+                channel.server_id!,
+                user.id,
+                targetId,
+                "lower hand",
+              );
+            } catch (error) {
+              if (error instanceof Forbidden) {
+                return false;
+              }
+              throw error;
+            }
           }
-          throw error;
+          await setVoiceUserHandRaised(channelId!, targetId, false);
+          return true;
+        }),
+      );
+      for (const done of results) {
+        if (done) {
+          lowered += 1;
+        } else {
+          skipped += 1;
         }
       }
-      await setVoiceUserHandRaised(channelId!, targetId, false);
-      lowered += 1;
     }
     return { ok: true, lowered, skipped };
   },
