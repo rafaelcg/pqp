@@ -71,6 +71,8 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   // New with the flag, so there was no old reader: this is its definition.
   clean_voice_default: offWords,
   // New with the flag, so there was no old reader: this is its definition.
+  raised_hand_sticky: offWords,
+  // New with the flag, so there was no old reader: this is its definition.
   ws_auth_admission: offWords,
   community_home: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.

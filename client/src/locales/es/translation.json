@@ -1547,6 +1547,7 @@
   "voice.hand.next": "Sigues tú",
   "voice.hand.more": "+{count} esperando",
   "voice.hand.lowerFor": "Bajarle la mano a {name}",
+  "voice.hand.lowerAll": "Bajar todas las manos",
   "voice.hand.raised": "Mano levantada",
   "voice.hand.raisedAt": "Mano levantada, número {position} en la fila",
   "voice.hand.ask": "Pedir la palabra",

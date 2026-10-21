@@ -1243,6 +1243,18 @@ export async function getVoiceRaisedHand(
   return row ? row.raised_at.getTime() : null;
 }
 
+/** Everybody whose hand is up in this room per the rows (a moderator's "lower all"). */
+export async function listVoiceRaisedHandUserIds(
+  channelId: string,
+): Promise<string[]> {
+  const result = await getPool().query<{ user_id: string }>(
+    `SELECT user_id FROM voice_raised_hands
+      WHERE channel_id = $1 ORDER BY raised_at, user_id`,
+    [channelId],
+  );
+  return result.rows.map((row) => row.user_id);
+}
+
 // --- watch party ------------------------------------------------------------
 //
 // `voice_rooms.watch_party` is the room's party with the flag on; the map in

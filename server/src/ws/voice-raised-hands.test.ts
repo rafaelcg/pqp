@@ -25,8 +25,10 @@ import type { DbUser } from "../db.js";
  * Registry off, which is production's single-instance shape. The two-machine
  * half is the "raised hands across instances" group of voice-cluster.test.ts.
  * The moderator's lower is a route, and lives in api/voice-moderation.test.ts.
- * SPEAKING lowering your own hand is the client's (the server never sees
- * speaking): client/src/hooks/use-voice.test.ts.
+ * Talking does not lower your own hand (the server never sees speaking, and
+ * the client no longer lowers it either): client/src/hooks/use-voice.test.ts.
+ * Being given the floor in audience mode does not either, behind
+ * `raised_hand_sticky`: voice-audience.test.ts.
  */
 
 const backend = vi.hoisted(() => ({ configured: "mesh" as "mesh" | "livekit" }));
@@ -424,11 +426,61 @@ describe("raised hands", () => {
     expect(queueOn(a, channel)).toEqual([bob]);
   });
 
-  // "What lowers a hand" in docs/RAISED_HANDS.md lists exactly four things,
-  // and a moderator's server mute is not one of them: it is a sanction on
+  // "What lowers a hand" in docs/RAISED_HANDS.md lists exactly three things
+  // (the person, leaving, a moderator), and a moderator's server mute is not
+  // one of them: it is a sanction on
   // the microphone, not an answer to the request. A muted person is often
   // exactly who is waiting for the floor, so muting must not silently drop
   // them from the queue.
+  // The other half of the same list: nothing that happens to a microphone
+  // takes a hand down. A hand is a place in a queue, and the queue outlives
+  // somebody being unmuted, talking, or being given the floor (audience mode,
+  // in voice-audience.test.ts and voice-audience-cluster.test.ts). RPG
+  // initiative at a table is the use: you speak while your hand is up.
+  it("does not lower a hand when the person opens their microphone, or a moderator unmutes them", async () => {
+    const channel = randomUUID();
+    const alice = randomUUID();
+    const bob = randomUUID();
+    const a = await join(alice, channel);
+    const b = await join(bob, channel);
+    await raiseInOrder([
+      [a, alice],
+      [b, bob],
+    ]);
+    const at = voiceUserHandRaisedAt(channel, alice);
+
+    // A moderator mutes, then unmutes (the call-on flow's unmute).
+    await setVoiceUserServerMuted(channel, alice, true);
+    await setVoiceUserServerMuted(channel, alice, false);
+    // The person's own state: mic closed, then opened to talk.
+    for (const muted of [true, false, true, false]) {
+      await handleVoiceMessage(
+        { socket: a.socket, user: asUser(alice) },
+        { type: "set-voice-state", muted, deafened: false },
+      );
+    }
+    expect(voiceUserHandRaisedAt(channel, alice)).toBe(at);
+    expect(queueOn(a, channel)).toEqual([alice, bob]);
+    expect(queueOn(b, channel)).toEqual([alice, bob]);
+  });
+
+  it("renumbers the queue when somebody in the middle lowers, and the others keep their order", async () => {
+    const channel = randomUUID();
+    const [alice, bob, carol] = [randomUUID(), randomUUID(), randomUUID()];
+    const a = await join(alice, channel);
+    const b = await join(bob, channel);
+    const c = await join(carol, channel);
+    await raiseInOrder([
+      [a, alice],
+      [b, bob],
+      [c, carol],
+    ]);
+    expect(queueOn(c, channel)).toEqual([alice, bob, carol]);
+    await raise(b, bob, false);
+    expect(queueOn(c, channel)).toEqual([alice, carol]);
+    expect(queueOn(a, channel)).toEqual([alice, carol]);
+  });
+
   it("does not lower a hand when a moderator server-mutes that person", async () => {
     const channel = randomUUID();
     const alice = randomUUID();

@@ -179,6 +179,28 @@ describe("GET /api/voice/config against the client that reads it", () => {
     expect(dashboard).toMatch(/\baudience_mode:\s*"/);
   });
 
+  it("raised_hand_sticky is global, on by default, served on the voice config and read by the call stage", () => {
+    const def = FEATURE_FLAGS.raised_hand_sticky;
+    expect(def.perServer).toBe(false);
+    expect(def.codeDefault).toBe(true);
+    expect(def.clientVia).toBe("GET /api/voice/config (raisedHandSticky)");
+    expect(served).toContain("raisedHandSticky");
+    // The stage asks with the call's server and reads the field by name.
+    const stage = readFileSync(path.join(clientSrc, "components/voice/call-stage.tsx"), "utf8");
+    expect(stage).toMatch(/useVoiceConfig\(serverId\)\.raisedHandSticky === true/);
+    // The server half is the lowering rule itself: the audience grant reads
+    // the flag, and so does the lower-all route.
+    const voice = readFileSync(path.join(serverSrc, "ws/voice.ts"), "utf8");
+    expect(voice).toContain('isEnabled("raised_hand_sticky")');
+    const api = readFileSync(path.join(serverSrc, "api/index.ts"), "utf8");
+    expect(api).toContain('isEnabled("raised_hand_sticky")');
+    const dashboard = readFileSync(
+      path.resolve(here, "../../../tools/admin-dashboard/site/novo.js"),
+      "utf8",
+    );
+    expect(dashboard).toMatch(/\braised_hand_sticky:\s*"/);
+  });
+
   it("clean_voice_default is global, on by default, read off the global config and handed to the settings resolver", () => {
     const def = FEATURE_FLAGS.clean_voice_default;
     expect(def.perServer).toBe(false);

@@ -423,6 +423,7 @@ import {
   moveChannel,
   moveMemberVoice,
   disconnectMemberVoice,
+  lowerAllVoiceHands,
   lowerMemberVoiceHand,
   setMemberVoiceMuted,
   setVoiceAudienceMode,
@@ -8651,6 +8652,15 @@ function MainAppContent({
     }
   }
 
+  /** "Baixar todas": every hand in the room we are looking at. */
+  async function handleLowerAllHands(channelId: string) {
+    try {
+      await lowerAllVoiceHands(channelId);
+    } catch (err) {
+      setAppError(voiceModerationError(err, t("member.muteFailed")));
+    }
+  }
+
   async function handleKickOccupant(userId: string, name: string) {
     if (!selectedServerId) {
       return;
@@ -12822,6 +12832,7 @@ function MainAppContent({
               selectedChannel.id,
             )}
             onLowerHand={(userId) => void handleLowerOccupantHand(userId)}
+            onLowerAllHands={() => void handleLowerAllHands(selectedChannel.id)}
             audienceHost={audienceHostFor(selectedChannel)}
             compactPeers={localSettings.compactPeers}
           />

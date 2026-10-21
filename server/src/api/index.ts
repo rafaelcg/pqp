@@ -290,6 +290,7 @@ import {
   isRoomPinnedLocally,
   leaveVoiceByResumeToken,
   notifyVoiceModeration,
+  listVoiceRaisedHandUserIds,
   setVoiceUserHandRaised,
   setVoiceUserServerMuted,
   refreshVoiceIdentity,
@@ -12395,6 +12396,62 @@ router.post(
     );
     await setVoiceUserHandRaised(voiceChannelId, userId!, false);
     return { ok: true };
+  },
+);
+
+/**
+ * Lower every hand in a voice channel: "next round" at an RPG table, "that is
+ * the end of the Q&A" on a stream. Behind `raised_hand_sticky`, because only
+ * with sticky hands is there a queue that stays up long enough to need
+ * clearing; off answers 403 like any action the server does not offer.
+ *
+ * The same bit as lowering one hand (`Permission.MUTE_MEMBERS` in that
+ * channel), and the same outrank rule applied per person: a moderator who
+ * cannot lower the owner's hand one at a time cannot do it in bulk either, so
+ * those hands are skipped and counted rather than refused wholesale. Your own
+ * hand is lowered like anyone else's (the single route refuses self-targeting
+ * because a person lowers their own from the call; here there is no target).
+ * Not audited, for the single route's reason. Idempotent.
+ */
+router.post(
+  "/api/channels/:channelId/voice-lower-hands",
+  async ({ user }, { channelId }) => {
+    const channel = await requireChannelAccess(channelId!, user.id);
+    if (channel.kind !== "server" || !channel.server_id || channel.type !== "voice") {
+      throw new NotFound("Channel not found");
+    }
+    await requirePermission(
+      channel.server_id,
+      user.id,
+      Permission.MUTE_MEMBERS,
+      channelId!,
+    );
+    if (!isEnabled("raised_hand_sticky")) {
+      throw new Forbidden("Lowering every hand is not available");
+    }
+    let lowered = 0;
+    let skipped = 0;
+    for (const targetId of await listVoiceRaisedHandUserIds(channelId!)) {
+      if (targetId !== user.id) {
+        try {
+          await requireOutranked(
+            channel.server_id,
+            user.id,
+            targetId,
+            "lower hand",
+          );
+        } catch (error) {
+          if (error instanceof Forbidden) {
+            skipped += 1;
+            continue;
+          }
+          throw error;
+        }
+      }
+      await setVoiceUserHandRaised(channelId!, targetId, false);
+      lowered += 1;
+    }
+    return { ok: true, lowered, skipped };
   },
 );
 

@@ -37,6 +37,15 @@ import { isEnabled } from "./flags.js";
  * switch: a default is never persisted, so every device that never chose
  * goes back to the browser's suppressor on its next config refresh.
  *
+ * `raisedHandSticky`: a raised hand stays up until the person, a moderator
+ * or leaving the call takes it down (`docs/RAISED_HANDS.md` §"What lowers a
+ * hand"). Runtime flag `raised_hand_sticky`, global, on by default,
+ * `RAISED_HAND_STICKY` as its environment default. The server enforces the
+ * lowering rules itself (allowing somebody to speak in audience mode no
+ * longer lowers their hand); the client reads this only to show the new
+ * controls (click your own hand to lower it, "Baixar todas" for a moderator),
+ * so off hides them and restores the old audience-mode behaviour.
+ *
  * `serverId` absent (a DM call) or not a uuid is read as absent: the answer is
  * then the global value, and a DM call has no audience mode anyway.
  */
@@ -45,6 +54,7 @@ export interface VoiceConfig {
   audioSelfHeal: boolean;
   soundboard: boolean;
   cleanVoiceDefault: boolean;
+  raisedHandSticky: boolean;
 }
 
 const serverIdSchema = z.string().uuid();
@@ -57,5 +67,6 @@ export function voiceConfigForServer(rawServerId: string | null): VoiceConfig {
     audioSelfHeal: isEnabled("voice_audio_self_heal"),
     soundboard: isEnabled("soundboard", { serverId }),
     cleanVoiceDefault: isEnabled("clean_voice_default"),
+    raisedHandSticky: isEnabled("raised_hand_sticky"),
   };
 }

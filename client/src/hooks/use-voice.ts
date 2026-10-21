@@ -3485,6 +3485,18 @@ export function createVoiceController(transport: RealtimeTransport) {
     timer: ReturnType<typeof setTimeout>;
   } | null = null;
 
+  /**
+   * Our own hand as the ROOM last said it (the raw roster value, never the
+   * optimistic one). The stored occupancy carries our hand overlaid with what
+   * we believe (`overlayLocalSelfVoice`), and a roster delta is merged onto
+   * that stored copy, so without this a delta about somebody else would hand
+   * our own stale belief back to `applySelfHand` as if the room had said it:
+   * a moderator lowers your hand, then lowers another (or anything else moves)
+   * and your hand comes back up on your screen, up nowhere else. Undefined
+   * until a roster has described us in this call.
+   */
+  let serverSelfHand: number | null | undefined;
+
   function discardPendingHand() {
     if (!pendingHand) {
       return;
@@ -3518,6 +3530,7 @@ export function createVoiceController(transport: RealtimeTransport) {
    * everybody in the room is reading, and one of them is us.
    */
   function applySelfHand(serverValue: number | null) {
+    serverSelfHand = serverValue;
     if (pendingHand) {
       pendingHand.seen = serverValue;
       const agrees = (serverValue !== null) === pendingHand.raised;
@@ -5430,7 +5443,12 @@ export function createVoiceController(transport: RealtimeTransport) {
         const byId = new Map(
           (state.occupancy[message.voiceChannelId] ?? []).map((participant) => [
             participant.peerId,
-            participant,
+            participant.peerId === state.peerId &&
+            message.voiceChannelId === state.voiceChannelId &&
+            serverSelfHand !== undefined &&
+            (participant.handRaisedAt ?? null) !== serverSelfHand
+              ? { ...participant, handRaisedAt: serverSelfHand }
+              : participant,
           ]),
         );
         // A user id -> peer ids index, so `mergeParticipant` below stays
@@ -6477,6 +6495,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       // A queue belongs to a room. Walking into another one is not a place
       // in its queue, and the welcome will say so anyway.
       state.handRaisedAt = null;
+      serverSelfHand = undefined;
       discardPendingHand();
       // Known from the moment we start, not only once the server says welcome —
       // otherwise the UI cannot tell which channel is connecting.

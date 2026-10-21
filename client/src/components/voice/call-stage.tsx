@@ -87,8 +87,11 @@ import { AudioHealthNotice } from "@/components/voice/audio-health-notice";
 import { ShareGameCaptureNotice } from "@/components/voice/share-game-capture-notice";
 import { RaisedHandQueue } from "@/components/voice/raised-hand-queue";
 import {
+  HandBadgeActionsContext,
   HandPositionBadge,
   raisedHandPositions,
+  useHandLowerFor,
+  type HandBadgeActions,
 } from "@/components/voice/hand-position-badge";
 import {
   AudienceModeStrip,
@@ -829,6 +832,12 @@ export interface CallStageProps {
   canLowerHands?: boolean;
   onLowerHand?: (userId: string) => void;
   /**
+   * Lower every hand in the room (sticky hands, `raised_hand_sticky`): the
+   * moderator's "next round". Same bit as `canLowerHands`; the stage draws it
+   * only while the flag is on.
+   */
+  onLowerAllHands?: () => void;
+  /**
    * Audience mode controls for somebody who runs the stage here
    * (`docs/plans/AUDIENCE_MODE.md`). Absent for everybody else, and always in
    * a conversation call.
@@ -937,6 +946,7 @@ export function CallStage({
   onToggleRaisedHand,
   canLowerHands = false,
   onLowerHand,
+  onLowerAllHands,
   audienceHost = null,
   compactPeers = false,
   ringWhenAlone = true,
@@ -964,7 +974,36 @@ export function CallStage({
     screenShareCount: sharePeerIds.length,
   });
 
+  // STICKY HANDS (`raised_hand_sticky`, served on the voice config). A hand
+  // stays up until the person, a moderator or leaving takes it down, so the
+  // places a hand is drawn become the places it is lowered from: your own
+  // badge and your row in the queue, and for a moderator anybody's, plus
+  // "Baixar todas". With the flag off (or an older API, or a DM call, which
+  // has no server to ask about) none of it is offered and a hand is only a
+  // picture, as before.
+  const sticky = useVoiceConfig(serverId).raisedHandSticky === true;
+  const selfUserId = voiceState.self?.userId ?? currentUser?.id ?? null;
+  const handActions: HandBadgeActions | null = sticky
+    ? {
+        selfUserId,
+        // A lower, never a raise: the badge only exists while the hand is up,
+        // but a double click can land after the first click has already put
+        // it down, and a toggle would put it back.
+        lowerSelf: onToggleRaisedHand
+          ? () => {
+              if (voiceState.handRaisedAt !== null) {
+                onToggleRaisedHand();
+              }
+            }
+          : undefined,
+        lowerOther:
+          canLowerHands && onLowerHand ? (userId) => onLowerHand(userId) : undefined,
+        lowerAll: canLowerHands ? onLowerAllHands : undefined,
+      }
+    : null;
+
   return (
+    <HandBadgeActionsContext.Provider value={handActions}>
     <ActiveCall
       channelId={channelId}
       serverId={serverId}
@@ -1023,6 +1062,7 @@ export function CallStage({
       fill={fill}
       onShapeChange={onShapeChange}
     />
+    </HandBadgeActionsContext.Provider>
   );
 }
 
@@ -1175,6 +1215,7 @@ function ActiveCall({
   // Where the collapsed bar goes: the composer's dock when one is mounted
   // around us, our own place otherwise. See `call-dock.tsx`.
   const dockPublish = useCallDockPublisher();
+  const handActionsHere = useContext(HandBadgeActionsContext);
   // For the floating self-preview, which is a camera like any other and so
   // follows the camera answer. It carries no button of its own: at 112px
   // there is no room for one, and the tiles that do carry it set the same
@@ -2180,7 +2221,11 @@ function ActiveCall({
             selfUserId={voiceState.self?.userId ?? null}
             audience={
               audienceHost && voiceState.audience
-                ? { busy: audienceHost.busy, onAllow: audienceHost.onAllow }
+                ? {
+                    busy: audienceHost.busy,
+                    onAllow: audienceHost.onAllow,
+                    speakerUserIds: voiceState.audience.speakerUserIds,
+                  }
                 : null
             }
           />
@@ -2395,7 +2440,11 @@ function ActiveCall({
   );
   const composerDock = dockPublish ? (
     <CallDockPortal channelId={channelId} publish={dockPublish}>
-      {dockedBar}
+      {/* The bar is drawn from a store, in the composer, outside this tree,
+          so the hand actions (sticky hands) have to travel with it. */}
+      <HandBadgeActionsContext.Provider value={handActionsHere}>
+        {dockedBar}
+      </HandBadgeActionsContext.Provider>
     </CallDockPortal>
   ) : (
     <div className="border-b border-border bg-surface-0 px-3 py-2">
@@ -2983,6 +3032,7 @@ function ActiveCall({
             )}
             <TileBadge
               name={t("voice.tile.you")}
+              userId={self.userId}
               muted={self.muted}
               serverMuted={self.serverMuted}
               handPosition={self.handPosition}
@@ -3839,7 +3889,11 @@ export function CallControls({
           onLowerHand={onLowerHand}
           audience={
             audienceHost && voiceState.audience
-              ? { busy: audienceHost.busy, onAllow: audienceHost.onAllow }
+              ? {
+                    busy: audienceHost.busy,
+                    onAllow: audienceHost.onAllow,
+                    speakerUserIds: voiceState.audience.speakerUserIds,
+                  }
               : null
           }
           className="mb-1.5"
@@ -4622,6 +4676,7 @@ function PrimaryTile({
         badge={
           <TileBadge
             name={person.name}
+            userId={person.userId}
             muted={person.muted}
             serverMuted={person.serverMuted}
             handPosition={person.handPosition}
@@ -4754,6 +4809,7 @@ export function CameraTile({
         badge={
           <TileBadge
             name={person.isSelf ? youLabel : person.name}
+            userId={person.userId}
             muted={person.muted}
             serverMuted={person.serverMuted}
             handPosition={person.handPosition}
@@ -4998,6 +5054,7 @@ function StageAvatar({
 /** Name + mute strip along a tile's bottom edge — the voice panel's language. */
 function TileBadge({
   name,
+  userId,
   muted,
   serverMuted = false,
   handPosition = null,
@@ -5007,6 +5064,8 @@ function TileBadge({
   inline = false,
 }: {
   name: string;
+  /** Whose tile: with sticky hands, the badge lowers this person's hand. */
+  userId?: string;
   muted: boolean;
   /** Their place in the queue of raised hands, drawn as the hand and its number. */
   handPosition?: number | null;
@@ -5019,6 +5078,7 @@ function TileBadge({
   prominent?: boolean;
 }) {
   const { t } = useTranslation();
+  const lowerHand = useHandLowerFor(userId);
   return (
     <span
       className={cn(
@@ -5049,7 +5109,9 @@ function TileBadge({
       ) : (
         muted && <MicOff className="h-3 w-3 shrink-0 text-danger" />
       )}
-      {handPosition !== null && <HandPositionBadge position={handPosition} />}
+      {handPosition !== null && (
+        <HandPositionBadge position={handPosition} onLower={lowerHand} />
+      )}
       <span className={cn("truncate", inline && "@max-[12rem]/picture:hidden")}>
         {name}
       </span>

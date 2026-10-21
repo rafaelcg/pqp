@@ -52,6 +52,7 @@ export function VoiceChannelStage({
   onToggleRaisedHand,
   canLowerHands = false,
   onLowerHand,
+  onLowerAllHands,
   audienceHost = null,
   compactPeers = false,
   fill = false,
@@ -111,6 +112,7 @@ export function VoiceChannelStage({
   /** `Permission.MUTE_MEMBERS` here: may lower somebody else's hand. */
   canLowerHands?: boolean;
   onLowerHand?: (userId: string) => void;
+  onLowerAllHands?: () => void;
   /** Audience mode, for somebody who runs the stage (`audience-mode.tsx`). */
   audienceHost?: AudienceModeHostControls | null;
   compactPeers?: boolean;
@@ -171,6 +173,7 @@ export function VoiceChannelStage({
       onToggleRaisedHand={onToggleRaisedHand}
       canLowerHands={canLowerHands}
       onLowerHand={onLowerHand}
+      onLowerAllHands={onLowerAllHands}
       audienceHost={audienceHost}
       compactPeers={compactPeers}
       watchPartyChrome={watchPartyChrome}
