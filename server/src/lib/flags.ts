@@ -1041,7 +1041,7 @@ export const FEATURE_FLAGS = {
   },
   locadora_guest: {
     description:
-      "Locadora sem conta: pqp.gg/locadora/jogar (e pqp.gg/apps/locadora/play) deixa quem não tem conta abrir a Locadora e jogar um arquivo do próprio aparelho, depois de confirmar a idade no aparelho. Sem conta, sem cookie, sem websocket: as fitas e os saves ficam só naquele navegador. Também troca o botão da página da Locadora por \"Jogar agora\" e mostra, no máximo uma vez por dia e nunca durante o jogo, o convite pra criar conta. Precisa do apps_landing ligado e da Locadora lançada (live e ligada no geral).",
+      "Locadora sem conta: pqp.gg/locadora/jogar (e pqp.gg/apps/locadora/play) deixa quem não tem conta abrir a Locadora e jogar um arquivo do próprio aparelho, sem pergunta nenhuma. Sem conta, sem cookie, sem websocket: as fitas e os saves ficam só naquele navegador. Na página da Locadora, o \"Botar a fita\" abre o seletor (ou aceita o arquivo arrastado) e já entra jogando; e o jogo mostra, no máximo uma vez por dia e nunca durante o jogo, o convite pra criar conta. Precisa do apps_landing ligado e da Locadora lançada (live e ligada no geral).",
     env: "LOCADORA_GUEST",
     parseEnv: exactTrue,
     // Off: a public surface that runs an emulator for anybody with a link is

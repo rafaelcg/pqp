@@ -1,9 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  GUEST_AGE_DECLINED_KEY,
-  GUEST_AGE_DECLINED_TTL_MS,
-  GUEST_AGE_OK_KEY,
-  GUEST_AGE_OK_TTL_MS,
   LOCADORA_GUEST_EVENTS,
   UPSELL_DISMISS_MS,
   UPSELL_EJECT_AFTER_MS,
@@ -12,8 +8,9 @@ import {
   UPSELL_SHOW_EVERY_MS,
   UpsellMoments,
   guestRuntimeOf,
-  readGuestAgeMemory,
-  rememberGuestAge,
+  hasCartridge,
+  holdCartridge,
+  takeCartridge,
   rememberUpsellDismissed,
   rememberUpsellShown,
   trackLocadoraGuest,
@@ -36,37 +33,19 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("the age question, on the device", () => {
-  it("remembers only the verdict, for a while", () => {
-    const local = memory();
-    expect(readGuestAgeMemory(local, 0)).toBeNull();
-    rememberGuestAge("adult", local, 1000);
-    expect([...local.data.keys()]).toEqual([GUEST_AGE_OK_KEY]);
-    expect(local.data.get(GUEST_AGE_OK_KEY)).toBe("1000");
-    expect(readGuestAgeMemory(local, 1000 + GUEST_AGE_OK_TTL_MS - 1)).toBe("passed");
-    expect(readGuestAgeMemory(local, 1000 + GUEST_AGE_OK_TTL_MS)).toBeNull();
-  });
-
-  it("a minor is not offered the date again for a day", () => {
-    const local = memory();
-    rememberGuestAge("minor", local, 5);
-    expect(readGuestAgeMemory(local, 5 + GUEST_AGE_DECLINED_TTL_MS - 1)).toBe("declined");
-    expect(readGuestAgeMemory(local, 5 + GUEST_AGE_DECLINED_TTL_MS)).toBeNull();
-    expect(local.data.get(GUEST_AGE_DECLINED_KEY)).toBe("5");
-  });
-
-  it("storage that throws asks again and never throws itself", () => {
-    const broken = {
-      getItem: () => {
-        throw new Error("denied");
-      },
-      setItem: () => {
-        throw new Error("denied");
-      },
-      removeItem: () => {},
-    };
-    expect(readGuestAgeMemory(broken)).toBeNull();
-    expect(() => rememberGuestAge("adult", broken)).not.toThrow();
+describe("the cartridge from the door", () => {
+  it("is held in memory for one taking, and nothing is written anywhere", () => {
+    const setItem = vi.fn();
+    vi.stubGlobal("localStorage", { setItem, getItem: () => null, removeItem: () => {} });
+    vi.stubGlobal("sessionStorage", { setItem, getItem: () => null, removeItem: () => {} });
+    expect(hasCartridge()).toBe(false);
+    const bytes = new Uint8Array([1, 2, 3]).buffer;
+    holdCartridge({ bytes, ext: ".sfc" });
+    expect(hasCartridge()).toBe(true);
+    expect(takeCartridge()).toEqual({ bytes, ext: ".sfc" });
+    expect(takeCartridge()).toBeNull();
+    expect(hasCartridge()).toBe(false);
+    expect(setItem).not.toHaveBeenCalled();
   });
 });
 

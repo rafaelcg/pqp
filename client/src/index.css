@@ -4834,12 +4834,12 @@ html[data-immersive-stage] [data-immersive-hide] {
  * The hero is a night scene in EVERY theme, like the old hero photograph was:
  * it is art direction (neon only reads on the dark), so its colours are
  * identity constants here and not role tokens; everything around it follows
- * the visitor's theme. The TV's test pattern is our own colour bars, never a
- * game's picture.
+ * the visitor's theme. No game's picture is ever drawn.
  *
  * Motion, all of it decorative and all of it off under reduced motion (the
- * block below): the sign flickers once and then now and again, the cartridge
- * slides into the console, and the TV switches on to its bars when it lands.
+ * block below): the sign flickers once and then now and again, and the
+ * cartridge waits above the console's slot, lifts on hover or drag, and slides
+ * in when a file is chosen.
  * Each element's OWN style is the end state (house rule above `vem-*`), so
  * with the animations gone the scene is simply finished.
  */
@@ -4852,15 +4852,6 @@ html[data-immersive-stage] [data-immersive-hide] {
   --locadora-neon-cyan: oklch(0.87 0.14 205);
   --locadora-neon-core: oklch(0.97 0.03 345);
   --locadora-led: oklch(0.85 0.2 145);
-  --locadora-screen-off: oklch(0.2 0.02 260);
-  --locadora-bar-1: oklch(0.88 0 0);
-  --locadora-bar-2: oklch(0.9 0.17 100);
-  --locadora-bar-3: oklch(0.86 0.13 200);
-  --locadora-bar-4: oklch(0.82 0.22 145);
-  --locadora-bar-5: oklch(0.66 0.27 330);
-  --locadora-bar-6: oklch(0.6 0.23 28);
-  --locadora-bar-7: oklch(0.48 0.25 265);
-  --locadora-bar-low: oklch(0.25 0.02 260);
 }
 
 .loc-night {
@@ -4923,76 +4914,49 @@ html[data-immersive-stage] [data-immersive-hide] {
   }
 }
 
-.loc-cart {
-  animation: loc-cart-in 0.9s var(--ease-emphasized) 0.5s backwards;
+/* The landing's door (`[data-door]` on the stage): the cartridge arrives once and then waits above the slot,
+   lifts while a file hovers the page or the pointer is on "Botar a fita", and slides in when one is chosen, as the
+   console's light comes on. Its own transform is the waiting pose, so with motion off it is simply there. */
+.loc-door-cart {
+  transform: translateY(-44%);
+  transition: transform var(--duration-slow) var(--ease-emphasized);
+  animation: loc-door-arrive 0.8s var(--ease-emphasized) 0.2s backwards;
 }
 
-@keyframes loc-cart-in {
+[data-door="hover"] .loc-door-cart,
+[data-door="drag"] .loc-door-cart {
+  transform: translateY(-60%) rotate(-3deg);
+}
+
+[data-door="inserting"] .loc-door-cart {
+  transform: translateY(0);
+  transition-duration: 0.45s;
+  transition-timing-function: var(--ease-standard);
+}
+
+@keyframes loc-door-arrive {
   from {
-    transform: translateY(-62%);
+    transform: translateY(-120%);
     opacity: 0;
   }
-  35% {
+  40% {
     opacity: 1;
   }
-  to {
-    transform: translateY(0);
-  }
 }
 
-.loc-screen {
-  background: linear-gradient(
-      to right,
-      var(--locadora-bar-1) 0 14.28%,
-      var(--locadora-bar-2) 14.28% 28.57%,
-      var(--locadora-bar-3) 28.57% 42.85%,
-      var(--locadora-bar-4) 42.85% 57.14%,
-      var(--locadora-bar-5) 57.14% 71.42%,
-      var(--locadora-bar-6) 71.42% 85.71%,
-      var(--locadora-bar-7) 85.71% 100%
-    );
-  animation: loc-tv-on 0.6s var(--ease-emphasized) 1.25s backwards;
+.loc-sign-text-small {
+  font-size: 4.1cqw;
 }
 
-/* The scan lines on top of the bars, so the picture reads as a tube. */
-.loc-screen::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: repeating-linear-gradient(
-    to bottom,
-    transparent 0 2px,
-    var(--locadora-bar-low) 2px 3px
-  );
-  opacity: 0.35;
-}
-
-@keyframes loc-tv-on {
-  from {
-    transform: scale(1, 0.02);
-    filter: brightness(3);
-    background: var(--locadora-screen-off);
-  }
-  60% {
-    transform: scale(1, 1);
-    filter: brightness(1.6);
-  }
-  to {
-    filter: brightness(1);
-  }
-}
-
-.loc-led {
+.loc-door-led {
   background: var(--locadora-led);
-  box-shadow: 0 0 0.6em var(--locadora-led);
-  animation: loc-led-on 0.3s linear 1.35s backwards;
+  opacity: 0.25;
+  transition: opacity var(--duration-base) var(--ease-standard) 0.35s, box-shadow var(--duration-base) var(--ease-standard) 0.35s;
 }
 
-@keyframes loc-led-on {
-  from {
-    opacity: 0.15;
-    box-shadow: none;
-  }
+[data-door="inserting"] .loc-door-led {
+  opacity: 1;
+  box-shadow: 0 0 0.6em var(--locadora-led);
 }
 
 /* The guest player's sign-up card: it rises in from the corner, once. */
@@ -5002,10 +4966,12 @@ html[data-immersive-stage] [data-immersive-hide] {
 
 @media (prefers-reduced-motion: reduce) {
   .loc-sign-text,
-  .loc-cart,
-  .loc-screen,
-  .loc-led,
+  .loc-door-cart,
   .loc-upsell-in {
     animation: none;
+  }
+  .loc-door-cart,
+  .loc-door-led {
+    transition: none;
   }
 }

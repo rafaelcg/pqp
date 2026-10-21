@@ -10,9 +10,10 @@ import { startAppsOrigin, type AppsOrigin } from "./apps";
  * LOCADORA WITHOUT AN ACCOUNT, AS A VISITOR USES IT, AND THE RULE THAT MATTERS:
  * THE FILE NEVER LEAVES THE DEVICE.
  *
- * A signed-out visitor opens `/locadora/jogar`, answers the age question,
- * puts a cartridge in through the real picker, plays, ejects, and gets the
- * sign-up card. Every request the page makes (the page and the app frame, any
+ * A signed-out visitor opens `/apps/locadora`, presses "Botar a fita", picks
+ * a cartridge through the page's picker, lands in the player with it already
+ * in (nothing asked, no second picker), plays, ejects, and gets the sign-up
+ * card. Every request the page makes (the page and the app frame, any
  * origin) is recorded with its URL, headers and body, and the suite fails if
  * the cartridge's title, its file name or its SHA-256 (hex, base64 or
  * base64url) appears in any of them. The cartridge is a generated SNES test
@@ -54,7 +55,7 @@ test.beforeAll(async ({ browser }) => {
   // reads as page errors in whatever test comes first. Pay that here, on both pages, before anything is measured.
   const warm = await browser.newPage({ baseURL: CLIENT });
   for (const [path, ready] of [
-    ["/locadora/jogar", "[data-locadora-age]"],
+    ["/locadora/jogar", "iframe[data-app-frame]"],
     ["/apps/locadora", "h1"],
   ] as const) {
     await warm.goto(path);
@@ -91,13 +92,6 @@ function record(page: Page): Recorded[] {
   return seen;
 }
 
-async function answerAge(page: Page) {
-  await page.locator("[data-locadora-age]").waitFor();
-  await page.locator('input[autocomplete="bday-day"]').fill("01");
-  await page.locator('select[autocomplete="bday-month"]').selectOption({ index: 1 });
-  await page.locator('input[autocomplete="bday-year"]').fill("1990");
-  await page.locator('[data-locadora-age] button[type="submit"]').click();
-}
 
 test("a guest plays a cartridge and nothing about it leaves the page", async ({ page }) => {
   const rom = canaryCartridge();
@@ -120,19 +114,18 @@ test("a guest plays a cartridge and nothing about it leaves the page", async ({ 
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
 
-  await page.goto("/locadora/jogar");
-  await answerAge(page);
+  // the landing's door: "Botar a fita", the page's own picker, and the player opens with the cartridge already in
+  await page.goto("/apps/locadora");
+  const chooser = page.waitForEvent("filechooser");
+  await page.locator("[data-locadora-door]").click();
+  await (await chooser).setFiles(path);
+  await page.waitForURL(/\/locadora\/jogar$/);
+  // nothing asked before playing: no age question, straight to the frame
+  await expect(page.locator("[data-locadora-age]")).toHaveCount(0);
   const frame = (await (await page.waitForSelector("iframe[data-app-frame]")).contentFrame())!;
   await frame.locator("#loc:not([data-view=connecting])").waitFor({ timeout: 60_000 });
   await expect(frame.locator("#loc")).toHaveAttribute("data-guest", "true");
-  if ((await frame.locator("#loc").getAttribute("data-view")) === "onboarding") {
-    await frame.getByRole("button", { name: "Skip all" }).click();
-  }
-
-  // the real picker of the host page: the file goes in, its name goes nowhere
-  const chooser = page.waitForEvent("filechooser");
-  await frame.locator(".loc-top-pick").click();
-  await (await chooser).setFiles(path);
+  // no second picker: the console boots on its own with the file from the door
   const start = frame.locator('.loc-start[data-choice="fresh"]').first();
   await start.waitFor({ state: "visible", timeout: 60_000 });
   await start.click();
@@ -176,9 +169,11 @@ test("a guest plays a cartridge and nothing about it leaves the page", async ({ 
   for (const origin of origins) {
     expect([CLIENT, API, apps.origin], origin).toContain(origin);
   }
-  // and the only call to pqp's API is the public config
+  // and the only calls to pqp's API are public configs: the apps one, and the communities one the landing's
+  // site nav asks (the player page itself asks only the first)
   const api = new Set(requests.filter((request) => request.url.startsWith(API)).map((request) => new URL(request.url).pathname));
-  expect([...api]).toEqual(["/api/public/apps/config"]);
+  expect([...api].sort()).toEqual(expect.arrayContaining(["/api/public/apps/config"]));
+  for (const path of api) expect(["/api/public/apps/config", "/api/public/communities/config"], path).toContain(path);
   expect(errors).toEqual([]);
 
   // "Criar conta grátis" carries the ref through sign-up (the dev bypass has no sign-up: it lands on the app)
@@ -194,12 +189,10 @@ test("the card is once a day: a device that saw it today plays and ejects withou
     localStorage.setItem("pqp:locadora-guest-upsell", JSON.stringify({ shownAt: Date.now() - 60_000 })),
   );
   await page.reload();
-  await answerAge(page);
   const frame = (await (await page.waitForSelector("iframe[data-app-frame]")).contentFrame())!;
   await frame.locator("#loc:not([data-view=connecting])").waitFor({ timeout: 60_000 });
-  if ((await frame.locator("#loc").getAttribute("data-view")) === "onboarding") {
-    await frame.getByRole("button", { name: "Skip all" }).click();
-  }
+  // a guest lands on the Balcão, "Botar fita" first, not on the welcome
+  await expect(frame.locator("#loc")).toHaveAttribute("data-view", "balcao");
   const path = join(scratch, "once-a-day.sfc");
   writeFileSync(path, snesPattern());
   const chooser = page.waitForEvent("filechooser");
@@ -216,7 +209,7 @@ test("the card is once a day: a device that saw it today plays and ejects withou
   await expect(page.locator("[data-locadora-upsell]")).toHaveCount(0);
 });
 
-test("with guest play off, both addresses send the visitor home and the landing offers no Jogar agora", async ({ page }) => {
+test("with guest play off, both addresses send the visitor home and the landing has no door", async ({ page }) => {
   await page.route("**/api/public/apps/config", (route) =>
     route.fulfill({ json: { enabled: true, guest: false, cloudSaves: false, locadora: null } }),
   );
@@ -226,7 +219,7 @@ test("with guest play off, both addresses send the visitor home and the landing 
   }
   await page.goto("/apps/locadora");
   await expect(page.locator("h1")).toBeVisible();
-  await expect(page.locator("[data-locadora-play]")).toHaveCount(0);
+  await expect(page.locator("[data-locadora-door]")).toHaveCount(0);
 });
 
 test("with the landing off, the player is off too, whatever guest says", async ({ page }) => {
@@ -237,17 +230,35 @@ test("with the landing off, the player is off too, whatever guest says", async (
   await page.waitForURL((url) => url.pathname === "/");
 });
 
-test("under the age threshold nothing loads: no frame, no app request", async ({ page }) => {
-  const requests = record(page);
-  await page.goto("/locadora/jogar");
-  await page.locator("[data-locadora-age]").waitFor();
-  const year = String(new Date().getFullYear() - 10);
-  await page.locator('input[autocomplete="bday-day"]').fill("01");
-  await page.locator('select[autocomplete="bday-month"]').selectOption({ index: 1 });
-  await page.locator('input[autocomplete="bday-year"]').fill(year);
-  await page.locator('[data-locadora-age] button[type="submit"]').click();
-  await expect(page.locator("[data-locadora-declined]")).toBeVisible();
-  await expect(page.locator("iframe[data-app-frame]")).toHaveCount(0);
-  expect(requests.some((request) => request.url.startsWith(apps.origin))).toBe(false);
-  expect(requests.some((request) => request.url.includes(year))).toBe(false);
+test("a file dropped on the door goes straight in, and one that does not fit says so", async ({ page }) => {
+  await page.goto("/apps/locadora");
+  await page.locator("[data-locadora-door]").waitFor();
+  const drop = async (name: string, bytes: number[]) =>
+    page.evaluate(
+      ({ name, bytes }) => {
+        const transfer = new DataTransfer();
+        transfer.items.add(new File([new Uint8Array(bytes)], name));
+        const hero = document.querySelector("[data-locadora-hero]")!;
+        for (const type of ["dragenter", "dragover", "drop"]) {
+          hero.dispatchEvent(new DragEvent(type, { dataTransfer: transfer, bubbles: true, cancelable: true }));
+        }
+      },
+      { name, bytes },
+    );
+  await drop("notes.txt", [1, 2, 3]);
+  await expect(page.getByText("That cartridge does not fit", { exact: false })).toBeVisible();
+  await drop("dropped.sfc", [...snesPattern()]);
+  await page.waitForURL(/\/locadora\/jogar$/);
+  const frame = (await (await page.waitForSelector("iframe[data-app-frame]")).contentFrame())!;
+  await frame.locator('.loc-start[data-choice="fresh"]').first().waitFor({ state: "visible", timeout: 60_000 });
+});
+
+test("with guest play off, the landing's big button is the sign-up", async ({ page }) => {
+  await page.route("**/api/public/apps/config", (route) =>
+    route.fulfill({ json: { enabled: true, guest: false, cloudSaves: false, locadora: null } }),
+  );
+  await page.goto("/apps/locadora");
+  await expect(page.locator("[data-locadora-door]")).toHaveCount(0);
+  await page.locator('section[aria-labelledby="locadora-title"] [data-apps-cta="locadora-landing"]').click();
+  await page.waitForURL(/\/app\?ref=locadora-landing/);
 });

@@ -79,4 +79,6 @@ export interface BridgeHello {
   connection: BridgeConnectionStatus;
   /** The person has no pqp account (the signed-out guest player). Absent on every ordinary session. */
   guest?: boolean;
+  /** The page holds a file the person already chose: the first `files.pickLocal` answers with it, no picker. */
+  pendingFile?: boolean;
 }

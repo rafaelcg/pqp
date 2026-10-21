@@ -529,6 +529,14 @@ export const bridgeHelloPushSchema = push("hello", {
    * account's. Absent on every ordinary session; an older app ignores it.
    */
   guest: z.boolean().optional(),
+  /**
+   * The page already holds a file the person chose before the frame existed
+   * (the guest player's "Botar a fita" on the landing): the app's first
+   * `files.pickLocal` is answered with it at once, with no picker, and the
+   * same rules as a pick (the manifest's accept list and cap, bytes and an
+   * extension, never a name). Absent everywhere else; an older app ignores it.
+   */
+  pendingFile: z.boolean().optional(),
 });
 export const bridgeParticipantsPushSchema = push("participants", {
   participants: bridgeParticipantListSchema,

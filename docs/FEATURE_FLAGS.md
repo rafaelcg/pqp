@@ -1016,8 +1016,10 @@ within the config refresh (a page reads it when it loads); the edge within a min
 ## `locadora_guest` (global, default off)
 
 Locadora without an account: `pqp.gg/locadora/jogar` (and the same page at
-`pqp.gg/apps/locadora/play`), "Jogar agora" on `/apps/locadora` and on the hub's
-Locadora card, and the sign-up card inside the player. Behind
+`pqp.gg/apps/locadora/play`), with no age question and nothing collected; the
+`/apps/locadora` door ("Botar a fita" opens the picker, or a file is dropped,
+and the player opens with it already in), "Jogar agora" on the hub's Locadora
+card, and the sign-up card inside the player. Behind
 `LOCADORA_GUEST` (only `true` turns it on). **Global**: a guest has no server,
 no account and no session row.
 
@@ -1030,8 +1032,8 @@ no account and no session row.
   process for a minute (ten seconds after a failure) and a failure is "no
   guest", never an error.
 - **Off is dark**: both paths redirect to `/` in the router and, once it has
-  read `guest: false`, with a 302 at the Pages edge; the landing goes back to
-  its member wording ("dentro do pqp", "Abrir o pqp", no "sem cadastro").
+  read `guest: false`, with a 302 at the Pages edge; the landing's big
+  "Botar a fita" becomes the sign-up and nothing says there is no sign-up.
 - **What it is not.** No server session, no socket, no cookie, no id: the frame
   host runs a session that lives in the page (`client/src/lib/apps/guest-session.ts`),
   the shelf and saves are in the browser's own guest store (`guest:pqp-locadora`,

@@ -128,6 +128,12 @@ export interface BridgeHostOptions {
    * only what the app is told.
    */
   guest?: boolean;
+  /**
+   * The page already holds a file the person chose (the guest player's door on
+   * the landing): `hello` says `pendingFile: true`, and the caller's `pickFile`
+   * answers the first pick with it. This flag is only what the app is told.
+   */
+  pendingFile?: boolean;
   /** `ui.activity`: what the person is doing in the app (playing, paused, browsing). Unset, the call is answered and ignored. */
   onActivity?: (state: BridgeUiActivityState) => void;
   /** Called with a reason when the app behaves in a way that should end the frame. */
@@ -390,6 +396,7 @@ export class BridgeHost {
       },
       connection: this.connection,
       ...(this.options.guest ? { guest: true } : {}),
+      ...(this.options.pendingFile ? { pendingFile: true } : {}),
     });
     if (!hello.success) {
       this.log("hello did not pass its own schema", hello.error.issues[0]);

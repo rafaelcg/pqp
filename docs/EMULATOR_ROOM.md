@@ -371,8 +371,14 @@ which is everything:
   browser, and never to the account: Saves na conta is refused for a guest
   without a request (`saveSync: null`), and the receipt and the sign-up card say
   "tuas fitas ficam neste navegador".
-- **The age** is asked and judged on the device (the live preview's rule), and
-  only the verdict is remembered there.
+- **No age is asked, and nothing about the person is collected.** Rafael's
+  product decision (2026-10-21): a player that needs no account and keeps
+  nothing should be the easiest thing to try, and only registering has an age
+  requirement (the account gate, untouched). See item 10.
+- **The cartridge from the landing's door** ("Botar a fita" on
+  `/apps/locadora`, picked or dropped) is read by the page under the same rules
+  as the frame's picker and held in the page's memory for the one navigation to
+  the player, never in storage and never in a request.
 - **What the server sees**: one unauthenticated read of the public apps config,
   identical for everybody, and the static bundle and core files from the apps
   origin. No session row, no socket, no id. The page reports three closed
@@ -482,10 +488,12 @@ None has a ready WebAssembly build on npm, so each is a separate piece of work
    item 4 of the UX pass).
 
 10. **Guest play (`locadora_guest`), before it is on.** The same emulator,
-    offered to anybody with a link and no account, after an age question
-    answered on their own device. Is that acceptable given items 1 to 3, and is
-    the device-only age check enough for a public page (it is the bar the
-    signed-out live preview already uses)?
+    offered to anybody with a link and no account, with **no age check** and
+    nothing collected (no account, no id, no cookie, the file and the saves
+    only on the device). That is a deliberate product decision by Rafael
+    (2026-10-21). Is it acceptable given items 1 to 3, and do the ECA Digital
+    style rules for minors on open online services ask anything of a
+    no-account, no-data player like this one?
 
 Until 1 to 4 are answered in writing, `emulator_room` stays off everywhere.
 `locadora_share` also waits for 7, the multiplayer flag for 8 and

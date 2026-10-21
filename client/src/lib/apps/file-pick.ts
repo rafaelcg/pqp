@@ -22,6 +22,27 @@ export function extensionOf(fileName: string): string | null {
 }
 
 /**
+ * Reads one file the person handed the page (from a picker, or dropped on the
+ * guest player's door) under the manifest's rules: an extension on the accept
+ * list and at most `maxBytes`. The name is read once for the extension and goes
+ * no further; what comes back is the bytes and that extension.
+ */
+export async function readLocalFile(
+  file: File,
+  options: Pick<PickOptions, "accept" | "maxBytes" | "aborted">,
+): Promise<PickResult> {
+  const ext = extensionOf(file.name);
+  if (ext === null || !options.accept.includes(ext)) return { kind: "wrong-type" };
+  if (file.size > options.maxBytes) return { kind: "too-large" };
+  try {
+    const bytes = await file.arrayBuffer();
+    return options.aborted?.() ? { kind: "cancelled" } : { kind: "picked", bytes, ext };
+  } catch {
+    return { kind: "cancelled" };
+  }
+}
+
+/**
  * Opens a file picker owned by the pqp page, never by the app, and reads the
  * file the person chose. What comes back is the bytes and the lower-cased
  * extension taken from the manifest's closed accept list: the file name is read
@@ -64,14 +85,7 @@ export function pickLocalFile(options: PickOptions): Promise<PickResult> {
     input.addEventListener("change", () => {
       const file = input.files?.[0];
       if (!file || options.aborted?.()) return finish({ kind: "cancelled" });
-      const ext = extensionOf(file.name);
-      if (ext === null || !options.accept.includes(ext)) return finish({ kind: "wrong-type" });
-      if (file.size > options.maxBytes) return finish({ kind: "too-large" });
-      file.arrayBuffer().then(
-        (bytes) =>
-          finish(options.aborted?.() ? { kind: "cancelled" } : { kind: "picked", bytes, ext }),
-        () => finish({ kind: "cancelled" }),
-      );
+      void readLocalFile(file, options).then(finish);
     });
 
     doc.body.append(input);

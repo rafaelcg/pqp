@@ -57,7 +57,7 @@ export interface AppFrameControllerOptions {
   /** Forwarded to the bridge host (tests stand in for the picker, theme and fetch). */
   host?: Pick<
     BridgeHostOptions,
-    "pickFile" | "theme" | "fetchImpl" | "now" | "log" | "saveSync" | "openStore" | "guest" | "onActivity"
+    "pickFile" | "theme" | "fetchImpl" | "now" | "log" | "saveSync" | "openStore" | "guest" | "pendingFile" | "onActivity"
   >;
 }
 

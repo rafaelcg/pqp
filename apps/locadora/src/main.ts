@@ -815,12 +815,16 @@ async function main() {
   if (welcomeForced(location.search)) {
     // ?welcome=1: a replay on load, the stored flag untouched
     showWelcome({ replay: true });
-  } else if (await shouldShowOnboarding(store)) {
+  } else if (!isGuest && (await shouldShowOnboarding(store))) {
     showWelcome();
   } else {
+    // a guest came to play: straight to the Balcão, "Botar fita" first (the welcome is a button away)
     await showBalcao();
+    if (isGuest) (topBar as TopBar | null)?.pickButton.focus({ preventScroll: true });
   }
   activity.report("browsing");
+  // the page already holds the cartridge the person chose at its door: in it goes, no second picker
+  if (isGuest && app.hello.pendingFile === true && screens.current === "balcao") void pick();
   // a guest has no call to share into, and the host would refuse: no probe
   if (isGuest) return;
   // one stop request tells whether the platform offers sharing here (see src/share.ts)

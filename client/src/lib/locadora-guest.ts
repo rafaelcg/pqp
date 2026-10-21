@@ -1,6 +1,5 @@
 import type { BridgeUiActivityState, PublicGuestApp } from "@pqp/shared";
 import type { AppRuntimeConfig } from "./apps/types";
-import { judgePreviewAge, type PreviewAgeVerdict } from "./live-preview";
 import { track } from "./track";
 
 /**
@@ -15,7 +14,7 @@ import { track } from "./track";
  * in the page (`apps/guest-session.ts`), the shelf and the saves live in this
  * browser's own guest store, and the game file never leaves the device.
  *
- * This module: the paths, the age check on the device, the sign-up card's
+ * This module: the paths, the cartridge handed over from the landing, the sign-up card's
  * rules (when it may show, what it remembers), the runtime the frame host
  * gets, and the three closed events. The page is `pages/locadora-guest-page.tsx`.
  */
@@ -33,7 +32,7 @@ export const LOCADORA_GUEST_ALIAS = "/apps/locadora/play";
  * tag. The Google tag never loads on these paths (`google-ads-tag.ts`).
  */
 export const LOCADORA_GUEST_EVENTS = {
-  /** The player is up: the frame said hello after the age question. */
+  /** The player is up: the frame said hello. */
   start: "locadora_guest_start",
   /** The sign-up card was shown. */
   upsellShown: "locadora_guest_upsell_shown",
@@ -47,57 +46,43 @@ export function trackLocadoraGuest(event: LocadoraGuestEvent): void {
   track(event);
 }
 
-// --------------------------------------------------------------------- age
-
-/**
- * The age question, answered on the device exactly like the signed-out live
- * preview (`judgePreviewAge`: the account gate's rule and `MINIMUM_AGE_YEARS`).
- * The date is never sent and never stored; only the verdict is, on this
- * device: an adult is not asked again for `GUEST_AGE_OK_TTL_MS`, somebody under
- * the threshold is not offered the date again for a day.
- */
-export const GUEST_AGE_OK_KEY = "pqp:locadora-guest-age-ok";
-export const GUEST_AGE_DECLINED_KEY = "pqp:locadora-guest-age-declined";
-export const GUEST_AGE_OK_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-export const GUEST_AGE_DECLINED_TTL_MS = 24 * 60 * 60 * 1000;
-
 type ReadStorage = Pick<Storage, "getItem">;
 type WriteStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 
-export type GuestAgeMemory = "passed" | "declined" | null;
+// --------------------------------------------- the cartridge from the door
 
-export function judgeGuestAge(isoDate: string | null, now: Date = new Date()): PreviewAgeVerdict {
-  return judgePreviewAge(isoDate, now);
+/**
+ * "Botar a fita" on the landing: the person picks (or drops) a file there, and
+ * the guest player opens with it already in, no second picker. The file is
+ * read by the page under the manifest's rules (`readLocalFile`: accept list,
+ * cap, bytes and an extension, never the name) and held HERE, in this
+ * module's memory, for the one navigation to the player, which happens inside
+ * the SPA with no reload. Never written to storage, never sent anywhere: a
+ * reload or a new tab simply finds nothing and the player opens on the shelf.
+ * The player takes it once; the frame's first `files.pickLocal` is answered
+ * with it (`hello.pendingFile`).
+ */
+export interface PendingCartridge {
+  bytes: ArrayBuffer;
+  ext: string;
 }
 
-function stamp(storage: ReadStorage | null, key: string): number | null {
-  const value = Number(storage?.getItem(key) ?? NaN);
-  return Number.isFinite(value) ? value : null;
+let pending: PendingCartridge | null = null;
+
+export function holdCartridge(cartridge: PendingCartridge): void {
+  pending = cartridge;
 }
 
-export function readGuestAgeMemory(local: ReadStorage | null, now: number = Date.now()): GuestAgeMemory {
-  try {
-    const declined = stamp(local, GUEST_AGE_DECLINED_KEY);
-    if (declined !== null && now - declined < GUEST_AGE_DECLINED_TTL_MS) return "declined";
-    const passed = stamp(local, GUEST_AGE_OK_KEY);
-    if (passed !== null && now - passed < GUEST_AGE_OK_TTL_MS) return "passed";
-  } catch {
-    // storage denied: ask again. Nothing loads without an answer.
-  }
-  return null;
+/** The cartridge held for the player, once; null when there is none. */
+export function takeCartridge(): PendingCartridge | null {
+  const out = pending;
+  pending = null;
+  return out;
 }
 
-export function rememberGuestAge(verdict: "adult" | "minor", local: WriteStorage | null, now: number = Date.now()): void {
-  try {
-    if (verdict === "adult") {
-      local?.setItem(GUEST_AGE_OK_KEY, String(now));
-      local?.removeItem(GUEST_AGE_DECLINED_KEY);
-    } else {
-      local?.setItem(GUEST_AGE_DECLINED_KEY, String(now));
-    }
-  } catch {
-    // denied storage forgets the answer, which only means asking again
-  }
+/** Whether a cartridge is waiting, without taking it. */
+export function hasCartridge(): boolean {
+  return pending !== null;
 }
 
 // ------------------------------------------------------------ the runtime
