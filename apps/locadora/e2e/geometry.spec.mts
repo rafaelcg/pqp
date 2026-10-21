@@ -36,6 +36,8 @@ test.afterAll(async () => {
 
 const LAPTOP = { width: 2000, height: 1270 } as const;
 const DPR = 2;
+/** Deadlines and holds are longer on the CI runner (software GL, real fullscreen), never the pixel assertions. */
+const SLOW = process.env.CI ? 4 : 1;
 
 async function openLaptop(browser: Browser) {
   const context = await browser.newContext({ viewport: LAPTOP, deviceScaleFactor: DPR, screen: { width: 2000, height: 1330 } });
@@ -68,9 +70,9 @@ async function playCard(page: Page, frame: Frame) {
   await page.setInputFiles("#pick", path);
   await expect(frame.locator(".ejs_start_button")).toBeHidden();
   const start = frame.locator('.loc-start[data-choice="fresh"]').first();
-  await start.waitFor({ state: "visible", timeout: 30_000 });
+  await start.waitFor({ state: "visible", timeout: 30_000 * SLOW });
   await start.click();
-  await expect(frame.locator(".loc-load")).toHaveCount(0, { timeout: 30_000 });
+  await expect(frame.locator(".loc-load")).toHaveCount(0, { timeout: 30_000 * SLOW });
 }
 
 /** The canvas's own box, the core's frame as it reports it, and what the pill says. */
@@ -167,7 +169,7 @@ function modeOf(colour: Rgb): number | null {
 
 test("the picture is the stage's box, edge to edge, in every screen setting and in every mode the game takes (real full screen, laptop at 2x)", async ({ browser, browserName }) => {
   test.skip(browserName !== "chromium", "real element full screen in a headless browser is Chromium's");
-  test.setTimeout(240_000);
+  test.setTimeout(240_000 * SLOW);
   const shots = process.env.LOCADORA_SHOTS;
   if (shots) mkdirSync(shots, { recursive: true });
   const { context, page, frame, problems } = await openLaptop(browser);
@@ -181,7 +183,7 @@ test("the picture is the stage's box, edge to edge, in every screen setting and 
   const settle = async () => {
     await page.mouse.move(1000, 600);
     await page.mouse.move(1004, 604);
-    await expect.poll(() => frame.evaluate(() => document.getElementById("stage")?.dataset.hud), { timeout: 15_000 }).toBe("hidden");
+    await expect.poll(() => frame.evaluate(() => document.getElementById("stage")?.dataset.hud), { timeout: 15_000 * SLOW }).toBe("hidden");
     await page.waitForTimeout(600);
   };
 
@@ -236,21 +238,45 @@ test("the picture is the stage's box, edge to edge, in every screen setting and 
 
   // the game changes its frame, one press of B at a time: the picture stays the box in every one of them
   await pick("Pixel perfeito");
+  /** The card's own reported mode: its backdrop tint (null while a frame is mid change). */
+  let nudge = 0;
+  const cardMode = async () => {
+    await page.mouse.move(1000 + (nudge++ % 7), 600);
+    return modeOf((await readGlass(page, { left: 0, top: 0, width: 10, height: 10 })).centre);
+  };
+  /**
+   * Presses B until the card reaches `wanted`. A press is only seen if B is down on a frame the card samples, and on a
+   * slow runner (software GL, a frame every few hundred ms) a short press falls between two of them, so the hold
+   * scales with the runner and a press that changed nothing is repeated, a bounded number of times. A mode that
+   * already went PAST the wanted one (a press seen twice) is not an error: the card is a ring of four, so the loop
+   * keeps pressing until it comes round, and the pixel checks that follow are about the picture, never the count.
+   */
+  const advanceTo = async (wanted: number) => {
+    const holdMs = 160 * SLOW;
+    const settleMs = 3_000 * SLOW;
+    let current: number | null = null;
+    await expect.poll(async () => (current = await cardMode()), { message: "the card shows a mode", timeout: 15_000 * SLOW, intervals: [300] }).not.toBeNull();
+    for (let press = 0; press < SNES_GEOMETRY_MODES.length * 2 && current !== wanted; press++) {
+      const before: number | null = current;
+      await frame.locator("canvas.ejs_canvas").click();
+      await page.keyboard.down("x");
+      await page.waitForTimeout(holdMs);
+      await page.keyboard.up("x");
+      const deadline = Date.now() + settleMs;
+      while (Date.now() < deadline) {
+        await page.waitForTimeout(300);
+        const seen = await cardMode();
+        if (seen !== null && seen !== before) {
+          current = seen;
+          break;
+        }
+      }
+    }
+    expect(current, `the card takes mode ${wanted}`).toBe(wanted);
+  };
   for (let i = 1; i <= SNES_GEOMETRY_MODES.length; i++) {
     const wanted = i % SNES_GEOMETRY_MODES.length;
-    await frame.locator("canvas.ejs_canvas").click();
-    await page.keyboard.down("x");
-    await page.waitForTimeout(160);
-    await page.keyboard.up("x");
-    await expect
-      .poll(
-        async () => {
-          await page.mouse.move(1000 + i, 600);
-          return modeOf((await readGlass(page, { left: 0, top: 0, width: 10, height: 10 })).centre);
-        },
-        { message: `the card takes mode ${wanted}`, timeout: 15_000, intervals: [300] },
-      )
-      .toBe(wanted);
+    await advanceTo(wanted);
     await measure(`press${i}-${SNES_GEOMETRY_MODES[wanted]!.name}`, wanted === 0);
   }
 
