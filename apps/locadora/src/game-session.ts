@@ -780,9 +780,11 @@ export function createGameSession(ctx: SessionContext): GameSession {
       const size = runtime.videoSize();
       if (size) stage.setBase(size.width, size.height);
     };
+    // one handle, replaced each turn: the session's timer list is for one-shot timers and would grow all game long
+    let sizeTimer: ReturnType<typeof setTimeout> | undefined;
     const watchSize = () => {
       readSize();
-      if (mine === generation) timers.push(setTimeout(watchSize, SIZE_WATCH_MS));
+      if (mine === generation) sizeTimer = setTimeout(watchSize, SIZE_WATCH_MS);
     };
     watchSize();
     const canvasWatch =
@@ -794,7 +796,10 @@ export function createGameSession(ctx: SessionContext): GameSession {
       if (canvas) canvasWatch?.observe(canvas, { attributes: true, attributeFilter: ["width", "height"] });
     };
     watchCanvas();
-    removeSizeWatch = () => canvasWatch?.disconnect();
+    removeSizeWatch = () => {
+      clearTimeout(sizeTimer);
+      canvasWatch?.disconnect();
+    };
 
     // a file the console cannot run may still "start": RetroArch then sits in its own menu and the frame counter
     // never moves. That is the cartridge being bad, and the person is told so instead of being shown a menu.
