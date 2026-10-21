@@ -100,6 +100,26 @@ describe("the pill and the page's switch say the same thing", () => {
     expect(page.shared).toBe(true);
   });
 
+  it("a page push that arrives while a request runs wins over that request's late answer", async () => {
+    let answer: (on: boolean) => void = () => {};
+    const listeners = new Set<(on: boolean) => void>();
+    const page = {
+      share: { request: () => new Promise<boolean>((resolve) => (answer = resolve)) },
+      on: (_event: "share", callback: (on: boolean) => void) => {
+        listeners.add(callback);
+        return () => listeners.delete(callback);
+      },
+    };
+    const control = createShareControl(page, () => {});
+    control.setAvailable(true);
+    const pressed = control.toggle(); // asks to start
+    for (const listener of listeners) listener(true); // the page started it
+    for (const listener of listeners) listener(false); // and the call bar stopped it
+    answer(true); // the late answer to the start
+    await pressed;
+    expect(control.sharing).toBe(false);
+  });
+
   it("keeps a push that came before the probe, and draws nothing until sharing is offered", () => {
     const page = fakePage();
     const changes: number[] = [];

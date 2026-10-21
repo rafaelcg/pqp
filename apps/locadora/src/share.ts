@@ -83,7 +83,10 @@ export function createShareControl(host: ShareControlHost, onChange: () => void)
   let available = false;
   let sharing = false;
   let busy = false;
+  /** Counts the page's pushes, so a reply that lost a race to one is not applied. */
+  let pushes = 0;
   const off = host.on("share", (on) => {
+    pushes += 1;
     sharing = on;
     onChange();
   });
@@ -109,11 +112,14 @@ export function createShareControl(host: ShareControlHost, onChange: () => void)
       const wantOn = !sharing;
       busy = true;
       onChange();
+      const pushesBefore = pushes;
       const outcome = await setShared(host, wantOn);
       busy = false;
       let said: "started" | "failed" | "refused" | null = null;
       if (outcome.kind === "shared") {
-        sharing = outcome.on;
+        // A push that arrived while the request ran (the call bar's stop, the
+        // switch above the pane) is newer than this answer: it wins.
+        if (pushes === pushesBefore) sharing = outcome.on;
         if (outcome.on !== wantOn) said = "failed";
         else if (outcome.on) said = "started";
       } else {
