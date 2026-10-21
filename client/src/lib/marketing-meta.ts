@@ -1582,6 +1582,21 @@ export function injectMarketingHead(
   page: MarketingPage,
   locale: MarketingLocale,
 ): string {
+  return injectHeadTags(html, renderMarketingHead(page, locale), locale);
+}
+
+/**
+ * The rewrite itself, for any page that brings its own tags: strip what the
+ * shipped document says about the product, write `tags` at the top of
+ * `<head>`, and say the document's language. Shared with `apps-meta.ts`, whose
+ * pages are flag-gated and so cannot live in the marketing registry (which the
+ * sitemap reads).
+ */
+export function injectHeadTags(
+  html: string,
+  tags: string,
+  locale: MarketingLocale,
+): string {
   const headIndex = html.indexOf("<head>");
   if (headIndex === -1) {
     return html;
@@ -1594,7 +1609,7 @@ export function injectMarketingHead(
   return (
     stripped.slice(0, insertAt) +
     "\n    " +
-    renderMarketingHead(page, locale) +
+    tags +
     stripped.slice(insertAt)
   );
 }

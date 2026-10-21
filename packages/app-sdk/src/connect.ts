@@ -1,9 +1,9 @@
-import type { BridgeHello } from "@pqp/shared";
+import type { BridgeHello } from "./types.js";
 import { createApp, type PqpApp } from "./app.js";
 import { PortClient, REQUEST_TIMEOUT_MS } from "./client.js";
 import { PqpAppError } from "./errors.js";
 
-/** The platform API version this SDK speaks (`APP_PLATFORM_API` in `@pqp/shared`). */
+/** The platform API version this SDK speaks (`APP_PLATFORM_API` in the pqp repo). */
 const PLATFORM_API = 1;
 
 /** How often the hello is sent again until the host answers. The host answers only the first. */

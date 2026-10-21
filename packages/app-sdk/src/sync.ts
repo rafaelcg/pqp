@@ -1,4 +1,4 @@
-import type { BridgeHello } from "@pqp/shared";
+import type { BridgeHello } from "./types.js";
 import { createApp, type PqpApp } from "./app.js";
 import { PortClient, REQUEST_TIMEOUT_MS } from "./client.js";
 import type { ConnectOptions, HandshakeWindow } from "./connect.js";

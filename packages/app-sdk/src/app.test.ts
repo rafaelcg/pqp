@@ -514,7 +514,7 @@ describe("applyTheme", () => {
 });
 
 describe("package hygiene", () => {
-  it("imports nothing at runtime: only `import type` from @pqp/shared", () => {
+  it("imports nothing but its own files: no dependency, runtime or type", () => {
     const dir = new URL(".", import.meta.url).pathname;
     const sources = readdirSync(dir).filter(
       (name) => name.endsWith(".ts") && !name.endsWith(".test.ts") && !name.endsWith(".fixture.ts"),
@@ -525,9 +525,7 @@ describe("package hygiene", () => {
       const imports = [...text.matchAll(/^(?:import|export)\b[^;]*?from\s+"([^"]+)"/gms)];
       for (const match of imports) {
         const spec = match[1]!;
-        if (spec.startsWith("./")) continue;
-        expect(spec, `${name} imports ${spec}`).toBe("@pqp/shared");
-        expect(match[0], `${name} must use \`import type\` for ${spec}`).toMatch(/^import type\b/);
+        expect(spec.startsWith("./"), `${name} imports ${spec}`).toBe(true);
       }
     }
     const pkg = JSON.parse(readFileSync(dir + "../package.json", "utf8"));

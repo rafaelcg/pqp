@@ -1,9 +1,17 @@
 {
   "name": "@pqp/app-sdk",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "private": true,
   "license": "AGPL-3.0-only",
-  "description": "The SDK a pqp app (a sandboxed bundle) uses to talk to the pqp page. No runtime dependencies.",
+  "description": "The SDK a pqp app (a sandboxed bundle) uses to talk to the pqp page. No dependencies.",
+  "keywords": ["pqp", "app", "sdk", "sandbox", "iframe", "postmessage", "multiplayer"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rafaelcg/pqp.git",
+    "directory": "packages/app-sdk"
+  },
+  "homepage": "https://github.com/rafaelcg/pqp/tree/main/packages/app-sdk#readme",
+  "bugs": "https://github.com/rafaelcg/pqp/issues",
   "type": "module",
   "sideEffects": false,
   "types": "./src/index.ts",
@@ -17,7 +25,11 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "build": "node scripts/build.mjs",
+    "package": "node scripts/build.mjs && node scripts/stage.mjs && node scripts/check-package.mjs",
+    "pack:dry": "pnpm run package && npm pack ./publish --dry-run",
+    "publish:npm": "pnpm run package && node scripts/publish.mjs"
   },
   "devDependencies": {
     "@pqp/shared": "workspace:*",

@@ -105,6 +105,19 @@ jobs:
           git fetch --no-tags --depth=1 origin main:refs/remotes/origin/main
           pnpm apps:check
 
+      # What `npm publish` would upload for @pqp/app-sdk: builds dist/, stages
+      # publish/ and FAILS when the tarball is not self-contained (a leaked
+      # @pqp/shared or zod import, a test file, a private manifest, a
+      # .d.ts a strict consumer cannot type-check). Nothing is published; the
+      # release workflow is separate and manual. packages/app-sdk/PUBLISHING.md.
+      - name: Check the app-sdk package
+        run: pnpm --filter @pqp/app-sdk package
+
+      # The docs site for people who build apps (docs-apps/). The build fails on
+      # a dead internal link. Nothing deploys it yet (docs-apps/README.md).
+      - name: Build the apps docs
+        run: pnpm docs:apps:build
+
       # `scripts/` is outside the pnpm workspace, so `pnpm test` never saw it.
       # That was fine while the monitor was only "fetch a URL, look at the
       # status code", and stopped being fine when it grew a matcher that decides

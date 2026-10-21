@@ -22,6 +22,8 @@ export default tseslint.config(
       // generated, it is git-ignored, and linting it fails the whole run for
       // anybody who has ever run the admin dashboard locally.
       "**/.wrangler/**",
+      // VitePress's dependency-optimizer cache, git-ignored and generated.
+      "**/.vitepress/cache/**",
     ],
   },
 
@@ -98,6 +100,7 @@ export default tseslint.config(
     // point (see `tools/ambient`).
     files: [
       "scripts/**/*.mjs",
+      "packages/app-sdk/scripts/**/*.mjs",
       "client/scripts/**/*.mjs",
       "server/scripts/**/*.mjs",
       "client/bench/**/*.mjs",

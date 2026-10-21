@@ -5,7 +5,7 @@
   "packageManager": "pnpm@10.33.0",
   "scripts": {
     "dev": "pnpm run --parallel --filter @pqp/client --filter @pqp/server dev",
-    "build": "pnpm run -r --filter=!@pqp/electron --filter=!@pqp/apps-build build",
+    "build": "pnpm run -r --filter=!@pqp/electron --filter=!@pqp/apps-build --filter=!@pqp/app-sdk --filter=!@pqp/apps-docs build",
     "test": "pnpm run -r test",
     "typecheck": "pnpm run -r --filter=!@pqp/electron typecheck",
     "lint": "eslint .",
@@ -13,6 +13,8 @@
     "apps:build": "pnpm --filter @pqp/apps-build run build",
     "apps:check": "pnpm --filter @pqp/apps-build run check",
     "apps:dev": "pnpm --filter @pqp/apps-build run dev",
+    "docs:apps": "pnpm --filter @pqp/apps-docs run dev",
+    "docs:apps:build": "pnpm --filter @pqp/apps-docs run build",
     "soak:voice": "node scripts/voice-soak.mjs",
     "share:repro": "node tools/share-diagnostic/repro.mjs",
     "start": "pnpm --filter @pqp/server start",

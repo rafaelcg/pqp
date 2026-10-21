@@ -711,6 +711,59 @@ Turn it on from controles → interruptores or `PUT /api/admin/flags
 config refresh (focus or 10 min). Merging this PR restarts the API
 (`restarts-api`): it touches `server/` and `packages/shared`.
 
+## `hint_diet` and `hint_budget` (global, client presentation only)
+
+The two switches of the 2026-10-20 hints audit (`docs/ONBOARDING.md` §"The
+diet and the quiet contexts"). Both born as flags, default off (`HINT_DIET`,
+`HINT_BUDGET`, `exactTrue`), global (a hint belongs to a person's screen, and a
+DM has no server to override it for). Merging changes nothing until one is
+flipped. The client learns both from `GET /api/onboarding/config` as `hintDiet`
+and `hintBudget`, asked once the age gate has passed and on every config refresh
+(`client/src/lib/hint-config.ts`), so open tabs follow on their next focus.
+Anything but an explicit `true` is off: an older API, a failed ask, a localhost
+without the flag.
+
+- **`hint_diet`: hide what repeats the app.** One list of ids
+  (`HINT_DIET_IDS`, `lib/hint-diet.ts`): the What's new, cargos, shortcuts,
+  Voz limpa and seasonal-look corner cards, the call dock ("controls moved"),
+  watch party, music, music field, composer format and channel pin coach marks,
+  and the owner empty channel's "Copiar convite" (the arrival banner carries
+  it). It is checked where the queues read: `winningCornerHint` and
+  `winningFeatureHint` skip a hidden id so the next card takes the slot,
+  `isFeatureHintSeen` answers "seen" and `rememberFeatureHint` writes nothing.
+  **Nothing is ever stored for a hidden hint**, so turning the flag off restores
+  every card exactly as it was, even for an account that used the format bar
+  meanwhile. Not on the list on purpose: the Música tile pip (spent by use), the
+  Voz limpa NOVO dot, the QG invite, bringFriends, watchNow, the forum hint,
+  the notify offer, the mobile beta card and the first-run checklist.
+- **`hint_budget`: quiet contexts.** An unsolicited hint waits while voice is
+  connected, an app or game session the person sits in is running, they are
+  sharing or watching a share or a live watch party, the message composer has
+  focus or a draft, or a modal dialog is open (`lib/hint-quiet.ts`, applied at
+  the one place the winner is chosen, next to `campaignsYield` in `App.tsx`).
+  **Waits, never drops**: nothing is stamped while a hint is held, so it shows
+  when the context ends; an attached coach mark that is already up is held
+  (the provider's `yielding`), not spent. Never held: real failures (mic
+  fallback, audio health, stale chunk, sanctions), the update indicator,
+  event notifications (DMs, reminders, a Baú post, the notify offer), the
+  arrival banner, and the voice note transcription notice (consent). Not
+  implemented yet, later changes of the audit: the global time budget, the queue
+  merge, account-level seen state and a master switch.
+
+Until the first answer arrives (or 2 s, or a failed ask) the queues hold every
+unsolicited hint, so a card the diet hides cannot paint and stamp itself in the
+moment before the flag lands.
+
+Turn either on from controles → interruptores or `PUT /api/admin/flags
+{ key: "hint_diet", enabled: true }` (same for `hint_budget`). Start with the
+diet, which only hides. The budget is the one that can move a first-run funnel:
+compare the QG's `arrival_*` impressions and joins before and after. Merging
+this PR restarts the API (`restarts-api`): it touches `server/`. To check either
+on localhost: a real browser there sees every card on every reload because
+nothing persists (`lib/hints.ts`), so set `localStorage["pqp:hints-persist"] =
+"1"` to make dismissals stick like production, and know that an automated
+browser (`navigator.webdriver`, Playwright) never sees a hint at all.
+
 
 ## `conversations_home` and `conversations_home_phone_tabs` (global, client presentation only)
 
@@ -890,3 +943,37 @@ serverId, enabled: true }` or from controles → interruptores, then
 `bot_test_chat` the same way. Production also needs `ANTHROPIC_API_KEY`: with
 no model offered, the config answers `enabled: false` whatever the flag says.
 
+
+## `apps_landing` (global, default off)
+
+The front door of pqp Apps: `pqp.gg/apps`, `pqp.gg/apps/locadora` and the short
+link `pqp.gg/locadora`. Behind `APPS_LANDING` (only `true` turns it on), born as
+a flag. **Global**, because a visitor has no server and the page is the same for
+everyone; it is also independent of `apps` (the per-server platform switch): it
+decides only whether the shop window exists, not whether anything can be opened.
+
+- **Served by** `GET /api/public/apps/config` -> `{ enabled }` and nothing
+  else. Unauthenticated (never reads `Authorization`, so a dead token cannot
+  veto it), its own address bucket under the anon backstop, `public,
+  max-age=60`. Off answers 200 `{ enabled: false }`, never 404.
+- **Off is dark.** The three client routes redirect to `/` (`AppsRoute`, which
+  also treats a failed or unreadable answer as off, like the donation page and
+  the communities band), nothing in the site links to them (this change adds no link at all; the pages
+  are for outreach and the short link), the Pages
+  middleware answers them with a redirect to `/` once it has read `enabled:
+  false`, and the sitemap does not list them. Reaching `/apps` on an older API
+  that has no such route is the same as off.
+- **On.** The edge injects the page's title, description, canonical, Open Graph
+  and Twitter tags (`client/src/lib/apps-meta.ts`, in the visitor's language,
+  with `hreflang`).
+- **Measurement is the spec's, nothing more.** One closed Umami event through
+  `track()` (`apps_door_view`), no properties, no ids. The Google Ads tag does
+  not load on `/apps*` or `/locadora*` (decision D3, see
+  `lib/google-ads-tag.ts`).
+- **Sitemap.** Not listed on purpose: the sitemap is built into the bundle and
+  this flag is runtime, so a listed page could answer a redirect. List the three
+  paths (`EXTRA_PAGES` in `lib/sitemap-pages.ts`) once the flag is on for good.
+
+Turn it on: controles -> interruptores, or `PUT /api/admin/flags { key:
+"apps_landing", enabled: true }` with the machine token. An open tab follows
+within the config refresh (a page reads it when it loads); the edge within a minute.

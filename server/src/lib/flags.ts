@@ -911,6 +911,29 @@ export const FEATURE_FLAGS = {
     clientVia:
       "GET /api/onboarding/config (discordImportNotice) and GET /api/servers/:id/import-arrivals (imported)",
   },
+  hint_diet: {
+    description:
+      "Dieta de dicas (só cliente): esconde os cartões e as dicas que repetem o que o app já mostra (Novidades, cargos, atalhos, fixar canal, formatação, \"os controles mudaram\", dicas de call, Voz limpa, visual de temporada e o Copiar convite do canal vazio). Nada é gravado: desligado, tudo volta como estava.",
+    env: "HINT_DIET",
+    parseEnv: exactTrue,
+    // Off so merging changes nothing until the operator flips it. Global: the
+    // hints belong to the person's screen, and a DM or a conversation has no
+    // server to override it for.
+    codeDefault: false,
+    perServer: false,
+    clientVia: "GET /api/onboarding/config (hintDiet)",
+  },
+  hint_budget: {
+    description:
+      "Dicas quietas (só cliente): nenhuma dica não pedida enquanto a pessoa está numa call, num app ou jogo, compartilhando ou assistindo tela ou watch party, com o campo de mensagem em foco ou com rascunho, ou com uma janela aberta. A dica espera e aparece quando o momento acaba. Falhas, atualização, notificações e o aviso de transcrição de voz nunca esperam.",
+    env: "HINT_BUDGET",
+    parseEnv: exactTrue,
+    // Off until the QG's impressions have been compared with and without it:
+    // holding hints back is the one half that can lower a first-run funnel.
+    codeDefault: false,
+    perServer: false,
+    clientVia: "GET /api/onboarding/config (hintBudget)",
+  },
   apps: {
     description:
       "Apps nos canais: liga a plataforma de apps pra este servidor (o botão de apps, o cartão ao vivo na conversa e o Entrar). Desligado, nada aparece e toda rota de apps responde 404. Cada app ainda precisa ser liberado por ti, servidor a servidor.",
@@ -958,6 +981,20 @@ export const FEATURE_FLAGS = {
     // session row names its server. Needs `apps` and `emulator_room` on too.
     perServer: true,
     clientVia: "GET /api/apps/config?serverId= (saveSync)",
+  },
+  apps_landing: {
+    description:
+      "Páginas públicas do pqp Apps: pqp.gg/apps, pqp.gg/apps/locadora e o atalho pqp.gg/locadora. Desligado, as três redirecionam pra página inicial, não entram em lugar nenhum e nenhum link do site aponta pra elas.",
+    env: "APPS_LANDING",
+    parseEnv: exactTrue,
+    // Off: the pages describe a product that is not open to everybody yet, so
+    // they go on when Rafael says so. Only `true` turns it on.
+    codeDefault: false,
+    // GLOBAL: a visitor has no server, and the page is the same for everyone.
+    // It is independent of `apps` (the per-server platform switch): this one
+    // only decides whether the front door exists.
+    perServer: false,
+    clientVia: "GET /api/public/apps/config (enabled)",
   },
 } as const satisfies Record<string, FlagDefinition>;
 

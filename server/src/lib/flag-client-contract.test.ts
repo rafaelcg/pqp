@@ -405,6 +405,43 @@ describe("discord_import_notice against the onboarding config the client reads",
 });
 
 /**
+ * `hint_diet` and `hint_budget`, the hints audit's two switches. Global client
+ * flags on the onboarding config route, read by one client module.
+ */
+describe("hint_diet and hint_budget against the onboarding config the client reads", () => {
+  it("are global, off by default, and named under the fields the route serves", () => {
+    for (const [key, field] of [
+      ["hint_diet", "hintDiet"],
+      ["hint_budget", "hintBudget"],
+    ] as const) {
+      const def = FEATURE_FLAGS[key];
+      expect(def.perServer, key).toBe(false);
+      expect(def.codeDefault, key).toBe(false);
+      expect(def.clientVia, key).toBe(`GET /api/onboarding/config (${field})`);
+    }
+  });
+
+  it("the config route answers from both flags", () => {
+    const api = readFileSync(path.join(serverSrc, "api/index.ts"), "utf8");
+    const route = /router\.get\("\/api\/onboarding\/config"[\s\S]*?\);/.exec(api)?.[0];
+    expect(route, "GET /api/onboarding/config is not mounted").toBeTruthy();
+    expect(route).toContain('hintDiet: isEnabled("hint_diet")');
+    expect(route).toContain('hintBudget: isEnabled("hint_budget")');
+  });
+
+  it("the client asks that route, reads both fields, and App starts the reader", () => {
+    const config = readFileSync(path.join(clientSrc, "lib/hint-config.ts"), "utf8");
+    expect(config).toContain("/api/onboarding/config");
+    const diet = readFileSync(path.join(clientSrc, "lib/hint-diet.ts"), "utf8");
+    expect(diet).toMatch(/\.hintDiet === true/);
+    const quiet = readFileSync(path.join(clientSrc, "lib/hint-quiet.ts"), "utf8");
+    expect(quiet).toMatch(/\.hintBudget === true/);
+    const app = readFileSync(path.join(clientSrc, "App.tsx"), "utf8");
+    expect(app).toMatch(/newcomerInviteUserId \? startHintConfig\(\) : undefined/);
+  });
+});
+
+/**
  * `conversations_home` and `conversations_home_phone_tabs`, Conversas. Two
  * global client flags served on one route that web, iOS and Android all read.
  */
@@ -620,5 +657,54 @@ describe("locadora_save_sync and the routes rule 7 now allows", () => {
   it("the dashboard has a note for it", () => {
     const dashboard = readFileSync(path.resolve(here, "../../../tools/admin-dashboard/site/novo.js"), "utf8");
     expect(dashboard).toMatch(/\blocadora_save_sync:\s*"/);
+  });
+});
+
+/**
+ * `apps_landing`, the public pqp Apps pages. A global client flag on its own
+ * unauthenticated route (`GET /api/public/apps/config`), read by the page's
+ * gate and by the Pages middleware. Pinned from both sides, and the route is
+ * checked to sit BEFORE the authenticated router, because a signed-out visitor
+ * is who the pages are for: a route behind the Bearer resolution would answer
+ * them 401 and the pages would be dark for exactly the people they exist for.
+ */
+describe("apps_landing against the public apps config the pages read", () => {
+  it("is global, off by default, and named under the route that serves it", () => {
+    const def = FEATURE_FLAGS.apps_landing;
+    expect(def.perServer).toBe(false);
+    expect(def.codeDefault).toBe(false);
+    expect(def.clientVia).toBe("GET /api/public/apps/config (enabled)");
+  });
+
+  it("the route is matched before the authenticated router and answers from the flag alone", () => {
+    const api = readFileSync(path.join(serverSrc, "api/index.ts"), "utf8");
+    const fn = /function servePublicAppsConfig[\s\S]*?\n\}\n/.exec(api)?.[0];
+    expect(fn, "servePublicAppsConfig not found").toBeTruthy();
+    expect(fn).toContain('JSON.stringify({ enabled: isEnabled("apps_landing") })');
+    expect(fn).not.toMatch(/authorization|resolveAuth/i);
+    const matched = api.indexOf("servePublicAppsConfig(req, res);");
+    const router = api.indexOf("router.match(method, pathname)", matched);
+    expect(matched, "route is not matched in handleApi").toBeGreaterThan(0);
+    expect(router, "router.match not found after it").toBeGreaterThan(matched);
+  });
+
+  it("the client asks that route with no credential and the edge asks it too", () => {
+    const lib = readFileSync(path.join(clientSrc, "lib/apps-landing.ts"), "utf8");
+    expect(lib).toContain("/api/public/apps/config");
+    expect(lib).toMatch(/body\.enabled !== "boolean"/);
+    expect(lib).not.toMatch(/authorization/i);
+    const middleware = readFileSync(
+      path.resolve(here, "../../../client/functions/_middleware.ts"),
+      "utf8",
+    );
+    expect(middleware).toContain("/api/public/apps/config");
+  });
+
+  it("the dashboard has a note for it", () => {
+    const dashboard = readFileSync(
+      path.resolve(here, "../../../tools/admin-dashboard/site/novo.js"),
+      "utf8",
+    );
+    expect(dashboard).toMatch(/\bapps_landing:\s*"/);
   });
 });

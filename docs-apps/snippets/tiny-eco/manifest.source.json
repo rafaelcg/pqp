@@ -1,0 +1,50 @@
+{
+  "manifestVersion": 1,
+  "id": "tiny-eco",
+  "version": "1.0.0",
+  "publisher": "pqp",
+  "platformApi": 1,
+  "name": "name",
+  "description": "description",
+  "icon": "sparkles",
+  "category": "tool",
+  "channelTypes": ["text", "voice"],
+  "players": { "min": 1, "max": 8, "spectators": true, "maxSpectators": 50 },
+  "requires": { "start": "USE_APPS", "join": "VIEW_CHANNEL" },
+  "capabilities": {
+    "identity": "display",
+    "share": "none",
+    "localFiles": { "allowed": false },
+    "peer": "none"
+  },
+  "hostBound": false,
+  "state": { "maxBytes": 1024, "maxWritesPerSecond": 10, "writers": "participants" },
+  "events": { "maxPerSecond": 5, "maxBytes": 128 },
+  "presence": { "phrase": "presence.phrase", "short": "presence.short" },
+  "content": { "userText": false, "userImages": false },
+  "entry": { "path": "index.html" },
+  "license": {
+    "spdx": "MIT",
+    "source": "https://github.com/rafaelcg/pqp/tree/main/apps/tiny-eco"
+  },
+  "i18n": {
+    "pt-BR": {
+      "name": "Tiny Eco",
+      "description": "Um contador que todo mundo mexe junto e um ping.",
+      "presence.phrase": "{name} tá no Tiny Eco",
+      "presence.short": "No Tiny Eco"
+    },
+    "en": {
+      "name": "Tiny Eco",
+      "description": "A counter everybody moves together, and a ping.",
+      "presence.phrase": "{name} is in Tiny Eco",
+      "presence.short": "In Tiny Eco"
+    },
+    "es": {
+      "name": "Tiny Eco",
+      "description": "Un contador que todos mueven juntos y un ping.",
+      "presence.phrase": "{name} está en Tiny Eco",
+      "presence.short": "En Tiny Eco"
+    }
+  }
+}

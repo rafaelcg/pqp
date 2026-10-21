@@ -126,6 +126,7 @@ import { translateMessage, useTranslation, type MessageKey } from "@/lib/i18n";
 import { toggleMessageSelection } from "@/lib/message-selection";
 import { splitArrivals } from "@/lib/message-arrivals";
 import { scrollWithin } from "@/lib/scroll-within";
+import { hintDietHides, useHintDiet } from "@/lib/hint-diet";
 import { shouldOpenUp } from "@/lib/menu-flip";
 import {
   cn,
@@ -151,6 +152,13 @@ const STICKY_THRESHOLD_PX = 120;
 const SCROLL_END_SLACK_PX = 4;
 /** Distance from the top that triggers loading older history. */
 const LOAD_MORE_THRESHOLD_PX = 240;
+/**
+ * How long the row the reader was on is held in place after older history is
+ * prepended. The new rows start as `ROW_CONTENT_VISIBILITY` placeholders and
+ * take their real height over the next frames (a one-line row is about 24px
+ * against the 64px guess), and images settle later still.
+ */
+const ANCHOR_HOLD_MS = 1500;
 /** How long a jumped-to message stays lit. */
 const HIGHLIGHT_MS = 2_000;
 /**
@@ -177,6 +185,27 @@ const JUMP_NOTICE_MS = 3_000;
 /** How far the transcript is scrolled up from its live end, in pixels. */
 function distanceFromBottom(container: HTMLElement): number {
   return container.scrollHeight - container.scrollTop - container.clientHeight;
+}
+
+/** Where a row's top sits below the top of the scroll viewport, in px. */
+function offsetInViewport(container: HTMLElement, node: HTMLElement): number {
+  return node.getBoundingClientRect().top - container.getBoundingClientRect().top;
+}
+
+/** The first row whose bottom is inside the viewport, and where it sits. */
+function firstVisibleRow(
+  container: HTMLElement,
+  ids: readonly string[],
+  nodes: ReadonlyMap<string, HTMLElement>,
+): { id: string; offset: number } | null {
+  const top = container.getBoundingClientRect().top;
+  for (const id of ids) {
+    const node = nodes.get(id);
+    if (node && node.getBoundingClientRect().bottom > top) {
+      return { id, offset: node.getBoundingClientRect().top - top };
+    }
+  }
+  return null;
 }
 
 /**
@@ -813,8 +842,24 @@ export const MessageList = memo(function MessageList({
   const forumHoldTopRef = useRef(false);
   /** The newest row last time: unchanged means only history above moved. */
   const lastTailIdRef = useRef<string | null>(messages[messages.length - 1]?.id ?? null);
-  /** Scroll height captured before prepending history, to keep the view still. */
-  const restoreRef = useRef<{ height: number; top: number } | null>(null);
+  /**
+   * Captured before prepending history, to keep the view still: the row on
+   * screen and its offset, with the scroll height as the fallback when that
+   * row is gone by the time the page lands.
+   */
+  const restoreRef = useRef<{
+    height: number;
+    top: number;
+    anchor: { id: string; offset: number } | null;
+  } | null>(null);
+  /**
+   * The row held in place for `ANCHOR_HOLD_MS` after a prepend. A restore from
+   * the change in scroll height alone used to land the reader on the newest
+   * rows: the height it measured was mostly 64px placeholders that then
+   * shrank. The ResizeObserver puts this row back where it was every time the
+   * content resizes; the reader's own scrolling moves the offset with them.
+   */
+  const scrollAnchorRef = useRef<{ id: string; offset: number; until: number } | null>(null);
   /**
    * How many of the newly added messages came from loading history rather than
    * arriving live. React flushes layout effects before passive ones, so the
@@ -1316,8 +1361,10 @@ export const MessageList = memo(function MessageList({
    */
   const jumpToMessage = useCallback(
     (messageId: string) => {
-      // A jump is the reader moving: a forum post's first-visit hold ends.
+      // A jump is the reader moving: a forum post's first-visit hold ends,
+      // and so does a prepend's held row.
       forumHoldTopRef.current = false;
+      scrollAnchorRef.current = null;
       // Every jump supersedes the one before it, a loaded one included: a page
       // still being fetched for an earlier target must not land afterwards
       // and take the reader back there.
@@ -1495,6 +1542,15 @@ export const MessageList = memo(function MessageList({
     }
     const observer = new ResizeObserver(() => {
       setCanScrollDown(distanceFromBottom(container) > SCROLL_END_SLACK_PX);
+      const anchor = scrollAnchorRef.current;
+      if (anchor) {
+        const node = rowNodes.current.get(anchor.id);
+        if (node && performance.now() < anchor.until && !isPinnedRef.current) {
+          container.scrollTop += offsetInViewport(container, node) - anchor.offset;
+          return;
+        }
+        scrollAnchorRef.current = null;
+      }
       if (forumHoldTopRef.current) {
         container.scrollTop = 0;
         return;
@@ -1545,7 +1601,16 @@ export const MessageList = memo(function MessageList({
       return;
     }
     restoreRef.current = null;
-    container.scrollTop = container.scrollHeight - saved.height + saved.top;
+    const node = saved.anchor ? rowNodes.current.get(saved.anchor.id) : undefined;
+    if (!saved.anchor || !node) {
+      container.scrollTop = container.scrollHeight - saved.height + saved.top;
+      return;
+    }
+    container.scrollTop += offsetInViewport(container, node) - saved.anchor.offset;
+    scrollAnchorRef.current = {
+      ...saved.anchor,
+      until: performance.now() + ANCHOR_HOLD_MS,
+    };
   }, [messages.length]);
 
   // Channel switch: reset visit-scoped UI. Where the viewport lands is the
@@ -1717,6 +1782,11 @@ export const MessageList = memo(function MessageList({
     restoreRef.current = {
       height: container.scrollHeight,
       top: container.scrollTop,
+      anchor: firstVisibleRow(
+        container,
+        messages.map((message) => message.id),
+        rowNodes.current,
+      ),
     };
     void onLoadOlder()
       .then((added) => {
@@ -1730,7 +1800,7 @@ export const MessageList = memo(function MessageList({
         // scroll, which reads as auto-scroll being permanently broken.
         restoreRef.current = null;
       });
-  }, [hasMore, isLoadingOlder, onLoadOlder]);
+  }, [hasMore, isLoadingOlder, messages, onLoadOlder]);
 
   const loadNewer = useCallback(() => {
     if (!onLoadNewer || !hasNewer || isLoadingNewer) {
@@ -1858,6 +1928,7 @@ export const MessageList = memo(function MessageList({
   // A hold belongs to the post it landed on, never to the next conversation.
   useEffect(() => {
     forumHoldTopRef.current = false;
+    scrollAnchorRef.current = null;
   }, [channelId]);
 
   const handleScroll = useCallback(() => {
@@ -1867,6 +1938,18 @@ export const MessageList = memo(function MessageList({
     }
     // Plain geometry, true mid-jump as much as any other time.
     setCanScrollDown(distanceFromBottom(container) > SCROLL_END_SLACK_PX);
+    // The reader scrolling while a prepend settles: the held row moves with
+    // them, so the next resize keeps it where they put it. Back at the live
+    // end, the hold is over: the bottom is what the list follows there.
+    const anchor = scrollAnchorRef.current;
+    if (anchor) {
+      const node = rowNodes.current.get(anchor.id);
+      if (distanceFromBottom(container) <= STICKY_THRESHOLD_PX) {
+        scrollAnchorRef.current = null;
+      } else if (node) {
+        anchor.offset = offsetInViewport(container, node);
+      }
+    }
     // A jump's own animation: `settleJump` reads the geometry when it lands.
     // Its first frames are still near the bottom and would re-pin the list.
     if (jumpingRef.current) {
@@ -2651,6 +2734,11 @@ function EmptyState({
   const { t } = useTranslation();
   const [state, setState] = useState<"idle" | "busy" | "copied" | "failed">("idle");
   const timer = useRef<number | null>(null);
+  // The hint diet drops the button: the arrival banner above carries the
+  // same "Copiar convite" and two of them a screen apart is the audit's
+  // first-second finding. The line of text stays.
+  useHintDiet();
+  const showCopyButton = !hintDietHides("ownerInviteButton");
 
   useEffect(
     () => () => {
@@ -2691,24 +2779,26 @@ function EmptyState({
             ? t("chat.empty.owner.failed")
             : t("chat.empty.owner.body")}
         </p>
-        <Button
-          // Secondary: the owner banner above carries the loud copy of this
-          // same action, and two accent buttons a screen apart compete.
-          variant="secondary"
-          className="mt-3"
-          data-empty-copy-invite=""
-          disabled={state === "busy"}
-          onClick={() => void copy()}
-        >
-          {state === "copied" ? (
-            <Check aria-hidden="true" className="animate-icon-swap h-4 w-4" />
-          ) : (
-            <Copy aria-hidden="true" className="h-4 w-4" />
-          )}
-          {state === "copied"
-            ? t("chat.empty.owner.copied")
-            : t("chat.empty.owner.copy")}
-        </Button>
+        {showCopyButton ? (
+          <Button
+            // Secondary: the owner banner above carries the loud copy of this
+            // same action, and two accent buttons a screen apart compete.
+            variant="secondary"
+            className="mt-3"
+            data-empty-copy-invite=""
+            disabled={state === "busy"}
+            onClick={() => void copy()}
+          >
+            {state === "copied" ? (
+              <Check aria-hidden="true" className="animate-icon-swap h-4 w-4" />
+            ) : (
+              <Copy aria-hidden="true" className="h-4 w-4" />
+            )}
+            {state === "copied"
+              ? t("chat.empty.owner.copied")
+              : t("chat.empty.owner.copy")}
+          </Button>
+        ) : null}
       </div>
     );
   }

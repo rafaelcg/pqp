@@ -11,6 +11,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import vm from "node:vm";
 import { describe, expect, it } from "vitest";
 import { googleAds, googleAdsTags } from "./google-ads-tag";
 
@@ -96,4 +97,65 @@ describe("the shipped index.html", () => {
       expect(html, `index.html carries ${marker}`).not.toMatch(marker);
     }
   });
+});
+
+describe("the pages the tag must not load on (decision D3: /apps*, /locadora*)", () => {
+  /**
+   * The injected scripts, run as the browser would, on a given path. Records
+   * whether anything reached Google: a `dataLayer`, a `gtag` or a script
+   * appended to the head (the library request).
+   */
+  function runOn(pathname: string) {
+    const appended: unknown[] = [];
+    const listeners: Array<() => void> = [];
+    const addEventListener = (_name: string, fn: () => void) => {
+      listeners.push(fn);
+    };
+    const win: Record<string, unknown> = {
+      addEventListener,
+      setTimeout: (fn: () => void) => fn(),
+      requestIdleCallback: (fn: () => void) => fn(),
+    };
+    const document = {
+      readyState: "complete",
+      documentElement: { getAttribute: () => "other" },
+      head: { appendChild: (node: unknown) => appended.push(node) },
+      createElement: () => ({ setAttribute() {} }),
+    };
+    win.window = win;
+    win.document = document;
+    const context = vm.createContext({
+      ...win,
+      window: win,
+      document,
+      location: { pathname },
+      Date,
+    });
+    for (const tag of googleAdsTags({ VITE_GOOGLE_ADS_ID: "AW-123456789" })) {
+      vm.runInContext(String(tag.children), context);
+    }
+    // The first touch fires the loader too.
+    for (const fn of listeners) fn();
+    return { appended, win };
+  }
+
+  it.each(["/apps", "/apps/", "/apps/locadora", "/locadora", "/locadora/x"])(
+    "loads nothing, defines nothing and queues nothing on %s",
+    (pathname) => {
+      const { appended, win } = runOn(pathname);
+      expect(appended).toEqual([]);
+      expect(win.dataLayer).toBeUndefined();
+      expect(win.gtag).toBeUndefined();
+    },
+  );
+
+  it.each(["/", "/app", "/vem", "/appstore", "/locadoras", "/c/apps", "/@locadora"])(
+    "still loads and configures on %s",
+    (pathname) => {
+      const { appended, win } = runOn(pathname);
+      expect(appended.length).toBeGreaterThan(0);
+      expect(JSON.stringify(win.dataLayer)).toContain("config");
+      expect(typeof win.gtag).toBe("function");
+    },
+  );
 });

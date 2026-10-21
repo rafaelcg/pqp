@@ -82,6 +82,12 @@ interface ImportMetaEnv {
   readonly VITE_SPONSOR_URL?: string;
   readonly VITE_PIX_KEY?: string;
   readonly VITE_PIX_BRCODE?: string;
+  /**
+   * Where the "Build yours" section of `/apps` sends a developer to read the
+   * apps documentation. Public, optional, and absent on a self-host: empty
+   * means the link is not drawn. See `lib/apps-landing.ts`.
+   */
+  readonly VITE_APPS_DOCS_URL?: string;
 }
 
 interface ImportMeta {

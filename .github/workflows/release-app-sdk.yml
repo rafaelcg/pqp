@@ -1,0 +1,104 @@
+name: Release app-sdk
+
+# DRAFT. Publishes `@pqp/app-sdk` to the public npm registry, with provenance.
+#
+# It runs ONLY when somebody presses "Run workflow" on the Actions tab. There is
+# no push, schedule or pull_request trigger, so merging this file changes
+# nothing, and it stays inert until the repository secret NPM_TOKEN exists.
+# The steps Rafael does by hand first (npm scope, license decision, token) are
+# in packages/app-sdk/PUBLISHING.md. Read that before the first run.
+#
+# "Dry run" is ticked by default: the job builds, checks and runs
+# `npm publish --dry-run`, which prints what would go up and uploads nothing.
+# Untick it for the real thing. A published version can never be reused.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run: build, check and list the tarball, publish nothing"
+        type: boolean
+        default: true
+
+concurrency:
+  group: release-app-sdk
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build, check and publish @pqp/app-sdk
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Only the protected main branch may publish: a dispatch from another ref
+    # would otherwise check that ref out and publish it.
+    if: github.ref == 'refs/heads/main'
+    # Like the apps deploy: a branch can carry its own copy of a workflow, so the
+    # token belongs to an environment whose deployment branch policy is `main`
+    # (Settings > Environments > npm-release). Until you create it, GitHub makes
+    # an empty one on the first run and the repository secret of the same name is
+    # what is read.
+    environment: npm-release
+    permissions:
+      contents: read
+      # npm provenance: the registry verifies a signed statement of which commit
+      # and workflow built the package, issued by GitHub's OIDC provider.
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        # Version comes from the root package.json "packageManager" field.
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          # writes the .npmrc that reads NODE_AUTH_TOKEN
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build shared
+        run: pnpm --filter @pqp/shared build
+
+      - name: Typecheck and test the SDK
+        run: |
+          pnpm --filter @pqp/app-sdk typecheck
+          pnpm --filter @pqp/app-sdk test
+
+      # The apps must not have moved. They bundle the workspace source and not the
+      # npm package, so publishing cannot change them, and this proves it.
+      - name: Check the apps catalog
+        run: |
+          git fetch --no-tags --depth=1 origin main:refs/remotes/origin/main
+          pnpm apps:check
+
+      # Builds dist/, stages publish/ and FAILS when the tarball would not be
+      # self-contained (a leaked @pqp/shared import, a test file, a private manifest).
+      - name: Check the package
+        run: pnpm --filter @pqp/app-sdk package
+
+      - name: What would be published
+        run: npm pack ./packages/app-sdk/publish --dry-run
+
+      - name: Publish (dry run)
+        if: ${{ inputs.dry_run }}
+        run: npm publish ./packages/app-sdk/publish --access public --provenance --dry-run
+
+      - name: Publish
+        if: ${{ !inputs.dry_run }}
+        env:
+          # A granular token limited to the @pqp scope, read and write.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::error::Missing secret NPM_TOKEN (packages/app-sdk/PUBLISHING.md, step 4)."
+            exit 1
+          fi
+          npm publish ./packages/app-sdk/publish --access public --provenance
