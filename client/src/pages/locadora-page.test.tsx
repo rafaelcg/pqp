@@ -186,6 +186,46 @@ describe("choosing a cartridge at the door", () => {
     vi.unstubAllGlobals();
   });
 
+  it("only the cartridge chosen last goes in, however the reads finish", async () => {
+    vi.stubGlobal("matchMedia", () => ({ matches: true }));
+    mount(GUEST);
+    let releaseFirst: (bytes: ArrayBuffer) => void = () => {};
+    const first = new File([new Uint8Array([1])], "first.sfc");
+    Object.defineProperty(first, "arrayBuffer", { value: () => new Promise<ArrayBuffer>((resolve) => (releaseFirst = resolve)) });
+    const input = host!.querySelector<HTMLInputElement>('input[type="file"]')!;
+    Object.defineProperty(input, "files", { value: [first], configurable: true });
+    act(() => {
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await choose(new File([new Uint8Array([2, 2])], "second.gba"));
+    await act(async () => {
+      releaseFirst(new Uint8Array([1]).buffer);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    });
+    expect(host!.querySelector("[data-where]")?.textContent).toBe("/locadora/jogar");
+    expect(takeCartridge()?.ext).toBe(".gba");
+    vi.unstubAllGlobals();
+  });
+
+  it("a read that finishes after the visitor left holds nothing and goes nowhere", async () => {
+    mount(GUEST);
+    let release: (bytes: ArrayBuffer) => void = () => {};
+    const slow = new File([new Uint8Array([1])], "slow.nes");
+    Object.defineProperty(slow, "arrayBuffer", { value: () => new Promise<ArrayBuffer>((resolve) => (release = resolve)) });
+    const input = host!.querySelector<HTMLInputElement>('input[type="file"]')!;
+    Object.defineProperty(input, "files", { value: [slow], configurable: true });
+    act(() => {
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    act(() => root?.unmount());
+    root = null;
+    await act(async () => {
+      release(new Uint8Array([1]).buffer);
+      await new Promise((resolve) => setTimeout(resolve, 600));
+    });
+    expect(hasCartridge()).toBe(false);
+  });
+
   it("a file that does not fit says so and stays on the page", async () => {
     mount(GUEST);
     await choose(new File([new Uint8Array([1])], "notes.txt"));

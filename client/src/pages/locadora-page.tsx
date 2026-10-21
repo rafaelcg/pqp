@@ -82,13 +82,28 @@ export function LocadoraPageBody() {
   const [state, setState] = useState<DoorState>("idle");
   const [problem, setProblem] = useState<MessageKey | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  useEffect(() => () => clearTimeout(timer.current), []);
+  /**
+   * The latest choice, by number: a read that finishes after a newer pick or drop (or after the page went away,
+   * `-1`) is dropped, so the player only ever gets the cartridge chosen last, and a slow read can never navigate
+   * someone back here from wherever they went.
+   */
+  const choice = useRef(0);
+  useEffect(() => {
+    // (StrictMode mounts twice: the second mount must open the door again)
+    if (choice.current < 0) choice.current = 0;
+    return () => {
+      choice.current = -1;
+      clearTimeout(timer.current);
+    };
+  }, []);
 
   /** A file from the picker or a drop: read it, put it in, open the player. */
   const insert = useCallback(
     async (file: File | null | undefined) => {
-      if (!guest || !file || state === "inserting") return;
+      if (!guest || !file || state === "inserting" || choice.current < 0) return;
+      const mine = (choice.current += 1);
       const result = await readLocalFile(file, { accept, maxBytes });
+      if (choice.current !== mine) return;
       if (result.kind !== "picked") {
         setState("idle");
         setProblem(
