@@ -369,6 +369,18 @@ describe("capabilities", () => {
     expect(await noFlow.app.call({ type: "share.request", on: true })).toMatchObject({ error: "unavailable" });
   });
 
+  it("a share that was asked for and did not start is a failure the app can say, and a stop is never one", async () => {
+    // the person is not in the call, or closed the picker: the page answers false
+    const share = vi.fn(async () => false);
+    const refused = await make({
+      app: { capabilities: { share: "pane", localFiles: { allowed: false } }, shareAllowed: true },
+      host: { ui: { share } },
+    });
+    expect(await refused.app.call({ type: "share.request", on: true })).toMatchObject({ error: "unavailable" });
+    // a stop that finds nothing to stop (the probe at start) still answers
+    expect(await refused.app.call({ type: "share.request", on: false })).toMatchObject({ ok: true, result: { on: false } });
+  });
+
   it("ui.fullscreen needs the page to offer it, and ui.resize reaches the page", async () => {
     const resize = vi.fn();
     const r = await make({ host: { ui: { resize } } });

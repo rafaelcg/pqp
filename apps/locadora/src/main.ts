@@ -1,4 +1,5 @@
 import "./shim";
+import "./audio";
 import "@emulatorjs/emulatorjs/data/emulator.css";
 import "./styles/base.css";
 import "./styles/stage.css";
@@ -53,9 +54,7 @@ const loadingSection = el<HTMLElement>("v-loading");
 const play = el<HTMLElement>("v-play");
 const stageEl = el<HTMLElement>("stage");
 const gameEl = el<HTMLElement>("game");
-const bar = el<HTMLElement>("bar");
 const watchView = el<HTMLElement>("v-watch");
-const shareButton = el<HTMLButtonElement>("share");
 const sharingLine = el<HTMLElement>("sharing");
 const noticesPanel = el<HTMLElement>("notices");
 const noticesClose = el<HTMLButtonElement>("notices-close");
@@ -81,10 +80,8 @@ function render(screen: Screen) {
   endedLine.hidden = !dead;
   if (dead) closeNotices();
   if (screen !== "palco") {
-    // the share control and its line belong to the game on screen (`syncShare` brings them back)
-    shareButton.hidden = true;
+    // the share indicator belongs to the game on screen (`syncShare` brings it back)
     sharingLine.hidden = true;
-    bar.hidden = true;
   }
 }
 screens.onChange(render);
@@ -195,7 +192,6 @@ async function main() {
   function applyLabels() {
     setText("title", t.title);
     setText("loading", t["load.steps"].split("·")[0]?.trim() ?? t.loading);
-    shareButton.textContent = sharing ? t.shareStop : t.share;
     setText("notices-title", t.noticesTitle);
     setText("notices-intro", t.noticesIntro);
     noticesClose.textContent = t.noticesHide;
@@ -344,29 +340,36 @@ async function main() {
   const isWatcher = app.hello.self.role === "spectator";
   let shareAvailable = false;
   let sharing = false;
+  let shareBusy = false;
+  /** The HUD's share pill and the "sharing" chip follow what the platform said: nothing is drawn where sharing is not offered. */
   function syncShare() {
     const playing = root.dataset.view === "palco";
-    shareButton.hidden = !(shareAvailable && playing);
-    bar.hidden = shareButton.hidden;
-    shareButton.textContent = sharing ? t.shareStop : t.share;
-    shareButton.setAttribute("aria-pressed", String(sharing));
+    session?.setShare(shareAvailable ? { on: sharing, busy: shareBusy } : null);
     sharingLine.hidden = !(sharing && playing);
-    sharingLine.textContent = sharing ? t.sharing : "";
+    sharingLine.textContent = sharing ? t.sharingLive : "";
+    sharingLine.title = sharing ? t.sharing : "";
   }
   screens.onChange(() => syncShare());
-  shareButton.addEventListener("click", async () => {
-    shareButton.disabled = true;
-    const outcome = await setShared(app, !sharing);
-    shareButton.disabled = false;
-    if (outcome.kind === "shared") {
+  async function toggleShare() {
+    if (shareBusy || !shareAvailable) return;
+    const wantOn = !sharing;
+    shareBusy = true;
+    syncShare();
+    const outcome = await setShared(app, wantOn);
+    shareBusy = false;
+    if (outcome.kind === "shared" && outcome.on === wantOn) {
       sharing = outcome.on;
+      if (sharing) session.toast(t.sharing);
+    } else if (outcome.kind === "shared") {
+      // the platform answered and did not do it (no call to share into, the picker was closed): said, never nothing
+      sharing = outcome.on;
+      session.toast(t.shareFailed);
     } else {
-      sharingLine.hidden = false;
-      sharingLine.textContent = outcome.kind === "refused" ? t.shareRefused : t.shareFailed;
+      session.toast(outcome.kind === "refused" ? t.shareRefused : t.shareFailed);
       if (outcome.kind === "refused") shareAvailable = false;
     }
     syncShare();
-  });
+  }
 
   /** The line a watcher reads: whose game is on the screen they are looking at. */
   function renderWatching(roster: Awaited<ReturnType<PqpApp["participants"]["get"]>>) {
@@ -604,6 +607,7 @@ async function main() {
     get syncProblem() {
       return syncProblem;
     },
+    onShare: () => void toggleShare(),
     onLeave: (_reason, item) => {
       if (isFullscreen) {
         void askFullscreen(false).catch(() => undefined);

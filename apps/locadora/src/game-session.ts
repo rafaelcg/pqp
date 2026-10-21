@@ -19,7 +19,7 @@
  */
 import type { PqpApp } from "@pqp/app-sdk";
 import { createEmulatorRuntime, type EjsRuntime, type EmulatorLanguage } from "./emulator";
-import { createHud, type Hud, type HudAction } from "./hud";
+import { createHud, type Hud, type HudAction, type HudShare } from "./hud";
 import type { Strings } from "./i18n";
 import type { Platform as ConsoleGroup } from "./keymap";
 import {
@@ -96,6 +96,8 @@ export interface SessionContext {
   openExport?(): void;
   /** The game is over for now: the shelf takes over. */
   onLeave(reason: LeaveReason, item: LibraryItem): void;
+  /** The person pressed the HUD's share pill (it is only drawn where sharing is offered). */
+  onShare?(): void;
   /**
    * Saves na conta (`locadora_save_sync`): the account this session's saves are copied to, or null where it is
    * off. Null keeps everything exactly as it was: the saves stay on this device and nothing else is asked.
@@ -121,6 +123,10 @@ export interface GameSession {
   setFullscreen(full: boolean): void;
   /** The stage laid itself out again: the HUD's screen pill follows. */
   syncStage(): void;
+  /** Whether the HUD offers sharing the pane, and whether it is on: `null` draws nothing (sharing is not offered here). */
+  setShare(share: HudShare): void;
+  /** A line over the picture, in the HUD's own toaster; nothing before a game is up. */
+  toast(text: string): void;
   /** A key was rebound in the controller map: the running console follows. */
   applyKeymap(platform: ConsoleGroup, map: Readonly<Record<string, string>>): void;
 }
@@ -165,6 +171,8 @@ export function createGameSession(ctx: SessionContext): GameSession {
   let thumbUrls: string[] = [];
   let timers: Array<ReturnType<typeof setTimeout>> = [];
   let muted = prefs.prefs.muted;
+  /** What the page last said about sharing: the HUD draws it, and a HUD made later starts from it. */
+  let shareState: HudShare = null;
   let started = false;
   /** The core's error screen is up: it is said once, whatever fires after it. */
   let errorShown = false;
@@ -418,6 +426,9 @@ export function createGameSession(ctx: SessionContext): GameSession {
       case "eject":
         void eject();
         break;
+      case "share":
+        ctx.onShare?.();
+        break;
     }
   }
 
@@ -531,6 +542,8 @@ export function createGameSession(ctx: SessionContext): GameSession {
 
     const created = (ctx.createRuntime ?? createEmulatorRuntime)();
     runtime = created;
+    // the person's own switch is on from the first note: this reaches the frame's audio hub before the console exists
+    if (muted) created.setMuted(true);
     const savesNow = createSaves({ store, runtime: created, sha: item.sha256, autosave: prefs.prefs.autosave, requireShelf: true });
     saves = savesNow;
     gameSync =
@@ -707,6 +720,7 @@ export function createGameSession(ctx: SessionContext): GameSession {
       },
     });
     hud.setFullscreen(ctx.isFullscreen());
+    hud.setShare(shareState);
     if (muted) {
       liveRuntime.setMuted(true);
       hud.setMuted(true);
@@ -953,6 +967,13 @@ export function createGameSession(ctx: SessionContext): GameSession {
     },
     syncStage() {
       hud?.syncStage();
+    },
+    setShare(share) {
+      shareState = share;
+      hud?.setShare(share);
+    },
+    toast(text) {
+      hud?.toast(text);
     },
     applyKeymap(platform, map) {
       if (playing && runtime && input && group() === platform) {

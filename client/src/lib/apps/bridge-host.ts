@@ -703,7 +703,11 @@ export class BridgeHost {
         if (!share) return this.fail(id, "unavailable");
         if (this.connection !== "online") return this.fail(id, "unavailable");
         try {
-          return this.succeed(id, message.type, { on: await share(message.on) });
+          const on = await share(message.on);
+          // a request to START that did not start (no call to share into, the picker was closed) is a failure the app
+          // can say out loud, never an `{ on: false }` that looks like it worked and left a button doing nothing
+          if (message.on && !on) return this.fail(id, "unavailable");
+          return this.succeed(id, message.type, { on });
         } catch {
           return this.fail(id, "unavailable");
         }

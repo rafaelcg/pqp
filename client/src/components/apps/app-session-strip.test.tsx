@@ -169,6 +169,47 @@ describe("AppSessionStrip", () => {
     expect(toggle.getAttribute("aria-disabled")).toBe("true");
     act(() => toggle.click());
     expect(onShareChange).not.toHaveBeenCalled();
+    // and says why in words beside it, not only in a hover: a dimmed switch with no reason is a button that does nothing
+    const reason = document.querySelector('[data-testid="app-strip-share-reason"]')!;
+    expect(reason.textContent).toMatch(/call/i);
+  });
+
+  it("already sharing another screen: the switch is shown, says so, and does not fire", () => {
+    const onShareChange = vi.fn();
+    render({
+      model: live({
+        phase: "host",
+        isHost: true,
+        line: { kind: "host" },
+        actions: { leave: true, end: true, enter: null, takeHost: false, share: true },
+      }),
+      share: { ...shareOff, otherShare: true },
+      onShareChange,
+    });
+    const toggle = document.querySelector<HTMLElement>('[role="switch"]')!;
+    expect(toggle.getAttribute("aria-disabled")).toBe("true");
+    act(() => toggle.click());
+    expect(onShareChange).not.toHaveBeenCalled();
+    expect(document.querySelector('[data-testid="app-strip-share-reason"]')?.textContent).toMatch(/outra tela|another screen/);
+  });
+
+  it("able to share: no reason is drawn and the switch fires", () => {
+    const onShareChange = vi.fn();
+    render({
+      model: live({
+        phase: "host",
+        isHost: true,
+        line: { kind: "host" },
+        actions: { leave: true, end: true, enter: null, takeHost: false, share: true },
+      }),
+      share: shareOff,
+      onShareChange,
+    });
+    expect(document.querySelector('[data-testid="app-strip-share-reason"]')).toBeNull();
+    const toggle = document.querySelector<HTMLElement>('[role="switch"]')!;
+    expect(toggle.getAttribute("aria-disabled")).toBeNull();
+    act(() => toggle.click());
+    expect(onShareChange).toHaveBeenCalledWith(true);
   });
 
   it("the next host sees a warm strip and Assumir agora calls the take-over", () => {

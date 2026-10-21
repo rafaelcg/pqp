@@ -36,7 +36,13 @@ export const SLOT_COUNT = 4;
 export { DEFAULT_TURBO_RATIO };
 
 /** What the HUD asks its owner to do. The slot is the picker's current one. */
-export type HudAction = "save" | "load" | "saves" | "controls" | "sound" | "fullscreen" | "eject";
+export type HudAction = "save" | "load" | "saves" | "controls" | "sound" | "fullscreen" | "eject" | "share";
+
+/**
+ * The share control, which the HUD only draws: whether sharing is offered at all is the page's to know (src/share.ts).
+ * `null` is "not offered": no pill, nothing to press, nothing that does nothing.
+ */
+export type HudShare = { on: boolean; busy: boolean } | null;
 
 export interface HudInfo {
   title: string;
@@ -99,6 +105,8 @@ export interface Hud {
   setTurboRatio(ratio: number): void;
   toggleTurbo(): void;
   setMuted(muted: boolean): void;
+  /** Draws (or removes, with `null`) the pill that shares the pane. Pressing it asks the owner for the `"share"` action. */
+  setShare(share: HudShare): void;
   /** Tell the HUD the room is (or is not) full screen; also tells the stage. */
   setFullscreen(full: boolean): void;
   /** While the saves drawer is open the HUD does not fade. */
@@ -271,7 +279,12 @@ export function createHud(options: HudOptions): Hud {
     h("kbd", { "aria-hidden": "true" }, "Esc"),
   );
 
-  const top = h("div", { class: "loc-hud-top" }, titleChip, h("span", { class: "loc-hud-spacer" }), turboPill, screenPill, crtPill, exitPill);
+  // the share control lives with the other chips of the top row, never over the bar: it was drawn on top of it once
+  const sharePill = pill({ action: "share", label: t.share, aria: t.share });
+  sharePill.classList.add("loc-pill-share");
+  sharePill.setAttribute("aria-pressed", "false");
+  sharePill.hidden = true;
+  const top = h("div", { class: "loc-hud-top" }, titleChip, h("span", { class: "loc-hud-spacer" }), turboPill, sharePill, screenPill, crtPill, exitPill);
 
   // ---- the bar ----
   const pauseBtn = barButton({ action: "pause", icon: "pause", label: t["hud.pause"], aria: `${t["hud.pause"]}, P`, kbd: "P" });
@@ -895,6 +908,9 @@ export function createHud(options: HudOptions): Hud {
   onPress(soundBtn.button, () => ask("sound"));
   onPress(fullBtn.button, () => ask("fullscreen"));
   onPress(exitPill, () => ask("fullscreen"));
+  onPress(sharePill, () => {
+    if (sharePill.getAttribute("aria-disabled") !== "true") ask("share");
+  });
   onPress(ejectBtn.button, () => ask("eject"));
   onPress(slotPrev, () => setSlot(stepSlot(slot, -1)));
   onPress(slotNext, () => setSlot(stepSlot(slot, 1)));
@@ -1209,6 +1225,18 @@ export function createHud(options: HudOptions): Hud {
     setMuted(next) {
       muted = next;
       renderSound();
+    },
+    setShare(share) {
+      sharePill.hidden = share === null;
+      if (share === null) top.removeAttribute("data-share");
+      else top.setAttribute("data-share", "");
+      if (share === null) return;
+      sharePill.textContent = share.on ? t["hud.sharingPill"] : t.share;
+      sharePill.setAttribute("aria-label", share.on ? t.shareStop : t.share);
+      sharePill.setAttribute("aria-pressed", String(share.on));
+      // busy keeps the focus (a disabled button would drop it) and ignores a second press while the first is asked
+      if (share.busy) sharePill.setAttribute("aria-disabled", "true");
+      else sharePill.removeAttribute("aria-disabled");
     },
     setFullscreen(full) {
       if (full === fullscreen) return;
