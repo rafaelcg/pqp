@@ -100,6 +100,11 @@ describe("what arrived while the chat was away", () => {
     expect(run([], history, [...history, msg("n1", "bia")]).unread.count).toBe(1);
   });
 
+  it("an empty list in between (a refetch) keeps the boundary, so what arrived meanwhile counts", () => {
+    const back = [...base, msg("3", "bia"), msg("4", "caio")];
+    expect(run(base, [], back).unread.count).toBe(2);
+  });
+
   it("a replaced page, a jump or history loaded above counts nothing and keeps what was counted", () => {
     const one = [...base, msg("3", "bia")];
     const jumped = [msg("x1", "bia"), msg("x2", "bia"), msg("x3", "bia")];

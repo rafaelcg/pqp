@@ -85,9 +85,9 @@ export function advanceUnread(
   messages: readonly UnreadMessage[],
   viewer: { id: string | null; username: string | null },
 ): UnreadTracker {
-  if (messages.length === 0) {
-    return previous.lastId === null ? previous : { lastId: null, unread: previous.unread };
-  }
+  // An empty list is a refetch or a page still on its way (another channel
+  // gets a fresh tracker from the caller): the boundary waits for it.
+  if (messages.length === 0) return previous;
   const newest = messages[messages.length - 1]!.id;
   if (newest === previous.lastId) return previous;
   if (previous.lastId === null) return { lastId: newest, unread: previous.unread };
