@@ -24,7 +24,6 @@ export { PortClient, REQUEST_TIMEOUT_MS, type Unsubscribe } from "./client.js";
 // Saves na conta: its own module, so an app that never imports it builds byte for byte as before (see sync.ts)
 export {
   connectWithSync,
-  createActivityApi,
   createSyncApi,
   type ActivityApi,
   type ActivityState,
