@@ -23,6 +23,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
@@ -120,6 +121,27 @@ private fun InviteHeader(preview: InvitePreview, modifier: Modifier = Modifier) 
 }
 
 /**
+ * The one calm sentence after a session ended under the person ("Your session
+ * expired. Sign in again."). Muted body text, not an error: they did nothing
+ * wrong and the remedy is the form right below. Shown until they sign in.
+ */
+@Composable
+private fun SessionExpiredNotice(session: SessionStore, modifier: Modifier = Modifier) {
+    val expired by session.sessionExpired.collectAsStateWithLifecycle()
+    if (!expired) return
+    Text(
+        text = stringResource(R.string.session_expired_notice),
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = TextAlign.Center,
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.gutter, vertical = Spacing.sm)
+            .testTag("signin.sessionNotice"),
+    )
+}
+
+/**
  * A release build packaged without a Clerk publishable key.
  *
  * Deliberately a dead end with an explanation rather than a button. The only
@@ -185,6 +207,7 @@ private fun ClerkSignIn(session: SessionStore, preview: InvitePreview?) {
                     .padding(horizontal = Spacing.gutter + Spacing.xs, vertical = Spacing.md),
             )
         }
+    SessionExpiredNotice(session, if (preview == null) Modifier.statusBarsPadding() else Modifier)
     Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
         if (!initialized) {
             CircularProgressIndicator()
@@ -269,6 +292,7 @@ private fun DevSignIn(session: SessionStore, preview: InvitePreview?) {
             )
             Spacer(Modifier.height(Spacing.lg))
         }
+        SessionExpiredNotice(session)
         Text(
             text = stringResource(R.string.sign_in_title),
             style = MaterialTheme.typography.displaySmall,

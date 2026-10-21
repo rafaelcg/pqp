@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * What the push surface is currently able to do, which is mostly a question
@@ -152,7 +153,20 @@ class PushController(
     init {
         app.registerActivityLifecycleCallbacks(ForegroundCounter())
         if (BuildConfig.PUSH_AVAILABLE) notifier.ensureChannel()
+        session.deviceCleanup = { unregisterForSignOut() }
         watchSession()
+    }
+
+    /**
+     * What a Sign out the person chose does for push, while the session still
+     * authenticates and before Clerk ends it (`SessionStore.signOut` calls this
+     * after the screen has already changed, and bounds it). Takes the token so
+     * [onSignedOut] does not unregister it a second time.
+     */
+    private suspend fun unregisterForSignOut() {
+        val token = lastToken ?: return
+        lastToken = null
+        runCatching { api.unregister(token) }
     }
 
     // ------------------------------------------------------------- lifecycle
@@ -208,14 +222,19 @@ class PushController(
         _promptNeeded.value = false
         VisibleChannel.clear()
         notifier.clearAll()
+        // A Sign out the person chose unregisters through `session.deviceCleanup`,
+        // in order and before Clerk ends the session; doing it here as well would
+        // race that and lose.
+        if (session.userSignOutInProgress) return
         val token = lastToken
         lastToken = null
         if (token == null) return
-        // Best effort, and ordered this way on purpose: the row has to go
-        // before the credential does, or the next person to hold this phone
-        // gets the last one's notifications. A failure here is not worth a
-        // message, because there is no longer a screen it belongs on.
-        scope.launch { runCatching { api.unregister(token) } }
+        // A session that ended under the person: best effort, and bounded. The
+        // call will most likely be refused (there is no live credential left),
+        // and the server drops a token it cannot deliver to on its first failed
+        // push. A failure here is not worth a message, because there is no
+        // longer a screen it belongs on.
+        scope.launch { withTimeoutOrNull(UNREGISTER_MS) { runCatching { api.unregister(token) } } }
     }
 
     // ------------------------------------------------------------- the toggle
@@ -520,6 +539,7 @@ class PushController(
 
     private companion object {
         const val TAG = "pqp.push"
+        const val UNREGISTER_MS = 4_000L
         const val PREFS = "pqp.push"
         const val KEY_ENABLED = "enabled"
         const val KEY_TOKEN = "token"

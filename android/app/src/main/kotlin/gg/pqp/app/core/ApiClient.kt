@@ -51,6 +51,36 @@ class ApiClient(
 ) {
     suspend fun me(): Me = get("/api/me")
 
+    /**
+     * `GET /api/me` with exactly [token], answering the HTTP status or null
+     * when there was no answer (offline, a timeout). Asked once by the session
+     * expiry handler to learn whether a 401 is a dead session; it carries the
+     * [SessionProbeRequest] tag so its own 401 never reports back to that same
+     * handler, and it never throws for a network failure.
+     */
+    suspend fun probeMe(token: String): Int? {
+        val request = Request.Builder()
+            .url(url("/api/me"))
+            .header("Authorization", "Bearer $token")
+            .header("Accept", "application/json")
+            .tag(SessionProbeRequest::class.java, SessionProbeRequest)
+            .build()
+        return suspendCancellableCoroutine { continuation ->
+            val call = http.newCall(request)
+            continuation.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    if (continuation.isActive) continuation.resume(null)
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    val code = response.use { it.code }
+                    if (continuation.isActive) continuation.resume(code)
+                }
+            })
+        }
+    }
+
     suspend fun submitAgeCheck(dateOfBirth: String): String {
         val body = json.encodeToString(AgeDeclaration.serializer(), AgeDeclaration(dateOfBirth))
         return post<AgeCheckResponse>("/api/me/age-check", body).ageGate

@@ -67,11 +67,53 @@ sealed interface SessionPhase {
  */
 class SessionStore(
     private val scope: CoroutineScope,
-    /** Shared with the API and the socket; the connection check borrows it too. */
-    val http: OkHttpClient = ApiClient.defaultHttpClient(),
+    baseHttp: OkHttpClient = ApiClient.defaultHttpClient(),
 ) {
+    /** Set once [expiryGate] exists; the interceptor below is built first and reads it lazily. */
+    @Volatile
+    private var expiryGateRef: SessionExpiryGate? = null
+
+    /**
+     * Shared with the API and the socket; the connection check borrows it too.
+     * Every request path goes through [SessionExpiryInterceptor], which is how
+     * ONE place hears about a 401 whichever code made the call.
+     */
+    val http: OkHttpClient = baseHttp.newBuilder()
+        .addInterceptor(SessionExpiryInterceptor { expiryGateRef })
+        .build()
+
     private val _phase = MutableStateFlow<SessionPhase>(SessionPhase.Launching)
     val phase: StateFlow<SessionPhase> = _phase.asStateFlow()
+
+    /**
+     * True from the moment a session ended under the person until they sign in
+     * again: the sign-in screen says so once, calmly ("Your session expired.
+     * Sign in again."), instead of an error. A Sign out the person chose never
+     * sets it. Separate from [phase] so the message is not a screen of its own.
+     */
+    private val _sessionExpired = MutableStateFlow(false)
+    val sessionExpired: StateFlow<Boolean> = _sessionExpired.asStateFlow()
+
+    /**
+     * Fires when a session ends, either way, before the screen changes. For
+     * what lives outside the store and must not outlive the account (a call).
+     */
+    private val _sessionEnded = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val sessionEnded: kotlinx.coroutines.flow.SharedFlow<Unit> = _sessionEnded
+
+    /**
+     * What a Sign out the person chose has to do over the network while the
+     * session still works (the push controller unregisters this device so the
+     * next owner of the phone does not receive the last one's notifications).
+     * Bounded by [NETWORK_STEP_MS] and optional: never allowed to hold the screen.
+     */
+    @Volatile
+    var deviceCleanup: (suspend () -> Unit)? = null
+
+    /** True while a Sign out the person chose is running, so [deviceCleanup]'s owner does not do it twice. */
+    @Volatile
+    var userSignOutInProgress: Boolean = false
+        private set
 
     private val _servers = MutableStateFlow<List<ServerSummary>>(emptyList())
     val servers: StateFlow<List<ServerSummary>> = _servers.asStateFlow()
@@ -114,6 +156,58 @@ class SessionStore(
 
     val api: ApiClient = ApiClient(delegating, http)
     val realtime: RealtimeClient = RealtimeClient(delegating, scope, http)
+
+    /** Signed in as somebody, whatever the gate says: the phases a dead session is torn down from. */
+    private fun hasAccount(): Boolean = when (_phase.value) {
+        is SessionPhase.Ready, is SessionPhase.AgeGate, is SessionPhase.Blocked -> true
+        is SessionPhase.Launching, is SessionPhase.SignedOut, is SessionPhase.Failed -> false
+    }
+
+    private val expiryGate = SessionExpiryGate(
+        scope = scope,
+        hasAccount = ::hasAccount,
+        probe = ::probeSession,
+        endSession = { endSession(expired = true) },
+    ).also { expiryGateRef = it }
+
+    /**
+     * THE place a dead session is dealt with. Everything that can find out calls
+     * this: the shared HTTP client on any authenticated 401
+     * ([SessionExpiryInterceptor]), the socket when it is refused (4401) or has
+     * no token, and Clerk when it says its session is over ([watchClerk]).
+     *
+     * Idempotent: the first caller claims the transition and every other one
+     * returns at once. It first asks the server once, with a freshly refreshed
+     * token, whether the session is really gone, because a 401 can also be one
+     * stale token and only a 401 (or no session at all) counts as dead: offline
+     * or a 5xx is "unknown" and never signs anybody out. A 401 for a request
+     * that began before the session ended is ignored (the epoch).
+     */
+    suspend fun handleSessionExpired() = expiryGate.handle()
+
+    private suspend fun probeSession(): SessionProbe {
+        val token = when (val refreshed = tokens.refreshedToken()) {
+            TokenRefresh.NoSession -> return SessionProbe.Dead
+            TokenRefresh.Unavailable -> return SessionProbe.Unknown
+            is TokenRefresh.Token -> refreshed.value
+        }
+        return SessionExpiry.classifyProbe(api.probeMe(token))
+    }
+
+    /**
+     * Clerk saying the session is over (replaced by a sign-in on another
+     * device under single session mode, ended, expired, revoked, removed): the
+     * same door as a 401, with no waiting for the next request to find out.
+     * Only a change from a session we held counts; launch is `restore`'s.
+     */
+    private suspend fun watchClerk() {
+        var previous: com.clerk.api.session.Session? = com.clerk.api.Clerk.session
+        com.clerk.api.Clerk.sessionFlow.collect { current ->
+            val had = previous
+            previous = current
+            if (had != null && SessionExpiry.isOver(current?.status)) handleSessionExpired()
+        }
+    }
 
     private var restoreJob: Job? = null
 
@@ -254,10 +348,18 @@ class SessionStore(
         restoreJob?.cancel()
         restoreJob = scope.launch {
             _phase.value = SessionPhase.Launching
+            // The Clerk session this attempt speaks for, read BEFORE the
+            // request: a refusal that arrives after Clerk moved to another
+            // session is about the old one.
+            val askedClerk = clerkSessionId()
+            var refused = false
             val me = withTimeoutOrNull(LAUNCH_DEADLINE_MS) {
                 runSuspendCatching { api.me() }.getOrElse { error ->
                     when {
-                        error is ApiException && error.isUnauthorized -> null
+                        error is ApiException && error.isUnauthorized -> {
+                            refused = true
+                            null
+                        }
                         else -> {
                             Log.w(TAG, "restore failed: ${error.message}")
                             _phase.value = SessionPhase.Failed(error.message ?: "")
@@ -269,8 +371,21 @@ class SessionStore(
 
             if (_phase.value is SessionPhase.Failed) return@launch
 
+            if (me != null) _sessionExpired.value = false
             when (me?.ageGate) {
-                null -> _phase.value = SessionPhase.SignedOut
+                null -> {
+                    _phase.value = SessionPhase.SignedOut
+                    // The server refused a token Clerk had just minted: the
+                    // session Clerk still holds is dead (replaced by a sign-in
+                    // on another device, or minted for another instance).
+                    // Clear it so the sign-in screen starts clean, and say
+                    // what happened once. A launch that merely timed out is
+                    // not that, and neither is a fresh install.
+                    if (refused && askedClerk != null && clerkSessionId() == askedClerk) {
+                        _sessionExpired.value = true
+                        scope.launch { clerkSignOutBounded(askedClerk) }
+                    }
+                }
                 "passed" -> {
                     _phase.value = SessionPhase.Ready(me)
                     realtime.connect()
@@ -606,33 +721,99 @@ class SessionStore(
         _linkError.value = null
     }
 
-    fun signOutLocally() {
+    /**
+     * Everything that ends a session, in an order that cannot wedge: the screen
+     * changes first and every network step after it is optional and bounded by
+     * [NETWORK_STEP_MS]. Nothing in the first half needs a session that works,
+     * which is the point: a dead session used to leave Sign out waiting on a
+     * Clerk request with nothing behind it, and the app looking signed in.
+     *
+     * [expired] is a session that ended under the person ([handleSessionExpired]);
+     * otherwise it is a Sign out they chose. The difference is the message on
+     * the sign-in screen and whether this device is unregistered from push first
+     * (a dead session could not authenticate that call anyway).
+     */
+    private suspend fun endSession(expired: Boolean) {
+        // The Clerk session being ended, named before anything else happens so
+        // a sign-in that lands during the bounded steps below is never mistaken
+        // for it (`clerkSignOutBounded`).
+        val ending = clerkSessionId()
+        // Calls in the air belong to the account that is leaving, and a late
+        // refusal of one must not read as the next account's session dying.
+        expiryGate.sessionEnded()
+        restoreJob?.cancel()
+        orderFollowJob?.cancel()
+        inviteJoin?.cancel()
+        inviteJoin = null
+        _sessionExpired.value = expired
+        // A call outlives nothing: it leaves while its socket can still say so.
+        _sessionEnded.tryEmit(Unit)
         realtime.disconnect()
+        http.dispatcher.cancelAll()
         PermissionsCache.clear()
         _servers.value = emptyList()
         _serversLoaded.value = false
         _linkError.value = null
         _landing.value = null
-        inviteJoin?.cancel()
-        inviteJoin = null
+        // The screen goes first. Whatever is slow below must not keep a dead
+        // session's UI on screen.
         _phase.value = SessionPhase.SignedOut
+
+        if (!expired) {
+            withTimeoutOrNull(NETWORK_STEP_MS) { runSuspendCatching { deviceCleanup?.invoke() } }
+        }
+        clerkSignOutBounded(ending)
+    }
+
+    private fun clerkSessionId(): String? =
+        if (Backend.authMode == AuthMode.Clerk) com.clerk.api.Clerk.session?.id else null
+
+    /** Test seam: lands the store in a signed-in phase without a network. */
+    internal fun seedPhaseForTesting(next: SessionPhase) {
+        _phase.value = next
     }
 
     /**
-     * Ends the Clerk session first, while the call can still authenticate,
-     * then forgets it locally. Clearing local state first would leave a live
-     * session on the device with nothing able to revoke it.
-     *
-     * Here rather than on the account screen because it has a second caller
-     * now: the connection banner's "Sign in again", which is the only fix for
-     * a session the server has stopped accepting.
+     * Ends the Clerk session [ending], waiting at most [NETWORK_STEP_MS]. The SDK has no
+     * local-only clear, but its sign-out empties the local session state even
+     * when the server refuses the request (it does for a session that is
+     * already dead), so the bound is what keeps a slow network from holding
+     * anything up.
+     */
+    private suspend fun clerkSignOutBounded(ending: String?) {
+        if (Backend.authMode != AuthMode.Clerk || ending == null) return
+        // The screen changed before the steps above, so the person may already
+        // be signing in again: Clerk's sign-out is global, and would end that
+        // new session instead. Only the session that was being ended is ended.
+        if (clerkSessionId() != ending) return
+        // Named first: it ends only that session, whatever else is current by
+        // now. A session the server no longer knows refuses it, and only then
+        // the SDK's own sign-out is used, because it is the one that empties
+        // local state when the server will not cooperate.
+        val targeted = withTimeoutOrNull(NETWORK_STEP_MS) {
+            runSuspendCatching { com.clerk.api.Clerk.auth.signOut(ending) }.getOrNull()
+        }
+        if (targeted !is com.clerk.api.network.serialization.ClerkResult.Success && clerkSessionId() == ending) {
+            withTimeoutOrNull(NETWORK_STEP_MS) {
+                runSuspendCatching { com.clerk.api.Clerk.auth.signOut() }
+            }
+        }
+    }
+
+    /**
+     * Sign out, from Profile or from the connection banner's "Sign in again".
+     * Works with a session that is dead or half dead: the screen changes at
+     * once and every network step is bounded and optional ([endSession]).
      */
     fun signOut() {
+        if (userSignOutInProgress) return
+        userSignOutInProgress = true
         scope.launch {
-            if (Backend.authMode == AuthMode.Clerk) {
-                runCatching { com.clerk.api.Clerk.auth.signOut() }
+            try {
+                endSession(expired = false)
+            } finally {
+                userSignOutInProgress = false
             }
-            signOutLocally()
         }
     }
 
@@ -641,6 +822,10 @@ class SessionStore(
     // store, because the socket outlives every screen. Last in the class on purpose: the collector
     // may run at once, and everything it touches has to exist by then.
     init {
+        // A socket refused with 4401, or with no token to present, asks the
+        // session whether it is dead: one confirming request, then one door.
+        realtime.onAuthRefused = { scope.launch { handleSessionExpired() } }
+        if (Backend.authMode == AuthMode.Clerk) scope.launch { watchClerk() }
         scope.launch { realtime.frames.collect(::onAccountFrame) }
         // A reconnect may have missed a permissions-update: nothing cached before it is trusted after it.
         scope.launch {
@@ -662,5 +847,12 @@ class SessionStore(
          * screen with a button rather than on the splash forever.
          */
         private const val LAUNCH_DEADLINE_MS = 12_000L
+
+        /**
+         * How long any one network step of a sign-out may take (unregistering
+         * this device from push, Clerk's own sign-out). The screen has already
+         * changed by then; this only bounds the cleanup behind it.
+         */
+        internal const val NETWORK_STEP_MS = 4_000L
     }
 }

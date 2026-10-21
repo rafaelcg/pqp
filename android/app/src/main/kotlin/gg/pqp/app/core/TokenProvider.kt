@@ -12,6 +12,15 @@ package gg.pqp.app.core
  */
 fun interface TokenProvider {
     suspend fun currentToken(): String?
+
+    /**
+     * A token read after asking the identity provider to refresh, and what it
+     * can say when there is none. Used once, to confirm that a 401 is the
+     * session being dead rather than a stale token (`SessionExpiryGate`). A
+     * provider with nothing to refresh just answers like [currentToken].
+     */
+    suspend fun refreshedToken(): TokenRefresh =
+        currentToken()?.let { TokenRefresh.Token(it) } ?: TokenRefresh.NoSession
 }
 
 /**
