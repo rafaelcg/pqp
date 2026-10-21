@@ -96,7 +96,7 @@ const voice = {
   stopShare: vi.fn(),
 };
 
-type Msg = { id: string; authorId: string; body: string };
+type Msg = { id: string; authorId: string; body: string; createdAt?: string };
 
 function tree(props: {
   channelId?: string | null;
@@ -308,6 +308,21 @@ describe("AppSessionLayout", () => {
       expect(document.querySelector("[data-app-chat-unread]")).toBeNull();
       rerender({ channelId: OTHER, messages: [...there, { id: "b2", authorId: BIA, body: "bora" }] });
       expect(document.querySelector("[data-app-chat-unread]")?.getAttribute("data-app-chat-unread")).toBe("dot");
+    });
+
+    it("a channel whose history loads after the switch does not read its history as unread", () => {
+      const OTHER = "33333333-3333-4333-8333-333333333333";
+      applyChannelApp(CHANNEL, summary(true));
+      applyChannelApp(OTHER, { ...summary(true), id: "44444444-4444-4444-8444-444444444444" });
+      render({ messages: [{ id: "a1", authorId: BIA, body: "oi" }] });
+      act(() => toggle().click());
+      rerender({ channelId: OTHER, messages: [] });
+      const old = new Date(Date.now() - 60_000).toISOString();
+      rerender({
+        channelId: OTHER,
+        messages: [{ id: "b1", authorId: BIA, body: "@rafa antigo", createdAt: old } as Msg],
+      });
+      expect(document.querySelector("[data-app-chat-unread]")).toBeNull();
     });
 
     it("the shortcut does nothing without an app on screen", () => {

@@ -5,6 +5,7 @@ import {
   appColumnLayout,
   chatUnreadSince,
   readAppChatHidden,
+  UNREAD_SCAN_LIMIT,
   unreadBadgeText,
   writeAppChatHidden,
   type AppColumnLayoutInput,
@@ -57,28 +58,40 @@ describe("the stored choice", () => {
 
 describe("what arrived while the chat was away", () => {
   const list = [msg("1", "bia"), msg("2", ME), msg("3", "bia"), msg("4", "caio")];
+  const after = (id: string | null) => ({ id, at: 0 });
 
   it("counts other people's messages after the one that was newest", () => {
-    expect(chatUnreadSince(list, "1", viewer)).toEqual({ count: 2, mention: false });
+    expect(chatUnreadSince(list, after("1"), viewer)).toEqual({ count: 2, mention: false });
   });
 
   it("never counts the person's own messages", () => {
-    expect(chatUnreadSince([msg("1", "bia"), msg("2", ME)], "1", viewer).count).toBe(0);
+    expect(chatUnreadSince([msg("1", "bia"), msg("2", ME)], after("1"), viewer).count).toBe(0);
   });
 
-  it("an empty channel when hidden counts everything that came after", () => {
-    expect(chatUnreadSince(list, null, viewer).count).toBe(3);
+  it("with no message to mark, only what is newer than the moment counts (history that loads later does not)", () => {
+    const at = Date.parse("2026-10-21T12:00:00Z");
+    const timed = [
+      { ...msg("h1", "bia", "@rafa velho"), createdAt: "2026-10-21T11:00:00Z" },
+      { ...msg("h2", "caio"), createdAt: "2026-10-21T11:59:00Z" },
+      { ...msg("n1", "bia"), createdAt: "2026-10-21T12:00:05Z" },
+    ];
+    expect(chatUnreadSince(timed, { id: null, at }, viewer)).toEqual({ count: 1, mention: false });
   });
 
   it("a mention lights the count", () => {
     const named = [...list, msg("5", "bia", "@rafa bora?")];
-    expect(chatUnreadSince(named, "4", viewer)).toEqual({ count: 1, mention: true });
+    expect(chatUnreadSince(named, after("4"), viewer)).toEqual({ count: 1, mention: true });
     const everyone = [...list, { ...msg("5", "bia", "galera"), mentionEveryone: true }];
-    expect(chatUnreadSince(everyone, "4", viewer).mention).toBe(true);
+    expect(chatUnreadSince(everyone, after("4"), viewer).mention).toBe(true);
   });
 
   it("a page that no longer holds the mark counts nothing rather than everything", () => {
-    expect(chatUnreadSince(list, "gone", viewer)).toEqual({ count: 0, mention: false });
+    expect(chatUnreadSince(list, after("gone"), viewer)).toEqual({ count: 0, mention: false });
+  });
+
+  it("looks back at most UNREAD_SCAN_LIMIT messages, and a long absence still counts", () => {
+    const long = Array.from({ length: UNREAD_SCAN_LIMIT + 50 }, (_, i) => msg(`m${i}`, "bia"));
+    expect(chatUnreadSince(long, after("m0"), viewer).count).toBe(UNREAD_SCAN_LIMIT);
   });
 
   it("prints at most two characters", () => {

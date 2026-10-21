@@ -35,6 +35,7 @@ import {
   readAppChatHidden,
   writeAppChatHidden,
   type AppCallShape,
+  type UnreadMark,
   type UnreadMessage,
 } from "@/lib/apps/app-chat-visibility";
 
@@ -503,7 +504,8 @@ export function AppSessionLayout(props: AppSessionLayoutProps) {
   const messages = chat?.messages;
   // Keyed by channel: moving to another channel's app with the chat still away
   // takes that channel's newest message as the mark, not the last one's.
-  const awaySince = useRef<{ channelId: string | null; id: string | null } | null>(null);
+  // An empty list (history not loaded yet) leaves only the time as the mark.
+  const awaySince = useRef<({ channelId: string | null } & UnreadMark) | null>(null);
   if (
     layout.chatAway &&
     (awaySince.current === null || awaySince.current.channelId !== channelId)
@@ -511,20 +513,21 @@ export function AppSessionLayout(props: AppSessionLayoutProps) {
     awaySince.current = {
       channelId,
       id: messages && messages.length > 0 ? messages[messages.length - 1]!.id : null,
+      at: Date.now(),
     };
   } else if (!layout.chatAway && awaySince.current !== null) {
     awaySince.current = null;
   }
-  const sinceId = layout.chatAway && awaySince.current ? awaySince.current.id : undefined;
+  const mark = layout.chatAway ? awaySince.current : null;
   const username = chat?.username ?? null;
-  // Recounted only when the list, the mark or the reader changes, and the mark
-  // is found from the end, so the cost is the unread tail, not the page.
+  // Recounted only when the list, the mark or the reader changes, walking back
+  // from the newest message to the mark (`chatUnreadSince`).
   const unread = useMemo(
     () =>
-      sinceId !== undefined && messages
-        ? chatUnreadSince(messages, sinceId, { id: viewerId, username })
+      mark && messages
+        ? chatUnreadSince(messages, mark, { id: viewerId, username })
         : NO_UNREAD,
-    [messages, sinceId, viewerId, username],
+    [messages, mark, viewerId, username],
   );
 
   useEffect(() => {

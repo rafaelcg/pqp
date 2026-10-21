@@ -40,7 +40,25 @@ export function writeAppChatHidden(hidden: boolean): void {
 
 export interface UnreadMessage extends MentionCheckMessage {
   id: string;
+  /** ISO time, for a mark taken before the channel's history had loaded. */
+  createdAt?: string;
 }
+
+/**
+ * Where "unread" starts: the newest message when the chat went away (`id`),
+ * or, when the list was empty then (a channel just opened, history still on
+ * its way), the moment it went away (`at`, epoch ms).
+ */
+export interface UnreadMark {
+  id: string | null;
+  at: number;
+}
+
+/**
+ * The most a recount looks at, from the newest message back. The badge prints
+ * "9+" past nine, so a long absence never costs more than this per message.
+ */
+export const UNREAD_SCAN_LIMIT = 100;
 
 export interface ChatUnread {
   /** Messages from other people since the chat was put away. */
@@ -52,40 +70,43 @@ export interface ChatUnread {
 export const NO_UNREAD: ChatUnread = { count: 0, mention: false };
 
 /**
- * What arrived after `sinceId` (the newest message when the chat was hidden;
- * null when the channel had none). Own messages never count. A `sinceId` that
- * is no longer in the list (the page was replaced, a jump) counts nothing
- * rather than everything: a wrong "37 novas" is worse than a missing dot.
+ * What arrived after the mark. Own messages never count. Walks back from the
+ * newest message and stops at the mark, so the cost is the unread tail, capped
+ * at `UNREAD_SCAN_LIMIT`. A mark id that is no longer in the list (the page
+ * was replaced, a jump) counts nothing rather than everything: a wrong
+ * "37 novas" is worse than a missing dot. With no id (the list was empty when
+ * the chat went away) only messages newer than the moment count, so a history
+ * that loads afterwards is not read as new.
  */
 export function chatUnreadSince(
   messages: readonly UnreadMessage[],
-  sinceId: string | null,
+  mark: UnreadMark,
   viewer: { id: string | null; username: string | null },
 ): ChatUnread {
-  let start = 0;
-  if (sinceId !== null) {
-    // From the end: the mark is the newest message when the chat went away, so
-    // it sits right before the unread tail.
-    let index = -1;
-    for (let i = messages.length - 1; i >= 0; i -= 1) {
-      if (messages[i]!.id === sinceId) {
-        index = i;
-        break;
-      }
-    }
-    if (index === -1) return NO_UNREAD;
-    start = index + 1;
-  }
   let count = 0;
   let mention = false;
-  for (let i = start; i < messages.length; i += 1) {
+  let reachedMark = mark.id === null;
+  const floor = Math.max(0, messages.length - UNREAD_SCAN_LIMIT);
+  for (let i = messages.length - 1; i >= floor; i -= 1) {
     const message = messages[i]!;
+    if (mark.id !== null) {
+      if (message.id === mark.id) {
+        reachedMark = true;
+        break;
+      }
+    } else {
+      const created = message.createdAt ? Date.parse(message.createdAt) : Number.NaN;
+      if (!(created > mark.at)) break;
+    }
     if (viewer.id && message.authorId === viewer.id) continue;
     count += 1;
     if (!mention && messageMentionsYou(message, viewer.username, viewer.id)) {
       mention = true;
     }
   }
+  // Past the scan limit the mark may still be behind us: that is a long
+  // absence, not a lost mark, so the count stands.
+  if (!reachedMark && floor === 0) return NO_UNREAD;
   return { count, mention };
 }
 
