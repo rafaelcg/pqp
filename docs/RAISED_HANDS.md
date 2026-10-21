@@ -54,20 +54,19 @@ when that person holds no seat in the room at all, orphans included.
 1. **The person.** Always available. Not gated on a moderator's mute, not on
    `Permission.SPEAK`, not on push-to-talk. Raising a hand is asking, and
    somebody who has changed their mind must be able to say so.
-2. **Speaking.** `isTransmitting` going true, which is a voice-activity gate
-   opening on a real syllable or a push-to-talk key going down. **Only the
-   client can do this**: `speaking` is deliberately not on the roster, so the
-   server never sees it. That is not a hole. The only hand this can lower is
-   the person's own, and a client that declined to run it would be leaving its
-   own hand up in a queue it can see.
-3. **Leaving the room.** Server-side, on the last seat going.
-4. **A moderator**, when they call on somebody:
+2. **Leaving the room.** Server-side, on the last seat going.
+3. **A moderator**, when they call on somebody:
    `POST /api/servers/:serverId/members/:userId/voice-lower-hand`,
    `Permission.MUTE_MEMBERS` in that channel plus the outrank check, through
    `requireVoiceModeration` with the other three voice moderation actions. Not
    audited: the audit log is for sanctions somebody may answer for weeks later,
    and calling on the next person is the ordinary running of a room, forty
    times in a stream.
+
+Talking does not lower a hand. It used to: the client lowered your own hand
+the moment your mic opened. A table that runs RPG initiative over calls asked
+for the opposite. The hand is their place in the turn order, and it stays up
+while they chat until the person or a moderator takes it down.
 
 Raising is the person's own state and rides the voice socket
 (`set-raised-hand`, rate-limited by the same limiter as a mute toggle).
@@ -81,7 +80,8 @@ with the rest of them. There is no frame shape anywhere that names a target.
 | Call controls | a hand button, `aria-pressed`, on the expanded stage and on the slim bar |
 | Expanded stage | `RaisedHandQueue`: the ordered list, your position, an X per row for a moderator |
 | Collapsed call strip | the same queue as one line: first name, `+N`, your position |
-| Sidebar occupant row | a hand glyph next to the mute and camera badges |
+| Call tiles | the hand and its number (`✋ 2`) in the name strip of each tile |
+| Sidebar occupant row | the hand and its number next to the mute and camera badges |
 | Sidebar right-click | **Abaixar a mão**, only while that hand is up and only with the bit |
 
 The collapsed strip is not a corner case. A call where nobody has a camera on
@@ -97,8 +97,9 @@ both audiences, so hiding the hand from people outside the call would mean the
 client deliberately dropping something it was told. It is also the more useful
 way round: "somebody in there is waiting to talk" is exactly what makes a
 person open the call, and a hand is a public gesture in a room whose occupants
-are already listed by name. The POSITION is not shown outside the call; that
-belongs with the people who can act on it.
+are already listed by name. The position is shown with it, on the sidebar and
+on the tiles. It used to live only in the stage's queue, and most calls never
+open the stage, so the room could not read its own turn order.
 
 **The list is capped, the queue is not.** Refusing the twenty-first hand takes
 away the only way that person has to say "me next" and buys nothing: the state
@@ -145,8 +146,9 @@ place.
 | order, stability, resume, refresh, leaving, an emptied room | `server/src/ws/voice-raised-hands.test.ts` |
 | the moderator route: may, may not, idempotent | `server/src/api/voice-moderation.test.ts` |
 | two instances: order across the bus, a lower from the other machine, a third process | `server/src/ws/voice-cluster.test.ts`, group "raised hands across instances" |
-| speaking lowers your own, the optimistic window, a moderator's lower landing | `client/src/hooks/use-voice.test.ts`, group "raising a hand" |
+| talking keeps your own up, the optimistic window, a moderator's lower landing | `client/src/hooks/use-voice.test.ts`, group "raising a hand" |
 | the panel, the compact line, the lower control's gating | `client/src/components/voice/raised-hand-queue.test.tsx` |
+| the number beside each hand | `client/src/components/layout/voice-occupant-badges.test.tsx` |
 
 Production runs `VOICE_REGISTRY=postgres`, which is why the cluster group is
 the one that matters here (pitfall 12 in `CLAUDE.md`): the single-process

@@ -1544,6 +1544,7 @@
   "voice.hand.more": "+{count} waiting",
   "voice.hand.lowerFor": "Lower {name}'s hand",
   "voice.hand.raised": "Hand raised",
+  "voice.hand.raisedAt": "Hand raised, number {position} in the queue",
   "voice.hand.ask": "Ask to talk",
   "voice.audience.toggle": "Audience mode",
   "voice.audience.toggleOnHint": "Mutes everyone except the staff and the people you let talk",

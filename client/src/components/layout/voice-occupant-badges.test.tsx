@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { VoiceParticipant } from "@pqp/shared";
+import { raisedHandPositions } from "@/components/voice/hand-position-badge";
 import { VoiceOccupantBadges } from "./voice-occupant-badges";
 
 /**
@@ -61,5 +62,42 @@ describe("VoiceOccupantBadges", () => {
       <VoiceOccupantBadges person={person({ cameraStreamId: "cam-1" })} />,
     );
     expect(html).toContain('aria-label="Camera on"');
+  });
+  it("shows a raised hand with its place in the queue", () => {
+    const html = renderToStaticMarkup(
+      <VoiceOccupantBadges
+        person={person({ handRaisedAt: 2_000 })}
+        handPosition={2}
+      />,
+    );
+    expect(html).toContain('aria-label="Hand raised, number 2 in the queue"');
+    expect(html).toContain('data-hand-position="2"');
+  });
+
+  it("falls back to the plain hand when no position is known", () => {
+    const html = renderToStaticMarkup(
+      <VoiceOccupantBadges person={person({ handRaisedAt: 2_000 })} />,
+    );
+    expect(html).toContain('aria-label="Hand raised"');
+    expect(html).not.toContain("data-hand-position");
+  });
+});
+
+describe("raisedHandPositions", () => {
+  it("numbers the room in the order hands went up, one number per person", () => {
+    const room = [
+      person({ peerId: "a", userId: "a", handRaisedAt: 3_000 }),
+      person({ peerId: "b", userId: "b", handRaisedAt: null }),
+      person({ peerId: "c", userId: "c", handRaisedAt: 1_000 }),
+      // The same person on a second device: still one place in the queue.
+      person({ peerId: "c2", userId: "c", handRaisedAt: 1_000 }),
+      person({ peerId: "d", userId: "d", handRaisedAt: 2_000 }),
+    ];
+    const positions = raisedHandPositions(room);
+    expect([...positions]).toEqual([
+      ["c", 1],
+      ["d", 2],
+      ["a", 3],
+    ]);
   });
 });

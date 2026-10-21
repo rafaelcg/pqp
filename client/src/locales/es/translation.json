@@ -1548,6 +1548,7 @@
   "voice.hand.more": "+{count} esperando",
   "voice.hand.lowerFor": "Bajarle la mano a {name}",
   "voice.hand.raised": "Mano levantada",
+  "voice.hand.raisedAt": "Mano levantada, número {position} en la fila",
   "voice.hand.ask": "Pedir la palabra",
   "voice.audience.toggle": "Modo audiencia",
   "voice.audience.toggleOnHint": "Silencia a todos menos al staff y a quien le des la palabra",
