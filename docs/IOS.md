@@ -90,6 +90,8 @@ environment.** Clerk's views read `@Environment(Clerk.self)`, and a missing
 environment value traps inside SwiftUI with a stack that never mentions Clerk —
 `PqpApp` injects it via `ClerkEnvironment`.
 
+**A dead session is handled in one place.** Any authenticated 401 (`APIClient`), a socket with no token, and Clerk ending the session (`replaced` by a sign-in on another device under single session mode, `expired`, `revoked`) all call `SessionStore.handleSessionExpired()`, which confirms once with a freshly refreshed token, then clears everything locally with no network call, returns to the sign-in screen and shows "Your session expired. Sign in again." once there. Sign out uses the same local teardown, so it works with a dead session and never waits on the network for more than a few seconds.
+
 ## Decisions worth knowing
 
 **Sending a message is a WebSocket frame, not an HTTP call.** There is no
