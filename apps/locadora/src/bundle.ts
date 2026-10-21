@@ -79,6 +79,9 @@ interface Manifest {
  * that cannot fit stops at the file that tipped it over, without first reading and packing the whole
  * shelf. Each file is read just before it is packed, so the page holds the packed output and one file.
  */
+const ZIP_SLICE_BYTES = 1024 * 1024;
+const EMPTY = new Uint8Array(0);
+
 function boundedZip(cap: number) {
   const chunks: Uint8Array[] = [];
   let size = 0;
@@ -88,8 +91,10 @@ function boundedZip(cap: number) {
       failed = true;
       return;
     }
-    chunks.push(chunk);
     size += chunk.length;
+    // past the cap nothing more is kept: the export is refused, and the packed bytes so far are let go
+    if (size > cap) chunks.length = 0;
+    else chunks.push(chunk);
   });
   return {
     /** False once the archive is over the cap (or broke): stop adding. */
@@ -97,7 +102,14 @@ function boundedZip(cap: number) {
       if (failed || size > cap) return false;
       const file = new ZipDeflate(name, { level: 6 });
       zip.add(file);
-      file.push(bytes, true);
+      // a slice at a time, so one file bigger than what is left stops at the slice that tips it over
+      // instead of being packed whole first
+      if (bytes.length === 0) file.push(bytes, true);
+      for (let at = 0; at < bytes.length; at += ZIP_SLICE_BYTES) {
+        const end = Math.min(bytes.length, at + ZIP_SLICE_BYTES);
+        file.push(bytes.subarray(at, end), end === bytes.length);
+        if (failed || size > cap) return false;
+      }
       return !failed && size <= cap;
     },
     finish(): Uint8Array | null {
@@ -109,10 +121,14 @@ function boundedZip(cap: number) {
       if (failed || size > cap) return null;
       const out = new Uint8Array(size);
       let at = 0;
-      for (const chunk of chunks) {
+      // each chunk is let go as soon as it is copied, so the two copies never both exist whole
+      for (let i = 0; i < chunks.length; i += 1) {
+        const chunk = chunks[i]!;
         out.set(chunk, at);
         at += chunk.length;
+        chunks[i] = EMPTY;
       }
+      chunks.length = 0;
       return out;
     },
     abort(): void {
@@ -383,11 +399,14 @@ export async function planImport(store: DeviceStore, bundle: ParsedBundle): Prom
     };
     const gameWrites: PlannedWrite[] = [];
 
-    let hasFile = (await store.get(romKey(sha))) !== null;
+    const fileHere = await store.get(romKey(sha));
+    let hasFile = fileHere !== null;
     // the game file is only ever kept under the hash of its own bytes: a bundle that names one sha and carries
-    // other bytes does not get to put them on the shelf (its saves still arrive and wait for the real file)
-    if (item.rom && !hasFile && (await sha256Hex(item.rom)) === sha) {
-      gameWrites.push({ key: romKey(sha), bytes: item.rom, conflict: false, replaces: 0 });
+    // other bytes does not get to put them on the shelf (its saves still arrive and wait for the real file).
+    // A verified one is planned even when the device has it, so a game removed in another tab between the plan
+    // and the apply comes back whole; `applyImport` never writes over a game file that is there
+    if (item.rom && (await sha256Hex(item.rom)) === sha) {
+      gameWrites.push({ key: romKey(sha), bytes: item.rom, conflict: false, replaces: fileHere?.bytes.length ?? 0 });
       hasFile = true;
     }
     game.missingFile = !hasFile;
@@ -440,7 +459,7 @@ export async function planImport(store: DeviceStore, bundle: ParsedBundle): Prom
     games,
     writes,
     conflicts: games.reduce((sum, g) => sum + g.conflicts, 0),
-    bytes: writes.reduce((sum, w) => sum + w.bytes.length, 0),
+    bytes: writes.reduce((sum, w) => sum + Math.max(0, w.bytes.length - w.replaces), 0),
   };
 }
 

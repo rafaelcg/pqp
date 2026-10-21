@@ -154,7 +154,7 @@
         "notice": "notice",
         "entry": {
           "path": "index.html",
-          "sha256": "18c8620f790818e9ef2450d21b4ddb024d2354c65b756d9bd468c3bfc80d6ed4"
+          "sha256": "43029342e3768fa86ca05ae07e8458b5b93cc687b33670ca236e21cd7e5b0197"
         },
         "assets": [
           {
@@ -238,7 +238,7 @@
           }
         }
       },
-      "manifestSha256": "1cf5b7a7b1e63a99ad196adcbe1ddc207d8a29796e7b475e55a02e5913cbc88d"
+      "manifestSha256": "98ca39d81b5ada22430801120746124bfa61ff8317632c9684ee494a99ba8b48"
     }
   ]
 }

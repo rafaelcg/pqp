@@ -260,6 +260,8 @@ describe("importing safely", () => {
     const result = await applyImport(target, plan);
     expect(result.ok).toBe(true);
     expect(await target.get(metaKey(source.sha))).not.toBeNull();
+    // and whole: the game file the bundle carried comes back with it, so the box can play
+    expect([...(await target.get(romKey(source.sha)))!.bytes]).toEqual([...source.bytes]);
   });
 
   it("a save that appears after the plan is a collision too, kept by default", async () => {
