@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { hintDietHides } from "./hint-diet";
 import {
   isAutomatedBrowser,
   isHintSeen,
@@ -102,6 +103,11 @@ export function isFeatureHintSeen(
   storage?: Pick<Storage, "getItem"> | null,
   persist: boolean = shouldPersistHints(),
 ): boolean {
+  // The diet (`lib/hint-diet.ts`) answers "seen" for the ids it hides, in
+  // every host, so a coach mark it removes never becomes eligible.
+  if (hintDietHides(id)) {
+    return true;
+  }
   return isHintSeen(FEATURE_HINT_STORAGE_KEYS[id], storage, persist);
 }
 
@@ -110,6 +116,11 @@ export function rememberFeatureHint(
   storage?: Pick<Storage, "setItem"> | null,
   persist: boolean = shouldPersistHints(),
 ): void {
+  // Nothing is stored for a hint the diet hides: using the control while the
+  // flag is on must not decide what the flag's rollback shows.
+  if (hintDietHides(id)) {
+    return;
+  }
   rememberHint(FEATURE_HINT_STORAGE_KEYS[id], storage, persist);
 }
 
@@ -179,7 +190,7 @@ export function winningFeatureHint(
   wanting: Partial<Record<AttachedFeatureHintId, boolean>>,
 ): AttachedFeatureHintId | null {
   for (const id of ATTACHED_FEATURE_HINT_ORDER) {
-    if (wanting[id] && !spentThisLoad.has(id)) {
+    if (wanting[id] && !spentThisLoad.has(id) && !hintDietHides(id)) {
       return id;
     }
   }

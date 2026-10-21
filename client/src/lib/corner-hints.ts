@@ -1,3 +1,5 @@
+import { hintDietHides } from "./hint-diet";
+
 /**
  * One card at a time.
  *
@@ -44,13 +46,34 @@ export const CORNER_HINT_ORDER = [
 ] as const;
 export type CornerHintId = (typeof CORNER_HINT_ORDER)[number];
 
+/**
+ * A Baú publish and a missed-DM notification offer are things that happened,
+ * not campaigns: a quiet context never holds them (`lib/hint-quiet.ts`).
+ */
+export const QUIET_EXEMPT_CORNER_IDS: ReadonlySet<CornerHintId> = new Set([
+  "communityHomePost",
+  "notifyOffer",
+]);
+
+/**
+ * `quiet`: unsolicited hints wait (a quiet context, or the hint switches have
+ * not been read yet; see `lib/hint-quiet.ts`). The ids in
+ * `QUIET_EXEMPT_CORNER_IDS` still win. A hidden-by-the-diet id
+ * is skipped before anything else (`lib/hint-diet.ts`), so the next card in
+ * line takes the corner and nothing is stored for the one skipped.
+ */
 export function winningCornerHint(
   wanting: Partial<Record<CornerHintId, boolean>>,
+  options: { quiet?: boolean } = {},
 ): CornerHintId | null {
   for (const id of CORNER_HINT_ORDER) {
-    if (wanting[id]) {
-      return id;
+    if (!wanting[id] || hintDietHides(id)) {
+      continue;
     }
+    if (options.quiet && !QUIET_EXEMPT_CORNER_IDS.has(id)) {
+      continue;
+    }
+    return id;
   }
   return null;
 }

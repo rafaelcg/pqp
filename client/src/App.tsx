@@ -165,6 +165,9 @@ import {
   VoiceCleanHint,
 } from "@/components/voice/voice-clean-hint";
 import { winningCornerHint } from "@/lib/corner-hints";
+import { startHintConfig, useHintConfigSettled } from "@/lib/hint-config";
+import { useHintDiet } from "@/lib/hint-diet";
+import { hintsAreQuiet, useHintQuietSources } from "@/lib/hint-quiet";
 import { isDesktopApp } from "@/lib/desktop";
 import { createHistoryLoadTracker } from "@/lib/history-load-tracker";
 import {
@@ -1791,6 +1794,12 @@ function MainAppContent({
   // what makes the next tip arrive on that click rather than on whatever
   // happens to re-render App next.
   useFeatureHintsSpent();
+  // `hint_diet` and `hint_budget` (`lib/hint-diet.ts`, `lib/hint-quiet.ts`):
+  // the queue below re-renders the moment either flag moves, and again when
+  // the composer, a dialog or an app session starts or ends a quiet context.
+  useHintDiet();
+  const hintQuietSources = useHintQuietSources();
+  const hintConfigSettled = useHintConfigSettled();
   const [shortcutsQuietReady, setShortcutsQuietReady] = useState(false);
   useEffect(() => {
     const timer = window.setTimeout(() => setShortcutsQuietReady(true), 1600);
@@ -10185,6 +10194,11 @@ function MainAppContent({
     () => (newcomerInviteUserId ? startDiscordImportNoticeConfig() : undefined),
     [newcomerInviteUserId],
   );
+  // `hint_diet` and `hint_budget`, the same config route and the same gate.
+  useEffect(
+    () => (newcomerInviteUserId ? startHintConfig() : undefined),
+    [newcomerInviteUserId],
+  );
   // "Aparecer no diretório" (`community_listing_nudge`, `lib/community-
   // listing-nudge.ts`): asked once per page for an owner whose room has a
   // public address and no listing. The server picks the room (or none) and
@@ -11364,49 +11378,73 @@ function MainAppContent({
   /** A live party, or the watch-now strip: no campaign card takes the corner. */
   const campaignsYield =
     Boolean(selectedPartyLive) || watchNowStreams.length > 0;
-  const cornerHint = winningCornerHint({
-    communityHomePost: Boolean(
-      communityHomePostToast &&
-        communityHomePostToast.serverId === selectedServerId,
-    ),
-    // NO CAMPAIGN CARDS OVER A LIVE PARTY. QG, the phone app, What's new,
-    // cargos and shortcuts all wait until the person is not watching a film.
-    // The phone-app card is the sharp one, being a way out of the page: 8 of
-    // the 51 phone sessions MoonKase's link created mid-show on 2026-09-26
-    // went to /android instead of the party. Holding only that one would hand
-    // the corner to the next card in line, so the whole tail yields. The
-    // update notice, a Baú post and the voice nudge are not campaigns.
-    //
-    // THE WATCH-NOW STRIP IS THE SAME CASE. While it is on screen a stream is
-    // live in this server and the strip is the one thing the newcomer is
-    // being asked to do; a corner card beside it is a second request, and the
-    // first thing a stranger is told must not be "join the QG" (2026-10-04,
-    // Filminho). It also keeps its own one-time hint, an attached card, from
-    // yielding to a campaign for the whole film.
-    // A moment, not a campaign, but still a nudge: not over a live film.
-    notifyOffer: wantsNotifyOfferCard && notifyOfferReady && !campaignsYield,
-    qg: qgHintWanted && !campaignsYield,
-    listingNudge: wantsListingNudge({
-      hasCandidate: listingNudge !== null,
-      closed: listingNudgeClosed,
-      campaignsYield,
-    }),
-    voiceClean: wantsVoiceCleanHint,
-    seasonalLook:
-      seasonalLookOffer !== null && qgHintReady && !campaignsYield,
-    mobileBeta: wantsMobileBeta && !campaignsYield,
-    whatsNew: wantsWhatsNew && !campaignsYield,
-    cargos:
-      wantsCargosHint &&
-      qgHintReady &&
-      !campaignsYield &&
-      Boolean(canManageRoles && selectedServerId),
-    shortcuts:
-      wantsShortcutsHint &&
-      shortcutsQuietReady &&
-      !campaignsYield &&
-      attachedFeatureHint === null,
+  /**
+   * QUIET CONTEXTS (`hint_budget`, `lib/hint-quiet.ts`). While any holds, an
+   * unsolicited hint waits: both queues below skip it (a corner card) or
+   * stand aside without being spent (an attached coach mark). Nothing is
+   * stored, so the hint shows when the context ends. Until the two hint
+   * switches have been read once (`useHintConfigSettled`) the queues hold
+   * too, so a card the diet hides cannot paint and stamp itself in the
+   * moment before the flag arrives.
+   */
+  const { quiet: hintsQuiet } = hintsAreQuiet({
+    settled: hintConfigSettled,
+    budgetOn: hintQuietSources.budgetOn,
+    facts: {
+      inCall: voiceState.status !== "idle",
+      appRunning: hintQuietSources.appRunning,
+      sharing: voiceState.isSharingScreen || watchingAShare,
+      partyLive: Boolean(selectedPartyLive),
+      composerBusy: hintQuietSources.composerBusy,
+      dialogOpen: hintQuietSources.dialogOpen,
+    },
   });
+  const cornerHint = winningCornerHint(
+    {
+      communityHomePost: Boolean(
+        communityHomePostToast &&
+          communityHomePostToast.serverId === selectedServerId,
+      ),
+      // NO CAMPAIGN CARDS OVER A LIVE PARTY. QG, the phone app, What's new,
+      // cargos and shortcuts all wait until the person is not watching a film.
+      // The phone-app card is the sharp one, being a way out of the page: 8 of
+      // the 51 phone sessions MoonKase's link created mid-show on 2026-09-26
+      // went to /android instead of the party. Holding only that one would hand
+      // the corner to the next card in line, so the whole tail yields. The
+      // update notice, a Baú post and the voice nudge are not campaigns.
+      //
+      // THE WATCH-NOW STRIP IS THE SAME CASE. While it is on screen a stream is
+      // live in this server and the strip is the one thing the newcomer is
+      // being asked to do; a corner card beside it is a second request, and the
+      // first thing a stranger is told must not be "join the QG" (2026-10-04,
+      // Filminho). It also keeps its own one-time hint, an attached card, from
+      // yielding to a campaign for the whole film.
+      // A moment, not a campaign, but still a nudge: not over a live film.
+      notifyOffer: wantsNotifyOfferCard && notifyOfferReady && !campaignsYield,
+      qg: qgHintWanted && !campaignsYield,
+      listingNudge: wantsListingNudge({
+        hasCandidate: listingNudge !== null,
+        closed: listingNudgeClosed,
+        campaignsYield,
+      }),
+      voiceClean: wantsVoiceCleanHint,
+      seasonalLook:
+        seasonalLookOffer !== null && qgHintReady && !campaignsYield,
+      mobileBeta: wantsMobileBeta && !campaignsYield,
+      whatsNew: wantsWhatsNew && !campaignsYield,
+      cargos:
+        wantsCargosHint &&
+        qgHintReady &&
+        !campaignsYield &&
+        Boolean(canManageRoles && selectedServerId),
+      shortcuts:
+        wantsShortcutsHint &&
+        shortcutsQuietReady &&
+        !campaignsYield &&
+        attachedFeatureHint === null,
+    },
+    { quiet: hintsQuiet },
+  );
   // A DM arrival card and the bottom-right onboarding queue would collide on
   // a phone, so a toast up wins the corner for its duration — same yield the
   // update prompt already gets. The card records no impression while it
@@ -11414,7 +11452,8 @@ function MainAppContent({
   // false below, which every corner card already treats as "never rendered".
   const effectiveCornerHint = dmToastActive ? null : cornerHint;
   const liveAttachedHint =
-    effectiveCornerHint === null || effectiveCornerHint === "shortcuts"
+    !hintsQuiet &&
+    (effectiveCornerHint === null || effectiveCornerHint === "shortcuts")
       ? attachedFeatureHint
       : null;
   /** The conversation the active call lives in, when it is a DM call. */
