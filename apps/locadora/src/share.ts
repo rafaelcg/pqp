@@ -118,10 +118,13 @@ export function createShareControl(host: ShareControlHost, onChange: () => void)
       let said: "started" | "failed" | "refused" | null = null;
       if (outcome.kind === "shared") {
         // A push that arrived while the request ran (the call bar's stop, the
-        // switch above the pane) is newer than this answer: it wins.
-        if (pushes === pushesBefore) sharing = outcome.on;
-        if (outcome.on !== wantOn) said = "failed";
-        else if (outcome.on) said = "started";
+        // switch above the pane) is newer than this answer: it wins, for the
+        // state and for what is said (no "sharing" toast over a stopped share).
+        if (pushes === pushesBefore) {
+          sharing = outcome.on;
+          if (outcome.on !== wantOn) said = "failed";
+          else if (outcome.on) said = "started";
+        }
       } else {
         said = outcome.kind;
         if (outcome.kind === "refused") available = false;

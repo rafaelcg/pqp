@@ -116,7 +116,8 @@ describe("the pill and the page's switch say the same thing", () => {
     for (const listener of listeners) listener(true); // the page started it
     for (const listener of listeners) listener(false); // and the call bar stopped it
     answer(true); // the late answer to the start
-    await pressed;
+    // nothing to say: no "sharing" toast over a share that was stopped
+    expect(await pressed).toBeNull();
     expect(control.sharing).toBe(false);
   });
 
