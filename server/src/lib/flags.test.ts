@@ -169,6 +169,9 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   locadora_save_sync: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
   apps_landing: (raw) => raw === "true",
+  // New with the flags, so there was no old reader: this is their definition.
+  locadora_guest: (raw) => raw === "true",
+  locadora_saves_announced: (raw) => raw === "true",
 };
 
 const SAMPLES = [

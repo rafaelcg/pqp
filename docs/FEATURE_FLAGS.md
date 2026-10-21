@@ -984,3 +984,47 @@ decides only whether the shop window exists, not whether anything can be opened.
 Turn it on: controles -> interruptores, or `PUT /api/admin/flags { key:
 "apps_landing", enabled: true }` with the machine token. An open tab follows
 within the config refresh (a page reads it when it loads); the edge within a minute.
+
+
+## `locadora_guest` (global, default off)
+
+Locadora without an account: `pqp.gg/locadora/jogar` (and the same page at
+`pqp.gg/apps/locadora/play`), "Jogar agora" on `/apps/locadora` and on the hub's
+Locadora card, and the sign-up card inside the player. Behind
+`LOCADORA_GUEST` (only `true` turns it on). **Global**: a guest has no server,
+no account and no session row.
+
+- **Served by** the same `GET /api/public/apps/config`, as `guest`, beside the
+  app's slice of its stored built manifest (`locadora`: bundle URL, assets and
+  their hashes, capabilities, caps). `guest` is true only when `apps_landing`
+  is on too, `APPS_ORIGIN` is set and Locadora is released (`apps.status =
+  'live'`, `global_enabled`, a valid manifest): `publicAppsConfig` in
+  `server/src/apps/public-config.ts`. That one database read is memoised per
+  process for a minute (ten seconds after a failure) and a failure is "no
+  guest", never an error.
+- **Off is dark**: both paths redirect to `/` in the router and, once it has
+  read `guest: false`, with a 302 at the Pages edge; the landing goes back to
+  its member wording ("dentro do pqp", "Abrir o pqp", no "sem cadastro").
+- **What it is not.** No server session, no socket, no cookie, no id: the frame
+  host runs a session that lives in the page (`client/src/lib/apps/guest-session.ts`),
+  the shelf and saves are in the browser's own guest store (`guest:pqp-locadora`,
+  apart from any account's), the game file never leaves the device (the
+  `e2e/locadora-guest/` canary pins it). It does not need `apps`,
+  `emulator_room` or a server release, which is exactly why it is its own
+  switch: it is the emulator room's legal question asked for the open web.
+- **Measurement**: three closed Umami events through `track()`, no properties:
+  `locadora_guest_start`, `locadora_guest_upsell_shown`,
+  `locadora_guest_signup_click`. Sign-ups carry `?ref=locadora-guest`
+  (`users.acquisition_ref`). No Google tag on these paths.
+
+## `locadora_saves_announced` (global, default off)
+
+One sentence, not a feature: on, the Locadora page and the guest player's
+sign-up card say "saves na nuvem pra continuar em outro aparelho" (and the FAQ
+mentions them); off, that line is drawn muted with "em breve". Served as
+`cloudSaves` on `GET /api/public/apps/config`. It exists because
+`locadora_save_sync` is per server and a signed-out page cannot know whether a
+new account would get it; turn this on only once Saves na conta is on for
+everybody. The claims it gates are data (`client/src/lib/locadora-claims.ts`),
+and `locadora-claims.test.ts` fails when a claim that talks about cloud saves
+or watching is filed as live.

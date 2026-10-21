@@ -107,6 +107,11 @@ export interface SessionContext {
    */
   syncProblem?: SyncProblem | null;
   now?: () => number;
+  /**
+   * The game started running (`playing`) or was paused (`paused`). The page around the frame uses it to keep its
+   * own things (the guest player's sign-up card) off a running game. Leaving is `onLeave`.
+   */
+  onActivity?(state: "playing" | "paused"): void;
   /** The console behind the session; tests stand a fake in. */
   createRuntime?: () => EjsRuntime;
 }
@@ -191,7 +196,10 @@ export function createGameSession(ctx: SessionContext): GameSession {
 
   /* ---- the play clock ---- */
   function clockOn() {
-    if (runningSince === null) runningSince = now();
+    if (runningSince === null) {
+      runningSince = now();
+      ctx.onActivity?.("playing");
+    }
   }
   function clockOff() {
     if (runningSince !== null) {
@@ -702,8 +710,10 @@ export function createGameSession(ctx: SessionContext): GameSession {
       onSlotChange: (slot) => liveSaves.selectSlot(slot as ManualSlot),
       onPausedChange: (paused) => {
         liveSaves.setPaused(paused);
-        if (paused) clockOff();
-        else clockOn();
+        if (paused) {
+          clockOff();
+          ctx.onActivity?.("paused");
+        } else clockOn();
       },
     });
     hud.setFullscreen(ctx.isFullscreen());

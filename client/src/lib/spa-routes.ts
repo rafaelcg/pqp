@@ -41,6 +41,9 @@ const STATIC_PATHS: ReadonlySet<string> = new Set([
   "/apps",
   "/apps/locadora",
   "/locadora",
+  // The guest player (runtime flag `locadora_guest` on top), both spellings.
+  "/locadora/jogar",
+  "/apps/locadora/play",
   "/desktop-login",
   "/discord",
   "/ven",

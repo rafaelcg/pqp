@@ -2,6 +2,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "re
 import {
   mountAppFrame,
   type AppFrameController,
+  type AppFrameControllerOptions,
   type AppFrameStatus,
 } from "@/lib/apps/frame-controller";
 import type {
@@ -33,6 +34,12 @@ export interface AppFrameProps {
   onStatus?: (status: AppFrameStatus) => void;
   /** pqp's screen share flow, for apps whose manifest allows sharing the pane. */
   onShare?: (on: boolean) => Promise<boolean>;
+  /**
+   * Bridge host options beyond the session (the guest player passes `guest`,
+   * `saveSync: null`, its own device store and `onActivity`). Read when the
+   * frame mounts.
+   */
+  host?: AppFrameControllerOptions["host"];
 }
 
 export interface AppFrameHandle {
@@ -77,6 +84,7 @@ export const AppFrame = forwardRef<AppFrameHandle, AppFrameProps>(function AppFr
       locale: () => latest.current.locale,
       asSpectator,
       initialHeight,
+      ...(props.host ? { host: props.host } : {}),
       onShare: (on) =>
         latest.current.onShare ? latest.current.onShare(on) : Promise.reject(new Error("no share flow")),
       onStatus: (next) => {

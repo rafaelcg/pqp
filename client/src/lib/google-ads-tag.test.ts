@@ -139,7 +139,7 @@ describe("the pages the tag must not load on (decision D3: /apps*, /locadora*)",
     return { appended, win };
   }
 
-  it.each(["/apps", "/apps/", "/apps/locadora", "/locadora", "/locadora/x"])(
+  it.each(["/apps", "/apps/", "/apps/locadora", "/locadora", "/locadora/x", "/locadora/jogar", "/apps/locadora/play"])(
     "loads nothing, defines nothing and queues nothing on %s",
     (pathname) => {
       const { appended, win } = runOn(pathname);

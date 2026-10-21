@@ -169,3 +169,35 @@ describe("everything else is not its business", () => {
     );
   });
 });
+
+describe("the guest player at the edge", () => {
+  const PLAY = ["/locadora/jogar", "/apps/locadora/play"];
+
+  it.each(PLAY)("%s redirects home while guest play is off, even with the landing on", async (pathname) => {
+    for (const body of [{ enabled: true, guest: false }, { enabled: true }, { enabled: false, guest: true }]) {
+      vi.stubGlobal("fetch", vi.fn(async () => Response.json(body)));
+      const onRequest = await freshMiddleware();
+      const response = await onRequest(ctx(pathname));
+      expect(response.status, JSON.stringify(body)).toBe(302);
+      expect(response.headers.get("location")).toBe("/");
+    }
+  });
+
+  it.each(PLAY)("%s gets the announcement card and stays out of search while it is on", async (pathname) => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ enabled: true, guest: true })));
+    const onRequest = await freshMiddleware();
+    const response = await onRequest(ctx(pathname, { "accept-language": "pt-BR" }));
+    expect(response.status).toBe(200);
+    const html = await response.text();
+    expect(html).toContain(`<title>${APPS_COPY.play.title["pt-BR"]}</title>`);
+    expect(html).toContain('<link rel="canonical" href="https://pqp.gg/locadora/jogar" />');
+    expect(html).toContain(`content="https://pqp.gg${APPS_COPY.play.image}"`);
+    expect(html).toContain('<meta name="robots" content="noindex, nofollow" />');
+  });
+
+  it("the landing does not need guest play", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ enabled: true, guest: false })));
+    const onRequest = await freshMiddleware();
+    expect((await onRequest(ctx("/apps/locadora"))).status).toBe(200);
+  });
+});

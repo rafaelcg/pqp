@@ -100,6 +100,7 @@ const requests: Record<string, Record<string, unknown>> = {
   "ui.fullscreen": { on: true },
   "share.request": { on: false },
   "session.end": {},
+  "ui.activity": { state: "paused" },
 };
 
 function req(type: string, extra: Record<string, unknown> = {}) {
@@ -107,6 +108,17 @@ function req(type: string, extra: Record<string, unknown> = {}) {
 }
 
 describe("app to host requests", () => {
+  it("ui.activity is a closed state and nothing else", () => {
+    for (const state of ["playing", "paused", "browsing"]) {
+      expect(bridgeAppMessageSchema.safeParse(req("ui.activity", { state })).success, state).toBe(true);
+    }
+    for (const state of ["idle", "", 1, null, "playing Some Game"]) {
+      expect(bridgeAppMessageSchema.safeParse(req("ui.activity", { state })).success, String(state)).toBe(false);
+    }
+    // strict: nothing can ride along with it
+    expect(bridgeAppMessageSchema.safeParse(req("ui.activity", { title: "x" })).success).toBe(false);
+  });
+
   it("sync.put carries a save, never a game: no name, no extra field, at most 1 MiB and a 16 KiB picture", () => {
     expect(bridgeAppMessageSchema.safeParse(req("sync.put", { name: "game.gba" })).success).toBe(false);
     expect(bridgeAppMessageSchema.safeParse(req("sync.put", { bytes: new ArrayBuffer(1024 * 1024 + 1) })).success).toBe(false);
@@ -439,6 +451,14 @@ describe("host to app messages", () => {
     expect(result.success, JSON.stringify(result)).toBe(true);
   });
 
+  it("a guest hello says so, and a hello without the field is still a hello", () => {
+    const guest = bridgeHostMessageSchema.parse({ ...(hostMessages.hello as object), guest: true });
+    expect(guest).toMatchObject({ type: "hello", guest: true });
+    const plain = bridgeHostMessageSchema.parse(hostMessages.hello);
+    expect("guest" in (plain as object)).toBe(false);
+    expect(bridgeHostMessageSchema.safeParse({ ...(hostMessages.hello as object), guest: "yes" }).success).toBe(false);
+  });
+
   it("accepts a successful answer to every request type", () => {
     const results: Record<string, unknown> = {
       "participants.get": { participants: [] },
@@ -483,6 +503,7 @@ describe("host to app messages", () => {
       "ui.fullscreen": { on: true },
       "share.request": { on: true },
       "session.end": null,
+      "ui.activity": null,
     };
     expect(Object.keys(results).sort()).toEqual(Object.keys(requests).sort());
     for (const [type, result] of Object.entries(results)) {

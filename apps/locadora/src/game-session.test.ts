@@ -114,6 +114,7 @@ let host: HTMLElement;
 let stage: Stage;
 let consoles: Array<ReturnType<typeof fakeConsole>>;
 let left: LeaveReason[];
+let activity: string[] = [];
 let session: GameSession;
 let store: DeviceStore;
 let keeper: ReturnType<typeof createPrefsKeeper>;
@@ -131,6 +132,7 @@ function setup(over: { store?: DeviceStore; prefs?: Partial<ReturnType<typeof de
   stage = createStage({ stage: host, game: document.getElementById("game")! });
   consoles = [];
   left = [];
+  activity = [];
   const context: SessionContext = {
     app: { hello: { locale: "pt-BR" } } as SessionContext["app"],
     t,
@@ -145,6 +147,9 @@ function setup(over: { store?: DeviceStore; prefs?: Partial<ReturnType<typeof de
     isFullscreen: () => false,
     toggleFullscreen: async () => {},
     openControls: () => {},
+    onActivity: (state) => {
+      activity.push(state);
+    },
     onLeave: (reason) => {
       left.push(reason);
     },
@@ -296,6 +301,23 @@ describe("a file the console cannot run ends on the error screen, never on a dea
     pressStart();
     await settle(FRAME_CHECK_MS * (FRAME_CHECK_TRIES + 2));
     expect(errorText()).toBeNull();
+  });
+
+  it("tells the page when the game runs and pauses, and nothing before Start", async () => {
+    const console_ = await boot();
+    expect(activity).toEqual([]);
+    pressStart();
+    console_.frameCount = 10;
+    await settle(10);
+    expect(activity).toEqual(["playing"]);
+    const p = () => document.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyP", key: "p", bubbles: true, cancelable: true }));
+    // the HUDs of earlier tests in this file still listen on the document, so a state can be said twice in a row
+    // here; the reporter in main.ts says each change once (activity.test.ts)
+    const changes = () => activity.filter((state, i) => state !== activity[i - 1]);
+    p();
+    expect(changes()).toEqual(["playing", "paused"]);
+    p();
+    expect(changes()).toEqual(["playing", "paused", "playing"]);
   });
 
   it("a paused game with no frame yet is not mistaken for a dead one", async () => {

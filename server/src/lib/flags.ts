@@ -1012,6 +1012,31 @@ export const FEATURE_FLAGS = {
     perServer: false,
     clientVia: "GET /api/public/apps/config (enabled)",
   },
+  locadora_guest: {
+    description:
+      "Locadora sem conta: pqp.gg/locadora/jogar (e pqp.gg/apps/locadora/play) deixa quem não tem conta abrir a Locadora e jogar um arquivo do próprio aparelho, depois de confirmar a idade no aparelho. Sem conta, sem cookie, sem websocket: as fitas e os saves ficam só naquele navegador. Também troca o botão da página da Locadora por \"Jogar agora\" e mostra, no máximo uma vez por dia e nunca durante o jogo, o convite pra criar conta. Precisa do apps_landing ligado e da Locadora lançada (live e ligada no geral).",
+    env: "LOCADORA_GUEST",
+    parseEnv: exactTrue,
+    // Off: a public surface that runs an emulator for anybody with a link is
+    // the same legal question `emulator_room` waits on (docs/EMULATOR_ROOM.md),
+    // asked for the open web. It goes on when Rafael says so. Only `true`.
+    codeDefault: false,
+    // GLOBAL: a guest has no server, no account and no session row.
+    perServer: false,
+    clientVia: "GET /api/public/apps/config (guest)",
+  },
+  locadora_saves_announced: {
+    description:
+      "Diz em público que existe Saves na conta: com ele ligado, a página da Locadora e o convite do jogo sem conta passam a dizer \"saves na nuvem pra continuar em outro aparelho\". Desligado, essa linha aparece como \"em breve\". Não liga nada: só a frase. Liga quando o locadora_save_sync estiver ligado pra todo mundo.",
+    env: "LOCADORA_SAVES_ANNOUNCED",
+    parseEnv: exactTrue,
+    // Off: `locadora_save_sync` is per server, so a signed-out page cannot ask
+    // it, and the public copy must not promise what a new account would not
+    // get. This is the one bit the public pages read for that sentence.
+    codeDefault: false,
+    perServer: false,
+    clientVia: "GET /api/public/apps/config (cloudSaves)",
+  },
 } as const satisfies Record<string, FlagDefinition>;
 
 export type FlagKey = keyof typeof FEATURE_FLAGS;

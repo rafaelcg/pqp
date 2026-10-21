@@ -343,6 +343,37 @@ with `ui/conflict-sheet.ts`. Tests: `server/src/apps/locadora-saves.test.ts`
 (a scratch database and an in-memory bucket), `client/src/lib/apps/save-sync.test.ts`,
 `apps/locadora/src/sync.test.ts`, `game-session-sync.test.ts`, `ui/sync-ui.test.ts`.
 
+### Guest play: Locadora without an account (`locadora_guest`, built dark)
+
+`pqp.gg/locadora/jogar` (and `/apps/locadora/play`) lets somebody with no
+account open Locadora and play a file from their own disk, behind the global
+runtime flag `locadora_guest` (on top of `apps_landing`). The mechanics are in
+`docs/APPS.md` §"Guest play"; what matters here is what stays on the device,
+which is everything:
+
+- **The game file** is read by the page's picker and handed to the frame. Its
+  name is read once for the extension and goes nowhere; the bytes, the title in
+  its header and its hash never reach a request, a log or an event. The
+  `client/e2e/locadora-guest/` canary fails if any of them shows up in any
+  request's URL, headers or body.
+- **The shelf and the saves** (cartridges, battery saves, save states, their
+  pictures, preferences) go to this browser's IndexedDB under the guest's own
+  store (`guest:pqp-locadora`), never mixed with an account's in the same
+  browser, and never to the account: Saves na conta is refused for a guest
+  without a request (`saveSync: null`), and the receipt and the sign-up card say
+  "tuas fitas ficam neste navegador".
+- **The age** is asked and judged on the device (the live preview's rule), and
+  only the verdict is remembered there.
+- **What the server sees**: one unauthenticated read of the public apps config,
+  identical for everybody, and the static bundle and core files from the apps
+  origin. No session row, no socket, no id. The page reports three closed
+  events through the hosted Umami tag (start, card shown, sign-up pressed) and
+  nothing about which game or console.
+
+It is not gated by `emulator_room`, `apps` or any server's release, because a
+guest has no server: that is exactly why it is its own switch, and why item 10
+below asks the lawyer before it goes on.
+
 ## The cores, and the license check
 
 AGPL-3.0 is this repository's license. GPL-3.0 and AGPL-3.0 code, MIT/BSD and
@@ -440,6 +471,12 @@ None has a ready WebAssembly build on npm, so each is a separate piece of work
    learn the game) acceptable, given that a save state carries fragments of the
    game's own data? Rafael's go on amending rule 7 is also needed (FOR-RAFAEL
    item 4 of the UX pass).
+
+10. **Guest play (`locadora_guest`), before it is on.** The same emulator,
+    offered to anybody with a link and no account, after an age question
+    answered on their own device. Is that acceptable given items 1 to 3, and is
+    the device-only age check enough for a public page (it is the bar the
+    signed-out live preview already uses)?
 
 Until 1 to 4 are answered in writing, `emulator_room` stays off everywhere.
 `locadora_share` also waits for 7, the multiplayer flag for 8 and

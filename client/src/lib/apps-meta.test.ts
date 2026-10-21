@@ -32,6 +32,8 @@ describe("appsPageFromMetaPath", () => {
     expect(appsPageFromMetaPath("/apps/locadora")).toBe("locadora");
     expect(appsPageFromMetaPath("/locadora")).toBe("locadora");
     expect(appsPageFromMetaPath("/locadora/")).toBe("locadora");
+    expect(appsPageFromMetaPath("/locadora/jogar")).toBe("play");
+    expect(appsPageFromMetaPath("/apps/locadora/play/")).toBe("play");
   });
 
   it("is an exact match, never a prefix: hashed assets and neighbours are not its business", () => {
@@ -39,6 +41,8 @@ describe("appsPageFromMetaPath", () => {
       "/",
       "/apps/other",
       "/apps/locadora/x",
+      "/locadora/play",
+      "/apps/locadora/jogar",
       "/appstore",
       "/locadoras",
       "/assets/apps-abc123.js",
@@ -50,7 +54,7 @@ describe("appsPageFromMetaPath", () => {
   });
 
   it("is a route the SPA has, so the edge never turns it into a soft 404", () => {
-    for (const path of ["/apps", "/apps/locadora", "/locadora"]) {
+    for (const path of ["/apps", "/apps/locadora", "/locadora", "/locadora/jogar", "/apps/locadora/play"]) {
       expect(isUnknownSpaPath(path), path).toBe(false);
     }
     expect(isUnknownSpaPath("/apps/nope")).toBe(true);
@@ -58,7 +62,7 @@ describe("appsPageFromMetaPath", () => {
 });
 
 describe("the head", () => {
-  it.each(["apps", "locadora"] as const)("%s: title, description, canonical, og, twitter and hreflang, per language", (page) => {
+  it.each(["apps", "locadora", "play"] as const)("%s: title, description, canonical, og, twitter and hreflang, per language", (page) => {
     for (const locale of ["pt-BR", "en", "es"] as const) {
       const head = renderAppsHead(page, locale);
       const copy = APPS_COPY[page];
@@ -74,7 +78,7 @@ describe("the head", () => {
       for (const hreflang of ["x-default", "pt-BR", "en", "es"]) {
         expect(head).toContain(`hreflang="${hreflang}"`);
       }
-      expect(head).toContain('<meta name="robots" content="index, follow" />');
+      expect(head).toContain(`<meta name="robots" content="${copy.robots}" />`);
     }
   });
 
@@ -112,9 +116,10 @@ describe("the copy is a duplicate of the catalogue, and cannot drift from it", (
   const keys = {
     apps: ["appsLanding.seo.title", "appsLanding.seo.description"],
     locadora: ["locadoraPage.seo.title", "locadoraPage.seo.description"],
+    play: ["locadoraGuest.seo.title", "locadoraGuest.seo.description"],
   } as const;
 
-  it.each(["apps", "locadora"] as const)("%s", (page) => {
+  it.each(["apps", "locadora", "play"] as const)("%s", (page) => {
     for (const locale of ["pt-BR", "en", "es"] as const) {
       expect(APPS_COPY[page].title[locale]).toBe(catalogues[locale]![keys[page][0]]);
       expect(APPS_COPY[page].description[locale]).toBe(catalogues[locale]![keys[page][1]]);
@@ -122,7 +127,7 @@ describe("the copy is a duplicate of the catalogue, and cannot drift from it", (
   });
 
   it("has no dash punctuation in any language", () => {
-    for (const page of ["apps", "locadora"] as const) {
+    for (const page of ["apps", "locadora", "play"] as const) {
       const all = [
         ...Object.values(APPS_COPY[page].title),
         ...Object.values(APPS_COPY[page].description),
@@ -136,11 +141,11 @@ describe("the copy is a duplicate of the catalogue, and cannot drift from it", (
 describe("while the flag is runtime, the pages stay out of the static registries", () => {
   it("is in neither the marketing registry nor the sitemap", () => {
     const registry = canonicalMarketingPages() as string[];
-    for (const path of ["/apps", "/apps/locadora", "/locadora"]) {
+    for (const path of ["/apps", "/apps/locadora", "/locadora", "/locadora/jogar", "/apps/locadora/play"]) {
       expect(registry).not.toContain(path);
     }
     const listed = sitemapPages(() => null).map((page) => page.path);
-    for (const path of ["/apps", "/apps/locadora", "/locadora"]) {
+    for (const path of ["/apps", "/apps/locadora", "/locadora", "/locadora/jogar", "/apps/locadora/play"]) {
       expect(listed).not.toContain(path);
     }
   });
