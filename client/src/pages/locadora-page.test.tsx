@@ -252,6 +252,20 @@ describe("choosing a cartridge at the door", () => {
 });
 
 describe("the copy", () => {
+  it("every key of the door and the account line is in all three catalogues, and each language says it its own way", () => {
+    const keys = Object.keys(ptBR).filter(
+      (key) => key.startsWith("locadoraPage.door.") || key.startsWith("locadoraPage.account.") || key === "locadoraPage.consoles.label",
+    );
+    expect(keys.length).toBeGreaterThanOrEqual(12);
+    for (const key of keys) {
+      for (const [locale, catalogue] of Object.entries(catalogues)) {
+        expect(catalogue[key], `${locale} ${key}`).toBeTruthy();
+      }
+    }
+    expect(en["locadoraPage.door.cta"]).toBe("Pop in a cartridge");
+    expect(es["locadoraPage.door.cta"]).toBe("Mete el cartucho");
+  });
+
   it("states the approved legal line and headline in every language", () => {
     expect(ptBR["locadoraPage.legal"]).toBe("A gente não aluga nem fornece jogo nenhum. Tu abre o teu.");
     expect(en["locadoraPage.legal"]).toBe("We don't rent or provide any game. You open your own.");
