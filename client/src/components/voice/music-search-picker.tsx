@@ -498,7 +498,7 @@ export function MusicSearchPicker({
                   <button
                     type="button"
                     className={cn(
-                      "flex h-8 w-8 shrink-0 items-center justify-center rounded-md opacity-0 group-hover/hit:opacity-100 group-focus-within/hit:opacity-100",
+                      "flex h-8 w-8 shrink-0 items-center justify-center rounded-md opacity-0 group-hover/hit:opacity-100 group-focus-within/hit:opacity-100 [@media(hover:none)]:opacity-100",
                       rail
                         ? "text-paper-muted hover:bg-ink-2 hover:text-paper"
                         : "text-text-tertiary hover:bg-surface-3 hover:text-text",
