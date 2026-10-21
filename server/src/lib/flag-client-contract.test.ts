@@ -613,3 +613,52 @@ describe("apps and locadora_share against the config the client reads", () => {
     expect(dashboard).toMatch(/\blocadora_share:\s*"/);
   });
 });
+
+/**
+ * `apps_landing`, the public pqp Apps pages. A global client flag on its own
+ * unauthenticated route (`GET /api/public/apps/config`), read by the page's
+ * gate and by the Pages middleware. Pinned from both sides, and the route is
+ * checked to sit BEFORE the authenticated router, because a signed-out visitor
+ * is who the pages are for: a route behind the Bearer resolution would answer
+ * them 401 and the pages would be dark for exactly the people they exist for.
+ */
+describe("apps_landing against the public apps config the pages read", () => {
+  it("is global, off by default, and named under the route that serves it", () => {
+    const def = FEATURE_FLAGS.apps_landing;
+    expect(def.perServer).toBe(false);
+    expect(def.codeDefault).toBe(false);
+    expect(def.clientVia).toBe("GET /api/public/apps/config (enabled)");
+  });
+
+  it("the route is matched before the authenticated router and answers from the flag alone", () => {
+    const api = readFileSync(path.join(serverSrc, "api/index.ts"), "utf8");
+    const fn = /function servePublicAppsConfig[\s\S]*?\n\}\n/.exec(api)?.[0];
+    expect(fn, "servePublicAppsConfig not found").toBeTruthy();
+    expect(fn).toContain('JSON.stringify({ enabled: isEnabled("apps_landing") })');
+    expect(fn).not.toMatch(/authorization|resolveAuth/i);
+    const matched = api.indexOf("servePublicAppsConfig(req, res);");
+    const router = api.indexOf("router.match(method, pathname)", matched);
+    expect(matched, "route is not matched in handleApi").toBeGreaterThan(0);
+    expect(router, "router.match not found after it").toBeGreaterThan(matched);
+  });
+
+  it("the client asks that route with no credential and the edge asks it too", () => {
+    const lib = readFileSync(path.join(clientSrc, "lib/apps-landing.ts"), "utf8");
+    expect(lib).toContain("/api/public/apps/config");
+    expect(lib).toMatch(/body\.enabled !== "boolean"/);
+    expect(lib).not.toMatch(/authorization/i);
+    const middleware = readFileSync(
+      path.resolve(here, "../../../client/functions/_middleware.ts"),
+      "utf8",
+    );
+    expect(middleware).toContain("/api/public/apps/config");
+  });
+
+  it("the dashboard has a note for it", () => {
+    const dashboard = readFileSync(
+      path.resolve(here, "../../../tools/admin-dashboard/site/novo.js"),
+      "utf8",
+    );
+    expect(dashboard).toMatch(/\bapps_landing:\s*"/);
+  });
+});

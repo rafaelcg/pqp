@@ -160,6 +160,8 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   // New with the flag, so there was no old reader: this is its definition.
   apps: (raw) => raw === "true",
   locadora_share: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
+  apps_landing: (raw) => raw === "true",
 };
 
 const SAMPLES = [

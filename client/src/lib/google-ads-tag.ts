@@ -35,13 +35,40 @@ export interface GoogleAdsEnv {
 }
 
 /**
+ * THE PAGES THE TAG MUST NOT LOAD ON (decision D3 of the Apps telemetry spec):
+ * `/apps`, `/apps/...` and `/locadora`, `/locadora/...`, the public pages of
+ * pqp Apps. A page about an emulator is not something to feed to an advertising
+ * platform: no library request to Google, no `config`, no remarketing signal.
+ *
+ * WHY A RUNTIME CHECK AND NOT A BUILD-TIME ONE. The tag lives in the one
+ * `index.html` every route is served, so the document cannot know its route at
+ * build time. Each inline script below starts with this guard, which reads
+ * `location.pathname` when the document loads and returns before it defines
+ * `gtag`, queues anything in `dataLayer` or requests the library. What it
+ * cannot do is unload a tag that already ran: a visitor who arrived on another
+ * page and then moves here in the SPA was configured on arrival, and that was
+ * their visit to the other page. A sign-up that starts here ends in a full
+ * load of `/app`, where the tag loads normally and the one conversion
+ * (`google-ads.ts`) still reports an account being created.
+ *
+ * ES5 on purpose, like everything else this file puts in the document.
+ */
+export const GOOGLE_TAG_EXCLUDED_PATHS_GUARD =
+  'var p=location.pathname;if(p==="/apps"||p.indexOf("/apps/")===0||p==="/locadora"||p.indexOf("/locadora/")===0)return;';
+
+/** Runs `source` only on pages the tag is allowed on. */
+function guarded(source: string): string {
+  return `(function(){${GOOGLE_TAG_EXCLUDED_PATHS_GUARD}${source}})();`;
+}
+
+/**
  * The head tags for a given environment. Empty for every environment that does
  * not name an advertiser account, which is every self-hosted build.
  *
  * The `config` call is what sets the first-party `_gcl_*` cookie that links a
  * later conversion back to the ad click, so it has to run on the landing page
  * rather than at the moment the conversion fires. The SPA is one document, so
- * one `config` at load covers the whole journey.
+ * one `config` at load covers the whole journey, except on the paths above.
  */
 export function googleAdsTags(env: GoogleAdsEnv): HtmlTagDescriptor[] {
   const id = env.VITE_GOOGLE_ADS_ID?.trim();
@@ -49,23 +76,28 @@ export function googleAdsTags(env: GoogleAdsEnv): HtmlTagDescriptor[] {
     return [];
   }
   const encoded = encodeURIComponent(id);
+  const loader = deferredScriptTag(
+    `https://www.googletagmanager.com/gtag/js?id=${encoded}`,
+  );
   return [
     // The library itself is requested once the page has loaded and the browser
     // is idle (see `deferred-tag.ts`). The stub below is inline and immediate,
     // so `gtag("config", ...)` and any later conversion call queue in
     // `dataLayer` and are drained when the library arrives.
-    deferredScriptTag(`https://www.googletagmanager.com/gtag/js?id=${encoded}`),
+    { ...loader, children: guarded(String(loader.children)) },
     {
       tag: "script",
       injectTo: "head",
       // A function expression and not an arrow, because gtag forwards the real
       // `arguments` object into `dataLayer` and an arrow has none.
-      children: [
-        "window.dataLayer = window.dataLayer || [];",
-        "window.gtag = window.gtag || function () { window.dataLayer.push(arguments); };",
-        'window.gtag("js", new Date());',
-        `window.gtag("config", ${JSON.stringify(id)});`,
-      ].join("\n"),
+      children: guarded(
+        [
+          "window.dataLayer = window.dataLayer || [];",
+          "window.gtag = window.gtag || function () { window.dataLayer.push(arguments); };",
+          'window.gtag("js", new Date());',
+          `window.gtag("config", ${JSON.stringify(id)});`,
+        ].join("\n"),
+      ),
     },
   ];
 }

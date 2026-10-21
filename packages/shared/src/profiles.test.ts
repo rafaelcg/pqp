@@ -99,6 +99,11 @@ describe("validateHandle", () => {
     expect(validateHandle("criadores")).toBe("reserved");
   });
 
+  it("reserves the pqp Apps landing's paths", () => {
+    expect(validateHandle("apps")).toBe("reserved");
+    expect(validateHandle("locadora")).toBe("reserved");
+  });
+
   it("reserves the desktop browser-login path", () => {
     expect(validateHandle("desktop-login")).toBe("reserved");
   });
