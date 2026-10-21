@@ -38,6 +38,68 @@ export function writeAppChatHidden(hidden: boolean): void {
   }
 }
 
+// ---------------------------------------------------------------------------
+// How wide the column beside the app is
+
+/**
+ * THE COLUMN GROWS WITH THE WINDOW. It used to be a fixed 320 px (352 from
+ * `xl`), which on a 2000 px window is 17 % of the body: the call, the chat and
+ * the composer stacked in a strip (Locadora feedback, round 2). Now it is a
+ * share of the body, clamped, and the person can drag it; the drag is kept per
+ * device.
+ */
+export const APP_COLUMN_MIN_PX = 360;
+export const APP_COLUMN_MAX_PX = 560;
+/** The share of the body the column takes before anybody drags it. */
+export const APP_COLUMN_DEFAULT_SHARE = 0.31;
+/** What the app keeps however wide the column is dragged. */
+export const APP_PANE_MIN_PX = 480;
+/**
+ * Under this body width the column goes under the app instead of beside it:
+ * below it, one of the two would be under its minimum.
+ */
+export const APP_COLUMN_SIDE_MIN_BODY_PX = APP_PANE_MIN_PX + APP_COLUMN_MIN_PX;
+/** One arrow key press on the divider; Shift is four. */
+export const APP_COLUMN_STEP_PX = 16;
+
+export const APP_COLUMN_WIDTH_KEY = "pqp:apps:column-width";
+
+/** The column's width for a body this wide, from the stored drag (null: none). */
+export function appColumnWidth(body: number, stored: number | null): number {
+  const max = Math.max(APP_COLUMN_MIN_PX, Math.min(APP_COLUMN_MAX_PX, body - APP_PANE_MIN_PX));
+  const wanted = stored ?? Math.round(body * APP_COLUMN_DEFAULT_SHARE);
+  return Math.round(Math.min(max, Math.max(APP_COLUMN_MIN_PX, wanted)));
+}
+
+/** The widest the divider can go for this body (for `aria-valuemax`). */
+export function appColumnMaxWidth(body: number): number {
+  return appColumnWidth(body, Number.MAX_SAFE_INTEGER);
+}
+
+export function readAppColumnWidth(): number | null {
+  try {
+    const raw = window.localStorage.getItem(APP_COLUMN_WIDTH_KEY);
+    if (raw === null) return null;
+    const value = Number(raw);
+    return Number.isFinite(value) && value > 0 ? Math.round(value) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** `null` forgets the drag (a double click on the divider). */
+export function writeAppColumnWidth(width: number | null): void {
+  try {
+    if (width === null) window.localStorage.removeItem(APP_COLUMN_WIDTH_KEY);
+    else window.localStorage.setItem(APP_COLUMN_WIDTH_KEY, String(Math.round(width)));
+  } catch {
+    // storage blocked: the width lasts this page only
+  }
+}
+
+// ---------------------------------------------------------------------------
+// What arrived while the chat was away
+
 export interface UnreadMessage extends MentionCheckMessage {
   id: string;
 }
@@ -127,6 +189,13 @@ export interface AppColumnLayoutInput {
   inCall: boolean;
   /** What the call stage is drawing: a card (`compact`) or pictures. */
   callShape: AppCallShape;
+  /**
+   * A desktop window whose body cannot hold the app and the column side by
+   * side (`APP_COLUMN_SIDE_MIN_BODY_PX`). The shown chat is then a drawer over
+   * the app's right edge, so the app keeps its whole width and the column its
+   * usable one, instead of both squeezed into a stack.
+   */
+  narrow?: boolean;
 }
 
 export interface AppColumnLayout {
@@ -143,8 +212,10 @@ export interface AppColumnLayout {
    * call has pictures, which keep the side column. `hidden`: nothing to show
    * (the chat is away and there is no call), the app takes the whole body.
    * `full`: no app on screen, the column is the conversation as always.
+   * `drawer`: a narrow desktop window with the chat shown, the column over the
+   * app's right edge.
    */
-  column: "full" | "side" | "below" | "bar" | "stage" | "hidden";
+  column: "full" | "side" | "below" | "bar" | "stage" | "hidden" | "drawer";
   /** The transcript and composer are put away (the call, if any, stays). */
   chatAway: boolean;
 }
@@ -154,9 +225,14 @@ export function appColumnLayout(input: AppColumnLayoutInput): AppColumnLayout {
     return { direction: "row", column: "full", chatAway: false };
   }
   if (!input.chatHidden) {
+    if (input.narrow) return { direction: "row", column: "drawer", chatAway: false };
     return input.md
       ? { direction: "row", column: "side", chatAway: false }
       : { direction: "column", column: "below", chatAway: false };
+  }
+  // Hidden on a narrow desktop window: the call goes under the app, as on a phone.
+  if (input.narrow) {
+    return appColumnLayout({ ...input, md: false, narrow: false });
   }
   const pictures = input.callShape === "expanded" || input.callShape === "fullscreen";
   if (!input.inCall || input.callShape === "none") {

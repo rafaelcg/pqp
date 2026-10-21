@@ -540,6 +540,24 @@ describe("connection, theme and the end", () => {
     });
   });
 
+  it("pushes whether the pane is shared, only on a change and only to an app that shares its pane", async () => {
+    const pane = { capabilities: { share: "pane" as const, localFiles: { allowed: false } }, shareAllowed: true };
+    const r = await make({ app: pane });
+    r.host.setShared(false);
+    r.host.setShared(true);
+    r.host.setShared(true);
+    r.host.setShared(false);
+    await r.app.settle();
+    expect(r.app.pushes.filter((p) => p.type === "share")).toEqual([
+      { type: "share", on: true },
+      { type: "share", on: false },
+    ]);
+    const none = await make({ app: { capabilities: { share: "none", localFiles: { allowed: false } } } });
+    none.host.setShared(true);
+    await none.app.settle();
+    expect(none.app.pushes.filter((p) => p.type === "share")).toHaveLength(0);
+  });
+
   it("session end pushes session.ended, tells the page, and every later call is answered ended", async () => {
     const r = await make();
     r.transport.handlers!.onEnded("host");

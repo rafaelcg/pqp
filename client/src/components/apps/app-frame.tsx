@@ -35,6 +35,12 @@ export interface AppFrameProps {
   /** pqp's screen share flow, for apps whose manifest allows sharing the pane. */
   onShare?: (on: boolean) => Promise<boolean>;
   /**
+   * Whether the pane is shared right now, as the page knows it. The app is told
+   * whenever it changes (the bridge's `share` push), so its own share control
+   * follows the switch above the pane and the call's stop.
+   */
+  shared?: boolean;
+  /**
    * Bridge host options beyond the session (the guest player passes `guest`,
    * `saveSync: null`, its own device store and `onActivity`). Read when the
    * frame mounts.
@@ -65,8 +71,9 @@ export const AppFrame = forwardRef<AppFrameHandle, AppFrameProps>(function AppFr
   const [status, setStatus] = useState<AppFrameStatus["kind"]>("loading");
 
   // the latest callbacks and values, without remounting the frame when they change
-  const latest = useRef({ onStatus: props.onStatus, onShare: props.onShare, locale, users });
-  latest.current = { onStatus: props.onStatus, onShare: props.onShare, locale, users };
+  const shared = props.shared === true;
+  const latest = useRef({ onStatus: props.onStatus, onShare: props.onShare, locale, users, shared });
+  latest.current = { onStatus: props.onStatus, onShare: props.onShare, locale, users, shared };
 
   useImperativeHandle(ref, () => ({ focus: () => controller.current?.focus() }), []);
 
@@ -93,6 +100,7 @@ export const AppFrame = forwardRef<AppFrameHandle, AppFrameProps>(function AppFr
       },
     });
     controller.current = mounted;
+    mounted.setShared(latest.current.shared);
     // a failure while mounting (a bad entry URL) was already reported through onStatus
     setStatus(mounted.status.kind);
     return () => {
@@ -102,6 +110,10 @@ export const AppFrame = forwardRef<AppFrameHandle, AppFrameProps>(function AppFr
     // title, locale and the callbacks are read live; the session identity is what a frame is
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [app.entry.url, app.id, app.version, appsOrigin, transport, asSpectator]);
+
+  useEffect(() => {
+    controller.current?.setShared(shared);
+  }, [shared]);
 
   return <div ref={container} className={className} data-app-frame-host data-status={status} />;
 });

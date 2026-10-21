@@ -55,6 +55,8 @@ export interface AppPaneProps {
   /** Whether a failed join as a player may be offered as a watch (the app admits spectators). */
   canWatch?: boolean;
   onShare?: (on: boolean) => Promise<boolean>;
+  /** The pane is shared now (the page's one answer); the app is told when it changes. */
+  shared?: boolean;
   onStatus?: (status: AppFrameStatus) => void;
   className?: string;
 }
@@ -168,6 +170,7 @@ export const AppPane = forwardRef<AppPaneHandle, AppPaneProps>(function AppPane(
           className="flex min-h-0 flex-1 flex-col overflow-auto"
           onStatus={onStatus}
           onShare={props.onShare}
+          shared={props.shared}
         />
       ) : null}
       {!unavailable && status.kind === "loading" ? (

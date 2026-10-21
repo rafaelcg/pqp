@@ -36,8 +36,16 @@ export function useChannelSidebarWidth(slot: SidebarWidthSlot = {}): {
   commitWidth: (width: number) => void;
 } {
   const { key, defaultWidth } = slot;
-  const [width, setWidth] = useState(() =>
-    loadChannelSidebarWidth(viewportWidth(), { key, defaultWidth }),
+  // THE CHOICE AND WHAT IS DRAWN ARE TWO NUMBERS. The resize listener used to
+  // write the window's bound into the choice itself (`min(previous, bound)`),
+  // so a window made narrow once (docked beside another, a phone held
+  // sideways) left the column at 200 px for good, however wide the window
+  // grew again, until a reload: the channel list read as squeezed next to an
+  // app (Locadora feedback, round 2). Now the bound only clamps what is drawn
+  // and the choice waits for the room to come back. Read unclamped so a choice
+  // made on a wide window is not lost to a narrow first render.
+  const [preferred, setPreferred] = useState(() =>
+    loadChannelSidebarWidth(Number.POSITIVE_INFINITY, { key, defaultWidth }),
   );
   const [maxWidth, setMaxWidth] = useState(() =>
     channelSidebarMaxWidth(viewportWidth()),
@@ -49,7 +57,7 @@ export function useChannelSidebarWidth(slot: SidebarWidthSlot = {}): {
   const [loadedKey, setLoadedKey] = useState(key);
   if (loadedKey !== key) {
     setLoadedKey(key);
-    setWidth(loadChannelSidebarWidth(viewportWidth(), { key, defaultWidth }));
+    setPreferred(loadChannelSidebarWidth(Number.POSITIVE_INFINITY, { key, defaultWidth }));
   }
 
   useEffect(() => {
@@ -58,10 +66,9 @@ export function useChannelSidebarWidth(slot: SidebarWidthSlot = {}): {
     }
     function onResize() {
       const next = channelSidebarMaxWidth(window.innerWidth);
-      // Both guarded on a real change: a resize drag fires this every frame,
-      // and above ~1050px the bound is a flat 420 that never moves at all.
+      // Guarded on a real change: a resize drag fires this every frame, and
+      // above ~1050px the bound is a flat 420 that never moves at all.
       setMaxWidth((previous) => (previous === next ? previous : next));
-      setWidth((previous) => (previous > next ? next : previous));
     }
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
@@ -70,11 +77,12 @@ export function useChannelSidebarWidth(slot: SidebarWidthSlot = {}): {
   const commitWidth = useCallback(
     (next: number) => {
       const clamped = clampChannelSidebarWidth(next, viewportWidth());
-      setWidth(clamped);
+      setPreferred(clamped);
       saveChannelSidebarWidth(clamped, { key });
     },
     [key],
   );
 
-  return { width, maxWidth, setWidth, commitWidth };
+  const width = Math.min(preferred, maxWidth);
+  return { width, maxWidth, setWidth: setPreferred, commitWidth };
 }

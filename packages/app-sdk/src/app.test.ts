@@ -468,6 +468,16 @@ describe("pushes", () => {
     expect(seen).toHaveBeenCalledWith({ "--bg": "#fff" });
   });
 
+  it("on('share') delivers whether the pane is shared, and ignores a malformed push", async () => {
+    const seen = vi.fn();
+    app.on("share", seen);
+    host.push({ type: "share", on: true });
+    host.push({ type: "share", on: "yes" });
+    host.push({ type: "share", on: false });
+    await host.settle();
+    expect(seen.mock.calls).toEqual([[true], [false]]);
+  });
+
   it("on('ended') delivers the reason, and every later call rejects with ended", async () => {
     const seen = vi.fn();
     app.on("ended", seen);

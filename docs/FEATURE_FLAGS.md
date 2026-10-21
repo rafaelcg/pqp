@@ -876,8 +876,11 @@ The layout of the column beside a running app (`APP_PANE_LAYOUT_V2`, default
 its one set of controls in the column with it (the call dock in the composer
 stands down there), "Mais" takes what does not fit one row, a share picture is a
 16:9 tile at most half the column, the page header stays up, and the strip
-carries a Chat toggle (Cmd/Ctrl+Shift+.) that puts the chat away. Off: the
-column is the old 300 px one with the call docked into the composer. A kill
+carries a Chat toggle (Cmd/Ctrl+Shift+.) that puts the chat away. The column
+is a share of the body (360 to 560 px) the person can drag, a drawer on a
+narrow desktop window, and the strip carries the one "Entrar na call". Off: the
+column is the old 300 px one with the call docked into the composer. The share
+sync with the app (the bridge's `share` push) and the labels are not behind it. A kill
 switch for a relayout of the call surface, so it is global: it is about the web
 client, not a server, and a client reads it on its next config refresh with no
 reload. Served as `paneLayoutV2` on `GET /api/apps/config?serverId=`; an API

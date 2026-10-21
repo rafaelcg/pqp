@@ -31,7 +31,7 @@ import { createFullscreenTracker, type ViewportProbe } from "./fullscreen-state"
 import { fetchCoreFiles } from "./load-flow";
 import { loadPrefs, createPrefsKeeper } from "./prefs";
 import { createScreens, type Screen } from "./screen";
-import { probeShare, setShared, spectatorNames } from "./share";
+import { createShareControl, probeShare, spectatorNames } from "./share";
 import { createStage } from "./stage";
 import { hostFromApp, openDeviceStore } from "./store-bridge";
 import { gamesOnAccount, openSync, type SyncAccount, type SyncProblem } from "./sync";
@@ -347,37 +347,24 @@ async function main() {
 
   // ---- sharing the pane and watching it: built dark behind `locadora_share` (src/share.ts) ----
   const isWatcher = app.hello.self.role === "spectator";
-  let shareAvailable = false;
-  let sharing = false;
-  let shareBusy = false;
-  /** The HUD's share pill and the "sharing" chip follow what the platform said: nothing is drawn where sharing is not offered. */
+  /** The HUD's share pill and the "sharing" chip follow the page's one answer (src/share.ts): nothing is drawn where sharing is not offered. */
+  // created before anything can call `syncShare` (the control only calls back on a push or a request)
+  const shareControl = createShareControl(app, () => syncShare());
   function syncShare() {
     const playing = root.dataset.view === "palco";
-    session?.setShare(shareAvailable ? { on: sharing, busy: shareBusy } : null);
+    const sharing = shareControl.available && shareControl.sharing;
+    session?.setShare(shareControl.view());
     sharingLine.hidden = !(sharing && playing);
     sharingLine.textContent = sharing ? t.sharingLive : "";
     sharingLine.title = sharing ? t.sharing : "";
   }
   screens.onChange(() => syncShare());
   async function toggleShare() {
-    if (shareBusy || !shareAvailable) return;
-    const wantOn = !sharing;
-    shareBusy = true;
-    syncShare();
-    const outcome = await setShared(app, wantOn);
-    shareBusy = false;
-    if (outcome.kind === "shared" && outcome.on === wantOn) {
-      sharing = outcome.on;
-      if (sharing) session.toast(t.sharing);
-    } else if (outcome.kind === "shared") {
-      // the platform answered and did not do it (no call to share into, the picker was closed): said, never nothing
-      sharing = outcome.on;
-      session.toast(t.shareFailed);
-    } else {
-      session.toast(outcome.kind === "refused" ? t.shareRefused : t.shareFailed);
-      if (outcome.kind === "refused") shareAvailable = false;
-    }
-    syncShare();
+    const said = await shareControl.toggle();
+    // the platform answered and did not do it (no call to share into, the picker was closed): said, never nothing
+    if (said === "started") session.toast(t.sharing);
+    else if (said === "failed") session.toast(t.shareFailed);
+    else if (said === "refused") session.toast(t.shareRefused);
   }
 
   /** The line a watcher reads: whose game is on the screen they are looking at. */
@@ -791,7 +778,7 @@ async function main() {
   app.on("connection", showConnection);
   app.on("ended", () => {
     ended = true;
-    sharing = false;
+    shareControl.setAvailable(false);
     statusLine.textContent = "";
     endedLine.textContent = sync ? t["ended.synced"] : t.ended;
     show("ended");
@@ -828,7 +815,7 @@ async function main() {
   // a guest has no call to share into, and the host would refuse: no probe
   if (isGuest) return;
   // one stop request tells whether the platform offers sharing here (see src/share.ts)
-  shareAvailable = await probeShare(app);
+  shareControl.setAvailable(await probeShare(app));
   syncShare();
 }
 

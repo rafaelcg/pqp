@@ -56,6 +56,13 @@ export interface AppEventMap {
   connection: BridgeConnectionStatus;
   theme: BridgeTheme;
   ended: AppEndReason;
+  /**
+   * Whether your pane is being shared, whoever turned it on or off (your own
+   * `share.request`, pqp's switch above the pane, the call's stop). Draw your
+   * share control from this, so it never disagrees with pqp's. Fires when it
+   * changes, and once after connecting when it is already on.
+   */
+  share: boolean;
 }
 
 export interface PqpApp {
@@ -318,6 +325,10 @@ export function createApp(client: PortClient, hello: BridgeHello): PqpApp {
           return client.on("theme", (push) => callback(push.theme as never));
         case "ended":
           return client.on("session.ended", (push) => callback(push.reason as never));
+        case "share":
+          return client.on("share", (push) => {
+            if (typeof push.on === "boolean") callback(push.on as never);
+          });
         default:
           return () => {};
       }

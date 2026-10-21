@@ -66,6 +66,8 @@ export interface AppFrameController {
   focus(): void;
   /** Remove the frame, release the seat, stop listening. Safe to call twice. */
   destroy(): void;
+  /** Tell the app whether its pane is shared now (the page's one answer). */
+  setShared(on: boolean): void;
   readonly status: AppFrameStatus;
 }
 
@@ -231,6 +233,7 @@ export function mountAppFrame(options: AppFrameControllerOptions): AppFrameContr
   function controller(): AppFrameController {
     return {
       focus: () => iframe?.focus(),
+      setShared: (on) => host.setShared(on),
       destroy() {
         if (destroyed) return;
         clearTimeout(timers.hello);

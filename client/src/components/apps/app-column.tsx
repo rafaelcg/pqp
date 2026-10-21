@@ -21,7 +21,7 @@ export interface AppColumnState {
    * Where the column is (`appColumnLayout`): `stage` is the side column holding
    * only the call's pictures, which leaves room for a way back to the chat.
    */
-  column?: "full" | "side" | "below" | "bar" | "stage" | "hidden";
+  column?: "full" | "side" | "below" | "bar" | "stage" | "hidden" | "drawer";
   /**
    * The most a call's pictures may take, in px, when they sit under the app
    * with the chat away (a share of the body's height). The column there is

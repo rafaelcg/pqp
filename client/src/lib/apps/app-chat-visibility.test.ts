@@ -2,6 +2,15 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
   APP_CHAT_HIDDEN_KEY,
+  APP_COLUMN_MAX_PX,
+  APP_COLUMN_MIN_PX,
+  APP_COLUMN_SIDE_MIN_BODY_PX,
+  APP_COLUMN_WIDTH_KEY,
+  APP_PANE_MIN_PX,
+  appColumnMaxWidth,
+  appColumnWidth,
+  readAppColumnWidth,
+  writeAppColumnWidth,
   appColumnLayout,
   advanceUnread,
   FRESH_TRACKER,
@@ -177,5 +186,64 @@ describe("where the column goes", () => {
     expect(
       appColumnLayout({ ...base, md: false, chatHidden: true, callShape: "expanded" }),
     ).toMatchObject({ direction: "column", column: "below", chatAway: true });
+  });
+});
+
+describe("a desktop window too narrow for the app and the column side by side", () => {
+  const narrow: AppColumnLayoutInput = {
+    paneVisible: true,
+    md: true,
+    narrow: true,
+    chatHidden: false,
+    inCall: true,
+    callShape: "expanded",
+  };
+
+  it("shows the chat as a drawer over the app, which keeps its whole width", () => {
+    expect(appColumnLayout(narrow)).toEqual({ direction: "row", column: "drawer", chatAway: false });
+  });
+
+  it("with the drawer closed the call goes under the app, as on a phone", () => {
+    expect(appColumnLayout({ ...narrow, chatHidden: true })).toMatchObject({
+      direction: "column",
+      column: "below",
+      chatAway: true,
+    });
+    expect(appColumnLayout({ ...narrow, chatHidden: true, callShape: "compact" }).column).toBe("bar");
+    expect(appColumnLayout({ ...narrow, chatHidden: true, inCall: false, callShape: "none" }).column).toBe(
+      "hidden",
+    );
+  });
+});
+
+describe("how wide the column beside the app is", () => {
+  it("grows with the window: about a third of the body, never under 360 or over 560", () => {
+    // Rafael's window: 2000 CSS px, the rail and the channel list leave ~1670 of body
+    expect(appColumnWidth(1670, null)).toBe(518);
+    // 1440 with the channel list open
+    expect(appColumnWidth(1112, null)).toBe(APP_COLUMN_MIN_PX);
+    expect(appColumnWidth(3000, null)).toBe(APP_COLUMN_MAX_PX);
+  });
+
+  it("a drag wins, inside the bounds, and the app always keeps its minimum", () => {
+    expect(appColumnWidth(1670, 420)).toBe(420);
+    expect(appColumnWidth(1670, 100)).toBe(APP_COLUMN_MIN_PX);
+    expect(appColumnWidth(1000, 560)).toBe(1000 - APP_PANE_MIN_PX);
+    expect(appColumnMaxWidth(1000)).toBe(1000 - APP_PANE_MIN_PX);
+  });
+
+  it("goes under the app below the two minimums side by side", () => {
+    expect(APP_COLUMN_SIDE_MIN_BODY_PX).toBe(APP_PANE_MIN_PX + APP_COLUMN_MIN_PX);
+  });
+
+  it("keeps the drag per device, and forgets it on a reset", () => {
+    expect(readAppColumnWidth()).toBeNull();
+    writeAppColumnWidth(444.4);
+    expect(window.localStorage.getItem(APP_COLUMN_WIDTH_KEY)).toBe("444");
+    expect(readAppColumnWidth()).toBe(444);
+    writeAppColumnWidth(null);
+    expect(readAppColumnWidth()).toBeNull();
+    window.localStorage.setItem(APP_COLUMN_WIDTH_KEY, "nope");
+    expect(readAppColumnWidth()).toBeNull();
   });
 });

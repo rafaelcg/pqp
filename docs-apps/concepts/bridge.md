@@ -47,6 +47,7 @@ Pushes have no id. The page sends them when something changes, and the SDK turns
 | `connection` `{ status }` | the page lost or regained the session | `app.on("connection")` |
 | `session.ended` `{ reason }` | the session is over | `app.on("ended")` |
 | `theme` `{ theme }` | the person changed brightness, skin, contrast or accent | `app.on("theme")` |
+| `share` `{ on }` | the pane started or stopped being shared, from anywhere (your request, pqp's switch, the call); once after `hello` if already on. Only for `share: "pane"` apps | `app.on("share")` |
 
 **A push that arrives before you registered a listener is gone.** That is why the pattern is always: register listeners, then read the current value with a `get` call.
 

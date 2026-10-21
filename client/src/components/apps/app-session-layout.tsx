@@ -28,13 +28,19 @@ import {
   registerAppChatToggler,
   type AppColumnState,
 } from "@/components/apps/app-column";
+import { AppColumnDivider } from "@/components/apps/app-column-divider";
 import {
+  APP_COLUMN_MIN_PX,
+  APP_COLUMN_SIDE_MIN_BODY_PX,
   appColumnLayout,
+  appColumnWidth,
   advanceUnread,
   FRESH_TRACKER,
   NO_UNREAD,
   readAppChatHidden,
+  readAppColumnWidth,
   writeAppChatHidden,
+  writeAppColumnWidth,
   type AppCallShape,
   type UnreadTracker,
   type UnreadMessage,
@@ -75,6 +81,8 @@ export interface AppSessionVoice {
    * `compact` while in the call.
    */
   callShape?: AppCallShape;
+  /** Join this channel's call (a voice channel); absent where there is none. */
+  joinCall?: () => void;
   /** This account is sharing a screen in that call right now. */
   sharing: boolean;
   /** Other people in the call, to say who the share reaches. */
@@ -106,8 +114,6 @@ export interface AppSessionLayoutProps {
   children: ReactNode;
 }
 
-/** Under this body width the column goes under the app instead of beside it. */
-export const APP_COLUMN_SIDE_MIN_BODY_PX = 720;
 
 /**
  * The share of the body a call's pictures may take when they sit under the app
@@ -397,6 +403,29 @@ export function AppSessionLayout(props: AppSessionLayoutProps) {
     [voice, sharePending],
   );
 
+  // "Entrar na call" from the strip: busy until the seat lands (or 8 s pass).
+  const [joiningCall, setJoiningCall] = useState(false);
+  useEffect(() => {
+    if (!joiningCall) return undefined;
+    if (voice.inCall) {
+      setJoiningCall(false);
+      return undefined;
+    }
+    const timer = window.setTimeout(() => setJoiningCall(false), 8_000);
+    return () => window.clearTimeout(timer);
+  }, [joiningCall, voice.inCall]);
+  const joinCall = voice.joinCall;
+  const onJoinCall = useMemo(
+    () =>
+      joinCall
+        ? () => {
+            setJoiningCall(true);
+            joinCall();
+          }
+        : undefined,
+    [joinCall],
+  );
+
   const share: StripShareState | undefined = liveModel?.actions.share
     ? {
         visible: true,
@@ -408,6 +437,8 @@ export function AppSessionLayout(props: AppSessionLayoutProps) {
         wholeTab: !supportsRegionCapture() || isDesktopApp(),
       }
     : undefined;
+  const stripJoinCall =
+    onJoinCall && !voice.inCall ? { onJoin: onJoinCall, joining: joiningCall } : undefined;
 
   // ---- actions -----------------------------------------------------------
 
@@ -468,16 +499,29 @@ export function AppSessionLayout(props: AppSessionLayoutProps) {
   const columnId = `app-chat-column-${channelId ?? "none"}`;
   const layout = appColumnLayout({
     paneVisible: v2 && paneVisible,
-    // A desktop window with the channel list open can leave the body under
-    // 720 px, and a 320 px column beside the app left the app 140 px wide
-    // (a game the size of a stamp). There the column goes under the app, as on
-    // a phone. Zero is "not measured yet", which keeps the desktop answer.
-    md: md && (bodyWidth === 0 || bodyWidth >= APP_COLUMN_SIDE_MIN_BODY_PX),
+    // A desktop body too narrow for the app's minimum beside the column's
+    // (480 + 360) shows the chat as a drawer over the app's right edge, rather
+    // than squeezing both into a stack. Zero is "not measured yet", which keeps
+    // the side column.
+    md,
+    narrow: md && bodyWidth > 0 && bodyWidth < APP_COLUMN_SIDE_MIN_BODY_PX,
     chatHidden,
     inCall: voice.inCall,
     callShape: voice.inCall ? (voice.callShape ?? "compact") : "none",
   });
   const appColumnOn = v2 && paneVisible;
+
+  // The column's width beside the app: a share of the body until dragged, the
+  // drag kept per device (`appColumnWidth`).
+  const [storedWidth, setStoredWidth] = useState<number | null>(() => readAppColumnWidth());
+  const [dragWidth, setDragWidth] = useState<number | null>(null);
+  const besideApp = layout.column === "side" || layout.column === "stage";
+  const columnWidth = appColumnWidth(bodyWidth, dragWidth ?? storedWidth);
+  const commitWidth = useCallback((width: number | null) => {
+    setDragWidth(null);
+    setStoredWidth(width);
+    writeAppColumnWidth(width);
+  }, []);
 
   const setChatHidden = useCallback(
     (hidden: boolean, via: "toggle" | "shortcut" | "header") => {
@@ -561,13 +605,18 @@ export function AppSessionLayout(props: AppSessionLayoutProps) {
       : "flex-1";
   const v2Column: Record<typeof layout.column, string> = {
     full: "flex-1",
-    side: "w-[320px] flex-none border-l border-border xl:w-[352px]",
-    stage: "w-[320px] flex-none border-l border-border xl:w-[352px]",
+    // The width is the style below, one number: no class can merge it away.
+    side: "flex-none",
+    stage: "flex-none",
     below: layout.chatAway
       ? "flex-none border-t border-border"
       : "flex-1 border-t border-border",
     bar: "flex-none border-t border-border",
     hidden: "hidden",
+    // Over the app's right edge, the full height of the body; the app under it
+    // keeps its size (it is not reflowed by a chat opening and closing).
+    drawer:
+      "app-drawer-in absolute inset-y-0 right-0 z-20 border-l border-border bg-surface-0 shadow-[var(--shadow-2)]",
   };
   // One utility, not `basis-[46%] flex-none`: tailwind-merge drops a basis
   // that comes before a `flex-*`, so that pair was only ever `flex-none` and
@@ -601,6 +650,7 @@ export function AppSessionLayout(props: AppSessionLayoutProps) {
             if (model.kind === "ended") setDismissedEnded(model.sessionId);
           }}
           onSkipToApp={() => paneRef.current?.focus()}
+          joinCall={v2 && paneVisible ? stripJoinCall : undefined}
           chat={
             appColumnOn
               ? {
@@ -617,7 +667,7 @@ export function AppSessionLayout(props: AppSessionLayoutProps) {
       <div
         ref={bodyRef}
         className={cn(
-          "flex min-h-0 min-w-0 flex-1",
+          "relative flex min-h-0 min-w-0 flex-1",
           v2 ? (layout.direction === "column" ? "flex-col" : "flex-row") : chatBelow ? "flex-col" : "flex-row",
         )}
       >
@@ -637,7 +687,17 @@ export function AppSessionLayout(props: AppSessionLayoutProps) {
             frozen={liveModel?.phase === "reconnecting"}
             canWatch={app.players.spectators && app.shareAllowed}
             onShare={setShare}
-            className={paneClass}
+            shared={shareOn}
+            className={cn(paneClass, dragWidth !== null && "pointer-events-none select-none")}
+          />
+        ) : null}
+        {v2 && besideApp && bodyWidth > 0 ? (
+          <AppColumnDivider
+            width={columnWidth}
+            body={bodyWidth}
+            controls={columnId}
+            onDrag={setDragWidth}
+            onCommit={commitWidth}
           />
         ) : null}
         <div
@@ -651,7 +711,28 @@ export function AppSessionLayout(props: AppSessionLayoutProps) {
           className={cn(
             "flex min-h-0 min-w-0 flex-col",
             v2 ? v2Column[layout.column] : legacyColumn,
+            // a drag that runs over the column must not select its text
+            dragWidth !== null && "select-none",
           )}
+          style={
+            v2 && besideApp
+              ? { width: columnWidth }
+              : v2 && layout.column === "drawer"
+                ? { width: Math.min(APP_COLUMN_MIN_PX + 20, Math.max(0, bodyWidth - 48)) }
+                : undefined
+          }
+          // The drawer is not modal (no trap, the app stays usable to its
+          // left), and Escape puts it away like any panel over content.
+          onKeyDown={
+            v2 && layout.column === "drawer"
+              ? (event) => {
+                  if (event.key === "Escape" && !event.defaultPrevented) {
+                    event.preventDefault();
+                    setChatHidden(true, "header");
+                  }
+                }
+              : undefined
+          }
         >
           <AppColumnContext.Provider value={columnState}>{children}</AppColumnContext.Provider>
         </div>

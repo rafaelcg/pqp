@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CardPerson } from "@/lib/apps/card-model";
 import type { EndedStripModel, LiveStripModel } from "@/lib/apps/strip-model";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   AppSessionStrip,
   endedLineText,
@@ -71,7 +72,7 @@ function render(props: AppSessionStripProps) {
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
-  act(() => root!.render(<AppSessionStrip {...props} />));
+  act(() => root!.render(<TooltipProvider><AppSessionStrip {...props} /></TooltipProvider>));
   return host;
 }
 
@@ -97,7 +98,7 @@ describe("AppSessionStrip", () => {
 
   it("a participant sees Sair and a menu, and no Encerrar, no share switch", () => {
     render({ model: live() });
-    expect(byText("Sair") ?? byText("Leave")).toBeTruthy();
+    expect(byText("Sair do app") ?? byText("Leave app")).toBeTruthy();
     expect(document.querySelector('[role="switch"]')).toBeNull();
     expect(buttons().some((b) => /Encerrar|End/.test(b.textContent ?? ""))).toBe(false);
     expect(document.querySelector('button[aria-label]')).not.toBeNull();
@@ -117,21 +118,21 @@ describe("AppSessionStrip", () => {
     });
     const order = Array.from(document.querySelectorAll('[role="switch"], button'))
       .map((el) => (el.getAttribute("role") === "switch" ? "switch" : el.textContent?.trim()))
-      .filter((label) => label === "switch" || /^(Sair|Leave|Encerrar|End)$/.test(label ?? ""));
+      .filter((label) => label === "switch" || /^(Sair do app|Leave app|Encerrar app|End app)$/.test(label ?? ""));
     // One primary button: whoever may end it finds Sair under the menu.
     expect(order).toEqual(["switch", order[1]]);
-    expect(order[1]).toMatch(/Encerrar|End/);
+    expect(order[1]).toMatch(/Encerrar app|End app/);
     expect(
       buttons().some((b) => /^(Mais|More)/.test(b.getAttribute("aria-label") ?? "")),
     ).toBe(true);
 
-    const end = buttons().find((b) => /^(Encerrar|End)$/.test(b.textContent?.trim() ?? ""))!;
+    const end = buttons().find((b) => /^(Encerrar app|End app)$/.test(b.textContent?.trim() ?? ""))!;
     act(() => end.click());
     expect(onEnd).not.toHaveBeenCalled();
     const confirm = document.querySelector('[role="dialog"]')!;
     expect(confirm).toBeTruthy();
     const yes = Array.from(confirm.querySelectorAll("button")).find((b) =>
-      /^(Encerrar|End)$/.test(b.textContent?.trim() ?? ""),
+      /^(Encerrar app|End app)$/.test(b.textContent?.trim() ?? ""),
     )!;
     act(() => yes.click());
     expect(onEnd).toHaveBeenCalledTimes(1);
@@ -154,6 +155,50 @@ describe("AppSessionStrip", () => {
     expect(document.querySelector('[role="status"]')?.textContent).toMatch(/7/);
     act(() => toggle.click());
     expect(onShareChange).toHaveBeenCalledWith(false);
+  });
+
+  it("sharing with nobody watching says Compartilhando, never pra 0", () => {
+    render({
+      model: live({
+        phase: "host",
+        isHost: true,
+        line: { kind: "host" },
+        actions: { leave: true, end: true, enter: null, takeHost: false, share: true },
+      }),
+      share: { ...shareOff, on: true, viewers: 0 },
+    });
+    const chip = document.querySelector('[data-testid="app-strip-sharing"]')!;
+    expect(chip.textContent).toMatch(/^(Compartilhando|Sharing)$/);
+    expect(chip.textContent).not.toMatch(/0/);
+  });
+
+  it("not in the call with a way to join: one click on Entrar na call joins, no switch to puzzle over", () => {
+    const onJoinCall = vi.fn();
+    render({
+      model: live({
+        phase: "host",
+        isHost: true,
+        line: { kind: "host" },
+        actions: { leave: true, end: true, enter: null, takeHost: false, share: true },
+      }),
+      share: { ...shareOff, needsCall: true },
+      joinCall: { onJoin: onJoinCall, joining: false },
+    });
+    expect(document.querySelector('[role="switch"]')).toBeNull();
+    const join = document.querySelector<HTMLButtonElement>('[data-testid="app-strip-join-call"]')!;
+    expect(join.textContent).toMatch(/Entrar na call|Join the call/);
+    act(() => join.click());
+    expect(onJoinCall).toHaveBeenCalledTimes(1);
+  });
+
+  it("a seated participant who cannot share gets Entrar na call too, and nobody outside the app does", () => {
+    const onJoin = vi.fn();
+    render({ model: live(), joinCall: { onJoin, joining: false } });
+    expect(document.querySelector('[data-testid="app-strip-join-call"]')).not.toBeNull();
+    act(() => root!.unmount());
+    host!.remove();
+    render({ model: live({ seated: false, phase: "outside" }), joinCall: { onJoin, joining: false } });
+    expect(document.querySelector('[data-testid="app-strip-join-call"]')).toBeNull();
   });
 
   it("not in the call: the switch is shown, says why, and does not fire", () => {
@@ -244,7 +289,7 @@ describe("AppSessionStrip", () => {
     render({ model: model(75) });
     const status = () => document.querySelector('[role="status"][aria-live]')!.textContent;
     const rerender = (seconds: number) =>
-      act(() => root!.render(<AppSessionStrip model={model(seconds)} />));
+      act(() => root!.render(<TooltipProvider><AppSessionStrip model={model(seconds)} /></TooltipProvider>));
     expect(status()).toMatch(/1:15/);
     rerender(74);
     expect(status()).toMatch(/1:15/);
@@ -327,7 +372,7 @@ describe("AppSessionStrip", () => {
     act(() => opener.click());
     expect(opener.getAttribute("aria-expanded")).toBe("true");
     const sheet = document.querySelector('[role="dialog"]')!;
-    expect(sheet.textContent).toMatch(/Encerrar para todos|End for everyone/);
+    expect(sheet.textContent).toMatch(/Encerrar o app pra todos|End the app for everyone/);
     expect(sheet.querySelectorAll("li").length).toBe(2);
   });
 });

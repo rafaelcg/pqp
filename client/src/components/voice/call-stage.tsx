@@ -4429,10 +4429,12 @@ export function CallControls({
         container={collapsed}
         className={cn("mx-0.5", collapsed ? "my-1" : "my-1.5")}
       />
-      <Tooltip label={t("call.panel.leave")}>
+      {/* Beside an app "Sair" could mean the app: there the call's hang-up says
+          whose it is ("Sair da call"), next to the strip's "Sair do app". */}
+      <Tooltip label={appColumn.active ? t("call.panel.leaveCall") : t("call.panel.leave")}>
         <button
           type="button"
-          aria-label={t("call.panel.leave")}
+          aria-label={appColumn.active ? t("call.panel.leaveCall") : t("call.panel.leave")}
           className={cn(
             "flex shrink-0 items-center justify-center rounded-full bg-danger/90 text-paper hover:bg-danger",
             appColumn.active

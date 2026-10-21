@@ -291,6 +291,8 @@ export class BridgeHost {
   private connection: BridgeConnectionStatus = "online";
   private endedReason: AppEndReason | null = null;
   private theme: BridgeTheme = {};
+  /** Whether the pane is shared, as the page knows it (`setShared`). */
+  private shared = false;
   private picking = false;
   private detached = false;
   private readonly assetCache = new Map<string, ArrayBuffer>();
@@ -403,6 +405,25 @@ export class BridgeHost {
       return;
     }
     port.postMessage(hello.data);
+    // an app that joins while its pane is already shared learns it at once
+    if (this.shared) this.pushShare();
+  }
+
+  /**
+   * The page's one answer to "is this pane shared", whoever turned it on or off
+   * (the app's own request, the switch above the pane, the call's stop). Pushed
+   * to the app when it changes, so its control never disagrees with the page's.
+   * Only an app that shares its pane is told.
+   */
+  setShared(on: boolean): void {
+    if (this.shared === on) return;
+    this.shared = on;
+    this.pushShare();
+  }
+
+  private pushShare(): void {
+    if (this.app.capabilities.share !== "pane") return;
+    this.pushToApp({ type: "share", on: this.shared });
   }
 
   /** Stops listening. The seat is not released: `leave()` does that. */

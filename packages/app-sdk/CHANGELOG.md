@@ -27,6 +27,8 @@ First version prepared for npm. Nothing has been published yet; the package is s
 - A build to `dist/` (ES2022 modules and `.d.ts`), a staging step that writes the publishable `package.json`, and a check that the tarball is self-contained.
 - The wire types (`JsonValue`, `BridgeHello`, `BridgeParticipant`, `BridgeErrorCode`, `BridgeTheme`, `AppEndReason`, `AppRole`, `AppParticipantConnection`, `BridgeConnectionStatus`) are exported from the package.
 
+- `app.on("share", (on) => ...)`: whether the pane is shared, whoever turned it on or off (the app, pqp's switch above the pane, the call's own stop), so an app's share control always says what pqp's says. Rides the `share` push; an older page never sends it.
+
 ### Changed
 
 - The wire types are written out in the package instead of imported from `@pqp/shared`, so the published `.d.ts` needs nothing else installed. A test fails if either copy drifts from the other. The runtime code is unchanged: the bundle of every first-party app is byte for byte what it was.

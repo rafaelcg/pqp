@@ -50,6 +50,83 @@ export async function setShared(host: ShareHost, on: boolean): Promise<ShareOutc
   }
 }
 
+/** What the HUD's pill draws: `null` when sharing is not offered here. */
+export type ShareView = { on: boolean; busy: boolean } | null;
+
+/** The SDK surface the control needs: the request, and the page's push. */
+export interface ShareControlHost extends ShareHost {
+  on(event: "share", callback: (on: boolean) => void): () => void;
+}
+
+export interface ShareControl {
+  /** Whether sharing is offered here (the probe's answer, or a refusal since). */
+  readonly available: boolean;
+  readonly sharing: boolean;
+  readonly busy: boolean;
+  /** The pill's press: start when off, stop when on. Resolves to what to say, if anything. */
+  toggle(): Promise<"started" | "failed" | "refused" | null>;
+  /** Called once the probe answered. */
+  setAvailable(available: boolean): void;
+  view(): ShareView;
+  destroy(): void;
+}
+
+/**
+ * ONE SOURCE OF TRUTH FOR THE SHARE. The page owns whether the pane is shared:
+ * its switch above the pane, the call's own stop and this pill all change it,
+ * and the page pushes every change (`share`). The pill shows that, never what
+ * its own last request answered, so the two cannot disagree (Locadora feedback,
+ * round 2: "Compartilhar" offered here while the page said the pane was shared).
+ * A request's answer is applied too, for a page that predates the push.
+ */
+export function createShareControl(host: ShareControlHost, onChange: () => void): ShareControl {
+  let available = false;
+  let sharing = false;
+  let busy = false;
+  const off = host.on("share", (on) => {
+    sharing = on;
+    onChange();
+  });
+  return {
+    get available() {
+      return available;
+    },
+    get sharing() {
+      return sharing;
+    },
+    get busy() {
+      return busy;
+    },
+    setAvailable(next) {
+      available = next;
+      onChange();
+    },
+    view() {
+      return available ? { on: sharing, busy } : null;
+    },
+    async toggle() {
+      if (busy || !available) return null;
+      const wantOn = !sharing;
+      busy = true;
+      onChange();
+      const outcome = await setShared(host, wantOn);
+      busy = false;
+      let said: "started" | "failed" | "refused" | null = null;
+      if (outcome.kind === "shared") {
+        sharing = outcome.on;
+        if (outcome.on !== wantOn) said = "failed";
+        else if (outcome.on) said = "started";
+      } else {
+        said = outcome.kind;
+        if (outcome.kind === "refused") available = false;
+      }
+      onChange();
+      return said;
+    },
+    destroy: off,
+  };
+}
+
 export interface Seat {
   displayName: string;
   role: string;

@@ -4,6 +4,7 @@ import {
   LogOut,
   MessageSquare,
   MonitorUp,
+  PhoneCall,
   MoreHorizontal,
   PanelRightClose,
   PanelRightOpen,
@@ -93,6 +94,50 @@ export interface AppSessionStripProps {
   onSkipToApp?: () => void;
   /** The chat beside the app, put away or shown (`app_pane_layout_v2`). */
   chat?: StripChatToggle;
+  /**
+   * This channel has a call the person is not in: one click joins it, with the
+   * app left open. The strip is the one place to join while an app is on
+   * screen (the page header's own button stands down), for everybody seated,
+   * not only a host who could share.
+   */
+  joinCall?: StripJoinCall;
+}
+
+export interface StripJoinCall {
+  onJoin: () => void;
+  /** The join is on its way. */
+  joining: boolean;
+}
+
+function JoinCallButton({
+  join,
+  forShare,
+  compact = false,
+}: {
+  join: StripJoinCall;
+  forShare: boolean;
+  compact?: boolean;
+}) {
+  const { t } = useTranslation();
+  return (
+    <Tooltip label={forShare ? t("apps.strip.joinCallToShare") : t("apps.strip.joinCallHint")}>
+      <Button
+        type="button"
+        size="sm"
+        variant="secondary"
+        className={compact ? "h-11 shrink-0 px-3" : undefined}
+        data-testid="app-strip-join-call"
+        aria-disabled={join.joining || undefined}
+        aria-busy={join.joining || undefined}
+        onClick={() => {
+          if (!join.joining) join.onJoin();
+        }}
+      >
+        {join.joining ? <Spinner /> : <PhoneCall aria-hidden className="h-3.5 w-3.5" />}
+        {t("apps.strip.joinCall")}
+      </Button>
+    </Tooltip>
+  );
 }
 
 export interface StripChatToggle {
@@ -467,8 +512,13 @@ function LiveStrip(props: AppSessionStripProps & { model: LiveStripModel }) {
       ) : null}
 
       <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-x-2 gap-y-1">
-        {share?.visible ? <ShareControl share={share} onChange={onShareChange} /> : null}
-        {share?.visible ? (
+        {props.joinCall && model.seated ? (
+          <JoinCallButton join={props.joinCall} forShare={Boolean(share?.visible)} />
+        ) : null}
+        {share?.visible && !(share.needsCall && props.joinCall && model.seated) ? (
+          <ShareControl share={share} onChange={onShareChange} />
+        ) : null}
+        {share?.visible || (props.joinCall && model.seated) ? (
           <span aria-hidden className="h-5 w-px bg-border" />
         ) : null}
         {model.actions.enter ? (
@@ -566,6 +616,10 @@ function ShareControl({
 }) {
   const { t } = useTranslation();
   const label = t("apps.strip.share");
+  // NOT IN THE CALL with a way to join: the strip draws "Entrar na call" in this
+  // place instead (`JoinCallButton`). It used to be a dimmed switch and "Entra
+  // na call pra compartilhar o app.", which left the person to find the channel
+  // and double click it (Locadora feedback, round 2).
   // WHY it cannot be used is said in words beside the switch, never only in a hover: a switch that is dimmed and says
   // nothing is a button that does nothing
   const blockedReason = share.needsCall
@@ -590,10 +644,18 @@ function ShareControl({
       {share.on ? (
         <span
           role="status"
+          data-testid="app-strip-sharing"
           className="app-badge-in inline-flex items-center gap-1.5 rounded-full bg-success-soft px-2 py-0.5 text-[11px] font-medium text-on-success-soft"
         >
           <Dot tone="live" />
-          {t("apps.strip.sharingTo", { count: share.viewers })}
+          {/* Nobody watching yet is "Compartilhando", never "pra 0". */}
+          {/* Under 760 px of strip the dot stays and the words go to assistive
+              tech only, so the controls hold one row. */}
+          <span className="@max-[759px]/strip:sr-only">
+            {share.viewers > 0
+              ? t("apps.strip.sharingTo", { count: share.viewers })
+              : t("apps.strip.sharingAlone")}
+          </span>
         </span>
       ) : null}
       {/* Where the printed label steps aside (a narrow strip), the screen icon
@@ -654,7 +716,11 @@ function ChatToggle({ chat, compact = false }: { chat: StripChatToggle; compact?
         )}
       >
         <Icon aria-hidden className={compact ? "h-5 w-5" : "h-4 w-4"} />
-        {compact ? null : <span aria-hidden>{t("apps.chat.label")}</span>}
+        {compact ? null : (
+          <span aria-hidden className="@max-[759px]/strip:hidden">
+            {t("apps.chat.label")}
+          </span>
+        )}
         {pending ? (
           mention ? (
             <span
@@ -831,6 +897,9 @@ function CompactStrip(props: AppSessionStripProps & { model: LiveStripModel }) {
           {busy?.join ? <Spinner /> : null}
           {t(model.actions.enter === "join" ? "apps.strip.join" : "apps.strip.watch")}
         </Button>
+      ) : null}
+      {props.joinCall && model.seated && !reconnecting ? (
+        <JoinCallButton join={props.joinCall} forShare={false} compact />
       ) : null}
       {props.chat && !reconnecting ? <ChatToggle chat={props.chat} compact /> : null}
       {reconnecting ? (

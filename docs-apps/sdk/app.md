@@ -222,6 +222,8 @@ share.request(on: boolean): Promise<boolean>
 
 Asks pqp to share the app's pane through its own screen-share flow (or to stop), and resolves to whether it is shared now. Needs `capabilities.share: "pane"` in the manifest, a voice channel, and that the platform allows sharing for this app. Rejects with `not-allowed` or `unavailable`.
 
+Draw your share control from [`on("share")`](#on), not from what your own requests answered: the person can also start or stop the share from pqp's switch above the pane, or end it from the call, and the push is what keeps your control and pqp's saying the same thing.
+
 ## end() {#end}
 
 ```ts
@@ -239,6 +241,7 @@ interface AppEventMap {
   connection: "online" | "reconnecting";
   theme: BridgeTheme;
   ended: AppEndReason;
+  share: boolean;
 }
 ```
 
@@ -246,6 +249,7 @@ interface AppEventMap {
 |---|---|---|
 | `"connection"` | The page lost or regained the session. | `"online"` or `"reconnecting"`. |
 | `"theme"` | The person changed brightness, skin, contrast or accent. | The new tokens, to pass to [`applyTheme`](/sdk/theme). |
+| `"share"` | The pane started or stopped being shared, from anywhere; once after connecting if it already is. Only for an app with `share: "pane"`. | `true` or `false`. |
 | `"ended"` | The session is over. | The reason: `host`, `moderator`, `operator`, `idle`, `host-gone`, `app-disabled`, `empty`, `max-duration`, `channel-gone` or `flag-off`. |
 
 After `"ended"` every call rejects with `ended`. An event name that is not one of these returns a no-op unsubscribe and never fires.
