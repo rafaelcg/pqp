@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { APP_STORE_CAP_CEILING_BYTES } from "./limits.js";
 
 /**
  * The pqp app manifest, version 1.
@@ -62,7 +63,7 @@ const I18N_KEY = /^[a-z][a-zA-Z0-9]*(\.[a-z][a-zA-Z0-9]*){0,3}$/;
 const BUNDLE_PATH = /^(?!\/)(?!.*\.\.)(?!.*\/\/)[A-Za-z0-9._/-]+$/;
 const ASSET_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const FILE_EXTENSION = /^\.[a-z0-9]{1,8}$/;
-const SPDX = /^[A-Za-z0-9.+ ()-]{2,120}$/;
+const SPDX = /^[A-Za-z0-9.+ ()-]{2,200}$/;
 const HTTPS = /^https:\/\//;
 
 const slug = z.string().regex(SLUG);
@@ -146,6 +147,19 @@ export const appManifestSchema = z
           })
           .strict(),
         peer: z.enum(["none", "datachannel"]),
+        /**
+         * Optional, so every manifest written before it still validates; absent
+         * reads as `{ allowed: false }`. When allowed, the app may keep named
+         * blobs on the person's device (the `store.*` bridge calls), at most
+         * `maxBytes` in total.
+         */
+        deviceStore: z
+          .object({
+            allowed: z.boolean(),
+            maxBytes: z.number().int().min(1).max(APP_STORE_CAP_CEILING_BYTES).optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict(),
     hostBound: z.boolean(),
@@ -420,6 +434,21 @@ function ruleIssues(manifest: ManifestLike): AppManifestIssue[] {
         "localFiles.maxBytes is only allowed when files are allowed",
       );
     }
+  }
+  const store = manifest.capabilities.deviceStore;
+  if (store?.allowed && store.maxBytes === undefined) {
+    add(
+      "capabilities.deviceStore.maxBytes",
+      "device-store-max-bytes-required",
+      "deviceStore.maxBytes is required when the device store is allowed",
+    );
+  }
+  if (store && !store.allowed && store.maxBytes !== undefined) {
+    add(
+      "capabilities.deviceStore.maxBytes",
+      "device-store-unexpected",
+      "deviceStore.maxBytes is only allowed when the device store is allowed",
+    );
   }
   if (manifest.capabilities.share === "pane" && !manifest.channelTypes.includes("voice")) {
     add("capabilities.share", "share-needs-voice", 'share "pane" requires "voice" in channelTypes');

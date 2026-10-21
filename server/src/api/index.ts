@@ -306,6 +306,7 @@ import {
   forumChannelsEnabled,
   forumConfigForServer,
 } from "../lib/forum-config.js";
+import { emulatorConfigForServer } from "../lib/emulator-config.js";
 import {
   FORUM_POST_USE_POST_ROUTES,
   isForumPost,
@@ -371,6 +372,8 @@ import {
   resetLivePreviewRateLimits,
 } from "./live-preview-routes.js";
 import { registerAppRoutes } from "./app-routes.js";
+import { endSessionsOfChannel } from "../apps/sweeps.js";
+import { registerAppOwnerRoutes } from "./app-owner-routes.js";
 import { Created, HttpErrorWithDetail } from "../lib/route-results.js";
 import {
   ADMIN_APP_REVIEW_PATH,
@@ -1692,6 +1695,8 @@ const router = createRouter();
 
 // The apps platform's routes (`app-routes.ts`), behind the `apps` flag.
 registerAppRoutes(router);
+// The owner's switches for the apps the operator released (`app-owner-routes.ts`).
+registerAppOwnerRoutes(router);
 
 /**
  * The two account-lifecycle routes a character must not reach.
@@ -3337,6 +3342,13 @@ router.get("/api/voice/config", async ({ url }) =>
 // server the client is in; see lib/forum-config.ts. Read per request.
 router.get("/api/forum/config", async ({ url }) =>
   forumConfigForServer(url.searchParams.get("serverId")),
+);
+
+// Emulator room (`emulator_room`, per server, default off). Local play only:
+// the emulator and the game file never touch the server. See
+// lib/emulator-config.ts and docs/EMULATOR_ROOM.md. Read per request.
+router.get("/api/emulator/config", async ({ url }) =>
+  emulatorConfigForServer(url.searchParams.get("serverId")),
 );
 
 // Whether the operator has forced every stale client to update
@@ -8270,6 +8282,10 @@ router.delete("/api/channels/:channelId", async ({ user }, { channelId }) => {
     [channelId!],
     { carriesChildren: true },
   );
+  // An app running here ends first, while the channel can still say who may
+  // hear of it: the cascade would take the row with the channel, and with it
+  // the only way to tell the viewers.
+  await endSessionsOfChannel(channelId!);
   await deleteChannel(channelId!);
   evictVoiceChannel(channelId!);
   evictChannelViewers(channelId!);

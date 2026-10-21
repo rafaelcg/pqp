@@ -55,7 +55,7 @@ export interface AppFrameControllerOptions {
   /** pqp's own screen share flow; resolves to whether the pane is shared now. */
   onShare?: (on: boolean) => Promise<boolean>;
   /** Forwarded to the bridge host (tests stand in for the picker, theme and fetch). */
-  host?: Pick<BridgeHostOptions, "pickFile" | "theme" | "fetchImpl" | "now" | "log">;
+  host?: Pick<BridgeHostOptions, "pickFile" | "theme" | "fetchImpl" | "now" | "log" | "saveSync">;
 }
 
 export interface AppFrameController {

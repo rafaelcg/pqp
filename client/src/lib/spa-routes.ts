@@ -49,6 +49,7 @@ const STATIC_PATHS: ReadonlySet<string> = new Set([
   "/blog",
   "/qa/ui",
   "/qa/bots",
+  "/qa/apps",
   // Pages itself redirects this to `/`; a monitor may also request it.
   "/index.html",
   // Probes a monitor may point at the site. They answer with the shell today
@@ -61,6 +62,9 @@ const STATIC_PATHS: ReadonlySet<string> = new Set([
   "/share-diagnostic",
   "/share-diagnostic-game",
   "/share-audio-tone",
+  // The emulator room's frame page (`public/emulator/frame.html`).
+  "/emulator/frame",
+  "/emulator/room",
 ]);
 
 export function isUnknownSpaPath(pathname: string): boolean {

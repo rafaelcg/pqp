@@ -122,3 +122,12 @@ function createApp(client: PortClient, hello: BridgeHello): PqpApp;
 ```
 
 Builds the app object over a `PortClient` whose `hello` push has already arrived. `connect()` is the handshake plus this. Use it to drive an app from a test with a `MessageChannel` you hold both ends of, without a window.
+
+### `connectWithSync` and `createSyncApi`
+
+```ts
+function connectWithSync(options?: ConnectOptions): Promise<{ app: PqpApp; sync: SyncApi }>;
+function createSyncApi(client: PortClient): SyncApi;
+```
+
+"Saves na conta": a battery save or a save state, with its picture, kept on the person's account through the page. They live in their own module so an app that never imports them builds byte for byte as before. `connectWithSync` is `connect()` (the same handshake and checks) that also hands back the `sync.*` calls (`status`, `list`, `get`, `put`, `delete`, `restore`, `clear`) on the same port. Only Locadora is allowed to use them today and only where the platform has switched them on; every other app gets `not-allowed`. Most apps will never need these.

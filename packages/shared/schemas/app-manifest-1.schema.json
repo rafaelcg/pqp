@@ -123,6 +123,16 @@
           },
           "description": "Whether the app may ask the person to open a file from their own device (Locadora). Requires review."
         },
+        "deviceStore": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["allowed"],
+          "properties": {
+            "allowed": { "type": "boolean" },
+            "maxBytes": { "type": "integer", "minimum": 1, "maximum": 1073741824 }
+          },
+          "description": "Whether the app may keep named blobs on the person's device (the bridge's store.* calls: IndexedDB database 'pqp-app-store', one object store per app id, never read by pqp's own code and never sent anywhere), at most maxBytes in total. Optional: absent means not allowed. Adds the line 'Keeps things on this device' to the join sheet. Requires review."
+        },
         "peer": {
           "type": "string",
           "enum": ["none", "datachannel"],
@@ -287,5 +297,5 @@
       "additionalProperties": { "type": "string", "minLength": 1, "maxLength": 240 }
     }
   },
-  "$comment": "Checks the validator adds beyond this schema (packages/shared/src/apps/manifest.ts, validateAppManifest): players.max >= players.min; every i18n key referenced (name, description, notice, presence.*, store.summary, store.screenshots[].alt) exists in pt-BR, en and es; presence.phrase values contain exactly one '{name}' and no other '{...}'; presence.short values contain no '{'; no i18n value contains an em dash (U+2014); pt-BR values do not contain the word 'você'/'voce'; ids starting with 'pqp-' require publisher 'pqp'; category 'emulator' requires publisher 'pqp'; capabilities.peer must be 'none' while platformApi is 1; capabilities.localFiles.accept and maxBytes are required when allowed is true and forbidden when false; share 'pane' requires 'voice' in channelTypes; hostBound true requires players.max >= 1 (always true) and is flagged in review; state.writers 'host' with state.maxBytes 0 is rejected (nothing to write)."
+  "$comment": "Checks the validator adds beyond this schema (packages/shared/src/apps/manifest.ts, validateAppManifest): players.max >= players.min; every i18n key referenced (name, description, notice, presence.*, store.summary, store.screenshots[].alt) exists in pt-BR, en and es; presence.phrase values contain exactly one '{name}' and no other '{...}'; presence.short values contain no '{'; no i18n value contains an em dash (U+2014); pt-BR values do not contain the word 'você'/'voce'; ids starting with 'pqp-' require publisher 'pqp'; category 'emulator' requires publisher 'pqp'; capabilities.peer must be 'none' while platformApi is 1; capabilities.localFiles.accept and maxBytes are required when allowed is true and forbidden when false; capabilities.deviceStore.maxBytes is required when allowed is true and forbidden when false; share 'pane' requires 'voice' in channelTypes; hostBound true requires players.max >= 1 (always true) and is flagged in review; state.writers 'host' with state.maxBytes 0 is rejected (nothing to write)."
 }

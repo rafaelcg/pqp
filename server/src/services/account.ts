@@ -11,6 +11,8 @@
 
 import { formatUserTag, type UserPreferences } from "@pqp/shared";
 import { retireAuthorStories } from "./stories.js";
+import { accountLocadoraSaveKeys } from "../apps/locadora-saves.js";
+import { deleteObjectsInBackground } from "./servers.js";
 import { getPool } from "../db.js";
 import type { PublicUser } from "@pqp/shared";
 import { deleteClerkUser, evictUserAcrossCluster } from "../auth/clerk.js";
@@ -801,7 +803,11 @@ export async function deleteAccount(
 
   // Read before the delete: these rows cascade, and once they are gone nothing
   // names the objects in the bucket any more.
-  const attachmentKeys = await accountAttachmentKeys(userId);
+  // Locadora's account saves live in the same bucket: their keys go with these.
+  const attachmentKeys = [
+    ...(await accountAttachmentKeys(userId)),
+    ...(await accountLocadoraSaveKeys(userId)),
+  ];
 
   const stamped = await getPool().query(
     `UPDATE users SET deletion_started_at = NOW()
@@ -905,6 +911,8 @@ export async function sweepPendingAccountDeletions(): Promise<number> {
       continue;
     }
     const keys = await accountAttachmentKeys(row.id);
+    // No hourly sweeper knows these, so they are deleted here, best effort.
+    deleteObjectsInBackground(await accountLocadoraSaveKeys(row.id));
     await retireAuthorStories(row.id);
     await getPool().query(`DELETE FROM users WHERE id = $1`, [row.id]);
     // Same reasoning as the primary path above: a deletion that was only

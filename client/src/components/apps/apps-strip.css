@@ -1,0 +1,97 @@
+/*
+ * Motion for the session strip and the app pane (mock 03). Kept beside the
+ * components instead of in index.css: nothing else uses these, and every rule
+ * here is switched off under prefers-reduced-motion in the block at the end.
+ */
+
+/* The strip arrives: -8px to 0 and opacity, 200 ms. The pane does not move to
+   make room: the strip's 52 px is reserved by the layout, not animated. */
+@keyframes app-strip-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.app-strip-in {
+  animation: app-strip-in 0.2s var(--ease-emphasized) both;
+}
+
+/* The ended strip collapses 8 s after the end: height 52 to 0. Runs on a
+   wrapper that is only drawn once the end is old enough. */
+@keyframes app-strip-out {
+  from {
+    opacity: 1;
+    max-height: 56px;
+  }
+  to {
+    opacity: 0;
+    max-height: 0;
+  }
+}
+
+.app-strip-out {
+  overflow: hidden;
+  animation: app-strip-out 0.18s ease-in both;
+}
+
+/* The share badge fades in (120 ms). */
+@keyframes app-badge-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.app-badge-in {
+  animation: app-badge-in 0.12s ease-out both;
+}
+
+/* The live dot breathes out while the session runs. */
+.app-live-dot {
+  animation: app-live-pulse 2s var(--ease-standard) infinite;
+}
+
+@keyframes app-live-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in oklch, var(--color-success) 50%, transparent);
+  }
+  70%,
+  100% {
+    box-shadow: 0 0 0 8px color-mix(in oklch, var(--color-success) 0%, transparent);
+  }
+}
+
+/* A frozen pane while the link is down: a 40 % veil that fades in. */
+.app-pane-veil {
+  background: color-mix(in oklch, var(--color-surface-0) 40%, transparent);
+  animation: app-veil-in 0.15s ease-out both;
+}
+
+@keyframes app-veil-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-strip-in {
+    animation: app-badge-in 0.01ms both;
+  }
+
+  .app-strip-out,
+  .app-badge-in,
+  .app-live-dot,
+  .app-pane-veil {
+    animation: none;
+  }
+}

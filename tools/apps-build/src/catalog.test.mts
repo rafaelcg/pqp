@@ -51,7 +51,7 @@ describe("hashes", () => {
   });
 
   it("changes when any byte of the manifest changes", () => {
-    expect(manifestSha256({ ...eco.manifest, version: "1.0.1" })).not.toBe(eco.manifestSha256);
+    expect(manifestSha256({ ...eco.manifest, version: "9.9.9" })).not.toBe(eco.manifestSha256);
   });
 });
 
@@ -86,7 +86,7 @@ describe("immutabilityViolations", () => {
     const next: Catalog = { apps: [{ ...eco, manifestSha256: "0".repeat(64) }] };
     const violations = immutabilityViolations(base, next);
     expect(violations).toHaveLength(1);
-    expect(violations[0]).toContain("pqp-eco@1.0.0");
+    expect(violations[0]).toContain(`pqp-eco@${eco.manifest.version}`);
     expect(violations[0]).toContain("bump the version");
   });
 

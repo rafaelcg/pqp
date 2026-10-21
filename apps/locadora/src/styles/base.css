@@ -1,0 +1,719 @@
+/*
+ * Locadora's base look: fonts, tokens, the page grid and the screens' shared
+ * pieces. The other stylesheets in this folder (stage, hud, shelf, onboarding,
+ * slots) belong to the modules they are named after and are imported from
+ * main.ts; this one is the foundation they sit on.
+ *
+ * Two kinds of colour, on purpose (SPEC 6). Chrome panels use only the host
+ * tokens the host sends in `hello` (`--color-surface-1`, `--color-text`,
+ * `--color-accent`, ...), so they follow a light pqp theme. The ROOM, the wall
+ * behind everything and what is written straight on it, is a game room at
+ * night and stays dark in every theme, like a video player stays black; its
+ * colours are the fixed `--loc-*` house tokens below. The fallbacks on the host
+ * tokens are what shows before the first push, never the design.
+ */
+
+/* Bundled, not linked: the app's CSP has `font-src 'self'`. Latin subsets, both SIL OFL 1.1 (notices.txt). */
+@font-face {
+  font-family: "Instrument Sans";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("../fonts/instrument-sans-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Dela Gothic One";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("../fonts/dela-gothic-one-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+:root {
+  color-scheme: dark light;
+
+  /* host tokens (chrome) */
+  --loc-bg: var(--color-surface-0, #14161c);
+  --loc-card: var(--color-surface-1, #1b1e26);
+  --loc-raised: var(--color-surface-2, #242833);
+  --loc-border: var(--color-border, #2d3240);
+  --loc-border-strong: var(--color-border-strong, #3a4150);
+  --loc-text: var(--color-text, #ece9de);
+  --loc-text-2: var(--color-text-secondary, #cfcbbd);
+  --loc-text-3: var(--color-text-tertiary, #a9a597);
+  --loc-accent: var(--color-accent, #c8f55a);
+  --loc-on-accent: var(--color-on-accent, #14161c);
+  --loc-ring: var(--color-focus-ring, rgba(200, 245, 90, 0.6));
+  --loc-success: var(--color-success, #6fd08c);
+  --loc-danger: var(--color-danger, #ee5d4b);
+  --loc-warning: var(--color-warning, #e5b94a);
+  --loc-radius: var(--radius-card, 0.5rem);
+  --loc-control: var(--radius-control, 0.375rem);
+  --loc-panel: var(--radius-panel, 1rem);
+  --loc-pill: var(--radius-pill, 999px);
+
+  /* house tokens (the room), fixed */
+  --loc-neon-pink: #ff5fc8;
+  --loc-neon-cyan: #5ff2ff;
+  --loc-neon-amber: #ffc24a;
+  --loc-wall: #0b0d12;
+  --loc-plank: #2b2118;
+  --loc-plank-edge: #46362a;
+  --loc-hud: rgba(14, 16, 22, 0.86);
+  /*
+   * The scrim over the shop's picture on the Balcão (shelf.css, `.loc-backdrop`): never lighter than `low` anywhere,
+   * `top` behind the top bar and at the foot. Text on the room is measured against these over WHITE, the brightest
+   * pixel the art could put under them (contrast.test.ts), so no corner of the picture can break a line of copy.
+   */
+  --loc-scrim-top: rgba(9, 7, 15, 0.8);
+  --loc-scrim-mid: rgba(9, 7, 15, 0.62);
+  --loc-scrim-low: rgba(9, 7, 15, 0.4);
+  /* the shelf's cabinet, over the scrim */
+  --loc-shelf-panel: rgba(13, 9, 18, 0.88);
+  /* what is written straight on the wall: always light, whatever the host theme */
+  --loc-wall-text: #f0ede4;
+  --loc-wall-text-2: #cfcbbd;
+  --loc-wall-text-3: #a29e91;
+
+  /*
+   * Text-safe stand-ins for the semantic colours. A host token is built for fills and borders on its own
+   * surfaces; as TEXT on a card in a light theme the amber and the green fall under 4.5:1. `main.ts` sets
+   * `data-scheme` from the host's `--pqp-color-scheme`, and the light scheme swaps in darker inks (the
+   * dark scheme reads the host's own, which are already light enough on a dark surface).
+   */
+  --loc-warning-text: var(--loc-warning);
+  --loc-success-text: var(--loc-success);
+  --loc-danger-text: var(--loc-danger);
+  --loc-stamp-text: var(--loc-neon-pink);
+  /* the accent as text or a thin icon on a host surface: pulled toward the text colour, which always contrasts with it */
+  --loc-accent-text: color-mix(in oklab, var(--loc-accent) 62%, var(--loc-text));
+  /* a solid danger button and the ink on it */
+  --loc-danger-solid: var(--loc-danger);
+  --loc-on-danger-solid: #14161c;
+  /* the panels on the room (Continuar, Regras, the Ficha): the host's surfaces as glass, the room a blur behind */
+  --loc-glass: color-mix(in srgb, var(--loc-card) 86%, transparent);
+  --loc-glass-raised: color-mix(in srgb, var(--loc-raised) 90%, transparent);
+
+  /* the house accent on the wall (HUD, rail, stage panels are dark in every theme, so their accent is fixed too) */
+  --loc-wall-accent: #c8f55a;
+  --loc-wall-on-accent: #14161c;
+  --loc-wall-warning: #ffc24a;
+
+  --loc-font: "Instrument Sans", var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif);
+  --loc-font-sign: "Dela Gothic One", var(--loc-font);
+  --loc-mono: var(--font-mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace);
+
+  --loc-fast: var(--duration-fast, 150ms);
+  --loc-base: var(--duration-base, 200ms);
+  --loc-slow: var(--duration-slow, 300ms);
+  --loc-ease: var(--ease-standard, cubic-bezier(0.2, 0, 0, 1));
+  --loc-ease-out: var(--ease-emphasized, cubic-bezier(0.16, 1, 0.3, 1));
+}
+
+:root[data-scheme="light"] {
+  --loc-warning-text: #7a4a00;
+  --loc-success-text: #1d6a3a;
+  --loc-danger-text: #a12a1b;
+  --loc-stamp-text: #a31c79;
+  --loc-danger-solid: #a12a1b;
+  --loc-on-danger-solid: #ffffff;
+  /* a light panel over a dark room would go grey and take its text's contrast with it: solid in a light theme */
+  --loc-glass: var(--loc-card);
+  --loc-glass-raised: var(--loc-raised);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  background: var(--loc-wall);
+  color: var(--loc-wall-text);
+  font-family: var(--loc-font);
+  font-size: 15px;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  overflow: hidden;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+/*
+ * The page: a full-height grid on the whole pane, never a centered column
+ * (the 720 px column and the fixed 4:3 stage were why full screen changed
+ * nothing). Row 2 is the one screen showing and takes all the room that is
+ * left; the rows around it collapse to nothing when their element is hidden.
+ * Padding lives on the children, not here, because a container query cannot
+ * restyle the container it measures.
+ */
+.loc {
+  container: loc / inline-size;
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto auto auto auto;
+  width: 100%;
+  height: 100%;
+  background:
+    radial-gradient(120% 90% at 50% 0%, #141722, var(--loc-wall) 70%),
+    var(--loc-wall);
+}
+
+.loc > * {
+  --g: 12px;
+  margin-inline: var(--g);
+  min-width: 0;
+}
+
+@container loc (min-width: 560px) {
+  .loc > * {
+    --g: 20px;
+  }
+}
+
+@container loc (min-width: 900px) {
+  .loc > * {
+    --g: 32px;
+  }
+}
+
+.loc-head {
+  grid-row: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-block: 12px 8px;
+}
+
+/* the screens that draw their own sign (the Balcão, the first visit, the game) do not need this one */
+.loc:is([data-view="balcao"], [data-view="onboarding"], [data-view="loading"], [data-view="palco"], [data-view="connecting"]) > .loc-head {
+  display: none;
+}
+
+/* the sign: the house name in neon, steady (the power-on flicker belongs to the shelf) */
+.loc-title {
+  margin: 0;
+  color: var(--loc-neon-pink);
+  font-family: var(--loc-font-sign);
+  font-size: 1.5rem;
+  font-weight: 400;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  text-shadow:
+    0 0 6px rgba(255, 95, 200, 0.7),
+    0 0 18px rgba(255, 95, 200, 0.35);
+}
+
+/* "Conectando..." and "Reconectando...": a small pill over everything, there only while it has something to say */
+.loc-status {
+  position: fixed;
+  top: 8px;
+  left: 50%;
+  z-index: 60;
+  margin: 0;
+  padding: 4px 12px;
+  background: var(--loc-hud);
+  border: 1px solid var(--loc-border-strong);
+  border-radius: var(--loc-pill);
+  color: var(--loc-wall-text-2);
+  font-size: 0.8125rem;
+  transform: translateX(-50%);
+}
+
+.loc-status:empty {
+  display: none;
+}
+
+.loc[data-connection="reconnecting"] .loc-status {
+  color: var(--loc-neon-amber);
+}
+
+/* ---- the screens: every one is a section in row 2, the app shows one at a time ---- */
+
+.loc-shelf,
+.loc-onboarding,
+.loc-loading,
+.loc-play,
+.loc-watch,
+.loc-ended {
+  grid-row: 2;
+  min-height: 0;
+}
+
+.loc-watch,
+.loc-ended {
+  color: var(--loc-text);
+  background: var(--loc-card);
+  border: 1px solid var(--loc-border);
+  border-radius: var(--loc-radius);
+}
+
+/* ---- the balcao (home): the top bar, Continuar, Regras and the shelf are drawn by main.ts, on the wall ---- */
+
+/* a column: the bar, the problem card, the counter and, at its foot (`margin-top: auto` in shelf.css), the cabinet */
+.loc-shelf {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow: auto;
+  margin-block: 0;
+  /* the floor under the cabinet: the shelf's last plank and the line under it are never at the pane's very edge */
+  padding-bottom: 16px;
+}
+
+.loc-shelf > * {
+  flex: none;
+}
+
+.loc-lead {
+  margin: 0;
+  max-width: 56ch;
+  font-size: 1rem;
+}
+
+/* a line that says what went wrong on the way in, with the one thing to do about it (SPEC 4.7) */
+/*
+ * A card on the host's surface with a calm tint of its danger colour: a round "!" badge, the headline and the
+ * line under it, the one action as the primary button, a close button. Laid out by its own width: on a narrow
+ * pane the action goes under the text, full width.
+ */
+.loc-problem {
+  container: problem / inline-size;
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px 16px;
+  width: 100%;
+  max-width: 720px;
+  margin: 0;
+  padding: 16px 14px 16px 18px;
+  background: color-mix(in oklab, var(--loc-danger) 9%, var(--loc-card));
+  color: var(--loc-text);
+  border: 1px solid color-mix(in oklab, var(--loc-danger) 42%, var(--loc-border));
+  border-radius: 18px;
+  /* the same card as Continuar's, with the danger colour as a soft light around it */
+  box-shadow:
+    0 24px 60px rgba(0, 0, 0, 0.4),
+    0 0 28px color-mix(in srgb, var(--loc-danger) 22%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  animation: loc-problem-in var(--loc-slow) var(--loc-ease-out) backwards;
+}
+
+@keyframes loc-problem-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+
+.loc-problem-badge {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--loc-danger) 18%, transparent);
+  background: var(--loc-danger-solid);
+  color: var(--loc-on-danger-solid);
+  border-radius: 50%;
+  font-size: 1.0625rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.loc-problem-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.loc-problem-title {
+  margin: 0;
+  color: var(--loc-text);
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.loc-problem-hint {
+  margin: 0;
+  color: var(--loc-text-2);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+
+.loc-problem .loc-problem-action {
+  white-space: nowrap;
+}
+
+.loc-problem-close {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  background: transparent;
+  color: var(--loc-text-2);
+  border: 0;
+  border-radius: var(--loc-control);
+  cursor: pointer;
+}
+
+.loc-problem-close:hover {
+  background: color-mix(in oklab, var(--loc-text) 8%, transparent);
+  color: var(--loc-text);
+}
+
+.loc-problem-close:focus-visible {
+  outline: 2px solid var(--loc-ring);
+  outline-offset: 2px;
+}
+
+@container problem (max-width: 520px) {
+  .loc-problem-text {
+    grid-column: 2 / 4;
+  }
+  .loc-problem-close {
+    grid-column: 4;
+    grid-row: 1;
+    align-self: start;
+  }
+  .loc-problem .loc-problem-action {
+    grid-column: 2 / -1;
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loc-problem {
+    animation: none;
+  }
+}
+
+:root[data-reduced-motion="true"] .loc-problem {
+  animation: none;
+}
+
+/* the file is being read: the first step of the loading, before the stage exists */
+.loc-loading {
+  display: grid;
+  place-items: center;
+  align-self: stretch;
+  margin-block: 4px 12px;
+  background: #000;
+  border: 1px solid var(--loc-border-strong);
+  border-radius: var(--loc-radius);
+}
+
+.loc-load-status {
+  margin: 0;
+  color: var(--loc-wall-text-2);
+  font-size: 0.9375rem;
+  letter-spacing: 0.02em;
+}
+
+/*
+ * ---- the palco: the stage takes every pixel the page has left ----
+ * The stage is no longer 4:3 and no longer capped: it is the whole of row 2.
+ * `stage.ts` sizes `#game` inside it and the canvas is drawn with hard pixel edges.
+ */
+
+.loc-play {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  gap: 12px;
+  margin-block: 4px 0;
+}
+
+/* the saves drawer docks on the right of the stage when there is room; below 720 px it is a bottom sheet (slots.css) */
+@media (min-width: 721px) {
+  .loc-play[data-drawer="open"] {
+    grid-template-columns: minmax(0, 1fr) 348px;
+  }
+
+  .loc-play > .loc-slots-drawer {
+    grid-column: 2;
+    grid-row: 1;
+  }
+}
+
+.loc-stage {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 0;
+  overflow: hidden;
+  background: #000;
+  border: 1px solid var(--loc-border-strong);
+  border-radius: var(--loc-radius);
+}
+
+.loc-game {
+  width: 100%;
+  height: 100%;
+}
+
+.loc-game canvas {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+
+/* ---- buttons and the bar ---- */
+
+.loc-button {
+  min-height: 44px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: var(--loc-control);
+  background: var(--loc-accent);
+  color: var(--loc-on-accent);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.loc-button:hover:not(:disabled) {
+  filter: brightness(0.92);
+}
+
+.loc-button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.loc-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.loc-button:focus-visible {
+  outline: 2px solid var(--loc-ring);
+  outline-offset: 2px;
+}
+
+/* the quiet buttons sit on the wall, so they use the wall's colours */
+.loc-button-quiet {
+  background: transparent;
+  color: var(--loc-wall-text-2);
+  border: 1px solid var(--loc-border-strong);
+  font-weight: 600;
+}
+
+/* the same button on a card (the name prompt inside the loading panel): the card's own ink, not the wall's */
+.loc-load-extra .loc-button-quiet,
+.loc-nameprompt .loc-button-quiet {
+  color: var(--loc-text);
+}
+
+.loc-bar {
+  grid-row: 4;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-block: 4px 12px;
+}
+
+.loc-sharing {
+  grid-row: 3;
+  margin-block: 0 8px;
+  padding: 10px 12px;
+  background: var(--loc-raised);
+  color: var(--loc-text);
+  border-left: 3px solid var(--loc-accent);
+  border-radius: var(--loc-control);
+  font-size: 0.875rem;
+}
+
+/* a watcher's screen: the TV in the middle of the pane, what it is and where the picture comes from under it */
+.loc-watch {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 8px;
+  padding: 32px 18px;
+  margin-block: 4px 12px;
+  text-align: center;
+  background:
+    radial-gradient(50% 45% at 50% 40%, rgba(95, 242, 255, 0.07), transparent 72%),
+    var(--loc-card);
+}
+
+.loc-watch-tv {
+  position: relative;
+  width: 168px;
+  height: 128px;
+  margin-bottom: 18px;
+  padding: 12px 12px 22px;
+  background: linear-gradient(180deg, #3a3f4d, #23262f);
+  border: 2px solid #0b0c10;
+  border-radius: 18px;
+  box-shadow:
+    inset 0 2px 0 rgba(255, 255, 255, 0.12),
+    0 16px 30px rgba(0, 0, 0, 0.35);
+}
+
+/* the antenna, two strokes from the top */
+.loc-watch-tv::before,
+.loc-watch-tv::after {
+  content: "";
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  width: 2px;
+  height: 30px;
+  background: #5a6072;
+  border-radius: 1px;
+  transform-origin: 50% 100%;
+  transform: rotate(-28deg);
+}
+
+.loc-watch-tv::after {
+  transform: rotate(28deg);
+}
+
+.loc-watch-screen {
+  display: block;
+  height: 100%;
+  background:
+    repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.28) 0 1px, transparent 1px 3px),
+    radial-gradient(70% 80% at 50% 45%, rgba(95, 242, 255, 0.55), rgba(255, 95, 200, 0.25) 60%, #0b0d12 100%);
+  border: 2px solid #0b0c10;
+  border-radius: 12px / 16px;
+  box-shadow: inset 0 0 18px rgba(0, 0, 0, 0.7);
+}
+
+.loc-watch-dot {
+  position: absolute;
+  right: 16px;
+  bottom: 7px;
+  width: 7px;
+  height: 7px;
+  background: var(--loc-wall-accent);
+  border-radius: 50%;
+  box-shadow: 0 0 8px var(--loc-wall-accent);
+}
+
+.loc-watch-title {
+  margin: 0;
+  font-size: 1.375rem;
+  font-weight: 700;
+}
+
+.loc-watch .loc-lead {
+  color: var(--loc-text-2);
+}
+
+.loc-muted {
+  margin: 0;
+  color: var(--loc-text-3);
+  font-size: 0.8125rem;
+}
+
+.loc-notices-text {
+  max-height: 40vh;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  background: var(--loc-bg);
+  border-radius: var(--loc-control);
+  color: var(--loc-text-2);
+  font-family: var(--loc-mono);
+  font-size: 0.75rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.loc-notices-text:focus-visible {
+  outline: 2px solid var(--loc-ring);
+  outline-offset: 2px;
+}
+
+.loc-ended {
+  align-self: start;
+  margin-block: 4px 12px;
+  padding: 12px 14px;
+  font-weight: 600;
+}
+
+/* ---- full screen: the game takes the whole display, the chrome steps aside ---- */
+
+.loc[data-fullscreen="true"] {
+  background: #000;
+}
+
+.loc[data-fullscreen="true"] > .loc-head {
+  display: none;
+}
+
+.loc[data-fullscreen="true"] > .loc-play {
+  grid-row: 1 / -1;
+  gap: 0;
+  margin: 0;
+}
+
+/* the picture is the whole display: no frame of the window's around it, not even a pixel of one */
+.loc[data-fullscreen="true"] .loc-stage {
+  border: 0;
+  border-radius: 0;
+}
+
+.loc[data-fullscreen="true"] .loc-bar {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  z-index: 5;
+  margin: 0;
+  padding: 6px;
+  background: var(--loc-hud);
+  border: 1px solid var(--loc-border-strong);
+  border-radius: 12px;
+  backdrop-filter: blur(10px);
+  transform: translateX(-50%);
+  transition: opacity var(--loc-slow) var(--loc-ease);
+}
+
+/* the share indicator must stay visible while sharing, so it floats instead of hiding */
+.loc[data-fullscreen="true"] .loc-sharing {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 5;
+  max-width: min(60ch, calc(100% - 24px));
+  margin: 0;
+}
+
+.loc[data-fullscreen="true"]:has(.loc-hud-host[data-hud="hidden"]) .loc-bar:not(:focus-within) {
+  opacity: 0;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loc[data-fullscreen="true"] .loc-bar {
+    transition: none;
+  }
+  .loc-button:active:not(:disabled) {
+    transform: none;
+  }
+}
+
+:root[data-reduced-motion="true"] .loc[data-fullscreen="true"] .loc-bar {
+  transition: none;
+}
+
+:root[data-reduced-motion="true"] .loc-button:active:not(:disabled) {
+  transform: none;
+}

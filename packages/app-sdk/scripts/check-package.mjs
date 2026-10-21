@@ -68,7 +68,7 @@ for (const file of files) {
 }
 
 // 3. it loads and exports what the docs say
-const expected = ["PortClient", "PqpAppError", "REQUEST_TIMEOUT_MS", "applyTheme", "connect", "createApp"];
+const expected = ["PortClient", "PqpAppError", "REQUEST_TIMEOUT_MS", "applyTheme", "connect", "connectWithSync", "createApp", "createSyncApi"];
 const loaded = await import(pathToFileURL(join(pkgDir, "dist", "index.js")).href);
 const got = Object.keys(loaded).sort();
 if (JSON.stringify(got) !== JSON.stringify(expected)) {

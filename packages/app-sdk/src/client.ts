@@ -87,7 +87,11 @@ export class PortClient {
       clearTimeout(entry.timer);
       if (data.ok) {
         // a success echoes the request type; one that names another call, or none, is not an answer to this one
-        const expectsNull = entry.type === "events.send" || entry.type === "session.end";
+        const expectsNull =
+          entry.type === "events.send" ||
+          entry.type === "session.end" ||
+          entry.type === "store.delete" ||
+          entry.type === "files.saveLocal";
         if (data.type !== entry.type || (expectsNull && data.result !== null)) {
           entry.reject(new PqpAppError("unavailable", `pqp host answered ${entry.type} with a reply that does not match it`));
         } else {

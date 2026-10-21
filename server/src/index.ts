@@ -88,6 +88,7 @@ import { processRole, runsColdJobs, servesTraffic } from "./lib/process-role.js"
 import { startFeatureFlags } from "./lib/flags.js";
 import { startAppCatalogLoad } from "./apps/catalog.js";
 import { startAppParticipantSweep } from "./ws/apps.js";
+import { adoptPreviousRunSeats } from "./apps/participants.js";
 import { checkReadiness, READINESS_PATH } from "./services/readiness.js";
 import {
   READY_PATH,
@@ -829,6 +830,13 @@ async function main() {
   // held for the resume window, held seats past it released). Wherever the
   // sockets are, never the worker.
   stopAppParticipantSweep = startAppParticipantSweep();
+  // One process and no cluster: the seats of an earlier run are this one's to
+  // hold and release. With a cluster, the dead-instance sweep does it.
+  if (!clusterTopologyTracked()) {
+    void adoptPreviousRunSeats(INSTANCE_ID).catch((error: unknown) => {
+      console.error("[apps] could not adopt the previous run's seats:", error);
+    });
+  }
 
   if (runsColdJobs(role)) {
     coldJobs = startColdJobs();

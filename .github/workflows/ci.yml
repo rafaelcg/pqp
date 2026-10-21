@@ -434,6 +434,13 @@ jobs:
           - suite: app-frame
             label: sandboxed frame policy
             appframe: true
+          # No lanes: Locadora in a real sandboxed frame under its real CSP, with
+          # generated test patterns and a canary server that must see nothing
+          # (apps/locadora/e2e). No API, no database. Chromium only here; the
+          # three engines run locally (`pnpm --filter @pqp-apps/locadora e2e`).
+          - suite: apps-sandbox
+            label: Locadora in the sandbox
+            apps: true
 
     services:
       postgres:
@@ -515,6 +522,13 @@ jobs:
       - name: E2E app frame (sandbox, frame-src policy, bridge)
         if: matrix.appframe
         run: pnpm --filter @pqp/client e2e:app-frame --project=chromium --project=firefox
+      # The apps sandbox, end to end: the real packager's build of Locadora in
+      # an `allow-scripts` frame, a generated NES and GBA test pattern (never a
+      # game) painted by the real cores, every escape probe failing inside the
+      # frame, and a canary server on another port that records nothing.
+      - name: E2E apps sandbox (Locadora, test patterns, canary)
+        if: matrix.apps
+        run: pnpm --filter @pqp-apps/locadora e2e
 
       # The presenter's camera held to the film, measured off the pictures
       # (client/playwright.camera-sync.config.ts): the real watch player on a

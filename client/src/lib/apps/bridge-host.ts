@@ -3,9 +3,12 @@ import {
   APP_EVENT_MAX_PER_SECOND,
   APP_PARTICIPANTS_AVATAR_BUDGET_CHARS,
   APP_PLATFORM_API,
+  APP_SAVE_LOCAL_EXTENSIONS,
+  APP_STORE_VALUE_MAX_BYTES,
   APP_STATE_MAX_BYTES,
   APP_STATE_MAX_WRITES_PER_SECOND,
   APP_DISPLAY_NAME_MAX_CHARS,
+  LOCADORA_APP_ID,
   bridgeAppMessageSchema,
   bridgeHelloPushSchema,
   bridgeParticipantSchema,
@@ -24,7 +27,9 @@ import {
 } from "@pqp/shared";
 import { AvatarCache } from "./avatar";
 import { fetchAsset, type AssetRef, type AssetResult } from "./asset-fetch";
+import { DeviceStoreError, openBrowserDeviceStore, type DeviceStore, type DeviceStoreErrorCode } from "./device-store";
 import { pickLocalFile, type PickOptions, type PickResult } from "./file-pick";
+import { createSaveSync, SaveSyncError, type SaveSyncClient } from "./save-sync";
 import { TokenBucket } from "./limiter";
 import { stateBytesAfter } from "./merge-patch";
 import { domThemeSource, sameTheme, type ThemeSource } from "./theme-tokens";
@@ -49,7 +54,10 @@ import {
  * - the manifest's caps and capabilities are enforced here AGAIN (the server
  *   enforces them for real): events per second and bytes, state bytes after the
  *   patch, who may write, `share` only for a `pane` app on a server where
- *   sharing is allowed, `files.pickLocal` only when the manifest allows files;
+ *   sharing is allowed, `files.pickLocal` only when the manifest allows files,
+ *   `store.*` only when it declares `deviceStore` (and the store is the HOST's
+ *   per app id, never named by a message), `files.saveLocal` only for an
+ *   extension on the platform's closed list that the manifest also accepts;
  * - what goes back is built from scratch (no user id, ever: a participant is a
  *   seat id, a name, an avatar data URL) and passed through the response and
  *   push schemas before it is posted;
@@ -81,6 +89,20 @@ export interface BridgeHostOptions {
   ui?: Partial<BridgeHostUi>;
   /** Defaults to the page's own picker. Tests stand in. */
   pickFile?: (options: PickOptions) => Promise<PickResult>;
+  /**
+   * Opens this app's device store (`appId` is the host's, from the manifest).
+   * Defaults to IndexedDB, and to nothing where the browser has none, which
+   * answers `unavailable`. Tests stand in.
+   */
+  openStore?: (appId: string, capBytes: number) => DeviceStore | null;
+  /** Hands the person a file (`files.saveLocal`). Defaults to a download the host names. Tests stand in. */
+  saveFile?: (file: { appId: string; bytes: ArrayBuffer; ext: string }) => void;
+  /**
+   * Saves na conta (`sync.*`): Locadora's account saves. Defaults to the real
+   * client over the API for Locadora and to nothing for every other app; the
+   * server still decides per request (404 is `not-allowed`). Tests stand in.
+   */
+  saveSync?: SaveSyncClient | null;
   fetchImpl?: typeof fetch;
   /** The apps origin: an asset URL anywhere else is refused, and a redirect off it fails. */
   appsOrigin: string;
@@ -110,6 +132,15 @@ type Failure = { error: BridgeErrorCode };
 
 const LOCALE_PATTERN = /^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8}){0,3}$/;
 const AVATAR_FETCH_CONCURRENCY = 6;
+/** `store.*`: reads move up to 64 MiB, so they are bounded too, not only the writes. */
+const STORE_RATE_PER_SECOND = 30;
+const STORE_BURST = 60;
+/** `files.saveLocal` opens a download: three at once, then one every five seconds. */
+const SAVE_RATE_PER_SECOND = 0.2;
+const SAVE_BURST = 3;
+/** `sync.*`: each one is a round trip to the API (and the bucket); the server has its own 30 writes a minute. */
+const SYNC_RATE_PER_SECOND = 5;
+const SYNC_BURST = 20;
 const FLOOD_RATE_PER_SECOND = 100;
 const FLOOD_BURST = 200;
 const FLOOD_STRIKES_BEFORE_VIOLATION = 500;
@@ -126,6 +157,33 @@ export function cleanDisplayName(name: string | undefined): string {
     out += char;
   }
   return out === "" ? "?" : out;
+}
+
+/** The name of a file the host hands the person: the host's choice, never the app's. */
+export function savedFileName(appId: string, ext: string, at: Date): string {
+  const stamp = at.toISOString().slice(0, 16).replace(/[-:]/g, "").replace("T", "-");
+  return `${appId}-${stamp}${ext}`;
+}
+
+/** The default `saveFile`: a download of the bytes under the host's own name. */
+export function downloadSavedFile(
+  file: { appId: string; bytes: ArrayBuffer; ext: string },
+  doc: Document = document,
+  now: () => Date = () => new Date(),
+): void {
+  const url = URL.createObjectURL(new Blob([file.bytes], { type: "application/octet-stream" }));
+  const link = doc.createElement("a");
+  link.href = url;
+  link.download = savedFileName(file.appId, file.ext, now());
+  link.hidden = true;
+  doc.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+function mapStoreError(code: DeviceStoreErrorCode): BridgeErrorCode {
+  return code === "too-large" ? "too-large" : code === "invalid" ? "invalid" : "unavailable";
 }
 
 export function mapTransportError(code: AppErrorCode, forEnd = false): BridgeErrorCode {
@@ -196,6 +254,12 @@ export class BridgeHost {
   private readonly eventBucket: TokenBucket;
   private readonly stateBucket: TokenBucket;
   private readonly floodBucket: TokenBucket;
+  private readonly storeBucket: TokenBucket;
+  private readonly saveBucket: TokenBucket;
+  private readonly syncBucket: TokenBucket;
+  private saveSync: SaveSyncClient | null | undefined;
+  /** Opened on the first `store.*` call, `null` when this browser has none. */
+  private deviceStore: DeviceStore | null | undefined;
   private floodStrikes = 0;
   private violated = false;
 
@@ -251,6 +315,9 @@ export class BridgeHost {
     );
     this.stateBucket = new TokenBucket(writes, Math.max(1, writes), this.now);
     this.floodBucket = new TokenBucket(FLOOD_RATE_PER_SECOND, FLOOD_BURST, this.now);
+    this.storeBucket = new TokenBucket(STORE_RATE_PER_SECOND, STORE_BURST, this.now);
+    this.saveBucket = new TokenBucket(SAVE_RATE_PER_SECOND, SAVE_BURST, this.now);
+    this.syncBucket = new TokenBucket(SYNC_RATE_PER_SECOND, SYNC_BURST, this.now);
   }
 
   // ---------------------------------------------------------------------------
@@ -274,7 +341,8 @@ export class BridgeHost {
       }
       this.applySnapshot(snapshot);
     } catch (error) {
-      this.unsubscribe();
+      // `detach()` may have run while the join was in flight and dropped it already
+      this.unsubscribe?.();
       this.unsubscribe = null;
       throw error;
     }
@@ -533,6 +601,86 @@ export class BridgeHost {
       case "files.pickLocal":
         return this.pickLocal(id);
 
+      case "store.get":
+        return this.withStore(id, async (store) => {
+          const found = await store.get(message.key);
+          if (found === null) return this.succeed(id, message.type, null);
+          // the bytes are a fresh copy out of the store, so they can be transferred
+          this.succeed(id, message.type, found, [found.bytes]);
+        });
+
+      case "store.put":
+        return this.withStore(id, async (store) => {
+          // the ceiling is checked before anything is read from the store
+          if (message.bytes.byteLength > APP_STORE_VALUE_MAX_BYTES) return this.fail(id, "too-large");
+          const usage = await store.put(message.key, message.bytes, message.meta ?? null);
+          this.succeed(id, message.type, { usage });
+        });
+
+      case "store.delete":
+        return this.withStore(id, async (store) => {
+          await store.delete(message.key);
+          this.succeed(id, message.type, null);
+        });
+
+      case "store.list":
+        return this.withStore(id, async (store) => {
+          this.succeed(id, message.type, await store.list(message.prefix));
+        });
+
+      case "store.usage":
+        return this.withStore(id, async (store) => {
+          this.succeed(id, message.type, await store.usage());
+        });
+
+      case "files.saveLocal":
+        return this.saveLocal(id, message.bytes, message.ext);
+
+      case "sync.status":
+        return this.withSync(id, async (sync, sessionId) => {
+          this.succeed(id, message.type, await sync.status(sessionId));
+        });
+      case "sync.list":
+        return this.withSync(id, async (sync, sessionId) => {
+          this.succeed(id, message.type, { entries: await sync.list(sessionId, message.game) });
+        });
+      case "sync.get":
+        return this.withSync(id, async (sync, sessionId) => {
+          const got = await sync.get(sessionId, message.save);
+          const transfer: Transferable[] = [got.bytes, ...(got.thumb ? [got.thumb] : [])];
+          this.succeed(id, message.type, got, transfer);
+        });
+      case "sync.put":
+        return this.withSync(id, async (sync, sessionId) => {
+          this.succeed(
+            id,
+            message.type,
+            await sync.put(sessionId, {
+              game: message.game,
+              kind: message.kind,
+              slot: message.slot,
+              baseRev: message.baseRev,
+              bytes: message.bytes,
+              ...(message.thumb ? { thumb: message.thumb } : {}),
+              platform: message.platform,
+              core: message.core,
+              coreVersion: message.coreVersion,
+            }),
+          );
+        });
+      case "sync.delete":
+        return this.withSync(id, async (sync, sessionId) => {
+          this.succeed(id, message.type, await sync.remove(sessionId, message.save));
+        });
+      case "sync.restore":
+        return this.withSync(id, async (sync, sessionId) => {
+          this.succeed(id, message.type, await sync.restore(sessionId, message.save, message.baseRev));
+        });
+      case "sync.clear":
+        return this.withSync(id, async (sync, sessionId) => {
+          this.succeed(id, message.type, await sync.clear(sessionId, message.game ?? null));
+        });
+
       case "ui.resize": {
         this.options.ui?.resize?.(message.height);
         return this.succeed(id, message.type, { height: message.height });
@@ -620,6 +768,81 @@ export class BridgeHost {
     // a copy per transfer: a transferred buffer is detached on this side
     const copy = bytes.slice(0);
     this.succeed(id, "assets.get", { name, bytes: copy }, [copy]);
+  }
+
+  /**
+   * Runs one `store.*` call. The manifest must declare the capability (an app
+   * that did not gets `not-allowed`, the same answer as any other call it has
+   * no grant for); the store is opened with the HOST's app id and the
+   * manifest's cap, so nothing a message says can pick another app's keys.
+   */
+  private async withStore(id: string, run: (store: DeviceStore) => Promise<void>): Promise<void> {
+    const grant = this.app.capabilities.deviceStore;
+    if (!grant?.allowed || grant.maxBytes === undefined) return this.fail(id, "not-allowed");
+    if (!this.storeBucket.take()) return this.fail(id, "rate-limited");
+    if (this.deviceStore === undefined) {
+      const open = this.options.openStore ?? openBrowserDeviceStore;
+      this.deviceStore = open(this.app.id, grant.maxBytes);
+    }
+    const store = this.deviceStore;
+    if (!store) return this.fail(id, "unavailable");
+    try {
+      await run(store);
+    } catch (error) {
+      this.fail(id, error instanceof DeviceStoreError ? mapStoreError(error.code) : "unavailable");
+    }
+  }
+
+  /**
+   * Runs one `sync.*` call. Only Locadora has account saves (the routes are its
+   * own), so any other app is `not-allowed` without a request leaving the
+   * page; for Locadora the session id is the HOST's (no message names one) and
+   * the server answers 404, read here as `not-allowed`, wherever the flag is off.
+   * A spectator has no game and no saves of its own: `not-allowed` too.
+   */
+  private async withSync(id: string, run: (sync: SaveSyncClient, sessionId: string) => Promise<void>): Promise<void> {
+    if (this.app.id !== LOCADORA_APP_ID) return this.fail(id, "not-allowed");
+    if (this.saveSync === undefined) {
+      this.saveSync = this.options.saveSync === undefined ? createSaveSync({ fetchImpl: this.options.fetchImpl }) : this.options.saveSync;
+    }
+    const sync = this.saveSync;
+    const sessionId = this.snapshot?.sessionId;
+    if (!sync || !sessionId || this.snapshot?.role !== "player") return this.fail(id, "not-allowed");
+    if (!this.syncBucket.take()) return this.fail(id, "rate-limited");
+    try {
+      await run(sync, sessionId);
+    } catch (error) {
+      if (!(error instanceof SaveSyncError)) {
+        this.log("a sync call failed", error);
+        return this.fail(id, "unavailable");
+      }
+      const codes: Record<SaveSyncError["code"], BridgeErrorCode> = {
+        off: "not-allowed",
+        stale: "stale-rev",
+        "too-large": "too-large",
+        "rate-limited": "rate-limited",
+        unavailable: "unavailable",
+      };
+      this.fail(id, codes[error.code]);
+    }
+  }
+
+  private saveLocal(id: string, bytes: ArrayBuffer, ext: string): void {
+    const files = this.app.capabilities.localFiles;
+    const listed = (APP_SAVE_LOCAL_EXTENSIONS as readonly string[]).includes(ext);
+    if (!files.allowed || files.maxBytes === undefined || !listed || !files.accept?.includes(ext)) {
+      return this.fail(id, "not-allowed");
+    }
+    if (bytes.byteLength === 0) return this.fail(id, "invalid");
+    if (bytes.byteLength > files.maxBytes) return this.fail(id, "too-large");
+    if (!this.saveBucket.take()) return this.fail(id, "rate-limited");
+    try {
+      (this.options.saveFile ?? ((file) => downloadSavedFile(file)))({ appId: this.app.id, bytes, ext });
+    } catch (error) {
+      this.log("files.saveLocal could not hand over the file", error);
+      return this.fail(id, "unavailable");
+    }
+    this.succeed(id, "files.saveLocal", null);
   }
 
   private async pickLocal(id: string): Promise<void> {

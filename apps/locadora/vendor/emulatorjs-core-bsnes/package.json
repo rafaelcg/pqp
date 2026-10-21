@@ -1,0 +1,35 @@
+{
+  "name": "@pqp-vendor/emulatorjs-core-bsnes",
+  "version": "2.0.3-pqp.20261020",
+  "private": true,
+  "license": "GPL-3.0-or-later AND ISC AND MIT AND LGPL-2.1-or-later",
+  "description": "The bsnes libretro core built for EmulatorJS, from source, with two fixes (source/). EmulatorJS has not published bsnes to npm, and its own nightly build cannot save or load a state or reset. Same shape as an @emulatorjs/core-* package so apps/locadora/prepare.mts reads it the same way.",
+  "pqpProvenance": {
+    "files": {
+      "bsnes-legacy-wasm.data": {
+        "sha256": "e33d34f7fd7113fba5281f246079aeb43a1227f0004939ed3218353c57f1de13",
+        "bytes": 1221951
+      },
+      "reports/bsnes.json": {
+        "sha256": "9b1a67c69802a96f9a217fe5e8fedf91b18294f0b5c6f687412bfef76c165d97"
+      },
+      "source/libco-emscripten-fiber.patch": {
+        "sha256": "423b31bc3a465fb4b7d3ad495da3857abaef1c150a8474c9a77d8bff60ff870f"
+      },
+      "source/retroarch-save-state-info.patch": {
+        "sha256": "ff5f2e0b7c63ca6e06a03f0d2c81d6c27c062e1e67bfbc68192aac1889a565ba"
+      }
+    },
+    "built": "2026-10-20T19:36:49Z to 2026-10-20T19:50:03Z, macOS arm64, emsdk 3.1.74, by source/build.sh",
+    "source": {
+      "core": "https://github.com/EmulatorJS/bsnes-libretro/tree/4b344745e3878e7c0675a60c624582935524b8f7",
+      "coreUpstream": "https://github.com/libretro/bsnes-libretro",
+      "frontendStaticallyLinked": "https://github.com/EmulatorJS/RetroArch/tree/d907a125ee76e02a21d89003c140fd0b72886e90",
+      "patches": [
+        "source/libco-emscripten-fiber.patch: adds co_derive and co_serializable to bsnes-libretro's libco/emscripten_fiber.c (without them a state save, a state load and a reset abort the runtime)",
+        "source/retroarch-save-state-info.patch: RetroArch's save_state_info returned a local array by address (a null pointer at -O3, so every save failed), and it serialised from inside the JavaScript call, where bsnes's fibers cannot switch; now the main loop makes the state at the top of its next tick and save_state_info answers pending until it is there"
+      ],
+      "recipe": "source/build.sh"
+    }
+  }
+}

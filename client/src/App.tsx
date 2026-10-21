@@ -251,6 +251,15 @@ import { useVoiceConfig } from "@/hooks/use-voice-config";
 import { useForumConfig } from "@/hooks/use-forum-config";
 import { useAppsSessionsSync } from "@/hooks/use-apps-sessions-sync";
 import { AppLauncher } from "@/components/apps/app-launcher";
+import { AppsHint } from "@/components/layout/apps-hint";
+import { isAppsHintSeen } from "@/lib/apps/apps-hint";
+import { useAppsConfig } from "@/hooks/use-apps-config";
+import { AppJoinHost } from "@/components/apps/app-join-host";
+import {
+  AppSessionLayout,
+  type AppSessionPeople,
+} from "@/components/apps/app-session-layout";
+import { appSessionWire, appWireLink } from "@/lib/apps/session-wire-instance";
 import {
   handleAppsFrame,
   noteAppsReconnected,
@@ -809,6 +818,8 @@ import { StoryStrip } from "@/components/stories/story-strip";
 import { emitStoriesRefresh, emitStoriesUpdate } from "@/lib/stories/events";
 import { openStoryComposer } from "@/lib/stories/ui-store";
 import { useStoriesEnabledFor } from "@/lib/stories/use-story-strip";
+import { EmulatorRoom } from "@/components/emulator/emulator-room";
+import { useEmulatorEnabledFor } from "@/lib/emulator/use-emulator-enabled";
 
 export type TokenResolver = (options?: {
   forceRefresh?: boolean;
@@ -1768,6 +1779,10 @@ function MainAppContent({
   // `onDismiss` below is: on localhost `lib/hints.ts` remembers no dismissal
   // on purpose, so this card wanted the corner on every load and the in-call
   // tips could not be drawn once.
+  // The apps card: only where the `apps` flag is on for the open server, once.
+  const [wantsAppsHint, setWantsAppsHint] = useState(
+    () => !isAutomatedBrowser() && !isAppsHintSeen(),
+  );
   const [wantsCargosHint, setWantsCargosHint] = useState(
     () => !isAutomatedBrowser() && !isCargosHintSeen(),
   );
@@ -2796,6 +2811,14 @@ function MainAppContent({
   const storiesOnHere = useStoriesEnabledFor(
     selectedServerId ? { kind: "server", serverId: selectedServerId } : null,
   );
+  // The emulator room (`emulator_room`, per server, default off): its menu
+  // entry exists only when the flag answered yes for the open server.
+  const emulatorOnHere = useEmulatorEnabledFor(selectedServerId);
+  const [emulatorRoomOpen, setEmulatorRoomOpen] = useState(false);
+  useEffect(() => {
+    // The room belongs to the server it was opened from.
+    setEmulatorRoomOpen(false);
+  }, [selectedServerId]);
   const serversRef = useRef(servers);
   serversRef.current = servers;
   // The server rail's order (`PUT /api/servers/order`). `railOriginRef` is this
@@ -6145,12 +6168,10 @@ function MainAppContent({
 
           // Apps in channels (behind the per-server `apps` flag): a channel's
           // live summary, and a session's snapshot, state, events, end and
-          // refusals. The store takes every one of them (it ignores `app-state`
-          // and `app-event`, which nothing draws yet), and they are chat
-          // frames, not voice ones, so they stop here rather than reach the
-          // voice controller. The store sees the frame BEFORE the return:
-          // `app-session` and `app-error` are what end a join, and a frame
-          // swallowed ahead of the store leaves every join to time out.
+          // refusals. They are chat frames, not voice ones, so they stop here
+          // rather than reach the voice controller. The session wire hears the
+          // per-session ones first (the seat this tab holds), then the live
+          // store, which keeps the summaries the card and the strip draw.
           if (
             message.type === "channel-app" ||
             message.type === "app-ended" ||
@@ -6159,6 +6180,7 @@ function MainAppContent({
             message.type === "app-event" ||
             message.type === "app-error"
           ) {
+            appSessionWire.dispatch(message);
             handleAppsFrame(message);
             return;
           }
@@ -6182,6 +6204,7 @@ function MainAppContent({
         transport.onStatusChange((status) => {
           setConnection(status);
           setAppsOnline(status === "online");
+          appSessionWire.setOnline(status === "online");
           if (status === "online") {
             setAppError(null);
           }
@@ -6226,6 +6249,10 @@ function MainAppContent({
           // Apps: a `channel-app` sent while we were away is gone, so the open
           // server's live sessions are re-read (jittered, in the sync hook).
           noteAppsReconnected();
+          // The seat this tab held in an app is asked for again (the server
+          // keeps a dropped seat for 90 s and the same account takes it back).
+          appSessionWire.setOnline(true);
+          appSessionWire.resume();
           // --- threads --- the secondary slot re-announces itself the same
           // way; the panel's window is refreshed by its next open.
           threadChat.resubscribe();
@@ -8467,6 +8494,7 @@ function MainAppContent({
   // join leaves the page (`app-join` over the socket until the join sheet and
   // the pane take it over).
   useAppsSessionsSync(selectedServerId, channels);
+  const appsHere = useAppsConfig(selectedServerId);
   useEffect(() => {
     setAppsViewer(user?.id ?? null);
   }, [user?.id]);
@@ -8497,6 +8525,37 @@ function MainAppContent({
       }),
     [transport],
   );
+  // The session wire (`lib/apps/session-wire.ts`) puts an app's join, leave,
+  // state and events on this socket. Frames are never queued while the socket
+  // is down: a join that waited in a queue would be a stale seat on return,
+  // and the wire resumes seats itself when the link comes back.
+  useEffect(() => {
+    appWireLink.current = {
+      send: (frame) => {
+        if (!transport.isConnected()) {
+          return false;
+        }
+        transport.sendChat(frame as unknown as Parameters<typeof transport.sendChat>[0]);
+        return true;
+      },
+    };
+    return () => {
+      appWireLink.current = null;
+      appSessionWire.reset();
+    };
+  }, [transport]);
+  // Names and pictures for the people an app shows (the strip, its roster).
+  const appPeople = useMemo(() => {
+    const map = new Map<string, AppSessionPeople>();
+    for (const member of serverMembers) {
+      map.set(member.id, {
+        displayName: member.nickname || member.displayName,
+        username: member.username ?? null,
+        avatarUrl: member.avatarUrl,
+      });
+    }
+    return map;
+  }, [serverMembers]);
   const [audienceBusy, setAudienceBusy] = useState(false);
   // Tied to the call and the session it answered for, so a warning from one
   // call is never drawn over the next one.
@@ -11432,6 +11491,16 @@ function MainAppContent({
         seasonalLookOffer !== null && qgHintReady && !campaignsYield,
       mobileBeta: wantsMobileBeta && !campaignsYield,
       whatsNew: wantsWhatsNew && !campaignsYield,
+      // News about a button in the composer: only where the platform is on for
+      // the server being looked at, in a channel that has the button.
+      appsNews:
+        wantsAppsHint &&
+        appsHere.enabled &&
+        appsHere.apps.length > 0 &&
+        selectedChannel?.kind === "server" &&
+        (selectedChannel.type === "text" || selectedChannel.type === "voice") &&
+        qgHintReady &&
+        !campaignsYield,
       cargos:
         wantsCargosHint &&
         qgHintReady &&
@@ -12371,6 +12440,44 @@ function MainAppContent({
           }}
         />
       )}
+      <AppJoinHost
+        serverId={selectedServerId}
+        viewerId={user?.id ?? null}
+        people={appPeople}
+      />
+      <AppSessionLayout
+        serverId={selectedServerId}
+        channelId={
+          selectedChannel.kind === "server" ? selectedChannel.id : null
+        }
+        channelType={selectedChannel.kind === "server" ? selectedChannel.type : "dm"}
+        viewerId={user?.id ?? null}
+        canModerate={
+          selectedChannel.kind === "server" &&
+          perms.can(Permission.MANAGE_CHANNELS, selectedChannel.id)
+        }
+        people={appPeople}
+        voice={{
+          inCall:
+            voiceState.voiceChannelId === selectedChannel.id &&
+            voiceState.status === "connected",
+          sharing:
+            voiceState.voiceChannelId === selectedChannel.id &&
+            voiceState.isSharingScreen,
+          others: Math.max(
+            0,
+            (voiceState.occupancy[selectedChannel.id] ?? []).length - 1,
+          ),
+          // The same share every other button starts, steered at a tab when
+          // there is no picture to hand over (the page cannot crop there).
+          startShare: (stream) =>
+            startScreenShareGated(
+              false,
+              stream ? { stream, maxFrameRate: 30 } : { preferBrowserTab: true },
+            ),
+          stopShare: () => void voice.stopScreenShare(),
+        }}
+      >
       <CallDockProvider
         viewingChannelId={selectedChannel.id}
         onOccupiedChange={setCallDockOnScreen}
@@ -13064,6 +13171,7 @@ function MainAppContent({
       </div>
       </CallSplit>
       </CallDockProvider>
+      </AppSessionLayout>
     </FileDropZone>
   ) : null;
 
@@ -13699,6 +13807,11 @@ function MainAppContent({
                 me={storiesSelf}
               />
             ) : null
+          }
+          onOpenEmulator={
+            selectedServer && emulatorOnHere
+              ? () => setEmulatorRoomOpen(true)
+              : undefined
           }
           onPostStory={
             selectedServer && storiesOnHere && perms.can(Permission.POST_STORIES)
@@ -14524,6 +14637,14 @@ function MainAppContent({
         }}
       />
 
+      {selectedServerId && (
+        <EmulatorRoom
+          serverId={selectedServerId}
+          open={emulatorRoomOpen}
+          onClose={() => setEmulatorRoomOpen(false)}
+        />
+      )}
+
       <ForwardPicker
         open={forwardSource !== null}
         source={forwardSource}
@@ -14784,6 +14905,10 @@ function MainAppContent({
         look={seasonalLookOffer}
         enabled={effectiveCornerHint === "seasonalLook"}
         onDismiss={dismissSeasonalLook}
+      />
+      <AppsHint
+        enabled={effectiveCornerHint === "appsNews"}
+        onDismiss={() => setWantsAppsHint(false)}
       />
       <CargosHint
         enabled={effectiveCornerHint === "cargos"}

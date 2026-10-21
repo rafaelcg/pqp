@@ -256,7 +256,7 @@ describe("estados 8 e 9: o registro quieto", () => {
   });
 
   it("an app that is not a game says took part", () => {
-    mount(endedModel({ app: { id: "x", name: "Enquete", icon: "poll", category: "tool" } }));
+    mount(endedModel({ app: { id: "x", name: "Quadro", icon: "sparkles", category: "tool" } }));
     expect(text()).toContain("4 took part for 23 min");
   });
 });

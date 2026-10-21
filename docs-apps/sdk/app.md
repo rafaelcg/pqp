@@ -24,6 +24,14 @@ interface PqpApp {
   };
   readonly files: {
     pickLocal(): Promise<PickedFile | null>;
+    saveLocal(bytes: ArrayBuffer | ArrayBufferView, ext: string): Promise<null>;
+  };
+  readonly store: {
+    get(key: string): Promise<StoredValue | null>;
+    put(key: string, bytes: ArrayBuffer | ArrayBufferView, meta?: JsonValue): Promise<StoreUsage>;
+    delete(key: string): Promise<null>;
+    list(prefix?: string): Promise<StoreEntry[]>;
+    usage(): Promise<StoreUsage>;
   };
   readonly ui: {
     resize(height: number): Promise<number>;
@@ -171,6 +179,30 @@ interface PickedFile { bytes: ArrayBuffer; ext: string }
 Opens pqp's own file picker. Resolves to `null` if the person cancels, otherwise `{ bytes, ext }`: the file's contents, and its extension lower-cased with its dot (`.gba`), taken from your manifest's `accept` list. **The file name never reaches the app** and nothing is uploaded.
 
 Needs `capabilities.localFiles` in the manifest, with `accept` and `maxBytes`. Rejects with `not-allowed` (not declared, or a file of another type), `too-large`, `rate-limited` (a picker is already open), `ended`.
+
+```ts
+files.saveLocal(bytes: ArrayBuffer | ArrayBufferView, ext: string): Promise<null>
+```
+
+Hands the person a file to keep: pqp triggers the download and names it. `ext` has its dot and must be one the platform allows for saving (today `.locadora`) and one of your manifest's `localFiles.accept`. Rejects with `not-allowed` otherwise, `too-large` past the manifest's cap.
+
+## store {#store}
+
+```ts
+store.get(key: string): Promise<StoredValue | null>
+store.put(key: string, bytes: ArrayBuffer | ArrayBufferView, meta?: JsonValue): Promise<StoreUsage>
+store.delete(key: string): Promise<null>
+store.list(prefix?: string): Promise<StoreEntry[]>
+store.usage(): Promise<StoreUsage>
+
+interface StoredValue { bytes: ArrayBuffer; meta: JsonValue }
+interface StoreEntry { key: string; size: number; meta: JsonValue; updatedAt: number }
+interface StoreUsage { used: number; cap: number; persisted: boolean }
+```
+
+Named blobs kept on the person's own device, per app id: no other app sees them and pqp never reads or sends them. Keys use `a-z 0-9 : . _ -`, 1 to 128 characters. `put` copies your bytes and accepts up to 2048 bytes of JSON `meta`; `list` returns at most 500 entries, with no bytes.
+
+Needs `capabilities.deviceStore` in the manifest. Every call rejects with `not-allowed` when it is not declared and with `invalid` on a page that predates it, so keep the data in memory and carry on. `put` rejects with `too-large` past the manifest's cap.
 
 ## ui {#ui}
 

@@ -28,6 +28,8 @@ import { hintDietHides } from "./hint-diet";
  *     window, so it goes before the year-round campaigns (`lib/seasonal-looks.ts`)
  *  7. mobileBeta — phone browsers only; the campaign for the native apps
  *  8. whatsNew — Novidades now lives on the rail
+ *  8b. appsNews — "Novo: apps no canal", once, only where the `apps` flag is on
+ *     for the open server (`lib/apps/apps-hint.ts`)
  *  9. cargos — staff who can manage roles
  * 10. shortcuts — Cmd+/ map; last, and skipped while an attached feature
  *     hint is up (see `lib/feature-hints.ts`)
@@ -41,6 +43,7 @@ export const CORNER_HINT_ORDER = [
   "seasonalLook",
   "mobileBeta",
   "whatsNew",
+  "appsNews",
   "cargos",
   "shortcuts",
 ] as const;

@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Locadora</title>
+    <!-- the generated half of the bundle (apps/locadora/prepare.mts): plain scripts, so the packager gives them SRI -->
+    <script src="/ejs/core-sri.js"></script>
+    <script src="/ejs/emulator.min.js"></script>
+  </head>
+  <body>
+    <main class="loc" id="loc" data-view="connecting">
+      <!-- the Balcão's room: the inside of the shop (src/art/shop-interior.webp), its lights alive; scenery only (shelf.css) -->
+      <div class="loc-backdrop" aria-hidden="true">
+        <div class="loc-backdrop-scene">
+          <i class="loc-glow" data-glow="neon"></i>
+          <i class="loc-glow" data-glow="tv"></i>
+          <i class="loc-glow" data-glow="bulb-1"></i>
+          <i class="loc-glow" data-glow="bulb-2"></i>
+          <i class="loc-glow" data-glow="bulb-3"></i>
+          <i class="loc-glow" data-glow="lamp"></i>
+          <i class="loc-glow" data-glow="dusk"></i>
+        </div>
+      </div>
+      <!-- the neon sign of the shelf draws itself; this heading is for the screens that have none (a watcher, the dead ends) -->
+      <header class="loc-head">
+        <h1 class="loc-title" id="title">Locadora</h1>
+      </header>
+      <p class="loc-status" id="status" role="status"></p>
+
+      <!-- the Balcão (SPEC 4.1): the top bar, Continuar, Regras da casa and the shelf are drawn here by src/main.ts -->
+      <section class="loc-shelf" id="v-shelf" aria-label="Locadora" hidden></section>
+
+      <!-- the first-visit walkthrough (SPEC 4.2) and, over a game, the controller map -->
+      <section class="loc-onboarding" id="v-onboarding" aria-label="Locadora" hidden></section>
+
+      <!-- between the pick and the first frame of the console: the file is being read (SPEC 4.3) -->
+      <section class="loc-loading" id="v-loading" hidden>
+        <p class="loc-load-status" id="loading" role="status"></p>
+      </section>
+
+      <section class="loc-play" id="v-play" hidden>
+        <div class="loc-stage" id="stage"><div class="loc-game" id="game" tabindex="-1"></div></div>
+      </section>
+
+      <section class="loc-watch" id="v-watch" aria-labelledby="watching-title" hidden>
+        <!-- scenery: a TV on the shop's counter, the screen a soft glow with scan lines -->
+        <div class="loc-watch-tv" aria-hidden="true"><span class="loc-watch-screen"></span><span class="loc-watch-dot"></span></div>
+        <h2 class="loc-watch-title" id="watching-title"></h2>
+        <p class="loc-lead" id="watching-line"></p>
+        <p class="loc-muted" id="watching-how"></p>
+      </section>
+
+      <p class="loc-sharing" id="sharing" role="status" hidden></p>
+
+      <div class="loc-bar" id="bar" hidden>
+        <button class="loc-button loc-button-quiet" id="share" type="button" aria-pressed="false" hidden></button>
+      </div>
+
+      <!-- the third-party notices, a dialog over whichever screen is up -->
+      <section class="loc-notices" id="notices" role="dialog" aria-modal="true" aria-labelledby="notices-title" hidden>
+        <div class="loc-notices-card">
+          <header class="loc-notices-head">
+            <h2 class="loc-notices-title" id="notices-title"></h2>
+            <button class="loc-button loc-button-quiet" id="notices-close" type="button"></button>
+          </header>
+          <p class="loc-muted" id="notices-intro"></p>
+          <pre class="loc-notices-text" id="notices-text" tabindex="0"></pre>
+        </div>
+      </section>
+
+      <p class="loc-ended" id="ended" role="status" hidden></p>
+    </main>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

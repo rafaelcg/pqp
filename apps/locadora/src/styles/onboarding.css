@@ -1,0 +1,1678 @@
+/*
+ * onboarding.css: the first visit, the controller map (mock 2) and the cartridge going into its slot.
+ * Built on the tokens and the page grid of base.css; imported from main.ts.
+ *
+ * The pictures are the pixel art in src/art (street-dusk, shop-interior, neon-sign, pad-*, cart-*),
+ * referenced from here so the frame's CSP (img-src 'self') serves them from the bundle. Nothing here draws an
+ * object: what CSS adds over the art is layout, type, lines, glows, scrims and motion.
+ *
+ * The panel sits on the room, so its text uses the host chrome tokens and follows a light pqp theme; the art
+ * stages are the room at night and stay dark in every theme, with the fixed house neon for the sign, the
+ * listening ring and the "gamepad found" glow. Spacing is on an 8 px grid.
+ *
+ * Motion: the sign's power-on flicker (two dips, never three changes in a second), the street's slow lights,
+ * the panel's rise, the cartridge loop and the listening ring's pulse. All of it is gone under
+ * prefers-reduced-motion and under hello.reducedMotion (data-reduced-motion): what is left is the finished
+ * picture, the sign lit, the cartridge in its slot with the light on, and the ring as a still pink outline.
+ */
+
+/* ---- the art ---- */
+
+.loc-onboarding {
+  --onb-street: url("../art/street-dusk.webp");
+  --onb-shop: url("../art/shop-interior.webp");
+}
+
+/* the room under the panel: one screen, the panel in the middle of it, never pushed off the top of a short pane */
+.loc-onboarding {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  justify-items: center;
+  align-items: safe center;
+  overflow: auto;
+  margin-block: 8px 16px;
+  background:
+    radial-gradient(70% 60% at 50% 30%, rgba(255, 95, 200, 0.07), transparent 70%),
+    var(--loc-wall);
+}
+
+.loc-onb-panel {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  width: min(1480px, 100%);
+  /* the panel takes the pane's height (up to a point), and its step fills what the header and foot leave */
+  min-height: min(100%, 920px);
+  color: var(--loc-text);
+  background: var(--loc-card);
+  border: 1px solid var(--loc-border-strong);
+  border-radius: var(--loc-panel);
+  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 95, 200, 0.08);
+  overflow: hidden;
+  animation: loc-onb-rise var(--loc-slow) var(--loc-ease-out) backwards;
+}
+
+@keyframes loc-onb-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.99);
+  }
+}
+
+/* ---- the rail ---- */
+
+.loc-onb-side {
+  display: grid;
+  grid-template-rows: auto auto auto 1fr auto;
+  gap: 16px;
+  padding: 24px;
+  color: var(--loc-wall-text);
+  background:
+    radial-gradient(120% 50% at 50% 0%, rgba(255, 95, 200, 0.14), transparent 70%),
+    radial-gradient(90% 40% at 50% 100%, rgba(95, 242, 255, 0.06), transparent 70%),
+    #12141b;
+  border-right: 1px solid var(--loc-border);
+}
+
+/* the sign: neon-sign.webp, and the house name lit inside its cyan frame (the box is in perspective, so is the name) */
+.loc-onb-sign {
+  container: onbsign / inline-size;
+  position: relative;
+  aspect-ratio: 640 / 446;
+  margin: -8px -8px 0;
+  background: url("../art/neon-sign.webp") center / 100% 100% no-repeat;
+  filter: drop-shadow(0 8px 16px rgba(0, 0, 0, 0.5));
+}
+
+.loc-onb-neon {
+  position: absolute;
+  left: 31%;
+  top: 21%;
+  width: 60%;
+  height: 44%;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  color: #ffe9f7;
+  font-family: var(--loc-font-sign);
+  font-size: 7.2cqw;
+  line-height: 1;
+  letter-spacing: 0.03em;
+  text-shadow:
+    0 0 2px #fff,
+    0 0 6px var(--loc-neon-pink),
+    0 0 14px var(--loc-neon-pink),
+    0 0 28px rgba(255, 95, 200, 0.6);
+  transform: perspective(240px) rotateY(-9deg) skewY(2deg);
+  animation: loc-onb-flick 1.2s steps(1) 1 backwards;
+}
+
+/* two dips only, well under three flashes a second: never a strobe */
+@keyframes loc-onb-flick {
+  0% {
+    opacity: 0.25;
+  }
+  18% {
+    opacity: 1;
+  }
+  30% {
+    opacity: 0.5;
+  }
+  42% {
+    opacity: 1;
+  }
+}
+
+.loc-onb-open {
+  color: var(--loc-neon-cyan);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0.3em;
+  text-align: center;
+  text-shadow: 0 0 8px rgba(95, 242, 255, 0.6);
+}
+
+.loc-onb-steps {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.loc-onb-steps li {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  padding: 8px;
+  color: var(--loc-wall-text-3);
+  border: 1px solid transparent;
+  border-radius: 12px;
+}
+
+.loc-onb-steps b {
+  display: block;
+  font-size: 14px;
+}
+
+.loc-onb-steps small {
+  font-size: 12px;
+}
+
+.loc-onb-n {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  font-size: 13px;
+  font-weight: 800;
+  border: 1.5px solid var(--loc-border-strong);
+  border-radius: 50%;
+}
+
+.loc-onb-steps li.is-done {
+  color: var(--loc-wall-text-2);
+}
+
+.loc-onb-steps li.is-done .loc-onb-n {
+  color: var(--loc-wall-accent);
+  background: rgba(200, 245, 90, 0.14);
+  border-color: rgba(200, 245, 90, 0.6);
+}
+
+.loc-onb-steps li[aria-current="step"] {
+  color: var(--loc-wall-text);
+  background: linear-gradient(90deg, rgba(255, 95, 200, 0.12), rgba(255, 95, 200, 0.02)), #1b1e27;
+  border-color: rgba(255, 95, 200, 0.28);
+}
+
+.loc-onb-steps li[aria-current="step"] .loc-onb-n {
+  color: var(--loc-wall-on-accent);
+  background: var(--loc-wall-accent);
+  border-color: var(--loc-wall-accent);
+  box-shadow: 0 0 12px rgba(200, 245, 90, 0.35);
+}
+
+/* the wall under the steps: a rack of tapes (rack.webp), as big as the room left, gone when there is none */
+.loc-onb-rack {
+  min-height: 0;
+  background: url("../art/rack.webp") center / contain no-repeat;
+  filter: drop-shadow(0 12px 16px rgba(0, 0, 0, 0.55)) brightness(0.92);
+  opacity: 0.9;
+}
+
+.loc-onb-once {
+  margin: 0;
+  color: var(--loc-wall-text-3);
+  font-size: 12px;
+}
+
+/* ---- the main column ---- */
+
+.loc-onb-main {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  gap: 16px;
+  min-width: 0;
+  padding: 24px 32px;
+}
+
+.loc-onb-eyebrow {
+  color: var(--loc-warning-text);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.loc-onb-title {
+  margin: 8px 0;
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+/* the title takes focus from code (tabindex -1) when a step opens, so a screen reader starts at it; it is not a control, and a ring on a block heading would be the panel's full width */
+.loc-onb-title:focus,
+.loc-onb-title:focus-visible {
+  outline: none;
+}
+
+.loc-onb-lead {
+  max-width: 64ch;
+  margin: 0;
+  color: var(--loc-text-2);
+}
+
+.loc-onb-content {
+  display: grid;
+  align-content: stretch;
+}
+
+/* every step draws on a stage of its own: one dark picture that takes the height the step leaves */
+.loc-onb-hero,
+.loc-onb-pick,
+.loc-onb-stage {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  color: var(--loc-wall-text);
+  background: #0e1016;
+  border: 1px solid var(--loc-border);
+  border-radius: 16px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.loc-onb-hero {
+  min-height: 320px;
+}
+
+/* a picture laid over a stage it covers (the shop, out of focus, under the console) */
+.loc-onb-backdrop {
+  position: absolute;
+  inset: -16px;
+  z-index: -1;
+  background: var(--onb-shop) center / cover no-repeat;
+}
+
+/* ---- step 1: the street at dusk, the shop's lights on ---- */
+
+.loc-onb-hero {
+  container: onbhero / size;
+}
+
+/*
+ * The scene keeps the picture's own proportions and covers the stage, its focus on the shop's door: the sign and
+ * the window stay in view however the stage is cut. Every light inside it is placed in the picture's percentages.
+ */
+.loc-onb-scene {
+  --sw: max(100cqw, 100cqh * 1376 / 768);
+  --sh: calc(var(--sw) * 768 / 1376);
+  position: absolute;
+  left: clamp(100cqw - var(--sw), 50cqw - var(--sw) * 0.74, 0px);
+  top: clamp(100cqh - var(--sh), 50cqh - var(--sh) * 0.5, 0px);
+  width: var(--sw);
+  height: var(--sh);
+  background: var(--onb-street) center / 100% 100% no-repeat;
+}
+
+/* a light: by default a lit copy of the picture's own pixels over its rectangle (--l --t --w --h, in %) */
+.loc-onb-fx {
+  position: absolute;
+  left: calc(var(--l) * 1%);
+  top: calc(var(--t) * 1%);
+  width: calc(var(--w) * 1%);
+  height: calc(var(--h) * 1%);
+  background-image: var(--onb-street);
+  background-repeat: no-repeat;
+  background-size: calc(10000% / var(--w)) calc(10000% / var(--h));
+  background-position: calc(var(--l) * 100% / (100 - var(--w))) calc(var(--t) * 100% / (100 - var(--h)));
+  pointer-events: none;
+}
+
+/* the sign's tubes, brighter: it powers on (two dips), then hums */
+.loc-onb-fx-sign {
+  --l: 68.2;
+  --t: 30.3;
+  --w: 23.7;
+  --h: 11.5;
+  filter: brightness(1.45) saturate(1.35);
+  opacity: 0.85;
+  animation:
+    loc-onb-flick 1.2s steps(1) 1 backwards,
+    loc-onb-hum 3.6s ease-in-out 1.2s infinite alternate;
+}
+
+@keyframes loc-onb-hum {
+  from {
+    opacity: 0.85;
+  }
+  to {
+    opacity: 0.55;
+  }
+}
+
+/* the light the sign throws on the wall around it */
+.loc-onb-fx-halo {
+  --l: 62;
+  --t: 20;
+  --w: 36;
+  --h: 32;
+  background: radial-gradient(closest-side, rgba(255, 95, 200, 0.34), rgba(95, 242, 255, 0.08) 60%, transparent);
+  mix-blend-mode: screen;
+  animation:
+    loc-onb-flick 1.2s steps(1) 1 backwards,
+    loc-onb-glow 3.6s ease-in-out 1.2s infinite alternate;
+}
+
+@keyframes loc-onb-glow {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0.6;
+  }
+}
+
+/* the TV in the window, playing: a soft, slow flicker (never more than one change in a second) */
+.loc-onb-fx-tv {
+  --l: 67.2;
+  --t: 62.6;
+  --w: 9.4;
+  --h: 11.6;
+  background: radial-gradient(closest-side, rgba(150, 230, 255, 0.55), rgba(95, 242, 255, 0.16) 55%, transparent);
+  mix-blend-mode: screen;
+  animation: loc-onb-tv 2.8s ease-in-out infinite;
+}
+
+@keyframes loc-onb-tv {
+  0%,
+  100% {
+    opacity: 0.75;
+  }
+  35% {
+    opacity: 0.45;
+  }
+  60% {
+    opacity: 0.9;
+  }
+}
+
+/* the street lamp's head, and the warm light out of the door on the pavement */
+.loc-onb-fx-lamp {
+  --l: 22;
+  --t: 22;
+  --w: 9;
+  --h: 14;
+  background: radial-gradient(closest-side, rgba(255, 214, 140, 0.55), rgba(255, 194, 74, 0.12) 55%, transparent);
+  mix-blend-mode: screen;
+  animation: loc-onb-glow 5s ease-in-out infinite alternate;
+}
+
+.loc-onb-fx-spill {
+  --l: 64;
+  --t: 78;
+  --w: 34;
+  --h: 16;
+  background: radial-gradient(closest-side, rgba(255, 196, 150, 0.3), transparent);
+  mix-blend-mode: screen;
+  animation: loc-onb-glow 4.4s ease-in-out 0.8s infinite alternate;
+}
+
+/* three stars over the hill, each on its own slow beat */
+.loc-onb-fx-star1,
+.loc-onb-fx-star2,
+.loc-onb-fx-star3 {
+  --w: 0.6;
+  --h: 1.1;
+  background: radial-gradient(closest-side, #fff, rgba(255, 255, 255, 0));
+  animation: loc-onb-twinkle 3.2s ease-in-out infinite alternate;
+}
+
+.loc-onb-fx-star1 {
+  --l: 25.5;
+  --t: 1.8;
+}
+
+.loc-onb-fx-star2 {
+  --l: 52;
+  --t: 4.4;
+  animation-delay: 1.1s;
+}
+
+.loc-onb-fx-star3 {
+  --l: 38.6;
+  --t: 9.6;
+  animation-delay: 2.3s;
+}
+
+@keyframes loc-onb-twinkle {
+  from {
+    opacity: 0.15;
+  }
+  to {
+    opacity: 0.9;
+  }
+}
+
+/* ---- the map: tabs, the controller, the bar (the second screen, and Controles on its own) ---- */
+
+.loc-onb-controls {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 16px;
+  min-width: 0;
+}
+
+.loc-onb-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.loc-onb-tab {
+  height: 36px;
+  padding: 0 16px;
+  color: var(--loc-text-2);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  background: transparent;
+  border: 1px solid var(--loc-border-strong);
+  border-radius: var(--loc-pill);
+  cursor: pointer;
+}
+
+.loc-onb-tab[aria-selected="true"] {
+  color: var(--loc-bg);
+  background: var(--loc-text);
+  border-color: var(--loc-text);
+}
+
+.loc-onb-pad {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  margin-left: auto;
+  padding: 8px 12px;
+  color: var(--loc-text-2);
+  font-size: 13px;
+  background: rgba(95, 242, 255, 0.08);
+  border: 1px solid rgba(95, 242, 255, 0.3);
+  border-radius: var(--loc-pill);
+}
+
+.loc-onb-dot {
+  width: 8px;
+  height: 8px;
+  background: var(--loc-neon-cyan);
+  border-radius: 50%;
+  box-shadow: 0 0 8px var(--loc-neon-cyan);
+}
+
+/* the stage: the console on a dark floor, a soft pink and cyan light behind it, the bar under it */
+.loc-onb-stage {
+  display: grid;
+  grid-template-rows: 1fr auto;
+  justify-items: center;
+  gap: 8px;
+  padding: 8px 8px 16px;
+  background:
+    radial-gradient(50% 55% at 38% 46%, rgba(255, 95, 200, 0.14), transparent 70%),
+    radial-gradient(45% 50% at 64% 40%, rgba(95, 242, 255, 0.1), transparent 70%),
+    radial-gradient(60% 18% at 50% 92%, rgba(0, 0, 0, 0.5), transparent 75%),
+    #0e1016;
+}
+
+.loc-onb-mapbox {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  min-width: 0;
+}
+
+/* a wide panel: the map is as big as the room the step leaves it, in its own proportions (720 x 440) */
+@container loc (min-width: 761px) {
+  .loc-onb-mapbox {
+    container: onbmap / size;
+    /* never so short that the chips give way to the phone list: 600 px wide is the least they need */
+    min-height: 368px;
+  }
+  .loc-onb-mapbox .loc-padmap {
+    width: min(100cqw, max(600px, 100cqh * 720 / 440), 980px);
+  }
+}
+
+.loc-padmap {
+  container: padmap / inline-size;
+  width: 100%;
+  max-width: 980px;
+}
+
+/* the picture and its chips share one box in its proportions (720 x 440), so a chip's --x / --y is a point on it */
+.loc-padart {
+  position: relative;
+  aspect-ratio: 720 / 440;
+}
+
+/* the console's picture, at its measured place in the box (--px --py --pw --ph, in box units) */
+.loc-pad-pic {
+  position: absolute;
+  left: calc(var(--px) * 100% / 720);
+  top: calc(var(--py) * 100% / 440);
+  width: calc(var(--pw) * 100% / 720);
+  height: calc(var(--ph) * 100% / 440);
+  background: center / 100% 100% no-repeat;
+  filter: drop-shadow(0 16px 20px rgba(0, 0, 0, 0.6)) drop-shadow(0 0 32px rgba(255, 95, 200, 0.12));
+  pointer-events: none;
+}
+
+.loc-padmap[data-p="nes"] {
+  --pad-art: url("../art/pad-nes.webp");
+}
+
+.loc-padmap[data-p="snes"] {
+  --pad-art: url("../art/pad-snes.webp");
+}
+
+.loc-padmap[data-p="gb"] {
+  --pad-art: url("../art/pad-gb.webp");
+}
+
+.loc-padmap[data-p="gba"] {
+  --pad-art: url("../art/pad-gba.webp");
+}
+
+.loc-pad-pic,
+.loc-padlist-glyph {
+  background-image: var(--pad-art);
+}
+
+.loc-pad {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+/* ---- the hotspots over the buttons ---- */
+
+.loc-pad-ctl {
+  cursor: pointer;
+}
+
+.loc-pad-lit,
+.loc-pad-halo {
+  fill: transparent;
+  stroke: transparent;
+  vector-effect: non-scaling-stroke;
+  transition:
+    fill var(--loc-fast) var(--loc-ease),
+    stroke var(--loc-fast) var(--loc-ease);
+}
+
+/* only the button itself answers the pointer; the outline around it is a picture of the answer */
+.loc-pad-halo {
+  pointer-events: none;
+}
+
+/* hover or focus on a button or on its chip rings the button */
+.loc-pad-ctl.is-hot .loc-pad-halo {
+  fill: rgba(200, 245, 90, 0.1);
+  stroke: var(--loc-wall-accent);
+  stroke-width: 2.5;
+  filter: drop-shadow(0 0 4px rgba(200, 245, 90, 0.6));
+}
+
+/* while it listens, the ring says so; the hover outline would only muddy it */
+.loc-pad-ctl.is-listening .loc-pad-halo {
+  fill: transparent;
+  stroke: transparent;
+  filter: none;
+}
+
+/* the button (or the d-pad's direction) being listened for */
+.loc-pad-lit.is-live {
+  fill: rgba(255, 95, 200, 0.28);
+}
+
+/* a gamepad button held: it lights up in the cyan of "found" */
+.loc-pad-ctl .loc-pad-lit.is-glowing {
+  fill: rgba(95, 242, 255, 0.45);
+  stroke: var(--loc-neon-cyan);
+  stroke-width: 2;
+  filter: drop-shadow(0 0 6px rgba(95, 242, 255, 0.9));
+}
+
+/* the listening ring: a still outline and, over it, a pulse that widens and fades */
+.loc-pad-ringlayer,
+.loc-pad-leaders {
+  pointer-events: none;
+}
+
+.loc-pad-ring-still {
+  fill: none;
+  stroke: var(--loc-neon-pink);
+  stroke-width: 3;
+  vector-effect: non-scaling-stroke;
+  filter: drop-shadow(0 0 6px rgba(255, 95, 200, 0.9));
+}
+
+.loc-pad-ring {
+  fill: none;
+  stroke: var(--loc-neon-pink);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+  animation: loc-onb-pulse 1.4s var(--loc-ease) infinite;
+}
+
+@keyframes loc-onb-pulse {
+  0% {
+    stroke-width: 2;
+    stroke-opacity: 0.9;
+  }
+  100% {
+    stroke-width: 18;
+    stroke-opacity: 0;
+  }
+}
+
+/* a leader: a light core in a dark casing, so it reads on a light shell and on the dark stage alike */
+.loc-pad-leader path {
+  fill: none;
+  stroke: #f0ede4;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+  filter: drop-shadow(0 0 1px #0b0d12) drop-shadow(0 0 1px #0b0d12);
+}
+
+.loc-pad-leader circle {
+  fill: #f0ede4;
+  stroke: #0b0d12;
+  stroke-width: 1.4;
+}
+
+.loc-pad-leader.is-hot path {
+  stroke: var(--loc-wall-accent);
+}
+
+.loc-pad-leader.is-hot circle {
+  fill: var(--loc-wall-accent);
+}
+
+.loc-pad-leader.is-listening path {
+  stroke: var(--loc-neon-pink);
+}
+
+.loc-pad-leader.is-listening circle {
+  fill: var(--loc-neon-pink);
+}
+
+/* ---- the chips: a tag with the key on a keycap, anchored by the edge that faces its control ---- */
+
+.loc-pad-callout {
+  position: absolute;
+  left: calc(var(--x) * 100% / 720);
+  top: calc(var(--y) * 100% / 440);
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  min-height: 28px;
+  margin: 0;
+  padding: 3px;
+  color: var(--loc-wall-text);
+  font: 700 13px/1 var(--loc-font);
+  white-space: nowrap;
+  background: #181b22;
+  border: 1px solid #4a5263;
+  border-radius: 8px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 6px 14px rgba(0, 0, 0, 0.45);
+  cursor: pointer;
+  transition:
+    border-color var(--loc-fast) var(--loc-ease),
+    background-color var(--loc-fast) var(--loc-ease);
+}
+
+.loc-pad-callout[data-anchor="l"] {
+  transform: translate(-100%, -50%);
+}
+
+.loc-pad-callout[data-anchor="r"] {
+  transform: translate(0, -50%);
+}
+
+.loc-pad-callout[data-anchor="tl"] {
+  transform: translate(-100%, -100%);
+}
+
+.loc-pad-callout[data-anchor="tr"] {
+  transform: translate(0, -100%);
+}
+
+.loc-pad-callout[data-anchor="bl"] {
+  transform: translate(-100%, 0);
+}
+
+.loc-pad-what {
+  padding-inline: 5px 0;
+  color: var(--loc-wall-text-2);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.loc-pad-key,
+.loc-pad-cluster-key {
+  display: inline-grid;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  color: var(--loc-wall-text);
+  font: 700 13px/1 var(--loc-font);
+  background: linear-gradient(#343a47, #252a34);
+  border: 1px solid #5d667a;
+  border-bottom-width: 2px;
+  border-radius: 5px;
+}
+
+.loc-pad-cluster {
+  display: grid;
+  grid-template-areas:
+    ". up ."
+    "left down right";
+  gap: 2px;
+}
+
+.loc-pad-cluster-key {
+  min-width: 21px;
+  height: 21px;
+  padding: 0 3px;
+  font-size: 12px;
+}
+
+.loc-pad-cluster-key[data-dir="up"],
+.loc-padlist-cluster-key[data-dir="up"] {
+  grid-area: up;
+}
+
+.loc-pad-cluster-key[data-dir="down"],
+.loc-padlist-cluster-key[data-dir="down"] {
+  grid-area: down;
+}
+
+.loc-pad-cluster-key[data-dir="left"],
+.loc-padlist-cluster-key[data-dir="left"] {
+  grid-area: left;
+}
+
+.loc-pad-cluster-key[data-dir="right"],
+.loc-padlist-cluster-key[data-dir="right"] {
+  grid-area: right;
+}
+
+/* the d-pad's words only show while it listens; the four keys are its picture */
+.loc-pad-callout-dpad .loc-pad-key {
+  display: none;
+}
+
+.loc-pad-callout:hover,
+.loc-pad-callout.is-hot {
+  z-index: 1;
+  border-color: var(--loc-wall-accent);
+}
+
+.loc-pad-callout.is-hot .loc-pad-key,
+.loc-pad-callout.is-hot .loc-pad-cluster-key {
+  border-color: rgba(200, 245, 90, 0.7);
+}
+
+.loc-pad-callout:focus {
+  outline: none;
+}
+
+.loc-pad-callout:focus-visible {
+  outline: 2px solid var(--loc-wall-accent);
+  outline-offset: 2px;
+}
+
+.loc-pad-callout.is-listening {
+  z-index: 2;
+  color: #ffd7f1;
+  background: #2a1424;
+  border-color: var(--loc-neon-pink);
+  box-shadow:
+    0 0 0 3px rgba(255, 95, 200, 0.18),
+    0 6px 14px rgba(0, 0, 0, 0.45);
+}
+
+.loc-pad-callout.is-listening::before {
+  content: "";
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-inline-start: 5px;
+  background: var(--loc-neon-pink);
+  border-radius: 50%;
+  box-shadow: 0 0 8px var(--loc-neon-pink);
+  animation: loc-pad-breathe 1.4s var(--loc-ease) infinite alternate;
+}
+
+.loc-pad-callout.is-listening .loc-pad-what {
+  color: #ffd7f1;
+}
+
+.loc-pad-callout.is-listening .loc-pad-cluster-key:not(.is-live) {
+  border-color: #5d667a;
+}
+
+/* the d-pad listens one direction at a time: its "?" cap is the cue, the bar under the map says which */
+.loc-pad-callout.is-listening:not(.loc-pad-callout-dpad) .loc-pad-key {
+  display: inline-grid;
+  padding-inline: 0 6px;
+  color: #ffd7f1;
+  font-size: 12px;
+  background: none;
+  border-color: transparent;
+}
+
+.loc-pad-cluster-key.is-live {
+  color: #2a0a1f;
+  background: var(--loc-neon-pink);
+  border-color: #ffa3dc;
+  animation: loc-pad-beacon 1.4s var(--loc-ease) infinite;
+}
+
+/* a glow that leaves the cap: the text on it never fades, so its contrast holds all the way through */
+@keyframes loc-pad-beacon {
+  from {
+    box-shadow: 0 0 0 0 rgba(255, 95, 200, 0.7);
+  }
+  to {
+    box-shadow: 0 0 0 7px rgba(255, 95, 200, 0);
+  }
+}
+
+@keyframes loc-pad-breathe {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0.45;
+  }
+}
+
+/* ---- the narrow layout's list of real buttons, each with a crop of the picture at its control ---- */
+
+.loc-padlist {
+  display: none;
+}
+
+.loc-padlist-item {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-height: 48px;
+  padding: 8px;
+  color: var(--loc-wall-text);
+  font: inherit;
+  text-align: start;
+  background: #1c2029;
+  border: 1px solid #4a5263;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: border-color var(--loc-fast) var(--loc-ease);
+}
+
+.loc-padlist-item-dpad {
+  grid-column: 1 / -1;
+}
+
+/* the console's own picture, cropped to the control (the size and position are set per button by the map) */
+.loc-padlist-glyph {
+  display: block;
+  width: 28px;
+  height: 28px;
+  margin: 2px;
+  background-color: #0e1016;
+  background-repeat: no-repeat;
+  border-radius: 8px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+.loc-padlist-what {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--loc-wall-text-2);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.loc-padlist-key {
+  display: inline-grid;
+  place-items: center;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 8px;
+  color: var(--loc-wall-text);
+  font-size: 15px;
+  font-weight: 700;
+  white-space: nowrap;
+  background: linear-gradient(#343a47, #252a34);
+  border: 1px solid #5d667a;
+  border-bottom-width: 2px;
+  border-radius: 6px;
+}
+
+.loc-padlist-item-dpad .loc-padlist-key {
+  height: auto;
+  padding: 0;
+  background: none;
+  border: 0;
+}
+
+.loc-padlist-cluster {
+  display: grid;
+  grid-template-areas:
+    ". up ."
+    "left down right";
+  gap: 2px;
+}
+
+.loc-padlist-cluster-key {
+  display: inline-grid;
+  place-items: center;
+  min-width: 22px;
+  height: 18px;
+  padding: 0 3px;
+  color: var(--loc-wall-text);
+  font: 700 12px/1 var(--loc-font);
+  background: linear-gradient(#343a47, #252a34);
+  border: 1px solid #5d667a;
+  border-radius: 4px;
+}
+
+.loc-padlist-item:hover,
+.loc-padlist-item.is-hot {
+  border-color: var(--loc-wall-accent);
+}
+
+.loc-padlist-item:focus-visible {
+  outline: 2px solid var(--loc-wall-accent);
+  outline-offset: 2px;
+}
+
+/* listening: the label, and under it the prompt, which may wrap in a narrow column */
+.loc-padlist-item.is-listening {
+  grid-template-columns: 32px minmax(0, 1fr);
+  row-gap: 4px;
+  background: #2a1424;
+  border-color: var(--loc-neon-pink);
+}
+
+.loc-padlist-item.is-listening .loc-padlist-glyph {
+  grid-row: span 2;
+  box-shadow: 0 0 0 2px var(--loc-neon-pink), 0 0 10px rgba(255, 95, 200, 0.6);
+}
+
+.loc-padlist-item.is-listening .loc-padlist-key {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: start;
+  height: auto;
+  min-width: 0;
+  padding: 0;
+  color: #ffd7f1;
+  font-size: 13px;
+  line-height: 1.25;
+  white-space: normal;
+  background: none;
+  border: 0;
+}
+
+.loc-padlist-item.is-listening .loc-padlist-key::before {
+  content: "";
+  flex: none;
+  width: 8px;
+  height: 8px;
+  background: var(--loc-neon-pink);
+  border-radius: 50%;
+  box-shadow: 0 0 8px var(--loc-neon-pink);
+  animation: loc-pad-breathe 1.4s var(--loc-ease) infinite alternate;
+}
+
+/*
+ * Under ~560 px the chips would crowd a picture scaled to a phone. There the box is cropped to the controller
+ * itself (the --c* the map sets per console), the chips and leaders go, and the same buttons are a grid of 48 px
+ * rows with 12 px and up labels. A tap on a button in the picture still picks it.
+ */
+@container padmap (max-width: 560px) {
+  .loc-padart {
+    width: min(100%, calc(232px * var(--cw) / var(--ch)));
+    margin-inline: auto;
+    overflow: hidden;
+    aspect-ratio: var(--cw) / var(--ch);
+  }
+
+  .loc-pad,
+  .loc-pad-pic {
+    inset: auto;
+  }
+
+  .loc-pad {
+    left: calc(-100% * var(--cx) / var(--cw));
+    top: calc(-100% * var(--cy) / var(--ch));
+    width: calc(100% * 720 / var(--cw));
+    height: calc(100% * 440 / var(--ch));
+  }
+
+  .loc-pad-pic {
+    left: calc(100% * (var(--px) - var(--cx)) / var(--cw));
+    top: calc(100% * (var(--py) - var(--cy)) / var(--ch));
+    width: calc(100% * var(--pw) / var(--cw));
+    height: calc(100% * var(--ph) / var(--ch));
+  }
+
+  .loc-pad-callout,
+  .loc-pad-leader {
+    display: none;
+  }
+
+  .loc-padlist {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(152px, 1fr));
+    gap: 8px;
+    padding-top: 16px;
+  }
+}
+
+.loc-onb-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  max-width: 760px;
+  min-height: 48px;
+  padding: 4px 8px 4px 16px;
+  font-size: 13px;
+  border-radius: 12px;
+}
+
+.loc-onb-bar-text {
+  display: grid;
+  min-width: 0;
+}
+
+.loc-onb-listen {
+  margin: 0;
+  color: #ffd7f1;
+  font-weight: 700;
+}
+
+.loc-onb-note {
+  margin: 0;
+  color: var(--loc-wall-warning);
+}
+
+/* the bar under the controller is on the dark stage in every theme, so its quiet buttons use the wall's ink */
+.loc-onb-stage .loc-onb-btn-quiet {
+  color: var(--loc-wall-text);
+}
+
+.loc-onb-stage .loc-onb-btn-ghost {
+  color: var(--loc-wall-text-2);
+}
+
+.loc-onb-listen:empty,
+.loc-onb-note:empty {
+  display: none;
+}
+
+.loc-onb-bar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* ---- the second screen: the map, and the console taking its first cartridge ---- */
+
+.loc-onb-setup {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+  min-width: 0;
+}
+
+/*
+ * The console and the way to put a cartridge in it. Under the map on most panes, a strip: the console on the left,
+ * the sentence and the big button on the right. On a wide pane it is a column beside the map.
+ */
+.loc-onb-pick {
+  display: grid;
+  grid-template-columns: minmax(104px, 168px) minmax(0, 1fr);
+  align-items: center;
+  gap: 24px;
+  padding: 16px 24px;
+}
+
+/* the shop again, dark and a little blurred, so the console and the button come forward */
+.loc-onb-backdrop-corner {
+  background-position: 72% 60%;
+  filter: blur(3px) brightness(0.3) saturate(1.2);
+}
+
+.loc-onb-pick::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background:
+    radial-gradient(42% 70% at 18% 50%, rgba(255, 95, 200, 0.16), transparent 72%),
+    linear-gradient(90deg, rgba(11, 13, 18, 0.6), rgba(11, 13, 18, 0.45));
+}
+
+.loc-onb-slot {
+  width: 100%;
+}
+
+.loc-onb-pick-text {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+  min-width: 0;
+}
+
+.loc-onb-pick-title {
+  margin: 0;
+  color: var(--loc-wall-text);
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.loc-onb-pick-body {
+  max-width: 52ch;
+  margin: 0 0 8px;
+  color: var(--loc-wall-text-2);
+  font-size: 14px;
+}
+
+/* the big button takes the light of the slot when the cartridge lands */
+.loc-onb-pick-go {
+  position: relative;
+  box-shadow: 0 0 0 0 rgba(200, 245, 90, 0);
+  animation: loc-onb-go 4.8s ease infinite;
+}
+
+@keyframes loc-onb-go {
+  0%,
+  44% {
+    box-shadow: 0 0 0 0 rgba(200, 245, 90, 0);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(200, 245, 90, 0.35), 0 0 32px rgba(200, 245, 90, 0.45);
+  }
+  80%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(200, 245, 90, 0), 0 0 24px rgba(200, 245, 90, 0.2);
+  }
+}
+
+/*
+ * A wide pane: the map keeps the room it had (the controller as big as the step leaves it) and the console stands
+ * beside it as a column. The column is sized from the stage's own height, so the console, the sentence and the
+ * button always fit what the panel leaves them.
+ */
+@container loc (min-width: 1100px) {
+  .loc-onb-setup {
+    grid-template-columns: minmax(0, 1fr) 340px;
+  }
+  .loc-onb-pick {
+    container: onbpick / size;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    align-content: center;
+    justify-items: center;
+    gap: 16px;
+    min-height: 360px;
+    padding: 24px;
+    text-align: center;
+  }
+  .loc-onb-pick-text {
+    justify-items: center;
+  }
+  .loc-onb-slot {
+    width: max(112px, min(280px, 100%, (100cqh - 232px) * 760 / 858));
+  }
+}
+
+/* a docked pane or a phone: the console goes over the text, centred, so the sentence has the whole width */
+@container loc (max-width: 520px) {
+  .loc-onb-pick {
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: center;
+    gap: 16px;
+    padding: 16px;
+    text-align: center;
+  }
+  .loc-onb-slot {
+    width: 128px;
+  }
+  .loc-onb-pick-text {
+    justify-items: center;
+  }
+}
+
+/*
+ * ---- the console and its cartridge (ui/cartridge.ts): the second screen loops it, the load overlay (flow.css) drops it once ----
+ *
+ * The box is the console's width (console.webp, 760 by 658) with 200 of the picture's units of headroom on top, 760
+ * by 858 in all, so a cartridge waiting over the slot always fits inside it. Every number below is a percentage of
+ * that box, measured on the picture:
+ *  - the slot's front lip (where the dark of the opening ends) runs from (260, 217) to (500, 140) of the console:
+ *    y = 206 - 0.325 (x - 300), a slope of 18 degrees. Moved into the box (+200) and taken to its two edges it is
+ *    58.68% at the left and 29.90% at the right: the clip's bottom edge. Above it the cartridge shows, under it it
+ *    is inside the console;
+ *  - the cartridge is skewed by the same 18 degrees, so its bottom edge lies along the lip, and centred at x = 388,
+ *    the middle of the lip;
+ *  - the power light is the small pill right of the slot, (615, 166) to (676, 199) of the console.
+ */
+
+.loc-ins-holder {
+  display: block;
+  line-height: 0;
+}
+
+.loc-ins {
+  container: ins / inline-size;
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 760 / 858;
+}
+
+/* the console stands on the floor: a soft dark pool under it, a little of the shop's pink on the wood */
+.loc-ins-floor {
+  position: absolute;
+  left: 4%;
+  right: 4%;
+  bottom: -3%;
+  height: 16%;
+  background:
+    radial-gradient(closest-side, rgba(0, 0, 0, 0.62), rgba(0, 0, 0, 0.3) 60%, transparent),
+    radial-gradient(60% 80% at 50% 40%, rgba(255, 95, 200, 0.18), transparent 70%);
+}
+
+.loc-ins-console {
+  position: absolute;
+  left: 0;
+  top: 23.31%;
+  width: 100%;
+  height: 76.69%;
+  background: url("../art/console.webp") center / 100% 100% no-repeat;
+  filter: drop-shadow(0 10px 14px rgba(0, 0, 0, 0.5));
+}
+
+/* everything above the slot's front lip: what is under the line has gone into the console */
+.loc-ins-clip {
+  position: absolute;
+  inset: 0;
+  clip-path: polygon(0 0, 100% 0, 100% 29.9%, 0 58.68%);
+}
+
+/*
+ * The cartridge at rest is IN the slot (no translation, what the scene ends on): 55% of it over the lip for the wide
+ * one, 60% for the handheld one, whose label sits lower. --ins-out lifts it clear of the slot: its bottom edge over the back of the opening, so it reads as waiting above
+ * the console and not as already in.
+ */
+.loc-ins-cart {
+  --ins-out: -80%;
+  --ins-skew: skewY(-18deg);
+  position: absolute;
+  left: 33.95%;
+  top: 28.89%;
+  width: 34.21%;
+  aspect-ratio: 520 / 471;
+  transform: translateY(0) var(--ins-skew);
+  filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.45));
+}
+
+.loc-ins[data-kind="gb"] .loc-ins-cart {
+  --ins-out: -75%;
+  left: 37.24%;
+  top: 27.49%;
+  width: 27.63%;
+  aspect-ratio: 520 / 584;
+}
+
+.loc-ins-sprite {
+  position: absolute;
+  inset: 0;
+  background: url("../art/cart-blank.webp") center / 100% 100% no-repeat;
+}
+
+.loc-ins[data-kind="gb"] .loc-ins-sprite {
+  background-image: url("../art/cart-gb.webp");
+}
+
+/* the blank label, written on: the title in marker, two lines at most */
+.loc-ins-label {
+  container: inslabel / inline-size;
+  position: absolute;
+  left: 22.5%;
+  top: 22.6%;
+  width: 55%;
+  height: 24%;
+  display: grid;
+  place-items: center;
+  padding: 0 3%;
+  overflow: hidden;
+}
+
+.loc-ins[data-kind="gb"] .loc-ins-label {
+  left: 25%;
+  top: 38%;
+  width: 50%;
+  height: 39%;
+}
+
+.loc-ins-title {
+  display: -webkit-box;
+  overflow: hidden;
+  color: #2b2433;
+  font-family: var(--loc-font-sign);
+  font-size: 10.5cqw;
+  line-height: 1.12;
+  text-align: center;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.loc-ins[data-kind="gb"] .loc-ins-title {
+  font-size: 12cqw;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+}
+
+/* the power light: off, the pill's own dark; on, a green glow that spills a little onto the top of the console */
+.loc-ins-led {
+  position: absolute;
+  left: 82.4%;
+  top: 43.12%;
+  width: 5.2%;
+  height: 2.21%;
+  border-radius: 40%;
+  background: #c8f55a;
+  box-shadow:
+    0 0 0.6cqw 0.2cqw rgba(200, 245, 90, 0.9),
+    0 0 3cqw 1cqw rgba(200, 245, 90, 0.35);
+  transform: skewY(-18deg);
+  opacity: 0;
+}
+
+/*
+ * The second screen's loop, 4.8 s: the cartridge waits over the slot with a small bob, slides down into it and
+ * settles, the light comes on, then it rises out again. The light is the last
+ * thing to change before the rise and the first to go after, so nothing blinks: one soft on, one soft off per cycle.
+ */
+.loc-onb-pick .loc-ins-cart {
+  animation: loc-onb-cart 4.8s cubic-bezier(0.45, 0, 0.25, 1) infinite;
+}
+
+.loc-onb-pick .loc-ins-led {
+  animation: loc-onb-led 4.8s ease infinite;
+}
+
+@keyframes loc-onb-cart {
+  0%,
+  24% {
+    transform: translateY(var(--ins-out)) var(--ins-skew);
+  }
+  12% {
+    transform: translateY(calc(var(--ins-out) + 3%)) var(--ins-skew);
+  }
+  42% {
+    transform: translateY(1.5%) var(--ins-skew);
+  }
+  46%,
+  82% {
+    transform: translateY(0) var(--ins-skew);
+  }
+  100% {
+    transform: translateY(var(--ins-out)) var(--ins-skew);
+  }
+}
+
+@keyframes loc-onb-led {
+  0%,
+  46% {
+    opacity: 0;
+  }
+  50%,
+  78% {
+    opacity: 1;
+  }
+  84%,
+  100% {
+    opacity: 0;
+  }
+}
+
+/* ---- buttons, the foot ---- */
+
+.loc-onb-btn {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 16px;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  white-space: nowrap;
+  background: transparent;
+  border: 0;
+  border-radius: var(--loc-control);
+  cursor: pointer;
+}
+
+.loc-onb-btn:focus-visible,
+.loc-onb-tab:focus-visible {
+  outline: 2px solid var(--loc-ring);
+  outline-offset: 2px;
+}
+
+.loc-onb-btn-primary {
+  color: var(--loc-on-accent);
+  background: var(--loc-accent);
+}
+
+.loc-onb-btn-primary:hover {
+  filter: brightness(0.92);
+}
+
+.loc-onb-btn-quiet {
+  color: var(--loc-text);
+  border: 1px solid var(--loc-border-strong);
+}
+
+.loc-onb-btn-ghost {
+  color: var(--loc-text-2);
+}
+
+.loc-onb-btn-sm {
+  min-height: 36px;
+  padding: 0 12px;
+  font-size: 12px;
+}
+
+.loc-onb-btn-big {
+  min-height: 56px;
+  padding: 0 32px;
+  font-size: 1.125rem;
+}
+
+/* on the art the big button is the wall's accent: the stage is dark in every theme */
+.loc-onb-pick .loc-onb-btn-primary {
+  color: var(--loc-wall-on-accent);
+  background: var(--loc-wall-accent);
+}
+
+.loc-onb-btn kbd {
+  padding: 3px 6px;
+  font: 700 11px/1 var(--loc-mono);
+  border: 1px solid currentColor;
+  border-radius: 4px;
+}
+
+.loc-onb-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.loc-onb-spacer {
+  flex: 1;
+}
+
+.loc-onb-progress {
+  display: flex;
+  gap: 8px;
+}
+
+.loc-onb-progress i {
+  width: 24px;
+  height: 4px;
+  background: var(--loc-border-strong);
+  border-radius: 2px;
+}
+
+.loc-onb-progress i.on {
+  background: var(--loc-accent);
+}
+
+/* ---- narrow panes: the rail becomes a strip, the steps shrink with their box ---- */
+
+@container loc (max-width: 760px) {
+  /* the strip keeps its own height; the step takes everything the panel has left */
+  .loc-onb-panel {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto 1fr;
+  }
+  /* the map alone (Controles) has no strip: its one column is the whole panel */
+  .loc-onb-panel:has(> .loc-onb-side[hidden]) {
+    grid-template-rows: 1fr;
+  }
+  /* the strip already says which step this is, and the three buttons fit on one line without the dots */
+  .loc-onb-progress {
+    display: none;
+  }
+  .loc-onb-foot {
+    flex-wrap: nowrap;
+  }
+  .loc-onb-foot .loc-onb-btn {
+    padding-inline: 12px;
+  }
+  .loc-onb-side {
+    grid-template-rows: auto;
+    /* the sign shrinks before the four step numbers do, so they never run under it */
+    grid-template-columns: clamp(88px, 30%, 136px) minmax(0, 1fr);
+    grid-auto-flow: column;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 16px;
+    border-right: 0;
+    border-bottom: 1px solid var(--loc-border);
+  }
+  .loc-onb-sign {
+    margin: 0;
+  }
+  .loc-onb-open,
+  .loc-onb-once,
+  .loc-onb-rack,
+  .loc-onb-steps small,
+  .loc-onb-steps b {
+    display: none;
+  }
+  .loc-onb-steps {
+    grid-auto-flow: column;
+    justify-content: end;
+    gap: 4px;
+  }
+  .loc-onb-steps li {
+    grid-template-columns: 32px;
+    padding: 2px;
+  }
+  .loc-onb-main {
+    gap: 16px;
+    padding: 16px;
+  }
+  .loc-onb-title {
+    font-size: 22px;
+  }
+  .loc-onb-pad {
+    margin-left: 0;
+  }
+  .loc-onb-hero {
+    min-height: 280px;
+  }
+}
+
+/*
+ * Reduced motion: the flicker, the rise, the street's lights, the cartridge going in and the pulse are gone.
+ * What stays is the finished picture: the sign lit, the cartridge in its slot with the light on, the TV on,
+ * and the listening ring as a still outline, so every state reads without movement.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .loc-onb-panel,
+  .loc-onb-neon,
+  .loc-onb-fx,
+  .loc-onb-pick-go,
+  .loc-onb-pick .loc-ins-cart,
+  .loc-onb-pick .loc-ins-led,
+  .loc-pad-ring,
+  .loc-pad-callout.is-listening::before,
+  .loc-pad-cluster-key.is-live,
+  .loc-padlist-item.is-listening .loc-padlist-key::before {
+    animation: none;
+  }
+  .loc-pad-ring {
+    opacity: 0.9;
+  }
+  .loc-onb-pick .loc-ins-cart {
+    transform: translateY(0) var(--ins-skew);
+  }
+  .loc-onb-pick .loc-ins-led {
+    opacity: 1;
+  }
+  .loc-onb-pick-go {
+    box-shadow: 0 0 24px rgba(200, 245, 90, 0.3);
+  }
+}
+
+:root[data-reduced-motion="true"] .loc-onb-panel,
+:root[data-reduced-motion="true"] .loc-onb-neon,
+:root[data-reduced-motion="true"] .loc-onb-fx,
+:root[data-reduced-motion="true"] .loc-onb-pick-go,
+:root[data-reduced-motion="true"] .loc-onb-pick .loc-ins-cart,
+:root[data-reduced-motion="true"] .loc-onb-pick .loc-ins-led,
+:root[data-reduced-motion="true"] .loc-pad-ring,
+:root[data-reduced-motion="true"] .loc-pad-callout.is-listening::before,
+:root[data-reduced-motion="true"] .loc-pad-cluster-key.is-live,
+:root[data-reduced-motion="true"] .loc-padlist-item.is-listening .loc-padlist-key::before {
+  animation: none;
+}
+
+:root[data-reduced-motion="true"] .loc-pad-ring {
+  opacity: 0.9;
+}
+
+:root[data-reduced-motion="true"] .loc-onb-pick .loc-ins-cart {
+  transform: translateY(0) var(--ins-skew);
+}
+
+:root[data-reduced-motion="true"] .loc-onb-pick .loc-ins-led {
+  opacity: 1;
+}
+
+:root[data-reduced-motion="true"] .loc-onb-pick-go {
+  box-shadow: 0 0 24px rgba(200, 245, 90, 0.3);
+}

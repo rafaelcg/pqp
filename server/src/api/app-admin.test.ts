@@ -240,7 +240,7 @@ describeDb("operator apps routes", () => {
     // Two apps: an emulator app and a plain one, each with one pending version.
     for (const [id, category, name] of [
       ["sala-de-jogos", "emulator", "Sala de jogos"],
-      ["enquete", "tool", "Enquete"],
+      ["quadro", "tool", "Quadro"],
     ] as const) {
       await pool.query(
         `INSERT INTO apps (id, publisher_id, status, current_version)
@@ -336,26 +336,26 @@ describeDb("operator apps routes", () => {
       const wrong = await asMachine(
         "PUT",
         "/api/admin/apps",
-        { appId: "enquete", communityUnlocked: true },
+        { appId: "quadro", communityUnlocked: true },
         WRONG_TOKEN,
       );
       expect(wrong.status).toBe(404);
       const user = await asUser(ana, "PUT", "/api/admin/apps", {
-        appId: "enquete",
+        appId: "quadro",
         communityUnlocked: true,
       });
       expect(user.status).toBe(404);
       const read = await asUser(ana, "GET", "/api/admin/apps");
       expect(read.status).toBe(404);
-      const servers = await asUser(ana, "GET", "/api/admin/app-servers?appId=enquete");
+      const servers = await asUser(ana, "GET", "/api/admin/app-servers?appId=quadro");
       expect(servers.status).toBe(404);
-      expect((await appOf("enquete")).communityUnlocked).toBe(false);
+      expect((await appOf("quadro")).communityUnlocked).toBe(false);
       expect(await auditRows()).toHaveLength(0);
     });
 
     it("an instance moderator works and is the audit actor; the token has no account", async () => {
       const viaSession = await asUser(operator, "PUT", "/api/admin/apps", {
-        appId: "enquete",
+        appId: "quadro",
         communityUnlocked: true,
       });
       expect(viaSession.status).toBe(200);
@@ -373,9 +373,9 @@ describeDb("operator apps routes", () => {
 
     it("a bad body is a 400, an unknown app a 404", async () => {
       expect(
-        (await asMachine("PUT", "/api/admin/apps", { appId: "Enquete!" })).status,
+        (await asMachine("PUT", "/api/admin/apps", { appId: "Quadro!" })).status,
       ).toBe(400);
-      expect((await asMachine("PUT", "/api/admin/apps", { appId: "enquete" })).status).toBe(400);
+      expect((await asMachine("PUT", "/api/admin/apps", { appId: "quadro" })).status).toBe(400);
       expect(
         (await asMachine("PUT", "/api/admin/apps", { appId: "nao-existe", status: "review" }))
           .status,
@@ -389,7 +389,7 @@ describeDb("operator apps routes", () => {
       const list = await listApps();
       expect(list.serverCount).toBe(3);
       expect(list.liveSessions).toBe(0);
-      expect(list.apps.map((a) => a.id).sort()).toEqual(["enquete", "sala-de-jogos"]);
+      expect(list.apps.map((a) => a.id).sort()).toEqual(["quadro", "sala-de-jogos"]);
       const sala = list.apps.find((a) => a.id === "sala-de-jogos")!;
       expect(sala).toMatchObject({
         name: "Sala de jogos",
@@ -412,15 +412,15 @@ describeDb("operator apps routes", () => {
     });
 
     it("counts live sessions and operator-on servers, and the owner's switch-offs", async () => {
-      await approve("enquete");
+      await approve("quadro");
       await asMachine("PUT", "/api/admin/server-apps", {
         serverId: privateId,
-        appId: "enquete",
+        appId: "quadro",
         operatorEnabled: true,
       });
       await asMachine("PUT", "/api/admin/server-apps", {
         serverId: otherPrivateId,
-        appId: "enquete",
+        appId: "quadro",
         operatorEnabled: true,
       });
       await getPool().query(
@@ -433,12 +433,12 @@ describeDb("operator apps routes", () => {
       );
       await getPool().query(
         `INSERT INTO app_sessions (server_id, channel_id, app_id, app_version)
-         VALUES ($1, $2, 'enquete', '1.0.0')`,
+         VALUES ($1, $2, 'quadro', '1.0.0')`,
         [privateId, channel.rows[0]!.id],
       );
       const list = await listApps();
-      const enquete = list.apps.find((a) => a.id === "enquete")!;
-      expect(enquete).toMatchObject({
+      const quadro = list.apps.find((a) => a.id === "quadro")!;
+      expect(quadro).toMatchObject({
         serversOn: 2,
         serversOwnerOff: 1,
         liveSessions: 1,
@@ -451,7 +451,7 @@ describeDb("operator apps routes", () => {
     it("carries the last 20 audit rows, newest first", async () => {
       for (let i = 0; i < 22; i += 1) {
         await asMachine("PUT", "/api/admin/apps", {
-          appId: "enquete",
+          appId: "quadro",
           communityUnlocked: i % 2 === 0,
         });
       }
@@ -460,7 +460,7 @@ describeDb("operator apps routes", () => {
       expect(list.audit[0]).toMatchObject({
         action: "community-unlock",
         actorKind: "dashboard",
-        appId: "enquete",
+        appId: "quadro",
       });
     });
   });
@@ -473,37 +473,37 @@ describeDb("operator apps routes", () => {
         { status: "live", globalEnabled: true },
       ]) {
         const response = await asMachine<{ error: string }>("PUT", "/api/admin/apps", {
-          appId: "enquete",
+          appId: "quadro",
           ...body,
         });
         expect(response.status).toBe(409);
         expect(response.body.error).toBe("not-reviewed");
       }
-      expect(await appOf("enquete")).toMatchObject({ status: "draft", globalEnabled: false });
+      expect(await appOf("quadro")).toMatchObject({ status: "draft", globalEnabled: false });
       expect(await auditRows()).toHaveLength(0);
       expect(frames).toHaveLength(0);
     });
 
     it("a rejected or withdrawn version is not approved either", async () => {
       await asMachine("PUT", "/api/admin/app-review", {
-        appId: "enquete",
+        appId: "quadro",
         version: "1.0.0",
         reviewStatus: "rejected",
         checklist: { ...FULL_CHECKLIST, sandbox: false },
       });
       const response = await asMachine("PUT", "/api/admin/apps", {
-        appId: "enquete",
+        appId: "quadro",
         status: "live",
       });
       expect(response.status).toBe(409);
     });
 
     it("works after approval, with one audit row per field that changed", async () => {
-      await approve("enquete");
+      await approve("quadro");
       const response = await asMachine<{ app: AppView; changed: number }>(
         "PUT",
         "/api/admin/apps",
-        { appId: "enquete", status: "live", globalEnabled: true },
+        { appId: "quadro", status: "live", globalEnabled: true },
       );
       expect(response.status).toBe(200);
       expect(response.body.changed).toBe(2);
@@ -518,12 +518,12 @@ describeDb("operator apps routes", () => {
     });
 
     it("a write that changes nothing adds no audit row and sends no hint", async () => {
-      await approve("enquete");
-      await asMachine("PUT", "/api/admin/apps", { appId: "enquete", status: "live" });
+      await approve("quadro");
+      await asMachine("PUT", "/api/admin/apps", { appId: "quadro", status: "live" });
       const rowsBefore = (await auditRows()).length;
       frames.length = 0;
       const again = await asMachine<{ changed: number }>("PUT", "/api/admin/apps", {
-        appId: "enquete",
+        appId: "quadro",
         status: "live",
       });
       expect(again.status).toBe(200);
@@ -533,55 +533,55 @@ describeDb("operator apps routes", () => {
     });
 
     it("switching off never needs a review", async () => {
-      await approve("enquete");
+      await approve("quadro");
       await asMachine("PUT", "/api/admin/apps", {
-        appId: "enquete",
+        appId: "quadro",
         status: "live",
         globalEnabled: true,
       });
       const off = await asMachine("PUT", "/api/admin/apps", {
-        appId: "enquete",
+        appId: "quadro",
         status: "retired",
         globalEnabled: false,
       });
       expect(off.status).toBe(200);
-      expect(await appOf("enquete")).toMatchObject({ status: "retired", globalEnabled: false });
+      expect(await appOf("quadro")).toMatchObject({ status: "retired", globalEnabled: false });
     });
 
     it("moving the current version to an unreviewed one is refused on a live app, and rollback works", async () => {
-      await approve("enquete");
+      await approve("quadro");
       await getPool().query(
         `INSERT INTO app_versions (app_id, version, manifest, manifest_sha256, entry_sha256)
-         VALUES ('enquete', '1.1.0', $1::jsonb, $2, $2)`,
-        [JSON.stringify({ ...manifest("enquete", "tool", "Enquete"), version: "1.1.0" }), SHA],
+         VALUES ('quadro', '1.1.0', $1::jsonb, $2, $2)`,
+        [JSON.stringify({ ...manifest("quadro", "tool", "Quadro"), version: "1.1.0" }), SHA],
       );
       await asMachine("PUT", "/api/admin/apps", {
-        appId: "enquete",
+        appId: "quadro",
         status: "live",
         globalEnabled: true,
       });
       const blocked = await asMachine<{ error: string }>("PUT", "/api/admin/apps", {
-        appId: "enquete",
+        appId: "quadro",
         currentVersion: "1.1.0",
       });
       expect(blocked.status).toBe(409);
       expect(blocked.body.error).toBe("not-reviewed");
-      expect((await appOf("enquete")).currentVersion).toBe("1.0.0");
+      expect((await appOf("quadro")).currentVersion).toBe("1.0.0");
 
-      await approve("enquete", "1.1.0");
+      await approve("quadro", "1.1.0");
       const moved = await asMachine("PUT", "/api/admin/apps", {
-        appId: "enquete",
+        appId: "quadro",
         currentVersion: "1.1.0",
       });
       expect(moved.status).toBe(200);
       const back = await asMachine("PUT", "/api/admin/apps", {
-        appId: "enquete",
+        appId: "quadro",
         currentVersion: "1.0.0",
       });
       expect(back.status).toBe(200);
-      expect((await appOf("enquete")).currentVersion).toBe("1.0.0");
+      expect((await appOf("quadro")).currentVersion).toBe("1.0.0");
       const missing = await asMachine("PUT", "/api/admin/apps", {
-        appId: "enquete",
+        appId: "quadro",
         currentVersion: "9.9.9",
       });
       expect(missing.status).toBe(404);
@@ -590,11 +590,11 @@ describeDb("operator apps routes", () => {
     });
 
     it("sends one apps.changed hint per committed write", async () => {
-      await approve("enquete");
+      await approve("quadro");
       frames.length = 0;
-      await asMachine("PUT", "/api/admin/apps", { appId: "enquete", status: "live" });
+      await asMachine("PUT", "/api/admin/apps", { appId: "quadro", status: "live" });
       expect(frames).toEqual([
-        { topic: APPS_BUS_TOPIC, data: { appId: "enquete", serverId: null } },
+        { topic: APPS_BUS_TOPIC, data: { appId: "quadro", serverId: null } },
       ]);
     });
   });
@@ -602,17 +602,17 @@ describeDb("operator apps routes", () => {
   describe("the review", () => {
     it("records reviewer, checklist and note, and an approval needs every line", async () => {
       const incomplete = await asMachine<{ error: string }>("PUT", "/api/admin/app-review", {
-        appId: "enquete",
+        appId: "quadro",
         version: "1.0.0",
         reviewStatus: "approved",
         checklist: { ...FULL_CHECKLIST, noNetwork: false },
       });
       expect(incomplete.status).toBe(409);
       expect(incomplete.body.error).toBe("checklist-incomplete");
-      expect((await appOf("enquete")).versions[0]!.reviewStatus).toBe("pending");
+      expect((await appOf("quadro")).versions[0]!.reviewStatus).toBe("pending");
 
       const ok = await asMachine<{ app: AppView }>("PUT", "/api/admin/app-review", {
-        appId: "enquete",
+        appId: "quadro",
         version: "1.0.0",
         reviewStatus: "approved",
         checklist: { sandbox: true, noNetwork: true, license: true, i18n: true, presence: true },
@@ -624,13 +624,13 @@ describeDb("operator apps routes", () => {
         reviewedBy: "dashboard",
       });
       const row = await getPool().query<{ review_note: string; reviewed_at: Date | null }>(
-        `SELECT review_note, reviewed_at FROM app_versions WHERE app_id = 'enquete'`,
+        `SELECT review_note, reviewed_at FROM app_versions WHERE app_id = 'quadro'`,
       );
       expect(row.rows[0]!.review_note).toBe("Revisado a mao.");
       expect(row.rows[0]!.reviewed_at).not.toBeNull();
       const audit = (await auditRows()).filter((r) => r.action === "review");
       expect(audit).toHaveLength(1);
-      expect(audit[0]).toMatchObject({ app_id: "enquete", app_version: "1.0.0" });
+      expect(audit[0]).toMatchObject({ app_id: "quadro", app_version: "1.0.0" });
     });
 
     it("an emulator app also needs the ROM policy line", async () => {
@@ -654,7 +654,7 @@ describeDb("operator apps routes", () => {
 
     it("a moderator's review names them; rejecting needs no complete checklist", async () => {
       const rejected = await asUser<{ app: AppView }>(operator, "PUT", "/api/admin/app-review", {
-        appId: "enquete",
+        appId: "quadro",
         version: "1.0.0",
         reviewStatus: "rejected",
         checklist: { sandbox: false, noNetwork: true, license: true, i18n: true, presence: false },
@@ -665,22 +665,22 @@ describeDb("operator apps routes", () => {
     });
 
     it("cannot take the approval from the version a live app stands on", async () => {
-      await approve("enquete");
-      await asMachine("PUT", "/api/admin/apps", { appId: "enquete", status: "live" });
+      await approve("quadro");
+      await asMachine("PUT", "/api/admin/apps", { appId: "quadro", status: "live" });
       const response = await asMachine<{ error: string }>("PUT", "/api/admin/app-review", {
-        appId: "enquete",
+        appId: "quadro",
         version: "1.0.0",
         reviewStatus: "withdrawn",
         checklist: FULL_CHECKLIST,
       });
       expect(response.status).toBe(409);
       expect(response.body.error).toBe("version-in-use");
-      expect((await appOf("enquete")).versions[0]!.reviewStatus).toBe("approved");
+      expect((await appOf("quadro")).versions[0]!.reviewStatus).toBe("approved");
     });
 
     it("an unknown version is a 404", async () => {
       const response = await asMachine("PUT", "/api/admin/app-review", {
-        appId: "enquete",
+        appId: "quadro",
         version: "2.0.0",
         reviewStatus: "rejected",
         checklist: FULL_CHECKLIST,
@@ -699,15 +699,15 @@ describeDb("operator apps routes", () => {
     }
 
     it("turns an app on and off for one server, audited, and null is undecided", async () => {
-      const on = await operatorSwitch(privateId, "enquete", true);
+      const on = await operatorSwitch(privateId, "quadro", true);
       expect(on.status).toBe(200);
       expect(on.body).toMatchObject({ operatorEnabled: true, changed: true });
-      const same = await operatorSwitch(privateId, "enquete", true);
+      const same = await operatorSwitch(privateId, "quadro", true);
       expect(same.body.changed).toBe(false);
-      await operatorSwitch(privateId, "enquete", false);
-      await operatorSwitch(privateId, "enquete", null);
+      await operatorSwitch(privateId, "quadro", false);
+      await operatorSwitch(privateId, "quadro", null);
       const row = await getPool().query<{ operator_enabled: boolean | null }>(
-        `SELECT operator_enabled FROM server_apps WHERE server_id = $1 AND app_id = 'enquete'`,
+        `SELECT operator_enabled FROM server_apps WHERE server_id = $1 AND app_id = 'quadro'`,
         [privateId],
       );
       expect(row.rows[0]!.operator_enabled).toBeNull();
@@ -722,18 +722,18 @@ describeDb("operator apps routes", () => {
     });
 
     it("a null on a server that never had a row writes nothing", async () => {
-      const response = await operatorSwitch(privateId, "enquete", null);
+      const response = await operatorSwitch(privateId, "quadro", null);
       expect(response.body.changed).toBe(false);
       expect(await auditRows()).toHaveLength(0);
     });
 
     it("keeps the owner's switch when the operator moves theirs", async () => {
-      await operatorSwitch(privateId, "enquete", true);
+      await operatorSwitch(privateId, "quadro", true);
       await getPool().query(
         `UPDATE server_apps SET owner_enabled = FALSE WHERE server_id = $1`,
         [privateId],
       );
-      await operatorSwitch(privateId, "enquete", false);
+      await operatorSwitch(privateId, "quadro", false);
       const row = await getPool().query<{ owner_enabled: boolean | null }>(
         `SELECT owner_enabled FROM server_apps WHERE server_id = $1`,
         [privateId],
@@ -742,7 +742,7 @@ describeDb("operator apps routes", () => {
     });
 
     it("a public community is locked until the app is unlocked for communities", async () => {
-      const locked = await operatorSwitch(communityId, "enquete", true);
+      const locked = await operatorSwitch(communityId, "quadro", true);
       expect(locked.status).toBe(409);
       expect(locked.body.error).toBe("community-locked");
       const none = await getPool().query(`SELECT 1 FROM server_apps WHERE server_id = $1`, [
@@ -751,8 +751,8 @@ describeDb("operator apps routes", () => {
       expect(none.rowCount).toBe(0);
       expect(await auditRows()).toHaveLength(0);
 
-      await asMachine("PUT", "/api/admin/apps", { appId: "enquete", communityUnlocked: true });
-      const open = await operatorSwitch(communityId, "enquete", true);
+      await asMachine("PUT", "/api/admin/apps", { appId: "quadro", communityUnlocked: true });
+      const open = await operatorSwitch(communityId, "quadro", true);
       expect(open.status).toBe(200);
 
       // Unlocked for one app is not unlocked for the other.
@@ -761,16 +761,16 @@ describeDb("operator apps routes", () => {
     });
 
     it("turning a community OFF is never refused, even when the app is locked", async () => {
-      await asMachine("PUT", "/api/admin/apps", { appId: "enquete", communityUnlocked: true });
-      await operatorSwitch(communityId, "enquete", true);
-      await asMachine("PUT", "/api/admin/apps", { appId: "enquete", communityUnlocked: false });
-      const off = await operatorSwitch(communityId, "enquete", false);
+      await asMachine("PUT", "/api/admin/apps", { appId: "quadro", communityUnlocked: true });
+      await operatorSwitch(communityId, "quadro", true);
+      await asMachine("PUT", "/api/admin/apps", { appId: "quadro", communityUnlocked: false });
+      const off = await operatorSwitch(communityId, "quadro", false);
       expect(off.status).toBe(200);
     });
 
     it("an unknown server or app is a 404", async () => {
       expect(
-        (await operatorSwitch("00000000-0000-4000-8000-000000000001", "enquete", true)).status,
+        (await operatorSwitch("00000000-0000-4000-8000-000000000001", "quadro", true)).status,
       ).toBe(404);
       expect((await operatorSwitch(privateId, "nao-existe", true)).status).toBe(404);
     });
@@ -796,7 +796,7 @@ describeDb("operator apps routes", () => {
     async function servers(query: string) {
       const response = await asMachine<ServerList>(
         "GET",
-        `/api/admin/app-servers?appId=enquete${query}`,
+        `/api/admin/app-servers?appId=quadro${query}`,
       );
       expect(response.status).toBe(200);
       return response.body;
@@ -805,7 +805,7 @@ describeDb("operator apps routes", () => {
     it("lists every server with its switches, the community locked, switched-on first", async () => {
       await asMachine("PUT", "/api/admin/server-apps", {
         serverId: otherPrivateId,
-        appId: "enquete",
+        appId: "quadro",
         operatorEnabled: true,
       });
       const body = await servers("");
@@ -825,7 +825,7 @@ describeDb("operator apps routes", () => {
     it("searches by name or by id, filters to the ones on, and pages", async () => {
       await asMachine("PUT", "/api/admin/server-apps", {
         serverId: otherPrivateId,
-        appId: "enquete",
+        appId: "quadro",
         operatorEnabled: true,
       });
       expect((await servers("&q=sand")).servers.map((s) => s.name)).toEqual(["Sandbox"]);
@@ -843,7 +843,7 @@ describeDb("operator apps routes", () => {
     });
 
     it("an unlocked app shows the community as switchable", async () => {
-      await asMachine("PUT", "/api/admin/apps", { appId: "enquete", communityUnlocked: true });
+      await asMachine("PUT", "/api/admin/apps", { appId: "quadro", communityUnlocked: true });
       const body = await servers("");
       expect(body.servers.find((s) => s.id === communityId)!.locked).toBe(false);
     });
@@ -888,17 +888,17 @@ describeDb("operator apps routes", () => {
     }
 
     it("Desligar em todos turns the master off and ends every live session of THAT app only", async () => {
-      await goLive("enquete");
+      await goLive("quadro");
       await goLive("sala-de-jogos");
-      const a = await liveSession(privateId, "enquete");
-      const b = await liveSession(otherPrivateId, "enquete");
+      const a = await liveSession(privateId, "quadro");
+      const b = await liveSession(otherPrivateId, "quadro");
       const other = await liveSession(privateId, "sala-de-jogos");
-      await asMachine("PUT", "/api/admin/server-apps", { serverId: privateId, appId: "enquete", operatorEnabled: true });
+      await asMachine("PUT", "/api/admin/server-apps", { serverId: privateId, appId: "quadro", operatorEnabled: true });
 
       const response = await asMachine<{ sessionsEnded: number; app: AppView }>(
         "POST",
         "/api/admin/app-disable-everywhere",
-        { appId: "enquete" },
+        { appId: "quadro" },
       );
       expect(response.status).toBe(200);
       expect(response.body.sessionsEnded).toBe(2);
@@ -910,7 +910,7 @@ describeDb("operator apps routes", () => {
       expect((await sessionRow(other)).status).toBe("live");
       // The per server switches stay as they were: the master back on brings the same servers back.
       const server = await getPool().query<{ operator_enabled: boolean }>(
-        `SELECT operator_enabled FROM server_apps WHERE server_id = $1 AND app_id = 'enquete'`,
+        `SELECT operator_enabled FROM server_apps WHERE server_id = $1 AND app_id = 'quadro'`,
         [privateId],
       );
       expect(server.rows[0]!.operator_enabled).toBe(true);
@@ -920,7 +920,7 @@ describeDb("operator apps routes", () => {
       expect(audit[0]).toMatchObject({
         actor_kind: "dashboard",
         actor_user_id: null,
-        app_id: "enquete",
+        app_id: "quadro",
         before: { globalEnabled: true, serversOn: 1 },
         after: { globalEnabled: false },
       });
@@ -928,15 +928,15 @@ describeDb("operator apps routes", () => {
         `SELECT sessions_ended FROM app_admin_audit WHERE action = 'disable-everywhere'`,
       );
       expect(counted.rows[0]!.sessions_ended).toBe(2);
-      expect(frames.at(-1)).toEqual({ topic: APPS_BUS_TOPIC, data: { appId: "enquete", serverId: null } });
+      expect(frames.at(-1)).toEqual({ topic: APPS_BUS_TOPIC, data: { appId: "quadro", serverId: null } });
     });
 
     it("is audited and safe to repeat: the second call ends nothing and says 0", async () => {
-      await goLive("enquete");
-      await liveSession(privateId, "enquete");
-      await asMachine("POST", "/api/admin/app-disable-everywhere", { appId: "enquete" });
+      await goLive("quadro");
+      await liveSession(privateId, "quadro");
+      await asMachine("POST", "/api/admin/app-disable-everywhere", { appId: "quadro" });
       const again = await asMachine<{ sessionsEnded: number }>("POST", "/api/admin/app-disable-everywhere", {
-        appId: "enquete",
+        appId: "quadro",
       });
       expect(again.status).toBe(200);
       expect(again.body.sessionsEnded).toBe(0);
@@ -947,7 +947,7 @@ describeDb("operator apps routes", () => {
     });
 
     it("works with no session, an app already off, an unknown app (404) and a bad body (400)", async () => {
-      const off = await asMachine<{ sessionsEnded: number }>("POST", "/api/admin/app-disable-everywhere", { appId: "enquete" });
+      const off = await asMachine<{ sessionsEnded: number }>("POST", "/api/admin/app-disable-everywhere", { appId: "quadro" });
       expect(off.status).toBe(200);
       expect(off.body.sessionsEnded).toBe(0);
       expect((await asMachine("POST", "/api/admin/app-disable-everywhere", { appId: "nao-existe" })).status).toBe(404);
@@ -955,16 +955,16 @@ describeDb("operator apps routes", () => {
     });
 
     it("a moderator does it as themselves, a non-moderator and a wrong token get the 404", async () => {
-      await goLive("enquete");
-      const id = await liveSession(privateId, "enquete");
-      expect((await asUser(ana, "POST", "/api/admin/app-disable-everywhere", { appId: "enquete" })).status).toBe(404);
+      await goLive("quadro");
+      const id = await liveSession(privateId, "quadro");
+      expect((await asUser(ana, "POST", "/api/admin/app-disable-everywhere", { appId: "quadro" })).status).toBe(404);
       expect(
-        (await asMachine("POST", "/api/admin/app-disable-everywhere", { appId: "enquete" }, WRONG_TOKEN)).status,
+        (await asMachine("POST", "/api/admin/app-disable-everywhere", { appId: "quadro" }, WRONG_TOKEN)).status,
       ).toBe(404);
       expect((await sessionRow(id)).status).toBe("live");
 
       const done = await asUser<{ sessionsEnded: number }>(operator, "POST", "/api/admin/app-disable-everywhere", {
-        appId: "enquete",
+        appId: "quadro",
       });
       expect(done.status).toBe(200);
       expect(done.body.sessionsEnded).toBe(1);
@@ -974,14 +974,14 @@ describeDb("operator apps routes", () => {
     });
 
     it("the operator ends one session with the reason operator, and again is a no-op", async () => {
-      const id = await liveSession(privateId, "enquete", ana.id);
+      const id = await liveSession(privateId, "quadro", ana.id);
       const response = await asMachine<{ ended: boolean; appId: string; serverId: string }>(
         "POST",
         "/api/admin/app-session-end",
         { sessionId: id },
       );
       expect(response.status).toBe(200);
-      expect(response.body).toMatchObject({ ended: true, appId: "enquete", serverId: privateId });
+      expect(response.body).toMatchObject({ ended: true, appId: "quadro", serverId: privateId });
       expect(await sessionRow(id)).toMatchObject({ status: "ended", end_reason: "operator", ended_by: null, state: {} });
 
       const again = await asUser<{ ended: boolean }>(operator, "POST", "/api/admin/app-session-end", { sessionId: id });
@@ -991,8 +991,8 @@ describeDb("operator apps routes", () => {
     });
 
     it("ending one session never touches the apps flag or another session, and needs a real id", async () => {
-      const a = await liveSession(privateId, "enquete");
-      const b = await liveSession(otherPrivateId, "enquete");
+      const a = await liveSession(privateId, "quadro");
+      const b = await liveSession(otherPrivateId, "quadro");
       // The `apps` flag is off everywhere in this suite; an operator still ends it.
       expect((await asMachine("POST", "/api/admin/app-session-end", { sessionId: a })).status).toBe(200);
       expect((await sessionRow(b)).status).toBe("live");
@@ -1003,16 +1003,16 @@ describeDb("operator apps routes", () => {
     });
 
     it("taking the app away from one server ends that server's sessions and records the count on its audit row", async () => {
-      await goLive("enquete");
+      await goLive("quadro");
       for (const serverId of [privateId, otherPrivateId]) {
-        await asMachine("PUT", "/api/admin/server-apps", { serverId, appId: "enquete", operatorEnabled: true });
+        await asMachine("PUT", "/api/admin/server-apps", { serverId, appId: "quadro", operatorEnabled: true });
       }
-      const here = await liveSession(privateId, "enquete");
-      const there = await liveSession(otherPrivateId, "enquete");
+      const here = await liveSession(privateId, "quadro");
+      const there = await liveSession(otherPrivateId, "quadro");
 
       const off = await asMachine<{ sessionsEnded: number; changed: boolean }>("PUT", "/api/admin/server-apps", {
         serverId: privateId,
-        appId: "enquete",
+        appId: "quadro",
         operatorEnabled: false,
       });
       expect(off.body).toMatchObject({ changed: true, sessionsEnded: 1 });
@@ -1024,8 +1024,8 @@ describeDb("operator apps routes", () => {
       expect(audit.rows.map((r) => r.sessions_ended)).toEqual([1]);
 
       // Turning it ON, or a repeat of off, ends nothing.
-      const live2 = await liveSession(privateId, "enquete");
-      await asMachine("PUT", "/api/admin/server-apps", { serverId: privateId, appId: "enquete", operatorEnabled: false });
+      const live2 = await liveSession(privateId, "quadro");
+      await asMachine("PUT", "/api/admin/server-apps", { serverId: privateId, appId: "quadro", operatorEnabled: false });
       expect((await sessionRow(live2)).status).toBe("live");
     });
   });
@@ -1049,17 +1049,17 @@ describeDb("operator apps routes", () => {
       sibling.publish({
         origin: "another-instance",
         topic: APPS_BUS_TOPIC,
-        data: { appId: "enquete", serverId: privateId },
+        data: { appId: "quadro", serverId: privateId },
       });
       sibling.publish({ origin: "another-instance", topic: APPS_BUS_TOPIC, data: "nope" });
       sibling.publish({
         origin: "another-instance",
         topic: APPS_BUS_TOPIC,
-        data: { appId: "enquete" },
+        data: { appId: "quadro" },
       });
       expect(seen).toEqual([
-        [{ appId: "enquete", serverId: privateId }, "another-instance"],
-        [{ appId: "enquete", serverId: null }, "another-instance"],
+        [{ appId: "quadro", serverId: privateId }, "another-instance"],
+        [{ appId: "quadro", serverId: null }, "another-instance"],
       ]);
     });
   });

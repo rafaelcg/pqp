@@ -31,3 +31,26 @@ export const APP_THEME_MAX_TOKENS = 64;
 /** Bounds of `ui.resize`, in CSS pixels. */
 export const APP_UI_MIN_HEIGHT = 120;
 export const APP_UI_MAX_HEIGHT = 2000;
+
+/**
+ * The device store (`capabilities.deviceStore`, `store.*` on the bridge).
+ *
+ * A key is lower case letters, digits and `: . _ -`, 1 to 128 characters. A
+ * prefix of `store.list` is the same alphabet, 0 to 128 characters.
+ */
+export const APP_STORE_KEY_PATTERN = /^[a-z0-9:._-]{1,128}$/;
+export const APP_STORE_PREFIX_PATTERN = /^[a-z0-9:._-]{0,128}$/;
+/** Longest serialized `meta` that travels with one stored value, in UTF-8 bytes. */
+export const APP_STORE_META_MAX_BYTES = 2048;
+/** Most entries one `store.list` answers. */
+export const APP_STORE_LIST_MAX = 500;
+/** One stored value, whatever the manifest's cap says (64 MiB, the ceiling of a picked file). */
+export const APP_STORE_VALUE_MAX_BYTES = 64 * 1024 * 1024;
+/** Ceiling of `capabilities.deviceStore.maxBytes` (1 GiB). */
+export const APP_STORE_CAP_CEILING_BYTES = 1024 * 1024 * 1024;
+/**
+ * Extensions `files.saveLocal` may hand the person as a download. A closed
+ * list on the platform, and the manifest's `localFiles.accept` must also name
+ * the extension: nothing an app invents becomes a file name on the device.
+ */
+export const APP_SAVE_LOCAL_EXTENSIONS = [".locadora"] as const;

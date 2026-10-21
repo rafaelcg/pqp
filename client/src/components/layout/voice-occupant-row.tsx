@@ -17,6 +17,7 @@ import {
   soundboardSoundLabel,
 } from "@/components/voice/soundboard-float";
 import { useTranslation } from "@/lib/i18n";
+import { useAppPresenceLine } from "@/lib/apps/presence";
 import { useSoundboardMark, useSoundboardUserMuted } from "@/lib/soundboard";
 import { VOICE_OCCUPANT_DRAG_MIME } from "@/lib/voice-occupant-dnd";
 import {
@@ -99,6 +100,7 @@ export function VoiceOccupantRow({
   onDragEnd: () => void;
 }) {
   const { t } = useTranslation();
+  const appLine = useAppPresenceLine(person.userId, person.displayName, "short");
   const mark = useSoundboardMark(person.userId);
   const playing = mark ? soundboardSoundLabel(mark.soundId, t) : null;
   const [soundboardMuted] = useSoundboardUserMuted(person.userId);
@@ -137,9 +139,10 @@ export function VoiceOccupantRow({
     : t("voice.occupant.row", { name: person.displayName });
   // The muted glyph is inside a labelled button, so a screen reader never
   // reaches it: the row's own name carries the state.
-  const rowLabel = soundboardMuted
+  const mutedLabel = soundboardMuted
     ? `${baseLabel}. ${t("voice.audio.soundboardMarkMuted", { name: person.displayName })}`
     : baseLabel;
+  const rowLabel = appLine ? `${mutedLabel}. ${appLine}` : mutedLabel;
 
   function clearGhost() {
     ghostRef.current?.remove();
@@ -226,13 +229,23 @@ export function VoiceOccupantRow({
             muted={person.muted || person.deafened}
             size="sm"
           />
-          <span className="flex min-w-0 flex-1 items-center gap-1.5">
-            <span className="truncate">{person.displayName}</span>
-            <SoundboardOccupantMark userId={person.userId} />
-            <SoundboardMutedMark
-              userId={person.userId}
-              name={person.displayName}
-            />
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span className="truncate">{person.displayName}</span>
+              <SoundboardOccupantMark userId={person.userId} />
+              <SoundboardMutedMark
+                userId={person.userId}
+                name={person.displayName}
+              />
+            </span>
+            {appLine ? (
+              <span
+                className="block truncate text-[11px] leading-4 text-text-tertiary"
+                data-voice-occupant-app={person.userId}
+              >
+                {appLine}
+              </span>
+            ) : null}
           </span>
           {/* The speaker slot sits BEFORE the badges, so the mute and deafen
               icons end at the row's right edge for everybody. After them, a

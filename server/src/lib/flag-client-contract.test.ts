@@ -615,6 +615,52 @@ describe("apps and locadora_share against the config the client reads", () => {
 });
 
 /**
+ * `locadora_save_sync`: Saves na conta. Per server, off. It amends rule 7 of
+ * docs/EMULATOR_ROOM.md ("the server knows nothing but the flag"), so what the
+ * amendment allows is pinned here: the routes live in their own file, mounted
+ * from the apps routes, every one of them under `/api/apps/pqp-locadora/saves`
+ * and gated by `saveContext`, which reads this flag for the session's server;
+ * the config serves `saveSync`, which the join sheet reads; and the emulator's
+ * own config route is still the one route about the emulator.
+ */
+describe("locadora_save_sync and the routes rule 7 now allows", () => {
+  it("is per server, off, and served as saveSync", () => {
+    const def = FEATURE_FLAGS.locadora_save_sync;
+    expect(def.perServer).toBe(true);
+    expect(def.codeDefault).toBe(false);
+    expect(def.clientVia).toBe("GET /api/apps/config?serverId= (saveSync)");
+    const config = readFileSync(path.join(serverSrc, "apps/config.ts"), "utf8");
+    expect(config).toMatch(/saveSync:\s*manifest\.id === LOCADORA_APP_ID && isEnabled\("locadora_save_sync",\s*\{\s*serverId\s*\}\)/);
+  });
+
+  it("every save route is under /api/apps/pqp-locadora/saves and goes through the gate first", () => {
+    const routes = readFileSync(path.join(serverSrc, "api/locadora-save-routes.ts"), "utf8");
+    expect(readFileSync(path.join(serverSrc, "api/app-routes.ts"), "utf8")).toMatch(/registerLocadoraSaveRoutes\(router\)/);
+    expect(routes).toContain('const BASE = "/api/apps/pqp-locadora/saves";');
+    const handlers = [...routes.matchAll(/router\.(get|post|delete)\(([^,]+),[\s\S]*?\n {2}\}\);/g)];
+    expect(handlers.length).toBe(8);
+    for (const [handler, , route] of handlers) {
+      expect(route, handler).toMatch(/^`?\$\{BASE\}|^BASE$/);
+      expect(handler, route).toContain("saveContext(user.id");
+    }
+    const service = readFileSync(path.join(serverSrc, "apps/locadora-saves.ts"), "utf8");
+    expect(service).toMatch(/isEnabled\("locadora_save_sync",\s*\{\s*serverId\s*\}\)/);
+    expect(service).toMatch(/isEnabled\("apps",\s*\{\s*serverId\s*\}\)/);
+    expect(service).toMatch(/isEnabled\("emulator_room",\s*\{\s*serverId\s*\}\)/);
+  });
+
+  it("the emulator's own config is still its one route", () => {
+    const api = readFileSync(path.join(serverSrc, "api/index.ts"), "utf8");
+    expect(api.match(/"\/api\/emulator\/[^"]*"/g)).toEqual(['"/api/emulator/config"']);
+  });
+
+  it("the dashboard has a note for it", () => {
+    const dashboard = readFileSync(path.resolve(here, "../../../tools/admin-dashboard/site/novo.js"), "utf8");
+    expect(dashboard).toMatch(/\blocadora_save_sync:\s*"/);
+  });
+});
+
+/**
  * `apps_landing`, the public pqp Apps pages. A global client flag on its own
  * unauthenticated route (`GET /api/public/apps/config`), read by the page's
  * gate and by the Pages middleware. Pinned from both sides, and the route is

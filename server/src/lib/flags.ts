@@ -741,6 +741,20 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/forum/config?serverId= (enabled)",
   },
+  emulator_room: {
+    description:
+      "Sala de emulador (só local): uma janela no servidor onde cada pessoa abre, do próprio computador, um jogo que ela tem, num emulador que roda no navegador dela. O pqp não fornece jogo nenhum, o arquivo nunca sai do navegador e não existe sala compartilhada. Desligado: o item some do menu do servidor. Não ligue antes da revisão do advogado (docs/EMULATOR_ROOM.md).",
+    env: "EMULATOR_ROOM",
+    parseEnv: exactTrue,
+    // Off, and it stays off until the lawyer review in docs/EMULATOR_ROOM.md is
+    // done. One server first (its override), never globally by default.
+    codeDefault: false,
+    // The client asks `GET /api/emulator/config?serverId=` with the server it is
+    // in. Nothing server side reads it beyond that answer: the emulator is
+    // entirely in the browser and no route touches a game file.
+    perServer: true,
+    clientVia: "GET /api/emulator/config?serverId= (enabled)",
+  },
   nudge: {
     description:
       "Chamar a atenção: em DM entre amigos, um toque chacoalha a janela do outro (com som) e deixa uma linha na conversa. Desligado, o servidor recusa todo pedido e os apps escondem o botão.",
@@ -953,6 +967,20 @@ export const FEATURE_FLAGS = {
     // No `clientVia` field yet: the config carries it as `shareAllowed` per
     // app, and the client that reads it arrives with the product UI. Naming a
     // field here before a client mentions it fails the contract test.
+  },
+  locadora_save_sync: {
+    description:
+      "Saves na conta (Locadora): os saves do jogo e os saves de estado, com as fotinhos deles, ficam também na conta da pessoa, pra continuar em outro aparelho. Nunca a fita (o arquivo do jogo), nunca o nome dela. Desligado: nada novo sobe; quem já tinha saves ainda consegue pegar de volta e apagar por 30 dias.",
+    env: "LOCADORA_SAVE_SYNC",
+    parseEnv: exactTrue,
+    // Off, dark: it amends rule 7 of docs/EMULATOR_ROOM.md (the server learns
+    // save metadata and has routes for it), so it waits for Rafael's go and
+    // the one-line lawyer check of the UX pass. One server first.
+    codeDefault: false,
+    // Every reader knows the server: each route takes a session id, and the
+    // session row names its server. Needs `apps` and `emulator_room` on too.
+    perServer: true,
+    clientVia: "GET /api/apps/config?serverId= (saveSync)",
   },
   apps_landing: {
     description:

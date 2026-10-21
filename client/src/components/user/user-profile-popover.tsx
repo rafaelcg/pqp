@@ -79,6 +79,7 @@ import {
 } from "@/lib/role-hierarchy";
 import { resolveUploadedImageUrl } from "@/lib/avatar";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { ProfileStatusLine } from "@/components/apps/app-presence-line";
 import { cn, formatRecency } from "@/lib/utils";
 import {
   canBlock,
@@ -1433,14 +1434,11 @@ function UserProfileCard({
 
             Not `font-mono` like the tag above it. A tag is an identifier and a
             recado is somebody talking. */}
-        {subject.customStatus && (
-          <p
-            className="mt-1 line-clamp-2 text-center text-xs text-paper"
-            data-profile-custom-status=""
-          >
-            {subject.customStatus}
-          </p>
-        )}
+        <ProfileStatusLine
+          userId={subject.id}
+          displayName={subject.displayName}
+          customStatus={subject.customStatus}
+        />
         {serverBot && (
           <div className="mt-3 space-y-2 text-left">
             <p className="text-xs text-warning">{t("bots.profile.beta")}</p>

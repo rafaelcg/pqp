@@ -16,8 +16,13 @@ export {
   type PickedFile,
   type PqpApp,
   type StateSnapshot,
+  type StoreEntry,
+  type StoredValue,
+  type StoreUsage,
 } from "./app.js";
 export { PortClient, REQUEST_TIMEOUT_MS, type Unsubscribe } from "./client.js";
+// Saves na conta: its own module, so an app that never imports it builds byte for byte as before (see sync.ts)
+export { connectWithSync, createSyncApi, type SyncApi, type SyncEntry, type SyncPut, type SyncStatus } from "./sync.js";
 export { PqpAppError } from "./errors.js";
 export type {
   AppEndReason,

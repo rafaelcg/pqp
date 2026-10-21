@@ -24,7 +24,9 @@ import {
   connect,            // the handshake: Promise<PqpApp>
   applyTheme,         // pqp's design tokens onto your page
   PqpAppError,        // what every rejected call throws
+  connectWithSync,    // connect() plus the account-saves calls (Locadora only)
   createApp,          // lower level: build the app over a port (tests, advanced)
+  createSyncApi,      // lower level: the account-saves calls over a port
   PortClient,         // lower level: the request and push plumbing
   REQUEST_TIMEOUT_MS, // 15_000
 } from "@pqp/app-sdk";
@@ -33,13 +35,13 @@ import {
 | Export | Kind | Page |
 |---|---|---|
 | `connect(options?)` | function | [connect()](/sdk/connect) |
-| `PqpApp` and its members: `hello`, `connection`, `participants`, `state`, `events`, `assets`, `files`, `ui`, `share`, `end()`, `on()` | type | [The app object](/sdk/app) |
+| `PqpApp` and its members: `hello`, `connection`, `participants`, `state`, `events`, `assets`, `files`, `store`, `ui`, `share`, `end()`, `on()` | type | [The app object](/sdk/app) |
 | `PqpAppError` | class | [Errors](/sdk/errors) |
 | `applyTheme(theme, root?)`, `ThemeRoot` | function, type | [Theme](/sdk/theme) |
 | `Participant`, `StateSnapshot`, `AppEvent`, `PickedFile`, `AppEventMap`, `Unsubscribe`, `ConnectOptions`, `HandshakeWindow`, `JsonValue`, `BridgeHello`, `BridgeParticipant`, `BridgeTheme`, `BridgeErrorCode`, `BridgeConnectionStatus`, `AppEndReason`, `AppRole`, `AppParticipantConnection` | types | [Types](/sdk/types) |
-| `createApp`, `PortClient`, `REQUEST_TIMEOUT_MS` | lower level | [Types and low level](/sdk/types#low-level-exports) |
+| `createApp`, `PortClient`, `REQUEST_TIMEOUT_MS`, `connectWithSync`, `createSyncApi` | lower level | [Types and low level](/sdk/types#low-level-exports) |
 
-The runtime exports are exactly the six names in the first block. Everything else is a type and disappears at build time.
+The runtime exports are exactly the eight names in the first block. Everything else is a type and disappears at build time.
 
 ## A minimal app
 

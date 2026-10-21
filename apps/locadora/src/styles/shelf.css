@@ -1,0 +1,1918 @@
+/*
+ * shelf.css: the balcão, the shelf and the cartridges.
+ * Built on the tokens and the page grid of base.css; imported from main.ts.
+ *
+ * The room is a picture: the inside of the shop (`../art/shop-interior.webp`), under a scrim that is never lighter
+ * than `--loc-scrim-low` anywhere and never lighter than `--loc-scrim-top` behind the top bar, so what is written on
+ * it keeps its contrast whatever pixel of the art is under it (contrast.test.ts measures against the scrim over
+ * white). The cartridges are pictures too (`cart-blank.webp`, `cart-gb.webp`); what CSS draws is type, light, glass
+ * and the wood of the plank, never an object.
+ *
+ * What is written straight on the room (the sign, the top bar, the shelf's cabinet) uses the fixed wall colours;
+ * panels (Continuar, Regras, the Ficha) are chrome and follow the host tokens. No inline styles anywhere: the
+ * frame's CSP is `style-src 'self'`, so the few dynamic values (the meter's width, a row's column count, a label's
+ * letter size) are set through the CSSOM.
+ *
+ * Every animation here is slow, small and off with reduced motion (the block at the end).
+ */
+
+/* ---- the room: the shop behind the Balcão ---- */
+
+.loc > .loc-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  display: none;
+  margin: 0;
+  overflow: hidden;
+  container-type: size;
+  pointer-events: none;
+  background: var(--loc-wall);
+}
+
+.loc[data-view="balcao"] > .loc-backdrop {
+  display: block;
+}
+
+/*
+ * The scene is the picture at its own aspect, covering the pane (object-fit: cover by hand, so the lights below can
+ * be placed in the picture's own coordinates). The focus point is the neon sign and the TV, right of centre.
+ */
+.loc-backdrop-scene {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: max(100cqw, 100cqh * 1376 / 768);
+  aspect-ratio: 1376 / 768;
+  background: url("../art/shop-interior.webp") 0 0 / 100% 100% no-repeat;
+  image-rendering: pixelated;
+  transform: translateX(-50%);
+}
+
+@container (max-aspect-ratio: 1 / 1) {
+  /* a phone held upright sees a slice of the shop: the slice with the sign and the TV in it */
+  .loc-backdrop-scene {
+    left: 0;
+    transform: translateX(calc((100cqw - 100%) * 0.66));
+  }
+}
+
+/* the scrim: dark behind the top bar, open in the middle where the room shows, dark again where the cabinet stands */
+.loc-backdrop::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(120% 80% at 70% 40%, transparent 40%, rgba(5, 4, 10, 0.35) 100%),
+    linear-gradient(
+      180deg,
+      var(--loc-scrim-top) 0,
+      var(--loc-scrim-top) 150px,
+      var(--loc-scrim-low) 46%,
+      var(--loc-scrim-low) 58%,
+      var(--loc-scrim-top) 100%
+    );
+}
+
+/* a narrow pane is all content, little room: the scrim stays closed */
+@container (max-width: 700px) {
+  .loc-backdrop::after {
+    background: linear-gradient(180deg, var(--loc-scrim-top), var(--loc-scrim-mid) 40%, var(--loc-scrim-top));
+  }
+}
+
+/* the lights of the shop, placed on the picture in its own percentages: they breathe, they never flash */
+.loc-glow {
+  position: absolute;
+  display: block;
+  border-radius: 50%;
+  mix-blend-mode: screen;
+  opacity: 0.55;
+}
+
+.loc-glow[data-glow="neon"] {
+  left: 56.2%;
+  top: 21.2%;
+  width: 20.4%;
+  height: 26%;
+  background: radial-gradient(closest-side, rgba(255, 95, 200, 0.4), rgba(95, 242, 255, 0.16) 55%, transparent);
+  animation: loc-neon-breathe 5.2s ease-in-out infinite alternate, loc-neon-stutter 11s steps(1, end) infinite;
+}
+
+.loc-glow[data-glow="tv"] {
+  left: 61.2%;
+  top: 42.2%;
+  width: 14.5%;
+  height: 19.5%;
+  background: radial-gradient(closest-side, rgba(110, 220, 255, 0.42), rgba(110, 160, 255, 0.12) 60%, transparent);
+  animation: loc-tv-flicker 2.6s ease-in-out infinite alternate;
+}
+
+.loc-glow[data-glow^="bulb"] {
+  top: 8.6%;
+  width: 8.7%;
+  height: 15.6%;
+  background: radial-gradient(closest-side, rgba(255, 196, 120, 0.5), transparent);
+  animation: loc-bulb 7s ease-in-out infinite alternate;
+}
+
+.loc-glow[data-glow="bulb-1"] {
+  left: 25.3%;
+}
+
+.loc-glow[data-glow="bulb-2"] {
+  left: 44.3%;
+  animation-delay: -2.3s;
+}
+
+.loc-glow[data-glow="bulb-3"] {
+  left: 58.9%;
+  animation-delay: -4.1s;
+}
+
+.loc-glow[data-glow="lamp"] {
+  left: 19.6%;
+  top: 39%;
+  width: 13%;
+  height: 18%;
+  background: radial-gradient(closest-side, rgba(255, 190, 110, 0.4), transparent);
+  animation: loc-bulb 9s ease-in-out infinite alternate;
+}
+
+.loc-glow[data-glow="dusk"] {
+  left: 80.7%;
+  top: 20.8%;
+  width: 17%;
+  height: 40%;
+  border-radius: 30%;
+  background: radial-gradient(closest-side, rgba(255, 120, 170, 0.22), transparent);
+  animation: loc-bulb 14s ease-in-out infinite alternate;
+}
+
+@keyframes loc-neon-breathe {
+  from {
+    opacity: 0.42;
+  }
+  to {
+    opacity: 0.72;
+  }
+}
+
+/* once every eleven seconds the tube catches for a tenth of a second: one dip, well under three a second */
+@keyframes loc-neon-stutter {
+  0%,
+  96% {
+    filter: none;
+  }
+  97% {
+    filter: brightness(0.55);
+  }
+  98% {
+    filter: none;
+  }
+}
+
+@keyframes loc-tv-flicker {
+  from {
+    opacity: 0.4;
+  }
+  to {
+    opacity: 0.62;
+  }
+}
+
+@keyframes loc-bulb {
+  from {
+    opacity: 0.38;
+  }
+  to {
+    opacity: 0.6;
+  }
+}
+
+/* ---- the sign ---- */
+
+.loc-sign {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+}
+
+.loc-sign-neon {
+  margin: 0;
+  padding: 7px 14px 9px;
+  border: 2px solid rgba(255, 95, 200, 0.6);
+  border-radius: 10px;
+  background: rgba(14, 6, 18, 0.55);
+  color: #ffe9f7;
+  font-family: var(--loc-font-sign);
+  font-size: 1.5rem;
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  line-height: 1;
+  text-transform: uppercase;
+  text-shadow:
+    0 0 2px #fff,
+    0 0 6px var(--loc-neon-pink),
+    0 0 14px var(--loc-neon-pink),
+    0 0 28px rgba(255, 95, 200, 0.6);
+  box-shadow:
+    0 0 12px rgba(255, 95, 200, 0.4),
+    0 0 40px rgba(255, 95, 200, 0.16),
+    inset 0 0 12px rgba(255, 95, 200, 0.28);
+  animation: loc-neon-hum 6s ease-in-out infinite alternate;
+}
+
+.loc-sign[data-size="lg"] .loc-sign-neon {
+  padding: 10px 20px 14px;
+  font-size: 2.6rem;
+}
+
+.loc-sign-sub {
+  color: var(--loc-neon-cyan);
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-shadow: 0 0 10px rgba(95, 242, 255, 0.55);
+}
+
+/* power-on, once a session: 1.2 s, two dips, three changes in the first second, then the slow hum */
+.loc-sign[data-power-on] .loc-sign-neon {
+  animation:
+    loc-neon-on 1.2s steps(1, end) both,
+    loc-neon-hum 6s ease-in-out 1.2s infinite alternate;
+}
+
+@keyframes loc-neon-on {
+  0% {
+    opacity: 0.25;
+  }
+  22% {
+    opacity: 1;
+  }
+  45% {
+    opacity: 0.5;
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+/* the tube's glow swells and settles: brightness only, never a blink */
+@keyframes loc-neon-hum {
+  from {
+    filter: brightness(0.92);
+  }
+  to {
+    filter: brightness(1.08) saturate(1.1);
+  }
+}
+
+/* ---- the balcão's column: the bar, the counter, the cabinet at the foot ---- */
+
+.loc[data-view="balcao"] > .loc-shelf {
+  position: relative;
+  z-index: 1;
+  margin-block: 0;
+}
+
+/*
+ * ---- the top bar ----
+ * The sign on the left; on the right the meter, the pill of icons and "Botar fita", as one group. One row from
+ * 760 px up (the sign's line and the key on the button go first, under 1024); under 760 two rows: the sign and the
+ * meter, then the buttons. Nothing wraps on its own: every width has its layout.
+ */
+
+.loc-top {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 12px 20px;
+  padding-block: 16px 0;
+}
+
+.loc-top > .loc-sign {
+  flex: 0 1 auto;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.loc-top .loc-sign-sub {
+  white-space: nowrap;
+}
+
+.loc-top-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+}
+
+/* the icons as one control strip: a pill around them, the buttons inside it borderless */
+.loc-top-tools {
+  position: relative;
+  display: flex;
+  border-radius: var(--loc-control);
+  background: var(--loc-scrim-top);
+  /* the outline is drawn inside, so the strip is exactly as tall as "Botar fita" beside it */
+  box-shadow: inset 0 0 0 1px var(--loc-border-strong);
+}
+
+.loc-top-tools > .loc-iconbtn:focus-visible {
+  outline-offset: -2px;
+}
+
+.loc-top-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06), 0 8px 24px rgba(200, 245, 90, 0.18);
+}
+
+@container loc (max-width: 1023px) {
+  /* the key is in the hint line under the shelf and in `aria-keyshortcuts`; the sign's line is the first to go */
+  .loc-top-pick .loc-kbd {
+    display: none;
+  }
+  .loc-top .loc-sign-sub {
+    display: none;
+  }
+  .loc-top .loc-sign-neon {
+    font-size: 1.3rem;
+  }
+}
+
+@container loc (max-width: 759px) {
+  .loc-top {
+    flex-wrap: wrap;
+  }
+  .loc-top-actions {
+    display: contents;
+  }
+  .loc-top > .loc-sign {
+    order: 1;
+  }
+  .loc-top .loc-top-meters {
+    order: 2;
+    margin-left: auto;
+  }
+  /* the line between the two rows */
+  .loc-top::after {
+    content: "";
+    order: 3;
+    flex: 1 0 100%;
+    height: 0;
+  }
+  /* the second row: "Botar fita" under the sign, the icons under the meter */
+  .loc-top-pick {
+    order: 4;
+  }
+  .loc-top-tools {
+    order: 5;
+    margin-left: auto;
+  }
+}
+
+@container loc (min-width: 560px) and (max-width: 759px) {
+  .loc-top .loc-sign-sub {
+    display: inline;
+  }
+}
+
+@container loc (max-width: 559px) {
+  .loc-top {
+    gap: 12px 8px;
+    padding-top: 12px;
+  }
+  /* a phone: "Botar fita" takes what the icons leave of the row, never the whole row (the icons stay beside it) */
+  .loc-top-pick {
+    flex: 1 1 0;
+    min-width: 0;
+    justify-content: center;
+    gap: 6px;
+    padding-inline: 12px;
+  }
+  .loc-top-pick > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+@container loc (max-width: 379px) {
+  /* the narrowest phones keep the words and drop the button's icon */
+  .loc-top-pick > svg {
+    display: none;
+  }
+}
+
+.loc-kbd {
+  padding: 3px 5px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  font: 600 0.6875rem/1 var(--loc-mono);
+}
+
+.loc-iconbtn {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--loc-control);
+  background: transparent;
+  color: var(--loc-wall-text-2);
+  cursor: pointer;
+  transition:
+    background var(--loc-fast) var(--loc-ease),
+    color var(--loc-fast) var(--loc-ease);
+}
+
+.loc-iconbtn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--loc-wall-text);
+}
+
+.loc-iconbtn:focus-visible {
+  outline: 2px solid var(--loc-ring);
+  outline-offset: 2px;
+}
+
+/* the button's name, under it, on hover and on keyboard focus: the same words as its aria-label */
+.loc-iconbtn[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 50%;
+  z-index: 30;
+  padding: 6px 10px;
+  border: 1px solid var(--loc-border-strong);
+  border-radius: 8px;
+  background: var(--loc-hud);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  color: var(--loc-wall-text);
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -4px);
+  transition:
+    opacity var(--loc-fast) var(--loc-ease),
+    transform var(--loc-fast) var(--loc-ease);
+}
+
+/* on keyboard focus always; on hover only where there is a real pointer (a tap must not leave it stuck open) */
+.loc-iconbtn[data-tip]:focus-visible::after {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  transition-delay: 0.25s;
+}
+
+@media (hover: hover) {
+  .loc-iconbtn[data-tip]:hover::after {
+    opacity: 1;
+    transform: translate(-50%, 0);
+    transition-delay: 0.25s;
+  }
+  .loc-top-tools > .loc-iconbtn:last-child:hover::after {
+    transform: none;
+  }
+}
+
+/* the strip's last icon keeps its tooltip inside the pane: it hangs from its right edge */
+.loc-top-tools > .loc-iconbtn:last-child::after {
+  left: auto;
+  right: 0;
+  transform: translateY(-4px);
+}
+
+.loc-top-tools > .loc-iconbtn:last-child:focus-visible::after {
+  transform: none;
+}
+
+/* the meter and, under it, what the account holds (Saves na conta): one column, right-aligned against the buttons */
+.loc-top-meters {
+  display: grid;
+  justify-items: end;
+  gap: 6px;
+}
+
+.loc-cloud-host {
+  display: grid;
+  justify-items: end;
+}
+
+.loc-cloud {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--loc-wall-text-2);
+  font: inherit;
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  text-align: right;
+}
+
+.loc-cloud svg {
+  flex: none;
+  color: var(--loc-wall-accent);
+}
+
+/* the account did not answer: amber, and a button a whole target tall (the one state with something to do) */
+.loc-cloud[data-state="unreachable"],
+.loc-cloud[data-state="no-store"] {
+  color: var(--loc-neon-amber);
+}
+
+.loc-cloud[data-state="unreachable"] svg,
+.loc-cloud[data-state="no-store"] svg {
+  color: var(--loc-neon-amber);
+}
+
+.loc-cloud-retry {
+  min-height: 44px;
+  padding: 0 4px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.loc-cloud-retry:focus-visible {
+  outline: 2px solid var(--loc-ring);
+  outline-offset: 2px;
+  border-radius: var(--loc-control);
+}
+
+/* the meter: the short line over a thin bar, right-aligned against the buttons */
+.loc-meter {
+  display: grid;
+  gap: 5px;
+  width: 128px;
+  color: var(--loc-wall-text-2);
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  text-align: right;
+}
+
+.loc-meter-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.loc-meter-bar {
+  height: 4px;
+  overflow: hidden;
+  border-radius: var(--loc-pill);
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.loc-meter-bar i {
+  display: block;
+  height: 100%;
+  min-width: 4px;
+  border-radius: inherit;
+  background: var(--loc-wall-accent);
+  box-shadow: 0 0 8px rgba(200, 245, 90, 0.5);
+  transition: width var(--loc-slow) var(--loc-ease);
+}
+
+.loc-meter[data-level="full"] {
+  color: var(--loc-neon-amber);
+}
+
+.loc-meter[data-level="full"] .loc-meter-bar i {
+  background: var(--loc-neon-amber);
+}
+
+/*
+ * ---- the counter: Continuar first, Regras under it, in a column on the left ----
+ * The rest of the width is the room: the rack, the sign, the TV and the street through the door stay in view.
+ */
+
+.loc-counter {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}
+
+/* one column for both cards: Regras is exactly as wide as Continuar, 12 px under it */
+@container loc (min-width: 900px) {
+  .loc-counter {
+    grid-template-columns: minmax(0, clamp(560px, 46%, 700px));
+  }
+}
+
+.loc-eyebrow {
+  margin: 0;
+  color: var(--loc-warning-text);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+/* the panels on the counter: glass over the room, the host's own surface in a light theme */
+.loc-continue,
+.loc-rules {
+  border: 1px solid var(--loc-border);
+  border-radius: 18px;
+  background: var(--loc-glass);
+  box-shadow:
+    0 24px 60px rgba(0, 0, 0, 0.38),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  color: var(--loc-text);
+  -webkit-backdrop-filter: blur(14px) saturate(1.2);
+  backdrop-filter: blur(14px) saturate(1.2);
+}
+
+/*
+ * ---- Continuar de onde parou ----
+ * The card lays itself out by its OWN width, not the page's: in the counter's column it is ~630 px wide, alone on
+ * a phone ~360, and the page width says neither. `.loc-continue-host` is the container (a container cannot
+ * restyle itself), the card inside is the grid.
+ *   >= 640 px   a big TV | text
+ *   440 to 639  the TV | text
+ *   < 440       a small TV | text
+ * The autosave's picture is on the TV's screen at every width (`.loc-continue-thumb`).
+ */
+
+.loc-continue-host {
+  container: continue / inline-size;
+  min-width: 0;
+}
+
+.loc-continue {
+  position: relative;
+  display: grid;
+  /* the TV's column leaves room on its right for the cartridge leaning on the set */
+  grid-template-columns: 156px minmax(0, 1fr);
+  align-items: center;
+  gap: 16px 28px;
+  padding: 18px 24px 18px 20px;
+}
+
+/*
+ * The TV (`tv-crt.webp`, cut at the top of its stand): its screen is a parallelogram on the sprite, 215 by 185 of
+ * 520 by 455 at (80, 210), leaning 9.2 degrees, and the picture goes on it the same way.
+ */
+.loc-continue-tv {
+  position: relative;
+  aspect-ratio: 520 / 455;
+  background: url("../art/tv-crt.webp") 50% 0 / 100% auto no-repeat;
+  filter: drop-shadow(0 12px 16px rgba(0, 0, 0, 0.5));
+}
+
+/* the screen's light on the card around it */
+.loc-continue-tv::before {
+  content: "";
+  position: absolute;
+  left: -10%;
+  top: 20%;
+  width: 90%;
+  height: 90%;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, rgba(110, 220, 255, 0.22), transparent);
+  pointer-events: none;
+}
+
+.loc-tv-screen {
+  position: absolute;
+  left: 15.4%;
+  top: 46.2%;
+  width: 41.4%;
+  height: 40.7%;
+  overflow: hidden;
+  border-radius: 18% / 16%;
+  transform: skewY(9.2deg);
+  transform-origin: 0 0;
+}
+
+.loc-continue-thumb {
+  position: absolute;
+  inset: 0;
+  background: #000;
+}
+
+.loc-continue-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+/* scan lines, a rolling bar, the glass's glare and the tube's dark corners, over the picture or the idle screen */
+.loc-tv-glass {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(90% 70% at 28% 18%, rgba(255, 255, 255, 0.24), transparent 46%),
+    repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.32) 0 1px, transparent 1px 3px),
+    radial-gradient(ellipse at 50% 50%, transparent 52%, rgba(0, 0, 0, 0.5) 100%);
+}
+
+.loc-tv-glass::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -30%;
+  height: 30%;
+  background: linear-gradient(180deg, transparent, rgba(255, 255, 255, 0.1), transparent);
+  animation: loc-roll 6.5s linear infinite;
+}
+
+@keyframes loc-roll {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(440%);
+  }
+}
+
+/* the game's cartridge, leaning on the set */
+.loc-continue-cart {
+  position: absolute;
+  right: -12%;
+  bottom: -2%;
+  width: 37%;
+  transform: rotate(7deg);
+  filter: drop-shadow(0 6px 6px rgba(0, 0, 0, 0.55));
+}
+
+.loc-continue-cart .loc-cart,
+.loc-continue-cart .loc-cart[data-kind="handheld"] {
+  --cart-w: 100%;
+}
+
+.loc-continue-badge {
+  position: absolute;
+  left: 4%;
+  bottom: -6px;
+  padding: 3px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: var(--loc-pill);
+  background: rgba(10, 12, 16, 0.86);
+  color: var(--loc-wall-text);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.loc-continue-main {
+  min-width: 0;
+}
+
+.loc-continue .loc-eyebrow {
+  text-wrap: balance;
+}
+
+.loc-continue-title {
+  margin: 8px 0 4px;
+  font-family: var(--loc-font-sign);
+  font-size: 1.625rem;
+  font-weight: 400;
+  letter-spacing: 0.01em;
+  line-height: 1.12;
+  /* a long title wraps between words; only a single word wider than the column is broken */
+  overflow-wrap: break-word;
+  text-wrap: balance;
+}
+
+/* a long name in smaller letters, so it takes two lines and not four (continue-card.ts says which) */
+.loc-continue-title[data-length="long"] {
+  font-size: 1.3125rem;
+  line-height: 1.16;
+}
+
+.loc-continue .loc-muted {
+  color: var(--loc-text-2);
+  font-size: 0.875rem;
+}
+
+.loc-continue-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.loc-continue .loc-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.loc-continue .loc-button-quiet,
+.loc-ficha .loc-button-quiet {
+  border-color: var(--loc-border-strong);
+  color: var(--loc-text);
+}
+
+@container continue (min-width: 640px) {
+  .loc-continue {
+    grid-template-columns: 188px minmax(0, 1fr);
+  }
+  .loc-continue-title {
+    font-size: 1.875rem;
+  }
+  .loc-continue-title[data-length="long"] {
+    font-size: 1.5rem;
+  }
+}
+
+@container continue (max-width: 439px) {
+  /* a phone: the TV beside the eyebrow and the title, the line and the buttons across the whole card under them */
+  .loc-continue {
+    grid-template-columns: 112px minmax(0, 1fr);
+    grid-template-areas:
+      "tv eyebrow"
+      "tv title"
+      "line line"
+      "actions actions";
+    align-items: end;
+    gap: 4px 16px;
+    padding: 16px;
+  }
+  .loc-continue-main {
+    display: contents;
+  }
+  .loc-continue-tv {
+    grid-area: tv;
+    align-self: center;
+  }
+  .loc-continue .loc-eyebrow {
+    grid-area: eyebrow;
+  }
+  .loc-continue-title {
+    grid-area: title;
+    align-self: start;
+  }
+  .loc-continue .loc-muted {
+    grid-area: line;
+    margin-top: 8px;
+  }
+  .loc-continue-actions {
+    grid-area: actions;
+    margin-top: 12px;
+  }
+  .loc-continue-actions .loc-button {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+  .loc-continue-title {
+    font-size: 1.25rem;
+  }
+  .loc-continue-title[data-length="long"] {
+    font-size: 1.0625rem;
+  }
+  /* the small TV keeps its cartridge to itself: it must not lean into the title beside it */
+  .loc-continue-cart {
+    right: -6%;
+    width: 36%;
+  }
+  .loc-continue-badge {
+    display: none;
+  }
+}
+
+/* ---- Regras da casa: quiet, beside the loud things ---- */
+
+.loc-rules {
+  position: relative;
+  display: grid;
+  gap: 12px;
+  padding: 20px 24px;
+}
+
+.loc-rules-title {
+  margin: 0;
+  padding-right: 96px;
+  color: var(--loc-text-2);
+  font-size: 0.75rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.loc-rules-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.loc-rules-list li {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 10px;
+  color: var(--loc-text-2);
+  font-size: 0.9375rem;
+  line-height: 1.45;
+}
+
+.loc-rules-list svg {
+  margin-top: 2px;
+  color: var(--loc-accent-text);
+}
+
+.loc-rules-stamp {
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  padding: 4px 6px;
+  border: 2px solid currentColor;
+  border-radius: 4px;
+  color: var(--loc-stamp-text);
+  font-size: 0.6875rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  line-height: 1;
+  text-transform: uppercase;
+  transform: rotate(8deg);
+}
+
+.loc-rules[data-compact] {
+  gap: 8px;
+  padding: 16px 24px 18px;
+}
+
+.loc-rules[data-compact] .loc-rules-list li {
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+
+.loc-rules[data-compact] .loc-rules-list svg {
+  width: 16px;
+  height: 16px;
+}
+
+/*
+ * ---- Tua prateleira: a cabinet standing at the foot of the room ----
+ * `#v-shelf` is a column; the cabinet's top margin is `auto`, so with little on the counter it sits low, like
+ * furniture, and the room shows above it.
+ */
+
+.loc-shelfview {
+  position: relative;
+  display: grid;
+  /* the one column is the pane's width and no wider: an `auto` track grows to the rack's fixed cells and drags the head (the sort select) off the right edge */
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+  margin-top: auto;
+  padding: 18px 8px 14px;
+  /* a whole cabinet, standing on the floor with room under it: never cut by the pane's bottom edge */
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 22px;
+  background:
+    linear-gradient(180deg, rgba(255, 95, 200, 0.06), transparent 120px),
+    var(--loc-shelf-panel);
+  box-shadow:
+    0 -30px 80px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  color: var(--loc-wall-text);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+
+/* a neon tube along the cabinet's top edge, pink into cyan */
+.loc-shelfview::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  right: 40px;
+  left: 40px;
+  height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, transparent, var(--loc-neon-pink) 18%, var(--loc-neon-cyan) 82%, transparent);
+  box-shadow: 0 0 14px rgba(255, 95, 200, 0.55), 0 0 28px rgba(95, 242, 255, 0.25);
+  opacity: 0.85;
+}
+
+.loc-shelfview-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding-inline: 16px;
+}
+
+.loc-shelfview-title {
+  margin: 0 8px 0 0;
+  font-family: var(--loc-font-sign);
+  font-size: 1.125rem;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+}
+
+.loc-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.loc-chip {
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: var(--loc-pill);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--loc-wall-text-2);
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background var(--loc-fast) var(--loc-ease),
+    color var(--loc-fast) var(--loc-ease);
+}
+
+.loc-chip:hover {
+  background: rgba(255, 255, 255, 0.09);
+  color: var(--loc-wall-text);
+}
+
+.loc-chip[aria-pressed="true"] {
+  border-color: rgba(200, 245, 90, 0.55);
+  background: rgba(200, 245, 90, 0.14);
+  color: var(--loc-wall-text);
+}
+
+.loc-chip:focus-visible,
+.loc-select:focus-visible,
+.loc-input:focus-visible {
+  outline: 2px solid var(--loc-ring);
+  outline-offset: 2px;
+}
+
+.loc-chip-n {
+  margin-left: 6px;
+  color: var(--loc-wall-text-3);
+  font-weight: 500;
+}
+
+@media (pointer: coarse) {
+  .loc-chip,
+  .loc-select {
+    min-height: 44px;
+  }
+}
+
+.loc-sort {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  color: var(--loc-wall-text-3);
+  font-size: 0.8125rem;
+}
+
+.loc-select {
+  min-height: 36px;
+  padding: 0 28px 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: var(--loc-control);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--loc-wall-text);
+  color-scheme: dark;
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.loc-notice {
+  margin: 0 16px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--loc-neon-cyan);
+  border-radius: var(--loc-control);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--loc-wall-text-2);
+  font-size: 0.875rem;
+}
+
+.loc-notice[data-level="warn"] {
+  border-left-color: var(--loc-neon-amber);
+}
+
+.loc-hint-line {
+  margin: 0;
+  padding-inline: 16px;
+  color: var(--loc-wall-text-3);
+  font-size: 0.75rem;
+}
+
+/* ---- the rack: rows of cartridges on planks ---- */
+
+.loc-rack {
+  /* the cell (the widest cartridge), the gap and the row's padding: shelf.ts reads these three to count the columns */
+  --loc-cell: 150px;
+  --loc-row-gap: 18px;
+  --loc-row-pad: 16px;
+  display: grid;
+  /* a plank (18 px under its row) and the air over the next row's cartridges */
+  gap: 32px;
+  padding-bottom: 26px;
+}
+
+@container loc (min-width: 1600px) {
+  .loc-rack {
+    --loc-cell: 172px;
+    --loc-row-gap: 24px;
+    --loc-row-pad: 24px;
+  }
+}
+
+.loc-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(var(--cols, 4), var(--loc-cell));
+  justify-content: start;
+  justify-items: center;
+  align-items: end;
+  gap: var(--loc-row-gap);
+  min-height: 0;
+  padding: 16px var(--loc-row-pad) 0;
+}
+
+/*
+ * The plank: wood in hard bands like the pixels of the art (lip, top, face, shadow), seams and grain flecks across
+ * it, a pink tube of light under its edge. Scenery: behind the cartridges in paint order and out of the way of the
+ * pointer (it used to catch the last pixels of every box, which took no hover and no click there).
+ */
+.loc-row::after {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  pointer-events: none;
+  right: 0;
+  bottom: -18px;
+  left: 0;
+  height: 18px;
+  border-radius: 2px;
+  background:
+    repeating-linear-gradient(90deg, transparent 0 58px, rgba(0, 0, 0, 0.28) 58px 60px, transparent 60px 148px, rgba(255, 214, 170, 0.1) 148px 152px, transparent 152px 236px),
+    repeating-linear-gradient(90deg, transparent 0 20px, rgba(0, 0, 0, 0.08) 20px 22px, transparent 22px 34px),
+    linear-gradient(180deg, #f0b07a 0 2px, #c27a46 2px 6px, #8f5130 6px 12px, #6a3a22 12px 15px, #2a150c 15px 18px);
+  box-shadow:
+    0 16px 26px rgba(0, 0, 0, 0.6),
+    0 6px 22px rgba(255, 95, 200, 0.22);
+}
+
+.loc-cell {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+/* where a cartridge stands, its shadow on the plank; it thins out when it is lifted off */
+.loc-cell::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  left: 8%;
+  right: 8%;
+  bottom: -6px;
+  height: 12px;
+  border-radius: 50%;
+  background: radial-gradient(50% 50% at 50% 50%, rgba(0, 0, 0, 0.8), transparent 75%);
+  pointer-events: none;
+  transition:
+    opacity var(--loc-base) var(--loc-ease-out),
+    transform var(--loc-base) var(--loc-ease-out);
+}
+
+.loc-cell:has(> .loc-box:is(:hover, :focus-visible, [aria-expanded="true"]))::before {
+  opacity: 0.5;
+  transform: scaleX(0.8);
+}
+
+.loc-cell:has(> .loc-ghost)::before {
+  display: none;
+}
+
+/* ---- a cartridge: the sprite, tinted per console, and the title on its label ---- */
+
+.loc-cart {
+  /* how wide it is drawn; the height follows the sprite */
+  --cart-w: var(--loc-cell, 150px);
+  --cart-tint: saturate(1);
+  --cart-ribbon: #4b3a86;
+  --cart-ink: #2a1630;
+  container-type: inline-size;
+  position: relative;
+  display: block;
+  width: var(--cart-w);
+  aspect-ratio: 520 / 471;
+}
+
+.loc-cart[data-kind="handheld"] {
+  --cart-w: calc(var(--loc-cell, 150px) * 0.9);
+  aspect-ratio: 520 / 584;
+}
+
+/*
+ * The parts are matched as CHILDREN of `.loc-cart`, and every box property is set here, never inherited from a
+ * default: the step-4 cartridge of the walkthrough and the load screen (`ui/cartridge.ts`, onboarding.css) shares
+ * these class names in bare selectors from a later stylesheet, and once moved this sprite 38% down its own height,
+ * shrank it to 86% and set its title at a fixed 6.4cqw, rotated, two lines at most.
+ */
+.loc-cart > .loc-cart-body {
+  position: absolute;
+  inset: 0;
+  width: auto;
+  height: auto;
+  margin: 0;
+  aspect-ratio: auto;
+  transform: none;
+  background: url("../art/cart-blank.webp") 0 0 / 100% 100% no-repeat;
+  filter: var(--cart-tint) drop-shadow(0 2px 1px rgba(0, 0, 0, 0.5)) drop-shadow(0 10px 12px rgba(0, 0, 0, 0.45));
+  transition: filter var(--loc-base) var(--loc-ease-out);
+}
+
+.loc-cart[data-kind="handheld"] .loc-cart-body {
+  background-image: url("../art/cart-gb.webp");
+}
+
+/* the consoles: a grey NES, the purple-grey SNES as drawn, a grey Game Boy, a teal Color, an indigo Advance */
+.loc-cart[data-platform="nes"] {
+  --cart-tint: saturate(0.18) brightness(1.08) contrast(1.05);
+  --cart-ribbon: #a8302c;
+}
+
+.loc-cart[data-platform="snes"] {
+  --cart-ribbon: #4b3a86;
+}
+
+.loc-cart[data-platform="gb"] {
+  --cart-tint: grayscale(0.85) brightness(1.12);
+}
+
+.loc-cart[data-platform="gbc"] {
+  --cart-tint: hue-rotate(150deg) saturate(1.2);
+  --cart-ink: #10302e;
+}
+
+.loc-cart[data-platform="gba"] {
+  --cart-tint: hue-rotate(205deg) saturate(1.35) brightness(0.95);
+  --cart-ink: #1d1a46;
+}
+
+/*
+ * The label is the cream window INSIDE the printed frame, measured on the sprites: on the console cartridge 291 by
+ * 117 at (114, 108) of 520 by 471, on the handheld one 293 by 251 at (113, 210) of 520 by 584. The title is set in
+ * its middle, in the area `TITLE_AREA` names in cart-label.ts (label units: the label is 100 wide).
+ */
+.loc-cart > .loc-cart-label {
+  container-type: inline-size;
+  position: absolute;
+  inset: auto;
+  left: 21.92%;
+  top: 22.93%;
+  width: 55.96%;
+  height: 24.84%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+  place-items: center;
+}
+
+.loc-cart[data-kind="handheld"] > .loc-cart-label {
+  left: 21.73%;
+  top: 35.96%;
+  width: 56.35%;
+  height: 42.98%;
+}
+
+/*
+ * The console's name on a tab printed over the frame's bottom edge (y 252 of 471), under the window and well clear
+ * of the grip's ridges at the top. Sized by the cartridge (`.loc-cart` is the container), not by the label.
+ */
+.loc-cart > .loc-cart-ribbon {
+  position: absolute;
+  left: 50%;
+  top: 53.5%;
+  padding: 0.32em 0.9em 0.36em 1.06em;
+  border-radius: 0.5em;
+  background: var(--cart-ribbon);
+  box-shadow: 0 0.12em 0 rgba(0, 0, 0, 0.28);
+  color: #fff;
+  font-family: var(--loc-font);
+  font-size: 4.6cqw;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  line-height: 1;
+  text-align: center;
+  white-space: nowrap;
+  transform: translate(-50%, -50%);
+}
+
+.loc-cart-label > .loc-cart-title {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: auto;
+  max-width: 100%;
+  margin: 0;
+  overflow: visible;
+  color: var(--cart-ink);
+  font-family: var(--loc-font-sign);
+  /* `--fs` is `fitLabel`'s size, hundredths of the label's width */
+  font-size: calc(var(--fs, 12) * 1cqw);
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  line-height: 1.02;
+  overflow-wrap: normal;
+  text-align: center;
+  text-shadow: 0 0.06em 0 rgba(255, 255, 255, 0.45);
+  transform: none;
+  -webkit-line-clamp: unset;
+  line-clamp: none;
+}
+
+.loc-cart-title > .loc-cart-line {
+  display: block;
+  white-space: nowrap;
+}
+
+/* a Game Boy cartridge has its console's name pressed into the recess at its top (370 by 80 at (75, 45)) */
+.loc-cart > .loc-cart-brand {
+  position: absolute;
+  left: 14.4%;
+  right: 14.4%;
+  top: 8.2%;
+  height: 12.6%;
+  display: grid;
+  place-items: center;
+  color: rgba(20, 14, 24, 0.5);
+  font-family: var(--loc-font);
+  /* "GB ADVANCE", the longest, stays inside the recess with room on both sides */
+  font-size: 6.6cqw;
+  font-style: italic;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  text-shadow: 0 0.08em 0 rgba(255, 255, 255, 0.28);
+  white-space: nowrap;
+}
+
+/* ---- a box on the shelf: the cartridge as a button ---- */
+
+.loc-box {
+  position: relative;
+  z-index: 1;
+  display: block;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  transform-origin: 50% 100%;
+  transition: transform var(--loc-base) var(--loc-ease-out);
+}
+
+/*
+ * The lift (-10px, tilted) moves the box away from a pointer that is on its bottom edge, so the pointer is left on the
+ * plank: the hover let go, the box dropped back, and a click there landed on the shelf and not on the box. A strip
+ * below the box, part of it and moving with it, keeps the pointer on the box for as long as it was.
+ */
+.loc-box::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  right: 0;
+  left: 0;
+  height: 14px;
+}
+
+.loc-box:hover,
+.loc-box:focus-visible,
+.loc-box[aria-expanded="true"] {
+  transform: translateY(-10px) rotate(-1.5deg);
+}
+
+/* lifted, it throws a longer shadow and catches the shop's neon on its rim */
+.loc-box:is(:hover, :focus-visible, [aria-expanded="true"]) .loc-cart-body {
+  filter: var(--cart-tint) brightness(1.04) drop-shadow(0 0 10px rgba(255, 95, 200, 0.35)) drop-shadow(0 18px 18px rgba(0, 0, 0, 0.55));
+}
+
+.loc-box:focus-visible {
+  outline: 2px solid var(--loc-ring);
+  outline-offset: 6px;
+}
+
+.loc-box[aria-expanded="true"] {
+  outline: 2px solid var(--loc-wall-accent);
+  outline-offset: 6px;
+}
+
+.loc-box-sticker {
+  position: absolute;
+  top: 8%;
+  right: -8px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  min-width: 38px;
+  max-width: 68px;
+  height: 38px;
+  padding: 0 6px;
+  border-radius: var(--loc-pill);
+  background: var(--loc-neon-amber);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45), inset 0 -2px 0 rgba(0, 0, 0, 0.12);
+  color: #1d1405;
+  font-size: 0.625rem;
+  font-weight: 800;
+  line-height: 1.05;
+  text-align: center;
+  transform: rotate(10deg);
+}
+
+/* "falta a fita": the saves came, the game file did not. Dimmed, with a plain sticker; a click asks for the file. */
+.loc-box[data-missing="true"] .loc-cart {
+  opacity: 0.5;
+  filter: grayscale(0.7);
+}
+
+/* a strip of masking tape stuck across the corner, written on by hand: not a badge, a note */
+.loc-box[data-missing="true"] .loc-box-sticker {
+  top: 10%;
+  right: -10px;
+  min-width: 0;
+  max-width: 96px;
+  height: auto;
+  padding: 5px 12px 6px;
+  border-radius: 1px;
+  background: linear-gradient(180deg, #fbf3d9, #efe3bf);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.45);
+  color: #2a2116;
+  font-size: 0.6875rem;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  clip-path: polygon(0 8%, 6% 0, 12% 10%, 18% 2%, 82% 2%, 88% 10%, 94% 0, 100% 8%, 100% 92%, 94% 100%, 88% 90%, 82% 98%, 18% 98%, 12% 90%, 6% 100%, 0 92%);
+  transform: rotate(12deg);
+}
+
+.loc-box[data-missing="true"]:hover .loc-cart,
+.loc-box[data-missing="true"]:focus-visible .loc-cart {
+  opacity: 0.85;
+}
+
+/* ---- free spots: a blank cartridge as a ghost, for "Botar outra fita" and the plank's empty places ---- */
+
+.loc-ghost {
+  position: relative;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 6px;
+  width: var(--loc-cell, 150px);
+  aspect-ratio: 520 / 471;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  color: var(--loc-wall-text-2);
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  text-align: center;
+}
+
+.loc-ghost-cart,
+.loc-spot,
+.loc-empty-spots i {
+  background: url("../art/cart-blank.webp") 0 0 / 100% 100% no-repeat;
+  filter: grayscale(1) brightness(0.85);
+}
+
+.loc-ghost-cart {
+  position: absolute;
+  inset: 0;
+  opacity: 0.18;
+  transition:
+    opacity var(--loc-base) var(--loc-ease-out),
+    filter var(--loc-base) var(--loc-ease-out);
+}
+
+.loc-ghost-plus,
+.loc-ghost-text {
+  position: relative;
+}
+
+.loc-ghost-plus {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border: 1px dashed rgba(255, 255, 255, 0.3);
+  border-radius: 50%;
+}
+
+.loc-ghost-button {
+  z-index: 1;
+  cursor: pointer;
+}
+
+.loc-ghost-button:hover,
+.loc-ghost-button:focus-visible {
+  color: var(--loc-wall-text);
+}
+
+.loc-ghost-button:hover .loc-ghost-cart,
+.loc-ghost-button:focus-visible .loc-ghost-cart {
+  opacity: 0.38;
+  filter: grayscale(0.4) brightness(0.95) drop-shadow(0 0 12px rgba(200, 245, 90, 0.35));
+}
+
+.loc-ghost-button:hover .loc-ghost-plus,
+.loc-ghost-button:focus-visible .loc-ghost-plus {
+  border-color: var(--loc-wall-accent);
+  color: var(--loc-wall-accent);
+}
+
+.loc-ghost-button:focus-visible {
+  outline: 2px solid var(--loc-ring);
+  outline-offset: 6px;
+}
+
+/* the plank's empty places after the last cartridge, each fainter than the last */
+.loc-spot {
+  position: relative;
+  z-index: 1;
+  width: var(--loc-cell, 150px);
+  aspect-ratio: 520 / 471;
+  opacity: 0.07;
+  pointer-events: none;
+}
+
+.loc-spot[data-n="2"] {
+  opacity: 0.05;
+}
+
+.loc-spot[data-n="3"] {
+  opacity: 0.035;
+}
+
+.loc-spot[data-n="4"] {
+  opacity: 0.02;
+}
+
+/* the empty shelf and the unavailable one: a plank with one slot, the line, the button */
+.loc-row.loc-empty {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 18px 28px;
+  min-height: 0;
+}
+
+.loc-empty > .loc-ghost {
+  z-index: 1;
+  color: var(--loc-wall-accent);
+}
+
+/* the empty shelf's free spot glows a little: it is the one thing on the plank */
+.loc-empty > .loc-ghost .loc-ghost-cart {
+  opacity: 0.34;
+  filter: grayscale(0.3) brightness(0.95) drop-shadow(0 0 16px rgba(200, 245, 90, 0.3));
+  animation: loc-ghost-wait 3.6s ease-in-out infinite alternate;
+}
+
+.loc-empty > .loc-ghost .loc-ghost-plus {
+  border-color: rgba(200, 245, 90, 0.6);
+}
+
+@keyframes loc-ghost-wait {
+  from {
+    opacity: 0.26;
+  }
+  to {
+    opacity: 0.4;
+  }
+}
+
+.loc-empty-text {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  align-self: center;
+  justify-items: start;
+  gap: 12px;
+  max-width: 44ch; padding-bottom: 16px;
+}
+
+.loc-empty-text .loc-empty-line {
+  margin: 0;
+  color: var(--loc-wall-text);
+  font-family: var(--loc-font-sign);
+  font-size: 1.375rem;
+  font-weight: 400;
+  line-height: 1.25;
+  text-wrap: balance;
+}
+
+.loc-empty-sub {
+  margin: -4px 0 4px;
+  color: var(--loc-wall-text-2);
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+
+/* the rest of the plank: spots for the tapes to come, each fainter than the last */
+.loc-empty-spots {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex: 1 1 0;
+  gap: var(--loc-row-gap, 18px);
+  justify-content: flex-end;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.loc-empty-spots i {
+  flex: none;
+  width: var(--loc-cell, 150px);
+  aspect-ratio: 520 / 471;
+  opacity: 0.05;
+}
+
+.loc-empty-spots i:nth-child(2) {
+  opacity: 0.08;
+}
+
+.loc-empty-spots i:nth-child(3) {
+  opacity: 0.11;
+}
+
+.loc-empty-spots i:nth-child(4) {
+  opacity: 0.15;
+}
+
+@container loc (max-width: 899px) {
+  .loc-empty-spots {
+    display: none;
+  }
+}
+
+.loc-empty .loc-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ---- the Ficha, at the end of its row: a card like Continuar's, the cartridge at its head ---- */
+
+.loc-ficha {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 12px 20px;
+  width: min(calc(100% - var(--loc-row-pad, 16px) * 2), 680px);
+  margin: 6px var(--loc-row-pad, 16px) 0;
+  padding: 18px 20px;
+  border: 1px solid var(--loc-border-strong);
+  border-radius: 18px;
+  background: var(--loc-glass-raised);
+  box-shadow:
+    0 24px 56px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  color: var(--loc-text);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+  animation: loc-ficha-in var(--loc-slow) var(--loc-ease-out) both;
+}
+
+/* risen above its row (shelf.ts, `placeFicha`): it stands close over the cartridges it is about */
+.loc-ficha[data-place="above"] {
+  margin: 0 var(--loc-row-pad, 16px) -14px;
+}
+
+@keyframes loc-ficha-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+.loc-ficha-cart {
+  padding-top: 4px;
+}
+
+.loc-ficha-cart .loc-cart {
+  --cart-w: 104px;
+}
+
+.loc-ficha-cart .loc-cart[data-kind="handheld"] {
+  --cart-w: 90px;
+}
+
+.loc-ficha-main {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.loc-ficha-eyebrow {
+  color: var(--loc-accent-text);
+}
+
+.loc-ficha-title {
+  margin: 0;
+  font-family: var(--loc-font-sign);
+  font-size: 1.375rem;
+  font-weight: 400;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.loc-ficha-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.loc-fact {
+  padding: 3px 10px;
+  border: 1px solid var(--loc-border-strong);
+  border-radius: var(--loc-pill);
+  background: var(--loc-card);
+  color: var(--loc-text-2);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.loc-ficha-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.loc-ficha-warn {
+  margin: 0 0 10px;
+  color: var(--loc-text);
+  font-size: 0.9375rem;
+}
+
+.loc-button-danger {
+  background: var(--loc-danger-solid);
+  color: var(--loc-on-danger-solid);
+}
+
+.loc-ficha .loc-button-danger-text {
+  border-color: color-mix(in srgb, var(--loc-danger) 55%, transparent);
+  color: var(--loc-danger-text);
+}
+
+/* ---- the name field: after a pick, and in the Ficha's Renomear ---- */
+
+.loc-nameprompt {
+  display: grid;
+  gap: 6px;
+}
+
+.loc-nameprompt-label {
+  color: var(--loc-text-2);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.loc-nameprompt-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.loc-input {
+  flex: 1 1 200px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--loc-border-strong);
+  border-radius: var(--loc-control);
+  background: var(--loc-bg);
+  color: var(--loc-text);
+  font: inherit;
+}
+
+/* ---- phone: a narrow pane keeps its cartridges, the cards take the width ---- */
+
+@container loc (max-width: 559px) {
+  .loc-sort {
+    margin-left: 0;
+  }
+  .loc-shelfview {
+    padding-inline: 0;
+    border-radius: 18px;
+  }
+  .loc-rack {
+    --loc-row-pad: 12px;
+  }
+  .loc-ficha {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .loc-ficha-cart {
+    display: none;
+  }
+}
+
+/* ---- reduced motion: no lift, no breathing lights, no rolling bar; outlines still say where you are ---- */
+
+@media (prefers-reduced-motion: reduce) {
+  .loc-sign-neon,
+  .loc-sign[data-power-on] .loc-sign-neon,
+  .loc-glow[data-glow],
+  .loc-tv-glass::after,
+  .loc-empty > .loc-ghost .loc-ghost-cart,
+  .loc-ficha {
+    animation: none;
+  }
+  .loc-tv-glass::after {
+    display: none;
+  }
+  .loc-box,
+  .loc-cart-body,
+  .loc-ghost-cart,
+  .loc-cell::before,
+  .loc-chip,
+  .loc-iconbtn,
+  .loc-iconbtn[data-tip]::after,
+  .loc-meter-bar i {
+    transition: none;
+  }
+  .loc-box:hover,
+  .loc-box:focus-visible,
+  .loc-box[aria-expanded="true"] {
+    transform: none;
+  }
+  .loc-box:hover:not(:focus-visible):not([aria-expanded="true"]) {
+    outline: 2px solid var(--loc-border-strong);
+    outline-offset: 6px;
+  }
+}
+
+:root[data-reduced-motion="true"] .loc-sign-neon,
+:root[data-reduced-motion="true"] .loc-sign[data-power-on] .loc-sign-neon,
+:root[data-reduced-motion="true"] .loc-glow,
+:root[data-reduced-motion="true"] .loc-tv-glass::after,
+:root[data-reduced-motion="true"] .loc-empty > .loc-ghost .loc-ghost-cart,
+:root[data-reduced-motion="true"] .loc-ficha {
+  animation: none;
+}
+
+:root[data-reduced-motion="true"] .loc-tv-glass::after {
+  display: none;
+}
+
+:root[data-reduced-motion="true"] .loc-box,
+:root[data-reduced-motion="true"] .loc-cart-body,
+:root[data-reduced-motion="true"] .loc-ghost-cart,
+:root[data-reduced-motion="true"] .loc-cell::before,
+:root[data-reduced-motion="true"] .loc-chip,
+:root[data-reduced-motion="true"] .loc-iconbtn,
+:root[data-reduced-motion="true"] .loc-iconbtn[data-tip]::after,
+:root[data-reduced-motion="true"] .loc-meter-bar i {
+  transition: none;
+}
+
+:root[data-reduced-motion="true"] .loc-box:hover,
+:root[data-reduced-motion="true"] .loc-box:focus-visible,
+:root[data-reduced-motion="true"] .loc-box[aria-expanded="true"] {
+  transform: none;
+}
+
+:root[data-reduced-motion="true"] .loc-box:hover:not(:focus-visible):not([aria-expanded="true"]) {
+  outline: 2px solid var(--loc-border-strong);
+  outline-offset: 6px;
+}

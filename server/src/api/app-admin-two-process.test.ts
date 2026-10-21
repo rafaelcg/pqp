@@ -136,7 +136,7 @@ async function call<T>(
 
 const manifest = {
   manifestVersion: 1,
-  id: "enquete",
+  id: "quadro",
   version: "1.0.0",
   publisher: "pqp",
   platformApi: 1,
@@ -151,7 +151,7 @@ const manifest = {
   content: { userText: false, userImages: false },
   license: { spdx: "AGPL-3.0-only", source: "https://github.com/rafaelcg/pqp" },
   i18n: {
-    "pt-BR": { name: "Enquete", description: "Enquete ao vivo" },
+    "pt-BR": { name: "Quadro", description: "Quadro ao vivo" },
     en: { name: "Poll", description: "A live poll" },
     es: { name: "Encuesta", description: "Una encuesta" },
   },
@@ -170,20 +170,25 @@ describeDb("an apps write on one API process, seen from the other and on the bus
     const db = await import("../db.js");
     await db.initDb();
     const pool = db.getPool();
-    await pool.query(`DELETE FROM apps`);
-    // The audit trail names an app by id and outlives it, so a rerun starts clean.
-    await pool.query(`DELETE FROM app_admin_audit`);
+    // Start from no apps at all, whatever an earlier suite left: a session row
+    // holds its app version by foreign key, so a plain DELETE FROM apps fails on
+    // a database another apps suite used first. The audit trail names an app by
+    // id and outlives it, so it goes too.
+    await pool.query(
+      `TRUNCATE app_admin_audit, app_sessions, app_session_participants, server_apps,
+                app_versions, apps RESTART IDENTITY CASCADE`,
+    );
     await pool.query(
       `INSERT INTO app_publishers (id, display_name, kind)
        VALUES ('pqp', 'pqp', 'first_party') ON CONFLICT (id) DO NOTHING`,
     );
-    await pool.query(`INSERT INTO apps (id, publisher_id) VALUES ('enquete', 'pqp')`);
+    await pool.query(`INSERT INTO apps (id, publisher_id) VALUES ('quadro', 'pqp')`);
     await pool.query(
       `INSERT INTO app_versions (app_id, version, manifest, manifest_sha256, entry_sha256)
-       VALUES ('enquete', '1.0.0', $1::jsonb, $2, $2)`,
+       VALUES ('quadro', '1.0.0', $1::jsonb, $2, $2)`,
       [JSON.stringify(manifest), SHA],
     );
-    await pool.query(`UPDATE apps SET current_version = '1.0.0' WHERE id = 'enquete'`);
+    await pool.query(`UPDATE apps SET current_version = '1.0.0' WHERE id = 'quadro'`);
     const owner = await pool.query<{ id: string }>(
       `INSERT INTO users (clerk_id, username, discriminator, display_name)
        VALUES ('clerk-apps-2p', 'apps2p', '0001', 'Apps 2p')
@@ -216,7 +221,9 @@ describeDb("an apps write on one API process, seen from the other and on the bus
     await observer?.close();
     await Promise.all([stopApi(a), stopApi(b)]);
     const db = await import("../db.js");
-    await db.getPool().query(`DELETE FROM servers WHERE id = $1`, [serverId]);
+    if (serverId) {
+      await db.getPool().query(`DELETE FROM servers WHERE id = $1`, [serverId]);
+    }
     await db.closePool();
   }, 30_000);
 
@@ -238,32 +245,32 @@ describeDb("an apps write on one API process, seen from the other and on the bus
   it("B's read shows A's writes, and the bus carried one hint for each change and none for a no-op", async () => {
     const put = (path: string, body: unknown) => call<{ error?: string }>(a!, "PUT", path, TOKEN, body);
 
-    const refused = await put("/api/admin/apps", { appId: "enquete", status: "live" });
+    const refused = await put("/api/admin/apps", { appId: "quadro", status: "live" });
     expect(refused.status).toBe(409);
     expect(refused.body.error).toBe("not-reviewed");
 
     const review = await put("/api/admin/app-review", {
-      appId: "enquete",
+      appId: "quadro",
       version: "1.0.0",
       reviewStatus: "approved",
       checklist: { sandbox: true, noNetwork: true, license: true, i18n: true, presence: true },
     });
     expect(review.status).toBe(200);
     const live = await put("/api/admin/apps", {
-      appId: "enquete",
+      appId: "quadro",
       status: "live",
       globalEnabled: true,
     });
     expect(live.status).toBe(200);
     const server = await put("/api/admin/server-apps", {
       serverId,
-      appId: "enquete",
+      appId: "quadro",
       operatorEnabled: true,
     });
     expect(server.status).toBe(200);
     const noop = await put("/api/admin/server-apps", {
       serverId,
-      appId: "enquete",
+      appId: "quadro",
       operatorEnabled: true,
     });
     expect(noop.status).toBe(200);
@@ -272,9 +279,9 @@ describeDb("an apps write on one API process, seen from the other and on the bus
     // Give a stray fourth frame (the refused write, the no-op) time to show.
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(frames.map((f) => f.data)).toEqual([
-      { appId: "enquete", serverId: null },
-      { appId: "enquete", serverId: null },
-      { appId: "enquete", serverId },
+      { appId: "quadro", serverId: null },
+      { appId: "quadro", serverId: null },
+      { appId: "quadro", serverId },
     ]);
 
     const list = await call<{
@@ -283,20 +290,20 @@ describeDb("an apps write on one API process, seen from the other and on the bus
     }>(b!, "GET", "/api/admin/apps", TOKEN);
     expect(list.status).toBe(200);
     // Only this test's app: the committed catalog (server/src/apps/catalog.json)
-    // is loaded at boot too, so a first-party app such as Eco is on the list with
+    // is loaded at boot too, so a first-party app such as Eco or Locadora is on the list with
     // its own `catalog-load` audit row.
-    const enquete = list.body.apps.filter((app) => app.id === "enquete");
-    const enqueteAudit = list.body.audit.filter((row) => row.appId === "enquete");
-    expect(enquete).toEqual([
-      expect.objectContaining({ id: "enquete", status: "live", globalEnabled: true, serversOn: 1 }),
+    const quadro = list.body.apps.filter((app) => app.id === "quadro");
+    const quadroAudit = list.body.audit.filter((row) => row.appId === "quadro");
+    expect(quadro).toEqual([
+      expect.objectContaining({ id: "quadro", status: "live", globalEnabled: true, serversOn: 1 }),
     ]);
-    expect(enqueteAudit.map((row) => row.action)).toEqual([
+    expect(quadroAudit.map((row) => row.action)).toEqual([
       "operator-server",
       "global",
       "status",
       "review",
     ]);
-    expect(enqueteAudit.every((row) => row.actorKind === "dashboard")).toBe(true);
+    expect(quadroAudit.every((row) => row.actorKind === "dashboard")).toBe(true);
   }, 30_000);
 
   it("Desligar em todos on A ends the session for the whole cluster: the bus carries the end, B reads it ended", async () => {
@@ -308,7 +315,7 @@ describeDb("an apps write on one API process, seen from the other and on the bus
     );
     const session = await pool.query<{ id: string }>(
       `INSERT INTO app_sessions (server_id, channel_id, app_id, app_version)
-       VALUES ($1, $2, 'enquete', '1.0.0') RETURNING id`,
+       VALUES ($1, $2, 'quadro', '1.0.0') RETURNING id`,
       [serverId, channel.rows[0]!.id],
     );
     const sessionId = session.rows[0]!.id;
@@ -319,7 +326,7 @@ describeDb("an apps write on one API process, seen from the other and on the bus
     expect(before.body.apps[0]!.liveSessions).toBe(1);
 
     const off = await call<{ sessionsEnded: number }>(a!, "POST", "/api/admin/app-disable-everywhere", TOKEN, {
-      appId: "enquete",
+      appId: "quadro",
     });
     expect(off.status).toBe(200);
     expect(off.body.sessionsEnded).toBe(1);

@@ -174,6 +174,9 @@ const DesktopLoginPage = lazy(() =>
     default: m.DesktopLoginPage,
   })),
 );
+const QaAppsPage = lazy(() =>
+  import("./pages/qa-apps-page").then((m) => ({ default: m.QaAppsPage })),
+);
 const UiTokensPage = lazy(() =>
   import("./pages/ui-tokens-page").then((m) => ({ default: m.UiTokensPage })),
 );
@@ -436,6 +439,8 @@ function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
         <Route path="/qa/ui" element={<UiTokensPage />} />
         {/* Every server-bot state on one sheet; gated like `/qa/ui`. */}
         <Route path="/qa/bots" element={<BotsQaPage />} />
+        {/* The apps session strip in every state; same gate as the sheet above. */}
+        <Route path="/qa/apps" element={<QaAppsPage />} />
         <Route
           path="*"
           element={<Navigate to={isDesktopApp() ? "/app" : "/"} replace />}
