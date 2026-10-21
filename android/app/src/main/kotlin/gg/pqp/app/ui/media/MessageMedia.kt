@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -22,6 +23,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -31,7 +33,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -137,29 +141,17 @@ private fun ImageAttachment(
     // Saveable: a rotation while the viewer is open must not close it.
     var viewing by rememberSaveable(attachment.id) { mutableStateOf(false) }
 
-    AsyncImage(
+    InlineMediaFrame(
         model = Backend.absolute(url),
         contentDescription = label,
-        contentScale = ContentScale.Crop,
-        onError = {
-            scope.launch { retry.next()?.let { url = it } }
-        },
-        modifier = modifier
-            .testTag("attachment-image")
-            .fillMaxWidth(0.8f)
-            .heightIn(min = MEDIA_MIN_HEIGHT, max = MEDIA_MAX_HEIGHT)
-            .clip(MaterialTheme.shapes.medium)
-            .background(MaterialTheme.colorScheme.surfaceContainer)
-            .border(
-                width = Sizes.hairline,
-                color = MaterialTheme.colorScheme.outline,
-                shape = MaterialTheme.shapes.medium,
-            )
-            .combinedClickable(
-                onClickLabel = openLabel,
-                onClick = { viewing = true },
-                onLongClick = onLongPress,
-            ),
+        openLabel = openLabel,
+        tag = "attachment-image",
+        animated = attachment.isAnimatedImage,
+        viewing = viewing,
+        onError = { scope.launch { retry.next()?.let { url = it } } },
+        onOpen = { viewing = true },
+        onLongPress = onLongPress,
+        modifier = modifier,
     )
 
     if (viewing) {
@@ -179,33 +171,23 @@ private fun ImageAttachment(
  * and it opens the same viewer. See [GifLinks] for why a body is allowed to
  * become a picture at all.
  */
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun InlineGif(url: String, modifier: Modifier = Modifier, onLongPress: (() -> Unit)? = null) {
     val label = stringResource(R.string.attachment_gif)
     val openLabel = stringResource(R.string.attachment_open_image, label)
     var viewing by rememberSaveable(url) { mutableStateOf(false) }
 
-    AsyncImage(
+    InlineMediaFrame(
         model = url,
         contentDescription = label,
-        contentScale = ContentScale.Crop,
-        modifier = modifier
-            .testTag("inline-gif")
-            .fillMaxWidth(0.8f)
-            .heightIn(min = MEDIA_MIN_HEIGHT, max = MEDIA_MAX_HEIGHT)
-            .clip(MaterialTheme.shapes.medium)
-            .background(MaterialTheme.colorScheme.surfaceContainer)
-            .border(
-                width = Sizes.hairline,
-                color = MaterialTheme.colorScheme.outline,
-                shape = MaterialTheme.shapes.medium,
-            )
-            .combinedClickable(
-                onClickLabel = openLabel,
-                onClick = { viewing = true },
-                onLongClick = onLongPress,
-            ),
+        openLabel = openLabel,
+        tag = "inline-gif",
+        animated = true,
+        viewing = viewing,
+        onError = {},
+        onOpen = { viewing = true },
+        onLongPress = onLongPress,
+        modifier = modifier,
     )
 
     if (viewing) {
@@ -217,6 +199,63 @@ fun InlineGif(url: String, modifier: Modifier = Modifier, onLongPress: (() -> Un
             onDismiss = { viewing = false },
         )
     }
+}
+
+/**
+ * The cropped frame a picture sits in inside the transcript.
+ *
+ * While the viewer is open over it, an animated picture is unloaded here, so
+ * one GIF is not decoding frames twice (once behind the dialog, where nobody
+ * can see it). The frame keeps the height it had, so the transcript behind the
+ * dialog does not jump; closing the viewer loads it again from Coil's cache.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun InlineMediaFrame(
+    model: String?,
+    contentDescription: String?,
+    openLabel: String,
+    tag: String,
+    animated: Boolean,
+    viewing: Boolean,
+    onError: () -> Unit,
+    onOpen: () -> Unit,
+    onLongPress: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
+    val density = LocalDensity.current
+    var heightPx by remember { mutableIntStateOf(0) }
+    val parked = viewing && animated
+
+    AsyncImage(
+        model = if (parked) null else model,
+        contentDescription = contentDescription,
+        contentScale = ContentScale.Crop,
+        onError = { if (!parked) onError() },
+        modifier = modifier
+            .testTag(tag)
+            .fillMaxWidth(0.8f)
+            .then(
+                if (parked && heightPx > 0) {
+                    Modifier.height(with(density) { heightPx.toDp() })
+                } else {
+                    Modifier.heightIn(min = MEDIA_MIN_HEIGHT, max = MEDIA_MAX_HEIGHT)
+                },
+            )
+            .onSizeChanged { if (!parked) heightPx = it.height }
+            .clip(MaterialTheme.shapes.medium)
+            .background(MaterialTheme.colorScheme.surfaceContainer)
+            .border(
+                width = Sizes.hairline,
+                color = MaterialTheme.colorScheme.outline,
+                shape = MaterialTheme.shapes.medium,
+            )
+            .combinedClickable(
+                onClickLabel = openLabel,
+                onClick = onOpen,
+                onLongClick = onLongPress,
+            ),
+    )
 }
 
 /**

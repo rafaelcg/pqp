@@ -5,9 +5,12 @@ package gg.pqp.app.ui.media
  *
  * Pure and in pixels, so it can be tested without a screen. The picture is
  * drawn `ContentScale.Fit` into the whole viewer and then scaled about its
- * centre, which is why the pan bound is half of what the scale added on each
- * axis: past that, the edge of the picture would leave the edge of the screen
- * and the reader would be panning over black.
+ * centre. On each axis it may pan by half of how far the scaled picture
+ * overhangs the screen, and not at all while it still fits: past that, the
+ * edge of the picture would leave the edge of the screen and the reader would
+ * be panning over black. A landscape photo on a portrait phone fills the
+ * width and not the height, which is why the bound is per axis and from the
+ * fitted picture rather than from the screen.
  */
 internal const val IMAGE_MIN_SCALE = 1f
 internal const val IMAGE_MAX_SCALE = 5f
@@ -25,21 +28,23 @@ internal data class ImageZoom(
     /**
      * One frame of a pinch or a drag. [zoom] is the multiplicative change the
      * gesture reported and [panX] / [panY] the movement of its centroid, both
-     * since the previous frame. An unzoomed picture does not pan at all.
+     * since the previous frame. [viewport] is the viewer's size and [content]
+     * the picture's size once fitted into it, both at scale 1. An unzoomed
+     * picture does not pan at all.
      */
     fun transform(
         zoom: Float,
         panX: Float,
         panY: Float,
-        width: Float,
-        height: Float,
+        viewport: Pair<Float, Float>,
+        content: Pair<Float, Float> = viewport,
     ): ImageZoom {
         val nextScale = (scale * zoom).coerceIn(IMAGE_MIN_SCALE, IMAGE_MAX_SCALE)
         if (nextScale <= IMAGE_MIN_SCALE) return ImageZoom()
         return ImageZoom(
             scale = nextScale,
-            offsetX = clampPan(offsetX + panX, nextScale, width),
-            offsetY = clampPan(offsetY + panY, nextScale, height),
+            offsetX = clampPan(offsetX + panX, nextScale, content.first, viewport.first),
+            offsetY = clampPan(offsetY + panY, nextScale, content.second, viewport.second),
         )
     }
 
@@ -48,9 +53,27 @@ internal data class ImageZoom(
         if (zoomed) ImageZoom() else ImageZoom(scale = IMAGE_DOUBLE_TAP_SCALE)
 }
 
-internal fun clampPan(offset: Float, scale: Float, extent: Float): Float {
-    val bound = ((scale - 1f) * extent / 2f).coerceAtLeast(0f)
+internal fun clampPan(offset: Float, scale: Float, content: Float, viewport: Float): Float {
+    val bound = ((content * scale - viewport) / 2f).coerceAtLeast(0f)
     return offset.coerceIn(-bound, bound)
+}
+
+/**
+ * The size a picture of [imageWidth] x [imageHeight] takes inside a
+ * [viewportWidth] x [viewportHeight] viewer under `ContentScale.Fit`. Falls
+ * back to the viewport when the picture's size is not known yet.
+ */
+internal fun fittedSize(
+    imageWidth: Float,
+    imageHeight: Float,
+    viewportWidth: Float,
+    viewportHeight: Float,
+): Pair<Float, Float> {
+    if (imageWidth <= 0f || imageHeight <= 0f || viewportWidth <= 0f || viewportHeight <= 0f) {
+        return viewportWidth to viewportHeight
+    }
+    val fit = minOf(viewportWidth / imageWidth, viewportHeight / imageHeight)
+    return imageWidth * fit to imageHeight * fit
 }
 
 /**

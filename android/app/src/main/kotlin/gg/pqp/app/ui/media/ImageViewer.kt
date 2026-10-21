@@ -14,6 +14,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -66,6 +67,9 @@ fun ImageViewerDialog(
     var loading by remember(url) { mutableStateOf(true) }
     var failed by remember(url) { mutableStateOf(false) }
     var zoom by remember(url) { mutableStateOf(ImageZoom()) }
+    // The decoded picture's own size, for the pan bound. Zero until it loads.
+    var imageWidth by remember(url) { mutableFloatStateOf(0f) }
+    var imageHeight by remember(url) { mutableFloatStateOf(0f) }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -83,12 +87,13 @@ fun ImageViewerDialog(
                 }
                 .pointerInput(Unit) {
                     detectTransformGestures { _, pan, gestureZoom, _ ->
+                        val viewport = size.width.toFloat() to size.height.toFloat()
                         zoom = zoom.transform(
                             zoom = gestureZoom,
                             panX = pan.x,
                             panY = pan.y,
-                            width = size.width.toFloat(),
-                            height = size.height.toFloat(),
+                            viewport = viewport,
+                            content = fittedSize(imageWidth, imageHeight, viewport.first, viewport.second),
                         )
                     }
                 },
@@ -97,7 +102,9 @@ fun ImageViewerDialog(
                 model = Backend.absolute(current),
                 contentDescription = contentDescription,
                 contentScale = ContentScale.Fit,
-                onSuccess = {
+                onSuccess = { state ->
+                    imageWidth = state.result.image.width.toFloat()
+                    imageHeight = state.result.image.height.toFloat()
                     loading = false
                     failed = false
                 },
