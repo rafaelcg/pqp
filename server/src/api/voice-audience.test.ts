@@ -136,6 +136,7 @@ describeDb("audience mode routes", () => {
       audioSelfHeal: true,
       soundboard: false,
       cleanVoiceDefault: true,
+      raisedHandSticky: true,
     });
     process.env.AUDIENCE_MODE = "false";
     expect((await call(owner, "GET", `/api/voice/config?serverId=${serverId}`)).body).toEqual({
@@ -143,6 +144,7 @@ describeDb("audience mode routes", () => {
       audioSelfHeal: true,
       soundboard: false,
       cleanVoiceDefault: true,
+      raisedHandSticky: true,
     });
   });
 

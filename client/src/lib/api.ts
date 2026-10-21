@@ -1175,6 +1175,13 @@ export interface VoiceConfig {
    * default; absent (an older API) reads as off, which is the old default.
    */
   cleanVoiceDefault?: boolean;
+  /**
+   * `raised_hand_sticky`: a raised hand stays up until the person, a
+   * moderator or leaving takes it down; the call offers to lower your own
+   * hand from its badge and a moderator gets "Baixar todas". Global, on by
+   * default; absent (an older API) reads as off, which is the old behaviour.
+   */
+  raisedHandSticky?: boolean;
 }
 
 export const fetchVoiceConfig = (serverId: string) =>
@@ -2432,6 +2439,18 @@ export const setMemberVoiceMuted = (
 export const lowerMemberVoiceHand = (serverId: string, userId: string) =>
   post<{ ok: boolean }>(
     `/api/servers/${serverId}/members/${userId}/voice-lower-hand`,
+    {},
+  );
+
+/**
+ * Lower every raised hand in a voice channel (`POST
+ * /api/channels/:id/voice-lower-hands`): `Permission.MUTE_MEMBERS` in that
+ * channel, only with sticky hands on. Hands the caller does not outrank are
+ * skipped and counted.
+ */
+export const lowerAllVoiceHands = (channelId: string) =>
+  post<{ ok: boolean; lowered: number; skipped: number }>(
+    `/api/channels/${channelId}/voice-lower-hands`,
     {},
   );
 

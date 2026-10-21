@@ -498,7 +498,7 @@ describe("toggling it on a LiveKit room", () => {
 });
 
 describe("letting one person speak", () => {
-  it("gives the microphone back on the media server, not the camera, lowers the hand, and Silenciar takes it back", async () => {
+  it("gives the microphone back on the media server, not the camera, KEEPS the hand up, and Silenciar takes it back", async () => {
     const { host, member } = await room("host", "member");
     await setVoiceAudienceMode(ROOM, true, "host");
     await handleVoiceMessage(
@@ -512,7 +512,10 @@ describe("letting one person speak", () => {
     expect(participantOf(member!).permission.canPublishSources).toEqual([TrackSource.MICROPHONE]);
     expect(tryToSpeak(member!)).toBe(true);
     expect(last(member!, "voice-speak-changed")).toMatchObject({ canSpeak: true, canStream: false });
-    expect(voiceUserHandRaisedAt(ROOM, "member")).toBeNull();
+    // Sticky hands (`raised_hand_sticky`, on by default): being given the
+    // floor is not a reason to lose your place in the queue. Only the
+    // person, a moderator or leaving takes the hand down.
+    expect(voiceUserHandRaisedAt(ROOM, "member")).not.toBeNull();
     expect(last(host!, "voice-audience")).toMatchObject({
       change: { kind: "speaker-added", userId: "member", byUserId: "host" },
     });
@@ -524,6 +527,23 @@ describe("letting one person speak", () => {
       canSpeak: false,
       speakReason: "audience",
     });
+  });
+
+  it("lowers the hand when it is let speak with the flag OFF: today's behaviour, byte for byte", async () => {
+    process.env.RAISED_HAND_STICKY = "off";
+    try {
+      const { member } = await room("host", "member");
+      await setVoiceAudienceMode(ROOM, true, "host");
+      await handleVoiceMessage(
+        { socket: member!.socket, user: asUser("member") },
+        { type: "set-raised-hand", raised: true },
+      );
+      expect(voiceUserHandRaisedAt(ROOM, "member")).not.toBeNull();
+      await setVoiceAudienceSpeaker(ROOM, "member", true, "host");
+      expect(voiceUserHandRaisedAt(ROOM, "member")).toBeNull();
+    } finally {
+      delete process.env.RAISED_HAND_STICKY;
+    }
   });
 
   it("is refused when audience mode is not on", async () => {

@@ -290,6 +290,7 @@ import {
   isRoomPinnedLocally,
   leaveVoiceByResumeToken,
   notifyVoiceModeration,
+  listVoiceRaisedHandUserIds,
   setVoiceUserHandRaised,
   setVoiceUserServerMuted,
   refreshVoiceIdentity,
@@ -12396,6 +12397,87 @@ router.post(
     );
     await setVoiceUserHandRaised(voiceChannelId, userId!, false);
     return { ok: true };
+  },
+);
+
+/**
+ * Lower every hand in a voice channel: "next round" at an RPG table, "that is
+ * the end of the Q&A" on a stream. Behind `raised_hand_sticky`, because only
+ * with sticky hands is there a queue that stays up long enough to need
+ * clearing; off answers 403 like any action the server does not offer.
+ *
+ * The same bit as lowering one hand (`Permission.MUTE_MEMBERS` in that
+ * channel), and the same outrank rule applied per person: a moderator who
+ * cannot lower the owner's hand one at a time cannot do it in bulk either, so
+ * those hands are skipped and counted rather than refused wholesale. Your own
+ * hand is lowered like anyone else's (the single route refuses self-targeting
+ * because a person lowers their own from the call; here there is no target).
+ * Not audited, for the single route's reason. Idempotent.
+ */
+router.post(
+  "/api/channels/:channelId/voice-lower-hands",
+  async ({ user }, { channelId }) => {
+    const channel = await requireChannelAccess(channelId!, user.id);
+    if (channel.kind !== "server" || !channel.server_id || channel.type !== "voice") {
+      throw new NotFound("Channel not found");
+    }
+    await requirePermission(
+      channel.server_id,
+      user.id,
+      Permission.MUTE_MEMBERS,
+      channelId!,
+    );
+    if (!isEnabled("raised_hand_sticky")) {
+      throw new Forbidden("Lowering every hand is not available");
+    }
+    let lowered = 0;
+    let skipped = 0;
+    // A few at a time rather than one after another: each hand is a rank
+    // check and a row write plus a roster fan-out, and a queue of forty
+    // should not be forty round trips in a row. Bounded, so a very long
+    // queue cannot take the pool; per-person authorization still runs for
+    // every hand.
+    const HANDS_AT_ONCE = 8;
+    const raised = await listVoiceRaisedHandUserIds(channelId!);
+    for (let start = 0; start < raised.length; start += HANDS_AT_ONCE) {
+      // allSettled, not all: a failure must not return while sibling lowers
+      // are still in flight, or the person who sees the error and raises
+      // again can have that hand lowered by a write still running.
+      const settled = await Promise.allSettled(
+        raised.slice(start, start + HANDS_AT_ONCE).map(async (targetId) => {
+          if (targetId !== user.id) {
+            try {
+              await requireOutranked(
+                channel.server_id!,
+                user.id,
+                targetId,
+                "lower hand",
+              );
+            } catch (error) {
+              if (error instanceof Forbidden) {
+                return false;
+              }
+              throw error;
+            }
+          }
+          await setVoiceUserHandRaised(channelId!, targetId, false);
+          return true;
+        }),
+      );
+      for (const result of settled) {
+        if (result.status === "rejected") {
+          throw result.reason;
+        }
+      }
+      for (const result of settled) {
+        if (result.status === "fulfilled" && result.value) {
+          lowered += 1;
+        } else {
+          skipped += 1;
+        }
+      }
+    }
+    return { ok: true, lowered, skipped };
   },
 );
 

@@ -51,22 +51,60 @@ when that person holds no seat in the room at all, orphans included.
 
 ## What lowers a hand
 
+A hand is a place in a queue, so it stays up until somebody who owns that
+place takes it down. Exactly three things do, and nothing automatic is on the
+list (no timer, no speaking, no unmute, no being given the floor):
+
 1. **The person.** Always available. Not gated on a moderator's mute, not on
    `Permission.SPEAK`, not on push-to-talk. Raising a hand is asking, and
-   somebody who has changed their mind must be able to say so.
-2. **Leaving the room.** Server-side, on the last seat going.
-3. **A moderator**, when they call on somebody:
-   `POST /api/servers/:serverId/members/:userId/voice-lower-hand`,
-   `Permission.MUTE_MEMBERS` in that channel plus the outrank check, through
-   `requireVoiceModeration` with the other three voice moderation actions. Not
-   audited: the audit log is for sanctions somebody may answer for weeks later,
-   and calling on the next person is the ordinary running of a room, forty
-   times in a stream.
+   somebody who has changed their mind must be able to say so. The hand button
+   toggles it, and with sticky hands (below) so does a click on your own
+   number on a tile, your row in the queue, or your place on the compact line.
+2. **Leaving the room.** Server-side, on the last seat going (`removePeer`,
+   `dropRaisedHandForUser`). Orphans count as seats, so a socket blip or a
+   refresh inside the 90 s resume window keeps the place.
+3. **A moderator**, explicitly, with `Permission.MUTE_MEMBERS` in that channel:
+   - one hand: `POST /api/servers/:serverId/members/:userId/voice-lower-hand`,
+     through `requireVoiceModeration` (so the outrank check applies);
+   - every hand: `POST /api/channels/:channelId/voice-lower-hands`, "Baixar
+     todas" in the queue panel and on the compact line. Same bit, and the
+     outrank rule per person: a hand the moderator cannot act on is skipped
+     and counted (`{ lowered, skipped }`), not a refusal of the whole call.
+     Your own hand is lowered like anybody's. Behind `raised_hand_sticky`:
+     with it off the route answers 403.
+   Neither is audited: the audit log is for sanctions somebody may answer for
+   weeks later, and calling on the next person is the ordinary running of a
+   room, forty times in a stream.
 
-Talking does not lower a hand. It used to: the client lowered your own hand
-the moment your mic opened. A table that runs RPG initiative over calls asked
-for the opposite. The hand is their place in the turn order, and it stays up
-while they chat until the person or a moderator takes it down.
+### What used to lower a hand, and what does now
+
+| Trigger | Before | Now |
+|---|---|---|
+| The person (button, own number, own queue row) | lowers | lowers |
+| Leaving the room (all seats gone) | lowers | lowers |
+| A moderator, one hand | lowers | lowers |
+| A moderator, "Baixar todas" | did not exist | lowers every hand they may |
+| Talking (mic opens, voice activity, push-to-talk) | lowered until #1427, then no | no |
+| A moderator unmuting you, or a server mute | no | no |
+| Audience mode: a host lets you speak (`setVoiceAudienceSpeaker`, `ws/voice.ts`) | **lowered** | **no**, with `raised_hand_sticky` on |
+| A timer | none | none |
+| Orphan hold expiring (the seat is gone) | lowers (it is leaving) | lowers |
+
+Talking stopped lowering a hand in #1427 and that part is not behind the flag:
+the client simply no longer sends a lower when the mic opens. The one
+automatic lower that survived was audience mode's, and it is what the flag
+turns off.
+
+### The flag: `raised_hand_sticky`
+
+Runtime flag, global, **on by default** (`RAISED_HAND_STICKY`, flippable from
+the dashboard with no deploy; `docs/FEATURE_FLAGS.md`). The server reads it
+with `isEnabled` where it matters (the audience grant, the lower-all route)
+and serves it as `raisedHandSticky` on `GET /api/voice/config` so the call
+shows the new controls. Off restores today's behaviour exactly: letting
+somebody speak in audience mode lowers their hand, the number on a tile is a
+picture, and "Baixar todas" is not drawn and the route answers 403. An older
+client against a new API, or the reverse, degrades to "no new controls".
 
 Raising is the person's own state and rides the voice socket
 (`set-raised-hand`, rate-limited by the same limiter as a mute toggle).
@@ -78,9 +116,9 @@ with the rest of them. There is no frame shape anywhere that names a target.
 | Surface | What |
 |---|---|
 | Call controls | a hand button, `aria-pressed`, on the expanded stage and on the slim bar |
-| Expanded stage | `RaisedHandQueue`: the ordered list, your position, an X per row for a moderator |
-| Collapsed call strip | the same queue as one line: first name, `+N`, your position |
-| Call tiles | the hand and its number (`✋ 2`) in the name strip of each tile |
+| Expanded stage | `RaisedHandQueue`: the ordered list, your position, an X on your own row (sticky hands), an X per row and **Baixar todas** for a moderator |
+| Collapsed call strip | the same queue as one line: first name, `+N`, your position (a button that lowers your hand, sticky hands), an X that lowers all of them for a moderator |
+| Call tiles | the hand and its number (`✋ 2`) in the name strip of each tile; with sticky hands it is a button: your own lowers your hand, a moderator's lowers theirs |
 | Sidebar occupant row | the hand and its number next to the mute and camera badges |
 | Sidebar right-click | **Abaixar a mão**, only while that hand is up and only with the bit |
 
@@ -118,12 +156,28 @@ same roster everybody else is reading, on a button that flips back to
 
 ## With audience mode
 
-Audience mode (`docs/plans/AUDIENCE_MODE.md`) makes the hand the audience's
-way to ask: while it is on, a person whose mic is locked by it sees the raise
-button as the primary control ("Pedir pra falar"), and a host sees a one-tap
-**Liberar o microfone** on every hand in the queue (on the compact line too,
-for the first hand). Letting somebody talk lowers their hand through the same
-path a moderator's lower takes, because they have been called on.
+Audience mode makes the hand the audience's way to ask: while it is on, a
+person whose mic is locked by it sees the raise button as the primary control
+("Pedir pra falar"), and a host sees a one-tap **Liberar o microfone** on
+every hand in the queue (on the compact line too, for the first hand).
+
+With sticky hands, letting somebody talk does **not** lower their hand any more:
+they keep their number while they have the floor, and the host takes the hand
+down with the X on that row (or "Baixar todas") when they are done. That is
+the same rule as everywhere else, a hand only comes down when its owner or a
+moderator says so. With the flag off it is the old behaviour: the grant lowers
+the hand, through the same path a moderator's lower takes.
+
+## One client bug the sticky queue exposed
+
+The client draws your own hand from what it believes (so the click moves the
+icon now) and stores that overlay in the occupancy a roster DELTA is merged
+onto. A moderator lowering several hands sends several deltas, and the second
+one handed the first one's stale overlay back to `applySelfHand` as if the room
+had said it: your hand came back up on your screen and nowhere else.
+`serverSelfHand` in `use-voice.ts` keeps the raw value the room last stated,
+and a delta is merged onto that. Found by driving three real browsers, not by
+any test that existed.
 
 ## Two machines
 
@@ -147,6 +201,13 @@ place.
 | the moderator route: may, may not, idempotent | `server/src/api/voice-moderation.test.ts` |
 | two instances: order across the bus, a lower from the other machine, a third process | `server/src/ws/voice-cluster.test.ts`, group "raised hands across instances" |
 | talking keeps your own up, the optimistic window, a moderator's lower landing | `client/src/hooks/use-voice.test.ts`, group "raising a hand" |
+| unmuting, a moderator's unmute and a renumbering keep the place | `server/src/ws/voice-raised-hands.test.ts` |
+| audience grant keeps the hand (flag on) and lowers it (flag off), one instance and two | `server/src/ws/voice-audience.test.ts`, `server/src/ws/voice-audience-cluster.test.ts` |
+| lower all: may, may not, skipped by rank, flag off, text channel | `server/src/api/voice-moderation.test.ts`, group "lower ALL hands" |
+| lower all over two instances (rows, not the cache) | `server/src/ws/voice-cluster.test.ts`, "a moderator's lower-all on A" |
+| clicking the number, the own-row X, Baixar todas, renumbering | `client/src/components/voice/sticky-hands.test.tsx` |
+| a moderator's lower is not undone by the next roster delta about somebody else | `client/src/hooks/use-voice.test.ts`, "keeps a hand down that a moderator lowered" |
+| the flag's contract with the client | `server/src/lib/flag-client-contract.test.ts` |
 | the panel, the compact line, the lower control's gating | `client/src/components/voice/raised-hand-queue.test.tsx` |
 | the number beside each hand | `client/src/components/layout/voice-occupant-badges.test.tsx` |
 

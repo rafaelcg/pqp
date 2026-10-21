@@ -2656,6 +2656,45 @@ describeDb("voice across two instances", () => {
       expect(rows.rowCount).toBe(0);
     });
 
+    it("a moderator's lower-all on A sees, and clears, a hand held on B", async () => {
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      const sidebarOnA = watcher(a);
+      const alice = randomUUID();
+      const bob = randomUUID();
+      const aliceOnA = await join(a, alice, channel);
+      const bobOnB = await join(b, bob, channel);
+      await settle();
+      await raise(a, aliceOnA, alice, true);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      await raise(b, bobOnB, bob, true);
+      await settle();
+      await waitFor(
+        () => handsOn(sidebarOnA, channel).length === 2,
+        "both hands on A",
+      );
+
+      // A's process cached bob's hand only if it saw the frame; the rows are
+      // what the route lists from, in the order the hands went up.
+      expect(await a.voice.listVoiceRaisedHandUserIds(channel)).toEqual([
+        alice,
+        bob,
+      ]);
+      for (const userId of await a.voice.listVoiceRaisedHandUserIds(channel)) {
+        await a.voice.setVoiceUserHandRaised(channel, userId, false);
+      }
+      await waitFor(
+        () => b.voice.voiceUserHandRaisedAt(channel, bob) === null,
+        "B to lower bob's hand",
+      );
+      await waitFor(
+        () => handsOn(sidebarOnA, channel).length === 0,
+        "the queue to empty",
+      );
+      expect(await a.voice.listVoiceRaisedHandUserIds(channel)).toEqual([]);
+    });
+
     it("the place outlives the seat and the process: a resume elsewhere keeps it", async () => {
       backend.configured = "livekit";
       const channel = randomUUID();

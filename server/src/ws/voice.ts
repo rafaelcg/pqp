@@ -214,6 +214,7 @@ import {
   clusterTopologyTracked,
   isVoiceRegistryEnabled,
   getVoiceRaisedHand as getVoiceRaisedHandInRegistry,
+  listVoiceRaisedHandUserIds as listVoiceRaisedHandUserIdsInRegistry,
   isVoiceServerMuted as isVoiceServerMutedInRegistry,
   listVoicePeersForUser,
   listVoicePeersInRoom,
@@ -1460,6 +1461,22 @@ async function dropRaisedHandForUser(
       raisedAt: null,
     } satisfies VoiceRaisedHandFrame);
   }
+}
+
+/**
+ * Everybody whose hand is up in this room, for a moderator's "lower all".
+ *
+ * With the registry on the rows are the queue (a hand may have gone up on the
+ * other machine and this process never cached it); without it the in-process
+ * map is the room.
+ */
+export async function listVoiceRaisedHandUserIds(
+  voiceChannelId: string,
+): Promise<string[]> {
+  if (registryOn()) {
+    return listVoiceRaisedHandUserIdsInRegistry(voiceChannelId);
+  }
+  return [...(roomRaisedHands.get(voiceChannelId)?.keys() ?? [])];
 }
 
 /**
@@ -11414,10 +11431,18 @@ export async function setVoiceAudienceSpeaker(
       } satisfies VoiceAudienceFrame);
     }
   }
-  // Called on: the hand comes down. Unconditionally with the registry on,
-  // because the hand may have gone up on the other machine and the row, not
-  // this cache, is the queue.
-  if (allowed && (registryOn() || voiceUserHandRaisedAt(channelId, userId) !== null)) {
+  // Called on: the hand comes down, UNLESS hands are sticky (`raised_hand_sticky`,
+  // on by default). Then being given the floor is not a reason to lose your
+  // place in the queue: the hand comes down when the person lowers it, when
+  // a moderator does (the explicit X, or "Baixar todas"), or when they leave.
+  // With the flag off this is the old side effect, byte for byte.
+  // Unconditionally with the registry on, because the hand may have gone up
+  // on the other machine and the row, not this cache, is the queue.
+  if (
+    allowed &&
+    !isEnabled("raised_hand_sticky") &&
+    (registryOn() || voiceUserHandRaisedAt(channelId, userId) !== null)
+  ) {
     await setVoiceUserHandRaised(channelId, userId, false);
   }
   await applyAudienceLocally(channelId, channel, state, change);
