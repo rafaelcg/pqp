@@ -208,6 +208,12 @@ export interface SfuRoomLoad {
    * to a region an operator has since removed all live there.
    */
   region?: string | null;
+  /**
+   * The channel is a `watch_party` channel. Priced at the flat camera tariff
+   * whatever the calibration says: its stage is the film, not a grid of faces,
+   * and it is the shape `docs/CAPACITY.md` measured.
+   */
+  watchParty?: boolean;
 }
 
 /**
@@ -252,7 +258,9 @@ export function estimateRoomMbps(
   const cameras = Math.max(0, room.cameraPublishers);
   const screens = Math.max(0, room.screenPublishers);
   const cameraMbps =
-    options.calibrated && participants <= LARGE_ROOM_PARTICIPANTS
+    options.calibrated &&
+    !room.watchParty &&
+    participants <= LARGE_ROOM_PARTICIPANTS
       ? calibratedCameraMbps(cameras)
       : cameras * CAMERA_STREAM_MBPS;
   return (

@@ -665,6 +665,15 @@ describe("the calibrated camera price", () => {
     ).toBe(0);
   });
 
+  it("keeps the flat tariff for a small watch party with several cameras", () => {
+    const party = room({ participants: 6, cameraPublishers: 3, watchParty: true });
+    expect(estimateRoomMbps(party, calibrated)).toBe(estimateRoomMbps(party));
+    expect(estimateRoomMbps(party, calibrated)).toBeCloseTo(27);
+    expect(
+      estimateRoomMbps({ ...party, watchParty: false }, calibrated),
+    ).toBeLessThan(27);
+  });
+
   it("does not touch a large audience: a 500-viewer party is priced exactly as measured", () => {
     // `docs/CAPACITY.md`: 500 viewers of one stream, 500 x 1.5 = 750 nominal
     // against 880 to 935 real. These shapes must not move by a single bit.

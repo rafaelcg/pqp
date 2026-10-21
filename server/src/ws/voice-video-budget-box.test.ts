@@ -75,11 +75,13 @@ vi.mock("../services/dms.js", () => ({
   isDmSendBlocked: async () => false,
 }));
 
+const channelTypes = vi.hoisted(() => new Map<string, string>());
+
 vi.mock("../services/servers.js", () => ({
   getChannel: async (id: string) => ({
     id,
     kind: "server",
-    type: "voice",
+    type: channelTypes.get(id) ?? "voice",
     server_id: null,
   }),
   getChannelAudience: async () => null,
@@ -104,7 +106,9 @@ const {
   resetVoiceRateLimits,
   resetVoiceRoomTransports,
 } = await import("./voice.js");
-const { settleVoiceRegistryWrites } = await import("../voice/registry.js");
+const { listVoiceRoster, settleVoiceRegistryWrites } = await import(
+  "../voice/registry.js"
+);
 const { resetRegionAudience } = await import("../voice/region-audience.js");
 const { createMemoryHub, createMemoryTransport, setBusTransport } = await import(
   "../lib/bus.js"
@@ -164,8 +168,11 @@ async function join(country: string, channel: string): Promise<Seat> {
   return seat;
 }
 
-async function room(country: string, size: number): Promise<{ channel: string; people: Seat[] }> {
-  const channel = randomUUID();
+async function room(
+  country: string,
+  size: number,
+  channel: string = randomUUID(),
+): Promise<{ channel: string; people: Seat[] }> {
   const people: Seat[] = [];
   for (let at = 0; at < size; at += 1) {
     people.push(await join(country, channel));
@@ -229,6 +236,7 @@ describeDb("the video budget is per box", () => {
     delete process.env.SFU_VIDEO_BUDGET_PER_BOX;
     process.env.SFU_VIDEO_PRICE_CALIBRATED = "off";
     process.env.CLERK_SECRET_KEY ??= "sk_test_video_box";
+    channelTypes.clear();
     resetRegionAudience();
     resetVoicePeers();
     resetVoiceRoomTransports();
@@ -325,5 +333,53 @@ describeDb("the video budget is per box", () => {
     expect(line).toContain("roomsOnBox=2");
     expect(line).toContain("peopleOnBox=12");
     expect(line).not.toContain("User ");
+  });
+
+  describe("a watch party room keeps the flat camera tariff", () => {
+    /** A real `watch_party` channel row, so the roster's own join can see the type. */
+    async function watchPartyChannel(): Promise<string> {
+      const pool = getPool();
+      const user = await pool.query<{ id: string }>(
+        `INSERT INTO users (clerk_id, display_name) VALUES ($1, 'Owner') RETURNING id`,
+        [`clerk_box_${randomUUID()}`],
+      );
+      const server = await pool.query<{ id: string }>(
+        `INSERT INTO servers (name, owner_id) VALUES ('party', $1) RETURNING id`,
+        [user.rows[0]!.id],
+      );
+      const channel = randomUUID();
+      await pool.query(
+        `INSERT INTO channels (id, server_id, name, type, position)
+         VALUES ($1, $2, 'sala', 'watch_party', 0)`,
+        [channel, server.rows[0]!.id],
+      );
+      channelTypes.set(channel, "watch_party");
+      return channel;
+    }
+
+    it("says so on the roster the other replica reads", async () => {
+      const channel = await watchPartyChannel();
+      await room("BR", 2, channel);
+      expect((await listVoiceRoster(channel))?.watchParty).toBe(true);
+      const plain = await room("BR", 2);
+      expect((await listVoiceRoster(plain.channel))?.watchParty).toBe(false);
+    });
+
+    it("prices a small party's cameras flat while an ordinary room of the same shape is calibrated", async () => {
+      process.env.SFU_VIDEO_PRICE_CALIBRATED = "on";
+      process.env.VOICE_PROMOTION_MAX_SFU_MBPS = "30";
+      // Different boxes, so neither room is judged on the other's load.
+      const party = await room("BR", 6, await watchPartyChannel());
+      const plain = await room("US", 6);
+      for (const person of party.people.slice(0, 3)) {
+        expect(await cameraOn(person)).toBe(true);
+      }
+      // Flat: the fourth camera is 6 * 4 * 1.5 = 36 of 30.
+      expect(await cameraOn(party.people[3]!)).toBe(false);
+      // Calibrated: 6 * (1.5 + 3 * 0.4) = 16.2 of 30.
+      for (const person of plain.people.slice(0, 4)) {
+        expect(await cameraOn(person)).toBe(true);
+      }
+    });
   });
 });

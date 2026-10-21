@@ -11957,6 +11957,8 @@ async function readRoomLoads(): Promise<SfuRoomLoad[]> {
           // This process's own pin wins over the row (it is what it handed
           // tokens for); unknown, removed and null regions all read as home.
           region: boxOfRegion(pinnedRoomRegion(room.channelId) ?? room.region),
+          watchParty:
+            room.watchParty || getRoomPeers(room.channelId).some((p) => p.watchParty),
         };
       });
     } catch (error) {
@@ -11980,10 +11982,14 @@ async function readRoomLoads(): Promise<SfuRoomLoad[]> {
         cameraPublishers: 0,
         screenPublishers: 0,
         region: boxOfRegion(pinnedRoomRegion(peer.voiceChannelId)),
+        watchParty: false,
       };
       byRoom.set(peer.voiceChannelId, room);
     }
     room.participants += 1;
+    if (peer.watchParty) {
+      room.watchParty = true;
+    }
     if (peer.cameraStreamId) {
       room.cameraPublishers += 1;
     }
@@ -12042,6 +12048,7 @@ async function admitVideoOnSfu(
       channelId: voiceChannelId,
       transport: "livekit",
       region,
+      watchParty: known?.watchParty || seated.some((p) => p.watchParty),
       participants: Math.max(known?.participants ?? 0, seated.length, 1),
       cameraPublishers: Math.max(
         known?.cameraPublishers ?? 0,
@@ -12260,6 +12267,7 @@ async function attemptPromotion(
       channelId: voiceChannelId,
       transport: "mesh",
       region,
+      watchParty: known?.watchParty || seated.some((p) => p.watchParty),
       participants: Math.max(known?.participants ?? 0, seated.length, 1),
       cameraPublishers: Math.max(
         known?.cameraPublishers ?? 0,
