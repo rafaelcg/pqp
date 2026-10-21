@@ -500,6 +500,10 @@ export interface VoiceState {
    * trip to look pressed. It is set the moment the person clicks and
    * reconciled against the roster (`applySelfHand`), which is also how a
    * moderator lowering it reaches us: nothing else can change it.
+   *
+   * Talking does not lower it. It used to, and a table playing RPG over a
+   * call asked for the opposite: the hand is their place in the turn order,
+   * and it has to stay up while they chat until somebody takes it down.
    */
   handRaisedAt: number | null;
   /**
@@ -2666,7 +2670,6 @@ export function createVoiceController(transport: RealtimeTransport) {
 
   function applyMuteToPipeline() {
     state.isTransmitting = micShouldBeOpen();
-    lowerHandOnTransmit();
     if (!pipeline) {
       return;
     }
@@ -3524,32 +3527,6 @@ export function createVoiceController(transport: RealtimeTransport) {
       discardPendingHand();
     }
     state.handRaisedAt = serverValue;
-  }
-
-  /**
-   * SPEAKING LOWERS YOUR OWN HAND, and it can only be done here.
-   *
-   * `speaking` is deliberately not on the roster (see the fan-out note on
-   * `voiceParticipantSchema`), so the server cannot see this happen; the one
-   * machine that knows is the one the microphone is plugged into. That is not
-   * a hole: the only hand this can lower is our own, and a client that
-   * declined to run it would be leaving its OWN hand up in a queue it can see.
-   *
-   * `isTransmitting` and not "unmuted": on voice activity it is the gate
-   * opening on an actual syllable, and on push-to-talk it is the key going
-   * down. Both are the person taking their turn, which is what the queue was
-   * for.
-   */
-  function lowerHandOnTransmit() {
-    if (
-      !state.isTransmitting ||
-      state.handRaisedAt === null ||
-      state.status !== "connected" ||
-      !state.voiceChannelId
-    ) {
-      return;
-    }
-    sendRaisedHand(false);
   }
 
   /**

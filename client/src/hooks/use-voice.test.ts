@@ -4836,21 +4836,7 @@ describe("raising a hand", () => {
     expect(voice.getState().handRaisedAt).not.toBeNull();
   });
 
-  it("puts your own hand down when you start transmitting", async () => {
-    const { voice, sent } = await connected();
-    voice.setInputMode("push-to-talk");
-    voice.toggleRaisedHand();
-    sent.length = 0;
-
-    // The key goes down: this person is taking their turn, which is what the
-    // queue was for. Nobody else's hand moves, because nobody else's is ours.
-    voice.setPushToTalkActive(true);
-    expect(voice.getState().isTransmitting).toBe(true);
-    expect(sent).toContainEqual({ type: "set-raised-hand", raised: false });
-    expect(voice.getState().handRaisedAt).toBeNull();
-  });
-
-  it("says it once, not on every syllable", async () => {
+  it("keeps your hand up while you talk, since it is your place in the queue", async () => {
     const { voice, sent } = await connected();
     voice.setInputMode("push-to-talk");
     voice.toggleRaisedHand();
@@ -4859,17 +4845,9 @@ describe("raising a hand", () => {
     voice.setPushToTalkActive(true);
     voice.setPushToTalkActive(false);
     voice.setPushToTalkActive(true);
-    expect(
-      sent.filter((frame) => frame.type === "set-raised-hand"),
-    ).toHaveLength(1);
-  });
-
-  it("does not lower a hand that was never up", async () => {
-    const { voice, sent } = await connected();
-    voice.setInputMode("push-to-talk");
-    sent.length = 0;
-    voice.setPushToTalkActive(true);
+    expect(voice.getState().isTransmitting).toBe(true);
     expect(sent.filter((f) => f.type === "set-raised-hand")).toHaveLength(0);
+    expect(voice.getState().handRaisedAt).not.toBeNull();
   });
 
   it("ignores a roster that still describes the hand we just changed", async () => {

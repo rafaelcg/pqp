@@ -1544,6 +1544,7 @@
   "voice.hand.more": "+{count} na fila",
   "voice.hand.lowerFor": "Abaixar a mão de {name}",
   "voice.hand.raised": "Mão levantada",
+  "voice.hand.raisedAt": "Mão levantada, {position}º na fila",
   "voice.hand.ask": "Pedir pra falar",
   "voice.audience.toggle": "Modo plateia",
   "voice.audience.toggleOnHint": "Silencia todo mundo menos a staff e quem você liberar",

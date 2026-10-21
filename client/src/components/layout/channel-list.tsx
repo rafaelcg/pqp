@@ -76,6 +76,7 @@ import {
 } from "@pqp/shared";
 import type { ChannelLive } from "@/hooks/use-voice";
 import type { ChannelMusicTrack } from "@pqp/shared";
+import { raisedHandPositions } from "@/components/voice/hand-position-badge";
 import { ChannelMusicCard } from "@/components/voice/channel-music-card";
 import { LivePartyBlock } from "@/components/watch-party/live-party-block";
 import { SearchDialog } from "@/components/search/search-dialog";
@@ -1664,6 +1665,7 @@ export const ChannelList = memo(function ChannelList({
     const occupants = isVoiceRoomChannelType(channel.type)
       ? (voiceOccupancy[channel.id] ?? [])
       : [];
+    const handPositions = raisedHandPositions(occupants);
     const isFavorite = inFavorites || favoriteIdSet.has(channel.id);
     const occupantDropOk = occupantDropAllowed(channel);
     const mixedRow = mixed && !inFavorites;
@@ -1896,6 +1898,7 @@ export const ChannelList = memo(function ChannelList({
                     !person.muted &&
                     !person.deafened
                   }
+                  handPosition={handPositions.get(person.userId) ?? null}
                   canDrag={canDrag}
                   isDragging={draggedOccupant?.userId === person.userId}
                   items={menuForOccupant(person, channel)}
