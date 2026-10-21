@@ -1544,7 +1544,7 @@ export const MessageList = memo(function MessageList({
       const anchor = scrollAnchorRef.current;
       if (anchor) {
         const node = rowNodes.current.get(anchor.id);
-        if (node && performance.now() < anchor.until) {
+        if (node && performance.now() < anchor.until && !isPinnedRef.current) {
           container.scrollTop += offsetInViewport(container, node) - anchor.offset;
           return;
         }
@@ -1938,11 +1938,14 @@ export const MessageList = memo(function MessageList({
     // Plain geometry, true mid-jump as much as any other time.
     setCanScrollDown(distanceFromBottom(container) > SCROLL_END_SLACK_PX);
     // The reader scrolling while a prepend settles: the held row moves with
-    // them, so the next resize keeps it where they put it.
+    // them, so the next resize keeps it where they put it. Back at the live
+    // end, the hold is over: the bottom is what the list follows there.
     const anchor = scrollAnchorRef.current;
     if (anchor) {
       const node = rowNodes.current.get(anchor.id);
-      if (node) {
+      if (distanceFromBottom(container) <= STICKY_THRESHOLD_PX) {
+        scrollAnchorRef.current = null;
+      } else if (node) {
         anchor.offset = offsetInViewport(container, node);
       }
     }
