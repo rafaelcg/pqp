@@ -125,9 +125,8 @@ export interface GameSession {
   applyKeymap(platform: ConsoleGroup, map: Readonly<Record<string, string>>): void;
 }
 
-/** How often the core's real frame size is asked for, and for how long, once the game runs. */
-const SIZE_POLL_MS = 200;
-const SIZE_POLL_TRIES = 25;
+/** How often the core's frame size is asked for while the game runs (a change of the canvas's size asks sooner). */
+export const SIZE_WATCH_MS = 500;
 /** Ejetar waits this long, at most, for what is still going up to the account. */
 export const EJECT_SYNC_WAIT_MS = 10_000;
 /** Loading a state the instant the core says `start` can beat its first frame. */
@@ -175,6 +174,7 @@ export function createGameSession(ctx: SessionContext): GameSession {
   let nameInitial = "";
   let removeFocusWatch: (() => void) | null = null;
   let removeCrashWatch: (() => void) | null = null;
+  let removeSizeWatch: (() => void) | null = null;
   /* Saves na conta: this game's copy on the account, what boot found, and the sheets waiting to be asked */
   let gameSync: GameSync | null = null;
   let syncOffer: ContinueOffer | null = null;
@@ -455,6 +455,8 @@ export function createGameSession(ctx: SessionContext): GameSession {
     removeFocusWatch = null;
     removeCrashWatch?.();
     removeCrashWatch = null;
+    removeSizeWatch?.();
+    removeSizeWatch = null;
     for (const stop of removeSyncWatch) stop();
     removeSyncWatch = [];
     gameSync?.dispose();
@@ -768,19 +770,36 @@ export function createGameSession(ctx: SessionContext): GameSession {
     win.addEventListener("error", onError);
     removeCrashWatch = () => win.removeEventListener("error", onError);
 
-    // the real frame size, once the core has drawn: the pixel-perfect scale needs it
-    let tries = 0;
-    const poll = () => {
+    // The core's frame size, for as long as the game runs. A game changes its picture while it plays (a SNES game
+    // goes between 224 and 239 lines, 256 and 512 wide, and a core may report a placeholder until its first real
+    // frame), so the size read once was a size kept for good: the box was fitted to a frame the core no longer drew.
+    // It is asked again every SIZE_WATCH_MS, and at once when the canvas's own size changes (RetroArch resizes the
+    // canvas when the geometry does), and the stage lays itself out again only when the answer is a different one.
+    const readSize = () => {
       if (mine !== generation || !runtime) return;
       const size = runtime.videoSize();
-      if (size) {
-        stage.setBase(size.width, size.height);
-        return;
-      }
-      tries += 1;
-      if (tries < SIZE_POLL_TRIES) timers.push(setTimeout(poll, SIZE_POLL_MS));
+      if (size) stage.setBase(size.width, size.height);
     };
-    poll();
+    // one handle, replaced each turn: the session's timer list is for one-shot timers and would grow all game long
+    let sizeTimer: ReturnType<typeof setTimeout> | undefined;
+    const watchSize = () => {
+      readSize();
+      if (mine === generation) sizeTimer = setTimeout(watchSize, SIZE_WATCH_MS);
+    };
+    watchSize();
+    const canvasWatch =
+      typeof MutationObserver === "undefined"
+        ? null
+        : new MutationObserver(() => readSize());
+    const watchCanvas = () => {
+      const canvas = elements.game.querySelector("canvas.ejs_canvas");
+      if (canvas) canvasWatch?.observe(canvas, { attributes: true, attributeFilter: ["width", "height"] });
+    };
+    watchCanvas();
+    removeSizeWatch = () => {
+      clearTimeout(sizeTimer);
+      canvasWatch?.disconnect();
+    };
 
     // a file the console cannot run may still "start": RetroArch then sits in its own menu and the frame counter
     // never moves. That is the cartridge being bad, and the person is told so instead of being shown a menu.
