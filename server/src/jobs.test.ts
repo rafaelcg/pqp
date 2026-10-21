@@ -145,6 +145,31 @@ vi.mock("./services/bot-reminders.js", async (importOriginal) => ({
 vi.mock("./apps/locadora-saves.js", () => ({
   sweepLocadoraSaves: vi.fn(async () => ({ saves: 0, uploads: 0 })),
 }));
+// This file advances a simulated day on fake timers, so any job it forgot to
+// mock reaches the real pool once per tick (thousands of times: see below), and
+// a failing tick is swallowed by `every()` so nothing here would notice. The
+// pool is the tripwire: the "fires each job" test asserts it was never asked.
+vi.mock("./db.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./db.js")>()),
+  getPool: vi.fn(() => {
+    throw new Error("jobs.test.ts must not touch Postgres: mock the job");
+  }),
+}));
+
+// The live-session sweep runs every 15 s, so the "fires each job" test below,
+// which advances a simulated day, drives it 5,760 times. Unmocked it went to
+// the real pool every time (4,900 connections opened against Postgres in four
+// seconds, measured), which starved whichever DB-backed file shared the
+// Postgres at that moment. Keep the real interval, mock the work.
+vi.mock("./apps/sweeps.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./apps/sweeps.js")>()),
+  runAppSweepJob: vi.fn(async () => null),
+}));
+// Same shape, once a minute: 1,440 real connections over the simulated day.
+vi.mock("./voice/hls-cleanup.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./voice/hls-cleanup.js")>()),
+  sweepHlsSessions: vi.fn(async () => 0),
+}));
 vi.mock("./services/bot-stats.js", () => ({
   pruneBotPeopleDaily: vi.fn(async () => 0),
 }));
@@ -175,6 +200,9 @@ import { runBauFollowTick } from "./services/bau-follow-delivery.js";
 import { runChannelLayoutMigrations } from "./services/channel-layout.js";
 import { pruneBotPeopleDaily } from "./services/bot-stats.js";
 import { sweepLocadoraSaves } from "./apps/locadora-saves.js";
+import { APP_SWEEP_INTERVAL_MS, runAppSweepJob } from "./apps/sweeps.js";
+import { sweepHlsSessions } from "./voice/hls-cleanup.js";
+import { getPool } from "./db.js";
 import { deliverDueReminders } from "./services/bot-reminders.js";
 import { sweepQuarantinedServerEmoji } from "./services/server-emoji-scan.js";
 import {
@@ -190,6 +218,7 @@ import {
   CHANNEL_SESSION_REMINDER_INTERVAL_MS,
   DAILY_MS,
   FORUM_SHELL_SWEEP_INTERVAL_MS,
+  HLS_SESSION_SWEEP_INTERVAL_MS,
   PENDING_DELETION_SWEEP_INTERVAL_MS,
   startColdJobs,
   type ColdJobs,
@@ -320,6 +349,12 @@ describe("cold jobs", () => {
     expect(sweepSoundboardUploads).toHaveBeenCalledTimes(4);
     // The bot reminders: every 30 s, no boot run, so eight in four minutes.
     expect(deliverDueReminders).toHaveBeenCalledTimes(8);
+    // The apps live-session sweep: every 15 s, no boot run, so sixteen.
+    expect(APP_SWEEP_INTERVAL_MS).toBe(15_000);
+    expect(runAppSweepJob).toHaveBeenCalledTimes(16);
+    // The HLS session sweep: a minute, so four, and none at boot.
+    expect(HLS_SESSION_SWEEP_INTERVAL_MS).toBe(60_000);
+    expect(sweepHlsSessions).toHaveBeenCalledTimes(4);
 
     await vi.advanceTimersByTimeAsync(PENDING_DELETION_SWEEP_INTERVAL_MS);
     expect(sweepPendingAccountDeletions).toHaveBeenCalledTimes(1);
@@ -361,6 +396,11 @@ describe("cold jobs", () => {
     expect(
       vi.mocked(userStats.copyWatchParties).mock.calls.length,
     ).toBeGreaterThanOrEqual(DAILY_MS / USER_STATS_WATCH_PARTY_COPY_INTERVAL_MS);
+    // Every job above was a mock. A job that is not goes to the real pool on
+    // every tick of the day this test just simulated, and that storm of
+    // connections is what once broke whichever DB-backed file shared the
+    // Postgres with this one (community-settings.test.ts, shard 3).
+    expect(getPool).not.toHaveBeenCalled();
   });
 
   it("a failing sweep is logged and the timer survives", async () => {

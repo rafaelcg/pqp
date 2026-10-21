@@ -116,5 +116,5 @@ export async function appsConfigForServer(serverId: string): Promise<AppsConfig>
       saveSync: manifest.id === LOCADORA_APP_ID && isEnabled("locadora_save_sync", { serverId }),
     });
   }
-  return { enabled: true, origin, apps };
+  return { enabled: true, origin, apps, paneLayoutV2: isEnabled("app_pane_layout_v2") };
 }

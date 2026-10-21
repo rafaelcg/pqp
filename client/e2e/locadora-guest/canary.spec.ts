@@ -139,7 +139,19 @@ test("a guest plays a cartridge and nothing about it leaves the page", async ({ 
   await page.waitForTimeout(1_500);
   // never over a running game
   await expect(page.locator("[data-locadora-upsell]")).toHaveCount(0);
+  // a guest has no share (the host says `shareAllowed: false`): no pill, and no account saves either
+  await expect(frame.locator('[data-action="share"]')).toBeHidden();
+  await expect(frame.locator("#loc")).not.toHaveAttribute("data-sync", /.+/);
   await frame.locator("#game").focus();
+  // mute works here too: the emulator is silenced, and M again gives the sound back
+  await page.keyboard.press("KeyM");
+  await expect
+    .poll(() => frame.evaluate(() => (window as unknown as { EJS_emulator?: { muted?: boolean } }).EJS_emulator?.muted))
+    .toBe(true);
+  await page.keyboard.press("KeyM");
+  await expect
+    .poll(() => frame.evaluate(() => (window as unknown as { EJS_emulator?: { muted?: boolean } }).EJS_emulator?.muted))
+    .toBe(false);
   await page.keyboard.press("F2"); // a save, into the guest's own store
   await page.waitForTimeout(31_000);
   await expect(page.locator("[data-locadora-upsell]")).toHaveCount(0);

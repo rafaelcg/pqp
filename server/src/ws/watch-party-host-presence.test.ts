@@ -129,7 +129,7 @@ async function makeUser(): Promise<string> {
 }
 
 async function waitFor(check: () => Promise<boolean>, what: string): Promise<void> {
-  const deadline = Date.now() + 3_000;
+  const deadline = Date.now() + 12_000;
   while (!(await check())) {
     if (Date.now() > deadline) {
       throw new Error(`timed out waiting for ${what}`);

@@ -31,7 +31,10 @@ export interface Strings {
   noticesFailed: string;
   share: string;
   shareStop: string;
+  /** The sentence said once when the share starts (and the chip's hover text). */
   sharing: string;
+  /** The chip that stays on screen while sharing. */
+  sharingLive: string;
   shareRefused: string;
   shareFailed: string;
   watchingTitle: string;
@@ -134,6 +137,7 @@ export interface Strings {
   "hud.mute": string;
   "hud.unmute": string;
   "hud.exit": string;
+  "hud.sharingPill": string;
   "hud.ejectAria": string;
   "hud.resume": string;
   /** `{time}` is the play time, like 1h12 or 12 min. */
@@ -378,8 +382,9 @@ export const STRINGS = {
     share: "Compartilhar",
     shareStop: "Parar de compartilhar",
     sharing: "A tela da Locadora tá sendo compartilhada. Quem entrar pra assistir vê o que tu vê aqui.",
+    sharingLive: "Compartilhando a tela",
     shareRefused: "Compartilhar tá desligado aqui.",
-    shareFailed: "Não deu pra compartilhar agora. Tenta de novo.",
+    shareFailed: "Não deu pra compartilhar. Entra na call de voz deste canal e tenta de novo.",
     watchingTitle: "Tu tá assistindo",
     watchingLine: "Aparece a tela do jogo de {names}.",
     watchingMore: " e mais {n}",
@@ -467,6 +472,7 @@ export const STRINGS = {
     "hud.mute": "Silenciar o som",
     "hud.unmute": "Ligar o som",
     "hud.exit": "Sair",
+    "hud.sharingPill": "Compartilhando",
     "hud.ejectAria": "Ejetar a fita e voltar pra prateleira",
     "hud.resume": "Continuar",
     "hud.played": "{time} de jogo",
@@ -698,8 +704,9 @@ export const STRINGS = {
     share: "Share",
     shareStop: "Stop sharing",
     sharing: "The Locadora screen is being shared. People who come to watch see what you see here.",
+    sharingLive: "Sharing the screen",
     shareRefused: "Sharing is off here.",
-    shareFailed: "Sharing did not work right now. Try again.",
+    shareFailed: "Sharing did not start. Join this channel's voice call and try again.",
     watchingTitle: "You are watching",
     watchingLine: "You are seeing the game screen of {names}.",
     watchingMore: " and {n} more",
@@ -785,6 +792,7 @@ export const STRINGS = {
     "hud.mute": "Mute the sound",
     "hud.unmute": "Turn the sound on",
     "hud.exit": "Exit",
+    "hud.sharingPill": "Sharing",
     "hud.ejectAria": "Eject the cartridge and go back to the shelf",
     "hud.resume": "Resume",
     "hud.played": "{time} played",
@@ -1016,8 +1024,9 @@ export const STRINGS = {
     share: "Compartir",
     shareStop: "Dejar de compartir",
     sharing: "La pantalla de Locadora se está compartiendo. Quien entre a mirar ve lo que tú ves aquí.",
+    sharingLive: "Compartiendo la pantalla",
     shareRefused: "Compartir está desactivado aquí.",
-    shareFailed: "No se pudo compartir ahora. Prueba otra vez.",
+    shareFailed: "No se pudo compartir. Entra a la llamada de voz de este canal y prueba otra vez.",
     watchingTitle: "Estás mirando",
     watchingLine: "Ves la pantalla del juego de {names}.",
     watchingMore: " y {n} más",
@@ -1103,6 +1112,7 @@ export const STRINGS = {
     "hud.mute": "Silenciar el sonido",
     "hud.unmute": "Activar el sonido",
     "hud.exit": "Salir",
+    "hud.sharingPill": "Compartiendo",
     "hud.ejectAria": "Expulsar el cartucho y volver a la estantería",
     "hud.resume": "Continuar",
     "hud.played": "{time} de juego",

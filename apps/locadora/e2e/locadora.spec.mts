@@ -78,6 +78,65 @@ interface OpenOptions {
   touch?: boolean;
   /** Older name of `frameSize`. */
   size?: { w: number; h: number };
+  /** Puts a meter on every `AudioContext` the frame makes, under the app's own wrapper (see `audioTapScript`). */
+  audioTap?: boolean;
+}
+
+/**
+ * A meter at the speakers, run in every frame BEFORE the app's own script. It wraps `AudioContext` first, so the
+ * app's wrapper (which wraps whatever it finds) sits on top of it: the meter's `destination` stands in for the
+ * real speakers, and everything the app lets through reaches it. A context the frame makes gets a tap (a gain at 1
+ * into the real destination) and an analyser on the tap, which is what `speakersPeak` reads. Nothing here touches
+ * the app's code: with the app's wrapper gone, a muted game still reads loud.
+ */
+function audioTapScript() {
+  const w = window as unknown as Record<string, unknown> & { __ctxs: unknown[] };
+  w.__ctxs = [];
+  const Native = w.AudioContext as new (...args: unknown[]) => AudioContext;
+  if (!Native) return;
+  class Metered extends Native {
+    constructor(...args: unknown[]) {
+      super(...args);
+      const real = this.destination;
+      const tap = this.createGain();
+      const analyser = this.createAnalyser();
+      analyser.fftSize = 1024;
+      tap.connect(real);
+      tap.connect(analyser);
+      Object.defineProperty(tap, "maxChannelCount", { value: real.maxChannelCount });
+      Object.defineProperty(this, "destination", { configurable: true, get: () => tap });
+      (this as unknown as { __analyser: AnalyserNode }).__analyser = analyser;
+      w.__ctxs.push(this);
+    }
+  }
+  w.AudioContext = Metered;
+  w.webkitAudioContext = Metered;
+}
+
+/** What the frame's audio contexts let through to the speakers now, 0 to 1, and how many contexts there are. */
+async function speakersPeak(frame: Frame): Promise<{ contexts: number; running: number; peak: number }> {
+  return frame.evaluate(async () => {
+    type Metered = AudioContext & { __analyser: AnalyserNode; __probe?: boolean };
+    const contexts = (window as unknown as { __ctxs: Metered[] }).__ctxs ?? [];
+    for (const context of contexts) {
+      if (context.state === "closed" || context.__probe) continue;
+      // a steady tone through the same door the core uses (the test ROMs themselves are silent)
+      const tone = context.createOscillator();
+      tone.frequency.value = 440;
+      tone.connect(context.destination);
+      tone.start();
+      context.__probe = true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    let peak = 0;
+    const data = new Float32Array(1024);
+    for (const context of contexts) {
+      if (context.state === "closed") continue;
+      context.__analyser.getFloatTimeDomainData(data);
+      for (const sample of data) peak = Math.max(peak, Math.abs(sample));
+    }
+    return { contexts: contexts.length, running: contexts.filter((context) => context.state === "running").length, peak };
+  });
 }
 
 async function open(browser: Browser, query = "", options: OpenOptions = {}): Promise<Opened> {
@@ -88,6 +147,7 @@ async function open(browser: Browser, query = "", options: OpenOptions = {}): Pr
     ...(options.touch ? { hasTouch: true } : {}),
   });
   await rig.allowHostAsAncestor(context);
+  if (options.audioTap) await context.addInitScript(audioTapScript);
   if (options.noDisplayMode) {
     await context.addInitScript(() => {
       const real = window.matchMedia.bind(window);
@@ -819,6 +879,78 @@ test("a SNES pattern runs on the bsnes core: it paints, the header names it, the
   await opened.context.close();
 });
 
+/*
+ * Mute is judged by what reaches the speakers, never by the `muted` flag (that was the old test, and the flag moved
+ * while the SNES core went on playing: its own audio driver never reaches EmulatorJS's volume). `audioTapScript`
+ * puts a meter where the speakers are; the test ROMs are silent, so `speakersPeak` also plays a steady tone through
+ * the same door the core uses. That tone is the only thing added, and it exists only in this test.
+ */
+for (const [label, ext, pattern, color] of [
+  ["SNES (bsnes, which makes its own audio context)", ".sfc", snesPattern, SNES_GREEN],
+  ["Game Boy Advance (mGBA)", ".gba", gbaPattern, GBA_GREEN],
+  ["NES (FCEUmm)", ".nes", nesPattern, NES_GREEN],
+] as const) {
+  test(`mute is silence at the speakers, not just an icon: ${label}`, async ({ browser }) => {
+    const opened = await open(browser, "", { audioTap: true });
+    const { frame, page } = opened;
+    await pickFile(opened, randomName(ext), pattern());
+    await startGame(frame);
+    await expectPaints(opened, color);
+
+    // sound is on: the core made its context and a tone through its door is heard
+    const loud = await speakersPeak(frame);
+    expect(loud.contexts).toBeGreaterThan(0);
+    expect(loud.running).toBeGreaterThan(0);
+    expect(loud.peak).toBeGreaterThan(0.05);
+
+    // M: the icon, the flag AND the sound
+    await page.keyboard.press("KeyM");
+    await expect.poll(async () => (await speakersPeak(frame)).peak, { timeout: 10_000, intervals: [200] }).toBeLessThan(0.001);
+    expect(await frame.evaluate(() => (window as unknown as { EJS_emulator?: { muted?: boolean } }).EJS_emulator?.muted)).toBe(true);
+    await frame.locator("#stage").hover();
+    await expect(frame.locator('[data-action="sound"] svg path[d*="17 9l5 6"]')).toHaveCount(1);
+
+    // pause and resume do not give it back
+    await frame.locator('[data-action="pause"]').click();
+    await frame.locator('[data-action="pause"]').click();
+    expect((await speakersPeak(frame)).peak).toBeLessThan(0.001);
+
+    // M again: back, at the volume it had
+    await page.keyboard.press("KeyM");
+    await expect.poll(async () => (await speakersPeak(frame)).peak, { timeout: 10_000, intervals: [200] }).toBeGreaterThan(0.05);
+
+    // muted, then another game (Ejetar and the same file again): the new console starts silent, not at full volume
+    await page.keyboard.press("KeyM");
+    await expect.poll(async () => (await speakersPeak(frame)).peak, { timeout: 10_000, intervals: [200] }).toBeLessThan(0.001);
+    await frame.locator("#stage").hover();
+    await frame.locator('[data-action="eject"]').click();
+    await expect(frame.locator("#v-shelf .loc-top")).toBeVisible();
+    const box = frame.locator(".loc-box");
+    await box.focus();
+    await page.keyboard.press("Enter");
+    await startGame(frame);
+    await expectPaints(opened, color);
+    expect((await speakersPeak(frame)).peak).toBeLessThan(0.001);
+
+    // and a reload of the whole frame (the `muted` preference is stored): silent again from the first note
+    await expect.poll(() => storeKeys(page).then((keys) => keys.includes("prefs"))).toBe(true);
+    await reloadFrame(opened);
+    const again = opened.frame;
+    await again.locator(".loc-box").first().focus();
+    await page.keyboard.press("Enter");
+    await startGame(again);
+    await expectPaints(opened, color);
+    const quiet = await speakersPeak(again);
+    expect(quiet.contexts).toBeGreaterThan(0);
+    expect(quiet.peak).toBeLessThan(0.001);
+    // unmuted again, so it is not stuck silent for good
+    await page.keyboard.press("KeyM");
+    await expect.poll(async () => (await speakersPeak(again)).peak, { timeout: 10_000, intervals: [200] }).toBeGreaterThan(0.05);
+    expect(opened.problems).toEqual([]);
+    await opened.context.close();
+  });
+}
+
 test("SNES: the bsnes core keeps running through a reset, a save and a load (libco's fibers derive and synchronise)", async ({ browser }) => {
   // EmulatorJS's own bsnes build aborted the runtime on all three ("missing function: co_derive" and
   // "co_serializable"), and a state made from a JavaScript call cannot switch bsnes's fibers; the vendored
@@ -1199,13 +1331,16 @@ test("a full device still plays: the cartridge is not kept, the game says so and
  * The platform side (the flag, `shareAllowed` on the config, the spectator refusal) is tested with the platform's
  * own PRs; these are the app's two states.
  */
-test("sharing, flag off: no control, one refused probe, and no share is ever asked for", async ({ browser }) => {
+test("sharing, flag off: no control anywhere, one refused probe, and no share is ever asked for", async ({ browser }) => {
   const opened = await open(browser);
   const { frame, page } = opened;
   await pickFile(opened, randomName(".nes"), nesPattern());
   await startGame(frame);
   await expectPaints(opened, NES_GREEN);
-  await expect(frame.locator("#share")).toBeHidden();
+  await frame.locator("#stage").hover();
+  // the HUD is up and nothing in it shares: not drawn, never a button that does nothing
+  await expect(frame.locator(".loc-hud-bar")).toBeVisible();
+  await expect(frame.locator('[data-action="share"]')).toBeHidden();
   await expect(frame.locator("#sharing")).toBeHidden();
   const shares = await page.evaluate(() => (window as unknown as HostGlobals).__h.shares);
   // the only call is the probe, a request to STOP sharing, and it was refused
@@ -1213,22 +1348,26 @@ test("sharing, flag off: no control, one refused probe, and no share is ever ask
   await opened.context.close();
 });
 
-test("sharing, flag on: the control shares the pane and stops it", async ({ browser }) => {
+test("sharing, flag on: the HUD's pill shares the pane and stops it, and says what is on", async ({ browser }) => {
   const opened = await open(browser, "&share=on");
   const { frame, page } = opened;
   // no control before there is a game on screen
-  await expect(frame.locator("#share")).toBeHidden();
+  await expect(frame.locator('[data-action="share"]')).toBeHidden();
   await pickFile(opened, randomName(".gba"), gbaPattern());
   await startGame(frame);
   await expectPaints(opened, GBA_GREEN);
-  const share = frame.locator("#share");
+  await frame.locator("#stage").hover();
+  const share = frame.locator('[data-action="share"]');
   await expect(share).toBeVisible();
   await expect(share).toHaveText("Compartilhar");
   await expect(share).toHaveAttribute("aria-pressed", "false");
   await share.click();
-  await expect(share).toHaveText("Parar de compartilhar");
+  await expect(share).toHaveText("Compartilhando");
   await expect(share).toHaveAttribute("aria-pressed", "true");
-  await expect(frame.locator("#sharing")).toContainText("compartilhada");
+  await expect(frame.locator("#sharing")).toHaveText("Compartilhando a tela");
+  // the sentence that says what the audience sees is said once, on the HUD's own toast
+  await expect(frame.locator(".loc-hud-toasts")).toContainText("Quem entrar pra assistir vê o que tu vê aqui");
+  await frame.locator("#stage").hover();
   await share.click();
   await expect(share).toHaveText("Compartilhar");
   await expect(frame.locator("#sharing")).toBeHidden();
@@ -1239,6 +1378,114 @@ test("sharing, flag on: the control shares the pane and stops it", async ({ brow
   await opened.context.close();
 });
 
+test("sharing, allowed but not started (not in the call): the pill says so out loud and nothing is left marked as sharing", async ({ browser }) => {
+  const opened = await open(browser, "&share=nocall");
+  const { frame, page } = opened;
+  await pickFile(opened, randomName(".gba"), gbaPattern());
+  await startGame(frame);
+  await expectPaints(opened, GBA_GREEN);
+  await frame.locator("#stage").hover();
+  const share = frame.locator('[data-action="share"]');
+  await expect(share).toBeVisible();
+  await share.click();
+  // never a silent button: a line over the picture says what to do
+  await expect(frame.locator(".loc-hud-toasts")).toContainText("Entra na call de voz deste canal");
+  await expect(share).toHaveText("Compartilhar");
+  await expect(share).toHaveAttribute("aria-pressed", "false");
+  await expect(frame.locator("#sharing")).toBeHidden();
+  // and the pill is usable again for a second try
+  await expect(share).not.toHaveAttribute("aria-disabled", "true");
+  expect((await page.evaluate(() => (window as unknown as HostGlobals).__h.shares)).map((s) => s.on)).toEqual([false, true]);
+  await opened.context.close();
+});
+
+/** Every box of the HUD's top row and bar, and the sharing chip, in the frame's own pixels. */
+async function hudBoxes(frame: Frame) {
+  return frame.evaluate(() => {
+    const rect = (el: Element) => {
+      const r = el.getBoundingClientRect();
+      return { x: r.left, y: r.top, w: r.width, h: r.height };
+    };
+    const visible = (el: Element) => !(el as HTMLElement).hidden && el.getBoundingClientRect().width > 0;
+    const bar = document.querySelector(".loc-hud-bar")!;
+    const top = [...document.querySelectorAll(".loc-hud-top > :not(.loc-hud-spacer)")].filter(visible).map((el) => ({ name: el.getAttribute("data-action") ?? el.className, ...rect(el) }));
+    const sharing = document.querySelector("#sharing");
+    return {
+      view: { w: window.innerWidth, h: window.innerHeight },
+      bar: rect(bar),
+      barOverflows: bar.scrollWidth > bar.clientWidth + 1,
+      barChildren: [...bar.querySelectorAll("button")].filter(visible).map(rect),
+      top,
+      sharing: sharing && visible(sharing) ? rect(sharing) : null,
+    };
+  });
+}
+
+const overlap = (a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }) =>
+  a.x < b.x + b.w - 0.5 && b.x < a.x + a.w - 0.5 && a.y < b.y + b.h - 0.5 && b.y < a.y + a.h - 0.5;
+
+for (const [label, options, full] of [
+  ["a 1440x900 laptop in full screen", { viewport: { width: 1440, height: 900 }, screen: { width: 1440, height: 900 }, frameSize: { w: 1000, h: 700 } }, true],
+  ["a 2000x1270 laptop at 2x in full screen", { viewport: { width: 2000, height: 1270 }, dpr: 2, screen: { width: 2000, height: 1330 }, frameSize: { w: 1400, h: 900 } }, true],
+  ["a 390x844 phone in full screen", { viewport: { width: 390, height: 844 }, screen: { width: 390, height: 844 }, frameSize: { w: 360, h: 600 }, dpr: 2, touch: true }, true],
+  ["the docked pane, 535 px wide", { viewport: { width: 1100, height: 900 }, frameSize: { w: 535, h: 760 } }, false],
+] as const) {
+  test(`the share pill and the sharing chip never touch the bar or each other: ${label}`, async ({ browser, browserName }) => {
+    test.skip(full && browserName !== "chromium", "real element full screen in a headless browser is Chromium's");
+    test.setTimeout(120_000);
+    const opened = await open(browser, `&share=on${full ? "&fs=real" : ""}`, { ...(options as OpenOptions), noDisplayMode: full });
+    const { frame, page } = opened;
+    await pickFile(opened, randomName(".gba"), gbaPattern());
+    await startGame(frame);
+    await expectPaints(opened, GBA_GREEN);
+    await frame.locator("#stage").hover();
+    if (full) {
+      // F is the HUD's key for full screen (the bar's own button sits in "Mais" on a short bar)
+      await frame.locator("#stage").click({ position: { x: 40, y: 200 } });
+      await page.keyboard.press("KeyF");
+      await expect(frame.locator("#loc")).toHaveAttribute("data-fullscreen", "true");
+    }
+    const move = async () => {
+      const v = page.viewportSize()!;
+      await page.mouse.move(v.width / 2, v.height / 2);
+      await page.mouse.move(v.width / 2 + 4, v.height / 2 + 4);
+    };
+    await move();
+    const share = frame.locator('[data-action="share"]');
+    await expect(share).toBeVisible();
+    await share.click();
+    await expect(share).toHaveText("Compartilhando");
+    await move();
+    await expect(frame.locator("#sharing")).toBeVisible();
+    await shot(page, `share-${label.replace(/[^a-z0-9]+/gi, "-")}`);
+    const boxes = await hudBoxes(frame);
+    const shareBox = boxes.top.find((box) => box.name === "share")!;
+    expect(shareBox, "the pill is in the top row").toBeTruthy();
+    // nothing of the pill is on the bar, and the pill is wholly on screen
+    expect(overlap(shareBox, boxes.bar)).toBe(false);
+    for (const child of boxes.barChildren) expect(overlap(shareBox, child)).toBe(false);
+    expect(shareBox.x).toBeGreaterThanOrEqual(0);
+    expect(shareBox.x + shareBox.w).toBeLessThanOrEqual(boxes.view.w + 0.5);
+    // every chip of the top row is wholly on screen: "Sair" is not cut off by the edge when the pill comes in
+    for (const box of boxes.top) {
+      expect(box.x, box.name).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.w, box.name).toBeLessThanOrEqual(boxes.view.w + 0.5);
+    }
+    // the top row's chips do not lie on one another
+    for (const [i, one] of boxes.top.entries()) for (const other of boxes.top.slice(i + 1)) expect(overlap(one, other), `${one.name} / ${other.name}`).toBe(false);
+    // the bar fits: nothing is cut off at the side, nothing needs scrolling
+    expect(boxes.barOverflows).toBe(false);
+    expect(boxes.bar.x).toBeGreaterThanOrEqual(0);
+    expect(boxes.bar.x + boxes.bar.w).toBeLessThanOrEqual(boxes.view.w + 0.5);
+    // the chip that says "sharing" is on neither the pills, nor the bar
+    if (boxes.sharing) {
+      expect(overlap(boxes.sharing, boxes.bar)).toBe(false);
+      for (const one of boxes.top) expect(overlap(boxes.sharing, one), `chip / ${one.name}`).toBe(false);
+    }
+    await opened.context.close();
+  });
+}
+
 test("a watcher sees whose game is on screen and has nothing to pick", async ({ browser }) => {
   const opened = await open(browser, "&role=spectator&share=on");
   const { frame, page } = opened;
@@ -1248,7 +1495,7 @@ test("a watcher sees whose game is on screen and has nothing to pick", async ({ 
   await expect(frame.locator("#watching-how")).toContainText("O pqp só passa a imagem");
   await expect(frame.locator("#v-shelf")).toBeHidden();
   await expect(frame.locator(".loc-top-pick")).toHaveCount(0);
-  await expect(frame.locator("#share")).toBeHidden();
+  await expect(frame.locator('[data-action="share"]')).toHaveCount(0);
   // a watcher never asks to share, and never touches the device store
   expect(await page.evaluate(() => (window as unknown as HostGlobals).__h.shares)).toEqual([]);
   const text = await frame.locator("main").innerText();

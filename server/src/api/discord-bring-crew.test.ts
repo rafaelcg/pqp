@@ -284,6 +284,13 @@ describeDb("Traz tua galera: import arrivals", () => {
     try {
       await client.query("BEGIN");
       await client.query("SET LOCAL enable_seqscan = off");
+      // The older partial index (`created_at`, every import) also matches this
+      // WHERE, and on a table with no statistics yet the planner picks between
+      // the two on a coin flip (whether autovacuum has analysed audit_log by
+      // now): it chose the wrong one on CI. Take it out of the running for this
+      // transaction (rolled back below) so the question is only whether the
+      // by-server index is usable, which is what this pins.
+      await client.query("DROP INDEX idx_audit_log_discord_import");
       const plan = await client.query<{ "QUERY PLAN": string }>(
         `EXPLAIN SELECT actor_id, created_at
            FROM audit_log
