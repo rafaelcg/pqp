@@ -104,10 +104,13 @@ export function chatUnreadSince(
       mention = true;
     }
   }
-  // Past the scan limit the mark may still be behind us: that is a long
-  // absence, not a lost mark, so the count stands.
-  if (!reachedMark && floor === 0) return NO_UNREAD;
-  return { count, mention };
+  if (reachedMark) return { count, mention };
+  // The window ended without the mark. A long absence (every message looked at
+  // is newer than the moment the chat went away) keeps its count; a replaced
+  // page or a jump to older history (anything else) counts nothing.
+  const oldest = floor > 0 ? messages[floor] : undefined;
+  const oldestAt = oldest?.createdAt ? Date.parse(oldest.createdAt) : Number.NaN;
+  return oldestAt > mark.at ? { count, mention } : NO_UNREAD;
 }
 
 /** "3", "9+": what the badge prints. */

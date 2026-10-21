@@ -89,9 +89,21 @@ describe("what arrived while the chat was away", () => {
     expect(chatUnreadSince(list, after("gone"), viewer)).toEqual({ count: 0, mention: false });
   });
 
-  it("looks back at most UNREAD_SCAN_LIMIT messages, and a long absence still counts", () => {
-    const long = Array.from({ length: UNREAD_SCAN_LIMIT + 50 }, (_, i) => msg(`m${i}`, "bia"));
-    expect(chatUnreadSince(long, after("m0"), viewer).count).toBe(UNREAD_SCAN_LIMIT);
+  it("looks back at most UNREAD_SCAN_LIMIT messages: a long absence counts, a replaced page does not", () => {
+    const at = Date.parse("2026-10-21T12:00:00Z");
+    const stamp = (i: number, base: number) => new Date(base + i * 1000).toISOString();
+    const newer = Array.from({ length: UNREAD_SCAN_LIMIT + 50 }, (_, i) => ({
+      ...msg(`m${i}`, "bia"),
+      createdAt: stamp(i, at - 10_000),
+    }));
+    // m0..m9 are before the moment, the mark is m5; the last 100 are all after.
+    expect(chatUnreadSince(newer, { id: "m5", at }, viewer).count).toBe(UNREAD_SCAN_LIMIT);
+    // A jump to an older page of more than 100 messages, mark not in it.
+    const older = Array.from({ length: UNREAD_SCAN_LIMIT + 50 }, (_, i) => ({
+      ...msg(`o${i}`, "bia"),
+      createdAt: stamp(i, at - 3_600_000),
+    }));
+    expect(chatUnreadSince(older, { id: "m5", at }, viewer)).toEqual({ count: 0, mention: false });
   });
 
   it("prints at most two characters", () => {
