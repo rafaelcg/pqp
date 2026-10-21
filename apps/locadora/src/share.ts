@@ -117,10 +117,13 @@ export function createShareControl(host: ShareControlHost, onChange: () => void)
       busy = false;
       let said: "started" | "failed" | "refused" | null = null;
       if (outcome.kind === "shared") {
-        // A push that arrived while the request ran (the call bar's stop, the
-        // switch above the pane) is newer than this answer: it wins, for the
-        // state and for what is said (no "sharing" toast over a stopped share).
-        if (pushes === pushesBefore) {
+        // A push that arrived while the request ran is newer than this answer.
+        // The page pushes for this very request too, so a push that agrees is
+        // the same news; one that disagrees (the call bar's stop, the switch
+        // above the pane) wins, for the state and for what is said: no
+        // "sharing" toast over a share that was stopped.
+        const superseded = pushes !== pushesBefore && sharing !== outcome.on;
+        if (!superseded) {
           sharing = outcome.on;
           if (outcome.on !== wantOn) said = "failed";
           else if (outcome.on) said = "started";
