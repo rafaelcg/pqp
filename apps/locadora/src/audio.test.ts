@@ -106,6 +106,32 @@ describe("the frame's audio hub", () => {
     expect(master.gain.value).toBe(0.5);
   });
 
+  it("lets go of a closed context when the next one is made, with no mute or turbo change in between", () => {
+    const window = target();
+    const hub = installAudioHub(window);
+    const first = new window.AudioContext();
+    expect(hub.size).toBe(1);
+    (first as { state: string }).state = "closed";
+    new window.AudioContext();
+    expect(hub.size).toBe(1);
+  });
+
+  it("lets go of a context the moment it reports closed", () => {
+    class Listening extends FakeContext {
+      listeners: Array<() => void> = [];
+      addEventListener(_type: string, listener: () => void) {
+        this.listeners.push(listener);
+      }
+    }
+    const window = { AudioContext: Listening as never } as AudioTarget;
+    const hub = installAudioHub(window);
+    const context = new (window.AudioContext as never as typeof Listening)();
+    expect(hub.size).toBe(1);
+    context.state = "closed";
+    for (const listener of context.listeners) listener();
+    expect(hub.size).toBe(0);
+  });
+
   it("never suspends a context: a core waiting on its audio clock would freeze", () => {
     const window = target();
     const hub = installAudioHub(window);

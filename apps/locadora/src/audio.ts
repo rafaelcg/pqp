@@ -65,7 +65,16 @@ export function installAudioHub(target: AudioTarget = window as unknown as Audio
     master.gain.value = level();
   }
 
+  /** Lets go of every context that has closed, so a frame that loads game after game holds only the live ones. */
+  function prune() {
+    for (const context of [...held.keys()]) {
+      if (context.state === "closed") held.delete(context);
+    }
+  }
+
   function adopt(context: HubContext) {
+    // a new context is the moment the old ones are known to be done with, whether or not anyone toggles the sound
+    prune();
     try {
       const real = context.destination;
       const master = context.createGain();
@@ -76,6 +85,10 @@ export function installAudioHub(target: AudioTarget = window as unknown as Audio
       if (typeof channels === "number") Object.defineProperty(master, "maxChannelCount", { configurable: true, value: channels });
       Object.defineProperty(context, "destination", { configurable: true, get: () => master });
       held.set(context, master);
+      // and the close itself lets go of it at once
+      (context as { addEventListener?: (type: string, listener: () => void) => void }).addEventListener?.("statechange", () => {
+        if (context.state === "closed") held.delete(context);
+      });
     } catch {
       // a context that will not take the master is left as it is: the frontend's own volume still reaches the stock cores
     }
@@ -84,10 +97,8 @@ export function installAudioHub(target: AudioTarget = window as unknown as Audio
   const hub: AudioHub = {
     setSilent(next) {
       silent = next;
-      for (const [context, master] of [...held]) {
-        if (context.state === "closed") held.delete(context);
-        else apply(master);
-      }
+      prune();
+      for (const master of held.values()) apply(master);
     },
     get silent() {
       return silent;
