@@ -40,25 +40,7 @@ export function writeAppChatHidden(hidden: boolean): void {
 
 export interface UnreadMessage extends MentionCheckMessage {
   id: string;
-  /** ISO time, for a mark taken before the channel's history had loaded. */
-  createdAt?: string;
 }
-
-/**
- * Where "unread" starts: the newest message when the chat went away (`id`),
- * or, when the list was empty then (a channel just opened, history still on
- * its way), the moment it went away (`at`, epoch ms).
- */
-export interface UnreadMark {
-  id: string | null;
-  at: number;
-}
-
-/**
- * The most a recount looks at, from the newest message back. The badge prints
- * "9+" past nine, so a long absence never costs more than this per message.
- */
-export const UNREAD_SCAN_LIMIT = 100;
 
 export interface ChatUnread {
   /** Messages from other people since the chat was put away. */
@@ -70,47 +52,62 @@ export interface ChatUnread {
 export const NO_UNREAD: ChatUnread = { count: 0, mention: false };
 
 /**
- * What arrived after the mark. Own messages never count. Walks back from the
- * newest message and stops at the mark, so the cost is the unread tail, capped
- * at `UNREAD_SCAN_LIMIT`. A mark id that is no longer in the list (the page
- * was replaced, a jump) counts nothing rather than everything: a wrong
- * "37 novas" is worse than a missing dot. With no id (the list was empty when
- * the chat went away) only messages newer than the moment count, so a history
- * that loads afterwards is not read as new.
+ * How far back an update looks for the previous newest message. A burst bigger
+ * than this between two renders is not an arrival (it is a page being loaded).
  */
-export function chatUnreadSince(
+export const UNREAD_APPEND_LIMIT = 50;
+
+/** What the chat toggle has counted so far, and where it last looked. */
+export interface UnreadTracker {
+  /** The newest message the tracker has seen; null before it has seen any. */
+  lastId: string | null;
+  unread: ChatUnread;
+}
+
+/** A tracker started when the chat goes away: nothing counted, no baseline yet. */
+export const FRESH_TRACKER: UnreadTracker = { lastId: null, unread: NO_UNREAD };
+
+/**
+ * COUNT ARRIVALS, NOT A RANGE. While the chat is away the toggle counts the
+ * messages that arrive: an update whose list ends with new messages right after
+ * the newest one seen last time adds those messages, and only those. Anything
+ * else (the first list it sees, a page replaced or jumped, history loaded above,
+ * a channel opened while away) only moves the baseline and counts nothing: a
+ * wrong "37 novas" is worse than a missing dot. No clock is read, so a browser
+ * whose time is off cannot shift the line. Own messages never count.
+ *
+ * Cost: an update with nothing new is one comparison; one with new messages
+ * looks back at most `UNREAD_APPEND_LIMIT` messages for the previous newest.
+ * Returns `previous` itself when nothing changed, so a caller can keep it.
+ */
+export function advanceUnread(
+  previous: UnreadTracker,
   messages: readonly UnreadMessage[],
-  mark: UnreadMark,
   viewer: { id: string | null; username: string | null },
-): ChatUnread {
-  let count = 0;
-  let mention = false;
-  let reachedMark = mark.id === null;
-  const floor = Math.max(0, messages.length - UNREAD_SCAN_LIMIT);
-  for (let i = messages.length - 1; i >= floor; i -= 1) {
-    const message = messages[i]!;
-    if (mark.id !== null) {
-      if (message.id === mark.id) {
-        reachedMark = true;
-        break;
-      }
-    } else {
-      const created = message.createdAt ? Date.parse(message.createdAt) : Number.NaN;
-      if (!(created > mark.at)) break;
-    }
-    if (viewer.id && message.authorId === viewer.id) continue;
-    count += 1;
-    if (!mention && messageMentionsYou(message, viewer.username, viewer.id)) {
-      mention = true;
+): UnreadTracker {
+  if (messages.length === 0) {
+    return previous.lastId === null ? previous : { lastId: null, unread: previous.unread };
+  }
+  const newest = messages[messages.length - 1]!.id;
+  if (newest === previous.lastId) return previous;
+  if (previous.lastId === null) return { lastId: newest, unread: previous.unread };
+  const floor = Math.max(0, messages.length - 1 - UNREAD_APPEND_LIMIT);
+  let index = -1;
+  for (let i = messages.length - 2; i >= floor; i -= 1) {
+    if (messages[i]!.id === previous.lastId) {
+      index = i;
+      break;
     }
   }
-  if (reachedMark) return { count, mention };
-  // The window ended without the mark. A long absence (every message looked at
-  // is newer than the moment the chat went away) keeps its count; a replaced
-  // page or a jump to older history (anything else) counts nothing.
-  const oldest = floor > 0 ? messages[floor] : undefined;
-  const oldestAt = oldest?.createdAt ? Date.parse(oldest.createdAt) : Number.NaN;
-  return oldestAt > mark.at ? { count, mention } : NO_UNREAD;
+  if (index === -1) return { lastId: newest, unread: previous.unread };
+  let { count, mention } = previous.unread;
+  for (let i = index + 1; i < messages.length; i += 1) {
+    const message = messages[i]!;
+    if (viewer.id && message.authorId === viewer.id) continue;
+    count += 1;
+    if (!mention && messageMentionsYou(message, viewer.username, viewer.id)) mention = true;
+  }
+  return { lastId: newest, unread: { count, mention } };
 }
 
 /** "3", "9+": what the badge prints. */

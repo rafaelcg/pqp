@@ -30,12 +30,13 @@ import {
 } from "@/components/apps/app-column";
 import {
   appColumnLayout,
-  chatUnreadSince,
+  advanceUnread,
+  FRESH_TRACKER,
   NO_UNREAD,
   readAppChatHidden,
   writeAppChatHidden,
   type AppCallShape,
-  type UnreadMark,
+  type UnreadTracker,
   type UnreadMessage,
 } from "@/lib/apps/app-chat-visibility";
 
@@ -504,31 +505,23 @@ export function AppSessionLayout(props: AppSessionLayoutProps) {
   const messages = chat?.messages;
   // Keyed by channel: moving to another channel's app with the chat still away
   // takes that channel's newest message as the mark, not the last one's.
-  // An empty list (history not loaded yet) leaves only the time as the mark.
-  const awaySince = useRef<({ channelId: string | null } & UnreadMark) | null>(null);
-  if (
-    layout.chatAway &&
-    (awaySince.current === null || awaySince.current.channelId !== channelId)
-  ) {
-    awaySince.current = {
-      channelId,
-      id: messages && messages.length > 0 ? messages[messages.length - 1]!.id : null,
-      at: Date.now(),
-    };
-  } else if (!layout.chatAway && awaySince.current !== null) {
-    awaySince.current = null;
+  // Counted by arrival (`advanceUnread`): started fresh when the chat goes
+  // away and again on another channel, advanced with each list it is shown.
+  // Pure and idempotent for the same list, so advancing it during render is
+  // safe under a double render.
+  const tracker = useRef<{ channelId: string | null; state: UnreadTracker } | null>(null);
+  if (!layout.chatAway) {
+    tracker.current = null;
+  } else {
+    if (tracker.current === null || tracker.current.channelId !== channelId) {
+      tracker.current = { channelId, state: FRESH_TRACKER };
+    }
+    tracker.current.state = advanceUnread(tracker.current.state, messages ?? [], {
+      id: viewerId,
+      username: chat?.username ?? null,
+    });
   }
-  const mark = layout.chatAway ? awaySince.current : null;
-  const username = chat?.username ?? null;
-  // Recounted only when the list, the mark or the reader changes, walking back
-  // from the newest message to the mark (`chatUnreadSince`).
-  const unread = useMemo(
-    () =>
-      mark && messages
-        ? chatUnreadSince(messages, mark, { id: viewerId, username })
-        : NO_UNREAD,
-    [messages, mark, viewerId, username],
-  );
+  const unread = tracker.current?.state.unread ?? NO_UNREAD;
 
   useEffect(() => {
     onPaneChange?.(appColumnOn);

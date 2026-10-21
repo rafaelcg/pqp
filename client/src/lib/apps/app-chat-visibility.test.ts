@@ -3,12 +3,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   APP_CHAT_HIDDEN_KEY,
   appColumnLayout,
-  chatUnreadSince,
+  advanceUnread,
+  FRESH_TRACKER,
   readAppChatHidden,
-  UNREAD_SCAN_LIMIT,
+  UNREAD_APPEND_LIMIT,
   unreadBadgeText,
   writeAppChatHidden,
   type AppColumnLayoutInput,
+  type UnreadMessage,
 } from "./app-chat-visibility";
 
 const ME = "me";
@@ -57,53 +59,58 @@ describe("the stored choice", () => {
 });
 
 describe("what arrived while the chat was away", () => {
-  const list = [msg("1", "bia"), msg("2", ME), msg("3", "bia"), msg("4", "caio")];
-  const after = (id: string | null) => ({ id, at: 0 });
+  const base = [msg("1", "bia"), msg("2", ME)];
+  /** Feeds the lists one after another, as successive renders. */
+  const run = (...lists: UnreadMessage[][]) =>
+    lists.reduce((state, list) => advanceUnread(state, list, viewer), FRESH_TRACKER);
 
-  it("counts other people's messages after the one that was newest", () => {
-    expect(chatUnreadSince(list, after("1"), viewer)).toEqual({ count: 2, mention: false });
+  it("the list it first sees is the baseline, and counts nothing", () => {
+    expect(run(base).unread).toEqual({ count: 0, mention: false });
+  });
+
+  it("counts other people's messages that arrive, one render or several at a time", () => {
+    const one = [...base, msg("3", "bia")];
+    const two = [...one, msg("4", "caio"), msg("5", "bia")];
+    expect(run(base, one, two).unread).toEqual({ count: 3, mention: false });
   });
 
   it("never counts the person's own messages", () => {
-    expect(chatUnreadSince([msg("1", "bia"), msg("2", ME)], after("1"), viewer).count).toBe(0);
+    expect(run(base, [...base, msg("3", ME)]).unread.count).toBe(0);
   });
 
-  it("with no message to mark, only what is newer than the moment counts (history that loads later does not)", () => {
-    const at = Date.parse("2026-10-21T12:00:00Z");
-    const timed = [
-      { ...msg("h1", "bia", "@rafa velho"), createdAt: "2026-10-21T11:00:00Z" },
-      { ...msg("h2", "caio"), createdAt: "2026-10-21T11:59:00Z" },
-      { ...msg("n1", "bia"), createdAt: "2026-10-21T12:00:05Z" },
-    ];
-    expect(chatUnreadSince(timed, { id: null, at }, viewer)).toEqual({ count: 1, mention: false });
+  it("the same list twice is the same state (safe to advance during render)", () => {
+    const one = [...base, msg("3", "bia")];
+    const once = run(base, one);
+    expect(advanceUnread(once, one, viewer)).toBe(once);
   });
 
   it("a mention lights the count", () => {
-    const named = [...list, msg("5", "bia", "@rafa bora?")];
-    expect(chatUnreadSince(named, after("4"), viewer)).toEqual({ count: 1, mention: true });
-    const everyone = [...list, { ...msg("5", "bia", "galera"), mentionEveryone: true }];
-    expect(chatUnreadSince(everyone, after("4"), viewer).mention).toBe(true);
+    expect(run(base, [...base, msg("3", "bia", "@rafa bora?")]).unread).toEqual({
+      count: 1,
+      mention: true,
+    });
+    expect(
+      run(base, [...base, { ...msg("3", "bia", "galera"), mentionEveryone: true }]).unread.mention,
+    ).toBe(true);
   });
 
-  it("a page that no longer holds the mark counts nothing rather than everything", () => {
-    expect(chatUnreadSince(list, after("gone"), viewer)).toEqual({ count: 0, mention: false });
+  it("history that loads after an empty list (a channel opened while away) is not unread", () => {
+    const history = [msg("h1", "bia", "@rafa velho"), msg("h2", "caio")];
+    expect(run([], history).unread).toEqual({ count: 0, mention: false });
+    expect(run([], history, [...history, msg("n1", "bia")]).unread.count).toBe(1);
   });
 
-  it("looks back at most UNREAD_SCAN_LIMIT messages: a long absence counts, a replaced page does not", () => {
-    const at = Date.parse("2026-10-21T12:00:00Z");
-    const stamp = (i: number, base: number) => new Date(base + i * 1000).toISOString();
-    const newer = Array.from({ length: UNREAD_SCAN_LIMIT + 50 }, (_, i) => ({
-      ...msg(`m${i}`, "bia"),
-      createdAt: stamp(i, at - 10_000),
-    }));
-    // m0..m9 are before the moment, the mark is m5; the last 100 are all after.
-    expect(chatUnreadSince(newer, { id: "m5", at }, viewer).count).toBe(UNREAD_SCAN_LIMIT);
-    // A jump to an older page of more than 100 messages, mark not in it.
-    const older = Array.from({ length: UNREAD_SCAN_LIMIT + 50 }, (_, i) => ({
-      ...msg(`o${i}`, "bia"),
-      createdAt: stamp(i, at - 3_600_000),
-    }));
-    expect(chatUnreadSince(older, { id: "m5", at }, viewer)).toEqual({ count: 0, mention: false });
+  it("a replaced page, a jump or history loaded above counts nothing and keeps what was counted", () => {
+    const one = [...base, msg("3", "bia")];
+    const jumped = [msg("x1", "bia"), msg("x2", "bia"), msg("x3", "bia")];
+    expect(run(base, one, jumped).unread.count).toBe(1);
+    const above = [msg("0", "bia"), ...one];
+    expect(run(base, one, above).unread.count).toBe(1);
+  });
+
+  it("a burst bigger than UNREAD_APPEND_LIMIT in one render reads as a page, not as arrivals", () => {
+    const burst = Array.from({ length: UNREAD_APPEND_LIMIT + 5 }, (_, i) => msg(`b${i}`, "bia"));
+    expect(run(base, [...base, ...burst]).unread.count).toBe(0);
   });
 
   it("prints at most two characters", () => {
