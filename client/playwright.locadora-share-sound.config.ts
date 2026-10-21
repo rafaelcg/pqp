@@ -37,6 +37,7 @@ export default defineConfig({
     baseURL: `http://localhost:${CLIENT_PORT}`,
     viewport: { width: 1280, height: 800 },
     locale: "en-US",
+    screenshot: "only-on-failure",
     // `E2E_REAL_CAPTURE=1` runs a headed browser that really captures its own tab (one window at a time); the
     // default stands a canvas in for the picker, because headless Chromium cannot capture a tab
     launchOptions:

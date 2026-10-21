@@ -289,9 +289,9 @@ async function hubState(frame: Frame): Promise<{ silent: boolean; tapping: boole
 async function setUp(browser: Browser, options: { regionCapture: boolean }) {
   const channel = await freshVoiceChannel();
   const media = REAL_CAPTURE ? { permissions: ["microphone" as const] } : {};
-  const sharerContext = await browser.newContext({ baseURL: CLIENT, viewport: { width: 1280, height: 800 }, ...media });
+  const sharerContext = await browser.newContext({ baseURL: CLIENT, viewport: { width: 1700, height: 1000 }, ...media });
   await sharerContext.addInitScript(instrument, { stubCapture: !REAL_CAPTURE, regionCapture: options.regionCapture });
-  const viewerContext = await browser.newContext({ baseURL: CLIENT, viewport: { width: 1280, height: 800 }, ...media });
+  const viewerContext = await browser.newContext({ baseURL: CLIENT, viewport: { width: 1700, height: 1000 }, ...media });
   const sharer = await signedInPage(sharerContext, SHARER);
   const viewer = await signedInPage(viewerContext, VIEWER);
   await joinCall(sharer, channel);

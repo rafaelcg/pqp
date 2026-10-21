@@ -172,7 +172,7 @@ for it, and the sandbox is stricter than the dialog's:
   and the platform refuses both for an `emulator` app until the flag
   `locadora_share` is on for the server (D14, `docs/APPS.md`). It waits for the
   answer to item 7 below. Nothing about anyone's game reaches anyone else today.
-  **The sound of a share** (2026-10-21, Locadora 1.0.5): a shared game used to
+  **The sound of a share** (2026-10-21, Locadora 1.0.6): a shared game used to
   reach the call as a picture only (`audio: false` in `pane-share.ts`), and the
   tab's own sound is the wrong fix, because the tab also holds the call's
   voices, which the people watching would hear come back. The app hands its
