@@ -321,6 +321,7 @@ The quiet "terminou" card needs something to say once the state is gone, and `ap
 
 - The frame host: `client/src/lib/apps/` (`bridge-host.ts`, `frame-controller.ts`, `frame-policy.ts`, `types.ts` for the transport interface), `client/src/components/apps/app-frame.tsx`; browser suite `client/e2e/app-frame/`.
 - The packager: `tools/apps-build/` (`bundle.mts` builds one app, `html.mts` SRI and the entry page rules, `headers.mts` CSP and `_headers`, `catalog.mts` the catalog and immutability, `dev-server.mts`, `cli.mts`). Apps: `apps/<name>/`. Output: `dist-apps/` (git-ignored); the committed result is `server/src/apps/catalog.json`.
+- The public docs for app builders: `docs-apps/` (VitePress, `pnpm docs:apps`), written from this file and the code. The SDK's npm release is prepared but not done: `packages/app-sdk/PUBLISHING.md`.
 - The SDK: `packages/app-sdk/` (`@pqp/app-sdk`). `connect()` in `connect.ts`, the request and push plumbing in `client.ts`, the public object in `app.ts`. Tests use a fake host on a real `MessageChannel` (`fake-host.fixture.ts`).
 - Zod schemas, validator and constants: `packages/shared/src/apps/manifest.ts`
 - Presence formatter: `packages/shared/src/apps/presence.ts`

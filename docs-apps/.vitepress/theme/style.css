@@ -1,0 +1,256 @@
+/*
+ * pqp's look on VitePress's variables.
+ *
+ * The role tokens below are the ones in client/src/index.css (docs/DESIGN.md),
+ * copied by value: dark is pqp's default, light is its `data-theme="light"`.
+ * A name says the role, not the colour, so the VitePress variable section
+ * further down never writes a colour of its own. If the client's palette
+ * moves, this block is the one place to follow it.
+ *
+ * Contrast is measured on the pairs that carry text: text on surface-0 and on
+ * the sidebar rail, accent on surface-0 (links) and on-accent on accent
+ * (buttons). The light accent is the dark green on purpose: the dark theme's
+ * chartreuse is near-white in luminance and fails on a white page.
+ */
+:root {
+  --color-surface-0: oklch(0.98 0.005 95);
+  --color-surface-1: oklch(0.955 0.006 95);
+  --color-surface-2: oklch(0.92 0.008 95);
+  --color-surface-3: oklch(0.88 0.01 95);
+  --color-rail: oklch(0.93 0.008 95);
+  --color-border: oklch(0.86 0.01 95);
+  --color-border-strong: oklch(0.74 0.012 95);
+  --color-text: oklch(0.25 0.015 250);
+  --color-text-secondary: oklch(0.38 0.018 250);
+  --color-text-tertiary: oklch(0.45 0.02 250);
+  --color-accent: oklch(0.52 0.16 135);
+  --color-accent-hover: oklch(0.45 0.15 135);
+  --color-on-accent: oklch(0.99 0 0);
+  --color-accent-soft: oklch(0.94 0.05 135);
+  --color-on-accent-soft: oklch(0.38 0.13 135);
+  --color-danger: oklch(0.52 0.2 25);
+  --color-danger-soft: oklch(0.94 0.04 25);
+  --color-warning: oklch(0.52 0.13 75);
+  --color-warning-soft: oklch(0.94 0.05 85);
+  --color-code-bg: oklch(0.94 0.006 95);
+  --color-code-text: oklch(0.42 0.14 135);
+  --color-focus-ring: oklch(0.52 0.16 135 / 0.6);
+  --pixel-grid: oklch(0.25 0.015 250 / 0.07);
+  --radius-control: 0.375rem;
+  --radius-card: 0.5rem;
+  --radius-panel: 1rem;
+}
+
+.dark {
+  --color-surface-0: oklch(0.16 0.012 250);
+  --color-surface-1: oklch(0.2 0.014 250);
+  --color-surface-2: oklch(0.24 0.016 250);
+  --color-surface-3: oklch(0.3 0.018 250);
+  --color-rail: oklch(0.13 0.012 250);
+  --color-border: oklch(0.3 0.018 250);
+  --color-border-strong: oklch(0.38 0.02 250);
+  --color-text: oklch(0.93 0.015 95);
+  --color-text-secondary: oklch(0.82 0.015 95);
+  --color-text-tertiary: oklch(0.72 0.02 95);
+  --color-accent: oklch(0.88 0.19 125);
+  --color-accent-hover: oklch(0.75 0.14 125);
+  --color-on-accent: oklch(0.16 0.012 250);
+  --color-accent-soft: oklch(0.32 0.06 125);
+  --color-on-accent-soft: oklch(0.9 0.16 125);
+  --color-danger: oklch(0.65 0.2 25);
+  --color-danger-soft: oklch(0.3 0.07 25);
+  --color-warning: oklch(0.8 0.14 85);
+  --color-warning-soft: oklch(0.3 0.06 85);
+  --color-code-bg: oklch(0.16 0.012 250);
+  --color-code-text: oklch(0.88 0.19 125);
+  --color-focus-ring: oklch(0.88 0.19 125 / 0.6);
+  --pixel-grid: oklch(0.93 0.015 95 / 0.06);
+}
+
+/* ---- VitePress variables, read from the roles above ---- */
+:root {
+  --vp-font-family-base: "Instrument Sans", "Instrument Sans Fallback", ui-sans-serif, system-ui, sans-serif;
+  --vp-font-family-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --docs-font-display: "Gabarito", "Gabarito Fallback", "Instrument Sans", "Instrument Sans Fallback", sans-serif;
+
+  --vp-c-bg: var(--color-surface-0);
+  --vp-c-bg-alt: var(--color-rail);
+  --vp-c-bg-elv: var(--color-surface-1);
+  --vp-c-bg-soft: var(--color-surface-1);
+  --vp-c-gutter: var(--color-surface-0);
+
+  --vp-c-border: var(--color-border-strong);
+  --vp-c-divider: var(--color-border);
+
+  --vp-c-text-1: var(--color-text);
+  --vp-c-text-2: var(--color-text-secondary);
+  --vp-c-text-3: var(--color-text-tertiary);
+
+  --vp-c-default-1: var(--color-border-strong);
+  --vp-c-default-2: var(--color-surface-3);
+  --vp-c-default-3: var(--color-text-tertiary);
+  --vp-c-default-soft: var(--color-surface-2);
+
+  --vp-c-brand-1: var(--color-accent);
+  --vp-c-brand-2: var(--color-accent-hover);
+  --vp-c-brand-3: var(--color-accent);
+  --vp-c-brand-soft: var(--color-accent-soft);
+
+  --vp-c-tip-1: var(--color-accent);
+  --vp-c-tip-2: var(--color-accent-hover);
+  --vp-c-tip-3: var(--color-accent);
+  --vp-c-tip-soft: var(--color-accent-soft);
+  --vp-c-warning-1: var(--color-warning);
+  --vp-c-warning-2: var(--color-warning);
+  --vp-c-warning-3: var(--color-warning);
+  --vp-c-warning-soft: var(--color-warning-soft);
+  --vp-c-danger-1: var(--color-danger);
+  --vp-c-danger-2: var(--color-danger);
+  --vp-c-danger-3: var(--color-danger);
+  --vp-c-danger-soft: var(--color-danger-soft);
+
+  --vp-button-brand-border: transparent;
+  --vp-button-brand-text: var(--color-on-accent);
+  --vp-button-brand-bg: var(--color-accent);
+  --vp-button-brand-hover-border: transparent;
+  --vp-button-brand-hover-text: var(--color-on-accent);
+  --vp-button-brand-hover-bg: var(--color-accent-hover);
+  --vp-button-brand-active-border: transparent;
+  --vp-button-brand-active-text: var(--color-on-accent);
+  --vp-button-brand-active-bg: var(--color-accent-hover);
+  --vp-button-alt-bg: var(--color-surface-2);
+  --vp-button-alt-hover-bg: var(--color-surface-3);
+  --vp-button-alt-active-bg: var(--color-surface-3);
+
+  --vp-code-block-bg: var(--color-code-bg);
+  --vp-code-block-divider-color: var(--color-border);
+  --vp-code-bg: var(--color-surface-2);
+  --vp-code-color: var(--color-code-text);
+  --vp-code-line-highlight-color: var(--color-accent-soft);
+  --vp-code-copy-code-bg: var(--color-surface-2);
+  --vp-code-copy-code-hover-bg: var(--color-surface-3);
+
+  --vp-custom-block-tip-bg: var(--color-accent-soft);
+  --vp-custom-block-tip-border: transparent;
+  --vp-custom-block-tip-text: var(--color-on-accent-soft);
+  --vp-custom-block-tip-code-bg: var(--color-surface-2);
+
+  --vp-home-hero-name-color: var(--color-accent);
+  --vp-home-hero-image-background-image: none;
+  --vp-home-hero-image-filter: none;
+
+  --vp-nav-logo-height: 28px;
+  --vp-layout-max-width: 1440px;
+  --vp-focus-ring: var(--color-focus-ring);
+}
+
+/* ---- type ---- */
+.vp-doc h1,
+.vp-doc h2,
+.vp-doc h3,
+.VPHero .name,
+.VPHero .text,
+.VPFeature .title,
+.VPNavBarTitle .title {
+  font-family: var(--docs-font-display);
+  letter-spacing: -0.01em;
+}
+.vp-doc h2 {
+  border-top-color: var(--color-border);
+}
+.vp-doc a {
+  text-underline-offset: 3px;
+}
+.VPHero .text {
+  font-weight: 800;
+}
+.VPHero .tagline {
+  color: var(--color-text-secondary);
+}
+
+/* ---- the arcade nod: a pressed button and a pixel grid, nothing else ---- */
+.VPButton.brand {
+  box-shadow: 0 3px 0 0 var(--color-accent-hover);
+}
+.VPButton.alt {
+  box-shadow: 0 3px 0 0 var(--color-border-strong);
+}
+.VPButton.brand:active,
+.VPButton.alt:active {
+  transform: translateY(2px);
+  box-shadow: 0 1px 0 0 var(--color-accent-hover);
+}
+@media (prefers-reduced-motion: reduce) {
+  .VPButton.brand:active,
+  .VPButton.alt:active {
+    transform: none;
+  }
+}
+
+.VPHome .VPHero {
+  background-image:
+    linear-gradient(var(--pixel-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--pixel-grid) 1px, transparent 1px);
+  background-size: 24px 24px;
+  background-position: -1px -1px;
+}
+.VPHero .image-src {
+  image-rendering: pixelated;
+  max-width: min(420px, 90vw);
+  max-height: none;
+  position: static;
+  transform: none;
+}
+.VPHero .image-container {
+  height: auto;
+}
+/* VitePress overlaps the hero image with its text on a phone (negative margins for a glow we do not use) */
+@media (max-width: 959px) {
+  .VPHero .image {
+    margin: 0 0 8px;
+  }
+}
+@media (min-width: 960px) {
+  .VPHero .container {
+    align-items: center;
+  }
+}
+.VPFeature {
+  border-radius: var(--radius-card);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-1);
+}
+
+/* ---- code and tables ---- */
+.vp-doc div[class*="language-"] {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+}
+.vp-doc :not(pre) > code {
+  border-radius: var(--radius-control);
+  color: var(--color-code-text);
+}
+.vp-doc table {
+  display: table;
+  width: 100%;
+}
+.vp-doc th {
+  background: var(--color-surface-1);
+}
+.vp-doc tr {
+  background: transparent;
+}
+.vp-doc tr:nth-child(2n) {
+  background: var(--color-surface-1);
+}
+
+/* ---- focus: pqp's ring ---- */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+::selection {
+  background: var(--color-focus-ring);
+}

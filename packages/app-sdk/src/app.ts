@@ -5,7 +5,7 @@ import type {
   BridgeParticipant,
   BridgeTheme,
   JsonValue,
-} from "@pqp/shared";
+} from "./types.js";
 import { PortClient, type Unsubscribe } from "./client.js";
 import { PqpAppError } from "./errors.js";
 

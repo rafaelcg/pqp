@@ -1,0 +1,8 @@
+{
+  "extends": "./tiny-eco/tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": { "@pqp/app-sdk": ["../../packages/app-sdk/src/index.ts"] }
+  },
+  "include": ["tiny-eco/src"]
+}

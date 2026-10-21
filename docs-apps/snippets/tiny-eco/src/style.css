@@ -1,0 +1,65 @@
+/* Every colour is a token pqp sends in `hello`; the fallback is what shows before it arrives. */
+html,
+body {
+  margin: 0;
+  background: var(--color-surface-0, #14181d);
+  color: var(--color-text, #ece9de);
+  font-family: var(--font-sans, system-ui, sans-serif);
+}
+
+main {
+  display: grid;
+  gap: 12px;
+  max-width: 420px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+#count {
+  margin: 0;
+  font-size: 3rem;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+}
+
+button {
+  padding: 8px 16px;
+  border: 0;
+  border-radius: var(--radius-control, 6px);
+  background: var(--color-accent, #b8ee3c);
+  color: var(--color-on-accent, #14181d);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+button:focus-visible {
+  outline: 2px solid var(--color-focus-ring, #b8ee3c);
+  outline-offset: 2px;
+}
+
+#status,
+#flash {
+  margin: 0;
+  min-height: 1.4em;
+  color: var(--color-text-secondary, #cfcbbd);
+}
+
+#people {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+#people li {
+  padding: 4px 0;
+  border-bottom: 1px solid var(--color-border, #2d3240);
+}

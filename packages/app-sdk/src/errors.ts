@@ -1,4 +1,4 @@
-import type { BridgeErrorCode } from "@pqp/shared";
+import type { BridgeErrorCode } from "./types.js";
 
 /** Every code the host may answer with. Exhaustive on purpose: a new code in the contract fails the typecheck here. */
 const ERROR_CODES: Record<BridgeErrorCode, true> = {

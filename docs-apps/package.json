@@ -1,0 +1,19 @@
+{
+  "name": "@pqp/apps-docs",
+  "version": "0.0.1",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "description": "The public docs site for people who build pqp apps (VitePress). Not served by the pqp client.",
+  "type": "module",
+  "scripts": {
+    "dev": "vitepress dev --port 5176",
+    "build": "vitepress build",
+    "preview": "vitepress preview --port 5176",
+    "typecheck": "tsc --noEmit && tsc -p snippets/tsconfig.check.json"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "typescript": "^5.7.3",
+    "vitepress": "1.6.4"
+  }
+}

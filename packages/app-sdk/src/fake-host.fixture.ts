@@ -1,4 +1,4 @@
-import type { BridgeHello } from "@pqp/shared";
+import type { BridgeHello } from "./types.js";
 import type { HandshakeWindow } from "./connect.js";
 
 export const HELLO: BridgeHello = {

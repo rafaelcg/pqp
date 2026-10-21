@@ -1,4 +1,4 @@
-import type { BridgeTheme } from "@pqp/shared";
+import type { BridgeTheme } from "./types.js";
 
 /** The part of an element `applyTheme` writes to; `document.documentElement` fits. */
 export interface ThemeRoot {
