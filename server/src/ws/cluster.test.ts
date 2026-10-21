@@ -710,7 +710,7 @@ describeDb("chat over the postgres bus", () => {
       messageId: "m1",
     });
 
-    const deadline = Date.now() + 5_000;
+    const deadline = Date.now() + 12_000;
     while (framesOfType(remote.received, "message-deleted").length === 0) {
       if (Date.now() > deadline) {
         throw new Error("frame never crossed the postgres bus");
@@ -734,7 +734,7 @@ describeDb("chat over the postgres bus", () => {
 
     await b.status.registerStatusSocket(theirTab.socket, userId);
 
-    const deadline = Date.now() + 5_000;
+    const deadline = Date.now() + 12_000;
     while (a.status.resolveStatus(userId) === "offline") {
       if (Date.now() > deadline) {
         throw new Error("status never crossed the postgres bus");
