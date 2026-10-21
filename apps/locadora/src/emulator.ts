@@ -156,6 +156,15 @@ export const RETROARCH_LOCKDOWN = [
   "quit_press_twice = false",
 ].join("\n");
 
+/**
+ * RetroArch draws the core's frame INSIDE the canvas at the aspect the core reports (8:7 pixels for the SNES), with
+ * black bars for what is left over, whatever shape the canvas is. The stage (`stage.ts`) already sizes the canvas to
+ * the exact shape the person asked for (square pixels, TV pixels, Encaixar), so two letterboxes were stacked: a game
+ * in "Pixel quadrado" got a smaller picture, off centre, in a box it should have filled. With the forced aspect off
+ * RetroArch stretches the frame over the whole canvas and the box the stage drew is the picture, edge to edge.
+ */
+export const RETROARCH_PICTURE = ["aspect_ratio_index = 24"].join("\n");
+
 const LOCKED = Symbol.for("pqp.locadora.retroarch-lockdown");
 
 type ConfigWriter = { getRetroArchCfg?: () => string; [LOCKED]?: boolean };
@@ -167,7 +176,7 @@ export function lockRetroArchMenu(): void {
   if (!manager || typeof original !== "function" || manager[LOCKED]) return;
   manager.getRetroArchCfg = function (this: unknown) {
     const cfg = original.call(this);
-    return `${cfg}${cfg.endsWith("\n") ? "" : "\n"}${RETROARCH_LOCKDOWN}\n`;
+    return `${cfg}${cfg.endsWith("\n") ? "" : "\n"}${RETROARCH_LOCKDOWN}\n${RETROARCH_PICTURE}\n`;
   };
   manager[LOCKED] = true;
 }

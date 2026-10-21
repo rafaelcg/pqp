@@ -230,7 +230,16 @@ the shelf lasts until the page closes, and the app says so.
   would be under two device pixels. Fit fills the room instead. The aspect is the
   TV's 8:7 pixel or square pixels (handhelds are always square), and the screen
   menu has an optional CRT filter, ambient light and a TV bezel. Fullscreen is
-  the browser's.
+  the browser's. The box the stage draws IS the picture: RetroArch is told to
+  stretch the frame over its whole canvas (`aspect_ratio_index = 24`, "Full",
+  `RETROARCH_PICTURE` in `emulator.ts`), because its default draws the frame
+  inside the canvas at the aspect the core reports, a second letterbox under the
+  stage's own (a SNES game in "Pixel quadrado" filled 1408x1077 of a 1408x1232
+  box). The frame size the stage fits is asked of the core all game long, not
+  once (`SIZE_WATCH_MS` in `game-session.ts`, and at once on a canvas size
+  change), since a game switches frames while it plays. Measured with
+  `e2e/geometry.spec.mts` and the card in `e2e/geometry-card.ts` (a SNES image
+  written for it that changes its PPU mode on every press of B).
 - **SNES: bsnes, in Locadora only.** Locadora accepts `.sfc` and `.smc` and plays
   them on bsnes (core name `bsnes`, the libretro port at
   https://github.com/EmulatorJS/bsnes-libretro, upstream
