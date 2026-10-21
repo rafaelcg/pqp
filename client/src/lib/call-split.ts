@@ -311,6 +311,41 @@ export function clampSplit(input: {
 }
 
 /** A dragged or nudged pixel size, back to the fraction that gets stored. */
+/**
+ * The band an expanded stage keeps under its pictures for its own controls
+ * (and the room's chips) when it is drawn in the column beside an app.
+ */
+export const APP_COLUMN_STAGE_CHROME_PX = 88;
+/** The share of the column a stage beside an app may take before a drag. */
+export const APP_COLUMN_STAGE_MAX_SHARE = 0.5;
+
+/**
+ * BESIDE AN APP, A PICTURE IS A TILE, NOT THE COLUMN (`app_pane_layout_v2`).
+ * The stage's own height rule (`68svh`) is for a stage that is the page; in a
+ * 320 px column beside an app it took the whole height, so the transcript got
+ * none and the session card in it was cut in half (Locadora feedback,
+ * 2026-10-21, a phone sharing its own screen into the call). Until the person
+ * drags the divider the stage is a 16:9 picture as wide as the column plus the
+ * band for its controls, and never more than half the column.
+ */
+export function appColumnStageTarget(
+  width: number,
+  container: number,
+  maxShare: number = APP_COLUMN_STAGE_MAX_SHARE,
+): number {
+  if (width <= 0 || container <= 0) {
+    return 0;
+  }
+  const picture = Math.round((width * 9) / 16) + APP_COLUMN_STAGE_CHROME_PX;
+  // A short column (a laptop window, a phone held sideways) gives the chat a
+  // little more: under 600 px the transcript would otherwise be one message.
+  const share = container < APP_COLUMN_SHORT_PX ? Math.min(maxShare, 0.42) : maxShare;
+  return Math.min(picture, Math.round(container * share));
+}
+
+/** Below this column height the tile's share of it shrinks (`appColumnStageTarget`). */
+export const APP_COLUMN_SHORT_PX = 600;
+
 export function splitFraction(sizePx: number, container: number): number {
   const usable = Math.max(0, container - CALL_SPLIT_DIVIDER_PX);
   if (usable <= 0) {

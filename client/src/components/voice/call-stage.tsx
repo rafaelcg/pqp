@@ -144,6 +144,7 @@ import { CinemaStage } from "@/components/voice/cinema-stage";
 import { useWatchFullscreen } from "@/components/voice/watch-fullscreen";
 import { useVideoInsets, type VideoInsets } from "@/hooks/use-video-insets";
 import { Menu } from "@/components/ui/menu";
+import type { ContextMenuItemDef } from "@/components/ui/context-menu";
 import {
   cameraTileMoreItems,
   shareTileMoreItems,
@@ -184,6 +185,7 @@ import {
   useCallDockHintHost,
   useCallDockPublisher,
 } from "@/components/voice/call-dock";
+import { useAppColumn } from "@/components/apps/app-column";
 import {
   collapsedPeopleLabel,
   collapsedPeopleLine,
@@ -1175,6 +1177,7 @@ function ActiveCall({
   // Where the collapsed bar goes: the composer's dock when one is mounted
   // around us, our own place otherwise. See `call-dock.tsx`.
   const dockPublish = useCallDockPublisher();
+  const appColumn = useAppColumn();
   // For the floating self-preview, which is a camera like any other and so
   // follows the camera answer. It carries no button of its own: at 112px
   // there is no room for one, and the tiles that do carry it set the same
@@ -1764,6 +1767,10 @@ function ActiveCall({
   const stripDrawn =
     showStrip &&
     !(musicGivesWay && chatMusic && !peerFailed) &&
+    // Beside an app the column is too short for a row of chips as well as a
+    // picture and its bar; "N na chamada" on the picture says the count, and a
+    // failed peer still brings the strip back for its retry.
+    !(appColumn.active && !peerFailed) &&
     !soloPerson &&
     !soloTile &&
     !soloMusic &&
@@ -1865,7 +1872,10 @@ function ActiveCall({
           !musicOnStage &&
           staged.tiles.length === 1 &&
           stage.tiles[0]?.isSelf === true);
-  const chromeMayHide = stageChromeMayHide({
+  // Beside an app the bar is the call's only set of controls and sits in its
+  // own band under the picture, so fading it leaves an empty band and a
+  // person who cannot find mute (`app_pane_layout_v2`).
+  const chromeMayHide = !appColumn.active && stageChromeMayHide({
     autoHideSetting,
     expanded: chromeExpanded && anyVideo,
     streamOnStage,
@@ -3513,6 +3523,7 @@ export function CallControls({
   audienceHost?: AudienceModeHostControls | null;
 }) {
   const { t } = useTranslation();
+  const appColumn = useAppColumn();
   // Probed once per mount — whether the browser has getDisplayMedia never
   // changes mid-session. Same probe the channel voice panel uses.
   const canShare = useMemo(() => supportsScreenShare(), []);
@@ -3583,9 +3594,15 @@ export function CallControls({
   // The strip's tiles shrink a step on a narrow strip (a phone), so the
   // whole set holds one row there instead of leaving hang-up on a line of
   // its own.
-  const size = collapsed
-    ? "h-9 w-9 @max-[24rem]:h-8 @max-[24rem]:w-8"
-    : "h-10 w-10";
+  // Beside an app the stage's own bar is the column's width (320 px), so it
+  // takes the slim bar's tile size and holds one row with hang-up on it.
+  // There the folding into "Mais" is what makes room, so a finger gets the
+  // full 44 px instead of the phone strip's 32.
+  const size = appColumn.active
+    ? "h-9 w-9 pointer-coarse:h-11 pointer-coarse:w-11"
+    : collapsed
+      ? "h-9 w-9 @max-[24rem]:h-8 @max-[24rem]:w-8"
+      : "h-10 w-10";
   const iconSize = collapsed ? "h-4 w-4" : "h-4 w-4";
   // On a narrow stage a cluster is not a unit: its tiles fold into the pill's
   // wrapping row one by one. The bell's group keeps its own rule (hidden
@@ -3661,7 +3678,49 @@ export function CallControls({
   // An open Mais keeps the stage awake, like a tile's own menu.
   const [stageMenuOpen, setStageMenuOpen] = useState(false);
   useReportTileMenu(stageMenuOpen);
+  // ONE ROW BESIDE AN APP (`app_pane_layout_v2`). The column is 320 px, and
+  // the full set wrapped to a second ragged row with hang-up alone on it. What
+  // a call uses every minute stays a tile (mic, camera, the picture's quality,
+  // share, hang up); the hand, the music and picture-in-picture go to the top
+  // of "Mais", above a line. A raised hand, an audience seat's ask and an open
+  // music panel stay tiles: they are a state somebody has to see.
+  const narrowBar = appColumn.active;
+  const handFolded =
+    narrowBar && Boolean(onToggleRaisedHand) && !handRaised && !audienceLocked;
+  const musicFolded = narrowBar && !musicDock.open;
+  const pipShown = (!collapsed || videoOnStage) && pip !== null;
+  const pipFolded = narrowBar && pipShown;
+  const folded: ContextMenuItemDef[] = [];
+  if (handFolded && onToggleRaisedHand) {
+    folded.push({
+      id: "raise-hand",
+      label: handLabel,
+      icon: Hand,
+      onSelect: onToggleRaisedHand,
+    });
+  }
+  if (musicFolded) {
+    folded.push({
+      id: "music",
+      label: t("music.open"),
+      icon: Music,
+      onSelect: toggleMusicOpen,
+    });
+  }
+  if (pipFolded && pip) {
+    folded.push({
+      id: "pip",
+      label: t("voice.hls.pip"),
+      icon: PictureInPicture2,
+      checked: pip.active,
+      onSelect: pip.toggle,
+    });
+  }
+  // The music tile's two dots (new, and "the room has music you are not
+  // hearing") move to "Mais" with it.
+  const musicAttention = musicFolded && (musicPip || (musicDock.on && !musicDock.listening));
   const stageMenuItems = stageMoreItems(t, {
+        folded,
         watchParty: offersWatchParty
           ? {
               disabledReason: voiceState.isSharingScreen
@@ -3937,7 +3996,11 @@ export function CallControls({
         "flex items-center gap-1",
         collapsed
           ? "w-full flex-wrap justify-end @max-[24rem]:gap-px @min-[35rem]:ml-auto @min-[35rem]:w-auto @min-[35rem]:shrink-0"
-          : "max-w-full flex-wrap justify-center gap-2 rounded-[1.625rem] bg-ink-2/90 px-2.5 py-1.5 shadow-lg ring-1 ring-ink-4/60 backdrop-blur @max-[40rem]:gap-1",
+          : appColumn.active
+            ? // The column beside an app is ~300 px: six 44 px touch tiles fit
+              // one row only with the tighter gap and padding.
+              "max-w-full flex-wrap justify-center gap-0.5 rounded-[1.625rem] bg-ink-2/90 px-1.5 py-1.5 shadow-lg ring-1 ring-ink-4/60 backdrop-blur"
+            : "max-w-full flex-wrap justify-center gap-2 rounded-[1.625rem] bg-ink-2/90 px-2.5 py-1.5 shadow-lg ring-1 ring-ink-4/60 backdrop-blur @max-[40rem]:gap-1",
       )}
     >
       {/* Every control in this bar used to carry a `title` beside its
@@ -4185,7 +4248,7 @@ export function CallControls({
       )}
       {/* The hand after share on both bars, then a hairline before what is
           about the room rather than about you. */}
-      {handControl}
+      {handFolded ? null : handControl}
       {audienceToggle}
       <CallControlDivider
         container={collapsed}
@@ -4212,6 +4275,7 @@ export function CallControls({
         size={size}
         iconSize={iconSize}
       />
+      {!musicFolded && (
       <Tooltip
         label={musicDock.open ? t("music.close") : t("music.open")}
       >
@@ -4250,7 +4314,8 @@ export function CallControls({
           ) : null}
         </button>
       </Tooltip>
-      {(!collapsed || videoOnStage) && pip && (
+      )}
+      {pipShown && pip && !pipFolded && (
         <Tooltip label={t("voice.hls.pip")}>
           <button
             type="button"
@@ -4290,7 +4355,13 @@ export function CallControls({
             )}
           >
             <MoreHorizontal className={iconSize} aria-hidden="true" />
-            {joinLeaveMuted ? (
+            {musicAttention ? (
+              <span
+                data-music-dock-dot=""
+                aria-hidden="true"
+                className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-signal ring-2 ring-ink"
+              />
+            ) : joinLeaveMuted ? (
               <span
                 aria-hidden="true"
                 className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-warning ring-2 ring-ink"
@@ -4310,7 +4381,11 @@ export function CallControls({
           aria-label={t("call.panel.leave")}
           className={cn(
             "flex shrink-0 items-center justify-center rounded-full bg-danger/90 text-paper hover:bg-danger",
-            collapsed ? size : "h-10 w-14",
+            appColumn.active
+              ? "h-9 w-12 pointer-coarse:h-11 pointer-coarse:w-11"
+              : collapsed
+                ? size
+                : "h-10 w-14",
           )}
           onClick={onLeave}
         >

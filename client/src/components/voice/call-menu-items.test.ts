@@ -47,6 +47,33 @@ describe("the stage bar's Mais", () => {
     );
   });
 
+  it("lists the tiles a narrow bar folded first, above one line, never two lines in a row", () => {
+    const folded = [
+      { id: "raise-hand", label: "voice.hand.raise", onSelect: () => {} },
+      { id: "music", label: "music.open", onSelect: () => {} },
+    ];
+    const items = stageMoreItems(t, { ...base, folded });
+    expect(items.map((item) => (item.separator ? "|" : item.id))).toEqual([
+      "raise-hand",
+      "music",
+      "|",
+      "join-leave-sounds",
+    ]);
+    const withShare = stageMoreItems(t, {
+      ...base,
+      folded,
+      cursor: { hidden: false, liveChangeable: false, sharing: false, onToggle: () => {} },
+    });
+    expect(withShare.map((item) => (item.separator ? "|" : item.id))).toEqual([
+      "raise-hand",
+      "music",
+      "|",
+      "share-cursor",
+      "|",
+      "join-leave-sounds",
+    ]);
+  });
+
   it("keeps watch party and the cursor listed while sharing, disabled with the reason", () => {
     const items = stageMoreItems(t, {
       ...base,
