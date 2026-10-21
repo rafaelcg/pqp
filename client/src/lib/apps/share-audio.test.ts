@@ -317,6 +317,48 @@ describe("ShareAudioRelay", () => {
     off();
   });
 
+  it("tells a frame nothing about a share whose audio is still starting, so a failed start leaves nobody sending", async () => {
+    const rig = fakeContext({ resumeRejects: true });
+    const instance = new ShareAudioRelay(() => new ShareAudioSink({ createContext: () => rig.context }));
+    const wanted = vi.fn();
+    const pending = instance.begin();
+    // a frame that reloads during the wait
+    instance.subscribe(wanted);
+    expect(wanted).not.toHaveBeenCalled();
+    expect(await pending).toBeNull();
+    expect(wanted).not.toHaveBeenCalled();
+    expect(instance.active).toBe(false);
+  });
+
+  it("a frame that mounts during a start that then succeeds is told once it has", async () => {
+    const { instance, rig } = relay();
+    const wanted = vi.fn();
+    const pending = instance.begin();
+    instance.subscribe(wanted);
+    expect(wanted).not.toHaveBeenCalled();
+    expect(await pending).toBe(rig.track);
+    expect(wanted).toHaveBeenCalledTimes(1);
+    expect(wanted).toHaveBeenCalledWith(true);
+  });
+
+  it("takes the track down and tells the app to stop when the audio is lost mid-share", async () => {
+    const rig = fakeContext();
+    const instance = new ShareAudioRelay((onLost) => new ShareAudioSink({ createContext: () => rig.context, onLost }));
+    const wanted = vi.fn();
+    instance.subscribe(wanted);
+    await instance.begin();
+    rig.context.resume = async () => {
+      throw new DOMException("not allowed", "NotAllowedError");
+    };
+    rig.state.run = "suspended";
+    instance.push(block());
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(wanted).toHaveBeenLastCalledWith(false);
+    expect(rig.track.stop).toHaveBeenCalled();
+    expect(instance.active).toBe(false);
+  });
+
   it("does not wait for ever on a context that never answers", async () => {
     const rig = fakeContext();
     rig.context.resume = () => new Promise(() => {});

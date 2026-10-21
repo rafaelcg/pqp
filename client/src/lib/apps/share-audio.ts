@@ -190,7 +190,10 @@ export class ShareAudioSink {
  * send, and hands every block it receives to `push`.
  */
 export class ShareAudioRelay {
+  /** The share's sink once its audio started: the only one a frame is told about and blocks are played into. */
   private sink: ShareAudioSink | null = null;
+  /** A sink whose audio context is still starting: nobody hears of it until it has started. */
+  private starting: ShareAudioSink | null = null;
   private readonly listeners = new Set<(wanted: boolean) => void>();
   private readonly lostListeners = new Set<() => void>();
   private readonly makeSink: (onLost: () => void) => ShareAudioSink;
@@ -225,6 +228,10 @@ export class ShareAudioRelay {
     let sink: ShareAudioSink;
     try {
       sink = this.makeSink(() => {
+        // the audio stopped mid-share and the browser would not start it again: the track carries silence, so the
+        // app is told to stop sending and the track is taken down, and the share's owner says so
+        if (this.sink !== sink) return;
+        this.end();
         for (const listener of [...this.lostListeners]) {
           try {
             listener();
@@ -236,7 +243,7 @@ export class ShareAudioRelay {
     } catch {
       return null;
     }
-    this.sink = sink;
+    this.starting = sink;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const started = await Promise.race([
       sink.ready,
@@ -246,20 +253,27 @@ export class ShareAudioRelay {
     ]);
     clearTimeout(timer);
     // ended, or begun again, while the context was starting: this one is not the share's any more
-    if (this.sink !== sink) {
+    if (this.starting !== sink) {
       sink.close();
       return null;
     }
+    this.starting = null;
     if (!started) {
-      this.sink = null;
       sink.close();
       return null;
     }
+    // a frame that mounted during the wait was told nothing, so a failed start leaves nobody sending
+    this.sink = sink;
     this.emit(true);
     return sink.track;
   }
 
   end(): void {
+    const pending = this.starting;
+    if (pending) {
+      this.starting = null;
+      pending.close();
+    }
     const sink = this.sink;
     if (!sink) return;
     this.sink = null;
