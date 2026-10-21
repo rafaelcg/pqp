@@ -377,7 +377,9 @@ export function createStage(options: StageOptions): Stage {
       relayout();
     },
     setBase(width, height) {
-      if (width > 0 && height > 0) base = [width, height];
+      // asked all game long: a size that did not change is not a reason to touch the layout
+      if (!(width > 0 && height > 0) || (width === base[0] && height === base[1] && current !== null)) return;
+      base = [width, height];
       relayout();
     },
     setFullscreen(full) {
