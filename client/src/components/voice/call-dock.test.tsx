@@ -8,6 +8,7 @@ import {
   CallDockProvider,
   useCallDockPublisher,
 } from "./call-dock";
+import { AppColumnContext } from "@/components/apps/app-column";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
   true;
@@ -262,6 +263,27 @@ describe("CallDockOutlet", () => {
       ),
     );
     expect(renders - afterMount).toBe(1);
+  });
+});
+
+describe("CallDockProvider beside an app (app_pane_layout_v2)", () => {
+  it("publishes nothing, so the stage keeps its one bar with it, and reports no dock", () => {
+    const occupied = vi.fn();
+    act(() =>
+      root.render(
+        <AppColumnContext.Provider
+          value={{ active: true, chatAway: false, hideChat: () => {}, showChat: () => {} }}
+        >
+          <Screen viewing="lobby" call={LOBBY} onOccupiedChange={occupied} />
+        </AppColumnContext.Provider>,
+      ),
+    );
+    expect(container.querySelector("[data-stage-slot] [data-inline]")?.textContent).toBe(
+      "Dev User",
+    );
+    expect(dock()).toBeNull();
+    expect(composerText()).toBe("");
+    expect(occupied).not.toHaveBeenCalledWith(true);
   });
 });
 

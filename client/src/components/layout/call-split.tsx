@@ -19,8 +19,11 @@ import {
   Video,
   VideoOff,
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
+import { useAppColumn } from "@/components/apps/app-column";
 import {
+  appColumnStageTarget,
   CALL_SPLIT_DIVIDER_PX,
   CALL_SPLIT_STEP_COARSE_PX,
   CALL_SPLIT_STEP_PX,
@@ -431,6 +434,16 @@ export function CallSplit({
     kind,
   );
   const { t } = useTranslation();
+  // Beside a running app (`app_pane_layout_v2`): see `appColumnStageTarget`,
+  // and the chat the strip's toggle put away, which takes its header and the
+  // divider with it while the call stays.
+  const appColumn = useAppColumn();
+  const chatAway = appColumn.active && appColumn.chatAway;
+  // The chat is away and the call has pictures: the pictures are still a tile
+  // (16:9 plus the bar), at the top of their column, not a black column with a
+  // picture floating in its middle. On a phone the column is only as tall as
+  // the tile, so its height cannot be what caps it.
+  const awayPictures = chatAway && shape === "expanded";
   const sideBySide = orientation === "side-by-side";
   const isWatchAudience = kind === "watch-audience";
   // Same rule as the orientation, one line below it on purpose: stored is what
@@ -484,7 +497,20 @@ export function CallSplit({
   const resizable =
     shape === "expanded" &&
     collapsed === "none" &&
+    !chatAway &&
     splitAvailable(container, orientation, kind);
+  // Nobody has dragged and an app is beside us: the picture is a tile. Also in
+  // a column too short to offer a divider (a phone): there the tile leaves the
+  // composer what it needs, rather than the stage's own `68svh` taking it all.
+  const appDefault =
+    appColumn.active &&
+    shape === "expanded" &&
+    collapsed === "none" &&
+    !chatAway &&
+    !sideBySide &&
+    fraction === null &&
+    width > 0 &&
+    container > 0;
   // The phone floor only speaks where nobody has an opinion yet: stacked, a
   // narrow pane, `stacked` still null. The person's own drag stores a fraction
   // and from then on it is theirs.
@@ -504,7 +530,7 @@ export function CallSplit({
   // simply takes under half and there is no divider to offer.
   const phoneShort = phoneNarrow && !resizable && container > 0;
   const sizedByChoice =
-    (resizable && (fraction !== null || phoneFloor)) || phoneShort;
+    (resizable && (fraction !== null || phoneFloor)) || phoneShort || appDefault;
   // A stage still on its own height rule that leaves the composer too little
   // room. Held at the height it had when that happened, and released only once
   // that height fits again, rather than re-measured: once the pane sizes it,
@@ -589,6 +615,14 @@ export function CallSplit({
           Math.max(0, Math.min(squeezedFrom ?? 0, container - chatNeed))
       : phoneShort
       ? phoneShortStageHeight(container)
+      : appDefault
+        ? resizable
+          ? clampSplit({
+              fraction: splitFraction(appColumnStageTarget(width, container), container),
+              container,
+              ...bounds,
+            })
+          : Math.max(0, Math.min(appColumnStageTarget(width, container), container - chatNeed))
       : phoneFloor
         ? clampSplit({
             fraction: splitFraction(
@@ -617,7 +651,15 @@ export function CallSplit({
   // put away owns all of it. Without this the stage keeps its own `68svh`
   // rule inside a pane it has entirely to itself, and the person who asked
   // for the call to fill the pane gets a band of empty pane under it.
-  const fills = sized || collapsed === "chat";
+  const fills = sized || collapsed === "chat" || awayPictures;
+  const awayPx = awayPictures
+    ? appColumn.column === "stage" && container > 0
+      ? appColumnStageTarget(width, container, 1)
+      : Math.min(
+          appColumnStageTarget(width, Number.MAX_SAFE_INTEGER, 1),
+          appColumn.belowCap ?? Number.MAX_SAFE_INTEGER,
+        )
+    : null;
   const chatHidden = collapsed === "chat";
   const stageHidden = collapsed === "stage";
   useEffect(() => {
@@ -844,7 +886,9 @@ export function CallSplit({
           fills && "overflow-hidden",
         )}
         style={
-          stagePx === null
+          awayPx !== null && awayPx > 0
+            ? { height: awayPx }
+            : stagePx === null
             ? musicNeed > 0
               ? ({ "--chat-music-h": `${musicNeed}px` } as CSSProperties)
               : undefined
@@ -896,7 +940,7 @@ export function CallSplit({
       <div
         ref={chatPaneRef}
         data-call-split-chat=""
-        hidden={collapsed === "chat"}
+        hidden={collapsed === "chat" || chatAway}
         className="flex min-h-0 min-w-0 flex-1 flex-col"
         style={
           filaRoom === null
@@ -908,7 +952,10 @@ export function CallSplit({
           <ChatPaneHeader
             header={chatHeader}
             videoHidden={collapsed === "stage"}
-            canHideChat={resizable}
+            // Beside an app the strip's Chat toggle is the one way to put the
+            // chat away, and hiding the video would take the call's controls
+            // with it (they live on the stage there, not in the composer).
+            canHideChat={resizable && !appColumn.active}
             onHideChat={() => setCollapsed("chat")}
             onHideVideo={() => setCollapsed("stage")}
             onShowVideo={() => setCollapsed("none")}
@@ -916,6 +963,20 @@ export function CallSplit({
         )}
         {children}
       </div>
+      {/* The rest of a side column holding only the call's pictures: where the
+          chat was, and the way back to it, rather than a void. */}
+      {awayPictures && appColumn.column === "stage" && (
+        <div
+          data-app-chat-away=""
+          className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 border-t border-border bg-surface-0 p-4 text-center"
+        >
+          <p className="text-xs text-text-tertiary">{t("apps.chat.away")}</p>
+          <Button type="button" size="sm" variant="secondary" onClick={appColumn.showChat}>
+            <MessageSquare className="h-4 w-4" aria-hidden="true" />
+            {t("apps.chat.show")}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

@@ -165,6 +165,8 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   hint_budget: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
   apps: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
+  app_pane_layout_v2: offWords,
   locadora_share: (raw) => raw === "true",
   locadora_save_sync: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.

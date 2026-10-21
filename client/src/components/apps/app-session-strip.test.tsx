@@ -103,7 +103,7 @@ describe("AppSessionStrip", () => {
     expect(document.querySelector('button[aria-label]')).not.toBeNull();
   });
 
-  it("the host sees the switch, Sair and Encerrar, in that order, and Encerrar asks first", () => {
+  it("the host sees the switch then Encerrar (Sair moves to the menu), and Encerrar asks first", () => {
     const onEnd = vi.fn();
     render({
       model: live({
@@ -118,9 +118,12 @@ describe("AppSessionStrip", () => {
     const order = Array.from(document.querySelectorAll('[role="switch"], button'))
       .map((el) => (el.getAttribute("role") === "switch" ? "switch" : el.textContent?.trim()))
       .filter((label) => label === "switch" || /^(Sair|Leave|Encerrar|End)$/.test(label ?? ""));
-    expect(order).toEqual(["switch", order[1], order[2]]);
-    expect(order[1]).toMatch(/Sair|Leave/);
-    expect(order[2]).toMatch(/Encerrar|End/);
+    // One primary button: whoever may end it finds Sair under the menu.
+    expect(order).toEqual(["switch", order[1]]);
+    expect(order[1]).toMatch(/Encerrar|End/);
+    expect(
+      buttons().some((b) => /^(Mais|More)/.test(b.getAttribute("aria-label") ?? "")),
+    ).toBe(true);
 
     const end = buttons().find((b) => /^(Encerrar|End)$/.test(b.textContent?.trim() ?? ""))!;
     act(() => end.click());

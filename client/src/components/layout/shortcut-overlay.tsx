@@ -29,6 +29,7 @@ const ACTION_LABEL: Record<ShortcutAction | "pushToTalk", MessageKey> = {
   toggleOverlay: "shortcuts.action.toggleOverlay",
   pushToTalk: "shortcuts.action.pushToTalk",
   openNewDm: "shortcuts.newDm",
+  toggleAppChat: "shortcuts.action.toggleAppChat",
 };
 
 const GROUP_LABEL: Record<(typeof SHORTCUT_GROUPS)[number]["id"], MessageKey> = {

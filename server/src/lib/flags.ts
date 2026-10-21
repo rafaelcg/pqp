@@ -967,6 +967,18 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/apps/config?serverId= (enabled)",
   },
+  app_pane_layout_v2: {
+    description:
+      "Apps: o layout novo do lado do app. A call fica numa coluna com um só conjunto de controles, a tela compartilhada vira um quadro com tamanho máximo e o chat pode ser escondido. Desligado: volta o layout antigo (controles da call no compositor do chat).",
+    env: "APP_PANE_LAYOUT_V2",
+    parseEnv: onUnlessOff,
+    // On: it is the layout the apps ship with now. The switch is a kill switch
+    // for a relayout of the call surface, read by the client on its next config
+    // refresh, no reload. Global: it is about the web client, not a server.
+    codeDefault: true,
+    perServer: false,
+    clientVia: "GET /api/apps/config?serverId= (paneLayoutV2)",
+  },
   locadora_share: {
     description:
       "Locadora compartilhando a tela do jogo: deixa o Locadora (e qualquer app de emulador) compartilhar o painel do jogo e deixa a galera assistir. Fica desligado até a resposta do advogado (Portão Legal L1b). Desligado, o servidor recusa o compartilhamento e a entrada como plateia nesses apps.",

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { AppPane, type AppPaneHandle } from "@/components/apps/app-pane";
 import { AppSessionStrip, type StripShareState } from "@/components/apps/app-session-strip";
 import { useAppsConfig } from "@/hooks/use-apps-config";
@@ -22,6 +22,23 @@ import { isDesktopApp } from "@/lib/desktop";
 import { useTranslation } from "@/lib/i18n";
 import { resolveAvatarUrl } from "@/lib/avatar";
 import { cn } from "@/lib/utils";
+import {
+  AppColumnContext,
+  INACTIVE_APP_COLUMN,
+  registerAppChatToggler,
+  type AppColumnState,
+} from "@/components/apps/app-column";
+import {
+  appColumnLayout,
+  advanceUnread,
+  FRESH_TRACKER,
+  NO_UNREAD,
+  readAppChatHidden,
+  writeAppChatHidden,
+  type AppCallShape,
+  type UnreadTracker,
+  type UnreadMessage,
+} from "@/lib/apps/app-chat-visibility";
 
 /**
  * Everything an open channel needs when an app is running in it: the strip
@@ -52,6 +69,12 @@ export interface AppSessionPeople {
 export interface AppSessionVoice {
   /** Connected to THIS channel's call. */
   inCall: boolean;
+  /**
+   * What this channel's call stage draws: a card (`compact`) or pictures.
+   * Decides where the call goes when the chat is put away. Absent reads as
+   * `compact` while in the call.
+   */
+  callShape?: AppCallShape;
   /** This account is sharing a screen in that call right now. */
   sharing: boolean;
   /** Other people in the call, to say who the share reaches. */
@@ -71,7 +94,45 @@ export interface AppSessionLayoutProps {
   /** The roster, for names and pictures. */
   people: ReadonlyMap<string, AppSessionPeople>;
   voice: AppSessionVoice;
+  /**
+   * This channel's messages and who is reading, for the unread mark on the
+   * chat toggle while the chat is put away.
+   */
+  chat?: { messages: readonly UnreadMessage[]; username: string | null };
+  /** The chat toggle's keyboard shortcut as printed ("Ctrl + Shift + ."). */
+  chatShortcut?: string | null;
+  /** The app is on screen (or stops being): the page header stays up then. */
+  onPaneChange?: (visible: boolean) => void;
   children: ReactNode;
+}
+
+/** Under this body width the column goes under the app instead of beside it. */
+export const APP_COLUMN_SIDE_MIN_BODY_PX = 720;
+
+/**
+ * The share of the body a call's pictures may take when they sit under the app
+ * with the chat away: the app is what the person made room for.
+ */
+export const APP_BELOW_STAGE_MAX_SHARE = 0.4;
+
+/** An element's size, kept in step by a ResizeObserver; 0 until measured. */
+function useElementSize(ref: RefObject<HTMLElement | null>): { width: number; height: number } {
+  const [size, setSize] = useState({ width: 0, height: 0 });
+  useEffect(() => {
+    const element = ref.current;
+    if (!element || typeof ResizeObserver === "undefined") return undefined;
+    const read = () =>
+      setSize((previous) => {
+        const width = Math.round(element.clientWidth);
+        const height = Math.round(element.clientHeight);
+        return previous.width === width && previous.height === height ? previous : { width, height };
+      });
+    read();
+    const observer = new ResizeObserver(read);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [ref]);
+  return size;
 }
 
 /** How long an ended strip stays before it collapses by itself (mock 03). */
@@ -101,7 +162,19 @@ function endedHere(
 }
 
 export function AppSessionLayout(props: AppSessionLayoutProps) {
-  const { serverId, channelId, channelType, viewerId, canModerate, people, voice, children } = props;
+  const {
+    serverId,
+    channelId,
+    channelType,
+    viewerId,
+    canModerate,
+    people,
+    voice,
+    chat,
+    chatShortcut,
+    onPaneChange,
+    children,
+  } = props;
   const { locale, t } = useTranslation();
   const config = useAppsConfig(serverId);
   const md = useMdUp();
@@ -374,6 +447,131 @@ export function AppSessionLayout(props: AppSessionLayoutProps) {
   const chatBeside = paneVisible && md;
   const chatBelow = paneVisible && !md;
 
+  // ---- the chat beside the app (app_pane_layout_v2) -----------------------
+
+  // `false` is the only answer that turns it off: an API from before the flag
+  // sends nothing, and the new layout is the default.
+  const v2 = config.paneLayoutV2 !== false;
+  const [chatHidden, setChatHiddenState] = useState(() => readAppChatHidden(!md));
+  const columnRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const { width: bodyWidth, height: bodyHeight } = useElementSize(bodyRef);
+  const columnId = `app-chat-column-${channelId ?? "none"}`;
+  const layout = appColumnLayout({
+    paneVisible: v2 && paneVisible,
+    // A desktop window with the channel list open can leave the body under
+    // 720 px, and a 320 px column beside the app left the app 140 px wide
+    // (a game the size of a stamp). There the column goes under the app, as on
+    // a phone. Zero is "not measured yet", which keeps the desktop answer.
+    md: md && (bodyWidth === 0 || bodyWidth >= APP_COLUMN_SIDE_MIN_BODY_PX),
+    chatHidden,
+    inCall: voice.inCall,
+    callShape: voice.inCall ? (voice.callShape ?? "compact") : "none",
+  });
+  const appColumnOn = v2 && paneVisible;
+
+  const setChatHidden = useCallback(
+    (hidden: boolean, via: "toggle" | "shortcut" | "header") => {
+      const column = columnRef.current;
+      const chatPart = column?.querySelector<HTMLElement>("[data-call-split-chat]") ?? column;
+      const focusInChat = Boolean(
+        chatPart && document.activeElement && chatPart.contains(document.activeElement),
+      );
+      setChatHiddenState(hidden);
+      writeAppChatHidden(hidden);
+      requestAnimationFrame(() => {
+        if (hidden && (focusInChat || via === "header")) {
+          // What was focused is about to be display:none; the toggle that brings
+          // it back is the sensible place to land.
+          document.querySelector<HTMLElement>("[data-app-chat-toggle]")?.focus();
+        } else if (!hidden && via === "shortcut") {
+          columnRef.current
+            ?.querySelector<HTMLElement>("[data-call-split-chat] textarea, [data-call-split-chat] [contenteditable='true']")
+            ?.focus();
+        }
+      });
+    },
+    [],
+  );
+
+  const chatHiddenRef = useRef(chatHidden);
+  chatHiddenRef.current = chatHidden;
+  useEffect(() => {
+    if (!appColumnOn) return undefined;
+    return registerAppChatToggler(() => setChatHidden(!chatHiddenRef.current, "shortcut"));
+  }, [appColumnOn, setChatHidden]);
+
+  // The newest message when the chat went away; what came after is unread.
+  const messages = chat?.messages;
+  // Keyed by channel: moving to another channel's app with the chat still away
+  // takes that channel's newest message as the mark, not the last one's.
+  // Counted by arrival (`advanceUnread`): started fresh when the chat goes
+  // away and again on another channel, advanced with each list it is shown.
+  // Pure and idempotent for the same list, so advancing it during render is
+  // safe under a double render.
+  const tracker = useRef<{ channelId: string | null; state: UnreadTracker } | null>(null);
+  if (!layout.chatAway) {
+    tracker.current = null;
+  } else {
+    if (tracker.current === null || tracker.current.channelId !== channelId) {
+      tracker.current = { channelId, state: FRESH_TRACKER };
+    }
+    tracker.current.state = advanceUnread(tracker.current.state, messages ?? [], {
+      id: viewerId,
+      username: chat?.username ?? null,
+    });
+  }
+  const unread = tracker.current?.state.unread ?? NO_UNREAD;
+
+  useEffect(() => {
+    onPaneChange?.(appColumnOn);
+  }, [appColumnOn, onPaneChange]);
+  useEffect(() => () => onPaneChange?.(false), [onPaneChange]);
+
+  const columnState: AppColumnState = useMemo(
+    () =>
+      appColumnOn
+        ? {
+            active: true,
+            chatAway: layout.chatAway,
+            column: layout.column,
+            belowCap:
+              bodyHeight > 0 ? Math.round(bodyHeight * APP_BELOW_STAGE_MAX_SHARE) : undefined,
+            hideChat: () => setChatHidden(true, "header"),
+            showChat: () => setChatHidden(false, "toggle"),
+          }
+        : INACTIVE_APP_COLUMN,
+    [appColumnOn, layout.chatAway, layout.column, bodyHeight, setChatHidden],
+  );
+
+  const columnHidden = layout.column === "hidden";
+  const legacyColumn = chatBeside
+    ? "w-[300px] flex-none border-l border-border"
+    : chatBelow
+      ? "flex-1 border-t border-border"
+      : "flex-1";
+  const v2Column: Record<typeof layout.column, string> = {
+    full: "flex-1",
+    side: "w-[320px] flex-none border-l border-border xl:w-[352px]",
+    stage: "w-[320px] flex-none border-l border-border xl:w-[352px]",
+    below: layout.chatAway
+      ? "flex-none border-t border-border"
+      : "flex-1 border-t border-border",
+    bar: "flex-none border-t border-border",
+    hidden: "hidden",
+  };
+  // One utility, not `basis-[46%] flex-none`: tailwind-merge drops a basis
+  // that comes before a `flex-*`, so that pair was only ever `flex-none` and
+  // the pane kept whatever height it first measured (the chat under it got
+  // none on a phone).
+  const paneClass = v2
+    ? layout.column === "below" && !layout.chatAway
+      ? "flex-[0_0_46%]"
+      : undefined
+    : chatBelow
+      ? "basis-[46%] flex-none"
+      : undefined;
+
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       {model ? (
@@ -394,12 +592,24 @@ export function AppSessionLayout(props: AppSessionLayoutProps) {
             if (model.kind === "ended") setDismissedEnded(model.sessionId);
           }}
           onSkipToApp={() => paneRef.current?.focus()}
+          chat={
+            appColumnOn
+              ? {
+                  hidden: chatHidden,
+                  unread,
+                  shortcut: chatShortcut ?? null,
+                  controls: columnId,
+                  onToggle: () => setChatHidden(!chatHidden, "toggle"),
+                }
+              : undefined
+          }
         />
       ) : null}
       <div
+        ref={bodyRef}
         className={cn(
           "flex min-h-0 min-w-0 flex-1",
-          chatBelow ? "flex-col" : "flex-row",
+          v2 ? (layout.direction === "column" ? "flex-col" : "flex-row") : chatBelow ? "flex-col" : "flex-row",
         )}
       >
         {paneVisible && app && transport ? (
@@ -416,21 +626,23 @@ export function AppSessionLayout(props: AppSessionLayoutProps) {
             frozen={liveModel?.phase === "reconnecting"}
             canWatch={app.players.spectators && app.shareAllowed}
             onShare={setShare}
-            className={chatBelow ? "basis-[46%] flex-none" : undefined}
+            className={paneClass}
           />
         ) : null}
         <div
+          ref={columnRef}
+          id={columnId}
           data-testid="app-chat-column"
+          data-app-column={v2 ? layout.column : undefined}
+          // Display none, so nothing in it can take focus or be read out; the
+          // children stay mounted (scroll, drafts, the call's bindings).
+          hidden={v2 && columnHidden ? true : undefined}
           className={cn(
             "flex min-h-0 min-w-0 flex-col",
-            chatBeside
-              ? "w-[300px] flex-none border-l border-border"
-              : chatBelow
-                ? "flex-1 border-t border-border"
-                : "flex-1",
+            v2 ? v2Column[layout.column] : legacyColumn,
           )}
         >
-          {children}
+          <AppColumnContext.Provider value={columnState}>{children}</AppColumnContext.Provider>
         </div>
       </div>
     </div>

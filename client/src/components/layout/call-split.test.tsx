@@ -11,6 +11,8 @@ import {
   type CallStageShape,
 } from "@/lib/call-split";
 import { CallSplit } from "./call-split";
+import { AppColumnContext } from "@/components/apps/app-column";
+import { appColumnStageTarget } from "@/lib/call-split";
 
 /**
  * THE INVARIANT THIS FILE EXISTS FOR.
@@ -656,5 +658,81 @@ describe("the phone chat floor (party_newcomer_experience)", () => {
     expect(html).toContain("data-call-split-phone-floor");
     expect(html).toContain('data-call-split="off"');
     expect(stageHeight(html)).toBeLessThan(360 / 2);
+  });
+});
+
+describe("CallSplit beside an app (app_pane_layout_v2)", () => {
+  const COLUMN = { width: 320, height: 760 };
+  const stageHeight = (html: string) =>
+    Number(/data-call-split-stage=""[^>]*style="height:(\d+)px"/.exec(html)?.[1]);
+
+  function inColumn(
+    chatAway: boolean,
+    preference: CallSplitPreference = CALL_SPLIT_DEFAULT,
+    column: "side" | "stage" | "below" = chatAway ? "stage" : "side",
+  ) {
+    return render(
+      <AppColumnContext.Provider
+        value={{ active: true, chatAway, column, hideChat: () => {}, showChat: () => {} }}
+      >
+        <CallSplit
+          shape="expanded"
+          preference={preference}
+          onPreferenceChange={() => {}}
+          paneSize={COLUMN}
+          chatHeader={{ title: "Chat" }}
+          stage={
+            <div data-testid="stage">
+              <video data-testid="stage-video" />
+            </div>
+          }
+        >
+          <div data-testid="chat" />
+        </CallSplit>
+      </AppColumnContext.Provider>,
+    );
+  }
+
+  it("sizes a picture as a 16:9 tile plus its bar before anybody drags", () => {
+    const html = inColumn(false);
+    expect(html).toContain("data-call-split-sized");
+    expect(stageHeight(html)).toBe(appColumnStageTarget(COLUMN.width, COLUMN.height));
+    expect(stageHeight(html)).toBeLessThanOrEqual(COLUMN.height / 2);
+    // The transcript keeps the rest, and the divider is still there to drag.
+    expect(html).toContain('data-testid="call-split-divider"');
+  });
+
+  it("a person's drag still wins over the tile", () => {
+    const html = inColumn(false, { ...CALL_SPLIT_DEFAULT, stacked: 0.7 });
+    expect(stageHeight(html)).toBeGreaterThan(appColumnStageTarget(COLUMN.width, COLUMN.height));
+  });
+
+  it("offers neither hide button in the chat header: the strip's toggle is the one", () => {
+    const html = inColumn(false);
+    expect(html).not.toContain("call-split-collapse-chat");
+    expect(html).not.toContain("call-split-collapse-stage");
+  });
+
+  it("with the chat away the pictures stay a tile, the chat is hidden (not unmounted), and the rest says how to get it back", () => {
+    const html = inColumn(true);
+    expect(html).not.toContain('data-testid="call-split-divider"');
+    expect(html).toMatch(/data-call-split-chat=""[^>]*hidden/);
+    expect(html).toContain('data-testid="chat"');
+    expect(html).toContain('data-testid="stage-video"');
+    expect(stageHeight(html)).toBe(appColumnStageTarget(COLUMN.width, COLUMN.height, 1));
+    expect(html).toContain("data-app-chat-away");
+  });
+
+  it("under the app (a phone) the away tile has no placeholder: the column is only the tile", () => {
+    const html = inColumn(true, CALL_SPLIT_DEFAULT, "below");
+    expect(html).not.toContain("data-app-chat-away");
+    expect(stageHeight(html)).toBe(appColumnStageTarget(COLUMN.width, Number.MAX_SAFE_INTEGER, 1));
+  });
+
+  it("caps the tile at half the column, and a little less in a short one", () => {
+    // 320 wide: a 180 px picture plus the 88 px band.
+    expect(appColumnStageTarget(320, 900)).toBe(268);
+    expect(appColumnStageTarget(320, 500)).toBe(250 - 40);
+    expect(appColumnStageTarget(320, 0)).toBe(0);
   });
 });

@@ -255,6 +255,7 @@ import { AppsHint } from "@/components/layout/apps-hint";
 import { isAppsHintSeen } from "@/lib/apps/apps-hint";
 import { useAppsConfig } from "@/hooks/use-apps-config";
 import { AppJoinHost } from "@/components/apps/app-join-host";
+import { toggleAppChat } from "@/components/apps/app-column";
 import {
   AppSessionLayout,
   type AppSessionPeople,
@@ -1894,6 +1895,8 @@ function MainAppContent({
    * there is nothing above the transcript for a header to sit under.
    */
   const [callDockOnScreen, setCallDockOnScreen] = useState(false);
+  /** An app session's pane is drawn here, with the call and chat beside it. */
+  const [appPaneOnScreen, setAppPaneOnScreen] = useState(false);
   const [splitState, setSplitState] = useState<CallSplitState>({
     active: false,
     canSideBySide: false,
@@ -6733,6 +6736,10 @@ function MainAppContent({
         case "openNewDm":
           setShortcutOverlayOpen(false);
           setNewDmOpen(true);
+          return;
+        case "toggleAppChat":
+          // Nothing to toggle without an app on screen; the key is left alone.
+          toggleAppChat();
           return;
         case "previousChannel":
         case "nextChannel":
@@ -11702,7 +11709,11 @@ function MainAppContent({
             liveAttachedHint === "bringFriends" && !viewingThisCall
           }
           onLeave={() => voice.leave()}
-          hideLeave={compact && callDockOnScreen}
+          // The call's own hang-up is on screen in the dock, or in the
+          // column beside an app (which has no dock), so the rail's goes.
+          hideLeave={
+            compact && (callDockOnScreen || (appPaneOnScreen && viewingThisCall))
+          }
           compact={compact}
         />
       )}
@@ -11816,7 +11827,11 @@ function MainAppContent({
       voiceState.status !== "idle" &&
       voiceRoomRowVisible &&
       stageShape === "expanded" &&
-      !splitState.chatHidden,
+      !splitState.chatHidden &&
+      // An app on screen keeps the page header: the stage is in the column
+      // beside it, not at the top of the page, and the channel's tools would
+      // otherwise crowd the column's narrow chat header.
+      !appPaneOnScreen,
   );
 
   const channelHeaderTools = selectedChannel ? (
@@ -12476,7 +12491,14 @@ function MainAppContent({
               stream ? { stream, maxFrameRate: 30 } : { preferBrowserTab: true },
             ),
           stopShare: () => void voice.stopScreenShare(),
+          callShape: stageShape,
         }}
+        chat={{
+          messages: chat.getMessages(),
+          username: user?.username ?? null,
+        }}
+        chatShortcut={formatBinding(shortcutBindings.toggleAppChat)}
+        onPaneChange={setAppPaneOnScreen}
       >
       <CallDockProvider
         viewingChannelId={selectedChannel.id}
@@ -12493,7 +12515,10 @@ function MainAppContent({
         // the header exists to sit between a stage and the transcript, and
         // there is no stage above the transcript then. A stage showing
         // pictures keeps it even though its controls are docked.
-        chatHeader={stageShape === "compact" ? undefined : {
+        // Beside an app the call is a card at the top of the column, and the
+        // chat under it gets its header after all: it is what says where the
+        // call ends and the conversation starts.
+        chatHeader={stageShape === "compact" && !appPaneOnScreen ? undefined : {
           title: t("chat.paneTitle"),
           actions: voiceStageOwnsHeader ? channelHeaderTools : undefined,
           tabs: partyOwnsHeader
