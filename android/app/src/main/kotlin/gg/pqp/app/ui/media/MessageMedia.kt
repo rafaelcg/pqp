@@ -3,13 +3,16 @@ package gg.pqp.app.ui.media
 import android.text.format.Formatter
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -20,15 +23,19 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -41,6 +48,7 @@ import gg.pqp.app.core.Backend
 import gg.pqp.app.ui.theme.PqpIcons
 import gg.pqp.app.ui.theme.Sizes
 import gg.pqp.app.ui.theme.Spacing
+import kotlinx.coroutines.launch
 
 /**
  * Everything a message can carry that is not words.
@@ -83,18 +91,38 @@ fun MessageAttachment(
      * a voice note has always degraded to.
      */
     voiceNote: gg.pqp.app.voicenotes.ui.VoiceNoteContext? = null,
+    /**
+     * The message's long press. A picture now takes taps itself (to open the
+     * viewer), and a child that takes taps swallows the row's long press too,
+     * so the row hands its long press down rather than losing it on images.
+     */
+    onLongPress: (() -> Unit)? = null,
 ) {
     when {
         attachment.isVoiceNote && voiceNote != null ->
             gg.pqp.app.voicenotes.ui.VoiceNoteCard(attachment, voiceNote, modifier)
         attachment.isVideo -> VideoAttachment(attachment, api, modifier)
-        attachment.isImage -> ImageAttachment(attachment, modifier)
+        attachment.isImage -> ImageAttachment(attachment, api, modifier, onLongPress)
         else -> FileChip(attachment, modifier)
     }
 }
 
+/**
+ * A picture in the transcript, and the door to [ImageViewerDialog].
+ *
+ * The frame crops (a tall screenshot cannot own the screen), so tapping is the
+ * only way to see the whole picture, and until the viewer existed a tap did
+ * nothing at all. A load failure re-mints the presigned URL once, because a
+ * transcript held in memory can outlive the URL's twelve hours.
+ */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ImageAttachment(attachment: Attachment, modifier: Modifier = Modifier) {
+private fun ImageAttachment(
+    attachment: Attachment,
+    api: ApiClient,
+    modifier: Modifier = Modifier,
+    onLongPress: (() -> Unit)? = null,
+) {
     // A picker GIF's filename is the provider's title (Klipy today, and the
     // GIPHY and Tenor rows stored before it), which is a description and
     // reads well; an uploaded file's is a filename, which does not, but it is
@@ -105,47 +133,127 @@ private fun ImageAttachment(attachment: Attachment, modifier: Modifier = Modifie
     } else {
         attachment.filename
     }
+    val openLabel = stringResource(R.string.attachment_open_image, attachment.filename)
 
-    AsyncImage(
-        model = Backend.absolute(attachment.url),
+    val scope = rememberCoroutineScope()
+    val retry = remember(attachment.id) { RemintOnce { api.attachmentUrl(attachment.id) } }
+    var url by remember(attachment.id, attachment.url) { mutableStateOf(attachment.url) }
+    // Saveable: a rotation while the viewer is open must not close it.
+    var viewing by rememberSaveable(attachment.id) { mutableStateOf(false) }
+
+    InlineMediaFrame(
+        model = Backend.absolute(url),
         contentDescription = label,
-        contentScale = ContentScale.Crop,
-        modifier = modifier
-            .testTag("attachment-image")
-            .fillMaxWidth(0.8f)
-            .heightIn(min = MEDIA_MIN_HEIGHT, max = MEDIA_MAX_HEIGHT)
-            .clip(MaterialTheme.shapes.medium)
-            .background(MaterialTheme.colorScheme.surfaceContainer)
-            .border(
-                width = Sizes.hairline,
-                color = MaterialTheme.colorScheme.outline,
-                shape = MaterialTheme.shapes.medium,
-            ),
+        openLabel = openLabel,
+        tag = "attachment-image",
+        animated = attachment.isAnimatedImage,
+        viewing = viewing,
+        onError = { scope.launch { retry.next()?.let { url = it } } },
+        onOpen = { viewing = true },
+        onLongPress = onLongPress,
+        modifier = modifier,
     )
+
+    if (viewing) {
+        ImageViewerDialog(
+            url = url,
+            contentDescription = label,
+            remint = { api.attachmentUrl(attachment.id) },
+            onDismiss = { viewing = false },
+        )
+    }
 }
 
 /**
  * A GIF pasted as a link rather than sent through the picker.
  *
- * Same frame as an image attachment, because to a reader it is the same thing.
- * See [GifLinks] for why a body is allowed to become a picture at all.
+ * Same frame as an image attachment, because to a reader it is the same thing,
+ * and it opens the same viewer. See [GifLinks] for why a body is allowed to
+ * become a picture at all.
  */
 @Composable
-fun InlineGif(url: String, modifier: Modifier = Modifier) {
-    AsyncImage(
+fun InlineGif(url: String, modifier: Modifier = Modifier, onLongPress: (() -> Unit)? = null) {
+    val label = stringResource(R.string.attachment_gif)
+    val openLabel = stringResource(R.string.attachment_open_image, label)
+    var viewing by rememberSaveable(url) { mutableStateOf(false) }
+
+    InlineMediaFrame(
         model = url,
-        contentDescription = stringResource(R.string.attachment_gif),
+        contentDescription = label,
+        openLabel = openLabel,
+        tag = "inline-gif",
+        animated = true,
+        viewing = viewing,
+        onError = {},
+        onOpen = { viewing = true },
+        onLongPress = onLongPress,
+        modifier = modifier,
+    )
+
+    if (viewing) {
+        // Not ours to sign: a pasted link has no attachment id to re-mint.
+        ImageViewerDialog(
+            url = url,
+            contentDescription = label,
+            remint = null,
+            onDismiss = { viewing = false },
+        )
+    }
+}
+
+/**
+ * The cropped frame a picture sits in inside the transcript.
+ *
+ * While the viewer is open over it, an animated picture is unloaded here, so
+ * one GIF is not decoding frames twice (once behind the dialog, where nobody
+ * can see it). The frame keeps the height it had, so the transcript behind the
+ * dialog does not jump; closing the viewer loads it again from Coil's cache.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun InlineMediaFrame(
+    model: String?,
+    contentDescription: String?,
+    openLabel: String,
+    tag: String,
+    animated: Boolean,
+    viewing: Boolean,
+    onError: () -> Unit,
+    onOpen: () -> Unit,
+    onLongPress: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
+    val density = LocalDensity.current
+    var heightPx by remember { mutableIntStateOf(0) }
+    val parked = viewing && animated
+
+    AsyncImage(
+        model = if (parked) null else model,
+        contentDescription = contentDescription,
         contentScale = ContentScale.Crop,
+        onError = { if (!parked) onError() },
         modifier = modifier
-            .testTag("inline-gif")
+            .testTag(tag)
             .fillMaxWidth(0.8f)
-            .heightIn(min = MEDIA_MIN_HEIGHT, max = MEDIA_MAX_HEIGHT)
+            .then(
+                if (parked && heightPx > 0) {
+                    Modifier.height(with(density) { heightPx.toDp() })
+                } else {
+                    Modifier.heightIn(min = MEDIA_MIN_HEIGHT, max = MEDIA_MAX_HEIGHT)
+                },
+            )
+            .onSizeChanged { if (!parked) heightPx = it.height }
             .clip(MaterialTheme.shapes.medium)
             .background(MaterialTheme.colorScheme.surfaceContainer)
             .border(
                 width = Sizes.hairline,
                 color = MaterialTheme.colorScheme.outline,
                 shape = MaterialTheme.shapes.medium,
+            )
+            .combinedClickable(
+                onClickLabel = openLabel,
+                onClick = onOpen,
+                onLongClick = onLongPress,
             ),
     )
 }

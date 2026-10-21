@@ -1507,7 +1507,7 @@ private fun MessageRow(
                 ForwardCard(forward)
             } else if (gifBody != null) {
                 Spacer(Modifier.height(Spacing.xs))
-                InlineGif(gifBody)
+                InlineGif(gifBody, onLongPress = onOpenActions)
             } else if (message.chance != null) {
                 Spacer(Modifier.height(Spacing.xs))
                 ChanceCard(message.chance)
@@ -1566,6 +1566,7 @@ private fun MessageRow(
                         authorName = message.authorName,
                         isMine = selfId != null && message.authorId == selfId,
                     ),
+                    onLongPress = onOpenActions,
                 )
             }
 
