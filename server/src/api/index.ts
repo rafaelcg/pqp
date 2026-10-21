@@ -12439,7 +12439,10 @@ router.post(
     const HANDS_AT_ONCE = 8;
     const raised = await listVoiceRaisedHandUserIds(channelId!);
     for (let start = 0; start < raised.length; start += HANDS_AT_ONCE) {
-      const results = await Promise.all(
+      // allSettled, not all: a failure must not return while sibling lowers
+      // are still in flight, or the person who sees the error and raises
+      // again can have that hand lowered by a write still running.
+      const settled = await Promise.allSettled(
         raised.slice(start, start + HANDS_AT_ONCE).map(async (targetId) => {
           if (targetId !== user.id) {
             try {
@@ -12460,8 +12463,13 @@ router.post(
           return true;
         }),
       );
-      for (const done of results) {
-        if (done) {
+      for (const result of settled) {
+        if (result.status === "rejected") {
+          throw result.reason;
+        }
+      }
+      for (const result of settled) {
+        if (result.status === "fulfilled" && result.value) {
           lowered += 1;
         } else {
           skipped += 1;
