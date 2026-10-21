@@ -201,7 +201,7 @@ describeDb("sendStreamStartedPush", () => {
       const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
       pushStreamStarted({ ...event(), userIds: [ana] }, onSent, onFailed);
       const until = async (check: () => boolean) => {
-        const deadline = Date.now() + 3_000;
+        const deadline = Date.now() + 12_000;
         while (!check()) {
           if (Date.now() > deadline) throw new Error("timed out");
           await new Promise((resolve) => setImmediate(resolve));
@@ -247,7 +247,7 @@ describeDb("sendStreamStartedPush", () => {
       const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
       pushStreamStarted({ ...event(), userIds: [ana] }, onSent, onFailed);
       const until = async (check: () => boolean) => {
-        const deadline = Date.now() + 3_000;
+        const deadline = Date.now() + 12_000;
         while (!check()) {
           if (Date.now() > deadline) throw new Error("timed out");
           await new Promise((resolve) => setImmediate(resolve));

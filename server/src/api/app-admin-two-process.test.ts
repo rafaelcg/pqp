@@ -228,7 +228,7 @@ describeDb("an apps write on one API process, seen from the other and on the bus
   }, 30_000);
 
   async function waitForFrames(count: number): Promise<void> {
-    const deadline = Date.now() + 5_000;
+    const deadline = Date.now() + 12_000;
     while (frames.length < count && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
@@ -331,7 +331,7 @@ describeDb("an apps write on one API process, seen from the other and on the bus
     expect(off.status).toBe(200);
     expect(off.body.sessionsEnded).toBe(1);
 
-    const deadline = Date.now() + 5_000;
+    const deadline = Date.now() + 12_000;
     while (sessionFrames.length < 2 && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 25));
     }

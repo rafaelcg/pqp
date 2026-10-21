@@ -375,7 +375,10 @@ describeDb("stories: eager uploads", () => {
 
     it("rate limits a burst, and caps unfinished uploads per account", async () => {
       let limited = 0;
-      for (let i = 0; i < 25; i += 1) {
+      // Until the first refusal, not a fixed 25: the bucket (20, +0.5 a second)
+      // refills while this runs, and a slow runner could otherwise never
+      // empty it. The bound is generous, never reached when the limiter works.
+      for (let i = 0; i < 400 && limited === 0; i += 1) {
         if ((await mint("layer", "image/png")).status === 429) limited += 1;
       }
       expect(limited).toBeGreaterThan(0);
