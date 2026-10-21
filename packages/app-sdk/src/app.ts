@@ -190,7 +190,15 @@ function usageOf(result: unknown): StoreUsage {
 /** Builds the app object over a port whose `hello` push has already arrived. */
 export function createApp(client: PortClient, hello: BridgeHello): PqpApp {
   let connection: BridgeConnectionStatus = hello.connection;
+  // The page sends `share` once right after `hello` when the pane is already
+  // shared, which is usually before the app has registered its listener: kept
+  // here (registered while `hello` is handled, so nothing is missed) and
+  // replayed to every `on("share")` that comes later.
+  let lastShare: boolean | undefined;
 
+  client.on("share", (push) => {
+    if (typeof push.on === "boolean") lastShare = push.on;
+  });
   client.on("connection", (push) => {
     if (push.status === "online" || push.status === "reconnecting") connection = push.status;
   });
@@ -325,10 +333,29 @@ export function createApp(client: PortClient, hello: BridgeHello): PqpApp {
           return client.on("theme", (push) => callback(push.theme as never));
         case "ended":
           return client.on("session.ended", (push) => callback(push.reason as never));
-        case "share":
-          return client.on("share", (push) => {
-            if (typeof push.on === "boolean") callback(push.on as never);
+        case "share": {
+          let live = true;
+          let heard = false;
+          const off = client.on("share", (push) => {
+            if (typeof push.on !== "boolean") return;
+            heard = true;
+            callback(push.on as never);
           });
+          // What the page said before this listener existed, on a microtask so
+          // a caller still initialising (a `const` it reads in the callback)
+          // has finished first. Skipped when a push landed meanwhile: that one
+          // is newer and was already delivered.
+          if (lastShare !== undefined) {
+            const known = lastShare;
+            queueMicrotask(() => {
+              if (live && !heard) callback(known as never);
+            });
+          }
+          return () => {
+            live = false;
+            off();
+          };
+        }
         default:
           return () => {};
       }
