@@ -133,12 +133,15 @@ class SessionExpiryGate(
         if (!hasAccount()) return
         if (!claimed.compareAndSet(false, true)) return
         try {
+            // The session this question is about. If it ends while the probe is
+            // in the air (a Sign out, then a sign-in as somebody else), a late
+            // "dead" is about the previous one and must not take down the next.
+            val asked = epoch.get()
             when (probe()) {
                 SessionProbe.Alive, SessionProbe.Unknown -> return
                 SessionProbe.Dead -> Unit
             }
-            // The person may have tapped Sign out while the probe was in the air.
-            if (!hasAccount()) return
+            if (epoch.get() != asked || !hasAccount()) return
             sessionEnded()
             endSession()
         } finally {

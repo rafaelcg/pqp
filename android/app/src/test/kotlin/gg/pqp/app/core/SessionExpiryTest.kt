@@ -150,6 +150,23 @@ class SessionExpiryTest {
     }
 
     @Test
+    fun `a probe that outlives its session cannot end the next one`() = runTest {
+        val release = CompletableDeferred<Unit>()
+        val rig = Rig(this) {
+            release.await()
+            SessionProbe.Dead
+        }
+        val handling = async { rig.gate.handle() }
+        runCurrent()
+        // Sign out, then sign in as somebody else, while the old probe is in the air.
+        rig.gate.sessionEnded()
+        rig.account = true
+        release.complete(Unit)
+        handling.await()
+        assertEquals("the new account is not the one the probe asked about", 0, rig.endings.get())
+    }
+
+    @Test
     fun `with nobody signed in there is nothing to confirm`() = runTest {
         val rig = Rig(this)
         rig.account = false

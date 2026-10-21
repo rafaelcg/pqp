@@ -377,9 +377,10 @@ class SessionStore(
                     // Clear it so the sign-in screen starts clean, and say
                     // what happened once. A launch that merely timed out is
                     // not that, and neither is a fresh install.
-                    if (refused && Backend.authMode == AuthMode.Clerk && com.clerk.api.Clerk.session != null) {
+                    val endingClerk = clerkSessionId()
+                    if (refused && endingClerk != null) {
                         _sessionExpired.value = true
-                        scope.launch { clerkSignOutBounded() }
+                        scope.launch { clerkSignOutBounded(endingClerk) }
                     }
                 }
                 "passed" -> {
@@ -730,6 +731,10 @@ class SessionStore(
      * (a dead session could not authenticate that call anyway).
      */
     private suspend fun endSession(expired: Boolean) {
+        // The Clerk session being ended, named before anything else happens so
+        // a sign-in that lands during the bounded steps below is never mistaken
+        // for it (`clerkSignOutBounded`).
+        val ending = clerkSessionId()
         // Calls in the air belong to the account that is leaving, and a late
         // refusal of one must not read as the next account's session dying.
         expiryGate.sessionEnded()
@@ -754,8 +759,11 @@ class SessionStore(
         if (!expired) {
             withTimeoutOrNull(NETWORK_STEP_MS) { runSuspendCatching { deviceCleanup?.invoke() } }
         }
-        clerkSignOutBounded()
+        clerkSignOutBounded(ending)
     }
+
+    private fun clerkSessionId(): String? =
+        if (Backend.authMode == AuthMode.Clerk) com.clerk.api.Clerk.session?.id else null
 
     /** Test seam: lands the store in a signed-in phase without a network. */
     internal fun seedPhaseForTesting(next: SessionPhase) {
@@ -763,14 +771,18 @@ class SessionStore(
     }
 
     /**
-     * Ends the Clerk session, waiting at most [NETWORK_STEP_MS]. The SDK has no
+     * Ends the Clerk session [ending], waiting at most [NETWORK_STEP_MS]. The SDK has no
      * local-only clear, but its sign-out empties the local session state even
      * when the server refuses the request (it does for a session that is
      * already dead), so the bound is what keeps a slow network from holding
      * anything up.
      */
-    private suspend fun clerkSignOutBounded() {
-        if (Backend.authMode != AuthMode.Clerk) return
+    private suspend fun clerkSignOutBounded(ending: String?) {
+        if (Backend.authMode != AuthMode.Clerk || ending == null) return
+        // The screen changed before the steps above, so the person may already
+        // be signing in again: Clerk's sign-out is global, and would end that
+        // new session instead. Only the session that was being ended is ended.
+        if (clerkSessionId() != ending) return
         withTimeoutOrNull(NETWORK_STEP_MS) {
             runSuspendCatching { com.clerk.api.Clerk.auth.signOut() }
         }
