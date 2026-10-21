@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  isWatchPartyChannelType,
   musicStateSchema,
   type MusicState,
   type VoiceRoomTransport,
@@ -1022,17 +1023,23 @@ export type VoiceRosterPeerRow = VoicePeerRow & {
 export interface VoiceRoomRoster {
   channelId: string;
   transport: VoiceRoomTransport;
+  /** `voice_rooms.sfu_region`: the media box the room is pinned to, null for home. */
+  region: string | null;
+  /** The channel is a `watch_party` channel: priced flat, and kept on the home box. */
+  watchParty: boolean;
   peers: VoiceRosterPeerRow[];
 }
 
 interface RosterDbRow extends VoicePeerDbRow {
   room_channel_id: string;
   transport: VoiceRoomTransport;
+  sfu_region: string | null;
+  room_channel_type: string | null;
   server_muted: boolean;
   hand_raised_at: Date | null;
 }
 
-const ROSTER_SELECT = `SELECT r.channel_id AS room_channel_id, r.transport,
+const ROSTER_SELECT = `SELECT r.channel_id AS room_channel_id, r.transport, r.sfu_region, ch.type AS room_channel_type,
        p.peer_id, p.channel_id, p.user_id, p.instance_id, p.display_name,
        p.avatar_url, p.muted, p.deafened, p.sharing_screen, p.listening_music, p.camera_stream_id,
        p.screen_audio_stream_id, p.can_speak, p.can_stream, p.can_resume, p.orphaned_at,
@@ -1045,6 +1052,7 @@ const ROSTER_SELECT = `SELECT r.channel_id AS room_channel_id, r.transport,
           WHERE h.channel_id = p.channel_id AND h.user_id = p.user_id
        ) AS hand_raised_at
   FROM voice_rooms r
+  LEFT JOIN channels ch ON ch.id = r.channel_id
   LEFT JOIN voice_peers p ON p.channel_id = r.channel_id`;
 
 function groupRosters(rows: RosterDbRow[]): VoiceRoomRoster[] {
@@ -1055,6 +1063,8 @@ function groupRosters(rows: RosterDbRow[]): VoiceRoomRoster[] {
       room = {
         channelId: row.room_channel_id,
         transport: row.transport,
+        region: row.sfu_region ?? null,
+        watchParty: isWatchPartyChannelType(row.room_channel_type ?? ""),
         peers: [],
       };
       byRoom.set(row.room_channel_id, room);

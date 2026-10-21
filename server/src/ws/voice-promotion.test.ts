@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import type { DbUser } from "../db.js";
 
@@ -257,6 +257,20 @@ function sharesOn(watcher: Seat): number {
 
 const ORIGINAL_BUDGET = process.env.VOICE_PROMOTION_MAX_SFU_MBPS;
 const ORIGINAL_ROOM_SIZE = process.env.VOICE_PROMOTION_ROOM_SIZE;
+
+// Every group above pins the FLAT tariff (a camera is 1.5 Mbit/s for each
+// participant, "36 Mbit/s for six people and four cameras"). The calibrated
+// camera price is the code default and has its own group at the bottom, which
+// turns it back on, so the flat arithmetic keeps a test of its own.
+const ORIGINAL_CALIBRATED = process.env.SFU_VIDEO_PRICE_CALIBRATED;
+process.env.SFU_VIDEO_PRICE_CALIBRATED = "off";
+afterAll(() => {
+  if (ORIGINAL_CALIBRATED === undefined) {
+    delete process.env.SFU_VIDEO_PRICE_CALIBRATED;
+  } else {
+    process.env.SFU_VIDEO_PRICE_CALIBRATED = ORIGINAL_CALIBRATED;
+  }
+});
 
 describe("promoting a mesh room so more cameras fit", () => {
   let channel: string;
@@ -1630,5 +1644,81 @@ describe("conversation calls never promote past a mesh cap", () => {
     expect(ninth.peerId).toBeNull();
     expect(ninth.frames.map((f) => f.type)).toContain("voice-room-full");
     expect(getRoomTransport(channel)).toBe("mesh");
+  });
+});
+
+describe("the calibrated camera price, through the join and camera handlers", () => {
+  let channel: string;
+
+  beforeEach(() => {
+    process.env.SFU_VIDEO_PRICE_CALIBRATED = "on";
+    for (const socket of openSockets) {
+      deleteAuthenticatedSocket(socket);
+    }
+    openSockets.length = 0;
+    resetVoicePeers();
+    resetVoiceRateLimits();
+    resetVoiceRoomTransports();
+    resetVoicePromotions();
+    backend.configured = "livekit";
+    rows.memberCount = 40;
+    rows.kind = "server";
+    channel = randomUUID();
+  });
+
+  afterEach(() => {
+    process.env.SFU_VIDEO_PRICE_CALIBRATED = "off";
+    delete process.env.VOICE_PROMOTION_MAX_SFU_MBPS;
+  });
+
+  async function roomOf(size: number): Promise<Seat[]> {
+    const people: Seat[] = [];
+    for (let at = 0; at < size; at += 1) {
+      people.push(await seat(channel));
+    }
+    return people;
+  }
+
+  it("admits the camera the flat price refused: six people, a budget of 30, four cameras", async () => {
+    // Flat: the fourth camera prices the room at 4 * 6 * 1.5 = 36 > 30, which
+    // is exactly the case the group above pins as refused. Calibrated it is
+    // 6 * (1.5 + 3 * 0.4) = 16.2.
+    process.env.VOICE_PROMOTION_MAX_SFU_MBPS = "30";
+    const people = await roomOf(6);
+    for (const person of people.slice(0, 4)) {
+      await cameraOn(person, channel);
+    }
+    expect(typesOf(people[3]!)).not.toContain("camera-denied");
+    expect(camerasOn(people[0]!)).toBe(4);
+  });
+
+  it("still refuses a camera once the room really is over the budget", async () => {
+    // Third camera 6 * 2.3 = 13.8, fourth 6 * 2.7 = 16.2.
+    process.env.VOICE_PROMOTION_MAX_SFU_MBPS = "15";
+    const people = await roomOf(6);
+    for (const person of people.slice(0, 3)) {
+      await cameraOn(person, channel);
+    }
+    expect(camerasOn(people[0]!)).toBe(3);
+    await cameraOn(people[3]!, channel);
+    expect(typesOf(people[3]!)).toContain("camera-denied");
+  });
+
+  it("says which box and how crowded it was when it refuses", async () => {
+    process.env.VOICE_PROMOTION_MAX_SFU_MBPS = "15";
+    const log = vi.spyOn(console, "log");
+    const people = await roomOf(6);
+    for (const person of people.slice(0, 4)) {
+      await cameraOn(person, channel);
+    }
+    const line = log.mock.calls
+      .map((call) => String(call[0]))
+      .find((text) => text.includes("voice.videoAdmissionRefused"));
+    expect(line).toBeDefined();
+    expect(line).toContain("region=sao");
+    expect(line).toContain("roomsOnBox=1");
+    expect(line).toContain("peopleOnBox=6");
+    expect(line).not.toMatch(/displayName|username/);
+    log.mockRestore();
   });
 });

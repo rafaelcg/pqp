@@ -240,6 +240,57 @@ why this measurement used `lk load-test` instead.
 and 800 rungs is the load tester's own TURN client, not the SFU.** Do not
 read it as an SFU-side error.
 
+## 1c. The video budget is per box, and a grid camera is priced as one (2026-10-21)
+
+On 2026-10-20 between 23:00 and 01:00 UTC the server refused 56 cameras
+(`voice.videoAdmissionRefused`, `loadMbps` 524 to 605 against 600) while the SFU
+itself measured at most 208 Mbit/s of packets in both directions at 23:30Z
+(Prometheus `livekit_packet_bytes`, one sample, one night), 114 participants in
+37 rooms and low loss: the budget was spent by the estimate, not by the box.
+Two things were wrong, and each is behind its own runtime flag, default on.
+
+1. **One budget for several boxes** (`sfu_video_budget_per_box`). The budget is
+   the measured ceiling of ONE media server, but `readRoomLoads` summed every SFU
+   room in the cluster, whichever box it was pinned to (`voice_rooms.sfu_region`),
+   against one number. Now only rooms on the asking room's box are summed (no
+   region is the home box), and each box may carry its own ceiling in
+   `VOICE_PROMOTION_MAX_SFU_MBPS_<REGION>` (falling back to the global value, and
+   never uncapping on an unreadable one). The watch party ladder and camera
+   egress run on the home box only and are priced against it alone. With
+   `LIVEKIT_REGIONS` unset every room is on the home box and this flag changes
+   nothing. Off restores the cluster-wide sum.
+2. **A camera priced at the top layer for every viewer**
+   (`sfu_video_price_calibrated`). `participants x cameras x 1.5` assumes each
+   viewer receives the 720p layer of each camera. Cameras publish a ladder
+   (720p 1.5, 360p 0.4, 180p 0.16 Mbit/s) and every client runs `adaptiveStream`
+   and `dynacast`: a viewer receives the smallest layer that covers the tile it
+   draws, and the stage draws one tile per publisher. One camera is the whole
+   stage (top layer, 1.5); from the second on it is a grid whose tiles a 360p
+   layer covers (0.4; 180p on a phone). So in a room of 20 or fewer a room of `c`
+   cameras costs each participant `1.5 + (c - 1) x 0.4`. A grid camera at 0.4 is
+   also consistent with the packet cost above (about 75 packets a second at
+   roughly 670 bytes). Shares, rooms above 20 and any room with one camera are
+   priced exactly as before, so the 500-viewer figure (500 x 1.5 = 750 nominal
+   against 880 to 935 real) does not move; `promotion.test.ts` pins it. Off is
+   the flat 1.5 each.
+
+Example, six people and four cameras: flat 36 Mbit/s, calibrated 6 x 2.7 = 16.2.
+A synthetic night shaped like the SFU's own count (37 rooms, 114 people, cameras
+in most rooms, a share in six) goes from 474 to 305. The invented shape is a
+unit test, not a reconstruction: the log lines of that night do not carry the
+camera counts.
+
+**Not in this change, and what is missing.** The API cannot read LiveKit's own
+bandwidth (`ListRooms` has rooms and participants, no bytes), so there is no
+estimated-versus-measured gauge on `/api/admin/metrics` yet. Until there is,
+recalibrate by comparing `voice.videoAdmissionRefused` (`loadMbps`, `region`,
+`roomsOnBox`, `peopleOnBox`) with `sum(rate(livekit_packet_bytes[5m]))` on the
+same box. The roster showed more people than `livekit_participant_total` that
+night (about 130 to 190 against 79 to 114); mesh rooms are priced at zero and
+orphans are held for 90 s only, and no stale-seat source was found in the code,
+so the first thing to read next time is `peopleOnBox` against the SFU's own
+participant count.
+
 ## 2. Production topology and the recommended configuration
 
 | piece | today |

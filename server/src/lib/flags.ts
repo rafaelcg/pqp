@@ -198,6 +198,22 @@ export const FEATURE_FLAGS = {
     codeDefault: true,
     perServer: false,
   },
+  sfu_video_budget_per_box: {
+    description:
+      "O orçamento de vídeo do SFU vale por servidor de mídia: só as salas da mesma região somam, e cada região tem o seu teto (desligado: soma o cluster inteiro contra um número só).",
+    env: "SFU_VIDEO_BUDGET_PER_BOX",
+    parseEnv: onUnlessOff,
+    codeDefault: true,
+    perServer: false,
+  },
+  sfu_video_price_calibrated: {
+    description:
+      "Preço das câmeras em sala comum pela camada que cada quadro pede de verdade: a primeira câmera custa 1,5 Mbit/s, as outras 0,4 (desligado: 1,5 Mbit/s cada, como antes).",
+    env: "SFU_VIDEO_PRICE_CALIBRATED",
+    parseEnv: onUnlessOff,
+    codeDefault: true,
+    perServer: false,
+  },
   voice_mesh_resume_requires_cap: {
     description:
       "Só segurar assento mesh por 90 s para quem declarou mesh-resume.",

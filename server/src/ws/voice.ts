@@ -174,10 +174,18 @@ import {
   decidePromotion,
   decideVideoAdmission,
   estimateSfuLoadMbps,
-  promotionBudgetMbps,
+  roomsOnBox,
   promotionRoomSize,
   type SfuRoomLoad,
 } from "../voice/promotion.js";
+import {
+  boxBudgetMbps,
+  boxOfRegion,
+  boxScopeFor,
+  homeBoxId,
+  perBoxBudgetOn,
+  priceOptions,
+} from "../voice/box-budget.js";
 import { readSfuStatsForRegion } from "../voice/sfu-stats.js";
 import {
   SFU_REGION_CAP,
@@ -3464,9 +3472,18 @@ setLiveHlsChangeListener((channelId, reason) => {
 // The HLS ladder and the promotion guard price the same media box. This is
 // what lets a rung be refused because of the cameras already on it, rather
 // than each side spending the box independently.
-setLiveHlsSfuLoadReader(async () =>
-  estimateSfuLoadMbps(await readRoomLoads()),
-);
+setLiveHlsSfuLoadReader(async () => {
+  const rooms = await readRoomLoads();
+  // The ladder and the camera egress only ever run on the HOME box, so with
+  // the per-box budget on they are priced against the rooms that live there
+  // and against the home box's own ceiling (`homeBoxBudgetMbps`).
+  return estimateSfuLoadMbps(
+    perBoxBudgetOn()
+      ? roomsOnBox(rooms, { region: homeBoxId(), home: homeBoxId() })
+      : rooms,
+    priceOptions(),
+  );
+});
 
 /**
  * IS THIS PERSON STILL THE PRESENTER, asked by the media path at the moment
@@ -11937,6 +11954,11 @@ async function readRoomLoads(): Promise<SfuRoomLoad[]> {
           participants: room.peers.length,
           cameraPublishers: publishing.cameras,
           screenPublishers: publishing.screens,
+          // This process's own pin wins over the row (it is what it handed
+          // tokens for); unknown, removed and null regions all read as home.
+          region: boxOfRegion(pinnedRoomRegion(room.channelId) ?? room.region),
+          watchParty:
+            room.watchParty || getRoomPeers(room.channelId).some((p) => p.watchParty),
         };
       });
     } catch (error) {
@@ -11959,10 +11981,15 @@ async function readRoomLoads(): Promise<SfuRoomLoad[]> {
         participants: 0,
         cameraPublishers: 0,
         screenPublishers: 0,
+        region: boxOfRegion(pinnedRoomRegion(peer.voiceChannelId)),
+        watchParty: false,
       };
       byRoom.set(peer.voiceChannelId, room);
     }
     room.participants += 1;
+    if (peer.watchParty) {
+      room.watchParty = true;
+    }
     if (peer.cameraStreamId) {
       room.cameraPublishers += 1;
     }
@@ -12000,7 +12027,6 @@ async function admitVideoOnSfu(
   reason: VoicePromotionReason,
   userId: string,
 ): Promise<boolean> {
-  const budgetMbps = promotionBudgetMbps();
   let rooms: SfuRoomLoad[];
   try {
     rooms = await readRoomLoads();
@@ -12014,10 +12040,15 @@ async function admitVideoOnSfu(
   }
   const seated = getRoomPeers(voiceChannelId);
   const known = rooms.find((room) => room.channelId === voiceChannelId);
+  // The box this room is on: this process's pin, else the row, else home.
+  const region = boxOfRegion(pinnedRoomRegion(voiceChannelId) ?? known?.region);
+  const budgetMbps = boxBudgetMbps(region);
   const candidate = withOneMore(
     {
       channelId: voiceChannelId,
       transport: "livekit",
+      region,
+      watchParty: known?.watchParty || seated.some((p) => p.watchParty),
       participants: Math.max(known?.participants ?? 0, seated.length, 1),
       cameraPublishers: Math.max(
         known?.cameraPublishers ?? 0,
@@ -12030,7 +12061,13 @@ async function admitVideoOnSfu(
     },
     reason,
   );
-  const verdict = decideVideoAdmission({ rooms, room: candidate, budgetMbps });
+  const verdict = decideVideoAdmission({
+    rooms,
+    room: candidate,
+    budgetMbps,
+    scope: boxScopeFor(region),
+    price: priceOptions(),
+  });
   if (!verdict.admit) {
     // The counter that proves the mechanism runs. Without it a budget that is
     // wrong looks exactly like a room where nobody wanted their camera on.
@@ -12044,6 +12081,12 @@ async function admitVideoOnSfu(
       roomSize: candidate.participants,
       cameraPublishers: candidate.cameraPublishers,
       screenPublishers: candidate.screenPublishers,
+      // Which box, and how crowded it was (counts only): the next refusal
+      // says whether it was one full box or the whole cluster summed.
+      region,
+      roomsOnBox: verdict.roomsOnBox,
+      peopleOnBox: verdict.peopleOnBox,
+      perBox: perBoxBudgetOn(),
     });
   }
   return verdict.admit;
@@ -12172,7 +12215,7 @@ async function promoteRoomPastMeshCap(
       refusal: "conversation",
       loadMbps: 0,
       addedMbps: 0,
-      budgetMbps: promotionBudgetMbps(),
+      budgetMbps: boxBudgetMbps(pinnedRoomRegion(voiceChannelId)),
       roomSize: getRoomPeers(voiceChannelId).length,
       sfuReachable: null,
     });
@@ -12197,10 +12240,10 @@ async function attemptPromotion(
   userId: string,
 ): Promise<boolean> {
   const seated = getRoomPeers(voiceChannelId);
-  const budgetMbps = promotionBudgetMbps();
   // The box this room would move onto: its own region's, when it has one.
-  // The load budget below still prices every room on every box together,
-  // which over-counts for a remote room and so errs towards refusing.
+  // The load budget below prices that box alone (runtime flag
+  // `sfu_video_budget_per_box`; off is every room on every box together,
+  // which over-counts for a remote room and so errs towards refusing).
   const [stats, rooms] = await Promise.all([
     readSfuStatsForRegion(pinnedRoomRegion(voiceChannelId)).catch(() => null),
     readRoomLoads(),
@@ -12217,10 +12260,14 @@ async function attemptPromotion(
   // nobody turned on would refuse the promotion of a big, silent call for
   // load it is not about to create.
   const known = rooms.find((room) => room.channelId === voiceChannelId);
+  const region = boxOfRegion(pinnedRoomRegion(voiceChannelId) ?? known?.region);
+  const budgetMbps = boxBudgetMbps(region);
   const candidate = withOneMore(
     {
       channelId: voiceChannelId,
       transport: "mesh",
+      region,
+      watchParty: known?.watchParty || seated.some((p) => p.watchParty),
       participants: Math.max(known?.participants ?? 0, seated.length, 1),
       cameraPublishers: Math.max(
         known?.cameraPublishers ?? 0,
@@ -12239,6 +12286,8 @@ async function attemptPromotion(
     rooms,
     room: candidate,
     budgetMbps,
+    scope: boxScopeFor(region),
+    price: priceOptions(),
   });
   if (!verdict.promote) {
     logEvent("voice.transportPromotionRefused", {
@@ -12251,6 +12300,9 @@ async function attemptPromotion(
       budgetMbps: verdict.budgetMbps,
       roomSize: seated.length,
       sfuReachable: stats?.reachable ?? null,
+      region,
+      roomsOnBox: verdict.roomsOnBox,
+      peopleOnBox: verdict.peopleOnBox,
     });
     return false;
   }
@@ -12296,6 +12348,9 @@ async function attemptPromotion(
         loadMbps: Math.round(verdict.loadMbps),
         addedMbps: Math.round(verdict.addedMbps),
         budgetMbps: verdict.budgetMbps,
+        region,
+        roomsOnBox: verdict.roomsOnBox,
+        peopleOnBox: verdict.peopleOnBox,
       });
     }
     return true;
@@ -12309,6 +12364,9 @@ async function attemptPromotion(
     loadMbps: Math.round(verdict.loadMbps),
     addedMbps: Math.round(verdict.addedMbps),
     budgetMbps: verdict.budgetMbps,
+    region,
+    roomsOnBox: verdict.roomsOnBox,
+    peopleOnBox: verdict.peopleOnBox,
   });
   return true;
 }
