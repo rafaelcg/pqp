@@ -1,3 +1,4 @@
+import { useContext } from "react";
 import { Hand, X } from "lucide-react";
 import {
   RAISED_HAND_LIST_LIMIT,
@@ -6,6 +7,7 @@ import {
 } from "@pqp/shared";
 import { Tooltip } from "@/components/ui/tooltip";
 import { AudienceAllowButton } from "@/components/voice/audience-mode";
+import { HandBadgeActionsContext } from "@/components/voice/hand-position-badge";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -62,12 +64,27 @@ export function RaisedHandQueue({
    * compact line the first hand gets it, because that line is what most
    * calls show. Null for everybody else.
    */
-  audience?: { busy: boolean; onAllow: (userId: string) => void } | null;
+  audience?: {
+    busy: boolean;
+    onAllow: (userId: string) => void;
+    /**
+     * Already let in. A hand stays up while its owner talks (sticky hands),
+     * so a person on this list is still in the queue and must not be offered
+     * the same "Liberar o microfone" again.
+     */
+    speakerUserIds?: readonly string[];
+  } | null;
   /** One line for the collapsed call strip instead of a panel. */
   compact?: boolean;
   className?: string;
 }) {
   const { t } = useTranslation();
+  // Sticky hands (`raised_hand_sticky`): the stage offers to lower your own
+  // hand from your row, and a moderator's "Baixar todas". Absent with the
+  // flag off, and in a test that mounts the queue alone.
+  const actions = useContext(HandBadgeActionsContext);
+  const lowerSelf = actions?.lowerSelf;
+  const lowerAll = actions?.lowerAll;
   const queue = raisedHandQueue(participants);
   if (queue.length === 0) {
     return null;
@@ -85,7 +102,11 @@ export function RaisedHandQueue({
         : null;
 
   if (compact) {
-    const showAllow = Boolean(audience && queue[0]!.userId !== selfUserId);
+    const showAllow = Boolean(
+      audience &&
+        queue[0]!.userId !== selfUserId &&
+        !audience.speakerUserIds?.includes(queue[0]!.userId),
+    );
     // One column per piece, so a narrow strip can take the line down to its
     // fixed parts (the hand, the allow button, your own place) and no
     // further: the first name and the count give way, those never do.
@@ -94,6 +115,7 @@ export function RaisedHandQueue({
       "minmax(0,max-content)",
       showAllow && "auto",
       queue.length > 1 && "minmax(0,max-content)",
+      lowerAll && "auto",
       selfLine && "auto",
     ]
       .filter(Boolean)
@@ -131,15 +153,43 @@ export function RaisedHandQueue({
             {t("voice.hand.more", { count: queue.length - 1 })}
           </span>
         )}
-        {selfLine && (
-          <span
-            aria-live="polite"
-            data-hand-position={selfIndex + 1}
-            className="whitespace-nowrap font-medium text-signal"
-          >
-            {selfLine}
-          </span>
+        {lowerAll && (
+          <Tooltip label={t("voice.hand.lowerAll")}>
+            <button
+              type="button"
+              aria-label={t("voice.hand.lowerAll")}
+              data-hand-lower-all=""
+              className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-paper-muted hover:bg-ink-4 hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+              onClick={lowerAll}
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </Tooltip>
         )}
+        {selfLine &&
+          (lowerSelf ? (
+            <Tooltip label={t("voice.hand.lower")}>
+              <button
+                type="button"
+                aria-live="polite"
+                aria-label={`${selfLine}. ${t("voice.hand.lower")}`}
+                data-hand-position={selfIndex + 1}
+                data-hand-lower-self=""
+                className="whitespace-nowrap rounded font-medium text-signal hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+                onClick={lowerSelf}
+              >
+                {selfLine}
+              </button>
+            </Tooltip>
+          ) : (
+            <span
+              aria-live="polite"
+              data-hand-position={selfIndex + 1}
+              className="whitespace-nowrap font-medium text-signal"
+            >
+              {selfLine}
+            </span>
+          ))}
       </p>
     );
   }
@@ -152,10 +202,20 @@ export function RaisedHandQueue({
         className,
       )}
     >
-      <p className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-paper-muted">
+      <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-paper-muted">
         <Hand className="h-3 w-3 text-signal" aria-hidden="true" />
-        {t("voice.hand.queue")}
-      </p>
+        <p className="min-w-0 flex-1 truncate">{t("voice.hand.queue")}</p>
+        {lowerAll && (
+          <button
+            type="button"
+            data-hand-lower-all=""
+            className="shrink-0 rounded px-1 py-0.5 font-medium normal-case tracking-normal text-paper-muted hover:bg-ink-4 hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+            onClick={lowerAll}
+          >
+            {t("voice.hand.lowerAll")}
+          </button>
+        )}
+      </div>
       <ol className="mt-1 space-y-0.5">
         {shown.map((person, index) => (
           <li
@@ -172,13 +232,29 @@ export function RaisedHandQueue({
               {index + 1}
             </span>
             <span className="min-w-0 flex-1 truncate">{person.displayName}</span>
-            {audience && person.userId !== selfUserId && (
+            {audience &&
+              person.userId !== selfUserId &&
+              !audience.speakerUserIds?.includes(person.userId) && (
               <AudienceAllowButton
                 name={person.displayName}
                 userId={person.userId}
                 busy={audience.busy}
                 onAllow={audience.onAllow}
               />
+            )}
+            {lowerSelf && person.userId === selfUserId && (
+              <Tooltip label={t("voice.hand.lower")}>
+                <button
+                  type="button"
+                  aria-label={t("voice.hand.lower")}
+                  data-hand-lower={person.userId}
+                  data-hand-lower-self=""
+                  className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-paper-muted hover:bg-ink-4 hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+                  onClick={lowerSelf}
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </Tooltip>
             )}
             {canLowerHands && onLowerHand && person.userId !== selfUserId && (
               <Tooltip

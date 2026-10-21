@@ -86,7 +86,10 @@ with its outrank check).
 An invitation is keyed on the person, like a raised hand: it survives a socket
 blip and a refresh inside the resume window, and it is dropped when the person
 holds no seat in the room any more, or when audience mode is turned off.
-Granting speak also lowers that person's hand (they have been called on).
+Granting speak used to lower that person's hand (they have been called on). With
+sticky hands (`raised_hand_sticky`, on by default, `docs/RAISED_HANDS.md`) it no
+longer does: the hand keeps its place in the queue until the person or the host
+lowers it. Off, the old behaviour.
 
 No outrank check on the toggle or on an invitation, deliberately. Neither is a
 sanction: stage holders are never affected, so the only people it touches are

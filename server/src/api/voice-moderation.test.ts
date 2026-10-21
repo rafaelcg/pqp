@@ -699,6 +699,120 @@ describeDb("voice moderation routes", () => {
     expect(res.status).toBe(200);
   });
 
+  // ------------------------------------------------------ lower ALL hands
+  //
+  // `raised_hand_sticky`: a queue that stays up until somebody takes it down
+  // needs a way to clear it. Pinned with the flag as production has it (on by
+  // default, no row), and with the environment switch the dashboard's flip is
+  // the same as.
+
+  function lowerAllCall(channelId: string, as = owner) {
+    return call<{ error?: string; lowered?: number; skipped?: number }>(
+      as,
+      "POST",
+      `/api/channels/${channelId}/voice-lower-hands`,
+    );
+  }
+
+  it("lowers every hand in the room in one call, the moderator's own included", async () => {
+    const { voiceChannelId } = await makeServer();
+    const ownerSeat = await joinVoice(owner.id, voiceChannelId);
+    const memberSeat = await joinVoice(member.id, voiceChannelId);
+    await raiseHand(memberSeat.socket, member.id);
+    await raiseHand(ownerSeat.socket, owner.id);
+    expect(
+      rosterEntry(ownerSeat.sent, voiceChannelId, member.id).handRaisedAt,
+    ).toEqual(expect.any(Number));
+
+    const res = await lowerAllCall(voiceChannelId);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true, lowered: 2, skipped: 0 });
+    for (const seat of [ownerSeat, memberSeat]) {
+      expect(
+        rosterEntry(seat.sent, voiceChannelId, member.id).handRaisedAt,
+      ).toBeNull();
+      expect(
+        rosterEntry(seat.sent, voiceChannelId, owner.id).handRaisedAt,
+      ).toBeNull();
+    }
+  });
+
+  it("is idempotent on a room with no hands up", async () => {
+    const { voiceChannelId } = await makeServer();
+    await joinVoice(member.id, voiceChannelId);
+    const res = await lowerAllCall(voiceChannelId);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ lowered: 0, skipped: 0 });
+  });
+
+  it("refuses a plain member, and changes nothing", async () => {
+    const { voiceChannelId } = await makeServer();
+    const ownerSeat = await joinVoice(owner.id, voiceChannelId);
+    await raiseHand(ownerSeat.socket, owner.id);
+    const res = await lowerAllCall(voiceChannelId, member);
+    expect(res.status).toBe(403);
+    expect(
+      rosterEntry(ownerSeat.sent, voiceChannelId, owner.id).handRaisedAt,
+    ).toEqual(expect.any(Number));
+  });
+
+  it("skips a hand the moderator does not outrank instead of refusing the lot", async () => {
+    const { serverId, voiceChannelId } = await makeServer();
+    await getPool().query(
+      `UPDATE server_members SET role = 'admin' WHERE server_id = $1 AND user_id = $2`,
+      [serverId, member.id],
+    );
+    const third = await upsertUser({
+      clerkId: "clerk_vmod_third",
+      displayName: "Third",
+      avatarUrl: null,
+    });
+    await getPool().query(
+      `INSERT INTO server_members (server_id, user_id, role) VALUES ($1, $2, 'member')`,
+      [serverId, third.id],
+    );
+    const ownerSeat = await joinVoice(owner.id, voiceChannelId);
+    const thirdSeat = await joinVoice(third.id, voiceChannelId);
+    await raiseHand(ownerSeat.socket, owner.id);
+    await raiseHand(thirdSeat.socket, third.id);
+
+    const res = await lowerAllCall(voiceChannelId, member);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ lowered: 1, skipped: 1 });
+    expect(
+      rosterEntry(thirdSeat.sent, voiceChannelId, third.id).handRaisedAt,
+    ).toBeNull();
+    expect(
+      rosterEntry(thirdSeat.sent, voiceChannelId, owner.id).handRaisedAt,
+    ).toEqual(expect.any(Number));
+  });
+
+  it("404s on a text channel", async () => {
+    const created = await call<{
+      channels: Array<{ id: string; type: string }>;
+    }>(owner, "POST", "/api/servers", { name: "Hands text" });
+    const text = created.body.channels.find((c) => c.type === "text")!;
+    expect((await lowerAllCall(text.id)).status).toBe(404);
+  });
+
+  it("is refused with the flag off, and the single lower still works", async () => {
+    const { serverId, voiceChannelId } = await makeServer();
+    const memberSeat = await joinVoice(member.id, voiceChannelId);
+    const ownerSeat = await joinVoice(owner.id, voiceChannelId);
+    await raiseHand(memberSeat.socket, member.id);
+    process.env.RAISED_HAND_STICKY = "off";
+    try {
+      const res = await lowerAllCall(voiceChannelId);
+      expect(res.status).toBe(403);
+      expect(
+        rosterEntry(ownerSeat.sent, voiceChannelId, member.id).handRaisedAt,
+      ).toEqual(expect.any(Number));
+      expect((await lowerHandCall(serverId, member.id)).status).toBe(200);
+    } finally {
+      delete process.env.RAISED_HAND_STICKY;
+    }
+  });
+
   it("reports an SFU that refuses the mute instead of pretending", async () => {
     const { serverId, voiceChannelId } = await makeServer();
     await joinVoice(member.id, voiceChannelId);

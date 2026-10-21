@@ -1543,6 +1543,7 @@
   "voice.hand.next": "Você é o próximo",
   "voice.hand.more": "+{count} na fila",
   "voice.hand.lowerFor": "Abaixar a mão de {name}",
+  "voice.hand.lowerAll": "Abaixar todas as mãos",
   "voice.hand.raised": "Mão levantada",
   "voice.hand.raisedAt": "Mão levantada, {position}º na fila",
   "voice.hand.ask": "Pedir pra falar",

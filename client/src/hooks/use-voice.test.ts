@@ -4949,6 +4949,58 @@ describe("raising a hand", () => {
     }
   });
 
+  // A moderator's "Baixar todas" is a burst of deltas, each about one
+  // person. The stored occupancy carries our own hand overlaid with what we
+  // believe, and a delta is merged onto that stored copy, so the SECOND delta
+  // used to hand our stale belief back as if the room had said it and the hand
+  // came back up on our screen only. Found driving three real browsers.
+  it("keeps a hand down that a moderator lowered, when the next roster delta is about somebody else", async () => {
+    const { voice } = await connected();
+    const ME = "00000000-0000-4000-8000-0000000000cc";
+    const OTHER = "00000000-0000-4000-8000-0000000000ee";
+    const entry = (peerId: string, userId: string, handRaisedAt: number | null) => ({
+      peerId,
+      userId,
+      displayName: userId,
+      avatarUrl: null,
+      sharingScreen: false,
+      muted: false,
+      deafened: false,
+      serverMuted: false,
+      handRaisedAt,
+    });
+    const roster = (seq: number, size: number, extra: object) =>
+      ({
+        type: "voice-roster-delta",
+        voiceChannelId: CHANNEL,
+        transport: "mesh",
+        seq,
+        size,
+        ...extra,
+      }) as unknown as VoiceSignalingMessage;
+
+    voice.toggleRaisedHand();
+    voice.handleSignaling({
+      type: "voice-roster",
+      voiceChannelId: CHANNEL,
+      seq: 1,
+      participants: [entry(PEER, ME, 1_000), entry("other", OTHER, 2_000)],
+    } as unknown as VoiceSignalingMessage);
+    expect(voice.getState().handRaisedAt).toBe(1_000);
+
+    // The moderator lowers ours, then theirs.
+    voice.handleSignaling(
+      roster(2, 2, { updated: [entry(PEER, ME, null)] }),
+    );
+    expect(voice.getState().handRaisedAt).toBeNull();
+    voice.handleSignaling(
+      roster(3, 2, { updated: [entry("other", OTHER, null)] }),
+    );
+    expect(voice.getState().handRaisedAt).toBeNull();
+    const mine = voice.getState().occupancy[CHANNEL]!.find((p) => p.peerId === PEER);
+    expect(mine?.handRaisedAt ?? null).toBeNull();
+  });
+
   it("leaves the queue behind when the call ends", async () => {
     const { voice } = await connected();
     voice.toggleRaisedHand();

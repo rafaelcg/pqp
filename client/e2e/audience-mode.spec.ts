@@ -265,7 +265,10 @@ test("a host turns audience mode on, the audience is told why, a hand is let in 
     const albertoMic = micButton(alberto.page);
     await expect(albertoMic).toBeEnabled();
     await expect(albertoMic).toHaveAttribute("aria-pressed", "true");
-    await expect(hand).toHaveAttribute("aria-pressed", "false");
+    // Sticky hands (`raised_hand_sticky`, on by default): being let speak does
+    // not take the hand down. It is his place in the queue until he or the
+    // host lowers it (docs/RAISED_HANDS.md).
+    await expect(hand).toHaveAttribute("aria-pressed", "true");
     await expect(dock(bia.page).locator('[data-speak-locked="audience"]')).toBeVisible();
     await albertoMic.click();
     await expect(albertoMic).toHaveAttribute("aria-pressed", "false");

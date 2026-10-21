@@ -225,6 +225,18 @@ included (the pipeline is swapped in place, no rejoin). It exists for what
 two-hour call: turn it off on reports of choppy audio or hot phones. Only
 `false` / `0` / `off` turn the variable off.
 
+Born as a flag (no old reader): `RAISED_HAND_STICKY` (`raised_hand_sticky`,
+default **on**, global), a raised hand that stays up until the person, a
+moderator or leaving takes it down (`docs/RAISED_HANDS.md` §"What lowers a
+hand"). The server reads it where it lowers (audience mode's "Liberar o
+microfone" no longer lowers the hand; the lower-all route
+`POST /api/channels/:id/voice-lower-hands` answers 403 off) and serves it as
+`raisedHandSticky` on `GET /api/voice/config`, which the call stage reads to
+draw the new controls (your own number on a tile or in the queue lowers your
+hand, "Baixar todas" for a moderator). Off restores the previous behaviour
+exactly; talking never lowers a hand either way (that stopped in #1427, not
+behind this flag). Only `false` / `0` / `off` turn the variable off.
+
 Born as a flag (no old reader): `WATCH_CAMERA_SYNC` (`watch_camera_sync`,
 default off, **per server**, client-only), the presenter's camera held to the
 film's wall clock in a viewer's browser (`client/src/lib/camera-sync.ts`),

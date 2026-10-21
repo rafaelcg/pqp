@@ -544,6 +544,21 @@ export const FEATURE_FLAGS = {
     perServer: false,
     clientVia: "GET /api/voice/config (audioSelfHeal)",
   },
+  raised_hand_sticky: {
+    description:
+      "Mão levantada que fica: só quem levantou, quem modera ou sair da call abaixa a mão. Liberar o microfone na plateia não abaixa mais, clicar na própria mão abaixa, e quem modera ganha \"Baixar todas\" (desligado: liberar o microfone na plateia abaixa a mão, sem clique na mão e sem \"Baixar todas\").",
+    env: "RAISED_HAND_STICKY",
+    parseEnv: onUnlessOff,
+    // On: Rafael's call, after a table that runs RPG initiative over calls
+    // asked for the hand to be a place in the turn order that only a person
+    // or a moderator takes down. The kill switch restores the audience-mode
+    // side effect (allowing somebody to speak lowers their hand) and hides
+    // the new controls. Global: the server's lowering rules read it with no
+    // server in hand on some paths, and a DM call has no server to override.
+    codeDefault: true,
+    perServer: false,
+    clientVia: "GET /api/voice/config (raisedHandSticky)",
+  },
   clean_voice_default: {
     description:
       "Voz limpa como padrão do microfone: quem nunca escolheu a redução de ruído neste aparelho começa na Voz limpa (RNNoise), se o navegador aguenta e o aparelho tem 4 núcleos ou mais; quem já escolheu um modo fica onde está (desligado: volta pro filtro do navegador na hora, até no meio da call).",

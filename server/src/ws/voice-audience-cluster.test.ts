@@ -433,6 +433,65 @@ describeDb("audience mode across two instances", () => {
     expect(last(memberOnB, "voice-speak-changed")).toMatchObject({ canSpeak: true, canStream: false });
   });
 
+  // Sticky hands, with the registry on (production's shape): a hand raised on
+  // B is a ROW, and letting that person speak from A must leave the row alone
+  // when `raised_hand_sticky` is on, and take it with the flag off.
+  async function handRows(channel: string, userId: string) {
+    const rows = await pools[0]!
+      .getPool()
+      .query(
+        `SELECT 1 FROM voice_raised_hands WHERE channel_id = $1 AND user_id = $2`,
+        [channel, userId],
+      );
+    return rows.rowCount;
+  }
+
+  it("letting a hand-raiser on B speak, from A, leaves their hand up (sticky, on by default)", async () => {
+    const { channel, host, member, a, b, memberOnB } = await stage();
+    await a.voice.setVoiceAudienceMode(channel, true, host);
+    await b.voice.handleVoiceMessage(
+      { socket: memberOnB.socket, user: asUser(member) },
+      { type: "set-raised-hand", raised: true },
+    );
+    await settle();
+    expect(await handRows(channel, member)).toBe(1);
+    const at = b.voice.voiceUserHandRaisedAt(channel, member);
+    expect(at).not.toBeNull();
+
+    await a.voice.setVoiceAudienceSpeaker(channel, member, true, host);
+    await settle();
+    expect(tryToSpeak(memberOnB, channel)).toBe(true);
+    expect(await handRows(channel, member)).toBe(1);
+    expect(b.voice.voiceUserHandRaisedAt(channel, member)).toBe(at);
+    // Silenciar does not touch it either.
+    await a.voice.setVoiceAudienceSpeaker(channel, member, false, host);
+    await settle();
+    expect(await handRows(channel, member)).toBe(1);
+  });
+
+  it("with the flag off the same grant lowers the hand on the row, as it always did", async () => {
+    process.env.RAISED_HAND_STICKY = "off";
+    try {
+      const { channel, host, member, a, b, memberOnB } = await stage();
+      await a.voice.setVoiceAudienceMode(channel, true, host);
+      await b.voice.handleVoiceMessage(
+        { socket: memberOnB.socket, user: asUser(member) },
+        { type: "set-raised-hand", raised: true },
+      );
+      await settle();
+      expect(await handRows(channel, member)).toBe(1);
+      await a.voice.setVoiceAudienceSpeaker(channel, member, true, host);
+      await settle();
+      expect(await handRows(channel, member)).toBe(0);
+      await waitFor(
+        () => b.voice.voiceUserHandRaisedAt(channel, member) === null,
+        "B to see the hand down",
+      );
+    } finally {
+      delete process.env.RAISED_HAND_STICKY;
+    }
+  });
+
   it("a resume onto the other machine comes back locked with the reason", async () => {
     const { channel, host, member, a, b, memberOnB } = await stage();
     b.voice.removeVoicePeerBySocket(memberOnB.socket);
