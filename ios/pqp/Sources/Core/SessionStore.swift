@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import UIKit
 import ClerkKit
 
 enum SessionPhase: Equatable, Sendable {
@@ -361,6 +362,7 @@ final class SessionStore {
     /// tokens. A session the API rejects is purged here so the sheet that
     /// follows starts clean.
     func adoptExistingSession() async -> Bool {
+        await settleTeardown()
         guard authMode == .clerk, hasClerkSession else { return false }
         do {
             let user = try await withDeadline(seconds: 12) {
@@ -384,6 +386,7 @@ final class SessionStore {
     /// Called when onboarding completes. Separate from `restore` because it
     /// must surface a failure — here the user *did* just ask to sign in.
     func signIn() async {
+        await settleTeardown()
         do {
             let user = try await api.currentUser()
             lastError = nil
@@ -841,9 +844,32 @@ final class SessionStore {
 
     private enum EndReason { case userRequested, expired }
 
+    /// The teardown in progress, if any. The sign-in screen is already showing
+    /// while its slow tail runs (the polite Clerk call, the disk), so a person
+    /// who signs in straight away must not have the NEW session picked up by the
+    /// OLD teardown: `adoptExistingSession` and `signIn` wait here first.
+    @ObservationIgnored private var teardown: Task<Void, Never>?
+
+    func settleTeardown() async {
+        await teardown?.value
+    }
+
+    /// One teardown at a time: a second caller (Sign out tapped while an expiry
+    /// is still finishing) waits for the first instead of running a second.
+    private func endSession(reason: EndReason) async {
+        if let running = teardown {
+            await running.value
+            return
+        }
+        let task = Task { await self.performEndSession(reason: reason) }
+        teardown = task
+        await task.value
+        teardown = nil
+    }
+
     /// Everything a sign-out does, in an order that cannot wedge: the screen
     /// changes first and every network step after it is optional and bounded.
-    private func endSession(reason: EndReason) async {
+    private func performEndSession(reason: EndReason) async {
         endingSession = true
         defer { endingSession = false }
         // Calls in the air belong to the account that is leaving, and a late
@@ -905,6 +931,16 @@ final class SessionStore {
             }
         }
         deviceToken = nil
+        // The server row cannot be removed without a session (the route is
+        // scoped to its caller). What CAN be done is to stop this install
+        // receiving anything for it: iOS invalidates the device token, so the
+        // previous account's pushes stop arriving whether or not the server
+        // still holds the row. The next sign-in registers again
+        // (`setUpNotifications` runs on `.ready`), and the server moves a
+        // token's row to whoever registers it.
+        if reason == .expired {
+            UIApplication.shared.unregisterForRemoteNotifications()
+        }
 
         if authMode == .clerk {
             switch reason {

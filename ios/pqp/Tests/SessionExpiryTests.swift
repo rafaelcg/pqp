@@ -123,6 +123,31 @@ final class SessionExpiryTests: XCTestCase {
         XCTAssertEqual(count, 0)
     }
 
+    func testARequestStillReadingItsTokenWhenTheSessionEndsNeverGoesOut() async {
+        // Farol: the epoch must be read before the first suspension, or a
+        // request that began under the old session resumes under the new one.
+        StubAPI.statusFor = { _, _ in 401 }
+        let api = APIClient(
+            tokenProvider: StubToken(tokenDelay: .milliseconds(300)),
+            protocolClasses: [StubAPI.self]
+        )
+        let told = Counter()
+        await api.setUnauthorizedHandler { await told.bump() }
+
+        async let request: Result<EmptyResponse, any Error> = {
+            do { return .success(try await api.get("/api/late")) } catch { return .failure(error) }
+        }()
+        try? await Task.sleep(for: .milliseconds(100))
+        await api.cancelInFlight()
+        let outcome = await request
+
+        guard case .failure(let error) = outcome else { return XCTFail("the old request must not complete") }
+        XCTAssertTrue(error.isCancellation, "\(error)")
+        XCTAssertEqual(StubAPI.count(path: "/api/late"), 0, "it never reached the network")
+        let count = await told.value
+        XCTAssertEqual(count, 0)
+    }
+
     // MARK: - The handler
 
     @MainActor
@@ -243,7 +268,11 @@ final class SessionExpiryTests: XCTestCase {
 
 private struct StubToken: TokenProviding {
     var refresh: TokenRefresh = .token("stub-token")
-    func currentToken() async -> String? { "stub-token" }
+    var tokenDelay: Duration = .zero
+    func currentToken() async -> String? {
+        if tokenDelay > .zero { try? await Task.sleep(for: tokenDelay) }
+        return "stub-token"
+    }
     func refreshedToken() async -> TokenRefresh { refresh }
 }
 

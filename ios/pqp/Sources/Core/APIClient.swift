@@ -448,6 +448,10 @@ actor APIClient {
             throw APIError.transport("Bad URL for \(path)")
         }
 
+        // BEFORE the first suspension: a request that begins under one session
+        // and resumes after it ended is the old session's, and neither goes out
+        // nor gets to report a 401 against the next one.
+        let epoch = authEpoch
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -461,7 +465,7 @@ actor APIClient {
             request.setValue(idempotencyKey, forHTTPHeaderField: "Idempotency-Key")
         }
         request.httpBody = body
-        let epoch = authEpoch
+        guard epoch == authEpoch else { throw CancellationError() }
         // A caller cancelled while the token was being read. Clerk answers that
         // with no token at all, and sending the request anyway would come back
         // 401 and read as "Your session expired" to somebody who only pulled
@@ -1244,11 +1248,12 @@ extension APIClient {
     /// 47s." is the difference between a user who waits and one who taps the
     /// button forever.
     private func rawGet(_ path: String) async throws -> Data {
+        let epoch = authEpoch
         var request = URLRequest(url: backend.apiBaseURL.appendingPathComponent(path))
         if let token = await tokenProvider.currentToken() {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
-        let epoch = authEpoch
+        guard epoch == authEpoch else { throw CancellationError() }
 
         let data: Data
         let response: URLResponse
@@ -1298,6 +1303,7 @@ extension APIClient {
             let servers: [BlockingOwnedServer]?
         }
 
+        let epoch = authEpoch
         var request = URLRequest(url: backend.apiBaseURL.appendingPathComponent("/api/me"))
         request.httpMethod = "DELETE"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -1305,7 +1311,7 @@ extension APIClient {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         request.httpBody = try Coding.encoder.encode(Body(confirm: confirm))
-        let epoch = authEpoch
+        guard epoch == authEpoch else { throw CancellationError() }
 
         let data: Data
         let response: URLResponse
