@@ -48,31 +48,29 @@ export function claimView(claim: Pick<Claim, "requires">, gates: ClaimGates): Cl
   }
 }
 
-/** "O que tu ganha com uma conta", in order. */
-export const ACCOUNT_CLAIMS: readonly Claim[] = [
+/**
+ * The one line under the landing's "Criar conta grátis": short phrases joined
+ * into a sentence ("Uma conta grátis adiciona {list}."). Only `shown` phrases
+ * go into it: a line this short has no room for "em breve".
+ */
+export const ACCOUNT_LINE_CLAIMS: readonly Claim[] = [
+  {
+    id: "call",
+    titleKey: "locadoraPage.account.adds.call",
+    bodyKey: "locadoraPage.account.adds.call",
+    requires: "live",
+  },
   {
     id: "saves",
-    titleKey: "locadoraPage.account.saves.title",
-    bodyKey: "locadoraPage.account.saves.body",
+    titleKey: "locadoraPage.account.adds.saves",
+    bodyKey: "locadoraPage.account.adds.saves",
     requires: "cloudSaves",
   },
   {
-    id: "call",
-    titleKey: "locadoraPage.account.call.title",
-    bodyKey: "locadoraPage.account.call.body",
-    requires: "live",
-  },
-  {
     id: "watch",
-    titleKey: "locadoraPage.account.watch.title",
-    bodyKey: "locadoraPage.account.watch.body",
+    titleKey: "locadoraPage.account.adds.watch",
+    bodyKey: "locadoraPage.account.adds.watch",
     requires: "share",
-  },
-  {
-    id: "chat",
-    titleKey: "locadoraPage.account.chat.title",
-    bodyKey: "locadoraPage.account.chat.body",
-    requires: "live",
   },
 ];
 

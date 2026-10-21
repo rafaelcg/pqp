@@ -129,6 +129,32 @@ describe("a guest frame host", () => {
     expect(await side.hello).not.toHaveProperty("guest");
   });
 
+  it("says pendingFile only when the page holds a cartridge, and a pick answers with it", async () => {
+    const held = new Uint8Array([9, 9]).buffer;
+    const host = new BridgeHost({
+      app: LOCADORA,
+      transport: createGuestTransport(),
+      users: guestUserDirectory(() => "x"),
+      locale: () => "en",
+      theme: new FakeTheme(),
+      appsOrigin: "http://localhost:5175",
+      guest: true,
+      pendingFile: true,
+      pickFile: async () => ({ kind: "picked", bytes: held, ext: ".sfc" }),
+      saveSync: null,
+      log: () => {},
+    });
+    hosts.push(host);
+    await host.start();
+    const channel = new MessageChannel();
+    const side = new AppSide(channel.port2);
+    host.attach(channel.port1);
+    expect(await side.hello).toMatchObject({ guest: true, pendingFile: true });
+    expect(await side.call({ type: "files.pickLocal" })).toMatchObject({ ok: true, type: "files.pickLocal", result: { ext: ".sfc" } });
+    const { app } = await guestRig();
+    expect(await app.hello).not.toHaveProperty("pendingFile");
+  });
+
   it("refuses account saves and the share without asking anybody", async () => {
     const fetchImpl = vi.fn(pngFetch());
     const { app } = await guestRig({ fetchImpl });

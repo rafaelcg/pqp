@@ -1,65 +1,62 @@
-import { ArrowLeft, ArrowRight, Check, ChevronDown, Clock, Play } from "lucide-react";
-import type { CSSProperties } from "react";
-import { Link } from "react-router-dom";
+import { ArrowLeft, ChevronDown, Gamepad2 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type DragEvent } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { AppsCta } from "@/components/apps-landing/apps-cta";
 import { AppsLandingGate } from "@/components/apps-landing/apps-landing-gate";
 import { AppsShell } from "@/components/apps-landing/apps-shell";
 import { Seo } from "@/components/marketing/seo";
 import { Button } from "@/components/ui/button";
 import { usePublicAppsConfig } from "@/hooks/use-apps-landing";
+import { readLocalFile } from "@/lib/apps/file-pick";
 import { appsDocsUrl, LOCADORA_LANDING_REF } from "@/lib/apps-landing";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
-import { ACCOUNT_CLAIMS, claimView } from "@/lib/locadora-claims";
-import { LOCADORA_GUEST_PATH } from "@/lib/locadora-guest";
+import { ACCOUNT_LINE_CLAIMS, claimView } from "@/lib/locadora-claims";
+import { holdCartridge, LOCADORA_GUEST_PATH } from "@/lib/locadora-guest";
 import { cn } from "@/lib/utils";
 
 /**
- * `/apps/locadora` (and the short link `/locadora`, canonicalised to it the way
- * `/claim` is to `/garanta`): what Locadora is, for somebody who has never
- * opened it. The approved launch copy (2026-10-21), in pt-BR, en and es.
+ * `/apps/locadora` (and the short link `/locadora`): the player's door, not a
+ * pitch. Rafael, 2026-10-21: "people want to play ASAP... we should just offer
+ * to botar a fita".
  *
- * NOTHING HERE CLAIMS MORE THAN THE CODE DOES. The hero's "sem cadastro pra
- * começar" and "Jogar agora" exist only while guest play is offered (the
- * public config's `guest`); without it the page says "dentro do pqp" and its
- * button opens pqp, as before. The account section is data
- * (`lib/locadora-claims.ts`): Saves na conta is "em breve" until
- * `locadora_saves_announced`, watching a friend play is not drawn at all until
- * the share is allowed, and the FAQ answers were checked against the code
- * (turbo is 1x to 10x, `turbo.ts`; four slots plus the autosave, `saves.ts`;
- * fullscreen on a double click, `hud.ts`; the sign-in line is the home page's
- * own). The legal line is under the buttons and again at the end.
+ * THE FIRST SCREEN IS ONE ACTION. The console with its slot, the cartridge
+ * above it, and one huge "Botar a fita". With guest play on (the public
+ * config's `guest`) the button opens the picker and the whole page is a drop
+ * target: the file is read here under Locadora's own rules (`readLocalFile`:
+ * its accept list and cap, bytes and an extension, never the name), held in
+ * memory (`holdCartridge`) and the cartridge goes into the console, then the
+ * guest player opens with it already in (`/locadora/jogar`, the frame's first
+ * pick answers with it). Nothing in between and nothing sent anywhere. With
+ * guest play off the same button is the sign-up.
  *
- * ART. Pixel art generated with Google Gemini (Nano Banana 2.1) from our own
- * prompts, credited in the footer: the neon sign, the CRT, the console and the
- * cartridge in the hero, the controllers and the rack below. No game's picture
- * anywhere: the TV shows our own colour bars, drawn in CSS. The first view is
- * the four hero sprites (about 100 KB together), everything below is lazy and
- * every image carries its size, so nothing shifts as it arrives.
+ * EVERYTHING ELSE IS FOOTER WEIGHT. The legal line under the button, one row
+ * of console names, one quiet "Criar conta grátis" with a single line of what
+ * an account adds (only claims whose gate is open, `ACCOUNT_LINE_CLAIMS`
+ * through `claimView`), and the FAQ folded away under "Perguntas".
+ *
+ * FAST. The first view is three sprites (the sign, the console and the
+ * cartridge, about 70 KB together) with their sizes set, nothing below the
+ * fold loads an image, and the motion (the cartridge lifting on hover or drag,
+ * sliding in when a file is chosen) is CSS that reduced motion turns off.
  */
-
-const H2 =
-  "text-balance font-display text-3xl font-bold leading-[1.1] tracking-tight text-text sm:text-4xl";
-
-function at(ms: number): CSSProperties {
-  return { "--d": ms } as CSSProperties;
-}
 
 const IMG = "/images/apps/";
 
-/** One card per console. Game Boy and Game Boy Color share the controller, the Color one tinted. */
-const CONSOLES = [
-  { id: "nes", label: "NES", art: "pad-nes.webp", width: 480, height: 358, tint: false },
-  { id: "snes", label: "SNES", art: "pad-snes.webp", width: 480, height: 321, tint: false },
-  { id: "gb", label: "Game Boy", art: "pad-gb.webp", width: 334, height: 480, tint: false },
-  { id: "gbc", label: "Game Boy Color", art: "pad-gb.webp", width: 334, height: 480, tint: true },
-  { id: "gba", label: "Game Boy Advance", art: "pad-gba.webp", width: 480, height: 339, tint: false },
-] as const;
+const CONSOLE_NAMES = ["NES", "SNES", "Game Boy", "Game Boy Color", "Game Boy Advance"] as const;
 
-const STEPS: { id: string; art: string; width: number; height: number; title: MessageKey; body: MessageKey }[] = [
-  { id: "1", art: "cart.webp", width: 240, height: 218, title: "locadoraPage.how.1.title", body: "locadoraPage.how.1.body" },
-  { id: "2", art: "pad-snes.webp", width: 480, height: 321, title: "locadoraPage.how.2.title", body: "locadoraPage.how.2.body" },
-  { id: "3", art: "rack.webp", width: 320, height: 320, title: "locadoraPage.how.3.title", body: "locadoraPage.how.3.body" },
-];
+/** How long the cartridge takes to slide in before the player opens (0 under reduced motion). */
+const INSERT_MS = 520;
+
+/** `hover`: the pointer or the keyboard is on the button. `drag`: a file is being carried over the page. */
+type DoorState = "idle" | "hover" | "drag" | "inserting";
+
+function prefersReducedMotion(): boolean {
+  try {
+    return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  } catch {
+    return false;
+  }
+}
 
 export function LocadoraPage() {
   return (
@@ -70,13 +67,89 @@ export function LocadoraPage() {
 }
 
 export function LocadoraPageBody() {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const { config } = usePublicAppsConfig();
-  const guest = config?.guest === true;
+  const navigate = useNavigate();
+  const guestApp = config?.guest === true ? (config.locadora?.app ?? null) : null;
+  const files = guestApp?.capabilities.localFiles;
+  const accept = files?.allowed ? (files.accept ?? []) : [];
+  const maxBytes = files?.allowed ? (files.maxBytes ?? 0) : 0;
+  const guest = guestApp !== null && accept.length > 0;
   const gates = { cloudSaves: config?.cloudSaves === true };
   const docsUrl = appsDocsUrl();
 
-  const faq: { id: string; q: MessageKey; a: MessageKey; link?: string }[] = [
+  const input = useRef<HTMLInputElement>(null);
+  const [state, setState] = useState<DoorState>("idle");
+  const [problem, setProblem] = useState<MessageKey | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);
+
+  /** A file from the picker or a drop: read it, put it in, open the player. */
+  const insert = useCallback(
+    async (file: File | null | undefined) => {
+      if (!guest || !file || state === "inserting") return;
+      const result = await readLocalFile(file, { accept, maxBytes });
+      if (result.kind !== "picked") {
+        setState("idle");
+        setProblem(
+          result.kind === "wrong-type"
+            ? "locadoraPage.door.wrongType"
+            : result.kind === "too-large"
+              ? "locadoraPage.door.tooLarge"
+              : "locadoraPage.door.unreadable",
+        );
+        return;
+      }
+      setProblem(null);
+      holdCartridge({ bytes: result.bytes, ext: result.ext });
+      setState("inserting");
+      timer.current = setTimeout(() => void navigate(LOCADORA_GUEST_PATH), prefersReducedMotion() ? 0 : INSERT_MS);
+    },
+    // accept is rebuilt each render from the same config; its contents are what matter
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [guest, accept.join(","), maxBytes, state, navigate],
+  );
+
+  // A file dropped anywhere on the page goes to the door, never into the tab (which would open the file itself).
+  useEffect(() => {
+    const over = (event: globalThis.DragEvent) => {
+      if (!event.dataTransfer?.types.includes("Files")) return;
+      event.preventDefault();
+    };
+    const drop = (event: globalThis.DragEvent) => {
+      if (!event.dataTransfer?.types.includes("Files")) return;
+      event.preventDefault();
+      setState((current) => (current === "drag" ? "idle" : current));
+      void insert(event.dataTransfer.files[0]);
+    };
+    window.addEventListener("dragover", over);
+    window.addEventListener("drop", drop);
+    return () => {
+      window.removeEventListener("dragover", over);
+      window.removeEventListener("drop", drop);
+    };
+  }, [insert]);
+
+  const onDragEnter = (event: DragEvent) => {
+    if (!guest || !event.dataTransfer.types.includes("Files")) return;
+    if (state !== "inserting") setState("drag");
+  };
+  const onDragLeave = (event: DragEvent) => {
+    if (state !== "drag") return;
+    const to = event.relatedTarget as Node | null;
+    if (!to || !event.currentTarget.contains(to)) setState("idle");
+  };
+
+  const dragging = state === "drag";
+  const doorClass =
+    "cta-lift h-16 w-full rounded-[var(--radius-panel)] px-8 text-xl font-extrabold tracking-tight sm:h-[4.5rem] sm:text-2xl md:w-auto md:min-w-[20rem]";
+
+  const adds = ACCOUNT_LINE_CLAIMS.filter((claim) => claimView(claim, gates) === "shown").map((claim) => t(claim.titleKey));
+  const addsLine = adds.length
+    ? t("locadoraPage.account.adds", { list: new Intl.ListFormat(locale, { type: "conjunction" }).format(adds) })
+    : null;
+
+  const faq: { id: string; q: MessageKey; a: MessageKey }[] = [
     { id: "games", q: "locadoraPage.faq.games.q", a: "locadoraPage.faq.games.a" },
     { id: "file", q: "locadoraPage.faq.file.q", a: "locadoraPage.faq.file.a" },
     // "Não pra jogar" is only true while guest play is offered
@@ -93,30 +166,8 @@ export function LocadoraPageBody() {
     { id: "consoles", q: "locadoraPage.faq.consoles.q", a: "locadoraPage.faq.consoles.a" },
     { id: "phone", q: "locadoraPage.faq.phone.q", a: "locadoraPage.faq.phone.a" },
     { id: "who", q: "locadoraPage.faq.who.q", a: "locadoraPage.faq.who.a" },
-    // only once the builders' docs are live (a hosted-only link, like the hub's)
-    ...(docsUrl ? [{ id: "build", q: "locadoraPage.faq.build.q" as MessageKey, a: "locadoraPage.faq.build.a" as MessageKey, link: docsUrl }] : []),
+    ...(docsUrl ? [{ id: "build", q: "locadoraPage.faq.build.q" as MessageKey, a: "locadoraPage.faq.build.a" as MessageKey }] : []),
   ];
-
-  const claims = ACCOUNT_CLAIMS.map((claim) => ({ claim, view: claimView(claim, gates) })).filter(
-    ({ view }) => view !== "hidden",
-  );
-
-  const playButton = (className?: string) =>
-    guest ? (
-      <Button asChild className={cn("cta-lift h-12 px-7 text-base", className)}>
-        <Link to={LOCADORA_GUEST_PATH} data-locadora-play="">
-          <Play className="h-4 w-4" aria-hidden />
-          {t("locadoraPage.hero.play")}
-        </Link>
-      </Button>
-    ) : (
-      <AppsCta
-        tag={LOCADORA_LANDING_REF}
-        path="/apps/locadora"
-        label={t("locadoraPage.hero.cta")}
-        className={className}
-      />
-    );
 
   return (
     <AppsShell creditKey="locadoraPage.credit">
@@ -127,317 +178,196 @@ export function LocadoraPageBody() {
         image="/images/og-locadora-chegou.jpg"
       />
 
-      {/* Hero: a night scene in every theme (art direction, `.loc-night` in
-          index.css), the words on the left and the stage on the right. */}
-      <section
-        className="relative mx-auto max-w-6xl px-0 pt-0 sm:px-8 sm:pt-8"
-        aria-labelledby="locadora-title"
-      >
+      {/* The door: a night scene in every theme (`.loc-night`). The whole panel takes a dropped file. */}
+      <section className="relative mx-auto max-w-6xl px-0 sm:px-8 sm:pt-6" aria-labelledby="locadora-title">
         <div
           className="loc-night relative isolate overflow-hidden sm:rounded-[var(--radius-panel)] sm:shadow-[var(--shadow-2)]"
           data-locadora-hero=""
+          data-door={state}
+          onDragEnter={onDragEnter}
+          onDragLeave={onDragLeave}
         >
-          <div
-            className="loc-floor pointer-events-none absolute inset-x-[-20%] bottom-0 -z-10 h-40 sm:h-56"
-            aria-hidden
-          />
-          <div className="grid items-center gap-6 px-4 pb-10 pt-5 sm:px-10 sm:pb-14 sm:pt-8 md:grid-cols-[1.05fr_1fr] md:gap-10 lg:px-14 lg:py-16">
-            <div className="flex flex-col">
-              <Link
-                to="/apps"
-                className="mb-6 inline-flex min-h-11 items-center gap-1.5 self-start text-sm font-medium text-white/75 transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
-                data-apps-crumb=""
-              >
-                <ArrowLeft className="h-4 w-4" aria-hidden />
-                {t("locadoraPage.crumb")}
-              </Link>
-              <p
-                className="loc-eyebrow vem-rise inline-flex self-start rounded-full border px-3 py-1 text-xs font-bold uppercase tracking-[0.2em]"
-                style={at(0)}
-              >
-                {t("locadoraPage.hero.eyebrow")}
-              </p>
-              <h1
-                id="locadora-title"
-                className="vem-rise mt-4 text-balance font-display text-[2.6rem] font-extrabold leading-[1.02] tracking-tight text-white sm:text-6xl lg:text-7xl"
-                style={at(60)}
-              >
-                {t("locadoraPage.hero.title")}
-              </h1>
-              <p
-                className="vem-rise mt-5 max-w-xl text-pretty text-lg leading-relaxed text-white/85 sm:text-xl"
-                style={at(120)}
-              >
-                {guest ? t("locadoraPage.hero.sub") : t("locadoraPage.hero.subMember")}
-              </p>
-              <div className="vem-rise mt-8 flex flex-col gap-3 sm:flex-row sm:flex-wrap" style={at(180)}>
-                {playButton("w-full sm:w-auto")}
-                {guest && (
-                  <AppsCta
-                    tag={LOCADORA_LANDING_REF}
-                    path="/apps/locadora"
-                    label={t("locadoraPage.hero.signup")}
-                    variant="secondary"
-                    className="w-full border-white/30 bg-white/10 text-white hover:bg-white/20 sm:w-auto"
+          <div className="loc-floor pointer-events-none absolute inset-x-[-20%] bottom-0 -z-10 h-40 sm:h-56" aria-hidden />
+          <Link
+            to="/apps"
+            className="absolute left-3 top-3 z-10 inline-flex min-h-11 items-center gap-1.5 rounded-full px-2 text-sm font-medium text-white/70 transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white sm:left-6 sm:top-5"
+            data-apps-crumb=""
+          >
+            <ArrowLeft className="h-4 w-4" aria-hidden />
+            {t("locadoraPage.crumb")}
+          </Link>
+          <div className="mx-auto flex max-w-5xl flex-col items-center gap-6 px-4 pb-10 pt-16 text-center sm:pb-14 md:grid md:grid-cols-2 md:grid-rows-[auto_auto] md:items-center md:gap-x-12 md:gap-y-8 md:px-10 md:pt-20 md:text-left lg:pb-16">
+            <h1
+              id="locadora-title"
+              className="text-balance font-display text-[2.4rem] font-extrabold leading-[1.02] tracking-tight text-white sm:text-5xl md:self-end lg:text-6xl"
+            >
+              {t("locadoraPage.hero.title")}
+            </h1>
+
+            <Stage
+              label={t("locadoraPage.hero.imageAlt")}
+              sign={t("locadoraPage.hero.sign")}
+              state={state}
+              className="md:col-start-2 md:row-span-2 md:row-start-1"
+            />
+
+            <div className="flex w-full flex-col items-center gap-3 md:items-start md:self-start">
+              {guest ? (
+                <>
+                  <input
+                    ref={input}
+                    type="file"
+                    accept={accept.join(",")}
+                    className="sr-only"
+                    tabIndex={-1}
+                    aria-hidden
+                    onChange={(event) => {
+                      const file = event.target.files?.[0];
+                      event.target.value = "";
+                      void insert(file);
+                    }}
                   />
-                )}
-              </div>
-              <p className="vem-rise mt-5 max-w-md text-balance text-sm leading-relaxed text-white/70" style={at(220)} data-apps-legal="">
+                  <Button
+                    type="button"
+                    className={cn(doorClass, dragging && "ring-4 ring-white/70")}
+                    disabled={state === "inserting"}
+                    onClick={() => {
+                      setProblem(null);
+                      input.current?.click();
+                    }}
+                    onMouseEnter={() => state === "idle" && setState("hover")}
+                    onMouseLeave={() => state === "hover" && setState("idle")}
+                    onFocus={() => state === "idle" && setState("hover")}
+                    onBlur={() => state === "hover" && setState("idle")}
+                    data-locadora-door=""
+                  >
+                    <Gamepad2 className="h-6 w-6" aria-hidden />
+                    {state === "inserting" ? t("locadoraPage.door.inserting") : dragging ? t("locadoraPage.door.drop") : t("locadoraPage.door.cta")}
+                  </Button>
+                  <p className="text-sm text-white/75" aria-live="polite">
+                    {problem ? <span className="font-semibold text-white">{t(problem)}</span> : t("locadoraPage.door.hint")}
+                  </p>
+                </>
+              ) : (
+                <>
+                  <AppsCta tag={LOCADORA_LANDING_REF} path="/apps/locadora" label={t("locadoraPage.door.cta")} className={doorClass} />
+                  <p className="text-sm text-white/75">{t("locadoraPage.door.hintMember")}</p>
+                </>
+              )}
+              <p className="max-w-md text-balance text-xs leading-relaxed text-white/60" data-apps-legal="">
                 {t("locadoraPage.legal")}
               </p>
             </div>
-            <HeroStage label={t("locadoraPage.hero.imageAlt")} sign={t("locadoraPage.hero.sign")} />
           </div>
         </div>
       </section>
 
-      {/* Como funciona: three steps, each with its sprite. */}
-      <section
-        className="relative mx-auto max-w-6xl px-4 py-16 sm:px-8 sm:py-24"
-        aria-labelledby="locadora-how-title"
-      >
-        <div data-reveal>
-          <h2 id="locadora-how-title" className={cn(H2, "vem-rise")} style={at(0)}>
-            {t("locadoraPage.how.title")}
-          </h2>
-          <ol className="mt-10 grid gap-4 sm:gap-6 md:grid-cols-3" data-locadora-steps="">
-            {STEPS.map((step, index) => (
-              <li
-                key={step.id}
-                className="vem-rise relative flex flex-col rounded-[var(--radius-panel)] border border-border bg-surface-card p-6 sm:p-7"
-                style={at(80 + index * 80)}
-                data-locadora-step={step.id}
-              >
-                <span
-                  className="flex h-9 w-9 items-center justify-center rounded-full bg-accent-soft font-display text-base font-bold text-on-accent-soft"
-                  aria-hidden
-                >
-                  {step.id}
-                </span>
-                <span className="mt-4 flex h-32 items-center justify-center" aria-hidden>
-                  <img
-                    src={`${IMG}${step.art}`}
-                    width={step.width}
-                    height={step.height}
-                    alt=""
-                    loading="lazy"
-                    decoding="async"
-                    className="max-h-full w-auto max-w-[70%] object-contain"
-                  />
-                </span>
-                <h3 className="mt-5 font-display text-xl font-bold text-text">{t(step.title)}</h3>
-                <p className="mt-2 text-pretty leading-relaxed text-text-secondary">{t(step.body)}</p>
-              </li>
-            ))}
-          </ol>
-        </div>
-      </section>
+      {/* Footer weight: the consoles, the account in one line, the questions folded away. */}
+      <section className="mx-auto flex max-w-3xl flex-col gap-6 px-4 py-10 text-sm sm:px-8 sm:py-14" aria-label={t("locadoraPage.faq.title")}>
+        <p className="flex flex-wrap items-center justify-center gap-2 text-text-secondary" data-locadora-consoles="">
+          <span className="text-text-tertiary">{t("locadoraPage.consoles.label")}</span>
+          {CONSOLE_NAMES.map((name) => (
+            <span
+              key={name}
+              className="rounded-full border border-border bg-surface-1 px-3 py-1 font-medium text-text"
+              data-locadora-console={name}
+            >
+              {name}
+            </span>
+          ))}
+        </p>
 
-      {/* Cinco consoles, uma prateleira. */}
-      <section className="relative border-y border-border bg-surface-1" aria-labelledby="locadora-consoles-title">
-        <div data-reveal className="mx-auto max-w-6xl px-4 py-16 sm:px-8 sm:py-20">
-          <h2 id="locadora-consoles-title" className={cn(H2, "vem-rise")} style={at(0)}>
-            {t("locadoraPage.consoles.title")}
-          </h2>
-          <p className="vem-rise mt-4 max-w-2xl text-pretty text-lg leading-relaxed text-text-secondary" style={at(60)}>
-            {t("locadoraPage.consoles.body")}
-          </p>
-          <ul className="mt-10 grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-5" data-locadora-consoles="">
-            {CONSOLES.map((console_, index) => (
-              <li
-                key={console_.id}
-                className={cn(
-                  "vem-rise flex flex-col items-center gap-4 rounded-[var(--radius-card)] border border-border bg-surface-card px-3 pb-5 pt-6",
-                  index === CONSOLES.length - 1 && "col-span-2 md:col-span-1",
-                )}
-                style={at(120 + index * 60)}
-                data-locadora-console={console_.id}
-              >
-                <span className="flex h-24 items-center justify-center sm:h-28" aria-hidden>
-                  <img
-                    src={`${IMG}${console_.art}`}
-                    width={console_.width}
-                    height={console_.height}
-                    alt=""
-                    loading="lazy"
-                    decoding="async"
-                    className={cn(
-                      "max-h-full w-auto max-w-full object-contain",
-                      console_.tint && "hue-rotate-[150deg] saturate-150",
-                    )}
-                  />
-                </span>
-                <span className="text-center text-sm font-semibold leading-snug text-text">{console_.label}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      </section>
+        <p className="text-center text-text-secondary" data-locadora-account="">
+          <AppsCta
+            tag={LOCADORA_LANDING_REF}
+            path="/apps/locadora"
+            label={t("locadoraPage.account.link")}
+            variant="ghost"
+            compact
+            className="mr-1 h-auto px-0 py-0 font-semibold text-accent underline-offset-4 hover:bg-transparent hover:text-accent hover:underline"
+          />
+          {addsLine && <span>{addsLine}</span>}
+        </p>
 
-      {/* O que tu ganha com uma conta: only claims whose gate is open, Saves
-          na conta muted as "em breve" while it is not announced. */}
-      <section className="relative mx-auto max-w-6xl px-4 py-16 sm:px-8 sm:py-24" aria-labelledby="locadora-account-title">
-        <div data-reveal className="grid gap-10 md:grid-cols-[1fr_1.3fr] md:gap-14">
-          <div>
-            <h2 id="locadora-account-title" className={cn(H2, "vem-rise")} style={at(0)}>
-              {t("locadoraPage.account.title")}
-            </h2>
-            <p className="vem-rise mt-4 max-w-md text-pretty text-lg leading-relaxed text-text-secondary" style={at(60)}>
-              {guest ? t("locadoraPage.account.lead") : t("locadoraPage.account.leadMember")}
-            </p>
-            <div className="vem-rise mt-8 flex flex-col items-start gap-3" style={at(120)}>
-              <AppsCta tag={LOCADORA_LANDING_REF} path="/apps/locadora" label={t("locadoraPage.account.cta")} />
-              <p className="text-sm text-text-tertiary">{t("locadoraPage.account.note")}</p>
-            </div>
-          </div>
-          <ul className="grid gap-3" data-locadora-claims="">
-            {claims.map(({ claim, view }, index) => (
-              <li
-                key={claim.id}
-                className={cn(
-                  "vem-rise rounded-[var(--radius-card)] border border-border p-5",
-                  view === "soon" ? "bg-surface-1" : "bg-surface-card",
-                )}
-                style={at(80 + index * 60)}
-                data-locadora-claim={claim.id}
-                data-claim-view={view}
-              >
-                <div className="flex items-center gap-2">
-                  {view === "soon" ? (
-                    <Clock className="h-4 w-4 shrink-0 text-text-tertiary" aria-hidden />
-                  ) : (
-                    <Check className="h-4 w-4 shrink-0 text-accent" aria-hidden />
-                  )}
-                  <h3 className={cn("font-semibold", view === "soon" ? "text-text-secondary" : "text-text")}>
-                    {t(claim.titleKey)}
-                  </h3>
-                  {view === "soon" && (
-                    <span className="ml-auto shrink-0 rounded-full bg-surface-3 px-2 py-0.5 text-xs font-medium text-text-secondary">
-                      {t("locadoraPage.account.soon")}
-                    </span>
-                  )}
-                </div>
-                <p className={cn("mt-2 text-pretty text-sm leading-relaxed", view === "soon" ? "text-text-tertiary" : "text-text-secondary")}>
-                  {t(claim.bodyKey)}
-                </p>
-              </li>
-            ))}
-          </ul>
-        </div>
-      </section>
-
-      {/* Perguntas: native disclosures, so the keyboard and a screen reader
-          get them for free. */}
-      <section className="relative border-y border-border bg-surface-1" aria-labelledby="locadora-faq-title">
-        <div data-reveal className="mx-auto max-w-3xl px-4 py-16 sm:px-8 sm:py-20">
-          <h2 id="locadora-faq-title" className={cn(H2, "vem-rise")} style={at(0)}>
+        <details className="group mx-auto w-full max-w-xl rounded-[var(--radius-card)] border border-border bg-surface-1" data-locadora-faq="">
+          <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-4 px-4 font-semibold text-text marker:hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring [&::-webkit-details-marker]:hidden">
             {t("locadoraPage.faq.title")}
-          </h2>
-          <div className="mt-8 divide-y divide-border border-y border-border" data-locadora-faq="">
+            <ChevronDown
+              className="h-4 w-4 shrink-0 text-text-tertiary transition-transform duration-[var(--duration-fast)] group-open:rotate-180 motion-reduce:transition-none"
+              aria-hidden
+            />
+          </summary>
+          <dl className="divide-y divide-border border-t border-border px-4">
             {faq.map((item) => (
-              <details key={item.id} className="group" data-locadora-faq-item={item.id}>
-                <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-4 py-4 text-left font-semibold text-text marker:hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring [&::-webkit-details-marker]:hidden">
-                  {t(item.q)}
-                  <ChevronDown
-                    className="h-5 w-5 shrink-0 text-text-tertiary transition-transform duration-[var(--duration-fast)] group-open:rotate-180 motion-reduce:transition-none"
-                    aria-hidden
-                  />
-                </summary>
-                <p className="pb-5 pr-9 text-pretty leading-relaxed text-text-secondary">
+              <div key={item.id} className="py-3" data-locadora-faq-item={item.id}>
+                <dt className="font-semibold text-text">{t(item.q)}</dt>
+                <dd className="mt-1 text-pretty leading-relaxed text-text-secondary">
                   {t(item.a)}
-                  {item.link && (
+                  {item.id === "build" && docsUrl && (
                     <>
                       {" "}
-                      <a href={item.link} className="font-medium text-accent underline-offset-4 hover:underline">
+                      <a href={docsUrl} className="font-medium text-accent underline-offset-4 hover:underline">
                         {t("locadoraPage.faq.build.link")}
                       </a>
                     </>
                   )}
-                </p>
-              </details>
+                </dd>
+              </div>
             ))}
-          </div>
-        </div>
-      </section>
-
-      {/* Close. */}
-      <section className="relative mx-auto max-w-3xl px-4 py-16 text-center sm:px-8 sm:py-24" aria-labelledby="locadora-final-title">
-        <h2 id="locadora-final-title" className={H2}>
-          {t("locadoraPage.final.title")}
-        </h2>
-        <p className="mx-auto mt-4 max-w-xl text-pretty text-lg leading-relaxed text-text-secondary">
-          {guest ? t("locadoraPage.final.body") : t("locadoraPage.final.bodyMember")}
-        </p>
-        <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
-          {playButton()}
-          {guest && (
-            <Link
-              to="#locadora-account-title"
-              onClick={(event) => {
-                event.preventDefault();
-                document.getElementById("locadora-account-title")?.scrollIntoView({ block: "start" });
-              }}
-              className="inline-flex min-h-11 items-center gap-1.5 text-sm font-semibold text-accent underline-offset-4 hover:underline"
-            >
-              {t("locadoraPage.account.title")}
-              <ArrowRight className="h-4 w-4" aria-hidden />
-            </Link>
-          )}
-        </div>
-        <p className="mx-auto mt-8 max-w-md text-sm text-text-tertiary" data-apps-legal="">
-          {t("locadoraPage.legal")}
-        </p>
+          </dl>
+        </details>
       </section>
     </AppsShell>
   );
 }
 
 /**
- * The hero's stage: the neon sign with the shop's name, the CRT showing our
- * colour bars, and the console with the cartridge sliding in (`.loc-*` in
- * index.css). One picture to a screen reader, with the description as its
- * name; the parts are decoration.
+ * The sign in the corner and the console with its slot, the cartridge waiting
+ * above it: it lifts while a file hovers the page or the pointer is on the
+ * button, and slides in when one is chosen (`[data-door]` in index.css). One
+ * picture to a screen reader; the parts are decoration.
  */
-function HeroStage({ label, sign }: { label: string; sign: string }) {
+function Stage({ label, sign, state, className }: { label: string; sign: string; state: DoorState; className?: string }) {
   return (
     <div
       role="img"
       aria-label={label}
-      className="loc-stage relative mx-auto aspect-[5/4] w-full max-w-[34rem]"
+      className={cn("loc-stage relative mx-auto aspect-square w-full max-w-[19rem] sm:max-w-[24rem] lg:max-w-[28rem]", className)}
       data-locadora-stage=""
+      data-door={state}
     >
-      {/* the sign, with the name lit on its dark panel */}
-      <div className="absolute left-[4%] top-0 w-[64%]" aria-hidden>
+      <div className="absolute left-0 top-[2%] w-[48%]" aria-hidden>
         <img
           src={`${IMG}neon-sign.webp`}
           width={480}
           height={335}
           alt=""
-          fetchPriority="high"
           decoding="async"
           className="block h-auto w-full"
         />
-        <span className="loc-sign-text absolute left-[34%] top-[27%] flex h-[37%] w-[54%] items-center justify-center font-display font-black leading-none">
+        <span className="loc-sign-text loc-sign-text-small absolute left-[34%] top-[27%] flex h-[37%] w-[54%] items-center justify-center font-display font-black leading-none">
           {sign}
         </span>
       </div>
-      {/* the TV, switching on to the bars */}
-      <div className="absolute bottom-0 left-0 w-[38%]" aria-hidden>
-        <img src={`${IMG}tv-crt.webp`} width={344} height={480} alt="" decoding="async" className="block h-auto w-full" />
-        <span className="loc-screen absolute left-[13.4%] top-[26.6%] h-[34%] w-[45.4%] overflow-hidden rounded-[16%]" />
-      </div>
-      {/* the console, and the cartridge going into its slot behind its front */}
-      <div className="absolute bottom-[3%] right-0 w-[56%]" aria-hidden>
+      <div className="absolute bottom-[2%] right-0 w-[74%]" aria-hidden>
         <img
           src={`${IMG}cart.webp`}
           width={240}
           height={218}
           alt=""
           decoding="async"
-          className="loc-cart absolute left-[29.5%] top-[-12%] z-10 w-[40%]"
+          className="loc-door-cart absolute left-[29.5%] top-[-12%] z-10 w-[40%]"
         />
-        <img src={`${IMG}console.webp`} width={480} height={416} alt="" decoding="async" className="relative block h-auto w-full" />
-        <span className="loc-led absolute left-[52%] top-[63%] h-[2.2%] w-[2.2%] rounded-full" />
+        <img
+          src={`${IMG}console.webp`}
+          width={480}
+          height={416}
+          alt=""
+          fetchPriority="high"
+          decoding="async"
+          className="relative block h-auto w-full"
+        />
+        <span className="loc-door-led absolute left-[52%] top-[63%] h-[2.2%] w-[2.2%] rounded-full" />
       </div>
     </div>
   );

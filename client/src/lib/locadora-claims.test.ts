@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import en from "../locales/en/translation.json";
 import es from "../locales/es/translation.json";
 import ptBR from "../locales/pt-BR/translation.json";
-import { ACCOUNT_CLAIMS, UPSELL_CLAIMS, claimView, type Claim, type ClaimGate } from "./locadora-claims";
+import { ACCOUNT_LINE_CLAIMS, UPSELL_CLAIMS, claimView, type Claim, type ClaimGate } from "./locadora-claims";
 
 /**
  * THE TRUTH TAGS, ENFORCED. The launch copy tags every claim with the gate
@@ -27,7 +27,7 @@ function words(claim: Claim): string {
 }
 
 describe("every claim the Locadora pages draw", () => {
-  const all = [...ACCOUNT_CLAIMS, ...UPSELL_CLAIMS];
+  const all = [...ACCOUNT_LINE_CLAIMS, ...UPSELL_CLAIMS];
 
   it.each(all.map((claim) => [claim.titleKey, claim] as const))("%s carries the gate its words need", (_key, claim) => {
     const text = words(claim);
@@ -46,8 +46,8 @@ describe("every claim the Locadora pages draw", () => {
   });
 
   it("files cloud saves under its flag and watching under the share", () => {
-    expect(ACCOUNT_CLAIMS.find((claim) => claim.id === "saves")?.requires).toBe("cloudSaves");
-    expect(ACCOUNT_CLAIMS.find((claim) => claim.id === "watch")?.requires).toBe("share");
+    expect(ACCOUNT_LINE_CLAIMS.find((claim) => claim.id === "saves")?.requires).toBe("cloudSaves");
+    expect(ACCOUNT_LINE_CLAIMS.find((claim) => claim.id === "watch")?.requires).toBe("share");
     expect(UPSELL_CLAIMS.find((claim) => claim.id === "saves")?.requires).toBe("cloudSaves");
   });
 });

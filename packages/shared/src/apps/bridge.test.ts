@@ -457,6 +457,8 @@ describe("host to app messages", () => {
     const plain = bridgeHostMessageSchema.parse(hostMessages.hello);
     expect("guest" in (plain as object)).toBe(false);
     expect(bridgeHostMessageSchema.safeParse({ ...(hostMessages.hello as object), guest: "yes" }).success).toBe(false);
+    expect(bridgeHostMessageSchema.parse({ ...(hostMessages.hello as object), pendingFile: true })).toMatchObject({ pendingFile: true });
+    expect(bridgeHostMessageSchema.safeParse({ ...(hostMessages.hello as object), pendingFile: "a.sfc" }).success).toBe(false);
   });
 
   it("accepts a successful answer to every request type", () => {

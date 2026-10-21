@@ -1,5 +1,5 @@
-import { MINIMUM_AGE_YEARS, type BridgeUiActivityState, type PublicAppsConfig } from "@pqp/shared";
-import { Lock, Play, RotateCcw, ScrollText } from "lucide-react";
+import type { BridgeUiActivityState, PublicAppsConfig } from "@pqp/shared";
+import { RotateCcw, ScrollText } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate } from "react-router-dom";
 import { AppsCta } from "@/components/apps-landing/apps-cta";
@@ -9,14 +9,9 @@ import { LanguagePicker } from "@/components/marketing/language-picker";
 import { Seo } from "@/components/marketing/seo";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
-import {
-  BirthDateFields,
-  EMPTY_DATE_PARTS,
-  toIsoDate,
-  type DateParts,
-} from "@/components/user/birth-date-fields";
 import { usePublicAppsConfig } from "@/hooks/use-apps-landing";
 import { parseAppsOrigin } from "@/lib/apps/apps-origin";
+import { pickLocalFile, type PickOptions } from "@/lib/apps/file-pick";
 import { createGuestTransport, guestUserDirectory, openGuestDeviceStore } from "@/lib/apps/guest-session";
 import { LOCADORA_GUEST_REF } from "@/lib/apps-landing";
 import { intentStorage } from "@/lib/handle-intent";
@@ -26,11 +21,10 @@ import {
   LOCADORA_GUEST_PATH,
   UpsellMoments,
   guestRuntimeOf,
-  judgeGuestAge,
-  readGuestAgeMemory,
-  rememberGuestAge,
+  hasCartridge,
   rememberUpsellDismissed,
   rememberUpsellShown,
+  takeCartridge,
   trackLocadoraGuest,
   upsellAllowed,
 } from "@/lib/locadora-guest";
@@ -53,10 +47,16 @@ import {
  *
  * WHAT IS AROUND THE FRAME. A slim bar (the wordmark back to the landing,
  * the house rules, the language while no game is in, and "Criar conta
- * grátis") and nothing else: no sidebar, no chat, no launcher. Before the
- * frame, the age question, answered on the device exactly like the live
- * preview. Over it, at a calm moment only, the sign-up card
- * (`LocadoraGuestUpsell`).
+ * grátis") and nothing else: no sidebar, no chat, no launcher, and nothing
+ * asked before playing. No age question either (Rafael's call, 2026-10-21:
+ * only registering has an age requirement, and a player that collects nothing
+ * should be the easiest thing to try; it is on the lawyer list,
+ * `docs/EMULATOR_ROOM.md` item 10). Over the frame, at a calm moment only, the
+ * sign-up card (`LocadoraGuestUpsell`).
+ *
+ * FROM THE DOOR. A cartridge picked or dropped on the landing's "Botar a fita"
+ * is held in memory (`holdCartridge`) and handed to the frame's first pick
+ * (`hello.pendingFile`), so the game boots with nothing in between.
  */
 
 export function LocadoraGuestPage() {
@@ -68,22 +68,8 @@ export function LocadoraGuestPage() {
   return <GuestPlayerPage config={config} origin={origin} />;
 }
 
-type Phase = "age" | "declined" | "play";
-
-function safeLocal(): Storage | null {
-  try {
-    return window.localStorage;
-  } catch {
-    return null;
-  }
-}
-
 function GuestPlayerPage({ config, origin }: { config: PublicAppsConfig; origin: string }) {
   const { t, locale } = useTranslation();
-  const [phase, setPhase] = useState<Phase>(() => {
-    const memory = readGuestAgeMemory(safeLocal());
-    return memory === "passed" ? "play" : memory === "declined" ? "declined" : "age";
-  });
   const [rulesOpen, setRulesOpen] = useState(false);
   const [activity, setActivity] = useState<BridgeUiActivityState>("browsing");
   const inGame = activity !== "browsing";
@@ -147,19 +133,9 @@ function GuestPlayerPage({ config, origin }: { config: PublicAppsConfig; origin:
         </div>
       </header>
 
-      <main id="main" className="relative min-h-0 flex-1" data-phase={phase}>
-        {phase === "age" && (
-          <AgeQuestion
-            onAnswer={(verdict) => {
-              rememberGuestAge(verdict, safeLocal());
-              setPhase(verdict === "adult" ? "play" : "declined");
-            }}
-          />
-        )}
-        {phase === "declined" && <Declined />}
-        {phase === "play" && (
-          <GuestPlayer config={config} origin={origin} locale={locale} onActivity={setActivity} />
-        )}
+      {/* Straight into the player: no account, nothing asked, nothing collected. */}
+      <main id="main" className="relative min-h-0 flex-1">
+        <GuestPlayer config={config} origin={origin} locale={locale} onActivity={setActivity} />
       </main>
 
       <Dialog
@@ -197,83 +173,6 @@ function HouseRules({ className }: { className?: string }) {
         </li>
       ))}
     </ul>
-  );
-}
-
-function AgeQuestion({ onAnswer }: { onAnswer: (verdict: "adult" | "minor") => void }) {
-  const { t } = useTranslation();
-  const [parts, setParts] = useState<DateParts>(EMPTY_DATE_PARTS);
-  const [error, setError] = useState(false);
-  return (
-    <div className="flex h-full items-start justify-center overflow-y-auto px-4 py-8 sm:items-center sm:py-12">
-      <form
-        className="w-full max-w-md rounded-[var(--radius-panel)] border border-border bg-surface-card p-6 shadow-[var(--shadow-2)] sm:p-8"
-        aria-labelledby="locadora-guest-age-title"
-        data-locadora-age=""
-        onSubmit={(event) => {
-          event.preventDefault();
-          const verdict = judgeGuestAge(toIsoDate(parts));
-          if (verdict === "invalid") {
-            setError(true);
-            return;
-          }
-          onAnswer(verdict);
-        }}
-      >
-        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-accent">{t("locadoraGuest.age.eyebrow")}</p>
-        <h1 id="locadora-guest-age-title" className="mt-2 font-display text-2xl font-bold text-text sm:text-3xl">
-          {t("locadoraGuest.age.title")}
-        </h1>
-        <p className="mt-3 text-pretty leading-relaxed text-text-secondary">
-          {t("locadoraGuest.age.body", { age: MINIMUM_AGE_YEARS })}
-        </p>
-        <div className="mt-6">
-          <BirthDateFields parts={parts} onChange={setParts} autoFocus />
-        </div>
-        <p className="mt-4 flex items-start gap-2 text-[13px] text-text-tertiary">
-          <Lock aria-hidden className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          {t("locadoraGuest.age.note")}
-        </p>
-        {error && (
-          <p role="alert" className="mt-3 text-sm text-danger">
-            {t("ageGate.error.badDate")}
-          </p>
-        )}
-        <div className="mt-6 flex flex-col gap-2">
-          <Button type="submit" disabled={!toIsoDate(parts)} className="h-12 w-full text-base font-bold">
-            <Play aria-hidden className="h-4 w-4" />
-            {t("locadoraGuest.age.submit")}
-          </Button>
-          <Button asChild variant="ghost" className="h-11 w-full">
-            <Link to="/apps/locadora">{t("locadoraGuest.age.back")}</Link>
-          </Button>
-        </div>
-        <HouseRules className="mt-6 border-t border-border pt-4" />
-      </form>
-    </div>
-  );
-}
-
-function Declined() {
-  const { t } = useTranslation();
-  return (
-    <div className="flex h-full items-start justify-center px-4 py-8 sm:items-center">
-      <div
-        className="w-full max-w-md rounded-[var(--radius-panel)] border border-border bg-surface-card p-6 sm:p-8"
-        role="status"
-        data-locadora-declined=""
-      >
-        <h1 className="font-display text-2xl font-bold text-text">
-          {t("locadoraGuest.declined.title", { age: MINIMUM_AGE_YEARS })}
-        </h1>
-        <p className="mt-3 leading-relaxed text-text-secondary">
-          {t("locadoraGuest.declined.body", { age: MINIMUM_AGE_YEARS })}
-        </p>
-        <Button asChild variant="secondary" className="mt-6 h-11 px-5">
-          <Link to="/apps/locadora">{t("locadoraGuest.age.back")}</Link>
-        </Button>
-      </div>
-    </div>
   );
 }
 
@@ -321,6 +220,15 @@ function GuestPlayer({
   const hostOptions = useMemo(
     () => ({
       guest: true,
+      // a cartridge chosen at the landing's door: the frame's first pick gets it, with no second picker
+      pendingFile: hasCartridge(),
+      pickFile: (options: PickOptions) => {
+        const held = takeCartridge();
+        if (held && options.accept.includes(held.ext) && held.bytes.byteLength <= options.maxBytes) {
+          return Promise.resolve({ kind: "picked" as const, bytes: held.bytes, ext: held.ext });
+        }
+        return pickLocalFile(options);
+      },
       saveSync: null,
       openStore: openGuestDeviceStore,
       onActivity: (state: BridgeUiActivityState) => {
@@ -330,7 +238,9 @@ function GuestPlayer({
         if (decision === "show") offer();
       },
     }),
-    [offer],
+    // a retry is a new frame: it says `pendingFile` only if a cartridge is still held
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [offer, attempt],
   );
 
   useEffect(() => {
