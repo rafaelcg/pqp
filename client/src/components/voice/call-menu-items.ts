@@ -231,9 +231,17 @@ export function stageMoreItems(
     joinLeaveAutoMute: { on: boolean; onToggle: () => void };
     fullscreen?: { active: boolean; onToggle: () => void };
     collapse?: { collapsed: boolean; onToggle: () => void };
+    /**
+     * Tiles a narrow bar folded into this menu (the column beside an app):
+     * listed first, above a line, so they read as the bar's own controls.
+     */
+    folded?: ContextMenuItemDef[];
   },
 ): ContextMenuItemDef[] {
   const items: ContextMenuItemDef[] = [];
+  if (input.folded && input.folded.length > 0) {
+    items.push(...input.folded, separator("folded-separator"));
+  }
   if (input.watchParty) {
     const reason = input.watchParty.disabledReason;
     items.push({
@@ -265,7 +273,9 @@ export function stageMoreItems(
       onSelect: input.cursor.onToggle,
     });
   }
-  if (items.length > 0) items.push(separator("share-separator"));
+  if (items.length > 0 && !items[items.length - 1]!.separator) {
+    items.push(separator("share-separator"));
+  }
   items.push({
     id: "join-leave-sounds",
     label: t("voice.control.disableJoinLeaveSounds"),

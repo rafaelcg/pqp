@@ -107,6 +107,13 @@ export const appsConfigSchema = z
     /** The apps origin (`APPS_ORIGIN`), or null when apps cannot run here. */
     origin: z.string().nullable(),
     apps: z.array(appConfigEntrySchema),
+    /**
+     * The runtime flag `app_pane_layout_v2` (global, default on): the call
+     * keeps its controls in the column beside the app, the share picture is a
+     * capped tile, and the chat can be put away. Only `false` turns it off; an
+     * API from before the flag sends nothing, which a client reads as on.
+     */
+    paneLayoutV2: z.boolean().optional(),
   })
   .strip();
 export type AppsConfig = z.infer<typeof appsConfigSchema>;

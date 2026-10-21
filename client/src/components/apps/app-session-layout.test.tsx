@@ -33,6 +33,8 @@ import {
   setAppsViewer,
 } from "@/lib/apps/app-sessions-store";
 import { AppSessionLayout, ENDED_STRIP_MS } from "./app-session-layout";
+import { toggleAppChat } from "./app-column";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -94,30 +96,59 @@ const voice = {
   stopShare: vi.fn(),
 };
 
-function render(props: { enabled?: boolean; channelId?: string | null } = {}) {
+type Msg = { id: string; authorId: string; body: string; createdAt?: string };
+
+function tree(props: {
+  channelId?: string | null;
+  messages?: Msg[];
+  inCall?: boolean;
+  callShape?: "none" | "compact" | "expanded";
+}) {
+  return (
+    <TooltipProvider>
+    <AppSessionLayout
+      serverId="srv"
+      channelId={props.channelId === undefined ? CHANNEL : props.channelId}
+      channelType="text"
+      viewerId={ME}
+      canModerate={false}
+      people={
+        new Map([
+          [ME, { displayName: "rafa" }],
+          [BIA, { displayName: "bia" }],
+        ])
+      }
+      voice={{ ...voice, inCall: props.inCall ?? false, callShape: props.callShape }}
+      chat={{ messages: props.messages ?? [], username: "rafa" }}
+      chatShortcut="Ctrl + Shift + ."
+    >
+      <div data-testid="chat">
+        <div data-call-split-chat="">
+          <textarea aria-label="composer" />
+        </div>
+      </div>
+    </AppSessionLayout>
+    </TooltipProvider>
+  );
+}
+
+function render(
+  props: {
+    enabled?: boolean;
+    channelId?: string | null;
+    messages?: Msg[];
+    inCall?: boolean;
+    callShape?: "none" | "compact" | "expanded";
+  } = {},
+) {
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
-  act(() =>
-    root!.render(
-      <AppSessionLayout
-        serverId="srv"
-        channelId={props.channelId === undefined ? CHANNEL : props.channelId}
-        channelType="text"
-        viewerId={ME}
-        canModerate={false}
-        people={
-          new Map([
-            [ME, { displayName: "rafa" }],
-            [BIA, { displayName: "bia" }],
-          ])
-        }
-        voice={voice}
-      >
-        <div data-testid="chat">chat</div>
-      </AppSessionLayout>,
-    ),
-  );
+  act(() => root!.render(tree(props)));
+}
+
+function rerender(props: Parameters<typeof tree>[0]) {
+  act(() => root!.render(tree(props)));
 }
 
 beforeEach(() => {
@@ -163,12 +194,141 @@ describe("AppSessionLayout", () => {
     expect(column().className).not.toMatch(/300px/);
   });
 
-  it("seated: the pane takes the conversation's place and the chat moves to 300 px", () => {
+  it("seated: the pane takes the conversation's place and the chat moves to the side column", () => {
     applyChannelApp(CHANNEL, summary(true));
     render();
     expect(document.querySelector('[data-testid="pane"]')).not.toBeNull();
-    expect(column().className).toMatch(/w-\[300px\]/);
+    expect(column().className).toMatch(/w-\[320px\]/);
+    expect(column().getAttribute("data-app-column")).toBe("side");
     expect(strip()?.getAttribute("data-state")).toBe("participant");
+  });
+
+  it("with app_pane_layout_v2 off it is the old 300 px column and no chat toggle", () => {
+    config.state = { ...config.state, paneLayoutV2: false } as typeof config.state;
+    applyChannelApp(CHANNEL, summary(true));
+    render();
+    expect(column().className).toMatch(/w-\[300px\]/);
+    expect(column().hasAttribute("data-app-column")).toBe(false);
+    expect(document.querySelector("[data-app-chat-toggle]")).toBeNull();
+  });
+
+  describe("hiding the chat", () => {
+    const toggle = () => document.querySelector<HTMLButtonElement>("[data-app-chat-toggle]")!;
+
+    beforeEach(() => {
+      window.localStorage.clear();
+    });
+
+    it("is offered only while the app is on screen", () => {
+      applyChannelApp(CHANNEL, summary(false));
+      render();
+      expect(document.querySelector("[data-app-chat-toggle]")).toBeNull();
+    });
+
+    it("with no call takes the whole column away (not focusable), keeps it mounted, and remembers", () => {
+      applyChannelApp(CHANNEL, summary(true));
+      render();
+      const chat = document.querySelector('[data-testid="chat"]')!;
+      expect(toggle().getAttribute("aria-expanded")).toBe("true");
+      expect(toggle().getAttribute("aria-controls")).toBe(column().id);
+      act(() => toggle().click());
+      expect(column().hasAttribute("hidden")).toBe(true);
+      expect(column().getAttribute("data-app-column")).toBe("hidden");
+      expect(toggle().getAttribute("aria-expanded")).toBe("false");
+      expect(document.querySelector('[data-testid="chat"]')).toBe(chat);
+      expect(window.localStorage.getItem("pqp:apps:chat-hidden")).toBe("1");
+      act(() => toggle().click());
+      expect(column().hasAttribute("hidden")).toBe(false);
+      expect(window.localStorage.getItem("pqp:apps:chat-hidden")).toBe("0");
+    });
+
+    it("in a call keeps the call: a card goes under the app, pictures keep the side", () => {
+      applyChannelApp(CHANNEL, summary(true));
+      render({ inCall: true, callShape: "compact" });
+      act(() => toggle().click());
+      expect(column().hasAttribute("hidden")).toBe(false);
+      expect(column().getAttribute("data-app-column")).toBe("bar");
+      rerender({ inCall: true, callShape: "expanded" });
+      expect(column().getAttribute("data-app-column")).toBe("stage");
+    });
+
+    it("moves focus out of the chat to the toggle, and the shortcut brings it back to the composer", () => {
+      applyChannelApp(CHANNEL, summary(true));
+      render();
+      const composer = document.querySelector<HTMLTextAreaElement>("textarea")!;
+      composer.focus();
+      act(() => {
+        toggleAppChat();
+      });
+      act(() => {
+        vi.advanceTimersByTime(50);
+      });
+      expect(document.activeElement).toBe(toggle());
+      act(() => {
+        toggleAppChat();
+      });
+      act(() => {
+        vi.advanceTimersByTime(50);
+      });
+      expect(column().hasAttribute("hidden")).toBe(false);
+      expect(document.activeElement).toBe(composer);
+    });
+
+    it("marks what arrived while it was away: a dot, a count when named", () => {
+      applyChannelApp(CHANNEL, summary(true));
+      const first = [{ id: "m1", authorId: BIA, body: "oi" }];
+      render({ messages: first });
+      act(() => toggle().click());
+      expect(document.querySelector("[data-app-chat-unread]")).toBeNull();
+      rerender({ messages: [...first, { id: "m2", authorId: BIA, body: "bora" }] });
+      expect(document.querySelector("[data-app-chat-unread]")?.getAttribute("data-app-chat-unread")).toBe("dot");
+      expect(toggle().getAttribute("aria-label")).toMatch(/1/);
+      rerender({
+        messages: [
+          ...first,
+          { id: "m2", authorId: BIA, body: "bora" },
+          { id: "m3", authorId: BIA, body: "@rafa vem" },
+        ],
+      });
+      const badge = document.querySelector("[data-app-chat-unread]")!;
+      expect(badge.getAttribute("data-app-chat-unread")).toBe("mention");
+      expect(badge.textContent).toBe("2");
+      act(() => toggle().click());
+      expect(document.querySelector("[data-app-chat-unread]")).toBeNull();
+    });
+
+    it("moving to another channel's app with the chat away takes that channel's newest message as the mark", () => {
+      const OTHER = "33333333-3333-4333-8333-333333333333";
+      applyChannelApp(CHANNEL, summary(true));
+      applyChannelApp(OTHER, { ...summary(true), id: "44444444-4444-4444-8444-444444444444" });
+      render({ messages: [{ id: "a1", authorId: BIA, body: "oi" }] });
+      act(() => toggle().click());
+      const there = [{ id: "b1", authorId: BIA, body: "oi" }];
+      rerender({ channelId: OTHER, messages: there });
+      expect(document.querySelector("[data-app-chat-unread]")).toBeNull();
+      rerender({ channelId: OTHER, messages: [...there, { id: "b2", authorId: BIA, body: "bora" }] });
+      expect(document.querySelector("[data-app-chat-unread]")?.getAttribute("data-app-chat-unread")).toBe("dot");
+    });
+
+    it("a channel whose history loads after the switch does not read its history as unread", () => {
+      const OTHER = "33333333-3333-4333-8333-333333333333";
+      applyChannelApp(CHANNEL, summary(true));
+      applyChannelApp(OTHER, { ...summary(true), id: "44444444-4444-4444-8444-444444444444" });
+      render({ messages: [{ id: "a1", authorId: BIA, body: "oi" }] });
+      act(() => toggle().click());
+      rerender({ channelId: OTHER, messages: [] });
+      const old = new Date(Date.now() - 60_000).toISOString();
+      rerender({
+        channelId: OTHER,
+        messages: [{ id: "b1", authorId: BIA, body: "@rafa antigo", createdAt: old } as Msg],
+      });
+      expect(document.querySelector("[data-app-chat-unread]")).toBeNull();
+    });
+
+    it("the shortcut does nothing without an app on screen", () => {
+      render();
+      expect(toggleAppChat()).toBe(false);
+    });
   });
 
   it("the chat stays mounted when the pane comes and goes", () => {

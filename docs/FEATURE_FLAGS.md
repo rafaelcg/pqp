@@ -857,6 +857,21 @@ Turn it on for one server with `PUT /api/admin/flag-overrides
 { key: "apps", serverId, enabled: true }` or from controles → interruptores,
 and only after the rest of the platform is in.
 
+## `app_pane_layout_v2` (global, default on)
+
+The layout of the column beside a running app (`APP_PANE_LAYOUT_V2`, default
+**on**, global, only `off` / `false` / `0` turns it off). On: the call keeps
+its one set of controls in the column with it (the call dock in the composer
+stands down there), "Mais" takes what does not fit one row, a share picture is a
+16:9 tile at most half the column, the page header stays up, and the strip
+carries a Chat toggle (Cmd/Ctrl+Shift+.) that puts the chat away. Off: the
+column is the old 300 px one with the call docked into the composer. A kill
+switch for a relayout of the call surface, so it is global: it is about the web
+client, not a server, and a client reads it on its next config refresh with no
+reload. Served as `paneLayoutV2` on `GET /api/apps/config?serverId=`; an API
+from before the flag sends nothing, which the client reads as on. See
+`docs/APPS.md` §"In the client", "The strip and the pane".
+
 ## `locadora_share` (per server)
 
 Whether an app of `category: "emulator"` (Locadora) may share its game pane and

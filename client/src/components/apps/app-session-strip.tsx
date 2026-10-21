@@ -1,7 +1,12 @@
 import {
   ChevronDown,
   LoaderCircle,
+  LogOut,
+  MessageSquare,
+  MonitorUp,
   MoreHorizontal,
+  PanelRightClose,
+  PanelRightOpen,
   Square,
   Users,
 } from "lucide-react";
@@ -13,7 +18,9 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dialog, DialogBody } from "@/components/ui/dialog";
 import { Menu } from "@/components/ui/menu";
 import { Switch } from "@/components/ui/switch";
+import { Tooltip } from "@/components/ui/tooltip";
 import { UserAvatar } from "@/components/user/user-avatar";
+import { unreadBadgeText, type ChatUnread } from "@/lib/apps/app-chat-visibility";
 import { formatCountdown, formatSessionDuration } from "@/lib/apps/card-model";
 import {
   announceHandoffAt,
@@ -84,6 +91,19 @@ export interface AppSessionStripProps {
   onTakeHost?: () => void;
   onClose?: () => void;
   onSkipToApp?: () => void;
+  /** The chat beside the app, put away or shown (`app_pane_layout_v2`). */
+  chat?: StripChatToggle;
+}
+
+export interface StripChatToggle {
+  hidden: boolean;
+  /** What arrived while it was away: a dot, or a count when somebody named you. */
+  unread: ChatUnread;
+  /** "Ctrl + Shift + .", for the tooltip. */
+  shortcut: string | null;
+  /** The id of the column it shows and hides (`aria-controls`). */
+  controls: string;
+  onToggle: () => void;
 }
 
 export function lineText(line: StripRoleLine, t: T): string {
@@ -371,6 +391,12 @@ function LiveStrip(props: AppSessionStripProps & { model: LiveStripModel }) {
   const warn = model.tone === "warn";
   const reconnecting = model.phase === "reconnecting";
   const line = lineText(model.line, t);
+  // ONE PRIMARY BUTTON. Whoever may end the session sees Encerrar and finds
+  // Sair in the menu (leaving is the rarer act for a host, and two buttons side
+  // by side that both make the app go away read as a choice to be puzzled
+  // over). Somebody who can only leave keeps Sair on the strip.
+  const leaveInMenu =
+    Boolean(model.actions.leave && model.actions.end && model.seated) && !reconnecting;
 
   const moreItems = [
     {
@@ -379,6 +405,16 @@ function LiveStrip(props: AppSessionStripProps & { model: LiveStripModel }) {
       icon: Users,
       onSelect: () => actions.setPeople(true),
     },
+    ...(leaveInMenu
+      ? [
+          {
+            id: "leave",
+            label: t("apps.strip.leave"),
+            icon: LogOut,
+            onSelect: () => onLeave?.(),
+          },
+        ]
+      : []),
   ];
 
   return (
@@ -389,9 +425,12 @@ function LiveStrip(props: AppSessionStripProps & { model: LiveStripModel }) {
       data-state={model.phase}
       className={cn(
         "@container/strip flex min-h-[52px] shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b py-1.5 pl-4 pr-3",
-        // Under 1100 px of strip the share switch keeps its name for assistive
-        // tech and drops the printed label (mock 03), so the row does not wrap.
-        "@max-[1099px]/strip:[&_[role=switch]>span:first-child]:sr-only",
+        // Under 760 px of strip the share switch keeps its name for assistive
+        // tech and drops the printed label, so the row does not wrap. It used
+        // to be 1100, which is most laptop windows with the channel list open,
+        // and left a bare switch nobody could name (Locadora feedback,
+        // 2026-10-21); the count and the faces go first now, at 960.
+        "@max-[759px]/strip:[&_[role=switch]>span:first-child]:sr-only",
         stripShell(model),
         entering && "app-strip-in",
       )}
@@ -467,7 +506,7 @@ function LiveStrip(props: AppSessionStripProps & { model: LiveStripModel }) {
             {t("apps.strip.reconnectingBtn")}
           </Button>
         ) : null}
-        {model.actions.leave && !reconnecting ? (
+        {model.actions.leave && !reconnecting && !leaveInMenu ? (
           <Button type="button" size="sm" variant="ghost" onClick={onLeave}>
             {t("apps.strip.leave")}
           </Button>
@@ -493,6 +532,12 @@ function LiveStrip(props: AppSessionStripProps & { model: LiveStripModel }) {
               <MoreHorizontal aria-hidden className="h-4 w-4" />
             </button>
           </Menu>
+        ) : null}
+        {props.chat ? (
+          <>
+            <span aria-hidden className="h-5 w-px bg-border" />
+            <ChatToggle chat={props.chat} />
+          </>
         ) : null}
       </div>
       {props.error ? (
@@ -549,6 +594,12 @@ function ShareControl({
           {t("apps.strip.sharingTo", { count: share.viewers })}
         </span>
       ) : null}
+      {/* Where the printed label steps aside (a narrow strip), the screen icon
+          keeps the switch nameable at a glance; its name stays on the switch. */}
+      <MonitorUp
+        aria-hidden
+        className="hidden h-4 w-4 shrink-0 text-text-secondary @max-[759px]/strip:block"
+      />
       <Switch
         checked={share.on}
         onCheckedChange={(next) => onChange?.(next)}
@@ -560,6 +611,77 @@ function ShareControl({
       />
     </>
   );
+}
+
+/**
+ * "Chat": shows and hides the chat beside the app. The last control on the
+ * strip, because it is about the layout and not about the session. While the
+ * chat is away it carries what arrived meanwhile: a dot for messages, a count
+ * on the danger fill when one of them names this person.
+ */
+function ChatToggle({ chat, compact = false }: { chat: StripChatToggle; compact?: boolean }) {
+  const { t } = useTranslation();
+  const label = chat.hidden ? t("apps.chat.show") : t("apps.chat.hide");
+  const { count, mention } = chat.unread;
+  const pending = chat.hidden && count > 0;
+  const spoken = pending
+    ? mention
+      ? t("apps.chat.unreadMention", { count })
+      : t("apps.chat.unread", { count })
+    : null;
+  const Icon = compact ? MessageSquare : chat.hidden ? PanelRightOpen : PanelRightClose;
+  return (
+    <Tooltip
+      label={label}
+      name={spoken ? `${label}. ${spoken}` : label}
+      detail={chat.shortcut ?? undefined}
+      side="bottom"
+    >
+      <button
+        type="button"
+        data-app-chat-toggle=""
+        data-chat-hidden={chat.hidden ? "true" : "false"}
+        aria-expanded={!chat.hidden}
+        aria-controls={chat.controls}
+        aria-keyshortcuts={chat.shortcut ? ariaShortcut(chat.shortcut) : undefined}
+        onClick={chat.onToggle}
+        className={cn(
+          "relative inline-flex shrink-0 items-center gap-1.5 rounded-[var(--radius-control)] text-sm text-text-secondary transition-colors duration-[var(--duration-fast)] hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
+          compact ? "h-11 w-11 justify-center" : "h-8 px-2 pointer-coarse:h-11",
+          !chat.hidden && !compact && "text-text",
+        )}
+      >
+        <Icon aria-hidden className={compact ? "h-5 w-5" : "h-4 w-4"} />
+        {compact ? null : <span aria-hidden>{t("apps.chat.label")}</span>}
+        {pending ? (
+          mention ? (
+            <span
+              aria-hidden
+              data-app-chat-unread="mention"
+              className="app-badge-in absolute -right-1 -top-1 grid h-4 min-w-4 place-items-center rounded-full bg-danger px-1 text-[10px] font-bold leading-none text-on-danger ring-2 ring-surface-1"
+            >
+              {unreadBadgeText(count)}
+            </span>
+          ) : (
+            <span
+              aria-hidden
+              data-app-chat-unread="dot"
+              className="app-badge-in absolute right-0.5 top-0.5 h-2 w-2 rounded-full bg-accent ring-2 ring-surface-1"
+            />
+          )
+        ) : null}
+      </button>
+    </Tooltip>
+  );
+}
+
+/** "Ctrl + Shift + ." as `aria-keyshortcuts` wants it: "Control+Shift+.". */
+function ariaShortcut(printed: string): string {
+  return printed
+    .split("+")
+    .map((part) => part.trim())
+    .map((part) => (part === "Ctrl" ? "Control" : part === "Cmd" || part === "⌘" ? "Meta" : part))
+    .join("+");
 }
 
 function EndConfirm({
@@ -663,7 +785,7 @@ function CompactStrip(props: AppSessionStripProps & { model: LiveStripModel }) {
       data-testid="app-session-strip"
       data-state={model.phase}
       className={cn(
-        "flex min-h-14 shrink-0 items-center gap-3 border-b py-1.5 pl-3 pr-1",
+        "flex min-h-14 shrink-0 items-center gap-2 border-b py-1.5 pl-3 pr-2",
         stripShell(model),
         entering && "app-strip-in",
       )}
@@ -708,6 +830,7 @@ function CompactStrip(props: AppSessionStripProps & { model: LiveStripModel }) {
           {t(model.actions.enter === "join" ? "apps.strip.join" : "apps.strip.watch")}
         </Button>
       ) : null}
+      {props.chat && !reconnecting ? <ChatToggle chat={props.chat} compact /> : null}
       {reconnecting ? (
         <span className="pr-3">
           <Spinner className="h-4 w-4" />
