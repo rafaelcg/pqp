@@ -647,6 +647,8 @@ export class EjsRuntime implements EmulatorRuntime {
   /** Silent while the person muted or turbo is above 3x: what the hub holds, always, whatever the core is doing. */
   private applySilence(): void {
     audioHub().setSilent(this.userMuted || this.turboMuted);
+    // the share's copy of the sound ignores the person's own mute but not turbo: above 3x it is a squeal for everybody
+    audioHub().setTapSilent(this.turboMuted);
   }
 
   /**

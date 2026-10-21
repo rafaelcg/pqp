@@ -25,6 +25,8 @@ export { PortClient, REQUEST_TIMEOUT_MS, type Unsubscribe } from "./client.js";
 export {
   connectWithSync,
   createSyncApi,
+  type ShareAudioApi,
+  type ShareAudioBlock,
   type ActivityApi,
   type ActivityState,
   type SyncApi,

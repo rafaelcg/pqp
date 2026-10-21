@@ -1674,6 +1674,7 @@
   "apps.strip.sharingAlone": "Compartiendo",
   "apps.strip.shareOtherShare": "Ya estás compartiendo otra pantalla. Páralo primero.",
   "apps.strip.shareWholeTab": "En este navegador se comparte toda la pestaña, con el chat.",
+  "apps.strip.shareNoGameSound": "Compartiendo solo la imagen: esta transmisión sale sin el sonido del juego.",
   "apps.strip.more": "Más opciones de la app",
   "apps.strip.seePeople": "Ver quién está dentro",
   "apps.strip.peopleTitle": "Quién está en {app}",

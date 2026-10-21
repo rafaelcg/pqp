@@ -590,6 +590,58 @@ describe("screen share audio", () => {
     expect(displayMediaCalls[0]).not.toHaveProperty("preferCurrentTab");
   });
 
+  /**
+   * "Share inside Locadora has no sound" (2026-10-21). A share of the app pane is a capture of the pqp tab, and the
+   * frame cannot be tapped from the page, so the app hands its sound over and the page makes a track of it
+   * (`lib/apps/share-audio.ts`). That track is the share's sound; whatever the capture carried (the tab's, which
+   * holds the call's voices) is not.
+   */
+  describe("the app pane's own sound", () => {
+    const appSound = () => ({
+      kind: "audio",
+      onended: null,
+      stop: () => stoppedTracks.push("app:audio"),
+    });
+
+    it("is the share's sound, and the capture's own sound (the call's voices) is dropped", async () => {
+      displayMedia = async () => fakeCapture("cap-tab", true, "browser");
+      const { voice } = await connectedMesh();
+      const app = appSound();
+      await voice.startScreenShare(false, { preferBrowserTab: true, appAudio: app as never });
+
+      // no sound is asked of the browser: nothing to tick, nothing that could echo the call
+      expect(displayMediaCalls[0]).toMatchObject({ audio: false, systemAudio: "exclude", windowAudio: "exclude" });
+      const state = voice.getState();
+      expect(state.isSharingScreen).toBe(true);
+      expect(state.localScreenStream!.getAudioTracks()).toEqual([app]);
+      expect(stoppedTracks).toContain("cap-tab:audio");
+      expect(state.isSharingScreenAudio).toBe(true);
+      // not "sem som": the share has sound
+      expect(state.notice).toBeNull();
+    });
+
+    it("rides on a picture the caller already cropped (the region capture), with no second picker", async () => {
+      const { voice } = await connectedMesh();
+      const app = appSound();
+      const pane = fakeCapture("pane", false, "browser");
+      await voice.startScreenShare(false, { stream: pane as never, appAudio: app as never, maxFrameRate: 30 });
+
+      expect(displayMediaCalls).toHaveLength(0);
+      const state = voice.getState();
+      expect(state.localScreenStream!.getAudioTracks()).toEqual([app]);
+      expect(state.isSharingScreenAudio).toBe(true);
+    });
+
+    it("is what a share with no app sound used to be: a picture and a silent share", async () => {
+      const { voice } = await connectedMesh();
+      const pane = fakeCapture("pane", false, "browser");
+      await voice.startScreenShare(false, { stream: pane as never, maxFrameRate: 30 });
+
+      expect(voice.getState().localScreenStream!.getAudioTracks()).toEqual([]);
+      expect(voice.getState().isSharingScreenAudio).toBe(false);
+    });
+  });
+
   it("flags a whole-screen share that carries sound", async () => {
     // The only surface that can be carrying everybody's voices, and the one
     // the UI says so about while it is live.

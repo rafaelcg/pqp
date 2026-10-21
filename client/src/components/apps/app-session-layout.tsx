@@ -14,6 +14,7 @@ import {
 } from "@/lib/apps/app-sessions-store";
 import type { CardPerson } from "@/lib/apps/card-model";
 import { openPaneCapture, supportsRegionCapture } from "@/lib/apps/pane-share";
+import { ShareAudioRelay } from "@/lib/apps/share-audio";
 import { appSessionWire } from "@/lib/apps/session-wire-instance";
 import { takeHostRequest } from "@/lib/apps/strip-api";
 import { buildEndedStrip, buildLiveStrip } from "@/lib/apps/strip-model";
@@ -88,7 +89,7 @@ export interface AppSessionVoice {
   /** Other people in the call, to say who the share reaches. */
   others: number;
   /** Publish `stream` (or open the usual picker steered at a tab when absent). Resolves to whether it is out. */
-  startShare(stream?: MediaStream): Promise<boolean>;
+  startShare(stream?: MediaStream, extras?: { appAudio?: MediaStreamTrack }): Promise<boolean>;
   stopShare(): void;
 }
 
@@ -205,6 +206,24 @@ export function AppSessionLayout(props: AppSessionLayoutProps) {
   const joinedAs = useRef<{ sessionId: string; spectator: boolean } | null>(null);
   const ownedShare = useRef(false);
   const shareWholeTab = useRef(false);
+  /**
+   * The app's own sound for a share of its pane: the frame hands it over (`share.audio`) and it rides with the share
+   * as its sound. The tab's sound is not used: it holds the call's voices.
+   */
+  const shareAudio = useRef<ShareAudioRelay | null>(null);
+  if (!shareAudio.current) shareAudio.current = new ShareAudioRelay();
+  useEffect(() => () => shareAudio.current?.end(), []);
+  /** The strip is saying the share goes out without the game's sound: it is taken down with that share. */
+  const soundNotice = useRef(false);
+  // the audio that carries the game's sound stopped mid-share and the browser would not start it again: it is silent
+  useEffect(
+    () =>
+      shareAudio.current!.onLost(() => {
+        soundNotice.current = true;
+        setError(t("apps.strip.shareNoGameSound"));
+      }),
+    [t],
+  );
 
   const person = useCallback(
     (userId: string): CardPerson | undefined => {
@@ -347,7 +366,15 @@ export function AppSessionLayout(props: AppSessionLayoutProps) {
 
   const shareOn = ownedShare.current && voice.sharing;
   useEffect(() => {
-    if (!voice.sharing) ownedShare.current = false;
+    if (!voice.sharing) {
+      ownedShare.current = false;
+      shareAudio.current?.end();
+      // the "no sound of the game" line belongs to the share it was said about
+      if (soundNotice.current) {
+        soundNotice.current = false;
+        setError(null);
+      }
+    }
   }, [voice.sharing]);
 
   // The share belongs to the session: leaving or losing the pane ends it.
@@ -367,6 +394,7 @@ export function AppSessionLayout(props: AppSessionLayoutProps) {
         if (ownedShare.current) {
           ownedShare.current = false;
           voice.stopShare();
+          shareAudio.current?.end();
         }
         return false;
       }
@@ -380,27 +408,47 @@ export function AppSessionLayout(props: AppSessionLayoutProps) {
       try {
         let started: boolean;
         const element = paneRef.current?.element() ?? null;
+        // The app is asked for its sound now (a null track: this browser cannot play it into a share, and the share
+        // goes out as a picture only, as it always could).
+        const relay = shareAudio.current!;
+        const appAudio = await relay.begin();
+        let withSound = appAudio !== null;
         if (!isDesktopApp() && element && supportsRegionCapture()) {
           const capture = await openPaneCapture(element);
           shareWholeTab.current = !capture.cropped;
-          started = await voice.startShare(capture.stream);
+          // The sound is the pane's, so it goes only with a picture that IS the pane: the person who picked some
+          // other surface in the picker is sharing something this app's sound does not belong to.
+          if (!capture.cropped) {
+            relay.end();
+            withSound = false;
+          }
+          started = await voice.startShare(capture.stream, withSound && appAudio ? { appAudio } : undefined);
           if (!started) {
             for (const track of capture.stream.getTracks()) track.stop();
           }
         } else {
           shareWholeTab.current = true;
-          started = await voice.startShare(undefined);
+          started = await voice.startShare(undefined, appAudio ? { appAudio } : undefined);
         }
         ownedShare.current = started;
+        if (!started) {
+          relay.end();
+        } else if (!withSound) {
+          // said, not silent: the people watching will hear nothing of the game, and the sharer should know before
+          // they ask why
+          soundNotice.current = true;
+          setError(t("apps.strip.shareNoGameSound"));
+        }
         return started;
       } catch {
         // the person cancelled the picker, or the browser refused
+        shareAudio.current?.end();
         return false;
       } finally {
         setSharePending(false);
       }
     },
-    [voice, sharePending],
+    [voice, sharePending, t],
   );
 
   // "Entrar na call" from the strip: busy until the seat lands (or 8 s pass).
@@ -688,6 +736,7 @@ export function AppSessionLayout(props: AppSessionLayoutProps) {
             canWatch={app.players.spectators && app.shareAllowed}
             onShare={setShare}
             shared={shareOn}
+            shareAudio={shareAudio.current ?? undefined}
             className={cn(paneClass, dragWidth !== null && "pointer-events-none select-none")}
           />
         ) : null}

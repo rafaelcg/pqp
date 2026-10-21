@@ -68,6 +68,11 @@ export async function openPaneCapture(
       navigator.mediaDevices.getDisplayMedia(constraints));
   const constraints = {
     video: { frameRate: { ideal: options.maxFrameRate ?? 30 } },
+    // No sound from the browser, on purpose. The tab's own sound holds every voice of the call (measured: a tab
+    // capture of the pqp tab carries a tone played by a call's <audio>, `restrictOwnAudio` or not), so asking for it
+    // would send the call back to the people speaking. The app's own sound is handed over through the bridge
+    // instead (`share.audio`, `lib/apps/share-audio.ts`) and published with this picture. This was `false` before
+    // too, and nothing replaced it: a game shared into a call arrived as a picture only.
     audio: false,
     // Chromium-only hints; an unknown member is ignored elsewhere.
     preferCurrentTab: true,

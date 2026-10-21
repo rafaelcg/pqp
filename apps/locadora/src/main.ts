@@ -8,7 +8,9 @@ import "./styles/shelf.css";
 import "./styles/onboarding.css";
 import "./styles/slots.css";
 import "./styles/flow.css";
-import { applyTheme, connectWithSync, type ActivityApi, type PqpApp, type SyncApi } from "@pqp/app-sdk";
+import { applyTheme, connectWithSync, type ActivityApi, type PqpApp, type ShareAudioApi, type SyncApi } from "@pqp/app-sdk";
+import { audioHub } from "./audio";
+import { wireShareSound } from "./share-sound";
 import { createActivityReporter } from "./activity";
 import { createGameSession, type GameInput, type GameSession, type StartIntent } from "./game-session";
 import { EMULATOR_LANGUAGE, pickLocale, STRINGS, type Strings } from "./i18n";
@@ -104,9 +106,10 @@ async function main() {
   let app: PqpApp;
   let syncApi: SyncApi;
   let activityApi: ActivityApi;
+  let shareAudioApi: ShareAudioApi;
   try {
     // `connect()` plus the port's `sync.*` and `ui.activity` calls, on their own SDK module so other apps build unchanged
-    ({ app, sync: syncApi, activity: activityApi } = await connectWithSync());
+    ({ app, sync: syncApi, activity: activityApi, shareAudio: shareAudioApi } = await connectWithSync());
   } catch {
     statusLine.textContent = "";
     endedLine.textContent = t.outside;
@@ -127,6 +130,9 @@ async function main() {
   };
   paintTheme(app.hello.theme);
   app.on("theme", (theme) => paintTheme(theme));
+
+  // the game's sound goes out with a share of the pane, only while the page asks for it (src/share-sound.ts)
+  wireShareSound(shareAudioApi, audioHub());
 
   // ---- the device store: the host's, or memory when the host will not keep anything (src/store-bridge.ts) ----
   const { store, durable } = await openDeviceStore(hostFromApp(app.store));

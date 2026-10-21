@@ -1669,6 +1669,7 @@
   "apps.strip.sharingAlone": "Sharing",
   "apps.strip.shareOtherShare": "You are already sharing another screen. Stop it first.",
   "apps.strip.shareWholeTab": "In this browser the whole tab is shared, chat included.",
+  "apps.strip.shareNoGameSound": "Sharing the picture only: this share goes out without the game's sound.",
   "apps.strip.more": "More app options",
   "apps.strip.seePeople": "See who is in",
   "apps.strip.peopleTitle": "Who is in {app}",

@@ -2,6 +2,7 @@ import { APP_PLATFORM_API, bridgeAppHelloSchema, type AppEndReason } from "@pqp/
 import { isOnAppsOrigin } from "./apps-origin";
 import { BridgeHost, type BridgeHostOptions } from "./bridge-host";
 import { ensureAppFramePolicy } from "./frame-policy";
+import type { ShareAudioRelay } from "./share-audio";
 import {
   AppTransportError,
   type AppErrorCode,
@@ -54,6 +55,8 @@ export interface AppFrameControllerOptions {
   onResize?: (height: number) => void;
   /** pqp's own screen share flow; resolves to whether the pane is shared now. */
   onShare?: (on: boolean) => Promise<boolean>;
+  /** Where the app's sound for a running share goes, and what tells the app to send it (`share.audio`). */
+  shareAudio?: ShareAudioRelay;
   /** Forwarded to the bridge host (tests stand in for the picker, theme and fetch). */
   host?: Pick<
     BridgeHostOptions,
@@ -144,10 +147,13 @@ export function mountAppFrame(options: AppFrameControllerOptions): AppFrameContr
         return doc.fullscreenElement === iframe;
       },
       share: (on) => (options.onShare ? options.onShare(on) : Promise.reject(new Error("no share flow"))),
+      shareAudio: (block) => options.shareAudio?.push(block),
     },
     onViolation: () => remove("flood"),
     onEnded: (reason) => setStatus({ kind: "ended", reason }),
   });
+  // the app is asked for its sound while a share of the pane runs (and once more if the frame reloads mid-share)
+  const unsubscribeShareAudio = options.shareAudio?.subscribe((on) => host.setShareAudioWanted(on));
 
   /** Take the frame out of the page and stop talking to it. */
   function remove(reason: AppFrameErrorReason, code?: AppErrorCode) {
@@ -155,6 +161,7 @@ export function mountAppFrame(options: AppFrameControllerOptions): AppFrameContr
     window.removeEventListener("message", onMessage);
     iframe?.remove();
     iframe = null;
+    unsubscribeShareAudio?.();
     host.detach();
     host.leave();
     setStatus({ kind: "error", reason, code });
@@ -240,6 +247,7 @@ export function mountAppFrame(options: AppFrameControllerOptions): AppFrameContr
         window.removeEventListener("message", onMessage);
         iframe?.remove();
         iframe = null;
+        unsubscribeShareAudio?.();
         host.detach();
         host.leave();
         destroyed = true;

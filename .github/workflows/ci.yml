@@ -538,6 +538,16 @@ jobs:
         env:
           E2E_DATABASE_URL: ${{ env.DATABASE_URL }}
         run: pnpm --filter @pqp/client e2e:locadora-guest
+      # A game shared into a voice call, MEASURED at the viewer
+      # (client/e2e/locadora-share-sound/): two real clients in one call, the
+      # real Locadora build running a generated pattern, and the viewer's
+      # inbound audio read for the game's tone (must be heard) and for the
+      # call's own (must not come back inside the share).
+      - name: E2E Locadora share sound (two clients, measured at the viewer)
+        if: matrix.apps
+        env:
+          E2E_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm --filter @pqp/client e2e:locadora-share-sound
 
       # The presenter's camera held to the film, measured off the pictures
       # (client/playwright.camera-sync.config.ts): the real watch player on a
