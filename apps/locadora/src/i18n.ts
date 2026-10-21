@@ -265,6 +265,8 @@ export interface Strings {
   "sync.badge": string;
   "sync.shelfChip": string;
   "rules.sync": string;
+  /** The guest player (no account): where the shelf lives. */
+  "rules.guest": string;
   "ended.synced": string;
   "gaveta.attest": string;
   /* the first visit and the controller map (L7) */
@@ -592,6 +594,7 @@ export const STRINGS = {
     "sync.badge": "na conta",
     "sync.shelfChip": "Saves na conta",
     "rules.sync": "Saves na conta: teus saves, e uma fotinho de cada, vão também pra tua conta do pqp. O jogo nunca vai.",
+    "rules.guest": "Sem conta: tuas fitas e teus saves ficam só neste navegador.",
     "ended.synced": "A sessão acabou. Teus saves ficaram guardados neste aparelho e na tua conta.",
     "gaveta.attest": "Essa fita é minha e eu tenho direito de jogar.",
     "onb.1.sub": "Bah, bem-vindo!",
@@ -911,6 +914,7 @@ export const STRINGS = {
     "sync.badge": "on your account",
     "sync.shelfChip": "Saves on your account",
     "rules.sync": "Saves on your account: your saves, and a small picture of each, also go to your pqp account. The game never does.",
+    "rules.guest": "No account: your cartridges and saves stay in this browser only.",
     "ended.synced": "The session ended. Your saves are kept on this device and on your account.",
     "gaveta.attest": "This cartridge is mine and I have the right to play it.",
     "onb.1.sub": "Welcome!",
@@ -1230,6 +1234,7 @@ export const STRINGS = {
     "sync.badge": "en la cuenta",
     "sync.shelfChip": "Partidas en la cuenta",
     "rules.sync": "Partidas en la cuenta: tus partidas, y una imagen pequeña de cada una, también van a tu cuenta de pqp. El juego nunca va.",
+    "rules.guest": "Sin cuenta: tus cartuchos y tus partidas se quedan solo en este navegador.",
     "ended.synced": "La sesión terminó. Tus partidas guardadas se quedan en este dispositivo y en tu cuenta.",
     "gaveta.attest": "Este cartucho es mío y tengo derecho a jugarlo.",
     "onb.1.sub": "¡Bienvenido!",

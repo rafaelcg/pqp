@@ -23,6 +23,7 @@ import {
   type BridgeParticipant,
   type BridgeRequestType,
   type BridgeTheme,
+  type BridgeUiActivityState,
   type JsonValue,
 } from "@pqp/shared";
 import { AvatarCache } from "./avatar";
@@ -120,6 +121,15 @@ export interface BridgeHostOptions {
    */
   apiOrigin?: string;
   now?: () => number;
+  /**
+   * The signed-out guest player: `hello` says `guest: true` so the app hides
+   * what needs an account. The guest host also passes `saveSync: null`, no
+   * share flow and its own device store (`openGuestDeviceStore`); this flag is
+   * only what the app is told.
+   */
+  guest?: boolean;
+  /** `ui.activity`: what the person is doing in the app (playing, paused, browsing). Unset, the call is answered and ignored. */
+  onActivity?: (state: BridgeUiActivityState) => void;
   /** Called with a reason when the app behaves in a way that should end the frame. */
   onViolation?: (reason: BridgeViolation) => void;
   /** Called when the session is over (`app-ended`). */
@@ -379,6 +389,7 @@ export class BridgeHost {
         isHost: this.snapshot.isHost,
       },
       connection: this.connection,
+      ...(this.options.guest ? { guest: true } : {}),
     });
     if (!hello.success) {
       this.log("hello did not pass its own schema", hello.error.issues[0]);
@@ -711,6 +722,16 @@ export class BridgeHost {
         } catch {
           return this.fail(id, "unavailable");
         }
+      }
+
+      case "ui.activity": {
+        // a closed enum and nothing else: the page learns "playing / paused / browsing", never what is on screen
+        try {
+          this.options.onActivity?.(message.state);
+        } catch (error) {
+          this.log("onActivity threw", error);
+        }
+        return this.succeed(id, message.type, null);
       }
 
       case "session.end": {

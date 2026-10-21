@@ -66,12 +66,15 @@ afterEach(() => {
 
 const url = () => `${baseUrl}/api/public/apps/config`;
 
+/** Every field off: no guest play (and no database read: no apps origin here), no cloud-saves line. */
+const OFF = { enabled: false, guest: false, cloudSaves: false, locadora: null };
+
 describe("public apps config", () => {
   it("answers 200 {enabled:true} unauthenticated when the flag is on", async () => {
     process.env.APPS_LANDING = "true";
     const res = await fetch(url(), { headers: { Origin: "https://pqp.gg" } });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ enabled: true });
+    expect(await res.json()).toEqual({ ...OFF, enabled: true });
     expect(res.headers.get("cache-control")).toBe("public, max-age=60");
     expect(res.headers.get("set-cookie")).toBeNull();
   });
@@ -80,13 +83,13 @@ describe("public apps config", () => {
     delete process.env.APPS_LANDING;
     const res = await fetch(url());
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ enabled: false });
+    expect(await res.json()).toEqual(OFF);
   });
 
   it("only the exact string 'true' turns it on", async () => {
     for (const raw of ["1", "on", "TRUE", "yes", ""]) {
       process.env.APPS_LANDING = raw;
-      expect(await (await fetch(url())).json(), raw).toEqual({ enabled: false });
+      expect(await (await fetch(url())).json(), raw).toEqual(OFF);
     }
   });
 
@@ -96,8 +99,28 @@ describe("public apps config", () => {
       headers: { Authorization: "Bearer expired.jwt.token" },
     });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ enabled: true });
+    expect(await res.json()).toEqual({ ...OFF, enabled: true });
     expect(resolveAuthUser).not.toHaveBeenCalled();
+  });
+
+  it("guest play stays off with no apps origin, whatever its flag says, and the copy flag is its own bit", async () => {
+    const saved = { guest: process.env.LOCADORA_GUEST, saves: process.env.LOCADORA_SAVES_ANNOUNCED, origin: process.env.APPS_ORIGIN };
+    try {
+      process.env.APPS_LANDING = "true";
+      process.env.LOCADORA_GUEST = "true";
+      process.env.LOCADORA_SAVES_ANNOUNCED = "true";
+      delete process.env.APPS_ORIGIN;
+      expect(await (await fetch(url())).json()).toEqual({ ...OFF, enabled: true, cloudSaves: true });
+    } finally {
+      for (const [key, value] of [
+        ["LOCADORA_GUEST", saved.guest],
+        ["LOCADORA_SAVES_ANNOUNCED", saved.saves],
+        ["APPS_ORIGIN", saved.origin],
+      ] as const) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 
   it("refuses non-GET methods with 405", async () => {

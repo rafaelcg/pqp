@@ -4826,3 +4826,186 @@ html[data-immersive-stage] [data-immersive-hide] {
     display: none;
   }
 }
+
+/*
+ * LOCADORA: the public page (`pages/locadora-page.tsx`) and the guest player
+ * (`pages/locadora-guest-page.tsx`).
+ *
+ * The hero is a night scene in EVERY theme, like the old hero photograph was:
+ * it is art direction (neon only reads on the dark), so its colours are
+ * identity constants here and not role tokens; everything around it follows
+ * the visitor's theme. The TV's test pattern is our own colour bars, never a
+ * game's picture.
+ *
+ * Motion, all of it decorative and all of it off under reduced motion (the
+ * block below): the sign flickers once and then now and again, the cartridge
+ * slides into the console, and the TV switches on to its bars when it lands.
+ * Each element's OWN style is the end state (house rule above `vem-*`), so
+ * with the animations gone the scene is simply finished.
+ */
+:root {
+  --locadora-night: oklch(0.16 0.055 292);
+  --locadora-night-2: oklch(0.24 0.1 305);
+  --locadora-horizon: oklch(0.45 0.2 350 / 0.55);
+  --locadora-grid: oklch(0.72 0.2 330 / 0.28);
+  --locadora-neon-pink: oklch(0.74 0.24 345);
+  --locadora-neon-cyan: oklch(0.87 0.14 205);
+  --locadora-neon-core: oklch(0.97 0.03 345);
+  --locadora-led: oklch(0.85 0.2 145);
+  --locadora-screen-off: oklch(0.2 0.02 260);
+  --locadora-bar-1: oklch(0.88 0 0);
+  --locadora-bar-2: oklch(0.9 0.17 100);
+  --locadora-bar-3: oklch(0.86 0.13 200);
+  --locadora-bar-4: oklch(0.82 0.22 145);
+  --locadora-bar-5: oklch(0.66 0.27 330);
+  --locadora-bar-6: oklch(0.6 0.23 28);
+  --locadora-bar-7: oklch(0.48 0.25 265);
+  --locadora-bar-low: oklch(0.25 0.02 260);
+}
+
+.loc-night {
+  background-color: var(--locadora-night);
+  background-image:
+    radial-gradient(120% 80% at 75% 105%, var(--locadora-horizon), transparent 60%),
+    radial-gradient(90% 70% at 10% 0%, var(--locadora-night-2), transparent 65%);
+}
+
+/* A synthwave floor under the stage: two families of lines, the horizontal
+   ones closer together near the horizon, drawn with gradients only. */
+.loc-floor {
+  background-image:
+    linear-gradient(to top, var(--locadora-grid) 1px, transparent 1px),
+    linear-gradient(to right, var(--locadora-grid) 1px, transparent 1px);
+  background-size: 100% 18px, 36px 100%;
+  mask-image: linear-gradient(to top, var(--locadora-night), transparent 85%);
+  transform: perspective(240px) rotateX(55deg);
+  transform-origin: bottom;
+}
+
+.loc-stage {
+  container-type: inline-size;
+}
+
+.loc-sign-text {
+  font-size: 5.5cqw;
+  letter-spacing: 0.08em;
+  color: var(--locadora-neon-core);
+  text-shadow:
+    0 0 0.06em var(--locadora-neon-core),
+    0 0 0.18em var(--locadora-neon-pink),
+    0 0 0.45em var(--locadora-neon-pink),
+    0 0 0.9em var(--locadora-neon-pink);
+  animation: loc-flicker 7s linear 0.2s infinite;
+}
+
+.loc-neon-word {
+  color: var(--locadora-neon-core);
+  text-shadow:
+    0 0 0.08em var(--locadora-neon-pink),
+    0 0 0.35em var(--locadora-neon-pink);
+}
+
+.loc-eyebrow {
+  color: var(--locadora-neon-cyan);
+  border-color: color-mix(in oklch, var(--locadora-neon-cyan) 55%, transparent);
+  text-shadow: 0 0 0.6em color-mix(in oklch, var(--locadora-neon-cyan) 70%, transparent);
+}
+
+@keyframes loc-flicker {
+  0%, 3.5%, 5%, 6.5%, 100% {
+    opacity: 1;
+  }
+  4%, 6% {
+    opacity: 0.35;
+  }
+  5.5% {
+    opacity: 0.8;
+  }
+}
+
+.loc-cart {
+  animation: loc-cart-in 0.9s var(--ease-emphasized) 0.5s backwards;
+}
+
+@keyframes loc-cart-in {
+  from {
+    transform: translateY(-62%);
+    opacity: 0;
+  }
+  35% {
+    opacity: 1;
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+.loc-screen {
+  background: linear-gradient(
+      to right,
+      var(--locadora-bar-1) 0 14.28%,
+      var(--locadora-bar-2) 14.28% 28.57%,
+      var(--locadora-bar-3) 28.57% 42.85%,
+      var(--locadora-bar-4) 42.85% 57.14%,
+      var(--locadora-bar-5) 57.14% 71.42%,
+      var(--locadora-bar-6) 71.42% 85.71%,
+      var(--locadora-bar-7) 85.71% 100%
+    );
+  animation: loc-tv-on 0.6s var(--ease-emphasized) 1.25s backwards;
+}
+
+/* The scan lines on top of the bars, so the picture reads as a tube. */
+.loc-screen::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent 0 2px,
+    var(--locadora-bar-low) 2px 3px
+  );
+  opacity: 0.35;
+}
+
+@keyframes loc-tv-on {
+  from {
+    transform: scale(1, 0.02);
+    filter: brightness(3);
+    background: var(--locadora-screen-off);
+  }
+  60% {
+    transform: scale(1, 1);
+    filter: brightness(1.6);
+  }
+  to {
+    filter: brightness(1);
+  }
+}
+
+.loc-led {
+  background: var(--locadora-led);
+  box-shadow: 0 0 0.6em var(--locadora-led);
+  animation: loc-led-on 0.3s linear 1.35s backwards;
+}
+
+@keyframes loc-led-on {
+  from {
+    opacity: 0.15;
+    box-shadow: none;
+  }
+}
+
+/* The guest player's sign-up card: it rises in from the corner, once. */
+.loc-upsell-in {
+  animation: vem-rise 0.5s var(--ease-emphasized) backwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loc-sign-text,
+  .loc-cart,
+  .loc-screen,
+  .loc-led,
+  .loc-upsell-in {
+    animation: none;
+  }
+}

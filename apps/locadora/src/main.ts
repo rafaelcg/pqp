@@ -8,7 +8,8 @@ import "./styles/shelf.css";
 import "./styles/onboarding.css";
 import "./styles/slots.css";
 import "./styles/flow.css";
-import { applyTheme, connectWithSync, type PqpApp, type SyncApi } from "@pqp/app-sdk";
+import { applyTheme, connectWithSync, type ActivityApi, type PqpApp, type SyncApi } from "@pqp/app-sdk";
+import { createActivityReporter } from "./activity";
 import { createGameSession, type GameInput, type GameSession, type StartIntent } from "./game-session";
 import { EMULATOR_LANGUAGE, pickLocale, STRINGS, type Strings } from "./i18n";
 import type { Platform } from "./keymap";
@@ -102,9 +103,10 @@ async function main() {
 
   let app: PqpApp;
   let syncApi: SyncApi;
+  let activityApi: ActivityApi;
   try {
-    // `connect()` plus the port's `sync.*` calls (Saves na conta), on its own SDK module so other apps build unchanged
-    ({ app, sync: syncApi } = await connectWithSync());
+    // `connect()` plus the port's `sync.*` and `ui.activity` calls, on their own SDK module so other apps build unchanged
+    ({ app, sync: syncApi, activity: activityApi } = await connectWithSync());
   } catch {
     statusLine.textContent = "";
     endedLine.textContent = t.outside;
@@ -134,6 +136,13 @@ async function main() {
   // A refusal is the quiet "off". Anything else (the account did not answer, this browser keeps nothing) is a
   // `syncProblem`: logged by `openSync`, drawn on the shelf and in the drawer, never a feature that is just missing.
   const isSpectator = app.hello.self.role === "spectator";
+  // The signed-out guest player (pqp.gg/locadora/jogar): no account behind it, so nothing here asks for one. The
+  // account saves are never opened (the host refuses them anyway), there is no share to probe, and one more line on
+  // the receipt says the shelf lives in this browser only. The page is told when a game runs, pauses or leaves, so
+  // its own card never lands on a running game.
+  const isGuest = app.hello.guest === true;
+  if (isGuest) root.dataset.guest = "true";
+  const activity = createActivityReporter(isGuest ? (state) => activityApi.report(state) : null);
   let sync: SyncAccount | null = null;
   let syncProblem: SyncProblem | null = null;
   const stopSyncWatch: Array<() => void> = [];
@@ -147,7 +156,7 @@ async function main() {
     // what the account holds changes as saves go up: the line under the meter follows
     if (sync) stopSyncWatch.push(sync.onChange(() => topBar?.update({ cloud: cloudChip() })));
   }
-  if (!isSpectator) adoptSync(await openSync(syncApi, store));
+  if (!isSpectator && !isGuest) adoptSync(await openSync(syncApi, store));
   /** What the shelf says about the account: its usage, or why it is not working, or nothing where the feature is off. */
   function cloudChip(): CloudChip | null {
     if (sync) return { state: sync.mode, used: sync.usage.used, cap: sync.usage.cap };
@@ -174,7 +183,7 @@ async function main() {
   /** "Tentar de novo", on the shelf: asks the account again and says what came of it. */
   let retryingSync = false;
   async function retrySync() {
-    if (retryingSync || isSpectator) return;
+    if (retryingSync || isSpectator || isGuest) return;
     retryingSync = true;
     balcaoToaster.show({ text: t["sync.retrying"] });
     try {
@@ -476,7 +485,7 @@ async function main() {
         }),
       );
     }
-    nodes.push(createHouseRules({ t, compact: last !== null, synced: sync !== null }).element);
+    nodes.push(createHouseRules({ t, compact: last !== null, synced: sync !== null, guest: isGuest }).element);
     counter.replaceChildren(...nodes);
   }
 
@@ -607,8 +616,10 @@ async function main() {
     get syncProblem() {
       return syncProblem;
     },
+    onActivity: (state) => activity.report(state),
     onShare: () => void toggleShare(),
     onLeave: (_reason, item) => {
+      activity.report("browsing");
       if (isFullscreen) {
         void askFullscreen(false).catch(() => undefined);
       }
@@ -809,6 +820,9 @@ async function main() {
   } else {
     await showBalcao();
   }
+  activity.report("browsing");
+  // a guest has no call to share into, and the host would refuse: no probe
+  if (isGuest) return;
   // one stop request tells whether the platform offers sharing here (see src/share.ts)
   shareAvailable = await probeShare(app);
   syncShare();

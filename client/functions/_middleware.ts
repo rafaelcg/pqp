@@ -14,6 +14,7 @@ import {
 } from "../src/lib/bau-post-meta";
 import {
   appsPageFromMetaPath,
+  appsPageNeedsGuest,
   injectAppsHead,
   type AppsPage,
 } from "../src/lib/apps-meta";
@@ -324,7 +325,16 @@ async function communitiesEnabled(context: PagesContext): Promise<boolean> {
  */
 const APPS_FLAG_MEMO_MS = 60_000;
 const APPS_FLAG_MISS_MS = 10_000;
-let appsFlagMemo: { at: number; ttl: number; value: boolean | null } | null = null;
+/**
+ * What the edge needs of the answer: `enabled` (`apps_landing`) and `guest`
+ * (guest play is offered: `locadora_guest`, an apps origin, Locadora released).
+ * An older API sends no `guest`, which reads as false.
+ */
+interface AppsFlags {
+  enabled: boolean;
+  guest: boolean;
+}
+let appsFlagMemo: { at: number; ttl: number; value: AppsFlags | null } | null = null;
 
 /**
  * The request this isolate has on the way, shared by every page that arrives
@@ -332,9 +342,9 @@ let appsFlagMemo: { at: number; ttl: number; value: boolean | null } | null = nu
  * call, not one per visitor. Trusted no longer than the request's own timeout:
  * on Workers, work a cancelled request started may never settle.
  */
-let appsFlagInFlight: { at: number; request: Promise<boolean | null> } | null = null;
+let appsFlagInFlight: { at: number; request: Promise<AppsFlags | null> } | null = null;
 
-async function appsLandingEnabled(context: PagesContext): Promise<boolean | null> {
+async function appsLandingFlags(context: PagesContext): Promise<AppsFlags | null> {
   if (appsFlagMemo && Date.now() - appsFlagMemo.at < appsFlagMemo.ttl) {
     return appsFlagMemo.value;
   }
@@ -353,8 +363,8 @@ async function appsLandingEnabled(context: PagesContext): Promise<boolean | null
 }
 
 /** One request to the API. Never rejects, settles within `API_TIMEOUT_MS`, remembers its answer. */
-async function askAppsLanding(context: PagesContext): Promise<boolean | null> {
-  let value: boolean | null = null;
+async function askAppsLanding(context: PagesContext): Promise<AppsFlags | null> {
+  let value: AppsFlags | null = null;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
   try {
@@ -365,8 +375,11 @@ async function askAppsLanding(context: PagesContext): Promise<boolean | null> {
         headers: { accept: "application/json" },
       });
       if (response.ok) {
-        const body = (await response.json()) as { enabled?: unknown };
-        value = typeof body.enabled === "boolean" ? body.enabled : null;
+        const body = (await response.json()) as { enabled?: unknown; guest?: unknown };
+        value =
+          typeof body.enabled === "boolean"
+            ? { enabled: body.enabled, guest: body.enabled && body.guest === true }
+            : null;
       }
     }
   } catch {
@@ -383,20 +396,23 @@ async function askAppsLanding(context: PagesContext): Promise<boolean | null> {
 }
 
 /**
- * The three pqp Apps pages. Flag off: a real redirect to `/`, so nothing about
- * a page that is not open yet reaches an index or a link preview. Flag on: the
- * page's own head, in the visitor's language. Anything else, including a
- * non-HTML answer: whatever the asset layer said.
+ * The pqp Apps pages. Flag off: a real redirect to `/`, so nothing about a
+ * page that is not open yet reaches an index or a link preview (the guest
+ * player also redirects while `guest` is off). Flag on: the page's own head,
+ * in the visitor's language. Anything else, including a non-HTML answer:
+ * whatever the asset layer said.
  */
 async function handleAppsPage(
   context: PagesContext,
   url: URL,
   page: AppsPage,
 ): Promise<Response> {
-  const [enabled, response] = await Promise.all([
-    appsLandingEnabled(context),
+  const [flags, response] = await Promise.all([
+    appsLandingFlags(context),
     context.next(),
   ]);
+  const enabled =
+    flags === null ? null : appsPageNeedsGuest(page) ? flags.guest : flags.enabled;
   if (enabled === false) {
     return new Response(null, {
       status: 302,

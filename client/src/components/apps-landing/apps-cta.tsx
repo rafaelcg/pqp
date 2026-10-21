@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import {
   appsCtaHref,
   rememberAppsRef,
+  type AppsLandingPath,
   type AppsLandingRef,
 } from "@/lib/apps-landing";
 import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
@@ -17,19 +18,26 @@ interface AppsCtaProps {
   /** The page's own tag: `users.acquisition_ref` ends up saying which page. */
   tag: AppsLandingRef;
   /** The page the button sits on, for the acquisition's landing. */
-  path: "/apps" | "/apps/locadora";
+  path: AppsLandingPath;
   label: string;
   className?: string;
+  /** The button's look; the arrow is drawn only on the default one. */
+  variant?: "default" | "secondary" | "ghost";
+  /** `h-12` by default; `compact` is the slim bar's size. */
+  compact?: boolean;
+  /** Called on every press, before anything else (a closed event, never a property). */
+  onActivate?: () => void;
 }
 
 /**
- * "Abrir o pqp". A signed-in visitor goes straight to the app. A signed-out
- * one opens the sign-up modal with the page's tag already in the acquisition
- * stash (before Clerk takes over, because the modal can end in a navigation
- * this page does not survive) and on the redirect URL as the belt, so the
- * account that comes out of it says which page made it. Clerk not ready, or
- * throwing, falls back to `/app?ref=`, which hosts the same forms. The dev
- * bypass has no ClerkProvider and no sign-up: the account exists, go in.
+ * "Abrir o pqp" / "Criar conta grátis". A signed-in visitor goes straight to
+ * the app. A signed-out one opens the sign-up modal with the page's tag
+ * already in the acquisition stash (before Clerk takes over, because the modal
+ * can end in a navigation this page does not survive) and on the redirect URL
+ * as the belt, so the account that comes out of it says which page made it.
+ * Clerk not ready, or throwing, falls back to `/app?ref=`, which hosts the
+ * same forms. The dev bypass has no ClerkProvider and no sign-up: the account
+ * exists, go in.
  */
 export function AppsCta(props: AppsCtaProps) {
   return isDevAuthBypassEnabled() ? (
@@ -39,18 +47,35 @@ export function AppsCta(props: AppsCtaProps) {
   );
 }
 
-function BypassAppsCta({ tag, label, className }: AppsCtaProps) {
+function classes({ className, compact }: AppsCtaProps): string {
+  return cn(compact ? "h-9 px-4 text-sm" : CTA_CLASS, className);
+}
+
+function Arrow({ variant, compact }: AppsCtaProps) {
+  return variant && variant !== "default" ? null : compact ? null : <ArrowRight className="h-4 w-4" aria-hidden />;
+}
+
+function BypassAppsCta(props: AppsCtaProps) {
+  const { tag, label, variant, path, onActivate } = props;
   return (
-    <Button asChild className={cn(CTA_CLASS, className)}>
-      <Link to={appsCtaHref(tag)} data-apps-cta={tag}>
+    <Button asChild variant={variant} className={classes(props)}>
+      <Link
+        to={appsCtaHref(tag)}
+        data-apps-cta={tag}
+        onClick={() => {
+          onActivate?.();
+          rememberAppsRef(tag, path);
+        }}
+      >
         {label}
-        <ArrowRight className="h-4 w-4" aria-hidden />
+        <Arrow {...props} />
       </Link>
     </Button>
   );
 }
 
-function ClerkAppsCta({ tag, path, label, className }: AppsCtaProps) {
+function ClerkAppsCta(props: AppsCtaProps) {
+  const { tag, path, label, variant, onActivate } = props;
   const { isLoaded, isSignedIn } = useAuth();
   const clerk = useClerk();
   const navigate = useNavigate();
@@ -58,10 +83,10 @@ function ClerkAppsCta({ tag, path, label, className }: AppsCtaProps) {
 
   if (isSignedIn) {
     return (
-      <Button asChild className={cn(CTA_CLASS, className)}>
-        <Link to="/app" data-apps-cta={tag}>
+      <Button asChild variant={variant} className={classes(props)}>
+        <Link to="/app" data-apps-cta={tag} onClick={() => onActivate?.()}>
           {label}
-          <ArrowRight className="h-4 w-4" aria-hidden />
+          <Arrow {...props} />
         </Link>
       </Button>
     );
@@ -70,9 +95,11 @@ function ClerkAppsCta({ tag, path, label, className }: AppsCtaProps) {
   return (
     <Button
       type="button"
-      className={cn(CTA_CLASS, className)}
+      variant={variant}
+      className={classes(props)}
       data-apps-cta={tag}
       onClick={() => {
+        onActivate?.();
         rememberAppsRef(tag, path);
         const go = () => void navigate(href);
         if (!isLoaded) {
@@ -88,7 +115,7 @@ function ClerkAppsCta({ tag, path, label, className }: AppsCtaProps) {
       }}
     >
       {label}
-      <ArrowRight className="h-4 w-4" aria-hidden />
+      <Arrow {...props} />
     </Button>
   );
 }

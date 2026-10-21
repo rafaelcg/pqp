@@ -225,6 +225,20 @@ export const bridgeUiResizeSchema = request("ui.resize", {
 export const bridgeUiFullscreenSchema = request("ui.fullscreen", { on: z.boolean() });
 export const bridgeShareRequestSchema = request("share.request", { on: z.boolean() });
 export const bridgeSessionEndSchema = request("session.end", {});
+/**
+ * What the person is doing in the app right now, so the page can choose a calm
+ * moment for something of its own (the guest player's sign-up card is drawn
+ * only while the app says `paused` or `browsing`, never over `playing`).
+ * `browsing` is everything that is not a running game: a menu, a shelf, a
+ * finished round. A closed enum on purpose, so nothing an app says here can
+ * carry what is on its screen. Additive on platform API 1: an older host
+ * answers `invalid` and an app treats any failure as "the page does not care".
+ */
+export const BRIDGE_UI_ACTIVITY_STATES = ["playing", "paused", "browsing"] as const;
+export const bridgeUiActivitySchema = request("ui.activity", {
+  state: z.enum(BRIDGE_UI_ACTIVITY_STATES),
+});
+export type BridgeUiActivityState = (typeof BRIDGE_UI_ACTIVITY_STATES)[number];
 
 export const bridgeAppMessageSchema = z.discriminatedUnion("type", [
   bridgeParticipantsGetSchema,
@@ -250,6 +264,7 @@ export const bridgeAppMessageSchema = z.discriminatedUnion("type", [
   bridgeUiFullscreenSchema,
   bridgeShareRequestSchema,
   bridgeSessionEndSchema,
+  bridgeUiActivitySchema,
 ]);
 export type BridgeAppMessage = z.infer<typeof bridgeAppMessageSchema>;
 export type BridgeRequestType = BridgeAppMessage["type"];
@@ -423,6 +438,7 @@ export const bridgeResultSchemas = {
   "ui.fullscreen": z.object({ on: z.boolean() }).strip(),
   "share.request": z.object({ on: z.boolean() }).strip(),
   "session.end": z.null(),
+  "ui.activity": z.null(),
 } as const satisfies Record<BridgeRequestType, z.ZodTypeAny>;
 
 /** One successful response schema per request type. */
@@ -467,6 +483,7 @@ export const bridgeResponseOkSchema = z.discriminatedUnion("type", [
   okResponse("ui.fullscreen"),
   okResponse("share.request"),
   okResponse("session.end"),
+  okResponse("ui.activity"),
 ]);
 export const bridgeResponseErrorSchema = z
   .object({
@@ -504,6 +521,14 @@ export const bridgeHelloPushSchema = push("hello", {
     .object({ seatId: seatIdSchema, role: appRoleSchema, isHost: z.boolean() })
     .strip(),
   connection: bridgeConnectionStatusSchema,
+  /**
+   * The person has no pqp account: the signed-out guest player
+   * (`pqp.gg/locadora/jogar`). A local, one-person session with no server
+   * behind it: nothing reaches anyone else, `sync.*` and `share.request` are
+   * refused, and the device store is the guest's own, apart from any
+   * account's. Absent on every ordinary session; an older app ignores it.
+   */
+  guest: z.boolean().optional(),
 });
 export const bridgeParticipantsPushSchema = push("participants", {
   participants: bridgeParticipantListSchema,
