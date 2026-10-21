@@ -4001,7 +4001,7 @@ export function HlsWatchPlayer({
               type="button"
               aria-label={t("voice.hls.pip")}
               aria-pressed={isPip}
-              className="absolute right-2 top-2 rounded bg-black/70 p-1 text-paper opacity-0 transition-opacity hover:bg-black/90 focus-visible:opacity-100 group-hover:opacity-100 motion-reduce:transition-none"
+              className="absolute right-2 top-2 rounded bg-black/70 p-1 text-paper opacity-0 transition-opacity hover:bg-black/90 focus-visible:opacity-100 group-hover:opacity-100 motion-reduce:transition-none [@media(hover:none)]:opacity-100"
               onClick={() => void togglePip()}
             >
               <PictureInPicture2 className="h-3.5 w-3.5" />

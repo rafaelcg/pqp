@@ -65,6 +65,7 @@ export function VoiceOccupantRow({
   person,
   channelId,
   isSpeaking,
+  handPosition = null,
   canDrag,
   isDragging = false,
   items,
@@ -75,6 +76,8 @@ export function VoiceOccupantRow({
   person: VoiceParticipant;
   channelId: string;
   isSpeaking: boolean;
+  /** Their place in the room's queue of raised hands (1-based), or null. */
+  handPosition?: number | null;
   canDrag: boolean;
   isDragging?: boolean;
   items: ContextMenuItemDef[];
@@ -269,7 +272,7 @@ export function VoiceOccupantRow({
               )}
             </span>
           )}
-          <VoiceOccupantBadges person={person} />
+          <VoiceOccupantBadges person={person} handPosition={handPosition} />
         </div>
       </ContextMenu>
       <PeerAudioMenu

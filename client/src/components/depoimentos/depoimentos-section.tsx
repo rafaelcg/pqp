@@ -86,7 +86,7 @@ export function DepoimentosSection({
                   aria-label={t("depoimentos.remove", {
                     name: one.author.displayName,
                   })}
-                  className="ml-auto shrink-0 rounded p-0.5 text-paper-muted opacity-0 transition-opacity hover:text-danger focus-visible:opacity-100 group-hover:opacity-100"
+                  className="ml-auto shrink-0 rounded p-0.5 text-paper-muted opacity-0 transition-opacity hover:text-danger focus-visible:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100"
                   onClick={() => onRemove(one.id)}
                 >
                   <Trash2 aria-hidden className="h-3 w-3" />

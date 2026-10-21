@@ -87,6 +87,10 @@ import { AudioHealthNotice } from "@/components/voice/audio-health-notice";
 import { ShareGameCaptureNotice } from "@/components/voice/share-game-capture-notice";
 import { RaisedHandQueue } from "@/components/voice/raised-hand-queue";
 import {
+  HandPositionBadge,
+  raisedHandPositions,
+} from "@/components/voice/hand-position-badge";
+import {
   AudienceModeStrip,
   AudienceModeToggle,
   type AudienceModeHostControls,
@@ -308,6 +312,8 @@ export interface StagePerson {
    * (the muted person most of all) need to tell the two apart at a glance.
    */
   serverMuted: boolean;
+  /** Their place in the room's queue of raised hands (1-based), or null. */
+  handPosition?: number | null;
   connecting: boolean;
   /** Mesh/SFU connection failed. Remote tiles offer Retry. */
   failed?: boolean;
@@ -1208,6 +1214,7 @@ function ActiveCall({
   }, [callingOut, playOutgoingRingtone]);
   const roster = voiceState.occupancy[channelId] ?? [];
   const rosterByPeerId = new Map(roster.map((p) => [p.peerId, p]));
+  const handPositions = raisedHandPositions(roster);
   const meshQuality = useVoiceLinkQuality(voiceState.status !== "idle");
   // Only while this machine is the one presenting: the reading it acts on
   // is a *sender* limitation, which no viewer has.
@@ -1250,6 +1257,7 @@ function ActiveCall({
           !voiceState.isMuted,
         muted: voiceState.isMuted,
         serverMuted: selfServerMuted,
+        handPosition: handPositions.get(currentUser.id) ?? null,
         connecting: false,
         isSelf: true,
       }
@@ -1270,6 +1278,9 @@ function ActiveCall({
       speaking: speaking.has(peer.peerId) && !serverMuted.has(peer.peerId),
       muted: rosterByPeerId.get(peer.peerId)?.muted ?? false,
       serverMuted: serverMuted.has(peer.peerId),
+      handPosition: peer.userId
+        ? (handPositions.get(peer.userId) ?? null)
+        : null,
       connecting: peer.connectionState !== "connected",
       failed,
       isSelf: false,
@@ -2974,6 +2985,7 @@ function ActiveCall({
               name={t("voice.tile.you")}
               muted={self.muted}
               serverMuted={self.serverMuted}
+              handPosition={self.handPosition}
             />
           </div>
         </div>
@@ -4612,6 +4624,7 @@ function PrimaryTile({
             name={person.name}
             muted={person.muted}
             serverMuted={person.serverMuted}
+            handPosition={person.handPosition}
             connecting={person.connecting}
             connectingLabel={t("voice.tile.connecting")}
             prominent
@@ -4743,6 +4756,7 @@ export function CameraTile({
             name={person.isSelf ? youLabel : person.name}
             muted={person.muted}
             serverMuted={person.serverMuted}
+            handPosition={person.handPosition}
             connecting={person.connecting}
             connectingLabel={t("voice.tile.connecting")}
             prominent
@@ -4986,6 +5000,7 @@ function TileBadge({
   name,
   muted,
   serverMuted = false,
+  handPosition = null,
   connecting = false,
   connectingLabel,
   prominent = false,
@@ -4993,6 +5008,8 @@ function TileBadge({
 }: {
   name: string;
   muted: boolean;
+  /** Their place in the queue of raised hands, drawn as the hand and its number. */
+  handPosition?: number | null;
   /** Drawn as the first item of a tile's control row, not pinned to a corner. */
   inline?: boolean;
   /** Muted by a moderator: a different glyph from a self-mute, on purpose. */
@@ -5013,7 +5030,11 @@ function TileBadge({
             // badge with nothing but the name goes with it.
             cn(
               "min-w-[4.5rem] rounded-md @max-[12rem]/picture:min-w-0",
-              !muted && !serverMuted && !connecting && "@max-[12rem]/picture:hidden",
+              !muted &&
+                !serverMuted &&
+                !connecting &&
+                handPosition === null &&
+                "@max-[12rem]/picture:hidden",
             )
           : cn("absolute bottom-0 left-0 rounded-tr-md", STAGE_LAYER.labels),
         prominent ? "px-2 py-1 text-xs" : "px-1.5 py-0.5 text-[10px]",
@@ -5028,6 +5049,7 @@ function TileBadge({
       ) : (
         muted && <MicOff className="h-3 w-3 shrink-0 text-danger" />
       )}
+      {handPosition !== null && <HandPositionBadge position={handPosition} />}
       <span className={cn("truncate", inline && "@max-[12rem]/picture:hidden")}>
         {name}
       </span>
