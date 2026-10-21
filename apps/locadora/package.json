@@ -1,6 +1,6 @@
 {
   "name": "@pqp-apps/locadora",
-  "version": "1.0.1",
+  "version": "1.0.3",
   "private": true,
   "license": "AGPL-3.0-only AND GPL-2.0-or-later AND MPL-2.0 AND GPL-3.0-only AND OFL-1.1 AND MIT AND GPL-3.0-or-later AND ISC",
   "description": "Locadora, the retro emulator app of the pqp apps platform: NES, SNES and Game Boy files from the person's own disk, no network, no storage.",

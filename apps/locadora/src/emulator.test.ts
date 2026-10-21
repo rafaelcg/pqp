@@ -685,6 +685,15 @@ describe("RetroArch's own menu stays shut", () => {
     expect(cfg.endsWith("\n")).toBe(true);
   });
 
+  it("tells RetroArch to fill the canvas (aspect \"Full\", index 24): the stage's box IS the picture, no second letterbox inside it", async () => {
+    const Manager = frontendWithConfig();
+    await ready();
+    const lines = new Manager().getRetroArchCfg().split("\n");
+    expect(lines).toContain("aspect_ratio_index = 24");
+    // it is the last of RetroArch's aspect table, FULL: 4:3 0, ... 32:9 19, config 20, square 21, core 22, custom 23, full 24
+    expect(lines.filter((line) => line.startsWith("aspect_ratio_index"))).toHaveLength(1);
+  });
+
   it("is written once however many games are started", async () => {
     const Manager = frontendWithConfig();
     await ready();
