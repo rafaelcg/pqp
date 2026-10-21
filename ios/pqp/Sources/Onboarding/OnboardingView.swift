@@ -189,6 +189,16 @@ struct OnboardingView: View {
 
     private var controls: some View {
         VStack(spacing: 10) {
+            // Once, calm, and only here: the screen the person lands on when a
+            // session ended under them (`SessionStore.handleSessionExpired`).
+            if let notice = session.sessionNotice {
+                Text(notice)
+                    .font(FirstRunType.callout)
+                    .foregroundStyle(Palette.paperMuted)
+                    .multilineTextAlignment(.center)
+                    .transition(.opacity)
+                    .accessibilityIdentifier("welcome.sessionNotice")
+            }
             if let error = session.lastError {
                 Text(error)
                     .font(FirstRunType.callout)

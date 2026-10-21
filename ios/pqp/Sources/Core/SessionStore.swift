@@ -12,6 +12,16 @@ enum SessionPhase: Equatable, Sendable {
     /// Declared under 18. Terminal: one attempt, no self-serve way out.
     case blocked
     case ready
+
+    /// Signed in as somebody, whatever the gate says. These are the phases a
+    /// dead session has to be torn down from; `.loading` and `.onboarding` have
+    /// no account to lose.
+    var hasAccount: Bool {
+        switch self {
+        case .ageGate, .blocked, .ready: true
+        case .loading, .onboarding: false
+        }
+    }
 }
 
 /// Owns identity and the two clients, and is the single thing views observe for
@@ -51,6 +61,12 @@ final class SessionStore {
     private(set) var currentUser: CurrentUser?
     private(set) var realtimeStatus: RealtimeStatus = .idle
     private(set) var lastError: String?
+
+    /// The one calm sentence the sign-in screen shows after a session ended
+    /// under the person ("Your session expired. Sign in again."). Separate from
+    /// `lastError`, which is a failure they caused and is drawn as one. Set by
+    /// `handleSessionExpired`, cleared by the next sign-in.
+    private(set) var sessionNotice: String?
 
     /// Where a link, or a tapped notification, is asking to go.
     ///
@@ -202,24 +218,51 @@ final class SessionStore {
     /// and closes, so the post has to outlive the screen that started it.
     let storyPosts: StoryPostQueue
 
-    init() {
+    convenience init() {
         let mode = AppConfig.authMode
-        authMode = mode
         let provider: any TokenProviding = switch mode {
         case .clerk: ClerkTokenProvider()
         case .devBypass: DevTokenProvider()
         }
+        self.init(
+            authMode: mode,
+            tokenProvider: provider,
+            api: APIClient(tokenProvider: provider)
+        )
+    }
+
+    /// The seam tests use to hand in an `APIClient` aimed at a stub.
+    init(authMode mode: AuthMode, tokenProvider provider: any TokenProviding, api client: APIClient) {
+        authMode = mode
         tokenProvider = provider
-        let client = APIClient(tokenProvider: provider)
         api = client
         realtime = RealtimeClient(tokenProvider: provider)
         storyPosts = StoryPostQueue(backend: LiveStoryPostBackend(api: client))
+        // ONE door for a dead session: any authenticated call that is refused
+        // with a 401 lands in `handleSessionExpired`, so no screen has to
+        // notice for itself (it used to be every screen, which is how a dead
+        // session left the app "signed in" behind a pile of alerts).
+        Task { [weak self] in await self?.installUnauthorizedHandler() }
+    }
+
+    /// Idempotent. Also awaited by `restore`, so the door is certainly open
+    /// before the first request that could need it.
+    func installUnauthorizedHandler() async {
+        await api.setUnauthorizedHandler { [weak self] in
+            await self?.handleSessionExpired()
+        }
     }
 
     /// Whether Clerk currently holds a session. Meaningless under the bypass,
     /// where there is nothing to hold.
+    ///
+    /// A session Clerk still holds but has ended (replaced by a sign-in on
+    /// another device under single session mode, expired, revoked) is NOT a
+    /// session: it keeps `Clerk.shared.session` non-nil, which is how the app
+    /// used to believe it was signed in.
     var hasClerkSession: Bool {
-        authMode == .clerk && Clerk.shared.session != nil
+        guard authMode == .clerk, let session = Clerk.shared.session else { return false }
+        return !ClerkSessionEnd.isOver(session.status)
     }
 
     private var eventTask: Task<Void, Never>?
@@ -248,6 +291,10 @@ final class SessionStore {
 
     func restore() async {
         guard phase == .loading else { return }
+        // Before any early return: a fresh install signs in later, and that
+        // session can be replaced too.
+        await installUnauthorizedHandler()
+        startWatchingClerk()
         guard hasOnboarded else {
             phase = .onboarding
             return
@@ -255,6 +302,13 @@ final class SessionStore {
         // Clerk restores its own session from the keychain; without a session
         // there is no token to send and `/api/me` would just 401.
         if authMode == .clerk, !hasClerkSession {
+            if Clerk.shared.session != nil {
+                // Held but over (see `hasClerkSession`): clear it so the
+                // sign-in sheet does not refuse with "already signed in", and
+                // say what happened once.
+                await purgeClerkSessionLocally()
+                sessionNotice = Self.sessionExpiredMessage
+            }
             phase = .onboarding
             return
         }
@@ -289,8 +343,8 @@ final class SessionStore {
                 // minted against a different Clerk instance (a dev build's
                 // pk_test surviving into a pk_live build). Purge it so the
                 // next tap starts clean, and say so without alarm.
-                await purgeClerkSession()
-                lastError = String(localized: "Signed out. Sign in again to continue.")
+                await purgeClerkSessionLocally()
+                sessionNotice = Self.sessionExpiredMessage
             }
             phase = .onboarding
         }
@@ -318,7 +372,7 @@ final class SessionStore {
             return true
         } catch {
             if case APIError.unauthorized = error {
-                await purgeClerkSession()
+                await purgeClerkSessionLocally()
                 // Not surfaced as an error: the sheet is about to offer a
                 // clean sign-in, which is the remedy.
                 lastError = nil
@@ -339,7 +393,7 @@ final class SessionStore {
             if authMode == .clerk, case APIError.unauthorized = error {
                 // Purge rather than strand: a refused session left in the
                 // keychain would block the next sign-in sheet the same way.
-                await purgeClerkSession()
+                await purgeClerkSessionLocally()
             }
             if let shown = error.userFacingMessage { lastError = shown }
         }
@@ -351,6 +405,7 @@ final class SessionStore {
     /// proceeding to the app would produce a screen of errors.
     private func route(_ user: CurrentUser) async {
         currentUser = user
+        sessionNotice = nil
         // A story the last run did not finish posting comes back with its
         // retry and discard choices; another account's draft stays out.
         storyPosts.restore(userId: user.id)
@@ -720,25 +775,86 @@ final class SessionStore {
     /// session survives the polite path, reconfigure with the same key —
     /// `Clerk.reconfigure` is the SDK's public "clear local state" operation,
     /// documented as requiring everyone to sign in again afterwards.
+    ///
+    /// The polite path is BOUNDED: it is a network call, and a Sign out button
+    /// that waits on a request with a dead session behind it is a button that
+    /// looks stuck.
     private func purgeClerkSession() async {
-        try? await Clerk.shared.auth.signOut()
+        _ = try? await withDeadline(seconds: 4) {
+            try await Clerk.shared.auth.signOut()
+        }
+        await purgeClerkSessionLocally()
+    }
+
+    /// The same end without asking Clerk's servers anything, for a session the
+    /// server has already refused (a polite sign-out would 401 again).
+    private func purgeClerkSessionLocally() async {
+        guard authMode == .clerk else { return }
         if Clerk.shared.session != nil, let key = AppConfig.clerkPublishableKey {
             try? await Clerk.reconfigure(publishableKey: key)
         }
     }
 
-    func signOut() async {
-        // BEFORE the token is revoked, because this needs an authenticated call.
-        //
-        // Not politeness — a correctness fix for the shared-phone case. The
-        // server owns one row per device token, so it would move to whoever
-        // signs in next; but if nobody does, the row stays pointed at the
-        // account that just left and this phone keeps buzzing with their DMs on
-        // somebody else's lock screen.
-        if let deviceToken {
-            try? await api.unregisterApnsToken(deviceToken)
+    // MARK: - A session that ended under the person
+
+    static var sessionExpiredMessage: String {
+        String(localized: "Your session expired. Sign in again.")
+    }
+
+    /// Set while a session is being ended, whichever way, so the several things
+    /// that can notice a dead session at the same moment (thirty requests
+    /// refused together, the socket, Clerk's own event) make ONE transition.
+    @ObservationIgnored private var endingSession = false
+    @ObservationIgnored private var clerkEventsTask: Task<Void, Never>?
+
+    /// THE place a dead session is dealt with. Everything that can find out
+    /// calls this: the API client on any 401 (`setUnauthorizedHandler`), the
+    /// socket when it has no token or keeps being refused, and Clerk when it
+    /// says the session is over (`startWatchingClerk`).
+    ///
+    /// Idempotent by construction: the check and the claim are synchronous on
+    /// the main actor, so the first caller owns the transition and every other
+    /// one returns at once. It asks the server once whether the session is
+    /// really gone, with a freshly refreshed token (`APIClient.probeSession`),
+    /// because a 401 can also be one stale token, and signing somebody out
+    /// over that is worse than the alert it replaces. Offline answers
+    /// "unknown", which is never a reason to sign anybody out.
+    ///
+    /// What follows is local only: nothing here needs a session that works.
+    func handleSessionExpired() async {
+        guard phase.hasAccount, !endingSession else { return }
+        endingSession = true
+        switch await api.probeSession() {
+        case .alive, .unknown:
+            endingSession = false
+            return
+        case .dead:
+            break
         }
-        deviceToken = nil
+        // The person may have tapped Sign out while the probe was in the air.
+        guard phase.hasAccount else {
+            endingSession = false
+            return
+        }
+        await endSession(reason: .expired)
+    }
+
+    private enum EndReason { case userRequested, expired }
+
+    /// Everything a sign-out does, in an order that cannot wedge: the screen
+    /// changes first and every network step after it is optional and bounded.
+    private func endSession(reason: EndReason) async {
+        endingSession = true
+        defer { endingSession = false }
+        // Calls in the air belong to the account that is leaving, and a late
+        // refusal of one must not read as the next account's session dying.
+        await api.cancelInFlight()
+        // The screen goes first. Whatever is slow below (the polite Clerk
+        // call, the disk) must not keep a dead session's UI on screen.
+        let leaving = phase
+        phase = .onboarding
+        sessionNotice = reason == .expired ? Self.sessionExpiredMessage : nil
+        lastError = nil
         // A link tapped by the previous account is not the next one's to follow.
         navigationRequest = nil
         linkError = nil
@@ -763,9 +879,6 @@ final class SessionStore {
         // The next account to use this device must not be dropped into the
         // previous one's conversation.
         LastVisited.clear()
-        if authMode == .clerk {
-            await purgeClerkSession()
-        }
         await realtime.stop()
         eventTask?.cancel()
         eventTask = nil
@@ -774,14 +887,64 @@ final class SessionStore {
         voiceOccupancy.clear()
         storyPosts.clear()
         StoryPreloader.shared.reset()
+
+        // BEFORE the token is revoked, because this needs an authenticated call,
+        // and only when the session still works: a dead one would 401, which is
+        // the thing being avoided. `cancelInFlight` bumped the epoch, so even a
+        // 401 here cannot start another transition.
+        //
+        // Not politeness, a correctness fix for the shared-phone case. The
+        // server owns one row per device token, so it would move to whoever
+        // signs in next; but if nobody does, the row stays pointed at the
+        // account that just left and this phone keeps buzzing with their DMs on
+        // somebody else's lock screen. For the expired case the server drops a
+        // token it cannot deliver to on its first failed push.
+        if reason == .userRequested, leaving == .ready, let deviceToken {
+            _ = try? await withDeadline(seconds: 4) {
+                try await self.api.unregisterApnsToken(deviceToken)
+            }
+        }
+        deviceToken = nil
+
+        if authMode == .clerk {
+            switch reason {
+            case .userRequested: await purgeClerkSession()
+            case .expired: await purgeClerkSessionLocally()
+            }
+        }
         // Cached pages are one account's private messages sitting in
         // Application Support. The next person to sign in on this device must
         // not find them, so the whole directory goes.
         await ReadCache.shared.clear()
         await BauCardStore.shared.clear()
         currentUser = nil
-        phase = .onboarding
     }
+
+    func signOut() async {
+        // Works with a session that is dead or half-dead: everything that needs
+        // the network is bounded and optional inside `endSession`.
+        await endSession(reason: .userRequested)
+    }
+
+    /// Clerk says the session is over (replaced by a sign-in elsewhere, ended,
+    /// expired, revoked, removed): the same door as a 401, with no waiting for
+    /// the next request to find out. Started from `restore`, which runs after
+    /// `Clerk.configure`.
+    private func startWatchingClerk() {
+        guard authMode == .clerk, clerkEventsTask == nil else { return }
+        clerkEventsTask = Task { [weak self] in
+            for await event in Clerk.shared.auth.events {
+                guard let self else { return }
+                if case .sessionChanged(let old, let new) = event,
+                   old != nil, ClerkSessionEnd.isOver(new?.status) {
+                    await self.handleSessionExpired()
+                }
+            }
+        }
+    }
+
+    /// Test seam: lands the store in a signed-in phase without a network.
+    func seedPhaseForTesting(_ next: SessionPhase) { phase = next }
 
     // MARK: - Where the user is looking
 
@@ -849,7 +1012,17 @@ final class SessionStore {
         }
         let stream = await realtime.events()
         await realtime.onStatusChange { [weak self] status in
-            Task { @MainActor in self?.realtimeStatus = status }
+            Task { @MainActor in
+                self?.realtimeStatus = status
+                // No token to open a socket with: the session is gone. Same
+                // door as a 401.
+                if status == .unauthorized { await self?.handleSessionExpired() }
+            }
+        }
+        // A socket the server keeps refusing is either a network or a dead
+        // session; the probe tells them apart and only a dead one signs out.
+        await realtime.onAuthSuspect { [weak self] in
+            Task { @MainActor in await self?.handleSessionExpired() }
         }
         eventTask = Task { [weak self] in
             for await event in stream {

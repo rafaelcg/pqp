@@ -121,6 +121,36 @@ enum Coding {
 /// is exactly the mistake the web client already made once.
 protocol TokenProviding: Sendable {
     func currentToken() async -> String?
+    /// A token read after asking the identity provider to refresh, and what the
+    /// provider can say when there is none. Used once, to confirm that a 401 is
+    /// the session being dead rather than a stale token (`SessionProbe`).
+    func refreshedToken() async -> TokenRefresh
+}
+
+enum TokenRefresh: Equatable, Sendable {
+    case token(String)
+    /// There is no session left to ask for a token (signed out, replaced by
+    /// another device, expired). Not a connectivity problem: retrying changes
+    /// nothing.
+    case noSession
+    /// A session exists but a token could not be had right now (offline).
+    case unavailable
+}
+
+extension TokenProviding {
+    func refreshedToken() async -> TokenRefresh {
+        guard let token = await currentToken() else { return .noSession }
+        return .token(token)
+    }
+}
+
+/// What asking the server "is this session alive" answered.
+enum SessionProbe: Equatable, Sendable {
+    case alive
+    /// Even a freshly refreshed token is refused, or there is no session at all.
+    case dead
+    /// Could not tell (offline, a 5xx). Never a reason to sign anybody out.
+    case unknown
 }
 
 /// Development identity. The server accepts this only when `DEV_AUTH_BYPASS`
@@ -177,10 +207,20 @@ actor APIClient {
     /// `forward_messages`, held for a minute. Beside its endpoint in Forward.swift.
     var forwardConfigCache: (config: ForwardConfig, at: Date)?
 
+    /// Told once per 401 on an authenticated request, from whichever path made
+    /// it, so no screen has to notice a dead session on its own. Set by
+    /// `SessionStore`, which owns what happens next (`handleSessionExpired`).
+    private var unauthorizedHandler: (@Sendable () async -> Void)?
+    /// Bumped when the session ends. A request that began under an older epoch
+    /// and is refused after it is the previous session's business, and must not
+    /// sign out the next one.
+    private var authEpoch = 0
+
     init(
         backend: Backend = .current,
         tokenProvider: any TokenProviding,
-        cache: ReadCache = .shared
+        cache: ReadCache = .shared,
+        protocolClasses: [AnyClass]? = nil
     ) {
         self.backend = backend
         self.tokenProvider = tokenProvider
@@ -201,7 +241,55 @@ actor APIClient {
         // fast and showing something is strictly better.
         config.waitsForConnectivity = false
         config.timeoutIntervalForResource = 30
+        // Tests only: a stub standing in for the network.
+        if let protocolClasses { config.protocolClasses = protocolClasses }
         self.session = URLSession(configuration: config)
+    }
+
+    // MARK: - Session expiry
+
+    func setUnauthorizedHandler(_ handler: (@Sendable () async -> Void)?) {
+        unauthorizedHandler = handler
+    }
+
+    /// Called when a session ends: calls still in the air belong to it. Their
+    /// failures are cancellations, which no screen shows (`isCancellation`).
+    func cancelInFlight() async {
+        authEpoch += 1
+        for task in await session.allTasks { task.cancel() }
+    }
+
+    /// The one place a 401 is noticed, called by every authenticated request
+    /// after its response arrives. Only an answer to a request begun in the
+    /// current epoch counts.
+    private func noteStatus(_ status: Int, epoch: Int) async {
+        guard status == 401, epoch == authEpoch, let unauthorizedHandler else { return }
+        await unauthorizedHandler()
+    }
+
+    /// Asks `GET /api/me` with a freshly refreshed token whether the session is
+    /// really gone. Never reports to the handler (it IS the handler's question),
+    /// and never throws: a failure to find out is `.unknown`.
+    func probeSession() async -> SessionProbe {
+        let token: String
+        switch await tokenProvider.refreshedToken() {
+        case .noSession: return .dead
+        case .unavailable: return .unknown
+        case .token(let value): token = value
+        }
+        var request = URLRequest(url: backend.apiBaseURL.appendingPathComponent("/api/me"))
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        guard let (_, response) = try? await session.data(for: request),
+              let http = response as? HTTPURLResponse else { return .unknown }
+        return Self.classifyProbe(status: http.statusCode)
+    }
+
+    static func classifyProbe(status: Int) -> SessionProbe {
+        switch status {
+        case 401: .dead
+        case 200..<300: .alive
+        default: .unknown
+        }
     }
 
     // MARK: - Requests
@@ -373,6 +461,7 @@ actor APIClient {
             request.setValue(idempotencyKey, forHTTPHeaderField: "Idempotency-Key")
         }
         request.httpBody = body
+        let epoch = authEpoch
         // A caller cancelled while the token was being read. Clerk answers that
         // with no token at all, and sending the request anyway would come back
         // 401 and read as "Your session expired" to somebody who only pulled
@@ -390,6 +479,7 @@ actor APIClient {
         guard let http = response as? HTTPURLResponse else {
             throw APIError.transport("Malformed response")
         }
+        await noteStatus(http.statusCode, epoch: epoch)
 
         return (data, http)
     }
@@ -1158,6 +1248,7 @@ extension APIClient {
         if let token = await tokenProvider.currentToken() {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
+        let epoch = authEpoch
 
         let data: Data
         let response: URLResponse
@@ -1169,6 +1260,7 @@ extension APIClient {
         guard let http = response as? HTTPURLResponse else {
             throw APIError.transport("Malformed response")
         }
+        await noteStatus(http.statusCode, epoch: epoch)
         guard (200..<300).contains(http.statusCode) else {
             throw Self.refusal(status: http.statusCode, body: data, response: http)
         }
@@ -1213,6 +1305,7 @@ extension APIClient {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         request.httpBody = try Coding.encoder.encode(Body(confirm: confirm))
+        let epoch = authEpoch
 
         let data: Data
         let response: URLResponse
@@ -1224,6 +1317,7 @@ extension APIClient {
         guard let http = response as? HTTPURLResponse else {
             throw APIError.transport("Malformed response")
         }
+        await noteStatus(http.statusCode, epoch: epoch)
         if (200..<300).contains(http.statusCode) {
             return
         }

@@ -56,4 +56,43 @@ struct ClerkTokenProvider: TokenProviding {
             return nil
         }
     }
+
+    /// Forces a round trip to Clerk instead of the cached token, and says why
+    /// when there is none. A session Clerk itself no longer holds as active
+    /// (replaced by a sign-in on another device under single session mode,
+    /// ended, expired, revoked) is `.noSession`.
+    func refreshedToken() async -> TokenRefresh {
+        let alive = await MainActor.run { Clerk.shared.session.map(\.isLive) ?? false }
+        guard alive else { return .noSession }
+        do {
+            if let token = try await Clerk.shared.auth.getToken(.init(skipCache: true)) {
+                return .token(token)
+            }
+            return .noSession
+        } catch {
+            // Clerk answers a refused refresh with an error as well as a
+            // dropped connection; the session's own state, re-read, tells them
+            // apart.
+            let stillLive = await MainActor.run { Clerk.shared.session.map(\.isLive) ?? false }
+            return stillLive ? .unavailable : .noSession
+        }
+    }
+}
+
+extension Session {
+    /// Whether Clerk still treats this session as one that can mint tokens.
+    /// `pending` (a sign-in waiting on a step) is not signed in either.
+    var isLive: Bool { status == .active }
+}
+
+/// Which session states are the session being over, as opposed to unfinished.
+/// Pure so the rule is testable without a Clerk instance.
+enum ClerkSessionEnd {
+    static func isOver(_ status: Session.SessionStatus?) -> Bool {
+        switch status {
+        case nil: true
+        case .ended, .expired, .removed, .replaced, .revoked, .abandoned: true
+        case .active, .pending, .unknown: false
+        }
+    }
 }

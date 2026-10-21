@@ -413,6 +413,8 @@ actor RealtimeClient {
     private var continuation: AsyncStream<RealtimeEvent>.Continuation?
     private var statusHandler: (@Sendable (RealtimeStatus) -> Void)?
     private var reconnectAttempt = 0
+    /// Told every third failed reconnect in a row (`scheduleReconnect`).
+    private var authSuspectHandler: (@Sendable () -> Void)?
     private var joinedChannelId: String?
     /// Who holds the primary slot, so a screen's late `leave` cannot drop the
     /// join of a newer screen for the same channel (`leave(channelId:owner:)`).
@@ -537,6 +539,10 @@ actor RealtimeClient {
         }
     }
 
+    func onAuthSuspect(_ handler: @escaping @Sendable () -> Void) {
+        authSuspectHandler = handler
+    }
+
     func onStatusChange(_ handler: @escaping @Sendable (RealtimeStatus) -> Void) {
         statusHandler = handler
     }
@@ -651,6 +657,11 @@ actor RealtimeClient {
         missedPongs = 0
         statusHandler?(.reconnecting)
         reconnectAttempt += 1
+        // A server that closes every socket with 4401 looks, from here, exactly
+        // like a network that keeps dropping. Ask the owner of the session to
+        // check, every third time; it answers with one cheap request and only
+        // acts on a dead session.
+        if reconnectAttempt % 3 == 0 { authSuspectHandler?() }
         // Capped exponential backoff. Without the cap a long outage pushes the
         // next attempt hours out and the app never comes back on its own.
         let delay = min(pow(2, Double(reconnectAttempt)) * 0.5, 20)
