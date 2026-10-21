@@ -1,5 +1,13 @@
 import type { VoiceSignalingMessage } from "@pqp/shared";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 import type { RealtimeTransport } from "@/lib/realtime";
 import type { RemotePeer } from "@/lib/peer-connection-manager";
 import type { RemoteAudioPlan } from "@/lib/remote-audio-delivery";
@@ -5416,5 +5424,235 @@ describe("deafen restores the mic the person had", () => {
     voice.toggleDeafen();
     expect(voice.getState().isDeafened).toBe(false);
     expect(voice.getState().isMuted).toBe(true);
+  });
+});
+
+/**
+ * `share.endedEarly`: every way a share can end inside its first ten seconds
+ * says why, as a closed enum, on the console line a person can copy. The Faro
+ * half and the limit are pinned in `lib/share-ended-early.test.ts`; this is the
+ * join between each trigger in the controller and its reason.
+ */
+describe("share.endedEarly", () => {
+  let now = 1_000_000;
+  let warn: MockInstance<typeof console.warn>;
+
+  beforeEach(() => {
+    installBrowserStubs();
+    managers.length = 0;
+    stoppedTracks.length = 0;
+    sfuScreenPublishes.length = 0;
+    now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // An earlier suite may have left its own spy on `console.warn`; spying
+    // again returns that one with its calls, so start from nothing.
+    warn.mockClear();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** The fields of every early-end line the console got. */
+  function lines(): Record<string, string>[] {
+    return warn.mock.calls
+      .filter((call) => call[0] === "[pqp] screen share ended early")
+      .map((call) => call[1] as Record<string, string>);
+  }
+
+  async function connected(transport: "mesh" | "livekit" = "mesh") {
+    const { transport: wire } = createTransport();
+    const voice = createVoiceController(wire);
+    if (transport === "livekit") {
+      voice.setSessionProvider(async () => sfuSession());
+    }
+    await voice.join(CHANNEL);
+    voice.handleSignaling(welcome(transport));
+    await settle();
+    return voice;
+  }
+
+  it("says track-ended, with the surface and sound, when the source ends", async () => {
+    const capture = fakeCapture("e-1", true, "window");
+    displayMedia = async () => capture;
+    const voice = await connected();
+    await voice.startScreenShare();
+    now += 3_000;
+    capture.getVideoTracks()[0]!.onended?.();
+    await settle();
+    expect(lines()).toEqual([
+      {
+        reason: "track-ended",
+        surface: "window",
+        audio: "with",
+        platform: "web",
+        transport: "mesh",
+        elapsedBucket: "2to5s",
+      },
+    ]);
+  });
+
+  it("says refused-by-server on the SFU when the voice server turns the share down", async () => {
+    displayMedia = async () => fakeCapture("e-2", false, "monitor");
+    const voice = await connected("livekit");
+    await voice.startScreenShare();
+    now += 500;
+    voice.handleSignaling({ type: "screen-share-denied", voiceChannelId: CHANNEL });
+    await settle();
+    expect(lines()).toEqual([
+      {
+        reason: "refused-by-server",
+        surface: "screen",
+        audio: "without",
+        platform: "web",
+        transport: "sfu",
+        elapsedBucket: "lt2s",
+      },
+    ]);
+  });
+
+  it("says user-stopped for a stop inside the window and nothing after it", async () => {
+    displayMedia = async () => fakeCapture("e-3", false, "browser");
+    const voice = await connected();
+    await voice.startScreenShare();
+    now += 6_000;
+    await voice.stopScreenShare();
+    expect(lines()).toMatchObject([
+      { reason: "user-stopped", surface: "tab", elapsedBucket: "5to10s" },
+    ]);
+
+    warn.mockClear();
+    displayMedia = async () => fakeCapture("e-3b", false);
+    await voice.startScreenShare();
+    now += 10_000;
+    await voice.stopScreenShare();
+    expect(lines()).toEqual([]);
+  });
+
+  it("says nothing when the source ends after ten seconds", async () => {
+    const capture = fakeCapture("e-4", false);
+    displayMedia = async () => capture;
+    const voice = await connected();
+    await voice.startScreenShare();
+    now += 30_000;
+    capture.getVideoTracks()[0]!.onended?.();
+    await settle();
+    expect(lines()).toEqual([]);
+  });
+
+  it("says room-left when the call ends under a fresh share", async () => {
+    displayMedia = async () => fakeCapture("e-5", false);
+    const voice = await connected();
+    await voice.startScreenShare();
+    now += 1_000;
+    voice.leave();
+    expect(lines()).toMatchObject([{ reason: "room-left", surface: "unknown" }]);
+  });
+
+  it("says republish-failed when the voice server rejects the publish, and forwards no error text", async () => {
+    displayMedia = async () => fakeCapture("e-6", false, "window");
+    const voice = await connected("livekit");
+    const session = (await vi.mocked(connectLiveKit).mock.results.at(-1)!.value) as {
+      publishScreen: () => Promise<void>;
+    };
+    session.publishScreen = async () => {
+      throw new Error("publish rejected: C:\\secret\\path");
+    };
+    await voice.startScreenShare();
+    expect(lines()).toMatchObject([
+      { reason: "republish-failed", surface: "window", transport: "sfu" },
+    ]);
+    expect(JSON.stringify(warn.mock.calls.filter((c) => c[0] === "[pqp] screen share ended early"))).not.toContain(
+      "secret",
+    );
+  });
+
+  it("says transport-changed when the room moves to a transport this client cannot follow", async () => {
+    displayMedia = async () => fakeCapture("e-9", false, "monitor");
+    const voice = await connected();
+    await voice.startScreenShare();
+    now += 4_000;
+    voice.handleSignaling({
+      type: "voice-transport-unsupported",
+      voiceChannelId: CHANNEL,
+      transport: "livekit",
+      reason: "promoted",
+    });
+    await settle();
+    expect(lines()).toMatchObject([
+      { reason: "transport-changed", surface: "screen", transport: "mesh", elapsedBucket: "2to5s" },
+    ]);
+  });
+
+  it("says permission-denied when the operating system refuses the capture", async () => {
+    displayMedia = async () => {
+      const err = new Error("Permission denied by system");
+      err.name = "NotAllowedError";
+      throw err;
+    };
+    const voice = await connected();
+    await voice.startScreenShare();
+    expect(lines()).toEqual([
+      {
+        reason: "permission-denied",
+        surface: "unknown",
+        audio: "without",
+        platform: "web",
+        transport: "mesh",
+        elapsedBucket: "lt2s",
+      },
+    ]);
+  });
+
+  it("says capture-failed, and that the sound was the casualty when it was asked for", async () => {
+    displayMedia = async () => {
+      const err = new Error("Could not start video source");
+      err.name = "NotReadableError";
+      throw err;
+    };
+    const voice = await connected();
+    await voice.startScreenShare(true);
+    expect(lines()).toMatchObject([{ reason: "capture-failed", audio: "failed" }]);
+  });
+
+  it("says nothing when the person simply closes the picker", async () => {
+    displayMedia = async () => {
+      const err = new Error("Permission denied");
+      err.name = "NotAllowedError";
+      throw err;
+    };
+    const voice = await connected();
+    await voice.startScreenShare();
+    expect(lines()).toEqual([]);
+  });
+
+  it("marks the sound as failed when it ends under a share that then ends early", async () => {
+    const capture = fakeCapture("e-7", true, "monitor");
+    displayMedia = async () => capture;
+    const voice = await connected();
+    await voice.startScreenShare();
+    capture.getAudioTracks()[0]!.onended?.();
+    await settle();
+    now += 1_500;
+    capture.getVideoTracks()[0]!.onended?.();
+    await settle();
+    expect(lines()).toMatchObject([{ reason: "track-ended", audio: "failed" }]);
+  });
+
+  it("never puts a capture label, a title or an id on the line", async () => {
+    const capture = fakeCapture("e-8", false, "window");
+    (capture.getVideoTracks()[0] as unknown as { label: string }).label =
+      "Chrome - Bank statement - rafael@example.com";
+    displayMedia = async () => capture;
+    const voice = await connected();
+    await voice.startScreenShare();
+    capture.getVideoTracks()[0]!.onended?.();
+    await settle();
+    const text = JSON.stringify(warn.mock.calls);
+    expect(text).not.toContain("Bank statement");
+    expect(text).not.toContain("rafael@example.com");
+    expect(text).not.toContain(CHANNEL);
+    expect(text).not.toContain(PEER);
   });
 });

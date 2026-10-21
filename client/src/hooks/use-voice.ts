@@ -204,6 +204,16 @@ import {
   type MicFault,
 } from "@/lib/mic-health";
 import { reportFaroEvent } from "@/lib/faro";
+import {
+  buildShareEndedEarly,
+  reasonFromCaptureError,
+  reportShareEndedEarly,
+  shareSurface,
+  shareTransport,
+  type ShareAudio,
+  type ShareEndReason,
+  type ShareSurface,
+} from "@/lib/share-ended-early";
 import type { AudioHealthPrompt } from "@/lib/audio-health";
 import {
   createAudioHealthMonitor,
@@ -2291,7 +2301,9 @@ export function createVoiceController(transport: RealtimeTransport) {
     void teardownSfu();
     stopMicPipeline(pipeline);
     pipeline = null;
-    releaseScreenCapture();
+    // The room runs a transport this client cannot: the call, and the share
+    // in it, end for that reason.
+    releaseScreenCapture("transport-changed");
     releaseCameraCapture();
     pushToTalkHeld = false;
     voiceActivityOpen = false;
@@ -2614,7 +2626,8 @@ export function createVoiceController(transport: RealtimeTransport) {
     }
     if (!canStream) {
       if (screenCaptureStream) {
-        void stopScreenShareInternal();
+        // The server took the right to present away.
+        void stopScreenShareInternal("refused-by-server");
       }
       if (cameraCaptureStream) {
         void stopCameraInternal();
@@ -3782,6 +3795,16 @@ export function createVoiceController(transport: RealtimeTransport) {
   let sharePictureWatch: SharePictureWatch | null = null;
   /** `Date.now()` when the running share went out, for "ended by itself this soon". */
   let shareStartedAt = 0;
+  /**
+   * What `share.endedEarly` says about the running share, closed enums only
+   * (`lib/share-ended-early.ts`). Set when the share goes out, read once when
+   * it ends, null while nothing is shared.
+   */
+  let shareEarlyRecord: {
+    surface: ShareSurface;
+    audio: ShareAudio;
+    transport: ReturnType<typeof shareTransport>;
+  } | null = null;
   /** `share_game_capture_hint` was on for the running share. */
   let shareGameCaptureHintOn = false;
   /**
@@ -4169,10 +4192,68 @@ export function createVoiceController(transport: RealtimeTransport) {
     }
   }
 
-  function releaseScreenCapture() {
+  /**
+   * `share.endedEarly`: say why a share that lived under ten seconds ended.
+   * Nothing for a longer one. Never changes what the share does.
+   */
+  function recordShareEnded(reason: ShareEndReason) {
+    const record = shareEarlyRecord;
+    shareEarlyRecord = null;
+    if (!record) {
+      return;
+    }
+    reportShareEndedEarly(
+      buildShareEndedEarly({
+        startedAt: shareStartedAt,
+        endedAt: Date.now(),
+        reason,
+        surface: record.surface,
+        audio: record.audio,
+        platform: isDesktopApp() ? "desktop" : "web",
+        transport: record.transport,
+      }),
+    );
+  }
+
+  /**
+   * A capture that never produced a share (the picker failed, the OS refused,
+   * no picture came back). It never lived, so it reads as the first bucket.
+   * A person closing the picker is not this and reports nothing.
+   */
+  function recordCaptureFailed(err: unknown, askedForAudio: boolean) {
+    const reason = reasonFromCaptureError(err);
+    if (reason === null) {
+      return;
+    }
+    const now = Date.now();
+    reportShareEndedEarly(
+      buildShareEndedEarly({
+        startedAt: now,
+        endedAt: now,
+        reason,
+        surface: "unknown",
+        audio:
+          askedForAudio && !(err instanceof Error && err.name === "NotAllowedError")
+            ? "failed"
+            : "without",
+        platform: isDesktopApp() ? "desktop" : "web",
+        transport: shareTransport(state.roomTransport),
+      }),
+    );
+  }
+
+  /** The running share's sound failed; its end, if early, says so. */
+  function noteShareAudioFailed() {
+    if (shareEarlyRecord) {
+      shareEarlyRecord.audio = "failed";
+    }
+  }
+
+  function releaseScreenCapture(reason: ShareEndReason) {
     if (!screenCaptureStream) {
       return;
     }
+    recordShareEnded(reason);
     rememberShareAudioTrack(null);
     // Before the tracks stop: the native capture is found by its track, and
     // stopping it now spares the shell a second of capturing for nobody.
@@ -4468,6 +4549,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     }
     screenCaptureStream.removeTrack(track);
     track.stop();
+    noteShareAudioFailed();
     state.isSharingScreenAudio = false;
     state.isSharingSystemAudio = false;
     announceSharing();
@@ -4494,7 +4576,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         // Windows Graphics Capture reports when it never gets a frame of an
         // exclusive-fullscreen game: the third face of the same problem.
         maybeHintEarlyCaptureEnd(stream, video);
-        void stopScreenShareInternal();
+        void stopScreenShareInternal("track-ended");
         emit();
       };
     }
@@ -4549,11 +4631,11 @@ export function createVoiceController(transport: RealtimeTransport) {
   }
 
   /** Full stop while still in-call: releases the capture and tells everyone. */
-  async function stopScreenShareInternal() {
+  async function stopScreenShareInternal(reason: ShareEndReason) {
     if (!screenCaptureStream) {
       return;
     }
-    releaseScreenCapture();
+    releaseScreenCapture(reason);
     transport.sendVoice({
       type: "set-sharing-screen",
       sharing: false,
@@ -4839,7 +4921,13 @@ export function createVoiceController(transport: RealtimeTransport) {
           // Same reason as `screen-share-denied`: the docked bar shows only a
           // share error it can tell is the share's.
           state.screenShareError = state.error;
-          await stopScreenShareInternal().catch(() => {});
+          await stopScreenShareInternal(
+            // A promotion in flight is the transport changing under the
+            // share; anything else is a plain failed republish.
+            retiringMesh !== null || promotionGiveUpId !== null
+              ? "transport-changed"
+              : "republish-failed",
+          ).catch(() => {});
         }
       }
       // Same story for the camera in a conversation call.
@@ -5224,7 +5312,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     const closingPipeline = pipeline;
     pipeline = null;
     stopMicTracks(closingPipeline);
-    releaseScreenCapture();
+    releaseScreenCapture("room-left");
     releaseCameraCapture();
     pushToTalkHeld = false;
     voiceActivityOpen = false;
@@ -5564,7 +5652,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         console.warn("[pqp] screen share refused by the server", {
           transport: state.roomTransport,
         });
-        void stopScreenShareInternal();
+        void stopScreenShareInternal("refused-by-server");
         state.error = shareLimitMessage(
           meshShareLimit(),
           canPromoteTransport(),
@@ -7162,6 +7250,8 @@ export function createVoiceController(transport: RealtimeTransport) {
       // PQP-31: the sound failed and the shell gave the same surface back
       // without it. Said once the share is up.
       let sharedWithoutSoundAfterFailure = false;
+      // The shell's own capture of the computer's sound did not attach.
+      let nativeAudioFailed = false;
       // A stream the caller already opened (the watch party preview) is
       // published as it is. The picker has already run, the host has already
       // looked at the result, and asking again here would broadcast a
@@ -7195,6 +7285,7 @@ export function createVoiceController(transport: RealtimeTransport) {
             err instanceof Error &&
             (err.name === "TypeError" || err.name === "NotSupportedError");
           if (!shapeRefused) {
+            recordCaptureFailed(err, askedForAudio);
             state.error = screenShareErrorMessage(err);
             state.screenShareError = state.error;
             state.errorKind = "share";
@@ -7216,7 +7307,8 @@ export function createVoiceController(transport: RealtimeTransport) {
           }
           try {
             stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-          } catch {
+          } catch (retryErr) {
+            recordCaptureFailed(retryErr, false);
             state.error = screenShareErrorMessage(err);
             state.screenShareError = state.error;
             state.errorKind = "share";
@@ -7230,6 +7322,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       const track = stream.getVideoTracks()[0];
       if (!track) {
         for (const t of stream.getTracks()) t.stop();
+        recordCaptureFailed(new Error("no video track"), false);
         state.error = translateMessage("voice.error.noVideoTrack");
         state.errorKind = "share";
         state.screenShareError = state.error;
@@ -7281,6 +7374,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           // stopped and the next share takes the old path; the presenter and
           // whoever watches their tile are told it is now without sound.
           onEnded: () => {
+            noteShareAudioFailed();
             state.isSharingScreenAudio = false;
             state.notice = translateMessage("voice.notice.nativeShareAudioEnded");
             emit();
@@ -7291,6 +7385,9 @@ export function createVoiceController(transport: RealtimeTransport) {
         // is a silent share. Say so rather than leave "why is there no sound"
         // to be discovered by the audience. The box left unticked
         // (`reason: "none"`) is the ordinary silent share and needs no line.
+        if (!attach.attached && attach.reason !== "none") {
+          nativeAudioFailed = true;
+        }
         if (!attach.attached && attach.reason !== "none" && !state.notice) {
           state.notice = translateMessage("voice.notice.nativeShareAudioFailed");
         }
@@ -7429,6 +7526,13 @@ export function createVoiceController(transport: RealtimeTransport) {
         displaySurface,
         hasAudio,
       });
+      // `share.endedEarly` needs the surface, the sound and the transport as
+      // they were when the share went out.
+      shareEarlyRecord = {
+        surface: shareSurface(displaySurface),
+        audio: lostSound || nativeAudioFailed ? "failed" : hasAudio ? "with" : "without",
+        transport: shareTransport(state.roomTransport),
+      };
       // Same moment, same rule, different consequence: the presenter asked for
       // their pointer to be left out and this surface carries it anyway. Said
       // now, while they can still pick a different surface.
@@ -7486,13 +7590,14 @@ export function createVoiceController(transport: RealtimeTransport) {
         state.error = screenShareErrorMessage(err);
         state.errorKind = "share";
         state.screenShareError = state.error;
-        await stopScreenShareInternal();
+        // The first publish, not a republish; the enum has one word for both.
+        await stopScreenShareInternal("republish-failed");
         emit();
       }
     },
 
     async stopScreenShare() {
-      await stopScreenShareInternal();
+      await stopScreenShareInternal("user-stopped");
       emit();
     },
 
