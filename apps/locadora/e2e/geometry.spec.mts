@@ -253,17 +253,19 @@ test("the picture is the stage's box, edge to edge, in every screen setting and 
    */
   const advanceTo = async (wanted: number) => {
     const holdMs = 160 * SLOW;
-    const settleMs = 3_000 * SLOW;
+    const settleMs = 2_500 * SLOW;
+    // one deadline for the whole climb, so a card that never answers fails in tens of seconds, not attempts times a wait
+    const overall = Date.now() + 20_000 * SLOW;
     let current: number | null = null;
     await expect.poll(async () => (current = await cardMode()), { message: "the card shows a mode", timeout: 15_000 * SLOW, intervals: [300] }).not.toBeNull();
-    for (let press = 0; press < SNES_GEOMETRY_MODES.length * 2 && current !== wanted; press++) {
+    for (let press = 0; press < SNES_GEOMETRY_MODES.length * 2 && current !== wanted && Date.now() < overall; press++) {
       const before: number | null = current;
       await frame.locator("canvas.ejs_canvas").click();
       await page.keyboard.down("x");
       await page.waitForTimeout(holdMs);
       await page.keyboard.up("x");
       const deadline = Date.now() + settleMs;
-      while (Date.now() < deadline) {
+      while (Date.now() < Math.min(deadline, overall)) {
         await page.waitForTimeout(300);
         const seen = await cardMode();
         if (seen !== null && seen !== before) {
