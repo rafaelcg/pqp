@@ -254,6 +254,10 @@
     <string name="attachment_play_video">Play %1$s</string>
     <string name="attachment_video_failed">This video could not be played.</string>
     <string name="attachment_video_close">Close</string>
+    <!-- The action an image attachment offers: open it over the whole screen.
+         %1$s is its filename. -->
+    <string name="attachment_open_image">Open %1$s</string>
+    <string name="attachment_image_failed">This image could not be loaded.</string>
 
     <!-- Connection -->
     <string name="connection_connecting">Connecting…</string>

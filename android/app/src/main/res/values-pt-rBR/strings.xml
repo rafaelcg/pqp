@@ -243,6 +243,8 @@
     <string name="attachment_play_video">Reproduzir %1$s</string>
     <string name="attachment_video_failed">Não foi possível reproduzir este vídeo.</string>
     <string name="attachment_video_close">Fechar</string>
+    <string name="attachment_open_image">Abrir %1$s</string>
+    <string name="attachment_image_failed">Não foi possível carregar esta imagem.</string>
 
     <!-- Conexão -->
     <string name="connection_connecting">Conectando…</string>

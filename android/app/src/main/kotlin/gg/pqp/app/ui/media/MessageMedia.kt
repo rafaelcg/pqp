@@ -3,7 +3,9 @@ package gg.pqp.app.ui.media
 import android.text.format.Formatter
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -22,6 +24,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -41,6 +44,7 @@ import gg.pqp.app.core.Backend
 import gg.pqp.app.ui.theme.PqpIcons
 import gg.pqp.app.ui.theme.Sizes
 import gg.pqp.app.ui.theme.Spacing
+import kotlinx.coroutines.launch
 
 /**
  * Everything a message can carry that is not words.
@@ -83,18 +87,38 @@ fun MessageAttachment(
      * a voice note has always degraded to.
      */
     voiceNote: gg.pqp.app.voicenotes.ui.VoiceNoteContext? = null,
+    /**
+     * The message's long press. A picture now takes taps itself (to open the
+     * viewer), and a child that takes taps swallows the row's long press too,
+     * so the row hands its long press down rather than losing it on images.
+     */
+    onLongPress: (() -> Unit)? = null,
 ) {
     when {
         attachment.isVoiceNote && voiceNote != null ->
             gg.pqp.app.voicenotes.ui.VoiceNoteCard(attachment, voiceNote, modifier)
         attachment.isVideo -> VideoAttachment(attachment, api, modifier)
-        attachment.isImage -> ImageAttachment(attachment, modifier)
+        attachment.isImage -> ImageAttachment(attachment, api, modifier, onLongPress)
         else -> FileChip(attachment, modifier)
     }
 }
 
+/**
+ * A picture in the transcript, and the door to [ImageViewerDialog].
+ *
+ * The frame crops (a tall screenshot cannot own the screen), so tapping is the
+ * only way to see the whole picture, and until the viewer existed a tap did
+ * nothing at all. A load failure re-mints the presigned URL once, because a
+ * transcript held in memory can outlive the URL's twelve hours.
+ */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ImageAttachment(attachment: Attachment, modifier: Modifier = Modifier) {
+private fun ImageAttachment(
+    attachment: Attachment,
+    api: ApiClient,
+    modifier: Modifier = Modifier,
+    onLongPress: (() -> Unit)? = null,
+) {
     // A picker GIF's filename is the provider's title (Klipy today, and the
     // GIPHY and Tenor rows stored before it), which is a description and
     // reads well; an uploaded file's is a filename, which does not, but it is
@@ -105,11 +129,21 @@ private fun ImageAttachment(attachment: Attachment, modifier: Modifier = Modifie
     } else {
         attachment.filename
     }
+    val openLabel = stringResource(R.string.attachment_open_image, attachment.filename)
+
+    val scope = rememberCoroutineScope()
+    val retry = remember(attachment.id) { RemintOnce { api.attachmentUrl(attachment.id) } }
+    var url by remember(attachment.id, attachment.url) { mutableStateOf(attachment.url) }
+    // Saveable: a rotation while the viewer is open must not close it.
+    var viewing by rememberSaveable(attachment.id) { mutableStateOf(false) }
 
     AsyncImage(
-        model = Backend.absolute(attachment.url),
+        model = Backend.absolute(url),
         contentDescription = label,
         contentScale = ContentScale.Crop,
+        onError = {
+            scope.launch { retry.next()?.let { url = it } }
+        },
         modifier = modifier
             .testTag("attachment-image")
             .fillMaxWidth(0.8f)
@@ -120,21 +154,41 @@ private fun ImageAttachment(attachment: Attachment, modifier: Modifier = Modifie
                 width = Sizes.hairline,
                 color = MaterialTheme.colorScheme.outline,
                 shape = MaterialTheme.shapes.medium,
+            )
+            .combinedClickable(
+                onClickLabel = openLabel,
+                onClick = { viewing = true },
+                onLongClick = onLongPress,
             ),
     )
+
+    if (viewing) {
+        ImageViewerDialog(
+            url = url,
+            contentDescription = label,
+            remint = { api.attachmentUrl(attachment.id) },
+            onDismiss = { viewing = false },
+        )
+    }
 }
 
 /**
  * A GIF pasted as a link rather than sent through the picker.
  *
- * Same frame as an image attachment, because to a reader it is the same thing.
- * See [GifLinks] for why a body is allowed to become a picture at all.
+ * Same frame as an image attachment, because to a reader it is the same thing,
+ * and it opens the same viewer. See [GifLinks] for why a body is allowed to
+ * become a picture at all.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun InlineGif(url: String, modifier: Modifier = Modifier) {
+fun InlineGif(url: String, modifier: Modifier = Modifier, onLongPress: (() -> Unit)? = null) {
+    val label = stringResource(R.string.attachment_gif)
+    val openLabel = stringResource(R.string.attachment_open_image, label)
+    var viewing by rememberSaveable(url) { mutableStateOf(false) }
+
     AsyncImage(
         model = url,
-        contentDescription = stringResource(R.string.attachment_gif),
+        contentDescription = label,
         contentScale = ContentScale.Crop,
         modifier = modifier
             .testTag("inline-gif")
@@ -146,8 +200,23 @@ fun InlineGif(url: String, modifier: Modifier = Modifier) {
                 width = Sizes.hairline,
                 color = MaterialTheme.colorScheme.outline,
                 shape = MaterialTheme.shapes.medium,
+            )
+            .combinedClickable(
+                onClickLabel = openLabel,
+                onClick = { viewing = true },
+                onLongClick = onLongPress,
             ),
     )
+
+    if (viewing) {
+        // Not ours to sign: a pasted link has no attachment id to re-mint.
+        ImageViewerDialog(
+            url = url,
+            contentDescription = label,
+            remint = null,
+            onDismiss = { viewing = false },
+        )
+    }
 }
 
 /**
