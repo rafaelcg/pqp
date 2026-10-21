@@ -1022,17 +1022,20 @@ export type VoiceRosterPeerRow = VoicePeerRow & {
 export interface VoiceRoomRoster {
   channelId: string;
   transport: VoiceRoomTransport;
+  /** `voice_rooms.sfu_region`: the media box the room is pinned to, null for home. */
+  region: string | null;
   peers: VoiceRosterPeerRow[];
 }
 
 interface RosterDbRow extends VoicePeerDbRow {
   room_channel_id: string;
   transport: VoiceRoomTransport;
+  sfu_region: string | null;
   server_muted: boolean;
   hand_raised_at: Date | null;
 }
 
-const ROSTER_SELECT = `SELECT r.channel_id AS room_channel_id, r.transport,
+const ROSTER_SELECT = `SELECT r.channel_id AS room_channel_id, r.transport, r.sfu_region,
        p.peer_id, p.channel_id, p.user_id, p.instance_id, p.display_name,
        p.avatar_url, p.muted, p.deafened, p.sharing_screen, p.listening_music, p.camera_stream_id,
        p.screen_audio_stream_id, p.can_speak, p.can_stream, p.can_resume, p.orphaned_at,
@@ -1055,6 +1058,7 @@ function groupRosters(rows: RosterDbRow[]): VoiceRoomRoster[] {
       room = {
         channelId: row.room_channel_id,
         transport: row.transport,
+        region: row.sfu_region ?? null,
         peers: [],
       };
       byRoom.set(row.room_channel_id, room);

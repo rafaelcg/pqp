@@ -98,19 +98,62 @@ export function screenStreamMbps(participants: number): number {
  */
 export const VOICE_PROMOTION_DEFAULT_MAX_MBPS = 600;
 
-/** `VOICE_PROMOTION_MAX_SFU_MBPS`, or the default. Read per call, never cached. */
-export function promotionBudgetMbps(): number {
-  const raw = process.env.VOICE_PROMOTION_MAX_SFU_MBPS?.trim();
+/** A budget env value as a number, or null for unset and unreadable. */
+function readBudgetEnv(name: string): number | null {
+  const raw = process.env[name]?.trim();
   if (!raw) {
-    return VOICE_PROMOTION_DEFAULT_MAX_MBPS;
+    return null;
   }
   const parsed = Number(raw);
   // A typo must not silently uncap the box, and must not silently close it
-  // either: an unreadable value is the default, exactly as if it were unset.
+  // either: an unreadable value is the fallback, exactly as if it were unset.
   if (!Number.isFinite(parsed) || parsed < 0) {
-    return VOICE_PROMOTION_DEFAULT_MAX_MBPS;
+    return null;
   }
   return parsed;
+}
+
+/** `VOICE_PROMOTION_MAX_SFU_MBPS`, or the default. Read per call, never cached. */
+export function promotionBudgetMbps(): number {
+  return (
+    readBudgetEnv("VOICE_PROMOTION_MAX_SFU_MBPS") ??
+    VOICE_PROMOTION_DEFAULT_MAX_MBPS
+  );
+}
+
+/**
+ * The environment suffix of a region id, the same rule `regions.ts` uses for
+ * `LIVEKIT_API_KEY_<ID>`: upper case, `-` as `_`. Repeated here rather than
+ * imported because this module is arithmetic and must stay importable without
+ * the config it would otherwise drag in.
+ */
+export function regionBudgetSuffix(region: string): string {
+  return region.toUpperCase().replace(/-/g, "_");
+}
+
+/**
+ * THE BUDGET OF ONE BOX. `VOICE_PROMOTION_MAX_SFU_MBPS_<REGION>` (`_MIA`,
+ * `_LON`, `_SAO`) for a box that is smaller or bigger than the 4 vCPU one
+ * `docs/CAPACITY.md` measured, and `VOICE_PROMOTION_MAX_SFU_MBPS` (default
+ * 600) for every box that has no line of its own. Read per call, never cached.
+ *
+ * An unreadable regional value falls back to the global budget, which is
+ * itself the default when unreadable: a typo on one box must never uncap it
+ * and must never close it either. `0` closes that one box, the same switch the
+ * global variable has.
+ */
+export function promotionBudgetMbpsFor(
+  region: string | null | undefined,
+): number {
+  if (region) {
+    const own = readBudgetEnv(
+      `VOICE_PROMOTION_MAX_SFU_MBPS_${regionBudgetSuffix(region)}`,
+    );
+    if (own !== null) {
+      return own;
+    }
+  }
+  return promotionBudgetMbps();
 }
 
 /**
@@ -158,6 +201,31 @@ export interface SfuRoomLoad {
    * both is in both counts, which is right: they publish two tracks.
    */
   screenPublishers: number;
+  /**
+   * The SFU box this room is pinned to (`voice_rooms.sfu_region`, the id of a
+   * region in `LIVEKIT_REGIONS`). Null or absent is the HOME box: a room that
+   * predates regions, a room on a single-region deployment, and a room pinned
+   * to a region an operator has since removed all live there.
+   */
+  region?: string | null;
+}
+
+/**
+ * Which box a budget question is about. `region` is the box the asking room
+ * is on, `home` is the box a room with no region lives on. Passing a scope is
+ * what makes a budget PER BOX: only rooms on `region` are summed.
+ */
+export interface BoxScope {
+  region: string;
+  home: string;
+}
+
+/** The rooms that share a box with `scope.region`; an unknown region reads as home. */
+export function roomsOnBox(
+  rooms: readonly SfuRoomLoad[],
+  scope: BoxScope,
+): SfuRoomLoad[] {
+  return rooms.filter((room) => (room.region || scope.home) === scope.region);
 }
 
 /**
@@ -173,26 +241,89 @@ export interface SfuRoomLoad {
  * whole reason the two counts are kept apart: pricing that share as a camera
  * said 9.
  */
-export function estimateRoomMbps(room: SfuRoomLoad): number {
+export function estimateRoomMbps(
+  room: SfuRoomLoad,
+  options: PriceOptions = {},
+): number {
   if (room.transport !== "livekit") {
     return 0;
   }
   const participants = Math.max(0, room.participants);
   const cameras = Math.max(0, room.cameraPublishers);
   const screens = Math.max(0, room.screenPublishers);
+  const cameraMbps =
+    options.calibrated && participants <= LARGE_ROOM_PARTICIPANTS
+      ? calibratedCameraMbps(cameras)
+      : cameras * CAMERA_STREAM_MBPS;
   return (
-    participants *
-    (cameras * CAMERA_STREAM_MBPS + screens * screenStreamMbps(participants))
+    participants * (cameraMbps + screens * screenStreamMbps(participants))
   );
 }
 
 /** The whole box, as far as this cluster can see it. */
-export function estimateSfuLoadMbps(rooms: readonly SfuRoomLoad[]): number {
+export function estimateSfuLoadMbps(
+  rooms: readonly SfuRoomLoad[],
+  options: PriceOptions = {},
+): number {
   let total = 0;
   for (const room of rooms) {
-    total += estimateRoomMbps(room);
+    total += estimateRoomMbps(room, options);
   }
   return total;
+}
+
+/** How a room is priced. Absent is the original flat tariff. */
+export interface PriceOptions {
+  /**
+   * Price camera fan-out by the layer a tile really asks for
+   * (`calibratedCameraMbps`). Runtime flag `sfu_video_price_calibrated`.
+   */
+  calibrated?: boolean;
+}
+
+/**
+ * What a viewer's tile of one NON-LEADING camera really costs in an ordinary
+ * room, in Mbit/s: the ceiling of the middle simulcast layer, 640x360 at
+ * 400 kbit/s (`CAMERA_SIMULCAST_RUNGS` in `client/src/lib/video-quality.ts`).
+ *
+ * WHY THE FLAT 1.5 WAS TOO HIGH IN A ROOM OF CAMERAS. The tariff above prices
+ * every camera at the top layer (720p, 1.5 Mbit/s) for every participant,
+ * which is true only for a tile that fills the stage. Cameras are published
+ * as a ladder (720p 1.5 Mbit/s, 360p 0.4, 180p 0.16) and every client runs
+ * `adaptiveStream` + `dynacast`: the SFU forwards, per viewer, the smallest
+ * layer that covers the element the viewer actually draws, and the publisher
+ * stops encoding a layer nobody asks for. The stage draws one tile per
+ * publisher (`stageTileSlots`), so:
+ *
+ *  - ONE camera is the whole stage: its tile is big, the top layer, 1.5.
+ *  - From the SECOND camera on the stage is a grid. On a laptop a tile of a
+ *    two-by-two or three-by-three grid is 400 to 640 px wide, which the 360p
+ *    layer covers (0.4); on a phone the 180p layer does (0.16). A pin or a
+ *    spotlight makes one tile big again, which is the "leading camera" above.
+ *  - Tiles past the bound (12 wide, 6 narrow) are chips with the stream
+ *    stopped, and a hidden tab pauses its video: both cost nothing and are
+ *    not subtracted here.
+ *
+ * So a room of `c` cameras costs each participant `1.5 + (c - 1) * 0.4`, not
+ * `c * 1.5`. 0.4 is the ceiling of the layer, and a talking head sits well
+ * under its ceiling, so this stays on the safe side of the measurement.
+ */
+export const CAMERA_TILE_MBPS = 0.4;
+
+/**
+ * Camera inflow of one participant for `cameras` published cameras, in a room
+ * small enough to be a conversation. Zero cameras cost nothing.
+ *
+ * Only used at or under `LARGE_ROOM_PARTICIPANTS`: above it the room is a
+ * broadcast, `docs/CAPACITY.md` measured its pricing accurate (a ratio of
+ * about 1.2), and nothing here touches it. One camera costs exactly what it
+ * always did, so a watch party's presenter camera is priced the same either way.
+ */
+export function calibratedCameraMbps(cameras: number): number {
+  if (cameras <= 0) {
+    return 0;
+  }
+  return CAMERA_STREAM_MBPS + (cameras - 1) * CAMERA_TILE_MBPS;
 }
 
 export type PromotionRefusal =
@@ -264,6 +395,11 @@ export interface PromotionVerdict {
   /** What this room would add once it is on the SFU, for the log line. */
   addedMbps: number;
   budgetMbps: number;
+  /** The box the question was about, or null for the whole cluster. */
+  region: string | null;
+  /** SFU rooms on that box counting this one, and the people in them. */
+  roomsOnBox: number;
+  peopleOnBox: number;
 }
 
 export interface PromotionInput {
@@ -279,6 +415,9 @@ export interface PromotionInput {
   /** The room asking to be promoted, as it will look once the camera is on. */
   room: SfuRoomLoad;
   budgetMbps: number;
+  /** Per-box accounting: only rooms on the candidate's box are summed. Absent is the whole cluster. */
+  scope?: BoxScope;
+  price?: PriceOptions;
 }
 
 /**
@@ -295,11 +434,16 @@ export function decidePromotion(input: PromotionInput): PromotionVerdict {
     rooms: input.rooms,
     room: input.room,
     budgetMbps: input.budgetMbps,
+    scope: input.scope,
+    price: input.price,
   });
   const base = {
     loadMbps: budget.loadMbps,
     addedMbps: budget.addedMbps,
     budgetMbps: input.budgetMbps,
+    region: budget.region,
+    roomsOnBox: budget.roomsOnBox,
+    peopleOnBox: budget.peopleOnBox,
   };
   if (!input.liveKitConfigured) {
     return { ...base, promote: false, refusal: "unconfigured" };
@@ -347,6 +491,16 @@ export interface VideoAdmissionInput {
   /** The room asking, priced as it WILL be once the publication lands. */
   room: SfuRoomLoad;
   budgetMbps: number;
+  /**
+   * THE BUDGET IS ONE BOX'S. With a scope only the rooms pinned to the same
+   * box as the asking room are summed, because the budget is the measured
+   * ceiling of one media server (`docs/CAPACITY.md`) and a room in Miami
+   * spends nothing of Sao Paulo's. Without one, every room on the cluster is
+   * summed, which is what a deployment with one box always did.
+   */
+  scope?: BoxScope;
+  /** How rooms are priced; absent is the flat tariff. */
+  price?: PriceOptions;
 }
 
 export interface VideoAdmissionVerdict {
@@ -356,6 +510,11 @@ export interface VideoAdmissionVerdict {
   /** What the asking room will cost once the publication lands. */
   addedMbps: number;
   budgetMbps: number;
+  /** The box the question was about, or null for the whole cluster. */
+  region: string | null;
+  /** SFU rooms on that box, the asking one included, and the people in them. */
+  roomsOnBox: number;
+  peopleOnBox: number;
 }
 
 /**
@@ -368,15 +527,34 @@ export interface VideoAdmissionVerdict {
 export function decideVideoAdmission(
   input: VideoAdmissionInput,
 ): VideoAdmissionVerdict {
-  const others = input.rooms.filter(
+  const sameBox = input.scope
+    ? roomsOnBox(input.rooms, input.scope)
+    : input.rooms;
+  const others = sameBox.filter(
     (room) => room.channelId !== input.room.channelId,
   );
-  const loadMbps = estimateSfuLoadMbps(others);
-  const addedMbps = estimateRoomMbps({ ...input.room, transport: "livekit" });
+  const loadMbps = estimateSfuLoadMbps(others, input.price);
+  const addedMbps = estimateRoomMbps(
+    { ...input.room, transport: "livekit" },
+    input.price,
+  );
+  // Crowding, for the log line: SFU rooms only (a mesh room is not on a box),
+  // and the asking room counted once, as the room it will be.
+  let roomsCounted = 1;
+  let peopleCounted = Math.max(0, input.room.participants);
+  for (const room of others) {
+    if (room.transport === "livekit") {
+      roomsCounted += 1;
+      peopleCounted += Math.max(0, room.participants);
+    }
+  }
   return {
     admit: loadMbps + addedMbps <= input.budgetMbps,
     loadMbps,
     addedMbps,
     budgetMbps: input.budgetMbps,
+    region: input.scope?.region ?? null,
+    roomsOnBox: roomsCounted,
+    peopleOnBox: peopleCounted,
   };
 }

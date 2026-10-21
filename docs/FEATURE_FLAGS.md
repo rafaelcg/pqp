@@ -104,6 +104,13 @@ Converted (global unless noted): `WATCH_PARTY_WAITLIST` (per server),
 moderation asks only the box a room lives on, with a per-region budget and
 circuit for rooms whose box is unknown; off is the old ask-every-box-and-wait,
 see `docs/plans/SFU_REGIONS.md` §"The control plane"),
+`SFU_VIDEO_BUDGET_PER_BOX` (`sfu_video_budget_per_box`, default **on**: the
+video admission and promotion budget is summed per SFU box instead of over the
+whole cluster, with an optional ceiling per region; off is the cluster sum),
+`SFU_VIDEO_PRICE_CALIBRATED` (`sfu_video_price_calibrated`, default **on**:
+camera fan-out in rooms of 20 or fewer is priced by the layer a grid tile asks
+for; off is the flat 1.5 Mbit/s each; shares and large rooms never change;
+both in `docs/CAPACITY.md` §"The video budget is per box"),
 `TURN_PREFER_STATIC`, `READ_CACHE`,
 `USER_STATS` (`user_stats`, default **on**: the per-person counts the
 Retrospectiva is built from; off stops every new write, nothing is deleted;

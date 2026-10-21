@@ -61,6 +61,10 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   },
   // New with the flag, so there was no old reader: this is its definition.
   sfu_region_scoped_calls: offWords,
+  // New with the flag, so there was no old reader: this is its definition.
+  sfu_video_budget_per_box: offWords,
+  // New with the flag, so there was no old reader: this is its definition.
+  sfu_video_price_calibrated: offWords,
   voice_mesh_resume_requires_cap: (raw) => raw === "true",
   turn_prefer_static: (raw) => raw === "true",
   read_cache: offWords,

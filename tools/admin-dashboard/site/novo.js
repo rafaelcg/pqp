@@ -1890,6 +1890,8 @@
     turn_prefer_static: "Muda qual relay (TURN) as chamadas usam. Se o relay estático estiver ruim, chamadas entre redes diferentes podem falhar.",
     voice_mesh_resume_requires_cap: "Ligado, quem não declarou mesh-resume (os apps de celular) perde o lugar na chamada ponto a ponto ao reconectar, em vez de guardá-lo por 90 s.",
     sfu_region_scoped_calls: "Desligado, kick, ban e mute no SFU perguntam a todas as regiões e esperam a mais lenta (até 5 s): uma região com problema atrasa a moderação de salas de outras regiões. Ligado, só a região da sala é consultada nas repetições.",
+    sfu_video_budget_per_box: "Desligado, o orçamento de vídeo soma as salas de todos os servidores de mídia (são paulo, miami, londres) contra um teto só, e uma noite cheia numa região recusa câmera em todas. Ligado, cada servidor tem o seu teto.",
+    sfu_video_price_calibrated: "Desligado, cada câmera numa sala comum é cobrada a 1,5 Mbit/s para todo mundo, o que superestima umas três vezes e recusa câmeras com o servidor folgado. Ligado, só a primeira câmera custa isso e as outras 0,4. Salas de mais de 20 e watch party não mudam.",
     livekit_region_require_cap: "Ligado, apps que não declararam sfu-region só abrem salas em São Paulo.",
     watch_party_waitlist: "Mostra ou esconde o convite da lista de espera nos servidores sem watch party.",
     live_hls_camera: "Vale a partir da próxima transmissão: a câmera do apresentador sobre o filme.",
