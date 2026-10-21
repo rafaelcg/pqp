@@ -12503,11 +12503,12 @@ function MainAppContent({
           ),
           // The same share every other button starts, steered at a tab when
           // there is no picture to hand over (the page cannot crop there).
-          startShare: (stream) =>
-            startScreenShareGated(
-              false,
-              stream ? { stream, maxFrameRate: 30 } : { preferBrowserTab: true },
-            ),
+          startShare: (stream, extras) =>
+            startScreenShareGated(false, {
+              ...(stream ? { stream, maxFrameRate: 30 } : { preferBrowserTab: true }),
+              // the app's own sound, handed over through the bridge, is the share's sound
+              ...(extras?.appAudio ? { appAudio: extras.appAudio } : {}),
+            }),
           stopShare: () => void voice.stopScreenShare(),
           callShape: stageShape,
           // The header's own "Entre na call", from the strip: the same guarded

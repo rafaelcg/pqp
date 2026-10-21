@@ -183,6 +183,43 @@ export function createActivityApi(client: PortClient): ActivityApi {
   };
 }
 
+/**
+ * `share.audio`: the app's sound, for a share of its pane. The page cannot tap a sandboxed frame, so while it wants
+ * the sound (`onWanted(true)`, pushed when a share starts and `false` when it ends) the app hands its output over in
+ * short blocks and the page plays them into the share. Fire and forget: a block that does not get there is a gap of
+ * a few milliseconds, never an error to show. On this module for the same reason as `sync.*`: only Locadora imports
+ * it, so every other app builds byte for byte as before.
+ */
+export interface ShareAudioBlock {
+  /** Samples per second per channel (8000 to 96000). */
+  rate: number;
+  channels: 1 | 2;
+  /** Float32 samples, channels interleaved, at most 64 KiB. */
+  samples: ArrayBuffer;
+}
+
+export interface ShareAudioApi {
+  /** One block of sound. Never rejects; a host that predates it answers `invalid` and nothing more happens. */
+  send(block: ShareAudioBlock): void;
+  /** Whether the page wants the sound now: called with `true` or `false` on every change, and not at once with the current state. */
+  onWanted(callback: (wanted: boolean) => void): () => void;
+}
+
+export function createShareAudioApi(client: PortClient): ShareAudioApi {
+  return {
+    send(block) {
+      void client
+        .request<unknown>("share.audio", { rate: block.rate, channels: block.channels, samples: block.samples })
+        .catch(() => {});
+    },
+    onWanted(callback) {
+      return client.on("share.audio", (push) => {
+        if (typeof push.on === "boolean") callback(push.on);
+      });
+    },
+  };
+}
+
 const PLATFORM_API = 1;
 const HELLO_RETRY_MS = 1000;
 
@@ -209,8 +246,8 @@ function isHello(data: unknown): data is BridgeHello {
   );
 }
 
-/** `connect()`, plus the `sync.*` and `ui.activity` calls on the same port. Call it once, instead of `connect`. */
-export function connectWithSync(options: ConnectOptions = {}): Promise<{ app: PqpApp; sync: SyncApi; activity: ActivityApi }> {
+/** `connect()`, plus the `sync.*`, `ui.activity` and `share.audio` calls on the same port. Call it once, instead of `connect`. */
+export function connectWithSync(options: ConnectOptions = {}): Promise<{ app: PqpApp; sync: SyncApi; activity: ActivityApi; shareAudio: ShareAudioApi }> {
   const host: HandshakeWindow | undefined = options.window ?? (globalThis as unknown as { window?: HandshakeWindow }).window;
   if (!host) return Promise.reject(new PqpAppError("unavailable", "connectWithSync() needs a browser window"));
   const parent = host.parent;
@@ -254,7 +291,7 @@ export function connectWithSync(options: ConnectOptions = {}): Promise<{ app: Pq
         }
         settled = true;
         clearTimeout(timer);
-        resolve({ app: createApp(client, push), sync: createSyncApi(client), activity: createActivityApi(client) });
+        resolve({ app: createApp(client, push), sync: createSyncApi(client), activity: createActivityApi(client), shareAudio: createShareAudioApi(client) });
       });
     }
     host.addEventListener("message", onMessage);

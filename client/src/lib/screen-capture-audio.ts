@@ -160,6 +160,14 @@ export interface ScreenCaptureIntent {
    */
   stream?: MediaStream;
   /**
+   * The sound of the thing being shared, made by the page itself, to publish INSTEAD of whatever the capture carries.
+   * The app pane share's (`lib/apps/share-audio.ts`): the picture is a capture of the pqp tab, whose own sound holds
+   * the call's voices, so the app hands its output over and that is the share's sound. Asking the browser for sound
+   * is skipped (nothing in the picker to tick), and any track the capture still carries is dropped before this one
+   * goes in.
+   */
+  appAudio?: MediaStreamTrack;
+  /**
    * Which watch party this go-live share belongs to (Farol, 2026-09-14, two
    * rounds). The gate this intent travels through can defer a share behind
    * `HlsHostAckSheet`'s disclosure notice for as long as the host takes to
@@ -794,7 +802,10 @@ export function screenCaptureOptions(
     offersShellSystemAudio(env) &&
     (env.sharePickerOffersAudio || shareSystemAudio) &&
     !tabSteer;
-  const carriesAudio = browserOffersCheckbox || shellWantsAudio;
+  // The app's own sound (`intent.appAudio`) replaces whatever the capture would carry, so none is asked for: the
+  // tab's sound holds the call's voices, and the picker would offer a box that does nothing.
+  const appSound = intent.appAudio !== undefined;
+  const carriesAudio = !appSound && (browserOffersCheckbox || shellWantsAudio);
   const maxFrameRate = intent.maxFrameRate === 60 ? 60 : 30;
   return {
     // `video: true` used to be the whole of this, and it is why a share arrived
@@ -829,7 +840,7 @@ export function screenCaptureOptions(
     // surfaces to offer tab audio from. It is also the only way to stop the
     // system picker, which skips our handler entirely, from carrying the
     // request to a platform that will reject the whole capture over it.
-    audio: env.isDesktopShell && !carriesAudio ? false : audio,
+    audio: appSound || (env.isDesktopShell && !carriesAudio) ? false : audio,
     systemAudio: carriesAudio ? "include" : "exclude",
     // Window pane: Chrome's default is `system` (the mixer, the call). We
     // never send that. An engine that knows `restrictOwnAudio` gets per-app
@@ -852,7 +863,7 @@ export function screenCaptureOptions(
       ? {}
       : {
           windowAudio:
-            tabSteer || !env.supportsRestrictOwnAudio
+            tabSteer || appSound || !env.supportsRestrictOwnAudio
               ? ("exclude" as const)
               : ("window" as const),
         }),

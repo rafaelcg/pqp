@@ -5,6 +5,7 @@ import {
   type AppFrameControllerOptions,
   type AppFrameStatus,
 } from "@/lib/apps/frame-controller";
+import type { ShareAudioRelay } from "@/lib/apps/share-audio";
 import type {
   AppRuntimeConfig,
   AppSessionTransport,
@@ -34,6 +35,8 @@ export interface AppFrameProps {
   onStatus?: (status: AppFrameStatus) => void;
   /** pqp's screen share flow, for apps whose manifest allows sharing the pane. */
   onShare?: (on: boolean) => Promise<boolean>;
+  /** The app's own sound for a running share (`share.audio`). Stable for the life of the frame: read when it mounts. */
+  shareAudio?: ShareAudioRelay;
   /**
    * Whether the pane is shared right now, as the page knows it. The app is told
    * whenever it changes (the bridge's `share` push), so its own share control
@@ -92,6 +95,7 @@ export const AppFrame = forwardRef<AppFrameHandle, AppFrameProps>(function AppFr
       asSpectator,
       initialHeight,
       ...(props.host ? { host: props.host } : {}),
+      ...(props.shareAudio ? { shareAudio: props.shareAudio } : {}),
       onShare: (on) =>
         latest.current.onShare ? latest.current.onShare(on) : Promise.reject(new Error("no share flow")),
       onStatus: (next) => {

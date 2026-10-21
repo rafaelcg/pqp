@@ -695,6 +695,20 @@ describe("sound", () => {
     expect(audioHub().silent).toBe(false);
   });
 
+  it("the share's copy of the sound ignores the person's mute and follows turbo's silence", async () => {
+    const runtime = await running();
+    // M is the person's own speakers: the people watching a share still hear the game
+    runtime.setMuted(true);
+    expect(audioHub().silent).toBe(true);
+    expect(audioHub().tapSilent).toBe(false);
+    runtime.setMuted(false);
+    // above 3x the sound is a squeal for everybody
+    runtime.setTurbo(8);
+    expect(audioHub().tapSilent).toBe(true);
+    runtime.setTurbo(0);
+    expect(audioHub().tapSilent).toBe(false);
+  });
+
   it("never unmutes into silence, and does nothing before the setter exists", async () => {
     const runtime = await running();
     expect(() => runtime.setMuted(true)).not.toThrow();

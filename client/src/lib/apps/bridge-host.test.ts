@@ -381,6 +381,75 @@ describe("capabilities", () => {
     expect(await refused.app.call({ type: "share.request", on: false })).toMatchObject({ ok: true, result: { on: false } });
   });
 
+  describe("share.audio: the app's own sound for a share of its pane", () => {
+    const pane = { capabilities: { share: "pane", localFiles: { allowed: false } }, shareAllowed: true } as const;
+    const stereo = (frames = 4) => new Float32Array(frames * 2).fill(0.25).buffer;
+
+    it("is for a pane app on a server that allows sharing, like share.request", async () => {
+      const shareAudio = vi.fn();
+      const none = await make({ host: { ui: { shareAudio } } });
+      expect(await none.app.call({ type: "share.audio", rate: 48000, channels: 2, samples: stereo() })).toMatchObject({
+        error: "not-allowed",
+      });
+      const off = await make({ app: { ...pane, shareAllowed: false }, host: { ui: { shareAudio } } });
+      expect(await off.app.call({ type: "share.audio", rate: 48000, channels: 2, samples: stereo() })).toMatchObject({
+        error: "not-allowed",
+      });
+      expect(shareAudio).not.toHaveBeenCalled();
+      const noSink = await make({ app: pane });
+      expect(await noSink.app.call({ type: "share.audio", rate: 48000, channels: 2, samples: stereo() })).toMatchObject({
+        error: "unavailable",
+      });
+    });
+
+    it("asks the app for its sound while a share wants it, and tells it again when it stops", async () => {
+      const r = await make({ app: pane, host: { ui: { shareAudio: vi.fn() } } });
+      r.app.pushes.length = 0;
+      r.host.setShareAudioWanted(true);
+      r.host.setShareAudioWanted(true);
+      r.host.setShareAudioWanted(false);
+      await r.app.call({ type: "state.get" }); // pushes cross the port asynchronously: this round trip is behind them
+      expect(r.app.pushes.filter((p) => p.type === "share.audio")).toEqual([
+        { type: "share.audio", on: true },
+        { type: "share.audio", on: false },
+      ]);
+    });
+
+    it("hands a block to the page while one is wanted, and drops a stray one without an error", async () => {
+      const shareAudio = vi.fn();
+      const r = await make({ app: pane, host: { ui: { shareAudio } } });
+      // nobody asked yet: a late block from a share that just ended is not an error and plays nothing
+      expect(await r.app.call({ type: "share.audio", rate: 48000, channels: 2, samples: stereo() })).toMatchObject({ ok: true, result: null });
+      expect(shareAudio).not.toHaveBeenCalled();
+      r.host.setShareAudioWanted(true);
+      const samples = stereo(8);
+      expect(await r.app.call({ type: "share.audio", rate: 44100, channels: 2, samples })).toMatchObject({ ok: true, type: "share.audio", result: null });
+      expect(shareAudio).toHaveBeenCalledTimes(1);
+      expect(shareAudio).toHaveBeenCalledWith({ rate: 44100, channels: 2, samples });
+    });
+
+    it("refuses a block that is not whole frames, a bad rate and an oversized one", async () => {
+      const shareAudio = vi.fn();
+      const r = await make({ app: pane, host: { ui: { shareAudio } } });
+      r.host.setShareAudioWanted(true);
+      // three floats cannot be stereo frames
+      expect(await r.app.call({ type: "share.audio", rate: 48000, channels: 2, samples: new Float32Array(3).buffer })).toMatchObject({ error: "invalid" });
+      expect(await r.app.call({ type: "share.audio", rate: 100, channels: 2, samples: stereo() })).toMatchObject({ error: "invalid" });
+      expect(await r.app.call({ type: "share.audio", rate: 48000, channels: 2, samples: new ArrayBuffer(64 * 1024 + 8) })).toMatchObject({ error: "invalid" });
+      expect(await r.app.call({ type: "share.audio", rate: 48000, channels: 2, samples: new ArrayBuffer(0) })).toMatchObject({ error: "invalid" });
+      expect(shareAudio).not.toHaveBeenCalled();
+    });
+
+    it("survives a sink that throws: the block is lost, the answer still comes", async () => {
+      const shareAudio = vi.fn(() => {
+        throw new Error("boom");
+      });
+      const r = await make({ app: pane, host: { ui: { shareAudio } } });
+      r.host.setShareAudioWanted(true);
+      expect(await r.app.call({ type: "share.audio", rate: 48000, channels: 2, samples: stereo() })).toMatchObject({ ok: true });
+    });
+  });
+
   it("ui.fullscreen needs the page to offer it, and ui.resize reaches the page", async () => {
     const resize = vi.fn();
     const r = await make({ host: { ui: { resize } } });

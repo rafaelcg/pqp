@@ -240,6 +240,33 @@ export const bridgeUiActivitySchema = request("ui.activity", {
 });
 export type BridgeUiActivityState = (typeof BRIDGE_UI_ACTIVITY_STATES)[number];
 
+/**
+ * THE APP'S SOUND, FOR A SHARE (`share.audio`, Locadora). A pane share is a picture of the app, and the sandboxed
+ * frame (an opaque origin) cannot be tapped from the page, so the only way its sound reaches the people watching is
+ * for the app to hand it over. The page asks for it with the `share.audio` push (`on: true` while a share is
+ * running, `false` when it stops), and while it is wanted the app sends its output as short blocks of 32-bit float
+ * samples, interleaved, here. The page plays them into a track that rides with the share, so the sound is exactly
+ * the app's own: not the tab (which also holds the call's voices, and would echo them back to the people speaking),
+ * not the machine, and not shaped by the app's own mute, which is the person's own speakers. Additive on platform
+ * API 1: an older host answers `invalid` and an app stops sending.
+ */
+export const BRIDGE_SHARE_AUDIO_MAX_BYTES = 64 * 1024;
+export const BRIDGE_SHARE_AUDIO_MIN_RATE = 8000;
+export const BRIDGE_SHARE_AUDIO_MAX_RATE = 96000;
+export const bridgeShareAudioSchema = request("share.audio", {
+  /** Samples per second per channel. */
+  rate: z.number().int().min(BRIDGE_SHARE_AUDIO_MIN_RATE).max(BRIDGE_SHARE_AUDIO_MAX_RATE),
+  channels: z.union([z.literal(1), z.literal(2)]),
+  /** Float32 samples, channels interleaved, at most 64 KiB. */
+  samples: arrayBufferSchema.refine(
+    (bytes) => {
+      const length = arrayBufferByteLength!.call(bytes);
+      return length > 0 && length % 4 === 0 && length <= BRIDGE_SHARE_AUDIO_MAX_BYTES;
+    },
+    { message: `a block of sound is whole floats and at most ${BRIDGE_SHARE_AUDIO_MAX_BYTES} bytes` },
+  ),
+});
+
 export const bridgeAppMessageSchema = z.discriminatedUnion("type", [
   bridgeParticipantsGetSchema,
   bridgeStateGetSchema,
@@ -263,6 +290,7 @@ export const bridgeAppMessageSchema = z.discriminatedUnion("type", [
   bridgeUiResizeSchema,
   bridgeUiFullscreenSchema,
   bridgeShareRequestSchema,
+  bridgeShareAudioSchema,
   bridgeSessionEndSchema,
   bridgeUiActivitySchema,
 ]);
@@ -437,6 +465,7 @@ export const bridgeResultSchemas = {
   "ui.resize": z.object({ height: z.number().int() }).strip(),
   "ui.fullscreen": z.object({ on: z.boolean() }).strip(),
   "share.request": z.object({ on: z.boolean() }).strip(),
+  "share.audio": z.null(),
   "session.end": z.null(),
   "ui.activity": z.null(),
 } as const satisfies Record<BridgeRequestType, z.ZodTypeAny>;
@@ -482,6 +511,7 @@ export const bridgeResponseOkSchema = z.discriminatedUnion("type", [
   okResponse("ui.resize"),
   okResponse("ui.fullscreen"),
   okResponse("share.request"),
+  okResponse("share.audio"),
   okResponse("session.end"),
   okResponse("ui.activity"),
 ]);
@@ -565,6 +595,8 @@ export const bridgeThemePushSchema = push("theme", { theme: bridgeThemeSchema })
  * whose manifest says `share: "pane"`; an older app ignores it.
  */
 export const bridgeSharePushSchema = push("share", { on: z.boolean() });
+/** The page wants (or no longer wants) the app's sound for a share: see `share.audio`. */
+export const bridgeShareAudioPushSchema = push("share.audio", { on: z.boolean() });
 
 export const bridgePushSchema = z.discriminatedUnion("type", [
   bridgeHelloPushSchema,
@@ -575,6 +607,7 @@ export const bridgePushSchema = z.discriminatedUnion("type", [
   bridgeSessionEndedPushSchema,
   bridgeThemePushSchema,
   bridgeSharePushSchema,
+  bridgeShareAudioPushSchema,
 ]);
 export type BridgePush = z.infer<typeof bridgePushSchema>;
 export type BridgeHello = z.infer<typeof bridgeHelloPushSchema>;

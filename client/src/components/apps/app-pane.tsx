@@ -12,6 +12,7 @@ import "@/components/apps/apps-strip.css";
 import { Button } from "@/components/ui/button";
 import type { AppConfigEntry } from "@pqp/shared";
 import { parseAppsOrigin } from "@/lib/apps/apps-origin";
+import type { ShareAudioRelay } from "@/lib/apps/share-audio";
 import type {
   AppRuntimeConfig,
   AppSessionTransport,
@@ -57,6 +58,8 @@ export interface AppPaneProps {
   onShare?: (on: boolean) => Promise<boolean>;
   /** The pane is shared now (the page's one answer); the app is told when it changes. */
   shared?: boolean;
+  /** The app's own sound for a running share (`share.audio`). */
+  shareAudio?: ShareAudioRelay;
   onStatus?: (status: AppFrameStatus) => void;
   className?: string;
 }
@@ -171,6 +174,7 @@ export const AppPane = forwardRef<AppPaneHandle, AppPaneProps>(function AppPane(
           onStatus={onStatus}
           onShare={props.onShare}
           shared={props.shared}
+          shareAudio={props.shareAudio}
         />
       ) : null}
       {!unavailable && status.kind === "loading" ? (

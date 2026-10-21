@@ -50,6 +50,44 @@ describe("connectWithSync", () => {
     other.close();
   });
 
+  it("share.audio hands a block of sound over and never rejects", async () => {
+    const other = new FakeHost();
+    const pending = connectWithSync({ window: other.window, timeoutMs: 400 });
+    other.accept();
+    const { shareAudio } = await pending;
+    const samples = new Float32Array([0.5, -0.5, 0.25, -0.25]).buffer;
+    shareAudio.send({ rate: 48000, channels: 2, samples });
+    const request = await other.nextRequest();
+    expect(request).toMatchObject({ id: request.id, type: "share.audio", rate: 48000, channels: 2 });
+    expect(Array.from(new Float32Array(request.samples as ArrayBuffer))).toEqual([0.5, -0.5, 0.25, -0.25]);
+    other.respond(request.id, null);
+    // an older host refuses the type: nothing to show, nothing thrown
+    shareAudio.send({ rate: 48000, channels: 2, samples: new Float32Array(4).buffer });
+    other.fail((await other.nextRequest()).id, "invalid");
+    await other.settle();
+    other.close();
+  });
+
+  it("share.audio hears the page ask for the sound, and stop asking", async () => {
+    const other = new FakeHost();
+    const pending = connectWithSync({ window: other.window, timeoutMs: 400 });
+    other.accept();
+    const { shareAudio } = await pending;
+    const wanted: boolean[] = [];
+    const stop = shareAudio.onWanted((on) => wanted.push(on));
+    other.push({ type: "share.audio", on: true });
+    other.push({ type: "share.audio", on: false });
+    // a push that is not a boolean is not an answer
+    other.push({ type: "share.audio", on: "yes" });
+    await other.settle();
+    expect(wanted).toEqual([true, false]);
+    stop();
+    other.push({ type: "share.audio", on: true });
+    await other.settle();
+    expect(wanted).toEqual([true, false]);
+    other.close();
+  });
+
   it("refuses a port from anybody but the parent", async () => {
     const other = new FakeHost();
     const pending = connectWithSync({ window: other.window, timeoutMs: 100 });

@@ -7242,7 +7242,8 @@ export function createVoiceController(transport: RealtimeTransport) {
       // they would otherwise ask Chromium for no audio with nothing in its
       // place, which on Windows 11 is sound we used to have.
       let nativeAudio = false;
-      if (!intent.stream) {
+      // The app pane's own sound (`intent.appAudio`) is the share's sound, so the shell's is not armed at all.
+      if (!intent.stream && !intent.appAudio) {
         const armed = await armOrFallBackToChromiumAudio(
           shareSystemAudio,
           captureEnv,
@@ -7371,10 +7372,24 @@ export function createVoiceController(transport: RealtimeTransport) {
           }),
         );
       }
+      // THE APP PANE'S OWN SOUND (`lib/apps/share-audio.ts`). The capture is a
+      // picture of the pqp tab, and anything audio it carried would be the
+      // call's voices coming back to the people speaking, so whatever it has is
+      // dropped and the app's output, handed over through the bridge, is the
+      // share's sound. After the strip above on purpose: that one judges tracks
+      // the browser made, and this one has no surface to be judged by.
+      if (intent.appAudio) {
+        for (const leftover of stream.getAudioTracks()) {
+          stream.removeTrack(leftover);
+          leftover.stop();
+        }
+        stream.addTrack(intent.appAudio);
+      }
       // The watch party preview opened its capture itself, so a silent
       // fallback there is read off the stream it handed over.
       const lostSound =
-        sharedWithoutSoundAfterFailure || lostSoundToFailure(intent.stream);
+        !intent.appAudio &&
+        (sharedWithoutSoundAfterFailure || lostSoundToFailure(intent.stream));
       if (lostSound && intent.watchParty !== true) {
         state.notice = translateMessage("voice.notice.shareAudioFallback");
       }

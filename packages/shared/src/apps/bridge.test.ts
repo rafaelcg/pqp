@@ -99,6 +99,7 @@ const requests: Record<string, Record<string, unknown>> = {
   "ui.resize": { height: 480 },
   "ui.fullscreen": { on: true },
   "share.request": { on: false },
+  "share.audio": { rate: 48000, channels: 2, samples: new ArrayBuffer(16) },
   "session.end": {},
   "ui.activity": { state: "paused" },
 };
@@ -117,6 +118,30 @@ describe("app to host requests", () => {
     }
     // strict: nothing can ride along with it
     expect(bridgeAppMessageSchema.safeParse(req("ui.activity", { title: "x" })).success).toBe(false);
+  });
+
+  it("share.audio carries sound only: whole float samples, a sane rate, mono or stereo, at most 64 KiB, nothing else", () => {
+    const ok = (extra: Record<string, unknown>) => bridgeAppMessageSchema.safeParse(req("share.audio", extra)).success;
+    expect(ok({})).toBe(true);
+    expect(ok({ channels: 1, samples: new ArrayBuffer(4) })).toBe(true);
+    expect(ok({ samples: new ArrayBuffer(64 * 1024) })).toBe(true);
+    // a block is whole floats, not empty, not past 64 KiB
+    expect(ok({ samples: new ArrayBuffer(0) })).toBe(false);
+    expect(ok({ samples: new ArrayBuffer(6) })).toBe(false);
+    expect(ok({ samples: new ArrayBuffer(64 * 1024 + 4) })).toBe(false);
+    // the rate is a real one, the channels are one or two
+    for (const rate of [0, 7999, 96001, 44100.5, "48000", null]) expect(ok({ rate }), String(rate)).toBe(false);
+    for (const channels of [0, 3, "2", null]) expect(ok({ channels }), String(channels)).toBe(false);
+    // strict: no name, no title, nothing rides along with the sound
+    expect(ok({ name: "game.gba" })).toBe(false);
+    expect(ok({ samples: new Float32Array(4) })).toBe(false);
+  });
+
+  it("the host's share.audio push is a boolean and nothing else", () => {
+    expect(bridgeHostMessageSchema.safeParse({ type: "share.audio", on: true }).success).toBe(true);
+    expect(bridgeHostMessageSchema.safeParse({ type: "share.audio", on: false }).success).toBe(true);
+    expect(bridgeHostMessageSchema.safeParse({ type: "share.audio", on: "yes" }).success).toBe(false);
+    expect(bridgeHostMessageSchema.safeParse({ type: "share.audio" }).success).toBe(false);
   });
 
   it("sync.put carries a save, never a game: no name, no extra field, at most 1 MiB and a 16 KiB picture", () => {
@@ -505,6 +530,7 @@ describe("host to app messages", () => {
       "ui.resize": { height: 300 },
       "ui.fullscreen": { on: true },
       "share.request": { on: true },
+      "share.audio": null,
       "session.end": null,
       "ui.activity": null,
     };

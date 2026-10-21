@@ -78,6 +78,11 @@ export interface BridgeHostUi {
   fullscreen(on: boolean): Promise<boolean>;
   /** Share (or stop sharing) the app pane through pqp's screen share; resolves to whether it is shared now. */
   share(on: boolean): Promise<boolean>;
+  /**
+   * One block of the app's own sound for the share (`share.audio`): Float32 samples, channels interleaved. The host
+   * only calls this while the page asked for it (`setShareAudioWanted(true)`).
+   */
+  shareAudio(block: { rate: number; channels: 1 | 2; samples: ArrayBuffer }): void;
 }
 
 export interface BridgeHostOptions {
@@ -157,6 +162,9 @@ const SAVE_BURST = 3;
 /** `sync.*`: each one is a round trip to the API (and the bucket); the server has its own 30 writes a minute. */
 const SYNC_RATE_PER_SECOND = 5;
 const SYNC_BURST = 20;
+/** `share.audio`: a block is 20 to 90 ms of sound, so 12 to 50 a second; the bucket allows twice the busiest. */
+const AUDIO_RATE_PER_SECOND = 100;
+const AUDIO_BURST = 100;
 const FLOOD_RATE_PER_SECOND = 100;
 const FLOOD_BURST = 200;
 const FLOOD_STRIKES_BEFORE_VIOLATION = 500;
@@ -273,6 +281,9 @@ export class BridgeHost {
   private readonly storeBucket: TokenBucket;
   private readonly saveBucket: TokenBucket;
   private readonly syncBucket: TokenBucket;
+  private readonly audioBucket: TokenBucket;
+  /** The page wants the app's sound for the share that is running: told to the app, and told again to a frame that reloads. */
+  private shareAudioWanted = false;
   private saveSync: SaveSyncClient | null | undefined;
   /** Opened on the first `store.*` call, `null` when this browser has none. */
   private deviceStore: DeviceStore | null | undefined;
@@ -336,6 +347,7 @@ export class BridgeHost {
     this.storeBucket = new TokenBucket(STORE_RATE_PER_SECOND, STORE_BURST, this.now);
     this.saveBucket = new TokenBucket(SAVE_RATE_PER_SECOND, SAVE_BURST, this.now);
     this.syncBucket = new TokenBucket(SYNC_RATE_PER_SECOND, SYNC_BURST, this.now);
+    this.audioBucket = new TokenBucket(AUDIO_RATE_PER_SECOND, AUDIO_BURST, this.now);
   }
 
   // ---------------------------------------------------------------------------
@@ -407,6 +419,7 @@ export class BridgeHost {
     port.postMessage(hello.data);
     // an app that joins while its pane is already shared learns it at once
     if (this.shared) this.pushShare();
+    if (this.shareAudioWanted) this.pushToApp({ type: "share.audio", on: true });
   }
 
   /**
@@ -424,6 +437,16 @@ export class BridgeHost {
   private pushShare(): void {
     if (this.app.capabilities.share !== "pane") return;
     this.pushToApp({ type: "share", on: this.shared });
+  }
+
+  /**
+   * Tells the app whether the page wants its sound for the share (see `share.audio`): on when a share of the pane
+   * starts, off when it ends. The app sends nothing while this is off, so a pane nobody is watching costs no work.
+   */
+  setShareAudioWanted(on: boolean): void {
+    if (this.shareAudioWanted === on) return;
+    this.shareAudioWanted = on;
+    this.pushToApp({ type: "share.audio", on });
   }
 
   /** Stops listening. The seat is not released: `leave()` does that. */
@@ -750,6 +773,24 @@ export class BridgeHost {
         } catch {
           return this.fail(id, "unavailable");
         }
+      }
+
+      case "share.audio": {
+        const caps = this.app.capabilities;
+        if (caps.share !== "pane" || this.app.shareAllowed !== true) return this.fail(id, "not-allowed");
+        const sink = this.options.ui?.shareAudio;
+        if (!sink) return this.fail(id, "unavailable");
+        // a block nobody asked for (the share just ended, a stray late one) is dropped quietly, never an error
+        if (!this.shareAudioWanted) return this.succeed(id, message.type, null);
+        if (!this.audioBucket.take()) return this.fail(id, "rate-limited");
+        // whole frames only: a half frame would shift every channel after it
+        if (message.samples.byteLength % (4 * message.channels) !== 0) return this.fail(id, "invalid");
+        try {
+          sink({ rate: message.rate, channels: message.channels, samples: message.samples });
+        } catch (error) {
+          this.log("the share sound sink threw", error);
+        }
+        return this.succeed(id, message.type, null);
       }
 
       case "ui.activity": {

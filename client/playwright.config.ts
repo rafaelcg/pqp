@@ -107,6 +107,8 @@ const projects: E2EProject[] = [
       /share-fast-start[\\/]/,
       // its own flags, apps origin and API: `playwright.locadora-guest.config.ts`
       /locadora-guest[\\/]/,
+      // and the share-sound one: `playwright.locadora-share-sound.config.ts`
+      /locadora-share-sound[\\/]/,
     ],
   },
   {
