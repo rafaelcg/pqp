@@ -16,7 +16,9 @@
   var realFullscreen = q.get("fs") === "real";
 
   // ?share=on: the platform says this server may share (D14's `shareAllowed`); anything else: it may not
-  var shareAllowed = q.get("share") === "on";
+  // ?share=nocall: it may, but the person is not in the call, so a request to start fails the way the real host's does
+  var shareAllowed = q.get("share") === "on" || q.get("share") === "nocall";
+  var shareNoCall = q.get("share") === "nocall";
   // ?role=spectator: the frame is a watcher's
   var role = q.get("role") === "spectator" ? "spectator" : "player";
   // ?store=off: a host that predates the device store (answers `invalid`); ?store=denied: one that refuses this app
@@ -234,6 +236,7 @@
         case "share.request":
           H_.shares.push({ on: m.on, allowed: shareAllowed });
           if (!shareAllowed) return reply(m, false, "not-allowed");
+          if (shareNoCall && m.on) return reply(m, false, "unavailable");
           return reply(m, true, { on: m.on });
         case "ui.fullscreen":
           H_.fullscreen.push(m.on);

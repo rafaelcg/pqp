@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { audioHub } from "./audio";
 import {
   buildDefaultControllers,
   createEmulatorRuntime,
@@ -643,6 +644,55 @@ describe("sound", () => {
     runtime.setMuted(false);
     expect(h.instance().muted).toBe(false);
     expect(volumes).toEqual([0, 0.5]);
+  });
+
+  it("silences the frame's audio hub, which is what a core with its own audio driver answers to (the bsnes build)", async () => {
+    const runtime = await running();
+    // the frontend's setter exists and reaches nothing: the SNES core never makes an OpenAL source
+    h.instance().volume = 0.5;
+    h.instance().setVolume = () => {};
+    runtime.setMuted(true);
+    expect(audioHub().silent).toBe(true);
+    runtime.setMuted(false);
+    expect(audioHub().silent).toBe(false);
+  });
+
+  it("silences the hub when EmulatorJS has no volume setter at all", async () => {
+    const runtime = await running();
+    runtime.setMuted(true);
+    expect(audioHub().silent).toBe(true);
+    runtime.setMuted(false);
+    expect(audioHub().silent).toBe(false);
+  });
+
+  it("mutes before the console exists, and a new game does not unmute it", async () => {
+    const fresh = createEmulatorRuntime();
+    expect(() => fresh.setMuted(true)).not.toThrow();
+    expect(audioHub().silent).toBe(true);
+    const started = fresh.start(options());
+    await vi.advanceTimersByTimeAsync(25);
+    await started;
+    expect(audioHub().silent).toBe(true);
+    fresh.setMuted(false);
+    expect(audioHub().silent).toBe(false);
+  });
+
+  it("the person's mute wins over turbo's: turbo ending leaves it silent, turbo alone gives the sound back", async () => {
+    const runtime = await running();
+    runtime.setMuted(true);
+    runtime.setTurbo(8);
+    expect(audioHub().silent).toBe(true);
+    runtime.setTurbo(0);
+    expect(audioHub().silent).toBe(true);
+    runtime.setMuted(false);
+    expect(audioHub().silent).toBe(false);
+    runtime.setTurbo(8);
+    expect(audioHub().silent).toBe(true);
+    runtime.setMuted(true);
+    runtime.setMuted(false);
+    expect(audioHub().silent).toBe(true);
+    runtime.setTurbo(0);
+    expect(audioHub().silent).toBe(false);
   });
 
   it("never unmutes into silence, and does nothing before the setter exists", async () => {

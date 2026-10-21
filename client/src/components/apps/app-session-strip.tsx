@@ -60,6 +60,11 @@ export interface StripShareState {
   pending: boolean;
   /** Not in this channel's call: the switch is shown and says so. */
   needsCall: boolean;
+  /**
+   * The person is already sharing something else in this call (another screen, not this pane): the switch is shown and
+   * says so, because starting a second share would take that one away.
+   */
+  otherShare?: boolean;
   /** How many other people are in the call to see it. */
   viewers: number;
   /** This browser shares the whole tab (no Region Capture). */
@@ -461,7 +466,7 @@ function LiveStrip(props: AppSessionStripProps & { model: LiveStripModel }) {
         </span>
       ) : null}
 
-      <div className="ml-auto flex shrink-0 items-center gap-2">
+      <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-x-2 gap-y-1">
         {share?.visible ? <ShareControl share={share} onChange={onShareChange} /> : null}
         {share?.visible ? (
           <span aria-hidden className="h-5 w-px bg-border" />
@@ -561,13 +566,27 @@ function ShareControl({
 }) {
   const { t } = useTranslation();
   const label = t("apps.strip.share");
-  const reason = share.needsCall
+  // WHY it cannot be used is said in words beside the switch, never only in a hover: a switch that is dimmed and says
+  // nothing is a button that does nothing
+  const blockedReason = share.needsCall
     ? t("apps.strip.shareNeedsCall")
-    : share.wholeTab
-      ? t("apps.strip.shareWholeTab")
+    : share.otherShare
+      ? t("apps.strip.shareOtherShare")
       : undefined;
+  const reason = blockedReason ?? (share.wholeTab ? t("apps.strip.shareWholeTab") : undefined);
   return (
     <>
+      {blockedReason ? (
+        <span
+          role="status"
+          data-testid="app-strip-share-reason"
+          // Wide: beside the switch. Under 760 px it is a line of its own above the controls, so the group wraps instead of
+          // running past the strip's edge and under the Chat toggle.
+          className="max-w-[22ch] text-xs leading-4 text-text-secondary @min-[1100px]/strip:max-w-[40ch] @max-[759px]/strip:order-first @max-[759px]/strip:max-w-none @max-[759px]/strip:basis-full @max-[759px]/strip:text-right"
+        >
+          {blockedReason}
+        </span>
+      ) : null}
       {share.on ? (
         <span
           role="status"
@@ -589,7 +608,7 @@ function ShareControl({
         label={label}
         title={reason}
         busy={share.pending}
-        unavailable={share.needsCall}
+        unavailable={Boolean(blockedReason)}
         className="w-auto gap-2 px-1"
       />
     </>

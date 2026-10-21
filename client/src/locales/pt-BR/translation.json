@@ -1660,6 +1660,7 @@
   "apps.strip.endKeep": "Deixar rodando",
   "apps.strip.share": "Compartilhar tela",
   "apps.strip.shareNeedsCall": "Entra na call pra compartilhar o app.",
+  "apps.strip.shareOtherShare": "Tu já tá compartilhando outra tela. Para ela primeiro.",
   "apps.strip.shareWholeTab": "Neste navegador a aba inteira vai junto, chat incluso.",
   "apps.strip.more": "Mais opções do app",
   "apps.strip.seePeople": "Ver quem está dentro",

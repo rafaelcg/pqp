@@ -356,11 +356,19 @@ export function AppSessionLayout(props: AppSessionLayoutProps) {
   const setShare = useCallback(
     async (on: boolean): Promise<boolean> => {
       if (!on) {
-        ownedShare.current = false;
-        voice.stopShare();
+        // Only this pane's own share is ours to stop: the app asks "stop" once at start as a probe (src/share.ts of
+        // Locadora), and that must never end a screen the person is sharing for some other reason.
+        if (ownedShare.current) {
+          ownedShare.current = false;
+          voice.stopShare();
+        }
         return false;
       }
-      if (!voice.inCall || sharePending) return false;
+      // already sharing this pane: asking again changes nothing (the app's pill and the strip's switch can disagree
+      // for a moment, and the answer is the truth)
+      if (ownedShare.current && voice.sharing) return true;
+      // not in this channel's call, or already sharing a different screen: no share starts, and the strip says why
+      if (!voice.inCall || voice.sharing || sharePending) return false;
       setSharePending(true);
       setError(null);
       try {
@@ -395,6 +403,7 @@ export function AppSessionLayout(props: AppSessionLayoutProps) {
         on: shareOn,
         pending: sharePending,
         needsCall: !voice.inCall,
+        otherShare: voice.inCall && voice.sharing && !shareOn,
         viewers: voice.others,
         wholeTab: !supportsRegionCapture() || isDesktopApp(),
       }
@@ -616,7 +625,9 @@ export function AppSessionLayout(props: AppSessionLayoutProps) {
           <AppPane
             ref={paneRef}
             key={sessionId ?? undefined}
-            app={app}
+            // a phone cannot share a pane (the strip never offers it), so the frame is told sharing is not allowed
+            // here: an app that asks learns it is off and draws no control, rather than one that fails when pressed
+            app={md || !app.shareAllowed ? app : { ...app, shareAllowed: false }}
             origin={config.origin}
             title={model && model.kind === "live" ? model.app.name : app.id}
             transport={transport}

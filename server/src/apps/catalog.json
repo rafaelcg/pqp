@@ -90,7 +90,7 @@
       "manifest": {
         "manifestVersion": 1,
         "id": "pqp-locadora",
-        "version": "1.0.1",
+        "version": "1.0.2",
         "publisher": "pqp",
         "platformApi": 1,
         "name": "name",
@@ -154,7 +154,7 @@
         "notice": "notice",
         "entry": {
           "path": "index.html",
-          "sha256": "5ec7340925dc7ad42fcd6b27b750b5918c89eb191026fccb9b42c2161dbf2946"
+          "sha256": "1c7be5573cd6097f39d7d553dfa3baf92deda282afbb975cda87a6780a52140b"
         },
         "assets": [
           {
@@ -238,7 +238,7 @@
           }
         }
       },
-      "manifestSha256": "9a417cfe852d9a01e4b8cb2cd33721151324601d703bd0ec5d361e333e89c73d"
+      "manifestSha256": "c366b4996fb6387bbc017dc2da8c12ed89adc371f6f879720083fcfaffbb0550"
     }
   ]
 }

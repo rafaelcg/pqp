@@ -1660,6 +1660,7 @@
   "apps.strip.endKeep": "Keep it",
   "apps.strip.share": "Share screen",
   "apps.strip.shareNeedsCall": "Join the call to share the app.",
+  "apps.strip.shareOtherShare": "You are already sharing another screen. Stop it first.",
   "apps.strip.shareWholeTab": "In this browser the whole tab is shared, chat included.",
   "apps.strip.more": "More app options",
   "apps.strip.seePeople": "See who is in",
