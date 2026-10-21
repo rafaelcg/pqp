@@ -9,6 +9,7 @@ import { resetNativeShareAudioForTests } from "@/lib/native-share-audio";
 import { ADVANCED_SAMPLE_RATE } from "@/lib/noise-suppression";
 import { moveOccupantSeat } from "@/lib/voice-occupant-dnd";
 import { retryShareWithoutSound } from "@/lib/share-silent-fallback";
+import { showsDockedShareError } from "@/components/voice/docked-share-error";
 
 /**
  * The client obeys the room's transport, or leaves and says so.
@@ -1596,6 +1597,43 @@ describe("concurrent screen shares", () => {
     await settle();
     expect(voice.getState().isSharingScreen).toBe(false);
     expect(voice.getState().error).toMatch(/2/);
+    // A call shown as the docked bar alone says why too.
+    expect(showsDockedShareError(true, voice.getState())).toBe(true);
+  });
+
+  /**
+   * "Aqui coloco pra transmitir aí abre e fecha" (QG, 2026-10-20). On the
+   * voice server the share is priced against the box's budget when the
+   * roster claim arrives, which is after the picker closed and the publish
+   * went out, so a refusal takes down a share the presenter already saw
+   * start. The refusal used to set only `error`, and the docked call bar
+   * draws a share error only when it is `screenShareError`: the share opened,
+   * closed, and the bar said nothing.
+   */
+  it("says why in the docked call bar when the voice server refuses a share", async () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    voice.setSessionProvider(async () => sfuSession());
+    await voice.join(CHANNEL);
+    voice.handleSignaling(welcome("livekit"));
+    await settle();
+    expect(voice.getState().usingSfu).toBe(true);
+
+    await voice.startScreenShare();
+    expect(voice.getState().isSharingScreen).toBe(true);
+    expect(sfuScreenPublishes.length).toBe(1);
+
+    voice.handleSignaling({
+      type: "screen-share-denied",
+      voiceChannelId: CHANNEL,
+    });
+    await settle();
+
+    const state = voice.getState();
+    expect(state.isSharingScreen).toBe(false);
+    expect(state.error).toBeTruthy();
+    expect(state.screenShareError).toBe(state.error);
+    expect(showsDockedShareError(true, state)).toBe(true);
   });
 
   it("treats a channel switch as a join into live shares, not a newest-diff", async () => {

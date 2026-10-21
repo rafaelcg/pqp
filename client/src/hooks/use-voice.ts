@@ -4836,6 +4836,9 @@ export function createVoiceController(transport: RealtimeTransport) {
           console.warn("[pqp] share could not be republished on the SFU; stopping it", err);
           state.error = screenShareErrorMessage(err);
           state.errorKind = "share";
+          // Same reason as `screen-share-denied`: the docked bar shows only a
+          // share error it can tell is the share's.
+          state.screenShareError = state.error;
           await stopScreenShareInternal().catch(() => {});
         }
       }
@@ -5552,12 +5555,22 @@ export function createVoiceController(transport: RealtimeTransport) {
         if (message.voiceChannelId !== state.voiceChannelId) {
           return;
         }
+        // The picker has already closed and the share is already on the wire
+        // when this lands (the server prices it on `set-sharing-screen`, which
+        // goes out after the publish), so to the presenter it reads as "it
+        // opened and closed". `screenShareError` is what lets the docked call
+        // bar say why; without it only the stage strip did, and a call shown
+        // as the bar alone said nothing at all.
+        console.warn("[pqp] screen share refused by the server", {
+          transport: state.roomTransport,
+        });
         void stopScreenShareInternal();
         state.error = shareLimitMessage(
           meshShareLimit(),
           canPromoteTransport(),
         );
         state.errorKind = "share";
+        state.screenShareError = state.error;
         emit();
         break;
       case "camera-denied":
