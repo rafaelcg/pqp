@@ -149,8 +149,8 @@ describe("export then import", () => {
     expect(plan.games[0]!.isNew).toBe(false);
 
     const keep = await applyImport(target, plan, "keep");
-    // the slot's state and its picture both wait: two writes skipped, one collision
-    expect(keep).toMatchObject({ ok: true, skipped: 2 });
+    // the slot's state and its picture both wait, and the item row already there stays: three writes skipped, one collision
+    expect(keep).toMatchObject({ ok: true, skipped: 3 });
     expect([...(await target.get(stateKey(source.sha, "1")))!.bytes]).toEqual([42, 42]);
 
     const replace = await applyImport(target, plan, "replace");
@@ -246,6 +246,20 @@ describe("importing safely", () => {
     const result = await applyImport(tight, plan, "replace");
     expect(result.ok).toBe(true);
     expect([...(await tight.get(stateKey(source.sha, "1")))!.bytes]).toEqual([1, 2, 3, 4]);
+  });
+
+  it("a game removed in another tab after the plan comes back to the shelf with its row", async () => {
+    const { source, bundle } = await bundleOf(true);
+    const target = memoryStore();
+    await applyImport(target, await planImport(target, bundle));
+    const plan = await planImport(target, bundle);
+    expect(plan.games[0]!.isNew).toBe(false);
+    // the person removes the game in another tab before this import is applied
+    await target.delete(metaKey(source.sha));
+    await target.delete(romKey(source.sha));
+    const result = await applyImport(target, plan);
+    expect(result.ok).toBe(true);
+    expect(await target.get(metaKey(source.sha))).not.toBeNull();
   });
 
   it("a save that appears after the plan is a collision too, kept by default", async () => {

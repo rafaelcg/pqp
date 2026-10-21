@@ -430,7 +430,9 @@ export async function planImport(store: DeviceStore, bundle: ParsedBundle): Prom
     game.conflicts = gameWrites.filter((w) => w.conflict && !w.key.startsWith("thumb:")).length;
     writes.push(...gameWrites);
     // the item row goes last, so a cut-short import never shows a half-written game
-    if (game.isNew) writes.push({ key: metaKey(sha), bytes: MARKER, meta: { ...item.meta }, conflict: false, replaces: 0 });
+    // and it is planned for every game, not only a new one: a game removed in another tab between the plan and the
+    // apply gets its row back, while `applyImport` leaves an existing row (this device's title) as it is
+    writes.push({ key: metaKey(sha), bytes: MARKER, meta: { ...item.meta }, conflict: false, replaces: game.isNew ? 0 : MARKER.length });
     games.push(game);
   }
 
