@@ -260,6 +260,7 @@
     <string name="connection_offline">Offline. Trying to reconnect…</string>
     <string name="connection_retry">Retry</string>
     <string name="connection_unauthorized">Session expired, reconnecting…</string>
+    <string name="session_expired_notice">Your session expired. Sign in again.</string>
     <string name="connection_retry_now">Try now</string>
     <string name="connection_check">Check connection</string>
     <string name="connection_check_hint">Stuck on connecting? This tells you what is blocked and what to do.</string>

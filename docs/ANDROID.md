@@ -3033,6 +3033,8 @@ be run once on a phone on mobile data and once on a network known to block
 UDP, and the report compared with the web's from the same network, before
 anybody quotes the advice to a user.
 
+**A dead session is handled in one place.** Any authenticated 401 (`SessionExpiryInterceptor`, on the one OkHttp client every request path shares), a socket refused with 4401 or given no token, and Clerk ending the session (`replaced` by a sign-in on another device under single session mode, `expired`, `revoked`) all call `SessionStore.handleSessionExpired()`, which confirms once with a freshly refreshed token and `GET /api/me` (only a 401 or no session counts; offline or a 5xx never signs anybody out), then ends the call, stops the socket, clears the account's state, returns to the sign-in screen and shows "Your session expired. Sign in again." there once, muted. Sign out uses the same teardown with the screen changing first and every network step (push unregister, Clerk's own sign-out) bounded to four seconds, so it works with a dead session; Clerk's Android SDK has no local-only clear, but its sign-out empties local state even when the server refuses it. Pinned by `SessionExpiryTest`.
+
 ## Invites: making one, and the https links that open the app
 
 Before this, an Android user could redeem an invite but could not produce one:

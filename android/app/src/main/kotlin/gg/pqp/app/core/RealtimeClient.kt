@@ -96,6 +96,14 @@ class RealtimeClient(
      */
     val unauthorizedStreak: StateFlow<Int> = _unauthorizedStreak.asStateFlow()
 
+    /**
+     * Told when an attempt ended in a refusal (4401) or with no token to
+     * present. One of those is a stale token, so the owner of the session
+     * answers it with a single confirming request and only acts on a dead
+     * session (`SessionStore.handleSessionExpired`).
+     */
+    @Volatile var onAuthRefused: (() -> Unit)? = null
+
     /** Re-sent after every `ready`, because the server forgets on reconnect. */
     @Volatile private var subscribedChannelId: String? = null
 
@@ -236,7 +244,10 @@ class RealtimeClient(
     private fun settle(outcome: AttemptOutcome) {
         _unauthorizedStreak.value = streakAfter(_unauthorizedStreak.value, outcome)
         when (outcome) {
-            AttemptOutcome.NoToken, AttemptOutcome.Refused -> _state.value = RealtimeState.Refused
+            AttemptOutcome.NoToken, AttemptOutcome.Refused -> {
+                _state.value = RealtimeState.Refused
+                onAuthRefused?.invoke()
+            }
             AttemptOutcome.Ready, AttemptOutcome.Dropped -> Unit
         }
     }

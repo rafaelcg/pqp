@@ -249,6 +249,7 @@
     <string name="connection_offline">Sem conexão. Tentando reconectar…</string>
     <string name="connection_retry">Tentar de novo</string>
     <string name="connection_unauthorized">A sessão expirou, reconectando…</string>
+    <string name="session_expired_notice">Tua sessão expirou. Entra de novo.</string>
     <string name="connection_retry_now">Tentar agora</string>
     <string name="connection_check">Verificar conexão</string>
     <string name="connection_check_hint">Fica conectando? Isso mostra o que está bloqueado e o que fazer.</string>

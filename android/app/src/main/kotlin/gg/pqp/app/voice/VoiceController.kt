@@ -520,6 +520,14 @@ class VoiceController(
     init {
         scope.launch { listen() }
         scope.launch { followConnection() }
+        // A session that ended (expired, or signed out) takes its call with it,
+        // while the socket can still say so. Nothing else would: the socket
+        // closing is read as a drop to rebuild from.
+        scope.launch {
+            session.sessionEnded.collect {
+                if (wantedChannel != null || _state.value.isActive) leave()
+            }
+        }
     }
 
     /**
