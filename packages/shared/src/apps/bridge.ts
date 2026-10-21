@@ -557,6 +557,14 @@ export const bridgeSessionEndedPushSchema = push("session.ended", {
   reason: appEndReasonSchema,
 });
 export const bridgeThemePushSchema = push("theme", { theme: bridgeThemeSchema });
+/**
+ * Whether the app pane is being shared right now, whoever started or stopped
+ * it: the app's own control, the page's switch above the pane, the call's own
+ * stop. Sent when it changes, and once after `hello` when it is already on, so
+ * an app's control and the page's always say the same thing. Only to an app
+ * whose manifest says `share: "pane"`; an older app ignores it.
+ */
+export const bridgeSharePushSchema = push("share", { on: z.boolean() });
 
 export const bridgePushSchema = z.discriminatedUnion("type", [
   bridgeHelloPushSchema,
@@ -566,6 +574,7 @@ export const bridgePushSchema = z.discriminatedUnion("type", [
   bridgeConnectionPushSchema,
   bridgeSessionEndedPushSchema,
   bridgeThemePushSchema,
+  bridgeSharePushSchema,
 ]);
 export type BridgePush = z.infer<typeof bridgePushSchema>;
 export type BridgeHello = z.infer<typeof bridgeHelloPushSchema>;

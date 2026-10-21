@@ -468,6 +468,39 @@ describe("pushes", () => {
     expect(seen).toHaveBeenCalledWith({ "--bg": "#fff" });
   });
 
+  it("on('share') delivers whether the pane is shared, and ignores a malformed push", async () => {
+    const seen = vi.fn();
+    app.on("share", seen);
+    host.push({ type: "share", on: true });
+    host.push({ type: "share", on: "yes" });
+    host.push({ type: "share", on: false });
+    await host.settle();
+    expect(seen.mock.calls).toEqual([[true], [false]]);
+  });
+
+  it("on('share') replays what the page said before the listener existed, unless a newer push came", async () => {
+    host.push({ type: "share", on: true });
+    await host.settle();
+    const late = vi.fn();
+    app.on("share", late);
+    await Promise.resolve();
+    expect(late.mock.calls).toEqual([[true]]);
+
+    // A push after subscribing (a port message, so after the replay) ends on
+    // the newer value.
+    const raced = vi.fn();
+    app.on("share", raced);
+    host.push({ type: "share", on: false });
+    await host.settle();
+    expect(raced.mock.calls.at(-1)).toEqual([false]);
+
+    // Unsubscribed before the replay: nothing.
+    const gone = vi.fn();
+    app.on("share", gone)();
+    await Promise.resolve();
+    expect(gone).not.toHaveBeenCalled();
+  });
+
   it("on('ended') delivers the reason, and every later call rejects with ended", async () => {
     const seen = vi.fn();
     app.on("ended", seen);

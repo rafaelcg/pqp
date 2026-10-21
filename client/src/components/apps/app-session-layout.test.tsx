@@ -16,13 +16,27 @@ const config = vi.hoisted(() => ({
 vi.mock("@/hooks/use-apps-config", () => ({ useAppsConfig: () => config.state }));
 vi.mock("@/hooks/use-md-up", () => ({ useMdUp: () => true }));
 vi.mock("@/lib/apps/api", () => ({ endAppSessionRequest: vi.fn(async () => true) }));
+/** What the fake pane was last given: the app's side of the share. */
+const pane = vi.hoisted(() => ({
+  shared: undefined as boolean | undefined,
+  onShare: undefined as ((on: boolean) => Promise<boolean>) | undefined,
+}));
 vi.mock("@/components/apps/app-pane", () => ({
-  AppPane: forwardRef<{ focus(): void; element(): HTMLElement | null }, { title: string; frozen?: boolean }>(
-    function FakePane(props, ref) {
-      useImperativeHandle(ref, () => ({ focus: () => {}, element: () => null }), []);
-      return <div data-testid="pane" data-frozen={props.frozen ? "yes" : "no"} />;
-    },
-  ),
+  AppPane: forwardRef<
+    { focus(): void; element(): HTMLElement | null },
+    { title: string; frozen?: boolean; shared?: boolean; onShare?: (on: boolean) => Promise<boolean> }
+  >(function FakePane(props, ref) {
+    useImperativeHandle(ref, () => ({ focus: () => {}, element: () => null }), []);
+    pane.shared = props.shared;
+    pane.onShare = props.onShare;
+    return (
+      <div
+        data-testid="pane"
+        data-frozen={props.frozen ? "yes" : "no"}
+        data-shared={props.shared ? "yes" : "no"}
+      />
+    );
+  }),
 }));
 
 import {
@@ -34,6 +48,7 @@ import {
 } from "@/lib/apps/app-sessions-store";
 import { AppSessionLayout, ENDED_STRIP_MS } from "./app-session-layout";
 import { toggleAppChat } from "./app-column";
+import { APP_COLUMN_MIN_PX } from "@/lib/apps/app-chat-visibility";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -98,18 +113,23 @@ const voice = {
 
 type Msg = { id: string; authorId: string; body: string; createdAt?: string };
 
-function tree(props: {
+type TreeProps = {
   channelId?: string | null;
   messages?: Msg[];
   inCall?: boolean;
   callShape?: "none" | "compact" | "expanded";
-}) {
+  channelType?: string;
+  sharing?: boolean;
+  joinCall?: () => void;
+};
+
+function tree(props: TreeProps) {
   return (
     <TooltipProvider>
     <AppSessionLayout
       serverId="srv"
       channelId={props.channelId === undefined ? CHANNEL : props.channelId}
-      channelType="text"
+      channelType={props.channelType ?? "text"}
       viewerId={ME}
       canModerate={false}
       people={
@@ -118,7 +138,13 @@ function tree(props: {
           [BIA, { displayName: "bia" }],
         ])
       }
-      voice={{ ...voice, inCall: props.inCall ?? false, callShape: props.callShape }}
+      voice={{
+        ...voice,
+        inCall: props.inCall ?? false,
+        sharing: props.sharing ?? false,
+        callShape: props.callShape,
+        joinCall: props.joinCall,
+      }}
       chat={{ messages: props.messages ?? [], username: "rafa" }}
       chatShortcut="Ctrl + Shift + ."
     >
@@ -132,15 +158,7 @@ function tree(props: {
   );
 }
 
-function render(
-  props: {
-    enabled?: boolean;
-    channelId?: string | null;
-    messages?: Msg[];
-    inCall?: boolean;
-    callShape?: "none" | "compact" | "expanded";
-  } = {},
-) {
+function render(props: TreeProps & { enabled?: boolean } = {}) {
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -198,7 +216,9 @@ describe("AppSessionLayout", () => {
     applyChannelApp(CHANNEL, summary(true));
     render();
     expect(document.querySelector('[data-testid="pane"]')).not.toBeNull();
-    expect(column().className).toMatch(/w-\[320px\]/);
+    // A number in a style, not a class that a merge can drop; the floor before
+    // the body is measured (jsdom measures nothing).
+    expect(column().style.width).toBe(`${APP_COLUMN_MIN_PX}px`);
     expect(column().getAttribute("data-app-column")).toBe("side");
     expect(strip()?.getAttribute("data-state")).toBe("participant");
   });
@@ -328,6 +348,92 @@ describe("AppSessionLayout", () => {
     it("the shortcut does nothing without an app on screen", () => {
       render();
       expect(toggleAppChat()).toBe(false);
+    });
+  });
+
+  describe("one source of truth for the share", () => {
+    const paneApp = {
+      ...eco,
+      capabilities: { ...eco.capabilities, share: "pane" },
+    } as unknown as AppConfigEntry;
+    const hosting = (): AppSessionSummary => ({ ...summary(true), hostUserId: ME, startedBy: ME });
+    const shareSwitch = () =>
+      document.querySelector<HTMLElement>('[data-testid="app-session-strip"] [role="switch"]')!;
+
+    beforeEach(() => {
+      config.state = { ...config.state, apps: [paneApp] };
+      voice.startShare.mockClear();
+      voice.stopShare.mockClear();
+    });
+
+    it("the strip's switch turns the app's control on, and the app's stop turns the switch off", async () => {
+      applyChannelApp(CHANNEL, hosting());
+      render({ channelType: "voice", inCall: true });
+      expect(shareSwitch().getAttribute("aria-checked")).toBe("false");
+      expect(pane.shared).toBe(false);
+
+      // the strip's switch
+      await act(async () => {
+        shareSwitch().click();
+      });
+      expect(voice.startShare).toHaveBeenCalledTimes(1);
+      rerender({ channelType: "voice", inCall: true, sharing: true });
+      expect(shareSwitch().getAttribute("aria-checked")).toBe("true");
+      expect(pane.shared).toBe(true);
+
+      // the app's own control (the HUD pill), through the bridge
+      await act(async () => {
+        await pane.onShare!(false);
+      });
+      expect(voice.stopShare).toHaveBeenCalledTimes(1);
+      rerender({ channelType: "voice", inCall: true, sharing: false });
+      expect(shareSwitch().getAttribute("aria-checked")).toBe("false");
+      expect(pane.shared).toBe(false);
+    });
+
+    it("the app's control turns the strip's switch on, and the switch turns the app's control off", async () => {
+      applyChannelApp(CHANNEL, hosting());
+      render({ channelType: "voice", inCall: true });
+      await act(async () => {
+        expect(await pane.onShare!(true)).toBe(true);
+      });
+      rerender({ channelType: "voice", inCall: true, sharing: true });
+      expect(shareSwitch().getAttribute("aria-checked")).toBe("true");
+      expect(pane.shared).toBe(true);
+
+      await act(async () => {
+        shareSwitch().click();
+      });
+      expect(voice.stopShare).toHaveBeenCalledTimes(1);
+      rerender({ channelType: "voice", inCall: true, sharing: false });
+      expect(pane.shared).toBe(false);
+    });
+
+    it("a stop from the call's own bar turns both off", async () => {
+      applyChannelApp(CHANNEL, hosting());
+      render({ channelType: "voice", inCall: true });
+      await act(async () => {
+        await pane.onShare!(true);
+      });
+      rerender({ channelType: "voice", inCall: true, sharing: true });
+      expect(pane.shared).toBe(true);
+      rerender({ channelType: "voice", inCall: true, sharing: false });
+      expect(pane.shared).toBe(false);
+      expect(shareSwitch().getAttribute("aria-checked")).toBe("false");
+    });
+
+    it("not in the call: one click on Entrar na call joins, and the app stays open", () => {
+      const joinCall = vi.fn();
+      applyChannelApp(CHANNEL, hosting());
+      render({ channelType: "voice", inCall: false, joinCall });
+      const join = document.querySelector<HTMLButtonElement>('[data-testid="app-strip-join-call"]')!;
+      act(() => join.click());
+      expect(joinCall).toHaveBeenCalledTimes(1);
+      expect(join.getAttribute("aria-busy")).toBe("true");
+      rerender({ channelType: "voice", inCall: true, joinCall });
+      expect(document.querySelector('[data-testid="pane"]')).not.toBeNull();
+      expect(document.querySelector('[data-testid="app-strip-join-call"]')).toBeNull();
+      expect(shareSwitch()).not.toBeNull();
     });
   });
 

@@ -1359,7 +1359,7 @@ test("sharing, flag on: the HUD's pill shares the pane and stops it, and says wh
   await frame.locator("#stage").hover();
   const share = frame.locator('[data-action="share"]');
   await expect(share).toBeVisible();
-  await expect(share).toHaveText("Compartilhar");
+  await expect(share).toHaveText("Compartilhar tela");
   await expect(share).toHaveAttribute("aria-pressed", "false");
   await share.click();
   await expect(share).toHaveText("Compartilhando");
@@ -1369,7 +1369,7 @@ test("sharing, flag on: the HUD's pill shares the pane and stops it, and says wh
   await expect(frame.locator(".loc-hud-toasts")).toContainText("Quem entrar pra assistir vê o que tu vê aqui");
   await frame.locator("#stage").hover();
   await share.click();
-  await expect(share).toHaveText("Compartilhar");
+  await expect(share).toHaveText("Compartilhar tela");
   await expect(frame.locator("#sharing")).toBeHidden();
   const shares = await page.evaluate(() => (window as unknown as HostGlobals).__h.shares);
   expect(shares.map((s) => s.on)).toEqual([false, true, false]);
@@ -1390,7 +1390,7 @@ test("sharing, allowed but not started (not in the call): the pill says so out l
   await share.click();
   // never a silent button: a line over the picture says what to do
   await expect(frame.locator(".loc-hud-toasts")).toContainText("Entra na call de voz deste canal");
-  await expect(share).toHaveText("Compartilhar");
+  await expect(share).toHaveText("Compartilhar tela");
   await expect(share).toHaveAttribute("aria-pressed", "false");
   await expect(frame.locator("#sharing")).toBeHidden();
   // and the pill is usable again for a second try

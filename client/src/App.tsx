@@ -11674,7 +11674,11 @@ function MainAppContent({
           peerQualities={voiceState.remotePeers.flatMap((peer) =>
             peer.quality ? [peer.quality] : [],
           )}
-          canStream={voiceState.canStream}
+          // Beside an app the call's own bar is on screen in the column, with
+          // camera and share; the footer's copies would be a second set.
+          canStream={
+            voiceState.canStream && !(appPaneOnScreen && viewingThisCall)
+          }
           isCameraOn={voiceState.isCameraOn}
           isSharingScreen={voiceState.isSharingScreen}
           cameraCappedOut={
@@ -12055,7 +12059,11 @@ function MainAppContent({
             !(
               voiceState.voiceChannelId === selectedChannel.id &&
               voiceState.status !== "idle"
-            ) && (
+            ) &&
+            // With an app on screen the strip above it carries the one
+            // "Entrar na call" (beside the share it unlocks): two join
+            // buttons a few pixels apart read as two different things.
+            !appPaneOnScreen && (
               <Tooltip label={t("voice.joinNamed", { name: selectedChannel.name })}>
                 <button
                   type="button"
@@ -12502,6 +12510,16 @@ function MainAppContent({
             ),
           stopShare: () => void voice.stopScreenShare(),
           callShape: stageShape,
+          // The header's own "Entre na call", from the strip: the same guarded
+          // join, and the selection does not move, so the app stays open.
+          joinCall:
+            selectedChannel.kind === "server" &&
+            isVoiceRoomChannelType(selectedChannel.type)
+              ? () =>
+                  guardVoiceJoin(selectedChannel.id, () =>
+                    handleJoinVoice(selectedChannel.id),
+                  )
+              : undefined,
         }}
         chat={{
           messages: chat.getMessages(),

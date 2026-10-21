@@ -1,6 +1,6 @@
 {
   "name": "@pqp-apps/eco",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "private": true,
   "license": "AGPL-3.0-only",
   "description": "Eco, the internal test app of the pqp apps platform.",

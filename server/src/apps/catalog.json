@@ -4,7 +4,7 @@
       "manifest": {
         "manifestVersion": 1,
         "id": "pqp-eco",
-        "version": "1.0.1",
+        "version": "1.0.2",
         "publisher": "pqp",
         "platformApi": 1,
         "name": "name",
@@ -53,7 +53,7 @@
         },
         "entry": {
           "path": "index.html",
-          "sha256": "0b50f1d3e2fe4fe7729b5b93d67b2ac6d2247ad6670589e4dec86eafe7a5af62"
+          "sha256": "548e17170423b37d24737171c9b38bf452ef34a1bb6c086722625706c570a514"
         },
         "platforms": [
           "web",
@@ -84,13 +84,13 @@
           }
         }
       },
-      "manifestSha256": "3f36437e977db2e3c30b5281c27602e4dee0716fcfd89e4b0418f328293b5a7e"
+      "manifestSha256": "343c6ccdd4604d815e1279d3b2ed64c8bd30f4e8700510e8a9723dce15ff96ec"
     },
     {
       "manifest": {
         "manifestVersion": 1,
         "id": "pqp-locadora",
-        "version": "1.0.4",
+        "version": "1.0.5",
         "publisher": "pqp",
         "platformApi": 1,
         "name": "name",
@@ -154,7 +154,7 @@
         "notice": "notice",
         "entry": {
           "path": "index.html",
-          "sha256": "2d2e1048688af6e64a4d9405c33d731ddd0414530fef66ad06defa6b7786456d"
+          "sha256": "6a41833fc58e0e05573e3040979a517b6a41d4a9d5490e2e3931c27f225505b8"
         },
         "assets": [
           {
@@ -238,7 +238,7 @@
           }
         }
       },
-      "manifestSha256": "d8e1e376c19160bc516122f2297010d39acbc41e1d1ae106f42253ce2194eb97"
+      "manifestSha256": "00508e29308968ef2f3dcfb88c76ef6bf89417cb943f7847fc29a4093c674733"
     }
   ]
 }

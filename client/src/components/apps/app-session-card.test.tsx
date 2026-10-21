@@ -110,7 +110,7 @@ describe("estado 2: dentro", () => {
       }),
       { onLeave, onFocusApp },
     );
-    expect(buttons().map((b) => b.textContent)).toEqual(["Leave", "Back to the app"]);
+    expect(buttons().map((b) => b.textContent)).toEqual(["Leave app", "Back to the app"]);
     expect(host!.querySelector('[role="group"]')!.className).toContain("border-accent");
     expect(text()).toContain("You are in");
     expect(text()).toContain("4 in, full");

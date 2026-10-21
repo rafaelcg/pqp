@@ -443,6 +443,7 @@ const hostMessages: Record<string, unknown> = {
   connection: { type: "connection", status: "reconnecting" },
   "session.ended": { type: "session.ended", reason: "host" },
   theme: { type: "theme", theme },
+  share: { type: "share", on: true },
 };
 
 describe("host to app messages", () => {
