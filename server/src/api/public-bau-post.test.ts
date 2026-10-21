@@ -1261,15 +1261,23 @@ describeDb("public Baú post", () => {
     // The bucket refills while the loop runs (8 a second), so the first 429
     // lands a little past the burst on a slow runner. Never before it.
     const statuses: number[] = [];
-    for (let i = 0; i < 2000 && !statuses.includes(429); i += 1) {
-      statuses.push((await get(url(UNKNOWN_ID))).status);
+    let limited: Wire | null = null;
+    for (let i = 0; i < 2000 && !limited; i += 1) {
+      const res = await get(url(UNKNOWN_ID));
+      statuses.push(res.status);
+      if (res.status === 429) {
+        limited = res;
+      }
     }
+    expect(limited).not.toBeNull();
     const firstLimited = statuses.indexOf(429);
     expect(firstLimited).toBeGreaterThanOrEqual(240);
     expect(statuses.slice(0, firstLimited).every((s) => s === 404)).toBe(true);
     // A 429 is never cached: the limiter must not be served from the edge.
-    const limited = await get(url(UNKNOWN_ID));
-    expect(limited.headers.get("cache-control")).toBe("no-store");
+    // Read from the 429 the loop saw, not from a request made afterwards: the
+    // bucket refills a token every ~125 ms, so on a slow runner the next
+    // request can be let through (a cacheable 404) and say nothing about it.
+    expect(limited!.headers.get("cache-control")).toBe("no-store");
   });
 
   it("answers a shared cache the same way for every origin: ACAO *, no Vary", async () => {

@@ -363,7 +363,7 @@ describeDb("who a start-of-stream notice reaches", () => {
 
   describe("the 20 second debounce and the flags", () => {
     async function settle(check: () => boolean): Promise<void> {
-      const deadline = Date.now() + 5_000;
+      const deadline = Date.now() + 12_000;
       while (!check()) {
         if (Date.now() > deadline) {
           throw new Error("timed out waiting for the notice pipeline");

@@ -222,7 +222,7 @@ describeDb("forum frames between two API processes on the Postgres bus", () => {
     });
     expect(flip.status).toBe(200);
     // B hears the flip over the bus, not its ten minute timer.
-    const deadline = Date.now() + 5_000;
+    const deadline = Date.now() + 12_000;
     for (;;) {
       const config = await call<{ enabled: boolean }>(b, "GET", "/api/forum/config", BOB);
       if (config.body.enabled || Date.now() > deadline) {

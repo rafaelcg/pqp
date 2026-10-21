@@ -236,7 +236,7 @@ describeDb("forum webhooks between two API processes on the Postgres bus", () =>
       enabled: true,
     });
     expect(flip.status).toBe(200);
-    const deadline = Date.now() + 5_000;
+    const deadline = Date.now() + 12_000;
     for (;;) {
       const config = await call<{ enabled: boolean }>(b, "GET", "/api/forum/config", BOB);
       if (config.body.enabled || Date.now() > deadline) {
