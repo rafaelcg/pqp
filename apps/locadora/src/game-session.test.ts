@@ -100,7 +100,8 @@ function fakeConsole() {
     setTurbo(turbo: number) {
       fake.turbos.push(turbo);
     },
-    videoSize: () => ({ width: 256, height: 240 }),
+    size: { width: 256, height: 240 },
+    videoSize: () => fake.size,
     setKeyboard(on: boolean) {
       fake.keyboard.push(on);
     },
@@ -114,6 +115,7 @@ let host: HTMLElement;
 let stage: Stage;
 let consoles: Array<ReturnType<typeof fakeConsole>>;
 let left: LeaveReason[];
+let activity: string[] = [];
 let session: GameSession;
 let store: DeviceStore;
 let keeper: ReturnType<typeof createPrefsKeeper>;
@@ -131,6 +133,7 @@ function setup(over: { store?: DeviceStore; prefs?: Partial<ReturnType<typeof de
   stage = createStage({ stage: host, game: document.getElementById("game")! });
   consoles = [];
   left = [];
+  activity = [];
   const context: SessionContext = {
     app: { hello: { locale: "pt-BR" } } as SessionContext["app"],
     t,
@@ -145,6 +148,9 @@ function setup(over: { store?: DeviceStore; prefs?: Partial<ReturnType<typeof de
     isFullscreen: () => false,
     toggleFullscreen: async () => {},
     openControls: () => {},
+    onActivity: (state) => {
+      activity.push(state);
+    },
     onLeave: (reason) => {
       left.push(reason);
     },
@@ -186,6 +192,81 @@ async function boot(over: Partial<GameInput> = {}) {
 }
 
 const pressStart = () => host.querySelector<HTMLButtonElement>(".loc-start")!.click();
+
+describe("the stage follows the core's frame size all game long, never the first answer", () => {
+  // jsdom lays nothing out: give the stage a room, or its layout is never computed
+  function room() {
+    Object.defineProperty(host, "clientWidth", { configurable: true, get: () => 1280 });
+    Object.defineProperty(host, "clientHeight", { configurable: true, get: () => 800 });
+  }
+
+  it("lays the picture out again when the core reports another size, and not when it reports the same one", async () => {
+    const console_ = await boot();
+    room();
+    pressStart();
+    await settle(600);
+    expect(stage.layout?.baseW).toBe(256);
+    expect(stage.layout?.baseH).toBe(240);
+    const setBase = vi.spyOn(stage, "setBase");
+    await settle(2000);
+    // the same answer every half second: asked each time, and the layout is left alone
+    expect(setBase).toHaveBeenCalled();
+    expect(stage.layout?.baseH).toBe(240);
+
+    console_.size = { width: 256, height: 224 };
+    await settle(600);
+    expect(stage.layout?.baseW).toBe(256);
+    expect(stage.layout?.baseH).toBe(224);
+
+    console_.size = { width: 512, height: 448 };
+    await settle(600);
+    expect(stage.layout?.baseW).toBe(512);
+    expect(stage.layout?.baseH).toBe(448);
+
+    // and back, which a game that goes between two modes does all the time
+    console_.size = { width: 256, height: 239 };
+    await settle(600);
+    expect(stage.layout?.baseW).toBe(256);
+    expect(stage.layout?.baseH).toBe(239);
+  });
+
+  it("asks at once when the canvas's own size changes, not on the next half second", async () => {
+    setup();
+    room();
+    const canvas = document.createElement("canvas");
+    canvas.className = "ejs_canvas";
+    document.getElementById("game")!.append(canvas);
+    void session.start(input());
+    const console_ = consoles[0]!;
+    console_.resolveStart();
+    await settle(0);
+    pressStart();
+    await settle(0);
+    console_.size = { width: 256, height: 224 };
+    canvas.setAttribute("width", "640");
+    // one turn of the microtask queue, far under the half second
+    await settle(1);
+    expect(stage.layout?.baseH).toBe(224);
+  });
+
+  it("stops when the game is put away: no read of a console that is gone", async () => {
+    const console_ = await boot();
+    pressStart();
+    await settle(0);
+    let reads = 0;
+    console_.videoSize = () => {
+      reads += 1;
+      return { width: 256, height: 240 };
+    };
+    await settle(600);
+    expect(reads).toBeGreaterThan(0);
+    await session.eject();
+    await settle(0);
+    const before = reads;
+    await settle(3000);
+    expect(reads).toBe(before);
+  });
+});
 
 describe("a file the console cannot run ends on the error screen, never on a dead one (SPEC 4.7)", () => {
   it("says so, with 'Tentar de novo' and 'Voltar pra prateleira', when the game fails the moment Start is pressed", async () => {
@@ -296,6 +377,23 @@ describe("a file the console cannot run ends on the error screen, never on a dea
     pressStart();
     await settle(FRAME_CHECK_MS * (FRAME_CHECK_TRIES + 2));
     expect(errorText()).toBeNull();
+  });
+
+  it("tells the page when the game runs and pauses, and nothing before Start", async () => {
+    const console_ = await boot();
+    expect(activity).toEqual([]);
+    pressStart();
+    console_.frameCount = 10;
+    await settle(10);
+    expect(activity).toEqual(["playing"]);
+    const p = () => document.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyP", key: "p", bubbles: true, cancelable: true }));
+    // the HUDs of earlier tests in this file still listen on the document, so a state can be said twice in a row
+    // here; the reporter in main.ts says each change once (activity.test.ts)
+    const changes = () => activity.filter((state, i) => state !== activity[i - 1]);
+    p();
+    expect(changes()).toEqual(["playing", "paused"]);
+    p();
+    expect(changes()).toEqual(["playing", "paused", "playing"]);
   });
 
   it("a paused game with no frame yet is not mistaken for a dead one", async () => {

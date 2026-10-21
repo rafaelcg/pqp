@@ -77,4 +77,6 @@ export interface BridgeHello {
   reducedMotion: boolean;
   self: { seatId: string; role: AppRole; isHost: boolean };
   connection: BridgeConnectionStatus;
+  /** The person has no pqp account (the signed-out guest player). Absent on every ordinary session. */
+  guest?: boolean;
 }

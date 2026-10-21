@@ -23,6 +23,11 @@ export interface AppsConfigState {
   /** The apps origin, or null while this deployment has none. */
   origin: string | null;
   apps: AppsConfig["apps"];
+  /**
+   * `app_pane_layout_v2`: the call and chat column beside an app. Absent (an
+   * API from before the flag, or no answer yet) is on; only `false` is off.
+   */
+  paneLayoutV2?: boolean;
 }
 
 const NO_APPS: AppsConfig["apps"] = [];
@@ -59,6 +64,7 @@ function sameAnswer(a: AppsConfigState, b: AppsConfigState): boolean {
   return (
     a.enabled === b.enabled &&
     a.origin === b.origin &&
+    a.paneLayoutV2 === b.paneLayoutV2 &&
     JSON.stringify(a.apps) === JSON.stringify(b.apps)
   );
 }
@@ -74,6 +80,7 @@ export function loadAppsConfig(serverId: string): Promise<AppsConfigState> {
           loaded: true,
           origin: answer.origin,
           apps: answer.enabled ? answer.apps : NO_APPS,
+          ...(answer.paneLayoutV2 === false ? { paneLayoutV2: false } : {}),
         };
         const before = settled.get(serverId);
         settled.set(serverId, next);

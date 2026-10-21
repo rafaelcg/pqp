@@ -30,6 +30,7 @@ export const SHORTCUT_ACTIONS = [
   "nextUnreadChannel",
   "toggleOverlay",
   "openNewDm",
+  "toggleAppChat",
 ] as const;
 
 export type ShortcutAction = (typeof SHORTCUT_ACTIONS)[number];
@@ -49,7 +50,10 @@ export const SHORTCUT_GROUPS: ReadonlyArray<{
       "nextUnreadChannel",
     ],
   },
-  { id: "app", actions: ["openUserSettings", "toggleOverlay", "openNewDm"] },
+  {
+    id: "app",
+    actions: ["openUserSettings", "toggleOverlay", "openNewDm", "toggleAppChat"],
+  },
 ];
 
 export type BindableId = ShortcutAction | "pushToTalk";
@@ -137,6 +141,18 @@ export function defaultShortcutBindings(
     openNewDm: {
       code: "KeyN",
       label: "N",
+      ...mod,
+      alt: false,
+      shift: true,
+    },
+    // The chat beside a running app, shown or put away. Cmd/Ctrl+Shift+C was
+    // the obvious letter and is the browsers' "inspect element" on Windows
+    // and Linux; E, H, J, K, O, U and Y are each some browser's panel or the
+    // GTK Unicode entry. The full stop is free in Chromium, Firefox, Safari
+    // and the desktop shell's menu, and sits beside where "chat" is typed.
+    toggleAppChat: {
+      code: "Period",
+      label: ".",
       ...mod,
       alt: false,
       shift: true,

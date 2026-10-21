@@ -374,6 +374,7 @@ import {
 } from "./live-preview-routes.js";
 import { registerAppRoutes } from "./app-routes.js";
 import { endSessionsOfChannel } from "../apps/sweeps.js";
+import { publicAppsConfig } from "../apps/public-config.js";
 import { registerAppOwnerRoutes } from "./app-owner-routes.js";
 import { Created, HttpErrorWithDetail } from "../lib/route-results.js";
 import {
@@ -14766,18 +14767,24 @@ const PUBLIC_APPS_CONFIG_PATH = "/api/public/apps/config";
  * twin in spirit of `GET /api/apps/config?serverId=`, which is a different
  * question (is the platform on for THIS server) and wants a session.
  *
- * Body is `{ enabled }` and nothing else, from the global runtime flag
- * `apps_landing`. Off answers 200 `{ enabled: false }`, not 404: a 404 is what
- * a missing route looks like on an older API, and the client reads that as
- * "unknown, stay dark" anyway. Never reads Authorization, never sets a cookie,
- * identical for every caller, so it is publicly cacheable for a minute (the
- * edge Worker holds it; a flip shows within a minute). Matched before any
- * router, so a bad token cannot veto it.
+ * Body is `{ enabled, guest, cloudSaves, locadora }` (`publicAppsConfig` in
+ * `apps/public-config.ts`, typed by `publicAppsConfigSchema`): `enabled` is the
+ * global runtime flag `apps_landing`, `guest` whether Locadora can be played
+ * without an account (`locadora_guest`, an apps origin, Locadora released),
+ * `cloudSaves` whether the public copy may say "saves na nuvem"
+ * (`locadora_saves_announced`), and `locadora` the guest player's slice of the
+ * built manifest. Off answers 200 `{ enabled: false, ... }`, not 404: a 404 is
+ * what a missing route looks like on an older API, and the client reads that
+ * as "unknown, stay dark" anyway. Never reads Authorization, never sets a
+ * cookie, identical for every caller, so it is publicly cacheable for a minute
+ * (the edge Worker holds it; a flip shows within a minute). Matched before any
+ * router, so a bad token cannot veto it. The one database read behind `guest`
+ * is memoised per process and fails to "no guest", never to an error.
  */
-function servePublicAppsConfig(
+async function servePublicAppsConfig(
   req: IncomingMessage,
   res: ServerResponse,
-): void {
+): Promise<void> {
   if (req.method !== "GET" && req.method !== "HEAD") {
     res.setHeader("Allow", "GET, HEAD, OPTIONS");
     sendError(res, 405, "Method not allowed", req);
@@ -14792,7 +14799,7 @@ function servePublicAppsConfig(
     sendError(res, 429, "Too many requests", req);
     return;
   }
-  const payload = JSON.stringify({ enabled: isEnabled("apps_landing") });
+  const payload = JSON.stringify(await publicAppsConfig());
   res.writeHead(200, {
     "Content-Type": "application/json",
     "Content-Length": String(Buffer.byteLength(payload)),
@@ -15049,7 +15056,7 @@ export async function handleApi(
   }
 
   if (pathname === PUBLIC_APPS_CONFIG_PATH) {
-    servePublicAppsConfig(req, res);
+    await servePublicAppsConfig(req, res);
     return;
   }
 

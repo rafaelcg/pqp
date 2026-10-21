@@ -11,7 +11,7 @@ import {
 import { playlistLooksLive, type LiveHlsStream } from "@pqp/shared";
 import { isLiveKitConfigured } from "./backends.js";
 import { isEnabled } from "../lib/flags.js";
-import { promotionBudgetMbps } from "./promotion.js";
+import { homeBoxBudgetMbps } from "./box-budget.js";
 import {
   CAMERA_RUNG,
   CAMERA_RUNG_480,
@@ -7408,7 +7408,7 @@ async function reconcileCameraEgressNow(
     }),
     sfuLoadMbps:
       (await currentSfuLoadMbps()) + runningCameraMbps() + replacedMbps,
-    boxBudgetMbps: promotionBudgetMbps(),
+    boxBudgetMbps: homeBoxBudgetMbps(),
     hasVideo: Boolean(wantedVideo),
     ownMbps: cameraSlotMbps(rung),
   });
@@ -7424,7 +7424,7 @@ async function reconcileCameraEgressNow(
       channelId,
       refusal: decision.refusal,
       boxMbps: Math.round(decision.boxMbps),
-      boxBudgetMbps: promotionBudgetMbps(),
+      boxBudgetMbps: homeBoxBudgetMbps(),
       retryInMs,
       height: rung.height,
     });
@@ -8147,7 +8147,7 @@ async function startRoom(
     }),
     sfuLoadMbps: (await currentSfuLoadMbps()) + runningCameraMbps(),
     ladderBudgetMbps: ladderBudgetMbps(),
-    boxBudgetMbps: promotionBudgetMbps(),
+    boxBudgetMbps: homeBoxBudgetMbps(),
     // The host's getSettings() height, when announced, is the pixels. LiveKit
     // `track.height` is the declared layer and can be the frozen 1080 from a
     // 480p window. An upscale rung is a wasted x264 and a flapping ABR.
@@ -8171,7 +8171,7 @@ async function startRoom(
         ladderMbps: Math.round(decision.ladderMbps),
         boxMbps: Math.round(decision.boxMbps),
         ladderBudgetMbps: ladderBudgetMbps(),
-        boxBudgetMbps: promotionBudgetMbps(),
+        boxBudgetMbps: homeBoxBudgetMbps(),
       });
       continue;
     }

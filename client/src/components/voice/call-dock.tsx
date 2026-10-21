@@ -12,6 +12,7 @@ import {
   type ReactNode,
   type TransitionEvent,
 } from "react";
+import { useAppColumn } from "@/components/apps/app-column";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { cn } from "@/lib/utils";
 
@@ -167,7 +168,18 @@ export function CallDockProvider({
     [store],
   );
   const [barVisible, setBarVisible] = useState(false);
+  // BESIDE AN APP THE CALL KEEPS ITS CONTROLS WITH IT (`app_pane_layout_v2`).
+  // The column there is three things stacked (the call, the chat's header and
+  // transcript, the composer), and a call bar docked into the composer put the
+  // call's controls at the bottom of the chat, under the transcript, away from
+  // the call they belong to: the column read as two calls and a chat. With no
+  // publisher the stage draws its one bar in its own place, as it does on any
+  // surface with no composer. Nothing is remounted: the stage keeps deciding,
+  // only the home of the bar changes.
+  const appColumn = useAppColumn();
+  const publishHere = appColumn.active ? null : publish;
   const occupied =
+    !appColumn.active &&
     barVisible &&
     publishedChannelId !== null &&
     publishedChannelId === viewingChannelId;
@@ -185,7 +197,7 @@ export function CallDockProvider({
     [],
   );
   return (
-    <PublishContext.Provider value={publish}>
+    <PublishContext.Provider value={publishHere}>
       <OccupiedContext.Provider value={setBarVisible}>
         <StoreContext.Provider value={store}>{children}</StoreContext.Provider>
       </OccupiedContext.Provider>

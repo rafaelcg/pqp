@@ -105,6 +105,8 @@ const projects: E2EProject[] = [
       MEDIA_SPEC,
       /stale-bundle[\\/]/,
       /share-fast-start[\\/]/,
+      // its own flags, apps origin and API: `playwright.locadora-guest.config.ts`
+      /locadora-guest[\\/]/,
     ],
   },
   {

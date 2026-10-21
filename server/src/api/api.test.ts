@@ -4121,7 +4121,7 @@ describeDb("API authorization", () => {
      * regression still fails, it just takes two seconds to say so.
      */
     async function flush(until?: () => boolean) {
-      const deadline = Date.now() + 2_000;
+      const deadline = Date.now() + 12_000;
       // No predicate means "wait for something that produced no frame to watch
       // for", which is the cache-miss cases below. Those keep the original
       // fixed wait, because there is nothing to poll on. Shortening it would

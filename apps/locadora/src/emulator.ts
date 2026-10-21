@@ -1,5 +1,6 @@
 import esLanguage from "@emulatorjs/emulatorjs/data/localization/es-ES.json";
 import ptLanguage from "@emulatorjs/emulatorjs/data/localization/pt-BR.json";
+import { audioHub } from "./audio";
 import { unpackContainer } from "./container";
 import type { EmulatorRuntime, KeyMap, Turbo, VideoSize } from "./runtime";
 import { coreRatio, silencesGame } from "./turbo";
@@ -155,6 +156,15 @@ export const RETROARCH_LOCKDOWN = [
   "quit_press_twice = false",
 ].join("\n");
 
+/**
+ * RetroArch draws the core's frame INSIDE the canvas at the aspect the core reports (8:7 pixels for the SNES), with
+ * black bars for what is left over, whatever shape the canvas is. The stage (`stage.ts`) already sizes the canvas to
+ * the exact shape the person asked for (square pixels, TV pixels, Encaixar), so two letterboxes were stacked: a game
+ * in "Pixel quadrado" got a smaller picture, off centre, in a box it should have filled. With the forced aspect off
+ * RetroArch stretches the frame over the whole canvas and the box the stage drew is the picture, edge to edge.
+ */
+export const RETROARCH_PICTURE = ["aspect_ratio_index = 24"].join("\n");
+
 const LOCKED = Symbol.for("pqp.locadora.retroarch-lockdown");
 
 type ConfigWriter = { getRetroArchCfg?: () => string; [LOCKED]?: boolean };
@@ -166,7 +176,7 @@ export function lockRetroArchMenu(): void {
   if (!manager || typeof original !== "function" || manager[LOCKED]) return;
   manager.getRetroArchCfg = function (this: unknown) {
     const cfg = original.call(this);
-    return `${cfg}${cfg.endsWith("\n") ? "" : "\n"}${RETROARCH_LOCKDOWN}\n`;
+    return `${cfg}${cfg.endsWith("\n") ? "" : "\n"}${RETROARCH_LOCKDOWN}\n${RETROARCH_PICTURE}\n`;
   };
   manager[LOCKED] = true;
 }
@@ -411,6 +421,7 @@ export class EjsRuntime implements EmulatorRuntime {
     this.turbo = 0;
     this.turboMuted = false;
     this.silentApplied = false;
+    this.applySilence();
     if (options.keymap) this.keymap = { ...this.keymap, ...options.keymap };
     return new Promise<void>((resolve, reject) => {
       try {
@@ -468,6 +479,7 @@ export class EjsRuntime implements EmulatorRuntime {
   stop(): void {
     this.turbo = 0;
     this.turboMuted = false;
+    this.applySilence();
     stopEmulator(this.options?.container);
   }
 
@@ -617,16 +629,24 @@ export class EjsRuntime implements EmulatorRuntime {
   }
 
   /**
-   * EmulatorJS's own mute: its volume setter scales every audio source (it is what its
-   * mute button calls). The remembered volume is never 0, so unmuting is never silence.
+   * The sound switch. Two things are told, and the first is the one that counts: the frame's audio hub (`audio.ts`),
+   * which silences every `AudioContext` the core made whatever driver it uses (the SNES core's own never reaches
+   * EmulatorJS's volume), and EmulatorJS's own volume setter, which keeps its menu and its OpenAL sources true.
+   * Works before the console runs, so a person who muted is never played a note by the next game.
    */
   setMuted(muted: boolean): void {
     this.userMuted = muted;
-    const ejs = this.running();
-    if (!ejs.setVolume) return;
+    this.applySilence();
+    const ejs = window.EJS_emulator;
+    if (!ejs?.gameManager || !this.options || !ejs.setVolume) return;
     if (!muted && (ejs.volume === undefined || ejs.volume === 0)) ejs.volume = 0.5;
     ejs.muted = muted;
     this.applyVolume(true);
+  }
+
+  /** Silent while the person muted or turbo is above 3x: what the hub holds, always, whatever the core is doing. */
+  private applySilence(): void {
+    audioHub().setSilent(this.userMuted || this.turboMuted);
   }
 
   /**
@@ -634,8 +654,9 @@ export class EjsRuntime implements EmulatorRuntime {
    * when the answer changes (or when asked to), so a turbo at 2x never nudges a volume nobody changed.
    */
   private applyVolume(force: boolean): void {
-    const ejs = this.running();
-    if (!ejs.setVolume) return;
+    this.applySilence();
+    const ejs = window.EJS_emulator;
+    if (!ejs?.gameManager || !this.options || !ejs.setVolume) return;
     const silent = this.userMuted || this.turboMuted;
     if (!force && silent === this.silentApplied) return;
     this.silentApplied = silent;

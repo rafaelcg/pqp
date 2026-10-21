@@ -518,23 +518,29 @@ body {
   color: var(--loc-text);
 }
 
-.loc-bar {
-  grid-row: 4;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding-block: 4px 12px;
-}
-
+/* the chip that says the pane is being shared; the control that starts and stops it is the HUD's own pill (src/hud.ts) */
 .loc-sharing {
   grid-row: 3;
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   margin-block: 0 8px;
-  padding: 10px 12px;
+  padding: 6px 12px;
   background: var(--loc-raised);
   color: var(--loc-text);
-  border-left: 3px solid var(--loc-accent);
-  border-radius: var(--loc-control);
-  font-size: 0.875rem;
+  border: 1px solid var(--loc-border-strong);
+  border-radius: 999px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.loc-sharing::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--loc-accent);
 }
 
 /* a watcher's screen: the TV in the middle of the pane, what it is and where the picture comes from under it */
@@ -671,47 +677,41 @@ body {
   border-radius: 0;
 }
 
-.loc[data-fullscreen="true"] .loc-bar {
-  position: fixed;
-  bottom: 18px;
-  left: 50%;
-  z-index: 5;
-  margin: 0;
-  padding: 6px;
-  background: var(--loc-hud);
-  border: 1px solid var(--loc-border-strong);
-  border-radius: 12px;
-  backdrop-filter: blur(10px);
-  transform: translateX(-50%);
-  transition: opacity var(--loc-slow) var(--loc-ease);
-}
-
-/* the share indicator must stay visible while sharing, so it floats instead of hiding */
+/*
+ * The share indicator must stay visible while sharing, so it floats instead of hiding with the HUD. It sits at the top,
+ * in the middle: the title chip is on the left and the pills on the right, and neither is ever under it. On a narrow
+ * window those two fill the row, so it drops to its own line under them.
+ */
 .loc[data-fullscreen="true"] .loc-sharing {
   position: fixed;
-  top: 12px;
-  left: 12px;
+  top: 20px;
+  left: 50%;
   z-index: 5;
-  max-width: min(60ch, calc(100% - 24px));
+  max-width: calc(100% - 24px);
   margin: 0;
+  transform: translateX(-50%);
+  white-space: nowrap;
 }
 
-.loc[data-fullscreen="true"]:has(.loc-hud-host[data-hud="hidden"]) .loc-bar:not(:focus-within) {
-  opacity: 0;
-  pointer-events: none;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .loc[data-fullscreen="true"] .loc-bar {
-    transition: none;
-  }
-  .loc-button:active:not(:disabled) {
+@media (max-width: 1100px) {
+  .loc[data-fullscreen="true"] .loc-sharing {
+    top: 70px;
+    left: 8px;
     transform: none;
   }
 }
 
-:root[data-reduced-motion="true"] .loc[data-fullscreen="true"] .loc-bar {
-  transition: none;
+/* at phone width the HUD's top row may be two lines (the share pill wraps it): the chip goes under both */
+@media (max-width: 560px) {
+  .loc[data-fullscreen="true"] .loc-sharing {
+    top: 124px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loc-button:active:not(:disabled) {
+    transform: none;
+  }
 }
 
 :root[data-reduced-motion="true"] .loc-button:active:not(:disabled) {

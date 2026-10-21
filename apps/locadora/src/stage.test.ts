@@ -239,6 +239,50 @@ describe("the whole picture is always on screen", () => {
   });
 });
 
+describe("fitStage follows a frame that changes size (a game switches modes while it plays)", () => {
+  const room = { viewW: 2000, viewH: 1270, par: 1, dpr: 2 } as const;
+
+  it("fills the limiting side of the room, and never crops, whatever the frame is now", () => {
+    for (const [baseW, baseH] of [[256, 224], [256, 239], [512, 224], [512, 448], [512, 478], [256, 240], [160, 144], [240, 160]] as const) {
+      for (const par of [1, TV_PIXEL_ASPECT]) {
+        for (const mode of ["pixel", "fit"] as const) {
+          const fit = fitStage({ ...room, baseW, baseH, par, mode });
+          const tag = `${baseW}x${baseH} par ${par} ${mode}`;
+          expect(fit.width, tag).toBeLessThanOrEqual(room.viewW + 1e-9);
+          expect(fit.height, tag).toBeLessThanOrEqual(room.viewH + 1e-9);
+          // the picture's shape is the frame's, in the pixel's aspect
+          expect(fit.width / fit.height, tag).toBeCloseTo((baseW * par) / baseH, 1);
+          if (mode === "fit") {
+            const filled = Math.abs(fit.width - room.viewW) < 1 || Math.abs(fit.height - room.viewH) < 1;
+            expect(filled, tag).toBe(true);
+          }
+        }
+      }
+    }
+  });
+
+  it("Encaixar: 224 lines then 239 lines in the same room is a new box each time, both height limited", () => {
+    const a = fitStage({ ...room, baseW: 256, baseH: 224, mode: "fit" });
+    const b = fitStage({ ...room, baseW: 256, baseH: 239, mode: "fit" });
+    expect(a.height).toBe(1270);
+    expect(b.height).toBe(1270);
+    expect(a.width).not.toBe(b.width);
+    expect(b.cssScale).toBeLessThan(a.cssScale);
+  });
+
+  it("Pixel perfeito takes the whole number of the CURRENT size: 11 rows of 224, 10 of 239", () => {
+    const a = fitStage({ ...room, baseW: 256, baseH: 224, mode: "pixel" });
+    const b = fitStage({ ...room, baseW: 256, baseH: 239, mode: "pixel" });
+    expect(a.scale).toBe(11);
+    expect(b.scale).toBe(10);
+    expect(b.height * room.dpr).toBe(239 * 10);
+    // and a hi-res frame is twice as wide, so it is width limited and a smaller whole number
+    const c = fitStage({ ...room, baseW: 512, baseH: 224, mode: "pixel" });
+    expect(c.scale).toBe(7);
+    expect(c.width * room.dpr).toBe(512 * 7);
+  });
+});
+
 describe("measureRoom", () => {
   it("is the stage's box, less the bezel's room on every side", () => {
     expect(measureRoom({ stageW: 1336, stageH: 896, windowW: 1400, windowH: 900, margin: 0 })).toEqual({ viewW: 1336, viewH: 896 });

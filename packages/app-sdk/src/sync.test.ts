@@ -34,6 +34,22 @@ describe("connectWithSync", () => {
     expect(app.connection).toBe("online");
   });
 
+  it("ui.activity sends the state alone, and an older host's refusal reaches the caller", async () => {
+    const other = new FakeHost();
+    const pending = connectWithSync({ window: other.window, timeoutMs: 400 });
+    other.accept();
+    const { activity } = await pending;
+    const sent = activity.report("paused");
+    const request = await other.nextRequest();
+    expect(request).toEqual({ id: request.id, type: "ui.activity", state: "paused" });
+    other.respond(request.id, null);
+    await expect(sent).resolves.toBeUndefined();
+    const refused = activity.report("browsing");
+    other.fail((await other.nextRequest()).id, "invalid");
+    await expect(refused).rejects.toMatchObject({ code: "invalid" });
+    other.close();
+  });
+
   it("refuses a port from anybody but the parent", async () => {
     const other = new FakeHost();
     const pending = connectWithSync({ window: other.window, timeoutMs: 100 });

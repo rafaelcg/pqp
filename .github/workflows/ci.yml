@@ -529,6 +529,15 @@ jobs:
       - name: E2E apps sandbox (Locadora, test patterns, canary)
         if: matrix.apps
         run: pnpm --filter @pqp-apps/locadora e2e
+      # Locadora without an account (client/e2e/locadora-guest/): the real
+      # client and API with the guest flags on, the real Locadora build on its
+      # own origin, a generated SNES pattern with a canary title, and a failure
+      # if the title, the file name or the file's hash is in any request.
+      - name: E2E Locadora guest player (no account, canary)
+        if: matrix.apps
+        env:
+          E2E_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm --filter @pqp/client e2e:locadora-guest
 
       # The presenter's camera held to the film, measured off the pictures
       # (client/playwright.camera-sync.config.ts): the real watch player on a

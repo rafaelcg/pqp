@@ -23,11 +23,16 @@
  * MEASUREMENT IS ONE CLOSED EVENT. `apps_door_view`, through `track()` (inert
  * without the hosted Umami tag), with no properties: which of the two pages
  * is already the path Umami records, and nothing here names a person, a game
- * or a file. The events after the click (guest play and the rest of the
- * telemetry spec's funnel) belong to the guest-play change and are
- * deliberately not here.
+ * or a file. The guest player's three events live with it
+ * (`locadora-guest.ts`), and nothing else of the telemetry spec's funnel is
+ * built yet.
+ *
+ * The same answer also says whether guest play is offered (`guest`, the
+ * runtime flag `locadora_guest`) and whether the public copy may promise cloud
+ * saves (`cloudSaves`, `locadora_saves_announced`).
  */
 
+import { publicAppsConfigSchema, type PublicAppsConfig } from "@pqp/shared";
 import { stashAcquisition, landingForStorage } from "./acquisition";
 import { intentStorage } from "./handle-intent";
 import { track } from "./track";
@@ -35,7 +40,14 @@ import { getApiBaseUrl } from "./utils";
 
 export const APPS_LANDING_REF = "apps-landing";
 export const LOCADORA_LANDING_REF = "locadora-landing";
-export type AppsLandingRef = typeof APPS_LANDING_REF | typeof LOCADORA_LANDING_REF;
+/** Every sign-up button of the guest player (its top bar and the "Gostou da Locadora?" card). */
+export const LOCADORA_GUEST_REF = "locadora-guest";
+export type AppsLandingRef =
+  | typeof APPS_LANDING_REF
+  | typeof LOCADORA_LANDING_REF
+  | typeof LOCADORA_GUEST_REF;
+/** The pages a sign-up can start from, for the acquisition's landing (cut to the first segment when stored). */
+export type AppsLandingPath = "/apps" | "/apps/locadora" | "/locadora/jogar";
 
 /** The one event these pages send. A name, no properties. */
 export const APPS_DOOR_VIEW_EVENT = "apps_door_view";
@@ -53,7 +65,7 @@ export function appsCtaHref(ref: AppsLandingRef): string {
  */
 export function rememberAppsRef(
   ref: AppsLandingRef,
-  path: "/apps" | "/apps/locadora",
+  path: AppsLandingPath,
   storage = intentStorage(),
   now: number = Date.now(),
 ): void {
@@ -103,9 +115,16 @@ export const ANSWER_TTL_MS = 60_000;
 /** A request that never settles is a failure, not a blank page. */
 export const REQUEST_TIMEOUT_MS = 8_000;
 
-let answer: boolean | null = null;
+/**
+ * The whole answer, kept as one: `enabled` (the pages exist), `guest` (Locadora
+ * can be played without an account, with the app's slice in `locadora`) and
+ * `cloudSaves` (the public copy may say "saves na nuvem"). Parsed with the
+ * shared schema, so an older API that sends only `{ enabled }` reads as "no
+ * guest play, no cloud-saves line", the safe answer.
+ */
+let answer: PublicAppsConfig | null = null;
 let answeredAt = 0;
-let inflight: Promise<boolean | null> | null = null;
+let inflight: Promise<PublicAppsConfig | null> | null = null;
 let failedAt = 0;
 
 export function resetAppsLandingProbe(): void {
@@ -115,8 +134,8 @@ export function resetAppsLandingProbe(): void {
   failedAt = 0;
 }
 
-/** True or false on a clean answer, null on any failure. Never rejects. */
-async function ask(): Promise<boolean | null> {
+/** The config on a clean answer, null on any failure. Never rejects. */
+async function ask(): Promise<PublicAppsConfig | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
@@ -128,9 +147,10 @@ async function ask(): Promise<boolean | null> {
     // not left "in flight" (it keeps `networkidle` from ever firing).
     const text = await response.text();
     if (response.status !== 200) throw new Error(`status ${response.status}`);
-    const body = JSON.parse(text) as { enabled?: unknown };
-    if (typeof body.enabled !== "boolean") throw new Error("malformed");
-    answer = body.enabled;
+    const body = publicAppsConfigSchema.safeParse(JSON.parse(text));
+    if (!body.success) throw new Error("malformed");
+    // guest play is real only with the app's slice beside it
+    answer = body.data.guest && body.data.locadora ? body.data : { ...body.data, guest: false, locadora: null };
     answeredAt = Date.now();
     failedAt = 0;
     return answer;
@@ -148,20 +168,25 @@ async function ask(): Promise<boolean | null> {
  * lets an operator's flip reach a tab that keeps navigating: the next entry to
  * one of the pages asks again.
  */
-export function cachedAppsLanding(): boolean | null {
+export function cachedPublicAppsConfig(): PublicAppsConfig | null {
   if (answer !== null && Date.now() - answeredAt >= ANSWER_TTL_MS) {
     answer = null;
   }
   return answer;
 }
 
+/** `enabled` of the last clean answer, or null (see `cachedPublicAppsConfig`). */
+export function cachedAppsLanding(): boolean | null {
+  return cachedPublicAppsConfig()?.enabled ?? null;
+}
+
 /**
- * The answer, with a failure kept apart from a "no": `null` means the question
- * could not be answered (the API is down or too slow), which the page may want
- * to try again before it gives up. `force` skips the failure window.
+ * The whole answer, with a failure kept apart from a "no": `null` means the
+ * question could not be answered (the API is down or too slow), which the page
+ * may want to try again before it gives up. `force` skips the failure window.
  */
-export function probeAppsLandingDetailed(force = false): Promise<boolean | null> {
-  const known = cachedAppsLanding();
+export function probePublicAppsConfig(force = false): Promise<PublicAppsConfig | null> {
+  const known = cachedPublicAppsConfig();
   if (known !== null) return Promise.resolve(known);
   if (inflight) return inflight;
   if (!force && failedAt && Date.now() - failedAt < RETRY_AFTER_MS) {
@@ -171,6 +196,11 @@ export function probeAppsLandingDetailed(force = false): Promise<boolean | null>
     inflight = null;
   });
   return inflight;
+}
+
+/** `enabled`, with a failure kept apart from a "no" (see `probePublicAppsConfig`). */
+export async function probeAppsLandingDetailed(force = false): Promise<boolean | null> {
+  return (await probePublicAppsConfig(force))?.enabled ?? null;
 }
 
 /** True only on a clean 200 `{ enabled: true }`. */

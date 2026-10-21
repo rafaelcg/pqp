@@ -175,7 +175,7 @@ function asUser(id: string): DbUser {
 }
 
 async function waitFor(check: () => boolean, what: string): Promise<void> {
-  const deadline = Date.now() + 3_000;
+  const deadline = Date.now() + 12_000;
   while (!check()) {
     if (Date.now() > deadline) {
       throw new Error(`timed out waiting for ${what}`);

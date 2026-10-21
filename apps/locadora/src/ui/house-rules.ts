@@ -9,7 +9,7 @@ import type { Strings } from "../i18n";
 import { h } from "./dom";
 import { icon, type IconName } from "./top-bar";
 
-export type HouseRulesStrings = Pick<Strings, "rules.title" | "rules.stamp" | "rules.1" | "privacy" | "rules.3" | "rules.sync">;
+export type HouseRulesStrings = Pick<Strings, "rules.title" | "rules.stamp" | "rules.1" | "privacy" | "rules.3" | "rules.sync" | "rules.guest">;
 
 export interface HouseRulesOptions {
   t: HouseRulesStrings;
@@ -19,6 +19,11 @@ export interface HouseRulesOptions {
    * The `privacy` line stays as it is, because it is about the game file and that is still true.
    */
   synced?: boolean;
+  /**
+   * The signed-out guest player (`hello.guest`): one more line says the shelf lives in this browser only, apart
+   * from any account. Never together with `synced`, which a guest cannot have.
+   */
+  guest?: boolean;
 }
 
 export interface HouseRules {
@@ -32,7 +37,8 @@ export function createHouseRules(opts: HouseRulesOptions): HouseRules {
     ["shield", t["rules.1"]],
     ["screen", t.privacy],
     ["check", t["rules.3"]],
-    ...(opts.synced ? ([["cloud", t["rules.sync"]]] as Array<[IconName, string]>) : []),
+    ...(opts.synced && !opts.guest ? ([["cloud", t["rules.sync"]]] as Array<[IconName, string]>) : []),
+    ...(opts.guest ? ([["device", t["rules.guest"]]] as Array<[IconName, string]>) : []),
   ];
   const headingId = "loc-rules-heading";
   const element = h(

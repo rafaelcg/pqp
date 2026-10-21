@@ -702,8 +702,14 @@ describe("apps_landing against the public apps config the pages read", () => {
     const api = readFileSync(path.join(serverSrc, "api/index.ts"), "utf8");
     const fn = /function servePublicAppsConfig[\s\S]*?\n\}\n/.exec(api)?.[0];
     expect(fn, "servePublicAppsConfig not found").toBeTruthy();
-    expect(fn).toContain('JSON.stringify({ enabled: isEnabled("apps_landing") })');
+    expect(fn).toContain("JSON.stringify(await publicAppsConfig())");
     expect(fn).not.toMatch(/authorization|resolveAuth/i);
+    const body = readFileSync(path.join(serverSrc, "apps/public-config.ts"), "utf8");
+    expect(body).toContain('isEnabled("apps_landing")');
+    expect(body).toContain('isEnabled("locadora_guest")');
+    expect(body).toContain('isEnabled("locadora_saves_announced")');
+    // no credential is read, and every flag is read globally (no `{ serverId }`)
+    expect(body).not.toMatch(/resolveAuth|headers\.authorization|isEnabled\("[a-z_]+",\s*\{/);
     const matched = api.indexOf("servePublicAppsConfig(req, res);");
     const router = api.indexOf("router.match(method, pathname)", matched);
     expect(matched, "route is not matched in handleApi").toBeGreaterThan(0);
@@ -713,7 +719,7 @@ describe("apps_landing against the public apps config the pages read", () => {
   it("the client asks that route with no credential and the edge asks it too", () => {
     const lib = readFileSync(path.join(clientSrc, "lib/apps-landing.ts"), "utf8");
     expect(lib).toContain("/api/public/apps/config");
-    expect(lib).toMatch(/body\.enabled !== "boolean"/);
+    expect(lib).toMatch(/publicAppsConfigSchema\.safeParse/);
     expect(lib).not.toMatch(/authorization/i);
     const middleware = readFileSync(
       path.resolve(here, "../../../client/functions/_middleware.ts"),
@@ -728,5 +734,40 @@ describe("apps_landing against the public apps config the pages read", () => {
       "utf8",
     );
     expect(dashboard).toMatch(/\bapps_landing:\s*"/);
+  });
+});
+
+/**
+ * `locadora_guest` (guest play) and `locadora_saves_announced` (the public
+ * cloud-saves sentence): two global flags on the same public route, read by the
+ * guest player, the Locadora page and the edge. Guest play needs the landing
+ * flag too, which the server decides, so the client never has to combine them.
+ */
+describe("locadora_guest and locadora_saves_announced against the public apps config", () => {
+  it("are global, off by default, and named under the route that serves them", () => {
+    expect(FEATURE_FLAGS.locadora_guest.perServer).toBe(false);
+    expect(FEATURE_FLAGS.locadora_guest.codeDefault).toBe(false);
+    expect(FEATURE_FLAGS.locadora_guest.clientVia).toBe("GET /api/public/apps/config (guest)");
+    expect(FEATURE_FLAGS.locadora_saves_announced.perServer).toBe(false);
+    expect(FEATURE_FLAGS.locadora_saves_announced.codeDefault).toBe(false);
+    expect(FEATURE_FLAGS.locadora_saves_announced.clientVia).toBe("GET /api/public/apps/config (cloudSaves)");
+  });
+
+  it("guest play is only ever offered with the landing flag on", () => {
+    const body = readFileSync(path.join(serverSrc, "apps/public-config.ts"), "utf8");
+    expect(body).toMatch(/if \(!enabled \|\| !isEnabled\("locadora_guest"\) \|\| !origin\)/);
+  });
+
+  it("the client reads both fields through the shared schema and the edge reads guest", () => {
+    const lib = readFileSync(path.join(clientSrc, "lib/apps-landing.ts"), "utf8");
+    expect(lib).toContain("publicAppsConfigSchema");
+    const middleware = readFileSync(path.resolve(here, "../../../client/functions/_middleware.ts"), "utf8");
+    expect(middleware).toMatch(/body\.guest/);
+  });
+
+  it("the dashboard has a note for each", () => {
+    const dashboard = readFileSync(path.resolve(here, "../../../tools/admin-dashboard/site/novo.js"), "utf8");
+    expect(dashboard).toMatch(/\blocadora_guest:\s*"/);
+    expect(dashboard).toMatch(/\blocadora_saves_announced:\s*"/);
   });
 });

@@ -85,6 +85,13 @@ describe("defaults", () => {
     expect(bindingsEqual(MAC.openNewDm, MAC.toggleMute)).toBe(false);
   });
 
+  it("binds the app chat toggle to Cmd/Ctrl+Shift+. and to no other action's chord", () => {
+    expect(MAC.toggleAppChat).toMatchObject({ code: "Period", meta: true, ctrl: false, shift: true });
+    expect(WIN.toggleAppChat).toMatchObject({ code: "Period", meta: false, ctrl: true, shift: true });
+    expect(findBindingConflict(MAC, "toggleAppChat", MAC.toggleAppChat)).toBeNull();
+    expect(findBindingConflict(WIN, "toggleAppChat", WIN.toggleAppChat)).toBeNull();
+  });
+
   it("uses Alt arrows for channel motion, Shift for unread", () => {
     expect(MAC.previousChannel).toMatchObject({
       code: "ArrowUp",

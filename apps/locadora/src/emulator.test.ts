@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { audioHub } from "./audio";
 import {
   buildDefaultControllers,
   createEmulatorRuntime,
@@ -645,6 +646,55 @@ describe("sound", () => {
     expect(volumes).toEqual([0, 0.5]);
   });
 
+  it("silences the frame's audio hub, which is what a core with its own audio driver answers to (the bsnes build)", async () => {
+    const runtime = await running();
+    // the frontend's setter exists and reaches nothing: the SNES core never makes an OpenAL source
+    h.instance().volume = 0.5;
+    h.instance().setVolume = () => {};
+    runtime.setMuted(true);
+    expect(audioHub().silent).toBe(true);
+    runtime.setMuted(false);
+    expect(audioHub().silent).toBe(false);
+  });
+
+  it("silences the hub when EmulatorJS has no volume setter at all", async () => {
+    const runtime = await running();
+    runtime.setMuted(true);
+    expect(audioHub().silent).toBe(true);
+    runtime.setMuted(false);
+    expect(audioHub().silent).toBe(false);
+  });
+
+  it("mutes before the console exists, and a new game does not unmute it", async () => {
+    const fresh = createEmulatorRuntime();
+    expect(() => fresh.setMuted(true)).not.toThrow();
+    expect(audioHub().silent).toBe(true);
+    const started = fresh.start(options());
+    await vi.advanceTimersByTimeAsync(25);
+    await started;
+    expect(audioHub().silent).toBe(true);
+    fresh.setMuted(false);
+    expect(audioHub().silent).toBe(false);
+  });
+
+  it("the person's mute wins over turbo's: turbo ending leaves it silent, turbo alone gives the sound back", async () => {
+    const runtime = await running();
+    runtime.setMuted(true);
+    runtime.setTurbo(8);
+    expect(audioHub().silent).toBe(true);
+    runtime.setTurbo(0);
+    expect(audioHub().silent).toBe(true);
+    runtime.setMuted(false);
+    expect(audioHub().silent).toBe(false);
+    runtime.setTurbo(8);
+    expect(audioHub().silent).toBe(true);
+    runtime.setMuted(true);
+    runtime.setMuted(false);
+    expect(audioHub().silent).toBe(true);
+    runtime.setTurbo(0);
+    expect(audioHub().silent).toBe(false);
+  });
+
   it("never unmutes into silence, and does nothing before the setter exists", async () => {
     const runtime = await running();
     expect(() => runtime.setMuted(true)).not.toThrow();
@@ -683,6 +733,15 @@ describe("RetroArch's own menu stays shut", () => {
       expect(cfg.split("\n"), line).toContain(line);
     }
     expect(cfg.endsWith("\n")).toBe(true);
+  });
+
+  it("tells RetroArch to fill the canvas (aspect \"Full\", index 24): the stage's box IS the picture, no second letterbox inside it", async () => {
+    const Manager = frontendWithConfig();
+    await ready();
+    const lines = new Manager().getRetroArchCfg().split("\n");
+    expect(lines).toContain("aspect_ratio_index = 24");
+    // it is the last of RetroArch's aspect table, FULL: 4:3 0, ... 32:9 19, config 20, square 21, core 22, custom 23, full 24
+    expect(lines.filter((line) => line.startsWith("aspect_ratio_index"))).toHaveLength(1);
   });
 
   it("is written once however many games are started", async () => {

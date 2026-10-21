@@ -136,6 +136,9 @@ const StreamersPage = lazy(() =>
 const AppsPage = lazy(() =>
   import("./pages/apps-page").then((m) => ({ default: m.AppsPage })),
 );
+const LocadoraGuestPage = lazy(() =>
+  import("./pages/locadora-guest-page").then((m) => ({ default: m.LocadoraGuestPage })),
+);
 const LocadoraPage = lazy(() =>
   import("./pages/locadora-page").then((m) => ({ default: m.LocadoraPage })),
 );
@@ -414,6 +417,12 @@ function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
         <Route path="/apps" element={<AppsPage />} />
         <Route path="/apps/locadora" element={<LocadoraPage />} />
         <Route path="/locadora" element={<LocadoraPage />} />
+        {/* The guest player: Locadora with no account. Needs `locadora_guest`
+            on top of `apps_landing` (the public config's `guest`); off, it is
+            a redirect home like the pages above. `/locadora/jogar` is the
+            address people share, `/apps/locadora/play` the same page. */}
+        <Route path="/locadora/jogar" element={<LocadoraGuestPage />} />
+        <Route path="/apps/locadora/play" element={<LocadoraGuestPage />} />
         <Route
           path="/discord"
           element={<Navigate to="/vem#importar" replace />}

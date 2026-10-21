@@ -161,6 +161,28 @@ export function createSyncApi(client: PortClient): SyncApi {
   };
 }
 
+/**
+ * `ui.activity`: what the person is doing right now, so the page can pick a
+ * calm moment for something of its own (the guest player draws its sign-up
+ * card only while the app says `paused` or `browsing`). On this module for the
+ * same reason as `sync.*`: only Locadora imports it, so every other app builds
+ * byte for byte as before.
+ */
+export type ActivityState = "playing" | "paused" | "browsing";
+
+export interface ActivityApi {
+  /** Rejects with `invalid` on a host that predates it; an app treats any failure as "the page does not care". */
+  report(state: ActivityState): Promise<void>;
+}
+
+export function createActivityApi(client: PortClient): ActivityApi {
+  return {
+    async report(state) {
+      await client.request<unknown>("ui.activity", { state });
+    },
+  };
+}
+
 const PLATFORM_API = 1;
 const HELLO_RETRY_MS = 1000;
 
@@ -187,8 +209,8 @@ function isHello(data: unknown): data is BridgeHello {
   );
 }
 
-/** `connect()`, plus the `sync.*` calls on the same port. Call it once, instead of `connect`. */
-export function connectWithSync(options: ConnectOptions = {}): Promise<{ app: PqpApp; sync: SyncApi }> {
+/** `connect()`, plus the `sync.*` and `ui.activity` calls on the same port. Call it once, instead of `connect`. */
+export function connectWithSync(options: ConnectOptions = {}): Promise<{ app: PqpApp; sync: SyncApi; activity: ActivityApi }> {
   const host: HandshakeWindow | undefined = options.window ?? (globalThis as unknown as { window?: HandshakeWindow }).window;
   if (!host) return Promise.reject(new PqpAppError("unavailable", "connectWithSync() needs a browser window"));
   const parent = host.parent;
@@ -232,7 +254,7 @@ export function connectWithSync(options: ConnectOptions = {}): Promise<{ app: Pq
         }
         settled = true;
         clearTimeout(timer);
-        resolve({ app: createApp(client, push), sync: createSyncApi(client) });
+        resolve({ app: createApp(client, push), sync: createSyncApi(client), activity: createActivityApi(client) });
       });
     }
     host.addEventListener("message", onMessage);

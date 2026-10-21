@@ -11,9 +11,13 @@
  * asks the flag before it writes a head (`client/functions/_middleware.ts`),
  * and with the flag off or unknown the shipped document is served untouched.
  *
- * `/apps`, `/apps/locadora` and `/locadora` are the three paths. The last is
- * the short link people type and paste, and it is the same page as
+ * `/apps`, `/apps/locadora` and `/locadora` are the three landing paths. The
+ * last is the short link people type and paste, and it is the same page as
  * `/apps/locadora`, canonicalised there the way `/claim` is to `/garanta`.
+ * The guest player is a fourth page, `/locadora/jogar` (and the same page at
+ * `/apps/locadora/play`), which also needs `locadora_guest`
+ * (`appsPageNeedsGuest`), unfurls with the same "Chegou a Locadora" card and
+ * is `noindex`: search should land on the landing, which explains it.
  *
  * Constant copy, so nothing is fetched here. DELIBERATELY DEPENDENCY-FREE,
  * like its siblings (wrangler bundles the middleware outside the workspace);
@@ -32,13 +36,24 @@ import {
 
 const CANONICAL_ORIGIN = "https://pqp.gg";
 
-export type AppsPage = "apps" | "locadora";
+export type AppsPage = "apps" | "locadora" | "play";
 
 /** The canonical path of each page. */
 export const APPS_PAGE_PATH: Record<AppsPage, string> = {
   apps: "/apps",
   locadora: "/apps/locadora",
+  // The guest player: the short pt-BR address is the one people share, and
+  // `/apps/locadora/play` is the same page.
+  play: "/locadora/jogar",
 };
+
+/**
+ * The runtime flag each page needs besides `apps_landing`: the guest player
+ * exists only while `locadora_guest` is on too (the public config's `guest`).
+ */
+export function appsPageNeedsGuest(page: AppsPage): boolean {
+  return page === "play";
+}
 
 /**
  * The page behind a path, or null for every other path.
@@ -53,6 +68,9 @@ export function appsPageFromMetaPath(pathname: string): AppsPage | null {
   if (normalized === "/apps/locadora" || normalized === "/locadora") {
     return "locadora";
   }
+  if (normalized === "/locadora/jogar" || normalized === "/apps/locadora/play") {
+    return "play";
+  }
   return null;
 }
 
@@ -64,7 +82,20 @@ interface AppsCopy {
   /** Site-relative share card, 1200 x 630. */
   image: string;
   imageAlt: Text;
+  /**
+   * The guest player is a tool, not a page to rank: its card unfurls in a chat
+   * like the landing's, but search sends people to `/apps/locadora`.
+   */
+  robots: "index, follow" | "noindex, nofollow";
 }
+
+/** "Chegou a Locadora no pqp": the announcement's share card, for the Locadora page and the player. */
+const LOCADORA_CARD = "/images/og-locadora-chegou.jpg";
+const LOCADORA_CARD_ALT: Text = {
+  "pt-BR": "Chegou a Locadora no pqp: o letreiro de neon da Locadora num pôr do sol retrô em pixel art, com cartuchos e controles.",
+  en: "Locadora is here on pqp: the Locadora neon sign over a retro pixel-art sunset, with cartridges and controllers.",
+  es: "Llegó Locadora a pqp: el letrero de neón de Locadora sobre un atardecer retro en pixel art, con cartuchos y controles.",
+};
 
 export const APPS_COPY: Record<AppsPage, AppsCopy> = {
   apps: {
@@ -85,25 +116,39 @@ export const APPS_COPY: Record<AppsPage, AppsCopy> = {
       en: "A neighbourhood street at dusk with the Locadora neon storefront, in pixel art.",
       es: "Una calle de barrio al atardecer con la fachada de neón de la Locadora, en pixel art.",
     },
+    robots: "index, follow",
   },
   locadora: {
     title: {
-      "pt-BR": "Locadora no pqp | Teus jogos retrô na call",
-      en: "Locadora on pqp | Your retro games on the call",
-      es: "Locadora en pqp | Tus juegos retro en la llamada",
+      "pt-BR": "Locadora no pqp | Teus jogos antigos, de volta",
+      en: "Locadora on pqp | Your old games, back",
+      es: "Locadora en pqp | Tus juegos de siempre, de vuelta",
     },
     description: {
       "pt-BR":
-        "Monta tua prateleira de pixel art com os teus jogos de NES, SNES, Game Boy e GBA e joga na call com a galera por perto. O arquivo do jogo nunca sai do teu aparelho.",
-      en: "Build a pixel-art shelf of your own NES, SNES, Game Boy and GBA games and play on the call with your friends around. The game file never leaves your device.",
-      es: "Arma tu estante de pixel art con tus propios juegos de NES, SNES, Game Boy y GBA y juega en la llamada con tus amigos cerca. El archivo del juego nunca sale de tu dispositivo.",
+        "Joga teus jogos de NES, SNES, Game Boy, Game Boy Color e Game Boy Advance no navegador, sem instalar nada. Salva em 4 slots, turbo de 1x a 10x. O arquivo nunca sai do teu aparelho.",
+      en: "Play your own NES, SNES, Game Boy, Game Boy Color and Game Boy Advance games in your browser, nothing to install. Save to 4 slots, turbo from 1x to 10x. The file never leaves your device.",
+      es: "Juega tus juegos de NES, SNES, Game Boy, Game Boy Color y Game Boy Advance en el navegador, sin instalar nada. Guarda en 4 slots, turbo de 1x a 10x. El archivo nunca sale de tu dispositivo.",
     },
-    image: "/images/og-locadora.jpg",
-    imageAlt: {
-      "pt-BR": "Arte de capa da Locadora: letreiro de neon, cartuchos e controles num pôr do sol retrô.",
-      en: "Locadora key art: a neon sign, cartridges and controllers over a retro sunset.",
-      es: "Arte de portada de Locadora: letrero de neón, cartuchos y controles sobre un atardecer retro.",
+    image: LOCADORA_CARD,
+    imageAlt: LOCADORA_CARD_ALT,
+    robots: "index, follow",
+  },
+  play: {
+    title: {
+      "pt-BR": "Jogar na Locadora | pqp",
+      en: "Play at Locadora | pqp",
+      es: "Jugar en Locadora | pqp",
     },
+    description: {
+      "pt-BR":
+        "Abre a Locadora e joga um jogo teu de NES, SNES ou Game Boy no navegador, sem conta. O arquivo nunca sai do teu aparelho.",
+      en: "Open Locadora and play a game of yours for NES, SNES or Game Boy in your browser, no account needed. The file never leaves your device.",
+      es: "Abre Locadora y juega un juego tuyo de NES, SNES o Game Boy en el navegador, sin cuenta. El archivo nunca sale de tu dispositivo.",
+    },
+    image: LOCADORA_CARD,
+    imageAlt: LOCADORA_CARD_ALT,
+    robots: "noindex, nofollow",
   },
 };
 
@@ -166,7 +211,7 @@ export function renderAppsHead(
     `<meta name="twitter:description" content="${e(description)}" />`,
     `<meta name="twitter:image" content="${e(image)}" />`,
     `<meta name="twitter:image:alt" content="${e(alt)}" />`,
-    `<meta name="robots" content="index, follow" />`,
+    `<meta name="robots" content="${copy.robots}" />`,
     `<meta name="pqp:locale" content="${locale}" />`,
   ].join("\n    ");
 }

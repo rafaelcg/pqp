@@ -1,4 +1,5 @@
 import "./shim";
+import "./audio";
 import "@emulatorjs/emulatorjs/data/emulator.css";
 import "./styles/base.css";
 import "./styles/stage.css";
@@ -7,7 +8,8 @@ import "./styles/shelf.css";
 import "./styles/onboarding.css";
 import "./styles/slots.css";
 import "./styles/flow.css";
-import { applyTheme, connectWithSync, type PqpApp, type SyncApi } from "@pqp/app-sdk";
+import { applyTheme, connectWithSync, type ActivityApi, type PqpApp, type SyncApi } from "@pqp/app-sdk";
+import { createActivityReporter } from "./activity";
 import { createGameSession, type GameInput, type GameSession, type StartIntent } from "./game-session";
 import { EMULATOR_LANGUAGE, pickLocale, STRINGS, type Strings } from "./i18n";
 import type { Platform } from "./keymap";
@@ -53,9 +55,7 @@ const loadingSection = el<HTMLElement>("v-loading");
 const play = el<HTMLElement>("v-play");
 const stageEl = el<HTMLElement>("stage");
 const gameEl = el<HTMLElement>("game");
-const bar = el<HTMLElement>("bar");
 const watchView = el<HTMLElement>("v-watch");
-const shareButton = el<HTMLButtonElement>("share");
 const sharingLine = el<HTMLElement>("sharing");
 const noticesPanel = el<HTMLElement>("notices");
 const noticesClose = el<HTMLButtonElement>("notices-close");
@@ -81,10 +81,8 @@ function render(screen: Screen) {
   endedLine.hidden = !dead;
   if (dead) closeNotices();
   if (screen !== "palco") {
-    // the share control and its line belong to the game on screen (`syncShare` brings them back)
-    shareButton.hidden = true;
+    // the share indicator belongs to the game on screen (`syncShare` brings it back)
     sharingLine.hidden = true;
-    bar.hidden = true;
   }
 }
 screens.onChange(render);
@@ -105,9 +103,10 @@ async function main() {
 
   let app: PqpApp;
   let syncApi: SyncApi;
+  let activityApi: ActivityApi;
   try {
-    // `connect()` plus the port's `sync.*` calls (Saves na conta), on its own SDK module so other apps build unchanged
-    ({ app, sync: syncApi } = await connectWithSync());
+    // `connect()` plus the port's `sync.*` and `ui.activity` calls, on their own SDK module so other apps build unchanged
+    ({ app, sync: syncApi, activity: activityApi } = await connectWithSync());
   } catch {
     statusLine.textContent = "";
     endedLine.textContent = t.outside;
@@ -137,6 +136,13 @@ async function main() {
   // A refusal is the quiet "off". Anything else (the account did not answer, this browser keeps nothing) is a
   // `syncProblem`: logged by `openSync`, drawn on the shelf and in the drawer, never a feature that is just missing.
   const isSpectator = app.hello.self.role === "spectator";
+  // The signed-out guest player (pqp.gg/locadora/jogar): no account behind it, so nothing here asks for one. The
+  // account saves are never opened (the host refuses them anyway), there is no share to probe, and one more line on
+  // the receipt says the shelf lives in this browser only. The page is told when a game runs, pauses or leaves, so
+  // its own card never lands on a running game.
+  const isGuest = app.hello.guest === true;
+  if (isGuest) root.dataset.guest = "true";
+  const activity = createActivityReporter(isGuest ? (state) => activityApi.report(state) : null);
   let sync: SyncAccount | null = null;
   let syncProblem: SyncProblem | null = null;
   const stopSyncWatch: Array<() => void> = [];
@@ -150,7 +156,7 @@ async function main() {
     // what the account holds changes as saves go up: the line under the meter follows
     if (sync) stopSyncWatch.push(sync.onChange(() => topBar?.update({ cloud: cloudChip() })));
   }
-  if (!isSpectator) adoptSync(await openSync(syncApi, store));
+  if (!isSpectator && !isGuest) adoptSync(await openSync(syncApi, store));
   /** What the shelf says about the account: its usage, or why it is not working, or nothing where the feature is off. */
   function cloudChip(): CloudChip | null {
     if (sync) return { state: sync.mode, used: sync.usage.used, cap: sync.usage.cap };
@@ -177,7 +183,7 @@ async function main() {
   /** "Tentar de novo", on the shelf: asks the account again and says what came of it. */
   let retryingSync = false;
   async function retrySync() {
-    if (retryingSync || isSpectator) return;
+    if (retryingSync || isSpectator || isGuest) return;
     retryingSync = true;
     balcaoToaster.show({ text: t["sync.retrying"] });
     try {
@@ -195,7 +201,6 @@ async function main() {
   function applyLabels() {
     setText("title", t.title);
     setText("loading", t["load.steps"].split("·")[0]?.trim() ?? t.loading);
-    shareButton.textContent = sharing ? t.shareStop : t.share;
     setText("notices-title", t.noticesTitle);
     setText("notices-intro", t.noticesIntro);
     noticesClose.textContent = t.noticesHide;
@@ -344,29 +349,36 @@ async function main() {
   const isWatcher = app.hello.self.role === "spectator";
   let shareAvailable = false;
   let sharing = false;
+  let shareBusy = false;
+  /** The HUD's share pill and the "sharing" chip follow what the platform said: nothing is drawn where sharing is not offered. */
   function syncShare() {
     const playing = root.dataset.view === "palco";
-    shareButton.hidden = !(shareAvailable && playing);
-    bar.hidden = shareButton.hidden;
-    shareButton.textContent = sharing ? t.shareStop : t.share;
-    shareButton.setAttribute("aria-pressed", String(sharing));
+    session?.setShare(shareAvailable ? { on: sharing, busy: shareBusy } : null);
     sharingLine.hidden = !(sharing && playing);
-    sharingLine.textContent = sharing ? t.sharing : "";
+    sharingLine.textContent = sharing ? t.sharingLive : "";
+    sharingLine.title = sharing ? t.sharing : "";
   }
   screens.onChange(() => syncShare());
-  shareButton.addEventListener("click", async () => {
-    shareButton.disabled = true;
-    const outcome = await setShared(app, !sharing);
-    shareButton.disabled = false;
-    if (outcome.kind === "shared") {
+  async function toggleShare() {
+    if (shareBusy || !shareAvailable) return;
+    const wantOn = !sharing;
+    shareBusy = true;
+    syncShare();
+    const outcome = await setShared(app, wantOn);
+    shareBusy = false;
+    if (outcome.kind === "shared" && outcome.on === wantOn) {
       sharing = outcome.on;
+      if (sharing) session.toast(t.sharing);
+    } else if (outcome.kind === "shared") {
+      // the platform answered and did not do it (no call to share into, the picker was closed): said, never nothing
+      sharing = outcome.on;
+      session.toast(t.shareFailed);
     } else {
-      sharingLine.hidden = false;
-      sharingLine.textContent = outcome.kind === "refused" ? t.shareRefused : t.shareFailed;
+      session.toast(outcome.kind === "refused" ? t.shareRefused : t.shareFailed);
       if (outcome.kind === "refused") shareAvailable = false;
     }
     syncShare();
-  });
+  }
 
   /** The line a watcher reads: whose game is on the screen they are looking at. */
   function renderWatching(roster: Awaited<ReturnType<PqpApp["participants"]["get"]>>) {
@@ -473,7 +485,7 @@ async function main() {
         }),
       );
     }
-    nodes.push(createHouseRules({ t, compact: last !== null, synced: sync !== null }).element);
+    nodes.push(createHouseRules({ t, compact: last !== null, synced: sync !== null, guest: isGuest }).element);
     counter.replaceChildren(...nodes);
   }
 
@@ -604,7 +616,10 @@ async function main() {
     get syncProblem() {
       return syncProblem;
     },
+    onActivity: (state) => activity.report(state),
+    onShare: () => void toggleShare(),
     onLeave: (_reason, item) => {
+      activity.report("browsing");
       if (isFullscreen) {
         void askFullscreen(false).catch(() => undefined);
       }
@@ -805,6 +820,9 @@ async function main() {
   } else {
     await showBalcao();
   }
+  activity.report("browsing");
+  // a guest has no call to share into, and the host would refuse: no probe
+  if (isGuest) return;
   // one stop request tells whether the platform offers sharing here (see src/share.ts)
   shareAvailable = await probeShare(app);
   syncShare();

@@ -61,6 +61,10 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   },
   // New with the flag, so there was no old reader: this is its definition.
   sfu_region_scoped_calls: offWords,
+  // New with the flag, so there was no old reader: this is its definition.
+  sfu_video_budget_per_box: offWords,
+  // New with the flag, so there was no old reader: this is its definition.
+  sfu_video_price_calibrated: offWords,
   voice_mesh_resume_requires_cap: (raw) => raw === "true",
   turn_prefer_static: (raw) => raw === "true",
   read_cache: offWords,
@@ -163,10 +167,15 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   hint_budget: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
   apps: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
+  app_pane_layout_v2: offWords,
   locadora_share: (raw) => raw === "true",
   locadora_save_sync: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
   apps_landing: (raw) => raw === "true",
+  // New with the flags, so there was no old reader: this is their definition.
+  locadora_guest: (raw) => raw === "true",
+  locadora_saves_announced: (raw) => raw === "true",
 };
 
 const SAMPLES = [

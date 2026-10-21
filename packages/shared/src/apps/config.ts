@@ -107,6 +107,71 @@ export const appsConfigSchema = z
     /** The apps origin (`APPS_ORIGIN`), or null when apps cannot run here. */
     origin: z.string().nullable(),
     apps: z.array(appConfigEntrySchema),
+    /**
+     * The runtime flag `app_pane_layout_v2` (global, default on): the call
+     * keeps its controls in the column beside the app, the share picture is a
+     * capped tile, and the chat can be put away. Only `false` turns it off; an
+     * API from before the flag sends nothing, which a client reads as on.
+     */
+    paneLayoutV2: z.boolean().optional(),
   })
   .strip();
 export type AppsConfig = z.infer<typeof appsConfigSchema>;
+
+/**
+ * `GET /api/public/apps/config`: what the signed-out pages of pqp Apps need,
+ * identical for every caller and publicly cacheable for a minute.
+ *
+ * - `enabled`: the runtime flag `apps_landing` (the pages exist at all).
+ * - `guest`: Locadora can be played without an account RIGHT NOW: `apps_landing`
+ *   and `locadora_guest` are on, this deployment has an apps origin, and
+ *   Locadora is `live` with the operator's master switch on and a valid stored
+ *   manifest. Only then is `locadora` filled in.
+ * - `cloudSaves`: the runtime flag `locadora_saves_announced`, which only
+ *   decides whether the public copy may say "saves na nuvem". It turns nothing
+ *   on; `locadora_save_sync` is per server and a visitor has none.
+ * - `locadora`: the slice of the built manifest the guest player's frame host
+ *   needs (bundle URL, assets with their hashes, capabilities, caps), built by
+ *   the server from the stored manifest, never from a request. No i18n, no
+ *   server, no session: a guest has none.
+ *
+ * An older API answers only `{ enabled }`; the defaults make that "no guest
+ * play, no cloud-saves line", which is the safe reading.
+ */
+export const publicGuestAppSchema = z
+  .object({
+    id: shape.id,
+    version: shape.version,
+    entry: z.object({ url: z.string() }).strip(),
+    capabilities: shape.capabilities,
+    state: shape.state,
+    events: shape.events,
+    assets: z
+      .array(
+        z
+          .object({
+            name: z.string(),
+            url: z.string(),
+            sha256: z.string(),
+            bytes: z.number().int().min(0),
+          })
+          .strip(),
+      )
+      .default([]),
+  })
+  .strip();
+export type PublicGuestApp = z.infer<typeof publicGuestAppSchema>;
+
+export const publicAppsConfigSchema = z
+  .object({
+    enabled: z.boolean(),
+    guest: z.boolean().default(false),
+    cloudSaves: z.boolean().default(false),
+    locadora: z
+      .object({ origin: z.string(), app: publicGuestAppSchema })
+      .strip()
+      .nullable()
+      .default(null),
+  })
+  .strip();
+export type PublicAppsConfig = z.infer<typeof publicAppsConfigSchema>;

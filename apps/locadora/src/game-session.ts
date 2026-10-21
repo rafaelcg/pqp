@@ -19,7 +19,7 @@
  */
 import type { PqpApp } from "@pqp/app-sdk";
 import { createEmulatorRuntime, type EjsRuntime, type EmulatorLanguage } from "./emulator";
-import { createHud, type Hud, type HudAction } from "./hud";
+import { createHud, type Hud, type HudAction, type HudShare } from "./hud";
 import type { Strings } from "./i18n";
 import type { Platform as ConsoleGroup } from "./keymap";
 import {
@@ -96,6 +96,8 @@ export interface SessionContext {
   openExport?(): void;
   /** The game is over for now: the shelf takes over. */
   onLeave(reason: LeaveReason, item: LibraryItem): void;
+  /** The person pressed the HUD's share pill (it is only drawn where sharing is offered). */
+  onShare?(): void;
   /**
    * Saves na conta (`locadora_save_sync`): the account this session's saves are copied to, or null where it is
    * off. Null keeps everything exactly as it was: the saves stay on this device and nothing else is asked.
@@ -107,6 +109,11 @@ export interface SessionContext {
    */
   syncProblem?: SyncProblem | null;
   now?: () => number;
+  /**
+   * The game started running (`playing`) or was paused (`paused`). The page around the frame uses it to keep its
+   * own things (the guest player's sign-up card) off a running game. Leaving is `onLeave`.
+   */
+  onActivity?(state: "playing" | "paused"): void;
   /** The console behind the session; tests stand a fake in. */
   createRuntime?: () => EjsRuntime;
 }
@@ -121,13 +128,16 @@ export interface GameSession {
   setFullscreen(full: boolean): void;
   /** The stage laid itself out again: the HUD's screen pill follows. */
   syncStage(): void;
+  /** Whether the HUD offers sharing the pane, and whether it is on: `null` draws nothing (sharing is not offered here). */
+  setShare(share: HudShare): void;
+  /** A line over the picture, in the HUD's own toaster; nothing before a game is up. */
+  toast(text: string): void;
   /** A key was rebound in the controller map: the running console follows. */
   applyKeymap(platform: ConsoleGroup, map: Readonly<Record<string, string>>): void;
 }
 
-/** How often the core's real frame size is asked for, and for how long, once the game runs. */
-const SIZE_POLL_MS = 200;
-const SIZE_POLL_TRIES = 25;
+/** How often the core's frame size is asked for while the game runs (a change of the canvas's size asks sooner). */
+export const SIZE_WATCH_MS = 500;
 /** Ejetar waits this long, at most, for what is still going up to the account. */
 export const EJECT_SYNC_WAIT_MS = 10_000;
 /** Loading a state the instant the core says `start` can beat its first frame. */
@@ -165,6 +175,8 @@ export function createGameSession(ctx: SessionContext): GameSession {
   let thumbUrls: string[] = [];
   let timers: Array<ReturnType<typeof setTimeout>> = [];
   let muted = prefs.prefs.muted;
+  /** What the page last said about sharing: the HUD draws it, and a HUD made later starts from it. */
+  let shareState: HudShare = null;
   let started = false;
   /** The core's error screen is up: it is said once, whatever fires after it. */
   let errorShown = false;
@@ -175,6 +187,7 @@ export function createGameSession(ctx: SessionContext): GameSession {
   let nameInitial = "";
   let removeFocusWatch: (() => void) | null = null;
   let removeCrashWatch: (() => void) | null = null;
+  let removeSizeWatch: (() => void) | null = null;
   /* Saves na conta: this game's copy on the account, what boot found, and the sheets waiting to be asked */
   let gameSync: GameSync | null = null;
   let syncOffer: ContinueOffer | null = null;
@@ -191,7 +204,10 @@ export function createGameSession(ctx: SessionContext): GameSession {
 
   /* ---- the play clock ---- */
   function clockOn() {
-    if (runningSince === null) runningSince = now();
+    if (runningSince === null) {
+      runningSince = now();
+      ctx.onActivity?.("playing");
+    }
   }
   function clockOff() {
     if (runningSince !== null) {
@@ -418,6 +434,9 @@ export function createGameSession(ctx: SessionContext): GameSession {
       case "eject":
         void eject();
         break;
+      case "share":
+        ctx.onShare?.();
+        break;
     }
   }
 
@@ -455,6 +474,8 @@ export function createGameSession(ctx: SessionContext): GameSession {
     removeFocusWatch = null;
     removeCrashWatch?.();
     removeCrashWatch = null;
+    removeSizeWatch?.();
+    removeSizeWatch = null;
     for (const stop of removeSyncWatch) stop();
     removeSyncWatch = [];
     gameSync?.dispose();
@@ -531,6 +552,8 @@ export function createGameSession(ctx: SessionContext): GameSession {
 
     const created = (ctx.createRuntime ?? createEmulatorRuntime)();
     runtime = created;
+    // the person's own switch is on from the first note: this reaches the frame's audio hub before the console exists
+    if (muted) created.setMuted(true);
     const savesNow = createSaves({ store, runtime: created, sha: item.sha256, autosave: prefs.prefs.autosave, requireShelf: true });
     saves = savesNow;
     gameSync =
@@ -702,11 +725,14 @@ export function createGameSession(ctx: SessionContext): GameSession {
       onSlotChange: (slot) => liveSaves.selectSlot(slot as ManualSlot),
       onPausedChange: (paused) => {
         liveSaves.setPaused(paused);
-        if (paused) clockOff();
-        else clockOn();
+        if (paused) {
+          clockOff();
+          ctx.onActivity?.("paused");
+        } else clockOn();
       },
     });
     hud.setFullscreen(ctx.isFullscreen());
+    hud.setShare(shareState);
     if (muted) {
       liveRuntime.setMuted(true);
       hud.setMuted(true);
@@ -768,19 +794,36 @@ export function createGameSession(ctx: SessionContext): GameSession {
     win.addEventListener("error", onError);
     removeCrashWatch = () => win.removeEventListener("error", onError);
 
-    // the real frame size, once the core has drawn: the pixel-perfect scale needs it
-    let tries = 0;
-    const poll = () => {
+    // The core's frame size, for as long as the game runs. A game changes its picture while it plays (a SNES game
+    // goes between 224 and 239 lines, 256 and 512 wide, and a core may report a placeholder until its first real
+    // frame), so the size read once was a size kept for good: the box was fitted to a frame the core no longer drew.
+    // It is asked again every SIZE_WATCH_MS, and at once when the canvas's own size changes (RetroArch resizes the
+    // canvas when the geometry does), and the stage lays itself out again only when the answer is a different one.
+    const readSize = () => {
       if (mine !== generation || !runtime) return;
       const size = runtime.videoSize();
-      if (size) {
-        stage.setBase(size.width, size.height);
-        return;
-      }
-      tries += 1;
-      if (tries < SIZE_POLL_TRIES) timers.push(setTimeout(poll, SIZE_POLL_MS));
+      if (size) stage.setBase(size.width, size.height);
     };
-    poll();
+    // one handle, replaced each turn: the session's timer list is for one-shot timers and would grow all game long
+    let sizeTimer: ReturnType<typeof setTimeout> | undefined;
+    const watchSize = () => {
+      readSize();
+      if (mine === generation) sizeTimer = setTimeout(watchSize, SIZE_WATCH_MS);
+    };
+    watchSize();
+    const canvasWatch =
+      typeof MutationObserver === "undefined"
+        ? null
+        : new MutationObserver(() => readSize());
+    const watchCanvas = () => {
+      const canvas = elements.game.querySelector("canvas.ejs_canvas");
+      if (canvas) canvasWatch?.observe(canvas, { attributes: true, attributeFilter: ["width", "height"] });
+    };
+    watchCanvas();
+    removeSizeWatch = () => {
+      clearTimeout(sizeTimer);
+      canvasWatch?.disconnect();
+    };
 
     // a file the console cannot run may still "start": RetroArch then sits in its own menu and the frame counter
     // never moves. That is the cartridge being bad, and the person is told so instead of being shown a menu.
@@ -953,6 +996,13 @@ export function createGameSession(ctx: SessionContext): GameSession {
     },
     syncStage() {
       hud?.syncStage();
+    },
+    setShare(share) {
+      shareState = share;
+      hud?.setShare(share);
+    },
+    toast(text) {
+      hud?.toast(text);
     },
     applyKeymap(platform, map) {
       if (playing && runtime && input && group() === platform) {

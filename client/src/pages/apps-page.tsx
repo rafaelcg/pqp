@@ -1,4 +1,4 @@
-import { ArrowRight, BookOpen, Code2, Package, Plus } from "lucide-react";
+import { ArrowRight, BookOpen, Code2, Package, Play, Plus } from "lucide-react";
 import type { CSSProperties, ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { AppsCta } from "@/components/apps-landing/apps-cta";
@@ -6,7 +6,9 @@ import { AppsLandingGate } from "@/components/apps-landing/apps-landing-gate";
 import { AppsShell } from "@/components/apps-landing/apps-shell";
 import { Seo } from "@/components/marketing/seo";
 import { Button } from "@/components/ui/button";
+import { usePublicAppsConfig } from "@/hooks/use-apps-landing";
 import { APPS_LANDING_REF, appsDocsUrl } from "@/lib/apps-landing";
+import { LOCADORA_GUEST_PATH } from "@/lib/locadora-guest";
 import { SOURCE_REPO_URL } from "@/lib/downloads";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -52,6 +54,7 @@ export function AppsPage() {
 export function AppsPageBody() {
   const { t } = useTranslation();
   const docsUrl = appsDocsUrl();
+  const guest = usePublicAppsConfig().config?.guest === true;
 
   return (
     <AppsShell creditKey="appsLanding.credit">
@@ -135,7 +138,16 @@ export function AppsPageBody() {
             <p className="text-pretty leading-relaxed text-text-secondary">
               {t("appsLanding.locadora.body")}
             </p>
-            <div>
+            <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+              {/* Only while guest play is offered (the public config's `guest`). */}
+              {guest && (
+                <Button asChild className="cta-lift h-12 px-6 text-base">
+                  <Link to={LOCADORA_GUEST_PATH} data-apps-locadora-link="play">
+                    <Play className="h-4 w-4" aria-hidden />
+                    {t("locadoraPage.hero.play")}
+                  </Link>
+                </Button>
+              )}
               <Button
                 asChild
                 variant="secondary"

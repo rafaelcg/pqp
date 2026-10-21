@@ -198,6 +198,22 @@ export const FEATURE_FLAGS = {
     codeDefault: true,
     perServer: false,
   },
+  sfu_video_budget_per_box: {
+    description:
+      "O orçamento de vídeo do SFU vale por servidor de mídia: só as salas da mesma região somam, e cada região tem o seu teto (desligado: soma o cluster inteiro contra um número só).",
+    env: "SFU_VIDEO_BUDGET_PER_BOX",
+    parseEnv: onUnlessOff,
+    codeDefault: true,
+    perServer: false,
+  },
+  sfu_video_price_calibrated: {
+    description:
+      "Preço das câmeras em sala comum pela camada que cada quadro pede de verdade: a primeira câmera custa 1,5 Mbit/s, as outras 0,4 (desligado: 1,5 Mbit/s cada, como antes).",
+    env: "SFU_VIDEO_PRICE_CALIBRATED",
+    parseEnv: onUnlessOff,
+    codeDefault: true,
+    perServer: false,
+  },
   voice_mesh_resume_requires_cap: {
     description:
       "Só segurar assento mesh por 90 s para quem declarou mesh-resume.",
@@ -966,6 +982,18 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/apps/config?serverId= (enabled)",
   },
+  app_pane_layout_v2: {
+    description:
+      "Apps: o layout novo do lado do app. A call fica numa coluna com um só conjunto de controles, a tela compartilhada vira um quadro com tamanho máximo e o chat pode ser escondido. Desligado: volta o layout antigo (controles da call no compositor do chat).",
+    env: "APP_PANE_LAYOUT_V2",
+    parseEnv: onUnlessOff,
+    // On: it is the layout the apps ship with now. The switch is a kill switch
+    // for a relayout of the call surface, read by the client on its next config
+    // refresh, no reload. Global: it is about the web client, not a server.
+    codeDefault: true,
+    perServer: false,
+    clientVia: "GET /api/apps/config?serverId= (paneLayoutV2)",
+  },
   locadora_share: {
     description:
       "Locadora compartilhando a tela do jogo: deixa o Locadora (e qualquer app de emulador) compartilhar o painel do jogo e deixa a galera assistir. Fica desligado até a resposta do advogado (Portão Legal L1b). Desligado, o servidor recusa o compartilhamento e a entrada como plateia nesses apps.",
@@ -1010,6 +1038,31 @@ export const FEATURE_FLAGS = {
     // only decides whether the front door exists.
     perServer: false,
     clientVia: "GET /api/public/apps/config (enabled)",
+  },
+  locadora_guest: {
+    description:
+      "Locadora sem conta: pqp.gg/locadora/jogar (e pqp.gg/apps/locadora/play) deixa quem não tem conta abrir a Locadora e jogar um arquivo do próprio aparelho, depois de confirmar a idade no aparelho. Sem conta, sem cookie, sem websocket: as fitas e os saves ficam só naquele navegador. Também troca o botão da página da Locadora por \"Jogar agora\" e mostra, no máximo uma vez por dia e nunca durante o jogo, o convite pra criar conta. Precisa do apps_landing ligado e da Locadora lançada (live e ligada no geral).",
+    env: "LOCADORA_GUEST",
+    parseEnv: exactTrue,
+    // Off: a public surface that runs an emulator for anybody with a link is
+    // the same legal question `emulator_room` waits on (docs/EMULATOR_ROOM.md),
+    // asked for the open web. It goes on when Rafael says so. Only `true`.
+    codeDefault: false,
+    // GLOBAL: a guest has no server, no account and no session row.
+    perServer: false,
+    clientVia: "GET /api/public/apps/config (guest)",
+  },
+  locadora_saves_announced: {
+    description:
+      "Diz em público que existe Saves na conta: com ele ligado, a página da Locadora e o convite do jogo sem conta passam a dizer \"saves na nuvem pra continuar em outro aparelho\". Desligado, essa linha aparece como \"em breve\". Não liga nada: só a frase. Liga quando o locadora_save_sync estiver ligado pra todo mundo.",
+    env: "LOCADORA_SAVES_ANNOUNCED",
+    parseEnv: exactTrue,
+    // Off: `locadora_save_sync` is per server, so a signed-out page cannot ask
+    // it, and the public copy must not promise what a new account would not
+    // get. This is the one bit the public pages read for that sentence.
+    codeDefault: false,
+    perServer: false,
+    clientVia: "GET /api/public/apps/config (cloudSaves)",
   },
 } as const satisfies Record<string, FlagDefinition>;
 
