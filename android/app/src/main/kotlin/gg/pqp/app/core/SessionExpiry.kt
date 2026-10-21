@@ -141,8 +141,9 @@ class SessionExpiryGate(
                 SessionProbe.Alive, SessionProbe.Unknown -> return
                 SessionProbe.Dead -> Unit
             }
-            if (epoch.get() != asked || !hasAccount()) return
-            sessionEnded()
+            // Checking the epoch and claiming the teardown are ONE step: a
+            // session cannot end between the two.
+            if (!hasAccount() || !epoch.compareAndSet(asked, asked + 1)) return
             endSession()
         } finally {
             claimed.set(false)

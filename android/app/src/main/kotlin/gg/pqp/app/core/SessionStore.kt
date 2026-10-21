@@ -348,6 +348,10 @@ class SessionStore(
         restoreJob?.cancel()
         restoreJob = scope.launch {
             _phase.value = SessionPhase.Launching
+            // The Clerk session this attempt speaks for, read BEFORE the
+            // request: a refusal that arrives after Clerk moved to another
+            // session is about the old one.
+            val askedClerk = clerkSessionId()
             var refused = false
             val me = withTimeoutOrNull(LAUNCH_DEADLINE_MS) {
                 runSuspendCatching { api.me() }.getOrElse { error ->
@@ -377,10 +381,9 @@ class SessionStore(
                     // Clear it so the sign-in screen starts clean, and say
                     // what happened once. A launch that merely timed out is
                     // not that, and neither is a fresh install.
-                    val endingClerk = clerkSessionId()
-                    if (refused && endingClerk != null) {
+                    if (refused && askedClerk != null && clerkSessionId() == askedClerk) {
                         _sessionExpired.value = true
-                        scope.launch { clerkSignOutBounded(endingClerk) }
+                        scope.launch { clerkSignOutBounded(askedClerk) }
                     }
                 }
                 "passed" -> {
@@ -783,8 +786,17 @@ class SessionStore(
         // be signing in again: Clerk's sign-out is global, and would end that
         // new session instead. Only the session that was being ended is ended.
         if (clerkSessionId() != ending) return
-        withTimeoutOrNull(NETWORK_STEP_MS) {
-            runSuspendCatching { com.clerk.api.Clerk.auth.signOut() }
+        // Named first: it ends only that session, whatever else is current by
+        // now. A session the server no longer knows refuses it, and only then
+        // the SDK's own sign-out is used, because it is the one that empties
+        // local state when the server will not cooperate.
+        val targeted = withTimeoutOrNull(NETWORK_STEP_MS) {
+            runSuspendCatching { com.clerk.api.Clerk.auth.signOut(ending) }.getOrNull()
+        }
+        if (targeted !is com.clerk.api.network.serialization.ClerkResult.Success && clerkSessionId() == ending) {
+            withTimeoutOrNull(NETWORK_STEP_MS) {
+                runSuspendCatching { com.clerk.api.Clerk.auth.signOut() }
+            }
         }
     }
 
