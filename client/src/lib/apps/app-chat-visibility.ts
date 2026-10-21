@@ -64,7 +64,15 @@ export function chatUnreadSince(
 ): ChatUnread {
   let start = 0;
   if (sinceId !== null) {
-    const index = messages.findIndex((message) => message.id === sinceId);
+    // From the end: the mark is the newest message when the chat went away, so
+    // it sits right before the unread tail.
+    let index = -1;
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      if (messages[i]!.id === sinceId) {
+        index = i;
+        break;
+      }
+    }
     if (index === -1) return NO_UNREAD;
     start = index + 1;
   }

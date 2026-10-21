@@ -501,19 +501,31 @@ export function AppSessionLayout(props: AppSessionLayoutProps) {
 
   // The newest message when the chat went away; what came after is unread.
   const messages = chat?.messages;
-  const awaySince = useRef<{ id: string | null } | null>(null);
-  if (layout.chatAway && awaySince.current === null) {
-    awaySince.current = { id: messages && messages.length > 0 ? messages[messages.length - 1]!.id : null };
+  // Keyed by channel: moving to another channel's app with the chat still away
+  // takes that channel's newest message as the mark, not the last one's.
+  const awaySince = useRef<{ channelId: string | null; id: string | null } | null>(null);
+  if (
+    layout.chatAway &&
+    (awaySince.current === null || awaySince.current.channelId !== channelId)
+  ) {
+    awaySince.current = {
+      channelId,
+      id: messages && messages.length > 0 ? messages[messages.length - 1]!.id : null,
+    };
   } else if (!layout.chatAway && awaySince.current !== null) {
     awaySince.current = null;
   }
-  const unread =
-    layout.chatAway && awaySince.current && messages
-      ? chatUnreadSince(messages, awaySince.current.id, {
-          id: viewerId,
-          username: chat?.username ?? null,
-        })
-      : NO_UNREAD;
+  const sinceId = layout.chatAway && awaySince.current ? awaySince.current.id : undefined;
+  const username = chat?.username ?? null;
+  // Recounted only when the list, the mark or the reader changes, and the mark
+  // is found from the end, so the cost is the unread tail, not the page.
+  const unread = useMemo(
+    () =>
+      sinceId !== undefined && messages
+        ? chatUnreadSince(messages, sinceId, { id: viewerId, username })
+        : NO_UNREAD,
+    [messages, sinceId, viewerId, username],
+  );
 
   useEffect(() => {
     onPaneChange?.(appColumnOn);

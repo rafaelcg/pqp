@@ -297,6 +297,19 @@ describe("AppSessionLayout", () => {
       expect(document.querySelector("[data-app-chat-unread]")).toBeNull();
     });
 
+    it("moving to another channel's app with the chat away takes that channel's newest message as the mark", () => {
+      const OTHER = "33333333-3333-4333-8333-333333333333";
+      applyChannelApp(CHANNEL, summary(true));
+      applyChannelApp(OTHER, { ...summary(true), id: "44444444-4444-4444-8444-444444444444" });
+      render({ messages: [{ id: "a1", authorId: BIA, body: "oi" }] });
+      act(() => toggle().click());
+      const there = [{ id: "b1", authorId: BIA, body: "oi" }];
+      rerender({ channelId: OTHER, messages: there });
+      expect(document.querySelector("[data-app-chat-unread]")).toBeNull();
+      rerender({ channelId: OTHER, messages: [...there, { id: "b2", authorId: BIA, body: "bora" }] });
+      expect(document.querySelector("[data-app-chat-unread]")?.getAttribute("data-app-chat-unread")).toBe("dot");
+    });
+
     it("the shortcut does nothing without an app on screen", () => {
       render();
       expect(toggleAppChat()).toBe(false);
