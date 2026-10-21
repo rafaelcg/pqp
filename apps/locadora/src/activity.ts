@@ -20,10 +20,16 @@ export function createActivityReporter(sink: ((state: ActivityState) => Promise<
     report(state) {
       if (!sink || state === current) return;
       current = state;
+      // a report that did not arrive is not "said": the next report of the same state goes out again, so one lost
+      // message never leaves the page believing a stale state (and drawing its card over a running game)
+      const forget = () => {
+        if (current === state) current = null;
+      };
       try {
-        void sink(state).catch(() => undefined);
+        void sink(state).catch(forget);
       } catch {
-        // a host that cannot even take the call: the page does not care
+        // a host that cannot even take the call
+        forget();
       }
     },
     get current() {

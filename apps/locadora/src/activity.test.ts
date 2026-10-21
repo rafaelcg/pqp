@@ -23,6 +23,32 @@ describe("the activity reporter", () => {
     await Promise.resolve();
   });
 
+  it("a report that failed is sent again the next time the same state is said", async () => {
+    let fail = true;
+    const sink = vi.fn(async (_state: string) => {
+      if (fail) throw new Error("lost");
+      return null;
+    });
+    const reporter = createActivityReporter(sink);
+    reporter.report("playing");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(reporter.current).toBeNull();
+    fail = false;
+    reporter.report("playing");
+    await Promise.resolve();
+    expect(sink).toHaveBeenCalledTimes(2);
+    expect(reporter.current).toBe("playing");
+    reporter.report("playing");
+    expect(sink).toHaveBeenCalledTimes(2);
+    // a sink that throws outright is forgotten at once
+    const throwing = createActivityReporter(() => {
+      throw new Error("no port");
+    });
+    throwing.report("paused");
+    expect(throwing.current).toBeNull();
+  });
+
   it("sends nothing without a sink (an ordinary session)", () => {
     const reporter = createActivityReporter(null);
     reporter.report("playing");
