@@ -11,7 +11,7 @@ import { readLocalFile } from "@/lib/apps/file-pick";
 import { appsDocsUrl, LOCADORA_LANDING_REF } from "@/lib/apps-landing";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { ACCOUNT_LINE_CLAIMS, claimView } from "@/lib/locadora-claims";
-import { holdCartridge, LOCADORA_GUEST_PATH } from "@/lib/locadora-guest";
+import { holdCartridge, LOCADORA_GUEST_PATH, takeCartridge } from "@/lib/locadora-guest";
 import { cn } from "@/lib/utils";
 
 /**
@@ -83,27 +83,36 @@ export function LocadoraPageBody() {
   const [problem, setProblem] = useState<MessageKey | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   /**
-   * The latest choice, by number: a read that finishes after a newer pick or drop (or after the page went away,
-   * `-1`) is dropped, so the player only ever gets the cartridge chosen last, and a slow read can never navigate
-   * someone back here from wherever they went.
+   * The latest choice, by number: a read that finishes after a newer pick or drop is dropped, so the player only
+   * ever gets the cartridge chosen last.
    */
   const choice = useRef(0);
+  /** Whether this page is still on screen; a read that resolves after it left does nothing at all. */
+  const alive = useRef(true);
+  /** This page put a cartridge in and has not yet handed it over: leaving before the hand-over takes it back. */
+  const holding = useRef(false);
   useEffect(() => {
     // (StrictMode mounts twice: the second mount must open the door again)
-    if (choice.current < 0) choice.current = 0;
+    alive.current = true;
     return () => {
-      choice.current = -1;
+      alive.current = false;
+      choice.current += 1;
       clearTimeout(timer.current);
+      if (holding.current) {
+        holding.current = false;
+        takeCartridge();
+      }
     };
   }, []);
 
   /** A file from the picker or a drop: read it, put it in, open the player. */
   const insert = useCallback(
     async (file: File | null | undefined) => {
-      if (!guest || !file || state === "inserting" || choice.current < 0) return;
+      if (!guest || !file || state === "inserting" || !alive.current) return;
       const mine = (choice.current += 1);
       const result = await readLocalFile(file, { accept, maxBytes });
-      if (choice.current !== mine) return;
+      // a newer choice, or the page went away while this was being read: drop it
+      if (!alive.current || choice.current !== mine) return;
       if (result.kind !== "picked") {
         setState("idle");
         setProblem(
@@ -117,8 +126,14 @@ export function LocadoraPageBody() {
       }
       setProblem(null);
       holdCartridge({ bytes: result.bytes, ext: result.ext });
+      holding.current = true;
       setState("inserting");
-      timer.current = setTimeout(() => void navigate(LOCADORA_GUEST_PATH), prefersReducedMotion() ? 0 : INSERT_MS);
+      timer.current = setTimeout(() => {
+        if (!alive.current) return;
+        // handed over: the player takes it from here
+        holding.current = false;
+        void navigate(LOCADORA_GUEST_PATH);
+      }, prefersReducedMotion() ? 0 : INSERT_MS);
     },
     // accept is rebuilt each render from the same config; its contents are what matter
     // eslint-disable-next-line react-hooks/exhaustive-deps

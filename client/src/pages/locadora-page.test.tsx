@@ -226,6 +226,20 @@ describe("choosing a cartridge at the door", () => {
     expect(hasCartridge()).toBe(false);
   });
 
+  it("leaving while the cartridge slides in takes it back: nothing is left held for a later visit", async () => {
+    vi.stubGlobal("matchMedia", () => ({ matches: false }));
+    mount(GUEST);
+    await choose(new File([new Uint8Array([1])], "quick.nes"));
+    expect(hasCartridge()).toBe(true);
+    act(() => root?.unmount());
+    root = null;
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 600));
+    });
+    expect(hasCartridge()).toBe(false);
+    vi.unstubAllGlobals();
+  });
+
   it("a file that does not fit says so and stays on the page", async () => {
     mount(GUEST);
     await choose(new File([new Uint8Array([1])], "notes.txt"));
