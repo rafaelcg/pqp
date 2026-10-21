@@ -62,6 +62,7 @@ An app is also a manifest and a build. Those live in the pqp repository today: [
 | `app.events` | `send()` and `on(name)`: ephemeral messages for the others, at most 1 KB each. |
 | `app.assets`, `app.files` | Big files the manifest lists, and the person's own files through pqp's picker. |
 | `app.ui`, `app.share`, `app.end()` | Resize and fullscreen the frame, share the pane, end the session (host only). |
+| `app.on(event, cb)` | `connection`, `theme`, `ended`, and `share`: whether your pane is shared, whoever turned it on or off (draw your share control from it, never from your own last request). |
 | `applyTheme(theme)` | Writes pqp's design tokens onto your page. |
 | `PqpAppError` | What every rejected call throws, with a `code`. |
 
