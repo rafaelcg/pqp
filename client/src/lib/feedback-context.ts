@@ -1,5 +1,6 @@
 import type { FeedbackContext, VoiceRoomTransport } from "@pqp/shared";
 import { isDesktopApp } from "@/lib/desktop";
+import { currentLinkSummary } from "@/lib/call-link-window";
 import { faroSessionId } from "@/lib/faro";
 
 /** The call half, which only `App` knows. Passed down to the settings box. */
@@ -44,6 +45,15 @@ export function buildFeedbackContext(
       transport: voice.inCall ? voice.transport : null,
       watchParty: voice.inCall && voice.watchParty,
     };
+    if (voice.inCall) {
+      // The path and the last ~30 s of the link, from the sampler the call
+      // already runs. Only while in a call: it describes THIS call, and after
+      // hanging up the window has aged out anyway.
+      const link = currentLinkSummary();
+      if (Object.keys(link).length > 0) {
+        context.voice.link = link;
+      }
+    }
   }
   const session = faroSessionId();
   if (session && /^[A-Za-z0-9_-]{1,128}$/.test(session)) {

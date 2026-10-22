@@ -4,6 +4,7 @@ import {
   pickActiveVideoSenderLayer,
   registerVoiceConnection,
   registerVoiceStatsSource,
+  relayHostFromUrl,
   resetVoiceStatsSamplingForTests,
   sampleVoiceStats,
   statRows,
@@ -120,6 +121,48 @@ describe("summariseStats", () => {
     expect(paths[0]!.localType).toBe("srflx");
     expect(paths[0]!.remoteType).toBe("relay");
     expect(paths[0]!.relayed).toBe(true);
+  });
+
+  it("reports the relay protocol and host of our own TURN allocation, never an address", () => {
+    const relayLocal = report().map((stat) =>
+      stat.id === "L1"
+        ? {
+            ...stat,
+            candidateType: "relay",
+            relayProtocol: "tls",
+            url: "turns:turn.cloudflare.com:443?transport=tcp",
+          }
+        : stat,
+    );
+    const { paths } = summariseStats(PEER, relayLocal, roles, new Map());
+    expect(paths[0]!.relayProtocol).toBe("tls");
+    expect(paths[0]!.relayHost).toBe("turn.cloudflare.com");
+  });
+
+  it("has no relay protocol or host when the relay is the other person's", () => {
+    const { paths } = summariseStats(PEER, report(), roles, new Map());
+    expect(paths[0]!.relayed).toBe(true);
+    expect(paths[0]!.relayProtocol).toBeNull();
+    expect(paths[0]!.relayHost).toBeNull();
+  });
+
+  it("reads the transport from the url when the browser omits relayProtocol", () => {
+    const relayLocal = report().map((stat) =>
+      stat.id === "L1"
+        ? { ...stat, candidateType: "relay", url: "turn:turn.example.org:3478?transport=udp" }
+        : stat,
+    );
+    const { paths } = summariseStats(PEER, relayLocal, roles, new Map());
+    expect(paths[0]!.relayProtocol).toBe("udp");
+  });
+
+  it("relayHostFromUrl keeps names and drops anything that is an address", () => {
+    expect(relayHostFromUrl("turn:Turn.Example.org:3478?transport=udp")).toBe("turn.example.org");
+    expect(relayHostFromUrl("turns:turn.example.org")).toBe("turn.example.org");
+    expect(relayHostFromUrl("turn:203.0.113.7:3478?transport=udp")).toBeNull();
+    expect(relayHostFromUrl("turn:[2001:db8::1]:3478")).toBeNull();
+    expect(relayHostFromUrl("stun:stun.example.org")).toBeNull();
+    expect(relayHostFromUrl(null)).toBeNull();
   });
 
   it("puts inbound packet counts on the selected path, audio included", () => {

@@ -147,6 +147,14 @@ export interface CandidatePairSample {
   localAddress: string | null;
   remoteAddress: string | null;
   /**
+   * How OUR end reaches the TURN server (`udp`, `tcp`, `tls`) and the
+   * server's hostname, only when the local candidate is a relay. Optional so
+   * every reader that predates them keeps type-checking. The host is a name,
+   * never an address: see `relayHostFromUrl`.
+   */
+  relayProtocol?: "udp" | "tcp" | "tls" | null;
+  relayHost?: string | null;
+  /**
    * Inbound packets lost and received on this connection, any kind, over the
    * last sample window rather than since the call started.
    *
@@ -296,6 +304,47 @@ function num(value: unknown): number | null {
 
 function str(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+/**
+ * The TURN server's hostname from a candidate's `url` (`turn:host:3478?transport=udp`,
+ * `turns:host:443`), or null. An IP literal is deliberately null: this label
+ * leaves the machine in a feedback report, and an address is exactly what a
+ * report must not carry. A relay named by IP is reported as "a relay" with no
+ * host rather than leaked.
+ */
+export function relayHostFromUrl(url: string | null): string | null {
+  if (!url) {
+    return null;
+  }
+  const match = /^turns?:([A-Za-z0-9][A-Za-z0-9.-]*)(?::\d+)?(?:\?.*)?$/i.exec(url.trim());
+  const host = match?.[1]?.toLowerCase();
+  if (!host || host.length > 64) {
+    return null;
+  }
+  if (/^[0-9.]+$/.test(host)) {
+    return null;
+  }
+  return host;
+}
+
+function relayProtocolOf(local: RtcStatLike | undefined): "udp" | "tcp" | "tls" | null {
+  const raw = str(local?.relayProtocol)?.toLowerCase();
+  if (raw === "udp" || raw === "tcp" || raw === "tls") {
+    return raw;
+  }
+  // Older Chromium omits `relayProtocol` but names the transport in the URL.
+  const url = (str(local?.url) ?? "").toLowerCase();
+  if (url.startsWith("turns:")) {
+    return "tls";
+  }
+  if (url.includes("transport=udp")) {
+    return "udp";
+  }
+  if (url.includes("transport=tcp")) {
+    return "tcp";
+  }
+  return null;
 }
 
 /**
@@ -490,6 +539,8 @@ export function summariseStats(
         available === null ? null : Math.round(available / 1000),
       localAddress: str(local?.address) ?? str(local?.ip),
       remoteAddress: str(remote?.address) ?? str(remote?.ip),
+      relayProtocol: localType === "relay" ? relayProtocolOf(local) : null,
+      relayHost: localType === "relay" ? relayHostFromUrl(str(local?.url)) : null,
       packetsLost,
       packetsReceived,
     };

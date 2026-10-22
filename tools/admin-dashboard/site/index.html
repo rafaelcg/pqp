@@ -5685,6 +5685,22 @@
     }
     if (c.faroSessionId) where.push("sessão faro <code>" + esc(c.faroSessionId) + "</code>");
     if (where.length) out += '<p class="fb-line">' + where.join(" · ") + "</p>";
+    var lk = c.voice && c.voice.link;
+    if (lk) {
+      // O caminho da chamada nos últimos ~30 s. O ms é a ida e volta até a OUTRA PESSOA, não até um servidor nosso.
+      var link = [];
+      if (lk.relayed === true) {
+        link.push("via relay" + (lk.relayProtocol ? " " + lk.relayProtocol : "") + (lk.relayHost ? " (" + lk.relayHost + ")" : ""));
+      } else if (lk.relayed === false) {
+        link.push("direto");
+      }
+      if (lk.rttMsAvg != null) link.push(lk.rttMsAvg + " ms até a outra pessoa");
+      if (lk.lossPctAvg != null) link.push(lk.lossPctAvg + "% de perda recebida");
+      if (lk.sharing) link.push("com tela compartilhada");
+      if (lk.effectiveType) link.push("rede " + lk.effectiveType + (lk.downlinkMbps != null ? ", " + lk.downlinkMbps + " Mbps" : ""));
+      if (lk.samples != null) link.push("média de " + lk.samples + " amostras");
+      if (link.length) out += '<p class="fb-line">link: ' + esc(link.join(" · ")) + "</p>";
+    }
     return out;
   }
 
