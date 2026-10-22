@@ -1190,19 +1190,19 @@ class SfuAdmissionTests(unittest.TestCase):
 
     def test_renders_one_series_per_box(self):
         body = exporter.render(_base_payload(sfuAdmission=_admission()))
-        self.assertIn('pqp_api_sfu_admission_estimated_mbps{box="sao"} 524.5', body)
-        self.assertIn('pqp_api_sfu_admission_estimated_mbps{box="mia"} 0', body)
-        self.assertIn('pqp_api_sfu_admission_budget_mbps{box="sao"} 600', body)
-        self.assertIn('pqp_api_sfu_admission_rooms{box="sao"} 31', body)
-        self.assertIn('pqp_api_sfu_admission_participants{box="sao"} 98', body)
-        self.assertIn('pqp_api_sfu_admission_camera_publishers{box="sao"} 40', body)
-        self.assertIn('pqp_api_sfu_admission_screen_publishers{box="sao"} 3', body)
-        self.assertIn('pqp_api_sfu_admission_checks_5m{box="sao"} 12', body)
-        self.assertIn('pqp_api_sfu_admission_refusals_5m{box="sao"} 2', body)
+        self.assertIn('pqp_api_sfu_admission_estimated_mbps{region="sao"} 524.5', body)
+        self.assertIn('pqp_api_sfu_admission_estimated_mbps{region="mia"} 0', body)
+        self.assertIn('pqp_api_sfu_admission_budget_mbps{region="sao"} 600', body)
+        self.assertIn('pqp_api_sfu_admission_rooms{region="sao"} 31', body)
+        self.assertIn('pqp_api_sfu_admission_participants{region="sao"} 98', body)
+        self.assertIn('pqp_api_sfu_admission_camera_publishers{region="sao"} 40', body)
+        self.assertIn('pqp_api_sfu_admission_screen_publishers{region="sao"} 3', body)
+        self.assertIn('pqp_api_sfu_admission_checks_5m{region="sao"} 12', body)
+        self.assertIn('pqp_api_sfu_admission_refusals_5m{region="sao"} 2', body)
         self.assertIn("pqp_api_sfu_admission_cluster_view 1", body)
         self.assertIn("# TYPE pqp_api_sfu_admission_refusals_total counter", body)
-        self.assertIn('pqp_api_sfu_admission_refusals_total{box="sao"} 9', body)
-        self.assertIn('pqp_api_sfu_admission_checks_total{box="sao"} 300', body)
+        self.assertIn('pqp_api_sfu_admission_refusals_total{region="sao"} 9', body)
+        self.assertIn('pqp_api_sfu_admission_checks_total{region="sao"} 300', body)
 
     def test_a_local_view_says_so(self):
         body = exporter.render(_base_payload(sfuAdmission=_admission(source="local")))
@@ -1222,7 +1222,7 @@ class SfuAdmissionTests(unittest.TestCase):
         self.assertEqual(sao["checksTotal"], 340)
         self.assertEqual(sao["refusalsTotal"], 11)
         body = exporter.render(merged)
-        self.assertIn('pqp_api_sfu_admission_refusals_5m{box="sao"} 3', body)
+        self.assertIn('pqp_api_sfu_admission_refusals_5m{region="sao"} 3', body)
 
     def test_a_replicas_own_room_floor_never_hides_the_cluster_view(self):
         floor = _base_payload(sfuAdmission=_admission(source="local", loadMbps=40.0, rooms=2))

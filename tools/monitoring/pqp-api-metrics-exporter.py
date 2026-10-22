@@ -1232,7 +1232,7 @@ def render(
             (
                 "pqp_api_sfu_admission_estimated_mbps",
                 "Mbit/s the admission estimator prices for the SFU rooms on this box "
-                "(sfuAdmission.boxes[].loadMbps; box=all when the per-box flag is off).",
+                "(sfuAdmission.boxes[].loadMbps; region=all when the per-box flag is off).",
                 "loadMbps",
             ),
             (
@@ -1277,19 +1277,19 @@ def render(
                 lines,
                 name,
                 help_text,
-                [({"box": str(box["box"])}, _vn_num(box.get(key))) for box in boxes],
+                [({"region": str(box["box"])}, _vn_num(box.get(key))) for box in boxes],
             )
         labeled_counter(
             lines,
             "pqp_api_sfu_admission_checks_total",
             "Cumulative admission decisions per box since the API booted, summed across replicas.",
-            [({"box": str(box["box"])}, _vn_num(box.get("checksTotal"))) for box in boxes],
+            [({"region": str(box["box"])}, _vn_num(box.get("checksTotal"))) for box in boxes],
         )
         labeled_counter(
             lines,
             "pqp_api_sfu_admission_refusals_total",
             "Cumulative admission refusals per box since the API booted, summed across replicas.",
-            [({"box": str(box["box"])}, _vn_num(box.get("refusalsTotal"))) for box in boxes],
+            [({"region": str(box["box"])}, _vn_num(box.get("refusalsTotal"))) for box in boxes],
         )
     # Pool waits (runtime.poolWait, server/src/lib/pool-wait.ts): what a peak
     # COST rather than how high it went. Worst replica, last five minutes, so
