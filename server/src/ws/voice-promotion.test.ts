@@ -110,7 +110,9 @@ vi.mock("../voice/admin.js", () => ({
 
 const {
   getRoomTransport,
+  getSfuAdmissionSnapshot,
   handleVoiceMessage,
+  resetSfuAdmissionSnapshotCache,
   resetVoicePeers,
   resetVoicePinRechecks,
   resetVoicePromotions,
@@ -120,6 +122,8 @@ const {
 
 const { SOCKET_CAPS, setAuthenticatedSocket, deleteAuthenticatedSocket } =
   await import("./sockets.js");
+
+const { admissionLedger } = await import("../voice/sfu-admission-metrics.js");
 
 const {
   CAMERA_LIMIT,
@@ -1087,6 +1091,39 @@ describe("more cameras on a room already on the SFU", () => {
 
     expect(typesOf(people[3]!)).toContain("camera-denied");
     expect(camerasOn(people[0]!)).toBe(3);
+  });
+
+  it("gauges what the estimator priced and how often it refused", async () => {
+    // Same room as the refusal above: four cameras in a room of six is 36
+    // Mbit/s against 30, so the fourth is refused and the box reads 27.
+    process.env.VOICE_PROMOTION_MAX_SFU_MBPS = "30";
+    admissionLedger.reset();
+    resetSfuAdmissionSnapshotCache();
+    const people = await roomOf(6);
+    for (const person of people.slice(0, 3)) {
+      await cameraOn(person, channel);
+    }
+    await cameraOn(people[3]!, channel);
+    expect(typesOf(people[3]!)).toContain("camera-denied");
+
+    resetSfuAdmissionSnapshotCache();
+    const gauge = await getSfuAdmissionSnapshot();
+
+    expect(gauge?.source).toBe("local");
+    expect(gauge?.boxes).toHaveLength(1);
+    expect(gauge?.boxes[0]).toMatchObject({
+      loadMbps: 27, // 3 cameras x 6 people x 1.5, what stayed on the box
+      budgetMbps: 30,
+      rooms: 1,
+      participants: 6,
+      cameraPublishers: 3,
+      checks5m: 4,
+      refusals5m: 1,
+      refusalsTotal: 1,
+    });
+    // The gauge only reads: the next camera is still refused exactly the same.
+    await cameraOn(people[4]!, channel);
+    expect(typesOf(people[4]!)).toContain("camera-denied");
   });
 
   it("admits the same camera once the budget covers it", async () => {
