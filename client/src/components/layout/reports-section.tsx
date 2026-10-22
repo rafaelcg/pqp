@@ -5,6 +5,7 @@ import {
 } from "@pqp/shared";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { ReportAttachments } from "@/components/layout/report-attachments";
 import { ReportContextPanel } from "@/components/layout/report-context-panel";
 import { ApiError, fetchServerReports, resolveReport } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
@@ -204,11 +205,15 @@ export function ReportsSection({ serverId }: { serverId: string }) {
                 })}
               </p>
 
-              {report.contentSnapshot !== null && (
+              {report.contentSnapshot?.trim() && (
                 <blockquote className="whitespace-pre-wrap break-words rounded-md border-l-2 border-ink-4 bg-ink px-3 py-2 text-sm text-paper">
                   {report.contentSnapshot}
                 </blockquote>
               )}
+              <ReportAttachments
+                reportId={report.id}
+                attachments={report.attachments}
+              />
               {report.messageDeleted && (
                 <p className="text-xs text-warning">
                   {t("reports.messageDeleted")}

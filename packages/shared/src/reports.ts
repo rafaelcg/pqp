@@ -183,6 +183,80 @@ export const resolveReportSchema = z.object({
 });
 export type ResolveReportRequest = z.infer<typeof resolveReportSchema>;
 
+// ------------------------------------------------------ reported attachments
+//
+// What a moderator may know about the files on a REPORTED message, and whether
+// they may look at one. Metadata is always served; the bytes never are, except
+// through `POST /api/reports/:id/attachments/:attachmentId/reveal`, one click
+// at a time, and only behind the `report_attachment_preview` runtime flag.
+// See docs/CONTENT_SAFETY.md, "What a moderator sees of a reported attachment".
+
+/** What the file is, in the words a moderator uses. Never a guess from bytes. */
+export const REPORT_ATTACHMENT_KINDS = ["image", "gif", "video", "file"] as const;
+export const reportAttachmentKindSchema = z.enum(REPORT_ATTACHMENT_KINDS);
+export type ReportAttachmentKind = z.infer<typeof reportAttachmentKindSchema>;
+
+/**
+ * Whether the card may offer a look, decided by the server so the client has
+ * no rule to get wrong:
+ *
+ * - `available`   the reveal button may be drawn
+ * - `off`         the `report_attachment_preview` flag is off
+ * - `blocked`     a guardrail refuses it; `blockReason` says which
+ * - `unsupported` not a still or animated picture we may fetch (video, any
+ *                 other file, storage not configured)
+ */
+export const reportAttachmentPreviewSchema = z.enum([
+  "available",
+  "off",
+  "blocked",
+  "unsupported",
+]);
+export type ReportAttachmentPreview = z.infer<typeof reportAttachmentPreviewSchema>;
+
+/**
+ * Why a guardrail refuses. These are the cases the illegal-content runbook in
+ * docs/CONTENT_SAFETY.md says never to open: a scanner verdict of flagged,
+ * rejected or error; an `illegal` or `csam_suspected` label; a quarantined
+ * object; and a message somebody reported as a minor in sexual content.
+ */
+export const REPORT_ATTACHMENT_BLOCK_REASONS = [
+  "scan_status",
+  "illegal_label",
+  "quarantined",
+  "minor_report",
+] as const;
+export const reportAttachmentBlockReasonSchema = z.enum(
+  REPORT_ATTACHMENT_BLOCK_REASONS,
+);
+export type ReportAttachmentBlockReason = z.infer<
+  typeof reportAttachmentBlockReasonSchema
+>;
+
+export const reportAttachmentSchema = z.object({
+  id: z.string().uuid(),
+  kind: reportAttachmentKindSchema,
+  contentType: z.string(),
+  /** The scanner's verdict, straight off the row. No new scanning. */
+  scan: z.object({
+    /** `unscanned` | `skipped` | `pass` | `flagged` | `rejected` | `error` */
+    status: z.string(),
+    provider: z.string().nullable(),
+    score: z.number().nullable(),
+    labels: z.array(z.string()),
+  }),
+  preview: reportAttachmentPreviewSchema,
+  blockReason: reportAttachmentBlockReasonSchema.nullable(),
+});
+export type ReportAttachment = z.infer<typeof reportAttachmentSchema>;
+
+/** The reveal's answer: a URL good for `expiresInSeconds`, never cached. */
+export const reportAttachmentRevealSchema = z.object({
+  url: z.string().url(),
+  expiresInSeconds: z.number().int().positive(),
+});
+export type ReportAttachmentReveal = z.infer<typeof reportAttachmentRevealSchema>;
+
 /**
  * What a moderator sees. Every identity field is nullable because the row is
  * built to outlive the things it points at — see the `reports` table comment
@@ -227,6 +301,12 @@ export const reportSchema = z.object({
   messageDeleted: z.boolean(),
   /** The reported message body, copied at report time. */
   contentSnapshot: z.string().nullable(),
+  /**
+   * The files on the reported message as it stands now (metadata only, never
+   * bytes). Empty for a message with none, a deleted message, and any subject
+   * that is not a message.
+   */
+  attachments: z.array(reportAttachmentSchema).default([]),
   channelId: z.string().uuid().nullable(),
   /** Snapshot of the channel name, so a renamed or deleted channel still reads. */
   channelName: z.string().nullable(),

@@ -772,6 +772,21 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/forum/config?serverId= (enabled)",
   },
+  report_attachment_preview: {
+    description:
+      "Moderação: no cartão de uma denúncia, o botão Mostrar que abre, borrado e só com um clique, a imagem ou o gif da mensagem denunciada. Desligado: a lista de anexos (tipo, veredito do scanner) continua aparecendo, só o botão e a rota somem.",
+    env: "REPORT_ATTACHMENT_PREVIEW",
+    parseEnv: exactTrue,
+    // Off: it lets a person look at what somebody else reported. Turn it on
+    // globally once the instance moderators have read the runbook; the
+    // guardrails (docs/CONTENT_SAFETY.md) hold with it on.
+    codeDefault: false,
+    // A report belongs to a server only some of the time (a conversation
+    // report has none) and the reader is an instance moderator, who is not
+    // "in" any server: global only.
+    perServer: false,
+    clientVia: "GET /api/reports/all, /api/servers/:id/reports (attachments[].preview)",
+  },
   emulator_room: {
     description:
       "Sala de emulador (só local): uma janela no servidor onde cada pessoa abre, do próprio computador, um jogo que ela tem, num emulador que roda no navegador dela. O pqp não fornece jogo nenhum, o arquivo nunca sai do navegador e não existe sala compartilhada. Desligado: o item some do menu do servidor. Não ligue antes da revisão do advogado (docs/EMULATOR_ROOM.md).",

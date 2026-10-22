@@ -337,6 +337,69 @@ decided once, by `createReport`/`createAutomatedReport`, from the reported
 thing, never by the client. This only widens who may *read and close* what
 was already filed.
 
+### What a moderator sees of a reported attachment
+
+A report on a message that carries only an image used to show an empty bar, and
+an instance moderator cannot open a private server's channel to look. The card
+now has two layers, and only the second can show a pixel.
+
+**1. The list, always.** Every report row (`GET /api/reports/all`,
+`/api/reports/instance`, `/api/servers/:id/reports`) carries `attachments`: the
+files on the REPORTED message only (never a neighbour, never another message by
+the same author), each with its kind (image, gif, video, file), content type and
+the scanner's verdict straight off `message_attachments` (`scan_status`,
+`scan_provider`, `scan_score`, `scan_labels`), plus `preview` and `blockReason`.
+No bytes, no URL, no new scanning, and not behind the flag. A report on a
+deleted message has none: the rows were orphaned for the sweeper.
+
+**2. One look, on a click, behind a flag.** `report_attachment_preview` (global,
+default **off**, `docs/FEATURE_FLAGS.md`). The card draws a placeholder with a
+warning and makes no request for the picture. "Mostrar" calls
+
+```
+POST /api/reports/:reportId/attachments/:attachmentId/reveal
+```
+
+which answers `{ url, expiresInSeconds: 60 }` with `Cache-Control: no-store`,
+and the card puts the picture away again on "Esconder", when the minute is
+nearly up, when the tab is hidden and when the card leaves the screen. Who may
+ask is the rule for reading the report: an instance moderator, or staff of the
+report's own server (KICK, BAN or MODERATE members). Everybody else, a missing
+report and a flag that is off are the same 404. The attachment must belong to
+that report's message, and the report must be open or resolved within 30 days.
+Rate limited per moderator (burst of 10, then one every 5 seconds).
+
+**The guardrails** are this document's runbook as a predicate
+(`guardrail` in `server/src/services/report-attachments.ts`), asked by the list
+and again, on a fresh read of the row, by the route. A reveal is refused, with a
+403 that says why, and the card shows the same reason and points here, when:
+
+| Condition | Reason |
+|---|---|
+| `scan_labels` contains `illegal` or `csam_suspected` | `illegal_label` |
+| `quarantined_at` is set | `quarantined` |
+| `scan_status` is `flagged`, `rejected` or `error` | `scan_status` |
+| any report on that message has reason `minor_sexual` | `minor_report` |
+| not a picture we may fetch (video, any file, SVG, no storage configured) | `unsupported` |
+
+`unscanned` and `skipped` are not on the list on purpose: they are "nobody has
+looked", the card prints the status, and a moderator is entitled to resolve that
+by looking. If an instance would rather refuse those too, that is one line in
+`guardrail`.
+
+**The audit entry.** Every granted reveal writes `report.attachment_reveal` to
+`audit_log` BEFORE the URL leaves the server (a failed write fails the request,
+so nobody looks without a record): actor, target = the attachment, `changes`
+carries the report id. The URL is never stored or logged. A conversation report
+has no server to file an audit row under (`audit_log.server_id` is NOT NULL, the
+same reason `report.resolve` is server-only), so it leaves the line
+`[moderation] report attachment revealed: report <id>, attachment <id>,
+moderator <id>` in the log instead, as `remove-message` does.
+
+Still true, flag or no flag: do not open anything the runbook says not to. The
+flag removes the reason to copy a file out of the bucket, it does not make a
+suspected-illegal file safe to look at.
+
 ---
 
 ## What the operator must obtain

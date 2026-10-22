@@ -113,6 +113,8 @@ const AUDIT_ACTION_KEYS: Record<AuditAction, MessageKey> = {
   "outgoing_webhook.rotate":
     "serverSettings.audit.action.outgoing_webhook.rotate",
   "report.resolve": "serverSettings.audit.action.report.resolve",
+  "report.attachment_reveal":
+    "serverSettings.audit.action.report.attachment_reveal",
   "role.create": "serverSettings.audit.action.role.create",
   "role.update": "serverSettings.audit.action.role.update",
   "role.delete": "serverSettings.audit.action.role.delete",
