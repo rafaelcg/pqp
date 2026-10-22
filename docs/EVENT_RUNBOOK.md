@@ -190,7 +190,10 @@ later with no warning.
       "Transmissões anteriores". For an older session, before its retention
       window passes:
       ```sql
-      -- psql "$DATABASE_URL" from the API box (the managed cluster only answers it)
+      -- Run on the API box (the managed cluster only answers it) with the
+      -- DATABASE_URL value from /opt/pqp/.env, e.g. in the postgres:17-alpine
+      -- container as docs/DB_RUNBOOK.md does for pg_dump. The variable is not
+      -- exported in a login shell, so "$DATABASE_URL" is empty until you set it.
       update hls_sessions set keep_replay = true
         where channel_id = '<channelId>' and ended_at > now() - interval '1 hour';
       ```
