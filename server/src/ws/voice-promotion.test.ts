@@ -124,6 +124,7 @@ const { SOCKET_CAPS, setAuthenticatedSocket, deleteAuthenticatedSocket } =
   await import("./sockets.js");
 
 const { admissionLedger } = await import("../voice/sfu-admission-metrics.js");
+const { pinRoomRegion } = await import("../voice/regions.js");
 
 const {
   CAMERA_LIMIT,
@@ -1124,6 +1125,31 @@ describe("more cameras on a room already on the SFU", () => {
     // The gauge only reads: the next camera is still refused exactly the same.
     await cameraOn(people[4]!, channel);
     expect(typesOf(people[4]!)).toContain("camera-denied");
+  });
+
+  it("counts a room pinned to a removed region on the home box, not a second row", async () => {
+    // `boxOfRegion` reads an unknown or removed region as home; the gauge has
+    // to key on the same canonical box the guards price with.
+    process.env.VOICE_PROMOTION_MAX_SFU_MBPS = "30";
+    admissionLedger.reset();
+    resetSfuAdmissionSnapshotCache();
+    const people = await roomOf(6);
+    pinRoomRegion(channel, "gone");
+    for (const person of people.slice(0, 4)) {
+      await cameraOn(person, channel);
+    }
+    expect(typesOf(people[3]!)).toContain("camera-denied");
+
+    resetSfuAdmissionSnapshotCache();
+    const gauge = await getSfuAdmissionSnapshot();
+
+    expect(gauge?.boxes.map((box) => box.box)).toEqual(["sao"]);
+    expect(gauge?.boxes[0]).toMatchObject({
+      loadMbps: 27,
+      rooms: 1,
+      checks5m: 4,
+      refusals5m: 1,
+    });
   });
 
   it("admits the same camera once the budget covers it", async () => {

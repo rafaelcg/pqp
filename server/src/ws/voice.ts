@@ -12044,6 +12044,19 @@ async function readRoomLoadsWithSource(): Promise<{
 }
 
 /**
+ * Tell the admission gauge how a budget decision went. The key is the
+ * CANONICAL box (`boxOfRegion`: a null, unknown or removed region is the home
+ * box), the same mapping the guards price with, so two region ids that are one
+ * physical box never split into two partial rows.
+ */
+function noteAdmissionCheck(
+  region: string | null | undefined,
+  refused: boolean,
+): void {
+  admissionLedger.note(boxOfRegion(region), refused);
+}
+
+/**
  * What the video admission estimator believes right now, per SFU box, for
  * `GET /api/admin/metrics` (`sfuAdmission`). READ-ONLY: the guards price rooms
  * exactly as before and only tell the ledger how they answered. Cached for
@@ -12067,14 +12080,24 @@ export async function getSfuAdmissionSnapshot(
   }
   sfuAdmissionInFlight = (async () => {
     try {
-      const { rooms, source } = await readRoomLoadsWithSource();
+      const loaded = await readRoomLoadsWithSource();
+      const source = loaded.source;
+      // Canonical boxes on every input, whatever the reader produced: the
+      // rows are keyed by box, and a region id that maps onto another box
+      // must land there and not as a second, partial row.
+      const rooms = loaded.rooms.map((room) => ({
+        ...room,
+        region: boxOfRegion(room.region),
+      }));
       const value = buildSfuAdmissionSnapshot({
         rooms,
         source,
         perBox: perBoxBudgetOn(),
         price: priceOptions(),
         homeBox: homeBoxId(),
-        boxIds: (sfuRegions() ?? []).map((region) => region.id),
+        boxIds: [
+          ...new Set((sfuRegions() ?? []).map((r) => boxOfRegion(r.id))),
+        ],
         budgetFor: (box) => boxBudgetMbps(box),
         clusterBudgetMbps: boxBudgetMbps(null),
         counts: admissionLedger.counts(now),
@@ -12167,7 +12190,7 @@ async function admitVideoOnSfu(
     scope: boxScopeFor(region),
     price: priceOptions(),
   });
-  admissionLedger.note(region, !verdict.admit);
+  noteAdmissionCheck(region, !verdict.admit);
   if (!verdict.admit) {
     // The counter that proves the mechanism runs. Without it a budget that is
     // wrong looks exactly like a room where nobody wanted their camera on.
@@ -12392,7 +12415,7 @@ async function attemptPromotion(
   // Only a decision against the budget is an admission check: an
   // unconfigured or unreachable SFU is a different failure.
   if (verdict.promote || verdict.refusal === "budget") {
-    admissionLedger.note(region, !verdict.promote);
+    noteAdmissionCheck(region, !verdict.promote);
   }
   if (!verdict.promote) {
     logEvent("voice.transportPromotionRefused", {
