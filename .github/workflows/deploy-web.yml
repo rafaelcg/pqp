@@ -32,7 +32,7 @@ jobs:
         with:
           # workflow_run checks out the default branch by default, which is
           # not necessarily the commit CI just passed. Pin it the same way
-          # deploy-api-fly.yml does so two close merges cannot ship a SHA
+          # deploy-api-vultr.yml does so two close merges cannot ship a SHA
           # whose CI has not finished.
           ref: ${{ github.event.workflow_run.head_sha || github.ref }}
           # Full history: the sitemap's `lastmod` for a marketing page is the day

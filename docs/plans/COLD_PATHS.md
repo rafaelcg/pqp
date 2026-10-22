@@ -6,8 +6,11 @@ or batch that also ran there competed for the same CPU. This is the inventory
 of those jobs as of 2026-09-06, where each one runs now, and why.
 
 The mechanism is `WORKER_MODE` (`server/src/lib/process-role.ts`) and the
-`jobs.ts` module. Deploy wiring: `fly.worker.toml`, `deploy-api-fly.yml`,
-`docs/deploy-fly.md` ("Worker").
+`jobs.ts` module. Deploy wiring: the `worker` service in
+`tools/api-host/compose.yaml` (production, since 2026-09-17). It used to be
+`fly.worker.toml`, `deploy-api-fly.yml` and `docs/deploy-fly.md` ("Worker");
+the first two were deleted on 2026-10-22, and the Fly commands in this file
+are history, kept for a self-host on Fly.
 
 ## The rule
 
