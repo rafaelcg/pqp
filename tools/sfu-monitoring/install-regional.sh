@@ -131,7 +131,11 @@ SFU_BOX_NAME="$SFU_BOX_NAME" bash "$HERE/install.sh"
 
 echo "== check"
 sleep 3
-systemctl is-active alloy pqp-box-metrics.timer
+# One at a time: `systemctl is-active a b` exits 0 when ANY of them is active.
+for unit in alloy pqp-box-metrics.timer; do
+  systemctl is-active --quiet "$unit" || die "$unit is not active after install; read: journalctl -u $unit -n 50"
+  echo "$unit active"
+done
 if ! grep -q "^pqp_sfu_egress_allowance_bytes ${ALLOWANCE}\$" /var/lib/node_exporter/textfile_collector/pqp_sfu_egress.prom 2>/dev/null; then
   echo "   !! the textfile does not show the allowance yet; wait a minute and read it (vnstat needs one sample before it answers)" >&2
 fi

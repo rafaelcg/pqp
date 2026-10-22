@@ -77,18 +77,18 @@ prometheus.scrape "box" {
 //     user.slice, ...);
 //   * only the `cpu` and `memory` groups are enabled (no per-cpu, network,
 //     disk or perf series);
-//   * only the compose service label is kept, then renamed to `service`
-//     (api-a, api-b, worker, caddy), and the per-recreate `id` and image tag
-//     labels are dropped so a deploy does not churn the series set.
+//   * container labels stay ON (the default), so the compose service label is
+//     certain to be there; the relabel below copies it to `service` (api-a,
+//     api-b, worker, caddy) and drops every `container_label_*`, plus the
+//     per-recreate `id` and image tag labels, BEFORE anything is sent, so a
+//     deploy does not churn the series set in Grafana Cloud.
 //
 // Queries: rate(container_cpu_usage_seconds_total{service="api-a"}[5m]) is
 // cores; container_memory_working_set_bytes is what the OOM killer counts.
 prometheus.exporter.cadvisor "containers" {
-  docker_host                  = "unix:///var/run/docker.sock"
-  docker_only                  = true
-  store_container_labels       = false
-  allowlisted_container_labels = ["com.docker.compose.service"]
-  enabled_metrics              = ["cpu", "memory"]
+  docker_host     = "unix:///var/run/docker.sock"
+  docker_only     = true
+  enabled_metrics = ["cpu", "memory"]
 }
 
 discovery.relabel "containers_cadvisor" {
@@ -131,7 +131,7 @@ prometheus.relabel "containers" {
 
   rule {
     action = "labeldrop"
-    regex  = "container_label_com_docker_compose_service|id|image"
+    regex  = "container_label_.*|id|image"
   }
 }
 

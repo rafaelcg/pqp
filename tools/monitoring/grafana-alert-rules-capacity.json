@@ -55,7 +55,7 @@
             }
           ],
           "noDataState": "OK",
-          "execErrState": "OK",
+          "execErrState": "KeepLast",
           "for": "15m",
           "labels": { "severity": "warning", "area": "capacity" },
           "annotations": {
@@ -95,7 +95,7 @@
             }
           ],
           "noDataState": "OK",
-          "execErrState": "OK",
+          "execErrState": "KeepLast",
           "for": "5m",
           "labels": { "severity": "warning", "area": "capacity" },
           "annotations": {
