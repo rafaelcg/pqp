@@ -37,6 +37,17 @@ export const FEEDBACK_PLATFORMS = ["web", "desktop", "ios", "android"] as const;
  * what the browser thought the network was. See feedback #126.
  */
 export const FEEDBACK_RELAY_PROTOCOLS = ["udp", "tcp", "tls"] as const;
+
+/**
+ * A relay host label is a DNS name, never an address. Dotted, and the last
+ * label must start with a letter: that rejects `203.0.113.7`, `0x7f.1`,
+ * `2130706433` and every other numeric spelling of an IPv4 address (a TLD is
+ * never numeric), and a bracketed IPv6 literal fails on the characters.
+ */
+const RELAY_HOSTNAME = /^(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z][A-Za-z0-9-]*[A-Za-z0-9]$/;
+export function isRelayHostname(host: string): boolean {
+  return host.length <= 64 && RELAY_HOSTNAME.test(host);
+}
 export const feedbackVoiceLinkSchema = z.object({
   /** The selected ICE pair had a TURN allocation on either end. */
   relayed: z.boolean().optional(),
@@ -46,7 +57,7 @@ export const feedbackVoiceLinkSchema = z.object({
     .string()
     .trim()
     .max(64)
-    .regex(/^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$/)
+    .refine(isRelayHostname, "not a hostname")
     .optional(),
   /** Round trip of the selected pair to the OTHER PERSON, averaged, in ms. */
   rttMsAvg: z.number().int().min(0).max(60000).optional(),

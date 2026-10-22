@@ -23,6 +23,8 @@
  * global, which is smaller than the cost of guessing.
  */
 
+import { isRelayHostname } from "@pqp/shared";
+
 /** Which of the two video senders a track belongs to. */
 export type VideoSenderRole = "camera" | "screen" | "unknown";
 
@@ -319,13 +321,9 @@ export function relayHostFromUrl(url: string | null): string | null {
   }
   const match = /^turns?:([A-Za-z0-9][A-Za-z0-9.-]*)(?::\d+)?(?:\?.*)?$/i.exec(url.trim());
   const host = match?.[1]?.toLowerCase();
-  if (!host || host.length > 64) {
-    return null;
-  }
-  if (/^[0-9.]+$/.test(host)) {
-    return null;
-  }
-  return host;
+  // `isRelayHostname` is the same rule the report's schema applies: dotted
+  // and a letter-led last label, so no spelling of an IPv4 address passes.
+  return host && isRelayHostname(host) ? host : null;
 }
 
 function relayProtocolOf(local: RtcStatLike | undefined): "udp" | "tcp" | "tls" | null {

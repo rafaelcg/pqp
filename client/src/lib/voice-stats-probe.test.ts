@@ -161,6 +161,8 @@ describe("summariseStats", () => {
     expect(relayHostFromUrl("turns:turn.example.org")).toBe("turn.example.org");
     expect(relayHostFromUrl("turn:203.0.113.7:3478?transport=udp")).toBeNull();
     expect(relayHostFromUrl("turn:[2001:db8::1]:3478")).toBeNull();
+    expect(relayHostFromUrl("turn:0x7f.1:3478")).toBeNull();
+    expect(relayHostFromUrl("turn:2130706433:3478")).toBeNull();
     expect(relayHostFromUrl("stun:stun.example.org")).toBeNull();
     expect(relayHostFromUrl(null)).toBeNull();
   });

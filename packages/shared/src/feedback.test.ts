@@ -48,6 +48,17 @@ describe("feedback context voice.link", () => {
     expect(parsed.voice?.link).toBeUndefined();
   });
 
+  it.each(["203.0.113.7", "0x7f.1", "2130706433", "1.2.3.0x4", "localhost", "[2001:db8::1]"])(
+    "refuses %s as a relay host",
+    (relayHost) => {
+      const parsed = feedbackContextSchema.parse({
+        ...base,
+        voice: { inCall: true, link: { relayHost } },
+      });
+      expect(parsed.voice?.link).toBeUndefined();
+    },
+  );
+
   it("never turns a bad link into a refused feedback", () => {
     const parsed = createFeedbackSchema.parse({
       kind: "bug",
