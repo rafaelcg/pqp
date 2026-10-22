@@ -62,6 +62,141 @@ prometheus.scrape "box" {
   forward_to      = [prometheus.remote_write.grafana_cloud.receiver]
 }
 
+// --- Per-container CPU and memory -------------------------------------------
+//
+// The box-level numbers above cannot say WHICH process is eating the box (the
+// capacity review of 2026-10-22, section G, item 1). Alloy embeds cAdvisor, so
+// there is no extra container to run, patch or give resource limits: the
+// component reads the Docker socket this unit already reads for the logs
+// below and the cgroup files under /sys/fs/cgroup, both readable by the
+// `alloy` user (provision.sh adds it to the docker group). Nothing listens on
+// a port: Alloy scrapes the component in process.
+//
+// Narrowed on purpose, because Grafana Cloud's free tier caps active series:
+//   * `docker_only` skips every cgroup that is not a container (system.slice,
+//     user.slice, ...);
+//   * only the `cpu` and `memory` groups are enabled (no per-cpu, network,
+//     disk or perf series);
+//   * only the compose service label is kept, then renamed to `service`
+//     (api-a, api-b, worker, caddy), and the per-recreate `id` and image tag
+//     labels are dropped so a deploy does not churn the series set.
+//
+// Queries: rate(container_cpu_usage_seconds_total{service="api-a"}[5m]) is
+// cores; container_memory_working_set_bytes is what the OOM killer counts.
+prometheus.exporter.cadvisor "containers" {
+  docker_host                  = "unix:///var/run/docker.sock"
+  docker_only                  = true
+  store_container_labels       = false
+  allowlisted_container_labels = ["com.docker.compose.service"]
+  enabled_metrics              = ["cpu", "memory"]
+}
+
+discovery.relabel "containers_cadvisor" {
+  targets = prometheus.exporter.cadvisor.containers.targets
+
+  rule {
+    target_label = "instance"
+    replacement  = "api-pqp"
+  }
+}
+
+prometheus.scrape "containers" {
+  targets         = discovery.relabel.containers_cadvisor.output
+  job_name        = "cadvisor"
+  scrape_interval = "60s"
+  forward_to      = [prometheus.relabel.containers.receiver]
+}
+
+prometheus.relabel "containers" {
+  forward_to = [prometheus.remote_write.grafana_cloud.receiver]
+
+  rule {
+    source_labels = ["container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+
+  // A series with no compose service is not one of ours (a container started
+  // by hand, or the cAdvisor root cgroup). Not worth a series.
+  rule {
+    source_labels = ["service"]
+    regex         = ".+"
+    action        = "keep"
+  }
+
+  rule {
+    source_labels = ["__name__"]
+    regex         = "container_(cpu_usage_seconds_total|memory_working_set_bytes|memory_usage_bytes|memory_rss|spec_memory_limit_bytes|start_time_seconds|last_seen|oom_events_total)"
+    action        = "keep"
+  }
+
+  rule {
+    action = "labeldrop"
+    regex  = "container_label_com_docker_compose_service|id|image"
+  }
+}
+
+// --- Caddy request metrics --------------------------------------------------
+//
+// Caddy serves its own Prometheus metrics on a SEPARATE listener, `:2020` in
+// tools/api-host/Caddyfile, which is NOT published to the host or the
+// internet (compose.yaml maps only 80 and 443; ufw allows only those from
+// Cloudflare's ranges). Alloy runs on the host, and a host can reach a
+// container's address on the Docker bridge, so the target is the caddy
+// container's own bridge IP and port 2020, found through the same Docker
+// discovery as the logs. No `ports:` line, so no compose change and no
+// recreate of Caddy to turn this on.
+discovery.relabel "caddy" {
+  targets = discovery.docker.containers.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    regex         = "caddy"
+    action        = "keep"
+  }
+
+  // discovery.docker emits one target per container port; keep one. Two
+  // targets with the same final address collapse anyway, this just makes it
+  // explicit.
+  rule {
+    source_labels = ["__meta_docker_port_private"]
+    regex         = "80"
+    action        = "keep"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_network_ip"]
+    regex         = "(.+)"
+    replacement   = "$1:2020"
+    target_label  = "__address__"
+  }
+
+  rule {
+    target_label = "instance"
+    replacement  = "api-pqp"
+  }
+}
+
+prometheus.scrape "caddy" {
+  targets         = discovery.relabel.caddy.output
+  job_name        = "caddy"
+  scrape_interval = "60s"
+  forward_to      = [prometheus.relabel.caddy.receiver]
+}
+
+// Keep the request rate, the status mix, the latency sum/count pair (a mean,
+// and no histogram buckets: they multiply by every handler, method and code),
+// in-flight requests and the upstream health that the active health check
+// feeds. Go runtime and process series are dropped.
+prometheus.relabel "caddy" {
+  forward_to = [prometheus.remote_write.grafana_cloud.receiver]
+
+  rule {
+    source_labels = ["__name__"]
+    regex         = "caddy_http_request_(duration_seconds_(count|sum)|errors_total|count_total)|caddy_http_requests_(total|in_flight)|caddy_reverse_proxy_upstreams_healthy"
+    action        = "keep"
+  }
+}
+
 prometheus.remote_write "grafana_cloud" {
   external_labels = {
     box = "api-pqp",

@@ -1,0 +1,111 @@
+{
+  "_comment": [
+    "Grafana Alerting file-provisioning format (apiVersion 1): two always-on capacity rules from the 2026-10-22",
+    "capacity review (section G, 'Alerts I would add'), meant to stay imported alongside grafana-alert-rules-growth.json.",
+    "Everything in this repo's Grafana stack is managed by hand in the UI (docs/MONITORING.md: 'the UI is the source of",
+    "truth'), so treat this file the same way: POST each rule to /api/v1/provisioning/alert-rules (with",
+    "X-Disable-Provenance: true, adding folderUID and ruleGroup, see docs/MONITORING.md 'Importing the capacity",
+    "dashboard and rules'), not something CI applies.",
+    "",
+    "Replace <PROMETHEUS_DATASOURCE_UID> before import (`grafanacloud-prom` on this stack).",
+    "",
+    "WINDOWS ARE 3 MINUTES OR MORE ON PURPOSE. The pqp_api_* series land about once a minute, and a [1m] window with",
+    "jitter is empty half the time, which Grafana reads as NoData (the 2026-09-22 alert-email storm). noDataState is OK",
+    "on both rules: a silent exporter is already alerted on by its own scrape_ok / collected_seconds rule, and these two",
+    "must not page for a missing series.",
+    "",
+    "Rule 1 needs the exporter with pqp_api_sfu_admission_* running on the SFU box (and the API PR that adds the",
+    "sfuAdmission block). Rule 2 needs pqp_api_event_loop_lag_p99_ms. Until then both sit on 'no data', which is OK here."
+  ],
+  "apiVersion": 1,
+  "groups": [
+    {
+      "orgId": 1,
+      "name": "pqp-capacity",
+      "folder": "pqp",
+      "interval": "1m",
+      "rules": [
+        {
+          "uid": "pqp-capacity-sfu-estimate-drift",
+          "title": "SFU admission estimate far above what the box carries",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "datasourceUid": "<PROMETHEUS_DATASOURCE_UID>",
+              "relativeTimeRange": { "from": 900, "to": 0 },
+              "model": {
+                "refId": "A",
+                "expr": "(sum(avg_over_time(pqp_api_sfu_admission_estimated_mbps{region=\"sao\"}[3m])) / clamp_min(sum(rate(node_network_transmit_bytes_total{box=\"sfu-pqp\"}[5m])) * 8 / 1e6, 1) > 2.5) and on() ((1 - avg(rate(node_cpu_seconds_total{box=\"sfu-pqp\",mode=\"idle\"}[5m]))) < 0.4) and on() (sum(avg_over_time(pqp_api_sfu_admission_estimated_mbps{region=\"sao\"}[3m])) > 100)",
+                "instant": true,
+                "range": false
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  { "evaluator": { "type": "gt", "params": [2.5] } }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "OK",
+          "for": "15m",
+          "labels": { "severity": "warning", "area": "capacity" },
+          "annotations": {
+            "summary": "The admission budget thinks the SFU is far busier than it is.",
+            "description": "estimated Mbit/s (pqp_api_sfu_admission_estimated_mbps{region=\"sao\"}) divided by the box's measured transmit Mbit/s is above 2.5 for 15m while the box CPU is under 40%, with an estimate above 100 so a quiet box never fires. This is the 2026-10-20 shape: 56 cameras and shares refused at 524 to 605 of 600 on a box at 32% CPU. Check the 'pqp Capacity' dashboard first; if the ratio is high and refusals are non-zero, the price is too high (sfu_video_price_calibrated, VOICE_PROMOTION_MAX_SFU_MBPS) and people are being turned away for load that is not there. The estimate prices video only and the measurement counts everything, so read the first weeks of data before moving the 2.5.",
+            "runbook": "docs/MONITORING.md#capacity-gauges"
+          },
+          "notification_settings": { "receiver": "rafael-email" }
+        },
+        {
+          "uid": "pqp-capacity-event-loop-p99",
+          "title": "API event loop stalled",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "datasourceUid": "<PROMETHEUS_DATASOURCE_UID>",
+              "relativeTimeRange": { "from": 600, "to": 0 },
+              "model": {
+                "refId": "A",
+                "expr": "last_over_time(pqp_api_event_loop_lag_p99_ms[3m])",
+                "instant": true,
+                "range": false
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  { "evaluator": { "type": "gt", "params": [200] } }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "OK",
+          "for": "5m",
+          "labels": { "severity": "warning", "area": "capacity" },
+          "annotations": {
+            "summary": "An API replica has been running its timers 200 ms late for 5 minutes.",
+            "description": "pqp_api_event_loop_lag_p99_ms (the worst of the two replicas, the worst 5 s slice's p99 over the last minute) above 200 for 5m. One Node thread per replica serves every socket and request, so a handler holding it makes the whole replica slow while the box CPU still reads about 20%. Look at the 'pqp Capacity' dashboard: does it track the socket count (a fan-out that scales with people) or arrive alone (one slow handler)? Then the API logs for that replica and a CPU profile if it persists. A rolling deploy's reconnect herd can lift it for a minute or two; five is not that.",
+            "runbook": "docs/MONITORING.md#capacity-gauges"
+          },
+          "notification_settings": { "receiver": "rafael-email" }
+        }
+      ]
+    }
+  ]
+}

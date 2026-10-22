@@ -18,7 +18,7 @@ arithmetic: [`docs/plans/WATCH_PARTY_POSTMORTEM_2026-09-12.md`](../../docs/plans
 | `pqp-deploy.sh` | The one command the unprivileged `pqp-deploy` SSH account may sudo. Rolling-updates `api-a` → `api-b` → `worker`, verifies each replica's own reported version, splits `PG_POOL_MAX` across however many replicas are running. Signed and transferred by the deploy workflow the same way as `compose.yaml`/`Caddyfile` (same HMAC manifest) and installs a newer copy of itself mid-run when one is staged — see its own header comment for why that self-replacement is safe. A box whose installed copy predates this file's `api-a`/`api-b` split needs ONE manual `provision.sh` re-run first; `docs/deploy-vultr.md` §9 "Migrating an existing box" has the exact commands. | `/usr/local/bin/pqp-deploy` (root:root, 0755) |
 | `Caddyfile` | TLS for `api.pqp.gg` (two modes documented in its header: Cloudflare Origin CA, or Caddy automatic HTTPS), load-balancing reverse proxy across `api-a:3001` / `api-b:3001` with active health checking, WebSocket pass-through | `/opt/pqp/caddy/Caddyfile` (the directory `/opt/pqp/caddy` is mounted whole at `/etc/caddy`, never the single file: see below) |
 | `test-pqp-deploy.sh` | Offline checks (stubbed `docker`, temp directories, no root) for the Caddy layout seeding and the post-reload integrity check in `pqp-deploy.sh`; the functions are cut out of the real script. Not installed on the box. | not on the box |
-| `config.alloy` | Box metrics + `api-a`/`api-b`/`worker` container logs (labeled by Compose service name automatically — no changes needed here for the second replica), both to the same Grafana Cloud stack `tools/sfu-monitoring` and `tools/log-shipper` already use | `/etc/alloy/config.alloy` |
+| `config.alloy` | Box metrics + `api-a`/`api-b`/`worker` container logs (labeled by Compose service name automatically, no changes needed here for the second replica), both to the same Grafana Cloud stack `tools/sfu-monitoring` and `tools/log-shipper` already use. Also per-container CPU and memory (Alloy's embedded cAdvisor, labelled `service`) and Caddy's request metrics (scraped at the caddy container's bridge address, port 2020, which is not published). See `docs/MONITORING.md` "Capacity gauges" | `/etc/alloy/config.alloy` |
 
 Not here, and never in git: `.env`, `caddy/certs/origin.{pem,key}`,
 `/etc/alloy/credentials.env`. `provision.sh` writes an empty template for
@@ -85,6 +85,32 @@ Checked locally with Caddy 2.11.4 and an echo upstream: a trusted peer sending
 `CF-Connecting-IP: 198.51.100.9` and a spoofed `X-Forwarded-For: 1.2.3.4`
 reaches the upstream as `X-Forwarded-For: 198.51.100.9`; an untrusted peer's
 headers are ignored (the upstream sees the peer's own address).
+
+## Apply an Alloy config change by hand
+
+`pqp-deploy.sh` does not touch `/etc/alloy/config.alloy` (the deploy workflow
+ships `compose.yaml`, the `Caddyfile` and the script, not the monitoring
+config), so a change to `config.alloy` is applied on the box by hand and takes
+effect at once without touching a container or a call:
+
+```bash
+sudo install -m 0644 config.alloy /etc/alloy/config.alloy
+sudo alloy validate /etc/alloy/config.alloy        # refuses a bad file before the reload
+sudo systemctl reload alloy                         # or: curl -X POST localhost:12345/-/reload
+systemctl is-active alloy
+curl -s localhost:12345/metrics | grep -E 'prometheus_remote_storage_samples_(total|failed_total)'
+```
+
+Then confirm the series in Grafana rather than trusting the config:
+`container_cpu_usage_seconds_total{box="api-pqp"}` (labelled `service`) and
+`caddy_http_request_duration_seconds_count{box="api-pqp"}`. If `service` is
+missing from the cAdvisor series, Alloy could not read the Docker socket or the
+cgroup files: check `groups alloy` includes `docker` and read
+`journalctl -u alloy -n 50`. The Caddy scrape target is the caddy container's
+address on the Docker bridge, port 2020 (`http://:2020` in the Caddyfile);
+`curl -s http://<that ip>:2020/metrics | head` from the box proves it. The first
+Caddyfile that carries `servers { metrics }` and the `:2020` site goes live with
+the deploy's own `caddy reload`.
 
 ## Apply a Caddyfile-only change by hand
 
