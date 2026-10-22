@@ -811,6 +811,7 @@ import { getIceServers } from "../services/ice.js";
 import {
   createReport,
   getReport,
+  getReportRevealTarget,
   getReportScope,
   isInstanceModerator,
   listAllReports,
@@ -821,6 +822,11 @@ import {
   ReportTargetNotVisibleError,
   resolveReport,
 } from "../services/reports.js";
+import {
+  REVEAL_RESOLVED_WINDOW_DAYS,
+  reportAttachmentPreviewEnabled,
+  revealReportAttachment,
+} from "../services/report-attachments.js";
 import { getReportContext } from "../services/report-context.js";
 import {
   ADMIN_FEEDBACK_PATH,
@@ -1159,6 +1165,16 @@ const webhookExecuteLimiter = createRateLimiter({
  */
 const reportLimiter = createRateLimiter({ capacity: 5, refillPerSecond: 0.05 });
 /**
+ * Looking at a reported attachment, per moderator. Each reveal is a deliberate
+ * click on one picture; a burst of ten and one more every five seconds covers
+ * working through a card with a few images and stops a script (or a stolen
+ * session) from walking every attachment in the queue.
+ */
+const reportRevealLimiter = createRateLimiter({
+  capacity: 10,
+  refillPerSecond: 0.2,
+});
+/**
  * Joining the watch party waitlist. A person edits their row a few times at
  * most (a wrong audience range, a typo in the channel); a burst of five and
  * one more every half minute covers that and keeps a script from walking
@@ -1468,6 +1484,7 @@ export function resetApiRateLimits(): void {
   accountDeleteLimiter.reset();
   webhookExecuteLimiter.reset();
   reportLimiter.reset();
+  reportRevealLimiter.reset();
   watchPartyWaitlistLimiter.reset();
   // Declared in the depoimentos section at the foot of this file. Safe to name
   // here: this function only ever runs after module evaluation, so the `const`
@@ -13086,6 +13103,130 @@ router.get("/api/reports/:report/context", async ({ user }, { report }) => {
   }
   return context;
 });
+
+/**
+ * One look at an image or gif on a reported message.
+ *
+ * Gated, in this order, so the cheapest and least revealing refusal comes first
+ * and every one of them but the guardrails reads as "not found":
+ *
+ * 1. `report_attachment_preview` off: 404, the route is absent.
+ * 2. The same rule as reading the report (`/context` above): an instance
+ *    moderator, or staff of the report's own server. Anybody else, and a report
+ *    that does not exist, are the same 404.
+ * 3. Rate limit per moderator.
+ * 4. The attachment must belong to THE REPORTED MESSAGE of THIS report, and the
+ *    report must be open or resolved within `REVEAL_RESOLVED_WINDOW_DAYS`;
+ *    otherwise 404. An attachment id from another message is not "forbidden",
+ *    it does not exist as far as this report is concerned.
+ * 5. The guardrails (`guardrail` in `services/report-attachments.ts`): a
+ *    scanner verdict of flagged, rejected or error, an illegal or csam_suspected
+ *    label, a quarantined object, a minor-in-sexual-content report, anything
+ *    that is not a picture. 403 with the reason in words, because the person
+ *    who asked deserves to know why, and the card already says so.
+ *
+ * The audit row is written BEFORE the URL is handed out, and a failed write
+ * fails the request: nobody looks without a record. It names the actor, the
+ * report and the attachment, never the URL. A conversation report has no server
+ * to file an `audit_log` row under (the column is NOT NULL, see `report.resolve`
+ * in shared/audit), so it leaves the `[moderation]` line below instead, the
+ * same trail `remove-message` leaves for the same case.
+ *
+ * The answer is `no-store` (every JSON response here is) and the URL lives 60
+ * seconds. Nothing in this handler logs it.
+ */
+router.post(
+  "/api/reports/:report/attachments/:attachment/reveal",
+  async ({ res, user }, { report, attachment }) => {
+    if (!reportAttachmentPreviewEnabled()) {
+      throw new NotFound("Not found");
+    }
+    const reportId = reportIdParam(report);
+    const scope = await getReportScope(reportId);
+    if (!scope) {
+      throw new NotFound("Report not found");
+    }
+    if (!isInstanceModerator(user)) {
+      if (!scope.serverId) {
+        throw new NotFound("Report not found");
+      }
+      try {
+        await requireAnyPermission(scope.serverId, user.id, [
+          Permission.KICK_MEMBERS,
+          Permission.BAN_MEMBERS,
+          Permission.MODERATE_MEMBERS,
+        ]);
+      } catch (error) {
+        if (error instanceof Forbidden || error instanceof NotFound) {
+          throw new NotFound("Report not found");
+        }
+        throw error;
+      }
+    }
+
+    const key = `report-reveal:${user.id}`;
+    if (!reportRevealLimiter.take(key)) {
+      res.setHeader("Retry-After", String(reportRevealLimiter.retryAfter(key)));
+      throw new HttpError(429, "Slow down");
+    }
+
+    if (!attachment || !isUuid(attachment)) {
+      throw new NotFound("Attachment not found");
+    }
+    const target = await getReportRevealTarget(
+      reportId,
+      REVEAL_RESOLVED_WINDOW_DAYS,
+    );
+    if (!target || !target.inWindow) {
+      throw new NotFound("Report not found");
+    }
+
+    const outcome = await revealReportAttachment({
+      messageId: target.messageId,
+      attachmentId: attachment,
+    });
+    if (!outcome.ok) {
+      if (outcome.reason === "not_found") {
+        throw new NotFound("Attachment not found");
+      }
+      if (outcome.reason === "unsupported") {
+        throw new HttpError(
+          403,
+          "Only images and gifs can be previewed from a report",
+        );
+      }
+      throw new Forbidden(
+        outcome.blockReason === "minor_report"
+          ? "Preview refused: this message was reported as a minor in sexual content. Do not open it, follow the illegal-content runbook"
+          : outcome.blockReason === "scan_status"
+            ? "Preview refused: the scanner flagged, rejected or could not read this file. See the illegal-content runbook"
+            : "Preview refused: this file is held as possibly illegal. Do not open it, follow the illegal-content runbook",
+      );
+    }
+
+    // Deliberately unconditional, and without the URL.
+    console.log(
+      `[moderation] report attachment revealed: report ${reportId}, ` +
+        `attachment ${attachment}, moderator ${user.id}`,
+    );
+    if (scope.serverId) {
+      await logAudit({
+        serverId: scope.serverId,
+        actorId: user.id,
+        action: "report.attachment_reveal",
+        targetType: "attachment",
+        targetId: attachment,
+        changes: [{ key: "report", old: null, new: reportId }],
+      });
+    }
+
+    res.setHeader("Cache-Control", "no-store");
+    return {
+      url: outcome.url,
+      expiresInSeconds: outcome.expiresInSeconds,
+    };
+  },
+);
 
 /**
  * One server's queue. `requireManager`, like every other moderation read — and

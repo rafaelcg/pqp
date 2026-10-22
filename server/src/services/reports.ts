@@ -11,6 +11,7 @@ import {
 } from "@pqp/shared";
 import type { DbUser } from "../db.js";
 import { getPool } from "../db.js";
+import { withAttachments } from "./report-attachments.js";
 import { resolveStoryForReport } from "./stories.js";
 import { canAccessChannel } from "./users.js";
 
@@ -179,6 +180,9 @@ function toReport(row: ReportRow): Report {
     messageDeleted:
       row.subject_type === "message" && row.reported_message_id === null,
     contentSnapshot: row.content_snapshot,
+    // Filled by `withAttachments` on the reads a moderator makes; a report
+    // handed back to its own filer, or built from a bare row, carries none.
+    attachments: [],
     channelId: row.channel_id,
     channelName: row.channel_label,
     storyId: row.reported_story_id,
@@ -917,7 +921,11 @@ export async function getReport(id: string): Promise<Report | null> {
     [id],
   );
   const row = result.rows[0];
-  return row ? toReport(row) : null;
+  if (!row) {
+    return null;
+  }
+  const [report] = await withAttachments([toReport(row)]);
+  return report ?? null;
 }
 
 export interface ListReportsOptions {
@@ -958,6 +966,16 @@ function page<Row extends ReportRow, T>(
   };
 }
 
+/** `page`, then the reported messages' attachments (metadata) in one query. */
+async function pageWithAttachments<Row extends ReportRow, T extends Report>(
+  rows: Row[],
+  limit: number,
+  map: (row: Row) => T,
+): Promise<{ reports: T[]; hasMore: boolean }> {
+  const { reports, hasMore } = page(rows, limit, map);
+  return { reports: await withAttachments(reports), hasMore };
+}
+
 /**
  * One server's queue.
  *
@@ -975,7 +993,7 @@ export async function listServerReports(
     `SELECT ${REPORT_COLUMNS} FROM reports r ${REPORT_JOINS} ${tail}`,
     params,
   );
-  return page(result.rows, options.limit, toReport);
+  return pageWithAttachments(result.rows, options.limit, toReport);
 }
 
 /**
@@ -995,7 +1013,7 @@ export async function listInstanceReports(
     `SELECT ${REPORT_COLUMNS} FROM reports r ${REPORT_JOINS} ${tail}`,
     params,
   );
-  return page(result.rows, options.limit, toReport);
+  return pageWithAttachments(result.rows, options.limit, toReport);
 }
 
 interface AllReportRow extends ReportRow {
@@ -1098,7 +1116,7 @@ export async function listAllReports(
      ${tail}`,
     params,
   );
-  return page(result.rows, options.limit, toAllReport);
+  return pageWithAttachments(result.rows, options.limit, toAllReport);
 }
 
 /** What the reporter filed, in the narrow shape they are allowed to see. */
@@ -1133,6 +1151,34 @@ export async function getReportScope(
   }>(`SELECT server_id, status FROM reports WHERE id = $1::bigint`, [id]);
   const row = result.rows[0];
   return row ? { serverId: row.server_id, status: row.status } : null;
+}
+
+/**
+ * What the attachment reveal route needs to know about a report, and no more:
+ * the message it is about and whether it is still inside the window in which a
+ * moderator may look at that message's files (open, or resolved within
+ * `windowDays`). One narrow read, so the route does not pay for the whole card.
+ */
+export async function getReportRevealTarget(
+  id: string,
+  windowDays: number,
+): Promise<{ messageId: string; inWindow: boolean } | null> {
+  const result = await getPool().query<{
+    message_id: string | null;
+    in_window: boolean;
+  }>(
+    `SELECT reported_message_id::text AS message_id,
+            (status = 'open'
+             OR resolved_at > NOW() - ($2::int * INTERVAL '1 day')) AS in_window
+     FROM reports
+     WHERE id = $1::bigint AND subject_type = 'message'`,
+    [id, windowDays],
+  );
+  const row = result.rows[0];
+  if (!row?.message_id) {
+    return null;
+  }
+  return { messageId: row.message_id, inWindow: row.in_window };
 }
 
 /**

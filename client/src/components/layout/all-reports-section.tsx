@@ -5,6 +5,7 @@ import {
 } from "@pqp/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { ReportAttachments } from "@/components/layout/report-attachments";
 import { ReportContextPanel } from "@/components/layout/report-context-panel";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
@@ -296,11 +297,15 @@ export function AllReportsSection() {
                   })}
                 </p>
 
-                {report.contentSnapshot !== null && (
+                {report.contentSnapshot?.trim() && (
                   <blockquote className="whitespace-pre-wrap break-words rounded-md border-l-2 border-ink-4 bg-ink px-3 py-2 text-sm text-paper">
                     {report.contentSnapshot}
                   </blockquote>
                 )}
+                <ReportAttachments
+                  reportId={report.id}
+                  attachments={report.attachments}
+                />
                 {report.messageDeleted && (
                   <p className="text-xs text-warning">
                     {t("reports.messageDeleted")}
