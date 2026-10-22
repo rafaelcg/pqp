@@ -156,6 +156,21 @@ describe("ReportAttachments", () => {
     expect(text).toContain("the scanner could not answer");
   });
 
+  it("shows a status it does not know as it is, even one named like an object key", async () => {
+    await mount(
+      <ReportAttachments
+        reportId="42"
+        attachments={[
+          attachment({
+            preview: "off",
+            scan: { status: "constructor", provider: null, score: null, labels: [] },
+          }),
+        ]}
+      />,
+    );
+    expect(host!.textContent).toContain("Scanner: constructor");
+  });
+
   it("with the preview off, draws the list and no button, no placeholder, no image", async () => {
     await mount(
       <ReportAttachments reportId="42" attachments={[attachment({ preview: "off" })]} />,

@@ -63,7 +63,8 @@ type Translate = ReturnType<typeof useTranslation>["t"];
 
 function scanLine(attachment: ReportAttachment, t: Translate): string {
   const { status, provider, score, labels } = attachment.scan;
-  const known = status in STATUS_KEYS;
+  // Own keys only: a status of "constructor" is not a translation key.
+  const known = Object.hasOwn(STATUS_KEYS, status);
   const parts = [
     known ? t(STATUS_KEYS[status as keyof typeof STATUS_KEYS]) : status,
   ];

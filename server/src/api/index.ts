@@ -13204,11 +13204,6 @@ router.post(
       );
     }
 
-    // Deliberately unconditional, and without the URL.
-    console.log(
-      `[moderation] report attachment revealed: report ${reportId}, ` +
-        `attachment ${attachment}, moderator ${user.id}`,
-    );
     if (scope.serverId) {
       await logAudit({
         serverId: scope.serverId,
@@ -13219,6 +13214,13 @@ router.post(
         changes: [{ key: "report", old: null, new: reportId }],
       });
     }
+    // Deliberately unconditional, without the URL, and AFTER the audit write:
+    // a reveal whose audit failed never happened, so it must not be logged as
+    // if it had. For a conversation report this line is the whole trail.
+    console.log(
+      `[moderation] report attachment revealed: report ${reportId}, ` +
+        `attachment ${attachment}, moderator ${user.id}`,
+    );
 
     res.setHeader("Cache-Control", "no-store");
     return {
