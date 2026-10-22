@@ -24,6 +24,55 @@ export const FEEDBACK_BODY_MAX_LENGTH = 2000;
  * header rather than trusting a copy.
  */
 export const FEEDBACK_PLATFORMS = ["web", "desktop", "ios", "android"] as const;
+
+/**
+ * How the call's link looked over the last ~30 seconds, read off the quality
+ * sampler the app already runs, so "the call was bad" arrives with the path
+ * it took. Captured only while in a call. Every field is optional and nothing
+ * here names an address or a person: the relay is a hostname label at most
+ * (never an IP, the client drops one), and the numbers are averages.
+ *
+ * Why it exists: a report of "220 ms and 4% loss" is unreadable without
+ * knowing whether the media went direct or through a relay, which relay, and
+ * what the browser thought the network was. See feedback #126.
+ */
+export const FEEDBACK_RELAY_PROTOCOLS = ["udp", "tcp", "tls"] as const;
+
+/**
+ * A relay host label is a DNS name, never an address. Dotted, and the last
+ * label must start with a letter: that rejects `203.0.113.7`, `0x7f.1`,
+ * `2130706433` and every other numeric spelling of an IPv4 address (a TLD is
+ * never numeric), and a bracketed IPv6 literal fails on the characters.
+ */
+const RELAY_HOSTNAME = /^(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z][A-Za-z0-9-]*[A-Za-z0-9]$/;
+export function isRelayHostname(host: string): boolean {
+  return host.length <= 64 && RELAY_HOSTNAME.test(host);
+}
+export const feedbackVoiceLinkSchema = z.object({
+  /** The selected ICE pair had a TURN allocation on either end. */
+  relayed: z.boolean().optional(),
+  relayProtocol: z.enum(FEEDBACK_RELAY_PROTOCOLS).optional(),
+  /** The TURN server's hostname (`turn.cloudflare.com`). Never an address. */
+  relayHost: z
+    .string()
+    .trim()
+    .max(64)
+    .refine(isRelayHostname, "not a hostname")
+    .optional(),
+  /** Round trip of the selected pair to the OTHER PERSON, averaged, in ms. */
+  rttMsAvg: z.number().int().min(0).max(60000).optional(),
+  /** Inbound packet loss, averaged over the window, percent. */
+  lossPctAvg: z.number().min(0).max(100).optional(),
+  /** How many two-second samples the two averages above came from. */
+  samples: z.number().int().min(0).max(1000).optional(),
+  /** A screen share was up, sent or received, at the latest sample. */
+  sharing: z.boolean().optional(),
+  /** `navigator.connection.effectiveType`: `4g`, `3g`... when the browser has it. */
+  effectiveType: z.string().trim().max(16).optional(),
+  /** `navigator.connection.downlink`, Mbps, when the browser has it. */
+  downlinkMbps: z.number().min(0).max(100000).optional(),
+});
+export type FeedbackVoiceLink = z.infer<typeof feedbackVoiceLinkSchema>;
 export const feedbackContextSchema = z.object({
   platform: z.enum(FEEDBACK_PLATFORMS),
   /** The deployed commit, or "dev". */
@@ -39,6 +88,8 @@ export const feedbackContextSchema = z.object({
       transport: voiceRoomTransportSchema.nullable().optional(),
       /** The call's channel had a watch party stream live. */
       watchParty: z.boolean().optional(),
+      /** A `link` this build cannot read is dropped alone, not the context. */
+      link: feedbackVoiceLinkSchema.optional().catch(undefined),
     })
     .optional(),
   /** Grafana Faro session, to open this person's errors around that moment. */

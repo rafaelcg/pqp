@@ -1194,6 +1194,34 @@ To check the budget, `grafanacloud_org_fe_o11y_billable_sessions` against
 `grafanacloud_org_fe_o11y_included_sessions` on the `grafanacloud-usage`
 Prometheus data source. Counts read off Faro are a sample: multiply by five.
 
+### The call link on a feedback report (`voice.link`)
+
+A bug report sent from inside a call carries `context.voice.link`, so "the call
+was bad" arrives with the path it took (`feedbackVoiceLinkSchema` in
+`packages/shared/src/feedback.ts`, built by `currentLinkSummary` in
+`client/src/lib/call-link-window.ts`). It is read off the sampler the call
+already runs (the one shared `sampleVoiceStats()` tick, no extra poll) and
+covers the last 30 seconds: `relayed` (the selected ICE pair had a TURN
+allocation on either end), `relayProtocol` (`udp`, `tcp` or `tls`, only for our
+own relay) and `relayHost` (the TURN hostname, for example `turn.cloudflare.com`;
+a relay named by IP address is left blank, and nothing in the field is ever an
+address), `rttMsAvg`, `lossPctAvg`, `samples`, `sharing` (a screen share up in
+either direction), and the browser's `effectiveType` / `downlinkMbps` where it
+exposes `navigator.connection`. The transport (mesh or sfu) is the existing
+`voice.transport`. Every field is optional: an older client sends none of it, and
+a `link` the server cannot parse is dropped on its own without losing the rest of
+the context. Read it on the operator dashboard's feedback queue (the `link:`
+line under each item) or in `GET /api/admin/feedback`. How to read it: the ms is
+the round trip to the OTHER PERSON in the call, through the relay when there is
+one, not to a pqp server, so it is not comparable with Discord's ping to its own
+server; loss is inbound only. High ms with `relayed: false` points at a far or
+slow peer or the reporter's own Wi-Fi (check `effectiveType` and `sharing`);
+`relayed: true` with `relayProtocol: tcp` or `tls` points at a relay reached over
+a blocked-UDP path, which adds delay and jitter; a missing `link` on a mesh
+report means the report was sent from outside a call or before the first sample.
+The window is empty once the call ends, so a report sent right after hanging up
+has no `link`.
+
 ## The activation funnel
 
 The growth counters above say how much is happening. The **activation funnel**
