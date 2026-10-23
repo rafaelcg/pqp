@@ -13,6 +13,7 @@ import {
 } from "./stream-alerts.js";
 import { livePreviewMetrics } from "./live-preview.js";
 import { appsMetrics, type AppsMetrics } from "../apps/metrics.js";
+import { ageGateMetrics, type AgeGateMetrics } from "./age-gate.js";
 import { nudgeMetrics, type NudgeMetrics } from "./nudge.js";
 import { channelLayoutReport, type ChannelLayoutReport } from "./channel-layout.js";
 import {
@@ -381,6 +382,13 @@ export interface AdminMetrics {
    * the 30 s cache.
    */
   nudge: NudgeMetrics;
+  /**
+   * The 18+ gate's answers (`services/age-gate.ts`), since this process started:
+   * `passed`, `blocked`, and `implausible` (a date refused without spending the
+   * attempt). Counts only, never a date or an account. Per process: with two
+   * instances read each. Live, never from the 30 s cache.
+   */
+  age: AgeGateMetrics;
   /**
    * Apps in channels (`apps/metrics.ts`): live sessions and seats from the
    * table, and since this process started the starts, ends by reason, handoffs,
@@ -1276,6 +1284,7 @@ type CachedMetrics = Omit<
   | "streamAlerts"
   | "livePreview"
   | "nudge"
+  | "age"
   | "channelLayout"
   | "apps"
 >;
@@ -2101,6 +2110,7 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     streamAlerts: streamAlertMetrics(),
     livePreview: livePreviewMetrics(),
     nudge: nudgeMetrics(),
+    age: ageGateMetrics(),
     channelLayout,
     apps,
   };

@@ -885,6 +885,20 @@ export const FEATURE_FLAGS = {
     // clients that read it land after the server.
     clientVia: "GET /api/stories/config + POST /api/stories/uploads",
   },
+  age_gate_readback: {
+    description:
+      "Portão de idade: antes de enviar, a data aparece escrita por extenso (\"Tu nasceu em 3 de dezembro de 2008\") com Está certo / Corrigir. Desligado, volta o envio direto.",
+    env: "AGE_GATE_READBACK",
+    parseEnv: onUnlessOff,
+    // On: a kill switch, not a rollout. Off is exactly today's direct submit.
+    codeDefault: true,
+    // About the sign-up screen of an account that belongs to no server.
+    perServer: false,
+    // Served on /api/me while the gate is pending: it is the only route a
+    // pending account may call besides the declaration. No `(field)` for the
+    // contract test, whose readers are config routes.
+    clientVia: "GET /api/me (ageGateReadback, only while ageGate is pending)",
+  },
   mixed_channel_list: {
     description:
       "Lista de canais só com categorias: tipos misturados em cada categoria, a ordem que o gerente escolher, e um servidor novo nasce com a categoria Canais.",

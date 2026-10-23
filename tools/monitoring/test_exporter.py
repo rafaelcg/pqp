@@ -1012,6 +1012,24 @@ class NudgeTests(unittest.TestCase):
         self.assertEqual(merged["nudge"], {"enabled": True, "sent": 5, "refused": {"cooldown": 7}})
 
 
+class AgeGateTests(unittest.TestCase):
+    def test_render(self):
+        body = exporter.render(_base_payload(age={"passed": 7, "blocked": 2, "implausible": 3}))
+        self.assertIn("pqp_api_age_passed_total 7", body)
+        self.assertIn("pqp_api_age_blocked_total 2", body)
+        self.assertIn("pqp_api_age_implausible_total 3", body)
+        self.assertIn("# TYPE pqp_api_age_implausible_total counter", body)
+
+    def test_absent_block_renders_nothing(self):
+        self.assertNotIn("pqp_api_age", exporter.render(_base_payload()))
+
+    def test_counters_sum_across_replicas(self):
+        a = _base_payload(age={"passed": 7, "blocked": 2, "implausible": 3})
+        b = _base_payload(age={"passed": 1, "blocked": 0, "implausible": 4})
+        merged = exporter.merge_admin_metrics([a, b])
+        self.assertEqual(merged["age"], {"passed": 8, "blocked": 2, "implausible": 7})
+
+
 class RenderVoiceNotesTests(unittest.TestCase):
     def test_usage_series(self):
         body = exporter.render(_base_payload(voiceNotes=_voice_notes()))

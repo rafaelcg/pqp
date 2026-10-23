@@ -2391,6 +2391,13 @@ function MainAppContent({
     null,
   );
   /**
+   * Whether the gate says the date back in words before sending it (the
+   * `age_gate_readback` flag, as `/api/me` reported it while the gate was
+   * pending). Only ever set while pending and never cleared, so the dialog
+   * keeps the screen it is on through the hand-off that follows a pass.
+   */
+  const [ageGateReadback, setAgeGateReadback] = useState(false);
+  /**
    * Whether this account still has to be shown the first-run flow.
    *
    * Decided once, from the `/api/me` the bootstrap already makes, and never
@@ -5272,6 +5279,9 @@ function MainAppContent({
         // read as "this deployment does not have one" and passes through. Only
         // an explicit `pending` or `blocked` stops here.
         if (me.ageGate === "pending" || me.ageGate === "blocked") {
+          if (me.ageGate === "pending") {
+            setAgeGateReadback(me.ageGateReadback === true);
+          }
           setAgeGate(me.ageGate);
           return;
         }
@@ -10730,6 +10740,7 @@ function MainAppContent({
         stepsTotal={firstRunPath === "cold" ? 4 : 2}
         path={firstRunPath}
         handingOff={gateHandoff}
+        readback={ageGateReadback}
         // Passing re-runs the whole bootstrap from the top, which is exactly
         // what is wanted: everything it would have loaded is still unloaded.
         onPassed={() => {
