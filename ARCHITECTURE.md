@@ -108,7 +108,7 @@ headline: an instance with attachments turned off is healthy, not degraded.
 
 `/status.json` answers **200 while reporting a component as down** — the state
 is in the body — so it cannot drive a status-code monitor. `/health` can, but it
-is Fly's release gate (`fly.toml`) and carries the deployed commit. So a third
+is the platform's release gate (the Docker healthcheck on the Vultr box, Fly's check on a self-host) and carries the deployed commit. So a third
 path exists whose entire contract is the status code: `GET /up`, 200 when the
 process reached its database and 503 only after that has failed continuously for
 45 seconds. It is unauthenticated like the other two and says strictly less than
