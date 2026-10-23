@@ -67,12 +67,19 @@ export function BirthDateFields({
   onChange,
   disabled = false,
   autoFocus = false,
+  focusField = "day",
   compact = false,
 }: {
   parts: DateParts;
   onChange: (update: (current: DateParts) => DateParts) => void;
   disabled?: boolean;
   autoFocus?: boolean;
+  /**
+   * Which box `autoFocus` lands on. The age gate sends somebody back to the
+   * year when the server said the year looks wrong, so they are one keystroke
+   * from the fix instead of at the day.
+   */
+  focusField?: "day" | "year";
   /** Narrower day and year boxes, for a card inside a phone-width column. */
   compact?: boolean;
 }) {
@@ -100,7 +107,7 @@ export function BirthDateFields({
             max={31}
             placeholder={t("ageGate.day.placeholder")}
             autoComplete="bday-day"
-            autoFocus={autoFocus}
+            autoFocus={autoFocus && focusField === "day"}
             disabled={disabled}
             value={parts.day}
             onChange={(event) => {
@@ -154,6 +161,7 @@ export function BirthDateFields({
             min={1900}
             placeholder={t("ageGate.year.placeholder")}
             autoComplete="bday-year"
+            autoFocus={autoFocus && focusField === "year"}
             disabled={disabled}
             value={parts.year}
             onChange={(event) => {

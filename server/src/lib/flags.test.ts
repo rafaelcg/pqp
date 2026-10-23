@@ -157,6 +157,8 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   stories_friends: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition. A kill switch: on unless off.
   stories_eager_uploads: offWords,
+  // New with the flag, so there was no old reader: this is its definition. A kill switch: on unless off.
+  age_gate_readback: offWords,
   // New with the flag, so there was no old reader: this is its definition.
   mixed_channel_list: (raw) => raw === "true",
   discord_bring_crew: (raw) => raw === "true",

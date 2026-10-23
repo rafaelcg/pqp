@@ -147,8 +147,42 @@ describe("plausibility", () => {
     expect(isPlausibleBirthDate(date("2030-01-01"), today)).toBe(false);
   });
 
-  it("accepts today itself — a newborn is implausible, not impossible", () => {
-    expect(isPlausibleBirthDate(today, today)).toBe(true);
+  it("refuses today itself and a newborn: the year somebody is typing it is a slip", () => {
+    expect(isPlausibleBirthDate(today, today)).toBe(false);
+    expect(isPlausibleBirthDate(date("2026-01-01"), today)).toBe(false);
+    expect(isPlausibleBirthDate(date("2025-03-10"), today)).toBe(false);
+  });
+
+  it("puts the floor at exactly ten years, to the day", () => {
+    // Exactly ten years back is plausible; one day short of it is not.
+    expect(isPlausibleBirthDate(date("2016-03-10"), today)).toBe(true);
+    expect(isPlausibleBirthDate(date("2016-03-11"), today)).toBe(false);
+    expect(isPlausibleBirthDate(date("2016-03-09"), today)).toBe(true);
+    // And a year slip that lands a decade or two back is still a declaration.
+    expect(isPlausibleBirthDate(date("2015-12-31"), today)).toBe(true);
+  });
+
+  it("puts a 29 February birth on 1 March when the floor falls in a non-leap year", () => {
+    const leapDay = date("2016-02-29");
+    expect(isPlausibleBirthDate(leapDay, date("2026-02-28"))).toBe(false);
+    expect(isPlausibleBirthDate(leapDay, date("2026-03-01"))).toBe(true);
+  });
+
+  it("accepts a normal adult and the eighteenth birthday itself", () => {
+    expect(isPlausibleBirthDate(date("1990-07-04"), today)).toBe(true);
+    expect(isPlausibleBirthDate(date("2008-03-10"), today)).toBe(true);
+    expect(isPlausibleBirthDate(date("2008-03-11"), today)).toBe(true);
+  });
+
+  it("reads the floor against the gate's own today, UTC+14", () => {
+    // 2026-03-09T23:00Z is already 2026-03-10 in the Line Islands.
+    const now = new Date("2026-03-09T23:00:00Z");
+    expect(isPlausibleBirthDate(date("2016-03-10"), ageCheckToday(now))).toBe(
+      true,
+    );
+    expect(isPlausibleBirthDate(date("2016-03-11"), ageCheckToday(now))).toBe(
+      false,
+    );
   });
 
   it("refuses a year that is a typo rather than a person", () => {

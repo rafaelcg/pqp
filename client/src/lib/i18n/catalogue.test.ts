@@ -38,7 +38,7 @@ describe("translateMessage", () => {
     );
     await loadLocale("pt-BR");
     expect(translateMessage("ageGate.description", { age: 18 })).toBe(
-      "O pqp é pra maiores de 18. A gente pergunta uma vez e acredita em você.",
+      "O pqp é pra maiores de 18. A gente pergunta uma vez e acredita no que tu disser.",
     );
   });
 
