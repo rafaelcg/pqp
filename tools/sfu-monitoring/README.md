@@ -13,7 +13,8 @@ one at the end, so a rebuild comes up already monitored.
 | `install.sh` | Idempotent installer. Run it on the box as root. Never touches the livekit or caddy containers, so it cannot interrupt a call. |
 | `config.alloy` | Grafana Alloy: node exporter + textfile collector + a scrape of LiveKit's own `:6789`, remote-written to Grafana Cloud. Installed at `/etc/alloy/config.alloy`. |
 | `pqp-box-metrics.py` | Writes two textfile metric files every minute: monthly egress from vnstat, and docker container state. Installed at `/usr/local/bin/pqp-box-metrics`. |
-| `pqp-box-metrics.service` / `.timer` | The systemd timer that runs it. |
+| `pqp-box-metrics.service` / `.timer` | The systemd timer that runs it. The service reads optional per-box overrides from `/etc/pqp-box-metrics.env`. |
+| `install-regional.sh` | The same install for a regional box (`sfu-mia`, `sfu-lhr`): requires its own `SFU_BOX_NAME` and `PQP_EGRESS_ALLOWANCE_BYTES`, finds the interface and containers, then runs `install.sh`. `PQP_REGIONAL_DRY_RUN=1` checks without changing anything. See below. |
 
 ## Install or update
 
@@ -28,6 +29,26 @@ grafana.com Access Policy token stored locally as `GRAFANA_LOGS_WRITE_TOKEN`
 in `~/.config/pqp/grafana.env`; it carries both `logs:write` and
 `metrics:write`. It is written to `/etc/alloy/credentials.env` (0600, root)
 and is never in this repo.
+
+## A regional box (`sfu-mia`, `sfu-lhr`)
+
+The Miami and London boxes get the same monitoring as this one, under their own
+`box` label, with their own transfer allowance:
+
+```bash
+scp -r tools/sfu-monitoring root@<box>:/opt/
+# first, a check that changes nothing:
+ssh root@<box> 'SFU_BOX_NAME=sfu-mia PQP_EGRESS_ALLOWANCE_BYTES=<bytes> PQP_REGIONAL_DRY_RUN=1 bash /opt/sfu-monitoring/install-regional.sh'
+# then the install (first run only: also GC_PROM_USER and GC_PROM_TOKEN, see above)
+ssh root@<box> 'SFU_BOX_NAME=sfu-mia PQP_EGRESS_ALLOWANCE_BYTES=<bytes> bash /opt/sfu-monitoring/install-regional.sh'
+```
+
+`PQP_EGRESS_ALLOWANCE_BYTES` is the plan's monthly transfer: read `bandwidth`
+(GB) for the plan from the Vultr API (`/v2/plans`), multiply by 10^9. It has no
+default on purpose; the script's default would be the 4c plan's 6 TB. Re-run
+the script to change it. The API metrics exporter (`tools/monitoring`) is NOT
+installed on a regional box: it is one cluster-wide read and already runs on
+`sfu-pqp`.
 
 ## Check it is working
 

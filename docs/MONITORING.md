@@ -1594,10 +1594,152 @@ restart and would churn the series set for nothing.
 
 ---
 
+## Capacity gauges
+
+From the 2026-10-22 capacity review, section G (the gauges it wanted and could
+not find). The reading that started it: on 2026-10-20 the API refused 56 cameras
+and shares between 23:00Z and 01:00Z with the admission estimate at 524 to 605
+Mbit/s against a 600 budget, while the SFU box sat at 1.27 cores (32%) and sent
+154 Mbit/s. The SFU was not full, the estimate was, and the only record of it
+was log lines. Everything below is read-only: no gauge here is consulted by an
+admission or any other decision.
+
+Dashboard `pqp Capacity` (uid `pqp-capacity`, `tools/monitoring/grafana-dashboard-capacity.json`),
+two rules in group `pqp-capacity` (`tools/monitoring/grafana-alert-rules-capacity.json`).
+
+### Estimated against measured SFU load
+
+`GET /api/admin/metrics` carries `sfuAdmission` (server code in
+`server/src/voice/sfu-admission-metrics.ts`), and the exporter writes it as
+`pqp_api_sfu_admission_*{region}`:
+
+| Series | Meaning |
+|---|---|
+| `_estimated_mbps` | Mbit/s the admission estimator prices for the SFU rooms on that region's box. The same `estimateSfuLoadMbps`, per-box scope and price flags (`sfu_video_budget_per_box`, `sfu_video_price_calibrated`) the camera, share and promotion guards use, so it is the number an admission compared with the budget. Cameras and shares only: audio is not priced. |
+| `_budget_mbps` | The ceiling that box is held to (`VOICE_PROMOTION_MAX_SFU_MBPS`, or `_<REGION>`). |
+| `_rooms`, `_participants`, `_camera_publishers`, `_screen_publishers` | What the estimate was made of. A mesh room costs the box nothing and is not counted. |
+| `_checks_5m`, `_refusals_5m` | Decisions against the budget in the last 5 minutes (a camera or share on a room already on the SFU, and a mesh room's promotion), and how many it refused. Summed across both API replicas. |
+| `_checks_total`, `_refusals_total` | The same since the API booted (counters; they reset on deploy). |
+| `_cluster_view` | 1 when the room list is the whole cluster's, 0 when it fell back to one replica's own rooms (registry off or its read failed), which makes the estimate a floor. |
+
+`region` is `sao` for the home box, the ids in `LIVEKIT_REGIONS` for the others,
+and `all` when `sfu_video_budget_per_box` is off and one number covers the
+cluster. Do not call the label `box`: Alloy stamps `box="sfu-pqp"` on every
+series from that host and the two would collide.
+
+**How to read it.** Divide the estimate by what the box really sends:
+
+```
+sum(pqp_api_sfu_admission_estimated_mbps{region="sao"})
+  / clamp_min(sum(rate(node_network_transmit_bytes_total{box="sfu-pqp"}[5m])) * 8 / 1e6, 1)
+```
+
+The estimate is a deliberate worst case (every viewer is charged the layer a big
+tile asks for) and it prices video only while the measurement counts audio and
+TURN too, so the ratio is not 1 and is not meant to be. What matters is the
+shape: a ratio that climbs while the box CPU stays low is an estimate that has
+drifted from the hardware, and `refusals_5m` above zero in that state is people
+being turned away for load that is not there. `sfu_video_price_calibrated` and
+the budget are what to move. The alert fires at a ratio above 2.5 for 15 minutes
+while CPU is under 40%, with an estimate above 100 as a floor; read the first
+weeks of the series before trusting 2.5, because the price was recalibrated on
+2026-10-21 and the old incident ratios (about 4) predate it. For a regional box
+use `region="mia"` against `node_network_transmit_bytes_total{box="sfu-mia"}`
+once `install-regional.sh` has run there.
+
+### Event-loop lag
+
+`runtime.eventLoop` on the payload (`server/src/lib/event-loop.ts`), written as
+`pqp_api_event_loop_lag_{p50,p99,max}_ms`: how late a replica fires its own
+timers over the last minute, from `perf_hooks.monitorEventLoopDelay`. The 20 ms
+sampling floor is subtracted, so a healthy process reads 0 to 2. `p99` is the
+worst 5 second slice's p99 (percentiles of slices cannot be merged, so it errs
+high, never low). The exporter reports the worse of the two replicas, because a
+stall holds one replica's thread and the sibling's calm reading would hide it.
+
+One Node thread per replica serves every socket and request, so a handler that
+holds it makes the whole replica slow while the host CPU reads 20% and the pool
+looks fine. Nothing else shows that. The alert fires at p99 above 200 ms for 5
+minutes. First question when it does: does the lag track the socket count (a
+fan-out that scales with people, the deploy reconnect herd) or arrive alone (one
+slow handler)? The dashboard puts the two on one panel.
+
+### Per-container CPU and memory on the API box
+
+Alloy's embedded cAdvisor (`prometheus.exporter.cadvisor` in
+`tools/api-host/config.alloy`), no extra container. Series
+`container_cpu_usage_seconds_total`, `container_memory_working_set_bytes`,
+`container_spec_memory_limit_bytes`, `container_start_time_seconds` and a few
+others, labelled `service` (`api-a`, `api-b`, `worker`, `caddy`) and
+`box="api-pqp"`. Narrowed to the `cpu` and `memory` groups, Docker containers
+only, with the per-recreate `id` and image labels dropped so a deploy does not
+churn the series set. `rate(container_cpu_usage_seconds_total{service="api-a"}[5m])`
+is cores; a replica far above its sibling is the hot one, which host CPU cannot
+say. A step in `container_start_time_seconds` is a restart; one with no deploy
+is a crash loop or an OOM kill.
+
+### Caddy request metrics
+
+The Caddyfile's global `servers { metrics }` turns on per-handler request
+counters, served by a separate `http://:2020 { metrics }` site that Alloy scrapes
+at the caddy container's address on the Docker bridge. **It is not public**:
+`compose.yaml` publishes only 80 and 443, ufw allows only those from Cloudflare
+plus SSH, and the public site never proxies `/metrics`. Do not add a `ports:`
+line for 2020 and do not proxy it from `api.pqp.gg`. Kept series:
+`caddy_http_request_duration_seconds_{count,sum}{code,handler,method,server}`,
+`caddy_http_requests_total`, `caddy_http_requests_in_flight`,
+`caddy_http_request_errors_total` and `caddy_reverse_proxy_upstreams_healthy`.
+No histogram buckets (they multiply by every handler, method and code). Query
+`handler!="metrics"` to leave out the scrape itself.
+
+- Request rate: `sum(rate(caddy_http_request_duration_seconds_count{handler!="metrics"}[5m]))`.
+  A WebSocket is counted once, when it closes.
+- 5xx: the same with `code=~"5.."`. A handful of 502s for under 10 seconds is a
+  rolling deploy (the health check pulls a replica out every 5 s); sustained 5xx
+  is not. 503 is also a replica answering `database_unavailable`.
+- `caddy_http_requests_in_flight` is mostly open `/ws` connections.
+- Do not graph mean latency from `_sum / _count` without knowing it includes
+  WebSocket sessions, whose "request" lasts as long as the socket.
+
+### Regional SFU boxes (`sfu-mia`, `sfu-lhr`)
+
+`tools/sfu-monitoring/install-regional.sh` installs on a regional box what
+`sfu-pqp` already has: Alloy with its built-in node exporter (CPU, memory, disk,
+network, the textfile collector), the LiveKit scrape on `127.0.0.1:6789`, and
+`pqp-box-metrics` (monthly transfer from vnstat, container state). It wraps
+`install.sh` and adds what a second box needs: a required `SFU_BOX_NAME` (so the
+series do not land on `sfu-pqp`'s), a required `PQP_EGRESS_ALLOWANCE_BYTES` (the
+default is the 4c plan's 6 TB; a 2c plan is smaller), and the interface and
+container names found rather than assumed, written to `/etc/pqp-box-metrics.env`.
+`PQP_REGIONAL_DRY_RUN=1` validates and prints the plan without touching the box.
+
+The `pqp-api-metrics-exporter` is **not** installed there on purpose: it reads
+one cluster-wide answer, already runs on `sfu-pqp`, and a second copy would
+write every `pqp_api_*` series twice and double every `sum()` in the capacity
+rules. Still not rendered by it: `sfuRegions.controlPlane` and the per-region
+`livekitRegions` counters (review section G, item 5).
+
+### Importing the capacity dashboard and rules
+
+Nothing in `tools/monitoring/` is provisioned from the repo (see "Adding a
+panel"). Dashboard: `POST /api/dashboards/db` with
+`{"dashboard": <file with "id": null>, "overwrite": true}` after replacing
+`<PROMETHEUS_DATASOURCE_UID>` with `grafanacloud-prom`. Rules: one
+`POST /api/v1/provisioning/alert-rules` per rule with
+`X-Disable-Provenance: true`, adding `folderUID` (the `pqp` folder,
+`ffxfigbmjr2f4e`) and `ruleGroup` (`pqp-capacity`). Then verify the series with a
+datasource `/api/v1/query` before telling anyone it is visible: the exporter on
+the SFU box is a separate manual deploy and is NOT in the API image.
+
+---
+
 ## Files
 
 | Path | Role |
 |---|---|
+| `tools/monitoring/grafana-dashboard-capacity.json` | "pqp Capacity" dashboard: estimated vs measured SFU load, per-container CPU and memory, Caddy, event-loop lag |
+| `tools/monitoring/grafana-alert-rules-capacity.json` | "SFU admission estimate far above what the box carries" and "API event loop stalled" |
+| `tools/sfu-monitoring/install-regional.sh` | Idempotent monitoring install for a regional SFU box; `PQP_REGIONAL_DRY_RUN=1` checks without changing anything |
 | `tools/log-shipper/` | Fly app `pqp-log-shipper`: ships `pqp-api` logs to Grafana Cloud Loki |
 | `tools/sfu-monitoring/` | Grafana Alloy config, the vnstat/docker textfile exporter and the installer for the SFU box |
 | `tools/monitoring/pqp-api-metrics-exporter.py` | Textfile exporter: scrapes `GET /api/admin/metrics` into Prometheus series (readiness, pool, voice, and the growth counters above) |
