@@ -188,6 +188,11 @@ import {
 } from "../voice/box-budget.js";
 import { readSfuStatsForRegion } from "../voice/sfu-stats.js";
 import {
+  admissionLedger,
+  buildSfuAdmissionSnapshot,
+  type SfuAdmissionSnapshot,
+} from "../voice/sfu-admission-metrics.js";
+import {
   SFU_REGION_CAP,
   decideSfuRegion,
   regionCapRequired,
@@ -11968,10 +11973,22 @@ function meshCameraLimit(voiceChannelId: string): number | null {
  * only one instance, so its own map is the whole truth.
  */
 async function readRoomLoads(): Promise<SfuRoomLoad[]> {
+  return (await readRoomLoadsWithSource()).rooms;
+}
+
+/**
+ * `readRoomLoads` plus where the answer came from: `cluster` is the registry's
+ * rooms, `local` is this process's own map (registry off, or its read failed).
+ * The admission gauge says which, because a local view is a floor.
+ */
+async function readRoomLoadsWithSource(): Promise<{
+  rooms: SfuRoomLoad[];
+  source: "cluster" | "local";
+}> {
   if (registryOn()) {
     try {
-      const rooms = await listVoiceRosters();
-      return rooms.map((room) => {
+      const rosters = await listVoiceRosters();
+      const rooms = rosters.map((room): SfuRoomLoad => {
         const publishing = countPublishers(room.peers);
         return {
           channelId: room.channelId,
@@ -11986,6 +12003,7 @@ async function readRoomLoads(): Promise<SfuRoomLoad[]> {
             room.watchParty || getRoomPeers(room.channelId).some((p) => p.watchParty),
         };
       });
+      return { source: "cluster", rooms };
     } catch (error) {
       logEvent("voice.registryReadFailed", {
         op: "promotionLoad",
@@ -12022,7 +12040,86 @@ async function readRoomLoads(): Promise<SfuRoomLoad[]> {
       room.screenPublishers += 1;
     }
   }
-  return [...byRoom.values()];
+  return { source: "local", rooms: [...byRoom.values()] };
+}
+
+/**
+ * Tell the admission gauge how a budget decision went. The key is the
+ * CANONICAL box (`boxOfRegion`: a null, unknown or removed region is the home
+ * box), the same mapping the guards price with, so two region ids that are one
+ * physical box never split into two partial rows.
+ */
+function noteAdmissionCheck(
+  region: string | null | undefined,
+  refused: boolean,
+): void {
+  admissionLedger.note(boxOfRegion(region), refused);
+}
+
+/**
+ * What the video admission estimator believes right now, per SFU box, for
+ * `GET /api/admin/metrics` (`sfuAdmission`). READ-ONLY: the guards price rooms
+ * exactly as before and only tell the ledger how they answered. Cached for
+ * 10 s with the in-flight read shared, because the exporter scrapes every
+ * replica every 20 s and the read is the registry's room list. Null when the
+ * read itself failed, which is a gauge with no value rather than a wrong one.
+ */
+const SFU_ADMISSION_TTL_MS = 10_000;
+let sfuAdmissionCache: { at: number; value: SfuAdmissionSnapshot | null } | null =
+  null;
+let sfuAdmissionInFlight: Promise<SfuAdmissionSnapshot | null> | null = null;
+
+export async function getSfuAdmissionSnapshot(
+  now = Date.now(),
+): Promise<SfuAdmissionSnapshot | null> {
+  if (sfuAdmissionCache && now - sfuAdmissionCache.at < SFU_ADMISSION_TTL_MS) {
+    return sfuAdmissionCache.value;
+  }
+  if (sfuAdmissionInFlight) {
+    return sfuAdmissionInFlight;
+  }
+  sfuAdmissionInFlight = (async () => {
+    try {
+      const loaded = await readRoomLoadsWithSource();
+      const source = loaded.source;
+      // Canonical boxes on every input, whatever the reader produced: the
+      // rows are keyed by box, and a region id that maps onto another box
+      // must land there and not as a second, partial row.
+      const rooms = loaded.rooms.map((room) => ({
+        ...room,
+        region: boxOfRegion(room.region),
+      }));
+      const value = buildSfuAdmissionSnapshot({
+        rooms,
+        source,
+        perBox: perBoxBudgetOn(),
+        price: priceOptions(),
+        homeBox: homeBoxId(),
+        boxIds: [
+          ...new Set((sfuRegions() ?? []).map((r) => boxOfRegion(r.id))),
+        ],
+        budgetFor: (box) => boxBudgetMbps(box),
+        clusterBudgetMbps: boxBudgetMbps(null),
+        counts: admissionLedger.counts(now),
+      });
+      sfuAdmissionCache = { at: now, value };
+      return value;
+    } catch (error) {
+      logEvent("voice.sfuAdmissionSnapshotFailed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    } finally {
+      sfuAdmissionInFlight = null;
+    }
+  })();
+  return sfuAdmissionInFlight;
+}
+
+/** Test seam: the snapshot is cached, and a test needs a fresh read. */
+export function resetSfuAdmissionSnapshotCache(): void {
+  sfuAdmissionCache = null;
+  sfuAdmissionInFlight = null;
 }
 
 /**
@@ -12093,6 +12190,7 @@ async function admitVideoOnSfu(
     scope: boxScopeFor(region),
     price: priceOptions(),
   });
+  noteAdmissionCheck(region, !verdict.admit);
   if (!verdict.admit) {
     // The counter that proves the mechanism runs. Without it a budget that is
     // wrong looks exactly like a room where nobody wanted their camera on.
@@ -12314,6 +12412,11 @@ async function attemptPromotion(
     scope: boxScopeFor(region),
     price: priceOptions(),
   });
+  // Only a decision against the budget is an admission check: an
+  // unconfigured or unreachable SFU is a different failure.
+  if (verdict.promote || verdict.refusal === "budget") {
+    noteAdmissionCheck(region, !verdict.promote);
+  }
   if (!verdict.promote) {
     logEvent("voice.transportPromotionRefused", {
       voiceChannelId,

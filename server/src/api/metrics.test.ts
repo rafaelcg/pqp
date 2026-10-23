@@ -761,6 +761,26 @@ describeDb("GET /api/admin/metrics", () => {
     });
   });
 
+  it("carries the event-loop lag slot and the SFU admission gauge", async () => {
+    const result = await call<
+      MetricsBody & {
+        sfuAdmission: {
+          source: string;
+          boxes: { box: string; loadMbps: number; budgetMbps: number }[];
+        } | null;
+      }
+    >(operator, "/api/admin/metrics");
+    expect(result.status).toBe(200);
+    // The monitor is started by the entry point, not by this suite, so the
+    // slot is present and null here; the lag figures have their own test.
+    expect(result.body.runtime).toHaveProperty("eventLoop", null);
+    expect(result.body.sfuAdmission?.source).toMatch(/^(cluster|local)$/);
+    expect(result.body.sfuAdmission?.boxes.length).toBeGreaterThan(0);
+    const box = result.body.sfuAdmission?.boxes[0];
+    expect(typeof box?.loadMbps).toBe("number");
+    expect(box?.budgetMbps).toBeGreaterThan(0);
+  });
+
   it("carries a runtime block, and never a cached one", async () => {
     const first = await call<MetricsBody>(operator, "/api/admin/metrics");
     const runtime = first.body.runtime;
