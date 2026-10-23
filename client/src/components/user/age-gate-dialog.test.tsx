@@ -272,6 +272,7 @@ describe("the server's plausibility floor", () => {
     await act(async () => cont().click());
     expect(document.querySelector('[role="alert"]')?.textContent).toContain("Check the year");
     expect(year().value).toBe("2026");
+    expect(document.activeElement).toBe(year());
   });
 
   it("any other 400 keeps the generic message", async () => {

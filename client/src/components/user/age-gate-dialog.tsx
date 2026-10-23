@@ -175,6 +175,17 @@ export function AgeGateDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [readingBack, busy]);
 
+  // With the read-back off the fields never unmount between a refusal and the
+  // retry, so `autoFocus` has nothing to act on: put the cursor in the year
+  // by hand when the server said the year looks wrong.
+  useEffect(() => {
+    if (focusYear && step === "fields" && error) {
+      document
+        .querySelector<HTMLInputElement>('input[autocomplete="bday-year"]')
+        ?.focus();
+    }
+  }, [focusYear, step, error]);
+
   /** Continue: say the date back first when the switch is on, else send it. */
   function onContinue() {
     if (!isoDate || busy) {
