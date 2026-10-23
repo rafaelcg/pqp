@@ -2,7 +2,7 @@ import { MINIMUM_AGE_YEARS, type AgeGateStatus } from "@pqp/shared";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { Dialog } from "@/components/ui/dialog";
+import { Dialog, DialogBody } from "@/components/ui/dialog";
 import { StepDots } from "@/components/onboarding/step-dots";
 import {
   BirthDateFields,
@@ -313,54 +313,56 @@ export function AgeGateDialog({
         </>
       }
     >
-      {readingBack ? (
-        // No <form> here on purpose: Enter does something only on a button that
-        // has focus, never from the page.
-        <div
-          ref={readbackRef}
-          role="group"
-          tabIndex={-1}
-          aria-label={`${t("ageGate.readback.born", { date: inWords })} ${t("ageGate.readback.check")}`}
-          data-age-gate-readback=""
-          className={cn(
-            "space-y-4 px-5 py-4 outline-none",
-            moved && "animate-step-in",
-          )}
-        >
-          <div className="space-y-1.5">
-            <p className="text-balance font-display text-xl font-semibold leading-snug text-text">
-              {t("ageGate.readback.born", { date: inWords })}
-            </p>
-            <p className="text-sm text-text-secondary">
-              {t("ageGate.readback.check")}
-            </p>
+      <DialogBody>
+        {readingBack ? (
+          // No <form> here on purpose: Enter does something only on a button that
+          // has focus, never from the page.
+          <div
+            ref={readbackRef}
+            role="group"
+            tabIndex={-1}
+            aria-label={`${t("ageGate.readback.born", { date: inWords })} ${t("ageGate.readback.check")}`}
+            data-age-gate-readback=""
+            className={cn(
+              "space-y-4 outline-none",
+              moved && "animate-step-in",
+            )}
+          >
+            <div className="space-y-1.5">
+              <p className="text-balance font-display text-xl font-semibold leading-snug text-text">
+                {t("ageGate.readback.born", { date: inWords })}
+              </p>
+              <p className="text-sm text-text-secondary">
+                {t("ageGate.readback.check")}
+              </p>
+            </div>
+            {warning}
+            {errorLine}
           </div>
-          {warning}
-          {errorLine}
-        </div>
-      ) : (
-        <form
-          className={cn("space-y-4 px-5 py-4", moved && "animate-step-in")}
-          onSubmit={(event) => {
-            event.preventDefault();
-            onContinue();
-          }}
-        >
-          <BirthDateFields
-            parts={parts}
-            onChange={setParts}
-            disabled={busy}
-            autoFocus
-            focusField={focusYear ? "year" : "day"}
-          />
+        ) : (
+          <form
+            className={cn("space-y-4", moved && "animate-step-in")}
+            onSubmit={(event) => {
+              event.preventDefault();
+              onContinue();
+            }}
+          >
+            <BirthDateFields
+              parts={parts}
+              onChange={setParts}
+              disabled={busy}
+              autoFocus
+              focusField={focusYear ? "year" : "day"}
+            />
 
-          {warning}
+            {warning}
 
-          {errorLine}
-          {/* Enter in any field continues; the visible button is in the footer. */}
-          <button type="submit" hidden aria-hidden="true" tabIndex={-1} />
-        </form>
-      )}
+            {errorLine}
+            {/* Enter in any field continues; the visible button is in the footer. */}
+            <button type="submit" hidden aria-hidden="true" tabIndex={-1} />
+          </form>
+        )}
+      </DialogBody>
     </Dialog>
   );
 }
