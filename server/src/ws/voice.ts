@@ -6817,6 +6817,7 @@ export function removeVoicePeerBySocket(socket: WebSocket) {
 export function resetVoicePeers(): void {
   reconnectLookupMissAt.clear();
   resumeRefusedLines.clear();
+  resumeRefusedSweptAt = 0;
   lastPresenterByChannel.clear();
   presenterPeopleByChannel.clear();
   resetRosterSequences();
@@ -7534,12 +7535,19 @@ type ResumeRefusal =
  * same second, so the line is bounded per reason and room, like the audience
  * lines (`voice/audience.ts`): the first is logged, the rest are counted into
  * `suppressed` on the next one past the window.
+ *
+ * The room id in the key is client-supplied, and a refusal does not need a
+ * real room, so the table is bounded: at most `RESUME_REFUSED_MAX_BUCKETS`
+ * live buckets, swept at most once a window. A flood of made-up rooms stops
+ * being logged until the window turns, and costs one map lookup per frame.
  */
 const RESUME_REFUSED_LOG_WINDOW_MS = 10_000;
+const RESUME_REFUSED_MAX_BUCKETS = 500;
 const resumeRefusedLines = new Map<
   string,
   { at: number; suppressed: number }
 >();
+let resumeRefusedSweptAt = 0;
 
 function noteResumeRefused(
   reason: ResumeRefusal,
@@ -7556,15 +7564,21 @@ function noteResumeRefused(
     entry.suppressed += 1;
     return;
   }
-  const suppressed = entry?.suppressed ?? 0;
-  resumeRefusedLines.set(key, { at: now, suppressed: 0 });
-  if (resumeRefusedLines.size > 2_000) {
-    for (const [stale, value] of resumeRefusedLines) {
-      if (now - value.at >= RESUME_REFUSED_LOG_WINDOW_MS) {
-        resumeRefusedLines.delete(stale);
+  if (!entry && resumeRefusedLines.size >= RESUME_REFUSED_MAX_BUCKETS) {
+    if (now - resumeRefusedSweptAt >= RESUME_REFUSED_LOG_WINDOW_MS) {
+      resumeRefusedSweptAt = now;
+      for (const [stale, value] of resumeRefusedLines) {
+        if (now - value.at >= RESUME_REFUSED_LOG_WINDOW_MS) {
+          resumeRefusedLines.delete(stale);
+        }
       }
     }
+    if (resumeRefusedLines.size >= RESUME_REFUSED_MAX_BUCKETS) {
+      return;
+    }
   }
+  const suppressed = entry?.suppressed ?? 0;
+  resumeRefusedLines.set(key, { at: now, suppressed: 0 });
   logEvent("voice.resumeRefused", {
     reason,
     ...fields,
@@ -7972,18 +7986,24 @@ export async function handleVoiceMessage(
     // `calls.*` on GET /api/admin/metrics is built from; `joinAttempts` is
     // its denominator, and `joinAttempts - joinConnected` the refusals.
     noteJoinAttempt();
-    const refuseResume = (reason: ResumeRefusal) => {
+    const refuseResume = () => {
+      if (payload.resumePeerId) {
+        send(socket, {
+          type: "voice-join-refused",
+          voiceChannelId: payload.voiceChannelId,
+        });
+      }
+    };
+    // The same refusal, with the reason on the record (`voice.resumeRefused`).
+    const declineJoin = (reason: ResumeRefusal) => {
       if (payload.resumePeerId) {
         noteResumeRefused(reason, {
           userId: user.id,
           voiceChannelId: payload.voiceChannelId,
           peerId: payload.resumePeerId,
         });
-        send(socket, {
-          type: "voice-join-refused",
-          voiceChannelId: payload.voiceChannelId,
-        });
       }
+      refuseResume();
     };
     // A CHARACTER NEVER JOINS VOICE. The house cast is a frame that works in a
     // public text room and nowhere else — a fictional stranger in your ear is
@@ -7998,12 +8018,12 @@ export async function handleVoiceMessage(
     // that mints an SFU token.
     if (user.is_character) {
       noteJoinRefused("character");
-      refuseResume("character");
+      declineJoin("character");
       return;
     }
     if (!(await canAccessChannel(payload.voiceChannelId, user.id))) {
       noteJoinRefused("no-access");
-      refuseResume("no-access");
+      declineJoin("no-access");
       return;
     }
     // `type` says which kind of *server* channel this is, and a conversation is
@@ -8022,17 +8042,17 @@ export async function handleVoiceMessage(
     // dead round trip per join either way, on the one path a watch party
     // hammers: the 2026-09-05 party put about ten sequential queries per join
     // against a database answering in 80 to 240 ms with the pool pinned at 25
-    // of 25. All four refusals here are the same `refuseResume`, so which one
+    // of 25. All four refusals here are the same `refuseResume()`, so which one
     // fires first is not observable by any client.
     const channel = await getChannel(payload.voiceChannelId);
     if (!channel) {
       noteJoinRefused("invalid-channel");
-      refuseResume("invalid-channel");
+      declineJoin("invalid-channel");
       return;
     }
     if (channel.kind === "server" && !isVoiceRoomChannelType(channel.type)) {
       noteJoinRefused("invalid-channel");
-      refuseResume("invalid-channel");
+      declineJoin("invalid-channel");
       return;
     }
 
@@ -8045,7 +8065,7 @@ export async function handleVoiceMessage(
       (await isDmSendBlocked(payload.voiceChannelId, user.id))
     ) {
       noteJoinRefused("blocked");
-      refuseResume("blocked");
+      declineJoin("blocked");
       return;
     }
     // THE VOICE CHOKEPOINT for timeouts. `join-voice-room` is the only way into
@@ -8066,7 +8086,7 @@ export async function handleVoiceMessage(
       (await findTimeoutForChannel(user.id, payload.voiceChannelId))
     ) {
       noteJoinRefused("timeout");
-      refuseResume("timeout");
+      declineJoin("timeout");
       return;
     }
 
@@ -8100,7 +8120,7 @@ export async function handleVoiceMessage(
       );
       if (!hasPermission(resolved.permissions, Permission.CONNECT)) {
         noteJoinRefused("no-access");
-        refuseResume("no-access");
+        declineJoin("no-access");
         return;
       }
       canSpeak = hasPermission(resolved.permissions, Permission.SPEAK);

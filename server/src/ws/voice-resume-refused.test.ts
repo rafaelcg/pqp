@@ -175,6 +175,8 @@ function refusals(log: MockInstance<typeof console.log>): Record<string, string>
     );
 }
 
+const realNow = Date.now.bind(Date);
+
 const previous = {
   registry: process.env.VOICE_REGISTRY,
   bus: process.env.CLUSTER_BUS,
@@ -344,7 +346,6 @@ describeDb("voice.resumeRefused", () => {
   });
 
   it("logs one line per reason and room per window, and counts the rest", async () => {
-    const realNow = Date.now.bind(Date);
     vi.spyOn(Date, "now").mockImplementation(() => realNow() + clock);
     const channel = randomUUID();
     const other = randomUUID();
@@ -376,4 +377,24 @@ describeDb("voice.resumeRefused", () => {
       suppressed: "2",
     });
   });
+
+  it("bounds the table, because the room id in the key is the client's", async () => {
+    vi.spyOn(Date, "now").mockImplementation(() => realNow() + clock);
+    const refuse = () =>
+      join(recorder(), randomUUID(), randomUUID(), {
+        resumePeerId: randomUUID(),
+        resumeToken: "x.y",
+      });
+
+    for (let i = 0; i < 26; i += 1) {
+      await Promise.all(Array.from({ length: 20 }, refuse));
+    }
+    // Past the cap nothing more is logged, and nothing is scanned either.
+    expect(refusals(log)).toHaveLength(500);
+
+    // The window turns: the table is swept once and logging resumes.
+    clock += 11_000;
+    await refuse();
+    expect(refusals(log)).toHaveLength(501);
+  }, 60_000);
 });
