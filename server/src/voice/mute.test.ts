@@ -102,22 +102,20 @@ describe("SFU server mute", () => {
     }
   });
 
-  it("unmutes with the same selection when muted=false", async () => {
+  it("never asks the SFU to unmute: lifting a mute is the person's own unmute", async () => {
     lk.listParticipants.mockResolvedValue([
       participant("peer-target", "user-1", [
         { sid: "TR_mic", type: TrackType.AUDIO },
       ]),
     ]);
 
+    // LiveKit refuses a server-side unmute ("remote unmute not enabled") and
+    // the product does not want one, so this resolves true with no SFU call.
     await expect(
       setSfuUserMuted(ROOM, "user-1", false, new Map()),
     ).resolves.toBe(true);
-    expect(lk.mutePublishedTrack).toHaveBeenCalledWith(
-      ROOM,
-      "peer-target",
-      "TR_mic",
-      false,
-    );
+    expect(lk.listParticipants).not.toHaveBeenCalled();
+    expect(lk.mutePublishedTrack).not.toHaveBeenCalled();
   });
 
   it("resolves identity from the local roster when metadata predates it", async () => {
