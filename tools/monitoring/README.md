@@ -32,7 +32,7 @@ actually running on a box with a Prometheus textfile collector -- see
 | `grafana-alert-rules-activation.json` | One always-on rule: "activation funnel stalled at the age gate" -- fires only when signups keep arriving (> 20 in 7 days) while the first gated step after signup is near zero for an hour, i.e. a broken step rather than a slow week. Deliberately the only funnel alert: a conversion floor is a threshold guess with no day-0 baseline and would cry wolf. |
 | `grafana-dashboard-voice-notes.json` | Standing "pqp Mensagens de voz" dashboard (uid `pqp-voice-notes`): a usage row (sent by scope and recorder, senders, length, first plays, listened share, refused requests) and a health row (oldest due job, queue depth, jobs settled and success rate, time to done, transcript status, speech budget). Built on `payload.voiceNotes`. Import and leave up. |
 | `grafana-alert-rules-voice-notes.json` | Always-on group `pqp-voice-notes`: queue stuck, job failure rate high, speech budget exhausted, speech budget at 80%. |
-| `grafana-alert-rules-capacity.json` | Always-on group `pqp-capacity` (seven rules, thresholds are fractions of the core count where they can be): SFU CPU busy above 45% for 15m (warn) and 60% for 10m (critical), LiveKit participants above 240 for 5m, outgoing packet loss p95 above 0.5% for 1h, SFU transmit above 600 Mbit/s for 10m, API box root disk above 75% and memory above 75%. They read node exporter and LiveKit series, not the API exporter above. They hand over to `docs/SFU_RESIZE_RUNBOOK.md`. See "Capacity alerts" below. |
+| `grafana-alert-rules-capacity.json` | Always-on group `pqp-capacity` (eight rules, thresholds are fractions of the core count where they can be): SFU CPU busy above 45% for 15m (warn) and 60% for 10m (critical), LiveKit participants above 240 for 5m, outgoing packet loss p95 above 0.5% for 1h, SFU transmit above 600 Mbit/s for 10m, API box root disk above 75% and memory above 75%, and a presence rule for the SFU trigger series. They read node exporter and LiveKit series, not the API exporter above. They hand over to `docs/SFU_RESIZE_RUNBOOK.md`. See "Capacity alerts" below. |
 | `pqp-api-metrics.service` / `.timer` | The systemd timer that runs it. |
 | `install.sh` | Idempotent installer for the box above. |
 | `grafana-alert-rules-event.json` | Grafana Alerting file-provisioning format: the 6 event-window alert rules (readiness false 60s, `/ready` postgres ms > 200 for 2m, pool queued > 20 for 60s, pool waits over 1 s (see "Pool waits" below), HLS rung deaths > 3 in 5m, API process restarted). Contact point `rafael-email`, same as every other alert in this repo's Grafana stack. |
@@ -383,6 +383,7 @@ shipped by Alloy from the boxes.
 | SFU transmit above 600 Mbit/s | `rate(node_network_transmit_bytes_total{device="enp1s0"}[5m])` in Mbit/s above 600 for 10m |
 | API box root disk above 75% | filesystem used percent on `box="api-vultr"` above 75 for 30m |
 | API box memory above 75% | `100 * (1 - MemAvailable / MemTotal)` on `box="api-vultr"` above 75 for 10m |
+| SFU trigger series missing | `sum(absent(...) or absent(...) ...)` over the node CPU, `enp1s0` transmit, `livekit_participant_total` and outgoing loss series, above 0 for 30m. Present because the rules above are `noDataState: OK`: without it a renamed interface would silence the transmit rule for good |
 
 **Fractions on purpose.** The CPU rules divide by the core count (the number of
 `mode="idle"` series), so resizing the SFU from 4 to 8 cores does not change
@@ -399,7 +400,8 @@ earlier 75% rule because it grew about 2 GB a day in the review).
 
 **Quiet by design.** `noDataState` and `execErrState` are `OK` on every rule: a
 dead exporter or Alloy is the job of the existing "no metrics for 10m" rules,
-and one missed scrape must not page. Each rule has a `for` of 5 to 60 minutes,
+and one missed scrape must not page. A single series vanishing while the
+exporter lives is the eighth rule's job (30 minutes). Each rule has a `for` of 5 to 60 minutes,
 and the packet loss rule also has a sample-count floor so a quiet hour cannot
 trip it. No mute timing: a capacity trigger is valid at any hour.
 
@@ -431,7 +433,7 @@ jq -c '.groups[] | .name as $g | .rules[] | . + {folderUID: "ffxfigbmjr2f4e", ru
 ```
 
 A second run fails with a uid conflict; update with
-`PUT /api/v1/provisioning/alert-rules/<uid>`. Check afterwards that all seven
+`PUT /api/v1/provisioning/alert-rules/<uid>`. Check afterwards that all eight
 show under group `pqp-capacity` in Alerting.
 
 ## Pool waits (added 2026-10-01)

@@ -281,7 +281,8 @@ ssh root@sfu.pqp.gg
 sed -i 's/^  udp_port: 7882-7885$/  udp_port: 7882-7889/' /opt/livekit/livekit.yaml
 grep -n 'udp_port' /opt/livekit/livekit.yaml        # expect 7882-7889 and the turn block's 3478
 ufw allow 7882:7889/udp
-ufw status | grep 7882
+ufw status | grep -F '7882:7889/udp' || echo 'STOP: the 7882:7889/udp rule is missing, do not resize'
+# the old 7882:7885 rule also exists and also matches "7882": only the exact line above counts
 ```
 
 Then update `tools/sfu/livekit.yaml.tmpl` and `tools/sfu/install.sh` in the repo
@@ -419,8 +420,8 @@ ssh root@sfu.pqp.gg 'docker logs --since "$(uptime -s)" livekit-livekit-1 2>&1 |
 #    0   (the sysctl file survived)
 ssh root@sfu.pqp.gg "ss -lntup | grep -E ':(3478|5349) ' | wc -l"
 #    at least 2: TURN/UDP and TURN/TLS listening
-ssh root@sfu.pqp.gg 'ufw status | grep -E "7882|5349|3478"'
-#    the rules are intact, including 7882:7889/udp
+ssh root@sfu.pqp.gg 'ufw status | grep -F "7882:7889/udp"; ufw status | grep -E "5349|3478"'
+#    the exact 7882:7889/udp line is there (the older 7882:7885 line does not count), plus TURN
 ssh root@sfu.pqp.gg 'for i in 1 2 3; do awk "NR>1 && \$13>0" /proc/net/udp; sleep 10; done'
 #    prints nothing: no receive-buffer drops (only meaningful once people are back)
 ```

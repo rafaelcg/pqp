@@ -1,10 +1,12 @@
 {
   "_comment": [
     "Grafana Alerting file-provisioning layout (apiVersion 1): the always-on",
-    "capacity group `pqp-capacity`. Seven rules: SFU CPU busy fraction warn (45% for",
+    "capacity group `pqp-capacity`. Eight rules: SFU CPU busy fraction warn (45% for",
     "15m) and critical (60% for 10m), LiveKit participants above 240 for 5m, outgoing",
     "packet loss p95 above 0.5% for 1h, SFU transmit above 600 Mbit/s for 10m, API box",
-    "root disk above 75%, API box memory above 75%. Meant to stay imported, like",
+    "root disk above 75%, API box memory above 75%, and a presence rule that fires when",
+    "one of the SFU trigger series has been missing for 30m (the others are noData OK,",
+    "so a vanished series would otherwise look healthy). Meant to stay imported, like",
     "grafana-alert-rules-growth.json. The reasoning and the upgrade procedure these",
     "alerts hand over to is docs/SFU_RESIZE_RUNBOOK.md.",
     "",
@@ -422,6 +424,62 @@
             "description": "100 * (1 - MemAvailable / MemTotal) on box api-vultr above 75 for 10m. It sat near 20% in the October 22 review with api-a, api-b, the worker and Caddy together, so this fires only on a leak or a real change. The SFU box has its own memory rule; this one did not exist for the API box. Check docker stats on the box to see which container grew.",
             "dashboard": "https://smallkestrel237.grafana.net/d/pqp-sfu-box",
             "runbook": "docs/MONITORING.md"
+          },
+          "notification_settings": {
+            "receiver": "rafael-email"
+          }
+        },
+        {
+          "uid": "pqp-capacity-sfu-series-missing",
+          "title": "SFU capacity: a trigger series has been missing for 30m",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "datasourceUid": "grafanacloud-prom",
+              "relativeTimeRange": {
+                "from": 1800,
+                "to": 0
+              },
+              "model": {
+                "refId": "A",
+                "expr": "sum(absent(node_cpu_seconds_total{box=\"sfu-pqp\",mode=\"idle\"}) or absent(node_network_transmit_bytes_total{box=\"sfu-pqp\",device=\"enp1s0\"}) or absent(livekit_participant_total{box=\"sfu-pqp\"}) or absent(livekit_packet_loss_percent_bucket{box=\"sfu-pqp\",direction=\"outgoing\"}))",
+                "instant": true,
+                "range": false
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        0
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "OK",
+          "for": "30m",
+          "labels": {
+            "severity": "warning",
+            "area": "capacity"
+          },
+          "annotations": {
+            "summary": "One of the series the SFU capacity alerts read has disappeared while the box may still look alive, so those alerts would be silent.",
+            "description": "The other capacity rules have noDataState OK so one missed scrape does not page, which also means a series that vanishes (the enp1s0 interface renamed after a reboot or resize, LiveKit's metrics port changed, a label change) makes its rule look healthy forever. This rule fires when any of the node CPU, enp1s0 transmit, livekit_participant_total or outgoing packet loss series has been absent for 30 minutes. It will fire too if the whole box is down or being resized for longer than 30 minutes, which is also worth knowing. Check the series in Prometheus, then the interface name (ip -br link on the box) and tools/sfu-monitoring/config.alloy. docs/SFU_RESIZE_RUNBOOK.md, post-checks.",
+            "dashboard": "https://smallkestrel237.grafana.net/d/pqp-sfu-box",
+            "runbook": "docs/SFU_RESIZE_RUNBOOK.md"
           },
           "notification_settings": {
             "receiver": "rafael-email"
