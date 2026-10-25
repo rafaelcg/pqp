@@ -454,8 +454,8 @@ const FORUM_OPENING_BASE_STYLE = {
   "--forum-user-line-height": "var(--chat-line-height)",
 } as CSSProperties;
 const FORUM_OPENING_STYLE = {
-  "--chat-font-size": "max(17px, var(--forum-user-font-size))",
-  "--chat-line-height": "max(27px, var(--forum-user-line-height))",
+  "--chat-font-size": "max(16px, var(--forum-user-font-size))",
+  "--chat-line-height": "max(26px, var(--forum-user-line-height))",
 } as CSSProperties;
 
 function ForumOpeningScope({ active, children }: { active: boolean; children: ReactNode }) {

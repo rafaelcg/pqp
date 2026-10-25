@@ -570,7 +570,7 @@ export const ForumPostCard = memo(function ForumPostCard({
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center">
-            {titleLink("block truncate font-display text-[15px] leading-5")}
+            {titleLink("forum-display block truncate text-[15px] font-semibold leading-5")}
           </div>
           <p className="mt-0.5 flex min-w-0 items-center gap-1.5 whitespace-nowrap text-xs leading-4 text-text-secondary">
             <span className="truncate font-semibold text-text">{author}</span>
@@ -631,7 +631,7 @@ export const ForumPostCard = memo(function ForumPostCard({
         <div className="px-1 pb-1 pt-2.5">
           <div className="flex min-w-0 items-center gap-2">
             {isUnread && <UnreadDot />}
-            {titleLink("block truncate font-display text-[15px] leading-5")}
+            {titleLink("forum-display block truncate text-[15px] font-semibold leading-5")}
           </div>
           <div className="mt-1.5 flex min-w-0 items-center gap-1.5 text-xs text-text-secondary">
             <ForumTagList tagIds={post.tagIds.slice(0, 1)} tagsById={tagsById} max={1} size="sm" />
@@ -689,7 +689,7 @@ export const ForumPostCard = memo(function ForumPostCard({
         {isUnread && <UnreadDot className="-translate-y-0.5" />}
         {titleLink(
           cn(
-            "font-display text-lg leading-6 [overflow-wrap:anywhere]",
+            "forum-display text-pretty text-lg font-semibold leading-6 [overflow-wrap:anywhere]",
             narrow ? "line-clamp-3" : "line-clamp-2",
           ),
         )}
@@ -841,7 +841,7 @@ export const ForumPinnedTile = memo(function ForumPinnedTile({
         onFocus={() => onFocus(post.id)}
         onKeyDown={(event) => onKeyDown?.(event, post.id)}
         className={cn(
-          "mt-1.5 line-clamp-2 font-display text-sm leading-[19px] outline-none after:absolute after:inset-0 after:rounded-[var(--radius-card)] after:content-[''] focus-visible:after:ring-2 focus-visible:after:ring-focus-ring",
+          "forum-display mt-1.5 line-clamp-2 text-sm font-semibold leading-[19px] outline-none after:absolute after:inset-0 after:rounded-[var(--radius-card)] after:content-[''] focus-visible:after:ring-2 focus-visible:after:ring-focus-ring",
           isUnread ? "font-bold text-text" : "font-semibold text-text-secondary",
         )}
       >

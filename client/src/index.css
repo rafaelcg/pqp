@@ -2043,6 +2043,53 @@ h2,
   letter-spacing: -0.03em;
 }
 
+/*
+ * The forum's own display text. The rule above is unlayered, so it outranks
+ * every Tailwind utility: a `tracking-[-0.015em]` written next to `font-display`
+ * has never applied, and the forum's titles were set at -0.03em, a headline
+ * tracking, at 17 to 30px. Same face, a tracking that holds at title sizes.
+ * `-lg` is for the 28 to 34px channel heading. Weight and size stay on the
+ * element, because a weight here would beat the utility the same way.
+ */
+.forum-display,
+.forum-display-lg {
+  font-family: var(--font-display);
+  letter-spacing: -0.012em;
+}
+
+.forum-display-lg {
+  letter-spacing: -0.02em;
+}
+
+/*
+ * The composer's title band. `h2` and the eyebrow come from the shared Dialog,
+ * which every other dialog keeps as it is; `headerClassName` is the seam.
+ */
+.forum-dialog-header h2 {
+  letter-spacing: -0.012em;
+}
+
+.forum-dialog-header p.text-accent {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+}
+
+/*
+ * A post's text reads at a book measure, not at the width of the window: a
+ * wide pane used to run one sentence across 1100px. The opening message is the
+ * post's body, so it gets a little more air between paragraphs than a chat
+ * line does.
+ */
+[data-forum-post-panel] .markdown-body {
+  max-width: 70ch;
+  text-wrap: pretty;
+}
+
+[data-forum-opening] .markdown-body p + p {
+  margin-top: 0.6em;
+}
+
 .hero-mosaic-tile {
   fill: var(--hero-mosaic-tile);
   rx: var(--radius-panel);

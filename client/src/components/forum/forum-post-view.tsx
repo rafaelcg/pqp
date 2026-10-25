@@ -400,7 +400,7 @@ function RepliesDivider({ count, people }: { count: number; people: number | nul
       className="mx-4 mb-1 mt-5 flex items-baseline gap-2.5 sm:mx-5"
       data-forum-replies-divider=""
     >
-      <span className="shrink-0 font-display text-[17px] font-bold leading-[22px] tabular-nums text-text">
+      <span className="forum-display shrink-0 text-[17px] font-bold leading-[22px] tabular-nums text-text">
         {t("forum.post.repliesDivider", { count })}
       </span>
       {people !== null && people > 0 && (
@@ -927,7 +927,7 @@ export function ForumPostView({
           {isPhone && (
             <p
               className={cn(
-                "absolute inset-0 flex items-center truncate px-1 font-display text-[15px] font-bold text-text transition-[opacity,transform] duration-[var(--duration-base)] ease-[var(--ease-standard)] motion-reduce:transition-none",
+                "absolute inset-0 flex items-center truncate px-1 forum-display text-[15px] font-bold text-text transition-[opacity,transform] duration-[var(--duration-base)] ease-[var(--ease-standard)] motion-reduce:transition-none",
                 titleInBar ? "opacity-100" : "pointer-events-none translate-y-1 opacity-0",
               )}
               aria-hidden={!titleInBar || undefined}
@@ -1117,15 +1117,15 @@ export function ForumPostView({
               }
             }}
             className={cn(
-              "mt-3 w-full rounded-[var(--radius-control)] border border-border bg-surface-0 px-2 py-1 font-display font-extrabold text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
-              wide ? "text-[30px] leading-[38px]" : "text-[22px] leading-7",
+              "forum-display mt-3 w-full rounded-[var(--radius-control)] border border-border bg-surface-0 px-2 py-1 font-bold text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
+              wide ? "text-[28px] leading-9" : "text-[22px] leading-7",
             )}
           />
         ) : (
           <h2
             className={cn(
-              "mt-3 font-display font-extrabold tracking-[-0.015em] text-text [overflow-wrap:anywhere]",
-              wide ? "text-[30px] leading-[38px]" : "text-[22px] leading-7",
+              "forum-display mt-3 text-balance font-bold text-text [overflow-wrap:anywhere]",
+              wide ? "text-[28px] leading-9" : "text-[22px] leading-7",
               canEdit && "cursor-text",
             )}
             onDoubleClick={() => {
@@ -1239,7 +1239,7 @@ export function ForumPostView({
         data-forum-post-removed=""
       >
         <Trash2 className="h-7 w-7 text-text-tertiary" aria-hidden />
-        <p className="font-display text-base font-bold text-text">{t("forum.removed")}</p>
+        <p className="forum-display text-base font-bold text-text">{t("forum.removed")}</p>
         <Button variant="secondary" onClick={onClose}>
           {t("forum.post.back")}
         </Button>
