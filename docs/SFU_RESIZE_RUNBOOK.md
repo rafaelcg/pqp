@@ -215,6 +215,18 @@ are separate Vultr instances with their own key pairs (`LIVEKIT_API_KEY_<ID>`)
 and are not touched. Nothing in `/opt/pqp/.env` is edited by this procedure. If
 a step below ever asks you to edit it, stop: you are doing something else.
 
+**5b. Review the video admission budget, separately.** What refuses cameras and
+screens is not the box CPU: it is the API's per-box budget,
+`VOICE_PROMOTION_MAX_SFU_MBPS` (default 600, `server/src/voice/promotion.ts`,
+logged as `budgetMbps` next to `loadMbps` on the admission lines, and counted as
+`voice.videoAdmissionRefused`). On 2026-10-20 it refused 56 cameras and screens
+at about a third of the CPU. A bigger CPU does not move it. Look at the last
+days of refusals and decide, **in a separate change and a separate window**,
+whether the number still fits: changing it is an API restart (`restarts-api`),
+which this procedure deliberately is not. The 2026-10-22 review's rule stands:
+tune it from a week of evidence, not from hardware. Writing "reviewed, no
+change" in the PR is a valid outcome.
+
 **6. Back up the box's own state.** The box is disposable by design
 (`docs/plans/SELF_HOSTED_LIVEKIT.md` section 4, "Backups": a Vultr snapshot is
 deliberately not used, it would take longer than the reboot it protects
@@ -240,6 +252,26 @@ the resize restarts the container anyway, so editing the file first costs no
 extra interruption: the container comes back up already reading the wide range.
 (Even if something restarted the container before the resize, eight ports on
 four cores is harmless: LiveKit binds the smaller number.)
+
+Evidence that the widening is needed, so nobody has to take it on faith:
+LiveKit's own `config-sample.yaml` recommends a mux port range "greater or equal
+to the number of vCPUs on the machine" (read 2026-10-25; the ports-and-firewall
+docs page says nothing on sizing it); `tools/sfu/livekit.yaml.tmpl` says the
+same, "keep this at or above the vCPU count"; and the box bound exactly two
+sockets on 2 vCPU with a four port range on 2026-09-08 (7882 and 7883, per
+`docs/plans/SELF_HOSTED_LIVEKIT.md` section 4), which is where the
+`min(vCPUs, ports)` rule in this repo comes from. What stays **to verify**: that
+eight ports measurably beat four on an 8 vCPU box. Nobody has load tested 8c;
+the port count is the documented setting, not a measured gain.
+
+What the change does to live calls: **nothing extra.** The new range only takes
+effect when the container next starts, and the resize reboot is that start, so
+calls drop once, not twice. If you ever widen the range on its own (no resize),
+`docker compose --project-directory /opt/livekit restart livekit` drops every
+SFU call for a few seconds and clients resume (the 2026-09-07 restart: users
+back within about a minute); do that only in the trough with the section 1 gates.
+The Vultr side needs nothing: no firewall group is attached to `sfu-pqp`, `ufw`
+is the only filter, and step 1 opens `7882:7889/udp` there.
 
 **Step 1. Widen the UDP range and the firewall.** On the box:
 
