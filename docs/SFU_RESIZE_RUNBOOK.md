@@ -51,6 +51,16 @@ their own: `SFU capacity: transmit above 600 Mbit/s for 10m` (a bigger CPU does
 not raise the network ceiling, see section 9) and the API box disk and memory
 rules.
 
+**How to read the Vultr portal graph.** The triggers above are in node exporter
+terms (the guest's own view, Grafana). The Vultr portal (Server Monitors, vCPU
+Usage, instance `sfu-pqp`) reads in units of **one vCPU**: 100% means one core
+busy, not the whole box. Divide by the vCPU count (4 now, 8 after the resize) to
+get the box fraction, so a portal peak of 94% on this 4 vCPU box is about 0.94
+cores, about 24% of the box. The graph is also a roughly 6 hour average, so it
+understates a 5-minute peak: on 2026-10-25 the portal showed 94% while the
+5-minute node exporter peak was 1.41 cores. It is a sanity check, not a
+trigger.
+
 **Who decides: Rafael.** The alert says "consider"; nobody resizes on an alert
 alone. The decision is "yes, at 09Z tomorrow" or "not yet, because...".
 
@@ -147,6 +157,13 @@ Go: `hls_sessions` is 0, `ll_sessions` is 0, `sfu_people` is at most about 10,
 not touch, so it can be higher. The day's peaks, minute by minute, are on
 `GET /api/admin/voice-occupancy` (same token). Cross-check on the box:
 `ssh root@sfu.pqp.gg "curl -s localhost:6789/metrics | grep '^livekit_participant_total'"`.
+
+**1b. Sanity check against the Vultr portal.** Open Server Monitors, vCPU Usage
+for `sfu-pqp` and note the last evening's peak. Read it as percent of one vCPU
+divided by the core count, and as a 6 hour average (see "How to read the Vultr
+portal graph" in section 1). It should be in the same ballpark as the node
+exporter's evening average, and below its 5-minute peak. A big disagreement is
+a reason to look at the exporter, not a trigger.
 
 **2. `/ready` is green, and the region boxes are too** (they are not touched, but
 a red one means somebody else is mid-incident):
