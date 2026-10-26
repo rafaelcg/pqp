@@ -2,7 +2,7 @@
 import { act, type ReactElement } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it } from "vitest";
-import { Banner, BannerAction, type BannerTone } from "@/components/ui/banner";
+import { Banner, BannerAction, BannerText, type BannerTone } from "@/components/ui/banner";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -108,4 +108,21 @@ describe("Banner under the redesign", () => {
     const host = draw(<Banner tone="warning" edge="bottom">x</Banner>);
     expect(host.firstElementChild!.className).toContain("redesign:mb-2");
   });
+
+  it("lets the message keep a floor, so two actions wrap under it on a phone", () => {
+    const host = draw(
+      <Banner tone="warning">
+        <BannerText>x</BannerText>
+        <BannerText grow={false} className="inline-flex">
+          y
+        </BannerText>
+      </Banner>,
+    );
+    const [grows, centred] = host.querySelectorAll("span");
+    expect(offClasses(grows!)).toEqual(["flex-1"]);
+    expect(offClasses(centred!)).toEqual(["inline-flex"]);
+    expect(centred!.className).toContain("redesign:min-w-[min(100%,10rem)]");
+    expect(centred!.className).toContain("redesign:flex-1");
+  });
 });
+

@@ -1,6 +1,6 @@
 import { WifiSlash } from "@phosphor-icons/react";
 import { WifiOff } from "lucide-react";
-import { Banner, BannerAction } from "@/components/ui/banner";
+import { Banner, BannerAction, BannerActions, BannerText } from "@/components/ui/banner";
 import { useTranslation } from "@/lib/i18n";
 import type { RealtimeStatus } from "@/lib/realtime";
 
@@ -39,15 +39,15 @@ export function ConnectionBanner({
       className="flex-wrap items-center justify-center gap-x-3 gap-y-1 border-warning/30 py-1.5 text-xs"
       data-connection-banner={status}
     >
-      <span className="inline-flex items-center gap-2 redesign:min-w-0 redesign:flex-1">
+      <BannerText grow={false} className="inline-flex items-center gap-2">
         <WifiOff className="h-3.5 w-3.5 redesign:hidden" aria-hidden />
         {refused
           ? t("connection.doctor.advice.signInAgain")
           : status === "unauthorized"
             ? t("connection.unauthorized")
             : t("connection.reconnecting")}
-      </span>
-      <span className="inline-flex items-center gap-1.5">
+      </BannerText>
+      <BannerActions className="inline-flex items-center gap-1.5">
         {refused ? (
           <BannerAction emphasis="fill" onClick={onSignInAgain} data-connection-sign-in>
             {t("connection.signInAgain")}
@@ -60,7 +60,7 @@ export function ConnectionBanner({
         <BannerAction emphasis="quiet" onClick={onCheck} data-connection-check>
           {t("connection.check")}
         </BannerAction>
-      </span>
+      </BannerActions>
     </Banner>
   );
 }

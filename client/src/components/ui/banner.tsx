@@ -95,6 +95,36 @@ export function Banner({
   );
 }
 
+/**
+ * The message. It takes the room the actions leave; under the redesign it
+ * keeps at least 10rem (or the whole line), so on a phone two actions wrap
+ * under it instead of squeezing it into a column.
+ *
+ * `grow={false}` for a strip whose message did not grow with the toggle off
+ * (the connection strip is centred).
+ */
+export function BannerText({
+  grow = true,
+  className,
+  ...rest
+}: React.HTMLAttributes<HTMLSpanElement> & { grow?: boolean }) {
+  return (
+    <span
+      className={cn(
+        grow && "flex-1",
+        className,
+        "redesign:min-w-[min(100%,10rem)] redesign:flex-1",
+      )}
+      {...rest}
+    />
+  );
+}
+
+/** Two actions side by side; under the redesign they sit at the end. */
+export function BannerActions({ className, ...rest }: React.HTMLAttributes<HTMLSpanElement>) {
+  return <span className={cn(className, "redesign:ml-auto")} {...rest} />;
+}
+
 /*
  * The old fill action was the tone at 20%, 30% on hover; written per tone.
  */
@@ -106,7 +136,7 @@ const FILL: Record<BannerTone, string> = {
 };
 
 const ACTION_REDESIGN =
-  "redesign:inline-flex redesign:h-7 redesign:shrink-0 redesign:items-center redesign:rounded-[var(--radius-pill)] redesign:px-3 redesign:text-xs redesign:font-semibold redesign:no-underline redesign:transition-colors redesign:duration-[var(--duration-fast)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--color-focus-ring)]";
+  "redesign:ml-auto redesign:inline-flex redesign:h-7 redesign:shrink-0 redesign:items-center redesign:rounded-[var(--radius-pill)] redesign:px-3 redesign:text-xs redesign:font-semibold redesign:no-underline redesign:transition-colors redesign:duration-[var(--duration-fast)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--color-focus-ring)]";
 
 const ACTION = {
   /** The main way out: "Tentar agora", "Entrar de novo". */

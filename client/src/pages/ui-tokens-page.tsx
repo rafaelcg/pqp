@@ -28,7 +28,7 @@ import {
 } from "lucide-react";
 import { Navigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { Banner, BannerAction } from "@/components/ui/banner";
+import { Banner, BannerAction, BannerText } from "@/components/ui/banner";
 import { ConnectionBanner } from "@/components/layout/connection-banner";
 import { SanctionNoticeBar } from "@/components/layout/sanction-notice-bar";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
@@ -1336,17 +1336,19 @@ function PrimitiveSheet() {
           onSignInAgain={() => {}}
         />
         <Banner tone="danger" icon={BannerErrorIcon}>
-          <span className="flex-1">{t("qaUi.banner.error")}</span>
+          <BannerText>{t("qaUi.banner.error")}</BannerText>
           <BannerAction>{t("connection.dismiss")}</BannerAction>
         </Banner>
         <Banner tone="warning" icon={BannerIdleIcon}>
-          <span className="flex-1">{t("voice.idle.warning", { count: 1 })}</span>
+          <BannerText>{t("voice.idle.warning", { count: 1 })}</BannerText>
           <BannerAction>{t("voice.idle.stillHere")}</BannerAction>
         </Banner>
         <Banner tone="success" icon={BannerCheckIcon}>
-          <span className="flex-1">{t("qaUi.banner.notice")}</span>
+          <BannerText>{t("qaUi.banner.notice")}</BannerText>
           <BannerAction>{t("connection.dismiss")}</BannerAction>
         </Banner>
+        {/* The composer's strip: in the app it sits above the composer. */}
+        <div className="h-4" aria-hidden />
         <SanctionNoticeBar
           notice={{
             type: "sanction-notice",

@@ -370,7 +370,7 @@ import { CallRatingPrompt } from "@/components/voice/call-rating-prompt";
 import { useCallRating } from "@/hooks/use-call-rating";
 import { usePermissions } from "@/hooks/use-permissions";
 import { ShareHandleButton } from "@/components/handle/share-handle-button";
-import { Banner, BannerAction } from "@/components/ui/banner";
+import { Banner, BannerAction, BannerText } from "@/components/ui/banner";
 import {
   CheckCircle as BannerCheckIcon,
   Code as BannerCodeIcon,
@@ -13908,7 +13908,7 @@ function MainAppContent({
 
         {appError && (
           <Banner tone="danger" icon={BannerErrorIcon}>
-            <span className="flex-1">{appError}</span>
+            <BannerText>{appError}</BannerText>
             <BannerAction onClick={() => setAppError(null)}>
               {t("connection.dismiss")}
             </BannerAction>
@@ -13917,14 +13917,14 @@ function MainAppContent({
 
         {idleWarning && (
           <Banner tone="warning" icon={BannerIdleIcon}>
-            <span className="flex-1">
+            <BannerText>
               {t("voice.idle.warning", {
                 count: Math.max(
                   1,
                   Math.round((idleWarning.disconnectAt - Date.now()) / 60_000),
                 ),
               })}
-            </span>
+            </BannerText>
             <BannerAction
               onClick={() => {
                 // Send and wait: the banner clears on the server's
@@ -13946,7 +13946,7 @@ function MainAppContent({
         {/* Same slot, same shape, opposite tone — see `appNotice`. */}
         {appNotice && (
           <Banner tone="success" icon={BannerCheckIcon}>
-            <span className="flex-1">{appNotice}</span>
+            <BannerText>{appNotice}</BannerText>
             {claimedHandle && <ShareHandleButton handle={claimedHandle} />}
             <BannerAction
               onClick={() => {

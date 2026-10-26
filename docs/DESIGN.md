@@ -970,9 +970,11 @@ connection dropped, an error, the idle hangup warning, a notice, a timeout.
 
 - **Props.** `tone` (`warning`, `danger`, `success`, `accent`), `edge` (`top`
   under the header, `bottom` above the composer), `icon` (a Phosphor icon,
-  drawn only under the redesign). `BannerAction` is its button: `fill` for
+  drawn only under the redesign). `BannerText` is the message: it takes the
+  room the actions leave and, under the redesign, keeps 10rem, so two
+  actions wrap under it on a phone. `BannerAction` is its button: `fill` for
   the main way out, `quiet` for a second action, `link` (the default) for
-  dismiss.
+  dismiss; `BannerActions` holds two of them.
 - **Toggle off.** The full-width bar each strip drew: a 10% tone fill, a 40%
   tone rule on the inner edge, tone text. A strip whose bar differed passes
   those classes and keeps them.
