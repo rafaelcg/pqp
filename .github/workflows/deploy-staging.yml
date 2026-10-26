@@ -97,6 +97,21 @@ jobs:
       # client/functions/_middleware.ts is picked up. --branch=staging makes
       # this a Pages branch deploy of the existing `pqp` project, which lands at
       # https://staging.pqp-3yr.pages.dev without touching production.
+      # wrangler is pinned to an exact version (4.149.0, published 2026-10-08,
+      # past the 14 day cool-off) and installed with --ignore-scripts: npm
+      # would otherwise run the install scripts of everything it fetches
+      # (esbuild, workerd, ...). wrangler has no install script of its own, and
+      # esbuild and workerd resolve their binary from the platform package
+      # npm installs as an optional dependency, which --ignore-scripts does not
+      # skip; `wrangler pages functions build` and `pages deploy` were run
+      # that way. The install step carries NO credentials. Bump the pin on
+      # purpose, never by `@4`.
+      - name: Install wrangler
+        run: |
+          TMP="$(mktemp -d)"
+          (cd "$TMP" && npm init -y >/dev/null && npm install wrangler@4.149.0 --ignore-scripts --no-fund --no-audit)
+          echo "WRANGLER=$TMP/node_modules/.bin/wrangler" >> "$GITHUB_ENV"
+
       - name: Deploy to Cloudflare Pages (branch staging)
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -110,10 +125,8 @@ jobs:
             echo "::error::Missing secret CLOUDFLARE_ACCOUNT_ID"
             exit 1
           fi
-          TMP="$(mktemp -d)"
-          (cd "$TMP" && npm init -y >/dev/null && npm install wrangler@4 --no-fund --no-audit)
           cd "$GITHUB_WORKSPACE/client"
-          "$TMP/node_modules/.bin/wrangler" pages deploy dist \
+          "$WRANGLER" pages deploy dist \
             --project-name=pqp --branch=staging --commit-dirty=true
 
       # Same tripwire as deploy-web.yml: the /@handle middleware is only useful

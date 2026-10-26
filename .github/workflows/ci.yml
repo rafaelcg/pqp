@@ -242,7 +242,7 @@ jobs:
       # old one. Bundling here costs seconds and turns that into a red PR.
       - name: Bundle Pages functions
         working-directory: client
-        run: npx wrangler pages functions build --outfile=/tmp/functions-bundle.js
+        run: npx --yes wrangler@4.149.0 pages functions build --outfile=/tmp/functions-bundle.js
 
   # The server suite (~5,200 tests in ~335 files) against a real database; it
   # was ~8.5 of the old job's 12 minutes. Sharded by file (`vitest --shard`):

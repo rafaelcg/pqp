@@ -102,7 +102,7 @@ jobs:
         if: steps.gate.outputs.go == 'true'
         run: |
           TMP="$(mktemp -d)"
-          (cd "$TMP" && npm init -y >/dev/null && npm install wrangler@4 --ignore-scripts --no-fund --no-audit)
+          (cd "$TMP" && npm init -y >/dev/null && npm install wrangler@4.149.0 --ignore-scripts --no-fund --no-audit)
           echo "WRANGLER=$TMP/node_modules/.bin/wrangler" >> "$GITHUB_ENV"
 
       - name: Deploy to Cloudflare Pages
