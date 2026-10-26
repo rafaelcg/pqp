@@ -7214,5 +7214,9 @@
   "locadoraGuest.upsell.soon": "coming soon",
   "locadoraGuest.upsell.device": "For now, your cartridges stay in this browser.",
   "locadoraGuest.upsell.cta": "Create a free account",
-  "locadoraGuest.upsell.later": "Not now"
+  "locadoraGuest.upsell.later": "Not now",
+  "qaUi.group.choice": "Choices",
+  "qaUi.check.description": "Create, edit and delete channels.",
+  "qaUi.checkbox.label": "Allow comments",
+  "qaUi.state.busy": "Saving"
 }
