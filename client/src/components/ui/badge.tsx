@@ -11,9 +11,11 @@ import { cn } from "@/lib/utils";
  * in a badge means "this thing is in this state". And not `BetaTag`, which is
  * one word about the product rather than about a thing in it.
  *
- * One size (18px tall, 10px uppercase bold), because a badge that grows with
- * its surroundings stops reading as the same signal from one surface to the
- * next. Every variant is a token pair the bench already measures:
+ * Two sizes: `md` on a card or row (18px, 10px uppercase bold with the
+ * toggle off; 20px, 11px semibold, sentence case under the redesign) and
+ * `tag` beside a name (the line's height off; 18px under the redesign). A
+ * badge that grew with its surroundings would stop reading as the same
+ * signal from one surface to the next. Every variant is a token pair the bench already measures:
  *
  * | Variant   | Fill            | Use                                      |
  * |-----------|-----------------|------------------------------------------|
@@ -51,7 +53,9 @@ const VARIANT_CLASS: Record<BadgeVariant, string> = {
  * The same pairs again as `redesign:` classes, so a call site that painted
  * its tag its own way with the toggle off (a webhook's old grey) still draws
  * the variant under the redesign. Written out because Tailwind only
- * generates classes it can read in the source.
+ * generates classes it can read in the source. `neutral` and `muted` are a
+ * step stronger than with the toggle off, so an 11px word clears 4.5:1 in
+ * every look (measured by the bench).
  */
 const VARIANT_REDESIGN: Record<BadgeVariant, string> = {
   new: "redesign:bg-accent redesign:text-on-accent",
@@ -59,8 +63,8 @@ const VARIANT_REDESIGN: Record<BadgeVariant, string> = {
   success: "redesign:bg-success-soft redesign:text-on-success-soft",
   warning: "redesign:bg-warning-soft redesign:text-on-warning-soft",
   danger: "redesign:bg-danger-soft redesign:text-on-danger-soft",
-  neutral: "redesign:bg-surface-3 redesign:text-text-secondary",
-  muted: "redesign:bg-surface-3 redesign:text-text-tertiary",
+  neutral: "redesign:bg-surface-3 redesign:text-text",
+  muted: "redesign:bg-surface-2 redesign:text-text-secondary",
 };
 
 /**

@@ -839,6 +839,7 @@
   --badge-text: 0.6875rem;
   --count-badge-h: 1.125rem;
   --count-badge-text: 0.6875rem;
+  --count-badge-sm-text: 0.625rem;
 
   --icon-button-radius: var(--radius-pill);
   --icon-button-text: var(--color-text-secondary);

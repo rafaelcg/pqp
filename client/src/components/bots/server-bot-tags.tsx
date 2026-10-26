@@ -16,7 +16,7 @@ export function ServerBotTags({ gone = false }: { gone?: boolean }) {
         </Badge>
       ) : (
         // Under the redesign, the same tag shape as BOT beside it.
-        <BetaTag className="redesign:h-[var(--badge-tag-h)] redesign:rounded-[var(--badge-radius)] redesign:px-[var(--badge-tag-px)] redesign:py-0 redesign:text-[length:var(--badge-text)] redesign:normal-case redesign:tracking-normal" />
+        <BetaTag className="redesign:h-[var(--badge-tag-h)] redesign:rounded-[var(--badge-radius)] redesign:px-[var(--badge-tag-px)] redesign:py-0 redesign:text-[length:var(--badge-text)] redesign:normal-case redesign:tracking-normal redesign:bg-transparent" />
       )}
     </span>
   );

@@ -1008,7 +1008,9 @@ tag.
 - **`icon`.** An optional lucide icon before the word, decorative.
 - **Toggle off.** 10px uppercase bold on `--radius-tick`, the geometry each
   caller drew. **Redesign.** A pill in sentence case, 11px semibold
-  (`--badge-*`), the variant's pair whatever the caller painted, so every
+  (`--badge-*`; `md` 20px, `tag` 18px), the variant's pair whatever the
+  caller painted (`neutral` and `muted` a step stronger, so 11px clears
+  4.5:1 in every look), so every
   tag on a message header is the same shape. The `BetaTag` beside a bot's
   BOT takes the tag's shape there.
 - **Use it** for a state. **Do not** use it for a count (`CountBadge`) or
@@ -1026,7 +1028,8 @@ conversations or friend requests waiting. Draws nothing at zero and caps at
   18px, `sm` 16px), `pop` (the arrival animation, re-played for each new
   number). A corner position and a ring against the surface behind it are
   the caller's `className`.
-- **Redesign.** 11px semibold with tabular figures (`--count-badge-*`).
+- **Redesign.** 11px semibold with tabular figures (`--count-badge-*`); the
+  16px `sm` keeps its height and takes 10px type, so "99+" fits.
 - The server rail's and the channel list's counts are drawn in place for
   now; they move here with their shell elements.
 

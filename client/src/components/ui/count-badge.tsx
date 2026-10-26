@@ -24,8 +24,10 @@ const TONE: Record<CountBadgeTone, string> = {
 };
 
 const SIZE: Record<CountBadgeSize, string> = {
-  md: "h-[18px] min-w-[18px] redesign:h-[var(--count-badge-h)] redesign:min-w-[var(--count-badge-h)]",
-  sm: "h-4 min-w-4",
+  md: "h-[18px] min-w-[18px] redesign:h-[var(--count-badge-h)] redesign:min-w-[var(--count-badge-h)] redesign:text-[length:var(--count-badge-text)]",
+  // 16px stays 16px; under the redesign its type is a step smaller than
+  // `md`'s, so "99+" still fits.
+  sm: "h-4 min-w-4 redesign:text-[length:var(--count-badge-sm-text)]",
 };
 
 export interface CountBadgeProps extends Omit<HTMLAttributes<HTMLSpanElement>, "children"> {
@@ -56,7 +58,7 @@ export function CountBadge({
         TONE[tone],
         pop && "animate-badge-pop",
         className,
-        "redesign:text-[length:var(--count-badge-text)] redesign:font-semibold",
+        "redesign:font-semibold",
       )}
       {...rest}
     >

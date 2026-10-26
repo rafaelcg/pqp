@@ -1292,12 +1292,25 @@ function PrimitiveSheet() {
               AutoMod
             </Badge>
           </span>
+          <span className="flex items-baseline gap-1.5">
+            <span className="font-semibold text-text">GitHub</span>
+            <Badge size="tag" className="rounded bg-ink-4 text-paper-muted">
+              Webhook
+            </Badge>
+          </span>
+          <span className="flex items-baseline gap-1.5">
+            <span className="font-semibold text-text-tertiary">Téo</span>
+            <Badge variant="muted" size="tag" className="self-center">
+              {t("chat.authorGone")}
+            </Badge>
+          </span>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <CountBadge count={3} />
           <CountBadge count={12} />
           <CountBadge count={120} />
           <CountBadge count={2} size="sm" />
+          <CountBadge count={120} size="sm" />
           <span className="relative inline-flex h-10 w-10 items-center justify-center rounded-[var(--radius-control)] bg-surface-2">
             <LineHash className="h-4 w-4" aria-hidden />
             <CountBadge
