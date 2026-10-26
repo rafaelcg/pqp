@@ -872,7 +872,7 @@ function PrimitiveSheet() {
         </div>
       </div>
 
-      <div data-testid="qa-primitive-input" className="grid gap-3 sm:grid-cols-3">
+      <div data-testid="qa-primitive-input" className="grid gap-3 rounded-[var(--radius-card)] border border-border bg-surface-1 p-3 sm:grid-cols-3">
         <label className="flex flex-col gap-1">
           <span style={{ fontSize: "var(--type-label-size)" }}>
             {t("qaUi.state.default")}

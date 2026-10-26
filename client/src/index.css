@@ -723,10 +723,10 @@
      text instead. */
   --input-bg: var(--color-field);
   --input-border: var(--color-field-border);
-  --input-hover-border: color-mix(in oklab, var(--color-field-border) 55%, var(--color-text));
+  --input-hover-border: color-mix(in oklab, var(--color-field-border) 40%, var(--color-text));
   --input-placeholder: var(--color-text-tertiary);
   --input-prefix: var(--color-text-secondary);
-  --input-prefix-gap: 0.25rem;
+  --input-prefix-gap: 0.0625rem;
   --input-px: 0.875rem;
   --input-h: var(--control-md);
   --input-disabled-opacity: 1;

@@ -45,9 +45,10 @@ describe("Input", () => {
     expect(redesign.sort()).toEqual(
       [
         "redesign:aria-invalid:border-danger",
+        "redesign:aria-invalid:bg-[color:color-mix(in_oklab,var(--color-danger)_6%,var(--color-field))]",
         "redesign:disabled:bg-transparent",
         "redesign:disabled:placeholder:text-[color:color-mix(in_oklab,var(--color-text-tertiary)_70%,transparent)]",
-        "redesign:disabled:text-[color:color-mix(in_oklab,var(--color-text-tertiary)_70%,transparent)]",
+        "redesign:disabled:text-text-tertiary",
         "redesign:enabled:hover:not-aria-invalid:border-[color:var(--input-hover-border)]",
       ].sort(),
     );
