@@ -106,6 +106,7 @@ import {
 } from "@/lib/community-home";
 import { toDisplayBody, toStoredBody } from "@/lib/community-home/channel-refs";
 import { gifMessageMedia } from "@/lib/gif-media";
+import { Checkbox } from "@/components/ui/checkbox";
 import { FileDropOverlay } from "@/components/ui/file-drop-overlay";
 import { useFileDropZone } from "@/hooks/use-file-drop-zone";
 import { useTranslation, type MessageKey, type MessageVars } from "@/lib/i18n";
@@ -2100,8 +2101,8 @@ function ComposeCard({
             </div>
           )}
           <label className="inline-flex items-center gap-1.5">
-            <input
-              type="checkbox"
+            <Checkbox
+              className="h-auto w-auto accent-auto"
               checked={state.commentsEnabled}
               onChange={(event) =>
                 setState((prev) => ({
@@ -2132,9 +2133,9 @@ function ComposeCard({
             className="mb-2 flex cursor-pointer items-start gap-2 rounded-lg border border-ink-4 bg-ink px-3 py-2 text-xs text-paper-muted"
             data-home-compose-announce
           >
-            <input
-              type="checkbox"
-              className="mt-0.5"
+            <Checkbox
+              wrapperClassName="mt-0.5"
+              className="h-auto w-auto accent-auto"
               checked={announce}
               onChange={(event) => setAnnounce(event.target.checked)}
             />

@@ -690,6 +690,31 @@
   --button-disabled-opacity: 0.5;
   /* A small button steps down in height, not in legibility. */
   --button-text-sm: 0.8125rem;
+  /* Switch, CheckRow, Checkbox (ui/switch.tsx, ui/check-row.tsx,
+     ui/checkbox.tsx). Off is a faint tint inside the field's 3:1 edge, so an
+     unticked box or an off track is visible on a card, a dialog and a pane
+     alike. The edge reads the field role (p-input) and falls back to the
+     same mix until that role is everywhere. */
+  --choice-edge: var(--color-field-border, color-mix(in oklab, var(--color-border-strong) 50%, var(--color-text)));
+  --choice-row-hover: var(--button-ghost-hover);
+  --switch-w: 2.5rem;
+  --switch-h: 1.5rem;
+  --switch-knob: 1.125rem;
+  --switch-pad: 0.1875rem;
+  --switch-travel: 1rem;
+  --switch-off-bg: color-mix(in oklab, var(--color-text) 8%, transparent);
+  --switch-off-ring: var(--choice-edge);
+  --switch-knob-off: var(--color-text-secondary);
+  --switch-knob-shadow: 0 1px 2px oklch(0.06 0.02 262 / 0.45), 0 0 0 0.5px oklch(0.06 0.02 262 / 0.2);
+  --tick-size: 1.125rem;
+  --tick-size-md: 1.25rem;
+  --tick-glyph: 0.75rem;
+  --tick-glyph-md: 0.875rem;
+  --tick-ring-w: 1.5px;
+  --tick-off-bg: color-mix(in oklab, var(--color-text) 4%, transparent);
+  --tick-off-ring: var(--choice-edge);
+  --tick-hover-ring: color-mix(in oklab, var(--choice-edge) 55%, var(--color-text));
+  --checkbox-appearance: none;
 
   /* Icon button (ui/icon-button.tsx). Unset with the toggle off: each falls
      back, in the class, to what the icon button always drew. */
@@ -989,6 +1014,7 @@
   /* The light accent is a dark green that sinks into the dark bubble; mix it
      toward the bubble's own label so the mark stays bright in every look. */
   --tooltip-rail-mark: color-mix(in oklab, var(--color-accent) 55%, var(--color-on-tooltip));
+  --switch-knob-shadow: 0 1px 2px oklch(0.4 0.02 262 / 0.28), 0 0 0 0.5px oklch(0.4 0.02 262 / 0.18);
 }
 
 /*

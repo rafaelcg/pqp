@@ -37,7 +37,7 @@ export const Checkbox = forwardRef<HTMLInputElement, CheckboxProps>(function Che
           "redesign:checked:border-accent redesign:checked:bg-accent",
           "redesign:enabled:hover:not-checked:border-[color:var(--tick-hover-ring)]",
           "redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-focus-ring redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-ring-offset",
-          "disabled:cursor-not-allowed redesign:disabled:opacity-[var(--tick-disabled-opacity)]",
+          "disabled:cursor-not-allowed redesign:disabled:opacity-[var(--tick-disabled-opacity,0.5)]",
           className,
         )}
         {...props}

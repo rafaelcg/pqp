@@ -21,6 +21,7 @@ import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { FileDropZone } from "@/components/ui/file-drop-zone";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import {
@@ -479,12 +480,11 @@ export function CommunitySettingsSection({
               className="flex items-center gap-2 text-sm text-paper"
               htmlFor={addressToggleId}
             >
-              <input
+              <Checkbox
                 id={addressToggleId}
-                type="checkbox"
                 checked={addressed}
                 disabled={formBusy || addressLocked}
-                className="h-4 w-4 rounded border-ink-4 bg-ink accent-signal disabled:opacity-50"
+                className="disabled:opacity-50"
                 onChange={(e) => {
                   setAddressed(e.target.checked);
                   // Turning the address off takes the listing with it, which is
@@ -525,12 +525,11 @@ export function CommunitySettingsSection({
               className="flex items-center gap-2 text-sm text-paper"
               htmlFor={toggleId}
             >
-              <input
+              <Checkbox
                 id={toggleId}
-                type="checkbox"
                 checked={listed}
                 disabled={formBusy || !canListPublicly || !addressed}
-                className="h-4 w-4 rounded border-ink-4 bg-ink accent-signal disabled:opacity-50"
+                className="disabled:opacity-50"
                 onChange={(e) => {
                   setListed(e.target.checked);
                   setSaved(false);

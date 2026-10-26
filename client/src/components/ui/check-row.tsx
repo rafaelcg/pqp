@@ -1,6 +1,76 @@
+import { Check as CheckBold } from "@phosphor-icons/react";
 import { Check } from "lucide-react";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
+
+export type TickSize = "sm" | "md";
+
+const TICK_BOX: Record<TickSize, string> = {
+  // A row's tick: 16px off, 18px under the redesign.
+  sm: "h-[var(--tick-size,1rem)] w-[var(--tick-size,1rem)]",
+  // A tick that is its own 36px target (a person in a picker): 20px.
+  md: "h-[var(--tick-size-md,1.25rem)] w-[var(--tick-size-md,1.25rem)]",
+};
+
+const TICK_OFF_RING: Record<TickSize, string> = {
+  sm: "ring-[color:var(--tick-off-ring,var(--color-border))]",
+  md: "ring-[color:var(--tick-off-ring,var(--color-border-strong))]",
+};
+
+/**
+ * The square tick alone, for a checkbox whose row is laid out by its call
+ * site. `CheckRow` draws one, and the native `Checkbox` draws the same box
+ * from the same `--tick-*` tokens under the redesign.
+ *
+ * With the toggle off it is today's tick: a surface square with a hairline,
+ * the accent with a Lucide check when on. Under the redesign the off box is a
+ * faint tint inside the field's 3:1 edge and the check is Phosphor bold.
+ */
+export function TickBox({
+  checked,
+  disabled = false,
+  size = "sm",
+  className,
+}: {
+  checked: boolean;
+  disabled?: boolean;
+  size?: TickSize;
+  className?: string;
+}) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "flex shrink-0 items-center justify-center rounded-[var(--radius-tick)] transition-colors duration-[var(--duration-fast)]",
+        TICK_BOX[size],
+        checked
+          ? "bg-accent"
+          : cn(
+              "bg-[color:var(--tick-off-bg,var(--color-surface-2))] ring-[length:var(--tick-ring-w,1px)] ring-inset",
+              TICK_OFF_RING[size],
+            ),
+        disabled && !checked && "opacity-[var(--tick-disabled-opacity,0.5)]",
+        className,
+      )}
+    >
+      {checked ? (
+        <>
+          <Check
+            className={cn("text-on-accent redesign:hidden", size === "md" ? "h-3.5 w-3.5" : "h-3 w-3")}
+            strokeWidth={3}
+          />
+          <CheckBold
+            weight="bold"
+            className={cn(
+              "hidden text-on-accent redesign:block",
+              size === "md" ? "size-[var(--tick-glyph-md)]" : "size-[var(--tick-glyph)]",
+            )}
+          />
+        </>
+      ) : null}
+    </span>
+  );
+}
 
 /**
  * Independent on/off row with a square tick. Switch is the control for
@@ -34,6 +104,8 @@ export function CheckRow({
   icon?: ReactNode;
   className?: string;
 }) {
+  // A row that cannot be changed says so in its label too (redesign only).
+  const labelText = "break-words text-sm text-text redesign:group-disabled:text-text-tertiary";
   return (
     <button
       type="button"
@@ -44,9 +116,11 @@ export function CheckRow({
       disabled={disabled}
       onClick={() => onCheckedChange(!checked)}
       className={cn(
-        "flex w-full items-center justify-between gap-4 rounded-[var(--radius-control)] px-2 py-2 text-left",
+        "group flex w-full items-center justify-between gap-4 rounded-[var(--choice-row-radius,var(--radius-control))] px-2 py-2 text-left",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring",
-        disabled ? "cursor-not-allowed" : "hover:bg-surface-2",
+        disabled
+          ? "cursor-not-allowed"
+          : "hover:bg-[color:var(--choice-row-hover,var(--color-surface-2))]",
         className,
       )}
     >
@@ -68,25 +142,24 @@ export function CheckRow({
         ) : null}
         {description ? (
           <span className="min-w-0">
-            <span className="block break-words text-sm text-text">{label}</span>
+            <span className={cn("block", labelText)}>{label}</span>
             <span className="block break-words text-xs text-text-tertiary">
               {description}
             </span>
           </span>
         ) : (
-          <span className="break-words text-sm text-text">{label}</span>
+          <span className={labelText}>{label}</span>
         )}
       </span>
-      <span
-        aria-hidden
-        className={cn(
-          "flex h-4 w-4 shrink-0 items-center justify-center rounded-[var(--radius-tick)] transition-colors duration-[var(--duration-fast)]",
-          checked ? "bg-accent" : "bg-surface-2 ring-1 ring-inset ring-border",
-          disabled && !checked && "opacity-50",
-        )}
-      >
-        {checked ? <Check className="h-3 w-3 text-on-accent" strokeWidth={3} /> : null}
-      </span>
+      <TickBox
+        checked={checked}
+        disabled={disabled}
+        className={
+          !disabled && !checked
+            ? "redesign:group-hover:ring-[color:var(--tick-hover-ring)]"
+            : undefined
+        }
+      />
     </button>
   );
 }

@@ -1,4 +1,51 @@
+import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
+
+/**
+ * The track and knob alone, for a switch whose row is laid out by its call
+ * site. `Switch` draws one; use this only where `Switch`'s row cannot fit.
+ *
+ * Every size and colour is a `--switch-*` token with today's value as its
+ * fallback, so the toggle off draws exactly what it drew before. Under the
+ * redesign the track is a 40 by 24 pill, off is a faint tint inside the
+ * field's 3:1 edge (`--color-field-border`), and the knob is lifted.
+ */
+export function SwitchTrack({
+  checked,
+  disabled = false,
+  className,
+}: {
+  checked: boolean;
+  /** Fades the track. Leave it off when the whole row is already dimmed. */
+  disabled?: boolean;
+  className?: string;
+}) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "relative h-[var(--switch-h,1.25rem)] w-[var(--switch-w,2.25rem)] shrink-0 rounded-full transition-colors duration-[var(--duration-fast)]",
+        checked
+          ? "bg-accent"
+          : "bg-[color:var(--switch-off-bg,var(--color-surface-2))] ring-1 ring-inset ring-[color:var(--switch-off-ring,var(--color-border))]",
+        disabled && "opacity-[var(--switch-disabled-opacity,0.5)]",
+        className,
+      )}
+    >
+      <span
+        className={cn(
+          "absolute top-[var(--switch-pad,0.125rem)] left-[var(--switch-pad,0.125rem)] h-[var(--switch-knob,1rem)] w-[var(--switch-knob,1rem)] rounded-full shadow-[var(--switch-knob-shadow,0_0_transparent)] transition-transform duration-[var(--duration-fast)]",
+          // Off: a mid-grey knob in dark. In every light look that grey is a
+          // dark dot on a pale track, so light draws a pale knob with an
+          // outline instead, the way a native light switch does.
+          checked
+            ? "translate-x-[var(--switch-travel,1rem)] bg-on-accent"
+            : "bg-[color:var(--switch-knob-off,var(--color-text-tertiary))] [:root[data-theme=light]_&]:bg-surface-0 [:root[data-theme=light]_&]:ring-1 [:root[data-theme=light]_&]:ring-border-strong",
+        )}
+      />
+    </span>
+  );
+}
 
 /**
  * Independent on/off control. Chips are for one-of-many; this is for a list of
@@ -11,6 +58,7 @@ export function Switch({
   onCheckedChange,
   disabled,
   label,
+  labelAdornment,
   description,
   title,
   className,
@@ -18,11 +66,16 @@ export function Switch({
   dimRowWhenDisabled = false,
   busy = false,
   unavailable = false,
+  ...data
 }: {
+  /** `data-*` attributes land on the button, for tests and hooks. */
+  [key: `data-${string}`]: string | undefined;
   checked: boolean;
   onCheckedChange: (checked: boolean) => void;
   disabled?: boolean;
   label: string;
+  /** Drawn after the label on its line, such as a "new" badge. */
+  labelAdornment?: ReactNode;
   description?: string;
   title?: string;
   className?: string;
@@ -60,20 +113,34 @@ export function Switch({
       aria-disabled={inert || undefined}
       aria-busy={busy || undefined}
       disabled={disabled}
+      {...data}
       onClick={() => {
         if (!inert) onCheckedChange(!checked);
       }}
       className={cn(
-        "flex w-full justify-between gap-4 rounded-[var(--radius-control)] px-2 py-2 text-left",
+        "group flex w-full justify-between gap-4 rounded-[var(--choice-row-radius,var(--radius-control))] px-2 py-2 text-left",
         description ? "items-start" : "items-center",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring",
-        disabled || inert ? "cursor-not-allowed" : "hover:bg-surface-2",
+        disabled || inert
+          ? "cursor-not-allowed"
+          : "hover:bg-[color:var(--choice-row-hover,var(--color-surface-2))]",
         dimRow && "opacity-60",
         className,
       )}
     >
       <span className={cn("min-w-0", hideLabel && "sr-only")}>
-        <span className="block text-sm text-text">{label}</span>
+        <span
+          className={cn(
+            "block text-sm text-text",
+            // A switch that cannot be changed says so in its label too, not
+            // only in a faded track (redesign only: off, the label stays).
+            !dimRow && "redesign:group-disabled:text-text-tertiary",
+            labelAdornment != null && "flex items-center gap-2",
+          )}
+        >
+          {label}
+          {labelAdornment}
+        </span>
         {title && !description ? (
           <span className="sr-only">{title}</span>
         ) : null}
@@ -83,27 +150,11 @@ export function Switch({
           </span>
         ) : null}
       </span>
-      <span
-        aria-hidden
-        className={cn(
-          "relative h-5 w-9 shrink-0 rounded-full transition-colors duration-[var(--duration-fast)]",
-          description && "mt-0.5",
-          checked ? "bg-accent" : "bg-surface-2 ring-1 ring-inset ring-border",
-          disabled && !dimRow && "opacity-50",
-        )}
-      >
-        <span
-          className={cn(
-            "absolute top-0.5 left-0.5 h-4 w-4 rounded-full transition-transform duration-[var(--duration-fast)]",
-            // Off: a mid-grey knob in dark. In every light look that grey is a
-            // dark dot on a pale track, so light draws a pale knob with an
-            // outline instead, the way a native light switch does.
-            checked
-              ? "translate-x-4 bg-on-accent"
-              : "bg-text-tertiary [:root[data-theme=light]_&]:bg-surface-0 [:root[data-theme=light]_&]:ring-1 [:root[data-theme=light]_&]:ring-border-strong",
-          )}
-        />
-      </span>
+      <SwitchTrack
+        checked={checked}
+        disabled={Boolean(disabled) && !dimRow}
+        className={description ? "mt-0.5" : undefined}
+      />
     </button>
   );
 
