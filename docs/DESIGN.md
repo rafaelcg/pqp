@@ -1056,6 +1056,25 @@ conversations or friend requests waiting. Draws nothing at zero and caps at
 - The server rail's and the channel list's counts are drawn in place for
   now; they move here with their shell elements.
 
+### Spinner and Skeleton
+
+`spinner.tsx`, `skeleton.tsx`. A spinner says something is on its way (a
+send, a save, a search); a skeleton holds the shape of content that is
+loading (the channel list, the message log, a settings row).
+
+- **Spinner.** Takes the caller's classes for size, colour and motion, as
+  the Lucide `Loader2` it replaces did. With the toggle off that glyph
+  draws. Under the redesign a ring draws: a faint track
+  (`--spinner-track-opacity` 0.25) and an arc in the icon stroke, still
+  under reduced motion. `label` adds a screen reader name when nothing
+  beside it says "loading".
+- **Skeleton.** Toggle off: `surface-3` at 50%, pulsing. Redesign: a text
+  tint (`--skeleton-bg`, 8%), so it reads on a pane, a card or a dialog,
+  and still under reduced motion. The channel skeleton's rows are the row
+  pill at the row height; the message skeleton's avatars are round.
+- **Do not** hand-build a spinner (`animate-spin` on a bordered span) or a
+  placeholder (`animate-pulse` on a fill).
+
 ## Planned primitives
 
 Not built. Do not invent a local one; add it here instead, in `ui/`, with a

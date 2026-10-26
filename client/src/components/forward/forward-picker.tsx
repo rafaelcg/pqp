@@ -8,7 +8,6 @@ import {
 import {
   Forward,
   Hash,
-  Loader2,
   Lock,
   MessageSquareText,
   Search,
@@ -42,6 +41,7 @@ import {
   type PickerTarget,
 } from "@/lib/forward";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { Spinner } from "@/components/ui/spinner";
 
 /**
  * "Encaminhar": pick up to five places (channels you can speak in, and your
@@ -603,7 +603,7 @@ export function ForwardPicker({
           >
             {busy ? (
               <>
-                <Loader2 className="mr-1.5 h-4 w-4 animate-spin" aria-hidden />
+                <Spinner className="mr-1.5 h-4 w-4 animate-spin" />
                 {t("forward.sending")}
               </>
             ) : (
@@ -739,7 +739,7 @@ export function ForwardPicker({
               className="flex items-center gap-2 px-2 py-1 text-xs text-text-tertiary"
               role="status"
             >
-              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+              <Spinner className="h-3.5 w-3.5 animate-spin" />
               {t("forward.loading")}
             </p>
           )}

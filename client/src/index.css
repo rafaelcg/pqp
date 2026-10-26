@@ -842,6 +842,12 @@
   --count-badge-text: 0.6875rem;
   --count-badge-sm-text: 0.625rem;
 
+  /* Loading (ui/spinner.tsx, ui/skeleton.tsx): a ring with a faint track,
+     and placeholder shapes as a faint text tint, so both read on a pane, a
+     card or a dialog. */
+  --spinner-track-opacity: 0.25;
+  --skeleton-bg: color-mix(in oklab, var(--color-text) 8%, transparent);
+
   --icon-button-radius: var(--radius-pill);
   --icon-button-text: var(--color-text-secondary);
   /* Tints, like the button's: an icon button sits on panes and dialogs. */

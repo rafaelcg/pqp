@@ -1,8 +1,9 @@
 import { useEffect } from "react";
-import { Check, CircleX, Loader2 } from "lucide-react";
+import { Check, CircleX } from "lucide-react";
 import { useSettingsAnnounce } from "@/components/settings/kit/announcer";
 import type { InlineSaveState } from "@/components/settings/kit/use-inline-save";
 import { useTranslation } from "@/lib/i18n";
+import { Spinner } from "@/components/ui/spinner";
 
 /**
  * What happened to the write a row just made, said in that row: never a toast,
@@ -52,7 +53,7 @@ export function SettingsInlineStatus({
   if (state.kind === "saving") {
     return (
       <p {...live} className="mt-1.5 flex items-center gap-1.5 text-xs text-text-tertiary">
-        <Loader2 aria-hidden className="h-3.5 w-3.5 shrink-0 motion-safe:animate-spin" />
+        <Spinner className="h-3.5 w-3.5 shrink-0 motion-safe:animate-spin" />
         {spoken}
       </p>
     );
