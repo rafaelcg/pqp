@@ -37,6 +37,7 @@ Read this file and the inventory at the start of every session.
 | 2 | `p-button` | Merged (cap at round 5: 8.9, 8.9, 9.0, no MUST) |
 | 2 | `p-icon-button` | Merged (cap at round 5: 9.0, 8.9, no MUST) |
 | 2 | `p-tooltip` | Merged (cap at round 5: 8.9, 8.8, no MUST) |
+| 2 | `p-input` | Merged (cap at round 5: 8.7, 8.9, no MUST) |
 
 ## Phase 0: directions
 
@@ -316,6 +317,43 @@ Spec (audit: 37 files import `Input`, 8 `Textarea`; 87 raw text fields):
 4. Folded: the schedule-session description, a hand-drawn textarea with no
    focus ring, is now `Textarea` (it gains the ring). Selects that copy the
    field recipe fold in `p-select`; search bars fold with their element.
+
+Council (Opus 5.5, GPT-6 Luna via Codex; Grok 4.7 through round 3, then
+dropped at André's request), overall after:
+
+| Round | Opus | Codex | Grok |
+|---|---|---|---|
+| 1 | 7.6 | 8.6 | 7.8 |
+| 2 | 7.8 | 8.8 | 8.1 |
+| 3 | 8.3 | 8.9 | 8.7 |
+| 4 | 8.6 | 8.7 | not run |
+| 5 | 8.7 | 8.9 | not run |
+
+Round 2 had a MUST (an empty disabled field read as a resting one), fixed
+in round 3. Stopped at the five-round cap with no MUST and every category
+above "before". Best round: 5. Screenshots: `~/pqp-redesign/p-input/`.
+
+Decisions:
+- One role, `--color-field`: a well below panes in dark, a 3% text tint in
+  light, its edge held at 3:1 on the fill, a dialog and the pane.
+- A field matches its button in height, not shape: fields are rounded
+  rectangles, actions are pills.
+- Disabled keeps the edge, drops the fill, and dims the value one step and
+  the placeholder and prefix two. A disabled invalid field draws as
+  disabled: no tint, no red edge.
+- Invalid adds a red tint to the red edge (`--input-invalid-bg`, 10% in
+  dark, 6% in light); the docs pair it with visible error text.
+- The prefix is `text-secondary`, 2px from the value.
+
+Deferred:
+- 16px text on touch screens so iOS does not zoom: the whole field family,
+  in the phone pass (`m-*`).
+- Aligning the disabled primary Button's edge with the field edge, and a
+  stronger light focus ring for fields: revisit with `p-dialog`.
+
+Verified: typecheck; 10,331 unit tests; `bench:tokens`; `settings-sections`,
+`server-settings-sections`, `profile-section` and `theme-switching` e2e (39
+passed); i18n check.
 
 ## Open questions for André
 
