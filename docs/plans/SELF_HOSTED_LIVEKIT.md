@@ -476,6 +476,10 @@ untouched, and `https://api.pqp.gg/ready` still reported LiveKit ok.
 
 ### Resize the box
 
+> The 4 to 8 vCPU step has its own runbook, [`docs/SFU_RESIZE_RUNBOOK.md`](../SFU_RESIZE_RUNBOOK.md),
+> which also covers what is stale below: the `voice-occupancy.sh` helper was Fly-only, and
+> an 8 vCPU box needs `rtc.udp_port` widened to `7882-7889` first.
+
 Once the port change is in and holding, resizing from 2 vCPU to 4 is the other half of the same
 gap: LiveKit binds `min(vCPUs, ports)`, so the four ports opened above only pay off once there are
 four cores to bind them to.
