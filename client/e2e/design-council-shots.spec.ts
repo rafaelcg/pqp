@@ -475,6 +475,10 @@ test("captures the design council screens", async ({ browser }) => {
       await page.getByRole("dialog").getByText("Aparência e idioma", { exact: true }).first().click();
       await expect(page.getByRole("dialog").getByRole("radiogroup").first()).toBeVisible();
       await shoot(page, `12-settings-appearance-${theme}`);
+      // The volume sliders, for Slider in place.
+      await page.getByRole("dialog").getByText("Voz e vídeo", { exact: true }).first().click();
+      await expect(page.getByRole("dialog").getByRole("slider").first()).toBeVisible();
+      await shoot(page, `14-settings-voice-${theme}`);
       await page.keyboard.press("Escape");
 
       await page.locator("[data-server-menu-trigger]").first().click();
@@ -553,7 +557,7 @@ const PRIMITIVES: {
   hover?: string;
   focus?: string;
   /** The role the hover and focus targets have. Buttons by default. */
-  role?: "button" | "textbox" | "combobox" | "checkbox" | "radio" | "tab";
+  role?: "button" | "textbox" | "combobox" | "checkbox" | "radio" | "tab" | "slider";
   /**
    * A button that opens a menu: the shot opens it, moves the highlight
    * `arrows` rows down with the keyboard, and frames the block and the menu.
@@ -592,6 +596,8 @@ const PRIMITIVES: {
   { id: "p-tabs", testId: "qa-primitive-tabs", role: "tab", focus: "Visão geral", hover: "Todos" },
   // Opened from the keyboard, the highlight on "Só menções" (its detail line).
   { id: "p-menu", testId: "qa-primitive-menu", open: { button: "Abrir menu", menu: "[data-server-menu]", arrows: 1 } },
+  // Hovering the scrub shows its thumb; the volume is keyboard-focused.
+  { id: "p-slider", testId: "qa-primitive-slider", focus: "Volume", role: "slider", hover: "Scrub" },
 ];
 
 test("captures the primitives", async ({ browser }) => {

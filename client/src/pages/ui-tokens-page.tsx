@@ -795,6 +795,7 @@ function PrimitiveSheet() {
   const [reportTab, setReportTab] = useState<"open" | "actioned" | "dismissed">("open");
   const [scrub, setScrub] = useState(42);
   const [volume, setVolume] = useState(70);
+  const [hue, setHue] = useState(96);
   const [pressed, setPressed] = useState(true);
 
   return (
@@ -1315,7 +1316,7 @@ function PrimitiveSheet() {
         </Menu>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div data-testid="qa-primitive-slider" className="grid gap-4 sm:grid-cols-2">
         <label className="flex flex-col gap-2">
           <span style={{ fontSize: "var(--type-label-size)" }}>
             {t("qaUi.slider.scrub")}
@@ -1352,6 +1353,45 @@ function PrimitiveSheet() {
             aria-label={t("qaUi.slider.readOnly")}
           />
         </label>
+        <label className="flex flex-col gap-2">
+          <span style={{ fontSize: "var(--type-label-size)" }}>
+            {t("qaUi.slider.hue")}
+          </span>
+          <Slider
+            variant="hue"
+            value={hue}
+            max={360}
+            aria-label={t("qaUi.slider.hue")}
+            onValueChange={setHue}
+          />
+        </label>
+        <label className="flex flex-col gap-2">
+          <span style={{ fontSize: "var(--type-label-size)" }}>
+            {t("qaUi.slider.disabled")}
+          </span>
+          <Slider
+            variant="volume"
+            value={volume}
+            max={100}
+            disabled
+            aria-label={t("qaUi.slider.disabled")}
+          />
+        </label>
+        <div className="flex flex-col gap-2 sm:col-span-2">
+          <span style={{ fontSize: "var(--type-label-size)" }}>
+            {t("qaUi.slider.edge")}
+          </span>
+          <div className="relative h-12 rounded-t-[var(--radius-card)] border-b border-border bg-surface-1">
+            <Slider
+              variant="edge"
+              value={scrub}
+              max={100}
+              aria-label={t("qaUi.slider.edge")}
+              onValueChange={setScrub}
+              className="absolute inset-x-0 -bottom-px"
+            />
+          </div>
+        </div>
       </div>
     </div>
   );

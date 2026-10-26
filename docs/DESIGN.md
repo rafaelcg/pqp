@@ -927,7 +927,7 @@ model and four shapes.
 variants: `scrub`, `volume`, `edge` (the compact player's fill on a panel's
 bottom border) and `hue`.
 
-- **`scrub`.** A 2px track. The thumb appears on hover or focus, so a progress
+- **`scrub`.** A 2px track (toggle off; 4px under the redesign). The thumb appears on hover or focus, so a progress
   bar does not grow a knob until someone means to move it. `readOnly` draws the
   same fill with `role="progressbar"` and no thumb: that is the bar a person
   without `MANAGE_MUSIC` sees. `indeterminate` is the same track with no fill,
@@ -937,8 +937,18 @@ bottom border) and `hue`.
   track, there is no fill, and the thumb wears the current accent with an
   `on-accent` rim. For the accent picker; it replaces the old native range
   and its `.accent-hue-slider` CSS once Aparência moves to it.
-- **States.** The fill is `accent` on `surface-3`. Focus uses the usual ring.
-  Disabled is 40% opacity.
+- **States (toggle off).** The fill is `accent` on `surface-3`. Focus uses
+  the usual ring. Disabled is 40% opacity.
+- **Under the redesign.** The track is a text tint (16% in dark, 13% in
+  light), so it shows on a pane, a card and a dialog alike. Scrub is 4px and
+  thickens to 6px under a pointer or focus; volume is 6px; hue is 10px. The
+  knob is 16px with no edge and a soft shadow in dark, a white knob with a
+  hairline in light, and it grows 12% while the slider is held anywhere.
+  Hue's knob is 20px; `edge` keeps its 12px knob. A read-only scrub never
+  thickens. Focus rings in the solid accent with a transparent offset, as
+  IconButton does. Disabled is 0.5, as on Button, and the light knob turns
+  grey so it stays visible. Every value is a `--slider-*` token with the old
+  value as its fallback.
 - **Use it** for playback position and volume. **Do not** use a native
   `<input type="range">` for those; it draws OS chrome and cannot share the
   read-only treatment.
