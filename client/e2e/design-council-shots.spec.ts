@@ -435,9 +435,9 @@ test("captures the design council screens", async ({ browser }) => {
       await shoot(page, `17-emoji-picker-${theme}`);
       await page.keyboard.press("Escape");
       // Escape inside the picker's own search does not always reach the
-      // panel; the button toggles it shut, so the menu shots show the menu alone.
+      // panel; a press outside closes it, so the menu shots show the menu alone.
       if (await page.locator(".emoji-mart-shell").isVisible()) {
-        await page.getByRole("button", { name: "Adicionar emoji", exact: true }).first().click();
+        await page.getByText(PAPO[0]![1]).click();
       }
       await expect(page.locator(".emoji-mart-shell")).toBeHidden();
       // Menus in place: the server header's, then a message's right-click
