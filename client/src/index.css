@@ -842,6 +842,14 @@
   --count-badge-text: 0.6875rem;
   --count-badge-sm-text: 0.625rem;
 
+  /* Section headers (ui/section-header.tsx). A pane's title is Gabarito at
+     20px with its line under it; a section label inside a list or a dialog
+     is a 12px semibold label in sentence case, no tracking, one step
+     quieter than the body. */
+  --pane-header-title-size: 1.25rem;
+  --pane-header-gap: 1.5rem;
+  --section-label-size: var(--type-label-size);
+
   --icon-button-radius: var(--radius-pill);
   --icon-button-text: var(--color-text-secondary);
   /* Tints, like the button's: an icon button sits on panes and dialogs. */

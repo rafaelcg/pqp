@@ -45,6 +45,7 @@ import { useCommunitiesEnabled } from "@/components/communities/use-communities-
 import { shouldShowCommunityHomeSettingsRow } from "@/lib/community-home";
 import { useTranslation, type MessageKey, type Translator } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { PaneHeader, SectionLabel } from "@/components/ui/section-header";
 import {
   ApiError,
   deleteServer,
@@ -427,12 +428,13 @@ const SECTIONS: SectionDef[] = [
 function SectionHeader({ section }: { section: SectionDef }) {
   const { t } = useTranslation();
   return (
-    <div className="mb-5">
-      <h3 className="font-display text-lg font-bold text-paper">
-        {t(section.label)}
-      </h3>
-      <p className="mt-1 text-xs text-paper-muted">{t(section.description)}</p>
-    </div>
+    <PaneHeader
+      title={t(section.label)}
+      description={t(section.description)}
+      className="mb-5"
+      titleClassName="font-display text-lg font-bold text-paper"
+      descriptionClassName="mt-1 text-xs text-paper-muted"
+    />
   );
 }
 
@@ -453,14 +455,16 @@ function Block({
         tone === "danger" && "rounded-lg border border-danger/40 bg-danger/5 p-4",
       )}
     >
-      <h4
+      <SectionLabel
+        as="h4"
+        tone={tone === "danger" ? "danger" : undefined}
         className={cn(
           "font-display text-sm font-bold uppercase tracking-wider",
           tone === "danger" ? "text-danger" : "text-paper-muted",
         )}
       >
         {title}
-      </h4>
+      </SectionLabel>
       {children}
     </section>
   );

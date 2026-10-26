@@ -38,6 +38,7 @@ import { displayRoleName } from "@/lib/role-labels";
 import { loadServerStoriesEnabled } from "@/lib/stories/config";
 import { useAppsConfig } from "@/hooks/use-apps-config";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { SectionLabel } from "@/components/ui/section-header";
 
 const FLAG_LABEL: Record<PermissionFlagKey, MessageKey> = {
   CREATE_INVITE: "roles.perm.CREATE_INVITE",
@@ -651,9 +652,9 @@ export function RolesSettingsSection({ serverId }: { serverId: string }) {
                 }
                 return (
                   <div key={group.heading}>
-                    <p className="mb-2 px-1 text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
+                    <SectionLabel as="p" className="mb-2 px-1 text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
                       {t(group.heading)}
-                    </p>
+                    </SectionLabel>
                     <div className="divide-y divide-ink-4/60 overflow-hidden rounded-2xl bg-ink-2">
                       {keys.map((key) => {
                         const lockedOnEveryone =

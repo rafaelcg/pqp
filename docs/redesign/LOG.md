@@ -666,6 +666,23 @@ count takes 10px type; the beta tag beside Bot drops its wash; the sheet
 shows a painted Webhook tag and a "Saiu" tag. Screenshots:
 `~/pqp-redesign/p-badge/`.
 
+### p-section-header
+
+Spec (audit: two pane titles drawn twice, about 170 uppercase tracked labels
+in 50 files, in four sizes, three trackings and two colours):
+
+1. Job: the title of a pane, and the small label over a group.
+2. Redesign: Gabarito pane titles at 20px; labels in sentence case, 12px
+   semibold, secondary text, no tracking.
+3. Folded: settings and server settings pane titles, server settings group
+   titles, forward picker, profile popover, shortcuts, invites, roles,
+   server identity, video quality menu.
+4. Left for their owners: channel categories (`s-category`), member list
+   sections (`s-member-list`), DM sections (`f-dm-home`), Baú
+   (`f-bau`), watch party (`f-watch-party`), voice menus (`f-call`). Labels
+   over a single input are field labels, not this element: logged for
+   `p-settings-kit`.
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss

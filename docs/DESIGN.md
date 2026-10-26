@@ -1033,6 +1033,27 @@ conversations or friend requests waiting. Draws nothing at zero and caps at
 - The server rail's and the channel list's counts are drawn in place for
   now; they move here with their shell elements.
 
+### PaneHeader and SectionLabel
+
+`section-header.tsx`. `PaneHeader` is the title of a pane that switches by
+section (user settings, server settings): the title, one line under it, and
+actions on the title line (`actions`, or a slot other code portals into
+through `actionsRef`). `SectionLabel` is the small heading over a group in a
+list, a popover or a dialog ("Recentes", "Convites ativos", a danger zone).
+
+- **Toggle off.** Each caller passes the classes it always drew
+  (`className`, `titleClassName`, `descriptionClassName`) and keeps its look.
+- **Redesign.** The redesign classes come last and win. A pane title is
+  Gabarito (`--type-title-font`) at `--pane-header-title-size` (20px), the
+  line under it body size in secondary text, `--pane-header-gap` (24px)
+  below. A section label is `--section-label-size` (12px), semibold,
+  secondary text, sentence case with no tracking. `tone="danger"` keeps a
+  danger zone's heading in the danger colour.
+- **Copy.** Write a label in sentence case. The old look upper-cases it with
+  CSS (on a span or heading, never on a button, which resets it).
+- **Not these.** A field's label over an input is the input's; a channel
+  category is a fold control (`ChannelSectionHeader`, `s-category`).
+
 ## Planned primitives
 
 Not built. Do not invent a local one; add it here instead, in `ui/`, with a
