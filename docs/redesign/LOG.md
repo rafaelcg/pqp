@@ -712,8 +712,11 @@ few sideways strips hide their bar):
 1. Decision: delete `ScrollArea` and its Radix dependency. Adopting it
    would change how every pane scrolls (an overlay bar, Radix's own
    viewport), which is behaviour, not look.
-2. Redesign: native scrollbars take the look's colours (a text-tinted
-   thumb, no track) at the platform's width, from one rule on the root.
+2. Redesign: native scrollbars take the look's colours (a thumb of tertiary
+   text at 65%, 80% in light, at least 3:1 on both panes; no track) at the platform's width, from one rule on the root.
+3. Not verifiable here: the captures run on macOS, whose overlay bars are
+   hidden at rest; the sheet draws the thumb's colour as a bar instead. A
+   Windows or Linux look at rest, hover and drag is for André's machine.
 
 ## Open questions for André
 

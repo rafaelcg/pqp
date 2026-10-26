@@ -851,7 +851,9 @@ card of settings, the "what's new" note.
 
 Native scrolling everywhere; there is no scroll area component (the unused
 Radix one was deleted with the redesign's `p-scroll`). Under the redesign
-the root sets `scrollbar-color` to `--scrollbar-thumb` (the text at 24%) on
+the root sets `scrollbar-color` to `--scrollbar-thumb` (tertiary text at
+65%, 80% in light: 3.2:1 to 4.3:1 on both panes in Clássico, Catppuccin,
+Everforest and Modo 2005, measured in Chromium) on
 no track, at the platform's width. A strip that scrolls sideways may hide
 its bar (`[scrollbar-width:none]`); a list that scrolls down keeps it.
 

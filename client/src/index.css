@@ -842,9 +842,9 @@
   --count-badge-text: 0.6875rem;
   --count-badge-sm-text: 0.625rem;
 
-  /* Scrollbars: a thumb of the text colour on no track (see the rule on
-     html[data-redesign] below). */
-  --scrollbar-thumb: color-mix(in oklab, var(--color-text) 24%, transparent);
+  /* Scrollbars: a thumb of the tertiary text on no track, at least 3:1 on
+     both panes (see the rule on html[data-redesign] below). */
+  --scrollbar-thumb: color-mix(in oklab, var(--color-text-tertiary) 65%, transparent);
 
   --icon-button-radius: var(--radius-pill);
   --icon-button-text: var(--color-text-secondary);
@@ -1128,6 +1128,8 @@
 
 /* The redesign's shadows on a light page: tinted, never black. Every look. */
 :root[data-redesign][data-theme="light"] {
+  /* Light panes need a stronger thumb to clear 3:1. */
+  --scrollbar-thumb: color-mix(in oklab, var(--color-text-tertiary) 80%, transparent);
   /* Banners: the soft fills are pale in light; a lighter edge keeps them calm. */
   --banner-edge: 22%;
   --input-invalid-bg: color-mix(in oklab, var(--color-danger) 6%, var(--color-field));

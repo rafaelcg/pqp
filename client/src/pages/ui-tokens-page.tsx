@@ -1268,11 +1268,19 @@ function PrimitiveSheet() {
               where === "pane" ? "bg-pane-side" : "elevation-3",
             )}
           >
-            {Array.from({ length: 12 }, (_, i) => (
-              <p key={i} className="px-2 py-1.5 text-sm text-text-secondary">
-                # canal-{i + 1}
-              </p>
-            ))}
+            <div className="relative">
+              {/* The thumb's colour drawn as a bar, because macOS hides an
+                  overlay scrollbar at rest and a screenshot cannot show it. */}
+              <span
+                aria-hidden="true"
+                className="absolute right-0 top-1 hidden h-16 w-2 rounded-full bg-[color:var(--scrollbar-thumb)] redesign:block"
+              />
+              {Array.from({ length: 12 }, (_, i) => (
+                <p key={i} className="px-2 py-1.5 text-sm text-text-secondary">
+                  # canal-{i + 1}
+                </p>
+              ))}
+            </div>
           </div>
         ))}
       </div>
