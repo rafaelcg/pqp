@@ -39,6 +39,7 @@ Read this file and the inventory at the start of every session.
 | 2 | `p-tooltip` | Merged (cap at round 5: 8.9, 8.8, no MUST) |
 | 2 | `p-input` | Merged (cap at round 5: 8.7, 8.9, no MUST) |
 | 2 | `p-select` | Merged (cap at round 5: 8.9, 8.8, no MUST) |
+| 2 | `p-checkbox` | Merged (cap at round 5: best round 3, 8.6, 8.5; round 5 MUST fixed) |
 
 ## Phase 0: directions
 
@@ -403,6 +404,21 @@ hand-built switches, 3 hand-built ticks):
    inside the field's 3:1 edge, an 18px tick with a bold check, the ghost
    tint on row hover, and a disabled label that dims with its control.
 5. Tokens with fallbacks; the toggle off draws what it drew before.
+
+Council (Opus 5.5, GPT-6 Luna via Codex), overall after:
+
+| Round | Opus | Codex |
+|---|---|---|
+| 1 | not recorded | 8.4 |
+| 2 | 8.4 | 8.5 |
+| 3 | 8.6 | 8.5 |
+| 4 | 8.2 | 8.6 |
+| 5 | 8.0 | 8.1 |
+
+Stopped at the five-round cap. Best round: 3. Round 5's MUST (a saving
+switch in a settings row still faded like a disabled one) was fixed after
+the council and pinned by a test. Covers Switch, CheckRow and Checkbox.
+Screenshots: `~/pqp-redesign/p-checkbox/`.
 
 ## Open questions for André
 
