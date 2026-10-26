@@ -92,6 +92,7 @@ import { starterTagsFor } from "@/lib/forum-tag-draft";
 import { useTranslation } from "@/lib/i18n";
 import type { MentionCandidate } from "@/lib/mention-autocomplete";
 import { cn } from "@/lib/utils";
+import { EmptyState } from "@/components/ui/empty-state";
 import { ForumComposerDialog } from "./forum-composer-dialog";
 import { ForumTagIcon } from "./forum-tag-icon";
 import {
@@ -228,14 +229,18 @@ function EmptyBlock({
   role?: "alert" | "status";
 }) {
   return (
-    <div role={role} className="flex flex-col items-center px-6 py-16 text-center animate-fade-in">
-      <div className="text-text-secondary">{icon}</div>
-      <p className="mt-4 forum-display text-xl font-bold text-text">{title}</p>
-      {body && <p className="mt-1.5 max-w-sm text-sm leading-5 text-text-secondary">{body}</p>}
-      {children && (
-        <div className="mt-5 flex flex-wrap items-center justify-center gap-2">{children}</div>
-      )}
-    </div>
+    <EmptyState
+      role={role}
+      icon={icon}
+      title={title}
+      body={body}
+      actions={children}
+      className="px-6 py-16 animate-fade-in"
+      iconClassName="text-text-secondary"
+      titleClassName="mt-4 forum-display text-xl font-bold text-text"
+      bodyClassName="mt-1.5 max-w-sm text-sm leading-5 text-text-secondary"
+      actionsClassName="mt-5"
+    />
   );
 }
 

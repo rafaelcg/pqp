@@ -29,6 +29,8 @@ import {
 import { CalendarClock, X as LineX } from "lucide-react";
 import { Navigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
+import { SettingsEmpty } from "@/components/settings/kit/empty";
 import { BANNER_FILL_REDESIGN, Banner, BannerAction, BannerText } from "@/components/ui/banner";
 import { ShareHandleButton } from "@/components/handle/share-handle-button";
 import { ConnectionBanner } from "@/components/layout/connection-banner";
@@ -1257,6 +1259,35 @@ function PrimitiveSheet() {
 
       {/* Badges: the status word on a card, the tag beside a name, and the
           count in a pill. */}
+      {/* Empty states: a pane's and a group's, with the toggle-off classes
+          their callers pass. */}
+      <div data-testid="qa-primitive-empty" className="grid gap-4 sm:grid-cols-2">
+        <div className="rounded-[var(--radius-pane)] bg-pane-main">
+          <EmptyState
+            icon={<Icon icon={UsersThree} size="lg" />}
+            title={t("chat.empty.owner.title")}
+            body={t("chat.empty.owner.body")}
+            actions={
+              <Button variant="secondary">
+                <Copy aria-hidden="true" className="h-4 w-4" />
+                {t("chat.empty.owner.copy")}
+              </Button>
+            }
+            className="justify-center gap-2 px-6 py-16"
+            iconClassName="hidden redesign:flex"
+            titleClassName="text-balance font-display text-xl font-bold text-text"
+            bodyClassName="max-w-xs text-pretty text-sm text-text-tertiary"
+          />
+        </div>
+        <div className="self-start rounded-[var(--radius-card)] border border-border bg-surface-card">
+          <SettingsEmpty
+            icon={LineHash}
+            title={t("chat.empty.title")}
+            description={t("chat.empty.body")}
+          />
+        </div>
+      </div>
+
       <div data-testid="qa-primitive-badge" className="flex flex-col gap-3">
         <p
           className="text-text-tertiary"

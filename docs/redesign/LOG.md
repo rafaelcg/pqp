@@ -704,6 +704,21 @@ Verified: typecheck; 10,417 unit tests; `bench:tokens`; i18n check;
 passed); retro, Halloween, high contrast, 390px and toggle off. Screenshots:
 `~/pqp-redesign/p-toast/`.
 
+### p-empty
+
+Spec (audit: four local empty components and about 30 hand-built empty
+blocks, each with its own sizes, colours and spacing):
+
+1. Job: say what is not here yet and the next step; `page` and `inline`.
+2. Redesign: the glyph on a soft disc, a Gabarito title, a secondary body
+   line, the actions under it; inline is quiet.
+3. Folded: the empty channel (both versions), the forum's empty and failed
+   blocks (six uses), search's empty and prompt states, the settings kit's
+   `SettingsEmpty` (every settings tab).
+4. Left for their owners: watch party, communities, stories, call stage,
+   apps, conversations home, friends (their surfaces' elements); the error
+   boundary (`f-states`, André's question 3).
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss

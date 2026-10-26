@@ -12,6 +12,7 @@ import { searchServerMessages } from "@/lib/api";
 import { messageLinkState, messageRoutePath } from "@/lib/app-route";
 import { useTranslation } from "@/lib/i18n";
 import { cn, formatDayLabel, formatFullTimestamp } from "@/lib/utils";
+import { EmptyState } from "@/components/ui/empty-state";
 import { appendUniqueResults, clampSelection } from "./search-results";
 
 /** Long enough that a typed word is one query, short enough to feel live. */
@@ -207,19 +208,19 @@ export function SearchDialog({
 
         <div className="min-h-0 flex-1 overflow-y-auto">
           {status === "error" ? (
-            <EmptyState
+            <SearchEmpty
               title={t("search.unavailable")}
               hint={t("search.unavailableHint")}
             />
           ) : !searchable ? (
-            <EmptyState
+            <SearchEmpty
               title={t("search.prompt")}
               hint={t("search.minChars", { count: SEARCH_QUERY_MIN_LENGTH })}
             />
           ) : status === "loading" && results.length === 0 ? (
-            <EmptyState title={t("search.searching")} />
+            <SearchEmpty title={t("search.searching")} />
           ) : results.length === 0 ? (
-            <EmptyState
+            <SearchEmpty
               title={t("search.noMatch", { query: trimmed })}
               hint={t("search.wholeWords")}
             />
@@ -320,11 +321,15 @@ function Snippet({ snippet }: { snippet: string }) {
   );
 }
 
-function EmptyState({ title, hint }: { title: string; hint?: string }) {
+function SearchEmpty({ title, hint }: { title: string; hint?: string }) {
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-1 px-8 text-center">
-      <p className="text-sm text-text">{title}</p>
-      {hint && <p className="text-xs text-text-muted">{hint}</p>}
-    </div>
+    <EmptyState
+      size="inline"
+      title={title}
+      body={hint}
+      className="h-full justify-center gap-1 px-8"
+      titleClassName="text-sm text-text"
+      bodyClassName="text-xs text-text-muted"
+    />
   );
 }

@@ -842,6 +842,12 @@
   --count-badge-text: 0.6875rem;
   --count-badge-sm-text: 0.625rem;
 
+  /* Empty states (ui/empty-state.tsx): a page empty state leads with its
+     glyph on a soft disc of the raised fill, then a Gabarito title. */
+  --empty-icon-disc: 3.5rem;
+  --empty-icon-bg: var(--color-surface-3);
+  --empty-title-size: 1.25rem;
+
   --icon-button-radius: var(--radius-pill);
   --icon-button-text: var(--color-text-secondary);
   /* Tints, like the button's: an icon button sits on panes and dialogs. */
