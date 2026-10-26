@@ -23,6 +23,7 @@ import { Icon } from "@/components/ui/icon";
 import { IconButton, type IconButtonSize } from "@/components/ui/icon-button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
+import { PopoverPanel } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
@@ -1082,6 +1083,27 @@ function PrimitiveSheet() {
             success + icon
           </Badge>
         </div>
+      </div>
+
+      {/* A popover's panel, drawn in place: placement is each caller's. */}
+      <div data-testid="qa-primitive-popover" className="flex flex-wrap items-start gap-4 p-4">
+        <PopoverPanel role="dialog" aria-label={t("qaUi.popover.title")} className="w-72 p-4 text-text">
+          <p className="text-sm font-semibold">{t("qaUi.popover.title")}</p>
+          <p className="mt-1 text-xs text-text-tertiary">{t("qaUi.popover.body")}</p>
+          <div className="mt-3 flex justify-end gap-2">
+            <Button variant="ghost" size="sm">
+              {t("qaUi.popover.later")}
+            </Button>
+            <Button size="sm">{t("qaUi.popover.now")}</Button>
+          </div>
+        </PopoverPanel>
+        <PopoverPanel className="grid w-56 grid-cols-6 gap-1 p-2">
+          {["😀", "😂", "🥲", "😍", "🤔", "😴", "🔥", "🎉", "👀", "💀", "🙏", "✨"].map((emoji) => (
+            <span key={emoji} className="grid h-8 place-items-center rounded-[var(--radius-control)] text-lg">
+              {emoji}
+            </span>
+          ))}
+        </PopoverPanel>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">

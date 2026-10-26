@@ -10,6 +10,7 @@ import {
 import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
+import { POPOVER_SURFACE } from "@/components/ui/popover";
 import { useApplyUpdate } from "@/hooks/use-apply-update";
 import { useInCall, useWatchingParty } from "@/lib/in-call-state";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
@@ -311,7 +312,7 @@ export function UpdateIndicator({
               top: box?.top ?? 0,
               visibility: box ? "visible" : "hidden",
             }}
-            className="elevation-3 fixed z-[100] rounded-[var(--radius-card)] p-4 text-text animate-pop-in"
+            className={cn(POPOVER_SURFACE, "fixed z-[100] p-4 text-text animate-pop-in")}
           >
             <div className="flex items-start gap-3">
               <span

@@ -777,6 +777,35 @@ itself on mount and flips above the pointer when it does not fit below.
 - `items.length === 0` (or `disabled`) renders the trigger alone, same as
   `ContextMenu`.
 
+### Popover
+
+`popover.tsx`. The panel an anchored popover floats in: a picker, a small
+card of settings, the "what's new" note.
+
+- **Shared.** `POPOVER_SURFACE` (and `PopoverPanel`, the same as an element)
+  is the surface only. Each popover keeps its own placement, portal and
+  dismissal, because each measures a different anchor.
+- **Callers.** The emoji and GIF pickers, the update note, the soundboard,
+  the forum icon picker and the music speaker panel. The profile popover
+  and the peer audio card still draw an older `ink-2` panel; they move with
+  their surfaces.
+- **Under the redesign.** The pane radius (16px), its own fill
+  (`surface-2` in dark, the brightest surface in light so the panel reads
+  lifted rather than sunk), a 10% text edge in both themes, and a lift
+  (`--shadow-2`, one rung under a dialog) with a top highlight in dark, a
+  close and a wide shadow in light. The edge and the lift are set through
+  `--elevation-3-border` and `--elevation-3-shadow` on the panel, so a
+  caller that sets its own fill or edge keeps it.
+- A caller that draws its own edge adds `POPOVER_OWN_EDGE`, so its edge is
+  the popover's whatever order the classes land in.
+- The emoji picker fills its panel: no inner corner or shadow, 38px cells
+  so eight fill its width, 6px under its category bar. Its fill is
+  `--rgb-picker-background`, an RGB triplet the picker needs; each redesign
+  look sets it by hand to its `--popover-surface` (surface-2 in dark,
+  surface-0 in light), so a look that changes those sets both.
+- **Use it** for anything anchored to the control that opened it. A list of
+  actions is a `Menu`; a blocking question is a `Dialog`.
+
 ### ScrollArea
 
 `scroll-area.tsx`. Radix scroll area with a themed thumb. Use it where a native

@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { useMediaQuery } from "@/components/ui/use-media-query";
 import { Tooltip, useFullscreenPortalHost } from "@/components/ui/tooltip";
+import { POPOVER_SURFACE } from "@/components/ui/popover";
 import { useVoiceConfig } from "@/hooks/use-voice-config";
 import { placeAnchoredPanel } from "@/lib/anchored-panel";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
@@ -503,7 +504,8 @@ export function SoundboardControl({
               visibility: placement ? "visible" : "hidden",
             }}
             className={cn(
-              "elevation-3 z-[100] flex max-w-full flex-col overflow-hidden rounded-[var(--radius-card)] animate-pop-in",
+              POPOVER_SURFACE,
+              "z-[100] flex max-w-full flex-col overflow-hidden animate-pop-in",
               compact ? "p-1.5" : "p-2.5",
               sheet ? "origin-bottom" : "origin-bottom-right",
             )}
