@@ -17,7 +17,7 @@ import { cn } from "@/lib/utils";
  *
  * | Size | Height | Where                                   |
  * |------|--------|-----------------------------------------|
- * | `md` | 40px   | beside an `Input`, which it matches (default) |
+ * | `md` | 40px   | beside an `Input`, which it matches (default); 36px under the redesign |
  * | `sm` | 36px   | a toolbar; 32px under the redesign, as `Button size="sm"` |
  *
  * Disabled follows the field: the same token opacity (1 under the redesign),
@@ -68,7 +68,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select
           "pointer-events-none absolute top-1/2 right-[var(--input-px,0.75rem)] hidden size-[var(--icon-sm)] -translate-y-1/2 text-text-tertiary redesign:block",
           // The caret follows the field: brighter on hover and focus, red
           // when invalid, as faded as the value when disabled.
-          "redesign:peer-enabled:peer-hover:text-text-secondary redesign:peer-focus-visible:text-text-secondary redesign:peer-aria-invalid:text-danger redesign:peer-disabled:text-[color:color-mix(in_oklab,var(--color-text-tertiary)_70%,transparent)]",
+          "redesign:peer-enabled:peer-hover:not-peer-aria-invalid:text-text-secondary redesign:peer-focus-visible:not-peer-aria-invalid:text-text-secondary redesign:peer-aria-invalid:text-danger redesign:peer-disabled:text-[color:color-mix(in_oklab,var(--color-text-tertiary)_70%,transparent)]",
         )}
       />
     </span>

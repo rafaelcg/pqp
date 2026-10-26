@@ -64,5 +64,10 @@ describe("Select", () => {
     const caret = host.querySelector("svg")!.getAttribute("class")!;
     expect(caret).toContain("redesign:peer-disabled:");
     expect(caret).toContain("redesign:peer-aria-invalid:text-danger");
+    expect(caret).toContain("redesign:peer-enabled:peer-hover:not-peer-aria-invalid:text-text-secondary");
+    expect(caret).toContain("redesign:peer-focus-visible:not-peer-aria-invalid:text-text-secondary");
+    expect(caret).toContain(
+      "redesign:peer-disabled:text-[color:color-mix(in_oklab,var(--color-text-tertiary)_70%,transparent)]",
+    );
   });
 });

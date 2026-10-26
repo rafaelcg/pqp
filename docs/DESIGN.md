@@ -584,6 +584,11 @@ value.
 - **Under the redesign.** The `Input` box (`FIELD_BOX`), and a Phosphor caret
   in place of the operating system's arrow (`--select-appearance: none`,
   `--select-pr`). With the toggle off it keeps the native arrow.
+- **States.** Disabled follows the field: `--input-disabled-opacity: 1`, no
+  fill, the value at `text-tertiary` and the caret faded as far as the
+  placeholder. The caret is a `peer` of the field: `text-secondary` on hover
+  and keyboard focus, `text-danger` when invalid (hover and focus never
+  repaint an invalid caret).
 - **Use it** for every short list. It replaced `SettingsSelect` and about a
   dozen hand-drawn selects.
 
