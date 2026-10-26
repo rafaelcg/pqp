@@ -35,7 +35,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ComposerSlashContext } from "@/components/chat/message-composer";
 import type {
   MessageAuthorInfo,
@@ -46,6 +46,7 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
 import { Dialog } from "@/components/ui/dialog";
+import { IconButton } from "@/components/ui/icon-button";
 import { Menu } from "@/components/ui/menu";
 import { Tooltip } from "@/components/ui/tooltip";
 import type { ChatController, ChatMessage } from "@/hooks/use-chat";
@@ -158,31 +159,6 @@ const DETAIL_RETRIES = 3;
 
 /** See the transcript effect: the closing read waits a beat for a remount. */
 const leaveTimers = new Map<string, number>();
-
-function PostIconButton({
-  label,
-  onClick,
-  children,
-  pressed,
-}: {
-  label: string;
-  onClick: () => void;
-  children: ReactNode;
-  pressed?: boolean;
-}) {
-  return (
-    <Tooltip label={label}>
-      <button
-        type="button"
-        onClick={onClick}
-        aria-pressed={pressed}
-        className="grid h-8 w-8 shrink-0 place-items-center rounded-[var(--radius-control)] text-text-tertiary transition-colors duration-[var(--duration-fast)] hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring max-sm:h-11 max-sm:w-11"
-      >
-        {children}
-      </button>
-    </Tooltip>
-  );
-}
 
 /** Edit tags: the same toggle chips as the composer, staff tags for staff. */
 export function EditTagsDialog({
@@ -908,9 +884,9 @@ export function ForumPostView({
   const topBar = (
       <div className="flex h-14 items-center gap-1 px-2 sm:px-3">
         {(layout === "full" || forcedFull) && (
-          <PostIconButton label={t("forum.post.back")} onClick={onClose}>
+          <IconButton label={t("forum.post.back")} onClick={onClose}>
             <ArrowLeft className="h-4 w-4" aria-hidden />
-          </PostIconButton>
+          </IconButton>
         )}
         <div className="relative min-w-0 flex-1 self-stretch">
           <p
@@ -939,7 +915,7 @@ export function ForumPostView({
         </div>
         {!forcedFull && (
           <span className="max-sm:hidden">
-            <PostIconButton
+            <IconButton
               label={maximized ? t("forum.post.collapse") : t("forum.post.expand")}
               onClick={onToggleMaximize}
               pressed={maximized}
@@ -949,24 +925,20 @@ export function ForumPostView({
               ) : (
                 <Maximize2 className="h-4 w-4" aria-hidden />
               )}
-            </PostIconButton>
+            </IconButton>
           </span>
         )}
         {layout === "side" && !forcedFull && (
-          <PostIconButton label={t("forum.post.back")} onClick={onClose}>
+          <IconButton label={t("forum.post.back")} onClick={onClose}>
             <X className="h-4 w-4" aria-hidden />
-          </PostIconButton>
+          </IconButton>
         )}
         <span className="sm:hidden">
           {/* Phones open on the menu the mock draws beside the bell. */}
           <Menu items={menuItems} align="end">
-            <button
-              type="button"
-              aria-label={t("forum.post.menu")}
-              className="grid h-11 w-11 place-items-center rounded-[var(--radius-control)] text-text-tertiary hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
-            >
+            <IconButton label={t("forum.post.menu")}>
               <MoreHorizontal className="h-5 w-5" aria-hidden />
-            </button>
+            </IconButton>
           </Menu>
         </span>
       </div>

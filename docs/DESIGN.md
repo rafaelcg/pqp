@@ -493,6 +493,29 @@ so a variant and a size are props, not class strings.
   one. A disabled button fires no hover, so its
   explanation cannot live in a native `title`.
 
+### IconButton
+
+`icon-button.tsx`. A control that is only an icon: settings, pin, mute, close.
+It wraps `Tooltip`, so `label` is required and is both the tooltip and the
+accessible name.
+
+- **Sizes.** `xs` (24px, beside text in a row), `sm` (28px, a row's trailing
+  actions), `md` (32px, a header or toolbar, the default), `lg` (36px, beside
+  a default `Button`).
+- **`touch`.** On by default: the box grows to 44px under 640px. Turn it off
+  only inside a dense row that has a larger tap target of its own.
+- **`tone="danger"`.** The icon turns red on hover, for remove and leave.
+- **`pressed`.** A toggle (mute, pin). It sets `aria-pressed` and, under the
+  redesign, the selected row fill.
+- **`detail`.** A second, quieter line in the tooltip.
+- **Under the redesign.** A pill, secondary text at rest and the row-hover
+  fill, from `--icon-button-*` tokens with fallbacks in the class (see Button).
+  The pressed fill is the one `redesign:` class, because nothing paints a
+  pressed icon button from outside.
+- **Use it** for every icon-only control. **Do not** draw a raw `<button>`
+  with an icon, and do not use `Button size="icon"` for a new one: that size
+  stays for an icon button that must match a row of text buttons.
+
 ### Input
 
 `input.tsx`. A single-line text field, `forwardRef` so a form can focus it.

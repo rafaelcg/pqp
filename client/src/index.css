@@ -675,6 +675,13 @@
   /* A small button steps down in height, not in legibility. */
   --button-text-sm: 0.8125rem;
 
+  /* Icon button (ui/icon-button.tsx). Unset with the toggle off: each falls
+     back, in the class, to what the icon button always drew. */
+  --icon-button-radius: var(--radius-pill);
+  --icon-button-text: var(--color-text-secondary);
+  --icon-button-hover: var(--color-row-hover);
+  --icon-button-danger-hover: var(--color-danger-soft);
+
   /* The title role is drawn in the display face: server names, channel
      titles and pane headers, in sentence case. */
   --type-display-leading: 1.25;

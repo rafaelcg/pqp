@@ -430,7 +430,9 @@ const MIRRORED = [
   /^--type-/,
   /^--control-/,
   /^--space-/,
-  /^--icon-/,
+  // Icon sizes and stroke. `--icon-button-*` are IconButton's component
+  // tokens, like `--button-*`, not roles the sheet lists.
+  /^--icon-(?!button-)/,
 ];
 
 const TOKENS_TS = join(SRC, "lib", "design-tokens.ts");

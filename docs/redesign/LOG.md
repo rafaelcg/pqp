@@ -220,6 +220,20 @@ Verified: typecheck; 10,315 unit tests; `bench:tokens` (3,062 pairs);
 `settings-sections` and `settings-keyboard` e2e (14 passed); i18n check;
 retro dark and light, Halloween, high contrast light, 390px; toggle off
 matches the original sheet and settings screens.
+### p-icon-button
+
+Spec (audit: about 180 raw icon-only `<button>`s, six heights, three hover
+fills, about a third with no accessible name; four named copies):
+
+1. Job: every icon-only control. One `IconButton` in `ui/`, wrapping
+   `Tooltip`, so the label is required and is the accessible name.
+2. Sizes xs/sm/md/lg (24/28/32/36px); 44px under 640px unless `touch={false}`.
+   Tones ghost and danger; `pressed` for toggles (`aria-pressed`).
+3. Redesign: a pill, secondary text, row-hover fill, selected fill when
+   pressed. Tokens with fallbacks, so the toggle off is unchanged.
+4. Folded now: `PostIconButton` (forum, 3 uses). `HEADER_ACTION_TILE` and
+   `CHANNEL_ACTION_TILE` fold in `s-header` and `s-channel-row`, `ChromeButton`
+   in `f-stories`; the raw buttons fold with the element that owns them.
 
 ## Open questions for André
 
