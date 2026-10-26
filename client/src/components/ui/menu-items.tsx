@@ -2,6 +2,7 @@ import { Check as PhCheck } from "@phosphor-icons/react";
 import { Check } from "lucide-react";
 import { useId, type ComponentType, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import { POPOVER_SURFACE } from "@/components/ui/popover";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
 
 /**
@@ -28,14 +29,32 @@ import type { ContextMenuItemDef } from "@/components/ui/context-menu";
  * cannot be a Radix menu (the composer's "+", anchored inside the field).
  * Positioning, width and z-index stay with each caller.
  */
-export const MENU_SURFACE =
-  "elevation-3 overflow-y-auto overscroll-contain rounded-[var(--menu-radius,var(--radius-card))] p-[var(--menu-pad,0.25rem)] animate-fade-in";
+export const MENU_SURFACE = `${POPOVER_SURFACE} overflow-y-auto overscroll-contain p-[var(--menu-pad,0.25rem)] animate-fade-in`;
 
 const ROW_SHAPE =
   "flex w-full cursor-default select-none items-center gap-[var(--menu-row-gap,0.5rem)] whitespace-nowrap rounded-[var(--menu-row-radius,var(--radius-control))] px-2.5 py-[var(--menu-row-py,0.375rem)] text-sm outline-none";
 
-/** A Radix row: highlighted by the pointer or the arrows. */
-export const MENU_ROW = `group/menu-row ${ROW_SHAPE} data-[disabled]:pointer-events-none data-[disabled]:opacity-[var(--menu-disabled-opacity,0.4)] data-[highlighted]:bg-[color:var(--menu-row-hover,var(--color-surface-2))]`;
+/**
+ * A Radix row: highlighted by the pointer or the arrows. Disabled fades the
+ * whole row with the toggle off; under the redesign only the icon and the
+ * label fade, so a detail that says how to enable the row stays readable.
+ */
+export const MENU_ROW = `group/menu-row ${ROW_SHAPE} data-[disabled]:pointer-events-none data-[disabled]:opacity-[var(--menu-disabled-opacity,0.4)] redesign:data-[disabled]:opacity-100 data-[highlighted]:bg-[color:var(--menu-row-hover,var(--color-surface-2))]`;
+
+/** What fades on a disabled row under the redesign. */
+const DISABLED_PART = "redesign:group-data-[disabled]/menu-row:opacity-[var(--menu-disabled-opacity)]";
+
+/**
+ * A heading over the rows below it, also for a menu's `topContent`. Under
+ * the redesign it is sentence case in `text-secondary` and semibold, so it
+ * does not read as a row's detail line.
+ */
+export const MENU_HEADING =
+  "px-2.5 pb-0.5 pt-1.5 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary redesign:pt-2 redesign:text-xs redesign:normal-case redesign:tracking-normal redesign:text-text-secondary";
+
+/** The heading's redesign half alone, for a heading whose toggle-off size differs. */
+export const MENU_HEADING_REDESIGN =
+  "redesign:pt-2 redesign:text-xs redesign:normal-case redesign:tracking-normal redesign:text-text-secondary";
 
 /** A hand-built row: a button highlighted on hover and keyboard focus. */
 export const MENU_ROW_BUTTON = `group/menu-row ${ROW_SHAPE} text-left text-text hover:bg-[color:var(--menu-row-hover,var(--color-surface-2))] focus-visible:bg-[color:var(--menu-row-hover,var(--color-surface-2))]`;
@@ -46,6 +65,9 @@ export const MENU_ROW_BUTTON = `group/menu-row ${ROW_SHAPE} text-left text-text 
  */
 export const MENU_ICON =
   "size-[var(--menu-icon-size,0.875rem)] shrink-0 text-[color:var(--menu-icon,currentColor)] group-data-[highlighted]/menu-row:text-current group-hover/menu-row:text-current group-focus-visible/menu-row:text-current";
+
+/** The column an icon sits in, so labels line up across rows. */
+export const MENU_ICON_BOX = "flex size-[var(--menu-icon-box,1rem)] shrink-0 items-center justify-center";
 
 export const MENU_SEPARATOR = "my-1 h-px bg-[color:var(--menu-separator,var(--color-border))]";
 
@@ -88,7 +110,7 @@ export function MenuItemRows({
           <div
             key={item.id}
             data-menu-heading={item.id}
-            className="px-2.5 pb-0.5 pt-1.5 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary redesign:text-xs redesign:font-medium redesign:normal-case redesign:tracking-normal"
+            className={MENU_HEADING}
           >
             {item.label}
           </div>
@@ -111,7 +133,7 @@ export function MenuItemRows({
             {reserveIcon && (
               <span
                 aria-hidden="true"
-                className="flex size-[var(--menu-icon-box,1rem)] shrink-0 items-center justify-center"
+                className={cn(MENU_ICON_BOX, DISABLED_PART)}
               >
                 {item.icon ? <item.icon className={MENU_ICON} /> : null}
               </span>
@@ -122,7 +144,7 @@ export function MenuItemRows({
                     label ran past the menu's edge and was cut off. */}
                 <span
                   id={`${idPrefix}-${item.id}-label`}
-                  className="whitespace-normal"
+                  className={cn("whitespace-normal", DISABLED_PART)}
                 >
                   {item.label}
                 </span>
@@ -134,7 +156,7 @@ export function MenuItemRows({
                 </span>
               </span>
             ) : (
-              <span className="min-w-0 flex-1 whitespace-normal">{item.label}</span>
+              <span className={cn("min-w-0 flex-1 whitespace-normal", DISABLED_PART)}>{item.label}</span>
             )}
             {item.trailing ? (
               <span className="ml-3 flex shrink-0 items-center">

@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import {
   MENU_ICON,
   MENU_ROW,
+  MENU_HEADING,
+  MENU_HEADING_REDESIGN,
   MENU_ROW_BUTTON,
   MENU_SEPARATOR,
   MENU_SURFACE,
@@ -45,13 +47,21 @@ function rows() {
 describe("menu recipe", () => {
   it("draws today's surface and row when the tokens are unset", () => {
     expect(MENU_SURFACE).toContain("elevation-3");
-    expect(MENU_SURFACE).toContain("rounded-[var(--menu-radius,var(--radius-card))]");
+    expect(MENU_SURFACE).toContain("rounded-[var(--popover-radius,var(--radius-card))]");
     expect(MENU_SURFACE).toContain("p-[var(--menu-pad,0.25rem)]");
     expect(MENU_ROW).toContain("rounded-[var(--menu-row-radius,var(--radius-control))]");
     expect(MENU_ROW).toContain("py-[var(--menu-row-py,0.375rem)]");
     expect(MENU_ROW).toContain("data-[highlighted]:bg-[color:var(--menu-row-hover,var(--color-surface-2))]");
     expect(MENU_ROW).toContain("data-[disabled]:opacity-[var(--menu-disabled-opacity,0.4)]");
     expect(MENU_SEPARATOR).toContain("bg-[color:var(--menu-separator,var(--color-border))]");
+  });
+
+  it("floats on the popover surface and fades only the icon and label of a disabled row under the redesign", () => {
+    expect(MENU_SURFACE).toContain("redesign:[--elevation-3-surface:var(--popover-surface)]");
+    expect(MENU_ROW).toContain("redesign:data-[disabled]:opacity-100");
+    expect(MENU_HEADING).toContain("redesign:normal-case");
+    expect(MENU_HEADING).toContain("redesign:text-text-secondary");
+    expect(MENU_HEADING).toContain(MENU_HEADING_REDESIGN);
   });
 
   it("gives a hand-built row the same shape, highlighted on hover and focus", () => {

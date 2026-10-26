@@ -441,6 +441,10 @@ six hand-built `role="menu"` lists):
    menu (`s-user-panel`), the profile popover's "more" (`f-profile-popover`),
    video quality (`f-call`), the watch player's two (`f-watch-party`), the
    message list's "more" (`s-message`).
+5. Round 1 also moved: the menu surface now builds on `POPOVER_SURFACE`;
+   `topContent` callers use `MENU_SEPARATOR` and the heading recipe; a
+   disabled row fades its icon and label, not its detail. Left for
+   `s-message`: the message menu's danger rows sit mid-list, not last.
 
 ### p-popover
 

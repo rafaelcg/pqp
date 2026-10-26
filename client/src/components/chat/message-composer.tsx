@@ -86,7 +86,7 @@ import { UserAvatar } from "@/components/user/user-avatar";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Tooltip } from "@/components/ui/tooltip";
-import { MENU_ICON, MENU_ROW_BUTTON, MENU_SURFACE } from "@/components/ui/menu-items";
+import { MENU_ICON, MENU_ICON_BOX, MENU_ROW_BUTTON, MENU_SURFACE } from "@/components/ui/menu-items";
 import {
   AttachmentAbortError,
   createPreviewUrl,
@@ -2162,7 +2162,9 @@ function ComposerInsertMenu({
             onClick={item.onSelect}
             className={MENU_ROW_BUTTON}
           >
-            <Icon className={MENU_ICON} aria-hidden />
+            <span aria-hidden className={MENU_ICON_BOX}>
+              <Icon className={MENU_ICON} />
+            </span>
             {item.label}
           </button>
         );

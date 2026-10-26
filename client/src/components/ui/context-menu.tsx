@@ -1,4 +1,5 @@
 import * as ContextMenuPrimitive from "@radix-ui/react-context-menu";
+import { Plus as PhPlus } from "@phosphor-icons/react";
 import { type LucideIcon } from "lucide-react";
 import {
   useCallback,
@@ -243,7 +244,7 @@ export function ContextMenu({
                     onSelect={reaction.onSelect}
                     data-quick-reaction=""
                     className={cn(
-                      "flex h-8 flex-1 cursor-default select-none items-center justify-center rounded-[var(--menu-row-radius,var(--radius-control))] text-base leading-none outline-none data-[highlighted]:bg-[color:var(--menu-row-hover,var(--color-surface-2))]",
+                      "flex h-8 flex-1 cursor-default select-none items-center justify-center rounded-[var(--menu-row-radius,var(--radius-control))] text-base leading-none outline-none redesign:h-[var(--menu-strip-h)] redesign:text-lg data-[highlighted]:bg-[color:var(--menu-row-hover,var(--color-surface-2))]",
                       reaction.active && "bg-accent/15 ring-1 ring-accent/40",
                     )}
                   >
@@ -255,9 +256,10 @@ export function ContextMenu({
                     aria-label={moreReactionsLabel}
                     onSelect={onMoreReactions}
                     data-quick-reaction-more=""
-                    className="flex h-8 flex-1 cursor-default select-none items-center justify-center rounded-[var(--menu-row-radius,var(--radius-control))] border border-dashed border-[color:var(--menu-more-edge,var(--color-border))] text-sm leading-none text-text-tertiary outline-none data-[highlighted]:bg-[color:var(--menu-row-hover,var(--color-surface-2))] data-[highlighted]:text-text"
+                    className="flex h-8 flex-1 redesign:h-[var(--menu-strip-h)] cursor-default select-none items-center justify-center rounded-[var(--menu-row-radius,var(--radius-control))] border border-dashed border-[color:var(--menu-more-edge,var(--color-border))] text-sm leading-none text-text-tertiary outline-none data-[highlighted]:bg-[color:var(--menu-row-hover,var(--color-surface-2))] data-[highlighted]:text-text"
                   >
-                    <span aria-hidden="true">+</span>
+                    <span aria-hidden="true" className="redesign:hidden">+</span>
+                    <PhPlus aria-hidden="true" weight="bold" className="hidden size-3.5 redesign:block" />
                   </ContextMenuPrimitive.Item>
                 )}
               </div>
