@@ -927,7 +927,7 @@ model and four shapes.
 variants: `scrub`, `volume`, `edge` (the compact player's fill on a panel's
 bottom border) and `hue`.
 
-- **`scrub`.** A 2px track. The thumb appears on hover or focus, so a progress
+- **`scrub`.** A 2px track (toggle off; 4px under the redesign). The thumb appears on hover or focus, so a progress
   bar does not grow a knob until someone means to move it. `readOnly` draws the
   same fill with `role="progressbar"` and no thumb: that is the bar a person
   without `MANAGE_MUSIC` sees. `indeterminate` is the same track with no fill,

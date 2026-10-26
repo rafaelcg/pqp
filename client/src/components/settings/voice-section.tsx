@@ -943,7 +943,9 @@ function VolumeRow({
       description={description}
       stacked
       control={
-        <div className="space-y-1">
+        // Under the redesign the 100% label hangs 6px under the knob; the hint
+        // below it starts clear of it (label box 34-46px, hint at 50px).
+        <div className="space-y-1 redesign:space-y-2.5" data-volume-stack="">
           <div className="flex items-center gap-3">
             <div className="relative flex-1">
               <Slider

@@ -471,6 +471,9 @@ describe("VoiceSection volumes", () => {
     expect(row.querySelector("[data-volume-tick]")).not.toBeNull();
     expect(row.textContent).toMatch(/100%/);
     expect(row.textContent).toMatch(/distort|distorcer|distorsionar/);
+    // jsdom has no layout: pin the spacing that keeps the hanging 100% label
+    // clear of the hint under the slider.
+    expect(row.querySelector("[data-volume-stack]")!.className).toContain("redesign:space-y-2.5");
     expect(
       host!.querySelector('[data-settings-row="output-volume"] [data-volume-tick]'),
     ).toBeNull();
