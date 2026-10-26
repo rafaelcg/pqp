@@ -50,6 +50,9 @@ export function TickBox({
               TICK_OFF_RING[size],
             ),
         disabled && !checked && "opacity-[var(--tick-disabled-opacity,0.5)]",
+        // Off, a disabled tick stays full when checked; under the redesign it
+        // fades with its label, as the native Checkbox does.
+        disabled && checked && "redesign:opacity-[var(--tick-disabled-opacity,0.5)]",
         className,
       )}
     >
