@@ -1,0 +1,63 @@
+// @vitest-environment jsdom
+import { act, type ReactElement } from "react";
+import { createRoot } from "react-dom/client";
+import { describe, expect, it } from "vitest";
+import { RadioGroup } from "@/components/ui/radio-group";
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+function draw(element: ReactElement): HTMLElement {
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  act(() => root.render(element));
+  return host;
+}
+
+const OPTIONS = [
+  { value: "a", label: "A", description: "first" },
+  { value: "b", label: "B", description: "second" },
+] as const;
+
+function group(variant: "segmented" | "chips" | "list") {
+  return draw(
+    <RadioGroup
+      label="g"
+      variant={variant}
+      value="a"
+      onValueChange={() => undefined}
+      options={variant === "segmented" ? OPTIONS.map(({ value, label }) => ({ value, label })) : OPTIONS}
+    />,
+  );
+}
+
+describe("RadioGroup tokens", () => {
+  it("draws today's segmented track and thumb when the tokens are unset", () => {
+    const host = group("segmented");
+    const track = host.querySelector('[role="radiogroup"]')!.className;
+    expect(track).toContain("bg-[color:var(--segmented-bg,var(--color-surface-0))]");
+    expect(track).toContain("border-[color:var(--segmented-border,var(--color-border))]");
+    const [on, off] = host.querySelectorAll('[role="radio"]');
+    expect(on!.className).toContain("bg-[color:var(--segmented-thumb,var(--color-surface-2))]");
+    expect(on!.className).toContain("shadow-[var(--segmented-thumb-shadow,0_0_transparent)]");
+    expect(off!.className).toContain("text-[color:var(--segmented-text,var(--color-text-tertiary))]");
+  });
+
+  it("keeps the chip edge and hover on tokens, and only weights the checked chip under the redesign", () => {
+    const [on, off] = group("chips").querySelectorAll('[role="radio"]');
+    expect(on!.className).toContain("redesign:font-medium");
+    expect(off!.className).toContain("border-[color:var(--chip-border,var(--color-border))]");
+    expect(off!.className).toContain("hover:bg-[color:var(--chip-hover,var(--color-surface-2))]");
+  });
+
+  it("sizes the list dot from tokens and fills it with the accent only under the redesign", () => {
+    const [on, off] = group("list").querySelectorAll('[role="radio"] [aria-hidden]');
+    expect(on!.getAttribute("class")).toContain("redesign:bg-accent");
+    expect(on!.getAttribute("class")).toContain("h-[var(--radio-size,1rem)]");
+    expect(on!.firstElementChild!.getAttribute("class")).toContain(
+      "bg-[color:var(--radio-dot,var(--color-accent))]",
+    );
+    expect(off!.getAttribute("class")).toContain(
+      "border-[color:var(--radio-off-ring,var(--color-border-strong))]",
+    );
+  });
+});

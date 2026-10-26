@@ -176,6 +176,11 @@ const INSET_FOCUS_RING =
  *
  * Options with a `description` cannot be segmented: a track has no room for a
  * second line, so the description would be silently dropped.
+ *
+ * Every colour and radius is a `--segmented-*`, `--chip-*` or `--radio-*`
+ * token with today's value as its fallback, so the toggle off is unchanged.
+ * Under the redesign the track is a tinted pill with a raised thumb, chips
+ * take a stronger edge, and the list's dot is a filled accent disc.
  */
 export function RadioGroup<T extends string | number>({
   value,
@@ -213,7 +218,7 @@ export function RadioGroup<T extends string | number>({
       onKeyDown={onKeyDown}
       className={cn(
         variant === "segmented" &&
-          "gap-0.5 rounded-[var(--radius-control)] border border-border bg-surface-0 p-0.5",
+          "gap-0.5 rounded-[var(--segmented-radius,var(--radius-control))] border border-[color:var(--segmented-border,var(--color-border))] bg-[color:var(--segmented-bg,var(--color-surface-0))] p-[var(--segmented-pad,0.125rem)]",
         variant === "segmented" &&
           (content
             ? "inline-flex max-w-full flex-wrap"
@@ -240,14 +245,14 @@ export function RadioGroup<T extends string | number>({
             }}
             className={cn(
               "transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
-              optionDisabled && "cursor-not-allowed opacity-40",
+              optionDisabled && "cursor-not-allowed opacity-[var(--radio-disabled-opacity,0.4)]",
               variant === "segmented" && [
-                "inline-flex items-center justify-center rounded-[var(--radius-control)] whitespace-nowrap",
+                "inline-flex items-center justify-center rounded-[var(--segmented-radius,var(--radius-control))] whitespace-nowrap",
                 content ? "shrink-0" : "min-w-0",
                 size === "sm" ? "h-9 px-2.5 text-xs sm:h-7" : "h-10 px-3 text-sm sm:h-8",
                 checked
-                  ? "bg-surface-2 font-medium text-text"
-                  : "text-text-tertiary",
+                  ? "bg-[color:var(--segmented-thumb,var(--color-surface-2))] font-medium text-text shadow-[var(--segmented-thumb-shadow,0_0_transparent)]"
+                  : "text-[color:var(--segmented-text,var(--color-text-tertiary))]",
                 !checked && !optionDisabled && "hover:text-text",
                 FOCUS_RING,
               ],
@@ -259,11 +264,11 @@ export function RadioGroup<T extends string | number>({
                 "relative max-sm:after:absolute max-sm:after:inset-x-0 max-sm:after:content-['']",
                 size === "sm" ? "max-sm:after:-inset-y-1" : "max-sm:after:-inset-y-0.5",
                 checked
-                  ? "border-accent bg-accent-soft text-on-accent-soft"
-                  : "border-border text-text-secondary",
+                  ? "border-accent bg-accent-soft text-on-accent-soft redesign:font-medium"
+                  : "border-[color:var(--chip-border,var(--color-border))] text-text-secondary",
                 !checked &&
                   !optionDisabled &&
-                  "hover:bg-surface-2 hover:text-text",
+                  "hover:bg-[color:var(--chip-hover,var(--color-surface-2))] hover:text-text",
                 FOCUS_RING,
               ],
               variant === "list" && [
@@ -271,7 +276,8 @@ export function RadioGroup<T extends string | number>({
                 // With a status the option's bottom padding moves under the
                 // status, so the line sits tight under the description.
                 showStatus ? "pb-0" : "pb-3",
-                !optionDisabled && "hover:bg-surface-2",
+                !optionDisabled &&
+                  "hover:bg-[color:var(--radio-row-hover,var(--color-surface-2))]",
                 INSET_FOCUS_RING,
               ],
             )}
@@ -289,12 +295,14 @@ export function RadioGroup<T extends string | number>({
                 <span
                   aria-hidden
                   className={cn(
-                    "flex h-4 w-4 shrink-0 items-center justify-center rounded-full border",
-                    checked ? "border-accent" : "border-border-strong",
+                    "flex h-[var(--radio-size,1rem)] w-[var(--radio-size,1rem)] shrink-0 items-center justify-center rounded-full border-[length:var(--radio-ring-w,1px)] transition-colors duration-[var(--duration-fast)]",
+                    checked
+                      ? "border-accent redesign:bg-accent"
+                      : "border-[color:var(--radio-off-ring,var(--color-border-strong))] bg-[color:var(--radio-off-bg,transparent)]",
                   )}
                 >
                   {checked ? (
-                    <span className="h-2 w-2 rounded-full bg-accent" />
+                    <span className="h-[var(--radio-dot-size,0.5rem)] w-[var(--radio-dot-size,0.5rem)] rounded-full bg-[color:var(--radio-dot,var(--color-accent))]" />
                   ) : null}
                 </span>
               </>

@@ -839,6 +839,15 @@ scrollbar would draw OS chrome over the design.
 - **States.** Selected is `bg-surface-2 font-medium text-text` on the segmented
   track and `border-accent bg-accent-soft text-on-accent-soft` as a chip.
   Disabled is `opacity-40` with `cursor-not-allowed`.
+- **Under the redesign.** The segmented track is a pill of a 6% text tint
+  with no border and a raised thumb (a 15% tint with a soft shadow in dark,
+  a white chip in light), so the choice reads by shape, not by a shade of
+  grey; unselected labels are `text-secondary`. Chips take the strong edge,
+  the ghost tint on hover and a medium-weight selected label. The list's dot
+  is 18px inside the field's 3:1 edge, and a filled accent disc with an
+  `on-accent` centre when selected. Disabled is 0.5, as on Button. Every
+  value is a `--segmented-*`, `--chip-*` or `--radio-*` token with today's
+  value as its fallback.
 - **Use it** for one of many. **Do not** give a segmented option a description;
   the track has no room for it, so use `list`, `chips` or a choice grid.
 - **Accessibility.** `role="radiogroup"` with `aria-label`; each option is a

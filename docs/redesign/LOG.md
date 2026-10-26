@@ -455,6 +455,24 @@ Round 4's MUST (the gap under the emoji category bar had no effect) was
 fixed in round 5. Stopped at the five-round cap with no MUST. Best round: 5.
 Screenshots: `~/pqp-redesign/p-popover/`.
 
+### p-radio
+
+Spec (audit: RadioGroup in 13 files; 14 more draw their own radios):
+
+1. Job: one of a few, in three shapes (segmented, chips, list) with one
+   keyboard model.
+2. Redesign: a tinted pill track with a raised thumb, stronger chip edges,
+   and a filled accent dot inside the field edge for the list.
+3. No hand-built group folds without changing the toggle-off look, so each
+   is left for the element that owns it: poll duration chips and Baú
+   visibility (`f-chat`, `f-bau`, near chips and segmented), the voice track
+   toggle (`f-watch-party`), invite choices (`f-invites`), the two timeout
+   grids that should share one control (`f-profile-popover`), the guest
+   setting (`f-watch-party`, near list). Swatch, image, icon and card grids
+   (appearance, bots, avatar, forum icons, the settings choice grid) are a
+   different control and stay.
+4. Tokens with fallbacks; the toggle off draws what it drew before.
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss
