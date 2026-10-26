@@ -1077,7 +1077,7 @@ group or a list (no results, nothing saved; the settings kit's
 - **Failure.** A load that did not come back is a `role="alert"` empty
   state with the retry as its action; under the redesign its disc takes the
   warning tone (`warning-soft`, `on-warning-soft`), so it reads apart from
-  an empty list.
+  an empty list. A page failure with no glyph gets `WarningCircle` there.
 - **Copy.** Say what is missing and the next step, in the casual voice.
 
 ## Planned primitives

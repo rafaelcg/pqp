@@ -62,4 +62,14 @@ describe("EmptyState", () => {
     expect(icon).toContain("redesign:bg-warning-soft redesign:text-on-warning-soft");
     expect(icon).not.toContain("redesign:bg-[color:var(--empty-icon-bg)]");
   });
+
+  it("gives a page failure with no glyph its warning disc under the redesign only", () => {
+    const html = renderToStaticMarkup(<EmptyState role="alert" title="Não deu pra carregar" />);
+    const icon = html.match(/<div aria-hidden="true" class="([^"]*)"/)![1];
+    expect(icon).toMatch(/^hidden /);
+    expect(icon).toContain("redesign:flex");
+    expect(icon).toContain("redesign:bg-warning-soft");
+    // An inline failure, or an empty state that is not a failure, draws none.
+    expect(renderToStaticMarkup(<EmptyState title="Nada" />)).not.toContain("aria-hidden");
+  });
 });

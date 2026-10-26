@@ -1,4 +1,6 @@
 import type { ReactNode } from "react";
+import { WarningCircle } from "@phosphor-icons/react";
+import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 
 /**
@@ -66,6 +68,11 @@ export function EmptyState({
   bodyClassName?: string;
   actionsClassName?: string;
 } & { [key: `data-${string}`]: string | undefined }) {
+  // A page failure always leads with its warning disc under the redesign;
+  // a caller that drew no glyph gets one there, and none with the toggle off.
+  const glyph =
+    icon ??
+    (role === "alert" && size === "page" ? <Icon icon={WarningCircle} size="lg" /> : undefined);
   return (
     <div
       role={role}
@@ -73,18 +80,19 @@ export function EmptyState({
       {...data}
       className={cn("flex flex-col items-center text-center", className, ROOT[size])}
     >
-      {icon ? (
+      {glyph ? (
         <div
           aria-hidden="true"
           className={cn(
             iconClassName,
+            !icon && "hidden redesign:flex",
             ICON[size],
             // A failure to load is not an empty list: its disc takes the
             // warning tone, so the two read apart at a glance.
             role === "alert" && size === "page" && "redesign:bg-warning-soft redesign:text-on-warning-soft",
           )}
         >
-          {icon}
+          {glyph}
         </div>
       ) : null}
       <p className={cn(titleClassName, TITLE[size])}>{title}</p>
