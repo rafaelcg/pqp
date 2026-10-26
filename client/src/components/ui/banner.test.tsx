@@ -124,5 +124,16 @@ describe("Banner under the redesign", () => {
     expect(centred!.className).toContain("redesign:min-w-[min(100%,10rem)]");
     expect(centred!.className).toContain("redesign:flex-1");
   });
+
+  it("draws a prominent link as the main way out under the redesign only", () => {
+    const host = draw(
+      <Banner tone="warning">
+        <BannerAction prominent>Ainda tô aqui</BannerAction>
+      </Banner>,
+    );
+    const button = host.querySelector("button")!;
+    expect(offClasses(button)).toEqual(words("shrink-0 text-xs underline underline-offset-2"));
+    expect(button.className).toContain("redesign:bg-[color:var(--banner-ink)]");
+  });
 });
 

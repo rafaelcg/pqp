@@ -370,7 +370,7 @@ import { CallRatingPrompt } from "@/components/voice/call-rating-prompt";
 import { useCallRating } from "@/hooks/use-call-rating";
 import { usePermissions } from "@/hooks/use-permissions";
 import { ShareHandleButton } from "@/components/handle/share-handle-button";
-import { Banner, BannerAction, BannerText } from "@/components/ui/banner";
+import { BANNER_FILL_REDESIGN, Banner, BannerAction, BannerText } from "@/components/ui/banner";
 import {
   CheckCircle as BannerCheckIcon,
   Code as BannerCodeIcon,
@@ -13894,7 +13894,7 @@ function MainAppContent({
             role="note"
             className="block border-warning/30 px-3 py-1 text-center text-xs"
           >
-            {t("chrome.devBypass")}
+            <BannerText grow={false}>{t("chrome.devBypass")}</BannerText>
           </Banner>
         )}
 
@@ -13926,6 +13926,7 @@ function MainAppContent({
               })}
             </BannerText>
             <BannerAction
+              prominent
               onClick={() => {
                 // Send and wait: the banner clears on the server's
                 // `voice-idle-warning-cancelled` confirmation, not on this
@@ -13947,7 +13948,9 @@ function MainAppContent({
         {appNotice && (
           <Banner tone="success" icon={BannerCheckIcon}>
             <BannerText>{appNotice}</BannerText>
-            {claimedHandle && <ShareHandleButton handle={claimedHandle} />}
+            {claimedHandle && (
+              <ShareHandleButton handle={claimedHandle} className={BANNER_FILL_REDESIGN} />
+            )}
             <BannerAction
               onClick={() => {
                 setAppNotice(null);

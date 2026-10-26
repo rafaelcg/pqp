@@ -40,7 +40,7 @@ const EDGE = {
 } as const;
 
 export const BANNER_REDESIGN =
-  "redesign:mx-2 redesign:sm:mx-4 redesign:flex redesign:flex-wrap redesign:items-center redesign:justify-start redesign:gap-x-3 redesign:gap-y-1.5 redesign:rounded-[var(--banner-radius)] redesign:border redesign:border-[color:color-mix(in_oklab,var(--banner-tone)_var(--banner-edge),transparent)] redesign:bg-[color:var(--banner-fill)] redesign:px-3 redesign:py-2 redesign:text-start redesign:text-sm redesign:text-text";
+  "redesign:mx-2 redesign:sm:mx-4 redesign:flex redesign:flex-wrap redesign:items-start redesign:justify-start redesign:gap-x-3 redesign:gap-y-1.5 redesign:rounded-[var(--banner-radius)] redesign:border redesign:border-[color:color-mix(in_oklab,var(--banner-tone)_var(--banner-edge),transparent)] redesign:bg-[color:var(--banner-fill)] redesign:px-3 redesign:py-2 redesign:text-start redesign:text-sm redesign:text-text";
 
 const BannerToneContext = React.createContext<BannerTone>("warning");
 
@@ -86,7 +86,7 @@ export function Banner({
             icon={icon}
             kind={iconKind}
             size="sm"
-            className="hidden shrink-0 redesign:block redesign:text-[color:var(--banner-ink)]"
+            className="hidden shrink-0 redesign:mt-1.5 redesign:block redesign:text-[color:var(--banner-ink)]"
           />
         ) : null}
         {children}
@@ -113,7 +113,7 @@ export function BannerText({
       className={cn(
         grow && "flex-1",
         className,
-        "redesign:min-w-[min(100%,10rem)] redesign:flex-1",
+        "redesign:min-w-[min(100%,10rem)] redesign:flex-1 redesign:py-1",
       )}
       {...rest}
     />
@@ -135,12 +135,16 @@ const FILL: Record<BannerTone, string> = {
   accent: "bg-accent/20 hover:bg-accent/30",
 };
 
+/** The main way out's redesign fill: the tone's ink, the label in its fill. */
+const FILL_INK =
+  "redesign:border-0 redesign:bg-[color:var(--banner-ink)] redesign:text-[color:var(--banner-fill)] redesign:hover:bg-[color:color-mix(in_oklab,var(--banner-ink)_88%,var(--color-text))]";
+
 const ACTION_REDESIGN =
-  "redesign:ml-auto redesign:inline-flex redesign:h-7 redesign:shrink-0 redesign:items-center redesign:rounded-[var(--radius-pill)] redesign:px-3 redesign:text-xs redesign:font-semibold redesign:no-underline redesign:transition-colors redesign:duration-[var(--duration-fast)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--color-focus-ring)]";
+  "redesign:ml-auto redesign:inline-flex redesign:h-7 redesign:shrink-0 redesign:items-center redesign:rounded-[var(--radius-pill)] redesign:px-3 redesign:text-xs redesign:font-semibold redesign:no-underline redesign:transition-colors redesign:duration-[var(--duration-fast)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--color-focus-ring)] redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-[color:var(--banner-fill)]";
 
 const ACTION = {
   /** The main way out: "Tentar agora", "Entrar de novo". */
-  fill: "rounded-[var(--radius-control)] px-2 py-0.5 font-semibold redesign:bg-[color:var(--banner-ink)] redesign:text-[color:var(--banner-fill)] redesign:hover:bg-[color:color-mix(in_oklab,var(--banner-ink)_88%,var(--color-text))]",
+  fill: `rounded-[var(--radius-control)] px-2 py-0.5 font-semibold ${FILL_INK}`,
   /** A second action beside it: "Verificar". */
   quiet:
     "rounded-[var(--radius-control)] px-2 py-0.5 font-semibold underline-offset-2 hover:underline redesign:text-[color:var(--banner-ink)] redesign:hover:bg-[color:color-mix(in_oklab,var(--banner-ink)_16%,transparent)]",
@@ -148,13 +152,27 @@ const ACTION = {
   link: "shrink-0 text-xs underline underline-offset-2 redesign:text-[color:var(--banner-ink)] redesign:hover:bg-[color:color-mix(in_oklab,var(--banner-ink)_16%,transparent)]",
 } as const;
 
+/**
+ * The banner's main-action look under the redesign, for a button the banner
+ * did not draw (the share button after a handle claim). With the toggle off
+ * it adds nothing.
+ */
+export const BANNER_FILL_REDESIGN = `${ACTION_REDESIGN} ${FILL_INK}`;
+
 export interface BannerActionProps
   extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   emphasis?: keyof typeof ACTION;
+  /**
+   * Draw as the main way out under the redesign only, for an action whose
+   * toggle-off look is the plain link but which is the one thing that
+   * matters in its strip ("Ainda tô aqui" stops a hangup).
+   */
+  prominent?: boolean;
 }
 
 export function BannerAction({
   emphasis = "link",
+  prominent = false,
   type = "button",
   className,
   ...rest
@@ -168,6 +186,7 @@ export function BannerAction({
         emphasis === "fill" && FILL[tone],
         className,
         ACTION_REDESIGN,
+        prominent && FILL_INK,
       )}
       {...rest}
     />
