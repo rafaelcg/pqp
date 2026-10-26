@@ -2815,8 +2815,8 @@ function EmptyState({
       body={t("chat.empty.body")}
       className="flex-1 justify-center gap-2 px-6 py-16"
       iconClassName="hidden redesign:flex"
-      titleClassName="text-balance font-display text-xl font-bold text-paper"
-      bodyClassName="max-w-xs text-pretty text-sm text-paper-muted"
+      titleClassName="text-balance font-display text-xl font-bold text-text"
+      bodyClassName="max-w-xs text-pretty text-sm text-text-tertiary"
     />
   );
 }
