@@ -1,7 +1,6 @@
 import type { UserStatus } from "@pqp/shared";
 import { Hash, Search, Volume2 } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
-import { formatBadgeCount } from "@/components/layout/channel-list";
 import { ServerIcon } from "@/components/layout/server-identity";
 import { Dialog } from "@/components/ui/dialog";
 import { StatusDot } from "@/components/user/status-dot";
@@ -13,6 +12,7 @@ import {
   type SwitcherSources,
 } from "@/lib/quick-switcher";
 import { cn } from "@/lib/utils";
+import { CountBadge } from "@/components/ui/count-badge";
 
 const IS_MAC =
   typeof navigator !== "undefined" && /Mac|iPhone|iPad/i.test(navigator.userAgent);
@@ -379,11 +379,7 @@ function Face({
 function Trailing({ unread, active, label }: { unread: number; active: boolean; label: string }) {
   return (
     <span className="flex shrink-0 items-center gap-2">
-      {unread > 0 && (
-        <span className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-danger px-1 text-[10px] font-bold leading-none tabular-nums text-on-danger">
-          {formatBadgeCount(unread)}
-        </span>
-      )}
+      <CountBadge count={unread} />
       {active && (
         <>
           <span className="hidden text-xs text-text-tertiary sm:inline">{label}</span>

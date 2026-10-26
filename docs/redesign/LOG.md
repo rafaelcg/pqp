@@ -46,6 +46,7 @@ Read this file and the inventory at the start of every session.
 | 2 | `p-menu` | Merged (cap at round 5: 8.4 Opus r5, 8.4 Codex r4, no MUST, approved) |
 | 2 | `p-slider` | Merged (cap at round 5: 8.0 Opus r4, 8.8 Codex r5, no MUST) |
 | 2 | `p-banner` | Merged (approved at round 3: 8.3 Opus, 8.5 Codex r2, no MUST) |
+| 2 | `p-badge` | Merged (approved at round 2: 8.3 Opus, 8.3 Codex r1, no MUST) |
 
 ## Phase 0: directions
 
@@ -632,6 +633,38 @@ icon and actions align to the first line, and the filled pill's focus ring
 has an offset. Logged, not done: the dark warning fill reads heavy beside
 success and danger; revisit if it does in use. Screenshots:
 `~/pqp-redesign/p-banner/`.
+
+### p-badge
+
+Spec (audit: 7 `Badge` callers, six hand-built count pills with one shared
+class string, six hand-built name tags in message headers):
+
+1. Job: name a state (Badge), a tag beside a name (Badge `tag`), or a
+   waiting count (new `CountBadge`).
+2. Redesign: sentence-case pills, 11px semibold, the variant's pair always;
+   counts in 11px semibold tabular figures. The beta tag beside BOT matches.
+3. Folded: six count pills (DM list, conversations home twice, quick
+   switcher, phone tabs, phone conversations) and the OP, gone, AutoMod,
+   Webhook, BOT and removed tags. New `muted` variant for gone and removed.
+4. Left for their owners: the server rail counts (`s-rail`), the
+   channel list's counts and live chips (`s-channel-row`), Baú media
+   overlays (`f-bau`), the voice-clean chip (`f-call`).
+
+Council (Opus 5.5, GPT-6 Luna via Codex), overall after. One reviewer per
+round, Opus for the sign-off:
+
+| Round | Opus | Codex |
+|---|---|---|
+| 1 | not run | 8.3 |
+| 2 | 8.3 | not run |
+
+Round 2 approved; its notes were applied after it. The bench now measures
+the neutral and muted badges, and under the redesign they are a step
+stronger (body text on `surface-3`; secondary text on `surface-2`) because
+Catppuccin, Everforest, Ocean and Modo 2005 fell under 4.5:1. The 16px
+count takes 10px type; the beta tag beside Bot drops its wash; the sheet
+shows a painted Webhook tag and a "Saiu" tag. Screenshots:
+`~/pqp-redesign/p-badge/`.
 
 ## Open questions for André
 

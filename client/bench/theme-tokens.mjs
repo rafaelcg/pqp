@@ -80,6 +80,9 @@ const CONTRAST_PAIRS = [
   { fg: "--color-text-tertiary", bg: "--color-pane-side", floor: 4.5, label: "tertiary text (offline names) on the side pane", redesign: true },
   { fg: "--color-text-tertiary", bg: "--color-pane-main", floor: 4.5, label: "tertiary text (timestamps) on the conversation pane", redesign: true },
   { fg: "--color-text-tertiary", bg: "--color-row-hover", floor: 4.5, label: "tertiary text on a hovered row", redesign: true },
+  // Badges under the redesign: an 11px word on its fill.
+  { fg: "--color-text", bg: "--color-surface-3", floor: 4.5, label: "a neutral badge (OP, Fechado)", redesign: true },
+  { fg: "--color-text-secondary", bg: "--color-surface-2", floor: 4.5, label: "a muted badge (Saiu, Removido)", redesign: true },
   // Nothing but icons and the unread pip sits on the canvas (the rail), so
   // the non-text floor.
   { fg: "--color-text-secondary", bg: "--color-canvas", floor: 3.0, label: "an icon on the canvas (the rail)", redesign: true },

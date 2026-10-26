@@ -33,6 +33,8 @@ import { ShareHandleButton } from "@/components/handle/share-handle-button";
 import { ConnectionBanner } from "@/components/layout/connection-banner";
 import { SanctionNoticeBar } from "@/components/layout/sanction-notice-bar";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
+import { CountBadge } from "@/components/ui/count-badge";
+import { ServerBotTags } from "@/components/bots/server-bot-tags";
 import { CheckRow } from "@/components/ui/check-row";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Icon } from "@/components/ui/icon";
@@ -776,13 +778,14 @@ function ControlSheet() {
 }
 
 const BUTTON_VARIANTS = ["default", "secondary", "ghost", "danger", "danger-ghost"] as const;
-const BADGE_VARIANTS: BadgeVariant[] = [
-  "new",
-  "accent",
-  "success",
-  "warning",
-  "danger",
-  "neutral",
+const BADGE_VARIANTS: { variant: BadgeVariant; word: MessageKey }[] = [
+  { variant: "new", word: "qaUi.badge.new" },
+  { variant: "accent", word: "qaUi.badge.accent" },
+  { variant: "success", word: "qaUi.badge.success" },
+  { variant: "warning", word: "qaUi.badge.warning" },
+  { variant: "danger", word: "qaUi.badge.danger" },
+  { variant: "neutral", word: "qaUi.badge.neutral" },
+  { variant: "muted", word: "qaUi.badge.muted" },
 ];
 const ICON_BUTTON_SIZES: IconButtonSize[] = ["xs", "sm", "md", "lg"];
 const BUTTON_SIZES = ["lg", "default", "sm", "icon-lg", "icon", "icon-sm"] as const;
@@ -1249,22 +1252,74 @@ function PrimitiveSheet() {
         </Tooltip>
       </div>
 
-      <div>
+      {/* Badges: the status word on a card, the tag beside a name, and the
+          count in a pill. */}
+      <div data-testid="qa-primitive-badge" className="flex flex-col gap-3">
         <p
-          className="mb-2 text-text-tertiary"
+          className="text-text-tertiary"
           style={{ fontSize: "var(--type-label-size)" }}
         >
           Badge
         </p>
         <div className="flex flex-wrap items-center gap-2">
-          {BADGE_VARIANTS.map((variant) => (
+          {BADGE_VARIANTS.map(({ variant, word }) => (
             <Badge key={variant} variant={variant}>
-              {variant}
+              {t(word)}
             </Badge>
           ))}
           <Badge variant="success" icon={CheckIcon}>
-            success + icon
+            {t("qaUi.badge.success")}
           </Badge>
+        </div>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+          <span className="flex items-baseline gap-1.5">
+            <span className="font-semibold text-text">Lia</span>
+            <Badge size="tag" className="self-center font-bold">
+              {t("forum.badge.op")}
+            </Badge>
+          </span>
+          <span className="flex items-baseline gap-1.5">
+            <span className="font-semibold text-text">Breu</span>
+            <ServerBotTags />
+          </span>
+          <span className="flex items-baseline gap-1.5">
+            <span className="font-semibold text-text">Breu</span>
+            <ServerBotTags gone />
+          </span>
+          <span className="flex items-baseline gap-1.5">
+            <span className="font-semibold text-text">pqp</span>
+            <Badge variant="accent" size="tag" className="rounded">
+              AutoMod
+            </Badge>
+          </span>
+          <span className="flex items-baseline gap-1.5">
+            <span className="font-semibold text-text">GitHub</span>
+            <Badge size="tag" className="rounded bg-ink-4 text-paper-muted">
+              Webhook
+            </Badge>
+          </span>
+          <span className="flex items-baseline gap-1.5">
+            <span className="font-semibold text-text-tertiary">Téo</span>
+            <Badge variant="muted" size="tag" className="self-center">
+              {t("chat.authorGone")}
+            </Badge>
+          </span>
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <CountBadge count={3} />
+          <CountBadge count={12} />
+          <CountBadge count={120} />
+          <CountBadge count={2} size="sm" />
+          <CountBadge count={120} size="sm" />
+          <span className="relative inline-flex h-10 w-10 items-center justify-center rounded-[var(--radius-control)] bg-surface-2">
+            <LineHash className="h-4 w-4" aria-hidden />
+            <CountBadge
+              count={4}
+              tone="accent"
+              size="sm"
+              className="absolute right-0.5 top-0.5 ring-2 ring-surface-1"
+            />
+          </span>
         </div>
       </div>
 
