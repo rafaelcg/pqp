@@ -137,12 +137,12 @@ describe("FeedbackSection", () => {
     type("a".repeat(MAX * 0.9));
     expect(counter()!.getAttribute("data-counter-tone")).toBe("warn");
     expect(host!.textContent).toContain("200");
-    expect(textarea().className).not.toContain("border-danger");
+    expect(textarea().classList.contains("border-danger")).toBe(false);
 
     type("a".repeat(MAX));
     expect(counter()!.getAttribute("data-counter-tone")).toBe("full");
     expect(host!.textContent).toContain(String(MAX));
-    expect(textarea().className).toContain("border-danger");
+    expect(textarea().classList.contains("border-danger")).toBe(true);
   });
 
   it("announces the count through a live region that settles after typing", () => {
