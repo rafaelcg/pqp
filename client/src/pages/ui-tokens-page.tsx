@@ -786,7 +786,11 @@ function PrimitiveSheet() {
                   aria-label={size.startsWith("icon") ? `${variant} ${size}` : undefined}
                 >
                   {size.startsWith("icon") ? (
-                    <Icon icon={Plus} kind="symbol" size={size === "icon-sm" ? "sm" : "md"} />
+                    <Icon
+                      icon={Plus}
+                      kind="symbol"
+                      size={size === "icon-sm" ? "sm" : size === "icon-lg" ? "lg" : "md"}
+                    />
                   ) : (
                     `${variant} ${size}`
                   )}

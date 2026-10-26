@@ -660,7 +660,7 @@
   /* A top highlight and a cast shadow that clears the fill; the light block
      sets its own. */
   --button-primary-shadow:
-    inset 0 1px 0 oklch(1 0 0 / 0.18), 0 1px 1px oklch(0.06 0.02 262 / 0.55),
+    inset 0 1px 0 oklch(1 0 0 / 0.22), 0 1px 1px oklch(0.06 0.02 262 / 0.55),
     0 4px 10px oklch(0.06 0.02 262 / 0.35);
   /* Tints of the text, never a surface: a dialog is surface-2, the same as
      the old secondary fill, and a surface hover can be darker than it. */

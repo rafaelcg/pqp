@@ -454,17 +454,28 @@ so a variant and a size are props, not class strings.
   `ghost` (no fill until hover, for a control in a bar or a row), `danger` (the
   soft danger fill, for a destructive confirm), `danger-ghost` (below).
 - **Sizes.** `default` (h-9), `sm` (h-8, 12px text), `lg` (h-11, the touch
-  size), `icon` (h-9 square).
+  size), and the icon squares `icon-sm` (h-8), `icon` (h-9), `icon-lg`
+  (h-11). Give `icon-lg` an `<Icon size="lg">`, the others `md` (`sm` for
+  `icon-sm`). An icon-only control on its own is `IconButton`; these sizes
+  are for one that sits in a row of text buttons.
 - **`danger-ghost`.** A destructive action that should not shout ("Deixar de
   seguir", "Remover"): red text, no fill until hover.
-- **Under the redesign.** A pill (`--radius-button`), more horizontal room, a
-  lifted primary and the row-hover fill on ghost. All of it comes from
+- **Under the redesign.** A pill (`--radius-button`), more horizontal room,
+  and a lifted primary (a top highlight plus a cast shadow). Secondary,
+  ghost and danger-ghost fills are tints of the text or of the danger colour
+  (secondary 7% at rest and 12% on hover, with `--color-border-strong`;
+  ghost 8%; danger-ghost 14%), never a surface, so they read on a pane and
+  on a dialog alike. Disabled is `opacity: 0.5`, and a disabled primary is
+  switched off: a `surface-3` fill, a `text-secondary` label, no shadow and
+  `opacity: 0.8`. Those three disabled-only rules are the one place the
+  primitive uses `redesign:` classes. Everything else comes from
   `--button-*` component tokens that are unset with the toggle off and fall
   back, inside the class, to the old value, so a call site's own `px-6` or
   `text-danger` still wins through `cn`. Never style a primitive with a
   `redesign:` class: it outranks the call site.
-- **States.** Hover, `active:scale-[0.98]`, `focus-visible` ring,
-  `disabled:opacity-40` with pointer events off.
+- **States.** Hover, `active:scale-[0.98]`, `focus-visible` ring, disabled
+  at `--button-disabled-opacity` (0.4 with the toggle off) with pointer
+  events off.
 - **`asChild`.** Renders a Radix `Slot`, so a link can wear a button.
 - **Ref.** `forwardRef` to the `<button>`, so a caller can move focus to a
   button it just revealed.
@@ -472,7 +483,8 @@ so a variant and a size are props, not class strings.
   navigation between routes without `asChild` and a real `<a>`, and do not use
   `default` twice on the same surface.
 - **Accessibility.** An `icon` button has no text, so it must be wrapped in
-  `Tooltip` or given an `aria-label`. A disabled button fires no hover, so its
+  `Tooltip` or given an `aria-label`. Prefer `IconButton`, which requires
+  one. A disabled button fires no hover, so its
   explanation cannot live in a native `title`.
 
 ### Input

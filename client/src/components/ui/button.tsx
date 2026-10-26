@@ -22,11 +22,12 @@ const buttonVariants = cva(
     variants: {
       variant: {
         // Disabled under the redesign is a switched-off button, not a dim
-        // lime one. Those three are `redesign:` classes on purpose: they
+        // lime one: a grey fill, washed only lightly so the pill keeps its
+        // shape on a dialog. Those are `redesign:` classes on purpose: they
         // only touch the disabled state, and a disabled primary should look
         // off whatever colour its caller gave it.
         default:
-          "bg-accent text-on-accent hover:bg-accent-hover font-semibold shadow-[var(--button-primary-shadow,0_0_transparent)] redesign:disabled:bg-surface-3 redesign:disabled:text-text-secondary redesign:disabled:[--button-primary-shadow:0_0_transparent]",
+          "bg-accent text-on-accent hover:bg-accent-hover font-semibold shadow-[var(--button-primary-shadow,0_0_transparent)] redesign:disabled:bg-surface-3 redesign:disabled:text-text-secondary redesign:disabled:[--button-primary-shadow:0_0_transparent] redesign:disabled:[--button-disabled-opacity:0.8]",
         // The redesign's fill and hover are tints of the text, so the button
         // keeps its edge on any surface, a dialog included.
         secondary:
