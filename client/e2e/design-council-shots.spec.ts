@@ -509,6 +509,21 @@ test("captures the design council screens", async ({ browser }) => {
     await expect(phonePage.getByText(PAPO.at(-1)![1])).toBeVisible({ timeout: 30_000 });
     await hideDevBanner(phonePage);
     await shoot(phonePage, "08-phone-chat-dark");
+    // A sheet: below `sm` a dialog rises from the bottom edge.
+    for (const theme of ["dark", "light"] as const) {
+      if (theme === "light") {
+        await as(phonePage, "light");
+        await phonePage.goto(chatUrl);
+        await expect(phonePage.getByText(PAPO.at(-1)![1])).toBeVisible({ timeout: 30_000 });
+        await hideDevBanner(phonePage);
+      }
+      await phonePage.getByText(PAPO.find(([who]) => who === VIEWER)![1]).click({ button: "right" });
+      await phonePage.getByRole("menuitem", { name: "Excluir mensagem" }).click();
+      await expect(phonePage.getByRole("dialog")).toBeVisible();
+      await phonePage.waitForTimeout(500);
+      await shoot(phonePage, `19-phone-sheet-${theme}`);
+      await phonePage.keyboard.press("Escape");
+    }
     await phone.close();
   } finally {
     for (const socket of sockets.values()) {
