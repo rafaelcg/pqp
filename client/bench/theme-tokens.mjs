@@ -33,7 +33,7 @@
 import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, extname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { contrastRatio, round } from "./lib/color.mjs";
+import { contrastRatio, deltaE, round } from "./lib/color.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLIENT = join(HERE, "..");
@@ -71,6 +71,46 @@ const CONTRAST_PAIRS = [
   { fg: "--color-on-danger-soft", bg: "--color-danger-soft-hover", floor: 4.5, label: "text on a hovered soft danger fill" },
   { fg: "--color-on-warning-soft", bg: "--color-warning-soft", floor: 4.5, label: "text on a soft warning fill" },
   { fg: "--color-on-success-soft", bg: "--color-success-soft", floor: 4.5, label: "text on a soft success fill" },
+  // The redesign's shell and row roles (docs/redesign/LOG.md, council round
+  // D1). `redesign: true` measures a pair only on the `redesign-*` themes:
+  // nothing draws these roles with the toggle off.
+  { fg: "--color-text", bg: "--color-pane-side", floor: 4.5, label: "body text on the side pane", redesign: true },
+  { fg: "--color-text", bg: "--color-pane-main", floor: 4.5, label: "body text on the conversation pane", redesign: true },
+  { fg: "--color-text-secondary", bg: "--color-pane-side", floor: 4.5, label: "secondary text on the side pane", redesign: true },
+  { fg: "--color-text-tertiary", bg: "--color-pane-side", floor: 4.5, label: "tertiary text (offline names) on the side pane", redesign: true },
+  { fg: "--color-text-tertiary", bg: "--color-pane-main", floor: 4.5, label: "tertiary text (timestamps) on the conversation pane", redesign: true },
+  { fg: "--color-text-tertiary", bg: "--color-row-hover", floor: 4.5, label: "tertiary text on a hovered row", redesign: true },
+  // Nothing but icons and the unread pip sits on the canvas (the rail), so
+  // the non-text floor.
+  { fg: "--color-text-secondary", bg: "--color-canvas", floor: 3.0, label: "an icon on the canvas (the rail)", redesign: true },
+  { fg: "--color-accent", bg: "--color-canvas", floor: 3.0, label: "accent on the canvas", redesign: true },
+  { fg: "--color-on-row-selected", bg: "--color-row-selected", floor: 4.5, label: "label on the selected row", redesign: true },
+  { fg: "--color-accent-text", bg: "--color-pane-side", floor: 4.5, label: "accent text on the side pane", redesign: true },
+  { fg: "--color-accent-text", bg: "--color-pane-main", floor: 4.5, label: "accent text on the conversation pane", redesign: true },
+  { fg: "--color-accent-text", bg: "--color-surface-2", floor: 4.5, label: "accent text on a raised panel", redesign: true },
+  { fg: "--color-success-text", bg: "--color-pane-side", floor: 4.5, label: "success text on the side pane", redesign: true },
+  { fg: "--color-success-text", bg: "--color-surface-1", floor: 4.5, label: "success text on panel", redesign: true },
+  { fg: "--color-text", bg: "--color-mention-row", floor: 4.5, label: "body text on a mention row", redesign: true },
+  { fg: "--color-text-tertiary", bg: "--color-mention-row", floor: 4.5, label: "timestamp on a mention row", redesign: true },
+  { fg: "--color-mention-bar", bg: "--color-pane-main", floor: 3.0, label: "mention bar on the conversation pane", redesign: true },
+  { fg: "--color-on-mention-chip", bg: "--color-mention-chip", floor: 4.5, label: "@name on a mention chip", redesign: true },
+  { fg: "--color-indicator", bg: "--color-pane-side", floor: 3.0, label: "unread pip on the side pane", redesign: true },
+];
+
+/**
+ * Steps between two fills that must stay visibly apart. Not text, so not a
+ * WCAG ratio: the distance in OKLab, where 0 is the same colour. Council round
+ * D1 found that panes told apart by tone alone collapse in light, and that
+ * hover and selected looked alike; these pin both, on every redesign theme.
+ */
+const STEP_PAIRS = [
+  { a: "--color-canvas", b: "--color-pane-side", floor: 0.04, label: "canvas to side pane" },
+  { a: "--color-canvas", b: "--color-pane-main", floor: 0.04, label: "canvas to conversation pane" },
+  { a: "--color-row-hover", b: "--color-pane-side", floor: 0.02, label: "hovered row on the side pane" },
+  { a: "--color-row-hover", b: "--color-pane-main", floor: 0.02, label: "hovered row on the conversation pane" },
+  { a: "--color-row-selected", b: "--color-row-hover", floor: 0.03, label: "selected row against a hovered row" },
+  { a: "--color-mention-row", b: "--color-pane-main", floor: 0.03, label: "mention row on the conversation pane" },
+  { a: "--color-mention-chip", b: "--color-mention-row", floor: 0.03, label: "@name chip on a mention row" },
 ];
 
 /**
@@ -169,20 +209,36 @@ function readTokens(css, blockMatcher) {
   return tokens;
 }
 
-/** Resolve `var(--x)` chains so aliases can be measured like real values. */
+/**
+ * Resolve `var(--x)` so aliases can be measured like real values: a whole-value
+ * alias, or a `var()` inside a derived value such as a `color-mix()`.
+ */
 function resolve(tokens, name, seen = new Set()) {
   const value = tokens[name];
   if (value === undefined || seen.has(name)) {
     return null;
   }
-  seen.add(name);
-  const alias = /^var\(\s*(--[\w-]+)\s*\)$/.exec(value);
-  return alias ? resolve(tokens, alias[1], seen) : value;
+  const chain = new Set(seen).add(name);
+  let missing = false;
+  const out = value.replace(/var\(\s*(--[\w-]+)\s*\)/g, (_, inner) => {
+    const resolved = resolve(tokens, inner, chain);
+    if (resolved === null) {
+      missing = true;
+      return "";
+    }
+    return resolved;
+  });
+  return missing ? null : out;
 }
+
+const isRedesignTheme = (name) => name.startsWith("redesign-");
 
 function auditContrast(tokens, themeName) {
   const results = [];
   for (const pair of CONTRAST_PAIRS) {
+    if (pair.redesign && !isRedesignTheme(themeName)) {
+      continue;
+    }
     const fg = resolve(tokens, pair.fg);
     const bg = resolve(tokens, pair.bg);
     if (!fg || !bg) {
@@ -201,6 +257,26 @@ function auditContrast(tokens, themeName) {
     });
   }
   return results;
+}
+
+function auditSteps(tokens, themeName) {
+  if (!isRedesignTheme(themeName)) {
+    return [];
+  }
+  return STEP_PAIRS.map((pair) => {
+    const a = resolve(tokens, pair.a);
+    const b = resolve(tokens, pair.b);
+    const distance = a && b ? deltaE(a, b) : null;
+    return {
+      theme: themeName,
+      label: pair.label,
+      a: pair.a,
+      b: pair.b,
+      floor: pair.floor,
+      distance: distance === null ? null : round(distance, 3),
+      pass: distance === null ? null : distance >= pair.floor,
+    };
+  });
 }
 
 function auditLeaks() {
@@ -316,6 +392,8 @@ const MIRRORED = [
   /^--ease-/,
   /^--type-/,
   /^--control-/,
+  /^--space-/,
+  /^--icon-/,
 ];
 
 const TOKENS_TS = join(SRC, "lib", "design-tokens.ts");
@@ -435,6 +513,28 @@ for (const appearance of [
   }
 }
 
+/*
+ * Every theme again with the redesign on (data-redesign, docs/redesign/).
+ * A look's redesign block is one per brightness, written with `:where()` so
+ * it ranks no higher than the look and comes after it; the merge order below
+ * is that cascade. Clássico is the look "signal", and it must have both.
+ */
+function redesignLayer(look, isLight) {
+  const selector = isLight
+    ? `:root\\[data-redesign\\]\\[data-theme="light"\\]:where\\(\\[data-appearance="${look}"\\]\\)`
+    : `:root\\[data-redesign\\]:where\\(\\[data-appearance="${look}"\\]:not\\(\\[data-theme="light"\\]\\)\\)`;
+  return readTokens(css, new RegExp(`${selector}\\s*\\{([\\s\\S]*?)\\n\\}`));
+}
+for (const name of Object.keys(themes)) {
+  const isLight = name === "light" || name.endsWith("-light");
+  const look = name === "dark" || name === "light" ? "signal" : name.replace(/-(dark|light)$/, "");
+  const layer = redesignLayer(look, isLight);
+  if (look === "signal" && Object.keys(layer).length === 0) {
+    throw new Error(`theme-tokens: no redesign block for Clássico ${isLight ? "light" : "dark"}`);
+  }
+  themes[`redesign-${name}`] = { ...themes[name], ...layer };
+}
+
 const contrastBlock = readTokens(
   css,
   /:root\[data-contrast="more"\]\s*\{([\s\S]*?)\n\}/,
@@ -470,7 +570,15 @@ function resolveAccentTokens(tokens, hue) {
   return resolved;
 }
 if (Object.keys(accentBlock).length > 0) {
-  const accentBases = ["dark", "light", "night-dark", "harmony-light", "retro-light"];
+  const accentBases = [
+    "dark",
+    "light",
+    "night-dark",
+    "harmony-light",
+    "retro-light",
+    "redesign-dark",
+    "redesign-light",
+  ];
   for (const hue of [0, 90, 125, 210, 255, 330]) {
     for (const name of accentBases) {
       const tokens = themes[name];
@@ -490,6 +598,11 @@ if (Object.keys(accentBlock).length > 0) {
 const contrast = Object.entries(themes).flatMap(([name, tokens]) =>
   auditContrast(tokens, name),
 );
+const steps = Object.entries(themes).flatMap(([name, tokens]) =>
+  auditSteps(tokens, name),
+);
+const stepFailures = steps.filter((r) => r.pass === false);
+const stepMissing = steps.filter((r) => r.distance === null);
 const leaks = auditLeaks();
 const uiAliases = auditUiAliases();
 const uiStatics = auditUiStatics();
@@ -512,6 +625,12 @@ const report = {
       ? measured.reduce((a, b) => (a.ratio < b.ratio ? a : b))
       : null,
     results: contrast,
+  },
+  steps: {
+    checked: steps.length - stepMissing.length,
+    failing: stepFailures.length,
+    missingTokens: stepMissing.length,
+    results: steps,
   },
   leaks: {
     count: leaks.length,
@@ -556,6 +675,15 @@ for (const failure of failures) {
     `  FAIL    ${failure.ratio}:1 < ${failure.floor} — ${failure.theme}, ${failure.label}`,
   );
 }
+console.log(
+  `steps:    ${steps.length - stepMissing.length - stepFailures.length}/${steps.length - stepMissing.length} pass` +
+    (stepMissing.length ? `, ${stepMissing.length} unmeasured` : ""),
+);
+for (const failure of stepFailures) {
+  console.log(
+    `  FAIL    ${failure.distance} < ${failure.floor} — ${failure.theme}, ${failure.label}`,
+  );
+}
 console.log(`leaks:    ${leaks.length} colour literal(s) outside the token layer`);
 for (const entry of report.leaks.byFile.slice(0, 10)) {
   console.log(`  ${String(entry.count).padStart(3)}  ${entry.file}`);
@@ -592,7 +720,7 @@ const maxUiAliases = Number(process.env.BENCH_MAX_UI_ALIASES ?? 0);
 // Same shape, same reasoning: BENCH_MAX_UI_STATICS exists for a migration in
 // progress, and the number it defaults to is zero.
 const maxUiStatics = Number(process.env.BENCH_MAX_UI_STATICS ?? 0);
-if (failures.length > 0) {
+if (failures.length > 0 || stepFailures.length > 0 || stepMissing.length > 0) {
   process.exitCode = 1;
 } else if (maxLeaks !== undefined && leaks.length > Number(maxLeaks)) {
   console.error(

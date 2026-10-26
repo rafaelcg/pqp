@@ -34,6 +34,11 @@ export const COLOR_TOKEN_GROUPS: readonly TokenGroup[] = [
       "--color-surface-3",
       "--color-rail",
       "--color-surface-card",
+      // The redesign's shell (docs/redesign/LOG.md): the frame the panes float
+      // on, and the two panes.
+      "--color-canvas",
+      "--color-pane-side",
+      "--color-pane-main",
     ],
   },
   { id: "borders", tokens: ["--color-border", "--color-border-strong"] },
@@ -46,11 +51,35 @@ export const COLOR_TOKEN_GROUPS: readonly TokenGroup[] = [
   },
   {
     id: "accent",
-    tokens: ["--color-accent", "--color-accent-hover", "--color-on-accent"],
+    tokens: [
+      "--color-accent",
+      "--color-accent-hover",
+      "--color-on-accent",
+      "--color-accent-text",
+    ],
   },
   {
     id: "status",
-    tokens: ["--color-danger", "--color-on-danger", "--color-warning", "--color-success"],
+    tokens: [
+      "--color-danger",
+      "--color-on-danger",
+      "--color-warning",
+      "--color-success",
+      "--color-success-text",
+    ],
+  },
+  {
+    id: "rows",
+    tokens: ["--color-row-hover", "--color-row-selected", "--color-on-row-selected"],
+  },
+  {
+    id: "mention",
+    tokens: [
+      "--color-mention-row",
+      "--color-mention-bar",
+      "--color-mention-chip",
+      "--color-on-mention-chip",
+    ],
   },
   { id: "code", tokens: ["--color-code-bg", "--color-code-text"] },
   { id: "media", tokens: ["--color-on-media", "--color-on-media-muted"] },
@@ -99,6 +128,7 @@ export const RADIUS_TOKENS = [
   "--radius-card",
   "--radius-panel",
   "--radius-pill",
+  "--radius-row",
 ] as const;
 
 /**
@@ -160,12 +190,25 @@ export const TYPE_ROLES = [
   "caption",
 ] as const;
 
-/** The control heights, shortest first. */
+/** The face each type role is drawn in, where a role names one. */
+export const TYPE_FONT_TOKENS = ["--type-title-font"] as const;
+
+/** The control heights, shortest first, then a list row. */
 export const CONTROL_TOKENS = [
   "--control-sm",
   "--control-md",
   "--control-lg",
+  "--control-row",
 ] as const;
+
+/** The two layout distances the shell names: between panes, inside a pane. */
+export const SPACE_TOKENS = ["--space-gutter", "--space-pane"] as const;
+
+/** The icon sizes, smallest first. */
+export const ICON_SIZE_TOKENS = ["--icon-sm", "--icon-md", "--icon-lg"] as const;
+
+/** The stroke a line icon is drawn with. */
+export const ICON_STROKE_TOKEN = "--icon-stroke";
 
 /** Read one custom property off the document root, as the browser resolved it. */
 export function readToken(name: string): string {
@@ -192,6 +235,88 @@ const OKLCH = new RegExp(
     "(?:\\s*/\\s*([\\d.]+%?))?\\s*\\)$",
   "i",
 );
+
+/** Split on the commas at the top level of a function's argument list. */
+function splitTopLevel(input: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+    if (ch === "(") depth++;
+    else if (ch === ")") depth--;
+    else if (ch === "," && depth === 0) {
+      parts.push(input.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+  parts.push(input.slice(start).trim());
+  return parts;
+}
+
+/** One `color-mix` stop: a colour and an optional trailing percentage. */
+function parseStop(input: string): { colour: string; weight: number | null } {
+  const match = /^([\s\S]*?)\s+([\d.]+)%$/.exec(input.trim());
+  return match
+    ? { colour: match[1]!, weight: Number(match[2]) / 100 }
+    : { colour: input.trim(), weight: null };
+}
+
+/**
+ * Parse an OKLCH value or `color-mix(in oklab, A [p%], B [q%])`, nested or not.
+ * The redesign derives a few roles (the mention row, the canvas, a hovered
+ * row) by mixing, and the browser hands a custom property back as written,
+ * with only its `var()`s filled in. Only `in oklab` is understood, the one
+ * space the token layer mixes in.
+ */
+export function parseColour(input: string): Oklch | null {
+  const text = input.trim();
+  const mix = /^color-mix\(([\s\S]*)\)$/i.exec(text);
+  if (!mix) {
+    return parseOklch(text);
+  }
+  const [space, first, second] = splitTopLevel(mix[1]!);
+  if (!/^in\s+oklab$/i.test(space ?? "") || !first || !second) {
+    return null;
+  }
+  const a = parseStop(first);
+  const b = parseStop(second);
+  const ca = parseColour(a.colour);
+  const cb = parseColour(b.colour);
+  if (!ca || !cb) {
+    return null;
+  }
+  let wa = a.weight;
+  let wb = b.weight;
+  if (wa === null && wb === null) {
+    wa = 0.5;
+    wb = 0.5;
+  } else if (wa === null) {
+    wa = 1 - wb!;
+  } else if (wb === null) {
+    wb = 1 - wa;
+  }
+  const total = wa + wb!;
+  const lab = (c: Oklch) => ({
+    l: c.l,
+    a: c.c * Math.cos((c.h * Math.PI) / 180),
+    b: c.c * Math.sin((c.h * Math.PI) / 180),
+  });
+  const la = lab(ca);
+  const lb = lab(cb);
+  // Premultiplied, per CSS Color 5, so a translucent stop pulls less.
+  const alpha = (ca.alpha * wa + cb.alpha * wb!) / total;
+  const mixed = (key: "l" | "a" | "b") =>
+    (la[key] * ca.alpha * wa! + lb[key] * cb.alpha * wb!) / (alpha * total);
+  const x = mixed("a");
+  const y = mixed("b");
+  return {
+    l: mixed("l"),
+    c: Math.hypot(x, y),
+    h: ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360,
+    alpha,
+  };
+}
 
 /** Parse an OKLCH string into components. L is 0..1. */
 export function parseOklch(input: string): Oklch | null {
@@ -261,8 +386,8 @@ export function contrastRatio(
   foreground: string,
   background: string,
 ): number | null {
-  const fg = parseOklch(foreground);
-  const bg = parseOklch(background);
+  const fg = parseColour(foreground);
+  const bg = parseColour(background);
   if (!fg || !bg) {
     return null;
   }

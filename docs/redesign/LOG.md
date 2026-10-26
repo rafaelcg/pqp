@@ -31,7 +31,7 @@ Read this file and the inventory at the start of every session.
 | 0 | Three directions, mockups and council round D1 | Done (2 of 3 reviewers) |
 | 0 | André picks a direction | Done: B (Salas), with filled icons |
 | 1 | Toggle | Done |
-| 1 | Tokens for the chosen direction | Not started |
+| 1 | Tokens for the chosen direction | Built on `rd/tokens`, council round T1 running |
 | 1 | André signs off on `/qa/ui` | Not started |
 
 ## Phase 0: directions
@@ -82,6 +82,37 @@ What Phase 1 tokens must solve for A (both reviewers):
 4. Selected, hover and unread need distinct treatments.
 5. Contrast floors for timestamps, offline names and placeholders.
 
+## Phase 1: tokens
+
+Branch `rd/tokens`. Screenshots and council answers: `~/pqp-redesign/t-tokens/`.
+The method and every value are in `docs/DESIGN.md`, section "The redesign
+(Salas)". In short:
+
+- Shape for every look: radius 4/10/14/20 px and pill rows, Gabarito for the
+  title role, 22px body leading, 36px rows, an 8px gutter (0 under 640px),
+  snappier motion, a deeper modal shadow.
+- The Salas palette for Clássico, dark and light. Accent unchanged, so the
+  custom accent hue still applies.
+- New roles for the council's D1 asks: `canvas`, `pane-side`, `pane-main`,
+  `row-hover`, `row-selected`, `on-row-selected`, `accent-text`,
+  `success-text`, `mention-row`, `mention-bar`, `mention-chip`,
+  `on-mention-chip`. Each is derived with `color-mix(in oklab, …)` from roles
+  every look already sets.
+- Small redesign-only fixes for Night, Modo 2005, Everforest and Catppuccin,
+  so the new roles pass there.
+- Filled icons: `@phosphor-icons/react` and `ui/icon.tsx` (objects fill,
+  symbols bold).
+- The bench measures 20 new pairs and 7 pane steps on every look with the
+  toggle on: 3062/3062 contrast, 308/308 steps, 0 leaks, 0 drift.
+- `/qa/ui` has the redesign switch, a shell specimen built from tokens only,
+  and an icons section.
+
+Toggle off: no line of `index.css` was removed and every new selector needs
+`data-redesign`, so every existing token keeps its value.
+
+Verified: client typecheck, 811 unit test files (10,309 tests), i18n check,
+bench:tokens.
+
 ## Open questions for André
 
 1. The third council reviewer: Gemini 4 Argon is out of Cursor credits. Use
@@ -103,4 +134,8 @@ What Phase 1 tokens must solve for A (both reviewers):
 | 2026-10-26 | Element branches use `rd/<id>` | Git ref conflict with `redesign`. |
 | 2026-10-26 | Direction mockups are a dev-only page on an unmerged branch | Real pixels for the pick, no change to production components, nothing to clean up on `redesign`. |
 | 2026-10-26 | Direction B (Salas), with filled icons instead of outlines | André's pick. The council preferred A; B was second for both reviewers (7.2, 7.4), and the risks they named for B go into the Phase 1 tokens: gutters cost width on small screens, and a third surface level invites card-in-card settings. |
+| 2026-10-26 | Redesign colours are scoped to Clássico; shape applies to every look | A look is a palette. The other looks keep their identity and get only the fixes the new roles need. |
+| 2026-10-26 | Derived roles use `color-mix(in oklab)`, and the bench and `/qa/ui` learned to read it | One formula reaches all ten looks, the custom accent and high contrast, and stays measured. |
+| 2026-10-26 | `ui/icon.tsx` ships with the tokens | It is the only place the fill-or-bold rule lives, and the sheet needs it to show the icon tokens. |
+| 2026-10-26 | Council T1 runs with two reviewers | Gemini 4 Argon is still out of credits; the third seat waits on open question 1. |
 | 2026-10-26 | The toggle ships before the tokens | It is the same for every direction and changes nothing visible. Precedence: `?redesign=1|0`, then the person's Beta switch (`pqp-redesign`), then the `redesign` flag. |

@@ -1,9 +1,24 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Check as CheckIcon } from "lucide-react";
+import {
+  Bell,
+  CaretDown,
+  ChatCircle,
+  GearSix,
+  Hash,
+  MagnifyingGlass,
+  Microphone,
+  PaperPlaneRight,
+  Plus,
+  SpeakerHigh,
+  UsersThree,
+  X,
+} from "@phosphor-icons/react";
+import { Check as CheckIcon, Hash as LineHash } from "lucide-react";
 import { Navigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { CheckRow } from "@/components/ui/check-row";
+import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Slider } from "@/components/ui/slider";
@@ -20,16 +35,20 @@ import {
   DURATION_TOKENS,
   EASE_TOKENS,
   ELEVATION_LEVELS,
+  ICON_SIZE_TOKENS,
+  ICON_STROKE_TOKEN,
   RADIUS_TOKENS,
   readToken,
   roundRatio,
   SHADOW_TOKENS,
   SOFT_PAIRS,
+  SPACE_TOKENS,
   TYPE_ROLES,
 } from "@/lib/design-tokens";
 import { isDesktopApp } from "@/lib/desktop";
 import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { setRedesignChoice, useRedesign } from "@/lib/redesign";
 import { SettingsKitSheet } from "@/pages/ui-settings-kit-sheet";
 
 /**
@@ -124,12 +143,23 @@ function ThemeControls() {
   const theme = useTheme();
   const appearance = useAppearance();
   const contrast = useContrast();
+  const redesign = useRedesign();
 
   const presetKey = (preset: AppearancePreference): MessageKey =>
     `settings.appearance.preset.${preset}` as MessageKey;
 
   return (
     <div className="flex flex-col gap-4">
+      {/* The redesign toggle, so the sheet can be read both ways. Same switch
+          as Settings > Beta: it writes the person's choice on this device. */}
+      <div className="max-w-md rounded-[var(--radius-card)] border border-border bg-surface-1 p-2">
+        <Switch
+          checked={redesign}
+          onCheckedChange={setRedesignChoice}
+          label={t("settings.beta.redesign.label")}
+          description={t("settings.beta.redesign.description")}
+        />
+      </div>
       <div>
         <p className="mb-2 text-text-tertiary" style={{ fontSize: "var(--type-label-size)" }}>
           {t("settings.appearance.theme")}
@@ -198,6 +228,7 @@ function ColourSheet() {
   const theme = useTheme();
   const appearance = useAppearance();
   const contrast = useContrast();
+  const redesign = useRedesign();
   const [swatches, setSwatches] = useState<Swatch[]>([]);
 
   // The attributes are already on the document when these values change, but
@@ -205,7 +236,7 @@ function ColourSheet() {
   // re-runs on every axis of the theme rather than only on mount.
   useEffect(() => {
     setSwatches(measure());
-  }, [theme.resolved, appearance.appearance, contrast.resolved]);
+  }, [theme.resolved, appearance.appearance, contrast.resolved, redesign]);
 
   const byToken = new Map(swatches.map((swatch) => [swatch.token, swatch]));
 
@@ -322,10 +353,19 @@ function TypeRamp() {
             <TokenName name={`--type-${role}-size`} />
           </span>
           <span
-            className={role === "display" ? "font-display font-bold" : undefined}
+            className={
+              role === "display"
+                ? "font-display font-bold"
+                : role === "title"
+                  ? "font-semibold"
+                  : undefined
+            }
             style={{
               fontSize: `var(--type-${role}-size)`,
               lineHeight: `var(--type-${role}-leading)`,
+              // The title role names its face (`--type-title-font`): the
+              // workhorse today, the display face under the redesign.
+              ...(role === "title" ? { fontFamily: "var(--type-title-font)" } : null),
             }}
           >
             {t("qaUi.type.sample")}
@@ -356,6 +396,235 @@ function ScaleSheet() {
           />
         </div>
       ))}
+      {SPACE_TOKENS.map((token) => (
+        <div key={token} className="flex items-center gap-3">
+          <span
+            className="w-16 shrink-0 text-text-tertiary"
+            style={{ fontSize: "var(--type-caption-size)" }}
+          >
+            <TokenName name={token} />
+          </span>
+          <span
+            aria-hidden
+            className="h-3 min-w-px rounded-[var(--radius-tick)] bg-accent"
+            style={{ width: `var(${token})` }}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const OBJECT_ICONS = [ChatCircle, SpeakerHigh, Microphone, Bell, UsersThree, GearSix] as const;
+const SYMBOL_ICONS = [Hash, Plus, MagnifyingGlass, X, CaretDown] as const;
+const ICON_SIZES = ["sm", "md", "lg"] as const;
+
+/**
+ * The icon set at each size token, one row per kind. The stroke token is drawn
+ * on a Lucide glyph, the only kind of icon that has a stroke to set.
+ */
+function IconSheet() {
+  const { t } = useTranslation();
+  const row = (label: string, icons: typeof OBJECT_ICONS | typeof SYMBOL_ICONS, kind: "object" | "symbol") => (
+    <div className="flex flex-col gap-2">
+      <p className="text-text-tertiary" style={{ fontSize: "var(--type-label-size)" }}>
+        {label}
+      </p>
+      {ICON_SIZES.map((size, index) => (
+        <div key={size} className="flex items-center gap-4">
+          <span className="w-28 shrink-0" style={{ fontSize: "var(--type-caption-size)" }}>
+            <TokenName name={ICON_SIZE_TOKENS[index]!} />
+          </span>
+          {icons.map((glyph, i) => (
+            <Icon key={i} icon={glyph} kind={kind} size={size} className="text-text-secondary" />
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+  return (
+    <div className="flex flex-col gap-6">
+      {row(t("qaUi.icons.objects"), OBJECT_ICONS, "object")}
+      {row(t("qaUi.icons.symbols"), SYMBOL_ICONS, "symbol")}
+      <div className="flex items-center gap-4">
+        <span className="w-28 shrink-0" style={{ fontSize: "var(--type-caption-size)" }}>
+          <TokenName name={ICON_STROKE_TOKEN} />
+        </span>
+        <LineHash
+          aria-hidden
+          className="h-[var(--icon-md)] w-[var(--icon-md)] text-text-secondary"
+          style={{ strokeWidth: `var(${ICON_STROKE_TOKEN})` }}
+        />
+        <span className="text-text-tertiary" style={{ fontSize: "var(--type-caption-size)" }}>
+          {t("qaUi.icons.stroke")}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/** One list row of the specimen. `tone` is the row's state. */
+function SpecimenRow({
+  name,
+  tone,
+}: {
+  name: string;
+  tone: "selected" | "unread" | "hover" | "read";
+}) {
+  return (
+    <div
+      className={
+        "flex h-[var(--control-row)] items-center gap-2 rounded-[var(--radius-row)] px-3 " +
+        (tone === "selected"
+          ? "bg-row-selected text-on-row-selected"
+          : tone === "hover"
+            ? "bg-row-hover text-text"
+            : tone === "unread"
+              ? "font-semibold text-text"
+              : "text-text-secondary")
+      }
+      style={{ fontSize: "var(--type-body-size)" }}
+    >
+      <Icon icon={Hash} kind="symbol" size="sm" className={tone === "read" ? "text-text-tertiary" : undefined} />
+      <span className="min-w-0 flex-1 truncate">{name}</span>
+      {tone === "unread" ? (
+        <span aria-hidden className="h-2 w-2 rounded-full bg-indicator" />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * The shell, drawn with nothing but tokens: the canvas, a rail, the side pane
+ * with every row state, the conversation with a mention, and the composer.
+ * It is what the design council scores for the token phase, before any real
+ * component moves. With the redesign off it shows the same roles resolved for
+ * today's look, which is how a reviewer sees what the toggle changes.
+ */
+function ShellSpecimen() {
+  const { t } = useTranslation();
+  const titleStyle = {
+    fontFamily: "var(--type-title-font)",
+    fontSize: "var(--type-title-size)",
+    lineHeight: "var(--type-title-leading)",
+  } as const;
+  const sectionLabel = "px-3 pb-1 pt-3 font-medium";
+  return (
+    <div className="flex flex-col gap-2">
+      <div
+        data-testid="qa-shell-specimen"
+        className="flex h-[26rem] overflow-hidden rounded-[var(--radius-panel)] border border-border bg-canvas"
+        style={{ gap: "var(--space-gutter)", padding: "var(--space-gutter)" }}
+      >
+        <div className="flex w-14 shrink-0 flex-col items-center gap-2 py-2">
+          <span className="flex h-11 w-11 items-center justify-center rounded-[var(--radius-card)] bg-accent text-on-accent">
+            <Icon icon={ChatCircle} />
+          </span>
+          <span className="flex h-11 w-11 items-center justify-center rounded-full bg-pane-side font-display font-bold text-text-secondary">
+            M
+          </span>
+          <span className="flex h-11 w-11 items-center justify-center rounded-full bg-pane-side text-text-secondary">
+            <Icon icon={Plus} kind="symbol" />
+          </span>
+        </div>
+
+        <div className="flex w-56 shrink-0 flex-col rounded-[var(--radius-panel)] bg-pane-side py-3" style={{ paddingInline: "calc(var(--space-pane) / 2)" }}>
+          <div className="flex items-center gap-1 px-3 pb-2 font-bold text-text" style={titleStyle}>
+            <span className="min-w-0 flex-1 truncate">Turma do Fliperama</span>
+            <Icon icon={CaretDown} kind="symbol" size="sm" className="text-text-tertiary" />
+          </div>
+          <p className={`${sectionLabel} text-text-tertiary`} style={{ fontSize: "var(--type-label-size)" }}>
+            {t("qaUi.shell.textChannels")}
+          </p>
+          <div className="flex flex-col gap-0.5">
+            <SpecimenRow name="papo" tone="selected" />
+            <SpecimenRow name="avisos" tone="unread" />
+            <SpecimenRow name="clipes" tone="hover" />
+            <SpecimenRow name="geral" tone="read" />
+          </div>
+          <p className={`${sectionLabel} text-accent-text`} style={{ fontSize: "var(--type-label-size)" }}>
+            {t("qaUi.shell.inCall")}
+          </p>
+          <div className="flex items-center gap-2 px-3 text-text" style={{ fontSize: "var(--type-body-size)" }}>
+            <Icon icon={SpeakerHigh} size="sm" className="text-success-text" />
+            Rafa
+          </div>
+          <p className={`${sectionLabel} text-text-tertiary`} style={{ fontSize: "var(--type-label-size)" }}>
+            {t("qaUi.shell.offline")}
+          </p>
+          <div className="px-3 text-text-tertiary" style={{ fontSize: "var(--type-body-size)" }}>
+            Teo
+          </div>
+          <div className="mt-auto flex items-center gap-2 rounded-[var(--radius-card)] bg-surface-2 p-2 shadow-[var(--shadow-1)]">
+            <span className="h-8 w-8 rounded-full bg-surface-3" />
+            <span className="min-w-0 flex-1 truncate font-medium text-text" style={{ fontSize: "var(--type-label-size)" }}>
+              Lia
+            </span>
+            <Icon icon={Microphone} size="sm" className="text-text-secondary" />
+            <Icon icon={GearSix} size="sm" className="text-text-secondary" />
+          </div>
+        </div>
+
+        <div className="flex min-w-0 flex-1 flex-col rounded-[var(--radius-panel)] bg-pane-main">
+          <div className="flex items-center gap-2 border-b border-border py-3 text-text" style={{ ...titleStyle, paddingInline: "var(--space-pane)" }}>
+            <Icon icon={Hash} kind="symbol" className="text-text-tertiary" />
+            <span className="font-bold">papo</span>
+          </div>
+          <div className="flex flex-1 flex-col justify-end gap-1 py-2">
+            <div className="flex gap-3 py-1" style={{ paddingInline: "var(--space-pane)" }}>
+              <span className="h-10 w-10 shrink-0 rounded-full bg-surface-3" />
+              <div className="min-w-0">
+                <p className="flex items-baseline gap-2">
+                  <span className="font-semibold text-text">Bia</span>
+                  <span className="tabular-nums text-text-tertiary" style={{ fontSize: "var(--type-caption-size)" }}>
+                    21:04
+                  </span>
+                </p>
+                <p className="text-text" style={{ fontSize: "var(--chat-font-size)" }}>
+                  {t("qaUi.shell.messageOne")}
+                </p>
+              </div>
+            </div>
+            <div
+              className="flex gap-3 border-l-[3px] border-mention-bar bg-mention-row py-1"
+              style={{ paddingInline: "calc(var(--space-pane) - 3px) var(--space-pane)" }}
+            >
+              <span className="h-10 w-10 shrink-0 rounded-full bg-surface-3" />
+              <div className="min-w-0">
+                <p className="flex items-baseline gap-2">
+                  <span className="font-semibold text-text">Rafa</span>
+                  <span className="tabular-nums text-text-tertiary" style={{ fontSize: "var(--type-caption-size)" }}>
+                    21:06
+                  </span>
+                </p>
+                <p className="text-text" style={{ fontSize: "var(--chat-font-size)" }}>
+                  <span className="rounded-[var(--radius-tick)] bg-mention-chip px-1 font-medium text-on-mention-chip">
+                    @lia
+                  </span>{" "}
+                  {t("qaUi.shell.messageTwo")}
+                </p>
+              </div>
+            </div>
+          </div>
+          <div className="pb-3" style={{ paddingInline: "var(--space-pane)" }}>
+            <div className="flex h-14 items-center gap-2 rounded-full border border-border bg-surface-2 pl-5 pr-2 shadow-[var(--shadow-2)]">
+              <span className="min-w-0 flex-1 truncate text-text-tertiary">
+                {t("qaUi.shell.composer", { channel: "papo" })}
+              </span>
+              <span
+                role="img"
+                aria-label={t("qaUi.shell.send")}
+                className="flex h-10 w-10 items-center justify-center rounded-full bg-accent text-on-accent"
+              >
+                <Icon icon={PaperPlaneRight} />
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p className="text-text-tertiary" style={{ fontSize: "var(--type-caption-size)" }}>
+        {t("qaUi.shell.legend")}
+      </p>
     </div>
   );
 }
@@ -676,6 +945,9 @@ export function UiTokensPage() {
         <Section title={t("qaUi.section.theme")}>
           <ThemeControls />
         </Section>
+        <Section title={t("qaUi.section.shell")} note={t("qaUi.shell.note")}>
+          <ShellSpecimen />
+        </Section>
         <Section title={t("qaUi.section.colour")} note={t("qaUi.colour.note")}>
           <ColourSheet />
         </Section>
@@ -687,6 +959,9 @@ export function UiTokensPage() {
         </Section>
         <Section title={t("qaUi.section.radius")}>
           <RadiusSheet />
+        </Section>
+        <Section title={t("qaUi.section.icons")} note={t("qaUi.icons.note")}>
+          <IconSheet />
         </Section>
         <Section
           title={t("qaUi.section.elevation")}
