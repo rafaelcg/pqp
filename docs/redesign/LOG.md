@@ -44,6 +44,7 @@ Read this file and the inventory at the start of every session.
 | 2 | `p-radio` | Merged (cap at round 5: 8.3 Opus r4, 8.0 Codex r5, no MUST) |
 | 2 | `p-tabs` | Merged (cap at round 5: 8.4 Opus r5, 8.7 Codex r4, no MUST) |
 | 2 | `p-menu` | Merged (cap at round 5: 8.4 Opus r5, 8.4 Codex r4, no MUST, approved) |
+| 2 | `p-slider` | Merged (cap at round 5: 8.0 Opus r4, 8.8 Codex r5, no MUST) |
 
 ## Phase 0: directions
 
@@ -583,6 +584,22 @@ Spec (audit: Slider in 13 files; 11 native range inputs elsewhere):
 6. Left for `f-call` (voice settings): above 100% the accent fill covers the
    middle of the unity tick. Raising the tick would paint it over the knob
    at 100%, so it needs its own treatment there.
+
+Council (Opus 5.5, GPT-6 Luna via Codex), overall after. Rounds 4 and 5 ran
+one reviewer each:
+
+| Round | Opus | Codex |
+|---|---|---|
+| 1 | 7.6 | 8.5 |
+| 2 | 8.4 | 9.0 |
+| 3 | 8.3 | 8.6 |
+| 4 | 8.0 | not run |
+| 5 | not run | 8.8 |
+
+Round 4's MUST (the voice settings' 100% label collided with the hint under
+it) was fixed; round 5 found nothing left. The slider group naming and the
+unity tick are logged for `f-music` and `f-call`. Stopped at the five-round
+cap with no MUST. Screenshots: `~/pqp-redesign/p-slider/`.
 
 ## Open questions for André
 
