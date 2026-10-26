@@ -37,6 +37,7 @@ import { findLastOwnEditableMessage } from "@/lib/edit-last-message";
 import { useTranslation } from "@/lib/i18n";
 import type { MentionCandidate } from "@/lib/mention-autocomplete";
 import { cn, formatDayLabel } from "@/lib/utils";
+import { PANE_SIDE_REDESIGN } from "@/components/ui/pane";
 
 /**
  * The thread's own conversation: a side panel on desktop, the whole viewport
@@ -251,7 +252,7 @@ export function ThreadPanel({
       data-forum-post-panel={forum ? thread.channelId : undefined}
       className={cn(
         "relative flex h-full min-h-0 w-full shrink-0 flex-col border-border/60 bg-surface-0 max-md:fixed max-md:inset-0 max-md:z-30 max-md:shadow-[var(--shadow-2)]",
-        !forum && "md:w-[26rem] md:border-l",
+        !forum && cn("md:w-[26rem] md:border-l", PANE_SIDE_REDESIGN),
         forum?.layout === "side" && "md:w-[488px] md:border-l animate-toast-in",
         forum?.layout === "full" && "md:min-w-0 md:flex-1 md:shrink animate-fade-in",
         forum && "max-md:animate-step-in",

@@ -70,6 +70,7 @@ import {
   type SectionCollapseState,
 } from "@/lib/member-groups";
 import { cn } from "@/lib/utils";
+import { PANE_SIDE_REDESIGN } from "@/components/ui/pane";
 
 const EMPTY_MEMBERS: readonly ServerMember[] = [];
 
@@ -670,7 +671,7 @@ export const MemberSidebar = memo(function MemberSidebar({
         className={cn(
           "flex shrink-0 flex-col border-l border-ink-4/60 bg-channel",
           wide
-            ? "w-60"
+            ? cn("w-60", PANE_SIDE_REDESIGN)
             : "fixed inset-y-0 right-0 z-30 w-[min(100%,15rem)] shadow-[var(--shadow-popover)]",
         )}
       >

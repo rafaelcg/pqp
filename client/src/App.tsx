@@ -292,6 +292,7 @@ import {
 } from "@/lib/watch-party-history-access";
 import { useWatchPartyHistoryAvailability } from "@/lib/use-watch-party-history-availability";
 import { useWatchParties } from "@/hooks/use-watch-parties";
+import { FRAME_REDESIGN, PANE_MAIN_REDESIGN, PANE_ROW_REDESIGN } from "@/components/ui/pane";
 import {
   claimWatchPartyHost as apiClaimWatchPartyHost,
   createServerWatchParty as apiCreateServerWatchParty,
@@ -13313,7 +13314,7 @@ function MainAppContent({
     {/* `app-shell`, not `overflow-hidden`: see index.css. A hidden box is
         still a scroll container that script can move, and it was moved. */}
     <div
-      className="app-shell animate-fade-in relative flex h-full"
+      className={cn("app-shell animate-fade-in relative flex h-full", FRAME_REDESIGN)}
       data-phone-tabs={phoneShell ? "" : undefined}
       data-phone-bar={phoneBarVisible ? "" : undefined}
     >
@@ -13651,6 +13652,7 @@ function MainAppContent({
       <div
         className={cn(
           "flex min-h-0 min-w-0 flex-1",
+          PANE_ROW_REDESIGN,
           whatsNewOpen && "hidden",
         )}
       >
@@ -13886,7 +13888,7 @@ function MainAppContent({
         />
       )}
 
-      <main className="flex min-w-0 flex-1 flex-col bg-transparent">
+      <main className={cn("flex min-w-0 flex-1 flex-col bg-transparent", PANE_MAIN_REDESIGN)}>
         {isDevAuthBypassEnabled() && (
           <Banner
             tone="warning"
