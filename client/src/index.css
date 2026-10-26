@@ -144,6 +144,13 @@
   --color-tooltip-border: color-mix(in oklab, var(--color-text) 18%, var(--color-tooltip));
   --color-on-tooltip: var(--color-text);
   --color-tooltip-detail: color-mix(in oklab, var(--color-on-tooltip) 80%, var(--color-tooltip));
+  /* A text field's fill under the redesign: the deepest surface, a well
+     below panes and dialogs. In light a faint tint of the text, so a field
+     still reads on the white conversation. Unused with the toggle off. */
+  --color-field: var(--color-surface-0);
+  /* A field's edge: 3:1 against its fill and against a dialog, the floor for
+     the boundary of a control (WCAG 1.4.11). */
+  --color-field-border: color-mix(in oklab, var(--color-border-strong) 50%, var(--color-text));
 
   /* Code sits BELOW the message list in dark and would be the page itself in
      light, so it is a role rather than an alias for a surface. */
@@ -711,6 +718,23 @@
      straight bar on the bubble's start edge. Actions on the rail stay plain. */
   --tooltip-rail-mark: var(--color-accent);
 
+  /* Input and Textarea (ui/input.tsx), same rule. The edge is the field
+     role, 3:1 on the fill and on a dialog; disabled keeps it and fades the
+     text instead. */
+  --input-bg: var(--color-field);
+  --input-border: var(--color-field-border);
+  /* An invalid field's second cue beside its red edge; a disabled field
+     never takes it (disabled wins). Stronger in dark, where 6% over the
+     well barely shows. */
+  --input-invalid-bg: color-mix(in oklab, var(--color-danger) 10%, var(--color-field));
+  --input-hover-border: color-mix(in oklab, var(--color-field-border) 40%, var(--color-text));
+  --input-placeholder: var(--color-text-tertiary);
+  --input-prefix: var(--color-text-secondary);
+  --input-prefix-gap: 0.125rem;
+  --input-px: 0.875rem;
+  --input-h: var(--control-md);
+  --input-disabled-opacity: 1;
+
   --icon-button-radius: var(--radius-pill);
   --icon-button-text: var(--color-text-secondary);
   /* Tints, like the button's: an icon button sits on panes and dialogs. */
@@ -938,10 +962,12 @@
   --color-tooltip: color-mix(in oklab, var(--color-text) 94%, var(--color-surface-0));
   --color-tooltip-border: transparent;
   --color-on-tooltip: var(--color-surface-0);
+  --color-field: color-mix(in oklab, var(--color-text) 3%, var(--color-surface-0));
 }
 
 /* The redesign's shadows on a light page: tinted, never black. Every look. */
 :root[data-redesign][data-theme="light"] {
+  --input-invalid-bg: color-mix(in oklab, var(--color-danger) 6%, var(--color-field));
   --shadow-1: 0 1px 2px oklch(0.4 0.02 262 / 0.08);
   --shadow-2: 0 12px 32px oklch(0.4 0.02 262 / 0.16);
   --shadow-3: 0 24px 64px -16px oklch(0.4 0.02 262 / 0.26);

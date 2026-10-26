@@ -24,6 +24,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Tooltip,
   TOOLTIP_DETAIL,
@@ -871,12 +872,30 @@ function PrimitiveSheet() {
         </div>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div data-testid="qa-primitive-input" className="grid gap-3 rounded-[var(--radius-card)] border border-border bg-surface-1 p-3 sm:grid-cols-3">
         <label className="flex flex-col gap-1">
           <span style={{ fontSize: "var(--type-label-size)" }}>
             {t("qaUi.state.default")}
           </span>
           <Input placeholder={t("qaUi.input.placeholder")} />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span style={{ fontSize: "var(--type-label-size)" }}>
+            {t("qaUi.input.filled")}
+          </span>
+          <Input defaultValue={t("qaUi.input.value")} />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span style={{ fontSize: "var(--type-label-size)" }}>
+            {t("qaUi.input.prefix")}
+          </span>
+          <Input prefix="pqp.gg/@" defaultValue="lia" />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span style={{ fontSize: "var(--type-label-size)" }}>
+            {t("qaUi.input.prefix")} · {t("qaUi.state.disabled")}
+          </span>
+          <Input prefix="pqp.gg/@" defaultValue="lia" disabled />
         </label>
         <label className="flex flex-col gap-1">
           <span style={{ fontSize: "var(--type-label-size)" }}>
@@ -893,6 +912,12 @@ function PrimitiveSheet() {
             className="border-danger"
             defaultValue={t("qaUi.input.invalidValue")}
           />
+        </label>
+        <label className="flex flex-col gap-1 sm:col-span-3">
+          <span style={{ fontSize: "var(--type-label-size)" }}>
+            {t("qaUi.input.multiline")}
+          </span>
+          <Textarea rows={3} className="min-h-0" placeholder={t("qaUi.input.placeholder")} />
         </label>
       </div>
 

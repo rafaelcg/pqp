@@ -535,16 +535,36 @@ accessible name.
 
 `input.tsx`. A single-line text field, `forwardRef` so a form can focus it.
 
-- One variant, one size (h-10). Error state is the caller's: pass
-  `aria-invalid` and a `border-danger` class.
+- One variant, one size: 40px with the toggle off, the default button's
+  36px under the redesign (`--input-h`), so a field and its Save line up.
+  Error state: pass `aria-invalid`. With the toggle off also pass a
+  `border-danger` class; under the redesign `aria-invalid` alone turns the
+  edge red.
 - **`prefix`.** Fixed text drawn inside the field before the value
   (`pqp.gg/@`), not part of the value. With a prefix the field is a box around
   an unstyled input: the focus ring is on the box (`focus-within`), so the
   prefix is ringed too, `className` goes on the box (`font-mono`,
   `border-danger`), and `aria-invalid="true"` on the input turns the box's
   border red by itself. Without a prefix the markup is the bare input.
-- **States.** Placeholder at `text-text-tertiary/70`, focus ring, disabled at 50%
-  with `cursor-not-allowed`.
+- **States.** With the toggle off: placeholder at `text-text-tertiary/70`,
+  focus ring, disabled at 50% with `cursor-not-allowed`.
+- **Under the redesign.** `--input-*` tokens over one role, `--color-field`:
+  the deepest surface in dark (a well below panes and dialogs) and a faint
+  tint of the text in light. The edge is `--color-field-border`, checked at
+  3:1 on the fill, on a dialog and on the conversation pane in every look
+  (the floor for a control's boundary), and grows toward the text on hover.
+  The placeholder is the full `text-tertiary`, the prefix `text-secondary`,
+  both at 4.5:1. Disabled keeps the edge, drops the fill, dims the value
+  to `text-tertiary` and the placeholder and prefix one step further (70%),
+  so an empty disabled field never looks like a resting one and a disabled
+  value still reads as a value. Invalid adds a faint red tint
+  (`--input-invalid-bg`, danger 10% in dark and 6% in light) to the red
+  edge; a field that is also disabled draws as disabled. Pair
+  `aria-invalid` with visible error text through `aria-describedby`: the
+  message is the cue that does not depend on colour. Hover, invalid and disabled are the field's `redesign:`
+  classes. Fields are rounded rectangles (`--radius-control`) and actions
+  are pills; a field and its button share a height, not a shape. `Textarea` shares the box through
+  `FIELD_BOX` and `FIELD_TEXT`.
 - **Use it** for every single-line text field. A multi-line value is a
   `Textarea`.
 - **Accessibility.** It renders no label. Wrap it in a `<label>` or point one at
