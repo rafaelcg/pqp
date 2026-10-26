@@ -72,7 +72,9 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select
         aria-hidden
         weight="bold"
         className={cn(
-          "pointer-events-none absolute top-1/2 end-[var(--input-px,0.75rem)] hidden size-[var(--icon-sm)] -translate-y-1/2 text-text-tertiary redesign:block",
+          "pointer-events-none absolute top-1/2 end-[var(--input-px,0.75rem)] hidden -translate-y-1/2 text-text-tertiary redesign:block",
+          // A step smaller on the 32px field, so it does not crowd the value.
+          size === "sm" ? "size-[var(--icon-button-glyph-xs)]" : "size-[var(--icon-sm)]",
           // The caret follows the field: brighter on hover and focus, red
           // when invalid, as faded as the value when disabled.
           "redesign:peer-enabled:peer-hover:not-peer-aria-invalid:text-text-secondary redesign:peer-focus-visible:not-peer-aria-invalid:text-text-secondary redesign:peer-aria-invalid:text-danger redesign:peer-disabled:text-[color:color-mix(in_oklab,var(--color-text-tertiary)_70%,transparent)]",
