@@ -1031,6 +1031,11 @@ variant set, and then use it everywhere.
 5. **UI copy is a catalogue key.** i18next, flat dotted keys, single-brace
    `{slots}`, `_one` / `_other` families, and both `en` and `pt-BR`. See
    `docs/I18N.md`. No em dash reaches a user, in either language.
+- **Presence dot.** Under the redesign a caller puts `StatusDot` at
+  `redesign:bottom-0 redesign:right-0`, so its centre sits on the circle's
+  edge at 45 degrees instead of hanging off a square's corner.
+- **Light.** The monogram disc takes a 1px inner edge (`--avatar-edge`), so
+  it stays a disc on the white pane.
 
 ### How the bench enforces this
 

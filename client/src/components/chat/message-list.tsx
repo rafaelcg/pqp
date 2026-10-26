@@ -3858,7 +3858,7 @@ const MessageRow = memo(function MessageRow({
                   {!message.isWebhook && authorInfo?.status && (
                     <StatusDot
                       status={authorInfo.status}
-                      className="absolute -bottom-0.5 -right-0.5"
+                      className="absolute -bottom-0.5 -right-0.5 redesign:bottom-0 redesign:right-0"
                       ringClassName="rounded-full bg-channel ring-2 ring-channel"
                     />
                   )}

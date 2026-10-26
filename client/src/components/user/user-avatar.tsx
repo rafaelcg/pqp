@@ -122,7 +122,8 @@ export function UserAvatar({
         fallbackClassName,
         dim,
         circle,
-        !ownPalette && "redesign:bg-surface-3 redesign:font-semibold redesign:text-text",
+        !ownPalette &&
+          "redesign:bg-surface-3 redesign:font-semibold redesign:text-text redesign:shadow-[inset_0_0_0_1px_var(--avatar-edge)]",
       )}
     >
       {(name.trim().slice(0, 1) || "?").toUpperCase()}

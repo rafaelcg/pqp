@@ -559,7 +559,7 @@ export function UserPanel({
           <StatusDot
             status={effectiveStatus}
             label={ownLabel}
-            className="absolute -bottom-0.5 -right-0.5"
+            className="absolute -bottom-0.5 -right-0.5 redesign:bottom-0 redesign:right-0"
             ringClassName="rounded-full bg-ink ring-2 ring-ink"
           />
         </span>

@@ -1327,7 +1327,7 @@ function PrimitiveSheet() {
         >
           Avatar
         </p>
-        <div className="flex flex-wrap items-end gap-5">
+        <div className="flex flex-wrap items-end gap-5 pb-1">
           {(
             [
               ["Bia", "h-6 w-6", "bg-surface-3 text-[10px] text-text", "online"],
@@ -1340,15 +1340,15 @@ function PrimitiveSheet() {
               <UserAvatar name={name} className={size} fallbackClassName={fallback} />
               <StatusDot
                 status={status}
-                className="absolute -bottom-0.5 -right-0.5"
+                className="absolute -bottom-0.5 -right-0.5 redesign:bottom-0 redesign:right-0"
                 ringClassName="rounded-full bg-surface-0 ring-2 ring-surface-0"
               />
             </span>
           ))}
           <UserAvatar name="Caio" className="h-10 w-10" fallbackClassName="bg-ink-3 text-sm" rounded="full" dimmed />
           {/* A photo at the smallest and the usual size: how it crops in the circle. */}
-          <UserAvatar name="Lia" avatarUrl="/images/hero/hero-480.webp" className="h-6 w-6" />
-          <UserAvatar name="Lia" avatarUrl="/images/hero/hero-480.webp" className="h-10 w-10" />
+          <UserAvatar name="Lia" avatarUrl="https://api.dicebear.com/9.x/shapes/png?seed=relay" className="h-6 w-6" />
+          <UserAvatar name="Lia" avatarUrl="https://api.dicebear.com/9.x/shapes/png?seed=relay" className="h-10 w-10" />
           <UserAvatar name="Breu" avatarUrl="/api/bot-faces/lime/oi.png" className="h-10 w-10" />
           <span className="flex -space-x-2">
             {["Lia", "Rafa", "Gui"].map((name) => (

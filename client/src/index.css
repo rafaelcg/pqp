@@ -823,6 +823,10 @@
   --slider-ring: var(--color-accent);
   --slider-ring-offset-color: transparent;
 
+  /* The monogram disc's edge: none in dark, where surface-3 already stands
+     off the panes; a hairline in light, where it is close to the white pane. */
+  --avatar-edge: transparent;
+
   --icon-button-radius: var(--radius-pill);
   --icon-button-text: var(--color-text-secondary);
   /* Tints, like the button's: an icon button sits on panes and dialogs. */
@@ -1105,6 +1109,7 @@
 
 /* The redesign's shadows on a light page: tinted, never black. Every look. */
 :root[data-redesign][data-theme="light"] {
+  --avatar-edge: var(--color-border);
   --input-invalid-bg: color-mix(in oklab, var(--color-danger) 6%, var(--color-field));
   /* Tabs */
   /* 7 points over the 8% ghost hover, so a hovered pill never reads as selected. */

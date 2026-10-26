@@ -98,5 +98,15 @@ describe("UserAvatar", () => {
     expect(html).toContain("rounded-lg");
     expect(html).toContain("redesign:rounded-full");
   });
+
+  it("keeps the caller's palette for an avatar drawn inside a story", () => {
+    const html = renderToStaticMarkup(
+      <UserAvatar name="Bia" ownPalette fallbackClassName="bg-accent text-on-accent" />,
+    );
+    expect(html).toContain("bg-accent text-on-accent");
+    expect(html).not.toContain("redesign:bg-surface-3");
+    // Still a circle under the redesign.
+    expect(html).toContain("redesign:rounded-full");
+  });
 });
 
