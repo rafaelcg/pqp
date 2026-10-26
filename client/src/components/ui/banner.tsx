@@ -1,6 +1,6 @@
 import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
 import * as React from "react";
-import { Icon } from "@/components/ui/icon";
+import { Icon, type IconKind } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 
 /**
@@ -53,12 +53,15 @@ export interface BannerProps extends React.HTMLAttributes<HTMLDivElement> {
    * one under the redesign (`redesign:hidden`).
    */
   icon?: PhosphorIcon;
+  /** `symbol` for a glyph that fills into a blob (the wifi arcs). */
+  iconKind?: IconKind;
 }
 
 export function Banner({
   tone,
   edge = "top",
   icon,
+  iconKind = "object",
   role = "status",
   className,
   children,
@@ -81,6 +84,7 @@ export function Banner({
         {icon ? (
           <Icon
             icon={icon}
+            kind={iconKind}
             size="sm"
             className="hidden shrink-0 redesign:block redesign:text-[color:var(--banner-ink)]"
           />

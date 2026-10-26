@@ -35,6 +35,7 @@ export function ConnectionBanner({
     <Banner
       tone="warning"
       icon={WifiSlash}
+      iconKind="symbol"
       className="flex-wrap items-center justify-center gap-x-3 gap-y-1 border-warning/30 py-1.5 text-xs"
       data-connection-banner={status}
     >
