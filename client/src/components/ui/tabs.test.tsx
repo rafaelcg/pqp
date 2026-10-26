@@ -155,6 +155,8 @@ describe("Tabs looks with the toggle off", () => {
 
   it("sets a selected pill apart from a hovered one by weight, and the filled chip on the accent's own text", () => {
     expect(look("pill", "md").on).toContain("redesign:font-medium");
+    expect(look("pill", "xs").on).toContain("redesign:font-medium");
+    expect(look("pill", "xs").off).toContain("redesign:font-normal");
     expect(look("filled", "sm").on).toContain("redesign:text-on-accent");
   });
 

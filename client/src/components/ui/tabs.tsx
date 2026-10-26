@@ -83,7 +83,7 @@ const LOOKS: Record<string, Look> = {
   },
   "segmented:md": {
     list: "grid auto-cols-fr grid-flow-col gap-1 rounded-[var(--segmented-radius,0.75rem)] bg-[color:var(--segmented-bg,color-mix(in_oklab,var(--color-surface-2)_60%,transparent))] p-[var(--segmented-pad,0.25rem)]",
-    focus: `${FOCUS_REDESIGN} redesign:focus-visible:ring-offset-[length:var(--segmented-ring-offset)] redesign:focus-visible:ring-offset-ring-offset`,
+    focus: `${FOCUS_REDESIGN} redesign:focus-visible:ring-offset-[length:var(--segmented-ring-offset)] redesign:focus-visible:ring-offset-transparent`,
     // RadioGroup's metrics under the redesign: the cell is the control
     // height minus the track's pad, so the track sits on the ladder.
     tab: "min-w-0 redesign:truncate rounded-[var(--segmented-radius,0.5rem)] px-3 py-1.5 text-sm transition-colors duration-[var(--duration-fast)] redesign:h-[var(--segmented-h)] redesign:py-0",
@@ -92,7 +92,7 @@ const LOOKS: Record<string, Look> = {
   },
   "segmented:xs": {
     list: "grid auto-cols-fr grid-flow-col gap-0.5 rounded-[var(--segmented-radius,0.5rem)] bg-[color:var(--segmented-bg,color-mix(in_oklab,var(--color-surface-2)_60%,transparent))] p-0.5 redesign:p-[var(--segmented-pad)]",
-    focus: `${FOCUS_REDESIGN} redesign:focus-visible:ring-offset-[length:var(--segmented-ring-offset)] redesign:focus-visible:ring-offset-ring-offset`,
+    focus: `${FOCUS_REDESIGN} redesign:focus-visible:ring-offset-[length:var(--segmented-ring-offset)] redesign:focus-visible:ring-offset-transparent`,
     tab: "min-w-0 truncate rounded-[var(--segmented-radius,0.375rem)] px-1.5 py-1 text-[11px] font-medium transition-colors redesign:h-[var(--segmented-h-sm)] redesign:py-0",
     on: "bg-[color:var(--segmented-thumb,var(--color-surface-1))] text-text shadow-[var(--segmented-thumb-shadow,0_0_transparent)]",
     off: "text-[color:var(--segmented-text,var(--color-text-tertiary))] hover:text-text",
@@ -108,8 +108,9 @@ const LOOKS: Record<string, Look> = {
   "pill:xs": {
     list: "flex shrink-0 items-center gap-0.5",
     focus: FOCUS_REDESIGN,
-    tab: "rounded-[var(--tabs-pill-radius,var(--radius-control))] px-2 py-0.5 font-semibold transition-colors",
-    on: "bg-[color:var(--tabs-pill-on,var(--color-surface-2))] text-text",
+    // As `pill:md` under the redesign: regular until selected, then medium.
+    tab: "rounded-[var(--tabs-pill-radius,var(--radius-control))] px-2 py-0.5 font-semibold transition-colors redesign:font-normal",
+    on: "bg-[color:var(--tabs-pill-on,var(--color-surface-2))] text-text redesign:font-medium",
     off: "text-[color:var(--tabs-off-text,var(--color-text-tertiary))] hover:bg-[color:var(--tabs-pill-hover,var(--color-surface-2))] hover:text-text",
   },
   "filled:sm": {
