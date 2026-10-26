@@ -23,6 +23,11 @@ concurrency:
   group: pqp-remux-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Explicit least privilege. The repository default is already read-only; this
+# keeps it that way if the default is ever widened.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest

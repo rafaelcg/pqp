@@ -188,14 +188,19 @@ jobs:
       - name: Summarise
         if: always()
         shell: bash
+        env:
+          APP_VERSION: ${{ inputs.app_version }}
+          SUBMIT_FOR_REVIEW: ${{ inputs.submit_for_review }}
+          SKIP_SCREENSHOTS: ${{ inputs.skip_screenshots }}
+          RAN: ${{ steps.secrets.outputs.ready == 'true' }}
         run: |
           {
             echo "### iOS store metadata"
             echo
             echo "| | |"
             echo "|---|---|"
-            echo "| app_version | ${{ inputs.app_version }} |"
-            echo "| submit_for_review | ${{ inputs.submit_for_review }} |"
-            echo "| skip_screenshots | ${{ inputs.skip_screenshots }} |"
-            echo "| ran | ${{ steps.secrets.outputs.ready == 'true' }} |"
+            echo "| app_version | ${APP_VERSION} |"
+            echo "| submit_for_review | ${SUBMIT_FOR_REVIEW} |"
+            echo "| skip_screenshots | ${SKIP_SCREENSHOTS} |"
+            echo "| ran | ${RAN} |"
           } >> "$GITHUB_STEP_SUMMARY"

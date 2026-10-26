@@ -64,6 +64,11 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Explicit least privilege. The repository default is already read-only; this
+# keeps it that way if the default is ever widened.
+permissions:
+  contents: read
+
 jobs:
   # The old single `checks` job ran lint, typecheck, every test suite and the
   # builds one after the other (~12-15 min, 8.5-11 of them the Test step). It is
