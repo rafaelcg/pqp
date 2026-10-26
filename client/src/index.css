@@ -805,6 +805,10 @@
      and sits inside the field's 3:1 edge when off. */
   --segmented-radius: 999px;
   --segmented-pad: 0.1875rem;
+  --segmented-h: calc(var(--control-md) - 2 * var(--segmented-pad));
+  --segmented-h-sm: calc(var(--control-sm) - 2 * var(--segmented-pad));
+  --segmented-ring-offset: 1px;
+  --radio-text-sm: var(--button-text-sm);
   --segmented-bg: color-mix(in oklab, var(--color-text) 6%, transparent);
   --segmented-border: transparent;
   --segmented-thumb: color-mix(in oklab, var(--color-text) 15%, transparent);

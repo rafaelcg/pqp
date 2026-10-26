@@ -249,22 +249,30 @@ export function RadioGroup<T extends string | number>({
               variant === "segmented" && [
                 "inline-flex items-center justify-center rounded-[var(--segmented-radius,var(--radius-control))] whitespace-nowrap",
                 content ? "shrink-0" : "min-w-0",
-                size === "sm" ? "h-9 px-2.5 text-xs sm:h-7" : "h-10 px-3 text-sm sm:h-8",
+                // The track sits on the control ladder under the redesign: a
+                // cell is the control height less the track's padding.
+                size === "sm"
+                  ? "h-9 px-2.5 text-[length:var(--radio-text-sm,0.75rem)] leading-4 sm:h-[var(--segmented-h-sm,1.75rem)]"
+                  : "h-10 px-3 text-sm sm:h-[var(--segmented-h,2rem)]",
                 checked
                   ? "bg-[color:var(--segmented-thumb,var(--color-surface-2))] font-medium text-text shadow-[var(--segmented-thumb-shadow,0_0_transparent)]"
                   : "text-[color:var(--segmented-text,var(--color-text-tertiary))]",
                 !checked && !optionDisabled && "hover:text-text",
                 FOCUS_RING,
+                // Inside the track: the ring's offset is the track's padding.
+                "focus-visible:ring-offset-[length:var(--segmented-ring-offset,2px)]",
               ],
               variant === "chips" && [
                 "inline-flex items-center rounded-full border",
-                size === "sm" ? "h-9 px-2.5 text-xs sm:h-7" : "h-10 px-3 text-sm sm:h-8",
+                size === "sm"
+                  ? "h-9 px-2.5 text-[length:var(--radio-text-sm,0.75rem)] leading-4 sm:h-7"
+                  : "h-10 px-3 text-sm sm:h-8",
                 // 44px to a finger on a phone: the hit area reaches past the
                 // drawn pill, into the gap between rows.
                 "relative max-sm:after:absolute max-sm:after:inset-x-0 max-sm:after:content-['']",
                 size === "sm" ? "max-sm:after:-inset-y-1" : "max-sm:after:-inset-y-0.5",
                 checked
-                  ? "border-accent bg-accent-soft text-on-accent-soft redesign:font-medium"
+                  ? "border-accent bg-accent-soft text-on-accent-soft"
                   : "border-[color:var(--chip-border,var(--color-border))] text-text-secondary",
                 !checked &&
                   !optionDisabled &&
@@ -311,7 +319,9 @@ export function RadioGroup<T extends string | number>({
                 <span className={content ? undefined : "truncate"}>
                   {option.label}
                 </span>
-                {option.trailing}
+                <span className="redesign:text-[color:color-mix(in_oklab,currentColor_70%,transparent)] redesign:tabular-nums">
+                  {option.trailing}
+                </span>
               </span>
             ) : (
               <span className={content ? undefined : "truncate"}>

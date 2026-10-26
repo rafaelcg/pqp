@@ -842,8 +842,11 @@ scrollbar would draw OS chrome over the design.
 - **Under the redesign.** The segmented track is a pill of a 6% text tint
   with no border and a raised thumb (a 15% tint with a soft shadow in dark,
   a white chip in light), so the choice reads by shape, not by a shade of
-  grey; unselected labels are `text-secondary`. Chips take the strong edge,
-  the ghost tint on hover and a medium-weight selected label. The list's dot
+  grey; unselected labels are `text-secondary`. The track sits on the
+  control ladder (36px, 32px small) and the focus ring stays inside it. A
+  small group's text is 13px, as on a small Button. Chips take the strong
+  edge and the ghost tint on hover; a count after a label is 70% of it,
+  tabular. The list's dot
   is 18px inside the field's 3:1 edge, and a filled accent disc with an
   `on-accent` centre when selected. Disabled is 0.5, as on Button. Every
   value is a `--segmented-*`, `--chip-*` or `--radio-*` token with today's

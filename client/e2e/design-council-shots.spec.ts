@@ -455,6 +455,10 @@ test("captures the design council screens", async ({ browser }) => {
       await page.getByRole("dialog").getByText("Notificações", { exact: true }).first().click();
       await expect(page.getByRole("dialog").getByRole("switch").first()).toBeVisible();
       await shoot(page, `11-settings-switches-${theme}`);
+      // The theme and density pickers, for RadioGroup in place.
+      await page.getByRole("dialog").getByText("Aparência e idioma", { exact: true }).first().click();
+      await expect(page.getByRole("dialog").getByRole("radiogroup").first()).toBeVisible();
+      await shoot(page, `12-settings-appearance-${theme}`);
       await page.keyboard.press("Escape");
 
       await page.locator("[data-server-menu-trigger]").first().click();

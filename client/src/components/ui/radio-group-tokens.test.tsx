@@ -44,7 +44,7 @@ describe("RadioGroup tokens", () => {
 
   it("keeps the chip edge and hover on tokens, and only weights the checked chip under the redesign", () => {
     const [on, off] = group("chips").querySelectorAll('[role="radio"]');
-    expect(on!.className).toContain("redesign:font-medium");
+    expect(on!.className).not.toContain("font-medium");
     expect(off!.className).toContain("border-[color:var(--chip-border,var(--color-border))]");
     expect(off!.className).toContain("hover:bg-[color:var(--chip-hover,var(--color-surface-2))]");
   });
@@ -59,5 +59,11 @@ describe("RadioGroup tokens", () => {
     expect(off!.getAttribute("class")).toContain(
       "border-[color:var(--radio-off-ring,var(--color-border-strong))]",
     );
+  });
+
+  it("puts the segmented track on the control ladder and the ring inside it", () => {
+    const [cell] = group("segmented").querySelectorAll('[role="radio"]');
+    expect(cell!.className).toContain("sm:h-[var(--segmented-h,2rem)]");
+    expect(cell!.className).toContain("focus-visible:ring-offset-[length:var(--segmented-ring-offset,2px)]");
   });
 });
