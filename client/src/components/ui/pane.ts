@@ -27,3 +27,10 @@ export const PANE_SIDE_REDESIGN =
 /** The conversation: the brightest pane, clipped to its corners. */
 export const PANE_MAIN_REDESIGN =
   "redesign:bg-pane-main md:redesign:overflow-clip md:redesign:rounded-[var(--radius-pane)]";
+
+/**
+ * A pane docked inside the conversation (a forum post open beside its list):
+ * its own rounded pane, inset by the gutter, on the side panes' colour.
+ */
+export const PANE_INSET_REDESIGN =
+  "md:redesign:my-[var(--space-gutter)] md:redesign:mr-[var(--space-gutter)] md:redesign:h-auto md:redesign:rounded-[var(--radius-pane)] md:redesign:border-0 md:redesign:bg-pane-side md:redesign:overflow-clip";
