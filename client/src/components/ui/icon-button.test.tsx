@@ -116,7 +116,10 @@ describe("IconButton", () => {
     expect(button.getAttribute("aria-disabled")).toBe("true");
     expect(button.className).toContain("redesign:aria-pressed:bg-row-selected");
     expect(button.className).toContain("redesign:aria-pressed:text-accent-text");
-    expect(button.className).toContain("redesign:aria-pressed:not-aria-disabled:hover:");
+    expect(button.className).toContain(
+      "redesign:aria-pressed:not-aria-disabled:hover:bg-[color:color-mix(in_oklab,var(--color-row-selected)_88%,var(--color-text))]",
+    );
+    expect(button.className).toContain("redesign:aria-pressed:hover:text-accent-text");
     expect(button.className).toContain("aria-disabled:not-aria-pressed:hover:bg-transparent");
   });
 
@@ -127,6 +130,9 @@ describe("IconButton", () => {
     );
     expect(className).toContain(
       "focus-visible:ring-offset-[length:var(--icon-button-ring-offset,0px)]",
+    );
+    expect(className).toContain(
+      "focus-visible:ring-offset-[color:var(--icon-button-ring-offset-color,var(--color-ring-offset))]",
     );
   });
 });

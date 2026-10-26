@@ -684,6 +684,10 @@
   /* A touch deeper than the button's, so the disc shows on a small circle. */
   --icon-button-danger-hover: color-mix(in oklab, var(--color-danger) 20%, transparent);
   --icon-button-ring-offset: 2px;
+  /* The band between a ghost circle and its ring shows what is behind it,
+     not one fixed surface, so a focused close button on a dialog has no
+     stray ring of the pane colour. */
+  --icon-button-ring-offset-color: transparent;
   --icon-button-press: 0.94;
   --icon-button-glyph-xs: 0.875rem;
   --icon-button-glyph-sm: 1rem;
