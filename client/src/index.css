@@ -665,13 +665,15 @@
   /* Tints of the text, never a surface: a dialog is surface-2, the same as
      the old secondary fill, and a surface hover can be darker than it. */
   --button-secondary-bg: color-mix(in oklab, var(--color-text) 7%, transparent);
-  --button-secondary-hover: color-mix(in oklab, var(--color-text) 12%, transparent);
+  --button-secondary-hover: color-mix(in oklab, var(--color-text) 15%, transparent);
   --button-secondary-border: var(--color-border-strong);
   --button-ghost-text: var(--color-text-secondary);
   --button-ghost-hover: color-mix(in oklab, var(--color-text) 8%, transparent);
   --button-danger-ghost-hover: color-mix(in oklab, var(--color-danger) 14%, transparent);
   --button-danger-ghost-hover-text: var(--color-on-danger-soft);
   --button-disabled-opacity: 0.5;
+  /* A small button steps down in height, not in legibility. */
+  --button-text-sm: 0.8125rem;
 
   /* The title role is drawn in the display face: server names, channel
      titles and pane headers, in sentence case. */
@@ -888,6 +890,8 @@
   --shadow-2: 0 12px 32px oklch(0.4 0.02 262 / 0.16);
   --shadow-3: 0 24px 64px -16px oklch(0.4 0.02 262 / 0.26);
   --button-primary-shadow: inset 0 1px 0 oklch(1 0 0 / 0.25), 0 1px 2px oklch(0.4 0.02 262 / 0.18);
+  /* Light shows the 12% step clearly; dark needs 15%. */
+  --button-secondary-hover: color-mix(in oklab, var(--color-text) 12%, transparent);
 }
 
 /*

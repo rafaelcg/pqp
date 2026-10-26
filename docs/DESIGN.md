@@ -463,11 +463,14 @@ so a variant and a size are props, not class strings.
 - **Under the redesign.** A pill (`--radius-button`), more horizontal room,
   and a lifted primary (a top highlight plus a cast shadow). Secondary,
   ghost and danger-ghost fills are tints of the text or of the danger colour
-  (secondary 7% at rest and 12% on hover, with `--color-border-strong`;
+  (secondary 7% at rest and 15% on hover in dark, 12% in light, with
+  `--color-border-strong`;
   ghost 8%; danger-ghost 14%), never a surface, so they read on a pane and
   on a dialog alike. Disabled is `opacity: 0.5`, and a disabled primary is
-  switched off: a `surface-3` fill, a `text-secondary` label, no shadow and
-  `opacity: 0.8`. Those three disabled-only rules are the one place the
+  switched off: a 6% text tint inside the strong edge, a `text-tertiary`
+  label, no shadow and full opacity, so it keeps its outline on a dialog and
+  never outweighs a live button. `sm` takes a 13px label. Those
+  disabled-only rules are the one place the
   primitive uses `redesign:` classes. Everything else comes from
   `--button-*` component tokens that are unset with the toggle off and fall
   back, inside the class, to the old value, so a call site's own `px-6` or

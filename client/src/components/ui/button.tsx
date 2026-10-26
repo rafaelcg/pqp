@@ -22,12 +22,13 @@ const buttonVariants = cva(
     variants: {
       variant: {
         // Disabled under the redesign is a switched-off button, not a dim
-        // lime one: a grey fill, washed only lightly so the pill keeps its
-        // shape on a dialog. Those are `redesign:` classes on purpose: they
-        // only touch the disabled state, and a disabled primary should look
-        // off whatever colour its caller gave it.
+        // lime one: a faint text tint inside the strong edge, so the pill
+        // keeps its outline on a dialog without outweighing a live button,
+        // and a muted label at full strength. Those are `redesign:` classes
+        // on purpose: they only touch the disabled state, and a disabled
+        // primary should look off whatever colour its caller gave it.
         default:
-          "bg-accent text-on-accent hover:bg-accent-hover font-semibold shadow-[var(--button-primary-shadow,0_0_transparent)] redesign:disabled:bg-surface-3 redesign:disabled:text-text-secondary redesign:disabled:[--button-primary-shadow:0_0_transparent] redesign:disabled:[--button-disabled-opacity:0.8]",
+          "bg-accent text-on-accent hover:bg-accent-hover font-semibold shadow-[var(--button-primary-shadow,0_0_transparent)] redesign:disabled:border redesign:disabled:border-border-strong redesign:disabled:bg-[color:color-mix(in_oklab,var(--color-text)_6%,transparent)] redesign:disabled:text-text-tertiary redesign:disabled:[--button-primary-shadow:0_0_transparent] redesign:disabled:[--button-disabled-opacity:1]",
         // The redesign's fill and hover are tints of the text, so the button
         // keeps its edge on any surface, a dialog included.
         secondary:
@@ -45,7 +46,7 @@ const buttonVariants = cva(
       },
       size: {
         default: "h-[var(--control-md)] px-[var(--button-px,1rem)] py-2",
-        sm: "h-[var(--control-sm)] px-[var(--button-px-sm,0.75rem)] text-xs",
+        sm: "h-[var(--control-sm)] px-[var(--button-px-sm,0.75rem)] text-[length:var(--button-text-sm,0.75rem)] leading-4",
         // The touch-size action (44px): a full-width confirm, a phone sheet,
         // an onboarding step. Replaces a hand-written `h-11` on a default
         // button and draws exactly what that drew with the toggle off.
