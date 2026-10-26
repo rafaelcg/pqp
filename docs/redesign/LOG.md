@@ -40,6 +40,7 @@ Read this file and the inventory at the start of every session.
 | 2 | `p-input` | Merged (cap at round 5: 8.7, 8.9, no MUST) |
 | 2 | `p-select` | Merged (cap at round 5: 8.9, 8.8, no MUST) |
 | 2 | `p-checkbox` | Merged (cap at round 5: best round 3, 8.6, 8.5; round 5 MUST fixed) |
+| 2 | `p-popover` | Merged (cap at round 5: 8.4 Opus, 8.3 Codex r4, no MUST) |
 
 ## Phase 0: directions
 
@@ -438,6 +439,21 @@ portal and placement):
 5. Left for the composer surface: with the toggle off a window shorter
    than the emoji picker cuts its category bar (the wrapper div never takes
    the shell's height). The redesign fixes it; the old look keeps the bug.
+
+Council (Opus 5.5, GPT-6 Luna via Codex), overall after. Round 5 ran one
+reviewer, at André's request to spend less on agents:
+
+| Round | Opus | Codex |
+|---|---|---|
+| 1 | 7.5 | 8.1 |
+| 2 | 8.2 | 8.6 |
+| 3 | 7.9 | 8.5 |
+| 4 | 7.8 | 8.3 |
+| 5 | 8.4 | not run |
+
+Round 4's MUST (the gap under the emoji category bar had no effect) was
+fixed in round 5. Stopped at the five-round cap with no MUST. Best round: 5.
+Screenshots: `~/pqp-redesign/p-popover/`.
 
 ## Open questions for André
 
