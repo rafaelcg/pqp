@@ -20,8 +20,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # Gate the branch here rather than in the workflow_run filter: only a
-    # successful CI run on main deploys. Manual dispatch always runs.
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main') }}
+    # successful CI run on main deploys. A manual dispatch is only trusted
+    # when it runs FROM main, same as deploy-api-vultr.yml: an arbitrary
+    # branch could otherwise carry a modified build step straight to
+    # production Pages.
+    #
+    # The workflow_run half needs its OWN check beyond head_branch == main:
+    # `head_branch` is just a string a fork controls (a fork can have its
+    # own branch literally named "main"), so without pinning
+    # head_repository too, a CI run completing on a fork's "main" would
+    # hand this job that fork's head_sha to build with the Cloudflare and
+    # Clerk secrets in scope.
+    if: ${{ (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository) }}
     permissions:
       contents: read
       deployments: write
