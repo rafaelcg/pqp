@@ -793,15 +793,16 @@ card of settings, the "what's new" note.
   (`surface-2` in dark, the brightest surface in light so the panel reads
   lifted rather than sunk), a 10% text edge in both themes, and a lift
   (`--shadow-2`, one rung under a dialog) with a top highlight in dark, a
-  close and a wide shadow in light.
-  A caller that draws its own edge adds `POPOVER_OWN_EDGE`, so its edge is
-  the popover's whatever order the classes land in. The emoji picker fills
-  its panel (no inner corner or shadow, 38px cells so eight fill its width).
-  Its fill is `--rgb-picker-background`, an RGB triplet the picker needs; it
-  copies `--popover-surface` by hand, so a look that changes surface-0 sets
-  both. Both are set through `--elevation-3-border` and
-  `--elevation-3-shadow` on the panel, so a caller that sets its own fill
-  or edge keeps it.
+  close and a wide shadow in light. The edge and the lift are set through
+  `--elevation-3-border` and `--elevation-3-shadow` on the panel, so a
+  caller that sets its own fill or edge keeps it.
+- A caller that draws its own edge adds `POPOVER_OWN_EDGE`, so its edge is
+  the popover's whatever order the classes land in.
+- The emoji picker fills its panel: no inner corner or shadow, 38px cells
+  so eight fill its width, 6px under its category bar. Its fill is
+  `--rgb-picker-background`, an RGB triplet the picker needs; each redesign
+  look sets it by hand to its `--popover-surface` (surface-2 in dark,
+  surface-0 in light), so a look that changes those sets both.
 - **Use it** for anything anchored to the control that opened it. A list of
   actions is a `Menu`; a blocking question is a `Dialog`.
 

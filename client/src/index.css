@@ -850,6 +850,8 @@
  * not restated, so the custom accent hue still applies.
  */
 :root[data-redesign]:where([data-appearance="signal"]:not([data-theme="light"])) {
+  /* The emoji picker's fill is the popover's (surface-2 here). */
+  --rgb-picker-background: 31, 35, 43;
   --color-surface-0: oklch(0.165 0.013 262);
   --color-surface-1: oklch(0.2 0.014 262);
   --color-surface-2: oklch(0.255 0.016 262);
@@ -3995,6 +3997,18 @@ html[data-pre] [data-home-hero] .animate-rise {
   --border-radius: 0;
   --shadow: none;
   width: 100%;
+}
+/* emoji-mart's React wrapper is an auto-height div, so the picker's own
+   max-height never resolved and it stayed 340px whatever the shell's height
+   or bottom padding. Filling the shell lets the padding keep the category
+   bar off the bottom edge. (With the toggle off a short window still cuts
+   that bar; logged for the composer surface.) */
+:root[data-redesign] .emoji-mart-shell > div {
+  height: 100%;
+}
+/* The picker paints its own fill over the shell's inset highlight. */
+:root[data-redesign]:not([data-theme="light"]) .emoji-mart-shell em-emoji-picker {
+  border-top: 1px solid oklch(1 0 0 / 0.07);
 }
 
 /*

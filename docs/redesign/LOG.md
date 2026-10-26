@@ -435,6 +435,9 @@ portal and placement):
    them needs `@radix-ui/react-popover`, a new dependency (logged as a
    question). The profile popover and peer audio (`ink-2` panels) move with
    `f-profile-popover` and `f-call`.
+5. Left for the composer surface: with the toggle off a window shorter
+   than the emoji picker cuts its category bar (the wrapper div never takes
+   the shell's height). The redesign fixes it; the old look keeps the bug.
 
 ## Open questions for André
 
