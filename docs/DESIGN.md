@@ -399,7 +399,7 @@ accent and high contrast get them without restating anything.
 | `pane-side` | Channel list, member list, conversation list | Dark: between `surface-1` and `surface-0` (60/40). Light: `surface-1` |
 | `pane-main` | The conversation, always the brightest pane | Dark: `surface-1`. Light: `surface-0` |
 | `row-hover` | A list row under the pointer | Dark: `pane-main` mixed 6% toward the text. Light: `pane-side` mixed 5% toward the text. It differs from both panes |
-| `row-selected` / `on-row-selected` | The current row and its label | `accent-soft` (deepened toward the accent in light) / `text` |
+| `row-selected` / `on-row-selected` | The current row and its label | `accent-soft` (deepened toward the accent in light) / `accent-text` in dark, `text` in light |
 | `accent-text` | The accent used as text: a link, "Na call", a count | `on-accent-soft` mixed 15% toward the text |
 | `success-text` | Success used as text | `on-success-soft` mixed 15% toward the text |
 | `mention-row` / `mention-bar` | A message that pings you, and its left bar | `accent-soft` 45% over `pane-main` (all of `accent-soft` in light) / `accent` |
@@ -735,12 +735,13 @@ variant set, and then use it everywhere.
 
 `pnpm --filter @pqp/client bench:tokens` runs `client/bench/theme-tokens.mjs` in
 CI (`.github/workflows/ci.yml`). It writes `bench/results/theme-tokens.json` and
-reports six numbers.
+reports seven numbers.
 
 | Number | Rule | Behaviour |
 |---|---|---|
 | `contrast` | 20 foreground and background pairs in every theme, plus 20 pairs for the redesign's roles on every `redesign-*` theme (each look with the toggle on). 106 theme combinations in all | Always fails on a regression |
 | `steps` | 7 pairs of fills that must stay visibly apart, as an OKLab distance (canvas to pane, hover to pane, selected to hover, mention to pane, chip to mention), on every `redesign-*` theme | Always fails, and an unmeasurable step fails too |
+| `order` | The pane rule as an order: canvas darker than the side pane, conversation at least as bright as the side pane (OKLab lightness), on every `redesign-*` theme | Always fails. A distance alone let a look swap its panes and pass |
 | `leaks` | Rule 2, counted across `client/src` | Ratchet, pinned by `BENCH_MAX_LEAKS`. It is 0 today |
 | `uiAliases` | Rule 4, counted inside `client/src/components/ui/` | Gate at 0. `BENCH_MAX_UI_ALIASES` is an escape hatch for a half-finished migration, not a setting |
 | `uiStatics` | Rule 1, counted inside `client/src/components/ui/`: Tailwind's own static radius, duration and shadow utilities (`rounded-md`, `duration-150`, `shadow-2xl`). `rounded-full` is exempt, because the pill is documented above as a static utility | Gate at 0, with `BENCH_MAX_UI_STATICS` as the same kind of escape hatch |

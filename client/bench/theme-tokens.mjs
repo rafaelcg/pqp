@@ -33,7 +33,7 @@
 import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, extname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { contrastRatio, deltaE, round } from "./lib/color.mjs";
+import { contrastRatio, deltaE, parseColour, round } from "./lib/color.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLIENT = join(HERE, "..");
@@ -277,6 +277,42 @@ function auditSteps(tokens, themeName) {
       pass: distance === null ? null : distance >= pair.floor,
     };
   });
+}
+
+/**
+ * The pane rule, as an order rather than a distance: on every redesign theme
+ * the canvas is the darkest of the three and the conversation the brightest
+ * (OKLab lightness). A distance alone let a look swap its panes and still
+ * pass, which council round T2 caught in Modo 2005 light.
+ */
+function auditPaneOrder(tokens, themeName) {
+  if (!isRedesignTheme(themeName)) {
+    return [];
+  }
+  const l = (name) => {
+    const value = resolve(tokens, name);
+    return value ? parseColour(value)?.l ?? null : null;
+  };
+  const canvas = l("--color-canvas");
+  const side = l("--color-pane-side");
+  const main = l("--color-pane-main");
+  if (canvas === null || side === null || main === null) {
+    return [{ theme: themeName, label: "pane order unmeasurable", pass: null }];
+  }
+  return [
+    {
+      theme: themeName,
+      label: "canvas darker than the side pane",
+      values: [round(canvas, 3), round(side, 3)],
+      pass: canvas < side,
+    },
+    {
+      theme: themeName,
+      label: "conversation at least as bright as the side pane",
+      values: [round(side, 3), round(main, 3)],
+      pass: main >= side,
+    },
+  ];
 }
 
 function auditLeaks() {
@@ -601,6 +637,10 @@ const contrast = Object.entries(themes).flatMap(([name, tokens]) =>
 const steps = Object.entries(themes).flatMap(([name, tokens]) =>
   auditSteps(tokens, name),
 );
+const paneOrder = Object.entries(themes).flatMap(([name, tokens]) =>
+  auditPaneOrder(tokens, name),
+);
+const orderFailures = paneOrder.filter((r) => r.pass !== true);
 const stepFailures = steps.filter((r) => r.pass === false);
 const stepMissing = steps.filter((r) => r.distance === null);
 const leaks = auditLeaks();
@@ -631,6 +671,11 @@ const report = {
     failing: stepFailures.length,
     missingTokens: stepMissing.length,
     results: steps,
+  },
+  paneOrder: {
+    checked: paneOrder.length,
+    failing: orderFailures.length,
+    results: paneOrder,
   },
   leaks: {
     count: leaks.length,
@@ -684,6 +729,10 @@ for (const failure of stepFailures) {
     `  FAIL    ${failure.distance} < ${failure.floor} — ${failure.theme}, ${failure.label}`,
   );
 }
+console.log(`order:    ${paneOrder.length - orderFailures.length}/${paneOrder.length} pass`);
+for (const failure of orderFailures) {
+  console.log(`  FAIL    ${failure.theme}, ${failure.label} ${JSON.stringify(failure.values ?? [])}`);
+}
 console.log(`leaks:    ${leaks.length} colour literal(s) outside the token layer`);
 for (const entry of report.leaks.byFile.slice(0, 10)) {
   console.log(`  ${String(entry.count).padStart(3)}  ${entry.file}`);
@@ -720,7 +769,12 @@ const maxUiAliases = Number(process.env.BENCH_MAX_UI_ALIASES ?? 0);
 // Same shape, same reasoning: BENCH_MAX_UI_STATICS exists for a migration in
 // progress, and the number it defaults to is zero.
 const maxUiStatics = Number(process.env.BENCH_MAX_UI_STATICS ?? 0);
-if (failures.length > 0 || stepFailures.length > 0 || stepMissing.length > 0) {
+if (
+  failures.length > 0 ||
+  stepFailures.length > 0 ||
+  stepMissing.length > 0 ||
+  orderFailures.length > 0
+) {
   process.exitCode = 1;
 } else if (maxLeaks !== undefined && leaks.length > Number(maxLeaks)) {
   console.error(

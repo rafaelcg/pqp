@@ -31,7 +31,7 @@ Read this file and the inventory at the start of every session.
 | 0 | Three directions, mockups and council round D1 | Done (2 of 3 reviewers) |
 | 0 | André picks a direction | Done: B (Salas), with filled icons |
 | 1 | Toggle | Done |
-| 1 | Tokens for the chosen direction | Built on `rd/tokens`, council round T2 running |
+| 1 | Tokens for the chosen direction | Built on `rd/tokens`, council round T3 running |
 | 1 | André signs off on `/qa/ui` | Not started |
 
 ## Phase 0: directions
@@ -130,6 +130,22 @@ one pane rule (the conversation is always the brightest pane), a darker Modo
 a lime label on the Clássico dark selected row. Deferred to the element
 rounds: an inset mention radius, a composer fill role, read rows in
 `text-tertiary`.
+
+### Council round T2
+
+Answers: `~/pqp-redesign/t-tokens/council-t2/`.
+
+| Overall | Toggle off | Redesign on |
+|---|---|---|
+| Claude Opus 5.5 | 6.6 | 8.4 |
+| Codex GPT-6 Luna | 7.6 | 8.4 |
+
+Codex: no fixes. Opus MUST: Modo 2005 light had the side pane brighter than
+the conversation. Fixed, and the bench now checks the pane order on every
+look (`order`), because a distance alone let the swap pass. Also: the
+selected row's label is `accent-text` in every dark look, and Night's side
+pane sits further off the black canvas. Deferred to the pane header element:
+a 16px title in the target versus the 18px title role.
 
 ## Open questions for André
 

@@ -96,8 +96,9 @@
    *                every look and the dim text on it stays readable.
    *   row-selected the current row. The accent's soft fill, so it retints with
    *                the accent (deepened toward the accent in light, where the
-   *                soft fill alone is too close to a hover); the label on it
-   *                stays the body text colour.
+   *                soft fill alone is too close to a hover). Its label is the
+   *                accent as text in dark, as in direction B, and the body
+   *                text in light, where a green label on green is too quiet.
    *   accent-text  the accent used AS TEXT (a link, "Na call", a count). The
    *                bright accent is about 2:1 on a light page; this is the
    *                soft pair's foreground pulled a little toward the text,
@@ -115,7 +116,7 @@
   --color-pane-main: var(--color-surface-1);
   --color-row-hover: color-mix(in oklab, var(--color-pane-main) 94%, var(--color-text));
   --color-row-selected: var(--color-accent-soft);
-  --color-on-row-selected: var(--color-text);
+  --color-on-row-selected: var(--color-accent-text);
   --color-accent-text: color-mix(
     in oklab,
     var(--color-on-accent-soft) 85%,
@@ -714,9 +715,6 @@
   /* A greener soft fill than the plain theme's: at chroma 0.06 a selected row
      reads olive. The custom accent's own block still wins over it. */
   --color-accent-soft: oklch(0.33 0.085 128);
-  /* The selected row's label is lime, as in direction B; the fill still
-     carries the state, so it is not colour alone. */
-  --color-on-row-selected: var(--color-accent-text);
   --color-code-bg: oklch(0.165 0.013 262);
   --color-indicator: oklch(0.95 0.006 95);
   --picker-border: oklch(0.29 0.016 262);
@@ -840,6 +838,7 @@
   --color-canvas: color-mix(in oklab, var(--color-surface-1) 90%, var(--color-text));
   --color-pane-side: var(--color-surface-1);
   --color-pane-main: var(--color-surface-0);
+  --color-on-row-selected: var(--color-text);
   /* A hover steps DOWN from the side pane here, since the conversation is
      the white page; in dark it steps up from the conversation. Either way it
      differs from both panes. */
@@ -1786,6 +1785,12 @@
  * before them). The token bench measures every look under the redesign.
  */
 
+/* Night: the canvas is pure black, so the side pane leans further toward
+   the panel than the default to stay off it. */
+:root[data-redesign]:where([data-appearance="night"]:not([data-theme="light"])) {
+  --color-pane-side: color-mix(in oklab, var(--color-surface-1) 75%, var(--color-surface-0));
+}
+
 /* Modo 2005: surface-0 is lighter than the panel here, so the brightest pane
    is surface-0, the canvas is the panel pulled toward black (the default
    would sit above the side pane), and a hover is the raised surface. */
@@ -1796,7 +1801,10 @@
   --color-row-hover: var(--color-surface-2);
 }
 :root[data-redesign][data-theme="light"]:where([data-appearance="retro"]) {
-  --color-row-hover: var(--color-surface-2);
+  /* In light this look's panel is the white one and surface-0 is tinted
+     blue, so the two panes swap to keep the conversation the brightest. */
+  --color-pane-side: var(--color-surface-0);
+  --color-pane-main: var(--color-surface-1);
 }
 
 /* Everforest and Catppuccin light set their quietest text right at 4.5:1 on
