@@ -1060,12 +1060,15 @@ conversations or friend requests waiting. Draws nothing at zero and caps at
 
 `list-row.tsx`. A row in a list: a channel, a person, a conversation, a
 thread, a follow. `leading` (an icon or an avatar), the label, `detail` (a
-second line), `trailing` (a count, a time, an action). Sizes `sm` (a
+second line), `trailing` (a count or a time, inside the row's button, so
+nothing interactive) and `action` (a control of its own: the row becomes a
+wrapper with the button and the action side by side). Sizes `sm` (a
 channel), `md` (a person), `lg` (a person or conversation with a second
 line).
 
 - **States.** Hover is a fill; `selected` is the row-selected role with its
-  own label colour and `aria-current`; `unread` is weight 600 plus the
+  own label colour and `aria-current` (a selected row is the one being
+  read, so it drops the unread look); `unread` is weight 600 plus the
   indicator pip at the end (a trailing count replaces it); `muted` fades
   the row; disabled is 0.4.
 - **Tokens.** Every value is `--list-row-*` with the old value as its

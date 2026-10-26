@@ -3,13 +3,16 @@ import { cn } from "@/lib/utils";
 
 /**
  * A row in a list: a channel, a person, a conversation, a thread, a follow.
- * A leading mark (an icon or an avatar), a label, an optional second line
- * and something trailing (a count, a time, an action).
+ * A leading mark (an icon or an avatar), a label, an optional second line,
+ * something trailing (a count, a time) and an optional action (a gear, a
+ * close button).
  *
  * States, never told apart by colour alone (DESIGN.md, the row roles):
  *
  * - hover is a fill (`row-hover` under the redesign);
- * - `selected` is the accent's soft fill with its own label colour;
+ * - `selected` is the accent's soft fill with its own label colour. A
+ *   selected row is the one being read, so it shows no unread weight or pip
+ *   even when `unread` is still set;
  * - `unread` is the body text at weight 600 plus the indicator pip at the
  *   end of the row;
  * - `muted` fades the whole row.
@@ -19,8 +22,10 @@ import { cn } from "@/lib/utils";
  * becomes a Salas pill under the redesign. A shell row passes its old
  * colours through `className` and `cn` keeps them, as it does for Button.
  *
- * It is a button. A row that navigates calls `navigate` in `onClick`, as the
- * channel and conversation rows already do.
+ * The row is a button. `trailing` is inside it, so it takes nothing
+ * interactive. An `action` is a control of its own: the row then becomes a
+ * wrapper that draws the row's look, with the button and the action side by
+ * side in it, never one inside the other.
  */
 export type ListRowSize = "sm" | "md" | "lg";
 
@@ -42,8 +47,22 @@ export interface ListRowProps extends React.ButtonHTMLAttributes<HTMLButtonEleme
   leading?: React.ReactNode;
   /** A second, quieter line under the label. */
   detail?: React.ReactNode;
-  /** A count, a time or an action at the end of the row. */
+  /** A count or a time at the end of the row. Nothing interactive. */
   trailing?: React.ReactNode;
+  /** A control of its own at the end of the row (a gear, a close). */
+  action?: React.ReactNode;
+}
+
+function rowLook(selected: boolean, unread: boolean, muted: boolean): string {
+  return cn(
+    "rounded-[var(--list-row-radius,var(--radius-control))] text-sm transition-colors duration-[var(--duration-fast)]",
+    selected
+      ? "bg-[color:var(--list-row-selected,var(--color-surface-3))] font-medium text-[color:var(--list-row-selected-text,var(--color-text))]"
+      : unread
+        ? "font-semibold text-text hover:bg-[color:var(--list-row-hover,var(--color-surface-2))]"
+        : "text-[color:var(--list-row-text,var(--color-text-secondary))] hover:bg-[color:var(--list-row-hover,var(--color-surface-2))] hover:text-text",
+    muted && !selected && "opacity-[var(--list-row-muted-opacity,0.5)]",
+  );
 }
 
 export const ListRow = React.forwardRef<HTMLButtonElement, ListRowProps>(function ListRow(
@@ -55,6 +74,7 @@ export const ListRow = React.forwardRef<HTMLButtonElement, ListRowProps>(functio
     leading,
     detail,
     trailing,
+    action,
     type = "button",
     className,
     children,
@@ -62,28 +82,8 @@ export const ListRow = React.forwardRef<HTMLButtonElement, ListRowProps>(functio
   },
   ref,
 ) {
-  return (
-    <button
-      ref={ref}
-      type={type}
-      aria-current={selected ? "true" : undefined}
-      data-selected={selected ? "" : undefined}
-      data-unread={unread ? "" : undefined}
-      className={cn(
-        "group/list-row flex w-full min-w-0 items-center rounded-[var(--list-row-radius,var(--radius-control))] px-[var(--list-row-px,0.5rem)] text-left text-sm transition-colors duration-[var(--duration-fast)]",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring",
-        "disabled:pointer-events-none disabled:opacity-[var(--list-row-disabled-opacity,0.4)]",
-        SIZE[size],
-        selected
-          ? "bg-[color:var(--list-row-selected,var(--color-surface-3))] font-medium text-[color:var(--list-row-selected-text,var(--color-text))]"
-          : unread
-            ? "font-semibold text-text hover:bg-[color:var(--list-row-hover,var(--color-surface-2))]"
-            : "text-[color:var(--list-row-text,var(--color-text-secondary))] hover:bg-[color:var(--list-row-hover,var(--color-surface-2))] hover:text-text",
-        muted && !selected && "opacity-[var(--list-row-muted-opacity,0.5)]",
-        className,
-      )}
-      {...rest}
-    >
+  const content = (
+    <>
       {leading ? (
         <span
           data-list-row-leading=""
@@ -116,6 +116,63 @@ export const ListRow = React.forwardRef<HTMLButtonElement, ListRowProps>(functio
           className="h-[var(--list-row-pip,0.375rem)] w-[var(--list-row-pip,0.375rem)] shrink-0 rounded-full bg-indicator"
         />
       ) : null}
-    </button>
+    </>
+  );
+  const buttonState = {
+    "aria-current": selected ? ("true" as const) : undefined,
+    "data-selected": selected ? "" : undefined,
+    "data-unread": unread ? "" : undefined,
+  };
+  const focus =
+    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring";
+
+  if (!action) {
+    return (
+      <button
+        ref={ref}
+        type={type}
+        {...buttonState}
+        className={cn(
+          "group/list-row flex w-full min-w-0 items-center px-[var(--list-row-px,0.5rem)] text-left",
+          focus,
+          "disabled:pointer-events-none disabled:opacity-[var(--list-row-disabled-opacity,0.4)]",
+          SIZE[size],
+          rowLook(selected, unread, muted),
+          className,
+        )}
+        {...rest}
+      >
+        {content}
+      </button>
+    );
+  }
+
+  return (
+    <div
+      data-list-row=""
+      className={cn(
+        "group/list-row flex w-full min-w-0 items-center gap-1 pr-[var(--list-row-action-pr,0.25rem)]",
+        rest.disabled && "pointer-events-none opacity-[var(--list-row-disabled-opacity,0.4)]",
+        rowLook(selected, unread, muted),
+        className,
+      )}
+    >
+      <button
+        ref={ref}
+        type={type}
+        {...buttonState}
+        className={cn(
+          "flex min-w-0 flex-1 items-center self-stretch rounded-[inherit] pl-[var(--list-row-px,0.5rem)] text-left",
+          focus,
+          SIZE[size],
+        )}
+        {...rest}
+      >
+        {content}
+      </button>
+      <span data-list-row-action="" className="flex shrink-0 items-center gap-0.5">
+        {action}
+      </span>
+    </div>
   );
 });

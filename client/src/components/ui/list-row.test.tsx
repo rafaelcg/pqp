@@ -48,4 +48,29 @@ describe("ListRow", () => {
     expect(html).toContain(">Na call<");
     expect(classes(html)).toContain("min-h-[var(--list-row-h-lg,3rem)]");
   });
+
+  it("puts an action beside the row's button, never inside it", () => {
+    const html = renderToStaticMarkup(
+      <ListRow selected action={<button type="button">gear</button>}>
+        papo
+      </ListRow>,
+    );
+    expect(html).toMatch(/^<div data-list-row=""/);
+    // Two sibling buttons: the row and the action; no button inside a button.
+    expect(html).not.toMatch(/<button[^>]*>(?:(?!<\/button>).)*<button/);
+    expect(html).toContain('aria-current="true"');
+    expect(classes(html)).toContain("bg-[color:var(--list-row-selected,var(--color-surface-3))]");
+  });
+
+  it("shows no unread weight or pip on the selected row, the one being read", () => {
+    const html = renderToStaticMarkup(
+      <ListRow selected unread>
+        avisos
+      </ListRow>,
+    );
+    expect(classes(html)).not.toContain("font-semibold");
+    expect(html).not.toContain("data-list-row-pip");
+    expect(html).toContain("data-unread");
+  });
 });
+

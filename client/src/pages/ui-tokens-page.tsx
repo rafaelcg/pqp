@@ -1477,7 +1477,18 @@ function PrimitiveSheet() {
               ["arquivo", { disabled: true }],
             ] as const
           ).map(([name, state]) => (
-            <ListRow key={name} leading={<Icon icon={Hash} kind="symbol" size="sm" />} {...state}>
+            <ListRow
+              key={name}
+              leading={<Icon icon={Hash} kind="symbol" size="sm" />}
+              action={
+                name === "papo" ? (
+                  <IconButton size="xs" touch={false} side="right" label={t("qaUi.iconButton.settings")}>
+                    <Icon icon={GearSix} />
+                  </IconButton>
+                ) : undefined
+              }
+              {...state}
+            >
               {name}
             </ListRow>
           ))}
