@@ -5094,6 +5094,7 @@
   "qaUi.toast.close": "Close",
   "qaUi.toast.sessionTitle": "Watch party in 5 minutes",
   "qaUi.toast.sessionBody": "#cinema · tap to join",
+  "qaUi.toast.forwarded": "Forwarded to #general",
   "qaUi.group.rows": "List rows",
   "qaUi.group.mention": "Mention",
   "qaUi.group.tooltip": "Tooltip",

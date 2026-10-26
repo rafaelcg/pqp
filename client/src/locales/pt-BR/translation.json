@@ -5094,6 +5094,7 @@
   "qaUi.toast.close": "Fechar",
   "qaUi.toast.sessionTitle": "Watch party em 5 minutos",
   "qaUi.toast.sessionBody": "#cinema · toca pra entrar",
+  "qaUi.toast.forwarded": "Encaminhada pra #geral",
   "qaUi.group.rows": "Linhas da lista",
   "qaUi.group.mention": "Menção",
   "qaUi.group.tooltip": "Dica",

@@ -1425,6 +1425,8 @@ function PrimitiveSheet() {
 
       {/* Toasts: a note that arrives (the four that drew the level-3 card) and
           a session reminder (which drew its own dark card). */}
+      {/* Toasts: a note that arrives and a plain notice (both on the level-3
+          card), and a session reminder (which drew its own dark card). */}
       <div data-testid="qa-primitive-toast" className="flex flex-col items-start gap-3 p-4">
         <div role="status" className={cn(TOAST_SURFACE, "flex w-80 items-center gap-3 p-3")}>
           <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent-soft font-semibold text-on-accent-soft">
@@ -1438,6 +1440,15 @@ function PrimitiveSheet() {
             <LineX className="h-4 w-4" aria-hidden />
           </button>
         </div>
+        <div role="status" className={cn(TOAST_SURFACE, "flex w-80 items-center gap-3 p-3")}>
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-on-accent">
+            <CheckIcon className="h-4 w-4" strokeWidth={3} aria-hidden />
+          </span>
+          <p className="min-w-0 flex-1 text-sm font-semibold text-text">{t("qaUi.toast.forwarded")}</p>
+          <button type="button" aria-label={t("qaUi.toast.close")} className={TOAST_CLOSE}>
+            <LineX className="h-4 w-4" aria-hidden />
+          </button>
+        </div>
         <div
           role="status"
           className={cn(
@@ -1445,7 +1456,7 @@ function PrimitiveSheet() {
             TOAST_SURFACE_REDESIGN,
           )}
         >
-          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-ink-3 text-paper-muted">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-ink-3 text-paper-muted redesign:bg-surface-3 redesign:text-text-secondary">
             <LineHash className="h-4 w-4" aria-hidden />
           </span>
           <span className="min-w-0 flex-1">

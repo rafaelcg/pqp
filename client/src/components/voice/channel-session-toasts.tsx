@@ -100,7 +100,7 @@ export function ChannelSessionToasts({
               onOpen(card.channelId);
             }}
           >
-            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-ink-3 text-paper-muted">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-ink-3 text-paper-muted redesign:bg-surface-3 redesign:text-text-secondary">
               <CalendarClock className="h-5 w-5" aria-hidden />
             </span>
             <span className="min-w-0 flex-1">
