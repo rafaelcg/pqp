@@ -43,6 +43,7 @@ Read this file and the inventory at the start of every session.
 | 2 | `p-popover` | Merged (cap at round 5: 8.4 Opus, 8.3 Codex r4, no MUST) |
 | 2 | `p-radio` | Merged (cap at round 5: 8.3 Opus r4, 8.0 Codex r5, no MUST) |
 | 2 | `p-tabs` | Merged (cap at round 5: 8.4 Opus r5, 8.7 Codex r4, no MUST) |
+| 2 | `p-menu` | Merged (cap at round 5: 8.4 Opus r5, 8.4 Codex r4, no MUST, approved) |
 
 ## Phase 0: directions
 
@@ -445,6 +446,23 @@ six hand-built `role="menu"` lists):
    `topContent` callers use `MENU_SEPARATOR` and the heading recipe; a
    disabled row fades its icon and label, not its detail. Left for
    `s-message`: the message menu's danger rows sit mid-list, not last.
+
+Council (Opus 5.5, GPT-6 Luna via Codex), overall after. Rounds 4 and 5 ran
+one reviewer each:
+
+| Round | Opus | Codex |
+|---|---|---|
+| 1 | 7.7 | 8.7 |
+| 2 | 8.0 | 8.5 |
+| 3 | 8.4 | 8.5 |
+| 4 | not run | 8.4 |
+| 5 | 8.4 | not run |
+
+Round 5 approved the element as it stands. Both reviewers asked to move the
+message menu's "Excluir mensagem" to the end; that changes the order with
+the toggle off, so it is logged for `s-message`. Open for the icon element:
+whether 16px menu icons go filled, as direction B says, or stay outline.
+Screenshots: `~/pqp-redesign/p-menu/`.
 
 ### p-popover
 
