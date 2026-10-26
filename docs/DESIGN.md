@@ -1060,8 +1060,8 @@ conversations or friend requests waiting. Draws nothing at zero and caps at
 
 `list-row.tsx`. A row in a list: a channel, a person, a conversation, a
 thread, a follow. `leading` (an icon or an avatar), the label, `detail` (a
-second line), `trailing` (a count or a time, inside the row's button, so
-nothing interactive) and `action` (a control of its own: the row becomes a
+second line), `trailing` (a time or a mark, inside the row's button, so
+nothing interactive), `count` (a `CountBadge`; it replaces the pip) and `action` (a control of its own: the row becomes a
 wrapper with the button and the action side by side). Sizes `sm` (a
 channel), `md` (a person), `lg` (a person or conversation with a second
 line).
@@ -1077,6 +1077,20 @@ line).
 - **Adopting it.** A shell row passes its old colours through `className`,
   so the toggle off draws what it drew. The channel, member, conversation
   and friend rows move onto it with their shell elements.
+- **Muted** also passes a mark in `trailing` (`BellSlash`, `sm`), so it is
+  not told apart from disabled by opacity alone.
+- **Selected.** The second line and a trailing time take the selected
+  label's colour under the redesign (tertiary falls under 4.5:1 on the
+  selected fill in several looks); the pip and a count are not drawn.
+- **Focus** is a 2px inset ring in the solid accent (`--list-row-ring`).
+- **Unread for a screen reader.** The pip is `aria-hidden`; put the state in
+  the row's name (an `sr-only` "não lida"), once, in the row that adopts it.
+- **Unread mark.** The end pip (or a count) is the one unread mark; the
+  sidebar's left-edge bar goes when the channel row adopts `ListRow`.
+- **Navigation.** A channel or a conversation row passes
+  `aria-current="page"`; the default `"true"` gives way to it.
+- **Disabled with an action.** The action is `inert`, out of pointer and
+  keyboard reach.
 
 ## Planned primitives
 
@@ -1105,15 +1119,6 @@ variant set, and then use it everywhere.
 5. **UI copy is a catalogue key.** i18next, flat dotted keys, single-brace
    `{slots}`, `_one` / `_other` families, and both `en` and `pt-BR`. See
    `docs/I18N.md`. No em dash reaches a user, in either language.
-- **Muted** also passes a mark in `trailing` (`BellSlash`, `sm`,
-  `text-tertiary`), so it is not told apart from disabled by opacity alone.
-- **Selected second line** takes the selected label's colour under the
-  redesign: the tertiary grey falls under 4.5:1 on the selected fill in
-  several looks.
-- **Navigation.** A channel or a conversation row passes
-  `aria-current="page"`; the default `"true"` gives way to it.
-- **Disabled with an action.** The action is `inert`, out of pointer and
-  keyboard reach.
 
 ### How the bench enforces this
 

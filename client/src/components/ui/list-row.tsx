@@ -50,7 +50,8 @@ export interface ListRowProps extends React.ButtonHTMLAttributes<HTMLButtonEleme
   /** A time or a mark (muted) at the end of the row. Nothing interactive.
    *  An unread row keeps its pip beside it. */
   trailing?: React.ReactNode;
-  /** A count of what is new (a `CountBadge`). It replaces the pip. */
+  /** A count of what is new (`ui/count-badge.tsx`). It replaces the pip,
+   *  and like the pip it is not drawn on the selected row. */
   count?: React.ReactNode;
   /** A control of its own at the end of the row (a gear, a close). */
   action?: React.ReactNode;
@@ -119,7 +120,7 @@ export const ListRow = React.forwardRef<HTMLButtonElement, ListRowProps>(functio
           </span>
         ) : null}
       </span>
-      {count != null ? (
+      {count != null && !selected ? (
         <span data-list-row-count="" className="flex shrink-0 items-center">
           {count}
         </span>
@@ -128,7 +129,10 @@ export const ListRow = React.forwardRef<HTMLButtonElement, ListRowProps>(functio
         <span
           data-list-row-trailing=""
           className={cn(
-            "flex shrink-0 items-center gap-1.5",
+            // A time takes the second line's colour, the selected label's on
+            // the selected fill (where tertiary falls under 4.5:1).
+            "flex shrink-0 items-center gap-1.5 text-xs font-normal text-[color:var(--list-row-detail,var(--color-text-tertiary))]",
+            selected && "redesign:text-[color:var(--list-row-selected-text)]",
             // A time over its pip on a two-line row.
             size === "lg" && trailing && pip && "flex-col items-end gap-1",
           )}
@@ -151,7 +155,7 @@ export const ListRow = React.forwardRef<HTMLButtonElement, ListRowProps>(functio
     "data-unread": unread ? "" : undefined,
   };
   const focus =
-    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring";
+    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[color:var(--list-row-ring,var(--color-focus-ring))]";
 
   if (!action) {
     return (

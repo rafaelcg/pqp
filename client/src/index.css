@@ -857,6 +857,9 @@
   /* A muted row (a channel you silenced) stays a step above a disabled one
      (0.4), so the two read apart. */
   --list-row-muted-opacity: 0.6;
+  /* The solid accent, as IconButton's and Slider's rings: the 60% focus
+     ring all but vanishes on the light selected fill. */
+  --list-row-ring: var(--color-accent);
 
   --icon-button-radius: var(--radius-pill);
   --icon-button-text: var(--color-text-secondary);
