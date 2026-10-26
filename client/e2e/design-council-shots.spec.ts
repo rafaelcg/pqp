@@ -513,7 +513,14 @@ test("captures the design council screens", async ({ browser }) => {
  * and a keyboard-focused one, which a static sheet cannot show. Context shots
  * are the screens above, where the primitive is used.
  */
-const PRIMITIVES: { id: string; testId: string; hover?: string; focus?: string }[] = [
+const PRIMITIVES: {
+  id: string;
+  testId: string;
+  hover?: string;
+  focus?: string;
+  /** The role the hover and focus targets have. Buttons by default. */
+  role?: "button" | "textbox";
+}[] = [
   {
     id: "p-button",
     testId: "qa-primitive-button",
@@ -528,6 +535,7 @@ const PRIMITIVES: { id: string; testId: string; hover?: string; focus?: string }
   },
   // A static specimen: every bubble at once, no hover needed.
   { id: "p-tooltip", testId: "qa-primitive-tooltip" },
+  { id: "p-input", testId: "qa-primitive-input", focus: "Padrão", role: "textbox", hover: "Preenchido" },
 ];
 
 test("captures the primitives", async ({ browser }) => {
@@ -552,12 +560,12 @@ test("captures the primitives", async ({ browser }) => {
       await page.evaluate(() => document.fonts.ready);
       if (primitive.focus) {
         // A keyboard focus, so `focus-visible` draws the ring.
-        await block.getByRole("button", { name: primitive.focus, exact: true }).focus();
+        await block.getByRole(primitive.role ?? "button", { name: primitive.focus, exact: true }).focus();
         await page.keyboard.press("Shift+Tab");
         await page.keyboard.press("Tab");
       }
       if (primitive.hover) {
-        await block.getByRole("button", { name: primitive.hover, exact: true }).hover();
+        await block.getByRole(primitive.role ?? "button", { name: primitive.hover, exact: true }).hover();
       }
       await page.waitForTimeout(300);
       await block.screenshot({ path: path.join(OUT!, `${primitive.id}-${theme}.png`) });

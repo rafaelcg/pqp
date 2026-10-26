@@ -545,6 +545,14 @@ accessible name.
   border red by itself. Without a prefix the markup is the bare input.
 - **States.** Placeholder at `text-text-tertiary/70`, focus ring, disabled at 50%
   with `cursor-not-allowed`.
+- **Under the redesign.** `--input-*` tokens over one role, `--color-field`:
+  the deepest surface in dark (a well below panes and dialogs) and a faint
+  tint of the text in light. The edge is `--color-border-strong`, as on the
+  secondary button, and grows toward the text on hover. The placeholder is
+  the full `text-tertiary`, checked at 4.5:1 in every look. With the
+  redesign, `aria-invalid` turns the border red by itself; hover and invalid
+  are the field's two `redesign:` classes. `Textarea` shares the box through
+  `FIELD_BOX` and `FIELD_TEXT`.
 - **Use it** for every single-line text field. A multi-line value is a
   `Textarea`.
 - **Accessibility.** It renders no label. Wrap it in a `<label>` or point one at

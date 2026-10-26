@@ -98,6 +98,9 @@ const CONTRAST_PAIRS = [
   { fg: "--color-indicator", bg: "--color-pane-side", floor: 3.0, label: "unread pip on the side pane", redesign: true },
   { fg: "--color-on-tooltip", bg: "--color-tooltip", floor: 4.5, label: "tooltip label", redesign: true },
   { fg: "--color-tooltip-detail", bg: "--color-tooltip", floor: 4.5, label: "tooltip detail line", redesign: true },
+  { fg: "--color-text", bg: "--color-field", floor: 4.5, label: "value in a text field", redesign: true },
+  { fg: "--color-text-tertiary", bg: "--color-field", floor: 4.5, label: "placeholder in a text field", redesign: true },
+  { fg: "--color-border-strong", bg: "--color-field", floor: 1.5, label: "text field edge on its fill", redesign: true },
 ];
 
 /**

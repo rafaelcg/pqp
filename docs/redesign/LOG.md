@@ -304,6 +304,18 @@ Decisions:
 Deferred:
 - Native `title=` on icon-only buttons goes as each element folds onto
   `IconButton`.
+### p-input
+
+Spec (audit: 37 files import `Input`, 8 `Textarea`; 87 raw text fields):
+
+1. Job: one-line and multi-line text entry, with the `prefix` box.
+2. States: rest, filled, hover, focus ring, invalid, disabled, placeholder.
+3. Redesign: `--color-field` (a well in dark, a faint tint in light), the
+   strong edge, a full-strength placeholder, invalid red by `aria-invalid`.
+   Tokens with fallbacks, so the toggle off is unchanged.
+4. Folded: the schedule-session description, a hand-drawn textarea with no
+   focus ring, is now `Textarea` (it gains the ring). Selects that copy the
+   field recipe fold in `p-select`; search bars fold with their element.
 
 ## Open questions for André
 

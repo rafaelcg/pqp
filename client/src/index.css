@@ -144,6 +144,10 @@
   --color-tooltip-border: color-mix(in oklab, var(--color-text) 18%, var(--color-tooltip));
   --color-on-tooltip: var(--color-text);
   --color-tooltip-detail: color-mix(in oklab, var(--color-on-tooltip) 80%, var(--color-tooltip));
+  /* A text field's fill under the redesign: the deepest surface, a well
+     below panes and dialogs. In light a faint tint of the text, so a field
+     still reads on the white conversation. Unused with the toggle off. */
+  --color-field: var(--color-surface-0);
 
   /* Code sits BELOW the message list in dark and would be the page itself in
      light, so it is a role rather than an alias for a surface. */
@@ -711,6 +715,14 @@
      straight bar on the bubble's start edge. Actions on the rail stay plain. */
   --tooltip-rail-mark: var(--color-accent);
 
+  /* Input and Textarea (ui/input.tsx), same rule. The edge is the strong
+     border, as on the secondary button, so a field holds on a dialog. */
+  --input-bg: var(--color-field);
+  --input-border: var(--color-border-strong);
+  --input-hover-border: color-mix(in oklab, var(--color-border-strong) 65%, var(--color-text));
+  --input-placeholder: var(--color-text-tertiary);
+  --input-px: 0.875rem;
+
   --icon-button-radius: var(--radius-pill);
   --icon-button-text: var(--color-text-secondary);
   /* Tints, like the button's: an icon button sits on panes and dialogs. */
@@ -938,6 +950,7 @@
   --color-tooltip: color-mix(in oklab, var(--color-text) 94%, var(--color-surface-0));
   --color-tooltip-border: transparent;
   --color-on-tooltip: var(--color-surface-0);
+  --color-field: color-mix(in oklab, var(--color-text) 3%, var(--color-surface-0));
 }
 
 /* The redesign's shadows on a light page: tinted, never black. Every look. */
