@@ -1,3 +1,4 @@
+import { Check as PhCheck } from "@phosphor-icons/react";
 import { Check } from "lucide-react";
 import { useId, type ComponentType, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
@@ -21,6 +22,32 @@ import type { ContextMenuItemDef } from "@/components/ui/context-menu";
  * site. The cast at each call site (`context-menu.tsx`, `menu.tsx`) is safe
  * because both `Item` components accept a strict superset of this shape.
  */
+
+/**
+ * The menu recipe, for the two Radix menus and for a hand-built one that
+ * cannot be a Radix menu (the composer's "+", anchored inside the field).
+ * Positioning, width and z-index stay with each caller.
+ */
+export const MENU_SURFACE =
+  "elevation-3 overflow-y-auto overscroll-contain rounded-[var(--menu-radius,var(--radius-card))] p-[var(--menu-pad,0.25rem)] animate-fade-in";
+
+const ROW_SHAPE =
+  "flex w-full cursor-default select-none items-center gap-[var(--menu-row-gap,0.5rem)] whitespace-nowrap rounded-[var(--menu-row-radius,var(--radius-control))] px-2.5 py-[var(--menu-row-py,0.375rem)] text-sm outline-none";
+
+/** A Radix row: highlighted by the pointer or the arrows. */
+export const MENU_ROW = `group/menu-row ${ROW_SHAPE} data-[disabled]:pointer-events-none data-[disabled]:opacity-[var(--menu-disabled-opacity,0.4)] data-[highlighted]:bg-[color:var(--menu-row-hover,var(--color-surface-2))]`;
+
+/** A hand-built row: a button highlighted on hover and keyboard focus. */
+export const MENU_ROW_BUTTON = `group/menu-row ${ROW_SHAPE} text-left text-text hover:bg-[color:var(--menu-row-hover,var(--color-surface-2))] focus-visible:bg-[color:var(--menu-row-hover,var(--color-surface-2))]`;
+
+/**
+ * A row's icon: the label's colour with the toggle off; under the redesign a
+ * quieter colour that comes up to the label's when the row is highlighted.
+ */
+export const MENU_ICON =
+  "size-[var(--menu-icon-size,0.875rem)] shrink-0 text-[color:var(--menu-icon,currentColor)] group-data-[highlighted]/menu-row:text-current group-hover/menu-row:text-current group-focus-visible/menu-row:text-current";
+
+export const MENU_SEPARATOR = "my-1 h-px bg-[color:var(--menu-separator,var(--color-border))]";
 
 export interface MenuItemComponentProps {
   disabled?: boolean;
@@ -55,13 +82,13 @@ export function MenuItemRows({
     <>
       {items.map((item) =>
         item.separator ? (
-          <Separator key={item.id} className="my-1 h-px bg-border" />
+          <Separator key={item.id} className={MENU_SEPARATOR} />
         ) : item.heading ? (
           /* Not an `Item`: a row that cannot be focused or chosen. */
           <div
             key={item.id}
             data-menu-heading={item.id}
-            className="px-2.5 pb-0.5 pt-1.5 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary"
+            className="px-2.5 pb-0.5 pt-1.5 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary redesign:text-xs redesign:font-medium redesign:normal-case redesign:tracking-normal"
           >
             {item.label}
           </div>
@@ -75,18 +102,18 @@ export function MenuItemRows({
             aria-describedby={item.detail ? `${idPrefix}-${item.id}-detail` : undefined}
             data-menu-item={item.id}
             className={cn(
-              "flex w-full cursor-default select-none items-center gap-2 whitespace-nowrap rounded-[var(--radius-control)] px-2.5 py-1.5 text-sm outline-none data-[disabled]:pointer-events-none data-[disabled]:opacity-40 data-[highlighted]:bg-surface-2",
+              MENU_ROW,
               item.danger
-                ? "text-danger data-[highlighted]:bg-danger/15"
+                ? "text-danger [--menu-icon:currentColor] data-[highlighted]:bg-[color:var(--menu-danger-hover,color-mix(in_oklab,var(--color-danger)_15%,transparent))]"
                 : "text-text",
             )}
           >
             {reserveIcon && (
               <span
                 aria-hidden="true"
-                className="flex h-4 w-4 shrink-0 items-center justify-center"
+                className="flex size-[var(--menu-icon-box,1rem)] shrink-0 items-center justify-center"
               >
-                {item.icon ? <item.icon className="h-3.5 w-3.5" /> : null}
+                {item.icon ? <item.icon className={MENU_ICON} /> : null}
               </span>
             )}
             {item.detail ? (
@@ -115,7 +142,14 @@ export function MenuItemRows({
               </span>
             ) : null}
             {item.checked ? (
-              <Check className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              <>
+                <Check className="h-3.5 w-3.5 shrink-0 redesign:hidden" aria-hidden="true" />
+                <PhCheck
+                  weight="bold"
+                  className="hidden size-4 shrink-0 text-accent redesign:block"
+                  aria-hidden="true"
+                />
+              </>
             ) : null}
           </Item>
         ),

@@ -423,6 +423,25 @@ switch in a settings row still faded like a disabled one) was fixed after
 the council and pinned by a test. Covers Switch, CheckRow and Checkbox.
 Screenshots: `~/pqp-redesign/p-checkbox/`.
 
+### p-menu
+
+Spec (audit: Menu in 15 files, ContextMenu in 25, one shared row renderer;
+six hand-built `role="menu"` lists):
+
+1. Job: a list of actions or exclusive choices, opened by a click (Menu) or
+   a right-click and long-press (ContextMenu, with a quick-reaction strip).
+2. Redesign: a visible highlight, concentric rows, quieter icons that come
+   up on the highlighted row, sentence-case headings, the Phosphor tick,
+   disabled at 0.5.
+3. Merges: the recipe is exported (`MENU_SURFACE`, `MENU_ROW`,
+   `MENU_ROW_BUTTON`, `MENU_ICON`, `MENU_SEPARATOR`); the composer's "+"
+   menu, which drew the same classes by hand, now uses it.
+4. Near-folds left for their surface (an `ink-2` panel with
+   `shadow-popover`, so folding changes the toggle-off look): the status
+   menu (`s-user-panel`), the profile popover's "more" (`f-profile-popover`),
+   video quality (`f-call`), the watch player's two (`f-watch-party`), the
+   message list's "more" (`s-message`).
+
 ### p-popover
 
 Spec (audit: no popover primitive; eight anchored panels, each with its own

@@ -777,6 +777,20 @@ itself on mount and flips above the pointer when it does not fit below.
 - `items.length === 0` (or `disabled`) renders the trigger alone, same as
   `ContextMenu`.
 
+Both menus, and a hand-built one that cannot be a Radix menu (the
+composer's "+"), draw from one recipe in `menu-items.tsx`: `MENU_SURFACE`,
+`MENU_ROW` (Radix rows), `MENU_ROW_BUTTON` (button rows), `MENU_ICON` and
+`MENU_SEPARATOR`. A new menu uses them; it does not copy their classes.
+
+- **Under the redesign.** The highlighted row is a 9% text tint (7% in
+  light); the old highlight was the menu surface's own colour and did not
+  show. Rows sit concentric inside the panel (the panel's radius minus its
+  6px pad) and are 34px tall. Icons are 16px in `text-secondary` and come up
+  to the label's colour on the highlighted row; a danger row's icon stays
+  red. Headings are sentence case at 12px. The tick is Phosphor's, in the
+  accent. Separators are a 10% text tint. Disabled is 0.5. Every value is a
+  `--menu-*` token with the old value as its fallback.
+
 ### Popover
 
 `popover.tsx`. The panel an anchored popover floats in: a picker, a small
