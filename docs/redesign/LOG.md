@@ -31,7 +31,7 @@ Read this file and the inventory at the start of every session.
 | 0 | Three directions, mockups and council round D1 | Done (2 of 3 reviewers) |
 | 0 | André picks a direction | Done: B (Salas), with filled icons |
 | 1 | Toggle | Done |
-| 1 | Tokens for the chosen direction | Built on `rd/tokens`, council round T1 running |
+| 1 | Tokens for the chosen direction | Built on `rd/tokens`, council round T2 running |
 | 1 | André signs off on `/qa/ui` | Not started |
 
 ## Phase 0: directions
@@ -112,6 +112,24 @@ Toggle off: no line of `index.css` was removed and every new selector needs
 
 Verified: client typecheck, 811 unit test files (10,309 tests), i18n check,
 bench:tokens.
+
+### Council round T1
+
+Answers: `~/pqp-redesign/t-tokens/council-t1/`. Two reviewers (see open
+question 1).
+
+| Overall | Toggle off | Redesign on |
+|---|---|---|
+| Claude Opus 5.5 | 6.6 | 7.8 |
+| Codex GPT-6 Luna | 7.0 | 8.5 |
+
+Both flagged the Night light shot as dark. Not a bug: Night is dark only
+(`appearanceForcesDark`), so its light block never applies. Fixed after T1:
+one pane rule (the conversation is always the brightest pane), a darker Modo
+2005 canvas, a visible Night conversation pane, spread Everforest light text,
+a lime label on the Clássico dark selected row. Deferred to the element
+rounds: an inset mention radius, a composer fill role, read rows in
+`text-tertiary`.
 
 ## Open questions for André
 

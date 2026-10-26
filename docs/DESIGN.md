@@ -396,14 +396,17 @@ accent and high contrast get them without restating anything.
 | Role | Use | Derived from |
 |---|---|---|
 | `canvas` | The frame the panes float on, behind the rail | Dark: `surface-0` mixed 25% toward black. Light: `surface-1` mixed 10% toward the text |
-| `pane-side` | Channel list, member list, conversation list | `surface-1` |
-| `pane-main` | The conversation | `surface-0` |
-| `row-hover` | A list row under the pointer | `pane-side` mixed 5% toward the text |
+| `pane-side` | Channel list, member list, conversation list | Dark: between `surface-1` and `surface-0` (60/40). Light: `surface-1` |
+| `pane-main` | The conversation, always the brightest pane | Dark: `surface-1`. Light: `surface-0` |
+| `row-hover` | A list row under the pointer | Dark: `pane-main` mixed 6% toward the text. Light: `pane-side` mixed 5% toward the text. It differs from both panes |
 | `row-selected` / `on-row-selected` | The current row and its label | `accent-soft` (deepened toward the accent in light) / `text` |
 | `accent-text` | The accent used as text: a link, "Na call", a count | `on-accent-soft` mixed 15% toward the text |
 | `success-text` | Success used as text | `on-success-soft` mixed 15% toward the text |
 | `mention-row` / `mention-bar` | A message that pings you, and its left bar | `accent-soft` 45% over `pane-main` (all of `accent-soft` in light) / `accent` |
 | `mention-chip` / `on-mention-chip` | The `@name` chip | `accent-soft` / `on-accent-soft` (both deepened in light) |
+
+Night and the seasonal looks are dark only (`appearanceForcesDark` in
+`lib/appearance.ts`), so their light blocks never apply.
 
 States are never told apart by colour alone:
 

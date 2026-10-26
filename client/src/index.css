@@ -86,10 +86,14 @@
    *                toward the text (in the light block), so the step is the
    *                same size in every look instead of whatever each rail is.
    *   pane-side    the channel list, the member list, the DM list.
-   *   pane-main    the conversation.
+   *   pane-main    the conversation. ONE RULE: it is the brightest pane, in
+   *                dark and in light, as in direction B. Dark takes surface-1
+   *                and sets the side pane between it and surface-0; light
+   *                (in the light block) takes surface-0, the page white.
    *   row-hover    a list row under the pointer. A fill, never a colour change:
-   *                the side pane pulled 7% toward the text, so the step is the
-   *                same in every look and the dim text on it stays readable.
+   *                the brightest pane pulled 6% toward the text in dark (the
+   *                side pane 5% in light), so it differs from both panes in
+   *                every look and the dim text on it stays readable.
    *   row-selected the current row. The accent's soft fill, so it retints with
    *                the accent (deepened toward the accent in light, where the
    *                soft fill alone is too close to a hover); the label on it
@@ -107,9 +111,9 @@
    * indicator pip, so it can never be confused with hover or selected.
    */
   --color-canvas: color-mix(in oklab, var(--color-surface-0) 75%, oklch(0 0 0));
-  --color-pane-side: var(--color-surface-1);
-  --color-pane-main: var(--color-surface-0);
-  --color-row-hover: color-mix(in oklab, var(--color-pane-side) 95%, var(--color-text));
+  --color-pane-side: color-mix(in oklab, var(--color-surface-1) 60%, var(--color-surface-0));
+  --color-pane-main: var(--color-surface-1);
+  --color-row-hover: color-mix(in oklab, var(--color-pane-main) 94%, var(--color-text));
   --color-row-selected: var(--color-accent-soft);
   --color-on-row-selected: var(--color-text);
   --color-accent-text: color-mix(
@@ -710,6 +714,9 @@
   /* A greener soft fill than the plain theme's: at chroma 0.06 a selected row
      reads olive. The custom accent's own block still wins over it. */
   --color-accent-soft: oklch(0.33 0.085 128);
+  /* The selected row's label is lime, as in direction B; the fill still
+     carries the state, so it is not colour alone. */
+  --color-on-row-selected: var(--color-accent-text);
   --color-code-bg: oklch(0.165 0.013 262);
   --color-indicator: oklch(0.95 0.006 95);
   --picker-border: oklch(0.29 0.016 262);
@@ -831,6 +838,12 @@
      text, so it is a visible step below the panes whatever the look's rail
      is. Read only by `redesign:` classes. */
   --color-canvas: color-mix(in oklab, var(--color-surface-1) 90%, var(--color-text));
+  --color-pane-side: var(--color-surface-1);
+  --color-pane-main: var(--color-surface-0);
+  /* A hover steps DOWN from the side pane here, since the conversation is
+     the white page; in dark it steps up from the conversation. Either way it
+     differs from both panes. */
+  --color-row-hover: color-mix(in oklab, var(--color-pane-side) 95%, var(--color-text));
   /* The soft fills are pale on a light page: a selected row is deepened
      toward the accent so it cannot pass for a hover, and a mention row takes
      the whole soft fill so it stands off the white conversation; the @name
@@ -1773,17 +1786,13 @@
  * before them). The token bench measures every look under the redesign.
  */
 
-/* Night: the canvas is already black, so the conversation sits halfway to
-   the side panes instead of vanishing into it. */
-:root[data-redesign]:where([data-appearance="night"]:not([data-theme="light"])) {
-  --color-pane-main: color-mix(in oklab, var(--color-surface-0) 50%, var(--color-surface-1));
-}
-
-/* Modo 2005: surface-0 is lighter than the panel here, so the canvas is the
-   title-bar blue in dark and the usual pulled panel in light, and a hover is
-   the raised surface. */
+/* Modo 2005: surface-0 is lighter than the panel here, so the brightest pane
+   is surface-0, the canvas is the panel pulled toward black (the default
+   would sit above the side pane), and a hover is the raised surface. */
 :root[data-redesign]:where([data-appearance="retro"]:not([data-theme="light"])) {
-  --color-canvas: var(--color-rail);
+  --color-pane-side: var(--color-surface-1);
+  --color-pane-main: var(--color-surface-0);
+  --color-canvas: color-mix(in oklab, var(--color-surface-1) 70%, oklch(0 0 0));
   --color-row-hover: var(--color-surface-2);
 }
 :root[data-redesign][data-theme="light"]:where([data-appearance="retro"]) {
@@ -1792,13 +1801,22 @@
 
 /* Everforest and Catppuccin light set their quietest text right at 4.5:1 on
    the panel, which leaves nothing for a hovered row or a mention to take.
-   Raised just enough for a timestamp to stay readable on both. */
+   Raised just enough for a timestamp to stay readable on both. Everforest
+   light also had its three text roles within 0.05 of each other, so a name, a
+   timestamp and an offline name read the same; they are spread apart. */
 :root[data-redesign]:where([data-appearance="everforest"]:not([data-theme="light"])) {
   --color-text-tertiary: oklch(0.77 0.0186 153.43);
+  /* The soft fill sits close to the panel here: the mention takes more of
+     it to stand off the conversation, and the @name chip and the selected row
+     sink below it (lighter would cost their labels contrast) so they stay
+     apart from the mention row and from a hover. */
+  --color-mention-row: color-mix(in oklab, var(--color-accent-soft) 55%, var(--color-pane-main));
+  --color-mention-chip: color-mix(in oklab, var(--color-accent-soft) 80%, oklch(0 0 0));
+  --color-row-selected: color-mix(in oklab, var(--color-accent-soft) 80%, oklch(0 0 0));
 }
 :root[data-redesign][data-theme="light"]:where([data-appearance="everforest"]) {
-  --color-text: oklch(0.47 0.0212 232.87);
-  --color-text-secondary: oklch(0.49 0.0174 190.64);
+  --color-text: oklch(0.38 0.0212 232.87);
+  --color-text-secondary: oklch(0.44 0.0174 190.64);
   --color-text-tertiary: oklch(0.49 0.0292 143.51);
   /* The soft fill is close to the panel here; deepen the selected row a
      little more than the default so it never reads as a hover. */
