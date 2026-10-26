@@ -827,8 +827,9 @@ scrollbar would draw OS chrome over the design.
 - **Variants.** `segmented` (two to four short options on one track),
   `chips` (one of many, or tag-like options that wrap), `list` (two to four
   options that each need a description: full-width rows with a radio dot,
-  meant to sit as one child of a settings group). Sizes `md` (h-8) and `sm`
-  (h-7, 12px text) for `segmented` and `chips`.
+  meant to sit as one child of a settings group). Sizes `md` and `sm`
+  for `segmented` and `chips` (h-8 and h-7 with 12px text with the toggle
+  off; see the redesign bullet).
 - **Props.** `value`, `onValueChange`, `options` (`value`, `label`, optional
   `description` and `disabled`), `label` (required, the group's accessible
   name), `variant`, `size`, `disabled`, plus `status` (list only: drawn under
@@ -847,7 +848,9 @@ scrollbar would draw OS chrome over the design.
   control ladder (36px, 32px small) and the focus ring stays inside it. A
   small group's text is 13px, as on a small Button. Chips sit on the same
   ladder (36px, 32px small), take the strong edge and the ghost tint on
-  hover, and never change weight when selected, so a chip keeps its width; a count after a label is 70% of it,
+  hover, and never change weight when selected, so a chip keeps its width; a
+  selected chip's accent edge is 2px (an inset ring), so the choice reads by
+  shape as well as hue; a count after a label is 70% of it,
   tabular. The list's dot
   is 18px inside the field's 3:1 edge, and a filled accent disc with an
   `on-accent` centre when selected. Disabled is 0.5, as on Button. Every

@@ -52,6 +52,7 @@ describe("RadioGroup tokens", () => {
     const [on, off] = group("chips").querySelectorAll('[role="radio"]');
     expect(on!.className).not.toContain("font-medium");
     expect(on!.className).toContain("sm:h-[var(--chip-h,2rem)]");
+    expect(on!.className).toContain("redesign:shadow-[var(--chip-on-ring)]");
     expect(off!.className).toContain("border-[color:var(--chip-border,var(--color-border))]");
     expect(off!.className).toContain("hover:bg-[color:var(--chip-hover,var(--color-surface-2))]");
   });
@@ -75,6 +76,26 @@ describe("RadioGroup tokens", () => {
     expect(cell!.className).toContain("redesign:focus-visible:ring-offset-transparent");
     const track = group("segmented").querySelector('[role="radiogroup"]')!.className;
     expect(track).toContain("border-[length:var(--segmented-border-w,1px)]");
+  });
+
+  it("keeps the small size on its own ladder and text, and a count tabular", () => {
+    const host = draw(
+      <RadioGroup
+        label="g"
+        variant="chips"
+        size="sm"
+        value="a"
+        onValueChange={() => undefined}
+        options={[
+          { value: "a", label: "A", trailing: 2 },
+          { value: "b", label: "B" },
+        ]}
+      />,
+    );
+    const [on] = host.querySelectorAll('[role="radio"]');
+    expect(on!.className).toContain("sm:h-[var(--chip-h-sm,1.75rem)]");
+    expect(on!.className).toContain("text-[length:var(--radio-text-sm,0.75rem)]");
+    expect(on!.innerHTML).toContain("tabular-nums");
   });
 
   it("exports the recipe a hand-drawn segmented picker shares", () => {

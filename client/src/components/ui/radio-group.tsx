@@ -283,7 +283,9 @@ export function RadioGroup<T extends string | number>({
                 "relative max-sm:after:absolute max-sm:after:inset-x-0 max-sm:after:content-['']",
                 size === "sm" ? "max-sm:after:-inset-y-1" : "max-sm:after:-inset-y-0.5",
                 checked
-                  ? "border-accent bg-accent-soft text-on-accent-soft"
+                  ? // Under the redesign a 2px edge marks the choice by
+                    // shape too, not only by hue, without changing width.
+                    "border-accent bg-accent-soft text-on-accent-soft redesign:shadow-[var(--chip-on-ring)]"
                   : "border-[color:var(--chip-border,var(--color-border))] text-text-secondary",
                 !checked &&
                   !optionDisabled &&
