@@ -514,7 +514,12 @@ accessible name.
   it loses.
 - **`disabled`.** Rendered as `aria-disabled`, not the native attribute, so
   the control stays hoverable and focusable and its tooltip can still name
-  it. Its handlers are not wired.
+  it. Its handlers are not wired, and a click's default action is
+  prevented, so a disabled submit does not submit. A pressed, disabled
+  toggle keeps its fill and does not react to hover.
+- **Focus.** The 2px ring with a 2px offset; in light under the redesign it
+  is the solid accent (`--icon-button-ring`), since a ghost circle has no
+  other chrome.
 - **`detail`.** A second, quieter line in the tooltip.
 - **Under the redesign.** A circle, secondary text at rest, the button's
   text-tint hover (a 20% danger tint for `tone="danger"`), a 2px ring offset

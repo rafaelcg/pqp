@@ -849,6 +849,16 @@ function PrimitiveSheet() {
                 <IconButton size={size} touch={false} side="right" disabled label={t("qaUi.state.disabled")}>
                   <Icon icon={Bell} />
                 </IconButton>
+                <IconButton
+                  size={size}
+                  touch={false}
+                  side="right"
+                  disabled
+                  pressed
+                  label={`${t("qaUi.iconButton.mute")} ${t("qaUi.state.disabled")} ${size}`}
+                >
+                  <Icon icon={Microphone} />
+                </IconButton>
               </div>
             );
           })}

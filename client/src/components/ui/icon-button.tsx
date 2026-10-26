@@ -41,10 +41,10 @@ export type IconButtonSize = "xs" | "sm" | "md" | "lg";
  * the 20px of the phone menu it replaced.
  */
 const SIZE: Record<IconButtonSize, string> = {
-  xs: "h-6 w-6 [&_svg]:size-[var(--icon-button-glyph-xs,0.875rem)]",
-  sm: "h-7 w-7 [&_svg]:size-[var(--icon-button-glyph-sm,1rem)]",
-  md: "h-8 w-8 [&_svg]:size-[var(--icon-button-glyph-md,1rem)]",
-  lg: "h-9 w-9 [&_svg]:size-[var(--icon-button-glyph-lg,1.25rem)]",
+  xs: "h-6 w-6 [&>svg]:size-[var(--icon-button-glyph-xs,0.875rem)]",
+  sm: "h-7 w-7 [&>svg]:size-[var(--icon-button-glyph-sm,1rem)]",
+  md: "h-8 w-8 [&>svg]:size-[var(--icon-button-glyph-md,1rem)]",
+  lg: "h-9 w-9 [&>svg]:size-[var(--icon-button-glyph-lg,1.25rem)]",
 };
 
 export interface IconButtonProps
@@ -94,11 +94,13 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
         type={type}
         aria-pressed={pressed}
         aria-disabled={disabled || undefined}
-        onClick={disabled ? undefined : onClick}
+        // `aria-disabled` does not stop a button's default action, so a
+        // disabled submit would still submit its form without this.
+        onClick={disabled ? (event) => event.preventDefault() : onClick}
         onPointerDown={disabled ? undefined : onPointerDown}
         onKeyDown={disabled ? undefined : onKeyDown}
         className={cn(
-          "grid shrink-0 place-items-center rounded-[var(--icon-button-radius,var(--radius-control))] text-[color:var(--icon-button-text,var(--color-text-tertiary))] transition-[background,color,transform] duration-[var(--duration-fast)] hover:bg-[var(--icon-button-hover,var(--color-surface-2))] hover:text-text active:scale-[var(--icon-button-press,1)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-[length:var(--icon-button-ring-offset,0px)] focus-visible:ring-offset-ring-offset",
+          "grid shrink-0 place-items-center rounded-[var(--icon-button-radius,var(--radius-control))] text-[color:var(--icon-button-text,var(--color-text-tertiary))] transition-[background,color,transform] duration-[var(--duration-fast)] hover:bg-[var(--icon-button-hover,var(--color-surface-2))] hover:text-text active:scale-[var(--icon-button-press,1)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--icon-button-ring,var(--color-focus-ring))] focus-visible:ring-offset-[length:var(--icon-button-ring-offset,0px)] focus-visible:ring-offset-ring-offset",
           SIZE[size],
           touch && "max-sm:h-11 max-sm:w-11",
           tone === "danger" &&
@@ -106,8 +108,9 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
           // A toggle that is on: the selected fill and the accent glyph, a
           // step deeper on hover. The one place this primitive uses
           // `redesign:` classes, since nothing paints it from outside.
-          "redesign:aria-pressed:bg-row-selected redesign:aria-pressed:text-accent-text redesign:aria-pressed:hover:bg-[color:color-mix(in_oklab,var(--color-row-selected)_88%,var(--color-text))] redesign:aria-pressed:hover:text-accent-text",
-          "aria-disabled:cursor-not-allowed aria-disabled:opacity-[var(--button-disabled-opacity,0.4)] aria-disabled:hover:bg-transparent aria-disabled:hover:text-[color:var(--icon-button-text,var(--color-text-tertiary))] aria-disabled:active:scale-100",
+          "redesign:aria-pressed:bg-row-selected redesign:aria-pressed:text-accent-text redesign:aria-pressed:not-aria-disabled:hover:bg-[color:color-mix(in_oklab,var(--color-row-selected)_88%,var(--color-text))] redesign:aria-pressed:hover:text-accent-text",
+          // Disabled: no hover, no press. A pressed one keeps its fill.
+          "aria-disabled:cursor-not-allowed aria-disabled:opacity-[var(--button-disabled-opacity,0.4)] aria-disabled:not-aria-pressed:hover:bg-transparent aria-disabled:not-aria-pressed:hover:text-[color:var(--icon-button-text,var(--color-text-tertiary))] aria-disabled:active:scale-100",
           className,
         )}
         {...props}

@@ -1,8 +1,7 @@
 // @vitest-environment jsdom
 import { act, type ReactElement } from "react";
-import { vi } from "vitest";
 import { createRoot } from "react-dom/client";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { IconButton } from "@/components/ui/icon-button";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
@@ -59,10 +58,10 @@ describe("IconButton", () => {
 
   it("owns the glyph size, falling back to what the forum drew", () => {
     expect(draw(<IconButton label="Fixar">•</IconButton>).className).toContain(
-      "[&_svg]:size-[var(--icon-button-glyph-md,1rem)]",
+      "[&>svg]:size-[var(--icon-button-glyph-md,1rem)]",
     );
     expect(draw(<IconButton label="Menu" size="lg">•</IconButton>).className).toContain(
-      "[&_svg]:size-[var(--icon-button-glyph-lg,1.25rem)]",
+      "[&>svg]:size-[var(--icon-button-glyph-lg,1.25rem)]",
     );
   });
 
@@ -78,5 +77,32 @@ describe("IconButton", () => {
     expect(button.getAttribute("aria-label")).toBe("Notificações");
     act(() => button.click());
     expect(onClick).not.toHaveBeenCalled();
+  });
+
+  it("does not submit its form when disabled", () => {
+    let submitted = false;
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    act(() =>
+      root.render(
+        <TooltipProvider>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              submitted = true;
+            }}
+          >
+            <IconButton label="Enviar" type="submit" disabled>
+              •
+            </IconButton>
+          </form>
+        </TooltipProvider>,
+      ),
+    );
+    act(() => host.querySelector("button")!.click());
+    expect(submitted).toBe(false);
+    act(() => root.unmount());
+    host.remove();
   });
 });
