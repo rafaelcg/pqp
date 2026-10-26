@@ -632,6 +632,21 @@ icon and actions align to the first line, and the filled pill's focus ring
 has an offset. Logged, not done: the dark warning fill reads heavy beside
 success and danger; revisit if it does in use. Screenshots:
 `~/pqp-redesign/p-banner/`.
+### p-badge
+
+Spec (audit: 7 `Badge` callers, six hand-built count pills with one shared
+class string, six hand-built name tags in message headers):
+
+1. Job: name a state (Badge), a tag beside a name (Badge `tag`), or a
+   waiting count (new `CountBadge`).
+2. Redesign: sentence-case pills, 11px semibold, the variant's pair always;
+   counts in 11px semibold tabular figures. The beta tag beside BOT matches.
+3. Folded: six count pills (DM list, conversations home twice, quick
+   switcher, phone tabs, phone conversations) and the OP, gone, AutoMod,
+   Webhook, BOT and removed tags. New `muted` variant for gone and removed.
+4. Left for their owners: the server rail counts (`s-rail`), the
+   channel list's counts and live chips (`s-channel-row`), Baú media
+   overlays (`f-bau`), the voice-clean chip (`f-call`).
 
 ## Open questions for André
 

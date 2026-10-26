@@ -995,20 +995,40 @@ because "beta" is the same word in both of this product's languages.
 ### Badge
 
 `badge.tsx`. A short status word on a card or beside a name: "Novo",
-"Resolvido", "Fixado", "Fechado", "OP", the "Staff" marker on a forum tag.
-One size (18px, 10px uppercase bold, `--radius-tick`), so the same signal
-reads the same on every surface.
+"Resolvido", "Fixado", "Fechado", "OP", "BOT", the "Staff" marker on a forum
+tag.
 
 - **Variants.** `new` (solid accent, something the viewer has not seen),
-  `accent`, `success`, `warning`, `danger` (the soft pairs) and `neutral`
-  (`surface-3` with `text-secondary`). Every variant is a pair the bench
-  already measures; there is no opacity wash.
+  `accent`, `success`, `warning`, `danger` (the soft pairs), `neutral`
+  (`surface-3` with `text-secondary`) and `muted` (the same fill, tertiary
+  text: gone, removed). Every variant is a pair the bench already measures;
+  there is no opacity wash.
+- **Sizes.** `md` (18px, the badge on a card or row) and `tag` (the smaller
+  one beside a name in a message header: OP, BOT, AutoMod, Webhook).
 - **`icon`.** An optional lucide icon before the word, decorative.
-- **Use it** for a state. **Do not** use it for a count (the mention pill and
-  the unread pip are their own shapes) or for the product's own "beta"
-  (`BetaTag`).
+- **Toggle off.** 10px uppercase bold on `--radius-tick`, the geometry each
+  caller drew. **Redesign.** A pill in sentence case, 11px semibold
+  (`--badge-*`), the variant's pair whatever the caller painted, so every
+  tag on a message header is the same shape. The `BetaTag` beside a bot's
+  BOT takes the tag's shape there.
+- **Use it** for a state. **Do not** use it for a count (`CountBadge`) or
+  for the product's own "beta" (`BetaTag`).
 - **Accessibility.** The word is the meaning, so colour is never the only
   signal; the icon is `aria-hidden`.
+
+### CountBadge
+
+`count-badge.tsx`. A number in a pill: unread messages, mentions,
+conversations or friend requests waiting. Draws nothing at zero and caps at
+"99+".
+
+- **Props.** `count`, `tone` (`danger` default, `accent`), `size` (`md`
+  18px, `sm` 16px), `pop` (the arrival animation, re-played for each new
+  number). A corner position and a ring against the surface behind it are
+  the caller's `className`.
+- **Redesign.** 11px semibold with tabular figures (`--count-badge-*`).
+- The server rail's and the channel list's counts are drawn in place for
+  now; they move here with their shell elements.
 
 ## Planned primitives
 
@@ -1017,8 +1037,6 @@ variant set, and then use it everywhere.
 
 - **Toast.** The animations (`animate-toast-in`, `animate-toast-out`) exist in
   `index.css` and each caller draws its own container.
-- **Count badge.** The status `Badge` exists; a general count pill does not
-  (the sidebar's mention number is drawn in place).
 
 ## Rules
 
