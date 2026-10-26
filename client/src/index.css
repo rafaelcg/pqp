@@ -818,6 +818,9 @@
   --segmented-text: var(--color-text-secondary);
   --chip-border: var(--color-border-strong);
   --chip-hover: var(--button-ghost-hover);
+  /* On the control ladder, the same height as a segmented track. */
+  --chip-h: var(--control-md);
+  --chip-h-sm: var(--control-sm);
   --radio-row-hover: var(--button-ghost-hover);
   --radio-size: 1.125rem;
   --radio-ring-w: 1.5px;

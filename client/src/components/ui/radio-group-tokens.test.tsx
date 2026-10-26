@@ -48,9 +48,10 @@ describe("RadioGroup tokens", () => {
     expect(off!.className).toContain("text-[color:var(--segmented-text,var(--color-text-tertiary))]");
   });
 
-  it("keeps the chip edge and hover on tokens, and only weights the checked chip under the redesign", () => {
+  it("keeps the chip edge, hover and height on tokens, and never weights a chip, so it keeps its width", () => {
     const [on, off] = group("chips").querySelectorAll('[role="radio"]');
     expect(on!.className).not.toContain("font-medium");
+    expect(on!.className).toContain("sm:h-[var(--chip-h,2rem)]");
     expect(off!.className).toContain("border-[color:var(--chip-border,var(--color-border))]");
     expect(off!.className).toContain("hover:bg-[color:var(--chip-hover,var(--color-surface-2))]");
   });

@@ -836,16 +836,18 @@ scrollbar would draw OS chrome over the design.
   `manual` where the arrows only move focus and Enter or Space selects, for an
   expensive change like a language reload) and `fit` (segmented only: `equal`
   cells that truncate, or `content` cells sized to their labels that wrap).
-- **States.** Selected is `bg-surface-2 font-medium text-text` on the segmented
-  track and `border-accent bg-accent-soft text-on-accent-soft` as a chip.
-  Disabled is `opacity-40` with `cursor-not-allowed`.
+- **States (toggle off).** Selected is `bg-surface-2 font-medium text-text`
+  on the segmented track and `border-accent bg-accent-soft text-on-accent-soft`
+  as a chip. Chips are 32px (28px small). Disabled is `opacity-40` with
+  `cursor-not-allowed`.
 - **Under the redesign.** The segmented track is a pill of a 6% text tint
   with no border and a raised thumb (a 15% tint with a soft shadow in dark,
   a white chip in light), so the choice reads by shape, not by a shade of
   grey; unselected labels are `text-secondary`. The track sits on the
   control ladder (36px, 32px small) and the focus ring stays inside it. A
-  small group's text is 13px, as on a small Button. Chips take the strong
-  edge and the ghost tint on hover; a count after a label is 70% of it,
+  small group's text is 13px, as on a small Button. Chips sit on the same
+  ladder (36px, 32px small), take the strong edge and the ghost tint on
+  hover, and never change weight when selected, so a chip keeps its width; a count after a label is 70% of it,
   tabular. The list's dot
   is 18px inside the field's 3:1 edge, and a filled accent disc with an
   `on-accent` centre when selected. Disabled is 0.5, as on Button. Every

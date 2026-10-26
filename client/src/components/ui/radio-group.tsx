@@ -276,8 +276,8 @@ export function RadioGroup<T extends string | number>({
               variant === "chips" && [
                 "inline-flex items-center rounded-full border",
                 size === "sm"
-                  ? "h-9 px-2.5 text-[length:var(--radio-text-sm,0.75rem)] leading-4 sm:h-7"
-                  : "h-10 px-3 text-sm sm:h-8",
+                  ? "h-9 px-2.5 text-[length:var(--radio-text-sm,0.75rem)] leading-4 sm:h-[var(--chip-h-sm,1.75rem)]"
+                  : "h-10 px-3 text-sm sm:h-[var(--chip-h,2rem)]",
                 // 44px to a finger on a phone: the hit area reaches past the
                 // drawn pill, into the gap between rows.
                 "relative max-sm:after:absolute max-sm:after:inset-x-0 max-sm:after:content-['']",
