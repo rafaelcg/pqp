@@ -632,6 +632,7 @@ icon and actions align to the first line, and the filled pill's focus ring
 has an offset. Logged, not done: the dark warning fill reads heavy beside
 success and danger; revisit if it does in use. Screenshots:
 `~/pqp-redesign/p-banner/`.
+
 ### p-badge
 
 Spec (audit: 7 `Badge` callers, six hand-built count pills with one shared

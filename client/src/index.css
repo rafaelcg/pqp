@@ -828,6 +828,7 @@
      the conversation rather than a stripe across it. */
   --banner-radius: 0.75rem;
   --banner-edge: 28%;
+
   /* Badges (ui/badge.tsx): a small pill in sentence case; a tag beside a
      name is a step smaller. Counts are a touch larger in type than the old
      10px, with tabular figures. */
