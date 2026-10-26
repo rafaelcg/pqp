@@ -21,7 +21,7 @@ describe("Select", () => {
       </Select>,
     ).querySelector("select")!;
     expect(select.className).toContain("[appearance:var(--select-appearance,auto)]");
-    expect(select.className).toContain("pr-[var(--select-pr,0.75rem)]");
+    expect(select.className).toContain("pe-[var(--select-pr,0.75rem)]");
     expect(select.className).toContain("bg-[color:var(--input-bg,var(--color-surface-0))]");
     expect(select.className).toContain("h-[var(--input-h,var(--control-lg))]");
   });
@@ -69,5 +69,16 @@ describe("Select", () => {
     expect(caret).toContain(
       "redesign:peer-disabled:text-[color:color-mix(in_oklab,var(--color-text-tertiary)_70%,transparent)]",
     );
+  });
+
+  it("dims a disabled value through the field box, and a raised select keeps today's fill", () => {
+    const select = draw(
+      <Select disabled raised>
+        <option>a</option>
+      </Select>,
+    ).querySelector("select")!;
+    expect(select.className).toContain("redesign:disabled:text-text-tertiary");
+    expect(select.className).toContain("bg-[color:var(--input-bg,var(--color-surface-2))]");
+    expect(select.className).not.toContain("bg-[color:var(--input-bg,var(--color-surface-0))]");
   });
 });

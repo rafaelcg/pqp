@@ -579,6 +579,9 @@ value.
 - **Sizes.** `md` matches an `Input` (40px off, 36px under the redesign),
   the default; `sm` is a step under it (36px off, 32px under the redesign,
   as a small `Button`).
+- **`raised`.** With the toggle off, a `surface-2` fill instead of
+  `surface-0`, for the selects that sat on a raised fill (bots, watch
+  party). Under the redesign every select takes the field fill.
 - **`wrapperClassName`.** Width and margins go on the wrapper (`@lg:w-48`,
   `sm:min-w-[14rem]`, `mt-1.5`); `className` is for the field itself.
 - **Under the redesign.** The `Input` box (`FIELD_BOX`), and a Phosphor caret

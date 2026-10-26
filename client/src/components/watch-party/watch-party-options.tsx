@@ -4,6 +4,7 @@ import {
 } from "@pqp/shared";
 import { useId, type ReactNode } from "react";
 import { Switch } from "@/components/ui/switch";
+import { Select } from "@/components/ui/select";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { previewWindowMinutes } from "@/lib/live-preview";
 import { cn } from "@/lib/utils";
@@ -145,8 +146,6 @@ export function OptionGroup({
   );
 }
 
-const selectClass =
-  "h-[var(--control-sm)] max-w-[11rem] rounded-[var(--radius-control)] border border-border bg-surface-2 pl-2.5 pr-7 text-sm text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring disabled:cursor-not-allowed disabled:opacity-50";
 
 export function WatchPartyOptionsPanel({
   options,
@@ -238,9 +237,12 @@ export function WatchPartyOptionsPanel({
           }
           htmlFor={slowId}
         >
-          <select
+          <Select
             id={slowId}
-            className={selectClass}
+            size="sm"
+            raised
+            wrapperClassName="w-auto max-w-[11rem]"
+            className="h-[var(--select-h-sm,var(--control-sm))] ps-[var(--input-px,0.625rem)] pe-[var(--select-pr,1.75rem)]"
             value={String(options.slowModeSeconds)}
             disabled={disabled}
             onChange={(event) =>
@@ -253,7 +255,7 @@ export function WatchPartyOptionsPanel({
                 {t(slowModeKey(seconds), { seconds })}
               </option>
             ))}
-          </select>
+          </Select>
         </OptionRow>
 
         <div data-watch-party-reactions className="px-1 py-0.5">

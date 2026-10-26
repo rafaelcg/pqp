@@ -41,10 +41,16 @@ export interface SelectProps extends Omit<ComponentProps<"select">, "size"> {
   size?: SelectSize;
   /** Classes for the wrapper: width and margins go here, not on the field. */
   wrapperClassName?: string;
+  /**
+   * With the toggle off, fill with `surface-2` instead of `surface-0`: for
+   * the selects that sat on a raised fill before (bots, watch party). Under
+   * the redesign every select takes the field fill.
+   */
+  raised?: boolean;
 }
 
 export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select(
-  { className, wrapperClassName, size = "md", ...props },
+  { className, wrapperClassName, size = "md", raised = false, ...props },
   ref,
 ) {
   return (
@@ -52,11 +58,12 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select
       <select
         ref={ref}
         className={cn(
-          "peer w-full px-[var(--input-px,0.75rem)] [appearance:var(--select-appearance,auto)] pr-[var(--select-pr,0.75rem)]",
+          "peer w-full px-[var(--input-px,0.75rem)] [appearance:var(--select-appearance,auto)] pe-[var(--select-pr,0.75rem)]",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring",
           "disabled:cursor-not-allowed disabled:opacity-[var(--input-disabled-opacity,0.5)]",
           FIELD_BOX,
           HEIGHT[size],
+          raised && "bg-[color:var(--input-bg,var(--color-surface-2))]",
           className,
         )}
         {...props}
@@ -65,7 +72,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select
         aria-hidden
         weight="bold"
         className={cn(
-          "pointer-events-none absolute top-1/2 right-[var(--input-px,0.75rem)] hidden size-[var(--icon-sm)] -translate-y-1/2 text-text-tertiary redesign:block",
+          "pointer-events-none absolute top-1/2 end-[var(--input-px,0.75rem)] hidden size-[var(--icon-sm)] -translate-y-1/2 text-text-tertiary redesign:block",
           // The caret follows the field: brighter on hover and focus, red
           // when invalid, as faded as the value when disabled.
           "redesign:peer-enabled:peer-hover:not-peer-aria-invalid:text-text-secondary redesign:peer-focus-visible:not-peer-aria-invalid:text-text-secondary redesign:peer-aria-invalid:text-danger redesign:peer-disabled:text-[color:color-mix(in_oklab,var(--color-text-tertiary)_70%,transparent)]",
