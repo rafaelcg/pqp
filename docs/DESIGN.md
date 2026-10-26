@@ -847,10 +847,13 @@ card of settings, the "what's new" note.
 - **Use it** for anything anchored to the control that opened it. A list of
   actions is a `Menu`; a blocking question is a `Dialog`.
 
-### ScrollArea
+### Scrollbars
 
-`scroll-area.tsx`. Radix scroll area with a themed thumb. Use it where a native
-scrollbar would draw OS chrome over the design.
+Native scrolling everywhere; there is no scroll area component (the unused
+Radix one was deleted with the redesign's `p-scroll`). Under the redesign
+the root sets `scrollbar-color` to `--scrollbar-thumb` (the text at 24%) on
+no track, at the platform's width. A strip that scrolls sideways may hide
+its bar (`[scrollbar-width:none]`); a list that scrolls down keeps it.
 
 ### Textarea
 

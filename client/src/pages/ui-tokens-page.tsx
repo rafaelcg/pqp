@@ -1257,6 +1257,26 @@ function PrimitiveSheet() {
 
       {/* Badges: the status word on a card, the tag beside a name, and the
           count in a pill. */}
+      {/* A list that scrolls, on a pane and on a dialog: the native bar in
+          the look's colours under the redesign. */}
+      <div data-testid="qa-primitive-scroll" className="grid gap-4 sm:grid-cols-2">
+        {(["pane", "dialog"] as const).map((where) => (
+          <div
+            key={where}
+            className={cn(
+              "h-40 overflow-y-auto rounded-[var(--radius-pane)] p-2",
+              where === "pane" ? "bg-pane-side" : "elevation-3",
+            )}
+          >
+            {Array.from({ length: 12 }, (_, i) => (
+              <p key={i} className="px-2 py-1.5 text-sm text-text-secondary">
+                # canal-{i + 1}
+              </p>
+            ))}
+          </div>
+        ))}
+      </div>
+
       <div data-testid="qa-primitive-badge" className="flex flex-col gap-3">
         <p
           className="text-text-tertiary"

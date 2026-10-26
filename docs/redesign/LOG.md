@@ -704,6 +704,17 @@ Verified: typecheck; 10,417 unit tests; `bench:tokens`; i18n check;
 passed); retro, Halloween, high contrast, 390px and toggle off. Screenshots:
 `~/pqp-redesign/p-toast/`.
 
+### p-scroll
+
+Spec (audit: `ScrollArea` had no callers; every list scrolls natively, a
+few sideways strips hide their bar):
+
+1. Decision: delete `ScrollArea` and its Radix dependency. Adopting it
+   would change how every pane scrolls (an overlay bar, Radix's own
+   viewport), which is behaviour, not look.
+2. Redesign: native scrollbars take the look's colours (a text-tinted
+   thumb, no track) at the platform's width, from one rule on the root.
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss

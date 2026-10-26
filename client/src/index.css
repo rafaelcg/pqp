@@ -842,6 +842,10 @@
   --count-badge-text: 0.6875rem;
   --count-badge-sm-text: 0.625rem;
 
+  /* Scrollbars: a thumb of the text colour on no track (see the rule on
+     html[data-redesign] below). */
+  --scrollbar-thumb: color-mix(in oklab, var(--color-text) 24%, transparent);
+
   --icon-button-radius: var(--radius-pill);
   --icon-button-text: var(--color-text-secondary);
   /* Tints, like the button's: an icon button sits on panes and dialogs. */
@@ -2615,6 +2619,17 @@ html[data-app-shell] body {
 html[data-app-shell] #root {
   overflow: hidden;
   overflow: clip;
+}
+
+/*
+ * Under the redesign a native scrollbar takes the look's colours: a thumb
+ * of the text colour and no track. It keeps the platform's width, so it
+ * stays easy to grab on Windows and Linux. `scrollbar-color` inherits, so
+ * one rule on the root reaches every pane; an element that hides its bar
+ * (`scrollbar-width: none`) still does.
+ */
+html[data-redesign] {
+  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 
 /*
