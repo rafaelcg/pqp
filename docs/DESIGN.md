@@ -1074,9 +1074,11 @@ group or a list (no results, nothing saved; the settings kit's
   title at `--empty-title-size` (20px), a body line in secondary text, the
   actions 20px under it. An inline one is a quiet glyph, a 14px label in
   secondary text and a 12px line.
-- **Copy.** Say what is missing and the next step, in the casual voice. Not
-  an error: a failure that needs a retry is a `role="alert"` empty state
-  with the retry as its action.
+- **Failure.** A load that did not come back is a `role="alert"` empty
+  state with the retry as its action; under the redesign its disc takes the
+  warning tone (`warning-soft`, `on-warning-soft`), so it reads apart from
+  an empty list.
+- **Copy.** Say what is missing and the next step, in the casual voice.
 
 ## Planned primitives
 

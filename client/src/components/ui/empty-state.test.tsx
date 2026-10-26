@@ -46,4 +46,20 @@ describe("EmptyState", () => {
     expect(html).toMatch(/^<div role="status" data-empty-state="page" data-empty-owner=""/);
     expect(html).toContain("<button");
   });
+
+  it("draws a failure with role alert, its retry and a warning disc under the redesign", () => {
+    const html = renderToStaticMarkup(
+      <EmptyState
+        role="alert"
+        icon={<svg />}
+        title="Não deu pra carregar"
+        actions={<button type="button">Tentar de novo</button>}
+      />,
+    );
+    expect(html).toMatch(/^<div role="alert"/);
+    expect(html).toContain(">Tentar de novo</button>");
+    const icon = html.match(/<div aria-hidden="true" class="([^"]*)"/)![1];
+    expect(icon).toContain("redesign:bg-warning-soft redesign:text-on-warning-soft");
+    expect(icon).not.toContain("redesign:bg-[color:var(--empty-icon-bg)]");
+  });
 });

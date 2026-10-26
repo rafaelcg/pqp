@@ -12,7 +12,8 @@ import { cn } from "@/lib/utils";
  * keeps its look. Under the redesign the classes below come last and win:
  * a page empty state leads with its icon on a soft disc, a Gabarito title
  * and a body line in secondary text; an inline one is a quiet icon, a
- * label and a smaller line.
+ * label and a smaller line. A failure (`role="alert"`) draws its disc in the
+ * warning tone, with the retry as its action.
  */
 export type EmptyStateSize = "page" | "inline";
 
@@ -73,7 +74,16 @@ export function EmptyState({
       className={cn("flex flex-col items-center text-center", className, ROOT[size])}
     >
       {icon ? (
-        <div aria-hidden="true" className={cn(iconClassName, ICON[size])}>
+        <div
+          aria-hidden="true"
+          className={cn(
+            iconClassName,
+            ICON[size],
+            // A failure to load is not an empty list: its disc takes the
+            // warning tone, so the two read apart at a glance.
+            role === "alert" && size === "page" && "redesign:bg-warning-soft redesign:text-on-warning-soft",
+          )}
+        >
           {icon}
         </div>
       ) : null}
