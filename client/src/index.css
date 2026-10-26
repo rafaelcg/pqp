@@ -74,6 +74,68 @@
   --color-success-soft: oklch(0.3 0.06 150);
   --color-on-success-soft: oklch(0.84 0.13 150);
 
+  /*
+   * SHELL AND ROW ROLES, added for the redesign (docs/redesign/LOG.md) and
+   * read only by `redesign:` classes, so the toggle off draws nothing new.
+   * Every one is DERIVED from roles each look already sets, so all ten looks,
+   * the custom accent and high contrast get them without restating anything.
+   * The Clássico look under the redesign sets its own values further down.
+   *
+   *   canvas       the frame the panes float on, a step below everything.
+   *                Dark mixes surface-0 toward black; light mixes the panel
+   *                toward the text (in the light block), so the step is the
+   *                same size in every look instead of whatever each rail is.
+   *   pane-side    the channel list, the member list, the DM list.
+   *   pane-main    the conversation. ONE RULE: it is the brightest pane, in
+   *                dark and in light, as in direction B. Dark takes surface-1
+   *                and sets the side pane between it and surface-0; light
+   *                (in the light block) takes surface-0, the page white.
+   *   row-hover    a list row under the pointer. A fill, never a colour change:
+   *                the brightest pane pulled 6% toward the text in dark (the
+   *                side pane 5% in light), so it differs from both panes in
+   *                every look and the dim text on it stays readable.
+   *   row-selected the current row. The accent's soft fill, so it retints with
+   *                the accent (deepened toward the accent in light, where the
+   *                soft fill alone is too close to a hover). Its label is the
+   *                accent as text in dark, as in direction B, and the body
+   *                text in light, where a green label on green is too quiet.
+   *   accent-text  the accent used AS TEXT (a link, "Na call", a count). The
+   *                bright accent is about 2:1 on a light page; this is the
+   *                soft pair's foreground pulled a little toward the text,
+   *                which clears 4.5 everywhere.
+   *   success-text the same idea for success.
+   *   mention-*    a message that pings you: the row wash, its left bar, and
+   *                the @name chip. Opaque, so the bench can measure the text
+   *                on it; an alpha wash of lime reads khaki on dark.
+   *
+   * Unread is not a colour: it is the body text colour, weight 600 and the
+   * indicator pip, so it can never be confused with hover or selected.
+   */
+  --color-canvas: color-mix(in oklab, var(--color-surface-0) 75%, oklch(0 0 0));
+  --color-pane-side: color-mix(in oklab, var(--color-surface-1) 60%, var(--color-surface-0));
+  --color-pane-main: var(--color-surface-1);
+  --color-row-hover: color-mix(in oklab, var(--color-pane-main) 94%, var(--color-text));
+  --color-row-selected: var(--color-accent-soft);
+  --color-on-row-selected: var(--color-accent-text);
+  --color-accent-text: color-mix(
+    in oklab,
+    var(--color-on-accent-soft) 85%,
+    var(--color-text)
+  );
+  --color-success-text: color-mix(
+    in oklab,
+    var(--color-on-success-soft) 85%,
+    var(--color-text)
+  );
+  --color-mention-row: color-mix(
+    in oklab,
+    var(--color-accent-soft) 45%,
+    var(--color-pane-main)
+  );
+  --color-mention-bar: var(--color-accent);
+  --color-mention-chip: var(--color-accent-soft);
+  --color-on-mention-chip: var(--color-on-accent-soft);
+
   /* Code sits BELOW the message list in dark and would be the page itself in
      light, so it is a role rather than an alias for a surface. */
   --color-code-bg: oklch(0.16 0.012 250);
@@ -235,6 +297,11 @@
   --radius-card: 0.5rem;
   --radius-panel: 1rem;
   --radius-pill: 999px;
+  /* A list row (channel, member, conversation). The control radius today; a
+     pill under the redesign. */
+  --radius-row: var(--radius-control);
+  /* A shell pane (channel list, conversation). The panel radius today. */
+  --radius-pane: var(--radius-panel);
   /* Message list drawing. Overridden on the root by src/lib/chat-display.ts. */
   --chat-font-size: 15px;
   --chat-line-height: 22px;
@@ -328,6 +395,9 @@
   --type-label-leading: 1rem;
   --type-caption-size: 0.6875rem;
   --type-caption-leading: 1rem;
+  /* The face the title role is drawn in. The workhorse today; the display
+     face under the redesign. */
+  --type-title-font: var(--font-sans);
 
   /*
    * CONTROL HEIGHTS. The three the ui/ primitives already draw: h-8 for a
@@ -338,6 +408,27 @@
   --control-sm: 2rem;
   --control-md: 2.25rem;
   --control-lg: 2.5rem;
+  /* A list row's height. */
+  --control-row: 2rem;
+
+  /*
+   * SPACE, the two layout distances the shell names. `gutter` is the gap
+   * between panes (none today: the panes meet at a border) and `pane` is a
+   * pane's inner horizontal padding. Everything else stays on Tailwind's 4px
+   * scale.
+   */
+  --space-gutter: 0rem;
+  --space-pane: 1rem;
+
+  /*
+   * ICONS. Three sizes: 16 inline with a label, 20 in a toolbar or a row,
+   * 24 alone as the target. The stroke is Lucide's own default, named so a
+   * primitive can pass it rather than a number.
+   */
+  --icon-sm: 1rem;
+  --icon-md: 1.25rem;
+  --icon-lg: 1.5rem;
+  --icon-stroke: 2;
 
   --overlay: oklch(0.1 0.02 250 / 0.8);
   --shadow-speaking: 0 0 10px oklch(0.88 0.19 125 / 0.45);
@@ -529,6 +620,111 @@
 }
 
 /*
+ * THE REDESIGN, direction B "Salas" (docs/redesign/LOG.md). Everything below
+ * up to the light block applies only while `<html>` carries `data-redesign`
+ * (lib/redesign.ts), so the toggle off changes nothing.
+ *
+ * WHERE THESE BLOCKS SIT IS THE CASCADE. The redesign selector has the same
+ * specificity as the light block and as every look's block (one attribute on
+ * `:root`), so source order decides between them. (Do not quote those
+ * selectors in this comment: the token bench finds blocks by regex.)
+ *
+ *   - shape (this block) and the Clássico palette (the next one) come BEFORE
+ *     the light block, so light still sets its own colours and shadows;
+ *   - every look, high contrast and the custom accent come AFTER, so they win
+ *     over the redesign wherever they set a value. Retro keeps its own shape.
+ *   - the light halves carry one more attribute and sit after the light block.
+ *
+ * SHAPE, TYPE, SPACING, ICONS, MOTION: every look. A look is a palette; the
+ * redesign is the structure underneath all of them.
+ */
+:root[data-redesign] {
+  /* Softer and larger. A row is a pill; a pane is a 20px panel. */
+  --radius-tick: 0.25rem;
+  --radius-control: 0.625rem;
+  --radius-card: 0.875rem;
+  --radius-panel: 1.25rem;
+  --radius-row: 999px;
+  /* A full-height shell pane is a touch tighter than a dialog. */
+  --radius-pane: 1rem;
+
+  /* The title role is drawn in the display face: server names, channel
+     titles and pane headers, in sentence case. */
+  --type-display-leading: 1.25;
+  --type-title-leading: 1.4;
+  --type-title-font: var(--font-display);
+  --type-body-leading: 1.375rem;
+
+  --control-row: 2.25rem;
+
+  /* The panes float on the canvas with a gutter between them. */
+  --space-gutter: 0.5rem;
+  --space-pane: 1rem;
+
+  /* Snappier: a state change under the pointer should feel instant. */
+  --duration-fast: 120ms;
+  --duration-base: 180ms;
+  --duration-slow: 280ms;
+
+  /* Filled icons (Phosphor): objects use weight "fill", symbols "bold".
+     There is no stroke to set, so the stroke token only reaches the Lucide
+     icons a surface has not been rebuilt away from yet. */
+  --icon-stroke: 2.25;
+
+  --shadow-1: 0 1px 2px oklch(0.06 0.02 262 / 0.4);
+  --shadow-2: 0 12px 32px oklch(0.06 0.02 262 / 0.45);
+  --shadow-3: 0 24px 64px -16px oklch(0.04 0.02 262 / 0.6);
+  /* A modal is the one thing that floats over everything, so it gets the
+     deepest rung instead of sharing a menu's. */
+  --elevation-3-shadow: var(--shadow-3);
+}
+
+/*
+ * Gutters cost width a phone does not have: under 640px the panes meet, as
+ * they do today. A council risk named for direction B in round D1.
+ */
+@media (max-width: 639px) {
+  :root[data-redesign] {
+    --space-gutter: 0rem;
+  }
+}
+
+/*
+ * THE CLÁSSICO PALETTE under the redesign, dark only. `:where()` keeps the
+ * look and the brightness out of the specificity, so this block ranks like
+ * the shape block above and high contrast and the custom accent still beat
+ * it. The canvas is the
+ * darkest tone, the side panes sit a step above it and the conversation a step
+ * above those; the hue moves from 250 to a cooler 262 to match. The accent is
+ * not restated, so the custom accent hue still applies.
+ */
+:root[data-redesign]:where([data-appearance="signal"]:not([data-theme="light"])) {
+  --color-surface-0: oklch(0.165 0.013 262);
+  --color-surface-1: oklch(0.2 0.014 262);
+  --color-surface-2: oklch(0.255 0.016 262);
+  --color-surface-3: oklch(0.31 0.018 262);
+  --color-rail: oklch(0.125 0.012 262);
+  --color-canvas: var(--color-rail);
+  --color-pane-side: oklch(0.185 0.014 262);
+  --color-pane-main: var(--color-surface-1);
+
+  --color-border: oklch(0.29 0.016 262);
+  --color-border-strong: oklch(0.38 0.02 262);
+
+  --color-text: oklch(0.95 0.006 95);
+  --color-text-secondary: oklch(0.82 0.01 95);
+  --color-text-tertiary: oklch(0.7 0.014 262);
+
+  --color-on-accent: oklch(0.15 0.012 262);
+  /* A greener soft fill than the plain theme's: at chroma 0.06 a selected row
+     reads olive. The custom accent's own block still wins over it. */
+  --color-accent-soft: oklch(0.33 0.085 128);
+  --color-code-bg: oklch(0.165 0.013 262);
+  --color-indicator: oklch(0.95 0.006 95);
+  --picker-border: oklch(0.29 0.016 262);
+}
+
+/*
  * Light is not an inversion of dark. `@theme` emits into `@layer theme`, so this
  * unlayered block outranks it without any specificity trick — keep it unlayered.
  *
@@ -639,6 +835,65 @@
   --rgb-picker-color: 40, 44, 52;
   --rgb-picker-accent: 90, 130, 40;
   --picker-border: oklch(0.86 0.01 95);
+
+  /* The redesign's canvas in every light look: the panel pulled toward the
+     text, so it is a visible step below the panes whatever the look's rail
+     is. Read only by `redesign:` classes. */
+  --color-canvas: color-mix(in oklab, var(--color-surface-1) 90%, var(--color-text));
+  --color-pane-side: var(--color-surface-1);
+  --color-pane-main: var(--color-surface-0);
+  --color-on-row-selected: var(--color-text);
+  /* A hover steps DOWN from the side pane here, since the conversation is
+     the white page; in dark it steps up from the conversation. Either way it
+     differs from both panes. */
+  --color-row-hover: color-mix(in oklab, var(--color-pane-side) 95%, var(--color-text));
+  /* The soft fills are pale on a light page: a selected row is deepened
+     toward the accent so it cannot pass for a hover, and a mention row takes
+     the whole soft fill so it stands off the white conversation; the @name
+     chip on it is deepened the same way so it does not vanish into the row. */
+  --color-row-selected: color-mix(in oklab, var(--color-accent-soft) 88%, var(--color-accent));
+  --color-mention-row: var(--color-accent-soft);
+  --color-mention-chip: color-mix(in oklab, var(--color-accent-soft) 78%, var(--color-accent));
+  --color-on-mention-chip: color-mix(in oklab, var(--color-on-accent-soft) 25%, var(--color-text));
+}
+
+/* The redesign's shadows on a light page: tinted, never black. Every look. */
+:root[data-redesign][data-theme="light"] {
+  --shadow-1: 0 1px 2px oklch(0.4 0.02 262 / 0.08);
+  --shadow-2: 0 12px 32px oklch(0.4 0.02 262 / 0.16);
+  --shadow-3: 0 24px 64px -16px oklch(0.4 0.02 262 / 0.26);
+}
+
+/*
+ * The Clássico palette under the redesign, light. Warm paper panes on a
+ * darker canvas; the conversation is the brightest surface. The accent and
+ * its soft pair are the plain light theme's, so the custom accent applies.
+ */
+:root[data-redesign][data-theme="light"]:where([data-appearance="signal"]) {
+  --color-surface-0: oklch(0.995 0.002 95);
+  --color-surface-1: oklch(0.975 0.004 95);
+  --color-surface-2: oklch(0.945 0.006 95);
+  --color-surface-3: oklch(0.9 0.01 95);
+  --color-rail: oklch(0.905 0.01 95);
+  --color-canvas: var(--color-rail);
+  --color-pane-side: var(--color-surface-1);
+  --color-pane-main: var(--color-surface-0);
+
+  --color-border: oklch(0.88 0.008 95);
+  --color-border-strong: oklch(0.74 0.012 95);
+
+  --color-text: oklch(0.2 0.015 262);
+  --color-text-secondary: oklch(0.36 0.016 262);
+  --color-text-tertiary: oklch(0.46 0.018 262);
+
+  /* The plain light theme's soft pair sits at hue 135, which reads mint on a
+     selected row; the target is lime. The custom accent's light block still
+     wins over these. */
+  --color-accent-soft: oklch(0.935 0.06 126);
+  --color-on-accent-soft: oklch(0.38 0.13 128);
+  --color-code-bg: oklch(0.955 0.005 95);
+  --color-indicator: oklch(0.2 0.015 262);
+  --picker-border: oklch(0.88 0.008 95);
 }
 
 /*
@@ -1530,6 +1785,67 @@
  * on whatever appearance is already active. Keep unlayered. Two-attribute
  * light beats this one-attribute dark block.
  */
+/*
+ * THE REDESIGN IN THE OTHER LOOKS. Each look keeps its palette under the
+ * redesign; these blocks only fix what the new shell roles need from a few of
+ * them. Same pattern as the Clássico blocks: `:where()` keeps the look and
+ * the brightness out of the specificity, so these beat the look (they come
+ * after it) and lose to high contrast and the custom accent (they come
+ * before them). The token bench measures every look under the redesign.
+ */
+
+/* Night: the canvas is pure black, so the side pane leans further toward
+   the panel than the default to stay off it. */
+:root[data-redesign]:where([data-appearance="night"]:not([data-theme="light"])) {
+  --color-pane-side: color-mix(in oklab, var(--color-surface-1) 75%, var(--color-surface-0));
+}
+
+/* Modo 2005: surface-0 is lighter than the panel here, so the brightest pane
+   is surface-0, the canvas is the panel pulled toward black (the default
+   would sit above the side pane), and a hover is the raised surface. */
+:root[data-redesign]:where([data-appearance="retro"]:not([data-theme="light"])) {
+  --color-pane-side: var(--color-surface-1);
+  --color-pane-main: var(--color-surface-0);
+  --color-canvas: color-mix(in oklab, var(--color-surface-1) 70%, oklch(0 0 0));
+  --color-row-hover: var(--color-surface-2);
+}
+:root[data-redesign][data-theme="light"]:where([data-appearance="retro"]) {
+  /* In light this look's panel is the white one and surface-0 is tinted
+     blue, so the two panes swap to keep the conversation the brightest. */
+  --color-pane-side: var(--color-surface-0);
+  --color-pane-main: var(--color-surface-1);
+}
+
+/* Everforest and Catppuccin light set their quietest text right at 4.5:1 on
+   the panel, which leaves nothing for a hovered row or a mention to take.
+   Raised just enough for a timestamp to stay readable on both. Everforest
+   light also had its three text roles within 0.05 of each other, so a name, a
+   timestamp and an offline name read the same; they are spread apart. */
+:root[data-redesign]:where([data-appearance="everforest"]:not([data-theme="light"])) {
+  --color-text-tertiary: oklch(0.77 0.0186 153.43);
+  /* The soft fill sits close to the panel here: the mention takes more of
+     it to stand off the conversation, and the @name chip and the selected row
+     sink below it (lighter would cost their labels contrast) so they stay
+     apart from the mention row and from a hover. */
+  --color-mention-row: color-mix(in oklab, var(--color-accent-soft) 55%, var(--color-pane-main));
+  --color-mention-chip: color-mix(in oklab, var(--color-accent-soft) 70%, oklch(0 0 0));
+  --color-row-selected: color-mix(in oklab, var(--color-accent-soft) 70%, oklch(0 0 0));
+}
+:root[data-redesign][data-theme="light"]:where([data-appearance="everforest"]) {
+  --color-text: oklch(0.38 0.0212 232.87);
+  --color-text-secondary: oklch(0.44 0.0174 190.64);
+  --color-text-tertiary: oklch(0.49 0.0292 143.51);
+  /* The soft fill is close to the panel here; deepen the selected row a
+     little more than the default so it never reads as a hover. */
+  --color-row-selected: color-mix(in oklab, var(--color-accent-soft) 84%, var(--color-accent));
+}
+:root[data-redesign][data-theme="light"]:where([data-appearance="catppuccin"]) {
+  --color-text-tertiary: oklch(0.49 0.0343 279.08);
+  /* The accent is a deep saturated purple, so the chip takes less of it to
+     keep its label readable. */
+  --color-mention-chip: color-mix(in oklab, var(--color-accent-soft) 86%, var(--color-accent));
+}
+
 :root[data-contrast="more"] {
   --color-text: oklch(0.99 0.01 95);
   --color-text-secondary: oklch(0.94 0.012 95);

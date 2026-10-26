@@ -344,6 +344,94 @@ Touch targets: a row control (Switch, CheckRow) makes the whole row the hit
 target rather than shipping a 16px native tick. A tooltip is inert on touch by
 design, so any explanation a phone user needs is said out loud on the surface.
 
+## The redesign (Salas)
+
+The redesign rebuilds the app element by element behind a toggle. Its status,
+decisions and council scores are in `docs/redesign/LOG.md`. The direction is B,
+"Salas": rounded panes that float on a darker canvas, with filled icons.
+
+### The toggle
+
+`<html>` carries `data-redesign` when the redesign is on (`lib/redesign.ts`).
+A component draws its new look with the `redesign:` Tailwind variant. With the
+toggle off, no `redesign:` class matches and no redesign token block applies.
+
+### What the toggle changes in the token layer
+
+Two kinds of block in `index.css`, both scoped to `data-redesign`:
+
+1. Shape, for every look. Radius, the title face, line heights, the list-row
+   height, the two space tokens, motion, the icon stroke and the shadow ladder.
+   A look is a palette. The redesign is the structure under all of them.
+2. Colour, per look. Clássico gets the Salas palette in dark and in light.
+   Night, Modo 2005, Everforest and Catppuccin get small fixes so the new roles
+   pass in them. Every other look keeps its colours as they are.
+
+Source order is the cascade. The redesign selectors have the same specificity
+as a look or the light block (`:where()` keeps the look and the brightness out
+of it). So a look wins over the shape block, and high contrast and the custom
+accent win over every redesign colour block. Do not quote the light or look
+selectors in a comment in `index.css`: the bench finds blocks by regex.
+
+| Token | Toggle off | Redesign |
+|---|---|---|
+| `--radius-tick` / `control` / `card` / `panel` | 3 / 6 / 8 / 16 px | 4 / 10 / 14 / 20 px |
+| `--radius-row` (new) | `--radius-control` | pill |
+| `--radius-pane` (new) | `--radius-panel` | 16 px (a dialog keeps `--radius-panel`, 20 px) |
+| `--type-title-font` (new) | `--font-sans` | `--font-display` (Gabarito) |
+| `--type-body-leading` | 20px | 22px |
+| `--control-row` (new) | 32px | 36px |
+| `--space-gutter` (new) | 0 | 8px (0 under 640px) |
+| `--space-pane` (new) | 16px | 16px |
+| `--duration-fast` / `base` / `slow` | 150 / 200 / 300 ms | 120 / 180 / 280 ms |
+| `--icon-sm` / `md` / `lg` (new) | 16 / 20 / 24 px | same |
+| `--icon-stroke` (new) | 2 | 2.25 |
+| `--elevation-3-shadow` | `--shadow-2` | `--shadow-3` |
+
+### The shell and row roles
+
+New colour roles, in `@theme`. Nothing draws them with the toggle off. Each
+one is derived from roles every look already sets, so every look, the custom
+accent and high contrast get them without restating anything.
+
+| Role | Use | Derived from |
+|---|---|---|
+| `canvas` | The frame the panes float on, behind the rail | Dark: `surface-0` mixed 25% toward black. Light: `surface-1` mixed 10% toward the text |
+| `pane-side` | Channel list, member list, conversation list | Dark: between `surface-1` and `surface-0` (60/40). Light: `surface-1` |
+| `pane-main` | The conversation, always the brightest pane | Dark: `surface-1`. Light: `surface-0` |
+| `row-hover` | A list row under the pointer | Dark: `pane-main` mixed 6% toward the text. Light: `pane-side` mixed 5% toward the text. It differs from both panes |
+| `row-selected` / `on-row-selected` | The current row and its label | `accent-soft` (deepened toward the accent in light) / `accent-text` in dark, `text` in light |
+| `accent-text` | The accent used as text: a link, "Na call", a count | `on-accent-soft` mixed 15% toward the text |
+| `success-text` | Success used as text | `on-success-soft` mixed 15% toward the text |
+| `mention-row` / `mention-bar` | A message that pings you, and its left bar | `accent-soft` 45% over `pane-main` (all of `accent-soft` in light) / `accent` |
+| `mention-chip` / `on-mention-chip` | The `@name` chip | `accent-soft` / `on-accent-soft` (both deepened in light) |
+
+Night and the seasonal looks are dark only (`appearanceForcesDark` in
+`lib/appearance.ts`), so their light blocks never apply.
+
+States are never told apart by colour alone:
+
+- Hover is a fill (`row-hover`).
+- Selected is the accent's soft fill (`row-selected`).
+- Unread is the body text colour at weight 600, plus the `indicator` pip.
+
+The mixes are `color-mix(in oklab, …)`. The bench and the sheet both read that
+form, so a derived role is measured like any other.
+
+### Icons
+
+The redesign's icons are Phosphor (`@phosphor-icons/react`), drawn through
+`ui/icon.tsx`. One rule picks the weight:
+
+| Kind | Weight | Examples |
+|---|---|---|
+| `object` | fill | speaker, bell, gear, person, chat |
+| `symbol` | bold | `#`, `+`, `@`, caret, cross, search |
+
+A filled `#` or `+` is a solid box, so symbols take the bold outline. Sizes are
+the three `--icon-*` tokens. Lucide stays on every surface that is not rebuilt
+yet. `--icon-stroke` is the stroke a Lucide icon takes when a primitive passes it.
+
 ## Components
 
 Everything in `client/src/components/ui/`. Import from `@/components/ui/<name>`.
@@ -648,20 +736,23 @@ variant set, and then use it everywhere.
 
 `pnpm --filter @pqp/client bench:tokens` runs `client/bench/theme-tokens.mjs` in
 CI (`.github/workflows/ci.yml`). It writes `bench/results/theme-tokens.json` and
-reports five numbers.
+reports seven numbers.
 
 | Number | Rule | Behaviour |
 |---|---|---|
-| `contrast` | 20 foreground and background pairs, in all 40 theme combinations | Always fails on a regression |
+| `contrast` | 20 foreground and background pairs in every theme, plus 20 pairs for the redesign's roles on every `redesign-*` theme (each look with the toggle on). 106 theme combinations in all | Always fails on a regression |
+| `steps` | 8 pairs of fills that must stay visibly apart, as an OKLab distance (canvas to pane, hover to pane, selected to hover, selected to pane, mention to pane, chip to mention), on every `redesign-*` theme | Always fails, and an unmeasurable step fails too |
+| `order` | The pane rule as an order: canvas darker than the side pane, conversation at least as bright as the side pane (OKLab lightness), on every `redesign-*` theme | Always fails. A distance alone let a look swap its panes and pass |
 | `leaks` | Rule 2, counted across `client/src` | Ratchet, pinned by `BENCH_MAX_LEAKS`. It is 0 today |
 | `uiAliases` | Rule 4, counted inside `client/src/components/ui/` | Gate at 0. `BENCH_MAX_UI_ALIASES` is an escape hatch for a half-finished migration, not a setting |
 | `uiStatics` | Rule 1, counted inside `client/src/components/ui/`: Tailwind's own static radius, duration and shadow utilities (`rounded-md`, `duration-150`, `shadow-2xl`). `rounded-full` is exempt, because the pill is documented above as a static utility | Gate at 0, with `BENCH_MAX_UI_STATICS` as the same kind of escape hatch |
 | `tokenDrift` | Every role token in `index.css` is listed in `client/src/lib/design-tokens.ts`, and every name listed there is still defined in the CSS | Always fails. The sheet is a hand-written mirror, so drift means `/qa/ui` quietly stopped showing part of the system |
 
 A contrast pair whose colour cannot be parsed is reported as "not defined yet"
-and does **not** fail the run, so a `color-mix()` token would sail through
-unmeasured. Every value the bench has to score is written as a plain `oklch()`.
-Read the `contrast: X/X pass` line and check that it grew, not the missing count.
+and does **not** fail the run. The bench reads a plain `oklch()` and
+`color-mix(in oklab, …)` (nested, with `var()` filled in). Any other form sails
+through unmeasured, so write a scored value in one of those two. Read the
+`contrast: X/X pass` line and check that it grew, not the missing count.
 
 The alias and static-utility counts are scoped to `ui/` because the rest of the app still carries
 hundreds of them and codemodding it is a separate change. The primitives are the
@@ -673,11 +764,15 @@ upgrade cannot silently change what a ratio means.
 
 ## Reference page
 
-`/qa/ui` renders the whole system: a theme, look and contrast switcher that
-flips the same attributes Settings does, every colour role with its live WCAG
+`/qa/ui` renders the whole system: the redesign switch (the same one as
+Settings > Beta), a theme, look and contrast switcher that flips the same
+attributes Settings does, a specimen of the app shell built from tokens only
+(canvas, rail, side pane with every row state, conversation with a mention,
+composer), every colour role with its live WCAG
 ratio against `surface-0` and `surface-1`, a chip per soft fill showing its
 `on-` foreground and the pair's own ratio, the type ramp, the spacing, radius,
-elevation and shadow-ladder samples, the motion samples, the control ladder,
+elevation and shadow-ladder samples, the icon set at each size, the motion
+samples, the control ladder,
 every primitive in every variant, and the settings kit
 (`client/src/components/settings/kit/`): every block a Settings tab is built
 from, on the pane surface the dialog uses. Light and dark cannot render side by

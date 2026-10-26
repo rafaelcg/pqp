@@ -31,8 +31,8 @@ Read this file and the inventory at the start of every session.
 | 0 | Three directions, mockups and council round D1 | Done (2 of 3 reviewers) |
 | 0 | André picks a direction | Done: B (Salas), with filled icons |
 | 1 | Toggle | Done |
-| 1 | Tokens for the chosen direction | Not started |
-| 1 | André signs off on `/qa/ui` | Not started |
+| 1 | Tokens for the chosen direction | Done |
+| 1 | André signs off on `/qa/ui` | Done, after round T3 |
 
 ## Phase 0: directions
 
@@ -82,6 +82,90 @@ What Phase 1 tokens must solve for A (both reviewers):
 4. Selected, hover and unread need distinct treatments.
 5. Contrast floors for timestamps, offline names and placeholders.
 
+## Phase 1: tokens
+
+Branch `rd/tokens`. Screenshots and council answers: `~/pqp-redesign/t-tokens/`.
+The method and every value are in `docs/DESIGN.md`, section "The redesign
+(Salas)". In short:
+
+- Shape for every look: radius 4/10/14/20 px and pill rows, Gabarito for the
+  title role, 22px body leading, 36px rows, an 8px gutter (0 under 640px),
+  snappier motion, a deeper modal shadow.
+- The Salas palette for Clássico, dark and light. Accent unchanged, so the
+  custom accent hue still applies.
+- New roles for the council's D1 asks: `canvas`, `pane-side`, `pane-main`,
+  `row-hover`, `row-selected`, `on-row-selected`, `accent-text`,
+  `success-text`, `mention-row`, `mention-bar`, `mention-chip`,
+  `on-mention-chip`. Each is derived with `color-mix(in oklab, …)` from roles
+  every look already sets.
+- Small redesign-only fixes for Night, Modo 2005, Everforest and Catppuccin,
+  so the new roles pass there.
+- Filled icons: `@phosphor-icons/react` and `ui/icon.tsx` (objects fill,
+  symbols bold).
+- The bench measures 20 new pairs and 7 pane steps on every look with the
+  toggle on: 3062/3062 contrast, 308/308 steps, 0 leaks, 0 drift.
+- `/qa/ui` has the redesign switch, a shell specimen built from tokens only,
+  and an icons section.
+
+Toggle off: no line of `index.css` was removed and every new selector needs
+`data-redesign`, so every existing token keeps its value.
+
+Verified: client typecheck, 811 unit test files (10,309 tests), i18n check,
+bench:tokens.
+
+### Council round T1
+
+Answers: `~/pqp-redesign/t-tokens/council-t1/`. Two reviewers (see open
+question 1).
+
+| Overall | Toggle off | Redesign on |
+|---|---|---|
+| Claude Opus 5.5 | 6.6 | 7.8 |
+| Codex GPT-6 Luna | 7.0 | 8.5 |
+
+Both flagged the Night light shot as dark. Not a bug: Night is dark only
+(`appearanceForcesDark`), so its light block never applies. Fixed after T1:
+one pane rule (the conversation is always the brightest pane), a darker Modo
+2005 canvas, a visible Night conversation pane, spread Everforest light text,
+a lime label on the Clássico dark selected row. Deferred to the element
+rounds: an inset mention radius, a composer fill role, read rows in
+`text-tertiary`.
+
+### Council round T2
+
+Answers: `~/pqp-redesign/t-tokens/council-t2/`.
+
+| Overall | Toggle off | Redesign on |
+|---|---|---|
+| Claude Opus 5.5 | 6.6 | 8.4 |
+| Codex GPT-6 Luna | 7.6 | 8.4 |
+
+Codex: no fixes. Opus MUST: Modo 2005 light had the side pane brighter than
+the conversation. Fixed, and the bench now checks the pane order on every
+look (`order`), because a distance alone let the swap pass. Also: the
+selected row's label is `accent-text` in every dark look, and Night's side
+pane sits further off the black canvas. Deferred to the pane header element:
+a 16px title in the target versus the 18px title role.
+
+### Council round T3
+
+Answers: `~/pqp-redesign/t-tokens/council-t3/`.
+
+| Overall | Toggle off | Redesign on |
+|---|---|---|
+| Claude Opus 5.5 | 7.3 | 8.4 |
+| Codex GPT-6 Luna | 7.7 | 9.0 |
+
+Codex: no fixes. Opus MUST: in Everforest dark the selected row nearly
+matched the side pane. Fixed, and the bench now measures selected to side
+pane. Also: Clássico light soft pair moved from hue 135 (mint) to 126
+(lime), the light mention chip stands further off its row (floor 0.05),
+and `--radius-pane` (16px) splits a shell pane from a dialog. Not taken:
+stating the pane pair in every look block (the `order` check already fails
+a look that inverts).
+
+André signed off on `/qa/ui` after round T3 (2026-10-26).
+
 ## Open questions for André
 
 1. The third council reviewer: Gemini 4 Argon is out of Cursor credits. Use
@@ -103,4 +187,10 @@ What Phase 1 tokens must solve for A (both reviewers):
 | 2026-10-26 | Element branches use `rd/<id>` | Git ref conflict with `redesign`. |
 | 2026-10-26 | Direction mockups are a dev-only page on an unmerged branch | Real pixels for the pick, no change to production components, nothing to clean up on `redesign`. |
 | 2026-10-26 | Direction B (Salas), with filled icons instead of outlines | André's pick. The council preferred A; B was second for both reviewers (7.2, 7.4), and the risks they named for B go into the Phase 1 tokens: gutters cost width on small screens, and a third surface level invites card-in-card settings. |
+| 2026-10-26 | Redesign colours are scoped to Clássico; shape applies to every look | A look is a palette. The other looks keep their identity and get only the fixes the new roles need. |
+| 2026-10-26 | Derived roles use `color-mix(in oklab)`, and the bench and `/qa/ui` learned to read it | One formula reaches all ten looks, the custom accent and high contrast, and stays measured. |
+| 2026-10-26 | `ui/icon.tsx` ships with the tokens | It is the only place the fill-or-bold rule lives, and the sheet needs it to show the icon tokens. |
+| 2026-10-26 | Council T1 runs with two reviewers | Gemini 4 Argon is still out of credits; the third seat waits on open question 1. |
+| 2026-10-26 | Tokens merged on André's sign-off at Codex 9.0, Opus 8.4 | Opus's last MUST was fixed after T3. The element rounds hold the 9.0 bar from here. |
+| 2026-10-26 | Phase 2 follows the inventory order: primitives first, then shell, surfaces, phone | Every later element is built from the primitives. |
 | 2026-10-26 | The toggle ships before the tokens | It is the same for every direction and changes nothing visible. Precedence: `?redesign=1|0`, then the person's Beta switch (`pqp-redesign`), then the `redesign` flag. |

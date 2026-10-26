@@ -22,6 +22,102 @@ export function parseOklch(input) {
   };
 }
 
+/** Split on the commas at the top level of a function's argument list. */
+function splitTopLevel(input) {
+  const parts = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+    if (ch === "(") depth++;
+    else if (ch === ")") depth--;
+    else if (ch === "," && depth === 0) {
+      parts.push(input.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+  parts.push(input.slice(start).trim());
+  return parts;
+}
+
+/** One `color-mix` stop: a colour and an optional trailing percentage. */
+function parseStop(input) {
+  const match = /^([\s\S]*?)\s+([\d.]+)%$/.exec(input.trim());
+  return match
+    ? { colour: match[1], weight: Number(match[2]) / 100 }
+    : { colour: input.trim(), weight: null };
+}
+
+/**
+ * Parse `oklch(...)` or `color-mix(in oklab, A [p%], B [q%])`, nested or not,
+ * into OKLCH components. The redesign derives a few roles (the mention row,
+ * the canvas) from each look's own colours, and a derived role the bench
+ * cannot read is a role nobody measures. Only `in oklab` is understood, the
+ * one space the token layer mixes in; anything else is null.
+ */
+export function parseColour(input) {
+  const text = input.trim();
+  const mix = /^color-mix\(([\s\S]*)\)$/i.exec(text);
+  if (!mix) {
+    return parseOklch(text);
+  }
+  const [space, first, second] = splitTopLevel(mix[1]);
+  if (!/^in\s+oklab$/i.test(space ?? "") || !first || !second) {
+    return null;
+  }
+  const a = parseStop(first);
+  const b = parseStop(second);
+  const ca = parseColour(a.colour);
+  const cb = parseColour(b.colour);
+  if (!ca || !cb) {
+    return null;
+  }
+  let wa = a.weight;
+  let wb = b.weight;
+  if (wa === null && wb === null) {
+    wa = 0.5;
+    wb = 0.5;
+  } else if (wa === null) {
+    wa = 1 - wb;
+  } else if (wb === null) {
+    wb = 1 - wa;
+  }
+  const total = wa + wb;
+  const lab = (c) => ({
+    l: c.l,
+    a: c.c * Math.cos((c.h * Math.PI) / 180),
+    b: c.c * Math.sin((c.h * Math.PI) / 180),
+  });
+  const la = lab(ca);
+  const lb = lab(cb);
+  // Premultiplied, per CSS Color 5, so a translucent stop pulls less.
+  const alpha = (ca.alpha * wa + cb.alpha * wb) / total;
+  const mixed = (key) =>
+    (la[key] * ca.alpha * wa + lb[key] * cb.alpha * wb) / (alpha * total);
+  const l = mixed("l");
+  const x = mixed("a");
+  const y = mixed("b");
+  const h = ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+  return { l, c: Math.hypot(x, y), h, alpha };
+}
+
+/** Distance between two colours in OKLab. 0 is identical. */
+export function deltaE(first, second) {
+  const ca = parseColour(first);
+  const cb = parseColour(second);
+  if (!ca || !cb) {
+    return null;
+  }
+  const lab = (c) => [
+    c.l,
+    c.c * Math.cos((c.h * Math.PI) / 180),
+    c.c * Math.sin((c.h * Math.PI) / 180),
+  ];
+  const [l1, a1, b1] = lab(ca);
+  const [l2, a2, b2] = lab(cb);
+  return Math.hypot(l1 - l2, a1 - a2, b1 - b2);
+}
+
 /** OKLCH → linear sRGB, per the CSS Color 4 conversion. */
 function oklchToLinearSrgb({ l, c, h }) {
   const hRad = (h * Math.PI) / 180;
@@ -63,10 +159,10 @@ function over(fg, bg, alpha) {
   };
 }
 
-/** WCAG 2.x contrast ratio between two OKLCH strings, 1..21. */
+/** WCAG 2.x contrast ratio between two colours (see `parseColour`), 1..21. */
 export function contrastRatio(foreground, background) {
-  const fg = parseOklch(foreground);
-  const bg = parseOklch(background);
+  const fg = parseColour(foreground);
+  const bg = parseColour(background);
   if (!fg || !bg) {
     return null;
   }
