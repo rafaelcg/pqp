@@ -1,0 +1,106 @@
+# Dependabot VERSION updates. Security updates are a separate repository
+# setting (Settings, Code security: Dependabot alerts and Dependabot security
+# updates), not something this file turns on; with them enabled, a security
+# update ignores `cooldown` and the groups below and opens on its own.
+#
+# Every entry waits 3 days after a release before proposing it (`cooldown`),
+# the same window as `minimumReleaseAge` in pnpm-workspace.yaml, so a
+# compromised release that is yanked within days is never proposed. Minor and
+# patch bumps are grouped into one PR per ecosystem per week; a major bump
+# stays its own PR so it gets read.
+version: 2
+
+updates:
+  # The pnpm workspace (root pnpm-lock.yaml). Dependabot reads pnpm from the
+  # `npm` ecosystem and needs each workspace package listed.
+  - package-ecosystem: npm
+    directories:
+      - "/"
+      - "/server"
+      - "/client"
+      - "/electron"
+      - "/packages/shared"
+      - "/packages/app-sdk"
+      - "/tools/watch-party-load"
+      - "/tools/apps-build"
+      - "/docs-apps"
+      - "/apps/eco"
+      - "/apps/locadora"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 3
+    groups:
+      npm-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  # Three tools with their own package-lock.json, outside the workspace.
+  # (tools/ambient has no lockfile, so a bump there would only move a range.)
+  - package-ecosystem: npm
+    directories:
+      - "/tools/admin-dashboard"
+      - "/tools/hls-edge"
+      - "/tools/support-bot"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 3
+    groups:
+      tools-npm-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 3
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  # Base images in the Dockerfiles. Deliberately no compose files: the SFU and
+  # API box images (LiveKit, egress, Caddy) are bumped by hand in a quiet hour,
+  # because recreating the SFU drops live calls.
+  - package-ecosystem: docker
+    directories:
+      - "/"
+      - "/tools/support-bot"
+      - "/tools/ambient"
+      - "/tools/ll-loss-harness/publisher"
+      - "/tools/ll-loss-harness/remuxd"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 3
+    ignore:
+      # The runtime major is a decision (Node 22 is what CI and prod run),
+      # not a weekly chore. Minor and patch of the same major still flow.
+      - dependency-name: "node"
+        update-types:
+          - version-update:semver-major
+    groups:
+      docker:
+        patterns:
+          - "*"
+
+  - package-ecosystem: gradle
+    directory: "/android"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 3
+    groups:
+      android:
+        patterns:
+          - "*"
