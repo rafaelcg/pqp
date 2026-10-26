@@ -785,8 +785,8 @@
   /* Menus: the highlight is a tint of the text, so it shows on the menu's own
      surface (the old one was that surface's colour and did not show). Rows
      sit concentric inside the panel; icons are quieter than their label and
-     come up to it on the highlighted row. Headings are sentence case. */
-  /* Menus float on the popover surface (radius, fill, edge and lift). */
+     come up to it on the highlighted row. Headings are sentence case. The
+     panel floats on the popover surface (radius, fill, edge and lift). */
   --menu-radius: var(--popover-radius);
   --menu-pad: 0.375rem;
   --menu-row-radius: calc(var(--menu-radius) - var(--menu-pad));

@@ -56,7 +56,6 @@ export const MENU_HEADING =
 export const MENU_HEADING_REDESIGN =
   "redesign:pt-2 redesign:text-xs redesign:normal-case redesign:tracking-normal redesign:text-text-secondary";
 
-/** A hand-built row: a button highlighted on hover and keyboard focus. */
 /**
  * A plain-button row (the composer's "+"). With the toggle off hover and
  * keyboard focus both fill; under the redesign only focus does, and the
