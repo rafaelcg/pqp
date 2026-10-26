@@ -612,7 +612,7 @@ bespoke cards in Baú, polls, voice notes, the forward and the corner card):
 3. Folded: the 15 copies (bot wizard and overview, bots settings, connection
    check, profile popover, conversations empty and phone screens).
 4. Left for their owners: Baú posts (`f-bau`), polls and voice notes
-   (`s-message-content`), the forward card (`f-forward`), the corner card
+   (`s-message-content`), the forward card (`s-message-content`), the corner card
    (`f-onboarding`), the public `/apps` page (out of scope).
 
 ## Open questions for André
