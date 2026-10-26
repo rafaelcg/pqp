@@ -556,8 +556,9 @@ const PRIMITIVES: {
   },
   // Two panels in place: a note with actions, and a picker grid.
   { id: "p-popover", testId: "qa-primitive-popover" },
-  // Focus the checked list option, hover an unchecked chip.
-  { id: "p-radio", testId: "qa-primitive-radio", role: "radio", focus: "Só amigos", hover: "Menções" },
+  // Focus the checked segment, hover an unchecked chip (the first of each
+  // name: the small groups repeat the labels).
+  { id: "p-radio", testId: "qa-primitive-radio", role: "radio", focus: "Escuro", hover: "Menções" },
 ];
 
 test("captures the primitives", async ({ browser }) => {
@@ -582,12 +583,12 @@ test("captures the primitives", async ({ browser }) => {
       await page.evaluate(() => document.fonts.ready);
       if (primitive.focus) {
         // A keyboard focus, so `focus-visible` draws the ring.
-        await block.getByRole(primitive.role ?? "button", { name: primitive.focus, exact: true }).focus();
+        await block.getByRole(primitive.role ?? "button", { name: primitive.focus, exact: true }).first().focus();
         await page.keyboard.press("Shift+Tab");
         await page.keyboard.press("Tab");
       }
       if (primitive.hover) {
-        await block.getByRole(primitive.role ?? "button", { name: primitive.hover, exact: true }).hover();
+        await block.getByRole(primitive.role ?? "button", { name: primitive.hover, exact: true }).first().hover();
       }
       await page.waitForTimeout(300);
       await block.screenshot({ path: path.join(OUT!, `${primitive.id}-${theme}.png`) });
