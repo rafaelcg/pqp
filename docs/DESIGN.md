@@ -1070,7 +1070,7 @@ line).
   own label colour and `aria-current` (a selected row is the one being
   read, so it drops the unread look); `unread` is weight 600 plus the
   indicator pip at the end (a trailing count replaces it); `muted` fades
-  the row; disabled is 0.4.
+  the row (0.5, 0.6 under the redesign, so it stays above disabled at 0.4).
 - **Tokens.** Every value is `--list-row-*` with the old value as its
   fallback. Under the redesign: a pill, 36/44/52px tall, 12px inside, on
   `row-hover` and `row-selected`.

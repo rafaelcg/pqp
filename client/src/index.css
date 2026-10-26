@@ -854,6 +854,9 @@
   --list-row-hover: var(--color-row-hover);
   --list-row-selected: var(--color-row-selected);
   --list-row-selected-text: var(--color-on-row-selected);
+  /* A muted row (a channel you silenced) stays a step above a disabled one
+     (0.4), so the two read apart. */
+  --list-row-muted-opacity: 0.6;
 
   --icon-button-radius: var(--radius-pill);
   --icon-button-text: var(--color-text-secondary);
