@@ -670,6 +670,24 @@ shapes: `ChannelListSkeleton`, `MessageListSkeleton`, `ServerRailSkeleton`.
 - **Accessibility.** A bare `Skeleton` is `aria-hidden`. The composed ones carry
   `aria-busy` and a translated label.
 
+### Toast
+
+`toast.tsx`. Not a component: the look of a note that arrives on its own and
+leaves on its own (a DM, a friend who accepted, a forward, an app join, a
+session reminder, a watch party approval). Each toast keeps its own corner,
+queue, timer and swipe.
+
+- `TOAST_SURFACE` is the popover's card: with the toggle off the level-3
+  card the toasts already drew, under the redesign the pane radius, the
+  raised fill, the faint edge and the lift. `TOAST_SURFACE_REDESIGN` moves a
+  toast that draws its own card (the session reminders, the watch party
+  approval) onto the same card under the redesign only.
+- `TOAST_CLOSE` is the dismiss button: today's small square with the toggle
+  off, IconButton's round ghost with its focus ring under the redesign.
+- **Use it** for news the person did not ask for and can ignore. **Do not**
+  use it for the result of a write the person just made; say that in the
+  row (`InlineStatus`).
+
 ### Tooltip
 
 `tooltip.tsx`. `TooltipProvider` is mounted once at the root; every `Tooltip`

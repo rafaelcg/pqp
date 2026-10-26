@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import type { ForwardedSummary } from "@/components/forward/forward-picker";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { TOAST_CLOSE, TOAST_SURFACE } from "@/components/ui/toast";
 
 /** Long enough to read and reach "Ver"; the work is already done. */
 const SHOW_MS = 8_000;
@@ -59,7 +60,8 @@ export function ForwardedToast({
       aria-live="polite"
       data-forwarded-toast=""
       className={cn(
-        "elevation-3 pointer-events-auto fixed inset-x-3 bottom-[calc(env(safe-area-inset-bottom)+72px)] z-40 flex items-center gap-3 rounded-[var(--radius-card)] p-3 sm:inset-x-auto sm:bottom-auto sm:right-4 sm:top-[max(1rem,env(safe-area-inset-top))] sm:w-80",
+        TOAST_SURFACE,
+        "pointer-events-auto fixed inset-x-3 bottom-[calc(env(safe-area-inset-bottom)+72px)] z-40 flex items-center gap-3 p-3 sm:inset-x-auto sm:bottom-auto sm:right-4 sm:top-[max(1rem,env(safe-area-inset-top))] sm:w-80",
         leaving ? "animate-toast-out" : "animate-toast-in",
       )}
     >
@@ -84,7 +86,7 @@ export function ForwardedToast({
       <button
         type="button"
         aria-label={t("dmToast.dismiss")}
-        className="flex h-7 w-7 shrink-0 items-center justify-center self-start rounded-[var(--radius-control)] text-text-tertiary hover:bg-surface-2 hover:text-text"
+        className={cn(TOAST_CLOSE, "self-start")}
         onClick={() => setLeaving(true)}
       >
         <X className="h-4 w-4" aria-hidden />

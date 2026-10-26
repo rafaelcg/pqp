@@ -1,6 +1,8 @@
 import { PartyPopper, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useTranslation } from "@/lib/i18n";
+import { TOAST_SURFACE_REDESIGN } from "@/components/ui/toast";
+import { cn } from "@/lib/utils";
 
 export interface WatchPartyApprovedCard {
   serverId: string;
@@ -43,7 +45,10 @@ export function WatchPartyApprovedToasts({
           key={card.serverId}
           role="status"
           data-watch-party-approved-toast={card.serverId}
-          className="pointer-events-auto flex w-full max-w-sm items-start gap-3 rounded-xl border border-border bg-surface-2 p-3 shadow-[var(--shadow-popover)] animate-toast-in"
+          className={cn(
+            "pointer-events-auto flex w-full max-w-sm items-start gap-3 rounded-xl border border-border bg-surface-2 p-3 shadow-[var(--shadow-popover)] animate-toast-in",
+            TOAST_SURFACE_REDESIGN,
+          )}
         >
           <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent-soft text-on-accent-soft">
             <PartyPopper className="h-5 w-5" aria-hidden />

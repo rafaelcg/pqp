@@ -6,6 +6,7 @@ import {
   type ChannelSessionReminderToast,
 } from "@/lib/channel-session-schedule";
 import { cn } from "@/lib/utils";
+import { TOAST_SURFACE_REDESIGN } from "@/components/ui/toast";
 
 const TOAST_MS = 8000;
 
@@ -87,6 +88,7 @@ export function ChannelSessionToasts({
           data-channel-session-toast={card.sessionId}
           className={cn(
             "pointer-events-auto flex w-full max-w-sm items-center gap-3 rounded-xl border border-ink-4/70 bg-ink-2 p-3 shadow-[var(--shadow-popover)]",
+            TOAST_SURFACE_REDESIGN,
             card.leaving ? "animate-toast-out" : "animate-toast-in",
           )}
         >

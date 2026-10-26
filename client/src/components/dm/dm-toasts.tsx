@@ -24,6 +24,7 @@ import { useTranslation } from "@/lib/i18n";
 import { onActivityToast, type ActivityToast } from "@/lib/notifications";
 import { subscribeEscapeUnlessOverlay } from "@/lib/escape-unless-overlay";
 import { cn } from "@/lib/utils";
+import { TOAST_CLOSE, TOAST_SURFACE } from "@/components/ui/toast";
 
 /**
  * "Somebody wrote to you", in the corner, while you are looking at something
@@ -357,7 +358,8 @@ function ToastCardView({
           : undefined
       }
       className={cn(
-        "elevation-3 pointer-events-auto flex min-h-16 w-full gap-3 rounded-[var(--radius-card)] p-3 sm:w-80",
+        TOAST_SURFACE,
+        "pointer-events-auto flex min-h-16 w-full gap-3 p-3 sm:w-80",
         card.leaving ? "animate-toast-out" : "animate-toast-in",
       )}
     >
@@ -409,7 +411,7 @@ function ToastCardView({
         type="button"
         aria-label={t("dmToast.dismiss")}
         title={t("dmToast.dismiss")}
-        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-text-tertiary hover:bg-surface-2 hover:text-text"
+        className={TOAST_CLOSE}
         onClick={onDismiss}
       >
         <X className="h-4 w-4" aria-hidden />

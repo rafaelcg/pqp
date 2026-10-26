@@ -666,6 +666,22 @@ count takes 10px type; the beta tag beside Bot drops its wash; the sheet
 shows a painted Webhook tag and a "Saiu" tag. Screenshots:
 `~/pqp-redesign/p-badge/`.
 
+### p-toast
+
+Spec (audit: no toast primitive; seven toasts, each with its own corner and
+queue; five drew the level-3 card, two drew their own):
+
+1. Job: the look of a note that arrives and leaves on its own.
+2. Redesign: the popover's card (radius, fill, edge, lift) and IconButton's
+   round ghost for the dismiss button.
+3. Merges: `TOAST_SURFACE` in the DM, friend, forward, not-in-server and
+   app-join toasts (exact with the toggle off); `TOAST_SURFACE_REDESIGN` in
+   the session reminders and the watch party approval (redesign only, they
+   drew another card); `TOAST_CLOSE` in four close buttons.
+4. Left: the retro toasts (their own look), the image lightbox's notice
+   (a media overlay, `s-message-content`) and the voice-clean confirmation
+   in `App.tsx` (`f-call`). Placement and queues stay per toast.
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss

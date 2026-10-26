@@ -589,6 +589,8 @@ const PRIMITIVES: {
   },
   // Two panels in place: a note with actions, and a picker grid.
   { id: "p-popover", testId: "qa-primitive-popover" },
+  // A note that arrived and a session reminder; the close button focused.
+  { id: "p-toast", testId: "qa-primitive-toast", focus: "Fechar" },
   // Focus the checked segment, hover an unchecked chip (the first of each
   // name: the small groups repeat the labels).
   { id: "p-radio", testId: "qa-primitive-radio", role: "radio", focus: "Escuro", hover: "Menções" },

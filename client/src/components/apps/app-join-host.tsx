@@ -31,6 +31,7 @@ import {
 } from "@/lib/apps/join-model";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { TOAST_SURFACE } from "@/components/ui/toast";
 
 /**
  * Where the join sheet lives and what decides whether it shows.
@@ -267,7 +268,8 @@ export function AppJoinHost({ serverId, viewerId, people }: AppJoinHostProps) {
           aria-live="polite"
           data-testid="app-join-toast"
           className={cn(
-            "elevation-3 pointer-events-auto fixed inset-x-3 bottom-[calc(env(safe-area-inset-bottom)+72px)] z-40 flex items-center gap-3 rounded-[var(--radius-card)] p-3 sm:inset-x-auto sm:bottom-6 sm:left-1/2 sm:w-auto sm:-translate-x-1/2",
+            TOAST_SURFACE,
+        "pointer-events-auto fixed inset-x-3 bottom-[calc(env(safe-area-inset-bottom)+72px)] z-40 flex items-center gap-3 p-3 sm:inset-x-auto sm:bottom-6 sm:left-1/2 sm:w-auto sm:-translate-x-1/2",
             toast.leaving ? "animate-toast-out" : "animate-toast-in",
           )}
         >

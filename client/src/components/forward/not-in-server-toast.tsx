@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNotInServerCount } from "@/lib/forward";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { TOAST_CLOSE, TOAST_SURFACE } from "@/components/ui/toast";
 
 const SHOW_MS = 4_000;
 const LEAVE_MS = 200;
@@ -45,7 +46,8 @@ export function NotInServerToast() {
       aria-live="polite"
       data-not-in-server-toast=""
       className={cn(
-        "elevation-3 pointer-events-auto fixed inset-x-3 bottom-[calc(env(safe-area-inset-bottom)+72px)] z-40 flex items-center gap-3 rounded-[var(--radius-card)] p-3 sm:inset-x-auto sm:bottom-auto sm:right-4 sm:top-[max(1rem,env(safe-area-inset-top))] sm:w-80",
+        TOAST_SURFACE,
+        "pointer-events-auto fixed inset-x-3 bottom-[calc(env(safe-area-inset-bottom)+72px)] z-40 flex items-center gap-3 p-3 sm:inset-x-auto sm:bottom-auto sm:right-4 sm:top-[max(1rem,env(safe-area-inset-top))] sm:w-80",
         state === "out" ? "animate-toast-out" : "animate-toast-in",
       )}
     >
@@ -58,7 +60,7 @@ export function NotInServerToast() {
       <button
         type="button"
         aria-label={t("dmToast.dismiss")}
-        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-text-tertiary hover:bg-surface-2 hover:text-text"
+        className={TOAST_CLOSE}
         onClick={() => setState("out")}
       >
         <X className="h-4 w-4" aria-hidden />
