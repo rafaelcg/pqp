@@ -1046,7 +1046,7 @@ list, a popover or a dialog ("Recentes", "Convites ativos", a danger zone).
 - **Redesign.** The redesign classes come last and win. A pane title is
   Gabarito (`--type-title-font`) at `--pane-header-title-size` (20px), the
   line under it body size in secondary text, `--pane-header-gap` (24px)
-  below. A section label is `--section-label-size` (12px), semibold,
+  below. A section label is `--section-label-size` (13px), semibold,
   secondary text, sentence case with no tracking. `tone="danger"` keeps a
   danger zone's heading in the danger colour.
 - **Copy.** Write a label in sentence case. The old look upper-cases it with

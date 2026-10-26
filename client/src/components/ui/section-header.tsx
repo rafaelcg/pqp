@@ -23,7 +23,7 @@ export const PANE_TITLE_REDESIGN =
 export const PANE_DESCRIPTION_REDESIGN =
   "redesign:mt-1 redesign:text-sm redesign:text-pretty redesign:text-text-secondary";
 export const SECTION_LABEL_REDESIGN =
-  "redesign:font-sans redesign:text-[length:var(--section-label-size)] redesign:leading-4 redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text-secondary";
+  "redesign:font-sans redesign:text-[length:var(--section-label-size)] redesign:leading-5 redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text-secondary";
 
 export function PaneHeader({
   title,

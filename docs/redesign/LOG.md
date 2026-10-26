@@ -672,7 +672,7 @@ Spec (audit: two pane titles drawn twice, about 170 uppercase tracked labels
 in 50 files, in four sizes, three trackings and two colours):
 
 1. Job: the title of a pane, and the small label over a group.
-2. Redesign: Gabarito pane titles at 20px; labels in sentence case, 12px
+2. Redesign: Gabarito pane titles at 20px; labels in sentence case, 13px
    semibold, secondary text, no tracking.
 3. Folded: settings and server settings pane titles, server settings group
    titles, forward picker, profile popover, shortcuts, invites, roles,
