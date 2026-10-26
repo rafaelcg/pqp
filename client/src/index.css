@@ -657,12 +657,21 @@
   --button-px: 1.25rem;
   --button-px-sm: 0.875rem;
   --button-px-lg: 1.5rem;
-  --button-primary-shadow: var(--shadow-1);
-  --button-secondary-hover: var(--color-surface-3);
+  /* A top highlight and a cast shadow that clears the fill; the light block
+     sets its own. */
+  --button-primary-shadow:
+    inset 0 1px 0 oklch(1 0 0 / 0.18), 0 1px 1px oklch(0.06 0.02 262 / 0.55),
+    0 4px 10px oklch(0.06 0.02 262 / 0.35);
+  /* Tints of the text, never a surface: a dialog is surface-2, the same as
+     the old secondary fill, and a surface hover can be darker than it. */
+  --button-secondary-bg: color-mix(in oklab, var(--color-text) 7%, transparent);
+  --button-secondary-hover: color-mix(in oklab, var(--color-text) 12%, transparent);
+  --button-secondary-border: var(--color-border-strong);
   --button-ghost-text: var(--color-text-secondary);
-  --button-ghost-hover: var(--color-row-hover);
-  --button-danger-ghost-hover: var(--color-danger-soft);
+  --button-ghost-hover: color-mix(in oklab, var(--color-text) 8%, transparent);
+  --button-danger-ghost-hover: color-mix(in oklab, var(--color-danger) 14%, transparent);
   --button-danger-ghost-hover-text: var(--color-on-danger-soft);
+  --button-disabled-opacity: 0.5;
 
   /* The title role is drawn in the display face: server names, channel
      titles and pane headers, in sentence case. */
@@ -878,6 +887,7 @@
   --shadow-1: 0 1px 2px oklch(0.4 0.02 262 / 0.08);
   --shadow-2: 0 12px 32px oklch(0.4 0.02 262 / 0.16);
   --shadow-3: 0 24px 64px -16px oklch(0.4 0.02 262 / 0.26);
+  --button-primary-shadow: inset 0 1px 0 oklch(1 0 0 / 0.25), 0 1px 2px oklch(0.4 0.02 262 / 0.18);
 }
 
 /*

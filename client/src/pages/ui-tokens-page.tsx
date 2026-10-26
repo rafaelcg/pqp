@@ -755,7 +755,7 @@ const BADGE_VARIANTS: BadgeVariant[] = [
   "danger",
   "neutral",
 ];
-const BUTTON_SIZES = ["lg", "default", "sm", "icon"] as const;
+const BUTTON_SIZES = ["lg", "default", "sm", "icon-lg", "icon", "icon-sm"] as const;
 
 function PrimitiveSheet() {
   const { t } = useTranslation();
@@ -779,8 +779,17 @@ function PrimitiveSheet() {
           {BUTTON_VARIANTS.map((variant) => (
             <div key={variant} className="flex flex-wrap items-center gap-2">
               {BUTTON_SIZES.map((size) => (
-                <Button key={size} variant={variant} size={size}>
-                  {size === "icon" ? "@" : `${variant} ${size}`}
+                <Button
+                  key={size}
+                  variant={variant}
+                  size={size}
+                  aria-label={size.startsWith("icon") ? `${variant} ${size}` : undefined}
+                >
+                  {size.startsWith("icon") ? (
+                    <Icon icon={Plus} kind="symbol" size={size === "icon-sm" ? "sm" : "md"} />
+                  ) : (
+                    `${variant} ${size}`
+                  )}
                 </Button>
               ))}
               <Button variant={variant} disabled>

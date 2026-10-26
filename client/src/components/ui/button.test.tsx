@@ -23,6 +23,24 @@ describe("Button", () => {
     expect(classes.some((c) => c.startsWith("redesign:"))).toBe(false);
   });
 
+  it("touches only the disabled state with redesign classes, on the primary", () => {
+    const primary = classesOf(<Button>x</Button>).filter((c) => c.startsWith("redesign:"));
+    expect(primary.length).toBeGreaterThan(0);
+    expect(primary.every((c) => c.startsWith("redesign:disabled:"))).toBe(true);
+  });
+
+  it("lets a call site's fill and border win over the secondary tokens", () => {
+    const classes = classesOf(
+      <Button variant="secondary" className="bg-transparent border-danger">
+        x
+      </Button>,
+    );
+    expect(classes).toContain("bg-transparent");
+    expect(classes).toContain("border-danger");
+    expect(classes.some((c) => c.includes("--button-secondary-bg"))).toBe(false);
+    expect(classes.some((c) => c.includes("--button-secondary-border"))).toBe(false);
+  });
+
   it("lets a call site's colour and padding win over the tokens", () => {
     const classes = classesOf(
       <Button variant="ghost" className="px-6 text-danger">
@@ -37,6 +55,8 @@ describe("Button", () => {
 
   it("draws the touch size and the quiet danger variant", () => {
     expect(classesOf(<Button size="lg">x</Button>)).toContain("h-11");
+    expect(classesOf(<Button size="icon-lg">x</Button>)).toContain("w-11");
+    expect(classesOf(<Button size="icon-sm">x</Button>)).toContain("w-[var(--control-sm)]");
     const danger = classesOf(<Button variant="danger-ghost">x</Button>);
     expect(danger).toContain("text-danger");
     expect(danger).toContain("hover:bg-[var(--button-danger-ghost-hover,var(--color-surface-2))]");

@@ -13,17 +13,24 @@ import { cn } from "@/lib/utils";
  * Every token is UNSET with the toggle off and falls back, in the class
  * itself, to the value the button always drew, so nothing changes. The
  * redesign sets them on `:root[data-redesign]` in `index.css`: a pill, more
- * horizontal room, a lifted primary, and the row-hover fill on ghost.
+ * horizontal room, a lifted primary, and fills that are tints of the text, so
+ * they read on a pane and on a dialog alike.
  */
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-[var(--radius-button)] text-sm font-medium transition-[background,color,transform] duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring disabled:pointer-events-none disabled:opacity-40 active:scale-[0.98]",
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-[var(--radius-button)] text-sm font-medium transition-[background,color,transform] duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring disabled:pointer-events-none disabled:opacity-[var(--button-disabled-opacity,0.4)] active:scale-[0.98]",
   {
     variants: {
       variant: {
+        // Disabled under the redesign is a switched-off button, not a dim
+        // lime one. Those three are `redesign:` classes on purpose: they
+        // only touch the disabled state, and a disabled primary should look
+        // off whatever colour its caller gave it.
         default:
-          "bg-accent text-on-accent hover:bg-accent-hover font-semibold shadow-[var(--button-primary-shadow,0_0_transparent)]",
+          "bg-accent text-on-accent hover:bg-accent-hover font-semibold shadow-[var(--button-primary-shadow,0_0_transparent)] redesign:disabled:bg-surface-3 redesign:disabled:text-text-secondary redesign:disabled:[--button-primary-shadow:0_0_transparent]",
+        // The redesign's fill and hover are tints of the text, so the button
+        // keeps its edge on any surface, a dialog included.
         secondary:
-          "bg-surface-2 text-text hover:bg-[var(--button-secondary-hover,var(--color-border))] border border-border",
+          "bg-[color:var(--button-secondary-bg,var(--color-surface-2))] text-text hover:bg-[color:var(--button-secondary-hover,var(--color-border))] border border-[color:var(--button-secondary-border,var(--color-border))]",
         ghost:
           "hover:bg-[var(--button-ghost-hover,var(--color-surface-2))] text-[color:var(--button-ghost-text,var(--color-text-tertiary))] hover:text-text",
         danger:
@@ -43,6 +50,10 @@ const buttonVariants = cva(
         // button and draws exactly what that drew with the toggle off.
         lg: "h-11 px-[var(--button-px-lg,1rem)] py-2",
         icon: "h-[var(--control-md)] w-[var(--control-md)]",
+        // The icon square on the rest of the ladder. An icon-only control
+        // on its own is `IconButton`; these match a row of text buttons.
+        "icon-sm": "h-[var(--control-sm)] w-[var(--control-sm)]",
+        "icon-lg": "h-11 w-11",
       },
     },
     defaultVariants: {
