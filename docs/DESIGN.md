@@ -598,11 +598,34 @@ needs it as an ancestor.
   non-obvious), `name` (an accessible name that differs from the visible text),
   `side`, `align`, `tone`.
 - **Tones.** `default` is the compact label on an icon button. `rail` is the
-  larger, darker bubble the server rail uses.
+  larger, semibold bubble the server rail uses, in the title face under the
+  redesign; there it shares the default's colours, radius and shadow. It is
+  semibold (`--tooltip-rail-weight: 600`) because it names a server: a step
+  under the bold server name in its pane title, above the medium default
+  label (`--tooltip-weight: 500`). Its padding and size are tokens
+  (`--tooltip-rail-px`, `-py`, `-size`), and it sits 14px from the tile.
+- **`mark`.** A rail bubble that names a place (a server tile, a pinned
+  conversation, the conversations home) passes `mark`: under the redesign it
+  carries a short straight 3px accent bar on its start edge
+  (`--tooltip-rail-mark`), mixed toward the label in light so it stays bright
+  on the dark bubble. An action on the rail ("Criar comunidade") stays plain.
 - **Behaviour.** 260ms before the first bubble of a group, then 500ms of no
   delay for its neighbours, so a control bar can be swept and read. Inert on
   touch, so a tap is never eaten. Portalled into the fullscreen element when one
   is open, or the tooltip would be painted where nothing can see it.
+- **Under the redesign.** Every colour, the radius, the padding and the
+  weight come from `--tooltip-*` tokens over four roles: `--color-tooltip`,
+  `--color-tooltip-border`, `--color-on-tooltip`, `--color-tooltip-detail`.
+  In dark the bubble sits below the deepest surface, so it parts from panes
+  and dialogs by its fill, with a soft edge (text 18% over the bubble) and a
+  faint top highlight; in light it is inverted (a dark bubble), since a white
+  one vanishes into a white page. The label is medium weight; the detail
+  line sits 2px under it at a 1.25 line height. The bench checks the label and the detail
+  at 4.5:1 in every look.
+- **Hand-placed bubbles.** A bubble that cannot use Radix (the reaction tip,
+  the locked-look hint) reads the same tokens with its own fallbacks, so the
+  redesign has one bubble. `tooltipBubbleClass()` and `TOOLTIP_DETAIL` draw a
+  static one, as `/qa/ui` does.
 - **Use it** for every icon-only control. **Do not** put a link or a control
   inside one; the bubble is `pointer-events-none`.
 - **Accessibility.** With a `detail`, the description is the detail only. Without

@@ -24,7 +24,12 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
-import { Tooltip, TooltipProvider } from "@/components/ui/tooltip";
+import {
+  Tooltip,
+  TOOLTIP_DETAIL,
+  tooltipBubbleClass,
+  TooltipProvider,
+} from "@/components/ui/tooltip";
 import { useAppearance } from "@/hooks/use-appearance";
 import { useContrast } from "@/hooks/use-contrast";
 import { useTheme } from "@/hooks/use-theme";
@@ -921,6 +926,23 @@ function PrimitiveSheet() {
         </div>
       </div>
 
+      <div data-testid="qa-primitive-tooltip">
+        <p
+          className="mb-2 text-text-tertiary"
+          style={{ fontSize: "var(--type-label-size)" }}
+        >
+          Tooltip
+        </p>
+        <div className="flex flex-wrap items-start gap-4">
+          <div className={tooltipBubbleClass()}>{t("qaUi.iconButton.settings")}</div>
+          <div className={`${tooltipBubbleClass()} max-w-72`}>
+            {t("qaUi.tooltip.label")}
+            <span className={TOOLTIP_DETAIL}>{t("qaUi.tooltip.detail")}</span>
+          </div>
+          <div className={tooltipBubbleClass("rail", true)}>{t("qaUi.tooltip.railLabel")}</div>
+        </div>
+      </div>
+
       <div className="flex flex-wrap items-center gap-6">
         <div className="flex w-48 flex-col gap-2">
           <Skeleton className="h-3 w-24" />
@@ -930,7 +952,7 @@ function PrimitiveSheet() {
         <Tooltip label={t("qaUi.tooltip.label")} detail={t("qaUi.tooltip.detail")}>
           <Button variant="secondary">{t("qaUi.tooltip.trigger")}</Button>
         </Tooltip>
-        <Tooltip label={t("qaUi.tooltip.railLabel")} tone="rail" side="right">
+        <Tooltip label={t("qaUi.tooltip.railLabel")} tone="rail" side="right" mark>
           <Button variant="secondary">{t("qaUi.tooltip.railTrigger")}</Button>
         </Tooltip>
       </div>

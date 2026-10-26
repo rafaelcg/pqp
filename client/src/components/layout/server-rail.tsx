@@ -291,6 +291,7 @@ export function ServerRail({
         }
         side="right"
         tone="rail"
+        mark
       >
       <button
         type="button"
@@ -378,6 +379,7 @@ export function ServerRail({
           label={t("conversations.rail.more", { count: foldedFaces })}
           side="right"
           tone="rail"
+          mark
         >
           <button
             type="button"
@@ -528,6 +530,7 @@ export function ServerRail({
             label={isPublic ? publicName : server.name}
             side="right"
             tone="rail"
+            mark
           >
             <span
               ref={reorder.itemRef(server.id)}
@@ -859,7 +862,7 @@ function PinnedConversationButton({
   );
 
   return (
-    <Tooltip label={title} side="right" tone="rail">
+    <Tooltip label={title} side="right" tone="rail" mark>
       <span className="relative inline-flex">
         {items.length > 0 ? (
           <ContextMenu items={items}>{button}</ContextMenu>

@@ -229,16 +229,62 @@ export function tooltipA11y({
   };
 }
 
+/*
+ * THE BUBBLE. Under the redesign every colour, the radius, the padding and
+ * the weight come from `--tooltip-*` tokens (`index.css`), unset with the
+ * toggle off, where each falls back in the class to what the bubble always
+ * drew. Hand-placed bubbles that cannot use Radix (the reaction tip in
+ * `message-list.tsx`, the locked-look hint in `appearance-section.tsx`) read
+ * the same tokens, so under the redesign there is one bubble in the app.
+ */
+const TOOLTIP_BUBBLE =
+  "rounded-[var(--tooltip-radius,var(--radius-control))] border border-[color:var(--tooltip-border,var(--elevation-3-border))] bg-[color:var(--tooltip-bg,var(--elevation-3-surface))] text-[color:var(--tooltip-text,var(--color-text))] shadow-[var(--tooltip-shadow,var(--elevation-3-shadow))] px-[var(--tooltip-px,0.5rem)] py-[var(--tooltip-py,0.25rem)] text-xs leading-[var(--tooltip-leading,1.375)] [font-weight:var(--tooltip-weight,400)]";
+
+/** The quieter second line. */
+export const TOOLTIP_DETAIL =
+  "mt-[var(--tooltip-detail-gap,0.25rem)] block text-[11px] leading-[var(--tooltip-detail-leading,inherit)] font-normal text-[color:var(--tooltip-detail,var(--color-text-tertiary))]";
+
+/**
+ * The server-list bubble: larger, semibold, and in the title face under the
+ * redesign, a step under the bold (700) server name in its pane title and
+ * above the medium default label. Its colours, radius and shadow are the
+ * default bubble's under the redesign. With `mark` it also carries a 3px
+ * accent bar on its start edge (`TOOLTIP_MARK`): the one place a tooltip
+ * carries the brand, because it names a place.
+ */
+const TOOLTIP_RAIL =
+  "rounded-[var(--tooltip-radius,var(--radius-card))] border border-[color:var(--tooltip-border,var(--color-surface-2))] bg-[color:var(--tooltip-bg,var(--color-surface-0))] text-[color:var(--tooltip-text,var(--color-text))] shadow-[var(--tooltip-rail-shadow,var(--shadow-popover))] px-[var(--tooltip-rail-px,0.625rem)] py-[var(--tooltip-rail-py,0.375rem)] text-[length:var(--tooltip-rail-size,13px)] leading-[var(--tooltip-leading,1.375)] [font-weight:var(--tooltip-rail-weight,600)] [font-family:var(--tooltip-rail-font,inherit)]";
+
+/**
+ * The place mark: a short straight bar on the rail bubble's start edge, for a
+ * bubble that names a place (a server, a pinned conversation), never an
+ * action. Drawn only where `--tooltip-rail-mark` is set (the redesign).
+ */
+const TOOLTIP_MARK =
+  "relative before:absolute before:inset-y-[0.375rem] before:left-0 before:w-[3px] before:rounded-r-full before:bg-[color:var(--tooltip-rail-mark,transparent)] before:content-['']";
+
+/** The bubble's classes, for a static specimen (`/qa/ui`). */
+export function tooltipBubbleClass(tone: "default" | "rail" = "default", mark = false): string {
+  if (tone !== "rail") return TOOLTIP_BUBBLE;
+  return mark ? cn(TOOLTIP_RAIL, TOOLTIP_MARK) : TOOLTIP_RAIL;
+}
+
 export interface TooltipProps extends TooltipA11yProps {
   /** Which side of the control the bubble sits on. Defaults to above it. */
   side?: "top" | "right" | "bottom" | "left";
   align?: "start" | "center" | "end";
   /**
-   * `rail` is the server-list bubble: a bit larger, darker, and further from
-   * the tile, the way Discord names a server on hover. Default is the compact
-   * label on icon buttons in a bar.
+   * `rail` is the server-list bubble: a bit larger, semibold, and further
+   * from the tile, the way Discord names a server on hover (darker too with
+   * the toggle off; under the redesign it shares the default's colours).
+   * Default is the compact label on icon buttons in a bar.
    */
   tone?: "default" | "rail";
+  /**
+   * `rail` only: the bubble names a place (a server, a pinned conversation),
+   * so it carries the accent mark. Leave it off for an action on the rail.
+   */
+  mark?: boolean;
   /**
    * The control. Must be a single element that forwards props and a ref to a
    * real DOM node — our `Button`, or a plain `<button>`.
@@ -253,6 +299,7 @@ export function Tooltip({
   side = "top",
   align = "center",
   tone = "default",
+  mark = false,
   children,
 }: TooltipProps) {
   const a11y = tooltipA11y({ label, detail, name });
@@ -277,7 +324,7 @@ export function Tooltip({
         <TooltipPrimitive.Content
           side={side}
           align={align}
-          sideOffset={rail ? 12 : 6}
+          sideOffset={rail ? 14 : 6}
           collisionPadding={COLLISION_PADDING}
           aria-label={a11y.description}
           className={cn(
@@ -285,10 +332,8 @@ export function Tooltip({
             // tallest things a tooltipped button can sit next to, and matching
             // the reaction tip in `message-list.tsx` so the two read as one
             // object rather than two house styles.
-            "z-[140] max-w-72 whitespace-pre-wrap select-none text-text animate-fade-in",
-            rail
-              ? "rounded-[var(--radius-card)] border border-surface-2 bg-surface-0 shadow-[var(--shadow-popover)] px-2.5 py-1.5 text-[13px] font-semibold leading-snug"
-              : "elevation-3 rounded-[var(--radius-control)] px-2 py-1 text-xs leading-snug",
+            "z-[140] max-w-[var(--tooltip-max-w,18rem)] whitespace-pre-wrap select-none animate-fade-in",
+            tooltipBubbleClass(tone, mark),
             // Never intercept a click aimed at what is underneath. The bubble
             // is placed over the stage, and a swallowed click on a call
             // control is a worse bug than a missing label.
@@ -297,7 +342,7 @@ export function Tooltip({
         >
           {label}
           {detail && (
-            <span className="mt-1 block text-[11px] text-text-tertiary">
+            <span className={TOOLTIP_DETAIL}>
               {detail}
             </span>
           )}
