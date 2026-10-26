@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { CheckRow } from "@/components/ui/check-row";
 import { Icon } from "@/components/ui/icon";
+import { IconButton, type IconButtonSize } from "@/components/ui/icon-button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Slider } from "@/components/ui/slider";
@@ -755,6 +756,7 @@ const BADGE_VARIANTS: BadgeVariant[] = [
   "danger",
   "neutral",
 ];
+const ICON_BUTTON_SIZES: IconButtonSize[] = ["xs", "sm", "md", "lg"];
 const BUTTON_SIZES = ["lg", "default", "sm", "icon-lg", "icon", "icon-sm"] as const;
 
 function PrimitiveSheet() {
@@ -763,6 +765,7 @@ function PrimitiveSheet() {
   const [checked, setChecked] = useState(false);
   const [scrub, setScrub] = useState(42);
   const [volume, setVolume] = useState(70);
+  const [pressed, setPressed] = useState(true);
 
   return (
     <div className="flex flex-col gap-6">
@@ -801,6 +804,65 @@ function PrimitiveSheet() {
               </Button>
             </div>
           ))}
+        </div>
+      </div>
+
+      <div data-testid="qa-primitive-icon-button">
+        <p
+          className="mb-2 text-text-tertiary"
+          style={{ fontSize: "var(--type-label-size)" }}
+        >
+          IconButton
+        </p>
+        <div className="flex flex-col gap-2">
+          {ICON_BUTTON_SIZES.map((size) => {
+            return (
+              <div key={size} className="flex flex-wrap items-center gap-3">
+                <span
+                  className="w-8 text-text-tertiary"
+                  style={{ fontSize: "var(--type-caption-size)" }}
+                >
+                  {size}
+                </span>
+                <IconButton size={size} touch={false} side="right" label={`${t("qaUi.iconButton.settings")} ${size}`}>
+                  <Icon icon={GearSix} />
+                </IconButton>
+                <IconButton
+                  size={size}
+                  touch={false}
+                  side="right"
+                  pressed={pressed}
+                  onClick={() => setPressed((value) => !value)}
+                  label={`${t("qaUi.iconButton.mute")} ${size}`}
+                >
+                  <Icon icon={Microphone} />
+                </IconButton>
+                <IconButton size={size} touch={false} side="right" disabled label={t("qaUi.state.disabled")}>
+                  <Icon icon={Bell} />
+                </IconButton>
+                <IconButton
+                  size={size}
+                  touch={false}
+                  side="right"
+                  disabled
+                  pressed
+                  label={`${t("qaUi.iconButton.mute")} ${t("qaUi.state.disabled")} ${size}`}
+                >
+                  <Icon icon={Microphone} />
+                </IconButton>
+                {/* Last in the row, so its open tooltip covers nothing. */}
+                <IconButton
+                  size={size}
+                  touch={false}
+                  side="right"
+                  tone="danger"
+                  label={`${t("qaUi.iconButton.remove")} ${size}`}
+                >
+                  <Icon icon={X} kind="symbol" />
+                </IconButton>
+              </div>
+            );
+          })}
         </div>
       </div>
 

@@ -26,6 +26,8 @@ import path from "node:path";
 const API = process.env.E2E_API_URL ?? "http://localhost:3101";
 const OUT = process.env.DESIGN_COUNCIL_DIR;
 const DEV_TOKEN = "dev-local-token";
+/** `ADMIN_METRICS_TOKEN` in `playwright.config.ts`, for a per-server flag. */
+const ADMIN_TOKEN = "e2e-admin-token-0123456789abcdef";
 /** `DESIGN_COUNCIL_REDESIGN=1`: photograph the redesign (`lib/redesign.ts`). */
 const REDESIGN = process.env.DESIGN_COUNCIL_REDESIGN === "1";
 const DESKTOP = { width: 1440, height: 900 };
@@ -518,12 +520,21 @@ const PRIMITIVES: { id: string; testId: string; hover?: string; focus?: string }
     hover: "secondary default",
     focus: "default default",
   },
+  {
+    id: "p-icon-button",
+    testId: "qa-primitive-icon-button",
+    hover: "Remover md",
+    focus: "Remover lg",
+  },
 ];
 
 test("captures the primitives", async ({ browser }) => {
   fs.mkdirSync(OUT!, { recursive: true });
   for (const theme of ["dark", "light"] as const) {
-    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const context = await browser.newContext({
+      viewport: { width: 1280, height: 900 },
+      locale: "pt-BR",
+    });
     const page = await context.newPage();
     await page.addInitScript(
       ([value, redesign]) => {
@@ -532,7 +543,7 @@ test("captures the primitives", async ({ browser }) => {
       },
       [theme, REDESIGN] as const,
     );
-    await page.goto("/qa/ui");
+    await page.goto("/qa/ui?lang=pt-BR");
     for (const primitive of PRIMITIVES) {
       const block = page.getByTestId(primitive.testId);
       await block.scrollIntoViewIfNeeded();
@@ -549,6 +560,61 @@ test("captures the primitives", async ({ browser }) => {
       await page.waitForTimeout(300);
       await block.screenshot({ path: path.join(OUT!, `${primitive.id}-${theme}.png`) });
     }
+    await context.close();
+  }
+});
+
+/**
+ * A forum post open beside its list: the header's icon buttons (expand,
+ * close) in context. Last, so its server is not in the other scenes' rail.
+ */
+test("captures the forum post", async ({ browser }) => {
+  fs.mkdirSync(OUT!, { recursive: true });
+  await person(VIEWER, "Lia", PRESET(4));
+  await person("rafa", "Rafa", PRESET(1));
+  const home = await server(VIEWER, "Oficina");
+  const flag = await fetch(`${API}/api/admin/flag-overrides`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${ADMIN_TOKEN}` },
+    body: JSON.stringify({ key: "forum_channels", serverId: home.id, enabled: true }),
+  });
+  expect(flag.status).toBe(200);
+  const { channel: forum } = await json<{ channel: { id: string } }>(
+    await fetch(`${API}/api/servers/${home.id}/channels`, {
+      method: "POST",
+      headers: headers(VIEWER),
+      body: JSON.stringify({ name: "ajuda", type: "forum" }),
+    }),
+  );
+  await json(
+    await fetch(`${API}/api/channels/${forum.id}/posts`, {
+      method: "POST",
+      headers: headers(VIEWER),
+      body: JSON.stringify({
+        title: "O áudio some quando alguém compartilha a tela",
+        body: "Acontece no app do Windows. No navegador fica normal.",
+        nonce: "council-forum-post",
+      }),
+    }),
+  );
+
+  for (const theme of ["dark", "light"] as const) {
+    const context = await browser.newContext({ viewport: DESKTOP, locale: "pt-BR" });
+    const page = await context.newPage();
+    await as(page, theme);
+    await page.goto(`/app/server/${home.id}/channel/${forum.id}?lang=pt-BR`);
+    await hideDevBanner(page);
+    await expect(page.locator("[data-forum-pane]")).toBeVisible({ timeout: 30_000 });
+    // The roster takes the width the post would sit in; without it the post
+    // opens beside the list, with its expand and close buttons.
+    const roster = page.locator("[data-member-sidebar-toggle]");
+    if ((await roster.count()) && (await roster.first().getAttribute("aria-pressed")) === "true") {
+      await roster.first().click();
+    }
+    await page.getByRole("link", { name: /O áudio some/ }).click();
+    const panel = page.locator("[data-forum-post-panel]");
+    await expect(panel).toBeVisible({ timeout: 15_000 });
+    await shoot(page, `09-forum-post-${theme}`);
     await context.close();
   }
 });

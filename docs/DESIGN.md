@@ -493,6 +493,44 @@ so a variant and a size are props, not class strings.
   one. A disabled button fires no hover, so its
   explanation cannot live in a native `title`.
 
+### IconButton
+
+`icon-button.tsx`. A control that is only an icon: settings, pin, mute, close.
+It wraps `Tooltip`, so `label` is required and is both the tooltip and the
+accessible name.
+
+- **Sizes.** `xs` (24px, beside text in a row), `sm` (28px, a row's trailing
+  actions), `md` (32px, a header or toolbar, the default), `lg` (36px, beside
+  a default `Button`).
+- **`touch`.** On by default: the box grows to 44px under 640px. Turn it off
+  only inside a dense row that has a larger tap target of its own.
+- **`tone="danger"`.** The icon turns red on hover, for remove and leave.
+- **`pressed`.** A toggle (mute, pin). It sets `aria-pressed` and, under the
+  redesign, the selected row fill with an accent glyph. Only with a fixed
+  `label`: a control whose label or icon swaps (expand and collapse) is an
+  action, not a toggle. Do not combine it with `tone="danger"`: a pressed toggle
+  hovers in the accent, not red.
+- **Glyph.** The size owns it: 14, 16, 18 and 20px for xs to lg under the
+  redesign (16px at `md` with the toggle off). Pass the icon bare; a class on
+  it loses.
+- **`disabled`.** Rendered as `aria-disabled`, not the native attribute, so
+  the control stays hoverable and focusable and its tooltip can still name
+  it. Its handlers are not wired, and a click's default action is
+  prevented, so a disabled submit does not submit. A pressed, disabled
+  toggle keeps its fill and does not react to hover.
+- **Focus.** The 2px ring with a 2px offset; in light under the redesign it
+  is the solid accent (`--icon-button-ring`), since a ghost circle has no
+  other chrome.
+- **`detail`.** A second, quieter line in the tooltip.
+- **Under the redesign.** A circle, secondary text at rest, the button's
+  text-tint hover (a 20% danger tint for `tone="danger"`), a 2px ring offset
+  and a press to 94%, all from `--icon-button-*` tokens with fallbacks in the
+  class (see Button). The pressed state is the one set of `redesign:`
+  classes, because nothing paints a pressed icon button from outside.
+- **Use it** for every icon-only control. **Do not** draw a raw `<button>`
+  with an icon, and do not use `Button size="icon"` for a new one: that size
+  stays for an icon button that must match a row of text buttons.
+
 ### Input
 
 `input.tsx`. A single-line text field, `forwardRef` so a form can focus it.

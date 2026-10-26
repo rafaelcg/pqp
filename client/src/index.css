@@ -675,6 +675,25 @@
   /* A small button steps down in height, not in legibility. */
   --button-text-sm: 0.8125rem;
 
+  /* Icon button (ui/icon-button.tsx). Unset with the toggle off: each falls
+     back, in the class, to what the icon button always drew. */
+  --icon-button-radius: var(--radius-pill);
+  --icon-button-text: var(--color-text-secondary);
+  /* Tints, like the button's: an icon button sits on panes and dialogs. */
+  --icon-button-hover: var(--button-ghost-hover);
+  /* A touch deeper than the button's, so the disc shows on a small circle. */
+  --icon-button-danger-hover: color-mix(in oklab, var(--color-danger) 20%, transparent);
+  --icon-button-ring-offset: 2px;
+  /* The band between a ghost circle and its ring shows what is behind it,
+     not one fixed surface, so a focused close button on a dialog has no
+     stray ring of the pane colour. */
+  --icon-button-ring-offset-color: transparent;
+  --icon-button-press: 0.94;
+  --icon-button-glyph-xs: 0.875rem;
+  --icon-button-glyph-sm: 1rem;
+  --icon-button-glyph-md: 1.125rem;
+  --icon-button-glyph-lg: 1.25rem;
+
   /* The title role is drawn in the display face: server names, channel
      titles and pane headers, in sentence case. */
   --type-display-leading: 1.25;
@@ -892,6 +911,9 @@
   --button-primary-shadow: inset 0 1px 0 oklch(1 0 0 / 0.25), 0 1px 2px oklch(0.4 0.02 262 / 0.18);
   /* Light shows the 12% step clearly; dark needs 15%. */
   --button-secondary-hover: color-mix(in oklab, var(--color-text) 12%, transparent);
+  /* A ghost icon button has no chrome but its ring, and the shared 60% ring
+     reads 2.4:1 on a light page; it takes the solid accent instead. */
+  --icon-button-ring: var(--color-accent);
 }
 
 /*
