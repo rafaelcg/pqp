@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils";
  */
 /** The box: border, fill, radius, ring, hover and invalid. */
 export const FIELD_BOX =
-  "rounded-[var(--input-radius,var(--radius-control))] border border-[color:var(--input-border,var(--color-border))] bg-[color:var(--input-bg,var(--color-surface-0))] text-sm text-text transition-colors duration-[var(--duration-fast)] redesign:enabled:hover:not-aria-invalid:border-[color:var(--input-hover-border)] redesign:aria-invalid:border-danger redesign:disabled:text-text-tertiary";
+  "rounded-[var(--input-radius,var(--radius-control))] border border-[color:var(--input-border,var(--color-border))] bg-[color:var(--input-bg,var(--color-surface-0))] text-sm text-text transition-colors duration-[var(--duration-fast)] redesign:enabled:hover:not-aria-invalid:border-[color:var(--input-hover-border)] redesign:aria-invalid:border-danger redesign:disabled:bg-transparent redesign:disabled:text-[color:color-mix(in_oklab,var(--color-text-tertiary)_70%,transparent)] redesign:disabled:placeholder:text-[color:color-mix(in_oklab,var(--color-text-tertiary)_70%,transparent)]";
 
 /** What the text inside a field draws: the placeholder above all. */
 export const FIELD_TEXT =
@@ -21,8 +21,9 @@ const FIELD_RING =
 
 /*
  * Height: 40px with the toggle off; under the redesign the field matches the
- * default button (`--input-h`), so a field and its Save line up. Disabled
- * keeps its edge under the redesign and fades only the text.
+ * default button (`--input-h`), so a field and its Save line up. Disabled,
+ * under the redesign, keeps its edge, drops its fill and dims its value,
+ * placeholder and prefix, so an empty disabled field is not a resting one.
  */
 const FIELD = cn(
   "flex h-[var(--input-h,var(--control-lg))] w-full px-[var(--input-px,0.75rem)] py-2 disabled:cursor-not-allowed disabled:opacity-[var(--input-disabled-opacity,0.5)]",
@@ -59,6 +60,7 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
           "focus-within:ring-2 focus-within:ring-offset-2 focus-within:ring-offset-ring-offset focus-within:ring-focus-ring",
           "redesign:has-[input:enabled]:hover:not-has-[input[aria-invalid=true]]:border-[color:var(--input-hover-border)]",
           "has-[input[aria-invalid=true]]:border-danger has-[input:disabled]:cursor-not-allowed has-[input:disabled]:opacity-[var(--input-disabled-opacity,0.5)]",
+          "redesign:has-[input:disabled]:bg-transparent redesign:has-[input:disabled]:[&>span]:text-[color:color-mix(in_oklab,var(--color-text-tertiary)_70%,transparent)]",
           className,
         )}
       >
@@ -72,7 +74,7 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
           ref={ref}
           type={type}
           className={cn(
-            "h-full min-w-0 flex-1 bg-transparent py-2 pr-[var(--input-px,0.75rem)] pl-[var(--input-prefix-gap,0.125rem)] text-text focus-visible:outline-none disabled:cursor-not-allowed",
+            "h-full min-w-0 flex-1 bg-transparent py-2 pr-[var(--input-px,0.75rem)] pl-[var(--input-prefix-gap,0.125rem)] text-text focus-visible:outline-none disabled:cursor-not-allowed redesign:disabled:text-[color:color-mix(in_oklab,var(--color-text-tertiary)_70%,transparent)] redesign:disabled:placeholder:text-[color:color-mix(in_oklab,var(--color-text-tertiary)_70%,transparent)]",
             FIELD_TEXT,
           )}
           {...props}

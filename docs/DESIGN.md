@@ -554,8 +554,11 @@ accessible name.
   3:1 on the fill, on a dialog and on the conversation pane in every look
   (the floor for a control's boundary), and grows toward the text on hover.
   The placeholder is the full `text-tertiary`, the prefix `text-secondary`,
-  both at 4.5:1. Disabled keeps the edge and fades only the text. Hover,
-  invalid and disabled are the field's `redesign:` classes. `Textarea` shares the box through
+  both at 4.5:1. Disabled keeps the edge, drops the fill and dims the
+  value, placeholder and prefix, so an empty disabled field never looks like
+  a resting one. Hover, invalid and disabled are the field's `redesign:`
+  classes. Fields are rounded rectangles (`--radius-control`) and actions
+  are pills; a field and its button share a height, not a shape. `Textarea` shares the box through
   `FIELD_BOX` and `FIELD_TEXT`.
 - **Use it** for every single-line text field. A multi-line value is a
   `Textarea`.

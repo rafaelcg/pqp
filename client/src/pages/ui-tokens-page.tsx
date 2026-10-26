@@ -893,6 +893,12 @@ function PrimitiveSheet() {
         </label>
         <label className="flex flex-col gap-1">
           <span style={{ fontSize: "var(--type-label-size)" }}>
+            {t("qaUi.input.prefix")} · {t("qaUi.state.disabled")}
+          </span>
+          <Input prefix="pqp.gg/@" defaultValue="lia" disabled />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span style={{ fontSize: "var(--type-label-size)" }}>
             {t("qaUi.state.disabled")}
           </span>
           <Input placeholder={t("qaUi.input.placeholder")} disabled />
