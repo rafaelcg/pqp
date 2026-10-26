@@ -129,6 +129,7 @@ export const RADIUS_TOKENS = [
   "--radius-panel",
   "--radius-pill",
   "--radius-row",
+  "--radius-pane",
 ] as const;
 
 /**

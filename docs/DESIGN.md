@@ -377,6 +377,7 @@ selectors in a comment in `index.css`: the bench finds blocks by regex.
 |---|---|---|
 | `--radius-tick` / `control` / `card` / `panel` | 3 / 6 / 8 / 16 px | 4 / 10 / 14 / 20 px |
 | `--radius-row` (new) | `--radius-control` | pill |
+| `--radius-pane` (new) | `--radius-panel` | 16 px (a dialog keeps `--radius-panel`, 20 px) |
 | `--type-title-font` (new) | `--font-sans` | `--font-display` (Gabarito) |
 | `--type-body-leading` | 20px | 22px |
 | `--control-row` (new) | 32px | 36px |
@@ -740,7 +741,7 @@ reports seven numbers.
 | Number | Rule | Behaviour |
 |---|---|---|
 | `contrast` | 20 foreground and background pairs in every theme, plus 20 pairs for the redesign's roles on every `redesign-*` theme (each look with the toggle on). 106 theme combinations in all | Always fails on a regression |
-| `steps` | 7 pairs of fills that must stay visibly apart, as an OKLab distance (canvas to pane, hover to pane, selected to hover, mention to pane, chip to mention), on every `redesign-*` theme | Always fails, and an unmeasurable step fails too |
+| `steps` | 8 pairs of fills that must stay visibly apart, as an OKLab distance (canvas to pane, hover to pane, selected to hover, selected to pane, mention to pane, chip to mention), on every `redesign-*` theme | Always fails, and an unmeasurable step fails too |
 | `order` | The pane rule as an order: canvas darker than the side pane, conversation at least as bright as the side pane (OKLab lightness), on every `redesign-*` theme | Always fails. A distance alone let a look swap its panes and pass |
 | `leaks` | Rule 2, counted across `client/src` | Ratchet, pinned by `BENCH_MAX_LEAKS`. It is 0 today |
 | `uiAliases` | Rule 4, counted inside `client/src/components/ui/` | Gate at 0. `BENCH_MAX_UI_ALIASES` is an escape hatch for a half-finished migration, not a setting |

@@ -31,7 +31,7 @@ Read this file and the inventory at the start of every session.
 | 0 | Three directions, mockups and council round D1 | Done (2 of 3 reviewers) |
 | 0 | André picks a direction | Done: B (Salas), with filled icons |
 | 1 | Toggle | Done |
-| 1 | Tokens for the chosen direction | Built on `rd/tokens`, council round T3 running |
+| 1 | Tokens for the chosen direction | Built on `rd/tokens`, council round T4 running |
 | 1 | André signs off on `/qa/ui` | Not started |
 
 ## Phase 0: directions
@@ -146,6 +146,23 @@ look (`order`), because a distance alone let the swap pass. Also: the
 selected row's label is `accent-text` in every dark look, and Night's side
 pane sits further off the black canvas. Deferred to the pane header element:
 a 16px title in the target versus the 18px title role.
+
+### Council round T3
+
+Answers: `~/pqp-redesign/t-tokens/council-t3/`.
+
+| Overall | Toggle off | Redesign on |
+|---|---|---|
+| Claude Opus 5.5 | 7.3 | 8.4 |
+| Codex GPT-6 Luna | 7.7 | 9.0 |
+
+Codex: no fixes. Opus MUST: in Everforest dark the selected row nearly
+matched the side pane. Fixed, and the bench now measures selected to side
+pane. Also: Clássico light soft pair moved from hue 135 (mint) to 126
+(lime), the light mention chip stands further off its row (floor 0.05),
+and `--radius-pane` (16px) splits a shell pane from a dialog. Not taken:
+stating the pane pair in every look block (the `order` check already fails
+a look that inverts).
 
 ## Open questions for André
 

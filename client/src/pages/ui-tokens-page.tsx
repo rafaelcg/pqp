@@ -528,7 +528,7 @@ function ShellSpecimen() {
           </span>
         </div>
 
-        <div className="flex w-56 shrink-0 flex-col rounded-[var(--radius-panel)] bg-pane-side py-3" style={{ paddingInline: "calc(var(--space-pane) / 2)" }}>
+        <div className="flex w-56 shrink-0 flex-col rounded-[var(--radius-pane)] bg-pane-side py-3" style={{ paddingInline: "calc(var(--space-pane) / 2)" }}>
           <div className="flex items-center gap-1 px-3 pb-2 font-bold text-text" style={titleStyle}>
             <span className="min-w-0 flex-1 truncate">Turma do Fliperama</span>
             <Icon icon={CaretDown} kind="symbol" size="sm" className="text-text-tertiary" />
@@ -565,7 +565,7 @@ function ShellSpecimen() {
           </div>
         </div>
 
-        <div className="flex min-w-0 flex-1 flex-col rounded-[var(--radius-panel)] bg-pane-main">
+        <div className="flex min-w-0 flex-1 flex-col rounded-[var(--radius-pane)] bg-pane-main">
           <div className="flex items-center gap-2 border-b border-border py-3 text-text" style={{ ...titleStyle, paddingInline: "var(--space-pane)" }}>
             <Icon icon={Hash} kind="symbol" className="text-text-tertiary" />
             <span className="font-bold">papo</span>

@@ -300,6 +300,8 @@
   /* A list row (channel, member, conversation). The control radius today; a
      pill under the redesign. */
   --radius-row: var(--radius-control);
+  /* A shell pane (channel list, conversation). The panel radius today. */
+  --radius-pane: var(--radius-panel);
   /* Message list drawing. Overridden on the root by src/lib/chat-display.ts. */
   --chat-font-size: 15px;
   --chat-line-height: 22px;
@@ -643,6 +645,8 @@
   --radius-card: 0.875rem;
   --radius-panel: 1.25rem;
   --radius-row: 999px;
+  /* A full-height shell pane is a touch tighter than a dialog. */
+  --radius-pane: 1rem;
 
   /* The title role is drawn in the display face: server names, channel
      titles and pane headers, in sentence case. */
@@ -849,7 +853,7 @@
      chip on it is deepened the same way so it does not vanish into the row. */
   --color-row-selected: color-mix(in oklab, var(--color-accent-soft) 88%, var(--color-accent));
   --color-mention-row: var(--color-accent-soft);
-  --color-mention-chip: color-mix(in oklab, var(--color-accent-soft) 86%, var(--color-accent));
+  --color-mention-chip: color-mix(in oklab, var(--color-accent-soft) 78%, var(--color-accent));
   --color-on-mention-chip: color-mix(in oklab, var(--color-on-accent-soft) 25%, var(--color-text));
 }
 
@@ -882,6 +886,11 @@
   --color-text-secondary: oklch(0.36 0.016 262);
   --color-text-tertiary: oklch(0.46 0.018 262);
 
+  /* The plain light theme's soft pair sits at hue 135, which reads mint on a
+     selected row; the target is lime. The custom accent's light block still
+     wins over these. */
+  --color-accent-soft: oklch(0.935 0.06 126);
+  --color-on-accent-soft: oklch(0.38 0.13 128);
   --color-code-bg: oklch(0.955 0.005 95);
   --color-indicator: oklch(0.2 0.015 262);
   --picker-border: oklch(0.88 0.008 95);
@@ -1819,8 +1828,8 @@
      sink below it (lighter would cost their labels contrast) so they stay
      apart from the mention row and from a hover. */
   --color-mention-row: color-mix(in oklab, var(--color-accent-soft) 55%, var(--color-pane-main));
-  --color-mention-chip: color-mix(in oklab, var(--color-accent-soft) 80%, oklch(0 0 0));
-  --color-row-selected: color-mix(in oklab, var(--color-accent-soft) 80%, oklch(0 0 0));
+  --color-mention-chip: color-mix(in oklab, var(--color-accent-soft) 70%, oklch(0 0 0));
+  --color-row-selected: color-mix(in oklab, var(--color-accent-soft) 70%, oklch(0 0 0));
 }
 :root[data-redesign][data-theme="light"]:where([data-appearance="everforest"]) {
   --color-text: oklch(0.38 0.0212 232.87);
@@ -1832,6 +1841,9 @@
 }
 :root[data-redesign][data-theme="light"]:where([data-appearance="catppuccin"]) {
   --color-text-tertiary: oklch(0.49 0.0343 279.08);
+  /* The accent is a deep saturated purple, so the chip takes less of it to
+     keep its label readable. */
+  --color-mention-chip: color-mix(in oklab, var(--color-accent-soft) 86%, var(--color-accent));
 }
 
 :root[data-contrast="more"] {

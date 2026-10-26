@@ -109,8 +109,9 @@ const STEP_PAIRS = [
   { a: "--color-row-hover", b: "--color-pane-side", floor: 0.02, label: "hovered row on the side pane" },
   { a: "--color-row-hover", b: "--color-pane-main", floor: 0.02, label: "hovered row on the conversation pane" },
   { a: "--color-row-selected", b: "--color-row-hover", floor: 0.03, label: "selected row against a hovered row" },
+  { a: "--color-row-selected", b: "--color-pane-side", floor: 0.03, label: "selected row on the side pane" },
   { a: "--color-mention-row", b: "--color-pane-main", floor: 0.03, label: "mention row on the conversation pane" },
-  { a: "--color-mention-chip", b: "--color-mention-row", floor: 0.03, label: "@name chip on a mention row" },
+  { a: "--color-mention-chip", b: "--color-mention-row", floor: 0.05, label: "@name chip on a mention row" },
 ];
 
 /**
