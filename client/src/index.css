@@ -799,6 +799,38 @@
   --icon-button-glyph-sm: 1rem;
   --icon-button-glyph-md: 1.125rem;
   --icon-button-glyph-lg: 1.25rem;
+  /* RadioGroup (ui/radio-group.tsx). The segmented track is a tinted pill
+     with a raised thumb, so the choice reads by shape and not by a shade of
+     grey; chips take the strong edge; the list's dot fills with the accent
+     and sits inside the field's 3:1 edge when off. */
+  --segmented-radius: 999px;
+  --segmented-pad: 0.1875rem;
+  --segmented-h: calc(var(--control-md) - 2 * var(--segmented-pad));
+  --segmented-h-sm: calc(var(--control-sm) - 2 * var(--segmented-pad));
+  --segmented-ring-offset: 1px;
+  --radio-text-sm: var(--button-text-sm);
+  --segmented-bg: color-mix(in oklab, var(--color-text) 6%, transparent);
+  --segmented-border: transparent;
+  /* No border width either, so the track is exactly the control height. */
+  --segmented-border-w: 0px;
+  --segmented-thumb: color-mix(in oklab, var(--color-text) 15%, transparent);
+  --segmented-thumb-shadow: inset 0 1px 0 oklch(1 0 0 / 0.06), 0 1px 2px oklch(0.06 0.02 262 / 0.4);
+  --segmented-text: var(--color-text-secondary);
+  --chip-border: var(--color-border-strong);
+  --chip-hover: var(--button-ghost-hover);
+  /* On the control ladder, the same height as a segmented track. */
+  --chip-h: var(--control-md);
+  --chip-h-sm: var(--control-sm);
+  /* Doubles the checked chip's 1px accent edge, inside its box. */
+  --chip-on-ring: inset 0 0 0 1px var(--color-accent);
+  --radio-row-hover: var(--button-ghost-hover);
+  --radio-size: 1.125rem;
+  --radio-ring-w: 1.5px;
+  --radio-off-ring: var(--color-field-border, color-mix(in oklab, var(--color-border-strong) 50%, var(--color-text)));
+  --radio-off-bg: color-mix(in oklab, var(--color-text) 4%, transparent);
+  --radio-dot: var(--color-on-accent);
+  --radio-dot-size: 0.4375rem;
+  --radio-disabled-opacity: 0.5;
 
   /* The title role is drawn in the display face: server names, channel
      titles and pane headers, in sentence case. */
@@ -1040,6 +1072,9 @@
   --popover-surface: var(--color-surface-0);
   --popover-border: color-mix(in oklab, var(--color-text) 10%, transparent);
   --popover-shadow: 0 1px 2px oklch(0.4 0.02 262 / 0.1), var(--shadow-2);
+  /* Light raises the thumb as a white chip on the grey track. */
+  --segmented-thumb: var(--color-surface-0);
+  --segmented-thumb-shadow: 0 1px 2px oklch(0.4 0.02 262 / 0.2), 0 0 0 0.5px oklch(0.4 0.02 262 / 0.12);
 }
 
 /*

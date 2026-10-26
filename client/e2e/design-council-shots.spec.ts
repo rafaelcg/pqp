@@ -455,6 +455,10 @@ test("captures the design council screens", async ({ browser }) => {
       await page.getByRole("dialog").getByText("Notificações", { exact: true }).first().click();
       await expect(page.getByRole("dialog").getByRole("switch").first()).toBeVisible();
       await shoot(page, `11-settings-switches-${theme}`);
+      // The theme and density pickers, for RadioGroup in place.
+      await page.getByRole("dialog").getByText("Aparência e idioma", { exact: true }).first().click();
+      await expect(page.getByRole("dialog").getByRole("radiogroup").first()).toBeVisible();
+      await shoot(page, `12-settings-appearance-${theme}`);
       await page.keyboard.press("Escape");
 
       await page.locator("[data-server-menu-trigger]").first().click();
@@ -529,7 +533,7 @@ const PRIMITIVES: {
   hover?: string;
   focus?: string;
   /** The role the hover and focus targets have. Buttons by default. */
-  role?: "button" | "textbox" | "combobox" | "checkbox";
+  role?: "button" | "textbox" | "combobox" | "checkbox" | "radio";
 }[] = [
   {
     id: "p-button",
@@ -556,6 +560,9 @@ const PRIMITIVES: {
   },
   // Two panels in place: a note with actions, and a picker grid.
   { id: "p-popover", testId: "qa-primitive-popover" },
+  // Focus the checked segment, hover an unchecked chip (the first of each
+  // name: the small groups repeat the labels).
+  { id: "p-radio", testId: "qa-primitive-radio", role: "radio", focus: "Escuro", hover: "Menções" },
 ];
 
 test("captures the primitives", async ({ browser }) => {
@@ -580,12 +587,12 @@ test("captures the primitives", async ({ browser }) => {
       await page.evaluate(() => document.fonts.ready);
       if (primitive.focus) {
         // A keyboard focus, so `focus-visible` draws the ring.
-        await block.getByRole(primitive.role ?? "button", { name: primitive.focus, exact: true }).focus();
+        await block.getByRole(primitive.role ?? "button", { name: primitive.focus, exact: true }).first().focus();
         await page.keyboard.press("Shift+Tab");
         await page.keyboard.press("Tab");
       }
       if (primitive.hover) {
-        await block.getByRole(primitive.role ?? "button", { name: primitive.hover, exact: true }).hover();
+        await block.getByRole(primitive.role ?? "button", { name: primitive.hover, exact: true }).first().hover();
       }
       await page.waitForTimeout(300);
       await block.screenshot({ path: path.join(OUT!, `${primitive.id}-${theme}.png`) });

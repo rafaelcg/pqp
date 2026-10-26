@@ -162,6 +162,23 @@ export function useRovingRadio<T>(
 const FOCUS_RING =
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring";
 
+/**
+ * The segmented track and cell, exported for a radio group that draws its own
+ * cells (the appearance page's locked "Modo" picker), so the two never drift.
+ * With the tokens unset this is the bordered `surface-0` box and `surface-2`
+ * thumb the app always drew.
+ */
+export const SEGMENTED_TRACK =
+  "gap-0.5 rounded-[var(--segmented-radius,var(--radius-control))] border-[length:var(--segmented-border-w,1px)] border-[color:var(--segmented-border,var(--color-border))] bg-[color:var(--segmented-bg,var(--color-surface-0))] p-[var(--segmented-pad,0.125rem)]";
+
+/** A cell's shape and focus; the ring's offset is the track's padding. */
+export const SEGMENTED_CELL = `inline-flex items-center justify-center rounded-[var(--segmented-radius,var(--radius-control))] whitespace-nowrap ${FOCUS_RING} focus-visible:ring-offset-[length:var(--segmented-ring-offset,2px)] redesign:focus-visible:ring-offset-transparent`;
+
+export const SEGMENTED_CELL_ON =
+  "bg-[color:var(--segmented-thumb,var(--color-surface-2))] font-medium text-text shadow-[var(--segmented-thumb-shadow,0_0_transparent)]";
+
+export const SEGMENTED_CELL_OFF = "text-[color:var(--segmented-text,var(--color-text-tertiary))]";
+
 /** Inside a group box the box clips an outer ring, so the ring goes inside. */
 const INSET_FOCUS_RING =
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring focus-visible:ring-offset-0";
@@ -176,6 +193,11 @@ const INSET_FOCUS_RING =
  *
  * Options with a `description` cannot be segmented: a track has no room for a
  * second line, so the description would be silently dropped.
+ *
+ * Every colour and radius is a `--segmented-*`, `--chip-*` or `--radio-*`
+ * token with today's value as its fallback, so the toggle off is unchanged.
+ * Under the redesign the track is a tinted pill with a raised thumb, chips
+ * take a stronger edge, and the list's dot is a filled accent disc.
  */
 export function RadioGroup<T extends string | number>({
   value,
@@ -212,8 +234,7 @@ export function RadioGroup<T extends string | number>({
       aria-disabled={disabled || undefined}
       onKeyDown={onKeyDown}
       className={cn(
-        variant === "segmented" &&
-          "gap-0.5 rounded-[var(--radius-control)] border border-border bg-surface-0 p-0.5",
+        variant === "segmented" && SEGMENTED_TRACK,
         variant === "segmented" &&
           (content
             ? "inline-flex max-w-full flex-wrap"
@@ -240,30 +261,35 @@ export function RadioGroup<T extends string | number>({
             }}
             className={cn(
               "transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
-              optionDisabled && "cursor-not-allowed opacity-40",
+              optionDisabled && "cursor-not-allowed opacity-[var(--radio-disabled-opacity,0.4)]",
               variant === "segmented" && [
-                "inline-flex items-center justify-center rounded-[var(--radius-control)] whitespace-nowrap",
+                SEGMENTED_CELL,
                 content ? "shrink-0" : "min-w-0",
-                size === "sm" ? "h-9 px-2.5 text-xs sm:h-7" : "h-10 px-3 text-sm sm:h-8",
-                checked
-                  ? "bg-surface-2 font-medium text-text"
-                  : "text-text-tertiary",
+                // The track sits on the control ladder under the redesign: a
+                // cell is the control height less the track's padding.
+                size === "sm"
+                  ? "h-9 px-2.5 text-[length:var(--radio-text-sm,0.75rem)] leading-4 sm:h-[var(--segmented-h-sm,1.75rem)]"
+                  : "h-10 px-3 text-sm sm:h-[var(--segmented-h,2rem)]",
+                checked ? SEGMENTED_CELL_ON : SEGMENTED_CELL_OFF,
                 !checked && !optionDisabled && "hover:text-text",
-                FOCUS_RING,
               ],
               variant === "chips" && [
                 "inline-flex items-center rounded-full border",
-                size === "sm" ? "h-9 px-2.5 text-xs sm:h-7" : "h-10 px-3 text-sm sm:h-8",
+                size === "sm"
+                  ? "h-9 px-2.5 text-[length:var(--radio-text-sm,0.75rem)] leading-4 sm:h-[var(--chip-h-sm,1.75rem)]"
+                  : "h-10 px-3 text-sm sm:h-[var(--chip-h,2rem)]",
                 // 44px to a finger on a phone: the hit area reaches past the
                 // drawn pill, into the gap between rows.
                 "relative max-sm:after:absolute max-sm:after:inset-x-0 max-sm:after:content-['']",
                 size === "sm" ? "max-sm:after:-inset-y-1" : "max-sm:after:-inset-y-0.5",
                 checked
-                  ? "border-accent bg-accent-soft text-on-accent-soft"
-                  : "border-border text-text-secondary",
+                  ? // Under the redesign a 2px edge marks the choice by
+                    // shape too, not only by hue, without changing width.
+                    "border-accent bg-accent-soft text-on-accent-soft redesign:shadow-[var(--chip-on-ring)]"
+                  : "border-[color:var(--chip-border,var(--color-border))] text-text-secondary",
                 !checked &&
                   !optionDisabled &&
-                  "hover:bg-surface-2 hover:text-text",
+                  "hover:bg-[color:var(--chip-hover,var(--color-surface-2))] hover:text-text",
                 FOCUS_RING,
               ],
               variant === "list" && [
@@ -271,7 +297,8 @@ export function RadioGroup<T extends string | number>({
                 // With a status the option's bottom padding moves under the
                 // status, so the line sits tight under the description.
                 showStatus ? "pb-0" : "pb-3",
-                !optionDisabled && "hover:bg-surface-2",
+                !optionDisabled &&
+                  "hover:bg-[color:var(--radio-row-hover,var(--color-surface-2))]",
                 INSET_FOCUS_RING,
               ],
             )}
@@ -289,12 +316,14 @@ export function RadioGroup<T extends string | number>({
                 <span
                   aria-hidden
                   className={cn(
-                    "flex h-4 w-4 shrink-0 items-center justify-center rounded-full border",
-                    checked ? "border-accent" : "border-border-strong",
+                    "flex h-[var(--radio-size,1rem)] w-[var(--radio-size,1rem)] shrink-0 items-center justify-center rounded-full border-[length:var(--radio-ring-w,1px)] transition-colors duration-[var(--duration-fast)]",
+                    checked
+                      ? "border-accent redesign:bg-accent"
+                      : "border-[color:var(--radio-off-ring,var(--color-border-strong))] bg-[color:var(--radio-off-bg,transparent)]",
                   )}
                 >
                   {checked ? (
-                    <span className="h-2 w-2 rounded-full bg-accent" />
+                    <span className="h-[var(--radio-dot-size,0.5rem)] w-[var(--radio-dot-size,0.5rem)] rounded-full bg-[color:var(--radio-dot,var(--color-accent))]" />
                   ) : null}
                 </span>
               </>
@@ -303,7 +332,9 @@ export function RadioGroup<T extends string | number>({
                 <span className={content ? undefined : "truncate"}>
                   {option.label}
                 </span>
-                {option.trailing}
+                <span className="redesign:text-[color:color-mix(in_oklab,currentColor_70%,transparent)] redesign:tabular-nums">
+                  {option.trailing}
+                </span>
               </span>
             ) : (
               <span className={content ? undefined : "truncate"}>
