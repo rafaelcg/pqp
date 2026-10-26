@@ -66,6 +66,9 @@ updates:
       github-actions:
         patterns:
           - "*"
+        update-types:
+          - minor
+          - patch
 
   # Base images in the Dockerfiles. Deliberately no compose files: the SFU and
   # API box images (LiveKit, egress, Caddy) are bumped by hand in a quiet hour,
@@ -92,6 +95,9 @@ updates:
       docker:
         patterns:
           - "*"
+        update-types:
+          - minor
+          - patch
 
   - package-ecosystem: gradle
     directory: "/android"
@@ -104,3 +110,6 @@ updates:
       android:
         patterns:
           - "*"
+        update-types:
+          - minor
+          - patch
