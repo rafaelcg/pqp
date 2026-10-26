@@ -1056,6 +1056,25 @@ conversations or friend requests waiting. Draws nothing at zero and caps at
 - The server rail's and the channel list's counts are drawn in place for
   now; they move here with their shell elements.
 
+### ListRow
+
+`list-row.tsx`. A row in a list: a channel, a person, a conversation, a
+thread, a follow. `leading` (an icon or an avatar), the label, `detail` (a
+second line), `trailing` (a count, a time, an action). Sizes `sm` (a
+channel), `md` (a person), `lg` (a person or conversation with a second
+line).
+
+- **States.** Hover is a fill; `selected` is the row-selected role with its
+  own label colour and `aria-current`; `unread` is weight 600 plus the
+  indicator pip at the end (a trailing count replaces it); `muted` fades
+  the row; disabled is 0.4.
+- **Tokens.** Every value is `--list-row-*` with the old value as its
+  fallback. Under the redesign: a pill, 36/44/52px tall, 12px inside, on
+  `row-hover` and `row-selected`.
+- **Adopting it.** A shell row passes its old colours through `className`,
+  so the toggle off draws what it drew. The channel, member, conversation
+  and friend rows move onto it with their shell elements.
+
 ## Planned primitives
 
 Not built. Do not invent a local one; add it here instead, in `ui/`, with a

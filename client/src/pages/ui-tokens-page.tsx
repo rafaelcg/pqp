@@ -33,6 +33,8 @@ import { BANNER_FILL_REDESIGN, Banner, BannerAction, BannerText } from "@/compon
 import { ShareHandleButton } from "@/components/handle/share-handle-button";
 import { ConnectionBanner } from "@/components/layout/connection-banner";
 import { SanctionNoticeBar } from "@/components/layout/sanction-notice-bar";
+import { ListRow } from "@/components/ui/list-row";
+import { UserAvatar } from "@/components/user/user-avatar";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { CountBadge } from "@/components/ui/count-badge";
 import { ServerBotTags } from "@/components/bots/server-bot-tags";
@@ -1463,6 +1465,44 @@ function PrimitiveSheet() {
             <span className="block truncate text-sm font-semibold text-text">{t("qaUi.toast.sessionTitle")}</span>
             <span className="block truncate text-xs text-text-tertiary redesign:text-text-secondary">{t("qaUi.toast.sessionBody")}</span>
           </span>
+      {/* List rows: channels (every state) and people (avatar, second line). */}
+      <div data-testid="qa-primitive-list-row" className="grid gap-4 sm:grid-cols-2">
+        <div className="flex flex-col gap-0.5 rounded-[var(--radius-card)] bg-pane-side p-2">
+          {(
+            [
+              ["geral", {}],
+              ["avisos", { unread: true }],
+              ["papo", { selected: true }],
+              ["clipes", { muted: true }],
+              ["arquivo", { disabled: true }],
+            ] as const
+          ).map(([name, state]) => (
+            <ListRow key={name} leading={<Icon icon={Hash} kind="symbol" size="sm" />} {...state}>
+              {name}
+            </ListRow>
+          ))}
+        </div>
+        <div className="flex flex-col gap-0.5 rounded-[var(--radius-card)] bg-pane-side p-2">
+          <ListRow size="md" leading={<UserAvatar name="Bia" className="h-8 w-8" fallbackClassName="bg-surface-3 text-xs text-text" rounded="full" />}>
+            Bia
+          </ListRow>
+          <ListRow
+            size="lg"
+            selected
+            leading={<UserAvatar name="Rafa" className="h-9 w-9" fallbackClassName="bg-surface-3 text-sm text-text" rounded="full" />}
+            detail={t("qaUi.listRow.inCall")}
+          >
+            Rafa
+          </ListRow>
+          <ListRow
+            size="lg"
+            unread
+            leading={<UserAvatar name="Caio" className="h-9 w-9" fallbackClassName="bg-surface-3 text-sm text-text" rounded="full" />}
+            detail={t("qaUi.listRow.lastMessage")}
+            trailing={<span className="text-xs font-normal text-text-tertiary">17:42</span>}
+          >
+            Caio
+          </ListRow>
         </div>
       </div>
 

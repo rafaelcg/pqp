@@ -598,6 +598,8 @@ const PRIMITIVES: {
   { id: "p-tabs", testId: "qa-primitive-tabs", role: "tab", focus: "Visão geral", hover: "Todos" },
   // Status words, the tags beside a name, and counts; no interaction.
   { id: "p-badge", testId: "qa-primitive-badge" },
+  // Focus a person row, hover a plain channel.
+  { id: "p-list-row", testId: "qa-primitive-list-row", focus: "Bia", hover: "geral" },
   // Opened from the keyboard, the highlight on "Só menções" (its detail line).
   { id: "p-menu", testId: "qa-primitive-menu", open: { button: "Abrir menu", menu: "[data-server-menu]", arrows: 1 } },
   // Hovering the scrub shows its thumb; the volume is keyboard-focused.
