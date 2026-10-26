@@ -3835,11 +3835,11 @@ const MessageRow = memo(function MessageRow({
                     author={authorInfo}
                     tabIndex={controlTabIndex}
                     onOpenProfile={openProfile}
-                    className="block h-9 w-9 shrink-0 overflow-hidden rounded-lg leading-none hover:no-underline"
+                    className="block h-9 w-9 shrink-0 overflow-hidden rounded-lg leading-none hover:no-underline redesign:rounded-full"
                   >
                     {message.isAutomod ? (
                       <span
-                        className="grid h-9 w-9 place-items-center rounded-lg bg-accent-soft text-on-accent-soft"
+                        className="grid h-9 w-9 place-items-center rounded-lg bg-accent-soft text-on-accent-soft redesign:rounded-full"
                         title={t("chat.automodPosted")}
                       >
                         <ShieldCheck className="h-5 w-5" aria-hidden />
