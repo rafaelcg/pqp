@@ -46,6 +46,7 @@ Read this file and the inventory at the start of every session.
 | 2 | `p-menu` | Merged (cap at round 5: 8.4 Opus r5, 8.4 Codex r4, no MUST, approved) |
 | 2 | `p-slider` | Merged (cap at round 5: 8.0 Opus r4, 8.8 Codex r5, no MUST) |
 | 2 | `p-banner` | Merged (approved at round 3: 8.3 Opus, 8.5 Codex r2, no MUST) |
+| 2 | `p-badge` | Merged (approved at round 2: 8.3 Opus, 8.3 Codex r1, no MUST) |
 
 ## Phase 0: directions
 
@@ -648,6 +649,22 @@ class string, six hand-built name tags in message headers):
 4. Left for their owners: the server rail counts (`s-rail`), the
    channel list's counts and live chips (`s-channel-row`), Baú media
    overlays (`f-bau`), the voice-clean chip (`f-call`).
+
+Council (Opus 5.5, GPT-6 Luna via Codex), overall after. One reviewer per
+round, Opus for the sign-off:
+
+| Round | Opus | Codex |
+|---|---|---|
+| 1 | not run | 8.3 |
+| 2 | 8.3 | not run |
+
+Round 2 approved; its notes were applied after it. The bench now measures
+the neutral and muted badges, and under the redesign they are a step
+stronger (body text on `surface-3`; secondary text on `surface-2`) because
+Catppuccin, Everforest, Ocean and Modo 2005 fell under 4.5:1. The 16px
+count takes 10px type; the beta tag beside Bot drops its wash; the sheet
+shows a painted Webhook tag and a "Saiu" tag. Screenshots:
+`~/pqp-redesign/p-badge/`.
 
 ## Open questions for André
 
