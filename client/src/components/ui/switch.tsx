@@ -124,7 +124,7 @@ export function Switch({
         disabled || inert
           ? "cursor-not-allowed redesign:aria-busy:cursor-progress"
           : "hover:bg-[color:var(--choice-row-hover,var(--color-surface-2))]",
-        dimRow && "opacity-60",
+        dimRow && "opacity-[var(--choice-row-disabled-opacity,0.6)]",
         className,
       )}
     >
@@ -157,8 +157,9 @@ export function Switch({
           // Centres the track on the label's first line: +2px for today's
           // 20px track, -2px for the redesign's 24px one.
           description && "mt-[var(--switch-desc-offset,0.125rem)]",
-          // A write is running: the track steps back while it waits.
-          busy && !dimRow && "redesign:opacity-70",
+          // A write is running: the track keeps its colour and the knob
+          // pulses, so "saving" never reads as "disabled".
+          busy && !dimRow && "redesign:motion-safe:[&>span]:animate-pulse",
         )}
       />
     </button>

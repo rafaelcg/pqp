@@ -697,6 +697,9 @@
      same mix until that role is everywhere. */
   --choice-edge: var(--color-field-border, color-mix(in oklab, var(--color-border-strong) 50%, var(--color-text)));
   --choice-row-hover: var(--button-ghost-hover);
+  /* A dimmed row (a setting a parent switch turned off) fades a step less
+     than a disabled control, so its label stays readable. */
+  --choice-row-disabled-opacity: 0.6;
   --switch-w: 2.5rem;
   --switch-h: 1.5rem;
   --switch-knob: 1.125rem;
@@ -705,7 +708,8 @@
   --switch-desc-offset: -0.125rem;
   --switch-off-bg: color-mix(in oklab, var(--color-text) 8%, transparent);
   --switch-off-ring: var(--choice-edge);
-  --switch-knob-off: var(--color-text-secondary);
+  /* Between secondary and tertiary: an off column does not outshine the on ones. */
+  --switch-knob-off: color-mix(in oklab, var(--color-text-secondary) 80%, var(--color-text-tertiary));
   --switch-knob-shadow: 0 1px 2px oklch(0.06 0.02 262 / 0.45), 0 0 0 0.5px oklch(0.06 0.02 262 / 0.2);
   --tick-size: 1.125rem;
   /* An 18px tick on a 20px first line: the row aligns to the top. */

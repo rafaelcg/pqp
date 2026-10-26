@@ -1,4 +1,4 @@
-import { Check } from "@phosphor-icons/react";
+import { Check, Minus } from "@phosphor-icons/react";
 import { forwardRef, type ComponentProps } from "react";
 import { cn } from "@/lib/utils";
 
@@ -35,7 +35,7 @@ export const Checkbox = forwardRef<HTMLInputElement, CheckboxProps>(function Che
           "[appearance:var(--checkbox-appearance,auto)] rounded-[var(--radius-tick)]",
           "border-[length:var(--tick-ring-w,0px)] border-[color:var(--tick-off-ring,transparent)] bg-[color:var(--tick-off-bg,transparent)]",
           "redesign:size-[var(--tick-size)] redesign:transition-colors redesign:duration-[var(--duration-fast)]",
-          "redesign:checked:border-accent redesign:checked:bg-accent",
+          "redesign:checked:border-accent redesign:checked:bg-accent redesign:indeterminate:border-accent redesign:indeterminate:bg-accent",
           "redesign:enabled:hover:not-checked:border-[color:var(--tick-hover-ring)] redesign:group-hover/checkbox:enabled:not-checked:border-[color:var(--tick-hover-ring)]",
           "redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-focus-ring redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-ring-offset",
           "disabled:cursor-not-allowed redesign:disabled:opacity-[var(--tick-disabled-opacity,0.5)]",
@@ -46,7 +46,13 @@ export const Checkbox = forwardRef<HTMLInputElement, CheckboxProps>(function Che
       <Check
         aria-hidden
         weight="bold"
-        className="pointer-events-none absolute hidden size-[var(--tick-glyph)] text-on-accent redesign:peer-checked:block redesign:peer-disabled:opacity-[var(--tick-disabled-opacity,0.5)]"
+        className="pointer-events-none absolute hidden size-[var(--tick-glyph)] text-on-accent redesign:peer-[:checked:not(:indeterminate)]:block redesign:peer-disabled:opacity-[var(--tick-disabled-opacity,0.5)]"
+      />
+      {/* "Some of them": set `indeterminate` on the element from a ref. */}
+      <Minus
+        aria-hidden
+        weight="bold"
+        className="pointer-events-none absolute hidden size-[var(--tick-glyph)] text-on-accent redesign:peer-indeterminate:block redesign:peer-disabled:opacity-[var(--tick-disabled-opacity,0.5)]"
       />
     </span>
   );

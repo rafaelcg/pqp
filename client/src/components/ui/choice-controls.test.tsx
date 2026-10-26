@@ -113,15 +113,20 @@ describe("Checkbox", () => {
     expect(input.className).not.toContain("accent-[var(--color-accent)]");
   });
 
+  it("draws a dash for a mixed state only under the redesign", () => {
+    const [, dash] = draw(<Checkbox />).querySelectorAll("svg");
+    expect(dash!.getAttribute("class")).toContain("redesign:peer-indeterminate:block");
+  });
+
   it("draws its check only under the redesign, out of the pointer's way", () => {
     const check = draw(<Checkbox />).querySelector("svg")!.getAttribute("class")!;
     expect(check).toContain("hidden");
-    expect(check).toContain("redesign:peer-checked:block");
+    expect(check).toContain("redesign:peer-[:checked:not(:indeterminate)]:block");
     expect(check).toContain("pointer-events-none");
   });
 
 describe("round 2 behaviour", () => {
-  it("centres the track on a described label and steps a busy one back", () => {
+  it("centres the track on a described label and pulses a busy one's knob", () => {
     const host = draw(
       <Switch checked busy onCheckedChange={() => undefined} label="Salvando" description="d" />,
     );
@@ -129,7 +134,8 @@ describe("round 2 behaviour", () => {
     expect(button.className).toContain("redesign:aria-busy:cursor-progress");
     const track = button.querySelector("span[aria-hidden]")!.getAttribute("class")!;
     expect(track).toContain("mt-[var(--switch-desc-offset,0.125rem)]");
-    expect(track).toContain("redesign:opacity-70");
+    expect(track).toContain("redesign:motion-safe:[&>span]:animate-pulse");
+    expect(track).not.toContain("opacity-70");
   });
 
   it("fades a disabled Checkbox's check and strengthens its edge from a named label group", () => {
