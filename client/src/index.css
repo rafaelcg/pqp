@@ -748,6 +748,7 @@
   --dialog-header-pb: 0.5rem;
   --dialog-solo-header-pb: 1rem;
   --dialog-solo-footer-pt: 0.5rem;
+  --dialog-footer-pb: 1.25rem;
   --dialog-close-glyph: 1.125rem;
   --dialog-eyebrow-size: 0.8125rem;
   --dialog-footer-rule: color-mix(in oklab, var(--color-text) 8%, transparent);
@@ -3877,7 +3878,7 @@ html[data-pre] [data-home-hero] .animate-rise {
 }
 
 .safe-pb {
-  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  padding-bottom: max(var(--safe-pb-min, 0.75rem), env(safe-area-inset-bottom));
 }
 
 /*

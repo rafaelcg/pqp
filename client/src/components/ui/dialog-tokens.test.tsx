@@ -29,7 +29,9 @@ describe("Dialog tokens", () => {
   });
 
   it("gives the close button IconButton's focus ring only under the redesign", () => {
-    expect(source).toContain("redesign:focus-visible:ring-[color:var(--icon-button-ring)]");
+    // With a fallback: the dark block does not set --icon-button-ring.
+    expect(source).toContain("redesign:focus-visible:ring-[color:var(--icon-button-ring,var(--color-focus-ring))]");
+    expect(source).toContain("redesign:[--safe-pb-min:var(--dialog-footer-pb)]");
     expect(source.match(/redesign:focus-visible:ring-2/g)?.length).toBe(2);
     expect(source).toContain("pt-[var(--dialog-header-pt,1rem)]");
   });

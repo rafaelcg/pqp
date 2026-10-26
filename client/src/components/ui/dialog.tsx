@@ -504,7 +504,7 @@ export function Dialog({
               <button
                 type="button"
                 aria-label={t("a11y.closeDialog")}
-                className="grid h-11 w-11 shrink-0 place-items-center rounded-[var(--radius-control)] text-text-secondary transition-colors hover:bg-surface-2 hover:text-text sm:hidden redesign:rounded-[var(--icon-button-radius)] redesign:text-[color:var(--icon-button-text)] redesign:hover:bg-[color:var(--icon-button-hover)] redesign:hover:text-text redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--icon-button-ring)] redesign:focus-visible:ring-offset-[length:var(--icon-button-ring-offset)] redesign:focus-visible:ring-offset-[color:var(--icon-button-ring-offset-color)]"
+                className="grid h-11 w-11 shrink-0 place-items-center rounded-[var(--radius-control)] text-text-secondary transition-colors hover:bg-surface-2 hover:text-text sm:hidden redesign:rounded-[var(--icon-button-radius)] redesign:text-[color:var(--icon-button-text)] redesign:hover:bg-[color:var(--icon-button-hover)] redesign:hover:text-text redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--icon-button-ring,var(--color-focus-ring))] redesign:focus-visible:ring-offset-[length:var(--icon-button-ring-offset)] redesign:focus-visible:ring-offset-[color:var(--icon-button-ring-offset-color)]"
                 onClick={onClose}
               >
                 <X className="h-5 w-5" />
@@ -547,7 +547,7 @@ export function Dialog({
                 )}
               </h2>
               {description && (
-                <p id={descriptionId} className="mt-1 text-pretty text-sm text-text-tertiary">
+                <p id={descriptionId} className="mt-1 text-pretty text-sm text-text-tertiary redesign:text-text-secondary">
                   {description}
                 </p>
               )}
@@ -581,7 +581,7 @@ export function Dialog({
                   "redesign:rounded-[var(--icon-button-radius)] redesign:text-[color:var(--icon-button-text)] redesign:hover:bg-[color:var(--icon-button-hover)] redesign:hover:text-text",
                   // and its focus ring, where the toggle off keeps the
                   // browser's own outline.
-                  "redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--icon-button-ring)] redesign:focus-visible:ring-offset-[length:var(--icon-button-ring-offset)] redesign:focus-visible:ring-offset-[color:var(--icon-button-ring-offset-color)]",
+                  "redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--icon-button-ring,var(--color-focus-ring))] redesign:focus-visible:ring-offset-[length:var(--icon-button-ring-offset)] redesign:focus-visible:ring-offset-[color:var(--icon-button-ring-offset-color)]",
                   // A full-screen phone dialog closes from the left.
                   phoneFullScreen && "max-sm:hidden",
                 )}
@@ -608,6 +608,9 @@ export function Dialog({
             <div
               className={cn(
                 "safe-pb flex shrink-0 flex-wrap justify-end gap-2 border-t border-[color:var(--dialog-footer-rule,var(--color-border))] px-[var(--dialog-px,1.25rem)] py-4",
+                // `.safe-pb` beats `py-4` at the bottom; under the redesign
+                // its floor matches the header's top inset.
+                "redesign:[--safe-pb-min:var(--dialog-footer-pb)]",
                 solo && "redesign:border-transparent redesign:pt-[var(--dialog-solo-footer-pt)]",
               )}
             >

@@ -682,7 +682,12 @@ shrinks `vh` for an on-screen keyboard.
   in dark, a 30% grey in light). The panel takes a 10% text edge (8% in
   light) and the deepest lift, through the elevation variables. The header
   loses its rule and keeps 8px under the title; the footer's rule is an 8%
-  text tint. The inset is 24px, the title 22px. The eyebrow is sentence case.
+  text tint. The inset is 24px, the title 22px, with 20px above the header
+  and below the footer. The eyebrow is sentence case at 13px; the
+  description is `text-secondary`. The close button is IconButton's ghost,
+  with its focus ring and an 18px glyph. A dialog with no body (a confirm)
+  keeps 16px under the question, drops the footer rule and keeps 8px above
+  the buttons, so the question and its answers read as one block.
   The close button draws as IconButton's ghost (round, `text-secondary`, the
   text-tint hover). Every value is a `--dialog-*` token with the old value
   as its fallback. PromptDialog's field labels are sentence case too.
