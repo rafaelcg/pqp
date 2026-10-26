@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { act, type ReactElement } from "react";
+import { vi } from "vitest";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it } from "vitest";
 import { IconButton } from "@/components/ui/icon-button";
@@ -54,5 +55,28 @@ describe("IconButton", () => {
     expect(className).toContain("h-5 w-5");
     expect(className).not.toContain("h-8 w-8");
     expect(className).toContain("text-danger");
+  });
+
+  it("owns the glyph size, falling back to what the forum drew", () => {
+    expect(draw(<IconButton label="Fixar">•</IconButton>).className).toContain(
+      "[&_svg]:size-[var(--icon-button-glyph-md,1rem)]",
+    );
+    expect(draw(<IconButton label="Menu" size="lg">•</IconButton>).className).toContain(
+      "[&_svg]:size-[var(--icon-button-glyph-lg,1.25rem)]",
+    );
+  });
+
+  it("stays focusable and named when disabled, and does not fire", () => {
+    const onClick = vi.fn();
+    const button = draw(
+      <IconButton label="Notificações" disabled onClick={onClick}>
+        •
+      </IconButton>,
+    );
+    expect(button.disabled).toBe(false);
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    expect(button.getAttribute("aria-label")).toBe("Notificações");
+    act(() => button.click());
+    expect(onClick).not.toHaveBeenCalled();
   });
 });

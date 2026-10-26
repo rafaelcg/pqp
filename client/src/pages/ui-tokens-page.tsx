@@ -816,7 +816,6 @@ function PrimitiveSheet() {
         </p>
         <div className="flex flex-col gap-2">
           {ICON_BUTTON_SIZES.map((size) => {
-            const glyph = size === "xs" || size === "sm" ? "sm" : "md";
             return (
               <div key={size} className="flex flex-wrap items-center gap-3">
                 <span
@@ -826,7 +825,7 @@ function PrimitiveSheet() {
                   {size}
                 </span>
                 <IconButton size={size} touch={false} side="right" label={`${t("qaUi.iconButton.settings")} ${size}`}>
-                  <Icon icon={GearSix} size={glyph} />
+                  <Icon icon={GearSix} />
                 </IconButton>
                 <IconButton
                   size={size}
@@ -836,7 +835,7 @@ function PrimitiveSheet() {
                   onClick={() => setPressed((value) => !value)}
                   label={`${t("qaUi.iconButton.mute")} ${size}`}
                 >
-                  <Icon icon={Microphone} size={glyph} />
+                  <Icon icon={Microphone} />
                 </IconButton>
                 <IconButton
                   size={size}
@@ -845,10 +844,10 @@ function PrimitiveSheet() {
                   tone="danger"
                   label={`${t("qaUi.iconButton.remove")} ${size}`}
                 >
-                  <Icon icon={X} kind="symbol" size={glyph} />
+                  <Icon icon={X} kind="symbol" />
                 </IconButton>
                 <IconButton size={size} touch={false} side="right" disabled label={t("qaUi.state.disabled")}>
-                  <Icon icon={Bell} size={glyph} />
+                  <Icon icon={Bell} />
                 </IconButton>
               </div>
             );

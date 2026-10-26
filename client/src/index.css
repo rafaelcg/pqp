@@ -681,7 +681,14 @@
   --icon-button-text: var(--color-text-secondary);
   /* Tints, like the button's: an icon button sits on panes and dialogs. */
   --icon-button-hover: var(--button-ghost-hover);
-  --icon-button-danger-hover: var(--button-danger-ghost-hover);
+  /* A touch deeper than the button's, so the disc shows on a small circle. */
+  --icon-button-danger-hover: color-mix(in oklab, var(--color-danger) 20%, transparent);
+  --icon-button-ring-offset: 2px;
+  --icon-button-press: 0.94;
+  --icon-button-glyph-xs: 0.875rem;
+  --icon-button-glyph-sm: 1rem;
+  --icon-button-glyph-md: 1.125rem;
+  --icon-button-glyph-lg: 1.25rem;
 
   /* The title role is drawn in the display face: server names, channel
      titles and pane headers, in sentence case. */

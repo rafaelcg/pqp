@@ -506,12 +506,21 @@ accessible name.
   only inside a dense row that has a larger tap target of its own.
 - **`tone="danger"`.** The icon turns red on hover, for remove and leave.
 - **`pressed`.** A toggle (mute, pin). It sets `aria-pressed` and, under the
-  redesign, the selected row fill.
+  redesign, the selected row fill with an accent glyph. Only with a fixed
+  `label`: a control whose label or icon swaps (expand and collapse) is an
+  action, not a toggle.
+- **Glyph.** The size owns it: 14, 16, 18 and 20px for xs to lg under the
+  redesign (16px at `md` with the toggle off). Pass the icon bare; a class on
+  it loses.
+- **`disabled`.** Rendered as `aria-disabled`, not the native attribute, so
+  the control stays hoverable and focusable and its tooltip can still name
+  it. Its handlers are not wired.
 - **`detail`.** A second, quieter line in the tooltip.
-- **Under the redesign.** A pill, secondary text at rest and the row-hover
-  fill, from `--icon-button-*` tokens with fallbacks in the class (see Button).
-  The pressed fill is the one `redesign:` class, because nothing paints a
-  pressed icon button from outside.
+- **Under the redesign.** A circle, secondary text at rest, the button's
+  text-tint hover (a 20% danger tint for `tone="danger"`), a 2px ring offset
+  and a press to 94%, all from `--icon-button-*` tokens with fallbacks in the
+  class (see Button). The pressed state is the one set of `redesign:`
+  classes, because nothing paints a pressed icon button from outside.
 - **Use it** for every icon-only control. **Do not** draw a raw `<button>`
   with an icon, and do not use `Button size="icon"` for a new one: that size
   stays for an icon button that must match a row of text buttons.

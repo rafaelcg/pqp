@@ -885,7 +885,7 @@ export function ForumPostView({
       <div className="flex h-14 items-center gap-1 px-2 sm:px-3">
         {(layout === "full" || forcedFull) && (
           <IconButton label={t("forum.post.back")} onClick={onClose}>
-            <ArrowLeft className="h-4 w-4" aria-hidden />
+            <ArrowLeft aria-hidden />
           </IconButton>
         )}
         <div className="relative min-w-0 flex-1 self-stretch">
@@ -918,26 +918,21 @@ export function ForumPostView({
             <IconButton
               label={maximized ? t("forum.post.collapse") : t("forum.post.expand")}
               onClick={onToggleMaximize}
-              pressed={maximized}
             >
-              {maximized ? (
-                <Minimize2 className="h-4 w-4" aria-hidden />
-              ) : (
-                <Maximize2 className="h-4 w-4" aria-hidden />
-              )}
+              {maximized ? <Minimize2 aria-hidden /> : <Maximize2 aria-hidden />}
             </IconButton>
           </span>
         )}
         {layout === "side" && !forcedFull && (
           <IconButton label={t("forum.post.back")} onClick={onClose}>
-            <X className="h-4 w-4" aria-hidden />
+            <X aria-hidden />
           </IconButton>
         )}
         <span className="sm:hidden">
           {/* Phones open on the menu the mock draws beside the bell. */}
           <Menu items={menuItems} align="end">
-            <IconButton label={t("forum.post.menu")}>
-              <MoreHorizontal className="h-5 w-5" aria-hidden />
+            <IconButton label={t("forum.post.menu")} size="lg">
+              <MoreHorizontal aria-hidden />
             </IconButton>
           </Menu>
         </span>

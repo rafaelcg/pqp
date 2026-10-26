@@ -22,7 +22,9 @@ import { cn } from "@/lib/utils";
  * `touch` (on by default) grows the box to 44px under 640px, the phone's tap
  * target. `tone="danger"` turns the icon red on hover, for remove and leave.
  * `pressed` is a toggle (mute, pin): it sets `aria-pressed` and, under the
- * redesign, the selected fill.
+ * redesign, the selected fill. Only with a fixed `label`: a control whose
+ * label or icon swaps (expand and collapse) is an action, not a toggle, or a
+ * screen reader hears "Collapse, pressed".
  *
  * THE REDESIGN changes it through `--icon-button-*` tokens that are unset
  * with the toggle off and fall back, in the class, to what the forum's icon
@@ -32,11 +34,17 @@ import { cn } from "@/lib/utils";
  */
 export type IconButtonSize = "xs" | "sm" | "md" | "lg";
 
+/*
+ * The box and the glyph inside it. The primitive owns the glyph's size, so
+ * the ratio is the same on every screen; a caller's own `h-4` on the icon
+ * loses to it. With the toggle off, `md` is the 16px the forum drew and `lg`
+ * the 20px of the phone menu it replaced.
+ */
 const SIZE: Record<IconButtonSize, string> = {
-  xs: "h-6 w-6",
-  sm: "h-7 w-7",
-  md: "h-8 w-8",
-  lg: "h-9 w-9",
+  xs: "h-6 w-6 [&_svg]:size-[var(--icon-button-glyph-xs,0.875rem)]",
+  sm: "h-7 w-7 [&_svg]:size-[var(--icon-button-glyph-sm,1rem)]",
+  md: "h-8 w-8 [&_svg]:size-[var(--icon-button-glyph-md,1rem)]",
+  lg: "h-9 w-9 [&_svg]:size-[var(--icon-button-glyph-lg,1.25rem)]",
 };
 
 export interface IconButtonProps
@@ -67,24 +75,39 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
     side,
     className,
     type = "button",
+    disabled,
+    onClick,
+    onPointerDown,
+    onKeyDown,
     children,
     ...props
   },
   ref,
 ) {
+  // DISABLED keeps the button hoverable and focusable, so its tooltip can
+  // still name it (a native `disabled` kills both). It is `aria-disabled`
+  // and its handlers, a trigger's included, are not wired.
   return (
     <Tooltip label={label} detail={detail} side={side}>
       <button
         ref={ref}
         type={type}
         aria-pressed={pressed}
+        aria-disabled={disabled || undefined}
+        onClick={disabled ? undefined : onClick}
+        onPointerDown={disabled ? undefined : onPointerDown}
+        onKeyDown={disabled ? undefined : onKeyDown}
         className={cn(
-          "grid shrink-0 place-items-center rounded-[var(--icon-button-radius,var(--radius-control))] text-[color:var(--icon-button-text,var(--color-text-tertiary))] transition-colors duration-[var(--duration-fast)] hover:bg-[var(--icon-button-hover,var(--color-surface-2))] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:pointer-events-none disabled:opacity-[var(--button-disabled-opacity,0.4)]",
+          "grid shrink-0 place-items-center rounded-[var(--icon-button-radius,var(--radius-control))] text-[color:var(--icon-button-text,var(--color-text-tertiary))] transition-[background,color,transform] duration-[var(--duration-fast)] hover:bg-[var(--icon-button-hover,var(--color-surface-2))] hover:text-text active:scale-[var(--icon-button-press,1)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-[length:var(--icon-button-ring-offset,0px)] focus-visible:ring-offset-ring-offset",
           SIZE[size],
           touch && "max-sm:h-11 max-sm:w-11",
           tone === "danger" &&
             "hover:bg-[var(--icon-button-danger-hover,var(--color-surface-2))] hover:text-danger",
-          "redesign:aria-pressed:bg-row-selected redesign:aria-pressed:text-on-row-selected",
+          // A toggle that is on: the selected fill and the accent glyph, a
+          // step deeper on hover. The one place this primitive uses
+          // `redesign:` classes, since nothing paints it from outside.
+          "redesign:aria-pressed:bg-row-selected redesign:aria-pressed:text-accent-text redesign:aria-pressed:hover:bg-[color:color-mix(in_oklab,var(--color-row-selected)_88%,var(--color-text))] redesign:aria-pressed:hover:text-accent-text",
+          "aria-disabled:cursor-not-allowed aria-disabled:opacity-[var(--button-disabled-opacity,0.4)] aria-disabled:hover:bg-transparent aria-disabled:hover:text-[color:var(--icon-button-text,var(--color-text-tertiary))] aria-disabled:active:scale-100",
           className,
         )}
         {...props}
