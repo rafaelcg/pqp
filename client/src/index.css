@@ -1005,7 +1005,8 @@
   --tooltip-rail-mark: color-mix(in oklab, var(--color-accent) 55%, var(--color-on-tooltip));
   /* A light scrim greys the app rather than blacking it out. */
   --dialog-scrim: oklch(0.3 0.02 262 / 0.3);
-  --dialog-border: color-mix(in oklab, var(--color-text) 8%, transparent);
+  /* 10% as in dark: a pale panel over a pale scrim needs the edge. */
+  --dialog-border: color-mix(in oklab, var(--color-text) 10%, transparent);
   --dialog-shadow: 0 1px 2px oklch(0.4 0.02 262 / 0.1), var(--shadow-3);
 }
 

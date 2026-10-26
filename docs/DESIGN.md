@@ -679,8 +679,8 @@ shrinks `vh` for an on-screen keyboard.
   described by its description. Escape is stopped from reaching a menu inside.
 
 - **Under the redesign.** A deeper scrim with more blur (62% of near-black
-  in dark, a 30% grey in light). The panel takes a 10% text edge (8% in
-  light) and the deepest lift, through the elevation variables. The header
+  in dark, a 30% grey in light). The panel takes a 10% text edge in both
+  themes and the deepest lift, through the elevation variables. The header
   loses its rule and keeps 8px under the title; the footer's rule is an 8%
   text tint. The inset is 24px, the title 22px, with 20px above the header
   and below the footer. The eyebrow is sentence case at 13px; the
