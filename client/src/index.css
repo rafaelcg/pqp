@@ -826,6 +826,9 @@
   /* The monogram disc's edge: none in dark, where surface-3 already stands
      off the panes; a hairline in light, where it is close to the white pane. */
   --avatar-edge: transparent;
+  /* The cutout behind a presence dot: the colour of the pane the avatar
+     sits on (the side panes by default, the conversation below). */
+  --avatar-dot-ring: var(--color-pane-side);
 
   --icon-button-radius: var(--radius-pill);
   --icon-button-text: var(--color-text-secondary);
@@ -2594,6 +2597,12 @@ body,
 html[data-app-shell],
 html[data-app-shell] body {
   overflow: hidden;
+}
+
+/* Under the redesign a presence dot in the conversation is cut out of the
+   conversation pane's colour. */
+:where([data-redesign]) main {
+  --avatar-dot-ring: var(--color-pane-main);
 }
 
 html[data-app-shell] #root {

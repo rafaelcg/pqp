@@ -1036,6 +1036,11 @@ variant set, and then use it everywhere.
   edge at 45 degrees instead of hanging off a square's corner.
 - **Light.** The monogram disc takes a 1px inner edge (`--avatar-edge`), so
   it stays a disc on the white pane.
+- **Dimmed** (offline, muted): under the redesign the letter dims to
+  tertiary text and the disc stays, so it still reads on a white pane.
+- **Dot cutout.** A pane call site's `StatusDot` ring reads
+  `--avatar-dot-ring`: the side pane's colour by default, the conversation
+  pane's inside `main`.
 
 ### How the bench enforces this
 

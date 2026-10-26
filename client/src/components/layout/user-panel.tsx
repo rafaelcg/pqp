@@ -560,7 +560,7 @@ export function UserPanel({
             status={effectiveStatus}
             label={ownLabel}
             className="absolute -bottom-0.5 -right-0.5 redesign:bottom-0 redesign:right-0"
-            ringClassName="rounded-full bg-ink ring-2 ring-ink"
+            ringClassName="rounded-full bg-ink ring-2 ring-ink redesign:bg-[color:var(--avatar-dot-ring)] redesign:ring-[color:var(--avatar-dot-ring)]"
           />
         </span>
         <span className={cn("min-w-0 flex-1", compact && "hidden")}>

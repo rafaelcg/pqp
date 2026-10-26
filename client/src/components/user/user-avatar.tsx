@@ -123,7 +123,10 @@ export function UserAvatar({
         dim,
         circle,
         !ownPalette &&
-          "redesign:bg-surface-3 redesign:font-semibold redesign:text-text redesign:shadow-[inset_0_0_0_1px_var(--avatar-edge)]",
+          "redesign:bg-surface-3 redesign:font-semibold redesign:tracking-[-0.02em] redesign:text-text redesign:shadow-[inset_0_0_0_1px_var(--avatar-edge)]",
+        // A dimmed (offline, muted) person keeps the disc and dims the letter,
+        // so the disc still reads on a white pane.
+        !ownPalette && dimmed && "redesign:opacity-100 redesign:text-text-tertiary",
       )}
     >
       {(name.trim().slice(0, 1) || "?").toUpperCase()}
