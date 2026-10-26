@@ -804,6 +804,22 @@
   --menu-detail-disabled-opacity: 0.7;
   --menu-strip-h: 2.125rem;
 
+  /* Slider: a visible track on any surface (a text tint, not a surface that
+     can match the pane), a lifted knob without an edge, and a scrub track
+     that thickens when a pointer or focus arrives. */
+  --slider-track: color-mix(in oklab, var(--color-text) 16%, transparent);
+  --slider-scrub-h: 0.25rem;
+  --slider-scrub-h-hover: 0.375rem;
+  --slider-volume-h: 0.375rem;
+  --slider-hue-h: 0.625rem;
+  --slider-thumb: 1rem;
+  --slider-thumb-hue: 1.25rem;
+  --slider-thumb-bg: var(--color-text);
+  --slider-thumb-border: transparent;
+  --slider-thumb-shadow: 0 1px 2px oklch(0.06 0.02 262 / 0.5), 0 2px 6px oklch(0.06 0.02 262 / 0.35);
+  --slider-thumb-press: 1.12;
+  --slider-disabled-opacity: 0.5;
+
   --icon-button-radius: var(--radius-pill);
   --icon-button-text: var(--color-text-secondary);
   /* Tints, like the button's: an icon button sits on panes and dialogs. */
@@ -1118,6 +1134,11 @@
   /* Light shows a 7% step as clearly as dark shows 9%. */
   --menu-row-hover: color-mix(in oklab, var(--color-text) 7%, transparent);
   --menu-danger-hover: color-mix(in oklab, var(--color-danger) 11%, transparent);
+  /* A white knob with a hairline, as the segmented thumb is a white chip. */
+  --slider-track: color-mix(in oklab, var(--color-text) 13%, transparent);
+  --slider-thumb-bg: var(--color-surface-0);
+  --slider-thumb-border: color-mix(in oklab, var(--color-text) 18%, transparent);
+  --slider-thumb-shadow: 0 1px 2px oklch(0.4 0.02 262 / 0.2), 0 2px 6px oklch(0.4 0.02 262 / 0.14);
 }
 
 /*

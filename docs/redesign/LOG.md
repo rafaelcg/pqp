@@ -562,6 +562,22 @@ the tabs keep their own track rather than RadioGroup's `SEGMENTED_*` strings,
 because those would change the toggle-off look. Stopped at the five-round
 cap with no MUST. Screenshots: `~/pqp-redesign/p-tabs/`.
 
+### p-slider
+
+Spec (audit: Slider in 13 files; 11 native range inputs elsewhere):
+
+1. Job: one value on a line, in four shapes: scrub (progress that seeks),
+   volume, edge (a compact player's fill on a border) and hue.
+2. Redesign: a text-tint track that shows on any surface, a scrub track
+   that thickens on hover and focus, a lifted knob (white with a hairline in
+   light), disabled at 0.5.
+3. No native range folds without changing its toggle-off look (the OS
+   slider tinted by `accent-color`), so each is logged for its surface:
+   the watch player, its PiP and the transmission gains (`f-watch-party`),
+   the story size sliders (`f-stories`), peer volume (`f-call`), the role
+   hue (server settings).
+4. Tokens with fallbacks; the toggle off draws what it drew before.
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss

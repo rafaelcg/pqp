@@ -4,7 +4,7 @@ import type { ComponentPropsWithoutRef, HTMLAttributes } from "react";
 import { cn } from "@/lib/utils";
 
 const root = cva(
-  "group relative flex w-full touch-none select-none items-center data-[disabled]:opacity-40",
+  "group relative flex w-full touch-none select-none items-center data-[disabled]:opacity-[var(--slider-disabled-opacity,0.4)]",
   {
     variants: {
       variant: {
@@ -25,10 +25,12 @@ const root = cva(
 const track = cva("relative w-full grow overflow-hidden", {
   variants: {
     variant: {
-      scrub: "h-0.5 rounded-full bg-surface-3",
-      volume: "h-1 rounded-full bg-surface-3",
+      scrub:
+        "h-[var(--slider-scrub-h,0.125rem)] rounded-full bg-[color:var(--slider-track,var(--color-surface-3))] redesign:transition-[height] redesign:duration-[var(--duration-fast)] redesign:group-hover:h-[var(--slider-scrub-h-hover)] redesign:group-focus-within:h-[var(--slider-scrub-h-hover)] redesign:group-data-[disabled]:h-[var(--slider-scrub-h)]",
+      volume:
+        "h-[var(--slider-volume-h,0.25rem)] rounded-full bg-[color:var(--slider-track,var(--color-surface-3))]",
       edge: "h-0.5 bg-border",
-      hue: "h-2 rounded-full bg-[image:var(--accent-track)]",
+      hue: "h-[var(--slider-hue-h,0.5rem)] rounded-full bg-[image:var(--accent-track)]",
     },
   },
   defaultVariants: {
@@ -37,16 +39,16 @@ const track = cva("relative w-full grow overflow-hidden", {
 });
 
 const thumb = cva(
-  "block shrink-0 rounded-full border border-border-strong bg-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring",
+  "block shrink-0 rounded-full border-[length:var(--slider-thumb-border-w,1px)] border-[color:var(--slider-thumb-border,var(--color-border-strong))] bg-[color:var(--slider-thumb-bg,var(--color-text))] shadow-[var(--slider-thumb-shadow,0_0_transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring redesign:transition-[opacity,transform] redesign:duration-[var(--duration-fast)] redesign:active:scale-[var(--slider-thumb-press)] redesign:group-data-[disabled]:active:scale-100",
   {
     variants: {
       variant: {
         scrub:
-          "h-3 w-3 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
-        volume: "h-3 w-3",
+          "size-[var(--slider-thumb,0.75rem)] opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
+        volume: "size-[var(--slider-thumb,0.75rem)]",
         edge:
-          "h-3 w-3 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
-        hue: "h-4 w-4 border-2 border-on-accent bg-accent",
+          "size-[var(--slider-thumb,0.75rem)] opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
+        hue: "size-[var(--slider-thumb-hue,1rem)] border-2 border-on-accent bg-accent",
       },
     },
     defaultVariants: {
@@ -75,11 +77,14 @@ export interface SliderProps
 
 /**
  * One-dimensional value. `scrub` is a thin track whose thumb appears on
- * hover or focus. `volume` keeps the thumb visible. `edge` is the same
+ * hover or focus (under the redesign the track also thickens). `volume` keeps the thumb visible. `edge` is the same
  * fill sitting on a panel's bottom border. `hue` is a colour wheel: the
  * `--accent-track` gradient as the track, no fill, and a thumb in the current
  * accent with an `on-accent` rim. `readOnly` draws the fill without a thumb and
  * does not seek.
+ *
+ * Every size and colour is a `--slider-*` token with the old value as its
+ * fallback, so the toggle off draws what it always drew.
  */
 export function Slider({
   className,
