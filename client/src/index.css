@@ -141,7 +141,7 @@
      light, where a white bubble would vanish into a white page. Unused with
      the toggle off. */
   --color-tooltip: color-mix(in oklab, var(--color-surface-0) 55%, oklch(0 0 0));
-  --color-tooltip-border: color-mix(in oklab, var(--color-text) 22%, var(--color-tooltip));
+  --color-tooltip-border: color-mix(in oklab, var(--color-text) 18%, var(--color-tooltip));
   --color-on-tooltip: var(--color-text);
   --color-tooltip-detail: color-mix(in oklab, var(--color-on-tooltip) 80%, var(--color-tooltip));
 

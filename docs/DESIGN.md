@@ -599,7 +599,10 @@ needs it as an ancestor.
   `side`, `align`, `tone`.
 - **Tones.** `default` is the compact label on an icon button. `rail` is the
   larger, semibold bubble the server rail uses, in the title face under the
-  redesign; there it shares the default's colours, radius and shadow.
+  redesign; there it shares the default's colours, radius and shadow. It is
+  semibold (`--tooltip-rail-weight: 600`) because it names a server: a step
+  under the bold server name in its pane title, above the medium default
+  label (`--tooltip-weight: 500`).
 - **Behaviour.** 260ms before the first bubble of a group, then 500ms of no
   delay for its neighbours, so a control bar can be swept and read. Inert on
   touch, so a tap is never eaten. Portalled into the fullscreen element when one
@@ -608,7 +611,7 @@ needs it as an ancestor.
   weight come from `--tooltip-*` tokens over four roles: `--color-tooltip`,
   `--color-tooltip-border`, `--color-on-tooltip`, `--color-tooltip-detail`.
   In dark the bubble sits below the deepest surface, so it parts from panes
-  and dialogs by its fill, with a soft edge (text 22% over the bubble) and a
+  and dialogs by its fill, with a soft edge (text 18% over the bubble) and a
   faint top highlight; in light it is inverted (a dark bubble), since a white
   one vanishes into a white page. The label is medium weight; the detail
   line sits 2px under it at a 1.25 line height. The bench checks the label and the detail

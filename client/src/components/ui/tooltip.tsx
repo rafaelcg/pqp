@@ -238,7 +238,7 @@ export function tooltipA11y({
  * the same tokens, so under the redesign there is one bubble in the app.
  */
 const TOOLTIP_BUBBLE =
-  "rounded-[var(--tooltip-radius,var(--radius-control))] border border-[color:var(--tooltip-border,var(--elevation-3-border))] bg-[color:var(--tooltip-bg,var(--elevation-3-surface))] text-[color:var(--tooltip-text,var(--color-text))] shadow-[var(--tooltip-shadow,var(--elevation-3-shadow))] px-[var(--tooltip-px,0.5rem)] py-[var(--tooltip-py,0.25rem)] text-xs leading-snug [font-weight:var(--tooltip-weight,400)]";
+  "rounded-[var(--tooltip-radius,var(--radius-control))] border border-[color:var(--tooltip-border,var(--elevation-3-border))] bg-[color:var(--tooltip-bg,var(--elevation-3-surface))] text-[color:var(--tooltip-text,var(--color-text))] shadow-[var(--tooltip-shadow,var(--elevation-3-shadow))] px-[var(--tooltip-px,0.5rem)] py-[var(--tooltip-py,0.25rem)] text-xs leading-[var(--tooltip-leading,1.375)] [font-weight:var(--tooltip-weight,400)]";
 
 /** The quieter second line. */
 export const TOOLTIP_DETAIL =
@@ -246,11 +246,12 @@ export const TOOLTIP_DETAIL =
 
 /**
  * The server-list bubble: larger, semibold, and in the title face under the
- * redesign, the weight a server name has in its own pane title. Its colours,
- * radius and shadow are the default bubble's under the redesign.
+ * redesign, a step under the bold (700) server name in its pane title and
+ * above the medium default label. Its colours, radius and shadow are the
+ * default bubble's under the redesign.
  */
 const TOOLTIP_RAIL =
-  "rounded-[var(--tooltip-radius,var(--radius-card))] border border-[color:var(--tooltip-border,var(--color-surface-2))] bg-[color:var(--tooltip-bg,var(--color-surface-0))] text-[color:var(--tooltip-text,var(--color-text))] shadow-[var(--tooltip-shadow,var(--shadow-popover))] px-2.5 py-1.5 text-[13px] leading-snug [font-weight:var(--tooltip-rail-weight,600)] [font-family:var(--tooltip-rail-font,inherit)]";
+  "rounded-[var(--tooltip-radius,var(--radius-card))] border border-[color:var(--tooltip-border,var(--color-surface-2))] bg-[color:var(--tooltip-bg,var(--color-surface-0))] text-[color:var(--tooltip-text,var(--color-text))] shadow-[var(--tooltip-shadow,var(--shadow-popover))] px-[var(--tooltip-rail-px,0.625rem)] py-[var(--tooltip-rail-py,0.375rem)] text-[length:var(--tooltip-rail-size,13px)] leading-snug [font-weight:var(--tooltip-rail-weight,600)] [font-family:var(--tooltip-rail-font,inherit)]";
 
 /** The bubble's classes, for a static specimen (`/qa/ui`). */
 export function tooltipBubbleClass(tone: "default" | "rail" = "default"): string {
@@ -262,9 +263,10 @@ export interface TooltipProps extends TooltipA11yProps {
   side?: "top" | "right" | "bottom" | "left";
   align?: "start" | "center" | "end";
   /**
-   * `rail` is the server-list bubble: a bit larger, darker, and further from
-   * the tile, the way Discord names a server on hover. Default is the compact
-   * label on icon buttons in a bar.
+   * `rail` is the server-list bubble: a bit larger, semibold, and further
+   * from the tile, the way Discord names a server on hover (darker too with
+   * the toggle off; under the redesign it shares the default's colours).
+   * Default is the compact label on icon buttons in a bar.
    */
   tone?: "default" | "rail";
   /**
@@ -313,7 +315,7 @@ export function Tooltip({
             // tallest things a tooltipped button can sit next to, and matching
             // the reaction tip in `message-list.tsx` so the two read as one
             // object rather than two house styles.
-            "z-[140] max-w-72 whitespace-pre-wrap select-none animate-fade-in",
+            "z-[140] max-w-[var(--tooltip-max-w,18rem)] whitespace-pre-wrap select-none animate-fade-in",
             rail ? TOOLTIP_RAIL : TOOLTIP_BUBBLE,
             // Never intercept a click aimed at what is underneath. The bubble
             // is placed over the stage, and a swallowed click on a call
