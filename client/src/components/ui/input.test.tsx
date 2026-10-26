@@ -44,7 +44,7 @@ describe("Input", () => {
     const redesign = field.filter((c) => c.startsWith("redesign:"));
     expect(redesign.sort()).toEqual(
       [
-        "redesign:aria-invalid:border-danger",
+        "redesign:aria-invalid:not-disabled:border-danger",
         "redesign:aria-invalid:not-disabled:bg-[color:var(--input-invalid-bg)]",
         "redesign:disabled:bg-transparent",
         "redesign:disabled:placeholder:text-[color:color-mix(in_oklab,var(--color-text-tertiary)_70%,transparent)]",
@@ -68,9 +68,14 @@ describe("Input", () => {
     const field = classes(draw(<Input disabled aria-invalid />).querySelector("input"));
     expect(field).toContain("redesign:aria-invalid:not-disabled:bg-[color:var(--input-invalid-bg)]");
     expect(field).toContain("redesign:disabled:bg-transparent");
+    expect(field).toContain("redesign:aria-invalid:not-disabled:border-danger");
+    expect(field).not.toContain("redesign:aria-invalid:border-danger");
     const box = classes(draw(<Input prefix="@" disabled aria-invalid />).querySelector("div"));
     expect(box).toContain(
       "redesign:has-[input[aria-invalid=true]]:not-has-[input:disabled]:bg-[color:var(--input-invalid-bg)]",
+    );
+    expect(box).toContain(
+      "redesign:has-[input:disabled]:has-[input[aria-invalid=true]]:border-[color:var(--input-border,var(--color-border))]",
     );
   });
 });
