@@ -1082,11 +1082,16 @@ variant set, and then use it everywhere.
    `{slots}`, `_one` / `_other` families, and both `en` and `pt-BR`. See
    `docs/I18N.md`. No em dash reaches a user, in either language.
 - **Two variants.** `list` (the default) heads rows in a popover, a picker
-  or a panel: 13px secondary, `--section-label-gap` (6px) to the first row.
-  `group` heads a group in a settings pane, where the rows are paragraphs
-  and controls: 14px semibold in the text colour, so it never reads weaker
-  than the paragraph under it. The settings kit's `SettingsGroup` title and
-  server settings' group titles are `group`.
+  or a panel: `--section-label-size` (13px), secondary text,
+  `--section-label-gap` (6px) to the first row. `group` heads a group in a
+  settings pane: `--section-group-size` (15px) semibold in the text colour,
+  a step over the 14px rows and flush with the group's edge. The settings
+  kit's `SettingsGroup` title and server settings' group titles are `group`.
+- **The face.** Both labels are the sans face with no tracking, and a pane
+  title is Gabarito at -0.012em. The unlayered `.font-display` rule outranks
+  every utility, and callers pass `font-display` as a toggle-off class, so
+  the primitive sets the face and the tracking with `!`.
+  `e2e/section-label-face.spec.ts` checks the computed face.
 
 ### How the bench enforces this
 

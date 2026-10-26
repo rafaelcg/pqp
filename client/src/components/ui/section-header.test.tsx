@@ -43,7 +43,7 @@ describe("SectionLabel", () => {
     expect(html).toMatch(/^<h3 data-section-label="list"/);
     const cls = classes(html);
     expect(cls).toContain("uppercase tracking-wider text-text-tertiary");
-    expect(cls).toContain("redesign:normal-case redesign:tracking-normal redesign:text-text-secondary");
+    expect(cls).toContain("redesign:normal-case redesign:tracking-normal! redesign:text-text-secondary");
   });
 
   it("keeps a danger zone's tone and the tag it is given", () => {
@@ -64,7 +64,7 @@ describe("SectionLabel", () => {
       </SectionLabel>,
     );
     expect(html).toContain('data-section-label="group"');
-    expect(classes(html)).toContain("redesign:text-sm");
+    expect(classes(html)).toContain("redesign:text-[length:var(--section-group-size)]");
     expect(classes(html)).toContain("redesign:text-text");
     expect(classes(html)).not.toContain("redesign:text-text-secondary");
     expect(classes(html)).not.toContain("--section-label-gap");

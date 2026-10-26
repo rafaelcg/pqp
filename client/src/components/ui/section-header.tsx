@@ -18,21 +18,24 @@ import { cn } from "@/lib/utils";
  */
 export const PANE_HEADER_REDESIGN =
   "redesign:mb-[var(--pane-header-gap)] redesign:gap-4";
+// `!` on the face and the tracking: the unlayered `.font-display` rule in
+// index.css outranks every utility, and a caller's toggle-off classes pass
+// `font-display`.
 export const PANE_TITLE_REDESIGN =
-  "redesign:font-[family-name:var(--type-title-font)] redesign:text-[length:var(--pane-header-title-size)] redesign:leading-tight redesign:font-bold redesign:text-text";
+  "redesign:font-[family-name:var(--type-title-font)]! redesign:tracking-[-0.012em]! redesign:text-[length:var(--pane-header-title-size)] redesign:leading-tight redesign:font-bold redesign:text-text";
 export const PANE_DESCRIPTION_REDESIGN =
   "redesign:mt-1 redesign:text-sm redesign:text-pretty redesign:text-text-secondary";
 /** Over a list in a popover, a picker or a panel: quieter than its rows. */
 export const SECTION_LABEL_REDESIGN =
-  "redesign:font-sans redesign:text-[length:var(--section-label-size)] redesign:leading-5 redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text-secondary redesign:pb-0 redesign:mb-[var(--section-label-gap)]";
+  "redesign:font-sans! redesign:text-[length:var(--section-label-size)] redesign:leading-5 redesign:font-semibold redesign:normal-case redesign:tracking-normal! redesign:text-text-secondary redesign:pb-0 redesign:mb-[var(--section-label-gap)]";
 
 /**
  * Over a group in a settings pane, where the rows are paragraphs and
- * controls: the body size in the text colour, so the step pane, group, row
- * holds. The settings kit's group title is this.
+ * controls: 15px in the text colour, a step over the 14px rows, flush with
+ * the group's edge, so the step pane, group, row holds. The settings kit's group title is this.
  */
 export const SECTION_GROUP_REDESIGN =
-  "redesign:font-sans redesign:text-sm redesign:leading-5 redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text";
+  "redesign:font-sans! redesign:text-[length:var(--section-group-size)] redesign:leading-5 redesign:font-semibold redesign:normal-case redesign:tracking-normal! redesign:px-0 redesign:text-text";
 
 export function PaneHeader({
   title,
