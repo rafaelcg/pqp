@@ -127,7 +127,7 @@ describe("Tabs looks with the toggle off", () => {
   it("keeps the role tabs' track, thumb and shadow, and draws no new focus ring or truncation", () => {
     const { list, on } = look("segmented", "md");
     expect(list).toContain("rounded-[var(--segmented-radius,0.75rem)]");
-    expect(list).toContain("p-[var(--tabs-track-pad,0.25rem)]");
+    expect(list).toContain("p-[var(--segmented-pad,0.25rem)]");
     expect(on).toContain("bg-[color:var(--segmented-thumb,var(--color-surface-1))]");
     expect(on).toContain("0_1px_3px_0_rgb(0_0_0/0.1),0_1px_2px_-1px_rgb(0_0_0/0.1)");
     expect(on).toContain("redesign:truncate");
@@ -151,5 +151,16 @@ describe("Tabs looks with the toggle off", () => {
     const { on, off } = look("filled", "sm");
     expect(on).toContain("bg-accent text-surface-0");
     expect(off).toContain("bg-[color:var(--tabs-filled-off,var(--color-surface-2))]");
+  });
+
+  it("sets a selected pill apart from a hovered one by weight, and the filled chip on the accent's own text", () => {
+    expect(look("pill", "md").on).toContain("redesign:font-medium");
+    expect(look("filled", "sm").on).toContain("redesign:text-on-accent");
+  });
+
+  it("puts segmented cells on RadioGroup's ladder only under the redesign", () => {
+    expect(look("segmented", "md").on).toContain("redesign:h-[var(--segmented-h)]");
+    expect(look("segmented", "xs").on).toContain("redesign:h-[var(--segmented-h-sm)]");
+    expect(look("segmented", "xs").list).toContain("redesign:p-[var(--segmented-pad)]");
   });
 });

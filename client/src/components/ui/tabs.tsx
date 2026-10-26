@@ -76,29 +76,33 @@ const LOOKS: Record<string, Look> = {
   "underline:md": {
     list: "flex gap-1 border-b border-[color:var(--tabs-rule,var(--color-border))]",
     focus: FOCUS,
-    tab: "-mb-px border-b-2 px-3 pb-2.5 pt-1 text-sm font-semibold transition-colors duration-[var(--duration-fast)]",
+    // Under the redesign the focus ring is a rounded box inset from the rule.
+    tab: "-mb-px border-b-2 px-3 pb-2.5 pt-1 text-sm font-semibold transition-colors duration-[var(--duration-fast)] redesign:rounded-t-[var(--radius-control)] redesign:focus-visible:ring-inset",
     on: "border-accent text-text",
     off: "border-transparent text-[color:var(--tabs-off-text,var(--color-text-tertiary))] hover:text-text",
   },
   "segmented:md": {
-    list: "grid auto-cols-fr grid-flow-col gap-1 rounded-[var(--segmented-radius,0.75rem)] bg-[color:var(--segmented-bg,color-mix(in_oklab,var(--color-surface-2)_60%,transparent))] p-[var(--tabs-track-pad,0.25rem)]",
-    focus: FOCUS_REDESIGN,
-    tab: "min-w-0 redesign:truncate rounded-[var(--segmented-radius,0.5rem)] px-3 py-1.5 text-sm transition-colors duration-[var(--duration-fast)]",
+    list: "grid auto-cols-fr grid-flow-col gap-1 rounded-[var(--segmented-radius,0.75rem)] bg-[color:var(--segmented-bg,color-mix(in_oklab,var(--color-surface-2)_60%,transparent))] p-[var(--segmented-pad,0.25rem)]",
+    focus: `${FOCUS_REDESIGN} redesign:focus-visible:ring-offset-[length:var(--segmented-ring-offset)] redesign:focus-visible:ring-offset-ring-offset`,
+    // RadioGroup's metrics under the redesign: the cell is the control
+    // height minus the track's pad, so the track sits on the ladder.
+    tab: "min-w-0 redesign:truncate rounded-[var(--segmented-radius,0.5rem)] px-3 py-1.5 text-sm transition-colors duration-[var(--duration-fast)] redesign:h-[var(--segmented-h)] redesign:py-0",
     on: "bg-[color:var(--segmented-thumb,var(--color-surface-1))] font-medium text-text shadow-[var(--segmented-thumb-shadow,0_1px_3px_0_rgb(0_0_0/0.1),0_1px_2px_-1px_rgb(0_0_0/0.1))]",
     off: "text-[color:var(--segmented-text,var(--color-text-tertiary))] hover:text-text",
   },
   "segmented:xs": {
-    list: "grid auto-cols-fr grid-flow-col gap-0.5 rounded-[var(--segmented-radius,0.5rem)] bg-[color:var(--segmented-bg,color-mix(in_oklab,var(--color-surface-2)_60%,transparent))] p-0.5",
-    focus: FOCUS_REDESIGN,
-    tab: "min-w-0 truncate rounded-[var(--segmented-radius,0.375rem)] px-1.5 py-1 text-[11px] font-medium transition-colors",
+    list: "grid auto-cols-fr grid-flow-col gap-0.5 rounded-[var(--segmented-radius,0.5rem)] bg-[color:var(--segmented-bg,color-mix(in_oklab,var(--color-surface-2)_60%,transparent))] p-0.5 redesign:p-[var(--segmented-pad)]",
+    focus: `${FOCUS_REDESIGN} redesign:focus-visible:ring-offset-[length:var(--segmented-ring-offset)] redesign:focus-visible:ring-offset-ring-offset`,
+    tab: "min-w-0 truncate rounded-[var(--segmented-radius,0.375rem)] px-1.5 py-1 text-[11px] font-medium transition-colors redesign:h-[var(--segmented-h-sm)] redesign:py-0",
     on: "bg-[color:var(--segmented-thumb,var(--color-surface-1))] text-text shadow-[var(--segmented-thumb-shadow,0_0_transparent)]",
     off: "text-[color:var(--segmented-text,var(--color-text-tertiary))] hover:text-text",
   },
   "pill:md": {
     list: "flex items-center gap-1",
     focus: FOCUS_REDESIGN,
-    tab: "flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[var(--tabs-pill-radius,0.375rem)] px-2.5 py-1.5 text-sm",
-    on: "bg-[color:var(--tabs-pill-on,var(--color-surface-2))] text-text",
+    tab: "flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[var(--tabs-pill-radius,0.375rem)] px-2.5 py-1.5 text-sm redesign:transition-colors redesign:duration-[var(--duration-fast)]",
+    // Selected differs from hovered by weight too, not only by the fill.
+    on: "bg-[color:var(--tabs-pill-on,var(--color-surface-2))] text-text redesign:font-medium",
     off: "text-[color:var(--tabs-off-text,var(--color-text-tertiary))] hover:bg-[color:var(--tabs-pill-hover,color-mix(in_oklab,var(--color-surface-2)_70%,transparent))] hover:text-text",
   },
   "pill:xs": {
@@ -112,7 +116,7 @@ const LOOKS: Record<string, Look> = {
     list: "flex flex-wrap gap-1.5",
     focus: FOCUS_REDESIGN,
     tab: "rounded-[var(--tabs-pill-radius,0.375rem)] px-2.5 py-1 text-xs font-medium transition-colors",
-    on: "bg-accent text-surface-0",
+    on: "bg-accent text-surface-0 redesign:text-on-accent",
     off: "bg-[color:var(--tabs-filled-off,var(--color-surface-2))] text-[color:var(--tabs-off-text,var(--color-text-tertiary))] hover:text-text",
   },
 };
@@ -208,7 +212,7 @@ export function Tabs<T extends string>({
           >
             {item.label}
             {item.count !== undefined && item.count > 0 ? (
-              <span className="ml-1 rounded-full bg-accent/20 px-1.5 text-[10px] text-accent">
+              <span className="ml-1 rounded-full bg-[color:var(--tabs-count-bg,color-mix(in_oklab,var(--color-accent)_20%,transparent))] px-1.5 text-[length:var(--tabs-count-size,10px)] text-[color:var(--tabs-count-text,var(--color-accent))] redesign:tabular-nums">
                 {item.count}
               </span>
             ) : null}

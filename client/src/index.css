@@ -836,11 +836,13 @@
      value. `segmented` shares RadioGroup's track and thumb above. */
   --tabs-off-text: var(--color-text-secondary);
   --tabs-pill-radius: 999px;
-  --tabs-pill-on: color-mix(in oklab, var(--color-text) 12%, transparent);
+  --tabs-pill-on: color-mix(in oklab, var(--color-text) 16%, transparent);
   --tabs-pill-hover: var(--button-ghost-hover);
   --tabs-filled-off: color-mix(in oklab, var(--color-text) 7%, transparent);
-  --tabs-track-pad: 0.1875rem;
-  --tabs-disabled-opacity: 0.5;
+  --tabs-disabled-opacity: var(--button-disabled-opacity);
+  --tabs-count-bg: var(--color-accent-soft);
+  --tabs-count-text: var(--color-on-accent-soft);
+  --tabs-count-size: 11px;
 
   /* The title role is drawn in the display face: server names, channel
      titles and pane headers, in sentence case. */
@@ -1060,6 +1062,8 @@
 /* The redesign's shadows on a light page: tinted, never black. Every look. */
 :root[data-redesign][data-theme="light"] {
   --input-invalid-bg: color-mix(in oklab, var(--color-danger) 6%, var(--color-field));
+  /* Light shows the selected pill clearly at 12%. */
+  --tabs-pill-on: color-mix(in oklab, var(--color-text) 12%, transparent);
   --shadow-1: 0 1px 2px oklch(0.4 0.02 262 / 0.08);
   --shadow-2: 0 12px 32px oklch(0.4 0.02 262 / 0.16);
   --shadow-3: 0 24px 64px -16px oklch(0.4 0.02 262 / 0.26);

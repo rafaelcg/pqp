@@ -884,10 +884,15 @@ model and four shapes.
   toggle off; the others keep the browser's outline there.
 - **Under the redesign.** Unselected labels are `text-secondary`. Pills are
   round, the selected one a 12% text tint and the hover the ghost tint. The
-  filled filter's unselected chips are a 7% text tint. `segmented` is
-  RadioGroup's track and thumb (`--segmented-*`) with a 3px pad, and its cells
-  truncate. Disabled is 0.5. Every value is a `--tabs-*` or `--segmented-*`
-  token with the old value as its fallback.
+  filled filter's unselected chips are a 7% text tint, its selected chip
+  takes `on-accent` text. A selected pill is a 16% tint (12% in light) and
+  medium weight, so it differs from a hovered one by more than the fill.
+  `segmented` is RadioGroup's control: its track and thumb, its 3px pad, its
+  cell heights (the control ladder minus the pad) and its ring offset; its
+  cells truncate. The underline's focus ring is rounded and inset. A count is
+  `accent-soft` with `on-accent-soft` text at 11px, tabular. Disabled follows
+  Button's. Every value is a `--tabs-*` or `--segmented-*` token with the old
+  value as its fallback.
 - **Use it** to switch a panel. **Do not** use it for one of a few values in a
   form (`RadioGroup`) or a settings dialog's side list (`SectionRail`).
 - **Accessibility.** `role="tablist"` with `aria-label`; each tab is a
