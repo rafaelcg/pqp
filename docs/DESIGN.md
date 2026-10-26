@@ -656,6 +656,9 @@ form submits it. A row in a checklist is `CheckRow`; a setting is `Switch`.
 - `wrapperClassName` takes margins; `className` styles the input.
 - Give the `<label>` around it `group/checkbox`: hovering the label then strengthens
   the box's edge, as hovering a CheckRow's row does.
+- Also give it `redesign:has-[:disabled]:text-text-tertiary`, so a disabled
+  box never sits beside a full-strength label. A hint under the label indents
+  by `calc(var(--tick-size)+0.5rem)` under the redesign.
 
 ### Skeleton
 

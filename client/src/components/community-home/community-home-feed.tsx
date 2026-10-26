@@ -2100,7 +2100,7 @@ function ComposeCard({
               ))}
             </div>
           )}
-          <label className="group/checkbox inline-flex items-center gap-1.5">
+          <label className="group/checkbox redesign:has-[:disabled]:text-text-tertiary inline-flex items-center gap-1.5">
             <Checkbox
               className="h-auto w-auto accent-auto"
               checked={state.commentsEnabled}
@@ -2130,11 +2130,11 @@ function ComposeCard({
 
         {announceChannel && !editingPublished && (
           <label
-            className="group/checkbox mb-2 flex cursor-pointer items-start gap-2 rounded-lg border border-ink-4 bg-ink px-3 py-2 text-xs text-paper-muted"
+            className="group/checkbox redesign:has-[:disabled]:text-text-tertiary mb-2 flex cursor-pointer items-start gap-2 rounded-lg border border-ink-4 bg-ink px-3 py-2 text-xs text-paper-muted"
             data-home-compose-announce
           >
             <Checkbox
-              wrapperClassName="mt-0.5"
+              wrapperClassName="mt-0.5 redesign:-mt-px"
               className="h-auto w-auto accent-auto"
               checked={announce}
               onChange={(event) => setAnnounce(event.target.checked)}

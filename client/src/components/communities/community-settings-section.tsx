@@ -477,7 +477,7 @@ export function CommunitySettingsSection({
               when their hand is on the box. */}
           <div className="space-y-1">
             <label
-              className="group/checkbox flex items-center gap-2 text-sm text-paper"
+              className="group/checkbox redesign:has-[:disabled]:text-text-tertiary flex items-center gap-2 text-sm text-paper"
               htmlFor={addressToggleId}
             >
               <Checkbox
@@ -498,11 +498,11 @@ export function CommunitySettingsSection({
               />
               {t("communities.settings.addressToggle")}
             </label>
-            <p className="pl-6 text-xs text-paper-muted">
+            <p className="pl-6 text-xs text-paper-muted redesign:pl-[calc(var(--tick-size)+0.5rem)]">
               {t("communities.settings.addressHint")}
             </p>
             {addressLocked && (
-              <p className="pl-6 text-xs text-paper-muted">
+              <p className="pl-6 text-xs text-paper-muted redesign:pl-[calc(var(--tick-size)+0.5rem)]">
                 {t("communities.settings.addressLockedByListing")}
               </p>
             )}
@@ -522,7 +522,7 @@ export function CommunitySettingsSection({
             data-directory-offer={offerDirectory ? "" : undefined}
           >
             <label
-              className="group/checkbox flex items-center gap-2 text-sm text-paper"
+              className="group/checkbox redesign:has-[:disabled]:text-text-tertiary flex items-center gap-2 text-sm text-paper"
               htmlFor={toggleId}
             >
               <Checkbox
@@ -537,16 +537,16 @@ export function CommunitySettingsSection({
               />
               {t("communities.settings.toggle")}
             </label>
-            <p className="pl-6 text-xs text-paper-muted">
+            <p className="pl-6 text-xs text-paper-muted redesign:pl-[calc(var(--tick-size)+0.5rem)]">
               {t("communities.settings.toggleHint")}
             </p>
             {!canListPublicly ? (
-              <p className="pl-6 text-xs text-paper-muted">
+              <p className="pl-6 text-xs text-paper-muted redesign:pl-[calc(var(--tick-size)+0.5rem)]">
                 {t("communities.settings.listingOwnerOnly")}
               </p>
             ) : (
               !addressed && (
-                <p className="pl-6 text-xs text-paper-muted">
+                <p className="pl-6 text-xs text-paper-muted redesign:pl-[calc(var(--tick-size)+0.5rem)]">
                   {t("communities.settings.listingNeedsAddress")}
                 </p>
               )
