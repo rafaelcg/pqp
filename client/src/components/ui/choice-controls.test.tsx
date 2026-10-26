@@ -138,13 +138,24 @@ describe("round 2 behaviour", () => {
     expect(track).not.toContain("opacity-70");
   });
 
+  it("keeps a saving row at full strength under the redesign, even when it dims when disabled", () => {
+    const host = draw(
+      <Switch checked busy dimRowWhenDisabled onCheckedChange={() => undefined} label="Salvando" />,
+    );
+    const button = host.querySelector("button")!;
+    expect(button.className).toContain("redesign:opacity-100");
+    const track = button.querySelector("span[aria-hidden]")!.getAttribute("class")!;
+    expect(track).toContain("redesign:motion-safe:[&>span]:animate-pulse");
+    expect(track).toContain("redesign:motion-reduce:[&>span]:opacity-60");
+  });
+
   it("fades a disabled Checkbox's check and strengthens its edge from a named label group", () => {
     const host = draw(<Checkbox disabled defaultChecked />);
     expect(host.querySelector("svg")!.getAttribute("class")).toContain(
       "redesign:peer-disabled:opacity-[var(--tick-disabled-opacity,0.5)]",
     );
     expect(host.querySelector("input")!.className).toContain(
-      "redesign:group-hover/checkbox:enabled:not-checked:border-[color:var(--tick-hover-ring)]",
+      "redesign:group-hover/checkbox:enabled:not-checked:not-indeterminate:border-[color:var(--tick-hover-ring)]",
     );
   });
 

@@ -618,7 +618,7 @@ value.
   border), so an off switch shows on a card, a dialog and a pane alike, and
   the off knob is `text-secondary`. The row hover is the ghost tint
   (`--choice-row-hover`). A disabled label dims to `text-tertiary` with its
-  track, and a `busy` track steps back to 70% with a progress cursor. Every value is a `--switch-*` token with today's value as the
+  track, and a `busy` switch keeps its track colour and pulses its knob (it steps back to 60% without motion), with a progress cursor, even in a row that dims when disabled. An off knob in dark is between `text-secondary` and `text-tertiary`. Every value is a `--switch-*` token with today's value as the
   fallback in the class.
 - `labelAdornment` draws a badge after the label; `data-*` props land on the
   button. `SwitchTrack` is the track alone, for a row a call site lays out

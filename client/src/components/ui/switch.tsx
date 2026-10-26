@@ -125,6 +125,9 @@ export function Switch({
           ? "cursor-not-allowed redesign:aria-busy:cursor-progress"
           : "hover:bg-[color:var(--choice-row-hover,var(--color-surface-2))]",
         dimRow && "opacity-[var(--choice-row-disabled-opacity,0.6)]",
+        // Under the redesign a row that is only saving does not fade: the
+        // knob pulses instead, so "saving" never reads as "disabled".
+        dimRow && busy && !disabled && !unavailable && "redesign:opacity-100",
         className,
       )}
     >
@@ -159,7 +162,8 @@ export function Switch({
           description && "mt-[var(--switch-desc-offset,0.125rem)]",
           // A write is running: the track keeps its colour and the knob
           // pulses, so "saving" never reads as "disabled".
-          busy && !dimRow && "redesign:motion-safe:[&>span]:animate-pulse",
+          // Without motion the knob steps back instead.
+          busy && "redesign:motion-safe:[&>span]:animate-pulse redesign:motion-reduce:[&>span]:opacity-60",
         )}
       />
     </button>
