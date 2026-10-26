@@ -5046,6 +5046,8 @@
   "qaUi.input.value": "Arcade crew",
   "qaUi.input.prefix": "With a prefix",
   "qaUi.input.multiline": "Multiple lines",
+  "qaUi.select.public": "Anyone",
+  "qaUi.select.friends": "Friends only",
   "qaUi.switch.label": "Push to talk",
   "qaUi.switch.description": "Hold a key to open the microphone.",
   "qaUi.check.label": "Manage channels",

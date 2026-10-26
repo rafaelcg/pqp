@@ -8,6 +8,7 @@ import {
 } from "react";
 import { ChevronDown, ChevronRight, TriangleAlert } from "lucide-react";
 import { Dialog, DialogBody } from "@/components/ui/dialog";
+import { Select } from "@/components/ui/select";
 import type { LiveHlsStream, VoiceRoomTransport } from "@pqp/shared";
 import { OutboundVideoReadout } from "@/components/voice/outbound-video-readout";
 import { endToEndDelaySeconds } from "@/lib/hls-live-edge";
@@ -714,13 +715,13 @@ export function StreamQualityControl({
           {t("watchParty.tx.streamQualityHint")}
         </span>
       </label>
-      <select
+      <Select
         id={selectId}
         data-testid="watch-party-tx-stream-quality-select"
-        className={cn(
-          "h-[var(--control-sm)] shrink-0 rounded-[var(--radius-control)] border border-border bg-surface-2 pl-2.5 pr-7 text-sm text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring",
-          stacked && "w-full",
-        )}
+        size="sm"
+        raised
+        wrapperClassName={stacked ? "w-full" : "w-auto shrink-0"}
+        className="h-[var(--select-h-sm,var(--control-sm))] ps-[var(--input-px,0.625rem)] pe-[var(--select-pr,1.75rem)]"
         value={quality}
         onChange={(event) => {
           const next = event.target.value as WatchPartyStreamQuality;
@@ -734,7 +735,7 @@ export function StreamQualityControl({
             {t(STREAM_QUALITY_KEYS[value])}
           </option>
         ))}
-      </select>
+      </Select>
     </div>
   );
 }

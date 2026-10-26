@@ -570,6 +570,35 @@ accessible name.
 - **Accessibility.** It renders no label. Wrap it in a `<label>` or point one at
   it. A placeholder is not a label.
 
+- **Focus ring.** The field family (Input, Textarea, Select) rings focus in
+  `--input-ring`: the shared 60% ring in dark, the solid accent in light,
+  where 60% reads about 2.4:1 on the page (IconButton made the same move).
+
+### Select
+
+`select.tsx`. A choice from a short list: a native `<select>` dressed as a
+text field, so a phone shows its own picker and e2e specs find options by
+value.
+
+- **Sizes.** `md` matches an `Input` (40px off, 36px under the redesign),
+  the default; `sm` is a step under it (36px off, 32px under the redesign,
+  as a small `Button`).
+- **`raised`.** With the toggle off, a `surface-2` fill instead of
+  `surface-0`, for the selects that sat on a raised fill (bots, watch
+  party). Under the redesign every select takes the field fill.
+- **`wrapperClassName`.** Width and margins go on the wrapper (`@lg:w-48`,
+  `sm:min-w-[14rem]`, `mt-1.5`); `className` is for the field itself.
+- **Under the redesign.** The `Input` box (`FIELD_BOX`), and a Phosphor caret
+  in place of the operating system's arrow (`--select-appearance: none`,
+  `--select-pr`). With the toggle off it keeps the native arrow.
+- **States.** Disabled follows the field: `--input-disabled-opacity: 1`, no
+  fill, the value at `text-tertiary` and the caret faded as far as the
+  placeholder. The caret is a `peer` of the field: `text-secondary` on hover
+  and keyboard focus, `text-danger` when invalid (hover and focus never
+  repaint an invalid caret).
+- **Use it** for every short list. It replaced `SettingsSelect` and about a
+  dozen hand-drawn selects.
+
 ### Switch
 
 `switch.tsx`. An independent on/off bit, with the whole row as the hit target.
@@ -817,8 +846,6 @@ reads the same on every surface.
 Not built. Do not invent a local one; add it here instead, in `ui/`, with a
 variant set, and then use it everywhere.
 
-- **Select.** Native `<select>` is used today. It draws OS chrome, which
-  `color-scheme` now at least tints correctly.
 - **Checkbox.** A bare `<input type="checkbox">` with `accent-[var(--color-accent)]`
   in PromptDialog. `CheckRow` covers the row case only.
 - **Tabs.** `SectionRail` is a tablist, but it is settings-shaped and not

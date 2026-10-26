@@ -33,6 +33,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { Select } from "@/components/ui/select";
 import {
   ApiError,
   deleteServerBot,
@@ -529,9 +530,10 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
             <>
               <label className="block space-y-1.5">
                 <span className="text-xs font-semibold text-text-secondary">{t("bots.welcome.channel")}</span>
-                <select
+                <Select
                   value={draft.welcomeChannelId}
-                  className="h-[var(--control-md)] w-full rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 text-sm text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-focus-ring)]"
+                  raised
+                  className="h-[var(--input-h,var(--control-md))]"
                   onChange={(e) => edit({ welcomeChannelId: e.target.value })}
                 >
                   {textChannels.map((channel) => (
@@ -539,7 +541,7 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
                       #{channel.name}
                     </option>
                   ))}
-                </select>
+                </Select>
               </label>
               <label className="block space-y-1.5">
                 <span className="text-xs font-semibold text-text-secondary">{t("bots.welcome.message")}</span>
@@ -563,11 +565,12 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
       {models.length > 1 && (
         <SettingsGroup title={t("serverSettings.bots.model")}>
           <div className="p-4">
-            <select
+            <Select
               id={ids.model}
               aria-label={t("serverSettings.bots.model")}
               value={draft.model}
-              className="h-[var(--control-md)] w-full rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 text-sm text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-focus-ring)]"
+              raised
+              className="h-[var(--input-h,var(--control-md))]"
               onChange={(e) => edit({ model: e.target.value })}
             >
               <option value="">{t("serverSettings.bots.modelDefault", { model: models[0]!.label })}</option>
@@ -576,7 +579,7 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
                   {choice.label}
                 </option>
               ))}
-            </select>
+            </Select>
           </div>
         </SettingsGroup>
       )}

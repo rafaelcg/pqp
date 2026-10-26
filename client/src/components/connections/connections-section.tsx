@@ -19,7 +19,6 @@ import {
   SettingsInlineStatus,
   SettingsNotice,
   SettingsRow,
-  SettingsSelect,
   SettingsSkeletonRows,
   inlineErrorMessage,
   useInlineSave,
@@ -35,6 +34,7 @@ import {
 } from "@/lib/api";
 import { takeConnectionErrorFromWindow } from "@/lib/connection-callback";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { Select } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 
 const PROVIDER_NAME: Record<ConnectionGlyphProvider, MessageKey> = {
@@ -558,7 +558,7 @@ function ProviderRow({
       <label htmlFor={selectId} className="text-xs text-text-tertiary">
         {t("settings.connections.visibility.label")}
       </label>
-      <SettingsSelect
+      <Select
         id={selectId}
         aria-describedby={
           showHandleHint ? `${nameId} ${hintId}` : nameId
@@ -574,7 +574,7 @@ function ProviderRow({
             {t(VISIBILITY_LABEL[value])}
           </option>
         ))}
-      </SettingsSelect>
+      </Select>
       {showHandleHint ? (
         <p id={hintId} className="text-xs text-pretty text-text-tertiary">
           {t("settings.connections.visibility.publicHint", {

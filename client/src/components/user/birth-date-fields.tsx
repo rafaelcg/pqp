@@ -1,5 +1,6 @@
 import { useRef } from "react";
 import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -117,9 +118,9 @@ export function BirthDateFields({
         </label>
         <label className="min-w-0 flex-1 text-xs font-medium text-text-secondary">
           {t("ageGate.month")}
-          <select
+          <Select
             ref={monthRef}
-            className="mt-1.5 flex h-10 w-full rounded-[var(--radius-control)] border border-border bg-surface-0 px-3 py-2 text-sm text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
+            wrapperClassName="mt-1.5"
             autoComplete="bday-month"
             disabled={disabled}
             value={parts.month}
@@ -137,7 +138,7 @@ export function BirthDateFields({
                 {t(key)}
               </option>
             ))}
-          </select>
+          </Select>
         </label>
         <label
           className={cn(
