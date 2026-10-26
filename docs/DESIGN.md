@@ -787,7 +787,7 @@ composer's "+"), draw from one recipe in `menu-items.tsx`: `MENU_SURFACE`,
   show. Rows sit concentric inside the panel (the panel's radius minus its
   6px pad) and are 34px tall. Icons are 16px in `text-secondary` and come up
   to the label's colour on the highlighted row; a danger row's icon stays
-  red. Headings are sentence case at 12px. The tick is Phosphor's, in the
+  red. Headings are sentence case, 12px semibold in `text-secondary` (medium would sit too close to the 14px rows). A disabled row fades its icon and label to 0.5 and its hint to 0.7. Groups are 6px apart, the panel's pad. In the composer's "+" menu only focus fills a row; the pointer moves focus. The tick is Phosphor's, in the
   accent. Separators are a 10% text tint. Disabled is 0.5. Every value is a
   `--menu-*` token with the old value as its fallback.
 

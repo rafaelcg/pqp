@@ -46,8 +46,8 @@ const DISABLED_PART = "redesign:group-data-[disabled]/menu-row:opacity-[var(--me
 
 /**
  * A heading over the rows below it, also for a menu's `topContent`. Under
- * the redesign it is sentence case in `text-secondary` and semibold, so it
- * does not read as a row's detail line.
+ * the redesign it is sentence case, 12px semibold in `text-secondary` (medium
+ * sits too close to the 14px rows), so it does not read as a detail line.
  */
 export const MENU_HEADING =
   "px-2.5 pb-0.5 pt-1.5 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary redesign:pt-2 redesign:text-xs redesign:normal-case redesign:tracking-normal redesign:text-text-secondary";
@@ -57,7 +57,12 @@ export const MENU_HEADING_REDESIGN =
   "redesign:pt-2 redesign:text-xs redesign:normal-case redesign:tracking-normal redesign:text-text-secondary";
 
 /** A hand-built row: a button highlighted on hover and keyboard focus. */
-export const MENU_ROW_BUTTON = `group/menu-row ${ROW_SHAPE} text-left text-text hover:bg-[color:var(--menu-row-hover,var(--color-surface-2))] focus-visible:bg-[color:var(--menu-row-hover,var(--color-surface-2))]`;
+/**
+ * A plain-button row (the composer's "+"). With the toggle off hover and
+ * keyboard focus both fill; under the redesign only focus does, and the
+ * caller moves focus with the pointer, so one row is ever filled, as Radix.
+ */
+export const MENU_ROW_BUTTON = `group/menu-row ${ROW_SHAPE} text-left text-text hover:bg-[color:var(--menu-row-hover,var(--color-surface-2))] focus-visible:bg-[color:var(--menu-row-hover,var(--color-surface-2))] redesign:hover:bg-transparent redesign:focus:bg-[color:var(--menu-row-hover)]`;
 
 /**
  * A row's icon: the label's colour with the toggle off; under the redesign a
@@ -71,12 +76,12 @@ export const MENU_ICON =
  * up on hover and on keyboard focus instead. (A Radix row lifts only on its
  * highlight, so a resting pointer and the arrow keys never light two icons.)
  */
-export const MENU_BUTTON_ICON = `${MENU_ICON} group-hover/menu-row:text-current group-focus-visible/menu-row:text-current`;
+export const MENU_BUTTON_ICON = `${MENU_ICON} group-hover/menu-row:text-current group-focus-visible/menu-row:text-current redesign:group-hover/menu-row:text-[color:var(--menu-icon)] redesign:group-focus/menu-row:text-current`;
 
 /** The column an icon sits in, so labels line up across rows. */
 export const MENU_ICON_BOX = "flex size-[var(--menu-icon-box,1rem)] shrink-0 items-center justify-center";
 
-export const MENU_SEPARATOR = "my-1 h-px bg-[color:var(--menu-separator,var(--color-border))]";
+export const MENU_SEPARATOR = "my-1 redesign:my-1.5 h-px bg-[color:var(--menu-separator,var(--color-border))]";
 
 export interface MenuItemComponentProps {
   disabled?: boolean;

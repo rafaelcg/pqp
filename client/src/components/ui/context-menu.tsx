@@ -264,7 +264,7 @@ export function ContextMenu({
                 )}
               </div>
               {items.length > 0 && (
-                <div className="mb-1 h-px bg-[color:var(--menu-separator,var(--color-border))]" />
+                <div className="mb-1 redesign:mb-1.5 h-px bg-[color:var(--menu-separator,var(--color-border))]" />
               )}
             </>
           )}

@@ -77,6 +77,10 @@ describe("menu recipe", () => {
     expect(MENU_ICON).toContain("size-[var(--menu-icon-size,0.875rem)]");
     expect(MENU_ICON).not.toContain("group-hover/menu-row");
     expect(MENU_BUTTON_ICON).toContain("group-hover/menu-row:text-current");
+    // Under the redesign only focus fills a button row and lifts its icon.
+    expect(MENU_ROW_BUTTON).toContain("redesign:hover:bg-transparent");
+    expect(MENU_ROW_BUTTON).toContain("redesign:focus:bg-[color:var(--menu-row-hover)]");
+    expect(MENU_BUTTON_ICON).toContain("redesign:group-focus/menu-row:text-current");
     expect(MENU_ICON).toContain("redesign:[stroke-width:var(--icon-stroke)]");
   });
 

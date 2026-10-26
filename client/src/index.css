@@ -801,7 +801,7 @@
   --menu-more-edge: var(--color-border-strong);
   --menu-disabled-opacity: 0.5;
   /* A disabled row's hint fades a little, so its label stays a step above it. */
-  --menu-detail-disabled-opacity: 0.8;
+  --menu-detail-disabled-opacity: 0.7;
   --menu-strip-h: 2.125rem;
 
   --icon-button-radius: var(--radius-pill);
