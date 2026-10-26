@@ -387,6 +387,23 @@ Left for the settings surfaces: no context shot shows a Select in a
 settings row yet (Privacidade, Voz e vídeo). Screenshots:
 `~/pqp-redesign/p-select/`.
 
+### p-checkbox
+
+Spec (audit: Switch in 18 files, CheckRow in 9, 5 native checkboxes, 4
+hand-built switches, 3 hand-built ticks):
+
+1. Job: the independent on/off controls. Switch (a setting), CheckRow (a
+   checklist), and a new `Checkbox`, a native input for forms.
+2. Fold: the two Baú settings switches (onto Switch, with `busy` and a
+   label badge), the new-conversation tick (onto `TickBox`), and five native
+   checkboxes (prompt dialog, community address and listing, Baú composer).
+3. Left for their surfaces: the poll composer's switch (`f-chat`) and the
+   stories composer's tick and switch (`f-stories`, its own media palette).
+4. Redesign: a 40 by 24 pill track with a lifted knob, off as a faint tint
+   inside the field's 3:1 edge, an 18px tick with a bold check, the ghost
+   tint on row hover, and a disabled label that dims with its control.
+5. Tokens with fallbacks; the toggle off draws what it drew before.
+
 ## Open questions for André
 
 1. Resolved 2026-10-26: Grok 4.7 is the third reviewer.
