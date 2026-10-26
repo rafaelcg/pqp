@@ -17,7 +17,7 @@ export const FIELD_TEXT =
   "placeholder:text-[color:var(--input-placeholder,color-mix(in_oklab,var(--color-text-tertiary)_70%,transparent))]";
 
 const FIELD_RING =
-  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring";
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-[color:var(--input-ring,var(--color-focus-ring))]";
 
 /*
  * Height: 40px with the toggle off; under the redesign the field matches the
@@ -57,7 +57,7 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
         className={cn(
           "flex h-[var(--input-h,var(--control-lg))] w-full items-center",
           FIELD_BOX,
-          "focus-within:ring-2 focus-within:ring-offset-2 focus-within:ring-offset-ring-offset focus-within:ring-focus-ring",
+          "focus-within:ring-2 focus-within:ring-offset-2 focus-within:ring-offset-ring-offset focus-within:ring-[color:var(--input-ring,var(--color-focus-ring))]",
           "redesign:has-[input:enabled]:hover:not-has-[input[aria-invalid=true]]:border-[color:var(--input-hover-border)]",
           "has-[input[aria-invalid=true]]:border-danger has-[input:disabled]:cursor-not-allowed has-[input:disabled]:opacity-[var(--input-disabled-opacity,0.5)]",
           "redesign:has-[input:disabled]:bg-transparent redesign:has-[input:disabled]:[&>span]:text-[color:color-mix(in_oklab,var(--color-text-tertiary)_70%,transparent)] redesign:has-[input[aria-invalid=true]]:not-has-[input:disabled]:bg-[color:var(--input-invalid-bg)]",

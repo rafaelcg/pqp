@@ -570,6 +570,10 @@ accessible name.
 - **Accessibility.** It renders no label. Wrap it in a `<label>` or point one at
   it. A placeholder is not a label.
 
+- **Focus ring.** The field family (Input, Textarea, Select) rings focus in
+  `--input-ring`: the shared 60% ring in dark, the solid accent in light,
+  where 60% reads about 2.4:1 on the page (IconButton made the same move).
+
 ### Select
 
 `select.tsx`. A choice from a short list: a native `<select>` dressed as a

@@ -59,7 +59,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select
         ref={ref}
         className={cn(
           "peer w-full px-[var(--input-px,0.75rem)] [appearance:var(--select-appearance,auto)] pe-[var(--select-pr,0.75rem)]",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-[color:var(--input-ring,var(--color-focus-ring))]",
           "disabled:cursor-not-allowed disabled:opacity-[var(--input-disabled-opacity,0.5)]",
           FIELD_BOX,
           HEIGHT[size],

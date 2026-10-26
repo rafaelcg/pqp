@@ -982,6 +982,8 @@
   /* A ghost icon button has no chrome but its ring, and the shared 60% ring
      reads 2.4:1 on a light page; it takes the solid accent instead. */
   --icon-button-ring: var(--color-accent);
+  /* The same for a field: the 60% ring is about 2.4:1 on a light page. */
+  --input-ring: var(--color-accent);
   /* Tighter than the panel shadow: a small label sits close to its control. */
   --tooltip-shadow: var(--shadow-1), 0 4px 12px oklch(0.4 0.02 262 / 0.14);
   /* The light accent is a dark green that sinks into the dark bubble; mix it

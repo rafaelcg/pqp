@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, type ReactElement } from "react";
 import { createRoot } from "react-dom/client";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { Select } from "@/components/ui/select";
 
@@ -80,5 +81,17 @@ describe("Select", () => {
     expect(select.className).toContain("redesign:disabled:text-text-tertiary");
     expect(select.className).toContain("bg-[color:var(--input-bg,var(--color-surface-2))]");
     expect(select.className).not.toContain("bg-[color:var(--input-bg,var(--color-surface-0))]");
+  });
+
+  it("keeps the invalid tint beside a raised fill", () => {
+    const html = renderToStaticMarkup(<Select raised aria-invalid aria-label="Modelo"><option>a</option></Select>);
+    const select = /<select[^>]*>/.exec(html)?.[0] ?? "";
+    expect(select).toContain("bg-[color:var(--input-bg,var(--color-surface-2))]");
+    expect(select).toContain("redesign:aria-invalid:not-disabled:bg-[color:var(--input-invalid-bg)]");
+  });
+
+  it("rings focus through the field family's token", () => {
+    const html = renderToStaticMarkup(<Select aria-label="Modelo"><option>a</option></Select>);
+    expect(html).toContain("focus-visible:ring-[color:var(--input-ring,var(--color-focus-ring))]");
   });
 });
