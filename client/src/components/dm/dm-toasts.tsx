@@ -24,6 +24,7 @@ import { useTranslation } from "@/lib/i18n";
 import { onActivityToast, type ActivityToast } from "@/lib/notifications";
 import { subscribeEscapeUnlessOverlay } from "@/lib/escape-unless-overlay";
 import { cn } from "@/lib/utils";
+import { TOAST_CLOSE, TOAST_OPEN_REDESIGN, TOAST_SURFACE } from "@/components/ui/toast";
 
 /**
  * "Somebody wrote to you", in the corner, while you are looking at something
@@ -357,13 +358,14 @@ function ToastCardView({
           : undefined
       }
       className={cn(
-        "elevation-3 pointer-events-auto flex min-h-16 w-full gap-3 rounded-[var(--radius-card)] p-3 sm:w-80",
+        TOAST_SURFACE,
+        "pointer-events-auto flex min-h-16 w-full gap-3 p-3 sm:w-80",
         card.leaving ? "animate-toast-out" : "animate-toast-in",
       )}
     >
       <button
         type="button"
-        className="flex min-w-0 flex-1 items-start gap-3 text-left"
+        className={cn("flex min-w-0 flex-1 items-start gap-3 text-left", TOAST_OPEN_REDESIGN)}
         onClick={() => {
           // A touch's synthetic click still fires after a swipe that sprang
           // back — a drag past the small jitter threshold means this tap was
@@ -385,7 +387,7 @@ function ToastCardView({
             rounded="full"
           />
         ) : (
-          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-surface-2 text-text-tertiary">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-surface-2 text-text-tertiary redesign:bg-surface-3">
             <MessageCircle className="h-5 w-5" aria-hidden />
           </span>
         )}
@@ -409,7 +411,7 @@ function ToastCardView({
         type="button"
         aria-label={t("dmToast.dismiss")}
         title={t("dmToast.dismiss")}
-        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-text-tertiary hover:bg-surface-2 hover:text-text"
+        className={TOAST_CLOSE}
         onClick={onDismiss}
       >
         <X className="h-4 w-4" aria-hidden />
@@ -433,7 +435,7 @@ function GroupAvatarStack({
           name={person.displayName}
           avatarUrl={person.avatarUrl}
           className="h-10 w-10 ring-2 ring-surface-1"
-          fallbackClassName="bg-surface-2 text-xs text-text"
+          fallbackClassName="bg-surface-2 text-xs text-text redesign:bg-surface-3"
           rounded="full"
         />
       ))}
