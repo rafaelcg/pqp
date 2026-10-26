@@ -1035,7 +1035,7 @@
   /* No top highlight on a light panel; a close shadow under the wide one.
      The fill is the brightest surface, so the panel sits above the pane. */
   --popover-surface: var(--color-surface-0);
-  --popover-border: color-mix(in oklab, var(--color-text) 8%, transparent);
+  --popover-border: color-mix(in oklab, var(--color-text) 10%, transparent);
   --popover-shadow: 0 1px 2px oklch(0.4 0.02 262 / 0.1), var(--shadow-2);
 }
 

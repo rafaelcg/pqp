@@ -791,11 +791,15 @@ card of settings, the "what's new" note.
   their surfaces.
 - **Under the redesign.** The pane radius (16px), its own fill
   (`surface-2` in dark, the brightest surface in light so the panel reads
-  lifted rather than sunk), a 10% text edge (8% in light), and a deeper
-  lift with a top highlight in dark, a close and a wide shadow in light.
+  lifted rather than sunk), a 10% text edge in both themes, and a lift
+  (`--shadow-2`, one rung under a dialog) with a top highlight in dark, a
+  close and a wide shadow in light.
   A caller that draws its own edge adds `POPOVER_OWN_EDGE`, so its edge is
   the popover's whatever order the classes land in. The emoji picker fills
-  its panel (no inner corner or shadow). Both are set through `--elevation-3-border` and
+  its panel (no inner corner or shadow, 38px cells so eight fill its width).
+  Its fill is `--rgb-picker-background`, an RGB triplet the picker needs; it
+  copies `--popover-surface` by hand, so a look that changes surface-0 sets
+  both. Both are set through `--elevation-3-border` and
   `--elevation-3-shadow` on the panel, so a caller that sets its own fill
   or edge keeps it.
 - **Use it** for anything anchored to the control that opened it. A list of

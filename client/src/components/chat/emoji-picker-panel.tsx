@@ -8,6 +8,7 @@ import { emojiPickerLocale } from "@/lib/emoji-picker-locale";
 import { serverEmojiImageUrl } from "@/lib/server-emoji";
 import type { ServerEmoji } from "@pqp/shared";
 import { useMemo } from "react";
+import { useRedesign } from "@/lib/redesign";
 
 interface EmojiPickerPanelProps {
   onSelect: (emoji: string) => void;
@@ -49,6 +50,7 @@ export function EmojiPickerPanel({ onSelect, customEmoji }: EmojiPickerPanelProp
   // are passed in rather than fetched, because its default for a locale is a
   // request to a CDN this app does not load scripts or data from.
   const picker = emojiPickerLocale(locale, { pt, es });
+  const redesign = useRedesign();
 
   return (
     <Picker
@@ -60,6 +62,9 @@ export function EmojiPickerPanel({ onSelect, customEmoji }: EmojiPickerPanelProp
       skinTonePosition="none"
       navPosition="bottom"
       perLine={8}
+      // Under the redesign the grid fills the 336px popover edge to edge
+      // (8 x 38 plus the picker's padding); the default 36 left a gutter.
+      emojiButtonSize={redesign ? 38 : undefined}
       maxFrequentRows={1}
       // This panel now opens from the keyboard as often as from a click
       // (the row's context menu, or the toolbar's + once the row is

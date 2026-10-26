@@ -243,7 +243,7 @@ function IconGrid({
         maxWidth: placement?.maxWidth,
         visibility: placement ? "visible" : "hidden",
       }}
-      className={`${POPOVER_SURFACE} ${POPOVER_OWN_EDGE} z-[120] overflow-y-auto border border-border bg-surface-1 p-3 motion-safe:animate-fade-in`}
+      className={`${POPOVER_SURFACE} ${POPOVER_OWN_EDGE} z-[120] overflow-y-auto border border-border bg-surface-1 redesign:bg-[color:var(--popover-surface)] p-3 motion-safe:animate-fade-in`}
     >
       <div
         role="radiogroup"

@@ -112,7 +112,9 @@ export function EmojiPickerPanel({
         visibility: placement ? "visible" : "hidden",
       }}
       className={cn(
-        "emoji-mart-shell z-[120] overflow-hidden animate-fade-in",
+        // Under the redesign 6px under the category bar, so its active
+        // underline does not sit on the panel's edge and corner.
+        "emoji-mart-shell z-[120] overflow-hidden animate-fade-in redesign:pb-1.5",
         POPOVER_SURFACE,
         className,
       )}
