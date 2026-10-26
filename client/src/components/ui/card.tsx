@@ -9,7 +9,9 @@
  * With the toggle off it is the card every caller drew: the card radius, the
  * plain border, `surface-card`. Under the redesign its fill and edge are
  * tints of the text, so the same card reads on a pane and on a dialog,
- * whatever their surface (as the buttons' fills do).
+ * whatever their surface (as the buttons' fills do). A list inside it
+ * (`divide-y`) takes the same edge for its rules, which the plain border
+ * colour would lose on a dialog.
  */
 export const CARD_SURFACE =
-  "rounded-[var(--radius-card)] border border-[color:var(--card-border,var(--color-border))] bg-[color:var(--card-bg,var(--color-surface-card))]";
+  "rounded-[var(--radius-card)] border border-[color:var(--card-border,var(--color-border))] bg-[color:var(--card-bg,var(--color-surface-card))] redesign:divide-[color:var(--card-border)]";

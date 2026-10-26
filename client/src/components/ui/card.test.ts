@@ -13,4 +13,10 @@ describe("CARD_SURFACE", () => {
   it("carries no padding or element, which stay the caller's", () => {
     expect(CARD_SURFACE).not.toMatch(/\bp[xy]?-\d/);
   });
+
+  it("gives a list inside it the card's own edge for its rules, under the redesign only", () => {
+    expect(CARD_SURFACE).toContain("redesign:divide-[color:var(--card-border)]");
+    expect(CARD_SURFACE).not.toMatch(/(^| )divide-/);
+  });
 });
+
