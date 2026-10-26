@@ -831,6 +831,22 @@
   --radio-dot: var(--color-on-accent);
   --radio-dot-size: 0.4375rem;
   --radio-disabled-opacity: 0.5;
+  /* Tabs (ui/tabs.tsx). Off tabs read in secondary text; pills are pills;
+     the selected pill is a neutral tint, since a tab picks a view, not a
+     value. `segmented` shares RadioGroup's track and thumb above. */
+  --tabs-off-text: var(--color-text-secondary);
+  --tabs-pill-radius: 999px;
+  /* Ten points over the 8% ghost hover: on a dark pane a smaller step reads
+     as the same pill. */
+  --tabs-pill-on: color-mix(in oklab, var(--color-text) 18%, transparent);
+  --tabs-rule: var(--color-border);
+  --tabs-pill-hover: var(--button-ghost-hover);
+  --tabs-filled-off: color-mix(in oklab, var(--color-text) 7%, transparent);
+  --tabs-filled-hover: color-mix(in oklab, var(--color-text) 12%, transparent);
+  --tabs-disabled-opacity: var(--button-disabled-opacity);
+  --tabs-count-bg: var(--color-accent-soft);
+  --tabs-count-text: var(--color-on-accent-soft);
+  --tabs-count-size: 11px;
 
   /* The title role is drawn in the display face: server names, channel
      titles and pane headers, in sentence case. */
@@ -1050,6 +1066,9 @@
 /* The redesign's shadows on a light page: tinted, never black. Every look. */
 :root[data-redesign][data-theme="light"] {
   --input-invalid-bg: color-mix(in oklab, var(--color-danger) 6%, var(--color-field));
+  /* Tabs */
+  /* 7 points over the 8% ghost hover, so a hovered pill never reads as selected. */
+  --tabs-pill-on: color-mix(in oklab, var(--color-text) 15%, transparent);
   --shadow-1: 0 1px 2px oklch(0.4 0.02 262 / 0.08);
   --shadow-2: 0 12px 32px oklch(0.4 0.02 262 / 0.16);
   --shadow-3: 0 24px 64px -16px oklch(0.4 0.02 262 / 0.26);

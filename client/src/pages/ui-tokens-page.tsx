@@ -25,6 +25,7 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { PopoverPanel } from "@/components/ui/popover";
 import { RadioGroup } from "@/components/ui/radio-group";
+import { Tabs } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
@@ -776,6 +777,12 @@ function PrimitiveSheet() {
   const [theme, setThemeChoice] = useState<"dark" | "light" | "system">("dark");
   const [filter, setFilter] = useState<"all" | "unread" | "mentions">("unread");
   const [who, setWho] = useState<"everyone" | "friends" | "nobody">("friends");
+  const [botTab, setBotTab] = useState<"overview" | "voice" | "powers">("overview");
+  const [roleTab, setRoleTab] = useState<"display" | "permissions" | "members">("permissions");
+  const [aboutTab, setAboutTab] = useState<"depoimentos" | "connections" | "communities">("depoimentos");
+  const [friendsTab, setFriendsTab] = useState<"online" | "all" | "pending">("online");
+  const [paneTab, setPaneTab] = useState<"chat" | "people">("chat");
+  const [reportTab, setReportTab] = useState<"open" | "actioned" | "dismissed">("open");
   const [scrub, setScrub] = useState(42);
   const [volume, setVolume] = useState(70);
   const [pressed, setPressed] = useState(true);
@@ -1053,6 +1060,90 @@ function PrimitiveSheet() {
             <span className={TOOLTIP_DETAIL}>{t("qaUi.tooltip.detail")}</span>
           </div>
           <div className={tooltipBubbleClass("rail", true)}>{t("qaUi.tooltip.railLabel")}</div>
+        </div>
+      </div>
+
+      <div data-testid="qa-primitive-tabs" className="flex flex-col gap-3">
+        <p
+          className="text-text-tertiary"
+          style={{ fontSize: "var(--type-label-size)" }}
+        >
+          {t("qaUi.group.tabs")}
+        </p>
+        <div className="grid gap-4 rounded-[var(--radius-card)] border border-border bg-surface-1 p-3 sm:grid-cols-2">
+          <Tabs
+            label={t("qaUi.tabs.underline")}
+            variant="underline"
+            value={botTab}
+            onValueChange={setBotTab}
+            items={[
+              { id: "overview", label: t("qaUi.tabs.overview") },
+              { id: "voice", label: t("qaUi.tabs.voice") },
+              { id: "powers", label: t("qaUi.tabs.powers") },
+            ]}
+          />
+          <Tabs
+            label={t("qaUi.tabs.segmented")}
+            variant="segmented"
+            value={roleTab}
+            onValueChange={setRoleTab}
+            items={[
+              { id: "display", label: t("qaUi.tabs.display") },
+              { id: "permissions", label: t("qaUi.tabs.permissions") },
+              { id: "members", label: t("qaUi.tabs.members") },
+            ]}
+          />
+          <Tabs
+            label={t("qaUi.tabs.pill")}
+            variant="pill"
+            value={friendsTab}
+            onValueChange={setFriendsTab}
+            items={[
+              { id: "online", label: t("qaUi.tabs.online") },
+              { id: "all", label: t("qaUi.tabs.all") },
+              { id: "pending", label: t("qaUi.tabs.pending") },
+            ]}
+          />
+          {/* The profile popover's content width. */}
+          <div className="w-72">
+            <Tabs
+              label={t("qaUi.tabs.segmentedSmall")}
+              variant="segmented"
+              size="xs"
+              value={aboutTab}
+              onValueChange={setAboutTab}
+              items={[
+                { id: "depoimentos", label: t("qaUi.tabs.depoimentos") },
+                { id: "connections", label: t("qaUi.tabs.connections") },
+                { id: "communities", label: t("qaUi.tabs.communities") },
+              ]}
+            />
+          </div>
+          <div className="text-xs">
+            <Tabs
+              label={t("qaUi.tabs.pillSmall")}
+              variant="pill"
+              size="xs"
+              value={paneTab}
+              onValueChange={setPaneTab}
+              items={[
+                { id: "chat", label: t("qaUi.tabs.chat") },
+                { id: "people", label: t("qaUi.tabs.people"), count: 4 },
+              ]}
+            />
+          </div>
+          <Tabs
+            label={t("qaUi.tabs.filled")}
+            variant="filled"
+            size="sm"
+            value={reportTab}
+            onValueChange={setReportTab}
+            items={[
+              { id: "open", label: t("qaUi.tabs.open") },
+              { id: "actioned", label: t("qaUi.tabs.actioned") },
+              { id: "dismissed", label: t("qaUi.tabs.dismissed"), disabled: true },
+            ]}
+          />
         </div>
       </div>
 

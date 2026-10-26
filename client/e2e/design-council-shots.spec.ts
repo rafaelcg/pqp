@@ -465,6 +465,10 @@ test("captures the design council screens", async ({ browser }) => {
       await page.getByRole("menuitem", { name: "Configurações da comunidade" }).click();
       await expect(page.getByRole("dialog")).toBeVisible();
       await shoot(page, `05-server-settings-${theme}`);
+      // The role editor's tabs, for Tabs in place.
+      await page.getByRole("dialog").getByText("Cargos", { exact: true }).first().click();
+      await expect(page.getByRole("dialog").getByRole("tablist", { name: "Nome do cargo" })).toBeVisible();
+      await shoot(page, `13-server-roles-${theme}`);
       await page.keyboard.press("Escape");
 
       await context.close();
@@ -533,7 +537,7 @@ const PRIMITIVES: {
   hover?: string;
   focus?: string;
   /** The role the hover and focus targets have. Buttons by default. */
-  role?: "button" | "textbox" | "combobox" | "checkbox" | "radio";
+  role?: "button" | "textbox" | "combobox" | "checkbox" | "radio" | "tab";
 }[] = [
   {
     id: "p-button",
@@ -563,6 +567,8 @@ const PRIMITIVES: {
   // Focus the checked segment, hover an unchecked chip (the first of each
   // name: the small groups repeat the labels).
   { id: "p-radio", testId: "qa-primitive-radio", role: "radio", focus: "Escuro", hover: "Menções" },
+  // Focus the selected underline tab, hover an unselected pill.
+  { id: "p-tabs", testId: "qa-primitive-tabs", role: "tab", focus: "Visão geral", hover: "Todos" },
 ];
 
 test("captures the primitives", async ({ browser }) => {

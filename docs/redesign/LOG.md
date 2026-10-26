@@ -42,6 +42,7 @@ Read this file and the inventory at the start of every session.
 | 2 | `p-checkbox` | Merged (cap at round 5: best round 3, 8.6, 8.5; round 5 MUST fixed) |
 | 2 | `p-popover` | Merged (cap at round 5: 8.4 Opus, 8.3 Codex r4, no MUST) |
 | 2 | `p-radio` | Merged (cap at round 5: 8.3 Opus r4, 8.0 Codex r5, no MUST) |
+| 2 | `p-tabs` | Merged (cap at round 5: 8.4 Opus r5, 8.7 Codex r4, no MUST) |
 
 ## Phase 0: directions
 
@@ -488,6 +489,37 @@ reviewer, at André's request to spend less on agents:
 Round 2's MUST (the "Modo" picker drew the old track) and round 4's MUST (a
 selected chip read by hue only) were fixed. Stopped at the five-round cap
 with no MUST. Screenshots: `~/pqp-redesign/p-radio/`.
+
+### p-tabs
+
+Spec (audit: six hand-built tab rows, two of them copies of each other):
+
+1. Job: switch one panel, in four shapes (underline, segmented, pill,
+   filled) with one keyboard model: roving tab stop, arrows, Home, End.
+2. Redesign: secondary text for unselected tabs, round tinted pills,
+   RadioGroup's track and thumb for `segmented`, a tinted filter chip.
+3. Folded: bot overview, roles, profile popover, friends, call split, and
+   both report queues (now one `ReportStatusTabs`). Each keeps its toggle-off
+   look; only the bot tabs keep a focus ring with the toggle off.
+4. Left out: the live preview (a public page), the phone tab bar (`m-*`)
+   and `SectionRail` (settings navigation, its own element).
+
+Council (Opus 5.5, GPT-6 Luna via Codex), overall after. Rounds 2 and 5 ran
+one reviewer each:
+
+| Round | Opus | Codex |
+|---|---|---|
+| 1 | 7.6 | 8.2 |
+| 2 | not run | 8.6 |
+| 3 | 7.8 | 8.4 |
+| 4 | 8.2 | 8.7 |
+| 5 | 8.4 | not run |
+
+Round 5's SHOULD (a disabled tab still took hover) is fixed: a disabled tab
+takes no pointer under the redesign. One reviewer split was settled here:
+the tabs keep their own track rather than RadioGroup's `SEGMENTED_*` strings,
+because those would change the toggle-off look. Stopped at the five-round
+cap with no MUST. Screenshots: `~/pqp-redesign/p-tabs/`.
 
 ## Open questions for André
 

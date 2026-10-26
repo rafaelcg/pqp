@@ -15,6 +15,7 @@ import {
   shouldStampFirstRunComplete,
 } from "@/lib/first-run";
 import { Button } from "@/components/ui/button";
+import { Tabs } from "@/components/ui/tabs";
 import { StatusDot } from "@/components/user/status-dot";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { UserSearch } from "@/components/user/user-search";
@@ -279,30 +280,16 @@ export function FriendsView({
           {t("friends.title")}
         </h1>
 
-        <div
-          role="tablist"
-          aria-label={t("friends.title")}
-          className="order-last -mx-1 flex w-full items-center gap-1 overflow-x-auto px-1 py-0.5 [scrollbar-width:thin] @2xl:order-none @2xl:mx-0 @2xl:ml-2 @2xl:w-auto @2xl:overflow-visible @2xl:p-0"
-        >
-          {tabs.map((one) => (
-            <button
-              key={one.id}
-              type="button"
-              role="tab"
-              aria-selected={tab === one.id}
-              aria-controls={panelId}
-              className={cn(
-                "flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-1.5 text-sm @2xl:py-1",
-                tab === one.id
-                  ? "bg-ink-3 text-paper"
-                  : "text-paper-muted hover:bg-ink-3/70 hover:text-paper",
-              )}
-              onClick={() => setTab(one.id)}
-            >
-              {one.label}
-            </button>
-          ))}
-        </div>
+        <Tabs
+          label={t("friends.title")}
+          variant="pill"
+          value={tab}
+          onValueChange={setTab}
+          items={tabs}
+          panelId={panelId}
+          className="order-last -mx-1 w-full overflow-x-auto px-1 py-0.5 [scrollbar-width:thin] @2xl:order-none @2xl:mx-0 @2xl:ml-2 @2xl:w-auto @2xl:overflow-visible @2xl:p-0"
+          tabClassName="@2xl:py-1"
+        />
 
         <Button
           size="sm"

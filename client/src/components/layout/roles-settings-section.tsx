@@ -17,8 +17,8 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { Tabs } from "@/components/ui/tabs";
 import { UserAvatar } from "@/components/user/user-avatar";
-import { cn } from "@/lib/utils";
 import {
   ApiError,
   assignMemberRole,
@@ -522,35 +522,22 @@ export function RolesSettingsSection({ serverId }: { serverId: string }) {
       {selected && (
         <div className="min-w-0 flex-1 space-y-4">
           {availableTabs.length > 1 && (
-            <div
-              role="tablist"
-              aria-label={t("roles.name")}
-              className="flex gap-1 rounded-xl bg-ink-3/60 p-1"
-            >
-              {availableTabs.map((id) => (
-                <button
-                  key={id}
-                  type="button"
-                  role="tab"
-                  aria-selected={activeTab === id}
-                  className={cn(
-                    "min-w-0 flex-1 rounded-lg px-3 py-1.5 text-sm",
-                    activeTab === id
-                      ? "bg-ink-2 font-medium text-paper shadow-sm"
-                      : "text-paper-muted hover:text-paper",
-                  )}
-                  onClick={() => setTab(id)}
-                >
-                  {t(
-                    id === "display"
-                      ? "roles.tab.display"
-                      : id === "permissions"
-                        ? "roles.tab.permissions"
-                        : "roles.tab.members",
-                  )}
-                </button>
-              ))}
-            </div>
+            <Tabs
+              label={t("roles.name")}
+              variant="segmented"
+              value={activeTab}
+              onValueChange={setTab}
+              items={availableTabs.map((id) => ({
+                id,
+                label: t(
+                  id === "display"
+                    ? "roles.tab.display"
+                    : id === "permissions"
+                      ? "roles.tab.permissions"
+                      : "roles.tab.members",
+                ),
+              }))}
+            />
           )}
 
           {activeTab === "display" && (

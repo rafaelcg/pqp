@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { ReportAttachments } from "@/components/layout/report-attachments";
 import { ReportContextPanel } from "@/components/layout/report-context-panel";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { ReportStatusTabs } from "@/components/layout/reports-section";
 import {
   ApiError,
   fetchAllReports,
@@ -15,7 +16,7 @@ import {
   resolveReport,
 } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
-import { cn, formatFullTimestamp } from "@/lib/utils";
+import { formatFullTimestamp } from "@/lib/utils";
 
 /**
  * The instance moderator's view across every queue at once: every server's
@@ -28,13 +29,6 @@ import { cn, formatFullTimestamp } from "@/lib/utils";
  * which server (or the instance queue) a row belongs to, and, for an
  * automated report, the scanner's own verdict.
  */
-
-const STATUS_TABS: Array<{ id: ReportStatus | "all"; key: "reports.tab.open" | "reports.tab.actioned" | "reports.tab.dismissed" | "reports.tab.all" }> = [
-  { id: "open", key: "reports.tab.open" },
-  { id: "actioned", key: "reports.tab.actioned" },
-  { id: "dismissed", key: "reports.tab.dismissed" },
-  { id: "all", key: "reports.tab.all" },
-];
 
 const EMPTY_BY_STATUS: Record<ReportStatus | "all", "reports.empty.open" | "reports.empty.actioned" | "reports.empty.dismissed" | "reports.empty.all"> = {
   open: "reports.empty.open",
@@ -206,25 +200,7 @@ export function AllReportsSection() {
 
   return (
     <section className="space-y-3">
-      <div className="flex flex-wrap gap-1.5" role="tablist">
-        {STATUS_TABS.map((tab) => (
-          <button
-            key={tab.id}
-            type="button"
-            role="tab"
-            aria-selected={status === tab.id}
-            onClick={() => setStatus(tab.id)}
-            className={cn(
-              "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
-              status === tab.id
-                ? "bg-signal text-ink"
-                : "bg-ink-3 text-paper-muted hover:text-paper",
-            )}
-          >
-            {t(tab.key)}
-          </button>
-        ))}
-      </div>
+      <ReportStatusTabs value={status} onValueChange={setStatus} />
 
       {loading && (
         <p role="status" aria-live="polite" className="text-sm text-paper-muted">
