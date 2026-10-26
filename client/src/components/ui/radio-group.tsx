@@ -162,6 +162,23 @@ export function useRovingRadio<T>(
 const FOCUS_RING =
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring";
 
+/**
+ * The segmented track and cell, exported for a radio group that draws its own
+ * cells (the appearance page's locked "Modo" picker), so the two never drift.
+ * With the tokens unset this is the bordered `surface-0` box and `surface-2`
+ * thumb the app always drew.
+ */
+export const SEGMENTED_TRACK =
+  "gap-0.5 rounded-[var(--segmented-radius,var(--radius-control))] border-[length:var(--segmented-border-w,1px)] border-[color:var(--segmented-border,var(--color-border))] bg-[color:var(--segmented-bg,var(--color-surface-0))] p-[var(--segmented-pad,0.125rem)]";
+
+/** A cell's shape and focus; the ring's offset is the track's padding. */
+export const SEGMENTED_CELL = `inline-flex items-center justify-center rounded-[var(--segmented-radius,var(--radius-control))] whitespace-nowrap ${FOCUS_RING} focus-visible:ring-offset-[length:var(--segmented-ring-offset,2px)] redesign:focus-visible:ring-offset-transparent`;
+
+export const SEGMENTED_CELL_ON =
+  "bg-[color:var(--segmented-thumb,var(--color-surface-2))] font-medium text-text shadow-[var(--segmented-thumb-shadow,0_0_transparent)]";
+
+export const SEGMENTED_CELL_OFF = "text-[color:var(--segmented-text,var(--color-text-tertiary))]";
+
 /** Inside a group box the box clips an outer ring, so the ring goes inside. */
 const INSET_FOCUS_RING =
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring focus-visible:ring-offset-0";
@@ -217,8 +234,7 @@ export function RadioGroup<T extends string | number>({
       aria-disabled={disabled || undefined}
       onKeyDown={onKeyDown}
       className={cn(
-        variant === "segmented" &&
-          "gap-0.5 rounded-[var(--segmented-radius,var(--radius-control))] border border-[color:var(--segmented-border,var(--color-border))] bg-[color:var(--segmented-bg,var(--color-surface-0))] p-[var(--segmented-pad,0.125rem)]",
+        variant === "segmented" && SEGMENTED_TRACK,
         variant === "segmented" &&
           (content
             ? "inline-flex max-w-full flex-wrap"
@@ -247,20 +263,15 @@ export function RadioGroup<T extends string | number>({
               "transition-colors duration-[var(--duration-fast)] ease-[var(--ease-standard)]",
               optionDisabled && "cursor-not-allowed opacity-[var(--radio-disabled-opacity,0.4)]",
               variant === "segmented" && [
-                "inline-flex items-center justify-center rounded-[var(--segmented-radius,var(--radius-control))] whitespace-nowrap",
+                SEGMENTED_CELL,
                 content ? "shrink-0" : "min-w-0",
                 // The track sits on the control ladder under the redesign: a
                 // cell is the control height less the track's padding.
                 size === "sm"
                   ? "h-9 px-2.5 text-[length:var(--radio-text-sm,0.75rem)] leading-4 sm:h-[var(--segmented-h-sm,1.75rem)]"
                   : "h-10 px-3 text-sm sm:h-[var(--segmented-h,2rem)]",
-                checked
-                  ? "bg-[color:var(--segmented-thumb,var(--color-surface-2))] font-medium text-text shadow-[var(--segmented-thumb-shadow,0_0_transparent)]"
-                  : "text-[color:var(--segmented-text,var(--color-text-tertiary))]",
+                checked ? SEGMENTED_CELL_ON : SEGMENTED_CELL_OFF,
                 !checked && !optionDisabled && "hover:text-text",
-                FOCUS_RING,
-                // Inside the track: the ring's offset is the track's padding.
-                "focus-visible:ring-offset-[length:var(--segmented-ring-offset,2px)]",
               ],
               variant === "chips" && [
                 "inline-flex items-center rounded-full border",

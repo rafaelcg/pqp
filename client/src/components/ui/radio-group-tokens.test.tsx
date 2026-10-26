@@ -2,7 +2,13 @@
 import { act, type ReactElement } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it } from "vitest";
-import { RadioGroup } from "@/components/ui/radio-group";
+import {
+  RadioGroup,
+  SEGMENTED_CELL,
+  SEGMENTED_CELL_OFF,
+  SEGMENTED_CELL_ON,
+  SEGMENTED_TRACK,
+} from "@/components/ui/radio-group";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -65,5 +71,15 @@ describe("RadioGroup tokens", () => {
     const [cell] = group("segmented").querySelectorAll('[role="radio"]');
     expect(cell!.className).toContain("sm:h-[var(--segmented-h,2rem)]");
     expect(cell!.className).toContain("focus-visible:ring-offset-[length:var(--segmented-ring-offset,2px)]");
+    expect(cell!.className).toContain("redesign:focus-visible:ring-offset-transparent");
+    const track = group("segmented").querySelector('[role="radiogroup"]')!.className;
+    expect(track).toContain("border-[length:var(--segmented-border-w,1px)]");
+  });
+
+  it("exports the recipe a hand-drawn segmented picker shares", () => {
+    expect(SEGMENTED_TRACK).toContain("p-[var(--segmented-pad,0.125rem)]");
+    expect(SEGMENTED_CELL).toContain("rounded-[var(--segmented-radius,var(--radius-control))]");
+    expect(SEGMENTED_CELL_ON).toContain("font-medium text-text");
+    expect(SEGMENTED_CELL_OFF).toContain("var(--color-text-tertiary)");
   });
 });
