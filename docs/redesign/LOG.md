@@ -28,7 +28,7 @@ Read this file and the inventory at the start of every session.
 |---|---|---|
 | 0 | Council tooling committed as the first commit on `redesign` | Done |
 | 0 | Inventory | Done |
-| 0 | Three directions, mockups and council round | In progress |
+| 0 | Three directions, mockups and council round D1 | Done (2 of 3 reviewers) |
 | 0 | André picks a direction | Waiting |
 | 1 | Toggle | Not started |
 | 1 | Tokens for the chosen direction | Not started |
@@ -49,18 +49,53 @@ variable is the design. All three keep the lime accent and the pt-BR voice.
 | b | Salas | Rounded panels floating on a darker canvas, with gutters. More air: 40px avatars, 23px line height, pill-shaped rows and composer. Selected channel is a soft lime pill. Softer and more "app". |
 | c | Fliperama | Flat and loud. Ink borders, 4px corners, Gabarito uppercase for server, channel and section names, mono timestamps, a solid lime rail and a solid lime selected channel. Most character, most risk. |
 
-Council scores: see "Council round D1" below once it lands.
+### Council round D1
+
+Answers: `~/pqp-redesign/directions/council-d1/`. Gemini 4 Argon failed
+(Cursor: "not included in your weekly usage"), so this round has two reviewers.
+
+| Overall | Current | A Afinado | B Salas | C Fliperama |
+|---|---|---|---|---|
+| Claude Opus 5.5 | 6.2 | 7.6 | 7.2 | 6.6 |
+| Codex GPT-6 Luna | 6.5 | 7.8 | 7.4 | 7.0 |
+
+Both recommend A. Both score C highest on Character (9.0, 8.5) and lowest on
+Scalability (4.8, 5.5): a solid lime rail and selected row become a large
+saturated slab when a look retints the accent.
+
+What both say A should take from the others:
+
+- From C: Gabarito as a display role for the server name and channel title,
+  sentence case. Tabular or mono timestamps.
+- From B: a rounded, inset composer with a filled round send button.
+- From B: a little more separation between panes, and a raised "you" card
+  at the bottom of the sidebar (Opus).
+
+What Phase 1 tokens must solve for A (both reviewers):
+
+1. Accent used as text in light mode is about 2:1. Add an `accent-text`
+   (and `success-text`) role that reaches 4.5:1 in every look.
+2. Mention highlight needs its own tokens (row, bar, chip) per look; lime at
+   low alpha reads khaki in dark.
+3. Pane separation by tone alone collapses in light. Set a minimum lightness
+   step between adjacent panes, checked on every look.
+4. Selected, hover and unread need distinct treatments.
+5. Contrast floors for timestamps, offline names and placeholders.
 
 ## Open questions for André
 
-1. Which direction (a, b, c, or a mix)?
-2. Four features live in two versions behind flags. The redesign should
+1. Which direction (a, b, c, or a mix)? The council recommends A with C's
+   type voice and B's composer.
+2. The third council reviewer: Gemini 4 Argon is out of Cursor credits. Use
+   Grok 4.7 or GPT-5.6 Sol (both on Cursor) instead, buy credits, or run with
+   two reviewers?
+3. Four features live in two versions behind flags. The redesign should
    rebuild only the version that stays. Which one stays for each?
    - DM list: classic or Conversas home (`conversations_home`).
    - New conversation dialog: classic or new.
    - Phone shell: bottom tabs (`conversations_home_phone_tabs`) or the drawer.
    - Channel list: mixed layout (`mixed_channel_list`) or legacy sections.
-3. `error-boundary.tsx` is English only, and AGENTS.md says to leave it alone.
+4. `error-boundary.tsx` is English only, and AGENTS.md says to leave it alone.
    Redesign its look and keep the copy as is?
 
 ## Decisions
