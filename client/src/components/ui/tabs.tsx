@@ -208,7 +208,7 @@ export function Tabs<T extends string>({
               look.tab,
               look.focus,
               selected ? look.on : look.off,
-              item.disabled && "cursor-not-allowed opacity-[var(--tabs-disabled-opacity,0.4)]",
+              item.disabled && "cursor-not-allowed opacity-[var(--tabs-disabled-opacity,0.4)] redesign:pointer-events-none",
               tabClassName,
             )}
           >

@@ -108,6 +108,14 @@ describe("Tabs", () => {
   });
 });
 
+describe("Tabs disabled", () => {
+  it("takes no hover under the redesign, as Button does", () => {
+    const host = draw(<Harness variant="filled" size="sm" />);
+    const disabled = tabs(host)[1]!;
+    expect(disabled.className).toContain("redesign:pointer-events-none");
+  });
+});
+
 describe("Tabs looks with the toggle off", () => {
   function look(variant: TabsVariant, size: TabsSize) {
     const host = draw(<Harness variant={variant} size={size} />);
