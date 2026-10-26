@@ -122,7 +122,7 @@ export function UserAvatar({
         fallbackClassName,
         dim,
         circle,
-        !ownPalette && "redesign:bg-surface-3 redesign:font-semibold redesign:text-text-secondary",
+        !ownPalette && "redesign:bg-surface-3 redesign:font-semibold redesign:text-text",
       )}
     >
       {(name.trim().slice(0, 1) || "?").toUpperCase()}

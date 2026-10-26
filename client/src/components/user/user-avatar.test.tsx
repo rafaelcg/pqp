@@ -84,7 +84,7 @@ describe("UserAvatar", () => {
       expect.arrayContaining([
         "redesign:rounded-full",
         "redesign:bg-surface-3",
-        "redesign:text-text-secondary",
+        "redesign:text-text",
         "redesign:font-semibold",
       ]),
     );

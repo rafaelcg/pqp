@@ -996,7 +996,8 @@ place. `StatusDot` (`status-dot.tsx`) draws presence on its corner.
 - **Toggle off.** The caller's shape (`rounded`: `md`, `lg`, `full`) and its
   monogram colours (`fallbackClassName`).
 - **Redesign.** A person is always a circle, and the monogram sits on one
-  neutral disc (`surface-3`, `text-secondary`, semibold); the caller still
+  neutral disc (`surface-3`, body text, semibold, measured at 4.5:1 in
+  every look by the bench); the caller still
   sets its size. A bot keeps its own shape. `ownPalette` keeps the caller's
   colours for an avatar drawn inside a story, which paints in its own
   palette.
