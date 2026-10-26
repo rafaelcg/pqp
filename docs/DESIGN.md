@@ -937,8 +937,8 @@ bottom border) and `hue`.
   track, there is no fill, and the thumb wears the current accent with an
   `on-accent` rim. For the accent picker; it replaces the old native range
   and its `.accent-hue-slider` CSS once Aparência moves to it.
-- **States.** The fill is `accent` on `surface-3`. Focus uses the usual ring.
-  Disabled is 40% opacity.
+- **States (toggle off).** The fill is `accent` on `surface-3`. Focus uses
+  the usual ring. Disabled is 40% opacity.
 - **Under the redesign.** The track is a text tint (16% in dark, 13% in
   light), so it shows on a pane, a card and a dialog alike. Scrub is 4px and
   thickens to 6px under a pointer or focus; volume is 6px; hue is 10px. The

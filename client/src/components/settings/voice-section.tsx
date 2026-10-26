@@ -970,7 +970,7 @@ function VolumeRow({
                   {tickLabel ? (
                     <span
                       aria-hidden
-                      className="pointer-events-none absolute bottom-0 -translate-x-1/2 text-xs text-text-tertiary redesign:bottom-auto redesign:top-[calc(50%+var(--slider-thumb)/2+0.125rem)] redesign:leading-none"
+                      className="pointer-events-none absolute bottom-0 -translate-x-1/2 text-xs text-text-tertiary redesign:bottom-auto redesign:top-[calc(50%+var(--slider-thumb)/2+0.375rem)] redesign:leading-none"
                       style={{ left: `${tickPct}%` }}
                     >
                       {tickLabel}

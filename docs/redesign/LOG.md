@@ -580,6 +580,9 @@ Spec (audit: Slider in 13 files; 11 native range inputs elsewhere):
 5. Not taken in round 2: naming the group (`group/slider`). It would stop a
    hoverable parent row from showing the knob with the toggle off too, so it
    is a behaviour change; `f-music` decides it for the now-playing row.
+6. Left for `f-call` (voice settings): above 100% the accent fill covers the
+   middle of the unity tick. Raising the tick would paint it over the knob
+   at 100%, so it needs its own treatment there.
 
 ## Open questions for André
 

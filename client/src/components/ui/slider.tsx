@@ -48,7 +48,8 @@ const thumb = cva(
         volume: "size-[var(--slider-thumb,0.75rem)]",
         edge:
           "size-[var(--slider-thumb-edge,0.75rem)] opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
-        hue: "size-[var(--slider-thumb-hue,1rem)] border-2 border-on-accent bg-accent",
+        // A disabled hue knob stays the accent: the grey disabled fill is for a white knob.
+        hue: "size-[var(--slider-thumb-hue,1rem)] border-2 border-on-accent bg-accent redesign:group-data-[disabled]:bg-accent",
       },
     },
     defaultVariants: {

@@ -95,6 +95,9 @@ describe("Slider", () => {
     expect(thumb).toContain("border-on-accent");
     expect(thumb).toContain("bg-accent");
     expect(thumb).not.toContain("bg-[color:var(--slider-thumb-bg");
+    // twMerge keeps the variant's disabled fill over the base's grey one.
+    expect(thumb).toContain("redesign:group-data-[disabled]:bg-accent");
+    expect(thumb).not.toContain("--slider-thumb-disabled-bg");
   });
 
   it("keeps a read-only scrub thin on hover, so it never looks seekable", () => {
