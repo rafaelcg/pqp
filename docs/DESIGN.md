@@ -535,23 +535,27 @@ accessible name.
 
 `input.tsx`. A single-line text field, `forwardRef` so a form can focus it.
 
-- One variant, one size (h-10). Error state is the caller's: pass
-  `aria-invalid` and a `border-danger` class.
+- One variant, one size: 40px with the toggle off, the default button's
+  36px under the redesign (`--input-h`), so a field and its Save line up.
+  Error state: pass `aria-invalid`. With the toggle off also pass a
+  `border-danger` class; under the redesign `aria-invalid` alone turns the
+  edge red.
 - **`prefix`.** Fixed text drawn inside the field before the value
   (`pqp.gg/@`), not part of the value. With a prefix the field is a box around
   an unstyled input: the focus ring is on the box (`focus-within`), so the
   prefix is ringed too, `className` goes on the box (`font-mono`,
   `border-danger`), and `aria-invalid="true"` on the input turns the box's
   border red by itself. Without a prefix the markup is the bare input.
-- **States.** Placeholder at `text-text-tertiary/70`, focus ring, disabled at 50%
-  with `cursor-not-allowed`.
+- **States.** With the toggle off: placeholder at `text-text-tertiary/70`,
+  focus ring, disabled at 50% with `cursor-not-allowed`.
 - **Under the redesign.** `--input-*` tokens over one role, `--color-field`:
   the deepest surface in dark (a well below panes and dialogs) and a faint
-  tint of the text in light. The edge is `--color-border-strong`, as on the
-  secondary button, and grows toward the text on hover. The placeholder is
-  the full `text-tertiary`, checked at 4.5:1 in every look. With the
-  redesign, `aria-invalid` turns the border red by itself; hover and invalid
-  are the field's two `redesign:` classes. `Textarea` shares the box through
+  tint of the text in light. The edge is `--color-field-border`, checked at
+  3:1 on the fill, on a dialog and on the conversation pane in every look
+  (the floor for a control's boundary), and grows toward the text on hover.
+  The placeholder is the full `text-tertiary`, the prefix `text-secondary`,
+  both at 4.5:1. Disabled keeps the edge and fades only the text. Hover,
+  invalid and disabled are the field's `redesign:` classes. `Textarea` shares the box through
   `FIELD_BOX` and `FIELD_TEXT`.
 - **Use it** for every single-line text field. A multi-line value is a
   `Textarea`.

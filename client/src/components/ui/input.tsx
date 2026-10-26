@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils";
  */
 /** The box: border, fill, radius, ring, hover and invalid. */
 export const FIELD_BOX =
-  "rounded-[var(--input-radius,var(--radius-control))] border border-[color:var(--input-border,var(--color-border))] bg-[color:var(--input-bg,var(--color-surface-0))] text-sm text-text transition-colors duration-[var(--duration-fast)] redesign:hover:border-[color:var(--input-hover-border)] redesign:aria-invalid:border-danger";
+  "rounded-[var(--input-radius,var(--radius-control))] border border-[color:var(--input-border,var(--color-border))] bg-[color:var(--input-bg,var(--color-surface-0))] text-sm text-text transition-colors duration-[var(--duration-fast)] redesign:enabled:hover:not-aria-invalid:border-[color:var(--input-hover-border)] redesign:aria-invalid:border-danger redesign:disabled:text-text-tertiary";
 
 /** What the text inside a field draws: the placeholder above all. */
 export const FIELD_TEXT =
@@ -19,8 +19,13 @@ export const FIELD_TEXT =
 const FIELD_RING =
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring";
 
+/*
+ * Height: 40px with the toggle off; under the redesign the field matches the
+ * default button (`--input-h`), so a field and its Save line up. Disabled
+ * keeps its edge under the redesign and fades only the text.
+ */
 const FIELD = cn(
-  "flex h-[var(--control-lg)] w-full px-[var(--input-px,0.75rem)] py-2 disabled:cursor-not-allowed disabled:opacity-50",
+  "flex h-[var(--input-h,var(--control-lg))] w-full px-[var(--input-px,0.75rem)] py-2 disabled:cursor-not-allowed disabled:opacity-[var(--input-disabled-opacity,0.5)]",
   FIELD_BOX,
   FIELD_TEXT,
   FIELD_RING,
@@ -49,21 +54,25 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
     return (
       <div
         className={cn(
-          "flex h-[var(--control-lg)] w-full items-center",
+          "flex h-[var(--input-h,var(--control-lg))] w-full items-center",
           FIELD_BOX,
           "focus-within:ring-2 focus-within:ring-offset-2 focus-within:ring-offset-ring-offset focus-within:ring-focus-ring",
-          "has-[input[aria-invalid=true]]:border-danger has-[input:disabled]:cursor-not-allowed has-[input:disabled]:opacity-50",
+          "redesign:has-[input:enabled]:hover:not-has-[input[aria-invalid=true]]:border-[color:var(--input-hover-border)]",
+          "has-[input[aria-invalid=true]]:border-danger has-[input:disabled]:cursor-not-allowed has-[input:disabled]:opacity-[var(--input-disabled-opacity,0.5)]",
           className,
         )}
       >
-        <span aria-hidden className="shrink-0 pl-[var(--input-px,0.75rem)] text-text-tertiary select-none">
+        <span
+          aria-hidden
+          className="shrink-0 pl-[var(--input-px,0.75rem)] text-[color:var(--input-prefix,var(--color-text-tertiary))] select-none"
+        >
           {prefix}
         </span>
         <input
           ref={ref}
           type={type}
           className={cn(
-            "h-full min-w-0 flex-1 bg-transparent py-2 pr-[var(--input-px,0.75rem)] pl-0.5 text-text focus-visible:outline-none disabled:cursor-not-allowed",
+            "h-full min-w-0 flex-1 bg-transparent py-2 pr-[var(--input-px,0.75rem)] pl-[var(--input-prefix-gap,0.125rem)] text-text focus-visible:outline-none disabled:cursor-not-allowed",
             FIELD_TEXT,
           )}
           {...props}

@@ -90,7 +90,7 @@ export const COLOR_TOKEN_GROUPS: readonly TokenGroup[] = [
       "--color-tooltip-detail",
     ],
   },
-  { id: "field", tokens: ["--color-field"] },
+  { id: "field", tokens: ["--color-field", "--color-field-border"] },
   { id: "code", tokens: ["--color-code-bg", "--color-code-text"] },
   { id: "media", tokens: ["--color-on-media", "--color-on-media-muted"] },
   {

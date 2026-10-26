@@ -22,6 +22,8 @@ describe("Input", () => {
     expect(field).toContain("bg-[color:var(--input-bg,var(--color-surface-0))]");
     expect(field).toContain("border-[color:var(--input-border,var(--color-border))]");
     expect(field).toContain("px-[var(--input-px,0.75rem)]");
+    expect(field).toContain("h-[var(--input-h,var(--control-lg))]");
+    expect(field).toContain("disabled:opacity-[var(--input-disabled-opacity,0.5)]");
     expect(field).toContain(
       "placeholder:text-[color:var(--input-placeholder,color-mix(in_oklab,var(--color-text-tertiary)_70%,transparent))]",
     );
@@ -37,11 +39,15 @@ describe("Input", () => {
     expect(field.some((c) => c.includes("--input-bg,"))).toBe(false);
   });
 
-  it("only uses redesign classes for hover and invalid", () => {
+  it("only uses redesign classes for hover, invalid and disabled", () => {
     const field = classes(draw(<Input />).querySelector("input"));
     const redesign = field.filter((c) => c.startsWith("redesign:"));
     expect(redesign.sort()).toEqual(
-      ["redesign:aria-invalid:border-danger", "redesign:hover:border-[color:var(--input-hover-border)]"].sort(),
+      [
+        "redesign:aria-invalid:border-danger",
+        "redesign:disabled:text-text-tertiary",
+        "redesign:enabled:hover:not-aria-invalid:border-[color:var(--input-hover-border)]",
+      ].sort(),
     );
   });
 

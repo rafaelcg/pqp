@@ -100,7 +100,10 @@ const CONTRAST_PAIRS = [
   { fg: "--color-tooltip-detail", bg: "--color-tooltip", floor: 4.5, label: "tooltip detail line", redesign: true },
   { fg: "--color-text", bg: "--color-field", floor: 4.5, label: "value in a text field", redesign: true },
   { fg: "--color-text-tertiary", bg: "--color-field", floor: 4.5, label: "placeholder in a text field", redesign: true },
-  { fg: "--color-border-strong", bg: "--color-field", floor: 1.5, label: "text field edge on its fill", redesign: true },
+  { fg: "--color-text-secondary", bg: "--color-field", floor: 4.5, label: "prefix in a text field", redesign: true },
+  { fg: "--color-field-border", bg: "--color-field", floor: 3.0, label: "text field edge on its fill", redesign: true },
+  { fg: "--color-field-border", bg: "--color-surface-2", floor: 3.0, label: "text field edge on a dialog", redesign: true },
+  { fg: "--color-field-border", bg: "--color-pane-main", floor: 3.0, label: "text field edge on the conversation pane", redesign: true },
 ];
 
 /**
