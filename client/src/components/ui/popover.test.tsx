@@ -35,6 +35,18 @@ describe("Popover surface", () => {
     }
   });
 
+  it("sets the pane radius once, in the dark block the light theme inherits", () => {
+    const css = readFileSync(new URL("../../index.css", import.meta.url), "utf8");
+    const dark = css.slice(css.indexOf(":root[data-redesign] {"));
+    expect(dark.slice(0, dark.indexOf("\n}\n"))).toContain("--popover-radius: var(--radius-pane);");
+  });
+
+  it("draws the stale-chunk fallback on the popover surface, without a second card when nested", () => {
+    const source = readFileSync(new URL("../error-boundary.tsx", import.meta.url), "utf8");
+    expect(source).toContain("POPOVER_SURFACE,");
+    expect(source).toContain("redesign:[--elevation-3-border:transparent]");
+  });
+
   it("gives a caller's own edge the popover's under the redesign", () => {
     expect(POPOVER_OWN_EDGE).toBe("redesign:border-[color:var(--popover-border)]");
   });

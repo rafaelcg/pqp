@@ -119,7 +119,7 @@ export function EmojiPickerPanel({
     >
       {/* A stale chunk costs this panel and nothing else: the root boundary
           would take the whole app, a call's screens included. */}
-      <ContainedChunkBoundary>
+      <ContainedChunkBoundary nested>
         <Suspense fallback={<div className="h-full w-full animate-pulse bg-ink-2" />}>
           <LazyPanel onSelect={onSelect} customEmoji={customEmoji} />
         </Suspense>
