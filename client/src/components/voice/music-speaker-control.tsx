@@ -5,6 +5,7 @@ import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip } from "@/components/ui/tooltip";
 import { SM_UP_QUERY, useMediaQuery } from "@/components/ui/use-media-query";
+import { POPOVER_SURFACE } from "@/components/ui/popover";
 import { useTranslation } from "@/lib/i18n";
 import {
   MUSIC_VOLUME_STEP,
@@ -259,7 +260,8 @@ export function MusicSpeakerControl({
           data-music-volume-flyout=""
           className={cn(
             "absolute bottom-full right-0 z-50 mb-2 w-52 animate-fade-in",
-            "elevation-3 rounded-[var(--radius-card)] border border-border bg-surface-2 p-2 text-text",
+            POPOVER_SURFACE,
+            "border border-border bg-surface-2 p-2 text-text",
             // The composer shows its slider inline once it is wide enough.
             slider && "@min-[40rem]:hidden",
           )}

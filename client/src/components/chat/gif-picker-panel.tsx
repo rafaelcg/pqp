@@ -8,6 +8,7 @@ import { useTheme } from "@/hooks/use-theme";
 import { fetchTrendingGifs, searchGifs } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { POPOVER_SURFACE } from "@/components/ui/popover";
 
 interface GifPickerPanelProps {
   onSelect: (gif: Gif) => void;
@@ -155,7 +156,8 @@ export function GifPickerPanel({
     <div
       ref={panelRef}
       className={cn(
-        "elevation-3 animate-rise z-50 flex h-[22rem] w-[21rem] flex-col overflow-hidden rounded-[var(--radius-card)]",
+        POPOVER_SURFACE,
+        "animate-rise z-50 flex h-[22rem] w-[21rem] flex-col overflow-hidden",
         className,
       )}
     >

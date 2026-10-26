@@ -9,6 +9,7 @@ import { createPortal } from "react-dom";
 import { Ban, Tag as TagGlyph } from "lucide-react";
 import { FORUM_TAG_ICON_KEYS, type ForumTag, type ForumTagIconKey } from "@pqp/shared";
 import { Tooltip } from "@/components/ui/tooltip";
+import { POPOVER_SURFACE } from "@/components/ui/popover";
 import { ForumTagIcon } from "@/components/forum/forum-tag-icon";
 import { placeAnchoredPanel } from "@/lib/anchored-panel";
 import {
@@ -242,7 +243,7 @@ function IconGrid({
         maxWidth: placement?.maxWidth,
         visibility: placement ? "visible" : "hidden",
       }}
-      className="elevation-3 z-[120] overflow-y-auto rounded-[var(--radius-card)] border border-border bg-surface-1 p-3 motion-safe:animate-fade-in"
+      className={`${POPOVER_SURFACE} z-[120] overflow-y-auto border border-border bg-surface-1 p-3 motion-safe:animate-fade-in`}
     >
       <div
         role="radiogroup"

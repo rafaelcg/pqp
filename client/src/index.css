@@ -773,6 +773,13 @@
   --select-pr: 2.5rem;
   --select-h-sm: var(--control-sm);
 
+  /* Popovers: the pane radius, a faint edge of the text (the level-3 edge is
+     the plain border, which disappears on a dark canvas) and a deeper lift
+     with a top highlight, so a picker reads as a lit object over the app. */
+  --popover-radius: var(--radius-pane);
+  --popover-border: color-mix(in oklab, var(--color-text) 10%, transparent);
+  --popover-shadow: inset 0 1px 0 oklch(1 0 0 / 0.05), var(--shadow-3);
+
   --icon-button-radius: var(--radius-pill);
   --icon-button-text: var(--color-text-secondary);
   /* Tints, like the button's: an icon button sits on panes and dialogs. */
@@ -1023,6 +1030,9 @@
      toward the bubble's own label so the mark stays bright in every look. */
   --tooltip-rail-mark: color-mix(in oklab, var(--color-accent) 55%, var(--color-on-tooltip));
   --switch-knob-shadow: 0 1px 2px oklch(0.4 0.02 262 / 0.28), 0 0 0 0.5px oklch(0.4 0.02 262 / 0.18);
+  /* No top highlight on a light panel; a close shadow under the wide one. */
+  --popover-border: color-mix(in oklab, var(--color-text) 8%, transparent);
+  --popover-shadow: 0 1px 2px oklch(0.4 0.02 262 / 0.1), var(--shadow-2);
 }
 
 /*

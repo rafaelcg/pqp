@@ -7,6 +7,7 @@ import {
   placeAnchoredPanel,
 } from "@/lib/anchored-panel";
 import { cn } from "@/lib/utils";
+import { POPOVER_SURFACE } from "@/components/ui/popover";
 
 /**
  * `@emoji-mart/data` is ~80 KB gzipped of pure data. Loading it lazily keeps it
@@ -111,7 +112,8 @@ export function EmojiPickerPanel({
         visibility: placement ? "visible" : "hidden",
       }}
       className={cn(
-        "emoji-mart-shell elevation-3 z-[120] overflow-hidden rounded-[var(--radius-card)] animate-fade-in",
+        "emoji-mart-shell z-[120] overflow-hidden animate-fade-in",
+        POPOVER_SURFACE,
         className,
       )}
     >
