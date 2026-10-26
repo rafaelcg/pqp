@@ -777,6 +777,26 @@ itself on mount and flips above the pointer when it does not fit below.
 - `items.length === 0` (or `disabled`) renders the trigger alone, same as
   `ContextMenu`.
 
+### Popover
+
+`popover.tsx`. The panel an anchored popover floats in: a picker, a small
+card of settings, the "what's new" note.
+
+- **Shared.** `POPOVER_SURFACE` (and `PopoverPanel`, the same as an element)
+  is the surface only. Each popover keeps its own placement, portal and
+  dismissal, because each measures a different anchor.
+- **Callers.** The emoji and GIF pickers, the update note, the soundboard,
+  the forum icon picker and the music speaker panel. The profile popover
+  and the peer audio card still draw an older `ink-2` panel; they move with
+  their surfaces.
+- **Under the redesign.** The pane radius (16px), a 10% text edge (8% in
+  light), and a deeper lift with a top highlight in dark, a close and a
+  wide shadow in light. Both are set through `--elevation-3-border` and
+  `--elevation-3-shadow` on the panel, so a caller that sets its own fill
+  or edge keeps it.
+- **Use it** for anything anchored to the control that opened it. A list of
+  actions is a `Menu`; a blocking question is a `Dialog`.
+
 ### ScrollArea
 
 `scroll-area.tsx`. Radix scroll area with a themed thumb. Use it where a native

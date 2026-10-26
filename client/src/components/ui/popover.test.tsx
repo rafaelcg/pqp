@@ -1,0 +1,26 @@
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it } from "vitest";
+import { POPOVER_SURFACE, PopoverPanel } from "@/components/ui/popover";
+
+describe("Popover surface", () => {
+  it("is the level-3 elevation at the card radius when the tokens are unset", () => {
+    expect(POPOVER_SURFACE).toContain("elevation-3");
+    expect(POPOVER_SURFACE).toContain("rounded-[var(--popover-radius,var(--radius-card))]");
+  });
+
+  it("moves the edge and the lift only under the redesign, through the elevation variables", () => {
+    expect(POPOVER_SURFACE).toContain("redesign:[--elevation-3-border:var(--popover-border)]");
+    expect(POPOVER_SURFACE).toContain("redesign:[--elevation-3-shadow:var(--popover-shadow)]");
+    expect(POPOVER_SURFACE).not.toMatch(/(^|\s)\[--elevation-3/);
+  });
+
+  it("renders a panel with the caller's classes and attributes", () => {
+    const html = renderToStaticMarkup(
+      <PopoverPanel role="dialog" aria-label="Nota" className="w-72 p-4" />,
+    );
+    expect(html).toContain('role="dialog"');
+    expect(html).toContain('aria-label="Nota"');
+    expect(html).toContain("w-72 p-4");
+    expect(html).toContain("elevation-3");
+  });
+});

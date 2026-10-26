@@ -420,7 +420,27 @@ switch in a settings row still faded like a disabled one) was fixed after
 the council and pinned by a test. Covers Switch, CheckRow and Checkbox.
 Screenshots: `~/pqp-redesign/p-checkbox/`.
 
+### p-popover
+
+Spec (audit: no popover primitive; eight anchored panels, each with its own
+portal and placement):
+
+1. Job: the panel an anchored popover floats in.
+2. Redesign: the pane radius, a faint text edge and a deeper lift, set
+   through the level-3 elevation variables.
+3. Merges: `POPOVER_SURFACE` for the emoji and GIF pickers (panel and
+   loading skeleton), the update note, the soundboard, the forum icon
+   picker and the music speaker panel.
+4. Left: placement and dismissal stay per caller. One behaviour for all of
+   them needs `@radix-ui/react-popover`, a new dependency (logged as a
+   question). The profile popover and peer audio (`ink-2` panels) move with
+   `f-profile-popover` and `f-call`.
+
 ## Open questions for André
+
+- Popover behaviour: eight popovers each place, portal and dismiss
+  themselves. Sharing one behaviour means adding `@radix-ui/react-popover`
+  (a new dependency and lockfile change). Only the look is shared for now.
 
 1. Resolved 2026-10-26: Grok 4.7 is the third reviewer.
 2. Four features live in two versions behind flags. The redesign should
