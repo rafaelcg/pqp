@@ -79,7 +79,7 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
         type={type}
         aria-pressed={pressed}
         className={cn(
-          "grid shrink-0 place-items-center rounded-[var(--icon-button-radius,var(--radius-control))] text-[color:var(--icon-button-text,var(--color-text-tertiary))] transition-colors duration-[var(--duration-fast)] hover:bg-[var(--icon-button-hover,var(--color-surface-2))] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:pointer-events-none disabled:opacity-40",
+          "grid shrink-0 place-items-center rounded-[var(--icon-button-radius,var(--radius-control))] text-[color:var(--icon-button-text,var(--color-text-tertiary))] transition-colors duration-[var(--duration-fast)] hover:bg-[var(--icon-button-hover,var(--color-surface-2))] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:pointer-events-none disabled:opacity-[var(--button-disabled-opacity,0.4)]",
           SIZE[size],
           touch && "max-sm:h-11 max-sm:w-11",
           tone === "danger" &&

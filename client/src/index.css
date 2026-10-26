@@ -679,8 +679,9 @@
      back, in the class, to what the icon button always drew. */
   --icon-button-radius: var(--radius-pill);
   --icon-button-text: var(--color-text-secondary);
-  --icon-button-hover: var(--color-row-hover);
-  --icon-button-danger-hover: var(--color-danger-soft);
+  /* Tints, like the button's: an icon button sits on panes and dialogs. */
+  --icon-button-hover: var(--button-ghost-hover);
+  --icon-button-danger-hover: var(--button-danger-ghost-hover);
 
   /* The title role is drawn in the display face: server names, channel
      titles and pane headers, in sentence case. */
