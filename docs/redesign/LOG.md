@@ -235,6 +235,11 @@ matches the original sheet and settings screens.
 
 ## Decisions
 
+- Oct 26, 2026: the council drops Grok 4.7 at André's request ("he takes too
+  long"). From IconButton round 5, Tooltip round 5, Input round 4, Select
+  round 3, Checkbox round 2 and Radio round 1 on, an element passes with
+  Opus and Codex at 9.0+, no MUST and no category below "before".
+
 | Date | Decision | Why |
 |---|---|---|
 | 2026-10-26 | Element branches use `rd/<id>` | Git ref conflict with `redesign`. |
