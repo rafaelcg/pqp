@@ -943,9 +943,12 @@ bottom border) and `hue`.
   light), so it shows on a pane, a card and a dialog alike. Scrub is 4px and
   thickens to 6px under a pointer or focus; volume is 6px; hue is 10px. The
   knob is 16px with no edge and a soft shadow in dark, a white knob with a
-  hairline in light, and it grows a little while held. Hue's knob is 20px.
-  Disabled is 0.5, as on Button. Every value is a `--slider-*` token with
-  the old value as its fallback.
+  hairline in light, and it grows 12% while the slider is held anywhere.
+  Hue's knob is 20px; `edge` keeps its 12px knob. A read-only scrub never
+  thickens. Focus rings in the solid accent with a transparent offset, as
+  IconButton does. Disabled is 0.5, as on Button, and the light knob turns
+  grey so it stays visible. Every value is a `--slider-*` token with the old
+  value as its fallback.
 - **Use it** for playback position and volume. **Do not** use a native
   `<input type="range">` for those; it draws OS chrome and cannot share the
   read-only treatment.

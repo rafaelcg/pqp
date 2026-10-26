@@ -39,7 +39,7 @@ const track = cva("relative w-full grow overflow-hidden", {
 });
 
 const thumb = cva(
-  "block shrink-0 rounded-full border-[length:var(--slider-thumb-border-w,1px)] border-[color:var(--slider-thumb-border,var(--color-border-strong))] bg-[color:var(--slider-thumb-bg,var(--color-text))] shadow-[var(--slider-thumb-shadow,0_0_transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-[color:var(--slider-ring,var(--color-focus-ring))] redesign:transition-[opacity,transform] redesign:duration-[var(--duration-fast)] redesign:group-active:scale-[var(--slider-thumb-press)] redesign:group-data-[disabled]:group-active:scale-100",
+  "block shrink-0 rounded-full border-[length:var(--slider-thumb-border-w,1px)] border-[color:var(--slider-thumb-border,var(--color-border-strong))] bg-[color:var(--slider-thumb-bg,var(--color-text))] shadow-[var(--slider-thumb-shadow,0_0_transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-[color:var(--slider-ring,var(--color-focus-ring))] redesign:transition-[opacity,transform] redesign:duration-[var(--duration-fast)] redesign:group-active:scale-[var(--slider-thumb-press)] redesign:group-data-[disabled]:group-active:scale-100 redesign:focus-visible:ring-offset-[color:var(--slider-ring-offset-color)] redesign:group-data-[disabled]:bg-[color:var(--slider-thumb-disabled-bg,var(--slider-thumb-bg))]",
   {
     variants: {
       variant: {

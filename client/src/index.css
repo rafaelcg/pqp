@@ -819,6 +819,9 @@
   --slider-thumb-shadow: 0 1px 2px oklch(0.06 0.02 262 / 0.5), 0 2px 6px oklch(0.06 0.02 262 / 0.35);
   --slider-thumb-press: 1.12;
   --slider-disabled-opacity: 0.5;
+  /* Every control rings in the solid accent, as IconButton does. */
+  --slider-ring: var(--color-accent);
+  --slider-ring-offset-color: transparent;
 
   --icon-button-radius: var(--radius-pill);
   --icon-button-text: var(--color-text-secondary);
@@ -1138,8 +1141,9 @@
   --slider-track: color-mix(in oklab, var(--color-text) 13%, transparent);
   --slider-thumb-bg: var(--color-surface-0);
   --slider-thumb-border: color-mix(in oklab, var(--color-text) 24%, transparent);
-  /* The 60% ring reads about 2.4:1 around a white knob on a light pane. */
-  --slider-ring: var(--color-accent);
+  /* A white knob at half opacity vanishes on a white pane: disabled, it
+     takes a grey fill instead. */
+  --slider-thumb-disabled-bg: color-mix(in oklab, var(--color-text) 22%, var(--color-surface-0));
   --slider-thumb-shadow: 0 1px 2px oklch(0.4 0.02 262 / 0.2), 0 2px 6px oklch(0.4 0.02 262 / 0.14);
 }
 

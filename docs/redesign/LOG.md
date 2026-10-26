@@ -577,6 +577,9 @@ Spec (audit: Slider in 13 files; 11 native range inputs elsewhere):
    the story size sliders (`f-stories`), peer volume (`f-call`), the role
    hue (server settings).
 4. Tokens with fallbacks; the toggle off draws what it drew before.
+5. Not taken in round 2: naming the group (`group/slider`). It would stop a
+   hoverable parent row from showing the knob with the toggle off too, so it
+   is a behaviour change; `f-music` decides it for the now-playing row.
 
 ## Open questions for André
 

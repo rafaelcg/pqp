@@ -111,6 +111,8 @@ describe("Slider", () => {
     const thumb = /<span[^>]*role="slider"[^>]*>/.exec(html)?.[0] ?? "";
     expect(thumb).toContain("redesign:group-active:scale-[var(--slider-thumb-press)]");
     expect(thumb).toContain("focus-visible:ring-[color:var(--slider-ring,var(--color-focus-ring))]");
+    expect(thumb).toContain("redesign:focus-visible:ring-offset-[color:var(--slider-ring-offset-color)]");
+    expect(thumb).toContain("redesign:group-data-[disabled]:bg-[color:var(--slider-thumb-disabled-bg,var(--slider-thumb-bg))]");
   });
 
   it("keeps the edge knob at its old size", () => {
