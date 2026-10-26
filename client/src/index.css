@@ -735,6 +735,21 @@
   --input-h: var(--control-md);
   --input-disabled-opacity: 1;
 
+  /* Dialogs: a deeper scrim with more blur, so the app behind recedes; the
+     panel takes a text edge and the deepest lift. The header loses its rule
+     (the title and the space under it separate it) and the footer's rule
+     softens. Titles step down from 24px to 22px, the inset grows to 24px. */
+  --dialog-scrim: oklch(0.06 0.02 262 / 0.62);
+  --dialog-scrim-blur: 6px;
+  --dialog-border: color-mix(in oklab, var(--color-text) 10%, transparent);
+  --dialog-shadow: inset 0 1px 0 oklch(1 0 0 / 0.05), var(--shadow-3);
+  --dialog-header-rule: transparent;
+  --dialog-header-pb: 0.5rem;
+  --dialog-footer-rule: color-mix(in oklab, var(--color-text) 8%, transparent);
+  --dialog-px: 1.5rem;
+  --dialog-title-size: 1.375rem;
+  --dialog-title-leading: 1.875rem;
+
   --icon-button-radius: var(--radius-pill);
   --icon-button-text: var(--color-text-secondary);
   /* Tints, like the button's: an icon button sits on panes and dialogs. */
@@ -982,6 +997,10 @@
   /* The light accent is a dark green that sinks into the dark bubble; mix it
      toward the bubble's own label so the mark stays bright in every look. */
   --tooltip-rail-mark: color-mix(in oklab, var(--color-accent) 55%, var(--color-on-tooltip));
+  /* A light scrim greys the app rather than blacking it out. */
+  --dialog-scrim: oklch(0.3 0.02 262 / 0.3);
+  --dialog-border: color-mix(in oklab, var(--color-text) 8%, transparent);
+  --dialog-shadow: 0 1px 2px oklch(0.4 0.02 262 / 0.1), var(--shadow-3);
 }
 
 /*

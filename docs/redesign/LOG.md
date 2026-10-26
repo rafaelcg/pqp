@@ -355,6 +355,23 @@ Verified: typecheck; 10,331 unit tests; `bench:tokens`; `settings-sections`,
 `server-settings-sections`, `profile-section` and `theme-switching` e2e (39
 passed); i18n check.
 
+### p-dialog
+
+Spec (audit: Dialog in 50 files, ConfirmDialog in 24, PromptDialog in 1;
+14 `role="dialog"` overlays outside it, 4 sheets, 3 native prompts):
+
+1. Job: a modal panel over the app: a title, a body, an optional footer of
+   actions; a full-screen page on a phone when asked.
+2. Redesign: a deeper scrim, a text edge and the deepest lift, no header
+   rule, a softer footer rule, a 24px inset, a 22px title, a sentence-case
+   eyebrow, the close button as IconButton's ghost.
+3. Merges: nothing folds without changing the toggle-off look. The close
+   button keeps its element (IconButton's `lg` has a 20px glyph and another
+   hover) and borrows IconButton's tokens under the redesign.
+4. Left for their surfaces: the 14 overlays outside Dialog, the sheets
+   (`p-sheet`), and the native `window.prompt` and `confirm` (nickname,
+   kick), which belong to `f-profile-popover` and `f-server-settings`.
+
 ## Open questions for André
 
 1. Resolved 2026-10-26: Grok 4.7 is the third reviewer.

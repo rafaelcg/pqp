@@ -428,6 +428,13 @@ test("captures the design council screens", async ({ browser }) => {
       await expect(page.getByText(PAPO.at(-1)![1])).toBeVisible();
       await hideDevBanner(page);
       await shoot(page, `01-chat-${theme}`);
+      // A confirm dialog in place: deleting your own message.
+      await page.getByText(PAPO.find(([who]) => who === VIEWER)![1]).click({ button: "right" });
+      await page.getByRole("menuitem", { name: "Excluir mensagem" }).click();
+      await expect(page.getByRole("dialog")).toBeVisible();
+      await page.waitForTimeout(400);
+      await shoot(page, `18-confirm-dialog-${theme}`);
+      await page.keyboard.press("Escape");
 
       await page.goto(`/app/dm/${conversation.channelId}?lang=pt-BR`);
       await expect(page.getByTestId("app-chat-column").getByText(DM.at(-1)![1])).toBeVisible({ timeout: 30_000 });

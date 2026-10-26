@@ -678,6 +678,15 @@ shrinks `vh` for an on-screen keyboard.
 - **Accessibility.** `role="dialog"`, `aria-modal`, labelled by its title and
   described by its description. Escape is stopped from reaching a menu inside.
 
+- **Under the redesign.** A deeper scrim with more blur (62% of near-black
+  in dark, a 30% grey in light). The panel takes a 10% text edge (8% in
+  light) and the deepest lift, through the elevation variables. The header
+  loses its rule and keeps 8px under the title; the footer's rule is an 8%
+  text tint. The inset is 24px, the title 22px. The eyebrow is sentence case.
+  The close button draws as IconButton's ghost (round, `text-secondary`, the
+  text-tint hover). Every value is a `--dialog-*` token with the old value
+  as its fallback. PromptDialog's field labels are sentence case too.
+
 ### ConfirmDialog
 
 `confirm-dialog.tsx`. The in-app replacement for `window.confirm`. Two

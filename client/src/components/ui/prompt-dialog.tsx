@@ -146,10 +146,10 @@ export function PromptDialog({
       <form
         id={formId}
         onSubmit={(event) => void handleSubmit(event)}
-        className="space-y-3 px-5 py-4"
+        className="space-y-3 px-[var(--dialog-px,1.25rem)] py-4"
       >
         <label className="block">
-          <span className="mb-1 block text-xs uppercase tracking-wide text-text-tertiary">
+          <span className="mb-1 block text-xs uppercase tracking-wide text-text-tertiary redesign:text-[13px] redesign:font-medium redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">
             {label ?? t("channelSettings.name")}
           </span>
           <Input
@@ -180,7 +180,7 @@ export function PromptDialog({
         {secondaryPlaceholder !== undefined && (
           <label className="block">
             {secondaryLabel && (
-              <span className="mb-1 block text-xs uppercase tracking-wide text-text-tertiary">
+              <span className="mb-1 block text-xs uppercase tracking-wide text-text-tertiary redesign:text-[13px] redesign:font-medium redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">
                 {secondaryLabel}
               </span>
             )}
