@@ -379,6 +379,7 @@ export function ServerRail({
           label={t("conversations.rail.more", { count: foldedFaces })}
           side="right"
           tone="rail"
+          mark
         >
           <button
             type="button"

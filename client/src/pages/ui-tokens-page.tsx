@@ -952,7 +952,7 @@ function PrimitiveSheet() {
         <Tooltip label={t("qaUi.tooltip.label")} detail={t("qaUi.tooltip.detail")}>
           <Button variant="secondary">{t("qaUi.tooltip.trigger")}</Button>
         </Tooltip>
-        <Tooltip label={t("qaUi.tooltip.railLabel")} tone="rail" side="right">
+        <Tooltip label={t("qaUi.tooltip.railLabel")} tone="rail" side="right" mark>
           <Button variant="secondary">{t("qaUi.tooltip.railTrigger")}</Button>
         </Tooltip>
       </div>

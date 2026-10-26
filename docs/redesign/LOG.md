@@ -36,6 +36,7 @@ Read this file and the inventory at the start of every session.
 | 1 | André signs off on `/qa/ui` | Done, after round T3 |
 | 2 | `p-button` | Merged (cap at round 5: 8.9, 8.9, 9.0, no MUST) |
 | 2 | `p-icon-button` | Merged (cap at round 5: 9.0, 8.9, no MUST) |
+| 2 | `p-tooltip` | Merged (cap at round 5: 8.9, 8.8, no MUST) |
 
 ## Phase 0: directions
 
@@ -275,6 +276,34 @@ hand-rolled bubbles; 471 native `title=` attributes):
    Their placement code stays.
 4. Native `title=` stays where it labels truncated text. On icon-only
    buttons it goes as each element folds onto `IconButton`.
+
+Council (Opus 5.5, GPT-6 Luna via Codex; Grok 4.7 through round 4, then
+dropped at André's request), overall after:
+
+| Round | Opus | Codex | Grok | MUST open |
+|---|---|---|---|---|
+| 1 | 7.2 | 8.4 | 7.5 | 0 |
+| 2 | 8.1 | 8.9 | 8.4 | 0 |
+| 3 | 8.4 | 8.9 | 8.6 | 0 |
+| 4 | 8.6 | 9.0 | 8.7 | 0 |
+| 5 | 8.9 | 8.8 | not run | 0 |
+
+Stopped at the five-round cap with no MUST and every category above
+"before". Best round: 5. Screenshots: `~/pqp-redesign/p-tooltip/`.
+
+Decisions:
+- Dark: a bubble below every surface (`surface-0` 55% toward black) with a
+  soft edge and a faint top highlight. Light: inverted, a dark bubble.
+- Medium label, the detail line at 80% of the label; the rail bubble in the
+  title face at semibold, 14px from its tile.
+- `mark` on a rail bubble that names a place (servers, pinned and folded
+  conversations, the conversations home): a 3px accent bar, mixed toward
+  the label in light. Actions stay plain.
+- The reaction tip and the locked-look hint read the same tokens.
+
+Deferred:
+- Native `title=` on icon-only buttons goes as each element folds onto
+  `IconButton`.
 
 ## Open questions for André
 

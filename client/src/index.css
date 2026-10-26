@@ -951,7 +951,8 @@
   /* A ghost icon button has no chrome but its ring, and the shared 60% ring
      reads 2.4:1 on a light page; it takes the solid accent instead. */
   --icon-button-ring: var(--color-accent);
-  --tooltip-shadow: var(--shadow-2);
+  /* Tighter than the panel shadow: a small label sits close to its control. */
+  --tooltip-shadow: var(--shadow-1), 0 4px 12px oklch(0.4 0.02 262 / 0.14);
   /* The light accent is a dark green that sinks into the dark bubble; mix it
      toward the bubble's own label so the mark stays bright in every look. */
   --tooltip-rail-mark: color-mix(in oklab, var(--color-accent) 55%, var(--color-on-tooltip));
