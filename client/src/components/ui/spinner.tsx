@@ -7,9 +7,10 @@ import { cn } from "@/lib/utils";
  * The caller's classes set the size, the colour and the motion, as they did
  * on the Lucide glyph they replace (`h-3.5 w-3.5 animate-spin`). With the
  * toggle off that glyph is what draws. Under the redesign a ring draws
- * instead: a faint full track and a turning arc in the icon stroke, which
- * stops turning for a person who asked for reduced motion (the track and
- * arc still say "loading").
+ * instead: a faint full track and a turning arc in the icon stroke. It owns
+ * its motion under the redesign: for a person who asked for reduced motion
+ * it stops turning and fades in and out instead, because a still quarter
+ * arc reads as 25% done, not as "loading".
  */
 export function Spinner({ className, label }: { className?: string; label?: string }) {
   return (
@@ -20,7 +21,10 @@ export function Spinner({ className, label }: { className?: string; label?: stri
         fill="none"
         aria-hidden="true"
         data-spinner=""
-        className={cn(className, "hidden redesign:block redesign:motion-reduce:animate-none")}
+        className={cn(
+          className,
+          "hidden redesign:block redesign:motion-safe:animate-spin redesign:motion-reduce:animate-pulse",
+        )}
       >
         <circle
           cx="12"

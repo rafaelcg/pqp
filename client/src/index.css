@@ -1130,6 +1130,10 @@
 
 /* The redesign's shadows on a light page: tinted, never black. Every look. */
 :root[data-redesign][data-theme="light"] {
+  /* On the near-white panes the 8% tint all but vanishes at the pulse's low
+     point, and a 25% track at 12px is a hairline. */
+  --skeleton-bg: color-mix(in oklab, var(--color-text) 10%, transparent);
+  --spinner-track-opacity: 0.3;
   /* Banners: the soft fills are pale in light; a lighter edge keeps them calm. */
   --banner-edge: 22%;
   --input-invalid-bg: color-mix(in oklab, var(--color-danger) 6%, var(--color-field));

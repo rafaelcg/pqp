@@ -11,7 +11,8 @@ describe("Spinner", () => {
     expect(classes[0]).toContain("lucide");
     expect(classes[0]).toContain("h-3.5 w-3.5 motion-safe:animate-spin redesign:hidden");
     expect(classes[1]).toContain("h-3.5 w-3.5 motion-safe:animate-spin hidden redesign:block");
-    expect(classes[1]).toContain("redesign:motion-reduce:animate-none");
+    expect(classes[1]).toContain("redesign:motion-safe:animate-spin");
+    expect(classes[1]).toContain("redesign:motion-reduce:animate-pulse");
     expect(html.match(/aria-hidden="true"/g)).toHaveLength(2);
   });
 

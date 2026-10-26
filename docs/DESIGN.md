@@ -1065,11 +1065,12 @@ loading (the channel list, the message log, a settings row).
 - **Spinner.** Takes the caller's classes for size, colour and motion, as
   the Lucide `Loader2` it replaces did. With the toggle off that glyph
   draws. Under the redesign a ring draws: a faint track
-  (`--spinner-track-opacity` 0.25) and an arc in the icon stroke, still
-  under reduced motion. `label` adds a screen reader name when nothing
+  (`--spinner-track-opacity` 0.25, 0.3 in light) and an arc in the icon
+  stroke. It owns its motion: it turns, and under reduced motion it fades
+  in and out instead, because a still arc reads as progress. `label` adds a screen reader name when nothing
   beside it says "loading".
 - **Skeleton.** Toggle off: `surface-3` at 50%, pulsing. Redesign: a text
-  tint (`--skeleton-bg`, 8%), so it reads on a pane, a card or a dialog,
+  tint (`--skeleton-bg`, 8%, 10% in light), so it reads on a pane, a card or a dialog,
   and still under reduced motion. The channel skeleton's rows are the row
   pill at the row height; the message skeleton's avatars are round.
 - **Do not** hand-build a spinner (`animate-spin` on a bordered span) or a
