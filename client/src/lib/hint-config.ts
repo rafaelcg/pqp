@@ -3,6 +3,7 @@ import { apiFetch } from "@/lib/api";
 import { onConfigRefresh } from "@/lib/config-refresh";
 import { hintDietFromConfig, setHintDiet } from "@/lib/hint-diet";
 import { hintBudgetFromConfig, setHintBudget } from "@/lib/hint-quiet";
+import { redesignFromConfig, setRedesignFlag } from "@/lib/redesign";
 
 /**
  * The two hint switches, `hint_diet` and `hint_budget` (both global, default
@@ -17,7 +18,9 @@ import { hintBudgetFromConfig, setHintBudget } from "@/lib/hint-quiet";
  * answer, and the first answer defaults to off.
  */
 export const fetchHintConfig = () =>
-  apiFetch<{ hintDiet?: boolean; hintBudget?: boolean }>("/api/onboarding/config");
+  apiFetch<{ hintDiet?: boolean; hintBudget?: boolean; redesign?: boolean }>(
+    "/api/onboarding/config",
+  );
 
 /**
  * SETTLED: the first answer (or the first failure, or `SETTLE_MAX_MS`) is in.
@@ -76,6 +79,7 @@ export async function loadHintConfig(
   fetcher: () => Promise<{
     hintDiet?: unknown;
     hintBudget?: unknown;
+    redesign?: unknown;
   }> = fetchHintConfig,
 ): Promise<void> {
   asked += 1;
@@ -87,6 +91,8 @@ export async function loadHintConfig(
       applied = mine;
       setHintDiet(hintDietFromConfig(answer));
       setHintBudget(hintBudgetFromConfig(answer));
+      // The same route carries the new look's default (`lib/redesign.ts`).
+      setRedesignFlag(redesignFromConfig(answer));
     }
   } catch {
     // An older API (404) or a blip: keep the last answer.
@@ -120,6 +126,7 @@ export function startHintConfig(): () => void {
     applied = asked;
     setHintDiet(false);
     setHintBudget(false);
+    setRedesignFlag(false);
   };
 }
 

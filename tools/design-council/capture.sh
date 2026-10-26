@@ -2,6 +2,10 @@
 # Captures one round of design council screenshots into a directory.
 #
 #   tools/design-council/capture.sh /tmp/pqp-council/r1
+#   REDESIGN=1 tools/design-council/capture.sh /tmp/pqp-council/r1-after
+#
+# REDESIGN=1 photographs the same build with the redesign toggle on
+# (client/src/lib/redesign.ts). Unset, the toggle is off: the "before".
 #
 # Rebuilds the scene from an empty database every time, so two rounds always
 # photograph the same people, servers and lines. See docs/DESIGN_COUNCIL.md.
@@ -34,6 +38,7 @@ rm -rf "$OUT"
 mkdir -p "$OUT"
 cd "$ROOT/client"
 DESIGN_COUNCIL_DIR="$OUT" \
+DESIGN_COUNCIL_REDESIGN="${REDESIGN:-0}" \
 E2E_DATABASE_URL="$PG/$DB" \
 E2E_SERVER_PORT="$SERVER_PORT" \
 E2E_CLIENT_PORT="$CLIENT_PORT" \

@@ -29,8 +29,8 @@ Read this file and the inventory at the start of every session.
 | 0 | Council tooling committed as the first commit on `redesign` | Done |
 | 0 | Inventory | Done |
 | 0 | Three directions, mockups and council round D1 | Done (2 of 3 reviewers) |
-| 0 | André picks a direction | Waiting |
-| 1 | Toggle | Not started |
+| 0 | André picks a direction | Done: B (Salas), with filled icons |
+| 1 | Toggle | Done |
 | 1 | Tokens for the chosen direction | Not started |
 | 1 | André signs off on `/qa/ui` | Not started |
 
@@ -84,18 +84,16 @@ What Phase 1 tokens must solve for A (both reviewers):
 
 ## Open questions for André
 
-1. Which direction (a, b, c, or a mix)? The council recommends A with C's
-   type voice and B's composer.
-2. The third council reviewer: Gemini 4 Argon is out of Cursor credits. Use
+1. The third council reviewer: Gemini 4 Argon is out of Cursor credits. Use
    Grok 4.7 or GPT-5.6 Sol (both on Cursor) instead, buy credits, or run with
    two reviewers?
-3. Four features live in two versions behind flags. The redesign should
+2. Four features live in two versions behind flags. The redesign should
    rebuild only the version that stays. Which one stays for each?
    - DM list: classic or Conversas home (`conversations_home`).
    - New conversation dialog: classic or new.
    - Phone shell: bottom tabs (`conversations_home_phone_tabs`) or the drawer.
    - Channel list: mixed layout (`mixed_channel_list`) or legacy sections.
-4. `error-boundary.tsx` is English only, and AGENTS.md says to leave it alone.
+3. `error-boundary.tsx` is English only, and AGENTS.md says to leave it alone.
    Redesign its look and keep the copy as is?
 
 ## Decisions
@@ -104,3 +102,5 @@ What Phase 1 tokens must solve for A (both reviewers):
 |---|---|---|
 | 2026-10-26 | Element branches use `rd/<id>` | Git ref conflict with `redesign`. |
 | 2026-10-26 | Direction mockups are a dev-only page on an unmerged branch | Real pixels for the pick, no change to production components, nothing to clean up on `redesign`. |
+| 2026-10-26 | Direction B (Salas), with filled icons instead of outlines | André's pick. The council preferred A; B was second for both reviewers (7.2, 7.4), and the risks they named for B go into the Phase 1 tokens: gutters cost width on small screens, and a third surface level invites card-in-card settings. |
+| 2026-10-26 | The toggle ships before the tokens | It is the same for every direction and changes nothing visible. Precedence: `?redesign=1|0`, then the person's Beta switch (`pqp-redesign`), then the `redesign` flag. |

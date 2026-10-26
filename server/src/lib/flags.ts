@@ -980,6 +980,20 @@ export const FEATURE_FLAGS = {
     perServer: false,
     clientVia: "GET /api/onboarding/config (hintBudget)",
   },
+  redesign: {
+    description:
+      "Novo visual (só cliente): o padrão pra quem não escolheu em Configurações, Beta. Ligado, o app abre com o visual novo; quem desligou na própria conta continua no antigo. Desligado, nada muda.",
+    env: "REDESIGN",
+    parseEnv: exactTrue,
+    // Off: the redesign is built element by element on a local branch, and
+    // the person's own Beta switch is how it is tried. This flag is the
+    // rollout, flipped only once every element has shipped.
+    codeDefault: false,
+    // The look belongs to the person's screen, not to a server: a DM or the
+    // friends list has no server to override it for.
+    perServer: false,
+    clientVia: "GET /api/onboarding/config (redesign)",
+  },
   apps: {
     description:
       "Apps nos canais: liga a plataforma de apps pra este servidor (o botão de apps, o cartão ao vivo na conversa e o Entrar). Desligado, nada aparece e toda rota de apps responde 404. Cada app ainda precisa ser liberado por ti, servidor a servidor.",
