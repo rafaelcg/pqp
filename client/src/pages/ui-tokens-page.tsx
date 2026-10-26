@@ -1462,7 +1462,7 @@ function PrimitiveSheet() {
           </span>
           <span className="min-w-0 flex-1">
             <span className="block truncate text-sm font-semibold text-text">{t("qaUi.toast.sessionTitle")}</span>
-            <span className="block truncate text-xs text-text-tertiary">{t("qaUi.toast.sessionBody")}</span>
+            <span className="block truncate text-xs text-text-tertiary redesign:text-text-secondary">{t("qaUi.toast.sessionBody")}</span>
           </span>
         </div>
       </div>

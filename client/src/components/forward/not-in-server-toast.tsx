@@ -51,7 +51,7 @@ export function NotInServerToast() {
         state === "out" ? "animate-toast-out" : "animate-toast-in",
       )}
     >
-      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-3 text-text-secondary">
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-3 text-text-secondary redesign:mx-1">
         <Lock className="h-4 w-4" aria-hidden />
       </span>
       <p className="min-w-0 flex-1 text-sm font-semibold text-text">

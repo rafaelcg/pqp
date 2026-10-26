@@ -39,6 +39,22 @@ describe("Toast recipe", () => {
     }
   });
 
+  it("gives a whole-card button the dismiss button's ring", () => {
+    for (const path of ["../dm/dm-toasts.tsx", "../voice/channel-session-toasts.tsx"]) {
+      expect(read(path)).toContain("TOAST_OPEN_REDESIGN)");
+    }
+  });
+
+  it("sits a 32px leading mark in the 40px slot, so stacked text lines up", () => {
+    for (const path of [
+      "../forward/forwarded-toast.tsx",
+      "../forward/not-in-server-toast.tsx",
+      "../apps/app-join-host.tsx",
+    ]) {
+      expect(read(path)).toMatch(/h-8 w-8[^"]* redesign:mx-1/);
+    }
+  });
+
   it("gives every toast's dismiss button the round ghost and its focus ring", () => {
     for (const path of [
       "../dm/dm-toasts.tsx",

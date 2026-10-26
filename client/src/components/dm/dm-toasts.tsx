@@ -387,7 +387,7 @@ function ToastCardView({
             rounded="full"
           />
         ) : (
-          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-surface-2 text-text-tertiary">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-surface-2 text-text-tertiary redesign:bg-surface-3">
             <MessageCircle className="h-5 w-5" aria-hidden />
           </span>
         )}
@@ -435,7 +435,7 @@ function GroupAvatarStack({
           name={person.displayName}
           avatarUrl={person.avatarUrl}
           className="h-10 w-10 ring-2 ring-surface-1"
-          fallbackClassName="bg-surface-2 text-xs text-text"
+          fallbackClassName="bg-surface-2 text-xs text-text redesign:bg-surface-3"
           rounded="full"
         />
       ))}

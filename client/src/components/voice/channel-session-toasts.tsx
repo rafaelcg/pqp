@@ -107,7 +107,7 @@ export function ChannelSessionToasts({
               <span className="block truncate text-sm font-semibold text-paper">
                 {card.title}
               </span>
-              <span className="block truncate text-xs text-paper-muted">
+              <span className="block truncate text-xs text-paper-muted redesign:text-text-secondary">
                 {card.kind === "live"
                   ? t("watchPartySchedule.toast.live")
                   : t("watchPartySchedule.toast.startingSoon")}

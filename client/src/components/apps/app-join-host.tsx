@@ -273,13 +273,13 @@ export function AppJoinHost({ serverId, viewerId, people }: AppJoinHostProps) {
             toast.leaving ? "animate-toast-out" : "animate-toast-in",
           )}
         >
-          <AppIconTile icon={app?.icon ?? "sparkles"} className="h-8 w-8 sm:h-8 sm:w-8" />
+          <AppIconTile icon={app?.icon ?? "sparkles"} className="h-8 w-8 sm:h-8 sm:w-8 redesign:mx-1" />
           <p className="min-w-0 flex-1 text-sm text-text">
             {t("apps.join.toast", { app: toast.app })}
           </p>
           <button
             type="button"
-            className="rounded-[var(--radius-control)] px-2 py-1 text-xs font-semibold text-text-secondary hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring redesign:rounded-[var(--radius-pill)] redesign:px-2.5 redesign:hover:bg-[color:var(--button-ghost-hover)]"
+            className="rounded-[var(--radius-control)] px-2 py-1 text-xs font-semibold text-text-secondary hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring redesign:focus-visible:ring-[color:var(--icon-button-ring,var(--color-focus-ring))] redesign:rounded-[var(--radius-pill)] redesign:px-2.5 redesign:hover:bg-[color:var(--button-ghost-hover)]"
             onClick={() => {
               leaveAppSession(toast.sessionId);
               setToast({ ...toast, leaving: true });
