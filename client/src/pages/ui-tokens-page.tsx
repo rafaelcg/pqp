@@ -3,14 +3,17 @@ import {
   Bell,
   CaretDown,
   ChatCircle,
+  CheckCircle as BannerCheckIcon,
   GearSix,
   Hash,
+  HourglassMedium as BannerIdleIcon,
   MagnifyingGlass,
   Microphone,
   PaperPlaneRight,
   Plus,
   SpeakerHigh,
   UsersThree,
+  WarningCircle as BannerErrorIcon,
   X,
 } from "@phosphor-icons/react";
 import {
@@ -25,6 +28,10 @@ import {
 } from "lucide-react";
 import { Navigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { BANNER_FILL_REDESIGN, Banner, BannerAction, BannerText } from "@/components/ui/banner";
+import { ShareHandleButton } from "@/components/handle/share-handle-button";
+import { ConnectionBanner } from "@/components/layout/connection-banner";
+import { SanctionNoticeBar } from "@/components/layout/sanction-notice-bar";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { CheckRow } from "@/components/ui/check-row";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -1314,6 +1321,48 @@ function PrimitiveSheet() {
             {t("qaUi.menu.open")}
           </Button>
         </Menu>
+      </div>
+
+      {/* Banners: the strips above the conversation (connection, an error,
+          the idle warning, a notice) and the one above the composer. */}
+      <div
+        data-testid="qa-primitive-banner"
+        className="flex max-w-2xl flex-col gap-2 pb-2 redesign:gap-0"
+      >
+        <ConnectionBanner
+          status="reconnecting"
+          refusedRepeatedly={false}
+          onRetry={() => {}}
+          onCheck={() => {}}
+          onSignInAgain={() => {}}
+        />
+        <Banner tone="danger" icon={BannerErrorIcon}>
+          <BannerText>{t("qaUi.banner.error")}</BannerText>
+          <BannerAction>{t("connection.dismiss")}</BannerAction>
+        </Banner>
+        <Banner tone="warning" icon={BannerIdleIcon}>
+          <BannerText>{t("voice.idle.warning", { count: 1 })}</BannerText>
+          <BannerAction prominent>{t("voice.idle.stillHere")}</BannerAction>
+        </Banner>
+        <Banner tone="success" icon={BannerCheckIcon}>
+          <BannerText>{t("qaUi.banner.notice")}</BannerText>
+          <ShareHandleButton handle="lia" className={BANNER_FILL_REDESIGN} />
+          <BannerAction>{t("connection.dismiss")}</BannerAction>
+        </Banner>
+        {/* The composer's strip: in the app it sits above the composer. */}
+        <div className="h-4" aria-hidden />
+        <SanctionNoticeBar
+          notice={{
+            type: "sanction-notice",
+            sanction: "timeout",
+            serverId: "00000000-0000-4000-8000-000000000000",
+            channelId: "00000000-0000-4000-8000-000000000001",
+            expiresAt: "2026-10-26T21:30:00.000Z",
+            reason: null,
+            message: t("qaUi.banner.sanction"),
+          }}
+          onDismiss={() => {}}
+        />
       </div>
 
       <div data-testid="qa-primitive-slider" className="grid gap-4 sm:grid-cols-2">

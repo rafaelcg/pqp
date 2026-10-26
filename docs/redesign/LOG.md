@@ -45,6 +45,7 @@ Read this file and the inventory at the start of every session.
 | 2 | `p-tabs` | Merged (cap at round 5: 8.4 Opus r5, 8.7 Codex r4, no MUST) |
 | 2 | `p-menu` | Merged (cap at round 5: 8.4 Opus r5, 8.4 Codex r4, no MUST, approved) |
 | 2 | `p-slider` | Merged (cap at round 5: 8.0 Opus r4, 8.8 Codex r5, no MUST) |
+| 2 | `p-banner` | Merged (approved at round 3: 8.3 Opus, 8.5 Codex r2, no MUST) |
 
 ## Phase 0: directions
 
@@ -600,6 +601,37 @@ Round 4's MUST (the voice settings' 100% label collided with the hint under
 it) was fixed; round 5 found nothing left. The slider group naming and the
 unity tick are logged for `f-music` and `f-call`. Stopped at the five-round
 cap with no MUST. Screenshots: `~/pqp-redesign/p-slider/`.
+### p-banner
+
+Spec (audit: six hand-built strips in `App.tsx`, `connection-banner.tsx` and
+`sanction-notice-bar.tsx`, each its own tinted bar):
+
+1. Job: state something about the app or the conversation until it stops
+   being true, with at most two actions.
+2. Redesign: an inset rounded card on the look's soft tone fill, the message
+   in the text colour, a leading icon and pill actions in the tone's ink.
+3. Folded: dev bypass, connection, app error, idle warning, success notice,
+   sanction. Each keeps its toggle-off bar.
+4. Left for their owners: watch now (`s-banners`), arrival, bring-crew and
+   newcomer strips (`f-onboarding`), the Discord import note
+   (`f-server-settings`). pt-BR idle copy moved to "tu".
+
+Council (Opus 5.5, GPT-6 Luna via Codex), overall after. One reviewer per
+round, Opus for the sign-off:
+
+| Round | Opus | Codex |
+|---|---|---|
+| 1 | not run | 8.2 |
+| 2 | not run | 8.5 |
+| 3 | 8.3 | not run |
+
+Round 1's phone check led to `BannerText` (two actions wrap under the
+message). Round 3 approved; its notes were applied after it: the share
+button and "Ainda tô aqui" draw as the main way out under the redesign, the
+icon and actions align to the first line, and the filled pill's focus ring
+has an offset. Logged, not done: the dark warning fill reads heavy beside
+success and danger; revisit if it does in use. Screenshots:
+`~/pqp-redesign/p-banner/`.
 
 ## Open questions for André
 
