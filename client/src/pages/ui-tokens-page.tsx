@@ -24,6 +24,7 @@ import { IconButton, type IconButtonSize } from "@/components/ui/icon-button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { PopoverPanel } from "@/components/ui/popover";
+import { RadioGroup } from "@/components/ui/radio-group";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
@@ -772,6 +773,9 @@ function PrimitiveSheet() {
   const { t } = useTranslation();
   const [switchOn, setSwitchOn] = useState(true);
   const [checked, setChecked] = useState(false);
+  const [theme, setThemeChoice] = useState<"dark" | "light" | "system">("dark");
+  const [filter, setFilter] = useState<"all" | "unread" | "mentions">("unread");
+  const [who, setWho] = useState<"everyone" | "friends" | "nobody">("friends");
   const [scrub, setScrub] = useState(42);
   const [volume, setVolume] = useState(70);
   const [pressed, setPressed] = useState(true);
@@ -1049,6 +1053,76 @@ function PrimitiveSheet() {
             <span className={TOOLTIP_DETAIL}>{t("qaUi.tooltip.detail")}</span>
           </div>
           <div className={tooltipBubbleClass("rail", true)}>{t("qaUi.tooltip.railLabel")}</div>
+        </div>
+      </div>
+
+      <div data-testid="qa-primitive-radio" className="flex flex-col gap-3">
+        <p
+          className="text-text-tertiary"
+          style={{ fontSize: "var(--type-label-size)" }}
+        >
+          {t("qaUi.group.radio")}
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="flex flex-col gap-3">
+            <RadioGroup
+              label={t("qaUi.radio.themeLabel")}
+              value={theme}
+              onValueChange={setThemeChoice}
+              options={[
+                { value: "dark", label: t("qaUi.radio.dark") },
+                { value: "light", label: t("qaUi.radio.light") },
+                { value: "system", label: t("qaUi.radio.system") },
+              ]}
+            />
+            <RadioGroup
+              label={t("qaUi.radio.themeSmallLabel")}
+              size="sm"
+              value={theme}
+              onValueChange={setThemeChoice}
+              options={[
+                { value: "dark", label: t("qaUi.radio.dark") },
+                { value: "light", label: t("qaUi.radio.light") },
+                { value: "system", label: t("qaUi.radio.system"), disabled: true },
+              ]}
+            />
+            <RadioGroup
+              label={t("qaUi.radio.filterLabel")}
+              variant="chips"
+              value={filter}
+              onValueChange={setFilter}
+              options={[
+                { value: "all", label: t("qaUi.radio.all") },
+                { value: "unread", label: t("qaUi.radio.unread"), trailing: <span className="tabular-nums opacity-80">3</span> },
+                { value: "mentions", label: t("qaUi.radio.mentions") },
+              ]}
+            />
+            <RadioGroup
+              label={t("qaUi.radio.filterSmallLabel")}
+              variant="chips"
+              size="sm"
+              value={filter}
+              onValueChange={setFilter}
+              options={[
+                { value: "all", label: t("qaUi.radio.all") },
+                { value: "unread", label: t("qaUi.radio.unread") },
+                { value: "mentions", label: t("qaUi.radio.mentions"), disabled: true },
+              ]}
+            />
+          </div>
+          <div className="overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface-1">
+            <RadioGroup
+              label={t("qaUi.radio.whoLabel")}
+              variant="list"
+              value={who}
+              onValueChange={setWho}
+              options={[
+                { value: "everyone", label: t("qaUi.radio.everyone"), description: t("qaUi.radio.everyoneHint") },
+                { value: "friends", label: t("qaUi.radio.friends"), description: t("qaUi.radio.friendsHint") },
+                { value: "nobody", label: t("qaUi.radio.nobody"), description: t("qaUi.radio.nobodyHint"), disabled: true },
+              ]}
+            />
+          </div>
         </div>
       </div>
 

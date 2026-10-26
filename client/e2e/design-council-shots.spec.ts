@@ -529,7 +529,7 @@ const PRIMITIVES: {
   hover?: string;
   focus?: string;
   /** The role the hover and focus targets have. Buttons by default. */
-  role?: "button" | "textbox" | "combobox" | "checkbox";
+  role?: "button" | "textbox" | "combobox" | "checkbox" | "radio";
 }[] = [
   {
     id: "p-button",
@@ -556,6 +556,8 @@ const PRIMITIVES: {
   },
   // Two panels in place: a note with actions, and a picker grid.
   { id: "p-popover", testId: "qa-primitive-popover" },
+  // Focus the checked list option, hover an unchecked chip.
+  { id: "p-radio", testId: "qa-primitive-radio", role: "radio", focus: "Só amigos", hover: "Menções" },
 ];
 
 test("captures the primitives", async ({ browser }) => {
