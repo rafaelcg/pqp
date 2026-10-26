@@ -47,7 +47,7 @@ describe("Select", () => {
     );
     expect(host.querySelector("span")!.className).toContain("sm:w-48");
     const select = host.querySelector("select")!;
-    expect(select.className).toContain("h-[var(--control-md)]");
+    expect(select.className).toContain("h-[var(--select-h-sm,var(--control-md))]");
     expect(select.className).toContain("text-text-secondary");
   });
 });

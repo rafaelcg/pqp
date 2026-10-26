@@ -18,7 +18,7 @@ import { cn } from "@/lib/utils";
  * | Size | Height | Where                                   |
  * |------|--------|-----------------------------------------|
  * | `md` | 40px   | beside an `Input`, which it matches (default) |
- * | `sm` | 36px   | a toolbar or a row of `Button`s         |
+ * | `sm` | 36px   | a toolbar; 32px under the redesign, as `Button size="sm"` |
  *
  * THE ARROW. With the toggle off it is the operating system's own, exactly
  * as before. Under the redesign `appearance: none` drops it and a Phosphor
@@ -30,7 +30,8 @@ export type SelectSize = "md" | "sm";
 const HEIGHT: Record<SelectSize, string> = {
   // The field's height: 40px off, the default button's 36px under the redesign.
   md: "h-[var(--input-h,var(--control-lg))]",
-  sm: "h-[var(--control-md)]",
+  // One step under `md` in both looks: 36px off, 32px under the redesign.
+  sm: "h-[var(--select-h-sm,var(--control-md))]",
 };
 
 export interface SelectProps extends Omit<ComponentProps<"select">, "size"> {

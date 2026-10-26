@@ -738,6 +738,7 @@
      in its place, with room for it. */
   --select-appearance: none;
   --select-pr: 2.25rem;
+  --select-h-sm: var(--control-sm);
 
   --icon-button-radius: var(--radius-pill);
   --icon-button-text: var(--color-text-secondary);

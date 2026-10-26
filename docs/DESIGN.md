@@ -576,8 +576,9 @@ accessible name.
 text field, so a phone shows its own picker and e2e specs find options by
 value.
 
-- **Sizes.** `md` (40px, beside an `Input`, the default), `sm` (36px, in a
-  toolbar or beside `Button`s).
+- **Sizes.** `md` matches an `Input` (40px off, 36px under the redesign),
+  the default; `sm` is a step under it (36px off, 32px under the redesign,
+  as a small `Button`).
 - **`wrapperClassName`.** Width and margins go on the wrapper (`@lg:w-48`,
   `sm:min-w-[14rem]`, `mt-1.5`); `className` is for the field itself.
 - **Under the redesign.** The `Input` box (`FIELD_BOX`), and a Phosphor caret
