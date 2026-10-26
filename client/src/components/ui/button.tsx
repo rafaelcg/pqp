@@ -22,13 +22,13 @@ const buttonVariants = cva(
     variants: {
       variant: {
         // Disabled under the redesign is a switched-off button, not a dim
-        // lime one: a faint text tint inside the strong edge, so the pill
-        // keeps its outline on a dialog without outweighing a live button,
-        // and a muted label at full strength. Those are `redesign:` classes
+        // lime one: an empty pill in the strong edge with a muted label at
+        // full strength. It keeps its outline on a dialog, and with no fill
+        // it cannot pass for a live secondary button beside it. Those are `redesign:` classes
         // on purpose: they only touch the disabled state, and a disabled
         // primary should look off whatever colour its caller gave it.
         default:
-          "bg-accent text-on-accent hover:bg-accent-hover font-semibold shadow-[var(--button-primary-shadow,0_0_transparent)] redesign:disabled:border redesign:disabled:border-border-strong redesign:disabled:bg-[color:color-mix(in_oklab,var(--color-text)_6%,transparent)] redesign:disabled:text-text-tertiary redesign:disabled:[--button-primary-shadow:0_0_transparent] redesign:disabled:[--button-disabled-opacity:1]",
+          "bg-accent text-on-accent hover:bg-accent-hover font-semibold shadow-[var(--button-primary-shadow,0_0_transparent)] redesign:disabled:border redesign:disabled:border-border-strong redesign:disabled:bg-transparent redesign:disabled:text-text-tertiary redesign:disabled:[--button-primary-shadow:0_0_transparent] redesign:disabled:[--button-disabled-opacity:1]",
         // The redesign's fill and hover are tints of the text, so the button
         // keeps its edge on any surface, a dialog included.
         secondary:
