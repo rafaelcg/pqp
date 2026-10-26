@@ -81,6 +81,15 @@ export const COLOR_TOKEN_GROUPS: readonly TokenGroup[] = [
       "--color-on-mention-chip",
     ],
   },
+  {
+    id: "tooltip",
+    tokens: [
+      "--color-tooltip",
+      "--color-tooltip-border",
+      "--color-on-tooltip",
+      "--color-tooltip-detail",
+    ],
+  },
   { id: "code", tokens: ["--color-code-bg", "--color-code-text"] },
   { id: "media", tokens: ["--color-on-media", "--color-on-media-muted"] },
   {

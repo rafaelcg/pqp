@@ -135,6 +135,14 @@
   --color-mention-bar: var(--color-accent);
   --color-mention-chip: var(--color-accent-soft);
   --color-on-mention-chip: var(--color-on-accent-soft);
+  /* The tooltip bubble under the redesign. In dark, the deepest surface with
+     a strong edge, so it parts from panes and dialogs alike (the rail bubble
+     always was this); inverted in light, where a white bubble would vanish
+     into a white page. Unused with the toggle off. */
+  --color-tooltip: var(--color-surface-0);
+  --color-tooltip-border: var(--color-border-strong);
+  --color-on-tooltip: var(--color-text);
+  --color-tooltip-detail: color-mix(in oklab, var(--color-on-tooltip) 80%, var(--color-tooltip));
 
   /* Code sits BELOW the message list in dark and would be the page itself in
      light, so it is a role rather than an alias for a surface. */
@@ -677,6 +685,18 @@
 
   /* Icon button (ui/icon-button.tsx). Unset with the toggle off: each falls
      back, in the class, to what the icon button always drew. */
+  /* Tooltip (ui/tooltip.tsx), same rule. */
+  --tooltip-bg: var(--color-tooltip);
+  --tooltip-border: var(--color-tooltip-border);
+  --tooltip-text: var(--color-on-tooltip);
+  --tooltip-detail: var(--color-tooltip-detail);
+  --tooltip-shadow: var(--shadow-2);
+  --tooltip-px: 0.625rem;
+  --tooltip-py: 0.3125rem;
+  --tooltip-weight: 500;
+  --tooltip-radius: var(--radius-control);
+  --tooltip-rail-font: var(--type-title-font);
+
   --icon-button-radius: var(--radius-pill);
   --icon-button-text: var(--color-text-secondary);
   /* Tints, like the button's: an icon button sits on panes and dialogs. */
@@ -901,6 +921,9 @@
   --color-mention-row: var(--color-accent-soft);
   --color-mention-chip: color-mix(in oklab, var(--color-accent-soft) 78%, var(--color-accent));
   --color-on-mention-chip: color-mix(in oklab, var(--color-on-accent-soft) 25%, var(--color-text));
+  --color-tooltip: color-mix(in oklab, var(--color-text) 94%, var(--color-surface-0));
+  --color-tooltip-border: transparent;
+  --color-on-tooltip: var(--color-surface-0);
 }
 
 /* The redesign's shadows on a light page: tinted, never black. Every look. */

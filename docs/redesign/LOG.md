@@ -261,6 +261,20 @@ Decisions:
 Deferred:
 - `touch` grows the drawn circle on a phone, not only the hit area: `m-*`.
 - The forum header's Lucide glyphs: `f-forum`.
+### p-tooltip
+
+Spec (audit: 153 files import `Tooltip`, 7 use the rail tone; two
+hand-rolled bubbles; 471 native `title=` attributes):
+
+1. Job: name a control on hover and keyboard focus; `rail` names a server.
+2. Redesign: four colour roles (`--color-tooltip*`), deepest surface plus a
+   strong edge in dark, inverted in light; medium label, title face on the
+   rail. Tokens with fallbacks, so the toggle off is unchanged.
+3. Merges: the reaction tip (`message-list.tsx`, its own `ink` palette) and
+   the locked-look hint (`appearance-section.tsx`) read the same tokens.
+   Their placement code stays.
+4. Native `title=` stays where it labels truncated text. On icon-only
+   buttons it goes as each element folds onto `IconButton`.
 
 ## Open questions for André
 

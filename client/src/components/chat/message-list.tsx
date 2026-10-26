@@ -5005,7 +5005,9 @@ function ReactionWhoTip({
         left,
         visibility: placed ? "visible" : "hidden",
       }}
-      className="z-[130] max-w-64 rounded-md border border-ink-4 bg-ink-2 px-2 py-1 text-xs text-paper shadow-[var(--shadow-popover)]"
+      // The tooltip's tokens with this tip's own fallbacks: one bubble under
+      // the redesign, unchanged with the toggle off (`ui/tooltip.tsx`).
+      className="z-[130] max-w-64 rounded-[var(--tooltip-radius,0.375rem)] border border-[color:var(--tooltip-border,var(--color-ink-4))] bg-[color:var(--tooltip-bg,var(--color-ink-2))] px-[var(--tooltip-px,0.5rem)] py-[var(--tooltip-py,0.25rem)] text-xs text-[color:var(--tooltip-text,var(--color-paper))] shadow-[var(--tooltip-shadow,var(--shadow-popover))] [font-weight:var(--tooltip-weight,400)]"
     >
       {children}
     </div>,

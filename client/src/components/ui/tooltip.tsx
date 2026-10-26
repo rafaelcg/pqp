@@ -229,6 +229,30 @@ export function tooltipA11y({
   };
 }
 
+/*
+ * THE BUBBLE. Under the redesign every colour, the radius, the padding and
+ * the weight come from `--tooltip-*` tokens (`index.css`), unset with the
+ * toggle off, where each falls back in the class to what the bubble always
+ * drew. Hand-placed bubbles that cannot use Radix (the reaction tip in
+ * `message-list.tsx`, the locked-look hint in `appearance-section.tsx`) read
+ * the same tokens, so under the redesign there is one bubble in the app.
+ */
+const TOOLTIP_BUBBLE =
+  "rounded-[var(--tooltip-radius,var(--radius-control))] border border-[color:var(--tooltip-border,var(--elevation-3-border))] bg-[color:var(--tooltip-bg,var(--elevation-3-surface))] text-[color:var(--tooltip-text,var(--color-text))] shadow-[var(--tooltip-shadow,var(--elevation-3-shadow))] px-[var(--tooltip-px,0.5rem)] py-[var(--tooltip-py,0.25rem)] text-xs leading-snug [font-weight:var(--tooltip-weight,400)]";
+
+/** The quieter second line. */
+export const TOOLTIP_DETAIL =
+  "mt-1 block text-[11px] font-normal text-[color:var(--tooltip-detail,var(--color-text-tertiary))]";
+
+/** The server-list bubble: larger, and the title face under the redesign. */
+const TOOLTIP_RAIL =
+  "rounded-[var(--radius-card)] border border-[color:var(--tooltip-border,var(--color-surface-2))] bg-[color:var(--tooltip-bg,var(--color-surface-0))] text-[color:var(--tooltip-text,var(--color-text))] shadow-[var(--shadow-popover)] px-2.5 py-1.5 text-[13px] font-semibold leading-snug [font-family:var(--tooltip-rail-font,inherit)]";
+
+/** The bubble's classes, for a static specimen (`/qa/ui`). */
+export function tooltipBubbleClass(tone: "default" | "rail" = "default"): string {
+  return tone === "rail" ? TOOLTIP_RAIL : TOOLTIP_BUBBLE;
+}
+
 export interface TooltipProps extends TooltipA11yProps {
   /** Which side of the control the bubble sits on. Defaults to above it. */
   side?: "top" | "right" | "bottom" | "left";
@@ -285,10 +309,8 @@ export function Tooltip({
             // tallest things a tooltipped button can sit next to, and matching
             // the reaction tip in `message-list.tsx` so the two read as one
             // object rather than two house styles.
-            "z-[140] max-w-72 whitespace-pre-wrap select-none text-text animate-fade-in",
-            rail
-              ? "rounded-[var(--radius-card)] border border-surface-2 bg-surface-0 shadow-[var(--shadow-popover)] px-2.5 py-1.5 text-[13px] font-semibold leading-snug"
-              : "elevation-3 rounded-[var(--radius-control)] px-2 py-1 text-xs leading-snug",
+            "z-[140] max-w-72 whitespace-pre-wrap select-none animate-fade-in",
+            rail ? TOOLTIP_RAIL : TOOLTIP_BUBBLE,
             // Never intercept a click aimed at what is underneath. The bubble
             // is placed over the stage, and a swallowed click on a call
             // control is a worse bug than a missing label.
@@ -297,7 +319,7 @@ export function Tooltip({
         >
           {label}
           {detail && (
-            <span className="mt-1 block text-[11px] text-text-tertiary">
+            <span className={TOOLTIP_DETAIL}>
               {detail}
             </span>
           )}

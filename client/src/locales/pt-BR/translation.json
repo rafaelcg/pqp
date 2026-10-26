@@ -5058,6 +5058,7 @@
   "qaUi.slider.readOnly": "Só leitura",
   "qaUi.group.rows": "Linhas da lista",
   "qaUi.group.mention": "Menção",
+  "qaUi.group.tooltip": "Dica",
   "qaUi.section.icons": "Ícones",
   "qaUi.icons.note": "Objetos usam o peso cheio e símbolos o negrito. O traço só vale para os ícones de linha que alguma tela ainda desenha.",
   "qaUi.icons.objects": "Objetos",

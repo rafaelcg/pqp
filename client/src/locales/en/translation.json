@@ -5058,6 +5058,7 @@
   "qaUi.slider.readOnly": "Read only",
   "qaUi.group.rows": "List rows",
   "qaUi.group.mention": "Mention",
+  "qaUi.group.tooltip": "Tooltip",
   "qaUi.section.icons": "Icons",
   "qaUi.icons.note": "Objects use the fill weight and symbols the bold weight. The stroke only reaches the line icons a surface still draws.",
   "qaUi.icons.objects": "Objects",

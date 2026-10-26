@@ -96,6 +96,8 @@ const CONTRAST_PAIRS = [
   { fg: "--color-mention-bar", bg: "--color-pane-main", floor: 3.0, label: "mention bar on the conversation pane", redesign: true },
   { fg: "--color-on-mention-chip", bg: "--color-mention-chip", floor: 4.5, label: "@name on a mention chip", redesign: true },
   { fg: "--color-indicator", bg: "--color-pane-side", floor: 3.0, label: "unread pip on the side pane", redesign: true },
+  { fg: "--color-on-tooltip", bg: "--color-tooltip", floor: 4.5, label: "tooltip label", redesign: true },
+  { fg: "--color-tooltip-detail", bg: "--color-tooltip", floor: 4.5, label: "tooltip detail line", redesign: true },
 ];
 
 /**

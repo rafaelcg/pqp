@@ -296,7 +296,8 @@ function LockableSegmented<T extends string>({
                 id={tipId}
                 role="tooltip"
                 className={cn(
-                  "elevation-3 pointer-events-none absolute top-full z-10 mt-2 rounded-[var(--radius-control)] px-2.5 py-1.5 text-xs whitespace-nowrap text-text",
+                  // The tooltip's tokens, as in `ui/tooltip.tsx`.
+                  "pointer-events-none absolute top-full z-10 mt-2 rounded-[var(--tooltip-radius,var(--radius-control))] border border-[color:var(--tooltip-border,var(--elevation-3-border))] bg-[color:var(--tooltip-bg,var(--elevation-3-surface))] px-[var(--tooltip-px,0.625rem)] py-[var(--tooltip-py,0.375rem)] text-xs whitespace-nowrap text-[color:var(--tooltip-text,var(--color-text))] shadow-[var(--tooltip-shadow,var(--elevation-3-shadow))] [font-weight:var(--tooltip-weight,400)]",
                   index === 0 ? "left-0" : "right-0",
                   tipFor === option.value
                     ? "block"

@@ -526,6 +526,8 @@ const PRIMITIVES: { id: string; testId: string; hover?: string; focus?: string }
     hover: "Remover md",
     focus: "Remover lg",
   },
+  // A static specimen: every bubble at once, no hover needed.
+  { id: "p-tooltip", testId: "qa-primitive-tooltip" },
 ];
 
 test("captures the primitives", async ({ browser }) => {
@@ -615,6 +617,14 @@ test("captures the forum post", async ({ browser }) => {
     const panel = page.locator("[data-forum-post-panel]");
     await expect(panel).toBeVisible({ timeout: 15_000 });
     await shoot(page, `09-forum-post-${theme}`);
+    // Tooltips in context: an icon button's bubble over the post, then the
+    // rail's larger bubble. `shoot` parks the mouse, so hover after it.
+    await page.getByRole("button", { name: "Abrir em tela cheia", exact: true }).hover();
+    await page.waitForTimeout(600);
+    await page.screenshot({ path: path.join(OUT!, `10-tooltip-post-${theme}.png`) });
+    await page.getByRole("button", { name: "Criar comunidade", exact: true }).first().hover();
+    await page.waitForTimeout(600);
+    await page.screenshot({ path: path.join(OUT!, `10-tooltip-rail-${theme}.png`) });
     await context.close();
   }
 });

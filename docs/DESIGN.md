@@ -603,6 +603,18 @@ needs it as an ancestor.
   delay for its neighbours, so a control bar can be swept and read. Inert on
   touch, so a tap is never eaten. Portalled into the fullscreen element when one
   is open, or the tooltip would be painted where nothing can see it.
+- **Under the redesign.** Every colour, the radius, the padding and the
+  weight come from `--tooltip-*` tokens over four roles: `--color-tooltip`,
+  `--color-tooltip-border`, `--color-on-tooltip`, `--color-tooltip-detail`.
+  In dark the bubble is the deepest surface with a strong edge, so it parts
+  from panes and dialogs alike; in light it is inverted (a dark bubble), since
+  a white one vanishes into a white page. The label is medium weight and the
+  rail bubble uses the title face. The bench checks the label and the detail
+  at 4.5:1 in every look.
+- **Hand-placed bubbles.** A bubble that cannot use Radix (the reaction tip,
+  the locked-look hint) reads the same tokens with its own fallbacks, so the
+  redesign has one bubble. `tooltipBubbleClass()` and `TOOLTIP_DETAIL` draw a
+  static one, as `/qa/ui` does.
 - **Use it** for every icon-only control. **Do not** put a link or a control
   inside one; the bubble is `pointer-events-none`.
 - **Accessibility.** With a `detail`, the description is the detail only. Without
