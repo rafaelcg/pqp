@@ -26,7 +26,7 @@ const track = cva("relative w-full grow overflow-hidden", {
   variants: {
     variant: {
       scrub:
-        "h-[var(--slider-scrub-h,0.125rem)] rounded-full bg-[color:var(--slider-track,var(--color-surface-3))] redesign:transition-[height] redesign:duration-[var(--duration-fast)] redesign:group-hover:h-[var(--slider-scrub-h-hover)] redesign:group-focus-within:h-[var(--slider-scrub-h-hover)] redesign:group-data-[disabled]:h-[var(--slider-scrub-h)]",
+        "h-[var(--slider-scrub-h,0.125rem)] rounded-full bg-[color:var(--slider-track,var(--color-surface-3))] redesign:transition-[height] redesign:duration-[var(--duration-fast)] redesign:group-hover:h-[var(--slider-scrub-h-hover)] redesign:group-focus-within:h-[var(--slider-scrub-h-hover)] redesign:group-data-[disabled]:h-[var(--slider-scrub-h)] redesign:group-data-[readonly]:h-[var(--slider-scrub-h)]",
       volume:
         "h-[var(--slider-volume-h,0.25rem)] rounded-full bg-[color:var(--slider-track,var(--color-surface-3))]",
       edge: "h-0.5 bg-border",
@@ -39,7 +39,7 @@ const track = cva("relative w-full grow overflow-hidden", {
 });
 
 const thumb = cva(
-  "block shrink-0 rounded-full border-[length:var(--slider-thumb-border-w,1px)] border-[color:var(--slider-thumb-border,var(--color-border-strong))] bg-[color:var(--slider-thumb-bg,var(--color-text))] shadow-[var(--slider-thumb-shadow,0_0_transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring redesign:transition-[opacity,transform] redesign:duration-[var(--duration-fast)] redesign:active:scale-[var(--slider-thumb-press)] redesign:group-data-[disabled]:active:scale-100",
+  "block shrink-0 rounded-full border-[length:var(--slider-thumb-border-w,1px)] border-[color:var(--slider-thumb-border,var(--color-border-strong))] bg-[color:var(--slider-thumb-bg,var(--color-text))] shadow-[var(--slider-thumb-shadow,0_0_transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-[color:var(--slider-ring,var(--color-focus-ring))] redesign:transition-[opacity,transform] redesign:duration-[var(--duration-fast)] redesign:group-active:scale-[var(--slider-thumb-press)] redesign:group-data-[disabled]:group-active:scale-100",
   {
     variants: {
       variant: {
@@ -47,7 +47,7 @@ const thumb = cva(
           "size-[var(--slider-thumb,0.75rem)] opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
         volume: "size-[var(--slider-thumb,0.75rem)]",
         edge:
-          "size-[var(--slider-thumb,0.75rem)] opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
+          "size-[var(--slider-thumb-edge,0.75rem)] opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
         hue: "size-[var(--slider-thumb-hue,1rem)] border-2 border-on-accent bg-accent",
       },
     },

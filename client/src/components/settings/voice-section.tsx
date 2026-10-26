@@ -948,7 +948,9 @@ function VolumeRow({
             <div className="relative flex-1">
               <Slider
                 variant="volume"
-                className="h-10"
+                // Above the unity tick under the redesign, so the tick
+                // reads as a notch on the track and the knob covers it.
+                className="h-10 redesign:z-[1]"
                 value={value}
                 min={min}
                 max={max}
@@ -968,7 +970,7 @@ function VolumeRow({
                   {tickLabel ? (
                     <span
                       aria-hidden
-                      className="pointer-events-none absolute bottom-0 -translate-x-1/2 text-xs text-text-tertiary"
+                      className="pointer-events-none absolute bottom-0 -translate-x-1/2 text-xs text-text-tertiary redesign:bottom-auto redesign:top-[calc(50%+var(--slider-thumb)/2+0.125rem)] redesign:leading-none"
                       style={{ left: `${tickPct}%` }}
                     >
                       {tickLabel}

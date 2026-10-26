@@ -96,4 +96,27 @@ describe("Slider", () => {
     expect(thumb).toContain("bg-accent");
     expect(thumb).not.toContain("bg-[color:var(--slider-thumb-bg");
   });
+
+  it("keeps a read-only scrub thin on hover, so it never looks seekable", () => {
+    const html = renderToStaticMarkup(
+      <Slider variant="scrub" readOnly value={30} max={100} aria-label="Andamento" />,
+    );
+    expect(html).toContain("redesign:group-data-[readonly]:h-[var(--slider-scrub-h)]");
+  });
+
+  it("grows the knob while the slider is held anywhere, and rings in the slider token", () => {
+    const html = renderToStaticMarkup(
+      <Slider variant="volume" value={70} max={100} aria-label="Volume" />,
+    );
+    const thumb = /<span[^>]*role="slider"[^>]*>/.exec(html)?.[0] ?? "";
+    expect(thumb).toContain("redesign:group-active:scale-[var(--slider-thumb-press)]");
+    expect(thumb).toContain("focus-visible:ring-[color:var(--slider-ring,var(--color-focus-ring))]");
+  });
+
+  it("keeps the edge knob at its old size", () => {
+    const html = renderToStaticMarkup(
+      <Slider variant="edge" value={40} max={100} aria-label="Andamento" />,
+    );
+    expect(html).toContain("size-[var(--slider-thumb-edge,0.75rem)]");
+  });
 });
