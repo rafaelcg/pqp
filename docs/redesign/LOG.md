@@ -35,6 +35,7 @@ Read this file and the inventory at the start of every session.
 | 1 | Tokens for the chosen direction | Done |
 | 1 | André signs off on `/qa/ui` | Done, after round T3 |
 | 2 | `p-button` | Merged (cap at round 5: 8.9, 8.9, 9.0, no MUST) |
+| 2 | `p-icon-button` | Merged (cap at round 5: 9.0, 8.9, no MUST) |
 
 ## Phase 0: directions
 
@@ -234,6 +235,32 @@ fills, about a third with no accessible name; four named copies):
 4. Folded now: `PostIconButton` (forum, 3 uses). `HEADER_ACTION_TILE` and
    `CHANNEL_ACTION_TILE` fold in `s-header` and `s-channel-row`, `ChromeButton`
    in `f-stories`; the raw buttons fold with the element that owns them.
+
+Council (Opus 5.5, GPT-6 Luna via Codex; Grok 4.7 through round 4, then
+dropped at André's request), overall after:
+
+| Round | Opus | Codex | Grok | MUST open |
+|---|---|---|---|---|
+| 1 | 7.4 | 8.3 | 7.7 | 0 |
+| 2 | 8.3 | 8.7 | 8.4 | 0 |
+| 3 | 8.5 | 8.8 | 8.8 | 0 |
+| 4 | 8.7 | 9.1 | 9.0 | 0 |
+| 5 | 9.0 | 8.9 | not run | 0 |
+
+Stopped at the five-round cap with no MUST and every category above
+"before". Best round: 5. Screenshots: `~/pqp-redesign/p-icon-button/`.
+
+Decisions:
+- A pill with secondary text at rest and the ghost tint on hover; pressed is
+  the selected-row fill with an accent glyph, and keeps it when disabled.
+- Disabled is `aria-disabled`, so the control stays focusable and named.
+- The focus ring's offset band is transparent under the redesign; the press
+  respects reduced motion.
+- The primitive owns the glyph size (`--icon-button-glyph-*`).
+
+Deferred:
+- `touch` grows the drawn circle on a phone, not only the hit area: `m-*`.
+- The forum header's Lucide glyphs: `f-forum`.
 
 ## Open questions for André
 
