@@ -38,6 +38,7 @@ Read this file and the inventory at the start of every session.
 | 2 | `p-icon-button` | Merged (cap at round 5: 9.0, 8.9, no MUST) |
 | 2 | `p-tooltip` | Merged (cap at round 5: 8.9, 8.8, no MUST) |
 | 2 | `p-input` | Merged (cap at round 5: 8.7, 8.9, no MUST) |
+| 2 | `p-select` | Merged (cap at round 5: 8.9, 8.8, no MUST) |
 
 ## Phase 0: directions
 
@@ -368,6 +369,23 @@ Spec (audit: `SettingsSelect` in 9 places, 19 raw `<select>`s in 4 recipes):
 4. Left: selects on `surface-2` (bots, watch party options and
    transmission) and the channel overview's tall `fieldClass` fold with
    their surfaces, since their toggle-off look differs.
+
+Council (Opus 5.5, GPT-6 Luna via Codex; Grok 4.7 through round 2, then
+dropped at André's request), overall after:
+
+| Round | Opus | Codex | Grok |
+|---|---|---|---|
+| 1 | 7.5 | 8.2 | 7.6 |
+| 2 | 8.2 | 8.8 | 8.5 |
+| 3 | 8.6 | 8.7 | not run |
+| 4 | 8.8 | 8.8 | not run |
+| 5 | 8.9 | 8.8 | not run |
+
+Stopped at the five-round cap with no MUST and every category above
+"before". Best round: 5. Round 5 took one COULD (a 14px caret on `sm`).
+Left for the settings surfaces: no context shot shows a Select in a
+settings row yet (Privacidade, Voz e vídeo). Screenshots:
+`~/pqp-redesign/p-select/`.
 
 ## Open questions for André
 
