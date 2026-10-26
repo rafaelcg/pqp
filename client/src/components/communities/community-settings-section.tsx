@@ -21,6 +21,7 @@ import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { FileDropZone } from "@/components/ui/file-drop-zone";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import {
@@ -476,15 +477,14 @@ export function CommunitySettingsSection({
               when their hand is on the box. */}
           <div className="space-y-1">
             <label
-              className="flex items-center gap-2 text-sm text-paper"
+              className="group/checkbox redesign:has-[:disabled]:text-text-tertiary flex items-center gap-2 text-sm text-paper"
               htmlFor={addressToggleId}
             >
-              <input
+              <Checkbox
                 id={addressToggleId}
-                type="checkbox"
                 checked={addressed}
                 disabled={formBusy || addressLocked}
-                className="h-4 w-4 rounded border-ink-4 bg-ink accent-signal disabled:opacity-50"
+                className="disabled:opacity-50"
                 onChange={(e) => {
                   setAddressed(e.target.checked);
                   // Turning the address off takes the listing with it, which is
@@ -498,11 +498,11 @@ export function CommunitySettingsSection({
               />
               {t("communities.settings.addressToggle")}
             </label>
-            <p className="pl-6 text-xs text-paper-muted">
+            <p className="pl-6 text-xs text-paper-muted redesign:pl-[calc(var(--tick-size)+0.5rem)]">
               {t("communities.settings.addressHint")}
             </p>
             {addressLocked && (
-              <p className="pl-6 text-xs text-paper-muted">
+              <p className="pl-6 text-xs text-paper-muted redesign:pl-[calc(var(--tick-size)+0.5rem)]">
                 {t("communities.settings.addressLockedByListing")}
               </p>
             )}
@@ -522,15 +522,14 @@ export function CommunitySettingsSection({
             data-directory-offer={offerDirectory ? "" : undefined}
           >
             <label
-              className="flex items-center gap-2 text-sm text-paper"
+              className="group/checkbox redesign:has-[:disabled]:text-text-tertiary flex items-center gap-2 text-sm text-paper"
               htmlFor={toggleId}
             >
-              <input
+              <Checkbox
                 id={toggleId}
-                type="checkbox"
                 checked={listed}
                 disabled={formBusy || !canListPublicly || !addressed}
-                className="h-4 w-4 rounded border-ink-4 bg-ink accent-signal disabled:opacity-50"
+                className="disabled:opacity-50"
                 onChange={(e) => {
                   setListed(e.target.checked);
                   setSaved(false);
@@ -538,16 +537,16 @@ export function CommunitySettingsSection({
               />
               {t("communities.settings.toggle")}
             </label>
-            <p className="pl-6 text-xs text-paper-muted">
+            <p className="pl-6 text-xs text-paper-muted redesign:pl-[calc(var(--tick-size)+0.5rem)]">
               {t("communities.settings.toggleHint")}
             </p>
             {!canListPublicly ? (
-              <p className="pl-6 text-xs text-paper-muted">
+              <p className="pl-6 text-xs text-paper-muted redesign:pl-[calc(var(--tick-size)+0.5rem)]">
                 {t("communities.settings.listingOwnerOnly")}
               </p>
             ) : (
               !addressed && (
-                <p className="pl-6 text-xs text-paper-muted">
+                <p className="pl-6 text-xs text-paper-muted redesign:pl-[calc(var(--tick-size)+0.5rem)]">
                   {t("communities.settings.listingNeedsAddress")}
                 </p>
               )

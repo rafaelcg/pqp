@@ -7214,5 +7214,9 @@
   "locadoraGuest.upsell.soon": "em breve",
   "locadoraGuest.upsell.device": "Por enquanto, tuas fitas ficam neste navegador.",
   "locadoraGuest.upsell.cta": "Criar conta grátis",
-  "locadoraGuest.upsell.later": "Agora não"
+  "locadoraGuest.upsell.later": "Agora não",
+  "qaUi.group.choice": "Escolhas",
+  "qaUi.check.description": "Criar, editar e apagar canais.",
+  "qaUi.checkbox.label": "Permitir comentários",
+  "qaUi.state.busy": "Salvando"
 }

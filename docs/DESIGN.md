@@ -613,11 +613,21 @@ value.
   as a dark dot. Disabled dims the track and blocks the pointer.
   `dimRowWhenDisabled` dims the whole row instead (label, description and
   track at 60%, the track not dimmed twice); the settings switch row uses it.
+- **Under the redesign.** A 40 by 24 track with an 18px lifted knob. Off is a
+  faint text tint inside the field's 3:1 edge (`--switch-off-ring`, the field
+  border), so an off switch shows on a card, a dialog and a pane alike, and
+  the off knob is `text-secondary`. The row hover is the ghost tint
+  (`--choice-row-hover`). A disabled label dims to `text-tertiary` with its
+  track, and a `busy` switch keeps its track colour and pulses its knob (it steps back to 60% without motion), with a progress cursor, even in a row that dims when disabled. An off knob in dark is between `text-secondary` and `text-tertiary`. Every value is a `--switch-*` token with today's value as the
+  fallback in the class.
+- `labelAdornment` draws a badge after the label; `data-*` props land on the
+  button. `SwitchTrack` is the track alone, for a row a call site lays out
+  itself (the poll composer is still hand-drawn and will move to it).
 - **Use it** for a list of independent settings. **Do not** use it for one of
   many; that is a `RadioGroup`.
 - **Accessibility.** `role="switch"` with `aria-checked`. A `title` is rendered
   on a wrapper, because a disabled button never fires the hover that would
-  summon it.
+  summon it. While a write runs pass `busy`, not `disabled`, so focus stays.
 
 ### CheckRow
 
@@ -625,7 +635,30 @@ value.
 optional colour dot. Switch is for a setting; CheckRow is for a checklist, which
 is why cargos use it.
 
+- **Under the redesign.** The tick is 18px, off is the same tint and field
+  edge as an off switch, and the check is Phosphor bold. Hover strengthens
+  the edge. `TickBox` is the tick alone: `size="sm"` (a row) or `md` (20px,
+  a tick that is its own 36px target, such as a person in a picker).
 - **Accessibility.** `role="checkbox"` with `aria-checked`.
+
+### Checkbox
+
+`checkbox.tsx`. A native `<input type="checkbox">`, for a form or beside a
+sentence ("Permitir comentários"): a `<label>` around it toggles it and a
+form submits it. A row in a checklist is `CheckRow`; a setting is `Switch`.
+
+- With the toggle off it is the browser's box tinted by `accent-color`, as
+  before. Pass `h-auto w-auto accent-auto` to keep the browser's default size
+  and tint where a box never had classes.
+- Under the redesign `appearance: none` drops the native box and the tick
+  tokens draw the same box as `TickBox`, with a Phosphor check over it that
+  ignores the pointer.
+- `wrapperClassName` takes margins; `className` styles the input.
+- Give the `<label>` around it `group/checkbox`: hovering the label then strengthens
+  the box's edge, as hovering a CheckRow's row does.
+- Also give it `redesign:has-[:disabled]:text-text-tertiary`, so a disabled
+  box never sits beside a full-strength label. A hint under the label indents
+  by `calc(var(--tick-size)+0.5rem)` under the redesign.
 
 ### Skeleton
 
@@ -846,8 +879,6 @@ reads the same on every surface.
 Not built. Do not invent a local one; add it here instead, in `ui/`, with a
 variant set, and then use it everywhere.
 
-- **Checkbox.** A bare `<input type="checkbox">` with `accent-[var(--color-accent)]`
-  in PromptDialog. `CheckRow` covers the row case only.
 - **Tabs.** `SectionRail` is a tablist, but it is settings-shaped and not
   general.
 - **Toast.** The animations (`animate-toast-in`, `animate-toast-out`) exist in

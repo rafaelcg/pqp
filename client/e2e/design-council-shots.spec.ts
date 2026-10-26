@@ -445,6 +445,10 @@ test("captures the design council screens", async ({ browser }) => {
       await page.getByRole("button", { name: "Abrir configurações" }).first().click();
       await expect(page.getByRole("dialog")).toBeVisible();
       await shoot(page, `04-settings-${theme}`);
+      // A section made of switches, for the choice controls.
+      await page.getByRole("dialog").getByText("Notificações", { exact: true }).first().click();
+      await expect(page.getByRole("dialog").getByRole("switch").first()).toBeVisible();
+      await shoot(page, `11-settings-switches-${theme}`);
       await page.keyboard.press("Escape");
 
       await page.locator("[data-server-menu-trigger]").first().click();
@@ -519,7 +523,7 @@ const PRIMITIVES: {
   hover?: string;
   focus?: string;
   /** The role the hover and focus targets have. Buttons by default. */
-  role?: "button" | "textbox" | "combobox";
+  role?: "button" | "textbox" | "combobox" | "checkbox";
 }[] = [
   {
     id: "p-button",
@@ -537,6 +541,13 @@ const PRIMITIVES: {
   { id: "p-tooltip", testId: "qa-primitive-tooltip" },
   { id: "p-input", testId: "qa-primitive-input", focus: "Padrão", role: "textbox", hover: "Preenchido" },
   { id: "p-select", testId: "qa-primitive-select", focus: "md", role: "combobox", hover: "sm" },
+  {
+    id: "p-checkbox",
+    testId: "qa-primitive-checkbox",
+    role: "checkbox",
+    hover: "Gerenciar canais",
+    focus: "Permitir comentários",
+  },
 ];
 
 test("captures the primitives", async ({ browser }) => {

@@ -7286,5 +7286,9 @@
   "locadoraGuest.upsell.soon": "pronto",
   "locadoraGuest.upsell.device": "Por ahora, tus cartuchos se quedan en este navegador.",
   "locadoraGuest.upsell.cta": "Crear cuenta gratis",
-  "locadoraGuest.upsell.later": "Ahora no"
+  "locadoraGuest.upsell.later": "Ahora no",
+  "qaUi.group.choice": "Opciones",
+  "qaUi.check.description": "Crear, editar y borrar canales.",
+  "qaUi.checkbox.label": "Permitir comentarios",
+  "qaUi.state.busy": "Guardando"
 }

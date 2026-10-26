@@ -18,6 +18,7 @@ import { Navigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { CheckRow } from "@/components/ui/check-row";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Icon } from "@/components/ui/icon";
 import { IconButton, type IconButtonSize } from "@/components/ui/icon-button";
 import { Input } from "@/components/ui/input";
@@ -947,33 +948,89 @@ function PrimitiveSheet() {
         </label>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2">
-        <div className="rounded-[var(--radius-card)] border border-border bg-surface-1 p-2">
-          <Switch
-            checked={switchOn}
-            onCheckedChange={setSwitchOn}
-            label={t("qaUi.switch.label")}
-            description={t("qaUi.switch.description")}
-          />
-          <Switch
-            checked={false}
-            onCheckedChange={() => undefined}
-            disabled
-            label={t("qaUi.state.disabled")}
-          />
-        </div>
-        <div className="rounded-[var(--radius-card)] border border-border bg-surface-1 p-2">
-          <CheckRow
-            checked={checked}
-            onCheckedChange={setChecked}
-            label={t("qaUi.check.label")}
-          />
-          <CheckRow
-            checked
-            onCheckedChange={() => undefined}
-            disabled
-            label={t("qaUi.state.disabled")}
-          />
+      <div data-testid="qa-primitive-checkbox">
+        <p
+          className="mb-2 text-text-tertiary"
+          style={{ fontSize: "var(--type-label-size)" }}
+        >
+          {t("qaUi.group.choice")}
+        </p>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <div className="rounded-[var(--radius-card)] border border-border bg-surface-1 p-2">
+            <Switch
+              checked={switchOn}
+              onCheckedChange={setSwitchOn}
+              label={t("qaUi.switch.label")}
+              description={t("qaUi.switch.description")}
+            />
+            <Switch
+              checked={false}
+              onCheckedChange={() => undefined}
+              label={t("qaUi.check.label")}
+            />
+            <Switch
+              checked={false}
+              onCheckedChange={() => undefined}
+              disabled
+              label={t("qaUi.state.disabled")}
+            />
+            <Switch
+              checked
+              onCheckedChange={() => undefined}
+              disabled
+              dimRowWhenDisabled
+              label={`${t("qaUi.state.disabled")} · ${t("qaUi.switch.label")}`}
+            />
+            <Switch
+              checked
+              onCheckedChange={() => undefined}
+              busy
+              label={t("qaUi.state.busy")}
+            />
+          </div>
+          <div className="rounded-[var(--radius-card)] border border-border bg-surface-1 p-2">
+            <CheckRow
+              checked={checked}
+              onCheckedChange={setChecked}
+              label={t("qaUi.check.label")}
+            />
+            <CheckRow
+              checked={false}
+              onCheckedChange={() => undefined}
+              label={t("qaUi.switch.label")}
+              description={t("qaUi.check.description")}
+            />
+            <CheckRow
+              checked
+              onCheckedChange={() => undefined}
+              disabled
+              label={t("qaUi.state.disabled")}
+            />
+            <CheckRow
+              checked={false}
+              onCheckedChange={() => undefined}
+              disabled
+              label={`${t("qaUi.state.disabled")} · ${t("qaUi.check.label")}`}
+            />
+          </div>
+          <div className="flex flex-col gap-3 rounded-[var(--radius-card)] border border-border bg-surface-1 p-3 text-sm text-text">
+            <label className="group/checkbox flex items-center gap-3">
+              <Checkbox />
+              {t("qaUi.checkbox.label")}
+            </label>
+            <label className="group/checkbox flex items-center gap-3">
+              <Checkbox defaultChecked />
+              {t("qaUi.switch.label")}
+            </label>
+            <label className="group/checkbox flex items-center gap-3 text-text-tertiary">
+              <Checkbox disabled />
+              {t("qaUi.state.disabled")}
+            </label>
+            <label className="group/checkbox flex items-center gap-3 text-text-tertiary">
+              <Checkbox disabled defaultChecked />
+              {`${t("qaUi.state.disabled")} · ${t("qaUi.check.label")}`}
+            </label>
+          </div>
         </div>
       </div>
 
