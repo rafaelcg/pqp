@@ -962,6 +962,27 @@ bottom border) and `hue`.
 Home and End keys, a vertical rail on desktop and a horizontal strip on phones.
 Supports a danger tint and an unsaved-changes dot per section.
 
+### Banner
+
+`banner.tsx`. A strip that states something about the whole app or the
+conversation and stays until it stops being true or is dismissed: the
+connection dropped, an error, the idle hangup warning, a notice, a timeout.
+
+- **Props.** `tone` (`warning`, `danger`, `success`, `accent`), `edge` (`top`
+  under the header, `bottom` above the composer), `icon` (a Phosphor icon,
+  drawn only under the redesign). `BannerAction` is its button: `fill` for
+  the main way out, `quiet` for a second action, `link` (the default) for
+  dismiss.
+- **Toggle off.** The full-width bar each strip drew: a 10% tone fill, a 40%
+  tone rule on the inner edge, tone text. A strip whose bar differed passes
+  those classes and keeps them.
+- **Redesign.** An inset card (16px from the column, 8px on a phone) on the
+  look's soft tone fill, with a `--banner-edge` tone border, the message in
+  the text colour, and the icon and pill actions in the tone's ink.
+- **Use it** for a state of the app or the conversation. **Do not** use it
+  for news that arrives on its own (a toast) or for the result of a write
+  the person just made (`InlineStatus`).
+
 ### BetaTag
 
 `beta-tag.tsx`. The pill next to the wordmark. Two variants: `default` on app

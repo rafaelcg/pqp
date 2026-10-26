@@ -598,6 +598,8 @@ const PRIMITIVES: {
   { id: "p-menu", testId: "qa-primitive-menu", open: { button: "Abrir menu", menu: "[data-server-menu]", arrows: 1 } },
   // Hovering the scrub shows its thumb; the volume is keyboard-focused.
   { id: "p-slider", testId: "qa-primitive-slider", focus: "Volume", role: "slider", hover: "Scrub" },
+  // Focus the connection strip's main action, hover the error's dismiss.
+  { id: "p-banner", testId: "qa-primitive-banner", focus: "Tentar agora", hover: "Dispensar" },
 ];
 
 test("captures the primitives", async ({ browser }) => {

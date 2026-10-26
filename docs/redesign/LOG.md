@@ -600,6 +600,20 @@ Round 4's MUST (the voice settings' 100% label collided with the hint under
 it) was fixed; round 5 found nothing left. The slider group naming and the
 unity tick are logged for `f-music` and `f-call`. Stopped at the five-round
 cap with no MUST. Screenshots: `~/pqp-redesign/p-slider/`.
+### p-banner
+
+Spec (audit: six hand-built strips in `App.tsx`, `connection-banner.tsx` and
+`sanction-notice-bar.tsx`, each its own tinted bar):
+
+1. Job: state something about the app or the conversation until it stops
+   being true, with at most two actions.
+2. Redesign: an inset rounded card on the look's soft tone fill, the message
+   in the text colour, a leading icon and pill actions in the tone's ink.
+3. Folded: dev bypass, connection, app error, idle warning, success notice,
+   sanction. Each keeps its toggle-off bar.
+4. Left for their owners: watch now (`s-banners`), arrival, bring-crew and
+   newcomer strips (`f-onboarding`), the Discord import note
+   (`f-server-settings`). pt-BR idle copy moved to "tu".
 
 ## Open questions for André
 

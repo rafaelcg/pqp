@@ -1,5 +1,7 @@
+import { Clock as ClockFill } from "@phosphor-icons/react";
 import { Clock } from "lucide-react";
 import type { SanctionNotice } from "@pqp/shared";
+import { Banner, BannerAction } from "@/components/ui/banner";
 import { useTranslation } from "@/lib/i18n";
 
 /**
@@ -33,19 +35,17 @@ export function SanctionNoticeBar({
   const { t } = useTranslation();
 
   return (
-    <div
-      role="status"
-      className="flex shrink-0 items-start gap-2 border-t border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning"
+    <Banner
+      tone="warning"
+      edge="bottom"
+      icon={ClockFill}
+      className="shrink-0 gap-2 border-warning/30 px-3 text-xs"
     >
-      <Clock className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+      <Clock className="mt-0.5 h-3.5 w-3.5 shrink-0 redesign:hidden" aria-hidden="true" />
       <p className="min-w-0 flex-1 break-words">{notice.message}</p>
-      <button
-        type="button"
-        className="shrink-0 underline underline-offset-2"
-        onClick={onDismiss}
-      >
+      <BannerAction onClick={onDismiss}>
         {t("connection.dismiss")}
-      </button>
-    </div>
+      </BannerAction>
+    </Banner>
   );
 }

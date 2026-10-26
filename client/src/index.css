@@ -823,6 +823,12 @@
   --slider-ring: var(--color-accent);
   --slider-ring-offset-color: transparent;
 
+  /* Banners (ui/banner.tsx): an inset card on the look's soft tone fill,
+     with a faint edge of the tone, so a strip reads as a note pinned to
+     the conversation rather than a stripe across it. */
+  --banner-radius: 0.75rem;
+  --banner-edge: 28%;
+
   --icon-button-radius: var(--radius-pill);
   --icon-button-text: var(--color-text-secondary);
   /* Tints, like the button's: an icon button sits on panes and dialogs. */
@@ -1105,6 +1111,8 @@
 
 /* The redesign's shadows on a light page: tinted, never black. Every look. */
 :root[data-redesign][data-theme="light"] {
+  /* Banners: the soft fills are pale in light; a lighter edge keeps them calm. */
+  --banner-edge: 22%;
   --input-invalid-bg: color-mix(in oklab, var(--color-danger) 6%, var(--color-field));
   /* Tabs */
   /* 7 points over the 8% ghost hover, so a hovered pill never reads as selected. */
