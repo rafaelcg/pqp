@@ -533,7 +533,7 @@ const PRIMITIVES: {
   hover?: string;
   focus?: string;
   /** The role the hover and focus targets have. Buttons by default. */
-  role?: "button" | "textbox" | "combobox" | "checkbox" | "radio";
+  role?: "button" | "textbox" | "combobox" | "checkbox" | "radio" | "tab";
 }[] = [
   {
     id: "p-button",
@@ -563,6 +563,8 @@ const PRIMITIVES: {
   // Focus the checked segment, hover an unchecked chip (the first of each
   // name: the small groups repeat the labels).
   { id: "p-radio", testId: "qa-primitive-radio", role: "radio", focus: "Escuro", hover: "Menções" },
+  // Focus the selected underline tab, hover an unselected pill.
+  { id: "p-tabs", testId: "qa-primitive-tabs", role: "tab", focus: "Visão geral", hover: "Todos" },
 ];
 
 test("captures the primitives", async ({ browser }) => {

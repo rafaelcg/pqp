@@ -831,6 +831,16 @@
   --radio-dot: var(--color-on-accent);
   --radio-dot-size: 0.4375rem;
   --radio-disabled-opacity: 0.5;
+  /* Tabs (ui/tabs.tsx). Off tabs read in secondary text; pills are pills;
+     the selected pill is a neutral tint, since a tab picks a view, not a
+     value. `segmented` shares RadioGroup's track and thumb above. */
+  --tabs-off-text: var(--color-text-secondary);
+  --tabs-pill-radius: 999px;
+  --tabs-pill-on: color-mix(in oklab, var(--color-text) 12%, transparent);
+  --tabs-pill-hover: var(--button-ghost-hover);
+  --tabs-filled-off: color-mix(in oklab, var(--color-text) 7%, transparent);
+  --tabs-track-pad: 0.1875rem;
+  --tabs-disabled-opacity: 0.5;
 
   /* The title role is drawn in the display face: server names, channel
      titles and pane headers, in sentence case. */
