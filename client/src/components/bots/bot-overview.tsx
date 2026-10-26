@@ -1,5 +1,5 @@
 import type { Channel, ServerBotActivityItem, ServerBotDto, ServerBotOverview } from "@pqp/shared";
-import { CARD_SURFACE } from "@/components/ui/card";
+import { CARD_LIST, CARD_SURFACE } from "@/components/ui/card";
 import {
   AlarmClock,
   BarChart3,
@@ -117,7 +117,7 @@ export function BotOverviewPanel({
             {t("bots.overview.nothingYet", { name: bot.name })}
           </p>
         ) : (
-          <ul className={cn(CARD_SURFACE, "divide-y divide-border overflow-hidden")}>
+          <ul className={cn(CARD_SURFACE, CARD_LIST)}>
             {overview.recent.map((item, index) => (
               <ActivityRow key={index} item={item} locale={locale} />
             ))}

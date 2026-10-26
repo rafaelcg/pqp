@@ -595,7 +595,7 @@ const PRIMITIVES: {
   // Focus the selected underline tab, hover an unselected pill.
   { id: "p-tabs", testId: "qa-primitive-tabs", role: "tab", focus: "Visão geral", hover: "Todos" },
   // A card on a pane and inside a dialog surface; no interaction.
-  { id: "p-card", testId: "qa-primitive-card" },
+  { id: "p-card", testId: "qa-primitive-card", hover: "Microfone liberado" },
   // Opened from the keyboard, the highlight on "Só menções" (its detail line).
   { id: "p-menu", testId: "qa-primitive-menu", open: { button: "Abrir menu", menu: "[data-server-menu]", arrows: 1 } },
   // Hovering the scrub shows its thumb; the volume is keyboard-focused.

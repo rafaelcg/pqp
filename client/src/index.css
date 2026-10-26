@@ -1111,7 +1111,9 @@
 /* The redesign's shadows on a light page: tinted, never black. Every look. */
 :root[data-redesign][data-theme="light"] {
   /* Cards: a lighter tint reads the same on a white pane. */
-  --card-bg: color-mix(in oklab, var(--color-text) 3%, transparent);
+  /* In light a text tint darkens into a grey tray; a white wash lifts the
+     card on a grey dialog and leaves the edge alone on the white pane. */
+  --card-bg: color-mix(in oklab, var(--color-surface-0) 60%, transparent);
   --card-border: color-mix(in oklab, var(--color-text) 10%, transparent);
   --input-invalid-bg: color-mix(in oklab, var(--color-danger) 6%, var(--color-field));
   /* Tabs */

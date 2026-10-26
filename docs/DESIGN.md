@@ -994,9 +994,16 @@ bot's summary, a list of checks, an empty note. The element and padding are
 the caller's, beside it in `cn`. Not a popover: a card does not float.
 
 - **Toggle off.** The card radius, the plain border, `surface-card`.
-- **Redesign.** Fill and edge are tints of the text (`--card-bg` 4% dark,
-  3% light; `--card-border` 8% dark, 10% light), so one card reads on a
-  pane and on a dialog alike.
+- **Redesign.** In dark the fill and edge are tints of the text
+  (`--card-bg` 4%, `--card-border` 8%), so one card lifts a little on a pane
+  and on a dialog alike. In light a text tint would darken into a grey tray,
+  so the fill is a white wash (`surface-0` at 60%) with a 10% text edge: it
+  lifts on a grey dialog, and on the white pane the edge alone sets it off.
+- **A list in a card.** Put `CARD_LIST` beside `CARD_SURFACE`: rules between
+  rows in the card's edge (the plain border with the toggle off), clipped
+  to the corners.
+- **Padding** is the caller's, on one scale: `p-3` compact, `p-4` default,
+  `px-6 py-8` an empty note, `p-2.5` only inside the profile popover.
 
 ## Planned primitives
 

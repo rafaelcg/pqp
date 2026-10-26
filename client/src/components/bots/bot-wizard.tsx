@@ -17,7 +17,7 @@ import {
   type ServerBotTool,
   type ServerBotToolGroup,
 } from "@pqp/shared";
-import { CARD_SURFACE } from "@/components/ui/card";
+import { CARD_LIST, CARD_SURFACE } from "@/components/ui/card";
 import { useEffect, useId, useRef, useState } from "react";
 import {
   AlarmClock,
@@ -1092,7 +1092,7 @@ export function ToolPicker({
         <ModeChip mode="now" />
         <ModeChip mode="confirms" />
       </div>
-      <div className={cn(CARD_SURFACE, "divide-y divide-border overflow-hidden")}>
+      <div className={cn(CARD_SURFACE, CARD_LIST)}>
         {TOOL_GROUPS.map(([group, groupTools]) => {
           const on = groupTools.filter((tool) => tools.includes(tool));
           const Icon = GROUP_ICON[group];

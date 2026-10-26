@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CARD_SURFACE } from "@/components/ui/card";
+import { CARD_LIST, CARD_SURFACE } from "@/components/ui/card";
 
 describe("CARD_SURFACE", () => {
   it("is the card every caller drew, with the toggle off", () => {
@@ -14,9 +14,10 @@ describe("CARD_SURFACE", () => {
     expect(CARD_SURFACE).not.toMatch(/\bp[xy]?-\d/);
   });
 
-  it("gives a list inside it the card's own edge for its rules, under the redesign only", () => {
-    expect(CARD_SURFACE).toContain("redesign:divide-[color:var(--card-border)]");
-    expect(CARD_SURFACE).not.toMatch(/(^| )divide-/);
+  it("gives a list inside it the card's own edge for its rules, the plain border with the toggle off", () => {
+    expect(CARD_LIST).toContain("divide-[color:var(--card-border,var(--color-border))]");
+    // A card that holds no list gets no rule colour on its children.
+    expect(CARD_SURFACE).not.toContain("divide-");
   });
 });
 

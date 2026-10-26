@@ -25,7 +25,7 @@ import {
 } from "lucide-react";
 import { Navigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { CARD_SURFACE } from "@/components/ui/card";
+import { CARD_LIST, CARD_SURFACE } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { CheckRow } from "@/components/ui/check-row";
@@ -1333,12 +1333,17 @@ function PrimitiveSheet() {
               <p className="text-sm font-semibold text-text">{t("qaUi.card.title")}</p>
               <p className="mt-1 text-xs text-text-tertiary">{t("qaUi.card.body")}</p>
             </div>
-            <ul className={cn(CARD_SURFACE, "mt-3 divide-y divide-border overflow-hidden")}>
-              {(["qaUi.card.rowOne", "qaUi.card.rowTwo"] as const).map((key) => (
-                <li key={key} className="px-4 py-2.5 text-sm text-text-secondary">
-                  {t(key)}
-                </li>
-              ))}
+            <ul className={cn(CARD_SURFACE, CARD_LIST, "mt-3")}>
+              <li className="px-4 py-2.5 text-sm text-text-secondary">{t("qaUi.card.rowOne")}</li>
+              {/* A row that opens something: its hover fill over the card's tint. */}
+              <li>
+                <button
+                  type="button"
+                  className="flex w-full px-4 py-2.5 text-left text-sm text-text-secondary hover:bg-surface-2 hover:text-text redesign:hover:bg-row-hover"
+                >
+                  {t("qaUi.card.rowTwo")}
+                </button>
+              </li>
             </ul>
           </div>
         ))}

@@ -1,5 +1,5 @@
 import { CircleCheck, CircleX, Copy, Loader2, Minus } from "lucide-react";
-import { CARD_SURFACE } from "@/components/ui/card";
+import { CARD_LIST, CARD_SURFACE } from "@/components/ui/card";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { SETTINGS_BUSY } from "@/components/settings/kit";
@@ -154,7 +154,7 @@ export function ConnectionDoctorDialog({
       }
     >
       <div className="space-y-4 px-5 py-4" data-connection-doctor>
-        <ul className={cn(CARD_SURFACE, "divide-y divide-border overflow-hidden")}>
+        <ul className={cn(CARD_SURFACE, CARD_LIST)}>
           {rows.map((id) => {
             const result = by.get(id);
             const Icon = !result

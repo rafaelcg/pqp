@@ -614,6 +614,9 @@ bespoke cards in Baú, polls, voice notes, the forward and the corner card):
 4. Left for their owners: Baú posts (`f-bau`), polls and voice notes
    (`s-message-content`), the forward card (`s-message-content`), the corner card
    (`f-onboarding`), the public `/apps` page (out of scope).
+5. Two eyebrow labels inside cards (bot overview, conversations empty) draw
+   different specs. Unifying them changes the toggle-off look, so they fold
+   onto `SectionLabel` with `p-section-header`.
 
 ## Open questions for André
 

@@ -10,8 +10,15 @@
  * plain border, `surface-card`. Under the redesign its fill and edge are
  * tints of the text, so the same card reads on a pane and on a dialog,
  * whatever their surface (as the buttons' fills do). A list inside it
- * (`divide-y`) takes the same edge for its rules, which the plain border
- * colour would lose on a dialog.
+ * takes `CARD_LIST` beside it, so its rules take the same edge, which the
+ * plain border colour would lose on a dialog.
  */
 export const CARD_SURFACE =
-  "rounded-[var(--radius-card)] border border-[color:var(--card-border,var(--color-border))] bg-[color:var(--card-bg,var(--color-surface-card))] redesign:divide-[color:var(--card-border)]";
+  "rounded-[var(--radius-card)] border border-[color:var(--card-border,var(--color-border))] bg-[color:var(--card-bg,var(--color-surface-card))]";
+
+/**
+ * A card holding a list of rows: a rule between rows in the card's edge
+ * (the plain border with the toggle off), clipped to the corners.
+ */
+export const CARD_LIST =
+  "divide-y divide-[color:var(--card-border,var(--color-border))] overflow-hidden";
