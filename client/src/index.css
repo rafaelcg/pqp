@@ -302,6 +302,9 @@
   --radius-row: var(--radius-control);
   /* A shell pane (channel list, conversation). The panel radius today. */
   --radius-pane: var(--radius-panel);
+  /* A button (ui/button.tsx). The control radius today; a pill under the
+     redesign. */
+  --radius-button: var(--radius-control);
   /* Message list drawing. Overridden on the root by src/lib/chat-display.ts. */
   --chat-font-size: 15px;
   --chat-line-height: 22px;
@@ -647,6 +650,30 @@
   --radius-row: 999px;
   /* A full-height shell pane is a touch tighter than a dialog. */
   --radius-pane: 1rem;
+  --radius-button: var(--radius-pill);
+
+  /* Button (ui/button.tsx). Unset with the toggle off: each falls back, in
+     the class, to what the button always drew. */
+  --button-px: 1.25rem;
+  --button-px-sm: 0.875rem;
+  --button-px-lg: 1.5rem;
+  /* A top highlight and a cast shadow that clears the fill; the light block
+     sets its own. */
+  --button-primary-shadow:
+    inset 0 1px 0 oklch(1 0 0 / 0.22), 0 1px 1px oklch(0.06 0.02 262 / 0.55),
+    0 4px 10px oklch(0.06 0.02 262 / 0.35);
+  /* Tints of the text, never a surface: a dialog is surface-2, the same as
+     the old secondary fill, and a surface hover can be darker than it. */
+  --button-secondary-bg: color-mix(in oklab, var(--color-text) 7%, transparent);
+  --button-secondary-hover: color-mix(in oklab, var(--color-text) 15%, transparent);
+  --button-secondary-border: var(--color-border-strong);
+  --button-ghost-text: var(--color-text-secondary);
+  --button-ghost-hover: color-mix(in oklab, var(--color-text) 8%, transparent);
+  --button-danger-ghost-hover: color-mix(in oklab, var(--color-danger) 14%, transparent);
+  --button-danger-ghost-hover-text: var(--color-on-danger-soft);
+  --button-disabled-opacity: 0.5;
+  /* A small button steps down in height, not in legibility. */
+  --button-text-sm: 0.8125rem;
 
   /* The title role is drawn in the display face: server names, channel
      titles and pane headers, in sentence case. */
@@ -862,6 +889,9 @@
   --shadow-1: 0 1px 2px oklch(0.4 0.02 262 / 0.08);
   --shadow-2: 0 12px 32px oklch(0.4 0.02 262 / 0.16);
   --shadow-3: 0 24px 64px -16px oklch(0.4 0.02 262 / 0.26);
+  --button-primary-shadow: inset 0 1px 0 oklch(1 0 0 / 0.25), 0 1px 2px oklch(0.4 0.02 262 / 0.18);
+  /* Light shows the 12% step clearly; dark needs 15%. */
+  --button-secondary-hover: color-mix(in oklab, var(--color-text) 12%, transparent);
 }
 
 /*

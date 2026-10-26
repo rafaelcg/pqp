@@ -746,7 +746,7 @@ function ControlSheet() {
   );
 }
 
-const BUTTON_VARIANTS = ["default", "secondary", "ghost", "danger"] as const;
+const BUTTON_VARIANTS = ["default", "secondary", "ghost", "danger", "danger-ghost"] as const;
 const BADGE_VARIANTS: BadgeVariant[] = [
   "new",
   "accent",
@@ -755,7 +755,7 @@ const BADGE_VARIANTS: BadgeVariant[] = [
   "danger",
   "neutral",
 ];
-const BUTTON_SIZES = ["default", "sm", "icon"] as const;
+const BUTTON_SIZES = ["lg", "default", "sm", "icon-lg", "icon", "icon-sm"] as const;
 
 function PrimitiveSheet() {
   const { t } = useTranslation();
@@ -766,7 +766,9 @@ function PrimitiveSheet() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
+      {/* `data-testid`: the design council's focused shot of this primitive
+          (e2e/design-council-shots.spec.ts, "primitives"). */}
+      <div data-testid="qa-primitive-button">
         <p
           className="mb-2 text-text-tertiary"
           style={{ fontSize: "var(--type-label-size)" }}
@@ -777,8 +779,21 @@ function PrimitiveSheet() {
           {BUTTON_VARIANTS.map((variant) => (
             <div key={variant} className="flex flex-wrap items-center gap-2">
               {BUTTON_SIZES.map((size) => (
-                <Button key={size} variant={variant} size={size}>
-                  {size === "icon" ? "@" : `${variant} ${size}`}
+                <Button
+                  key={size}
+                  variant={variant}
+                  size={size}
+                  aria-label={size.startsWith("icon") ? `${variant} ${size}` : undefined}
+                >
+                  {size.startsWith("icon") ? (
+                    <Icon
+                      icon={Plus}
+                      kind="symbol"
+                      size={size === "icon-sm" ? "sm" : size === "icon-lg" ? "lg" : "md"}
+                    />
+                  ) : (
+                    `${variant} ${size}`
+                  )}
                 </Button>
               ))}
               <Button variant={variant} disabled>

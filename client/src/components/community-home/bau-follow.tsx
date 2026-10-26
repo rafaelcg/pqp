@@ -237,9 +237,9 @@ function FollowRow({
       )}
       <Button
         type="button"
-        variant="ghost"
+        variant="danger-ghost"
         size="sm"
-        className={`text-danger ${TOUCH}`}
+        className={TOUCH}
         disabled={busy}
         onClick={onUnfollow}
         data-bau-follow-unfollow
@@ -804,9 +804,9 @@ export function BauFollowersDialog({
                     </Button>
                     <Button
                       type="button"
-                      variant="ghost"
+                      variant="danger-ghost"
                       size="sm"
-                      className={`text-danger ${TOUCH}`}
+                      className={TOUCH}
                       disabled={busyId !== null}
                       onClick={() => setConfirmBlock(follower)}
                       data-bau-follower-block
