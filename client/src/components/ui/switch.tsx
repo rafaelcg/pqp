@@ -122,7 +122,7 @@ export function Switch({
         description ? "items-start" : "items-center",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring",
         disabled || inert
-          ? "cursor-not-allowed"
+          ? "cursor-not-allowed redesign:aria-busy:cursor-progress"
           : "hover:bg-[color:var(--choice-row-hover,var(--color-surface-2))]",
         dimRow && "opacity-60",
         className,
@@ -153,7 +153,13 @@ export function Switch({
       <SwitchTrack
         checked={checked}
         disabled={Boolean(disabled) && !dimRow}
-        className={description ? "mt-0.5" : undefined}
+        className={cn(
+          // Centres the track on the label's first line: +2px for today's
+          // 20px track, -2px for the redesign's 24px one.
+          description && "mt-[var(--switch-desc-offset,0.125rem)]",
+          // A write is running: the track steps back while it waits.
+          busy && !dimRow && "redesign:opacity-70",
+        )}
       />
     </button>
   );

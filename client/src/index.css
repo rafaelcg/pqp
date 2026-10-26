@@ -702,6 +702,7 @@
   --switch-knob: 1.125rem;
   --switch-pad: 0.1875rem;
   --switch-travel: 1rem;
+  --switch-desc-offset: -0.125rem;
   --switch-off-bg: color-mix(in oklab, var(--color-text) 8%, transparent);
   --switch-off-ring: var(--choice-edge);
   --switch-knob-off: var(--color-text-secondary);

@@ -13,7 +13,8 @@ import { cn } from "@/lib/utils";
  * `accent-color`, exactly as before. Under the redesign `appearance: none`
  * drops it and the box is drawn from the tick tokens `CheckRow` uses, with a
  * Phosphor check over it; the check ignores the pointer, so a click still
- * lands on the input.
+ * lands on the input. Give the `<label>` around it `group`, so hovering the
+ * label strengthens the box's edge the way a CheckRow's row does.
  */
 export interface CheckboxProps extends Omit<ComponentProps<"input">, "type"> {
   /** Classes for the wrapper: margins and alignment go here. */
@@ -35,7 +36,7 @@ export const Checkbox = forwardRef<HTMLInputElement, CheckboxProps>(function Che
           "border-[length:var(--tick-ring-w,0px)] border-[color:var(--tick-off-ring,transparent)] bg-[color:var(--tick-off-bg,transparent)]",
           "redesign:size-[var(--tick-size)] redesign:transition-colors redesign:duration-[var(--duration-fast)]",
           "redesign:checked:border-accent redesign:checked:bg-accent",
-          "redesign:enabled:hover:not-checked:border-[color:var(--tick-hover-ring)]",
+          "redesign:enabled:hover:not-checked:border-[color:var(--tick-hover-ring)] redesign:group-hover:enabled:not-checked:border-[color:var(--tick-hover-ring)]",
           "redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-focus-ring redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-ring-offset",
           "disabled:cursor-not-allowed redesign:disabled:opacity-[var(--tick-disabled-opacity,0.5)]",
           className,
@@ -45,7 +46,7 @@ export const Checkbox = forwardRef<HTMLInputElement, CheckboxProps>(function Che
       <Check
         aria-hidden
         weight="bold"
-        className="pointer-events-none absolute hidden size-[var(--tick-glyph)] text-on-accent redesign:peer-checked:block"
+        className="pointer-events-none absolute hidden size-[var(--tick-glyph)] text-on-accent redesign:peer-checked:block redesign:peer-disabled:opacity-[var(--tick-disabled-opacity,0.5)]"
       />
     </span>
   );

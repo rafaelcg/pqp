@@ -618,7 +618,7 @@ value.
   border), so an off switch shows on a card, a dialog and a pane alike, and
   the off knob is `text-secondary`. The row hover is the ghost tint
   (`--choice-row-hover`). A disabled label dims to `text-tertiary` with its
-  track. Every value is a `--switch-*` token with today's value as the
+  track, and a `busy` track steps back to 70% with a progress cursor. Every value is a `--switch-*` token with today's value as the
   fallback in the class.
 - `labelAdornment` draws a badge after the label; `data-*` props land on the
   button. `SwitchTrack` is the track alone, for a row a call site lays out
@@ -654,6 +654,8 @@ form submits it. A row in a checklist is `CheckRow`; a setting is `Switch`.
   tokens draw the same box as `TickBox`, with a Phosphor check over it that
   ignores the pointer.
 - `wrapperClassName` takes margins; `className` styles the input.
+- Give the `<label>` around it `group`: hovering the label then strengthens
+  the box's edge, as hovering a CheckRow's row does.
 
 ### Skeleton
 
