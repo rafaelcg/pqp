@@ -883,7 +883,7 @@ model and four shapes.
   before. Only `underline` had a focus ring, so only it draws one with the
   toggle off; the others keep the browser's outline there.
 - **Under the redesign.** Unselected labels are `text-secondary`. Pills are
-  round and the hover is the ghost tint. A selected pill is a 16% tint (15%
+  round and the hover is the ghost tint. A selected pill is an 18% tint (15%
   in light) and medium weight, so it differs from a hovered one by more than
   the fill. The filled filter's unselected chips are a 7% text tint, 12% on
   hover; its selected chip takes `on-accent` text. `segmented` is

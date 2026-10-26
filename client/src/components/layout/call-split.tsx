@@ -1115,6 +1115,7 @@ function ChatPaneHeader({
           <Tabs
             variant="pill"
             size="xs"
+            label={header.title}
             value={header.tabs.active}
             onValueChange={(id) => header.tabs?.onSelect(id)}
             items={header.tabs.items.map((tab) => ({

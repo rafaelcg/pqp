@@ -836,7 +836,10 @@
      value. `segmented` shares RadioGroup's track and thumb above. */
   --tabs-off-text: var(--color-text-secondary);
   --tabs-pill-radius: 999px;
-  --tabs-pill-on: color-mix(in oklab, var(--color-text) 16%, transparent);
+  /* Ten points over the 8% ghost hover: on a dark pane a smaller step reads
+     as the same pill. */
+  --tabs-pill-on: color-mix(in oklab, var(--color-text) 18%, transparent);
+  --tabs-rule: var(--color-border);
   --tabs-pill-hover: var(--button-ghost-hover);
   --tabs-filled-off: color-mix(in oklab, var(--color-text) 7%, transparent);
   --tabs-filled-hover: color-mix(in oklab, var(--color-text) 12%, transparent);
@@ -1063,7 +1066,7 @@
 /* The redesign's shadows on a light page: tinted, never black. Every look. */
 :root[data-redesign][data-theme="light"] {
   --input-invalid-bg: color-mix(in oklab, var(--color-danger) 6%, var(--color-field));
-  /* Light shows the selected pill clearly at 12%. */
+  /* Tabs */
   /* 7 points over the 8% ghost hover, so a hovered pill never reads as selected. */
   --tabs-pill-on: color-mix(in oklab, var(--color-text) 15%, transparent);
   --shadow-1: 0 1px 2px oklch(0.4 0.02 262 / 0.08);
