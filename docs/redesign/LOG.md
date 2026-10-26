@@ -34,6 +34,7 @@ Read this file and the inventory at the start of every session.
 | 1 | Toggle | Done |
 | 1 | Tokens for the chosen direction | Done |
 | 1 | André signs off on `/qa/ui` | Done, after round T3 |
+| 2 | `p-button` | Merged (cap at round 5: 8.9, 8.9, 9.0, no MUST) |
 
 ## Phase 0: directions
 
@@ -185,6 +186,40 @@ that the elements they live in will fold as they are rebuilt):
    turn grey.)
 4. Icon-only buttons are `p-icon-button`, the next element.
 5. Public pages use Button too; tokens keep their own padding and colours.
+
+Council (Opus 5.5, GPT-6 Luna via Codex, Grok 4.7), overall after:
+
+| Round | Opus | Codex | Grok | MUST open |
+|---|---|---|---|---|
+| 1 | 7.2 | 8.3 | 8.5 | 2 (Opus: secondary and ghost vanish on a dark dialog) |
+| 2 | 8.3 | 8.7 | 8.6 | 0 |
+| 3 | 8.6 | 8.9 | 8.7 | 0 |
+| 4 | 8.7 | 8.8 | 8.9 | 1 (Codex: a misread of the light hover, withdrawn in round 5) |
+| 5 | 8.9 | 8.9 | 9.0 | 0 (Grok COULD: non-primary disabled labels near 3:1 in light; disabled controls are exempt) |
+
+Stopped at the five-round cap with no MUST and every category above
+"before". Best round: 5. Screenshots: `~/pqp-redesign/p-button/`.
+
+Decisions:
+- Fills are tints of the text, never a surface, so a button keeps its edge
+  on a pane and on a dialog.
+- A disabled primary is an empty pill (strong edge, quiet medium label, full
+  opacity); other variants fade to 0.5. Disabled means off, never just
+  dimmed.
+- `danger-ghost` stays red at rest (two reviewers asked to keep it).
+- `redesign:` classes only for disabled-only rules; everything else is a
+  component token with the old value as its fallback.
+
+Deferred to the element that owns the call site:
+- The dialog's square close button: `p-dialog`, on `IconButton`.
+- The avatar "Remover" in profile settings as `danger-ghost`:
+  `f-user-settings`.
+- `aria-disabled:opacity-60` on two Buttons in `app-launcher.tsx`: `f-apps`.
+
+Verified: typecheck; 10,315 unit tests; `bench:tokens` (3,062 pairs);
+`settings-sections` and `settings-keyboard` e2e (14 passed); i18n check;
+retro dark and light, Halloween, high contrast light, 390px; toggle off
+matches the original sheet and settings screens.
 
 ## Open questions for André
 

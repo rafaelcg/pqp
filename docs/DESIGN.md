@@ -297,7 +297,8 @@ on every size change. With reduced motion everything is simply there or not.
 - **Hover.** A background step up the surface ramp, usually `hover:bg-surface-2`.
   Text controls also lift `text-text-tertiary` to `text-text`.
 - **Active.** `active:scale-[0.98]` on Button. Nothing else presses.
-- **Disabled.** `disabled:pointer-events-none disabled:opacity-40` on Button,
+- **Disabled.** `disabled:pointer-events-none disabled:opacity-40` on Button
+  (0.5 under the redesign, where a disabled primary is an empty pill instead),
   `disabled:cursor-not-allowed disabled:opacity-50` on Input. The two differ
   because a disabled button must not swallow a tooltip's hover and a disabled
   field should still say why it cannot be typed in.
@@ -453,7 +454,7 @@ so a variant and a size are props, not class strings.
   surface), `secondary` (raised surface with a border, for a second action),
   `ghost` (no fill until hover, for a control in a bar or a row), `danger` (the
   soft danger fill, for a destructive confirm), `danger-ghost` (below).
-- **Sizes.** `default` (h-9), `sm` (h-8, 12px text), `lg` (h-11, the touch
+- **Sizes.** `default` (h-9), `sm` (h-8, 12px text, 13px under the redesign), `lg` (h-11, the touch
   size), and the icon squares `icon-sm` (h-8), `icon` (h-9), `icon-lg`
   (h-11). Give `icon-lg` an `<Icon size="lg">`, the others `md` (`sm` for
   `icon-sm`). An icon-only control on its own is `IconButton`; these sizes
