@@ -684,6 +684,11 @@ queue, timer and swipe.
   approval) onto the same card under the redesign only.
 - `TOAST_CLOSE` is the dismiss button: today's small square with the toggle
   off, IconButton's round ghost with its focus ring under the redesign.
+  `TOAST_OPEN_REDESIGN` gives a toast's whole-card button (a DM, a session
+  reminder) the same ring. A 32px leading mark sits in the 40px slot
+  (`redesign:mx-1`), so the text of stacked toasts lines up.
+- **Not toasts.** The retro presence card, the lightbox notice and the Baú
+  post hint are notes of their own and stay off this recipe on purpose.
 - **Use it** for news the person did not ask for and can ignore. **Do not**
   use it for the result of a write the person just made; say that in the
   row (`InlineStatus`).

@@ -65,7 +65,7 @@ export function ForwardedToast({
         leaving ? "animate-toast-out" : "animate-toast-in",
       )}
     >
-      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-on-accent">
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-on-accent redesign:mx-1">
         <Check className="h-4 w-4" strokeWidth={3} aria-hidden />
       </span>
       <p className="min-w-0 flex-1 text-sm font-semibold text-text">

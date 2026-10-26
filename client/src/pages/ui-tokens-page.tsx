@@ -1435,14 +1435,14 @@ function PrimitiveSheet() {
           </span>
           <span className="min-w-0 flex-1">
             <span className="block truncate text-sm font-semibold text-text">{t("qaUi.toast.dmName")}</span>
-            <span className="block truncate text-xs text-text-tertiary">{t("qaUi.toast.dmBody")}</span>
+            <span className="block truncate text-xs text-text-secondary">{t("qaUi.toast.dmBody")}</span>
           </span>
           <button type="button" aria-label={t("qaUi.toast.close")} className={TOAST_CLOSE}>
             <LineX className="h-4 w-4" aria-hidden />
           </button>
         </div>
         <div role="status" className={cn(TOAST_SURFACE, "flex w-80 items-center gap-3 p-3")}>
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-on-accent">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-on-accent redesign:mx-1">
             <CheckIcon className="h-4 w-4" strokeWidth={3} aria-hidden />
           </span>
           <p className="min-w-0 flex-1 text-sm font-semibold text-text">{t("qaUi.toast.forwarded")}</p>

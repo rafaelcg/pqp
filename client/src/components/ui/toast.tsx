@@ -32,6 +32,14 @@ export const TOAST_CLOSE_REDESIGN =
   "redesign:rounded-[var(--icon-button-radius)] redesign:text-[color:var(--icon-button-text)] redesign:hover:bg-[color:var(--icon-button-hover)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--icon-button-ring,var(--color-focus-ring))] redesign:focus-visible:ring-offset-[length:var(--icon-button-ring-offset)] redesign:focus-visible:ring-offset-[color:var(--icon-button-ring-offset-color)]";
 
 /**
+ * A toast that opens something when clicked as a whole (a DM, a session
+ * reminder): under the redesign its button shows the same focus ring as the
+ * dismiss button beside it, inside the card's corner.
+ */
+export const TOAST_OPEN_REDESIGN =
+  "redesign:rounded-[var(--radius-control)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--icon-button-ring,var(--color-focus-ring))]";
+
+/**
  * The dismiss button in a toast's corner. With the toggle off the small
  * square it always was; under the redesign IconButton's round ghost, with its
  * focus ring.

@@ -24,7 +24,7 @@ import { useTranslation } from "@/lib/i18n";
 import { onActivityToast, type ActivityToast } from "@/lib/notifications";
 import { subscribeEscapeUnlessOverlay } from "@/lib/escape-unless-overlay";
 import { cn } from "@/lib/utils";
-import { TOAST_CLOSE, TOAST_SURFACE } from "@/components/ui/toast";
+import { TOAST_CLOSE, TOAST_OPEN_REDESIGN, TOAST_SURFACE } from "@/components/ui/toast";
 
 /**
  * "Somebody wrote to you", in the corner, while you are looking at something
@@ -365,7 +365,7 @@ function ToastCardView({
     >
       <button
         type="button"
-        className="flex min-w-0 flex-1 items-start gap-3 text-left"
+        className={cn("flex min-w-0 flex-1 items-start gap-3 text-left", TOAST_OPEN_REDESIGN)}
         onClick={() => {
           // A touch's synthetic click still fires after a swipe that sprang
           // back — a drag past the small jitter threshold means this tap was

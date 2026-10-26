@@ -6,7 +6,7 @@ import {
   type ChannelSessionReminderToast,
 } from "@/lib/channel-session-schedule";
 import { cn } from "@/lib/utils";
-import { TOAST_SURFACE_REDESIGN } from "@/components/ui/toast";
+import { TOAST_OPEN_REDESIGN, TOAST_SURFACE_REDESIGN } from "@/components/ui/toast";
 
 const TOAST_MS = 8000;
 
@@ -94,7 +94,7 @@ export function ChannelSessionToasts({
         >
           <button
             type="button"
-            className="flex min-w-0 flex-1 items-center gap-3 text-left"
+            className={cn("flex min-w-0 flex-1 items-center gap-3 text-left", TOAST_OPEN_REDESIGN)}
             onClick={() => {
               dismiss(card.sessionId);
               onOpen(card.channelId);
