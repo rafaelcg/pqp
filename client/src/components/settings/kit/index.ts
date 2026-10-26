@@ -64,7 +64,6 @@ export {
   useSettingsSection,
   type SettingsSectionId,
 } from "@/components/settings/kit/sections";
-export { SettingsSelect } from "@/components/settings/kit/select";
 export {
   SettingsSkeletonRow,
   SettingsSkeletonRows,

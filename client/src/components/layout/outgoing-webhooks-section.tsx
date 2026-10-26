@@ -6,6 +6,7 @@ import { ChannelIcon } from "@/components/layout/channel-icon";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { Select } from "@/components/ui/select";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useForumConfig } from "@/hooks/use-forum-config";
 import {
@@ -577,11 +578,11 @@ function HookForm({
                 <span className="text-xs font-medium text-paper-muted">
                   {t("integrations.authNameLabel")}
                 </span>
-                <select
+                <Select
                   value={draft.authName}
                   aria-label={t("integrations.authNameLabel")}
                   disabled={disabled}
-                  className="h-10 w-full rounded-md border border-ink-4 bg-ink px-3 text-sm text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/50 disabled:opacity-50"
+                  
                   onChange={(e) =>
                     onChange({
                       ...draft,
@@ -595,7 +596,7 @@ function HookForm({
                       {option || t("integrations.authNone")}
                     </option>
                   ))}
-                </select>
+                </Select>
               </label>
               <label className="space-y-1.5 text-sm text-paper">
                 <span className="text-xs font-medium text-paper-muted">

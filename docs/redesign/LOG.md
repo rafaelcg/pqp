@@ -354,6 +354,20 @@ Deferred:
 Verified: typecheck; 10,331 unit tests; `bench:tokens`; `settings-sections`,
 `server-settings-sections`, `profile-section` and `theme-switching` e2e (39
 passed); i18n check.
+### p-select
+
+Spec (audit: `SettingsSelect` in 9 places, 19 raw `<select>`s in 4 recipes):
+
+1. Job: a choice from a short list. Stays native for the phone picker and
+   for the e2e specs that find options by value.
+2. New `ui/Select` on `FIELD_BOX`; sizes md (40px) and sm (36px); layout on
+   `wrapperClassName`. Redesign: a Phosphor caret instead of the OS arrow.
+3. Folded: `SettingsSelect` (deleted), the five `ink`-palette copies, AutoMod
+   (3), Baú follow (2), the share dialog, the birth date, the waitlist. The
+   `ink` copies gain the standard focus ring (offset, focus-ring colour).
+4. Left: selects on `surface-2` (bots, watch party options and
+   transmission) and the channel overview's tall `fieldClass` fold with
+   their surfaces, since their toggle-off look differs.
 
 ## Open questions for André
 

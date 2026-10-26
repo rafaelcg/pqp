@@ -1,4 +1,5 @@
 import { Ban, Bug } from "lucide-react";
+import { Select } from "@/components/ui/select";
 import { useId, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,7 +23,6 @@ import {
   SettingsPreview,
   SettingsResult,
   SettingsRow,
-  SettingsSelect,
   SettingsSkeletonRows,
   SettingsSliderRow,
   SettingsSwitchRow,
@@ -182,9 +182,9 @@ export function SettingsKitSheet() {
                 wideControl
                 control={
                   <div className="flex flex-wrap items-center gap-2">
-                    <SettingsSelect id={wideId} defaultValue="public" className="w-auto">
+                    <Select id={wideId} defaultValue="public" wrapperClassName="w-auto">
                       <option value="public">{t("qaUi.kit.row.selectDefault")}</option>
-                    </SettingsSelect>
+                    </Select>
                     <Button variant="secondary" size="sm">
                       {t("qaUi.kit.row.wideAction")}
                     </Button>
@@ -236,10 +236,10 @@ export function SettingsKitSheet() {
                 htmlFor={selectId}
                 badge={<SettingsBadge>{t("qaUi.kit.badge")}</SettingsBadge>}
                 control={
-                  <SettingsSelect id={selectId} defaultValue="default">
+                  <Select id={selectId} defaultValue="default">
                     <option value="default">{t("qaUi.kit.row.selectDefault")}</option>
                     <option value="usb">USB Audio</option>
-                  </SettingsSelect>
+                  </Select>
                 }
               />
               <SettingsRow

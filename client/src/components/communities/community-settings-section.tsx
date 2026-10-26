@@ -22,6 +22,7 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { FileDropZone } from "@/components/ui/file-drop-zone";
 import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
 import {
   ApiError,
   fetchCommunitySettings,
@@ -737,11 +738,11 @@ export function CommunitySettingsSection({
             >
               {t("communities.settings.category")}
             </label>
-            <select
+            <Select
               id={categoryId}
               value={category}
               disabled={formBusy}
-              className="h-10 w-full rounded-md border border-ink-4 bg-ink px-3 text-sm text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/50 disabled:opacity-50"
+              
               onChange={(e) => {
                 setCategory(e.target.value as CommunityCategory);
                 setSaved(false);
@@ -752,7 +753,7 @@ export function CommunitySettingsSection({
                   {t(`communities.category.${slug}` as never)}
                 </option>
               ))}
-            </select>
+            </Select>
           </div>
 
           {/* The public address. Rendered as the URL it becomes, prefix and
@@ -814,11 +815,11 @@ export function CommunitySettingsSection({
             >
               {t("communities.settings.language")}
             </label>
-            <select
+            <Select
               id={languageId}
               value={language}
               disabled={formBusy}
-              className="h-10 w-full rounded-md border border-ink-4 bg-ink px-3 text-sm text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/50 disabled:opacity-50"
+              
               onChange={(e) => {
                 setLanguage(e.target.value as CommunityLanguage);
                 setSaved(false);
@@ -829,7 +830,7 @@ export function CommunitySettingsSection({
                   {t(`communities.language.${code}` as never)}
                 </option>
               ))}
-            </select>
+            </Select>
           </div>
 
           <div className="flex flex-wrap gap-2">

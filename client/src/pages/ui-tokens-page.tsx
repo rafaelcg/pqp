@@ -21,6 +21,7 @@ import { CheckRow } from "@/components/ui/check-row";
 import { Icon } from "@/components/ui/icon";
 import { IconButton, type IconButtonSize } from "@/components/ui/icon-button";
 import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
@@ -918,6 +919,31 @@ function PrimitiveSheet() {
             {t("qaUi.input.multiline")}
           </span>
           <Textarea rows={3} className="min-h-0" placeholder={t("qaUi.input.placeholder")} />
+        </label>
+      </div>
+
+      <div data-testid="qa-primitive-select" className="grid gap-3 sm:grid-cols-3">
+        <label className="flex flex-col gap-1">
+          <span style={{ fontSize: "var(--type-label-size)" }}>md</span>
+          <Select defaultValue="public">
+            <option value="public">{t("qaUi.select.public")}</option>
+            <option value="friends">{t("qaUi.select.friends")}</option>
+          </Select>
+        </label>
+        <label className="flex flex-col gap-1">
+          <span style={{ fontSize: "var(--type-label-size)" }}>sm</span>
+          <Select size="sm" defaultValue="friends">
+            <option value="public">{t("qaUi.select.public")}</option>
+            <option value="friends">{t("qaUi.select.friends")}</option>
+          </Select>
+        </label>
+        <label className="flex flex-col gap-1">
+          <span style={{ fontSize: "var(--type-label-size)" }}>
+            {t("qaUi.state.disabled")}
+          </span>
+          <Select disabled defaultValue="public">
+            <option value="public">{t("qaUi.select.public")}</option>
+          </Select>
         </label>
       </div>
 

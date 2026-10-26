@@ -519,7 +519,7 @@ const PRIMITIVES: {
   hover?: string;
   focus?: string;
   /** The role the hover and focus targets have. Buttons by default. */
-  role?: "button" | "textbox";
+  role?: "button" | "textbox" | "combobox";
 }[] = [
   {
     id: "p-button",
@@ -536,6 +536,7 @@ const PRIMITIVES: {
   // A static specimen: every bubble at once, no hover needed.
   { id: "p-tooltip", testId: "qa-primitive-tooltip" },
   { id: "p-input", testId: "qa-primitive-input", focus: "Padrão", role: "textbox", hover: "Preenchido" },
+  { id: "p-select", testId: "qa-primitive-select", focus: "md", role: "combobox", hover: "sm" },
 ];
 
 test("captures the primitives", async ({ browser }) => {

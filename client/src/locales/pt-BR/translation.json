@@ -5046,6 +5046,8 @@
   "qaUi.input.value": "Turma do Fliperama",
   "qaUi.input.prefix": "Com prefixo",
   "qaUi.input.multiline": "Várias linhas",
+  "qaUi.select.public": "Qualquer pessoa",
+  "qaUi.select.friends": "Só amigos",
   "qaUi.switch.label": "Apertar para falar",
   "qaUi.switch.description": "Segure uma tecla para abrir o microfone.",
   "qaUi.check.label": "Gerenciar canais",

@@ -25,6 +25,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { SectionRail } from "@/components/ui/section-rail";
+import { Select } from "@/components/ui/select";
 import { ReportsSection } from "@/components/layout/reports-section";
 import { AutomodSettingsSection } from "@/components/layout/automod-settings-section";
 import { ServerIdentitySection } from "@/components/layout/server-identity-section";
@@ -1239,11 +1240,11 @@ export function ServerSettingsDialog({
                       server: server.name,
                     })}
                   </p>
-                  <select
+                  <Select
                     value={retentionDays === null ? "" : String(retentionDays)}
                     aria-label={t("serverSettings.retention.label")}
                     disabled={savingRetention}
-                    className="h-10 w-full rounded-md border border-ink-4 bg-ink px-3 text-sm text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/50 disabled:opacity-50"
+                    
                     onChange={(e) =>
                       void saveRetention(
                         e.target.value === "" ? null : Number(e.target.value),
@@ -1262,7 +1263,7 @@ export function ServerSettingsDialog({
                     <option value="365">
                       {t("serverSettings.retention.year")}
                     </option>
-                  </select>
+                  </Select>
                   <p
                     role="status"
                     aria-live="polite"
@@ -1337,11 +1338,11 @@ export function ServerSettingsDialog({
                   </p>
                 ) : (
                   <div className="space-y-2">
-                    <select
+                    <Select
                       value={targetId}
                       aria-label={t("serverSettings.transfer.label")}
                       disabled={transferArmed || transferring}
-                      className="h-10 w-full rounded-md border border-ink-4 bg-ink px-3 text-sm text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/50 disabled:opacity-50"
+                      
                       onChange={(e) => setTargetId(e.target.value)}
                     >
                       <option value="">
@@ -1353,7 +1354,7 @@ export function ServerSettingsDialog({
                           {member.tag ? ` ${member.tag}` : ""}
                         </option>
                       ))}
-                    </select>
+                    </Select>
 
                     {!transferArmed ? (
                       <Button

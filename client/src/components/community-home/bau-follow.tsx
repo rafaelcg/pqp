@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dialog } from "@/components/ui/dialog";
+import { Select } from "@/components/ui/select";
 import {
   ApiError,
   createBauFollow,
@@ -68,9 +69,6 @@ function noEnterSubmit(event: React.KeyboardEvent) {
 
 /** 44 px touch targets on a phone, the compact size above it. */
 const TOUCH = "max-sm:min-h-11 max-sm:px-4";
-
-const SELECT_CLASS =
-  "h-[var(--control-md)] max-sm:h-11 w-full rounded-[var(--radius-control)] border border-border bg-surface-0 px-3 text-sm text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring disabled:opacity-40";
 
 export function bauFollowErrorKey(error: unknown): MessageKey {
   if (error instanceof ApiError) {
@@ -488,7 +486,7 @@ export function BauFollowDialog({
               <span className="mb-1 block text-xs uppercase tracking-wide text-text-tertiary">
                 {t("bauFollow.server")}
               </span>
-              <select
+              <Select
                 id={serverSelectId}
                 value={destinationId}
                 onChange={(event) => {
@@ -497,7 +495,7 @@ export function BauFollowDialog({
                   setNotice(null);
                 }}
                 disabled={busy}
-                className={SELECT_CLASS}
+                size="sm" className="max-sm:h-11 disabled:opacity-40"
                 onKeyDown={noEnterSubmit}
                 data-bau-follow-server
               >
@@ -506,7 +504,7 @@ export function BauFollowDialog({
                     {one.serverName}
                   </option>
                 ))}
-              </select>
+              </Select>
             </label>
             {full && (
               <p className="text-sm text-warning" role="status">
@@ -527,7 +525,7 @@ export function BauFollowDialog({
                   <span className="mb-1 block text-xs uppercase tracking-wide text-text-tertiary">
                     {t("bauFollow.channel")}
                   </span>
-                  <select
+                  <Select
                     id={channelSelectId}
                     value={channelId}
                     onChange={(event) => {
@@ -536,7 +534,7 @@ export function BauFollowDialog({
                       setNotice(null);
                     }}
                     disabled={busy}
-                    className={SELECT_CLASS}
+                    size="sm" className="max-sm:h-11 disabled:opacity-40"
                 onKeyDown={noEnterSubmit}
                     data-bau-follow-channel
                   >
@@ -545,7 +543,7 @@ export function BauFollowDialog({
                         # {channel.name}
                       </option>
                     ))}
-                  </select>
+                  </Select>
                 </label>
               </>
             )}

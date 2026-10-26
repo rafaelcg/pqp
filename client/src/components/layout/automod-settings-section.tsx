@@ -34,6 +34,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { Select } from "@/components/ui/select";
 import {
   ApiError,
   createAutomodRule,
@@ -180,9 +181,6 @@ function Group({ title, children }: { title: string; children: ReactNode }) {
     </section>
   );
 }
-
-const SELECT =
-  "h-[var(--control-md)] w-full rounded-[var(--radius-control)] border border-border bg-surface-0 px-3 text-sm text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring disabled:opacity-50 sm:w-auto sm:min-w-[14rem]";
 
 function describeMinutes(
   minutes: number,
@@ -374,10 +372,10 @@ function ExemptPicker({
       {remaining.length === 0 ? (
         <p className="text-xs text-text-tertiary">{emptyLabel}</p>
       ) : (
-        <select
+        <Select
           value=""
           aria-label={addLabel}
-          className="h-[var(--control-md)] w-full rounded-[var(--radius-control)] border border-border bg-surface-0 px-3 text-sm text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring sm:w-auto sm:min-w-[14rem]"
+          size="sm" className="text-text-secondary" wrapperClassName="sm:w-auto sm:min-w-[14rem]"
           onChange={(event) => {
             if (event.target.value) {
               onChange([...selected, event.target.value]);
@@ -390,7 +388,7 @@ function ExemptPicker({
               {option.label}
             </option>
           ))}
-        </select>
+        </Select>
       )}
     </div>
   );
@@ -754,10 +752,10 @@ export function AutomodSettingsSection({
                   className="px-0"
                 />
                 {form.alertChannelId !== null && (
-                  <select
+                  <Select
                     value={form.alertChannelId}
                     aria-label={t("automod.response.alert.channel")}
-                    className={SELECT}
+                    size="sm" wrapperClassName="sm:w-auto sm:min-w-[14rem]"
                     onChange={(event) => patch({ alertChannelId: event.target.value })}
                   >
                     {textChannels.map((channel) => (
@@ -765,7 +763,7 @@ export function AutomodSettingsSection({
                         #{channel.name}
                       </option>
                     ))}
-                  </select>
+                  </Select>
                 )}
               </div>
 
@@ -778,10 +776,10 @@ export function AutomodSettingsSection({
                   className="px-0"
                 />
                 {form.timeoutMinutes > 0 && (
-                  <select
+                  <Select
                     value={form.timeoutMinutes}
                     aria-label={t("automod.response.timeout.duration")}
-                    className={SELECT}
+                    size="sm" wrapperClassName="sm:w-auto sm:min-w-[14rem]"
                     onChange={(event) => patch({ timeoutMinutes: Number(event.target.value) })}
                   >
                     {timeoutOptions(form.timeoutMinutes).map((minutes) => (
@@ -789,7 +787,7 @@ export function AutomodSettingsSection({
                         {describeMinutes(minutes, t)}
                       </option>
                     ))}
-                  </select>
+                  </Select>
                 )}
               </div>
             </div>

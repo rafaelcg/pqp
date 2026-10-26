@@ -734,6 +734,10 @@
   --input-px: 0.875rem;
   --input-h: var(--control-md);
   --input-disabled-opacity: 1;
+  /* Select (ui/select.tsx): the native arrow off, a Phosphor caret drawn
+     in its place, with room for it. */
+  --select-appearance: none;
+  --select-pr: 2.25rem;
 
   --icon-button-radius: var(--radius-pill);
   --icon-button-text: var(--color-text-secondary);

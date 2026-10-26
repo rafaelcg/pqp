@@ -570,6 +570,22 @@ accessible name.
 - **Accessibility.** It renders no label. Wrap it in a `<label>` or point one at
   it. A placeholder is not a label.
 
+### Select
+
+`select.tsx`. A choice from a short list: a native `<select>` dressed as a
+text field, so a phone shows its own picker and e2e specs find options by
+value.
+
+- **Sizes.** `md` (40px, beside an `Input`, the default), `sm` (36px, in a
+  toolbar or beside `Button`s).
+- **`wrapperClassName`.** Width and margins go on the wrapper (`@lg:w-48`,
+  `sm:min-w-[14rem]`, `mt-1.5`); `className` is for the field itself.
+- **Under the redesign.** The `Input` box (`FIELD_BOX`), and a Phosphor caret
+  in place of the operating system's arrow (`--select-appearance: none`,
+  `--select-pr`). With the toggle off it keeps the native arrow.
+- **Use it** for every short list. It replaced `SettingsSelect` and about a
+  dozen hand-drawn selects.
+
 ### Switch
 
 `switch.tsx`. An independent on/off bit, with the whole row as the hit target.
@@ -817,8 +833,6 @@ reads the same on every surface.
 Not built. Do not invent a local one; add it here instead, in `ui/`, with a
 variant set, and then use it everywhere.
 
-- **Select.** Native `<select>` is used today. It draws OS chrome, which
-  `color-scheme` now at least tints correctly.
 - **Checkbox.** A bare `<input type="checkbox">` with `accent-[var(--color-accent)]`
   in PromptDialog. `CheckRow` covers the row case only.
 - **Tabs.** `SectionRail` is a tablist, but it is settings-shaped and not
