@@ -13,7 +13,16 @@ import {
   UsersThree,
   X,
 } from "@phosphor-icons/react";
-import { Check as CheckIcon, Hash as LineHash } from "lucide-react";
+import {
+  AtSign,
+  Bell as LineBell,
+  BellOff,
+  Check as CheckIcon,
+  Copy,
+  Hash as LineHash,
+  LogOut,
+  Pencil,
+} from "lucide-react";
 import { Navigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
@@ -26,6 +35,7 @@ import { Select } from "@/components/ui/select";
 import { PopoverPanel } from "@/components/ui/popover";
 import { RadioGroup } from "@/components/ui/radio-group";
 import { Tabs } from "@/components/ui/tabs";
+import { Menu } from "@/components/ui/menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
@@ -1269,6 +1279,40 @@ function PrimitiveSheet() {
             </span>
           ))}
         </PopoverPanel>
+      </div>
+
+      {/* A menu, opened by the council shot; every row kind in one list. */}
+      <div data-testid="qa-primitive-menu" className="flex items-start gap-3">
+        <Menu
+          align="start"
+          items={[
+            { id: "heading", label: t("qaUi.menu.notifications"), heading: true },
+            { id: "all", label: t("qaUi.menu.all"), icon: LineBell, checked: true, onSelect: () => undefined },
+            {
+              id: "mentions",
+              label: t("qaUi.menu.mentions"),
+              icon: AtSign,
+              detail: t("qaUi.menu.mentionsDetail"),
+              onSelect: () => undefined,
+            },
+            { id: "nothing", label: t("qaUi.menu.nothing"), icon: BellOff, onSelect: () => undefined },
+            { id: "sep-1", label: "", separator: true },
+            { id: "edit", label: t("qaUi.menu.edit"), icon: Pencil, onSelect: () => undefined },
+            {
+              id: "copy",
+              label: t("qaUi.menu.copyId"),
+              icon: Copy,
+              disabled: true,
+              detail: t("qaUi.menu.copyIdDetail"),
+            },
+            { id: "sep-2", label: "", separator: true },
+            { id: "leave", label: t("qaUi.menu.leave"), icon: LogOut, danger: true, onSelect: () => undefined },
+          ]}
+        >
+          <Button variant="secondary" size="sm">
+            {t("qaUi.menu.open")}
+          </Button>
+        </Menu>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
