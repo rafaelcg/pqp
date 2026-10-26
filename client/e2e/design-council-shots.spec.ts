@@ -465,6 +465,10 @@ test("captures the design council screens", async ({ browser }) => {
       await page.getByRole("menuitem", { name: "Configurações da comunidade" }).click();
       await expect(page.getByRole("dialog")).toBeVisible();
       await shoot(page, `05-server-settings-${theme}`);
+      // The role editor's tabs, for Tabs in place.
+      await page.getByRole("dialog").getByText("Cargos", { exact: true }).first().click();
+      await expect(page.getByRole("dialog").getByRole("tablist", { name: "Nome do cargo" })).toBeVisible();
+      await shoot(page, `13-server-roles-${theme}`);
       await page.keyboard.press("Escape");
 
       await context.close();
