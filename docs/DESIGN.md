@@ -987,6 +987,20 @@ reads the same on every surface.
 - **Accessibility.** The word is the meaning, so colour is never the only
   signal; the icon is `aria-hidden`.
 
+### UserAvatar
+
+`components/user/user-avatar.tsx`. Every person's picture goes through it:
+the URL rules, the monogram fallback and a server bot's live face are in one
+place. `StatusDot` (`status-dot.tsx`) draws presence on its corner.
+
+- **Toggle off.** The caller's shape (`rounded`: `md`, `lg`, `full`) and its
+  monogram colours (`fallbackClassName`).
+- **Redesign.** A person is always a circle, and the monogram sits on one
+  neutral disc (`surface-3`, `text-secondary`, semibold); the caller still
+  sets its size. A bot keeps its own shape. `ownPalette` keeps the caller's
+  colours for an avatar drawn inside a story, which paints in its own
+  palette.
+
 ## Planned primitives
 
 Not built. Do not invent a local one; add it here instead, in `ui/`, with a

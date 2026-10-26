@@ -25,6 +25,8 @@ import {
 } from "lucide-react";
 import { Navigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { StatusDot } from "@/components/user/status-dot";
+import { UserAvatar } from "@/components/user/user-avatar";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { CheckRow } from "@/components/ui/check-row";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -1314,6 +1316,49 @@ function PrimitiveSheet() {
             {t("qaUi.menu.open")}
           </Button>
         </Menu>
+      </div>
+
+      {/* Avatars: monograms at the list, message and profile sizes, each
+          with its presence; a dimmed (muted) person; a bot; a stack. */}
+      <div data-testid="qa-primitive-avatar" className="flex flex-col gap-3">
+        <p
+          className="text-text-tertiary"
+          style={{ fontSize: "var(--type-label-size)" }}
+        >
+          Avatar
+        </p>
+        <div className="flex flex-wrap items-end gap-5">
+          {(
+            [
+              ["Bia", "h-6 w-6", "bg-surface-3 text-[10px] text-text", "online"],
+              ["Duda", "h-8 w-8", "bg-ink-3 text-xs", "idle"],
+              ["Nanda", "h-10 w-10", "bg-ink-3 text-sm", "dnd"],
+              ["Téo", "h-10 w-10", "bg-signal text-sm text-ink", "offline"],
+            ] as const
+          ).map(([name, size, fallback, status]) => (
+            <span key={name} className="relative inline-flex">
+              <UserAvatar name={name} className={size} fallbackClassName={fallback} />
+              <StatusDot
+                status={status}
+                className="absolute -bottom-0.5 -right-0.5"
+                ringClassName="rounded-full bg-surface-0 ring-2 ring-surface-0"
+              />
+            </span>
+          ))}
+          <UserAvatar name="Caio" className="h-10 w-10" fallbackClassName="bg-ink-3 text-sm" rounded="full" dimmed />
+          <UserAvatar name="Breu" avatarUrl="/api/bot-faces/lime/oi.png" className="h-10 w-10" />
+          <span className="flex -space-x-2">
+            {["Lia", "Rafa", "Gui"].map((name) => (
+              <UserAvatar
+                key={name}
+                name={name}
+                className="h-7 w-7 ring-2 ring-surface-0"
+                fallbackClassName="bg-surface-3 text-[11px] font-semibold text-text"
+                rounded="full"
+              />
+            ))}
+          </span>
+        </div>
       </div>
 
       <div data-testid="qa-primitive-slider" className="grid gap-4 sm:grid-cols-2">
