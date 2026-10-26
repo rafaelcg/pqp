@@ -168,6 +168,8 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   // New with the flag, so there was no old reader: this is its definition.
   hint_budget: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
+  redesign: (raw) => raw === "true",
+  // New with the flag, so there was no old reader: this is its definition.
   apps: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
   app_pane_layout_v2: offWords,

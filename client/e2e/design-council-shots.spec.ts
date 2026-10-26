@@ -26,6 +26,8 @@ import path from "node:path";
 const API = process.env.E2E_API_URL ?? "http://localhost:3101";
 const OUT = process.env.DESIGN_COUNCIL_DIR;
 const DEV_TOKEN = "dev-local-token";
+/** `DESIGN_COUNCIL_REDESIGN=1`: photograph the redesign (`lib/redesign.ts`). */
+const REDESIGN = process.env.DESIGN_COUNCIL_REDESIGN === "1";
 const DESKTOP = { width: 1440, height: 900 };
 const PHONE = { width: 390, height: 844 };
 
@@ -315,12 +317,13 @@ class Socket {
 /** Who the page is, and a returning person's furniture already put away. */
 async function as(page: Page, theme: "dark" | "light"): Promise<void> {
   await page.addInitScript(
-    ([suffix, value]) => {
+    ([suffix, value, redesign]) => {
       localStorage.setItem("pqp:dev-user-suffix", suffix);
       localStorage.setItem("pqp-theme", value);
       localStorage.setItem("pqp:download-hint-dismissed", "1");
+      localStorage.setItem("pqp-redesign", redesign ? "on" : "off");
     },
-    [VIEWER, theme] as const,
+    [VIEWER, theme, REDESIGN] as const,
   );
   await fetch(`${API}/api/me/preferences`, {
     method: "PATCH",

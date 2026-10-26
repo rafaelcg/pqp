@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Gamepad2, Bell, Bug, CircleHelp, Database, Keyboard, Mic, Palette, Puzzle, ShieldCheck, Siren, UserRound, type LucideIcon } from "lucide-react";
+import { Gamepad2, Bell, Bug, CircleHelp, Database, FlaskConical, Keyboard, Mic, Palette, Puzzle, ShieldCheck, Siren, UserRound, type LucideIcon } from "lucide-react";
 import {
   type BlockedUser,
   type User,
@@ -36,6 +36,7 @@ import { cn } from "@/lib/utils";
 import { LocalSettings, preferencesFromLocal, saveLocalSettings } from "@/components/settings/local-settings";
 import { VoiceSection } from "@/components/settings/voice-section";
 import { KeyboardSection } from "@/components/settings/keyboard-section";
+import { BetaSection } from "@/components/settings/beta-section";
 import { AppearanceSection } from "@/components/settings/appearance-section";
 import { NotificationsSection } from "@/components/settings/notifications-section";
 import { AppsSection } from "@/components/settings/apps-section";
@@ -202,6 +203,13 @@ const SECTIONS: SectionDef[] = [
     label: "settings.section.keyboard",
     description: "settings.keyboard.description",
     icon: Keyboard,
+    group: "app",
+  },
+  {
+    id: "beta",
+    label: "settings.section.beta",
+    description: "settings.beta.description",
+    icon: FlaskConical,
     group: "app",
   },
   {
@@ -1398,6 +1406,8 @@ export function SettingsModal({
                         )}
 
                         {active.id === "notifications" && <NotificationsSection />}
+
+                        {active.id === "beta" && <BetaSection />}
 
                         {active.id === "appearance" && (
                           <AppearanceSection

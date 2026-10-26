@@ -14,8 +14,8 @@ import { openApp } from "./fixtures";
 
 /**
  * Every section, in nav order: Account (Profile, Connections, Privacy, Your
- * data), App (Voice & Video, Notifications, Appearance & Language, Keyboard),
- * Support (Feedback, Help and contact). The list IS the assertion.
+ * data), App (Voice & Video, Notifications, Appearance & Language, Keyboard,
+ * Beta), Support (Feedback, Help and contact). The list IS the assertion.
  */
 const SECTIONS = [
   "Profile",
@@ -26,6 +26,7 @@ const SECTIONS = [
   "Notifications",
   "Appearance & Language",
   "Keyboard",
+  "Beta",
   "Feedback",
   "Help and contact",
 ] as const;
@@ -192,4 +193,25 @@ test.describe("settings on a phone", () => {
     await page.getByRole("tab", { name: "Profile", exact: true }).click();
     await page.screenshot({ path: "/tmp/settings-mobile.png" });
   });
+});
+
+test("Beta > New look turns the redesign attribute on and off", async ({ page }) => {
+  await openApp(page);
+  await openSettings(page);
+  await page.getByRole("tab", { name: "Beta", exact: true }).click();
+  const toggle = page.getByRole("switch", { name: "New look" });
+  const flagged = () =>
+    page.evaluate(() => document.documentElement.hasAttribute("data-redesign"));
+  await expect(toggle).not.toBeChecked();
+  expect(await flagged()).toBe(false);
+  await toggle.click();
+  await expect(toggle).toBeChecked();
+  expect(await flagged()).toBe(true);
+  await page.reload();
+  // The boot script paints the choice before the bundle runs.
+  expect(await flagged()).toBe(true);
+  await openSettings(page);
+  await page.getByRole("tab", { name: "Beta", exact: true }).click();
+  await page.getByRole("switch", { name: "New look" }).click();
+  expect(await flagged()).toBe(false);
 });

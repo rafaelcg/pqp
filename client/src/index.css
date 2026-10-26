@@ -2266,6 +2266,13 @@ h2,
 @custom-variant pre-pin (@media (min-width: 1024px) and (prefers-reduced-motion: no-preference));
 @custom-variant pre-unpin (@media not all and (min-width: 1024px) and (prefers-reduced-motion: no-preference));
 
+/* The redesign toggle (lib/redesign.ts, docs/redesign/LOG.md). `redesign:bg-x`
+   applies only while <html> carries data-redesign, so a redesigned element
+   keeps its old classes for everyone else. `:where` keeps the variant at zero
+   specificity: a redesign class outranks the old one by source order alone,
+   never by a heavier selector a later fix would have to fight. */
+@custom-variant redesign (&:where([data-redesign], [data-redesign] *));
+
 #pre-hero {
   display: contents;
 }
