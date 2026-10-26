@@ -50,4 +50,19 @@ describe("Select", () => {
     expect(select.className).toContain("h-[var(--select-h-sm,var(--control-md))]");
     expect(select.className).toContain("text-text-secondary");
   });
+
+  it("fades a disabled field by the shared token and dims the caret with it", () => {
+    const host = draw(
+      <Select disabled>
+        <option>a</option>
+      </Select>,
+    );
+    const select = host.querySelector("select")!;
+    expect(select.className).toContain("peer");
+    expect(select.className).toContain("disabled:opacity-[var(--input-disabled-opacity,0.5)]");
+    expect(select.className).not.toContain("disabled:opacity-50");
+    const caret = host.querySelector("svg")!.getAttribute("class")!;
+    expect(caret).toContain("redesign:peer-disabled:");
+    expect(caret).toContain("redesign:peer-aria-invalid:text-danger");
+  });
 });

@@ -20,6 +20,9 @@ import { cn } from "@/lib/utils";
  * | `md` | 40px   | beside an `Input`, which it matches (default) |
  * | `sm` | 36px   | a toolbar; 32px under the redesign, as `Button size="sm"` |
  *
+ * Disabled follows the field: the same token opacity (1 under the redesign),
+ * no fill, a dimmed value and a dimmed caret.
+ *
  * THE ARROW. With the toggle off it is the operating system's own, exactly
  * as before. Under the redesign `appearance: none` drops it and a Phosphor
  * caret is drawn in its place, the only way to make it match the app; the
@@ -49,9 +52,9 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select
       <select
         ref={ref}
         className={cn(
-          "w-full px-[var(--input-px,0.75rem)] [appearance:var(--select-appearance,auto)] pr-[var(--select-pr,0.75rem)]",
+          "peer w-full px-[var(--input-px,0.75rem)] [appearance:var(--select-appearance,auto)] pr-[var(--select-pr,0.75rem)]",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring",
-          "disabled:cursor-not-allowed disabled:opacity-50",
+          "disabled:cursor-not-allowed disabled:opacity-[var(--input-disabled-opacity,0.5)]",
           FIELD_BOX,
           HEIGHT[size],
           className,
@@ -61,7 +64,12 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select
       <CaretDown
         aria-hidden
         weight="bold"
-        className="pointer-events-none absolute top-1/2 right-[var(--input-px,0.75rem)] hidden size-[var(--icon-sm)] -translate-y-1/2 text-text-tertiary redesign:block"
+        className={cn(
+          "pointer-events-none absolute top-1/2 right-[var(--input-px,0.75rem)] hidden size-[var(--icon-sm)] -translate-y-1/2 text-text-tertiary redesign:block",
+          // The caret follows the field: brighter on hover and focus, red
+          // when invalid, as faded as the value when disabled.
+          "redesign:peer-enabled:peer-hover:text-text-secondary redesign:peer-focus-visible:text-text-secondary redesign:peer-aria-invalid:text-danger redesign:peer-disabled:text-[color:color-mix(in_oklab,var(--color-text-tertiary)_70%,transparent)]",
+        )}
       />
     </span>
   );

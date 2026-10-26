@@ -737,7 +737,7 @@
   /* Select (ui/select.tsx): the native arrow off, a Phosphor caret drawn
      in its place, with room for it. */
   --select-appearance: none;
-  --select-pr: 2.25rem;
+  --select-pr: 2.5rem;
   --select-h-sm: var(--control-sm);
 
   --icon-button-radius: var(--radius-pill);
