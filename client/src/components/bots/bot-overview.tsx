@@ -1,5 +1,4 @@
 import type { Channel, ServerBotActivityItem, ServerBotDto, ServerBotOverview } from "@pqp/shared";
-import type { KeyboardEvent } from "react";
 import {
   AlarmClock,
   BarChart3,
@@ -18,6 +17,7 @@ import {
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { intlLocale } from "@/lib/locale";
 import { cn } from "@/lib/utils";
+import { Tabs } from "@/components/ui/tabs";
 
 export type BotTab = "overview" | "voice" | "powers";
 
@@ -30,35 +30,14 @@ const TABS: Array<[BotTab, MessageKey]> = [
 /** The bot page's three tabs: a real tablist, arrow keys move between them. */
 export function BotTabs({ value, onChange }: { value: BotTab; onChange: (next: BotTab) => void }) {
   const { t } = useTranslation();
-  function onKeyDown(event: KeyboardEvent<HTMLButtonElement>, index: number) {
-    const step = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
-    if (!step) return;
-    event.preventDefault();
-    const next = TABS[(index + step + TABS.length) % TABS.length]![0];
-    onChange(next);
-    const tabs = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
-    tabs?.[TABS.findIndex(([id]) => id === next)]?.focus();
-  }
   return (
-    <div role="tablist" aria-label={t("bots.settings.tabs")} className="flex gap-1 border-b border-border">
-      {TABS.map(([id, label], index) => (
-        <button
-          key={id}
-          type="button"
-          role="tab"
-          aria-selected={value === id}
-          tabIndex={value === id ? 0 : -1}
-          onClick={() => onChange(id)}
-          onKeyDown={(event) => onKeyDown(event, index)}
-          className={cn(
-            "-mb-px border-b-2 px-3 pb-2.5 pt-1 text-sm font-semibold transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-focus-ring)]",
-            value === id ? "border-accent text-text" : "border-transparent text-text-tertiary hover:text-text",
-          )}
-        >
-          {t(label)}
-        </button>
-      ))}
-    </div>
+    <Tabs
+      label={t("bots.settings.tabs")}
+      variant="underline"
+      value={value}
+      onValueChange={onChange}
+      items={TABS.map(([id, label]) => ({ id, label: t(label) }))}
+    />
   );
 }
 

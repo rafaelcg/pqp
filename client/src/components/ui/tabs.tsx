@@ -19,8 +19,9 @@ import { cn } from "@/lib/utils";
  * | `filled`    | `sm` | a status filter (reports)                         |
  *
  * With the toggle off each shape draws exactly what its call sites drew
- * before; the palette aliases (`ink`, `paper`, `signal`) stay where they
- * were, so a tab inside `.on-media-scope` keeps that scope's colours. Under
+ * before, spelled with role names (`surface-1` for the old `ink-2`). None of
+ * them sits inside `.on-media-scope`; a tab row placed there would need the
+ * scope's `on-media` roles passed in through `className`. Under
  * the redesign every shape reads `--tabs-*` tokens, and `segmented` is the
  * same pill track and raised thumb as RadioGroup's (`--segmented-*`).
  *
@@ -58,6 +59,8 @@ export interface TabsProps<T extends string> {
 
 interface Look {
   list: string;
+  /** Focus ring. Only the shape that drew one before draws it with the toggle off. */
+  focus: string;
   tab: string;
   on: string;
   off: string;
@@ -65,44 +68,52 @@ interface Look {
 
 const FOCUS =
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring";
+const FOCUS_REDESIGN =
+  "redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-focus-ring";
 
 /** Keyed `variant:size`. A combination missing here falls back to `md`. */
 const LOOKS: Record<string, Look> = {
   "underline:md": {
     list: "flex gap-1 border-b border-[color:var(--tabs-rule,var(--color-border))]",
+    focus: FOCUS,
     tab: "-mb-px border-b-2 px-3 pb-2.5 pt-1 text-sm font-semibold transition-colors duration-[var(--duration-fast)]",
     on: "border-accent text-text",
     off: "border-transparent text-[color:var(--tabs-off-text,var(--color-text-tertiary))] hover:text-text",
   },
   "segmented:md": {
-    list: "grid auto-cols-fr grid-flow-col gap-1 rounded-[var(--segmented-radius,0.75rem)] bg-[color:var(--segmented-bg,color-mix(in_oklab,var(--color-ink-3)_60%,transparent))] p-[var(--tabs-track-pad,0.25rem)]",
-    tab: "min-w-0 truncate rounded-[var(--segmented-radius,0.5rem)] px-3 py-1.5 text-sm transition-colors duration-[var(--duration-fast)]",
-    on: "bg-[color:var(--segmented-thumb,var(--color-ink-2))] font-medium text-paper shadow-[var(--segmented-thumb-shadow,0_1px_3px_0_rgb(0_0_0/0.1),0_1px_2px_-1px_rgb(0_0_0/0.1))]",
-    off: "text-[color:var(--segmented-text,var(--color-paper-muted))] hover:text-paper",
+    list: "grid auto-cols-fr grid-flow-col gap-1 rounded-[var(--segmented-radius,0.75rem)] bg-[color:var(--segmented-bg,color-mix(in_oklab,var(--color-surface-2)_60%,transparent))] p-[var(--tabs-track-pad,0.25rem)]",
+    focus: FOCUS_REDESIGN,
+    tab: "min-w-0 redesign:truncate rounded-[var(--segmented-radius,0.5rem)] px-3 py-1.5 text-sm transition-colors duration-[var(--duration-fast)]",
+    on: "bg-[color:var(--segmented-thumb,var(--color-surface-1))] font-medium text-text shadow-[var(--segmented-thumb-shadow,0_1px_3px_0_rgb(0_0_0/0.1),0_1px_2px_-1px_rgb(0_0_0/0.1))]",
+    off: "text-[color:var(--segmented-text,var(--color-text-tertiary))] hover:text-text",
   },
   "segmented:xs": {
-    list: "grid auto-cols-fr grid-flow-col gap-0.5 rounded-[var(--segmented-radius,0.5rem)] bg-[color:var(--segmented-bg,color-mix(in_oklab,var(--color-ink-3)_60%,transparent))] p-0.5",
+    list: "grid auto-cols-fr grid-flow-col gap-0.5 rounded-[var(--segmented-radius,0.5rem)] bg-[color:var(--segmented-bg,color-mix(in_oklab,var(--color-surface-2)_60%,transparent))] p-0.5",
+    focus: FOCUS_REDESIGN,
     tab: "min-w-0 truncate rounded-[var(--segmented-radius,0.375rem)] px-1.5 py-1 text-[11px] font-medium transition-colors",
-    on: "bg-[color:var(--segmented-thumb,var(--color-ink-2))] text-paper shadow-[var(--segmented-thumb-shadow,0_0_transparent)]",
-    off: "text-[color:var(--segmented-text,var(--color-paper-muted))] hover:text-paper",
+    on: "bg-[color:var(--segmented-thumb,var(--color-surface-1))] text-text shadow-[var(--segmented-thumb-shadow,0_0_transparent)]",
+    off: "text-[color:var(--segmented-text,var(--color-text-tertiary))] hover:text-text",
   },
   "pill:md": {
     list: "flex items-center gap-1",
+    focus: FOCUS_REDESIGN,
     tab: "flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[var(--tabs-pill-radius,0.375rem)] px-2.5 py-1.5 text-sm",
-    on: "bg-[color:var(--tabs-pill-on,var(--color-ink-3))] text-paper",
-    off: "text-[color:var(--tabs-off-text,var(--color-paper-muted))] hover:bg-[color:var(--tabs-pill-hover,color-mix(in_oklab,var(--color-ink-3)_70%,transparent))] hover:text-paper",
+    on: "bg-[color:var(--tabs-pill-on,var(--color-surface-2))] text-text",
+    off: "text-[color:var(--tabs-off-text,var(--color-text-tertiary))] hover:bg-[color:var(--tabs-pill-hover,color-mix(in_oklab,var(--color-surface-2)_70%,transparent))] hover:text-text",
   },
   "pill:xs": {
     list: "flex shrink-0 items-center gap-0.5",
+    focus: FOCUS_REDESIGN,
     tab: "rounded-[var(--tabs-pill-radius,var(--radius-control))] px-2 py-0.5 font-semibold transition-colors",
-    on: "bg-[color:var(--tabs-pill-on,var(--color-surface-2))] text-paper",
-    off: "text-[color:var(--tabs-off-text,var(--color-paper-muted))] hover:bg-[color:var(--tabs-pill-hover,var(--color-surface-2))] hover:text-paper",
+    on: "bg-[color:var(--tabs-pill-on,var(--color-surface-2))] text-text",
+    off: "text-[color:var(--tabs-off-text,var(--color-text-tertiary))] hover:bg-[color:var(--tabs-pill-hover,var(--color-surface-2))] hover:text-text",
   },
   "filled:sm": {
     list: "flex flex-wrap gap-1.5",
+    focus: FOCUS_REDESIGN,
     tab: "rounded-[var(--tabs-pill-radius,0.375rem)] px-2.5 py-1 text-xs font-medium transition-colors",
-    on: "bg-signal text-ink",
-    off: "bg-[color:var(--tabs-filled-off,var(--color-ink-3))] text-[color:var(--tabs-off-text,var(--color-paper-muted))] hover:text-paper",
+    on: "bg-accent text-surface-0",
+    off: "bg-[color:var(--tabs-filled-off,var(--color-surface-2))] text-[color:var(--tabs-off-text,var(--color-text-tertiary))] hover:text-text",
   },
 };
 
@@ -189,7 +200,7 @@ export function Tabs<T extends string>({
             }}
             className={cn(
               look.tab,
-              FOCUS,
+              look.focus,
               selected ? look.on : look.off,
               item.disabled && "cursor-not-allowed opacity-[var(--tabs-disabled-opacity,0.4)]",
               tabClassName,
@@ -197,7 +208,7 @@ export function Tabs<T extends string>({
           >
             {item.label}
             {item.count !== undefined && item.count > 0 ? (
-              <span className="ml-1 rounded-full bg-signal/20 px-1.5 text-[10px] text-signal">
+              <span className="ml-1 rounded-full bg-accent/20 px-1.5 text-[10px] text-accent">
                 {item.count}
               </span>
             ) : null}

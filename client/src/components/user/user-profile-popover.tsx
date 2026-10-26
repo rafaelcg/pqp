@@ -44,6 +44,7 @@ import { UserAvatar } from "@/components/user/user-avatar";
 import { RankMarks } from "@/components/user/rank-marks";
 import { identityMarks, rankBadges } from "@/lib/author-display";
 import { CheckRow } from "@/components/ui/check-row";
+import { Tabs } from "@/components/ui/tabs";
 import { useFriends } from "@/components/friends/use-friends";
 import { DepoimentoComposer } from "@/components/depoimentos/depoimento-composer";
 import {
@@ -1651,36 +1652,19 @@ function UserProfileCard({
               variant="compact"
             />
             {aboutSegmented && aboutActive && (
-              <div
-                role="tablist"
-                aria-label={t("profile.about.tabs")}
-                className="mt-3 grid gap-0.5 rounded-lg bg-ink-3/60 p-0.5"
-                style={{
-                  gridTemplateColumns: `repeat(${aboutTabs.length}, minmax(0, 1fr))`,
-                }}
-              >
-                {aboutTabs.map((tab) => {
-                  const selected = tab === aboutActive;
-                  return (
-                    <button
-                      key={tab}
-                      type="button"
-                      role="tab"
-                      aria-selected={selected}
-                      data-profile-about={tab}
-                      className={cn(
-                        "truncate rounded-md px-1.5 py-1 text-[11px] font-medium transition-colors",
-                        selected
-                          ? "bg-ink-2 text-paper"
-                          : "text-paper-muted hover:text-paper",
-                      )}
-                      onClick={() => setAboutPick(tab)}
-                    >
-                      {t(ABOUT_LABEL[tab])}
-                    </button>
-                  );
-                })}
-              </div>
+              <Tabs
+                label={t("profile.about.tabs")}
+                variant="segmented"
+                size="xs"
+                className="mt-3"
+                value={aboutActive}
+                onValueChange={setAboutPick}
+                items={aboutTabs.map((tab) => ({
+                  id: tab,
+                  label: t(ABOUT_LABEL[tab]),
+                  data: { "data-profile-about": tab },
+                }))}
+              />
             )}
             {aboutTabs.length > 0 && (
               <div

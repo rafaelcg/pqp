@@ -864,6 +864,38 @@ scrollbar would draw OS chrome over the design.
   with the arrows on both axes (Home and End too), and skips disabled options.
   When the checked option is disabled, the first enabled one takes the tab stop.
 
+### Tabs
+
+`tabs.tsx`. A row of tabs that switch what one panel shows, with one keyboard
+model and four shapes.
+
+- **Variants.** `underline` (`md`: a page's sections, the bot overview),
+  `segmented` (`md`: two to four views of one thing, a role; `xs`: the same in
+  a popover, a profile's about), `pill` (`md`: a header's lists, friends;
+  `xs`: a compact pane header with counts, the call split) and `filled`
+  (`sm`: a status filter, the reports queues).
+- **Props.** `items` (`id`, `label`, optional `count`, `disabled` and `data`
+  for `data-*` hooks), `value`, `onValueChange`, `label` (the tablist's
+  accessible name), `variant`, `size`, `panelId` (each tab's
+  `aria-controls`), `className` for the list's layout and `tabClassName` for
+  layout on every tab.
+- **States.** Each shape draws, with the toggle off, what its call sites drew
+  before. Only `underline` had a focus ring, so only it draws one with the
+  toggle off; the others keep the browser's outline there.
+- **Under the redesign.** Unselected labels are `text-secondary`. Pills are
+  round, the selected one a 12% text tint and the hover the ghost tint. The
+  filled filter's unselected chips are a 7% text tint. `segmented` is
+  RadioGroup's track and thumb (`--segmented-*`) with a 3px pad, and its cells
+  truncate. Disabled is 0.5. Every value is a `--tabs-*` or `--segmented-*`
+  token with the old value as its fallback.
+- **Use it** to switch a panel. **Do not** use it for one of a few values in a
+  form (`RadioGroup`) or a settings dialog's side list (`SectionRail`).
+- **Accessibility.** `role="tablist"` with `aria-label`; each tab is a
+  `button role="tab"` with `aria-selected`. Only the selected tab is in the
+  tab order; the arrows on both axes, Home and End move and select, and skip
+  a disabled tab. When the selected tab is disabled or missing, the first
+  enabled one takes the tab stop.
+
 ### Slider
 
 `slider.tsx`. A one-dimensional value on `@radix-ui/react-slider`. Four
@@ -925,8 +957,6 @@ reads the same on every surface.
 Not built. Do not invent a local one; add it here instead, in `ui/`, with a
 variant set, and then use it everywhere.
 
-- **Tabs.** `SectionRail` is a tablist, but it is settings-shaped and not
-  general.
 - **Toast.** The animations (`animate-toast-in`, `animate-toast-out`) exist in
   `index.css` and each caller draws its own container.
 - **Count badge.** The status `Badge` exists; a general count pill does not

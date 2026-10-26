@@ -488,6 +488,19 @@ reviewer, at André's request to spend less on agents:
 Round 2's MUST (the "Modo" picker drew the old track) and round 4's MUST (a
 selected chip read by hue only) were fixed. Stopped at the five-round cap
 with no MUST. Screenshots: `~/pqp-redesign/p-radio/`.
+### p-tabs
+
+Spec (audit: six hand-built tab rows, two of them copies of each other):
+
+1. Job: switch one panel, in four shapes (underline, segmented, pill,
+   filled) with one keyboard model: roving tab stop, arrows, Home, End.
+2. Redesign: secondary text for unselected tabs, round tinted pills,
+   RadioGroup's track and thumb for `segmented`, a tinted filter chip.
+3. Folded: bot overview, roles, profile popover, friends, call split, and
+   both report queues (now one `ReportStatusTabs`). Each keeps its toggle-off
+   look; only the bot tabs keep a focus ring with the toggle off.
+4. Left out: the live preview (a public page), the phone tab bar (`m-*`)
+   and `SectionRail` (settings navigation, its own element).
 
 ## Open questions for André
 

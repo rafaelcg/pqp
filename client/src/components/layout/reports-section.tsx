@@ -5,11 +5,12 @@ import {
 } from "@pqp/shared";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Tabs } from "@/components/ui/tabs";
 import { ReportAttachments } from "@/components/layout/report-attachments";
 import { ReportContextPanel } from "@/components/layout/report-context-panel";
 import { ApiError, fetchServerReports, resolveReport } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
-import { cn, formatFullTimestamp } from "@/lib/utils";
+import { formatFullTimestamp } from "@/lib/utils";
 
 /**
  * The moderation queue for one server.
@@ -27,6 +28,27 @@ const STATUS_TABS: Array<{ id: ReportStatus | "all"; key: "reports.tab.open" | "
   { id: "dismissed", key: "reports.tab.dismissed" },
   { id: "all", key: "reports.tab.all" },
 ];
+
+/** The status filter both report queues use: the server's and the instance's. */
+export function ReportStatusTabs({
+  value,
+  onValueChange,
+}: {
+  value: ReportStatus | "all";
+  onValueChange: (next: ReportStatus | "all") => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <Tabs
+      label={t("reports.title")}
+      variant="filled"
+      size="sm"
+      value={value}
+      onValueChange={onValueChange}
+      items={STATUS_TABS.map((tab) => ({ id: tab.id, label: t(tab.key) }))}
+    />
+  );
+}
 
 const EMPTY_BY_STATUS: Record<ReportStatus | "all", "reports.empty.open" | "reports.empty.actioned" | "reports.empty.dismissed" | "reports.empty.all"> = {
   open: "reports.empty.open",
@@ -133,25 +155,7 @@ export function ReportsSection({ serverId }: { serverId: string }) {
       </h3>
       <p className="text-sm text-text-secondary">{t("reports.description")}</p>
 
-      <div className="flex flex-wrap gap-1.5" role="tablist">
-        {STATUS_TABS.map((tab) => (
-          <button
-            key={tab.id}
-            type="button"
-            role="tab"
-            aria-selected={status === tab.id}
-            onClick={() => setStatus(tab.id)}
-            className={cn(
-              "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
-              status === tab.id
-                ? "bg-signal text-ink"
-                : "bg-ink-3 text-paper-muted hover:text-paper",
-            )}
-          >
-            {t(tab.key)}
-          </button>
-        ))}
-      </div>
+      <ReportStatusTabs value={status} onValueChange={setStatus} />
 
       {loading && (
         <p role="status" aria-live="polite" className="text-sm text-paper-muted">
