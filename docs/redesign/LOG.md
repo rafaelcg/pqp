@@ -41,6 +41,7 @@ Read this file and the inventory at the start of every session.
 | 2 | `p-select` | Merged (cap at round 5: 8.9, 8.8, no MUST) |
 | 2 | `p-checkbox` | Merged (cap at round 5: best round 3, 8.6, 8.5; round 5 MUST fixed) |
 | 2 | `p-popover` | Merged (cap at round 5: 8.4 Opus, 8.3 Codex r4, no MUST) |
+| 2 | `p-radio` | Merged (cap at round 5: 8.3 Opus r4, 8.0 Codex r5, no MUST) |
 
 ## Phase 0: directions
 
@@ -472,6 +473,21 @@ Spec (audit: RadioGroup in 13 files; 14 more draw their own radios):
    (appearance, bots, avatar, forum icons, the settings choice grid) are a
    different control and stay.
 4. Tokens with fallbacks; the toggle off draws what it drew before.
+
+Council (Opus 5.5, GPT-6 Luna via Codex), overall after. Round 5 ran one
+reviewer, at André's request to spend less on agents:
+
+| Round | Opus | Codex |
+|---|---|---|
+| 1 | 7.7 | 8.7 |
+| 2 | 7.8 | 8.8 |
+| 3 | 8.0 | 8.5 |
+| 4 | 8.3 | 8.2 |
+| 5 | not run | 8.0 |
+
+Round 2's MUST (the "Modo" picker drew the old track) and round 4's MUST (a
+selected chip read by hue only) were fixed. Stopped at the five-round cap
+with no MUST. Screenshots: `~/pqp-redesign/p-radio/`.
 
 ## Open questions for André
 
