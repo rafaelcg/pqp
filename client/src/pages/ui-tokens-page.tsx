@@ -26,8 +26,7 @@ import {
   LogOut,
   Pencil,
 } from "lucide-react";
-import { Check as CheckIcon, Hash as LineHash, X as LineX } from "lucide-react";
-import { CalendarClock, Check as CheckIcon, Hash as LineHash, X as LineX } from "lucide-react";
+import { CalendarClock, X as LineX } from "lucide-react";
 import { Navigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { BANNER_FILL_REDESIGN, Banner, BannerAction, BannerText } from "@/components/ui/banner";
