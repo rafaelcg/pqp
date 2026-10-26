@@ -43,6 +43,7 @@ Read this file and the inventory at the start of every session.
 | 2 | `p-popover` | Merged (cap at round 5: 8.4 Opus, 8.3 Codex r4, no MUST) |
 | 2 | `p-radio` | Merged (cap at round 5: 8.3 Opus r4, 8.0 Codex r5, no MUST) |
 | 2 | `p-tabs` | Merged (cap at round 5: 8.4 Opus r5, 8.7 Codex r4, no MUST) |
+| 2 | `p-menu` | Merged (cap at round 5: 8.4 Opus r5, 8.4 Codex r4, no MUST, approved) |
 
 ## Phase 0: directions
 
@@ -422,6 +423,46 @@ Stopped at the five-round cap. Best round: 3. Round 5's MUST (a saving
 switch in a settings row still faded like a disabled one) was fixed after
 the council and pinned by a test. Covers Switch, CheckRow and Checkbox.
 Screenshots: `~/pqp-redesign/p-checkbox/`.
+
+### p-menu
+
+Spec (audit: Menu in 15 files, ContextMenu in 25, one shared row renderer;
+six hand-built `role="menu"` lists):
+
+1. Job: a list of actions or exclusive choices, opened by a click (Menu) or
+   a right-click and long-press (ContextMenu, with a quick-reaction strip).
+2. Redesign: a visible highlight, concentric rows, quieter icons that come
+   up on the highlighted row, sentence-case headings, the Phosphor tick,
+   disabled at 0.5.
+3. Merges: the recipe is exported (`MENU_SURFACE`, `MENU_ROW`,
+   `MENU_ROW_BUTTON`, `MENU_ICON`, `MENU_SEPARATOR`); the composer's "+"
+   menu, which drew the same classes by hand, now uses it.
+4. Near-folds left for their surface (an `ink-2` panel with
+   `shadow-popover`, so folding changes the toggle-off look): the status
+   menu (`s-user-panel`), the profile popover's "more" (`f-profile-popover`),
+   video quality (`f-call`), the watch player's two (`f-watch-party`), the
+   message list's "more" (`s-message`).
+5. Round 1 also moved: the menu surface now builds on `POPOVER_SURFACE`;
+   `topContent` callers use `MENU_SEPARATOR` and the heading recipe; a
+   disabled row fades its icon and label, not its detail. Left for
+   `s-message`: the message menu's danger rows sit mid-list, not last.
+
+Council (Opus 5.5, GPT-6 Luna via Codex), overall after. Rounds 4 and 5 ran
+one reviewer each:
+
+| Round | Opus | Codex |
+|---|---|---|
+| 1 | 7.7 | 8.7 |
+| 2 | 8.0 | 8.5 |
+| 3 | 8.4 | 8.5 |
+| 4 | not run | 8.4 |
+| 5 | 8.4 | not run |
+
+Round 5 approved the element as it stands. Both reviewers asked to move the
+message menu's "Excluir mensagem" to the end; that changes the order with
+the toggle off, so it is logged for `s-message`. Open for the icon element:
+whether 16px menu icons go filled, as direction B says, or stay outline.
+Screenshots: `~/pqp-redesign/p-menu/`.
 
 ### p-popover
 
