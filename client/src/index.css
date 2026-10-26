@@ -839,6 +839,7 @@
   --tabs-pill-on: color-mix(in oklab, var(--color-text) 16%, transparent);
   --tabs-pill-hover: var(--button-ghost-hover);
   --tabs-filled-off: color-mix(in oklab, var(--color-text) 7%, transparent);
+  --tabs-filled-hover: color-mix(in oklab, var(--color-text) 12%, transparent);
   --tabs-disabled-opacity: var(--button-disabled-opacity);
   --tabs-count-bg: var(--color-accent-soft);
   --tabs-count-text: var(--color-on-accent-soft);
@@ -1063,7 +1064,8 @@
 :root[data-redesign][data-theme="light"] {
   --input-invalid-bg: color-mix(in oklab, var(--color-danger) 6%, var(--color-field));
   /* Light shows the selected pill clearly at 12%. */
-  --tabs-pill-on: color-mix(in oklab, var(--color-text) 12%, transparent);
+  /* 7 points over the 8% ghost hover, so a hovered pill never reads as selected. */
+  --tabs-pill-on: color-mix(in oklab, var(--color-text) 15%, transparent);
   --shadow-1: 0 1px 2px oklch(0.4 0.02 262 / 0.08);
   --shadow-2: 0 12px 32px oklch(0.4 0.02 262 / 0.16);
   --shadow-3: 0 24px 64px -16px oklch(0.4 0.02 262 / 0.26);

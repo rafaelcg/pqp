@@ -82,7 +82,7 @@ const LOOKS: Record<string, Look> = {
     off: "border-transparent text-[color:var(--tabs-off-text,var(--color-text-tertiary))] hover:text-text",
   },
   "segmented:md": {
-    list: "grid auto-cols-fr grid-flow-col gap-1 rounded-[var(--segmented-radius,0.75rem)] bg-[color:var(--segmented-bg,color-mix(in_oklab,var(--color-surface-2)_60%,transparent))] p-[var(--segmented-pad,0.25rem)]",
+    list: "grid auto-cols-fr grid-flow-col gap-1 redesign:gap-0.5 rounded-[var(--segmented-radius,0.75rem)] bg-[color:var(--segmented-bg,color-mix(in_oklab,var(--color-surface-2)_60%,transparent))] p-[var(--segmented-pad,0.25rem)]",
     focus: `${FOCUS_REDESIGN} redesign:focus-visible:ring-offset-[length:var(--segmented-ring-offset)] redesign:focus-visible:ring-offset-transparent`,
     // RadioGroup's metrics under the redesign: the cell is the control
     // height minus the track's pad, so the track sits on the ladder.
@@ -93,8 +93,9 @@ const LOOKS: Record<string, Look> = {
   "segmented:xs": {
     list: "grid auto-cols-fr grid-flow-col gap-0.5 rounded-[var(--segmented-radius,0.5rem)] bg-[color:var(--segmented-bg,color-mix(in_oklab,var(--color-surface-2)_60%,transparent))] p-0.5 redesign:p-[var(--segmented-pad)]",
     focus: `${FOCUS_REDESIGN} redesign:focus-visible:ring-offset-[length:var(--segmented-ring-offset)] redesign:focus-visible:ring-offset-transparent`,
-    tab: "min-w-0 truncate rounded-[var(--segmented-radius,0.375rem)] px-1.5 py-1 text-[11px] font-medium transition-colors redesign:h-[var(--segmented-h-sm)] redesign:py-0",
-    on: "bg-[color:var(--segmented-thumb,var(--color-surface-1))] text-text shadow-[var(--segmented-thumb-shadow,0_0_transparent)]",
+    // Under the redesign: 12px, regular until selected, as RadioGroup's cells.
+    tab: "min-w-0 truncate rounded-[var(--segmented-radius,0.375rem)] px-1.5 py-1 text-[11px] font-medium transition-colors redesign:h-[var(--segmented-h-sm)] redesign:py-0 redesign:text-xs redesign:font-normal",
+    on: "bg-[color:var(--segmented-thumb,var(--color-surface-1))] text-text shadow-[var(--segmented-thumb-shadow,0_0_transparent)] redesign:font-medium",
     off: "text-[color:var(--segmented-text,var(--color-text-tertiary))] hover:text-text",
   },
   "pill:md": {
@@ -118,7 +119,7 @@ const LOOKS: Record<string, Look> = {
     focus: FOCUS_REDESIGN,
     tab: "rounded-[var(--tabs-pill-radius,0.375rem)] px-2.5 py-1 text-xs font-medium transition-colors",
     on: "bg-accent text-surface-0 redesign:text-on-accent",
-    off: "bg-[color:var(--tabs-filled-off,var(--color-surface-2))] text-[color:var(--tabs-off-text,var(--color-text-tertiary))] hover:text-text",
+    off: "bg-[color:var(--tabs-filled-off,var(--color-surface-2))] text-[color:var(--tabs-off-text,var(--color-text-tertiary))] hover:text-text redesign:hover:bg-[color:var(--tabs-filled-hover)]",
   },
 };
 
@@ -213,7 +214,7 @@ export function Tabs<T extends string>({
           >
             {item.label}
             {item.count !== undefined && item.count > 0 ? (
-              <span className="ml-1 rounded-full bg-[color:var(--tabs-count-bg,color-mix(in_oklab,var(--color-accent)_20%,transparent))] px-1.5 text-[length:var(--tabs-count-size,10px)] text-[color:var(--tabs-count-text,var(--color-accent))] redesign:tabular-nums">
+              <span className="ml-1 rounded-full bg-[color:var(--tabs-count-bg,color-mix(in_oklab,var(--color-accent)_20%,transparent))] px-1.5 text-[length:var(--tabs-count-size,10px)] text-[color:var(--tabs-count-text,var(--color-accent))] redesign:inline-block redesign:h-4 redesign:min-w-4 redesign:px-1 redesign:text-center redesign:leading-4 redesign:tabular-nums">
                 {item.count}
               </span>
             ) : null}

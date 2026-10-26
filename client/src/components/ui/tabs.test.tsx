@@ -164,5 +164,9 @@ describe("Tabs looks with the toggle off", () => {
     expect(look("segmented", "md").on).toContain("redesign:h-[var(--segmented-h)]");
     expect(look("segmented", "xs").on).toContain("redesign:h-[var(--segmented-h-sm)]");
     expect(look("segmented", "xs").list).toContain("redesign:p-[var(--segmented-pad)]");
+    expect(look("segmented", "md").list).toContain("redesign:gap-0.5");
+    expect(look("segmented", "xs").on).toContain("redesign:font-medium");
+    expect(look("segmented", "xs").off).toContain("redesign:font-normal");
+    expect(look("filled", "sm").off).toContain("redesign:hover:bg-[color:var(--tabs-filled-hover)]");
   });
 });

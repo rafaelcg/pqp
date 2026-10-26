@@ -883,14 +883,16 @@ model and four shapes.
   before. Only `underline` had a focus ring, so only it draws one with the
   toggle off; the others keep the browser's outline there.
 - **Under the redesign.** Unselected labels are `text-secondary`. Pills are
-  round, the selected one a 12% text tint and the hover the ghost tint. The
-  filled filter's unselected chips are a 7% text tint, its selected chip
-  takes `on-accent` text. A selected pill is a 16% tint (12% in light) and
-  medium weight, so it differs from a hovered one by more than the fill.
-  `segmented` is RadioGroup's control: its track and thumb, its 3px pad, its
+  round and the hover is the ghost tint. A selected pill is a 16% tint (15%
+  in light) and medium weight, so it differs from a hovered one by more than
+  the fill. The filled filter's unselected chips are a 7% text tint, 12% on
+  hover; its selected chip takes `on-accent` text. `segmented` is
+  RadioGroup's control: its track and thumb, its 2px gap and 3px pad, its
   cell heights (the control ladder minus the pad) and its ring offset; its
-  cells truncate. The underline's focus ring is rounded and inset. A count is
-  `accent-soft` with `on-accent-soft` text at 11px, tabular. Disabled follows
+  cells truncate, and the small one is 12px, regular until selected. The
+  underline's focus ring is rounded and inset. A count is a 16px
+  `accent-soft` pill (a circle for one digit) with `on-accent-soft` text at
+  11px, tabular. Disabled follows
   Button's. Every value is a `--tabs-*` or `--segmented-*` token with the old
   value as its fallback.
 - **Use it** to switch a panel. **Do not** use it for one of a few values in a
