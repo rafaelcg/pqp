@@ -3982,7 +3982,11 @@ html[data-pre] [data-home-hero] .animate-rise {
 }
 
 /* Under the redesign the picker fills its popover: no second corner, no
-   second shadow, no strip of the shell beside it. */
+   second shadow. Its grid has a fixed width inside the web component, so
+   the shell takes the picker's own fill and the strip beside it blends in. */
+:root[data-redesign] .emoji-mart-shell {
+  background-color: rgb(var(--rgb-picker-background));
+}
 :root[data-redesign] .emoji-mart-shell em-emoji-picker {
   --border-radius: 0;
   --shadow: none;
