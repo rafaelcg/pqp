@@ -660,6 +660,21 @@ form submits it. A row in a checklist is `CheckRow`; a setting is `Switch`.
   box never sits beside a full-strength label. A hint under the label indents
   by `calc(var(--tick-size)+0.5rem)` under the redesign.
 
+### Sheet
+
+`sheet.tsx`. Not a component: the look of a panel that rises from a phone's
+bottom edge. Dialog is a sheet below `sm`; the app launcher and the cinema
+stage's picker draw their own.
+
+- With the toggle off each sheet keeps the surface it drew before.
+- **Under the redesign.** `SHEET_SURFACE` (a sheet at every width) and
+  `SHEET_SURFACE_PHONE` (below `sm` only) give a 24px top radius, the raised
+  fill (`surface-2` in dark, `surface-0` in light), a 10% text hairline on
+  the top edge only and a shadow cast upwards. `SHEET_SCRIM` is the scrim
+  for a sheet that draws its own. Every value is a `--sheet-*` token.
+- **Use it** for a new phone panel anchored to the bottom edge. **Do not**
+  add a grab handle unless the sheet can be dragged.
+
 ### Skeleton
 
 `skeleton.tsx`. A pulsing block at `bg-surface-3/50`, plus three composed
