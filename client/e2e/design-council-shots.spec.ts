@@ -445,6 +445,10 @@ test("captures the design council screens", async ({ browser }) => {
       await page.getByRole("button", { name: "Abrir configurações" }).first().click();
       await expect(page.getByRole("dialog")).toBeVisible();
       await shoot(page, `04-settings-${theme}`);
+      // A section made of switches, for the choice controls.
+      await page.getByRole("dialog").getByText("Notificações", { exact: true }).first().click();
+      await expect(page.getByRole("dialog").getByRole("switch").first()).toBeVisible();
+      await shoot(page, `11-settings-switches-${theme}`);
       await page.keyboard.press("Escape");
 
       await page.locator("[data-server-menu-trigger]").first().click();
