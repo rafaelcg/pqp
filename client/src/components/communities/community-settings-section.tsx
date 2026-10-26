@@ -477,7 +477,7 @@ export function CommunitySettingsSection({
               when their hand is on the box. */}
           <div className="space-y-1">
             <label
-              className="flex items-center gap-2 text-sm text-paper"
+              className="group/checkbox flex items-center gap-2 text-sm text-paper"
               htmlFor={addressToggleId}
             >
               <Checkbox
@@ -522,7 +522,7 @@ export function CommunitySettingsSection({
             data-directory-offer={offerDirectory ? "" : undefined}
           >
             <label
-              className="flex items-center gap-2 text-sm text-paper"
+              className="group/checkbox flex items-center gap-2 text-sm text-paper"
               htmlFor={toggleId}
             >
               <Checkbox

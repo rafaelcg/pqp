@@ -119,4 +119,37 @@ describe("Checkbox", () => {
     expect(check).toContain("redesign:peer-checked:block");
     expect(check).toContain("pointer-events-none");
   });
+
+describe("round 2 behaviour", () => {
+  it("centres the track on a described label and steps a busy one back", () => {
+    const host = draw(
+      <Switch checked busy onCheckedChange={() => undefined} label="Salvando" description="d" />,
+    );
+    const button = host.querySelector("button")!;
+    expect(button.className).toContain("redesign:aria-busy:cursor-progress");
+    const track = button.querySelector("span[aria-hidden]")!.getAttribute("class")!;
+    expect(track).toContain("mt-[var(--switch-desc-offset,0.125rem)]");
+    expect(track).toContain("redesign:opacity-70");
+  });
+
+  it("fades a disabled Checkbox's check and strengthens its edge from a named label group", () => {
+    const host = draw(<Checkbox disabled defaultChecked />);
+    expect(host.querySelector("svg")!.getAttribute("class")).toContain(
+      "redesign:peer-disabled:opacity-[var(--tick-disabled-opacity,0.5)]",
+    );
+    expect(host.querySelector("input")!.className).toContain(
+      "redesign:group-hover/checkbox:enabled:not-checked:border-[color:var(--tick-hover-ring)]",
+    );
+  });
+
+  it("aligns a CheckRow's tick to the first line through tokens", () => {
+    const button = draw(
+      <CheckRow checked={false} onCheckedChange={() => undefined} label="A" description="b" />,
+    ).querySelector("button")!;
+    expect(button.className).toContain("[align-items:var(--check-row-align,center)]");
+    expect(button.querySelector("span[aria-hidden]:last-child")!.getAttribute("class")).toContain(
+      "mt-[var(--tick-line-offset,0px)]",
+    );
+  });
+});
 });

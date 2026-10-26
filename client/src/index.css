@@ -708,6 +708,9 @@
   --switch-knob-off: var(--color-text-secondary);
   --switch-knob-shadow: 0 1px 2px oklch(0.06 0.02 262 / 0.45), 0 0 0 0.5px oklch(0.06 0.02 262 / 0.2);
   --tick-size: 1.125rem;
+  /* An 18px tick on a 20px first line: the row aligns to the top. */
+  --check-row-align: flex-start;
+  --tick-line-offset: 0.0625rem;
   --tick-size-md: 1.25rem;
   --tick-glyph: 0.75rem;
   --tick-glyph-md: 0.875rem;

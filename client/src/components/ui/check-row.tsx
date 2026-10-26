@@ -119,7 +119,9 @@ export function CheckRow({
       disabled={disabled}
       onClick={() => onCheckedChange(!checked)}
       className={cn(
-        "group flex w-full items-center justify-between gap-4 rounded-[var(--choice-row-radius,var(--radius-control))] px-2 py-2 text-left",
+        // Under the redesign the tick sits on the label's first line, as a
+        // Switch's track does, instead of centring on label and description.
+        "group flex w-full [align-items:var(--check-row-align,center)] justify-between gap-4 rounded-[var(--choice-row-radius,var(--radius-control))] px-2 py-2 text-left",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring",
         disabled
           ? "cursor-not-allowed"
@@ -157,11 +159,10 @@ export function CheckRow({
       <TickBox
         checked={checked}
         disabled={disabled}
-        className={
-          !disabled && !checked
-            ? "redesign:group-hover:ring-[color:var(--tick-hover-ring)]"
-            : undefined
-        }
+        className={cn(
+          "mt-[var(--tick-line-offset,0px)]",
+          !disabled && !checked && "redesign:group-hover:ring-[color:var(--tick-hover-ring)]",
+        )}
       />
     </button>
   );

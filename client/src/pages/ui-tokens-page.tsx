@@ -1014,19 +1014,19 @@ function PrimitiveSheet() {
             />
           </div>
           <div className="flex flex-col gap-3 rounded-[var(--radius-card)] border border-border bg-surface-1 p-3 text-sm text-text">
-            <label className="group flex items-center gap-3">
+            <label className="group/checkbox flex items-center gap-3">
               <Checkbox />
               {t("qaUi.checkbox.label")}
             </label>
-            <label className="group flex items-center gap-3">
+            <label className="group/checkbox flex items-center gap-3">
               <Checkbox defaultChecked />
               {t("qaUi.switch.label")}
             </label>
-            <label className="group flex items-center gap-3 text-text-tertiary">
+            <label className="group/checkbox flex items-center gap-3 text-text-tertiary">
               <Checkbox disabled />
               {t("qaUi.state.disabled")}
             </label>
-            <label className="group flex items-center gap-3 text-text-tertiary">
+            <label className="group/checkbox flex items-center gap-3 text-text-tertiary">
               <Checkbox disabled defaultChecked />
               {`${t("qaUi.state.disabled")} · ${t("qaUi.check.label")}`}
             </label>

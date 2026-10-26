@@ -654,7 +654,7 @@ form submits it. A row in a checklist is `CheckRow`; a setting is `Switch`.
   tokens draw the same box as `TickBox`, with a Phosphor check over it that
   ignores the pointer.
 - `wrapperClassName` takes margins; `className` styles the input.
-- Give the `<label>` around it `group`: hovering the label then strengthens
+- Give the `<label>` around it `group/checkbox`: hovering the label then strengthens
   the box's edge, as hovering a CheckRow's row does.
 
 ### Skeleton
@@ -876,8 +876,6 @@ reads the same on every surface.
 Not built. Do not invent a local one; add it here instead, in `ui/`, with a
 variant set, and then use it everywhere.
 
-- **Checkbox.** A bare `<input type="checkbox">` with `accent-[var(--color-accent)]`
-  in PromptDialog. `CheckRow` covers the row case only.
 - **Tabs.** `SectionRail` is a tablist, but it is settings-shaped and not
   general.
 - **Toast.** The animations (`animate-toast-in`, `animate-toast-out`) exist in
