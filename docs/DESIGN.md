@@ -467,9 +467,11 @@ so a variant and a size are props, not class strings.
   `--color-border-strong`;
   ghost 8%; danger-ghost 14%), never a surface, so they read on a pane and
   on a dialog alike. Disabled is `opacity: 0.5`, and a disabled primary is
-  switched off: an empty pill in the strong edge, a `text-tertiary` label,
-  no shadow and full opacity, so it keeps its outline on a dialog and, with
-  no fill, cannot pass for a live secondary. `sm` takes a 13px label. Those
+  switched off: an empty pill in the strong edge, a medium-weight label at
+  70% of `text-tertiary`, no shadow and full opacity, so it keeps its
+  outline on a dialog and cannot pass for a live button. The rule for any
+  call site: disabled means off, never just dimmed. Do not add a
+  `disabled:opacity-*` of your own; the primitive owns both recipes. `sm` takes a 13px label. Those
   disabled-only rules are the one place the
   primitive uses `redesign:` classes. Everything else comes from
   `--button-*` component tokens that are unset with the toggle off and fall
