@@ -429,7 +429,7 @@ test("captures the design council screens", async ({ browser }) => {
       await hideDevBanner(page);
       await shoot(page, `01-chat-${theme}`);
       // A popover in place: the composer's emoji picker.
-      await page.getByRole("button", { name: "Emoji", exact: true }).first().click();
+      await page.getByRole("button", { name: "Adicionar emoji", exact: true }).first().click();
       await expect(page.locator(".emoji-mart-shell")).toBeVisible();
       await page.waitForTimeout(600);
       await shoot(page, `17-emoji-picker-${theme}`);
