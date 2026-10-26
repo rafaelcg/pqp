@@ -25,7 +25,7 @@ import {
 } from "lucide-react";
 import { Navigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { CARD_LIST, CARD_SURFACE } from "@/components/ui/card";
+import { CARD_LIST, CARD_ROW_HOVER, CARD_SURFACE } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { CheckRow } from "@/components/ui/check-row";
@@ -1339,7 +1339,13 @@ function PrimitiveSheet() {
               <li>
                 <button
                   type="button"
-                  className="flex w-full px-4 py-2.5 text-left text-sm text-text-secondary hover:bg-surface-2 hover:text-text redesign:hover:bg-[color:var(--card-row-hover)]"
+                  className={cn(
+                    "flex w-full px-4 py-2.5 text-left text-sm text-text-secondary hover:bg-surface-2 hover:text-text",
+                    CARD_ROW_HOVER,
+                    // On the dialog the hover is drawn at rest, so both
+                    // surfaces show it in one screenshot.
+                    where === "dialog" && "redesign:bg-[color:var(--card-row-hover)] redesign:text-text",
+                  )}
                 >
                   {t("qaUi.card.rowTwo")}
                 </button>

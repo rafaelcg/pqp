@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CARD_LIST, CARD_SURFACE } from "@/components/ui/card";
+import { CARD_LIST, CARD_ROW_HOVER, CARD_SURFACE } from "@/components/ui/card";
 
 describe("CARD_SURFACE", () => {
   it("is the card every caller drew, with the toggle off", () => {
@@ -18,6 +18,10 @@ describe("CARD_SURFACE", () => {
     expect(CARD_LIST).toContain("divide-[color:var(--card-border,var(--color-border))]");
     // A card that holds no list gets no rule colour on its children.
     expect(CARD_SURFACE).not.toContain("divide-");
+  });
+
+  it("hovers a row in a card with the card's own tint, under the redesign only", () => {
+    expect(CARD_ROW_HOVER).toBe("redesign:hover:bg-[color:var(--card-row-hover)]");
   });
 });
 

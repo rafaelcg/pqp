@@ -1114,6 +1114,9 @@
   /* In light a text tint darkens into a grey tray; a white wash lifts the
      card on a grey dialog and leaves the edge alone on the white pane. */
   --card-bg: color-mix(in oklab, var(--color-surface-0) 60%, transparent);
+  /* Lighter than dark's: over the white wash on a grey dialog, 6% lands at
+     the dialog's own grey and the row reads as a hole. */
+  --card-row-hover: color-mix(in oklab, var(--color-text) 4%, transparent);
   --card-border: color-mix(in oklab, var(--color-text) 10%, transparent);
   --input-invalid-bg: color-mix(in oklab, var(--color-danger) 6%, var(--color-field));
   /* Tabs */

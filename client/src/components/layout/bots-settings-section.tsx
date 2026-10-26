@@ -335,7 +335,7 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
             <p className="text-sm font-semibold text-text">
               {off ? t("bots.settings.asleep") : t("bots.settings.awake")}
             </p>
-            <p className="whitespace-nowrap text-xs text-text-tertiary">
+            <p className="whitespace-nowrap text-xs text-text-tertiary redesign:text-text-secondary">
               {off ? t("bots.settings.asleepHint") : t("bots.settings.awakeHint")}
             </p>
           </div>
@@ -652,7 +652,14 @@ function BotInvite({ onCreate }: { onCreate: () => void }) {
       <p className="mx-auto mt-2 max-w-md text-text-secondary">{t("bots.invite.description")}</p>
       <div className="mt-6 grid gap-3 text-left sm:grid-cols-3">
         {features.map(([Icon, title, body]) => (
-          <div key={title} className="rounded-[var(--radius-card)] border border-border bg-surface-2 p-3">
+          <div
+            key={title}
+            className={cn(
+              "rounded-[var(--radius-card)] border border-border bg-surface-2 p-3",
+              // A card in a card under the redesign: the tint stacks.
+              "redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)]",
+            )}
+          >
             <p className="flex items-center gap-2 text-sm font-semibold text-text">
               <Icon className="h-4 w-4 text-accent" aria-hidden />
               {t(title)}

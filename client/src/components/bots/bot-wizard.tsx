@@ -921,7 +921,7 @@ function TestChat({
     <div className={cn(CARD_SURFACE, "flex flex-col")}>
       <div className="max-h-72 min-h-40 space-y-3 overflow-y-auto p-3" aria-live="polite">
         {messages.length === 0 && (
-          <p className="text-sm text-text-tertiary">{t("bots.wizard.test.empty", { name })}</p>
+          <p className="text-sm text-text-tertiary redesign:text-text-secondary">{t("bots.wizard.test.empty", { name })}</p>
         )}
         {messages.map((message, index) =>
           message.from === "bot" ? (
@@ -1119,7 +1119,7 @@ export function ToolPicker({
                       aria-hidden
                     />
                   </span>
-                  <span className="block truncate text-xs text-text-tertiary">
+                  <span className="block truncate text-xs text-text-tertiary redesign:text-text-secondary">
                     {t("bots.tools.count", { on: on.length, total: groupTools.length })} ·{" "}
                     {t(`bots.tools.groupHint.${group}`)}
                   </span>
