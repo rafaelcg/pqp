@@ -38,4 +38,17 @@ describe("Toast recipe", () => {
       expect(read(path)).toContain("TOAST_SURFACE_REDESIGN");
     }
   });
+
+  it("gives every toast's dismiss button the round ghost and its focus ring", () => {
+    for (const path of [
+      "../dm/dm-toasts.tsx",
+      "../conversations/friend-accepted-toast.tsx",
+      "../forward/forwarded-toast.tsx",
+      "../forward/not-in-server-toast.tsx",
+      "../apps/app-join-host.tsx",
+    ]) {
+      expect(read(path)).toMatch(/className=\{(cn\()?TOAST_CLOSE\b/);
+    }
+    expect(read("../watch-party/waitlist/watch-party-approved-toasts.tsx")).toContain("TOAST_CLOSE_REDESIGN,");
+  });
 });

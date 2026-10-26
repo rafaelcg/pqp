@@ -24,9 +24,16 @@ export const TOAST_SURFACE_REDESIGN =
   "redesign:rounded-[var(--popover-radius)] redesign:border-[color:var(--popover-border)] redesign:bg-[color:var(--popover-surface)] redesign:shadow-[var(--popover-shadow)]";
 
 /**
+ * The dismiss button's redesign half alone: IconButton's round ghost and its
+ * focus ring. For a dismiss button that drew a different square with the
+ * toggle off (the watch party approval's smaller one).
+ */
+export const TOAST_CLOSE_REDESIGN =
+  "redesign:rounded-[var(--icon-button-radius)] redesign:text-[color:var(--icon-button-text)] redesign:hover:bg-[color:var(--icon-button-hover)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--icon-button-ring,var(--color-focus-ring))] redesign:focus-visible:ring-offset-[length:var(--icon-button-ring-offset)] redesign:focus-visible:ring-offset-[color:var(--icon-button-ring-offset-color)]";
+
+/**
  * The dismiss button in a toast's corner. With the toggle off the small
  * square it always was; under the redesign IconButton's round ghost, with its
  * focus ring.
  */
-export const TOAST_CLOSE =
-  "flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-text-tertiary hover:bg-surface-2 hover:text-text redesign:rounded-[var(--icon-button-radius)] redesign:text-[color:var(--icon-button-text)] redesign:hover:bg-[color:var(--icon-button-hover)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--icon-button-ring,var(--color-focus-ring))] redesign:focus-visible:ring-offset-[length:var(--icon-button-ring-offset)] redesign:focus-visible:ring-offset-[color:var(--icon-button-ring-offset-color)]";
+export const TOAST_CLOSE = `flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-text-tertiary hover:bg-surface-2 hover:text-text ${TOAST_CLOSE_REDESIGN}`;

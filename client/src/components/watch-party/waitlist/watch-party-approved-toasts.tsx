@@ -1,7 +1,7 @@
 import { PartyPopper, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useTranslation } from "@/lib/i18n";
-import { TOAST_SURFACE_REDESIGN } from "@/components/ui/toast";
+import { TOAST_CLOSE_REDESIGN, TOAST_SURFACE_REDESIGN } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 
 export interface WatchPartyApprovedCard {
@@ -72,10 +72,14 @@ export function WatchPartyApprovedToasts({
           <button
             type="button"
             aria-label={t("a11y.closeDialog")}
-            className="shrink-0 rounded-[var(--radius-control)] p-1 text-text-tertiary transition-colors hover:bg-surface-3 hover:text-text"
+            className={cn(
+              "shrink-0 rounded-[var(--radius-control)] p-1 text-text-tertiary transition-colors hover:bg-surface-3 hover:text-text",
+              "redesign:flex redesign:h-7 redesign:w-7 redesign:items-center redesign:justify-center redesign:p-0",
+              TOAST_CLOSE_REDESIGN,
+            )}
             onClick={() => onDismiss(card.serverId)}
           >
-            <X className="h-3.5 w-3.5" />
+            <X className="h-3.5 w-3.5 redesign:h-4 redesign:w-4" aria-hidden />
           </button>
         </div>
       ))}

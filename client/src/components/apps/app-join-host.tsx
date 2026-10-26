@@ -31,7 +31,7 @@ import {
 } from "@/lib/apps/join-model";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
-import { TOAST_SURFACE } from "@/components/ui/toast";
+import { TOAST_CLOSE, TOAST_SURFACE } from "@/components/ui/toast";
 
 /**
  * Where the join sheet lives and what decides whether it shows.
@@ -279,7 +279,7 @@ export function AppJoinHost({ serverId, viewerId, people }: AppJoinHostProps) {
           </p>
           <button
             type="button"
-            className="rounded-[var(--radius-control)] px-2 py-1 text-xs font-semibold text-text-secondary hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+            className="rounded-[var(--radius-control)] px-2 py-1 text-xs font-semibold text-text-secondary hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring redesign:rounded-[var(--radius-pill)] redesign:px-2.5 redesign:hover:bg-[color:var(--button-ghost-hover)]"
             onClick={() => {
               leaveAppSession(toast.sessionId);
               setToast({ ...toast, leaving: true });
@@ -290,7 +290,7 @@ export function AppJoinHost({ serverId, viewerId, people }: AppJoinHostProps) {
           <button
             type="button"
             aria-label={t("dmToast.dismiss")}
-            className="grid h-7 w-7 shrink-0 place-items-center rounded-[var(--radius-control)] text-text-tertiary hover:bg-surface-2 hover:text-text"
+            className={TOAST_CLOSE}
             onClick={() => setToast({ ...toast, leaving: true })}
           >
             <X aria-hidden className="h-4 w-4" />

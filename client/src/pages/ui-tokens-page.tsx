@@ -27,6 +27,7 @@ import {
   Pencil,
 } from "lucide-react";
 import { Check as CheckIcon, Hash as LineHash, X as LineX } from "lucide-react";
+import { CalendarClock, Check as CheckIcon, Hash as LineHash, X as LineX } from "lucide-react";
 import { Navigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { BANNER_FILL_REDESIGN, Banner, BannerAction, BannerText } from "@/components/ui/banner";
@@ -1457,7 +1458,7 @@ function PrimitiveSheet() {
           )}
         >
           <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-ink-3 text-paper-muted redesign:bg-surface-3 redesign:text-text-secondary">
-            <LineHash className="h-4 w-4" aria-hidden />
+            <CalendarClock className="h-5 w-5" aria-hidden />
           </span>
           <span className="min-w-0 flex-1">
             <span className="block truncate text-sm font-semibold text-text">{t("qaUi.toast.sessionTitle")}</span>
