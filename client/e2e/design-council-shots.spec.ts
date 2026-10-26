@@ -1,0 +1,503 @@
+import { expect, test, type Page } from "@playwright/test";
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+/**
+ * Captures the screenshots a design council scores (`docs/DESIGN_COUNCIL.md`).
+ *
+ * NOT A TEST. Skipped unless `DESIGN_COUNCIL_DIR` names an output directory,
+ * like `streamers-shots.spec.ts`, and for the same reason it lives here: it
+ * needs the suite's webServer pair and the dev-bypass identities.
+ *
+ * Every round must photograph the same scene, or the scores compare two
+ * different apps. So the scene is built from nothing on an empty database
+ * each run: the same people, servers, channels, lines and reactions, in
+ * pt-BR, at fixed viewports. It needs a database of its own, never the
+ * suite's, and `tools/design-council/capture.sh` makes one and runs this:
+ *
+ *   tools/design-council/capture.sh /tmp/pqp-council/current
+ *
+ * Avatars are the app's own presets, loaded from DiceBear, for half the cast.
+ * The other half has none, which is how most real accounts look.
+ */
+
+const API = process.env.E2E_API_URL ?? "http://localhost:3101";
+const OUT = process.env.DESIGN_COUNCIL_DIR;
+const DEV_TOKEN = "dev-local-token";
+const DESKTOP = { width: 1440, height: 900 };
+const PHONE = { width: 390, height: 844 };
+
+test.skip(!OUT, "Set DESIGN_COUNCIL_DIR to capture the design council screenshots");
+
+// What the camera "sees": a slow, soft gradient. Chromium's own fake camera
+// is a test card, which reviewers then score as if it were the product.
+const CAMERA = path.join(
+  OUT ? fs.mkdtempSync(path.join(os.tmpdir(), "pqp-council-")) : os.tmpdir(),
+  "camera.y4m",
+);
+if (OUT) {
+  const run = spawnSync("ffmpeg", [
+    "-y", "-f", "lavfi", "-i", "gradients=size=1280x720:rate=15:speed=0.01:c0=0x2f3d4c:c1=0x8a7560:nb_colors=2:type=radial",
+    "-t", "4", "-pix_fmt", "yuv420p", CAMERA,
+  ]);
+  if (run.status !== 0) {
+    throw new Error(`ffmpeg failed: ${run.stderr.toString()}`);
+  }
+}
+
+test.use({
+  launchOptions: {
+    args: [
+      "--use-fake-device-for-media-stream",
+      "--use-fake-ui-for-media-stream",
+      `--use-file-for-fake-video-capture=${CAMERA}`,
+    ],
+  },
+  permissions: ["microphone"],
+  locale: "pt-BR",
+  viewport: DESKTOP,
+  trace: "off",
+});
+
+test.setTimeout(240_000);
+
+/** The page's own account. */
+const VIEWER = "lia";
+
+/** The app's own presets (`AVATAR_PRESETS`); half the cast has none. */
+const PRESET = (n: number) =>
+  [
+    "https://api.dicebear.com/9.x/shapes/png?seed=signal",
+    "https://api.dicebear.com/9.x/shapes/png?seed=phosphor",
+    "https://api.dicebear.com/9.x/shapes/png?seed=mesh",
+    "https://api.dicebear.com/9.x/bottts-neutral/svg?seed=pqp1",
+    "https://api.dicebear.com/9.x/shapes/png?seed=relay",
+  ][n]!;
+
+const PEOPLE: ReadonlyArray<[suffix: string, name: string, avatar: string | null]> = [
+  [VIEWER, "Lia", PRESET(4)],
+  ["rafa", "Rafa", PRESET(1)],
+  ["bia", "Bia", null],
+  ["caio", "Caio", PRESET(2)],
+  ["duda", "Duda", null],
+  ["gui", "Gui", PRESET(3)],
+  ["nanda", "Nanda", null],
+  ["teo", "Téo", null],
+];
+
+/** Online for the whole capture. Everybody else is offline. */
+const ONLINE = ["rafa", "bia", "caio", "gui"];
+
+/** Seated in the call beside the viewer. */
+const IN_CALL = ["rafa", "bia", "caio"];
+
+const PAPO: ReadonlyArray<[suffix: string, body: string]> = [
+  ["rafa", "alguém on hoje à noite pra fechar aquela campanha?"],
+  ["bia", "eu! mas só depois das 21h, tô presa no trampo"],
+  ["caio", "21h fechou. vou deixar o servidor ligado"],
+  ["duda", "trouxe o mapa novo que o Gui fez, ficou insano"],
+  ["gui", "ainda tá meio bugado na parte da caverna, não me julguem"],
+  ["nanda", "kkkkkk a caverna é o melhor pedaço"],
+  ["rafa", "Lia, cê vem?"],
+  [VIEWER, "vou sim, levo o lanche dessa vez 🍕"],
+  ["teo", "alguém sabe se o patch de ontem quebrou os saves?"],
+  ["caio", "quebrou não, só precisa abrir o jogo duas vezes. coisa linda"],
+  ["bia", "clássico"],
+  ["duda", "vou abrir o Lobby umas 20h50 pra testar o áudio"],
+  ["gui", "boa. e dessa vez alguém lembra de gravar"],
+  ["nanda", "eu gravo, mas se a internet cair a culpa é da operadora"],
+];
+
+/** Index into PAPO, emoji, who reacts. */
+const REACTIONS: ReadonlyArray<[index: number, emoji: string, by: string[]]> = [
+  [7, "🍕", ["rafa", "bia", "gui"]],
+  [13, "😂", ["caio", "duda"]],
+  [2, "👍", ["rafa", "teo"]],
+];
+
+const AVISOS: ReadonlyArray<[suffix: string, body: string]> = [
+  ["caio", "campanha volta sexta, 21h. quem faltar paga o lanche"],
+];
+
+const DM: ReadonlyArray<[suffix: string, body: string]> = [
+  ["rafa", "ei, cê tem aquele print do boss de ontem?"],
+  [VIEWER, "tenho, mas tá horrível, tirei no meio da luta"],
+  ["rafa", "manda assim mesmo, quero zoar o Caio"],
+  [VIEWER, "kkkk mando quando chegar em casa"],
+  ["rafa", "fechou 🙏"],
+];
+
+function headers(suffix: string) {
+  return {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${DEV_TOKEN}:${suffix}`,
+  };
+}
+
+async function json<T>(response: Response): Promise<T> {
+  if (!response.ok) {
+    throw new Error(`${response.url} ${response.status} ${await response.text()}`);
+  }
+  return (await response.json()) as T;
+}
+
+/** Past the age gate and onboarding, with a display name a person would pick. */
+async function person(
+  suffix: string,
+  displayName: string,
+  avatarUrl: string | null,
+): Promise<string> {
+  await fetch(`${API}/api/me`, { headers: headers(suffix) });
+  await fetch(`${API}/api/me/age-check`, {
+    method: "POST",
+    headers: headers(suffix),
+    body: JSON.stringify({ dateOfBirth: "1990-01-01" }),
+  });
+  await json(
+    await fetch(`${API}/api/me`, {
+      method: "PATCH",
+      headers: headers(suffix),
+      // A handle a person would pick, not the bypass's `dev_user_<suffix>`.
+      body: JSON.stringify({ displayName, avatarUrl, username: suffix }),
+    }),
+  );
+  const me = await json<{ id: string }>(await fetch(`${API}/api/me`, { headers: headers(suffix) }));
+  await fetch(`${API}/api/me/preferences`, {
+    method: "PATCH",
+    headers: headers(suffix),
+    body: JSON.stringify({
+      onboardedAt: new Date().toISOString(),
+      firstRunDismissedAt: new Date().toISOString(),
+    }),
+  });
+  return me.id;
+}
+
+type Channel = { id: string; name: string; type: string; parentId?: string | null };
+
+async function server(owner: string, name: string): Promise<{ id: string; channels: Channel[] }> {
+  const body = await json<{ server: { id: string }; channels: Channel[] }>(
+    await fetch(`${API}/api/servers`, {
+      method: "POST",
+      headers: headers(owner),
+      body: JSON.stringify({ name }),
+    }),
+  );
+  return { id: body.server.id, channels: body.channels };
+}
+
+async function channel(
+  owner: string,
+  serverId: string,
+  name: string,
+  type: "text" | "voice",
+  parentId: string | null,
+): Promise<string> {
+  const body = await json<{ channel: { id: string } }>(
+    await fetch(`${API}/api/servers/${serverId}/channels`, {
+      method: "POST",
+      headers: headers(owner),
+      body: JSON.stringify({ name, type, parentId }),
+    }),
+  );
+  return body.channel.id;
+}
+
+async function join(owner: string, serverId: string, suffix: string): Promise<void> {
+  const { invite } = await json<{ invite: { code: string } }>(
+    await fetch(`${API}/api/servers/${serverId}/invites`, {
+      method: "POST",
+      headers: headers(owner),
+      body: JSON.stringify({}),
+    }),
+  );
+  await json(
+    await fetch(`${API}/api/invites/${invite.code}/join`, {
+      method: "POST",
+      headers: headers(suffix),
+    }),
+  );
+}
+
+async function befriend(a: string, b: string, bId: string, aId: string): Promise<void> {
+  await fetch(`${API}/api/friends`, {
+    method: "POST",
+    headers: headers(a),
+    body: JSON.stringify({ userId: bId }),
+  });
+  await fetch(`${API}/api/friends/${aId}/accept`, { method: "POST", headers: headers(b) });
+}
+
+type Frame = { type: string; [key: string]: unknown };
+
+/** A real protocol client: presence while open, and the app's own send path. */
+class Socket {
+  private socket!: WebSocket;
+  private frames: Frame[] = [];
+  private waiters: { match: (f: Frame) => boolean; resolve: (f: Frame) => void }[] = [];
+
+  constructor(readonly suffix: string) {}
+
+  async connect(): Promise<void> {
+    this.socket = new WebSocket(API.replace(/^http/, "ws") + "/ws");
+    await new Promise<void>((resolve, reject) => {
+      this.socket.addEventListener("open", () => resolve(), { once: true });
+      this.socket.addEventListener("error", () => reject(new Error("ws")), { once: true });
+    });
+    this.socket.addEventListener("message", (event) => {
+      const frame = JSON.parse(String(event.data)) as Frame;
+      this.frames.push(frame);
+      for (const waiter of this.waiters.splice(0)) {
+        if (waiter.match(frame)) {
+          waiter.resolve(frame);
+        } else {
+          this.waiters.push(waiter);
+        }
+      }
+    });
+    this.send({ type: "auth", token: `${DEV_TOKEN}:${this.suffix}` });
+    await this.waitFor((f) => f.type === "ready");
+  }
+
+  send(frame: Frame): void {
+    this.socket.send(JSON.stringify(frame));
+  }
+
+  waitFor(match: (f: Frame) => boolean, timeoutMs = 15_000): Promise<Frame> {
+    const existing = this.frames.find(match);
+    if (existing) {
+      this.frames.splice(this.frames.indexOf(existing), 1);
+      return Promise.resolve(existing);
+    }
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("timed out waiting for a frame")), timeoutMs);
+      this.waiters.push({
+        match,
+        resolve: (frame) => {
+          clearTimeout(timer);
+          resolve(frame);
+        },
+      });
+    });
+  }
+
+  /** Sends a line and answers its id. A refused line stops the capture. */
+  async say(channelId: string, body: string): Promise<string> {
+    const nonce = `council-${Math.random().toString(36).slice(2)}`;
+    this.send({ type: "message-create", channelId, body, nonce });
+    const frame = await this.waitFor(
+      (f) =>
+        (f.type === "message-broadcast" && f.nonce === nonce) ||
+        (f.type === "message-rejected" && f.nonce === nonce),
+    );
+    if (frame.type === "message-rejected") {
+      throw new Error(`message refused: ${String(frame.reason)}`);
+    }
+    return (frame.message as { id: string }).id;
+  }
+
+  react(channelId: string, messageId: string, emoji: string): void {
+    this.send({ type: "reaction-toggle", channelId, messageId, emoji });
+  }
+
+  async joinVoice(voiceChannelId: string): Promise<void> {
+    this.send({ type: "join-voice-room", voiceChannelId });
+    await this.waitFor((f) => f.type === "welcome");
+  }
+
+  close(): void {
+    this.socket?.close();
+  }
+}
+
+/** Who the page is, and a returning person's furniture already put away. */
+async function as(page: Page, theme: "dark" | "light"): Promise<void> {
+  await page.addInitScript(
+    ([suffix, value]) => {
+      localStorage.setItem("pqp:dev-user-suffix", suffix);
+      localStorage.setItem("pqp-theme", value);
+      localStorage.setItem("pqp:download-hint-dismissed", "1");
+    },
+    [VIEWER, theme] as const,
+  );
+  await fetch(`${API}/api/me/preferences`, {
+    method: "PATCH",
+    headers: headers(VIEWER),
+    body: JSON.stringify({ theme }),
+  });
+}
+
+/** The dev bypass's own banner is not part of the product. */
+async function hideDevBanner(page: Page): Promise<void> {
+  await page.addStyleTag({
+    content: `main > [class*="border-warning/30"] { display: none !important; }`,
+  });
+}
+
+/** Settled: fonts in, no spinner mid-turn, no caret blinking in a shot. */
+async function shoot(page: Page, name: string): Promise<void> {
+  await page.evaluate(() => document.fonts.ready);
+  await page.addStyleTag({ content: `* { caret-color: transparent !important; }` });
+  await page.waitForTimeout(800);
+  await page.mouse.move(0, 0);
+  await page.screenshot({ path: path.join(OUT!, `${name}.png`) });
+}
+
+test("captures the design council screens", async ({ browser }) => {
+  fs.mkdirSync(OUT!, { recursive: true });
+
+  const ids: Record<string, string> = {};
+  for (const [suffix, name, avatar] of PEOPLE) {
+    ids[suffix] = await person(suffix, name, avatar);
+  }
+
+  // Three servers, so the rail looks like somebody's.
+  const turma = await server(VIEWER, "Turma do Fliperama");
+  const general = turma.channels.find((c) => c.type === "text")!;
+  const lobby = turma.channels.find((c) => c.type === "voice")!;
+  const parent = general.parentId ?? null;
+  const avisos = await channel(VIEWER, turma.id, "avisos", "text", parent);
+  const papo = await channel(VIEWER, turma.id, "papo", "text", parent);
+  await channel(VIEWER, turma.id, "clipes", "text", parent);
+  await channel(VIEWER, turma.id, "sala-do-jogo", "voice", parent);
+  for (const [suffix] of PEOPLE.slice(1)) {
+    await join(VIEWER, turma.id, suffix);
+  }
+  const rpg = await server("rafa", "Mesa de RPG");
+  await join("rafa", rpg.id, VIEWER);
+  await server(VIEWER, "Faculdade ADS");
+
+  await befriend("rafa", VIEWER, ids[VIEWER]!, ids.rafa!);
+  await befriend("bia", VIEWER, ids[VIEWER]!, ids.bia!);
+  const { conversation } = await json<{ conversation: { channelId: string } }>(
+    await fetch(`${API}/api/dms`, {
+      method: "POST",
+      headers: headers("rafa"),
+      body: JSON.stringify({ userIds: [ids[VIEWER]] }),
+    }),
+  );
+
+  // Everybody who speaks gets a socket; the online ones keep theirs.
+  const sockets = new Map<string, Socket>();
+  for (const [suffix] of PEOPLE) {
+    const socket = new Socket(suffix);
+    await socket.connect();
+    sockets.set(suffix, socket);
+  }
+  const messageIds: string[] = [];
+  for (const [suffix, body] of PAPO) {
+    messageIds.push(await sockets.get(suffix)!.say(papo, body));
+  }
+  for (const [index, emoji, by] of REACTIONS) {
+    for (const suffix of by) {
+      sockets.get(suffix)!.react(papo, messageIds[index]!, emoji);
+    }
+  }
+  for (const [suffix, body] of DM) {
+    await sockets.get(suffix)!.say(conversation.channelId, body);
+  }
+  // The viewer has read the conversation; #avisos arrives after, as unread.
+  sockets.get(VIEWER)!.close();
+  for (const [suffix, body] of AVISOS) {
+    await sockets.get(suffix)!.say(avisos, body);
+  }
+  for (const [suffix, socket] of sockets) {
+    if (suffix !== VIEWER && !ONLINE.includes(suffix)) {
+      socket.close();
+      sockets.delete(suffix);
+    }
+  }
+
+  const chatUrl = `/app/server/${turma.id}/channel/${papo}?lang=pt-BR`;
+
+  try {
+    for (const theme of ["dark", "light"] as const) {
+      const context = await browser.newContext({ viewport: DESKTOP, locale: "pt-BR" });
+      const page = await context.newPage();
+      await as(page, theme);
+
+      await page.goto(chatUrl);
+      await expect(page.getByRole("button", { name: "Enviar" })).toBeVisible({ timeout: 30_000 });
+      await expect(page.getByText(PAPO.at(-1)![1])).toBeVisible();
+      await hideDevBanner(page);
+      await shoot(page, `01-chat-${theme}`);
+
+      await page.goto(`/app/dm/${conversation.channelId}?lang=pt-BR`);
+      await expect(page.getByTestId("app-chat-column").getByText(DM.at(-1)![1])).toBeVisible({ timeout: 30_000 });
+      await hideDevBanner(page);
+      await shoot(page, `02-dm-${theme}`);
+
+      await page.goto(`/app/dm?lang=pt-BR`);
+      await expect(page.getByText(DM.at(-1)![1]).first()).toBeVisible({ timeout: 30_000 });
+      await hideDevBanner(page);
+      await shoot(page, `03-home-${theme}`);
+
+      await page.goto(chatUrl);
+      await expect(page.getByRole("button", { name: "Enviar" })).toBeVisible({ timeout: 30_000 });
+      await hideDevBanner(page);
+      await page.getByRole("button", { name: "Abrir configurações" }).first().click();
+      await expect(page.getByRole("dialog")).toBeVisible();
+      await shoot(page, `04-settings-${theme}`);
+      await page.keyboard.press("Escape");
+
+      await page.locator("[data-server-menu-trigger]").first().click();
+      await page.getByRole("menuitem", { name: "Configurações da comunidade" }).click();
+      await expect(page.getByRole("dialog")).toBeVisible();
+      await shoot(page, `05-server-settings-${theme}`);
+      await page.keyboard.press("Escape");
+
+      await context.close();
+    }
+
+    // The call: the viewer joins from the browser, then three friends by
+    // socket. In that order: a mesh join waits on peers already seated, and a
+    // socket peer has no media to answer with.
+    const context = await browser.newContext({
+      viewport: DESKTOP,
+      locale: "pt-BR",
+      permissions: ["microphone"],
+    });
+    const page = await context.newPage();
+    await as(page, "dark");
+    await page.goto(chatUrl);
+    await expect(page.getByRole("button", { name: "Enviar" })).toBeVisible({ timeout: 30_000 });
+    await hideDevBanner(page);
+    await page.getByRole("button", { name: /^Lobby/ }).first().dblclick();
+    await expect(page.getByText("Na call", { exact: true })).toBeVisible({ timeout: 30_000 });
+    for (const suffix of IN_CALL) {
+      await sockets.get(suffix)!.joinVoice(lobby.id);
+    }
+    await page.waitForTimeout(3000);
+    await shoot(page, "06-call-audio-dark");
+    await page.getByRole("button", { name: "Ligar a câmera", exact: true }).first().click();
+    await expect(page.locator('[data-testid="call-stage"] video').first()).toBeVisible({
+      timeout: 20_000,
+    });
+    await page.waitForTimeout(2000);
+    await shoot(page, "07-call-camera-dark");
+    await page.getByRole("button", { name: "Sair da call" }).first().click().catch(() => {});
+    await context.close();
+
+    // A phone, the same conversation.
+    const phone = await browser.newContext({
+      viewport: PHONE,
+      locale: "pt-BR",
+      isMobile: true,
+      hasTouch: true,
+      deviceScaleFactor: 2,
+    });
+    const phonePage = await phone.newPage();
+    await as(phonePage, "dark");
+    await phonePage.goto(chatUrl);
+    await expect(phonePage.getByText(PAPO.at(-1)![1])).toBeVisible({ timeout: 30_000 });
+    await hideDevBanner(phonePage);
+    await shoot(phonePage, "08-phone-chat-dark");
+    await phone.close();
+  } finally {
+    for (const socket of sockets.values()) {
+      socket.close();
+    }
+  }
+});
