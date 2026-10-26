@@ -601,6 +601,20 @@ it) was fixed; round 5 found nothing left. The slider group naming and the
 unity tick are logged for `f-music` and `f-call`. Stopped at the five-round
 cap with no MUST. Screenshots: `~/pqp-redesign/p-slider/`.
 
+### p-card
+
+Spec (audit: 15 in-app copies of one card class in seven files, plus
+bespoke cards in Baú, polls, voice notes, the forward and the corner card):
+
+1. Job: a bounded group that sits in a pane or a dialog.
+2. Redesign: fill and edge as tints of the text, so the same card reads on
+   any surface.
+3. Folded: the 15 copies (bot wizard and overview, bots settings, connection
+   check, profile popover, conversations empty and phone screens).
+4. Left for their owners: Baú posts (`f-bau`), polls and voice notes
+   (`s-message-content`), the forward card (`f-forward`), the corner card
+   (`f-onboarding`), the public `/apps` page (out of scope).
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss

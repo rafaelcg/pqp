@@ -1,4 +1,5 @@
 import type { Server } from "@pqp/shared";
+import { CARD_SURFACE } from "@/components/ui/card";
 import {
   ChevronRight,
   CircleHelp,
@@ -195,7 +196,7 @@ export function PhoneYouScreen({
             </span>
           </span>
         </button>
-        <div className="mt-6 overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface-card">
+        <div className={cn(CARD_SURFACE, "mt-6 overflow-hidden")}>
           <YouRow icon={<UserPen className="h-5 w-5" aria-hidden="true" />} label={t("phoneTabs.editProfile")} onClick={onOpenProfile} />
           <YouRow icon={<Settings className="h-5 w-5" aria-hidden="true" />} label={t("phoneTabs.settings")} onClick={onOpenSettings} />
           {onOpenWhatsNew && (

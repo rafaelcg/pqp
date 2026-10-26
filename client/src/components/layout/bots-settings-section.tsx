@@ -12,6 +12,7 @@ import {
   type ServerBotModelChoice,
   type ServerBotOverview,
 } from "@pqp/shared";
+import { CARD_SURFACE } from "@/components/ui/card";
 import { useEffect, useId, useRef, useState } from "react";
 import { AtSign, ListChecks, ShieldCheck, Sparkles, Trash2 } from "lucide-react";
 import { BotFace } from "@/components/bots/bot-face";
@@ -329,7 +330,7 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
             {t("bots.settings.editFace")}
           </button>
         </div>
-        <div className="flex shrink-0 items-center gap-4 rounded-[var(--radius-card)] border border-border bg-surface-card px-4 py-3">
+        <div className={cn(CARD_SURFACE, "flex shrink-0 items-center gap-4 px-4 py-3")}>
           <div>
             <p className="text-sm font-semibold text-text">
               {off ? t("bots.settings.asleep") : t("bots.settings.awake")}
@@ -641,7 +642,7 @@ function BotInvite({ onCreate }: { onCreate: () => void }) {
     [ShieldCheck, "bots.invite.asks", "bots.invite.asksBody"],
   ];
   return (
-    <section className="rounded-[var(--radius-card)] border border-border bg-surface-card px-6 py-8 text-center">
+    <section className={cn(CARD_SURFACE, "px-6 py-8 text-center")}>
       <div className="flex items-end justify-center gap-3" aria-hidden="true">
         {cast.map(([color, face, size]) => (
           <BotFace key={color} color={color} face={face} variant="full" className={size} />

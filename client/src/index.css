@@ -823,6 +823,11 @@
   --slider-ring: var(--color-accent);
   --slider-ring-offset-color: transparent;
 
+  /* Cards (ui/card.tsx): tints of the text, so a card reads on a pane and
+     on a dialog alike. */
+  --card-bg: color-mix(in oklab, var(--color-text) 4%, transparent);
+  --card-border: color-mix(in oklab, var(--color-text) 8%, transparent);
+
   --icon-button-radius: var(--radius-pill);
   --icon-button-text: var(--color-text-secondary);
   /* Tints, like the button's: an icon button sits on panes and dialogs. */
@@ -1105,6 +1110,9 @@
 
 /* The redesign's shadows on a light page: tinted, never black. Every look. */
 :root[data-redesign][data-theme="light"] {
+  /* Cards: a lighter tint reads the same on a white pane. */
+  --card-bg: color-mix(in oklab, var(--color-text) 3%, transparent);
+  --card-border: color-mix(in oklab, var(--color-text) 10%, transparent);
   --input-invalid-bg: color-mix(in oklab, var(--color-danger) 6%, var(--color-field));
   /* Tabs */
   /* 7 points over the 8% ghost hover, so a hovered pill never reads as selected. */

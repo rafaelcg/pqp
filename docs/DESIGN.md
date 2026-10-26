@@ -987,6 +987,17 @@ reads the same on every surface.
 - **Accessibility.** The word is the meaning, so colour is never the only
   signal; the icon is `aria-hidden`.
 
+### Card
+
+`card.tsx`. `CARD_SURFACE` is a bounded group inside a pane or a dialog: a
+bot's summary, a list of checks, an empty note. The element and padding are
+the caller's, beside it in `cn`. Not a popover: a card does not float.
+
+- **Toggle off.** The card radius, the plain border, `surface-card`.
+- **Redesign.** Fill and edge are tints of the text (`--card-bg` 4% dark,
+  3% light; `--card-border` 8% dark, 10% light), so one card reads on a
+  pane and on a dialog alike.
+
 ## Planned primitives
 
 Not built. Do not invent a local one; add it here instead, in `ui/`, with a

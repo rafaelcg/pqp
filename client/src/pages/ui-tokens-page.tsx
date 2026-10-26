@@ -25,6 +25,8 @@ import {
 } from "lucide-react";
 import { Navigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { CARD_SURFACE } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { CheckRow } from "@/components/ui/check-row";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -1314,6 +1316,32 @@ function PrimitiveSheet() {
             {t("qaUi.menu.open")}
           </Button>
         </Menu>
+      </div>
+
+      {/* Cards: one on the pane, one inside a dialog's surface, each with a
+          list inside, to show the tint reads on both. */}
+      <div data-testid="qa-primitive-card" className="grid gap-4 sm:grid-cols-2">
+        {(["pane", "dialog"] as const).map((where) => (
+          <div
+            key={where}
+            className={cn(
+              "rounded-[var(--radius-pane)] p-4",
+              where === "pane" ? "bg-pane-main" : "elevation-3",
+            )}
+          >
+            <div className={cn(CARD_SURFACE, "p-4")}>
+              <p className="text-sm font-semibold text-text">{t("qaUi.card.title")}</p>
+              <p className="mt-1 text-xs text-text-tertiary">{t("qaUi.card.body")}</p>
+            </div>
+            <ul className={cn(CARD_SURFACE, "mt-3 divide-y divide-border overflow-hidden")}>
+              {(["qaUi.card.rowOne", "qaUi.card.rowTwo"] as const).map((key) => (
+                <li key={key} className="px-4 py-2.5 text-sm text-text-secondary">
+                  {t(key)}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
       </div>
 
       <div data-testid="qa-primitive-slider" className="grid gap-4 sm:grid-cols-2">
