@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import {
   Bell,
+  BellSlash,
   CaretDown,
   ChatCircle,
   CheckCircle as BannerCheckIcon,
@@ -1480,6 +1481,11 @@ function PrimitiveSheet() {
             <ListRow
               key={name}
               leading={<Icon icon={Hash} kind="symbol" size="sm" />}
+              trailing={
+                name === "clipes" ? (
+                  <Icon icon={BellSlash} size="sm" className="text-text-tertiary" />
+                ) : undefined
+              }
               action={
                 name === "papo" ? (
                   <IconButton size="xs" touch={false} side="right" label={t("qaUi.iconButton.settings")}>

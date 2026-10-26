@@ -87,7 +87,7 @@ const CONTRAST_PAIRS = [
   // the non-text floor.
   { fg: "--color-text-secondary", bg: "--color-canvas", floor: 3.0, label: "an icon on the canvas (the rail)", redesign: true },
   { fg: "--color-accent", bg: "--color-canvas", floor: 3.0, label: "accent on the canvas", redesign: true },
-  { fg: "--color-on-row-selected", bg: "--color-row-selected", floor: 4.5, label: "label on the selected row", redesign: true },
+  { fg: "--color-on-row-selected", bg: "--color-row-selected", floor: 4.5, label: "label and second line on the selected row", redesign: true },
   { fg: "--color-accent-text", bg: "--color-row-selected", floor: 3.0, label: "pressed icon on the selected fill", redesign: true },
   { fg: "--color-accent-text", bg: "--color-pane-side", floor: 4.5, label: "accent text on the side pane", redesign: true },
   { fg: "--color-accent-text", bg: "--color-pane-main", floor: 4.5, label: "accent text on the conversation pane", redesign: true },

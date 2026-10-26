@@ -22,8 +22,8 @@ import { cn } from "@/lib/utils";
  * becomes a Salas pill under the redesign. A shell row passes its old
  * colours through `className` and `cn` keeps them, as it does for Button.
  *
- * The row is a button. `trailing` is inside it, so it takes nothing
- * interactive. An `action` is a control of its own: the row then becomes a
+ * The row is a button. `trailing` and `count` are inside it, so they take
+ * nothing interactive. An `action` is a control of its own: the row then becomes a
  * wrapper that draws the row's look, with the button and the action side by
  * side in it, never one inside the other.
  */
@@ -47,8 +47,11 @@ export interface ListRowProps extends React.ButtonHTMLAttributes<HTMLButtonEleme
   leading?: React.ReactNode;
   /** A second, quieter line under the label. */
   detail?: React.ReactNode;
-  /** A count or a time at the end of the row. Nothing interactive. */
+  /** A time or a mark (muted) at the end of the row. Nothing interactive.
+   *  An unread row keeps its pip beside it. */
   trailing?: React.ReactNode;
+  /** A count of what is new (a `CountBadge`). It replaces the pip. */
+  count?: React.ReactNode;
   /** A control of its own at the end of the row (a gear, a close). */
   action?: React.ReactNode;
 }
@@ -74,6 +77,7 @@ export const ListRow = React.forwardRef<HTMLButtonElement, ListRowProps>(functio
     leading,
     detail,
     trailing,
+    count,
     action,
     type = "button",
     className,
@@ -82,6 +86,7 @@ export const ListRow = React.forwardRef<HTMLButtonElement, ListRowProps>(functio
   },
   ref,
 ) {
+  const pip = unread && !selected;
   const content = (
     <>
       {leading ? (
@@ -100,21 +105,43 @@ export const ListRow = React.forwardRef<HTMLButtonElement, ListRowProps>(functio
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="truncate">{children}</span>
         {detail ? (
-          <span className="truncate text-xs font-normal text-[color:var(--list-row-detail,var(--color-text-tertiary))]">
+          <span
+            className={cn(
+              "truncate text-xs font-normal",
+              // On the selected fill the tertiary grey falls under 4.5:1 in
+              // several looks; the selected label's own colour does not.
+              selected
+                ? "text-[color:var(--list-row-detail,var(--color-text-tertiary))] redesign:text-[color:var(--list-row-selected-text)]"
+                : "text-[color:var(--list-row-detail,var(--color-text-tertiary))]",
+            )}
+          >
             {detail}
           </span>
         ) : null}
       </span>
-      {trailing ? (
-        <span data-list-row-trailing="" className="flex shrink-0 items-center gap-1">
-          {trailing}
+      {count != null ? (
+        <span data-list-row-count="" className="flex shrink-0 items-center">
+          {count}
         </span>
-      ) : unread && !selected ? (
+      ) : null}
+      {trailing || (count == null && pip) ? (
         <span
-          data-list-row-pip=""
-          aria-hidden="true"
-          className="h-[var(--list-row-pip,0.375rem)] w-[var(--list-row-pip,0.375rem)] shrink-0 rounded-full bg-indicator"
-        />
+          data-list-row-trailing=""
+          className={cn(
+            "flex shrink-0 items-center gap-1.5",
+            // A time over its pip on a two-line row.
+            size === "lg" && trailing && pip && "flex-col items-end gap-1",
+          )}
+        >
+          {trailing}
+          {count == null && pip ? (
+            <span
+              data-list-row-pip=""
+              aria-hidden="true"
+              className="h-[var(--list-row-pip,0.375rem)] w-[var(--list-row-pip,0.375rem)] shrink-0 rounded-full bg-indicator"
+            />
+          ) : null}
+        </span>
       ) : null}
     </>
   );
@@ -170,7 +197,13 @@ export const ListRow = React.forwardRef<HTMLButtonElement, ListRowProps>(functio
       >
         {content}
       </button>
-      <span data-list-row-action="" className="flex shrink-0 items-center gap-0.5">
+      <span
+        data-list-row-action=""
+        // A disabled row's action is out of reach of the pointer (above) and
+        // of the keyboard.
+        inert={rest.disabled ? true : undefined}
+        className="flex shrink-0 items-center gap-0.5"
+      >
         {action}
       </span>
     </div>

@@ -22,8 +22,11 @@ describe("ListRow", () => {
     const html = renderToStaticMarkup(<ListRow unread>avisos</ListRow>);
     expect(classes(html)).toContain("font-semibold");
     expect(html).toContain("data-list-row-pip");
-    // A trailing count replaces the pip.
-    expect(renderToStaticMarkup(<ListRow unread trailing="3">avisos</ListRow>)).not.toContain(
+    // A count replaces the pip; a time does not.
+    expect(renderToStaticMarkup(<ListRow unread count="3">avisos</ListRow>)).not.toContain(
+      "data-list-row-pip",
+    );
+    expect(renderToStaticMarkup(<ListRow unread trailing="17:42">Caio</ListRow>)).toContain(
       "data-list-row-pip",
     );
   });
@@ -71,6 +74,15 @@ describe("ListRow", () => {
     expect(classes(html)).not.toContain("font-semibold");
     expect(html).not.toContain("data-list-row-pip");
     expect(html).toContain("data-unread");
+  });
+
+  it("takes a disabled row's action out of keyboard reach", () => {
+    const html = renderToStaticMarkup(
+      <ListRow disabled action={<button type="button">gear</button>}>
+        arquivo
+      </ListRow>,
+    );
+    expect(html).toMatch(/data-list-row-action=""[^>]*inert/);
   });
 });
 

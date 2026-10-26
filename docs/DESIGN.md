@@ -1069,7 +1069,7 @@ line).
 - **States.** Hover is a fill; `selected` is the row-selected role with its
   own label colour and `aria-current` (a selected row is the one being
   read, so it drops the unread look); `unread` is weight 600 plus the
-  indicator pip at the end (a trailing count replaces it); `muted` fades
+  indicator pip at the end (a `count` replaces it; a `trailing` time keeps it beside, or over it on an `lg` row); `muted` fades
   the row (0.5, 0.6 under the redesign, so it stays above disabled at 0.4).
 - **Tokens.** Every value is `--list-row-*` with the old value as its
   fallback. Under the redesign: a pill, 36/44/52px tall, 12px inside, on
@@ -1105,6 +1105,15 @@ variant set, and then use it everywhere.
 5. **UI copy is a catalogue key.** i18next, flat dotted keys, single-brace
    `{slots}`, `_one` / `_other` families, and both `en` and `pt-BR`. See
    `docs/I18N.md`. No em dash reaches a user, in either language.
+- **Muted** also passes a mark in `trailing` (`BellSlash`, `sm`,
+  `text-tertiary`), so it is not told apart from disabled by opacity alone.
+- **Selected second line** takes the selected label's colour under the
+  redesign: the tertiary grey falls under 4.5:1 on the selected fill in
+  several looks.
+- **Navigation.** A channel or a conversation row passes
+  `aria-current="page"`; the default `"true"` gives way to it.
+- **Disabled with an action.** The action is `inert`, out of pointer and
+  keyboard reach.
 
 ### How the bench enforces this
 
