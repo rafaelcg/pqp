@@ -31,8 +31,8 @@ Read this file and the inventory at the start of every session.
 | 0 | Three directions, mockups and council round D1 | Done (2 of 3 reviewers) |
 | 0 | André picks a direction | Done: B (Salas), with filled icons |
 | 1 | Toggle | Done |
-| 1 | Tokens for the chosen direction | Built on `rd/tokens`, council round T4 running |
-| 1 | André signs off on `/qa/ui` | Not started |
+| 1 | Tokens for the chosen direction | Done |
+| 1 | André signs off on `/qa/ui` | Done, after round T3 |
 
 ## Phase 0: directions
 
@@ -164,6 +164,8 @@ and `--radius-pane` (16px) splits a shell pane from a dialog. Not taken:
 stating the pane pair in every look block (the `order` check already fails
 a look that inverts).
 
+André signed off on `/qa/ui` after round T3 (2026-10-26).
+
 ## Open questions for André
 
 1. The third council reviewer: Gemini 4 Argon is out of Cursor credits. Use
@@ -189,4 +191,6 @@ a look that inverts).
 | 2026-10-26 | Derived roles use `color-mix(in oklab)`, and the bench and `/qa/ui` learned to read it | One formula reaches all ten looks, the custom accent and high contrast, and stays measured. |
 | 2026-10-26 | `ui/icon.tsx` ships with the tokens | It is the only place the fill-or-bold rule lives, and the sheet needs it to show the icon tokens. |
 | 2026-10-26 | Council T1 runs with two reviewers | Gemini 4 Argon is still out of credits; the third seat waits on open question 1. |
+| 2026-10-26 | Tokens merged on André's sign-off at Codex 9.0, Opus 8.4 | Opus's last MUST was fixed after T3. The element rounds hold the 9.0 bar from here. |
+| 2026-10-26 | Phase 2 follows the inventory order: primitives first, then shell, surfaces, phone | Every later element is built from the primitives. |
 | 2026-10-26 | The toggle ships before the tokens | It is the same for every direction and changes nothing visible. Precedence: `?redesign=1|0`, then the person's Beta switch (`pqp-redesign`), then the `redesign` flag. |
