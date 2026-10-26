@@ -252,11 +252,20 @@ export const TOOLTIP_DETAIL =
  * edge: the one place a tooltip carries the brand, because it names a place.
  */
 const TOOLTIP_RAIL =
-  "rounded-[var(--tooltip-radius,var(--radius-card))] border border-[color:var(--tooltip-border,var(--color-surface-2))] bg-[color:var(--tooltip-bg,var(--color-surface-0))] text-[color:var(--tooltip-text,var(--color-text))] shadow-[var(--tooltip-rail-shadow,var(--shadow-popover))] px-[var(--tooltip-rail-px,0.625rem)] py-[var(--tooltip-rail-py,0.375rem)] text-[length:var(--tooltip-rail-size,13px)] leading-snug [font-weight:var(--tooltip-rail-weight,600)] [font-family:var(--tooltip-rail-font,inherit)]";
+  "rounded-[var(--tooltip-radius,var(--radius-card))] border border-[color:var(--tooltip-border,var(--color-surface-2))] bg-[color:var(--tooltip-bg,var(--color-surface-0))] text-[color:var(--tooltip-text,var(--color-text))] shadow-[var(--tooltip-rail-shadow,var(--shadow-popover))] px-[var(--tooltip-rail-px,0.625rem)] py-[var(--tooltip-rail-py,0.375rem)] text-[length:var(--tooltip-rail-size,13px)] leading-[var(--tooltip-leading,1.375)] [font-weight:var(--tooltip-rail-weight,600)] [font-family:var(--tooltip-rail-font,inherit)]";
 
 /** The bubble's classes, for a static specimen (`/qa/ui`). */
-export function tooltipBubbleClass(tone: "default" | "rail" = "default"): string {
-  return tone === "rail" ? TOOLTIP_RAIL : TOOLTIP_BUBBLE;
+/**
+ * The place mark: a short straight bar on the rail bubble's start edge, for a
+ * bubble that names a place (a server, a pinned conversation), never an
+ * action. Drawn only where `--tooltip-rail-mark` is set (the redesign).
+ */
+const TOOLTIP_MARK =
+  "relative before:absolute before:inset-y-[0.375rem] before:left-0 before:w-[3px] before:rounded-r-full before:bg-[color:var(--tooltip-rail-mark,transparent)] before:content-['']";
+
+export function tooltipBubbleClass(tone: "default" | "rail" = "default", mark = false): string {
+  if (tone !== "rail") return TOOLTIP_BUBBLE;
+  return mark ? cn(TOOLTIP_RAIL, TOOLTIP_MARK) : TOOLTIP_RAIL;
 }
 
 export interface TooltipProps extends TooltipA11yProps {
@@ -271,6 +280,11 @@ export interface TooltipProps extends TooltipA11yProps {
    */
   tone?: "default" | "rail";
   /**
+   * `rail` only: the bubble names a place (a server, a pinned conversation),
+   * so it carries the accent mark. Leave it off for an action on the rail.
+   */
+  mark?: boolean;
+  /**
    * The control. Must be a single element that forwards props and a ref to a
    * real DOM node — our `Button`, or a plain `<button>`.
    */
@@ -284,6 +298,7 @@ export function Tooltip({
   side = "top",
   align = "center",
   tone = "default",
+  mark = false,
   children,
 }: TooltipProps) {
   const a11y = tooltipA11y({ label, detail, name });
@@ -308,7 +323,7 @@ export function Tooltip({
         <TooltipPrimitive.Content
           side={side}
           align={align}
-          sideOffset={rail ? 12 : 6}
+          sideOffset={rail ? 14 : 6}
           collisionPadding={COLLISION_PADDING}
           aria-label={a11y.description}
           className={cn(
@@ -317,7 +332,7 @@ export function Tooltip({
             // the reaction tip in `message-list.tsx` so the two read as one
             // object rather than two house styles.
             "z-[140] max-w-[var(--tooltip-max-w,18rem)] whitespace-pre-wrap select-none animate-fade-in",
-            rail ? TOOLTIP_RAIL : TOOLTIP_BUBBLE,
+            tooltipBubbleClass(tone, mark),
             // Never intercept a click aimed at what is underneath. The bubble
             // is placed over the stage, and a swallowed click on a call
             // control is a worse bug than a missing label.

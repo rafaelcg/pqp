@@ -939,7 +939,7 @@ function PrimitiveSheet() {
             {t("qaUi.tooltip.label")}
             <span className={TOOLTIP_DETAIL}>{t("qaUi.tooltip.detail")}</span>
           </div>
-          <div className={tooltipBubbleClass("rail")}>{t("qaUi.tooltip.railLabel")}</div>
+          <div className={tooltipBubbleClass("rail", true)}>{t("qaUi.tooltip.railLabel")}</div>
         </div>
       </div>
 

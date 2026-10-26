@@ -602,9 +602,13 @@ needs it as an ancestor.
   redesign; there it shares the default's colours, radius and shadow. It is
   semibold (`--tooltip-rail-weight: 600`) because it names a server: a step
   under the bold server name in its pane title, above the medium default
-  label (`--tooltip-weight: 500`). Under the redesign it also carries a 2px
-  lime bar on its start edge (`--tooltip-rail-shadow`), and its padding and
-  size are tokens (`--tooltip-rail-px`, `-py`, `-size`).
+  label (`--tooltip-weight: 500`). Its padding and size are tokens
+  (`--tooltip-rail-px`, `-py`, `-size`), and it sits 14px from the tile.
+- **`mark`.** A rail bubble that names a place (a server tile, a pinned
+  conversation, the conversations home) passes `mark`: under the redesign it
+  carries a short straight 3px accent bar on its start edge
+  (`--tooltip-rail-mark`), mixed toward the label in light so it stays bright
+  on the dark bubble. An action on the rail ("Criar comunidade") stays plain.
 - **Behaviour.** 260ms before the first bubble of a group, then 500ms of no
   delay for its neighbours, so a control bar can be swept and read. Inert on
   touch, so a tap is never eaten. Portalled into the fullscreen element when one

@@ -706,8 +706,10 @@
   --tooltip-rail-px: 0.625rem;
   --tooltip-rail-py: 0.375rem;
   --tooltip-rail-size: 13px;
-  /* A server name gets pqp's lime: a 2px bar on the bubble's start edge. */
-  --tooltip-rail-shadow: inset 2px 0 0 var(--color-accent), var(--tooltip-shadow);
+  --tooltip-rail-shadow: var(--tooltip-shadow);
+  /* A place (a server, a pinned conversation) gets pqp's lime: a short
+     straight bar on the bubble's start edge. Actions on the rail stay plain. */
+  --tooltip-rail-mark: var(--color-accent);
 
   --icon-button-radius: var(--radius-pill);
   --icon-button-text: var(--color-text-secondary);
@@ -950,6 +952,9 @@
      reads 2.4:1 on a light page; it takes the solid accent instead. */
   --icon-button-ring: var(--color-accent);
   --tooltip-shadow: var(--shadow-2);
+  /* The light accent is a dark green that sinks into the dark bubble; mix it
+     toward the bubble's own label so the mark stays bright in every look. */
+  --tooltip-rail-mark: color-mix(in oklab, var(--color-accent) 55%, var(--color-on-tooltip));
 }
 
 /*
