@@ -837,15 +837,6 @@ function PrimitiveSheet() {
                 >
                   <Icon icon={Microphone} />
                 </IconButton>
-                <IconButton
-                  size={size}
-                  touch={false}
-                  side="right"
-                  tone="danger"
-                  label={`${t("qaUi.iconButton.remove")} ${size}`}
-                >
-                  <Icon icon={X} kind="symbol" />
-                </IconButton>
                 <IconButton size={size} touch={false} side="right" disabled label={t("qaUi.state.disabled")}>
                   <Icon icon={Bell} />
                 </IconButton>
@@ -858,6 +849,16 @@ function PrimitiveSheet() {
                   label={`${t("qaUi.iconButton.mute")} ${t("qaUi.state.disabled")} ${size}`}
                 >
                   <Icon icon={Microphone} />
+                </IconButton>
+                {/* Last in the row, so its open tooltip covers nothing. */}
+                <IconButton
+                  size={size}
+                  touch={false}
+                  side="right"
+                  tone="danger"
+                  label={`${t("qaUi.iconButton.remove")} ${size}`}
+                >
+                  <Icon icon={X} kind="symbol" />
                 </IconButton>
               </div>
             );

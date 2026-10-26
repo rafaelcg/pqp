@@ -105,4 +105,28 @@ describe("IconButton", () => {
     act(() => root.unmount());
     host.remove();
   });
+
+  it("draws a pressed toggle as selected and a disabled one without hover", () => {
+    const button = draw(
+      <IconButton label="Silenciar" pressed disabled>
+        •
+      </IconButton>,
+    );
+    expect(button.getAttribute("aria-pressed")).toBe("true");
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    expect(button.className).toContain("redesign:aria-pressed:bg-row-selected");
+    expect(button.className).toContain("redesign:aria-pressed:text-accent-text");
+    expect(button.className).toContain("redesign:aria-pressed:not-aria-disabled:hover:");
+    expect(button.className).toContain("aria-disabled:not-aria-pressed:hover:bg-transparent");
+  });
+
+  it("reads its focus ring from a token, falling back to the shared ring", () => {
+    const { className } = draw(<IconButton label="Fixar">•</IconButton>);
+    expect(className).toContain(
+      "focus-visible:ring-[color:var(--icon-button-ring,var(--color-focus-ring))]",
+    );
+    expect(className).toContain(
+      "focus-visible:ring-offset-[length:var(--icon-button-ring-offset,0px)]",
+    );
+  });
 });
