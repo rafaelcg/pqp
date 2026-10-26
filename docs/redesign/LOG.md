@@ -17,8 +17,9 @@ Read this file and the inventory at the start of every session.
 - Screenshots and council answers: `~/pqp-redesign/<element-id>/`, never in git.
 - Baseline screenshots of `main`: `~/pqp-redesign/baseline/`.
 - Council: three reviewers on three providers, one brief, read-only. Roster:
-  Claude Opus 5.5, Codex GPT-6 Luna, Gemini 4 Argon (through Cursor). Reasoning
-  high for all three.
+  Claude Opus 5.5, Codex GPT-6 Luna, Grok 4.7 (through Cursor). Reasoning
+  high for all three. (Gemini 4 Argon was the first pick; it ran out of
+  Cursor credits, and André chose Grok on 2026-10-26.)
 - Toggle (Phase 1): `data-redesign` on `<html>`, a `redesign:` Tailwind variant,
   Settings > Beta "Novo visual", runtime flag `redesign` (default off).
 
@@ -168,9 +169,7 @@ André signed off on `/qa/ui` after round T3 (2026-10-26).
 
 ## Open questions for André
 
-1. The third council reviewer: Gemini 4 Argon is out of Cursor credits. Use
-   Grok 4.7 or GPT-5.6 Sol (both on Cursor) instead, buy credits, or run with
-   two reviewers?
+1. Resolved 2026-10-26: Grok 4.7 is the third reviewer.
 2. Four features live in two versions behind flags. The redesign should
    rebuild only the version that stays. Which one stays for each?
    - DM list: classic or Conversas home (`conversations_home`).
