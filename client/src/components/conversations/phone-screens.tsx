@@ -1,5 +1,5 @@
 import type { Server } from "@pqp/shared";
-import { CARD_SURFACE } from "@/components/ui/card";
+import { CARD_LIST, CARD_ROW_HOVER, CARD_SURFACE } from "@/components/ui/card";
 import {
   ChevronRight,
   CircleHelp,
@@ -196,7 +196,7 @@ export function PhoneYouScreen({
             </span>
           </span>
         </button>
-        <div className={cn(CARD_SURFACE, "mt-6 overflow-hidden")}>
+        <div className={cn(CARD_SURFACE, CARD_LIST, "mt-6")}>
           <YouRow icon={<UserPen className="h-5 w-5" aria-hidden="true" />} label={t("phoneTabs.editProfile")} onClick={onOpenProfile} />
           <YouRow icon={<Settings className="h-5 w-5" aria-hidden="true" />} label={t("phoneTabs.settings")} onClick={onOpenSettings} />
           {onOpenWhatsNew && (
@@ -230,7 +230,7 @@ function YouRow({
     <button
       type="button"
       onClick={onClick}
-      className="flex min-h-12 w-full items-center gap-3 border-b border-border px-4 text-left last:border-b-0 hover:bg-surface-2/60"
+      className={cn("flex min-h-12 w-full items-center gap-3 px-4 text-left hover:bg-surface-2/60", CARD_ROW_HOVER)}
     >
       <span className="text-text-tertiary">{icon}</span>
       <span className="min-w-0 flex-1 text-[15px] text-text">{label}</span>

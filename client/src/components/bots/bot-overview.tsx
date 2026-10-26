@@ -113,7 +113,7 @@ export function BotOverviewPanel({
       <section>
         <h3 className="mb-2 text-sm font-semibold text-text">{t("bots.overview.recent")}</h3>
         {!overview || overview.recent.length === 0 ? (
-          <p className={cn(CARD_SURFACE, "p-4 text-sm text-text-tertiary")}>
+          <p className={cn(CARD_SURFACE, "p-4 text-sm text-text-tertiary redesign:text-text-secondary")}>
             {t("bots.overview.nothingYet", { name: bot.name })}
           </p>
         ) : (

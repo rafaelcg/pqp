@@ -1331,7 +1331,7 @@ function PrimitiveSheet() {
           >
             <div className={cn(CARD_SURFACE, "p-4")}>
               <p className="text-sm font-semibold text-text">{t("qaUi.card.title")}</p>
-              <p className="mt-1 text-xs text-text-tertiary">{t("qaUi.card.body")}</p>
+              <p className="mt-1 text-xs text-text-tertiary redesign:text-text-secondary">{t("qaUi.card.body")}</p>
             </div>
             <ul className={cn(CARD_SURFACE, CARD_LIST, "mt-3")}>
               <li className="px-4 py-2.5 text-sm text-text-secondary">{t("qaUi.card.rowOne")}</li>
@@ -1339,7 +1339,7 @@ function PrimitiveSheet() {
               <li>
                 <button
                   type="button"
-                  className="flex w-full px-4 py-2.5 text-left text-sm text-text-secondary hover:bg-surface-2 hover:text-text redesign:hover:bg-row-hover"
+                  className="flex w-full px-4 py-2.5 text-left text-sm text-text-secondary hover:bg-surface-2 hover:text-text redesign:hover:bg-[color:var(--card-row-hover)]"
                 >
                   {t("qaUi.card.rowTwo")}
                 </button>

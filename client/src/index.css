@@ -827,6 +827,7 @@
      on a dialog alike. */
   --card-bg: color-mix(in oklab, var(--color-text) 4%, transparent);
   --card-border: color-mix(in oklab, var(--color-text) 8%, transparent);
+  --card-row-hover: color-mix(in oklab, var(--color-text) 6%, transparent);
 
   --icon-button-radius: var(--radius-pill);
   --icon-button-text: var(--color-text-secondary);
@@ -1110,7 +1111,6 @@
 
 /* The redesign's shadows on a light page: tinted, never black. Every look. */
 :root[data-redesign][data-theme="light"] {
-  /* Cards: a lighter tint reads the same on a white pane. */
   /* In light a text tint darkens into a grey tray; a white wash lifts the
      card on a grey dialog and leaves the edge alone on the white pane. */
   --card-bg: color-mix(in oklab, var(--color-surface-0) 60%, transparent);

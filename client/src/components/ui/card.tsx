@@ -22,3 +22,11 @@ export const CARD_SURFACE =
  */
 export const CARD_LIST =
   "divide-y divide-[color:var(--card-border,var(--color-border))] overflow-hidden";
+
+/**
+ * The hover of a row inside a card, under the redesign: a text tint over the
+ * card's own fill, so it shows the same on a pane, a dialog, dark and light
+ * (the row roles are solid colours built for a pane). Beside the row's
+ * toggle-off hover.
+ */
+export const CARD_ROW_HOVER = "redesign:hover:bg-[color:var(--card-row-hover)]";

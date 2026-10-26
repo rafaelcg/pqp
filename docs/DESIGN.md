@@ -1004,6 +1004,11 @@ the caller's, beside it in `cn`. Not a popover: a card does not float.
   to the corners.
 - **Padding** is the caller's, on one scale: `p-3` compact, `p-4` default,
   `px-6 py-8` an empty note, `p-2.5` only inside the profile popover.
+- **Between cards** a 12px gap (`gap-3` or `space-y-3`).
+- **A row that opens something** inside a card adds `CARD_ROW_HOVER` beside
+  its own hover: a text tint over the card's fill, the same on any surface.
+- **Body copy** in a card is secondary text under the redesign; tertiary at
+  12px on the light card is near the floor.
 
 ## Planned primitives
 
