@@ -1346,6 +1346,9 @@ function PrimitiveSheet() {
             </span>
           ))}
           <UserAvatar name="Caio" className="h-10 w-10" fallbackClassName="bg-ink-3 text-sm" rounded="full" dimmed />
+          {/* A photo at the smallest and the usual size: how it crops in the circle. */}
+          <UserAvatar name="Lia" avatarUrl="/images/hero/hero-480.webp" className="h-6 w-6" />
+          <UserAvatar name="Lia" avatarUrl="/images/hero/hero-480.webp" className="h-10 w-10" />
           <UserAvatar name="Breu" avatarUrl="/api/bot-faces/lime/oi.png" className="h-10 w-10" />
           <span className="flex -space-x-2">
             {["Lia", "Rafa", "Gui"].map((name) => (
