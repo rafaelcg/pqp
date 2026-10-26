@@ -14,6 +14,6 @@
     "ask": "node src/bot.js --ask"
   },
   "optionalDependencies": {
-    "@anthropic-ai/sdk": "^0.70.0"
+    "@anthropic-ai/sdk": "^1.2.0"
   }
 }
