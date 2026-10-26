@@ -28,6 +28,17 @@ describe("Dialog tokens", () => {
     expect(source).toContain("hover:bg-surface-2 hover:text-text");
   });
 
+  it("gives the close button IconButton's focus ring only under the redesign", () => {
+    expect(source).toContain("redesign:focus-visible:ring-[color:var(--icon-button-ring)]");
+    expect(source.match(/redesign:focus-visible:ring-2/g)?.length).toBe(2);
+    expect(source).toContain("pt-[var(--dialog-header-pt,1rem)]");
+  });
+
+  it("joins a body-less dialog's question and buttons only under the redesign", () => {
+    expect(source).toContain('solo && "redesign:pb-[var(--dialog-solo-header-pb)]"');
+    expect(source).toContain('solo && "redesign:border-transparent redesign:pt-[var(--dialog-solo-footer-pt)]"');
+  });
+
   it("sets the eyebrow in sentence case only under the redesign", () => {
     expect(source).toContain("text-xs uppercase tracking-[0.18em] text-accent redesign:font-medium redesign:normal-case");
   });

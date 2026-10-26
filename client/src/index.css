@@ -744,7 +744,12 @@
   --dialog-border: color-mix(in oklab, var(--color-text) 10%, transparent);
   --dialog-shadow: inset 0 1px 0 oklch(1 0 0 / 0.05), var(--shadow-3);
   --dialog-header-rule: transparent;
+  --dialog-header-pt: 1.25rem;
   --dialog-header-pb: 0.5rem;
+  --dialog-solo-header-pb: 1rem;
+  --dialog-solo-footer-pt: 0.5rem;
+  --dialog-close-glyph: 1.125rem;
+  --dialog-eyebrow-size: 0.8125rem;
   --dialog-footer-rule: color-mix(in oklab, var(--color-text) 8%, transparent);
   --dialog-px: 1.5rem;
   --dialog-title-size: 1.375rem;

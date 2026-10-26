@@ -371,6 +371,10 @@ Spec (audit: Dialog in 50 files, ConfirmDialog in 24, PromptDialog in 1;
 4. Left for their surfaces: the 14 overlays outside Dialog, the sheets
    (`p-sheet`), and the native `window.prompt` and `confirm` (nickname,
    kick), which belong to `f-profile-popover` and `f-server-settings`.
+5. Round 1: the close button takes IconButton's focus ring and an 18px
+   glyph, the header 20px at the top, a body-less dialog drops its footer
+   rule. Left for `f-server-settings`: its rail divider starts in mid-air
+   now that the header rule is gone.
 
 ## Open questions for André
 

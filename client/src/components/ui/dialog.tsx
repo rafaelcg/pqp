@@ -253,6 +253,8 @@ export function Dialog({
   phoneFullScreen = false,
 }: DialogProps) {
   const { t } = useTranslation();
+  // ConfirmDialog and friends pass no body: the header and footer meet.
+  const solo = children == null || children === false;
   const panelRef = useRef<HTMLDivElement>(null);
   const previouslyFocused = useRef<HTMLElement | null>(null);
   // The opener is read while rendering the open dialog, before any child
@@ -489,7 +491,10 @@ export function Dialog({
         >
           <div
             className={cn(
-              "flex items-start justify-between gap-3 border-b border-[color:var(--dialog-header-rule,var(--color-border))] px-[var(--dialog-px,1.25rem)] pb-[var(--dialog-header-pb,1rem)] pt-4",
+              "flex items-start justify-between gap-3 border-b border-[color:var(--dialog-header-rule,var(--color-border))] px-[var(--dialog-px,1.25rem)] pb-[var(--dialog-header-pb,1rem)] pt-[var(--dialog-header-pt,1rem)]",
+              // A dialog that is only a question (no body): under the
+              // redesign the question and its buttons read as one block.
+              solo && "redesign:pb-[var(--dialog-solo-header-pb)]",
               phoneFullScreen &&
                 "max-sm:items-center max-sm:gap-2 max-sm:px-3 max-sm:pb-2 max-sm:pt-[max(0.5rem,env(safe-area-inset-top))]",
               headerClassName,
@@ -499,7 +504,7 @@ export function Dialog({
               <button
                 type="button"
                 aria-label={t("a11y.closeDialog")}
-                className="grid h-11 w-11 shrink-0 place-items-center rounded-[var(--radius-control)] text-text-secondary transition-colors hover:bg-surface-2 hover:text-text sm:hidden redesign:rounded-[var(--icon-button-radius)] redesign:text-[color:var(--icon-button-text)] redesign:hover:bg-[color:var(--icon-button-hover)] redesign:hover:text-text"
+                className="grid h-11 w-11 shrink-0 place-items-center rounded-[var(--radius-control)] text-text-secondary transition-colors hover:bg-surface-2 hover:text-text sm:hidden redesign:rounded-[var(--icon-button-radius)] redesign:text-[color:var(--icon-button-text)] redesign:hover:bg-[color:var(--icon-button-hover)] redesign:hover:text-text redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--icon-button-ring)] redesign:focus-visible:ring-offset-[length:var(--icon-button-ring-offset)] redesign:focus-visible:ring-offset-[color:var(--icon-button-ring-offset-color)]"
                 onClick={onClose}
               >
                 <X className="h-5 w-5" />
@@ -516,7 +521,7 @@ export function Dialog({
               {eyebrow && (
                 <p
                   className={cn(
-                    "text-xs uppercase tracking-[0.18em] text-accent redesign:font-medium redesign:normal-case redesign:tracking-normal",
+                    "text-xs uppercase tracking-[0.18em] text-accent redesign:font-medium redesign:normal-case redesign:tracking-normal redesign:text-[length:var(--dialog-eyebrow-size)]",
                     phoneFullScreen && "max-sm:hidden",
                   )}
                 >
@@ -574,12 +579,15 @@ export function Dialog({
                   // Under the redesign, IconButton's ghost: a round hover in
                   // the text tint, the glyph a step brighter.
                   "redesign:rounded-[var(--icon-button-radius)] redesign:text-[color:var(--icon-button-text)] redesign:hover:bg-[color:var(--icon-button-hover)] redesign:hover:text-text",
+                  // and its focus ring, where the toggle off keeps the
+                  // browser's own outline.
+                  "redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--icon-button-ring)] redesign:focus-visible:ring-offset-[length:var(--icon-button-ring-offset)] redesign:focus-visible:ring-offset-[color:var(--icon-button-ring-offset-color)]",
                   // A full-screen phone dialog closes from the left.
                   phoneFullScreen && "max-sm:hidden",
                 )}
                 onClick={onClose}
               >
-                <X className="h-4 w-4" />
+                <X className="h-4 w-4 redesign:size-[var(--dialog-close-glyph)]" />
               </button>
             )}
           </div>
@@ -597,7 +605,12 @@ export function Dialog({
           </div>
 
           {footer && (
-            <div className="safe-pb flex shrink-0 flex-wrap justify-end gap-2 border-t border-[color:var(--dialog-footer-rule,var(--color-border))] px-[var(--dialog-px,1.25rem)] py-4">
+            <div
+              className={cn(
+                "safe-pb flex shrink-0 flex-wrap justify-end gap-2 border-t border-[color:var(--dialog-footer-rule,var(--color-border))] px-[var(--dialog-px,1.25rem)] py-4",
+                solo && "redesign:border-transparent redesign:pt-[var(--dialog-solo-footer-pt)]",
+              )}
+            >
               {footer}
             </div>
           )}
