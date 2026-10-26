@@ -1081,6 +1081,12 @@ variant set, and then use it everywhere.
 5. **UI copy is a catalogue key.** i18next, flat dotted keys, single-brace
    `{slots}`, `_one` / `_other` families, and both `en` and `pt-BR`. See
    `docs/I18N.md`. No em dash reaches a user, in either language.
+- **Two variants.** `list` (the default) heads rows in a popover, a picker
+  or a panel: 13px secondary, `--section-label-gap` (6px) to the first row.
+  `group` heads a group in a settings pane, where the rows are paragraphs
+  and controls: 14px semibold in the text colour, so it never reads weaker
+  than the paragraph under it. The settings kit's `SettingsGroup` title and
+  server settings' group titles are `group`.
 
 ### How the bench enforces this
 

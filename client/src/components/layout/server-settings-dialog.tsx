@@ -457,6 +457,7 @@ function Block({
     >
       <SectionLabel
         as="h4"
+        variant="group"
         tone={tone === "danger" ? "danger" : undefined}
         className={cn(
           "font-display text-sm font-bold uppercase tracking-wider",

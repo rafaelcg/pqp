@@ -652,7 +652,7 @@ export function RolesSettingsSection({ serverId }: { serverId: string }) {
                 }
                 return (
                   <div key={group.heading}>
-                    <SectionLabel as="p" className="mb-2 px-1 text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
+                    <SectionLabel as="p" variant="group" className="mb-2 px-1 text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
                       {t(group.heading)}
                     </SectionLabel>
                     <div className="divide-y divide-ink-4/60 overflow-hidden rounded-2xl bg-ink-2">

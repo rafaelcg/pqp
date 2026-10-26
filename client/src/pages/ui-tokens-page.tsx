@@ -1338,6 +1338,7 @@ function PrimitiveSheet() {
           />
           <SectionLabel
             as="h4"
+            variant="group"
             className="font-display text-sm font-bold uppercase tracking-wider text-paper-muted"
           >
             {t("serverSettings.name.title")}
@@ -1345,6 +1346,7 @@ function PrimitiveSheet() {
           <p className="mt-2 text-sm text-text-secondary">pqp</p>
           <SectionLabel
             as="h4"
+            variant="group"
             tone="danger"
             className="mt-6 font-display text-sm font-bold uppercase tracking-wider text-danger"
           >

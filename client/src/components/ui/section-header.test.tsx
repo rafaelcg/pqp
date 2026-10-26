@@ -40,7 +40,7 @@ describe("SectionLabel", () => {
         Recentes
       </SectionLabel>,
     );
-    expect(html).toMatch(/^<h3 data-section-label=""/);
+    expect(html).toMatch(/^<h3 data-section-label="list"/);
     const cls = classes(html);
     expect(cls).toContain("uppercase tracking-wider text-text-tertiary");
     expect(cls).toContain("redesign:normal-case redesign:tracking-normal redesign:text-text-secondary");
@@ -55,5 +55,18 @@ describe("SectionLabel", () => {
     expect(html).toMatch(/^<h4/);
     expect(classes(html)).toContain("redesign:text-danger");
     expect(classes(html)).not.toContain("redesign:text-text-secondary");
+  });
+
+  it("heads a settings group at the body size in the text colour", () => {
+    const html = renderToStaticMarkup(
+      <SectionLabel as="h4" variant="group" className="text-sm font-semibold text-text">
+        Nome e foto
+      </SectionLabel>,
+    );
+    expect(html).toContain('data-section-label="group"');
+    expect(classes(html)).toContain("redesign:text-sm");
+    expect(classes(html)).toContain("redesign:text-text");
+    expect(classes(html)).not.toContain("redesign:text-text-secondary");
+    expect(classes(html)).not.toContain("--section-label-gap");
   });
 });

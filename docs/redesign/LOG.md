@@ -682,6 +682,9 @@ in 50 files, in four sizes, three trackings and two colours):
    (`f-bau`), watch party (`f-watch-party`), voice menus (`f-call`). Labels
    over a single input are field labels, not this element: logged for
    `p-settings-kit`.
+5. Council round 3 (Opus): the roles field label ("Nome do cargo") is still
+   11px caps beside sentence-case labels, and the settings rail headings are
+   12px. Queued for `p-settings-kit` (field labels) and the settings rail.
 
 ## Open questions for André
 

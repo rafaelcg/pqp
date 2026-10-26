@@ -22,8 +22,17 @@ export const PANE_TITLE_REDESIGN =
   "redesign:font-[family-name:var(--type-title-font)] redesign:text-[length:var(--pane-header-title-size)] redesign:leading-tight redesign:font-bold redesign:text-text";
 export const PANE_DESCRIPTION_REDESIGN =
   "redesign:mt-1 redesign:text-sm redesign:text-pretty redesign:text-text-secondary";
+/** Over a list in a popover, a picker or a panel: quieter than its rows. */
 export const SECTION_LABEL_REDESIGN =
-  "redesign:font-sans redesign:text-[length:var(--section-label-size)] redesign:leading-5 redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text-secondary";
+  "redesign:font-sans redesign:text-[length:var(--section-label-size)] redesign:leading-5 redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text-secondary redesign:pb-0 redesign:mb-[var(--section-label-gap)]";
+
+/**
+ * Over a group in a settings pane, where the rows are paragraphs and
+ * controls: the body size in the text colour, so the step pane, group, row
+ * holds. The settings kit's group title is this.
+ */
+export const SECTION_GROUP_REDESIGN =
+  "redesign:font-sans redesign:text-sm redesign:leading-5 redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text";
 
 export function PaneHeader({
   title,
@@ -70,12 +79,15 @@ export function PaneHeader({
 export function SectionLabel({
   as: Tag = "h3",
   id,
+  variant = "list",
   tone,
   className,
   children,
 }: {
   as?: ElementType;
   id?: string;
+  /** `list` over rows in a popover or picker; `group` over a settings group. */
+  variant?: "list" | "group";
   /** A danger zone's heading keeps its tone under the redesign. */
   tone?: "danger";
   /** The toggle-off look: size, tracking, colour and spacing. */
@@ -85,8 +97,12 @@ export function SectionLabel({
   return (
     <Tag
       id={id}
-      data-section-label=""
-      className={cn(className, SECTION_LABEL_REDESIGN, tone === "danger" && "redesign:text-danger")}
+      data-section-label={variant}
+      className={cn(
+        className,
+        variant === "group" ? SECTION_GROUP_REDESIGN : SECTION_LABEL_REDESIGN,
+        tone === "danger" && "redesign:text-danger",
+      )}
     >
       {children}
     </Tag>

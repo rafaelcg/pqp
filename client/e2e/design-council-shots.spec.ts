@@ -489,6 +489,10 @@ test("captures the design council screens", async ({ browser }) => {
       await page.getByRole("dialog").getByText("Cargos", { exact: true }).first().click();
       await expect(page.getByRole("dialog").getByRole("tablist", { name: "Nome do cargo" })).toBeVisible();
       await shoot(page, `13-server-roles-${theme}`);
+      // The permission groups, for the section labels over them.
+      await page.getByRole("dialog").getByRole("tab", { name: "Permissões" }).click();
+      await page.waitForTimeout(300);
+      await shoot(page, `13-server-roles-perms-${theme}`);
       await page.keyboard.press("Escape");
 
       await context.close();

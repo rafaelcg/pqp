@@ -65,7 +65,7 @@ export function ServerIdentitySection({
 
   return (
     <section className="space-y-3 border-t border-ink-4 pt-5" data-server-identity>
-      <SectionLabel as="h4" className="font-display text-sm font-bold uppercase tracking-wider text-paper-muted">
+      <SectionLabel as="h4" variant="group" className="font-display text-sm font-bold uppercase tracking-wider text-paper-muted">
         {t("serverSettings.identity.title")}
       </SectionLabel>
       <p className="text-sm text-paper-muted">
