@@ -167,6 +167,25 @@ a look that inverts).
 
 André signed off on `/qa/ui` after round T3 (2026-10-26).
 
+## Phase 2: elements
+
+### p-button
+
+Spec (audit: 185 importers, about 610 `<Button>` uses, plus 598 raw buttons
+that the elements they live in will fold as they are rebuilt):
+
+1. Job: the one action control. Variants default, secondary, ghost, danger,
+   plus `danger-ghost` (a quiet destructive action, 4 hand-painted sites
+   folded). Sizes sm, default, icon, plus `lg` (44px, for touch).
+2. Redesign: a pill, more horizontal room, a lifted primary, the row-hover
+   fill and secondary text on ghost.
+3. Every redesign value is a component token with a fallback in the class,
+   so the toggle off is unchanged and a call site's own class still wins.
+   (A `redesign:` class would outrank it: a ghost button painted red would
+   turn grey.)
+4. Icon-only buttons are `p-icon-button`, the next element.
+5. Public pages use Button too; tokens keep their own padding and colours.
+
 ## Open questions for André
 
 1. Resolved 2026-10-26: Grok 4.7 is the third reviewer.

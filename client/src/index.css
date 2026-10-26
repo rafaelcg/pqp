@@ -302,6 +302,9 @@
   --radius-row: var(--radius-control);
   /* A shell pane (channel list, conversation). The panel radius today. */
   --radius-pane: var(--radius-panel);
+  /* A button (ui/button.tsx). The control radius today; a pill under the
+     redesign. */
+  --radius-button: var(--radius-control);
   /* Message list drawing. Overridden on the root by src/lib/chat-display.ts. */
   --chat-font-size: 15px;
   --chat-line-height: 22px;
@@ -647,6 +650,19 @@
   --radius-row: 999px;
   /* A full-height shell pane is a touch tighter than a dialog. */
   --radius-pane: 1rem;
+  --radius-button: var(--radius-pill);
+
+  /* Button (ui/button.tsx). Unset with the toggle off: each falls back, in
+     the class, to what the button always drew. */
+  --button-px: 1.25rem;
+  --button-px-sm: 0.875rem;
+  --button-px-lg: 1.5rem;
+  --button-primary-shadow: var(--shadow-1);
+  --button-secondary-hover: var(--color-surface-3);
+  --button-ghost-text: var(--color-text-secondary);
+  --button-ghost-hover: var(--color-row-hover);
+  --button-danger-ghost-hover: var(--color-danger-soft);
+  --button-danger-ghost-hover-text: var(--color-on-danger-soft);
 
   /* The title role is drawn in the display face: server names, channel
      titles and pane headers, in sentence case. */

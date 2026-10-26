@@ -119,8 +119,8 @@ export function ChannelBauFollowsSection({
             <Button
               type="button"
               size="sm"
-              variant="ghost"
-              className="text-danger max-sm:min-h-11"
+              variant="danger-ghost"
+              className="max-sm:min-h-11"
               disabled={busyId !== null}
               onClick={() => void unfollow(follow)}
               data-channel-bau-follow-unfollow

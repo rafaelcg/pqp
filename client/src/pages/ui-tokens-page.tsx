@@ -746,7 +746,7 @@ function ControlSheet() {
   );
 }
 
-const BUTTON_VARIANTS = ["default", "secondary", "ghost", "danger"] as const;
+const BUTTON_VARIANTS = ["default", "secondary", "ghost", "danger", "danger-ghost"] as const;
 const BADGE_VARIANTS: BadgeVariant[] = [
   "new",
   "accent",
@@ -755,7 +755,7 @@ const BADGE_VARIANTS: BadgeVariant[] = [
   "danger",
   "neutral",
 ];
-const BUTTON_SIZES = ["default", "sm", "icon"] as const;
+const BUTTON_SIZES = ["lg", "default", "sm", "icon"] as const;
 
 function PrimitiveSheet() {
   const { t } = useTranslation();
@@ -766,7 +766,9 @@ function PrimitiveSheet() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
+      {/* `data-testid`: the design council's focused shot of this primitive
+          (e2e/design-council-shots.spec.ts, "primitives"). */}
+      <div data-testid="qa-primitive-button">
         <p
           className="mb-2 text-text-tertiary"
           style={{ fontSize: "var(--type-label-size)" }}

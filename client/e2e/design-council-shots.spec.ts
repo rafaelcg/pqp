@@ -504,3 +504,51 @@ test("captures the design council screens", async ({ browser }) => {
     }
   }
 });
+
+/**
+ * The primitives, one focused shot each, off the token sheet (`/qa/ui`). A
+ * primitive's states are drawn side by side there; the shot adds a hovered
+ * and a keyboard-focused one, which a static sheet cannot show. Context shots
+ * are the screens above, where the primitive is used.
+ */
+const PRIMITIVES: { id: string; testId: string; hover?: string; focus?: string }[] = [
+  {
+    id: "p-button",
+    testId: "qa-primitive-button",
+    hover: "secondary default",
+    focus: "default default",
+  },
+];
+
+test("captures the primitives", async ({ browser }) => {
+  fs.mkdirSync(OUT!, { recursive: true });
+  for (const theme of ["dark", "light"] as const) {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const page = await context.newPage();
+    await page.addInitScript(
+      ([value, redesign]) => {
+        localStorage.setItem("pqp-theme", value);
+        localStorage.setItem("pqp-redesign", redesign ? "on" : "off");
+      },
+      [theme, REDESIGN] as const,
+    );
+    await page.goto("/qa/ui");
+    for (const primitive of PRIMITIVES) {
+      const block = page.getByTestId(primitive.testId);
+      await block.scrollIntoViewIfNeeded();
+      await page.evaluate(() => document.fonts.ready);
+      if (primitive.focus) {
+        // A keyboard focus, so `focus-visible` draws the ring.
+        await block.getByRole("button", { name: primitive.focus, exact: true }).focus();
+        await page.keyboard.press("Shift+Tab");
+        await page.keyboard.press("Tab");
+      }
+      if (primitive.hover) {
+        await block.getByRole("button", { name: primitive.hover, exact: true }).hover();
+      }
+      await page.waitForTimeout(300);
+      await block.screenshot({ path: path.join(OUT!, `${primitive.id}-${theme}.png`) });
+    }
+    await context.close();
+  }
+});

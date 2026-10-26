@@ -353,8 +353,16 @@ decisions and council scores are in `docs/redesign/LOG.md`. The direction is B,
 ### The toggle
 
 `<html>` carries `data-redesign` when the redesign is on (`lib/redesign.ts`).
-A component draws its new look with the `redesign:` Tailwind variant. With the
-toggle off, no `redesign:` class matches and no redesign token block applies.
+With the toggle off, no `redesign:` class matches and no redesign token block
+applies. Three ways to draw the new look, in order of preference:
+
+1. A component token with a fallback in the class:
+   `px-[var(--button-px,1rem)]`, with `--button-px` set only on
+   `:root[data-redesign]`. Use it for a primitive, because a call site's own
+   class still wins through `cn`.
+2. The `redesign:` variant, for an element nobody overrides from outside. It
+   outranks any plain class on the same element.
+3. `useRedesign()`, when the markup itself differs.
 
 ### What the toggle changes in the token layer
 
@@ -444,8 +452,17 @@ so a variant and a size are props, not class strings.
 - **Variants.** `default` (accent fill, semibold, the one primary action on a
   surface), `secondary` (raised surface with a border, for a second action),
   `ghost` (no fill until hover, for a control in a bar or a row), `danger` (the
-  soft danger fill, for a destructive confirm).
-- **Sizes.** `default` (h-9), `sm` (h-8, 12px text), `icon` (h-9 square).
+  soft danger fill, for a destructive confirm), `danger-ghost` (below).
+- **Sizes.** `default` (h-9), `sm` (h-8, 12px text), `lg` (h-11, the touch
+  size), `icon` (h-9 square).
+- **`danger-ghost`.** A destructive action that should not shout ("Deixar de
+  seguir", "Remover"): red text, no fill until hover.
+- **Under the redesign.** A pill (`--radius-button`), more horizontal room, a
+  lifted primary and the row-hover fill on ghost. All of it comes from
+  `--button-*` component tokens that are unset with the toggle off and fall
+  back, inside the class, to the old value, so a call site's own `px-6` or
+  `text-danger` still wins through `cn`. Never style a primitive with a
+  `redesign:` class: it outranks the call site.
 - **States.** Hover, `active:scale-[0.98]`, `focus-visible` ring,
   `disabled:opacity-40` with pointer events off.
 - **`asChild`.** Renders a Radix `Slot`, so a link can wear a button.
