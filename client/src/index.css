@@ -723,6 +723,10 @@
      text instead. */
   --input-bg: var(--color-field);
   --input-border: var(--color-field-border);
+  /* An invalid field's second cue beside its red edge; a disabled field
+     never takes it (disabled wins). Stronger in dark, where 6% over the
+     well barely shows. */
+  --input-invalid-bg: color-mix(in oklab, var(--color-danger) 10%, var(--color-field));
   --input-hover-border: color-mix(in oklab, var(--color-field-border) 40%, var(--color-text));
   --input-placeholder: var(--color-text-tertiary);
   --input-prefix: var(--color-text-secondary);
@@ -963,6 +967,7 @@
 
 /* The redesign's shadows on a light page: tinted, never black. Every look. */
 :root[data-redesign][data-theme="light"] {
+  --input-invalid-bg: color-mix(in oklab, var(--color-danger) 6%, var(--color-field));
   --shadow-1: 0 1px 2px oklch(0.4 0.02 262 / 0.08);
   --shadow-2: 0 12px 32px oklch(0.4 0.02 262 / 0.16);
   --shadow-3: 0 24px 64px -16px oklch(0.4 0.02 262 / 0.26);

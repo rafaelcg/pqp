@@ -557,8 +557,11 @@ accessible name.
   both at 4.5:1. Disabled keeps the edge, drops the fill, dims the value
   to `text-tertiary` and the placeholder and prefix one step further (70%),
   so an empty disabled field never looks like a resting one and a disabled
-  value still reads as a value. Invalid adds a faint red tint (danger 6%)
-  to the red edge, a second cue beside the colour of a 1px line. Hover, invalid and disabled are the field's `redesign:`
+  value still reads as a value. Invalid adds a faint red tint
+  (`--input-invalid-bg`, danger 10% in dark and 6% in light) to the red
+  edge; a field that is also disabled draws as disabled. Pair
+  `aria-invalid` with visible error text through `aria-describedby`: the
+  message is the cue that does not depend on colour. Hover, invalid and disabled are the field's `redesign:`
   classes. Fields are rounded rectangles (`--radius-control`) and actions
   are pills; a field and its button share a height, not a shape. `Textarea` shares the box through
   `FIELD_BOX` and `FIELD_TEXT`.

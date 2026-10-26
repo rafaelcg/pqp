@@ -45,7 +45,7 @@ describe("Input", () => {
     expect(redesign.sort()).toEqual(
       [
         "redesign:aria-invalid:border-danger",
-        "redesign:aria-invalid:bg-[color:color-mix(in_oklab,var(--color-danger)_6%,var(--color-field))]",
+        "redesign:aria-invalid:not-disabled:bg-[color:var(--input-invalid-bg)]",
         "redesign:disabled:bg-transparent",
         "redesign:disabled:placeholder:text-[color:color-mix(in_oklab,var(--color-text-tertiary)_70%,transparent)]",
         "redesign:disabled:text-text-tertiary",
@@ -62,5 +62,15 @@ describe("Input", () => {
     const area = classes(draw(<Textarea />).querySelector("textarea"));
     expect(area).toContain("border-[color:var(--input-border,var(--color-border))]");
     expect(area).toContain("min-h-28");
+  });
+
+  it("draws a field that is disabled and invalid as disabled", () => {
+    const field = classes(draw(<Input disabled aria-invalid />).querySelector("input"));
+    expect(field).toContain("redesign:aria-invalid:not-disabled:bg-[color:var(--input-invalid-bg)]");
+    expect(field).toContain("redesign:disabled:bg-transparent");
+    const box = classes(draw(<Input prefix="@" disabled aria-invalid />).querySelector("div"));
+    expect(box).toContain(
+      "redesign:has-[input[aria-invalid=true]]:not-has-[input:disabled]:bg-[color:var(--input-invalid-bg)]",
+    );
   });
 });
