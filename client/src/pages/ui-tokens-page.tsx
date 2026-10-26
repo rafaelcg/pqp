@@ -1104,7 +1104,8 @@ function PrimitiveSheet() {
               { id: "pending", label: t("qaUi.tabs.pending") },
             ]}
           />
-          <div className="w-56">
+          {/* The profile popover's content width. */}
+          <div className="w-72">
             <Tabs
               label={t("qaUi.tabs.segmentedSmall")}
               variant="segmented"
