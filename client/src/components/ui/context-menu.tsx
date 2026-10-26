@@ -259,7 +259,7 @@ export function ContextMenu({
                     className="flex h-8 flex-1 redesign:h-[var(--menu-strip-h)] cursor-default select-none items-center justify-center rounded-[var(--menu-row-radius,var(--radius-control))] border border-dashed border-[color:var(--menu-more-edge,var(--color-border))] text-sm leading-none text-text-tertiary outline-none data-[highlighted]:bg-[color:var(--menu-row-hover,var(--color-surface-2))] data-[highlighted]:text-text"
                   >
                     <span aria-hidden="true" className="redesign:hidden">+</span>
-                    <PhPlus aria-hidden="true" weight="bold" className="hidden size-3.5 redesign:block" />
+                    <PhPlus aria-hidden="true" weight="bold" className="hidden size-4 redesign:block" />
                   </ContextMenuPrimitive.Item>
                 )}
               </div>

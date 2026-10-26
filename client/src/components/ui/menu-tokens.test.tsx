@@ -3,6 +3,7 @@ import { forwardRef, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import {
+  MENU_BUTTON_ICON,
   MENU_ICON,
   MENU_ROW,
   MENU_HEADING,
@@ -74,6 +75,9 @@ describe("menu recipe", () => {
     expect(MENU_ICON).toContain("text-[color:var(--menu-icon,currentColor)]");
     expect(MENU_ICON).toContain("group-data-[highlighted]/menu-row:text-current");
     expect(MENU_ICON).toContain("size-[var(--menu-icon-size,0.875rem)]");
+    expect(MENU_ICON).not.toContain("group-hover/menu-row");
+    expect(MENU_BUTTON_ICON).toContain("group-hover/menu-row:text-current");
+    expect(MENU_ICON).toContain("redesign:[stroke-width:var(--icon-stroke)]");
   });
 
   it("keeps a danger row's icon red", () => {

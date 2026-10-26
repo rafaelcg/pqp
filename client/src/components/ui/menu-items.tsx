@@ -64,7 +64,14 @@ export const MENU_ROW_BUTTON = `group/menu-row ${ROW_SHAPE} text-left text-text 
  * quieter colour that comes up to the label's when the row is highlighted.
  */
 export const MENU_ICON =
-  "size-[var(--menu-icon-size,0.875rem)] shrink-0 text-[color:var(--menu-icon,currentColor)] group-data-[highlighted]/menu-row:text-current group-hover/menu-row:text-current group-focus-visible/menu-row:text-current";
+  "size-[var(--menu-icon-size,0.875rem)] shrink-0 text-[color:var(--menu-icon,currentColor)] redesign:[stroke-width:var(--icon-stroke)] group-data-[highlighted]/menu-row:text-current";
+
+/**
+ * The icon on a `MENU_ROW_BUTTON` row, which has no Radix highlight: it comes
+ * up on hover and on keyboard focus instead. (A Radix row lifts only on its
+ * highlight, so a resting pointer and the arrow keys never light two icons.)
+ */
+export const MENU_BUTTON_ICON = `${MENU_ICON} group-hover/menu-row:text-current group-focus-visible/menu-row:text-current`;
 
 /** The column an icon sits in, so labels line up across rows. */
 export const MENU_ICON_BOX = "flex size-[var(--menu-icon-box,1rem)] shrink-0 items-center justify-center";
@@ -150,7 +157,7 @@ export function MenuItemRows({
                 </span>
                 <span
                   id={`${idPrefix}-${item.id}-detail`}
-                  className="whitespace-normal text-xs text-text-tertiary"
+                  className="whitespace-normal text-xs text-text-tertiary redesign:group-data-[disabled]/menu-row:opacity-[var(--menu-detail-disabled-opacity)]"
                 >
                   {item.detail}
                 </span>
