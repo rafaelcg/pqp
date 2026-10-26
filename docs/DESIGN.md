@@ -508,7 +508,8 @@ accessible name.
 - **`pressed`.** A toggle (mute, pin). It sets `aria-pressed` and, under the
   redesign, the selected row fill with an accent glyph. Only with a fixed
   `label`: a control whose label or icon swaps (expand and collapse) is an
-  action, not a toggle.
+  action, not a toggle. Do not combine it with `tone="danger"`: a pressed toggle
+  hovers in the accent, not red.
 - **Glyph.** The size owns it: 14, 16, 18 and 20px for xs to lg under the
   redesign (16px at `md` with the toggle off). Pass the icon bare; a class on
   it loses.

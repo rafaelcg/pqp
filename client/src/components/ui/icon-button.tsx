@@ -100,7 +100,7 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
         onPointerDown={disabled ? undefined : onPointerDown}
         onKeyDown={disabled ? undefined : onKeyDown}
         className={cn(
-          "grid shrink-0 place-items-center rounded-[var(--icon-button-radius,var(--radius-control))] text-[color:var(--icon-button-text,var(--color-text-tertiary))] transition-[background,color,transform] duration-[var(--duration-fast)] hover:bg-[var(--icon-button-hover,var(--color-surface-2))] hover:text-text active:scale-[var(--icon-button-press,1)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--icon-button-ring,var(--color-focus-ring))] focus-visible:ring-offset-[length:var(--icon-button-ring-offset,0px)] focus-visible:ring-offset-[color:var(--icon-button-ring-offset-color,var(--color-ring-offset))]",
+          "grid shrink-0 place-items-center rounded-[var(--icon-button-radius,var(--radius-control))] text-[color:var(--icon-button-text,var(--color-text-tertiary))] transition-[background,color,transform] duration-[var(--duration-fast)] hover:bg-[var(--icon-button-hover,var(--color-surface-2))] hover:text-text active:scale-[var(--icon-button-press,1)] motion-reduce:active:scale-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--icon-button-ring,var(--color-focus-ring))] focus-visible:ring-offset-[length:var(--icon-button-ring-offset,0px)] focus-visible:ring-offset-[color:var(--icon-button-ring-offset-color,var(--color-ring-offset))]",
           SIZE[size],
           touch && "max-sm:h-11 max-sm:w-11",
           tone === "danger" &&
