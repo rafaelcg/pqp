@@ -242,11 +242,15 @@ const TOOLTIP_BUBBLE =
 
 /** The quieter second line. */
 export const TOOLTIP_DETAIL =
-  "mt-1 block text-[11px] font-normal text-[color:var(--tooltip-detail,var(--color-text-tertiary))]";
+  "mt-[var(--tooltip-detail-gap,0.25rem)] block text-[11px] leading-[var(--tooltip-detail-leading,inherit)] font-normal text-[color:var(--tooltip-detail,var(--color-text-tertiary))]";
 
-/** The server-list bubble: larger, and the title face under the redesign. */
+/**
+ * The server-list bubble: larger, semibold, and in the title face under the
+ * redesign, the weight a server name has in its own pane title. Its colours,
+ * radius and shadow are the default bubble's under the redesign.
+ */
 const TOOLTIP_RAIL =
-  "rounded-[var(--radius-card)] border border-[color:var(--tooltip-border,var(--color-surface-2))] bg-[color:var(--tooltip-bg,var(--color-surface-0))] text-[color:var(--tooltip-text,var(--color-text))] shadow-[var(--shadow-popover)] px-2.5 py-1.5 text-[13px] font-semibold leading-snug [font-family:var(--tooltip-rail-font,inherit)]";
+  "rounded-[var(--tooltip-radius,var(--radius-card))] border border-[color:var(--tooltip-border,var(--color-surface-2))] bg-[color:var(--tooltip-bg,var(--color-surface-0))] text-[color:var(--tooltip-text,var(--color-text))] shadow-[var(--tooltip-shadow,var(--shadow-popover))] px-2.5 py-1.5 text-[13px] leading-snug [font-weight:var(--tooltip-rail-weight,600)] [font-family:var(--tooltip-rail-font,inherit)]";
 
 /** The bubble's classes, for a static specimen (`/qa/ui`). */
 export function tooltipBubbleClass(tone: "default" | "rail" = "default"): string {

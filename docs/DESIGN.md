@@ -598,7 +598,8 @@ needs it as an ancestor.
   non-obvious), `name` (an accessible name that differs from the visible text),
   `side`, `align`, `tone`.
 - **Tones.** `default` is the compact label on an icon button. `rail` is the
-  larger, darker bubble the server rail uses.
+  larger, semibold bubble the server rail uses, in the title face under the
+  redesign; there it shares the default's colours, radius and shadow.
 - **Behaviour.** 260ms before the first bubble of a group, then 500ms of no
   delay for its neighbours, so a control bar can be swept and read. Inert on
   touch, so a tap is never eaten. Portalled into the fullscreen element when one
@@ -606,10 +607,11 @@ needs it as an ancestor.
 - **Under the redesign.** Every colour, the radius, the padding and the
   weight come from `--tooltip-*` tokens over four roles: `--color-tooltip`,
   `--color-tooltip-border`, `--color-on-tooltip`, `--color-tooltip-detail`.
-  In dark the bubble is the deepest surface with a strong edge, so it parts
-  from panes and dialogs alike; in light it is inverted (a dark bubble), since
-  a white one vanishes into a white page. The label is medium weight and the
-  rail bubble uses the title face. The bench checks the label and the detail
+  In dark the bubble sits below the deepest surface, so it parts from panes
+  and dialogs by its fill, with a soft edge (text 22% over the bubble) and a
+  faint top highlight; in light it is inverted (a dark bubble), since a white
+  one vanishes into a white page. The label is medium weight; the detail
+  line sits 2px under it at a 1.25 line height. The bench checks the label and the detail
   at 4.5:1 in every look.
 - **Hand-placed bubbles.** A bubble that cannot use Radix (the reaction tip,
   the locked-look hint) reads the same tokens with its own fallbacks, so the

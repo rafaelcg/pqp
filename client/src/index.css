@@ -135,12 +135,13 @@
   --color-mention-bar: var(--color-accent);
   --color-mention-chip: var(--color-accent-soft);
   --color-on-mention-chip: var(--color-on-accent-soft);
-  /* The tooltip bubble under the redesign. In dark, the deepest surface with
-     a strong edge, so it parts from panes and dialogs alike (the rail bubble
-     always was this); inverted in light, where a white bubble would vanish
-     into a white page. Unused with the toggle off. */
-  --color-tooltip: var(--color-surface-0);
-  --color-tooltip-border: var(--color-border-strong);
+  /* The tooltip bubble under the redesign. In dark, below the deepest
+     surface, so it parts from every pane and dialog by its fill and needs
+     only a soft edge (a strong one read as an outlined button); inverted in
+     light, where a white bubble would vanish into a white page. Unused with
+     the toggle off. */
+  --color-tooltip: color-mix(in oklab, var(--color-surface-0) 55%, oklch(0 0 0));
+  --color-tooltip-border: color-mix(in oklab, var(--color-text) 22%, var(--color-tooltip));
   --color-on-tooltip: var(--color-text);
   --color-tooltip-detail: color-mix(in oklab, var(--color-on-tooltip) 80%, var(--color-tooltip));
 
@@ -690,12 +691,18 @@
   --tooltip-border: var(--color-tooltip-border);
   --tooltip-text: var(--color-on-tooltip);
   --tooltip-detail: var(--color-tooltip-detail);
-  --tooltip-shadow: var(--shadow-2);
+  /* A faint top highlight, as on the primary button; light drops it. */
+  --tooltip-shadow: inset 0 1px 0 oklch(1 0 0 / 0.06), var(--shadow-2);
   --tooltip-px: 0.625rem;
   --tooltip-py: 0.3125rem;
   --tooltip-weight: 500;
   --tooltip-radius: var(--radius-control);
+  --tooltip-max-w: 18rem;
+  --tooltip-leading: 1.375;
+  --tooltip-detail-gap: 0.125rem;
+  --tooltip-detail-leading: 1.25;
   --tooltip-rail-font: var(--type-title-font);
+  --tooltip-rail-weight: 600;
 
   --icon-button-radius: var(--radius-pill);
   --icon-button-text: var(--color-text-secondary);
@@ -937,6 +944,7 @@
   /* A ghost icon button has no chrome but its ring, and the shared 60% ring
      reads 2.4:1 on a light page; it takes the solid accent instead. */
   --icon-button-ring: var(--color-accent);
+  --tooltip-shadow: var(--shadow-2);
 }
 
 /*
