@@ -52,6 +52,7 @@ Read this file and the inventory at the start of every session.
 | 2 | `p-list-row` | Merged (cap at round 5: 8.6 Opus r5, 8.4 Codex r2, no MUST) |
 | 2 | `p-card` | Merged (cap at round 5: 8.5 Opus r5, 8.4 Codex r1, no MUST) |
 | 2 | `p-section-header` | Merged (cap at round 5: 8.0 Opus r5, 8.4 Codex r2, no MUST) |
+| 2 | `p-loading` | Merged (cap at round 5: 8.6 Opus r5, 8.6 Codex r4, no MUST) |
 
 ## Phase 0: directions
 
@@ -875,6 +876,30 @@ local placeholders):
 4. Left for their owners: call, stories, apps, watch party and voice note
    spinners (their surfaces), the splash ring (`f-states`), the server
    rail skeleton (`s-rail`).
+
+Council (Opus 5.5, GPT-6 Luna via Codex), overall after. One reviewer per
+round, Opus for the sign-off:
+
+| Round | Opus | Codex |
+|---|---|---|
+| 1 | not run | 8.5 |
+| 2 | 8.4 | not run |
+| 3 | 8.4 | not run |
+| 4 | not run | 8.6 |
+| 5 | 8.6 | not run |
+
+Capped at round 5, no MUST open. Round 5's notes were applied after it: the
+channel header's placeholder is a Skeleton, the update button's busy state
+uses the Spinner, the sheet drops the 12px sample. Left for their owners
+(placeholders and spinners outside this element's scope):
+`community-home-feed.tsx` (`f-bau`), `pages/locadora-guest-page.tsx` and
+`pages/home/mudanca.tsx` (public pages, out of scope), `pages/claim-page.tsx`
+(signed-out), the channel skeleton's row spacing (`s-channel-row`).
+Verified: typecheck; 10,444 unit tests; `bench:tokens`; i18n check;
+`conversations-home`, `send-jumps-to-bottom`, `dialog-mobile-layout`,
+`profile-popover-menu`, `retro-look` and `message-permalink-scroll` e2e (39
+passed); retro, Halloween, high contrast, 390px and toggle off.
+Screenshots: `~/pqp-redesign/p-loading/`.
 
 ## Open questions for André
 
