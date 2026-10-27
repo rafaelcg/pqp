@@ -28,7 +28,14 @@ export const SECTION_FOCUS_RING =
  * and round actions.
  */
 export const CATEGORY_ROW_REDESIGN =
-  "redesign:min-h-8 redesign:gap-1.5 redesign:rounded-full redesign:px-2 redesign:text-text-secondary redesign:hover:text-text";
+  "redesign:min-h-8 redesign:gap-1.5 redesign:rounded-full redesign:px-2 redesign:text-text-secondary redesign:hover:text-text redesign:has-[[data-section-toggle]:focus-visible]:ring-2 redesign:has-[[data-section-toggle]:focus-visible]:ring-inset redesign:has-[[data-section-toggle]:focus-visible]:ring-accent";
+
+/**
+ * The fold button inside the row. Its own ring is off under the redesign:
+ * the row draws it on the whole 32px pill (see `CATEGORY_ROW_REDESIGN`).
+ */
+export const CATEGORY_TOGGLE_REDESIGN =
+  "redesign:gap-1.5 redesign:rounded-full redesign:focus-visible:ring-0 redesign:focus-visible:ring-offset-0";
 
 /** The name: the section label's face, in the row's colour. */
 export const CATEGORY_LABEL_REDESIGN = cn(
@@ -154,10 +161,11 @@ export function ChannelSectionHeader({
         onClick={onToggle}
         aria-expanded={!collapsed}
         aria-controls={controlsId}
+        data-section-toggle=""
         className={cn(
           "flex min-w-0 flex-1 items-center gap-1 rounded-sm text-left",
           SECTION_FOCUS_RING,
-          "redesign:gap-1.5 redesign:rounded-full redesign:focus-visible:ring-accent",
+          CATEGORY_TOGGLE_REDESIGN,
         )}
       >
         <SectionCaret collapsed={collapsed} />
