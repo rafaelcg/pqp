@@ -896,6 +896,11 @@
   --list-row-selected-text: var(--color-on-row-selected);
   /* A row's second line (a tag, a status, a count): the tertiary text. */
   --list-row-detail: var(--color-text-tertiary);
+  /* The communities directory: a full page in the conversation's tone, its
+     cards one solid step above it (solid, so the banner fade and the icon's
+     cut ring match the card). */
+  --communities-bg: var(--color-pane-main);
+  --community-card-bg: color-mix(in oklab, var(--color-text) 4%, var(--color-pane-main));
   /* A muted row (a channel you silenced) stays a step above a disabled one
      (0.4), so the two read apart. */
   --list-row-muted-opacity: 0.6;

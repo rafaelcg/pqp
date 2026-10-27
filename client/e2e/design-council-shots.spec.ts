@@ -467,6 +467,16 @@ test("captures the design council screens", async ({ browser }) => {
       await expect(page.getByText(DM.at(-1)![1]).first()).toBeVisible({ timeout: 30_000 });
       await hideDevBanner(page);
       await shoot(page, `03-home-${theme}`);
+      // The communities directory, a full page over the app.
+      try {
+        await page.getByRole("button", { name: "Comunidades" }).first().click({ timeout: 5_000 });
+        await page.waitForTimeout(1200);
+        await shoot(page, `35-communities-${theme}`);
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(300);
+      } catch {
+        console.log("communities shot skipped");
+      }
       // Novidades: a pane of its own beside the rail.
       await page.getByRole("button", { name: /^Novidades/ }).first().click();
       await page.waitForTimeout(1200);

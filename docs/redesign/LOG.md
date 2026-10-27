@@ -1034,6 +1034,23 @@ server settings do not use it, so its roles field label in caps moves to
    Phosphor icons through a shared `IconSwap`. Empty and result take the
    `p-empty` shape once that merges.
 
+### f-communities
+
+Spec (audit: `communities-view.tsx`, a full-screen overlay from the rail's
+Comunidades door; `community-card.tsx` with its skeleton; states: loading,
+error, empty per filter, results, load more):
+
+1. Job: browse and join public communities by search, category and language,
+   and start one.
+2. Redesign: the page on the conversation's tone (`--communities-bg`), cards
+   one solid step above (`--community-card-bg`) with card corners and a
+   round icon; category chips are the shared pill choices; the language
+   filter is the segmented control; search on the input tokens; Gabarito
+   titles; filled Compass and Sparkle; a round close.
+3. Merges: nothing. The emoji in empty states and chips stay (character).
+4. Kept: the hover lift and glow, share and report on every card, the
+   create call to action above the grid.
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss

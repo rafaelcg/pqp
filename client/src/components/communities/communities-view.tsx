@@ -19,6 +19,8 @@ import {
   type CategoryFilter,
   type LanguageFilter,
 } from "./communities-model";
+import { Compass as CompassGlyph, MagnifyingGlass, Sparkle as SparkleGlyph, X as XGlyph } from "@phosphor-icons/react";
+import { Icon } from "@/components/ui/icon";
 
 /** Long enough that typing a word does not fire five requests. */
 const SEARCH_DEBOUNCE_MS = 250;
@@ -211,7 +213,7 @@ export function CommunitiesView({
       role="dialog"
       aria-modal="true"
       aria-label={t("communities.title")}
-      className="fixed inset-0 z-40 flex flex-col bg-ink text-paper focus:outline-none"
+      className="fixed inset-0 z-40 flex flex-col bg-ink text-paper focus:outline-none redesign:bg-[color:var(--communities-bg)] redesign:text-text"
       data-communities-view
     >
       {/* The one piece of atmosphere in here: a wash of the accent behind the
@@ -223,10 +225,11 @@ export function CommunitiesView({
         className="pointer-events-none absolute inset-x-0 top-0 h-[26rem] bg-[radial-gradient(120%_100%_at_50%_0%,var(--glow-accent)_0%,transparent_70%)]"
       />
 
-      <header className="relative z-10 flex h-14 shrink-0 items-center justify-between gap-3 border-b border-ink-4/50 px-4 sm:px-6">
+      <header className="relative z-10 flex h-14 shrink-0 items-center justify-between gap-3 border-b border-ink-4/50 px-4 sm:px-6 redesign:border-[color:var(--card-border)]">
         <div className="flex min-w-0 items-center gap-2">
-          <Compass aria-hidden="true" className="h-5 w-5 shrink-0 text-signal" />
-          <span className="truncate font-display text-sm font-bold tracking-tight">
+          <Compass aria-hidden="true" className="h-5 w-5 shrink-0 text-signal redesign:hidden" />
+          <Icon icon={CompassGlyph} size="md" className="hidden text-accent-text redesign:block" />
+          <span className="truncate font-display text-sm font-bold tracking-tight redesign:font-[family-name:var(--type-title-font)] redesign:text-base">
             {t("communities.title")}
           </span>
         </div>
@@ -234,27 +237,34 @@ export function CommunitiesView({
           type="button"
           aria-label={t("communities.close")}
           title={t("communities.close")}
-          className="-mr-1.5 rounded-lg p-2 text-paper-muted transition hover:bg-ink-3 hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+          className="-mr-1.5 rounded-lg p-2 text-paper-muted transition hover:bg-ink-3 hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60 redesign:rounded-full redesign:text-text-secondary redesign:hover:bg-[color:var(--menu-row-hover)] redesign:hover:text-text redesign:focus-visible:ring-[color:var(--list-row-ring)]"
           onClick={onClose}
         >
-          <X aria-hidden="true" className="h-5 w-5" />
+          <X aria-hidden="true" className="h-5 w-5 redesign:hidden" />
+          <Icon icon={XGlyph} kind="symbol" size="md" className="hidden redesign:block" />
         </button>
       </header>
 
       <div className="relative z-10 min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-6xl px-4 pb-20 sm:px-6">
           <div className="pt-8 text-center sm:pt-12">
-            <h1 className="font-display text-3xl font-bold leading-[1.05] tracking-tight sm:text-4xl lg:text-5xl">
+            <h1 className="font-display text-3xl font-bold leading-[1.05] tracking-tight sm:text-4xl lg:text-5xl redesign:font-[family-name:var(--type-title-font)] redesign:text-balance">
               {t("communities.hero.title")}
             </h1>
-            <p className="mx-auto mt-3 max-w-xl text-sm text-paper-muted sm:text-base">
+            <p className="mx-auto mt-3 max-w-xl text-sm text-paper-muted sm:text-base redesign:text-text-secondary">
               {t("communities.hero.body")}
             </p>
 
             <div className="relative mx-auto mt-6 max-w-xl">
               <Search
                 aria-hidden="true"
-                className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-paper-muted"
+                className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-paper-muted redesign:hidden"
+              />
+              <Icon
+                icon={MagnifyingGlass}
+                kind="symbol"
+                size="sm"
+                className="pointer-events-none absolute left-4 top-1/2 hidden -translate-y-1/2 text-[color:var(--input-placeholder)] redesign:block"
               />
               {/* Not the shared `Input`: this one is the page's centrepiece and
                   wants a pill, a taller target and a focus ring that reads as
@@ -264,7 +274,7 @@ export function CommunitiesView({
                 value={rawQuery}
                 aria-label={t("communities.search")}
                 placeholder={t("communities.searchPlaceholder")}
-                className="h-12 w-full rounded-full border border-ink-4 bg-ink-2 pl-11 pr-4 text-base text-paper shadow-sm outline-none transition placeholder:text-paper-muted focus:border-signal/60 focus:ring-4 focus:ring-signal/15"
+                className="h-12 w-full rounded-full border border-ink-4 bg-ink-2 pl-11 pr-4 text-base text-paper shadow-sm outline-none transition placeholder:text-paper-muted focus:border-signal/60 focus:ring-4 focus:ring-signal/15 redesign:border-[color:var(--input-border)] redesign:bg-[color:var(--input-bg)] redesign:text-text redesign:shadow-none redesign:placeholder:text-[color:var(--input-placeholder)] redesign:focus:border-[color:var(--input-border)] redesign:focus:ring-2 redesign:focus:ring-offset-2 redesign:focus:ring-offset-ring-offset redesign:focus:ring-[color:var(--input-ring,var(--color-focus-ring))]"
                 onChange={(e) => setRawQuery(e.target.value)}
               />
             </div>
@@ -290,6 +300,10 @@ export function CommunitiesView({
                   chip.active
                     ? "border-signal bg-signal font-semibold text-ink"
                     : "border-ink-4 bg-ink-2 text-paper-muted hover:border-ink-4 hover:bg-ink-3 hover:text-paper",
+                  // Under the redesign: the same pill choices as everywhere,
+                  // the selected row's fill with an accent edge when on.
+                  "redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--list-row-ring)]",
+                  chip.active ? "redesign:border-accent redesign:bg-[color:var(--list-row-selected)] redesign:text-[color:var(--list-row-selected-text)]" : "redesign:border-[color:var(--card-border)] redesign:bg-transparent redesign:text-text-secondary redesign:hover:border-[color:var(--card-border)] redesign:hover:bg-[color:var(--card-row-hover)] redesign:hover:text-text",
                 )}
                 onClick={() => setCategory(chip.id)}
               >
@@ -311,7 +325,7 @@ export function CommunitiesView({
             data-language-filter
             className="mt-3 flex justify-center sm:justify-end"
           >
-            <div className="inline-flex items-center gap-0.5 rounded-full border border-ink-4 bg-ink-2 p-0.5">
+            <div className="inline-flex items-center gap-0.5 rounded-full border border-ink-4 bg-ink-2 p-0.5 redesign:border-0 redesign:bg-[color:var(--segmented-bg)] redesign:p-[var(--segmented-pad)]">
               {languages.map((segment) => (
                 <button
                   key={segment.id ?? "all"}
@@ -323,6 +337,11 @@ export function CommunitiesView({
                     segment.active
                       ? "bg-signal text-ink"
                       : "text-paper-muted hover:text-paper",
+                    // Under the redesign: the segmented control's thumb.
+                    "redesign:h-[var(--segmented-h-sm)] redesign:py-0 redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--list-row-ring)]",
+                    segment.active
+                      ? "redesign:bg-[color:var(--segmented-thumb)] redesign:font-semibold redesign:text-text redesign:shadow-[var(--segmented-thumb-shadow)]"
+                      : "redesign:text-text-secondary redesign:hover:text-text",
                   )}
                   onClick={() => setLanguage(segment.id)}
                 >
@@ -336,10 +355,11 @@ export function CommunitiesView({
               A directory whose only answer to "none of these are mine" is a
               scroll to the bottom teaches people that making one is an advanced
               move. It is not: it is the other half of the feature. */}
-          <div className="mt-6 flex flex-col gap-3 rounded-2xl border border-signal/25 bg-signal/[0.06] p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
+          <div className="mt-6 flex flex-col gap-3 rounded-2xl border border-signal/25 bg-signal/[0.06] p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5 redesign:rounded-[var(--radius-card)] redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--community-card-bg)]">
             <div className="min-w-0">
               <p className="flex items-center gap-2 font-display text-base font-bold">
-                <Sparkles aria-hidden="true" className="h-4 w-4 text-signal" />
+                <Sparkles aria-hidden="true" className="h-4 w-4 text-signal redesign:hidden" />
+                <Icon icon={SparkleGlyph} size="sm" className="hidden text-accent-text redesign:block" />
                 {t("communities.create.title")}
               </p>
               <p className="mt-1 text-sm text-paper-muted">

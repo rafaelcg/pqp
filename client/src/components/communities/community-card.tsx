@@ -150,7 +150,7 @@ export function CommunityCard({
 
   return (
     <li
-      className="group relative flex flex-col overflow-hidden rounded-2xl border border-ink-4 bg-ink-2 transition duration-200 hover:-translate-y-0.5 hover:border-signal/45 hover:shadow-[0_14px_36px_var(--glow-accent)] focus-within:border-signal/45"
+      className="group relative flex flex-col overflow-hidden rounded-2xl border border-ink-4 bg-ink-2 transition duration-200 hover:-translate-y-0.5 hover:border-signal/45 hover:shadow-[0_14px_36px_var(--glow-accent)] focus-within:border-signal/45 redesign:rounded-[var(--radius-card)] redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--community-card-bg)] redesign:hover:border-[color:color-mix(in_oklab,var(--color-accent)_40%,transparent)] redesign:focus-within:border-[color:color-mix(in_oklab,var(--color-accent)_40%,transparent)]"
       data-community={community.id}
     >
       {/* The header. Short enough that it never pushes the name below the fold
@@ -179,7 +179,7 @@ export function CommunityCard({
             something to sit against rather than a hard seam. */}
         <span
           aria-hidden="true"
-          className="absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-ink-2 to-transparent"
+          className="absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-ink-2 to-transparent redesign:from-[color:var(--community-card-bg)]"
         />
         <span
           aria-hidden="true"
@@ -200,7 +200,7 @@ export function CommunityCard({
               title={t("communities.share")}
               aria-label={`${t("communities.share")}: ${community.name}`}
               className={cn(
-                "rounded-lg bg-ink/50 p-1.5 backdrop-blur-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
+                "rounded-lg bg-ink/50 p-1.5 backdrop-blur-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60 redesign:rounded-full",
                 shared
                   ? "text-success"
                   : "text-paper-muted hover:text-signal",
@@ -218,7 +218,7 @@ export function CommunityCard({
             type="button"
             title={t("communities.report")}
             aria-label={`${t("communities.report")}: ${community.name}`}
-            className="rounded-lg bg-ink/50 p-1.5 text-paper-muted backdrop-blur-sm transition hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+            className="rounded-lg bg-ink/50 p-1.5 text-paper-muted backdrop-blur-sm transition hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60 redesign:rounded-full"
             onClick={onReport}
           >
             <Flag aria-hidden="true" className="h-3.5 w-3.5" />
@@ -233,7 +233,7 @@ export function CommunityCard({
             sliced in half by the banner it is supposed to overlap. */}
         <span
           aria-hidden="true"
-          className="relative -mt-7 flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-2xl font-display text-base font-bold text-paper ring-4 ring-ink-2"
+          className="relative -mt-7 flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-2xl font-display text-base font-bold text-paper ring-4 ring-ink-2 redesign:rounded-full redesign:ring-[color:var(--community-card-bg)]"
           style={showIcon ? undefined : tintStyle(hue, 55)}
         >
           {iconSrc && (
@@ -254,7 +254,7 @@ export function CommunityCard({
           {!showIcon && monogram(community.name)}
         </span>
 
-        <h3 className="mt-3 truncate font-display text-base font-bold text-paper">
+        <h3 className="mt-3 truncate font-display text-base font-bold text-paper redesign:font-[family-name:var(--type-title-font)] redesign:text-text">
           {community.name}
         </h3>
 
@@ -318,13 +318,14 @@ export function CommunityCardSkeleton({ className }: { className?: string }) {
     <li
       className={cn(
         "flex flex-col overflow-hidden rounded-2xl border border-ink-4 bg-ink-2",
+        "redesign:rounded-[var(--radius-card)] redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--community-card-bg)]",
         className,
       )}
       aria-hidden="true"
     >
       <Skeleton className="h-20 w-full rounded-none" />
       <div className="px-4 pb-4">
-        <Skeleton className="-mt-7 h-14 w-14 rounded-2xl ring-4 ring-ink-2" />
+        <Skeleton className="-mt-7 h-14 w-14 rounded-2xl ring-4 ring-ink-2 redesign:rounded-full redesign:ring-[color:var(--community-card-bg)]" />
         <Skeleton className="mt-3 h-4 w-2/3" />
         <Skeleton className="mt-2 h-3 w-24" />
         <Skeleton className="mt-3 h-3 w-full" />
