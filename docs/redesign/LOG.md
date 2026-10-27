@@ -1059,6 +1059,24 @@ server settings do not use it, so its roles field label in caps moves to
    Phosphor icons through a shared `IconSwap`. Empty and result take the
    `p-empty` shape once that merges.
 
+### f-forum
+
+Spec (audit: `forum/` (8 files): the pane with its search, filter bar and
+layout switch, three post layouts (card, compact row, gallery tile) and the
+pinned row, the post view with status, tags, follow and the solution, the
+composer dialog with similar posts and tags):
+
+1. Job: browse, filter and open posts; start one; mark one resolved.
+2. Redesign: cards, tiles and pinned rows on the card tokens with a stronger
+   edge on hover and when open; compact rows on the row roles (the selected
+   fill replaces the side bar); filters, tags and the status trigger are
+   pills on the segmented track's tint; the layout switch is segmented; the
+   search is a round input well; filled glyphs.
+3. Merges: the three tag pill looks share one resting tint.
+4. Kept: every layout, filter, sort and badge; the 767px breakpoint and the
+   forum's own empty block (logged, not merged: the shared EmptyState already
+   draws it).
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss
