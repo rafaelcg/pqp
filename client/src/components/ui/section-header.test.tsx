@@ -46,6 +46,17 @@ describe("SectionLabel", () => {
     expect(cls).toContain("redesign:normal-case redesign:tracking-normal! redesign:text-text-secondary");
   });
 
+  it("keeps the danger colour on a group title, as server settings' danger zone uses it", () => {
+    const html = renderToStaticMarkup(
+      <SectionLabel variant="group" tone="danger" className="text-danger">
+        Zona de perigo
+      </SectionLabel>,
+    );
+    expect(classes(html)).toContain("redesign:text-danger");
+    expect(classes(html)).not.toContain("redesign:text-text ");
+    expect(classes(html).endsWith("redesign:text-text")).toBe(false);
+  });
+
   it("keeps a danger zone's tone and the tag it is given", () => {
     const html = renderToStaticMarkup(
       <SectionLabel as="h4" tone="danger" className="text-danger">

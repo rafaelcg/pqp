@@ -1069,9 +1069,20 @@ list, a popover or a dialog ("Recentes", "Convites ativos", a danger zone).
 - **Redesign.** The redesign classes come last and win. A pane title is
   Gabarito (`--type-title-font`) at `--pane-header-title-size` (20px), the
   line under it body size in secondary text, `--pane-header-gap` (24px)
-  below. A section label is `--section-label-size` (13px), semibold,
-  secondary text, sentence case with no tracking. `tone="danger"` keeps a
-  danger zone's heading in the danger colour.
+  below. A section label is semibold sentence case with no tracking, in one
+  of two variants (below). `tone="danger"` keeps a danger zone's heading in
+  the danger colour on either.
+- **Two variants.** `list` (the default) heads rows in a popover, a picker
+  or a panel: `--section-label-size` (13px), secondary text,
+  `--section-label-gap` (6px) to the first row. `group` heads a group in a
+  settings pane: `--section-group-size` (15px) semibold in the text colour,
+  a step over the 14px rows and flush with the group's edge. The settings
+  kit's `SettingsGroup` title and server settings' group titles are `group`.
+- **The face.** Both labels are the sans face with no tracking, and a pane
+  title is Gabarito at -0.012em. The unlayered `.font-display` rule outranks
+  every utility, and callers pass `font-display` as a toggle-off class, so
+  the primitive sets the face and the tracking with `!`.
+  `e2e/section-label-face.spec.ts` checks the computed face.
 - **Copy.** Write a label in sentence case. The old look upper-cases it with
   CSS (on a span or heading, never on a button, which resets it).
 - **Not these.** A field's label over an input is the input's; a channel
@@ -1104,17 +1115,6 @@ variant set, and then use it everywhere.
 5. **UI copy is a catalogue key.** i18next, flat dotted keys, single-brace
    `{slots}`, `_one` / `_other` families, and both `en` and `pt-BR`. See
    `docs/I18N.md`. No em dash reaches a user, in either language.
-- **Two variants.** `list` (the default) heads rows in a popover, a picker
-  or a panel: `--section-label-size` (13px), secondary text,
-  `--section-label-gap` (6px) to the first row. `group` heads a group in a
-  settings pane: `--section-group-size` (15px) semibold in the text colour,
-  a step over the 14px rows and flush with the group's edge. The settings
-  kit's `SettingsGroup` title and server settings' group titles are `group`.
-- **The face.** Both labels are the sans face with no tracking, and a pane
-  title is Gabarito at -0.012em. The unlayered `.font-display` rule outranks
-  every utility, and callers pass `font-display` as a toggle-off class, so
-  the primitive sets the face and the tracking with `!`.
-  `e2e/section-label-face.spec.ts` checks the computed face.
 
 ### How the bench enforces this
 
