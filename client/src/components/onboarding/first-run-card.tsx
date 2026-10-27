@@ -168,7 +168,7 @@ export function FirstRunCard({
               <span
                 aria-hidden="true"
                 className={cn(
-                  "mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border redesign:h-8 redesign:w-8 redesign:border-0",
+                  "mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border redesign:-mt-1 redesign:h-8 redesign:w-8 redesign:border-0",
                   done
                     ? "border-success/40 bg-success/15 text-success"
                     : "border-ink-4 bg-ink text-signal redesign:bg-accent-soft redesign:text-on-accent-soft",
@@ -177,7 +177,7 @@ export function FirstRunCard({
                 {done ? (
                   <IconSwap off={Check} on={CheckBold} kind="symbol" offClassName="h-4 w-4" className="h-4 w-4" />
                 ) : (
-                  <IconSwap off={Icon} on={row.glyph} offClassName="h-4 w-4" className="h-4 w-4" />
+                  <IconSwap off={Icon} on={row.glyph} offClassName="h-4 w-4" className="h-[18px] w-[18px]" />
                 )}
               </span>
 
@@ -194,7 +194,7 @@ export function FirstRunCard({
                 {done ? (
                   // No sales pitch for something already done, and no praise for
                   // it either. One quiet word that the row is settled.
-                  <p className="mt-0.5 text-xs text-paper-muted redesign:mt-1 redesign:text-text-secondary">
+                  <p className="mt-0.5 text-xs text-paper-muted redesign:mt-1 redesign:text-text-tertiary">
                     {t("firstRun.done")}
                   </p>
                 ) : (
@@ -203,7 +203,7 @@ export function FirstRunCard({
                         prints a `name#0000` handle, which is one unbreakable
                         token up to 37 characters long, and at 390px a long one
                         ran off the edge of the card rather than wrapping. */}
-                    <p className="mt-0.5 break-words text-sm text-paper-muted redesign:mt-1">
+                    <p className="mt-0.5 break-words text-sm text-paper-muted redesign:mt-1 redesign:text-text-secondary">
                       {/* Only the friend row interpolates, and it wants the
                           reader's own tag — see the catalogue comment. */}
                       {t(row.body, { tag: user.tag ?? user.username ?? "" })}

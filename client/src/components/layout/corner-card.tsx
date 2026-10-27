@@ -126,7 +126,8 @@ export function CornerCard({
         // Round under the redesign: glass on a hero, a ghost on the card.
         "redesign:rounded-full redesign:focus-visible:ring-[color:var(--color-focus-ring)]",
         hero
-          ? "redesign:bg-[color:oklch(0.12_0.01_262/0.62)] redesign:text-[color:oklch(0.98_0_0)]"
+          ? // Dark glass in dark; a light glass with a hairline in light.
+            "redesign:bg-[color:oklch(0.12_0.01_262/0.62)] redesign:text-[color:oklch(0.98_0_0)] redesign:[:root[data-theme=light]_&]:bg-[color:oklch(0.99_0_0/0.72)] redesign:[:root[data-theme=light]_&]:text-text redesign:[:root[data-theme=light]_&]:ring-1 redesign:[:root[data-theme=light]_&]:ring-[color:var(--popover-border)]"
           : "redesign:-mr-1.5 redesign:-mt-1.5 redesign:h-8 redesign:w-8 redesign:text-text-tertiary redesign:hover:bg-[color:var(--menu-row-hover)] redesign:hover:text-text",
       )}
     >
