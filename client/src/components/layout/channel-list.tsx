@@ -2326,7 +2326,7 @@ export const ChannelList = memo(function ChannelList({
           // (`e2e/server-header.spec.ts`), not by `channel-list-header.test.tsx`
           // — jsdom has no layout engine, so a static-markup test cannot see
           // a box model computation like this one.
-          className="flex min-h-12 shrink-0 items-center gap-2 border-b border-border px-3 py-1.5 redesign:min-h-14 redesign:border-b-0 redesign:px-2 redesign:pt-2 redesign:pb-1"
+          className="flex min-h-12 shrink-0 items-center gap-2 border-b border-border px-3 py-1.5 redesign:min-h-14 redesign:border-b-0 redesign:px-3 redesign:pt-2 redesign:pb-1"
         >
           {server ? (
             <Menu
@@ -2427,7 +2427,7 @@ export const ChannelList = memo(function ChannelList({
             <Search className="h-3.5 w-3.5 shrink-0 redesign:hidden" />
             <Icon icon={MagnifyingGlass} kind="symbol" size="sm" className="hidden redesign:block" />
             <span className="truncate">{t("chrome.searchMessages")}</span>
-            <kbd className="ml-auto hidden shrink-0 rounded border border-border px-1 py-px text-[10px] font-sans md:inline redesign:rounded-md redesign:border-0 redesign:bg-surface-3 redesign:px-1.5 redesign:text-text-secondary">
+            <kbd className="ml-auto hidden shrink-0 rounded border border-border px-1 py-px text-[10px] font-sans md:inline redesign:rounded-md redesign:border-0 redesign:bg-surface-3 redesign:px-1.5 redesign:py-0.5 redesign:text-[11px] redesign:text-text-secondary">
               {searchShortcutHint(conversationsHome)}
             </kbd>
           </button>
@@ -2899,9 +2899,10 @@ export const ChannelList = memo(function ChannelList({
 /**
  * The header's icon buttons with the toggle off: 32px, 28px from `md`, the
  * ring offset they always had. Under the redesign IconButton's own round
- * ghost draws them.
+ * ghost draws them, 44px on a phone so a thumb lands on it.
  */
-const HEADER_ICON_BUTTON = "md:h-7 md:w-7 focus-visible:ring-offset-2";
+const HEADER_ICON_BUTTON =
+  "md:h-7 md:w-7 focus-visible:ring-offset-2 max-sm:redesign:h-11 max-sm:redesign:w-11";
 
 const ServerHeaderMenuTrigger = forwardRef<
   HTMLButtonElement,
@@ -2921,7 +2922,7 @@ const ServerHeaderMenuTrigger = forwardRef<
       ref={nameRef}
       id={nameId}
       data-server-name=""
-      className="min-w-0 flex-1 truncate font-display text-sm font-bold tracking-tight leading-tight text-text redesign:font-[family-name:var(--type-title-font)]! redesign:text-[length:var(--sidebar-header-title-size)] redesign:font-semibold redesign:tracking-[-0.012em]!"
+      className="min-w-0 flex-1 truncate font-display text-sm font-bold tracking-tight leading-tight text-text redesign:font-[family-name:var(--type-title-font)]! redesign:text-[length:var(--sidebar-header-title-size)] redesign:font-bold redesign:tracking-[-0.012em]!"
     >
       {server.name}
     </p>
@@ -2949,7 +2950,7 @@ const ServerHeaderMenuTrigger = forwardRef<
       // real Playwright run to catch. `items-center` on the row still
       // centers everything; only the click/hover rectangle's own height
       // changed, not the icon's position.
-      className="group flex min-w-0 flex-1 items-center gap-2 rounded-[var(--radius-control)] px-1 text-left transition-colors duration-[var(--duration-fast)] hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 data-[state=open]:bg-surface-2 redesign:min-h-11 redesign:gap-2.5 redesign:rounded-[var(--radius-row)] redesign:px-2 redesign:hover:bg-row-hover redesign:data-[state=open]:bg-row-hover redesign:focus-visible:ring-accent redesign:focus-visible:ring-offset-0"
+      className="group flex min-w-0 flex-1 items-center gap-2 rounded-[var(--radius-control)] px-1 text-left transition-colors duration-[var(--duration-fast)] hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 data-[state=open]:bg-surface-2 redesign:min-h-11 redesign:gap-1.5 redesign:rounded-[var(--radius-row)] redesign:px-2 redesign:hover:bg-row-hover redesign:data-[state=open]:bg-row-hover redesign:focus-visible:ring-accent redesign:focus-visible:ring-offset-0"
       {...triggerProps}
     >
       {/* Under the redesign the open server's tile sits right beside this
