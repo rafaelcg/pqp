@@ -531,6 +531,10 @@ function UserPanelBlock() {
       <FooterPane>
         <UserPanel {...base} inVoice serverMuted />
       </FooterPane>
+      {/* Listen only (audience mode): the mic locked, not unavailable. */}
+      <FooterPane>
+        <UserPanel {...base} inVoice canSpeak={false} />
+      </FooterPane>
       <FooterPane>
         <UserPanel {...base} manualStatus="dnd" effectiveStatus="dnd" />
       </FooterPane>

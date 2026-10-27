@@ -251,6 +251,8 @@ export function UserPanel({
   // Deafen forces the mic off, so both slashes show. Undeafen can leave the
   // mic slash up: that is the mute from before, not a second deafen.
   const micShownOff = serverMuted || isMuted || isDeafened;
+  /** In a call without the right to speak (audience mode), not muted by anyone. */
+  const listenOnly = inVoice && !canSpeak && !micShownOff;
 
   // Re-seed the draft from the truth: when the menu opens, and whenever the
   // saved value moves under it (another tab, another device, or this write
@@ -353,7 +355,7 @@ export function UserPanel({
         // An inset card at the foot of the sidebar, like the voice strip
         // above it. The presence dot's cutout is the card's colour, opaque.
         compact ? SIDEBAR_FOOTER_CARD_COMPACT_REDESIGN : SIDEBAR_FOOTER_CARD_REDESIGN,
-        "redesign:mb-2 redesign:[--avatar-dot-ring:color-mix(in_oklab,var(--color-text)_4%,var(--color-pane-side))]",
+        "redesign:mb-2 redesign:[--avatar-dot-ring:var(--footer-card-solid)]",
       )}
     >
       {showHint && (
@@ -696,7 +698,12 @@ export function UserPanel({
               "h-8 w-8 shrink-0",
               PANEL_BUTTON_REDESIGN,
               micShownOff && inVoice && !serverMuted && PANEL_BUTTON_OFF_REDESIGN,
-              serverMuted && "redesign:bg-warning-soft redesign:text-on-warning-soft",
+              // A moderator's mute is disabled, and must still read at full
+              // strength: it is the one time "am I heard" matters most.
+              serverMuted && "redesign:bg-warning-soft redesign:text-on-warning-soft redesign:[--button-disabled-opacity:1]",
+              // Listen only: locked, not unavailable. A neutral fill and the
+              // slashed mic at full strength.
+              listenOnly && "redesign:bg-[color:var(--card-row-hover)] redesign:text-text-secondary redesign:[--button-disabled-opacity:1]",
             )}
             onClick={onToggleMute}
             disabled={!inVoice || !canSpeak || serverMuted}
@@ -710,18 +717,17 @@ export function UserPanel({
             }
           >
             {micShownOff ? (
-              <>
-                <MicOff
-                  className={cn("h-4 w-4 redesign:hidden", serverMuted ? "text-warning" : "text-danger")}
-                />
-                <Icon icon={MicrophoneSlash} size="sm" className="hidden redesign:block" />
-              </>
+              <MicOff
+                className={cn("h-4 w-4 redesign:hidden", serverMuted ? "text-warning" : "text-danger")}
+              />
             ) : (
-              <>
-                <Mic className="h-4 w-4 redesign:hidden" />
-                <Icon icon={Microphone} size="sm" className="hidden redesign:block" />
-              </>
+              <Mic className="h-4 w-4 redesign:hidden" />
             )}
+            <Icon
+              icon={micShownOff || listenOnly ? MicrophoneSlash : Microphone}
+              size="sm"
+              className="hidden redesign:block"
+            />
           </Button>
         </span>
       </Tooltip>
