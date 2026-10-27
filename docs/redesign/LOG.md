@@ -56,6 +56,7 @@ Read this file and the inventory at the start of every session.
 | 2 | `p-empty` | Merged, capped at round 5 (Opus 8.6) |
 | 2 | `p-sheet` | Merged, capped at round 5 (Opus 8.6) |
 | 2 | `p-dialog` | Merged, capped at round 5 (Codex 8.7 r2, Opus 8.2 r4) |
+| 2 | `p-settings-kit` | Merged, capped at round 5 (Opus 8.5 r5, 8.5 r2) |
 | 3 | `s-frame` | Merged, capped at round 5 (Opus 8.8) |
 | 3 | `s-rail` | Merged, capped at round 5 (Opus 8.2 r5, 8.8 r3) |
 | 3 | `s-sidebar-header` | Merged, capped at round 5 (Opus 8.3 r5, 8.7 r3) |
@@ -1103,6 +1104,10 @@ server settings do not use it, so its roles field label in caps moves to
    `ui/Badge`, notices take the banner's shape with a tinted info tone,
    Phosphor icons through a shared `IconSwap`. Empty and result take the
    `p-empty` shape once that merges.
+
+Rounds: Codex 8.2 (r1); Opus 8.5 (r2), 8.0 (r3), 8.5 (r5), no MUST left.
+Round 5 fixes: the copy failure glyph at 14px, the info tint at 7% in
+dark, the rail build line in mono. Merged on the cap.
 
 ## Open questions for André
 
