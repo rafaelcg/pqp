@@ -180,8 +180,9 @@ export function CornerCard({
             </p>
           )}
           {children}
-          {/* The shell owns the CTA's width, so every hint's first action is the same size. */}
-          {footer && <div className="mt-3 redesign:[&>:is(button,a):first-child]:min-w-[7.5rem]">{footer}</div>}
+          {/* The shell owns the CTA's width: a footer's primary action carries
+              `data-cta`, and every one is the same size. */}
+          {footer && <div className="mt-3 redesign:[&_[data-cta]]:min-w-[7.5rem]">{footer}</div>}
         </div>
       </div>
     </aside>

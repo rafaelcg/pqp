@@ -933,7 +933,7 @@ export function ShellSheet() {
             dismissLabel="Fechar"
             title="Atalhos do teclado"
             body="Aperta Ctrl K pra buscar qualquer mensagem, e Ctrl / pra ver todos os atalhos."
-            footer={<Button size="sm" className="cta-lift min-w-[7.5rem] rounded-full px-4" onClick={noop}>Entendi</Button>}
+            footer={<Button size="sm" data-cta className="cta-lift rounded-full px-4" onClick={noop}>Entendi</Button>}
           />
           <CornerCard
             open

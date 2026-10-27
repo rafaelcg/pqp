@@ -211,7 +211,7 @@ export function FirstRunCard({
                           reader's own tag — see the catalogue comment. */}
                       {t(row.body, { tag: user.tag ?? user.username ?? "" })}
                     </p>
-                    <div className="mt-2 flex flex-wrap gap-2">
+                    <div className="mt-2 flex flex-wrap gap-2 redesign:mt-3">
                       {row.actions.map((action) => (
                         <Button
                           key={action.label}
