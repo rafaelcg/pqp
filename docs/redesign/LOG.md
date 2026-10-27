@@ -901,6 +901,22 @@ Verified: typecheck; 10,444 unit tests; `bench:tokens`; i18n check;
 passed); retro, Halloween, high contrast, 390px and toggle off.
 Screenshots: `~/pqp-redesign/p-loading/`.
 
+### p-settings-kit
+
+Spec (audit: 28 files in `settings/kit/`, about 30 callers in user settings;
+server settings do not use it, so its roles field label in caps moves to
+`f-server-settings`; no select of its own, the choice grid is the radio card):
+
+1. Job: the blocks every user settings tab is built from: group, row, switch,
+   slider, link, action row, choice grid, preview, notice, badge, keys,
+   empty, result, loading rows, copy, inline status, unsaved bar.
+2. States: hover, focus, disabled, busy, chosen, every notice tone, saving,
+   saved, error, unsaved, refused close.
+3. Redesign: group boxes and choice cards on the card tokens, the badge is
+   `ui/Badge`, notices take the banner's shape with a tinted info tone,
+   Phosphor icons through a shared `IconSwap`. Empty and result take the
+   `p-empty` shape once that merges.
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss
