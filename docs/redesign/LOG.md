@@ -56,6 +56,7 @@ Read this file and the inventory at the start of every session.
 | 2 | `p-empty` | Merged, capped at round 5 (Opus 8.6) |
 | 2 | `p-sheet` | Merged, capped at round 5 (Opus 8.6) |
 | 2 | `p-dialog` | Merged, capped at round 5 (Codex 8.7 r2, Opus 8.2 r4) |
+| 2 | `p-scroll` | Merged, capped at round 5 (Opus 7.9 r5, 8.6 r4). Hover thumb contrast not measured; Windows check open |
 | 2 | `p-settings-kit` | Merged, capped at round 5 (Opus 8.5 r5, 8.5 r2) |
 | 3 | `s-frame` | Merged, capped at round 5 (Opus 8.8) |
 | 3 | `s-rail` | Merged, capped at round 5 (Opus 8.2 r5, 8.8 r3) |
