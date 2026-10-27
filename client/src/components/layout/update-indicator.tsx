@@ -282,7 +282,9 @@ export function UpdateIndicator({
             // On the rail it is a small tile like the ones above it.
             variant === "rail" &&
               !emphasised &&
-              "redesign:bg-[color:var(--rail-tile-bg)] redesign:hover:bg-[color:var(--rail-tile-hover)] redesign:focus-visible:ring-accent redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-canvas",
+              "redesign:bg-[color:var(--rail-tile-bg)] redesign:hover:bg-[color:var(--rail-tile-hover)] redesign:focus-visible:ring-text redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-canvas",
+            // Every door on the rail is one tile size, this one too.
+            variant === "rail" && "redesign:h-[var(--rail-tile)] redesign:w-[var(--rail-tile)]",
             variant === "rail" && open && !emphasised && "redesign:bg-[color:var(--rail-tile-hover)]",
             className,
           )}

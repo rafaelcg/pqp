@@ -443,9 +443,12 @@ form, so a derived role is measured like any other.
 - The pip on the left edge is the text colour: tall for selected, a dot for
   unread.
 - The Baú's ring (new posts beside a mention) hugs the disc with no gap, like
-  a story ring; a ring with a gap is keyboard focus.
+  a story ring. Keyboard focus is a ring with a gap in the text colour, so it
+  never reads as a chosen face or the Baú.
 - Counts are `CountBadge` with a ring cut from the canvas. The public globe
-  and the live dot sit on canvas discs at the lower corners.
+  and the live dot sit on canvas discs at the lower corners; the live dot is
+  solid, never pulsing.
+- Every door is one 44px tile, the update tile included.
 - Glyphs are filled Phosphor objects; `+` is a bold symbol.
 
 ### Icons

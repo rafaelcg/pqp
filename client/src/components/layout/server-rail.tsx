@@ -198,7 +198,7 @@ export const RAIL_UNREAD_FACES = 3;
  * classes, so the toggle off draws what it always drew.
  */
 const RAIL_TILE_REDESIGN =
-  "redesign:h-[var(--rail-tile)] redesign:w-[var(--rail-tile)] redesign:rounded-full redesign:bg-[color:var(--rail-tile-bg)] redesign:text-text-secondary redesign:font-sans! redesign:tracking-normal! redesign:text-[13px] redesign:font-semibold redesign:hover:rounded-[var(--rail-tile-radius-selected)] redesign:hover:bg-[color:var(--rail-tile-hover)] redesign:hover:text-text redesign:transition-[border-radius,background-color,color] redesign:duration-[var(--duration-fast)] redesign:motion-reduce:transition-none redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-canvas";
+  "redesign:h-[var(--rail-tile)] redesign:w-[var(--rail-tile)] redesign:rounded-full redesign:bg-[color:var(--rail-tile-bg)] redesign:text-text-secondary redesign:font-sans! redesign:tracking-normal! redesign:text-[13px] redesign:font-semibold redesign:hover:rounded-[var(--rail-tile-radius-selected)] redesign:hover:bg-[color:var(--rail-tile-hover)] redesign:hover:text-text redesign:transition-[border-radius,background-color,color] redesign:duration-[var(--duration-fast)] redesign:motion-reduce:transition-none redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-text redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-canvas";
 
 /** The place on screen: the accent's rounded square, lifted. */
 const RAIL_TILE_SELECTED_REDESIGN =
@@ -407,7 +407,7 @@ export function ServerRail({
           aria-hidden="true"
           data-rail-conversations-label=""
           className={cn(
-            "max-w-[68px] truncate text-[10px] font-semibold leading-none",
+            "max-w-[68px] truncate text-[10px] font-semibold leading-none redesign:mt-1 redesign:text-[11px]",
             homeSelected ? "text-text" : "text-text-secondary",
           )}
         >
@@ -700,7 +700,9 @@ export function ServerRail({
                   data-server-live=""
                   className="absolute -bottom-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-rail redesign:-bottom-1 redesign:-right-1 redesign:h-[18px] redesign:w-[18px] redesign:bg-canvas"
                 >
-                  <span className="h-2.5 w-2.5 rounded-full bg-danger motion-safe:animate-pulse" />
+                  {/* Solid under the redesign: a pulsing 10px dot spent half its
+                      time maroon on the dark canvas. */}
+                  <span className="h-2.5 w-2.5 rounded-full bg-danger motion-safe:animate-pulse redesign:h-3 redesign:w-3 redesign:motion-safe:animate-none" />
                   <span className="sr-only">{t("chrome.livePartySr")}</span>
                 </span>
               )}
