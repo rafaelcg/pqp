@@ -860,6 +860,10 @@
   --sidebar-search-bg: color-mix(in oklab, var(--color-text) 6%, var(--color-pane-side));
   --sidebar-search-hover: color-mix(in oklab, var(--color-text) 9%, var(--color-pane-side));
   --sidebar-search-border: transparent;
+  /* The header trigger's ladder over the search pill (6%): hover 8%, the
+     ghost buttons' step beside it; open 10%. */
+  --sidebar-trigger-hover: var(--button-ghost-hover);
+  --sidebar-trigger-open: color-mix(in oklab, var(--color-text) 10%, transparent);
   --sidebar-banner-radius: 0.75rem;
 
   --icon-button-radius: var(--radius-pill);

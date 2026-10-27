@@ -2955,7 +2955,7 @@ const ServerHeaderMenuTrigger = forwardRef<
       // changed, not the icon's position. Under the redesign there is no
       // icon: the trigger is a 44px pill (`min-h-11`) and the name and caret
       // sit together at its start.
-      className="group flex min-w-0 flex-1 items-center gap-2 rounded-[var(--radius-control)] px-1 text-left transition-colors duration-[var(--duration-fast)] hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 data-[state=open]:bg-surface-2 redesign:min-h-11 redesign:gap-1.5 redesign:rounded-[var(--radius-row)] redesign:px-2 redesign:hover:bg-row-hover redesign:data-[state=open]:bg-[color:color-mix(in_oklab,var(--color-text)_10%,transparent)] redesign:focus-visible:ring-accent redesign:focus-visible:ring-offset-0"
+      className="group flex min-w-0 flex-1 items-center gap-2 rounded-[var(--radius-control)] px-1 text-left transition-colors duration-[var(--duration-fast)] hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 data-[state=open]:bg-surface-2 redesign:min-h-11 redesign:gap-1.5 redesign:rounded-[var(--radius-row)] redesign:px-2 redesign:hover:bg-[color:var(--sidebar-trigger-hover)] redesign:data-[state=open]:bg-[color:var(--sidebar-trigger-open)] redesign:focus-visible:ring-accent redesign:focus-visible:ring-offset-0"
       {...triggerProps}
     >
       {/* Under the redesign the open server's tile sits right beside this
