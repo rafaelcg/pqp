@@ -5077,6 +5077,8 @@
   "qaUi.badge.danger": "Recusado",
   "qaUi.badge.neutral": "Fechado",
   "qaUi.badge.muted": "Removido",
+  "qaUi.listRow.inCall": "Na call · Lobby",
+  "qaUi.listRow.lastMessage": "bora jogar hoje à noite?",
   "qaUi.menu.open": "Abrir menu",
   "qaUi.menu.notifications": "Notificações",
   "qaUi.menu.all": "Todas as mensagens",

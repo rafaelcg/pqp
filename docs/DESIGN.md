@@ -1066,6 +1066,32 @@ the caller's, beside it in `cn`. Not a popover: a card does not float.
   its own hover: a text tint over the card's fill, the same on any surface.
 - **Body copy** in a card is secondary text under the redesign; tertiary at
   12px on the light card is near the floor.
+### UserAvatar
+
+`components/user/user-avatar.tsx`. Every person's picture goes through it:
+the URL rules, the monogram fallback and a server bot's live face are in one
+place. `StatusDot` (`status-dot.tsx`) draws presence on its corner.
+
+- **Toggle off.** The caller's shape (`rounded`: `md`, `lg`, `full`) and its
+  monogram colours (`fallbackClassName`).
+- **Redesign.** A person is always a circle, and the monogram sits on one
+  neutral disc (`surface-3`, body text, semibold, measured at 4.5:1 in
+  every look by the bench); the caller still
+  sets its size. A bot keeps its own shape. `ownPalette` keeps the caller's
+  colours for an avatar drawn inside a story, which paints in its own
+  palette.
+- **Presence dot.** Under the redesign a caller puts `StatusDot` at
+  `redesign:bottom-0 redesign:right-0`, so its centre sits on the circle's
+  edge at 45 degrees instead of hanging off a square's corner.
+- **Light.** The monogram disc takes a 1px inner edge (`--avatar-edge`), so
+  it stays a disc on the white pane.
+- **Dimmed** (offline, muted): under the redesign the letter dims to
+  tertiary text and the disc stays, so it still reads on a white pane.
+- **Dot cutout.** A pane call site's `StatusDot` ring reads
+  `--avatar-dot-ring`: the side pane's colour by default, the conversation
+  pane's inside `main`.
+- **Stacks** cut their overlap with the same token
+  (`ring-[color:var(--avatar-dot-ring)]`).
 ### CountBadge
 
 `count-badge.tsx`. A number in a pill: unread messages, mentions,
@@ -1080,6 +1106,43 @@ conversations or friend requests waiting. Draws nothing at zero and caps at
   16px `sm` keeps its height and takes 10px type, so "99+" fits.
 - The server rail's and the channel list's counts are drawn in place for
   now; they move here with their shell elements.
+
+### ListRow
+
+`list-row.tsx`. A row in a list: a channel, a person, a conversation, a
+thread, a follow. `leading` (an icon or an avatar), the label, `detail` (a
+second line), `trailing` (a time or a mark, inside the row's button, so
+nothing interactive), `count` (a `CountBadge`; it replaces the pip) and `action` (a control of its own: the row becomes a
+wrapper with the button and the action side by side). Sizes `sm` (a
+channel), `md` (a person), `lg` (a person or conversation with a second
+line).
+
+- **States.** Hover is a fill; `selected` is the row-selected role with its
+  own label colour and `aria-current` (a selected row is the one being
+  read, so it drops the unread look); `unread` is weight 600 plus the
+  indicator pip at the end, 8px under the redesign (a `count` replaces it; a `trailing` time keeps either beside it, or over it on an `lg` row); `muted` fades
+  the row (0.5, 0.6 under the redesign, so it stays above disabled at 0.4).
+- **Tokens.** Every value is `--list-row-*` with the old value as its
+  fallback. Under the redesign: a pill, 36/44/52px tall, 12px inside, on
+  `row-hover` and `row-selected`.
+- **Adopting it.** A shell row passes its old colours through `className`,
+  so the toggle off draws what it drew. The channel, member, conversation
+  and friend rows move onto it with their shell elements.
+- **Muted** also passes a mark in `trailing` (`BellSlash`, `sm`), so it is
+  not told apart from disabled by opacity alone.
+- **Selected.** The second line and a trailing time take the selected
+  label's colour under the redesign (tertiary falls under 4.5:1 on the
+  selected fill in several looks), and so does the action; the pip and a
+  count are not drawn.
+- **Focus** is a 2px inset ring in the solid accent (`--list-row-ring`).
+- **Unread for a screen reader.** The pip is `aria-hidden`; put the state in
+  the row's name (an `sr-only` "não lida"), once, in the row that adopts it.
+- **Unread mark.** The end pip (or a count) is the one unread mark; the
+  sidebar's left-edge bar goes when the channel row adopts `ListRow`.
+- **Navigation.** A channel or a conversation row passes
+  `aria-current="page"`; the default `"true"` gives way to it.
+- **Disabled with an action.** The action is `inert`, out of pointer and
+  keyboard reach.
 
 ## Planned primitives
 
