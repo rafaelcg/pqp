@@ -159,7 +159,10 @@ export function CommunityHomePreview({
               // buttons, and each lights its own text.
               SIDEBAR_CARD_REDESIGN,
               "redesign:hover:bg-[color:var(--card-bg)]",
-              selected && "redesign:border-[color:var(--color-accent)]",
+              // The open Baú: the selection fill every sidebar row uses, as
+              // the party you are watching does.
+              selected &&
+                "redesign:border-transparent redesign:bg-row-selected redesign:hover:border-transparent redesign:hover:bg-row-selected",
             )}
             data-bau-preview-card
           >
@@ -167,7 +170,10 @@ export function CommunityHomePreview({
               type="button"
               onClick={onOpen}
               aria-current={selected ? "page" : undefined}
-              className="flex w-full items-center gap-1.5 px-2.5 pb-2 pt-2.5 text-left text-xs font-bold text-text-secondary hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring"
+              className={cn(
+                "flex w-full items-center gap-1.5 px-2.5 pb-2 pt-2.5 text-left text-xs font-bold text-text-secondary hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring",
+                selected && "redesign:text-on-row-selected redesign:hover:text-on-row-selected",
+              )}
             >
               <Archive className="h-3.5 w-3.5 redesign:hidden" aria-hidden />
               <Icon icon={ArchiveFill} size="sm" className="hidden h-3.5 w-3.5 redesign:block" />
