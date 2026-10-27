@@ -1285,6 +1285,16 @@ playing in the sidebar footer, three call sites through `sidebarFooter`):
    on). `MusicNowPlaying` is shared with the composer's music bar and moves
    with `s-composer`.
 
+Rounds (Opus only): r1 7.6, r2 8.0, r3 7.8 (no MUST). r3 fixes: status
+labels on one edge, the room's microphone glyph. Decision: the 6px gap
+between the voice strip and the user panel is the footer stack's gap, and
+both cards keep the 8px side inset; not changed.
+r4 8.0, r5 8.1 (cap, no MUST). r5 fixes: the footer cards draw
+`--card-border` (the light card barely separated from the pane), and the
+72px room button takes the row's shape. Follow-ups: the composer dock's
+hang-up moves to `PhoneDisconnect` (`s-composer`); the music idle row needs
+the music store fixture (`m-sheets`) before it can be reviewed.
+
 ### s-user-panel
 
 Spec (audit: `UserPanel` wide and compact through `sidebarFooter`; its
@@ -1304,15 +1314,15 @@ hand-built status menu with the recado field; `DownloadHint` above it):
 4. Question for André: the status menu could become `ui/menu`'s
    `DropdownMenu` with the field as top content. That is behaviour, so it is
    not done here.
-Rounds (Opus only): r1 7.6, r2 8.0, r3 7.8 (no MUST). r3 fixes: status
-labels on one edge, the room's microphone glyph. Decision: the 6px gap
-between the voice strip and the user panel is the footer stack's gap, and
-both cards keep the 8px side inset; not changed.
-r4 8.0, r5 8.1 (cap, no MUST). r5 fixes: the footer cards draw
-`--card-border` (the light card barely separated from the pane), and the
-72px room button takes the row's shape. Follow-ups: the composer dock's
-hang-up moves to `PhoneDisconnect` (`s-composer`); the music idle row needs
-the music store fixture (`m-sheets`) before it can be reviewed.
+
+Rounds (Opus only): r1 7.5 (MUST fixed), r2 7.8, r3 8.1, r4 8.1, r5 8.2
+(cap, no MUST). Changes over the rounds: the moderator's mute at full
+strength; listen only as an outlined mic with a lock badge, named "Só
+ouvindo" under the redesign; the home-indicator inset below the card;
+`--footer-card-solid-hover` for the dot cutout; the status menu as wide as
+the card with the dots in 16px slots; Não Perturbe as a red glyph without a
+fill. Open (copy, shows with the toggle off too): the Invisível hint wraps
+to seven lines at the card's width.
 
 ## Open questions for André
 
