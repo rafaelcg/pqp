@@ -232,7 +232,7 @@ export function VoiceStatusBar({
             <Button
               variant="ghost"
               size="icon"
-              className={cn("h-8 w-8 shrink-0", STRIP_ICON_REDESIGN, "redesign:bg-[color:var(--card-row-hover)]")}
+              className={cn("h-8 w-8 shrink-0", STRIP_ICON_REDESIGN, "redesign:w-10 redesign:rounded-[var(--radius-row)] redesign:bg-[color:var(--card-row-hover)]")}
               data-voice-bar-channel={channelType}
               onClick={onOpen}
             >
