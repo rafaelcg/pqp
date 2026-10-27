@@ -36,6 +36,7 @@ import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { intlLocale } from "@/lib/locale";
 import { cn } from "@/lib/utils";
 import { Tabs } from "@/components/ui/tabs";
+import { Button } from "@/components/ui/button";
 
 export type BotTab = "overview" | "voice" | "powers";
 
@@ -128,7 +129,7 @@ export function BotOverviewPanel({
       <div className="grid gap-3 sm:grid-cols-3">
         <Stat label={t("bots.overview.replies")}>
           <p className="font-display text-3xl font-extrabold text-text">
-            {used} <span className="text-base font-semibold text-text-tertiary">{t("bots.overview.of", { max })}</span>
+            {used} <span className="text-base font-semibold text-text-tertiary redesign:text-text-secondary">{t("bots.overview.of", { max })}</span>
           </p>
           <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-surface-3">
             <div
@@ -136,34 +137,30 @@ export function BotOverviewPanel({
               style={{ width: `${max > 0 ? Math.min(100, (used / max) * 100) : 0}%` }}
             />
           </div>
-          <p className="mt-2 text-xs text-text-tertiary">{t("bots.overview.resets")}</p>
+          <p className="mt-2 text-xs text-text-tertiary redesign:text-text-secondary">{t("bots.overview.resets")}</p>
         </Stat>
         <Stat label={t("bots.overview.actions")}>
           <p className="font-display text-3xl font-extrabold text-text">{overview?.actionsToday ?? 0}</p>
-          <p className="mt-2 text-xs text-text-tertiary">
+          <p className="mt-2 text-xs text-text-tertiary redesign:text-text-secondary">
             {redesign && confirmedToday === 0
               ? t("bots.overview.confirmedNone")
               : t("bots.overview.confirmed", { count: confirmedToday })}
           </p>
         </Stat>
         <Stat label={t("bots.overview.lives")}>
-          <p className="font-display text-3xl font-extrabold text-text">
+          <p className={cn("font-display text-3xl font-extrabold text-text", nowhere && "redesign:text-xl redesign:font-bold")}>
             {nowhere ? t("bots.overview.channelsNone") : t("bots.overview.channels", { count: homes.length })}
           </p>
           {nowhere ? (
-            // Awake but in no channel: say so, and open the tab that marks them.
-            <p className="mt-2 text-xs text-text-tertiary">
-              {bot.enabled && t("bots.overview.nowhere")}{" "}
+            // Awake but in no channel: say so, and a button to the tab that marks them.
+            <>
+              {bot.enabled && <p className="mt-2 text-xs text-text-secondary">{t("bots.overview.nowhere")}</p>}
               {onOpenPowers && (
-                <button
-                  type="button"
-                  className="font-medium text-accent-text hover:underline focus-visible:underline focus-visible:outline-none"
-                  onClick={onOpenPowers}
-                >
+                <Button type="button" size="sm" variant="secondary" className="mt-3" onClick={onOpenPowers}>
                   {t("bots.overview.pickChannels")}
-                </button>
+                </Button>
               )}
-            </p>
+            </>
           ) : (
             <p className="mt-2 truncate text-xs text-text-tertiary">
               {homeNames.join(", ")}

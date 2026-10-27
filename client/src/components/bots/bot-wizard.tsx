@@ -39,7 +39,7 @@ import { ArrowLeft as ArrowLeftGlyph, ArrowRight as ArrowRightGlyph, Shuffle as 
 import { BotFace } from "@/components/bots/bot-face";
 import { IconSwap } from "@/components/ui/icon";
 import { BotActionCard } from "@/components/chat/bot-action-card";
-import { ServerBotTags } from "@/components/bots/server-bot-tags";
+import { BOT_BETA_TAG_REDESIGN, ServerBotTags } from "@/components/bots/server-bot-tags";
 import { RadioChoices } from "@/components/bots/radio-choices";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Confetti } from "@/components/onboarding/confetti";
@@ -280,7 +280,7 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
       title={
         <span className="flex items-center gap-2">
           {step === "born" ? shownName : t("bots.wizard.title")}
-          <BetaTag />
+          <BetaTag className={BOT_BETA_TAG_REDESIGN} />
         </span>
       }
       description={t("bots.wizard.subtitle", { server: serverName })}
@@ -551,7 +551,7 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
                 <Textarea
                   id={ids.knowledge}
                   aria-label={t("serverSettings.bots.knowledge")}
-                  className="min-h-48"
+                  className="min-h-48 redesign:resize-none"
                   value={draft.knowledge}
                   maxLength={SERVER_BOT_KNOWLEDGE_MAX}
                   placeholder={t("serverSettings.bots.knowledgePlaceholder")}
@@ -658,7 +658,7 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
           </div>
         </div>
 
-        <aside className="relative hidden w-[24rem] shrink-0 flex-col items-center justify-center gap-5 overflow-y-auto overflow-x-hidden border-l border-border bg-surface-0 px-6 py-8 md:flex">
+        <aside className="relative hidden w-[24rem] shrink-0 flex-col items-center justify-center gap-5 overflow-y-auto overflow-x-hidden border-l border-border bg-surface-0 px-6 py-8 md:flex redesign:m-[var(--settings-pane-inset)] redesign:ml-0 redesign:rounded-[var(--radius-pane)] redesign:border-l-0 redesign:bg-[color:var(--settings-pane-bg)] redesign:ring-1 redesign:ring-inset redesign:ring-[color:var(--settings-rule)]">
           {step === "born" && <Confetti />}
           {step === "lives" ? (
             <StageChannels draft={draft} channels={channels} name={shownName} serverName={serverName} />

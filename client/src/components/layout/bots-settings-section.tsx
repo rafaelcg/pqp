@@ -706,7 +706,7 @@ function BotInvite({ onCreate }: { onCreate: () => void }) {
               <IconSwap off={Icon} on={glyph} offClassName="h-4 w-4 shrink-0 text-accent" className="mt-0.5 text-accent-text" />
               {t(title)}
             </p>
-            <p className="mt-1 text-xs text-text-secondary">{t(body)}</p>
+            <p className="mt-1 text-xs text-text-secondary redesign:pl-6">{t(body)}</p>
           </div>
         ))}
       </div>
