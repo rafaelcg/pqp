@@ -65,7 +65,8 @@ export function ChannelMusicCard({
         aria-label={inCall ? t("music.open") : t("music.sidebar.join", { title: track.title })}
         onClick={onTitleClick}
       >
-        <MarqueeText text={track.title} className="w-full min-w-0 text-[11px] text-text redesign:text-xs redesign:font-medium" />
+        {/* A long title fades at the edge instead of cutting mid-letter. */}
+        <MarqueeText text={track.title} className="w-full min-w-0 text-[11px] text-text redesign:text-xs redesign:font-medium redesign:[mask-image:linear-gradient(90deg,#000_85%,transparent)]" />
         {track.listeners != null && track.listeners > 0 ? (
           <span className="block truncate text-[10px] text-text-tertiary tabular-nums redesign:text-[11px]">
             {t("music.listening", { count: track.listeners })}

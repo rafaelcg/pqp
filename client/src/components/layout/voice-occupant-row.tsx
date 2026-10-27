@@ -264,7 +264,7 @@ export function VoiceOccupantRow({
               title={audioLabel}
               className={cn(
                 "shrink-0 transition-opacity duration-150 ease-out motion-reduce:transition-none",
-                silenced ? "text-danger" : "text-paper-muted",
+                silenced ? "text-danger" : "text-paper-muted redesign:text-[color:var(--list-row-detail)]",
                 affordance === "always"
                   ? "opacity-100"
                   : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
