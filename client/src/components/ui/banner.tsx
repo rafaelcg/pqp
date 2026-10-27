@@ -73,6 +73,20 @@ export function bannerSurfaceRedesign(
   );
 }
 
+/**
+ * A strip's second action ("Entendi", "Agora não", share): the tone's ink on
+ * a quiet tint of it, never the generic secondary grey on a tone.
+ */
+export const BANNER_QUIET_REDESIGN =
+  "redesign:border-0 redesign:bg-[color:color-mix(in_oklab,var(--banner-ink)_14%,transparent)] redesign:text-[color:var(--banner-ink)] redesign:hover:bg-[color:color-mix(in_oklab,var(--banner-ink)_22%,transparent)] redesign:hover:text-[color:var(--banner-ink)]";
+
+/**
+ * The disc a strip leads with: a tint of the tone's ink, so the main action
+ * stays the one loud mark on the card.
+ */
+export const BANNER_DISC_REDESIGN =
+  "redesign:bg-[color:color-mix(in_oklab,var(--banner-ink)_18%,transparent)] redesign:text-[color:var(--banner-ink)]";
+
 /** A round dismiss in a strip's corner, in the tone's ink. */
 export const BANNER_DISMISS_REDESIGN =
   "redesign:rounded-full redesign:text-[color:var(--banner-ink)] redesign:hover:bg-[color:color-mix(in_oklab,var(--banner-ink)_16%,transparent)] redesign:hover:text-[color:var(--banner-ink)] redesign:focus-visible:ring-[color:var(--color-focus-ring)]";
@@ -175,7 +189,7 @@ const FILL_INK =
   "redesign:border-0 redesign:bg-[color:var(--banner-ink)] redesign:text-[color:var(--banner-fill)] redesign:hover:bg-[color:color-mix(in_oklab,var(--banner-ink)_88%,var(--color-text))]";
 
 const ACTION_REDESIGN =
-  "redesign:ml-auto redesign:inline-flex redesign:h-7 redesign:shrink-0 redesign:items-center redesign:rounded-[var(--radius-pill)] redesign:px-3 redesign:text-xs redesign:font-semibold redesign:no-underline redesign:transition-colors redesign:duration-[var(--duration-fast)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--color-focus-ring)] redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-[color:var(--banner-fill)]";
+  "redesign:ml-auto redesign:inline-flex redesign:h-[var(--control-sm)] redesign:shrink-0 redesign:items-center redesign:rounded-[var(--radius-pill)] redesign:px-3.5 redesign:text-[length:var(--button-text-sm)] redesign:font-semibold redesign:no-underline redesign:transition-colors redesign:duration-[var(--duration-fast)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--color-focus-ring)] redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-[color:var(--banner-fill)]";
 
 const ACTION = {
   /** The main way out: "Tentar agora", "Entrar de novo". */

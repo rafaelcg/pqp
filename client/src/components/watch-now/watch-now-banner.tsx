@@ -6,7 +6,7 @@ import {
 } from "@/components/layout/feature-hint";
 import { CaretDown, CaretUp, MonitorPlay as MonitorPlayFill } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
-import { bannerSurfaceRedesign } from "@/components/ui/banner";
+import { BANNER_DISC_REDESIGN, BANNER_QUIET_REDESIGN, bannerSurfaceRedesign } from "@/components/ui/banner";
 import { Icon } from "@/components/ui/icon";
 import { useTranslation } from "@/lib/i18n";
 import {
@@ -315,6 +315,7 @@ function Row({
         className={cn(
           "flex shrink-0 items-center justify-center rounded-full bg-accent text-on-accent",
           compact ? "h-6 w-6" : "h-8 w-8",
+          BANNER_DISC_REDESIGN,
         )}
       >
         <MonitorPlay className={cn(compact ? "h-3.5 w-3.5" : "h-4 w-4", "redesign:hidden")} />
@@ -360,7 +361,7 @@ function Row({
             size="sm"
             variant="ghost"
             data-watch-now-dismiss=""
-            className="min-h-11 sm:min-h-0"
+            className={cn("min-h-11 sm:min-h-0", BANNER_QUIET_REDESIGN)}
             onClick={() => onDismiss(stream)}
           >
             {t("watchNow.dismiss")}

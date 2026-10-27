@@ -89,7 +89,7 @@ export function UpcomingSessionCard({
     >
       <span
         className={cn(
-          "flex h-9 w-9 shrink-0 items-center justify-center rounded-full",
+          "flex h-9 w-9 shrink-0 items-center justify-center rounded-full redesign:h-8 redesign:w-8",
           isLive ? "bg-danger/20 text-danger" : "bg-ink-3 text-paper-muted",
           isLive
             ? "redesign:bg-danger-soft redesign:text-on-danger-soft"
