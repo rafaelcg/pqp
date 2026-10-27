@@ -304,7 +304,7 @@ const CHANNEL_DETAIL_REDESIGN =
 const STRIP_TILE_REDESIGN =
   "redesign:rounded-[var(--strip-tile-radius)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-[color:var(--color-pane-side)]";
 const STRIP_BUTTON_REDESIGN =
-  "redesign:rounded-full redesign:text-[color:var(--list-row-icon)] redesign:hover:bg-[color:var(--list-row-hover)] redesign:hover:text-text redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent";
+  "redesign:rounded-full redesign:text-[color:var(--list-row-icon)] redesign:hover:bg-[color:var(--list-row-hover)] redesign:hover:text-text redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-[color:var(--color-pane-side)]";
 /** The pip, the mention and the call count cut out of the side pane. */
 const STRIP_RING_REDESIGN = "redesign:ring-2 redesign:ring-[color:var(--color-pane-side)]";
 
@@ -1006,7 +1006,7 @@ export const ChannelList = memo(function ChannelList({
             initialQuery={searchSeed}
           />
         )}
-        <div className="flex flex-1 flex-col items-center gap-1 overflow-y-auto px-2 py-2">
+        <div className="flex flex-1 flex-col items-center gap-1 overflow-y-auto px-2 py-2 redesign:gap-1.5">
           {(communityHomeEnabled || server?.isCommunity) &&
             server &&
             onSelectCommunityHome && (
@@ -1024,7 +1024,9 @@ export const ChannelList = memo(function ChannelList({
             <div
               key={group.key}
               className={cn(
-                "flex w-full flex-col items-center gap-1",
+                // 6px between tiles under the redesign: a badge hanging off
+                // one tile's corner never meets the next tile's.
+                "flex w-full flex-col items-center gap-1 redesign:gap-1.5",
                 index > 0 && "mt-1 border-t border-ink-4/50 pt-2 redesign:border-[color:var(--card-border)]",
               )}
             >
@@ -3529,9 +3531,6 @@ export function ChannelRailItem({
             className={cn(
               "absolute -left-1 -top-1 h-2.5 w-2.5 rounded-full bg-danger ring-2 ring-channel motion-safe:animate-pulse",
               STRIP_RING_REDESIGN,
-              // On the tile's corner, where a text channel's mentions go: a
-              // watch party has none.
-              "redesign:left-auto redesign:-right-1",
             )}
           />
         )}
@@ -3562,7 +3561,7 @@ export function ChannelRailItem({
         {occupants > 0 && (
           <span
             className={cn(
-              "absolute -bottom-1 -right-1 min-w-4 rounded-full bg-ink-4 px-1 py-0.5 text-center text-[10px] font-bold leading-none text-paper",
+              "absolute -bottom-1 -right-1 min-w-4 rounded-full bg-ink-4 px-1 py-0.5 text-center text-[10px] font-bold leading-none text-paper redesign:-bottom-0.5 redesign:-right-0.5",
               // How many are in the call: a quiet count, not an alert.
               "redesign:flex redesign:h-4 redesign:items-center redesign:justify-center redesign:bg-surface-3 redesign:py-0 redesign:text-[length:var(--count-badge-sm-text)] redesign:font-semibold redesign:tabular-nums redesign:text-text-secondary",
               STRIP_RING_REDESIGN,
@@ -3727,7 +3726,7 @@ export function CommunityHomeNavButton({
           : "text-paper-muted hover:bg-ink-4/70 hover:text-paper",
         // A strip tile, or a channel row: the same fills as the channels.
         compact
-          ? cn(STRIP_TILE_REDESIGN, !selected && "redesign:bg-surface-3")
+          ? STRIP_TILE_REDESIGN
           : "redesign:min-h-[var(--list-row-h-sm)] redesign:gap-2 redesign:rounded-[var(--list-row-radius)] redesign:py-1 redesign:pl-1 redesign:pr-[var(--list-row-px)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent",
         selected
           ? "redesign:bg-[color:var(--list-row-selected)] redesign:text-[color:var(--list-row-selected-text)]"
