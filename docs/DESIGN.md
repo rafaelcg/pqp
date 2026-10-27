@@ -390,7 +390,7 @@ selectors in a comment in `index.css`: the bench finds blocks by regex.
 | `--type-title-font` (new) | `--font-sans` | `--font-display` (Gabarito) |
 | `--type-body-leading` | 20px | 22px |
 | `--control-row` (new) | 32px | 36px |
-| `--space-gutter` (new) | 0 | 8px (0 under 640px) |
+| `--space-gutter` (new) | 0 | 8px (0 under 768px, where the frame stops floating) |
 | `--space-pane` (new) | 16px | 16px |
 | `--duration-fast` / `base` / `slow` | 150 / 200 / 300 ms | 120 / 180 / 280 ms |
 | `--icon-sm` / `md` / `lg` (new) | 16 / 20 / 24 px | same |
@@ -433,19 +433,26 @@ form, so a derived role is measured like any other.
 `ui/pane.ts`). Under the redesign:
 
 - Every tile is a 44px circle (`--rail-tile`) in the side pane's colour
-  (`--rail-tile-bg`), the label 13px semibold in secondary text.
+  (`--rail-tile-bg`). The monogram is 13px semibold in secondary text; the
+  Conversas caption under its tile is 11px semibold.
 - The selected tile is the accent's rounded square
   (`--rail-tile-radius-selected`, 16px) with a short drop
   (`--rail-tile-shadow`). A face (a pinned or waiting conversation) stays
   round and takes an accent ring instead, because its photo fills the tile.
 - A hover lifts the fill (`--rail-tile-hover`) and rounds the tile toward the
-  selected square. It never turns lime: lime only means "you are here".
+  selected square. It never turns lime: a lime tile fill only means "you
+  are here". Small lime marks (a friend request count, a Baú count, the
+  Novidades and update dots) mean "new for you", and they never fill a tile.
+- Every door, join included, sits on the same disc (`--rail-tile-bg`).
 - The pip on the left edge is the text colour: tall for selected, a dot for
   unread.
 - The Baú's ring (new posts beside a mention) hugs the disc with no gap, like
-  a story ring; a ring with a gap is keyboard focus.
+  a story ring. Keyboard focus is a ring with a gap in the text colour, so it
+  never reads as a chosen face or the Baú.
 - Counts are `CountBadge` with a ring cut from the canvas. The public globe
-  and the live dot sit on canvas discs at the lower corners.
+  and the live dot sit on canvas discs at the lower corners; the live dot is
+  solid, never pulsing.
+- Every door is one 44px tile, the update tile included.
 - Glyphs are filled Phosphor objects; `+` is a bold symbol.
 
 ### The sidebar header
@@ -453,12 +460,14 @@ form, so a derived role is measured like any other.
 The top of the channel list (`layout/channel-list.tsx`). Under the
 redesign:
 
-- No rule under it. The server's name is the title face at 16px semibold
+- No rule under it. The server's name is the title face at 16px bold
   (`--sidebar-header-title-size`), with no icon (the open server's tile is
-  right beside it on the rail), the row a pill on `row-hover` when hovered
-  or open.
-- Members, collapse and close are `IconButton`, which keeps their toggle-off
-  size (`touch={false}`, `HEADER_ICON_BUTTON`).
+  right beside it on the rail). The caret sits right after the name. The
+  row is a 44px pill on `row-hover` when hovered, a step stronger (text at
+  10%) while the menu is open.
+- Members, collapse and close are `IconButton`'s round ghost: 32px from
+  `md`, like the chat header's, and 44px on a phone (`HEADER_ICON_BUTTON`).
+  On a phone the members button is hidden: the chat header has its own.
 - Search is a pill (`--sidebar-search-*`): a text tint off the pane in dark,
   the field's white with its edge in light.
 - The banner (`ServerBannerStrip`) is an inset card with
@@ -513,6 +522,25 @@ The redesign's icons are Phosphor (`@phosphor-icons/react`), drawn through
 A filled `#` or `+` is a solid box, so symbols take the bold outline. Sizes are
 the three `--icon-*` tokens. Lucide stays on every surface that is not rebuilt
 yet. `--icon-stroke` is the stroke a Lucide icon takes when a primitive passes it.
+
+`IconSwap` draws a Lucide icon with the toggle off and its Phosphor
+replacement under the redesign, for a surface whose callers still pass Lucide.
+A filled glyph that turns into a blob (two copy squares) takes `symbol`.
+
+### The settings kit
+
+`components/settings/kit/` builds every tab of user settings. Under the
+redesign it uses the merged primitives' tokens:
+
+- A group box is a card (`SETTINGS_GROUP_REDESIGN`): `--card-bg`,
+  `--card-border`, the same edge between rows. Rows hover with
+  `SETTINGS_ROW_HOVER` (`--card-row-hover`).
+- `SettingsBadge` is `ui/Badge` (`new`, `neutral`).
+- A notice on its own takes the banner's corners (`--banner-radius`). Info is
+  a tint (`--settings-notice-info-bg`), not an outline. A notice in a group
+  stays a row.
+- A choice card is a card; the chosen one has a 2px accent edge (the accent border plus a 1px inset ring) and a check.
+- Icons are Phosphor through `IconSwap`.
 
 ## Components
 
@@ -733,6 +761,22 @@ form submits it. A row in a checklist is `CheckRow`; a setting is `Switch`.
   box never sits beside a full-strength label. A hint under the label indents
   by `calc(var(--tick-size)+0.5rem)` under the redesign.
 
+### Sheet
+
+`sheet.tsx`. Not a component: the look of a panel that rises from a phone's
+bottom edge. Dialog is a sheet below `sm`; the app launcher and the cinema
+stage's picker draw their own.
+
+- With the toggle off each sheet keeps the surface it drew before.
+- **Under the redesign.** `SHEET_SURFACE` (a sheet at every width) and
+  `SHEET_SURFACE_PHONE` (below `sm` only) give a 24px top radius, the raised
+  fill (`surface-2` in dark, `surface-0` in light), a 10% text hairline on
+  the top edge only and a shadow cast upwards. `SHEET_SCRIM` is the scrim
+  for a sheet that draws its own; a dialog's `--dialog-scrim` and
+  `--dialog-scrim-blur` alias the same tokens. Every value is a `--sheet-*` token.
+- **Use it** for a new phone panel anchored to the bottom edge. **Do not**
+  add a grab handle unless the sheet can be dragged.
+
 ### Skeleton
 
 `skeleton.tsx`. A pulsing block at `bg-surface-3/50`, plus three composed
@@ -836,6 +880,20 @@ shrinks `vh` for an on-screen keyboard.
 - **Accessibility.** `role="dialog"`, `aria-modal`, labelled by its title and
   described by its description. Escape is stopped from reaching a menu inside.
 
+- **Under the redesign.** A deeper scrim with more blur (62% of near-black
+  in dark, a 30% grey in light). The panel takes a 10% text edge in both
+  themes and the deepest lift, through the elevation variables. The header
+  loses its rule and keeps 8px under the title; the footer's rule is an 8%
+  text tint. The inset is 24px, the title 22px, with 20px above the header
+  and below the footer. The eyebrow is sentence case at 13px; the
+  description is `text-secondary`. The close button is IconButton's ghost,
+  with its focus ring and an 18px glyph. A dialog with no body (a confirm)
+  keeps 16px under the question, drops the footer rule and keeps 8px above
+  the buttons, so the question and its answers read as one block.
+  The close button draws as IconButton's ghost (round, `text-secondary`, the
+  text-tint hover). Every value is a `--dialog-*` token with the old value
+  as its fallback. PromptDialog's field labels are sentence case too.
+
 ### ConfirmDialog
 
 `confirm-dialog.tsx`. The in-app replacement for `window.confirm`. Two
@@ -920,10 +978,23 @@ card of settings, the "what's new" note.
 - **Use it** for anything anchored to the control that opened it. A list of
   actions is a `Menu`; a blocking question is a `Dialog`.
 
-### ScrollArea
+### Scrollbars
 
-`scroll-area.tsx`. Radix scroll area with a themed thumb. Use it where a native
-scrollbar would draw OS chrome over the design.
+Native scrolling everywhere; there is no scroll area component (the unused
+Radix one was deleted with the redesign's `p-scroll`). Under the redesign
+the root sets `scrollbar-color` to `--scrollbar-thumb` (tertiary text at
+65%, 80% in light: 3.2:1 to 4.3:1 on both panes in Clássico, Catppuccin,
+Everforest and Modo 2005, measured in Chromium) on
+no track, at the platform's width. A strip that scrolls sideways may hide
+its bar (`[scrollbar-width:none]`); a list that scrolls down keeps it at
+the platform's width. The one exception is a strip under 6rem tall (the
+listener strip's wrapped list, the friends tabs), which may stay `thin`.
+The innermost scroller under the pointer (`overflow-y-auto`,
+`overflow-auto`, `overflow-x-auto` or a textarea) lifts its thumb to
+`--scrollbar-thumb-hover` (secondary text at 80%, 90% in light). A scroller
+written another way (`overflow-y-scroll`, an inline style) does not lift;
+use one of those classes to opt in. Modo 2005 follows the same rule; its
+toolbar hides its bar because it is a sideways strip.
 
 ### Textarea
 
@@ -1179,6 +1250,30 @@ conversations or friend requests waiting. Draws nothing at zero and caps at
   16px `sm` keeps its height and takes 10px type, so "99+" fits.
 - The server rail's and the channel list's counts are drawn in place for
   now; they move here with their shell elements.
+
+### EmptyState
+
+`empty-state.tsx`. What is not here yet, and what to do about it. `page`
+fills a pane (an empty channel, a forum with no posts); `inline` sits in a
+group or a list (no results, nothing saved; the settings kit's
+`SettingsEmpty` is this).
+
+- **Props.** `icon`, `title`, `body`, `actions` (one or two buttons), `role`
+  (`status` or `alert` when it replaces content that failed), `data-*`.
+- **Toggle off.** Each caller passes the classes it always drew
+  (`className`, `iconClassName`, `titleClassName`, `bodyClassName`,
+  `actionsClassName`); a caller that drew no icon hides it with
+  `hidden redesign:flex`.
+- **Redesign.** A page empty state leads with its glyph on a soft disc
+  (`--empty-icon-disc` 56px, `--empty-icon-bg` `surface-3`), a Gabarito
+  title at `--empty-title-size` (20px), a body line in secondary text, the
+  actions 20px under it. An inline one is a quiet glyph, a 14px label in
+  secondary text and a 12px line.
+- **Failure.** A load that did not come back is a `role="alert"` empty
+  state with the retry as its action; under the redesign its disc takes the
+  warning tone (`warning-soft`, `on-warning-soft`), so it reads apart from
+  an empty list. A page failure with no glyph gets `WarningCircle` there.
+- **Copy.** Say what is missing and the next step, in the casual voice.
 
 ### Spinner and Skeleton
 

@@ -42,6 +42,13 @@ const CALL_HZ = 880;
 
 let apps: AppsOrigin;
 let scratch: string;
+/**
+ * Every context a test opened. They were never closed: the first two tests left their two clients alive behind the
+ * next one, each still running a game, a share (a canvas drawn every 33 ms), peer connections and a call, on a
+ * runner with four cores. They are closed after each test, once a failure has had its pages photographed and their
+ * media path read.
+ */
+const opened: BrowserContext[] = [];
 
 test.beforeAll(async ({ browser }) => {
   test.setTimeout(300_000);
@@ -59,6 +66,21 @@ test.beforeAll(async ({ browser }) => {
 test.afterAll(async () => {
   await apps?.close();
   if (scratch) rmSync(scratch, { recursive: true, force: true });
+});
+
+test.afterEach(async ({ browserName }, testInfo) => {
+  const failed = testInfo.status !== testInfo.expectedStatus;
+  let n = 0;
+  for (const context of opened.splice(0)) {
+    for (const page of failed ? context.pages() : []) {
+      n += 1;
+      await page.screenshot({ path: testInfo.outputPath(`page-${n}.png`) }).catch(() => {});
+      const report = JSON.stringify(await mediaReport(page).catch((error: unknown) => String(error)));
+      console.warn(`[${browserName}: ${testInfo.title.slice(-40)}] page ${n} media:`, report);
+      writeFileSync(testInfo.outputPath(`media-${n}.json`), report);
+    }
+    await context.close().catch(() => {});
+  }
 });
 
 const headers = (who: string) => ({
@@ -139,6 +161,83 @@ function instrument(options: { stubCapture: boolean; regionCapture?: boolean }) 
     }
     return stream;
   };
+}
+
+/**
+ * Runs in every frame of both clients: remembers each RTCPeerConnection the page makes, so a failure can say what
+ * the media path looked like (states, packets and bytes each way) rather than only that the tone read zero.
+ */
+function trackPeers() {
+  const w = window as unknown as { __pcs: RTCPeerConnection[]; RTCPeerConnection?: typeof RTCPeerConnection };
+  w.__pcs = [];
+  const Native = w.RTCPeerConnection;
+  if (!Native) return;
+  class Recorded extends Native {
+    constructor(...args: ConstructorParameters<typeof RTCPeerConnection>) {
+      super(...args);
+      w.__pcs.push(this);
+      const born = performance.now();
+      const events: string[] = [];
+      (this as unknown as { __events: string[] }).__events = events;
+      const note = (what: string) => events.push(`${Math.round(performance.now() - born)}ms ${what}`);
+      this.addEventListener("icegatheringstatechange", () => note(`gathering ${this.iceGatheringState}`));
+      this.addEventListener("iceconnectionstatechange", () => note(`ice ${this.iceConnectionState}`));
+      this.addEventListener("signalingstatechange", () => note(`signaling ${this.signalingState}`));
+      this.addEventListener("icecandidate", (event) => note(event.candidate ? "candidate" : "end of candidates"));
+      this.addEventListener("icecandidateerror", (event) => note(`candidate error ${(event as RTCPeerConnectionIceErrorEvent).errorCode}`));
+    }
+  }
+  w.RTCPeerConnection = Recorded;
+}
+
+/** What a page's peer connections and media elements are doing, for a failure's log and attachment. */
+async function mediaReport(page: Page): Promise<unknown> {
+  return page.evaluate(async () => {
+    const w = window as unknown as { __pcs?: RTCPeerConnection[] };
+    const peers = [];
+    for (const pc of w.__pcs ?? []) {
+      const rtp: Array<Record<string, unknown>> = [];
+      (await pc.getStats()).forEach((report: Record<string, unknown>) => {
+        if (report.type !== "inbound-rtp" && report.type !== "outbound-rtp") return;
+        rtp.push({
+          type: report.type,
+          kind: report.kind,
+          packets: report.packetsReceived ?? report.packetsSent,
+          bytes: report.bytesReceived ?? report.bytesSent,
+          frames: report.framesDecoded ?? report.framesEncoded,
+        });
+      });
+      // the candidates each side has put in its description: an address ending in `.local` is mDNS-obfuscated, and a
+      // peer that cannot resolve it never starts checking (the connection stays "new" and nothing ever says why)
+      const candidates = (sdp: string | undefined) => {
+        const lines = (sdp ?? "").split("\n").filter((line) => line.startsWith("a=candidate:"));
+        return { total: lines.length, mdns: lines.filter((line) => line.includes(".local ")).length };
+      };
+      peers.push({
+        connection: pc.connectionState,
+        ice: pc.iceConnectionState,
+        gathering: pc.iceGatheringState,
+        signaling: pc.signalingState,
+        events: (pc as unknown as { __events?: string[] }).__events,
+        local: candidates(pc.localDescription?.sdp),
+        remote: candidates(pc.remoteDescription?.sdp),
+        rtp,
+      });
+    }
+    const elements = [...document.querySelectorAll("video, audio")].map((node) => {
+      const element = node as HTMLMediaElement;
+      const source = element.srcObject instanceof MediaStream ? element.srcObject : null;
+      return {
+        tag: element.tagName,
+        paused: element.paused,
+        muted: element.muted,
+        ready: element.readyState,
+        size: node instanceof HTMLVideoElement ? [node.videoWidth, node.videoHeight] : null,
+        tracks: source?.getTracks().map((track) => ({ kind: track.kind, muted: track.muted, state: track.readyState })) ?? null,
+      };
+    });
+    return { peers, elements };
+  });
 }
 
 async function signedInPage(context: BrowserContext, who: string): Promise<Page> {
@@ -292,6 +391,9 @@ async function heardWithin(page: Page, timeoutMs = 30_000): Promise<Heard> {
     await page.waitForTimeout(1_000);
     heard = await heardAtViewer(page);
   }
+  if (heard.game < 0.02) {
+    console.warn("the game's tone never arrived:", JSON.stringify({ heard, media: await mediaReport(page) }));
+  }
   return heard;
 }
 
@@ -308,8 +410,11 @@ async function setUp(browser: Browser, options: { regionCapture: boolean }) {
   const channel = await freshVoiceChannel();
   const media = REAL_CAPTURE ? { permissions: ["microphone" as const] } : {};
   const sharerContext = await browser.newContext({ baseURL: CLIENT, viewport: { width: 1700, height: 1000 }, ...media });
-  await sharerContext.addInitScript(instrument, { stubCapture: !REAL_CAPTURE, regionCapture: options.regionCapture });
   const viewerContext = await browser.newContext({ baseURL: CLIENT, viewport: { width: 1700, height: 1000 }, ...media });
+  opened.push(sharerContext, viewerContext);
+  await sharerContext.addInitScript(instrument, { stubCapture: !REAL_CAPTURE, regionCapture: options.regionCapture });
+  await sharerContext.addInitScript(trackPeers);
+  await viewerContext.addInitScript(trackPeers);
   const sharer = await signedInPage(sharerContext, SHARER);
   const viewer = await signedInPage(viewerContext, VIEWER);
   await joinCall(sharer, channel);

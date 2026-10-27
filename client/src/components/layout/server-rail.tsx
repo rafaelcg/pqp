@@ -198,7 +198,7 @@ export const RAIL_UNREAD_FACES = 3;
  * classes, so the toggle off draws what it always drew.
  */
 const RAIL_TILE_REDESIGN =
-  "redesign:h-[var(--rail-tile)] redesign:w-[var(--rail-tile)] redesign:rounded-full redesign:bg-[color:var(--rail-tile-bg)] redesign:text-text-secondary redesign:font-sans! redesign:tracking-normal! redesign:text-[13px] redesign:font-semibold redesign:hover:rounded-[var(--rail-tile-radius-selected)] redesign:hover:bg-[color:var(--rail-tile-hover)] redesign:hover:text-text redesign:transition-[border-radius,background-color,color] redesign:duration-[var(--duration-fast)] redesign:motion-reduce:transition-none redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-canvas";
+  "redesign:h-[var(--rail-tile)] redesign:w-[var(--rail-tile)] redesign:rounded-full redesign:bg-[color:var(--rail-tile-bg)] redesign:text-text-secondary redesign:font-sans! redesign:tracking-normal! redesign:text-[13px] redesign:font-semibold redesign:hover:rounded-[var(--rail-tile-radius-selected)] redesign:hover:bg-[color:var(--rail-tile-hover)] redesign:hover:text-text redesign:transition-[border-radius,background-color,color] redesign:duration-[var(--duration-fast)] redesign:motion-reduce:transition-none redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-text redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-canvas";
 
 /** The place on screen: the accent's rounded square, lifted. */
 const RAIL_TILE_SELECTED_REDESIGN =
@@ -407,7 +407,7 @@ export function ServerRail({
           aria-hidden="true"
           data-rail-conversations-label=""
           className={cn(
-            "max-w-[68px] truncate text-[10px] font-semibold leading-none",
+            "max-w-[68px] truncate text-[10px] font-semibold leading-none redesign:mt-1 redesign:text-[11px]",
             homeSelected ? "text-text" : "text-text-secondary",
           )}
         >
@@ -685,10 +685,10 @@ export function ServerRail({
                   <span
                     data-server-public=""
                     aria-hidden="true"
-                    className="absolute -bottom-0.5 -left-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-rail text-signal redesign:-bottom-1 redesign:-left-1 redesign:h-[18px] redesign:w-[18px] redesign:bg-canvas redesign:text-accent"
+                    className="absolute -bottom-0.5 -left-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-rail text-signal redesign:-bottom-1 redesign:-left-1 redesign:h-[18px] redesign:w-[18px] redesign:bg-canvas redesign:text-text-secondary"
                   >
                     <Globe className="h-3 w-3 redesign:hidden" />
-                    <Icon icon={GlobeSimple} size="sm" className="hidden h-3 w-3 redesign:block" />
+                    <Icon icon={GlobeSimple} size="sm" className="hidden h-3.5 w-3.5 redesign:block" />
                   </span>
                   <span id={publicDescId} className="sr-only">
                     {t("chrome.publicCommunity")}
@@ -700,7 +700,9 @@ export function ServerRail({
                   data-server-live=""
                   className="absolute -bottom-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-rail redesign:-bottom-1 redesign:-right-1 redesign:h-[18px] redesign:w-[18px] redesign:bg-canvas"
                 >
-                  <span className="h-2.5 w-2.5 rounded-full bg-danger motion-safe:animate-pulse" />
+                  {/* Solid under the redesign: a pulsing 10px dot spent half its
+                      time maroon on the dark canvas. */}
+                  <span className="h-2.5 w-2.5 rounded-full bg-danger motion-safe:animate-pulse redesign:h-3 redesign:w-3 redesign:motion-safe:animate-none" />
                   <span className="sr-only">{t("chrome.livePartySr")}</span>
                 </span>
               )}
@@ -749,8 +751,6 @@ export function ServerRail({
           className={cn(
             "h-12 w-12 rounded-2xl hover:rounded-xl",
             RAIL_TILE_REDESIGN,
-            // A step below "create": no fill until the pointer is on it.
-            "redesign:border-0 redesign:bg-transparent",
           )}
           onClick={onJoinServer}
         >
@@ -767,8 +767,8 @@ export function ServerRail({
 
           The update indicator goes LAST, below everything else, and only
           exists while there is a build to take. It is not a door: a small round
-          button, smaller than the tiles above it, with a dot, and a popover when
-          it is clicked. See `components/layout/update-indicator.tsx`. */}
+          button, smaller than the tiles above it (under the redesign a 44px
+          tile like them), with a dot, and a popover when it is clicked. See `components/layout/update-indicator.tsx`. */}
       {onOpenWhatsNew && (
         <>
           <span
