@@ -324,7 +324,7 @@ function RailFooter({ user }: { user: User | null }) {
   return (
     <div className="flex flex-col gap-2">
       {user ? (
-        <div className="flex items-center gap-2 pl-2 redesign:min-h-[var(--list-row-h-md)] redesign:rounded-[var(--list-row-radius)] redesign:bg-[color:var(--settings-pane-bg)] redesign:py-1 redesign:pl-1.5 redesign:pr-1">
+        <div className="flex items-center gap-2 pl-2 redesign:min-h-[var(--list-row-h-md)] redesign:rounded-[var(--list-row-radius)] redesign:bg-[color:var(--settings-pane-bg)] redesign:py-1 redesign:pl-1 redesign:pr-1">
           <UserAvatar
             name={user.displayName}
             avatarUrl={user.avatarUrl}
@@ -335,10 +335,10 @@ function RailFooter({ user }: { user: User | null }) {
           <span className="min-w-0 flex-1 truncate text-sm font-medium text-text redesign:font-semibold">
             {user.displayName}
           </span>
-          <SignOutButton className="h-[var(--control-sm)] shrink-0 px-2 text-xs" />
+          <SignOutButton className="h-[var(--control-sm)] shrink-0 px-2 text-xs redesign:rounded-full redesign:px-3" />
         </div>
       ) : null}
-      <SettingsBuildLine className="self-start redesign:pl-2" />
+      <SettingsBuildLine className="self-start redesign:pl-3" />
     </div>
   );
 }
@@ -1325,7 +1325,7 @@ export function SettingsModal({
         size="2xl"
         fill
         // 56px: the band only names the dialog, the pane title names the page.
-        headerClassName="h-14 shrink-0 items-center py-0 [&_h2]:text-lg"
+        headerClassName="h-14 shrink-0 items-center py-0 [&_h2]:text-lg redesign:[&_h2]:text-base"
         onClose={requestClose}
       >
         <SettingsShellContext.Provider value={shell}>

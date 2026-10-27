@@ -85,7 +85,7 @@ const RAIL_SURFACE_REDESIGN =
  * dialogs.
  */
 export const SETTINGS_PANE_REDESIGN =
-  "redesign:bg-[color:var(--settings-pane-bg)] sm:redesign:mr-[var(--settings-pane-inset)] sm:redesign:mb-[var(--settings-pane-inset)] sm:redesign:rounded-[var(--radius-pane)]";
+  "redesign:bg-[color:var(--settings-pane-bg)] sm:redesign:mr-[var(--settings-pane-inset)] sm:redesign:mb-[var(--settings-pane-inset)] sm:redesign:rounded-[var(--radius-pane)] sm:redesign:ring-1 sm:redesign:ring-inset sm:redesign:ring-[color:var(--settings-rule)]";
 
 const TAB_REDESIGN =
   "redesign:min-h-[var(--list-row-h-sm)] redesign:gap-[var(--list-row-gap-sm)] redesign:rounded-[var(--list-row-radius)] redesign:px-[var(--list-row-px)] redesign:py-0 redesign:focus-visible:ring-[color:var(--list-row-ring)] redesign:focus-visible:ring-offset-0";
@@ -333,7 +333,7 @@ export function SectionRail<Id extends string>({
                 className={cn(
                   "hidden px-3 pb-1 pt-4 text-xs font-medium text-text-tertiary first:pt-0 sm:block",
                   SECTION_LABEL_REDESIGN,
-                  "redesign:mb-0 redesign:px-[var(--list-row-px)] redesign:pb-1.5 redesign:pt-5",
+                  "redesign:mb-0 redesign:px-[var(--list-row-px)] redesign:pb-1.5 redesign:pt-5 redesign:text-text-tertiary",
                 )}
               >
                 {heading}
