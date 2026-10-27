@@ -1,7 +1,43 @@
-import { Clapperboard, Hash, Lock, MessagesSquare, Mic } from "lucide-react";
+import {
+  ChatsCircle,
+  FilmSlate,
+  Hash as HashBold,
+  Lock as LockFill,
+  Microphone,
+  type Icon as PhosphorIcon,
+} from "@phosphor-icons/react";
+import {
+  Clapperboard,
+  Hash,
+  Lock,
+  MessagesSquare,
+  Mic,
+  type LucideIcon,
+} from "lucide-react";
 import { useState } from "react";
 import { isWatchPartyChannelType, type Channel } from "@pqp/shared";
+import { Icon, type IconKind } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
+
+/** Lucide with the toggle off, the Phosphor glyph under the redesign, same size. */
+function Glyph({
+  off: Off,
+  on,
+  kind = "object",
+  className,
+}: {
+  off: LucideIcon;
+  on: PhosphorIcon;
+  kind?: IconKind;
+  className: string;
+}) {
+  return (
+    <>
+      <Off className={cn(className, "redesign:hidden")} />
+      <Icon icon={on} kind={kind} className={cn("hidden redesign:block", className)} />
+    </>
+  );
+}
 
 /**
  * True for values meant to render as an `<img>`. Mirrors the shapes
@@ -84,17 +120,17 @@ export function ChannelIcon({
     );
   }
   if (channel.isPrivate) {
-    return <Lock className={cn("shrink-0 text-warning", className)} />;
+    return <Glyph off={Lock} on={LockFill} className={cn("shrink-0 text-warning", className)} />;
   }
   if (isWatchPartyChannelType(channel.type)) {
-    return <Clapperboard className={cn("shrink-0", className)} />;
+    return <Glyph off={Clapperboard} on={FilmSlate} className={cn("shrink-0", className)} />;
   }
   if (channel.type === "voice") {
-    return <Mic className={cn("shrink-0", className)} />;
+    return <Glyph off={Mic} on={Microphone} className={cn("shrink-0", className)} />;
   }
   // A forum: conversations, not one chat. Distinct from `#` at 16 px.
   if (channel.type === "forum") {
-    return <MessagesSquare className={cn("shrink-0", className)} />;
+    return <Glyph off={MessagesSquare} on={ChatsCircle} className={cn("shrink-0", className)} />;
   }
-  return <Hash className={cn("shrink-0", className)} />;
+  return <Glyph off={Hash} on={HashBold} kind="symbol" className={cn("shrink-0", className)} />;
 }

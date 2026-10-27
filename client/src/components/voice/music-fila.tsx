@@ -1,4 +1,11 @@
+import {
+  MonitorPlay as MonitorPlayGlyph,
+  Pause as PauseGlyph,
+  Play as PlayGlyph,
+  X as XGlyph,
+} from "@phosphor-icons/react";
 import { MonitorPlay, Pause, Play, X } from "lucide-react";
+import { IconSwap } from "@/components/ui/icon";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { rememberMusicPip } from "@/lib/music-pip";
 import { Slider } from "@/components/ui/slider";
@@ -35,11 +42,23 @@ import {
   useFeatureHintEnabled,
 } from "@/components/layout/feature-hint";
 import { useScrub } from "@/components/voice/use-scrub";
+import {
+  MUSIC_COVER_REDESIGN,
+  MUSIC_ICON_REDESIGN,
+  MUSIC_LABEL_REDESIGN,
+  MUSIC_TITLE_REDESIGN,
+  MUSIC_MUTED_REDESIGN,
+  MUSIC_TEXT_REDESIGN,
+} from "@/components/voice/music-classes";
 
-const RAIL_ICON =
-  "flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-paper-muted hover:bg-ink-3 hover:text-paper";
-const SHEET_ICON =
-  "flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-text-tertiary hover:bg-surface-3 hover:text-text";
+const RAIL_ICON = cn(
+  "flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-paper-muted hover:bg-ink-3 hover:text-paper",
+  MUSIC_ICON_REDESIGN,
+);
+const SHEET_ICON = cn(
+  "flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-text-tertiary hover:bg-surface-3 hover:text-text",
+  MUSIC_ICON_REDESIGN,
+);
 
 function onPage(node: ReactNode): ReactNode {
   return typeof document === "undefined" ? node : createPortal(node, document.body);
@@ -105,10 +124,11 @@ export function MusicFila({
   const headingCount = (current ? 1 : 0) + queue.length;
   const sheet = variant === "sheet";
   const iconClass = sheet ? SHEET_ICON : RAIL_ICON;
-  const muted = sheet ? "text-text-secondary" : "text-paper-muted";
-  const title = sheet ? "text-text" : "text-paper";
-  const thumb = sheet ? "bg-surface-3" : "bg-ink-3";
-  const rule = sheet ? "border-border/60" : "border-ink-4/60";
+  const muted = cn(sheet ? "text-text-secondary" : "text-paper-muted", MUSIC_MUTED_REDESIGN);
+  const title = cn(sheet ? "text-text" : "text-paper", MUSIC_TEXT_REDESIGN);
+  const thumb = cn(sheet ? "bg-surface-3" : "bg-ink-3", MUSIC_COVER_REDESIGN);
+  // Under the redesign the seams are the card's edge, in both homes.
+  const rule = cn(sheet ? "border-border/60" : "border-ink-4/60", "redesign:border-[color:var(--card-border)]");
   const tone = sheet ? "composer" : "rail";
 
   useEffect(() => {
@@ -158,7 +178,7 @@ export function MusicFila({
     <>
       <div
         className={cn(
-          "flex shrink-0 items-center justify-between gap-2 px-3",
+          "flex shrink-0 items-center justify-between gap-2 px-3 redesign:px-3.5",
           sheet ? "h-10" : "h-14",
           "border-b",
           rule,
@@ -168,6 +188,7 @@ export function MusicFila({
           className={cn(
             "truncate text-[11px] font-semibold uppercase tracking-wider",
             muted,
+            MUSIC_TITLE_REDESIGN,
           )}
         >
           {t("memberList.sectionHeading", {
@@ -195,7 +216,7 @@ export function MusicFila({
                 aria-label={t("music.stage.watch")}
                 onClick={() => setMusicPlacement("stage")}
               >
-                <MonitorPlay className="h-4 w-4" aria-hidden="true" />
+                <IconSwap off={MonitorPlay} on={MonitorPlayGlyph} size="sm" offClassName="h-4 w-4" />
               </button>
             </Tooltip>
           ) : null}
@@ -222,7 +243,7 @@ export function MusicFila({
               aria-label={t("music.close")}
               onClick={() => setMusicOpen(false)}
             >
-              <X className="h-4 w-4" />
+              <IconSwap off={X} on={XGlyph} kind="symbol" size="sm" offClassName="h-4 w-4" />
             </button>
           </Tooltip>
         </div>
@@ -236,7 +257,7 @@ export function MusicFila({
                 {current.thumbnailUrl ? (
                   <img src={current.thumbnailUrl} alt="" className="h-full w-full object-cover" />
                 ) : (
-                  <Play className={cn("m-auto h-5 w-5", muted)} aria-hidden="true" />
+                  <IconSwap off={Play} on={PlayGlyph} offClassName={cn("m-auto h-5 w-5", muted)} className={cn("m-auto", muted)} />
                 )}
                 <Tooltip
                   label={playing ? t("music.pause") : t("music.play")}
@@ -248,7 +269,8 @@ export function MusicFila({
                       data-music-fila-play=""
                       className={cn(
                         "flex h-full w-full items-center justify-center bg-ink/70 text-paper",
-                        canManage ? "hover:bg-ink/80" : "opacity-40",
+                        "redesign:bg-black/45 redesign:text-white",
+                        canManage ? "hover:bg-ink/80 redesign:hover:bg-black/60" : "opacity-40",
                       )}
                       aria-pressed={playing}
                       aria-label={playing ? t("music.pause") : t("music.play")}
@@ -260,9 +282,9 @@ export function MusicFila({
                       }}
                     >
                       {playing ? (
-                        <Pause className="h-5 w-5" aria-hidden="true" />
+                        <IconSwap off={Pause} on={PauseGlyph} offClassName="h-5 w-5" />
                       ) : (
-                        <Play className="ml-0.5 h-5 w-5" aria-hidden="true" />
+                        <IconSwap off={Play} on={PlayGlyph} offClassName="ml-0.5 h-5 w-5" />
                       )}
                     </button>
                   </span>
@@ -284,7 +306,7 @@ export function MusicFila({
                         name={addedBy.name}
                         avatarUrl={addedBy.avatarUrl}
                         className="h-3.5 w-3.5"
-                        fallbackClassName="bg-ink-3 text-[9px] text-paper"
+                        fallbackClassName="bg-ink-3 text-[9px] text-paper redesign:bg-surface-3 redesign:text-text"
                         rounded="full"
                       />
                       <span className={cn("truncate text-[11px]", muted)}>{addedBy.name}</span>
@@ -327,7 +349,7 @@ export function MusicFila({
           </div>
         ) : null}
 
-        <div className="shrink-0 px-2 pt-2">
+        <div className={cn("shrink-0 px-2 pt-2", sheet && "redesign:pr-3.5")}>
           <MusicSearchPicker
             compact
             chrome={sheet ? "default" : "rail"}
@@ -362,7 +384,7 @@ export function MusicFila({
              The sources line stays for as long as the field is empty, so
              opening the queue mid-song answers the question too; the longer
              explanation is for a room with nothing on. */
-          <div data-music-empty="" className="shrink-0 space-y-1.5 px-3 pt-2">
+          <div data-music-empty="" className="shrink-0 space-y-1.5 px-3 pt-2 redesign:px-3.5">
             {current ? null : (
               <p className={cn("text-[12px] leading-snug", muted)}>
                 {t("music.empty.what")}
@@ -378,6 +400,8 @@ export function MusicFila({
           className={cn(
             "flex-1 overflow-y-auto px-2 py-2",
             queue.length > 0 ? "min-h-12" : "min-h-0",
+            // The sheet closes its list with the header's seam, so the last row never reads as the player's.
+            sheet && "redesign:border-b redesign:border-[color:var(--card-border)]",
           )}
         >
           {queue.length > 0 && (
@@ -386,6 +410,8 @@ export function MusicFila({
                 className={cn(
                   "mb-1 px-1 py-1 text-[11px] font-semibold uppercase tracking-wider",
                   muted,
+                  MUSIC_LABEL_REDESIGN,
+                  "redesign:mb-0.5 redesign:px-1.5",
                 )}
               >
                 {t("memberList.sectionHeading", {
@@ -402,7 +428,7 @@ export function MusicFila({
             </div>
           )}
           {music.state?.autoplay && queue.length === 0 && current ? (
-            <p data-music-autoplay-next="" className={cn("px-1 py-1 text-[11px]", muted)}>
+            <p data-music-autoplay-next="" className={cn("px-1 py-1 text-[11px] redesign:px-1.5", muted)}>
               {t("music.autoplay.next")}
             </p>
           ) : null}
@@ -433,7 +459,7 @@ export function MusicFila({
           <>
             <button
               type="button"
-              className="fixed inset-0 z-20 bg-ink/70"
+              className="fixed inset-0 z-20 bg-ink/70 redesign:bg-[color:var(--sheet-scrim)] redesign:backdrop-blur-[var(--sheet-scrim-blur)]"
               aria-label={t("music.close")}
               onClick={() => setMusicOpen(false)}
             />
@@ -441,7 +467,7 @@ export function MusicFila({
               data-music-fila="drawer"
               data-immersive-hide=""
               aria-label={t("music.fila")}
-              className="fixed inset-y-0 right-0 z-30 flex w-[min(100%,15rem)] shrink-0 flex-col border-l border-ink-4/60 bg-channel shadow-[var(--shadow-popover)]"
+              className="fixed inset-y-0 right-0 z-30 flex w-[min(100%,15rem)] shrink-0 flex-col border-l border-ink-4/60 bg-channel shadow-[var(--shadow-popover)] redesign:border-[color:var(--card-border)] redesign:bg-pane-side redesign:shadow-[var(--drawer-shadow)]"
             >
               {panel}
             </aside>

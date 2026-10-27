@@ -69,7 +69,8 @@ const TONE: Record<
  * lacks, a feature this server has not configured. Every tinted tone is a soft
  * fill with its own `on-` foreground, a pair the bench measures; info is a plain
  * outline on the surface it sits on, because text-secondary on that surface is
- * measured too.
+ * measured too. Under the redesign info is a borderless tint instead
+ * (`--settings-notice-info-bg`: text at 6% in dark, 4% in light).
  *
  * In a group the notice sets no border of its own at all: a `border-0` there
  * used to zero the `divide-y` line the group draws under it.

@@ -179,7 +179,7 @@ export function FeatureHint({
       footer={
         <Button
           size="sm"
-          className="cta-lift min-w-[7.5rem] rounded-full px-4"
+          data-cta className="cta-lift min-w-[7.5rem] rounded-full px-4"
           disabled={actionBusy}
           onClick={() => {
             if (!onAction) {

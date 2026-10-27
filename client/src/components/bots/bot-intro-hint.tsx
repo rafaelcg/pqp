@@ -77,6 +77,7 @@ export function BotIntroHint({
               <Button
                 type="button"
                 size="sm"
+                data-cta
                 onClick={() => {
                   onSayHi(bot.username);
                   close();

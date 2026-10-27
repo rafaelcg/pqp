@@ -6,6 +6,8 @@ import { cn } from "@/lib/utils";
 import { dropIndexFromPointer, moveItem } from "@/lib/role-drag";
 import { useTranslation } from "@/lib/i18n";
 import type { ServerRole } from "@/lib/api";
+import { DotsSixVertical } from "@phosphor-icons/react";
+import { IconSwap } from "@/components/ui/icon";
 
 const DRAG_THRESHOLD_PX = 5;
 
@@ -217,7 +219,7 @@ export function RoleRankList({
 
   return (
     <>
-      <ul ref={listRef} className="divide-y divide-ink-4/60">
+      <ul ref={listRef} className="divide-y divide-ink-4/60 redesign:space-y-0.5 redesign:divide-y-0 redesign:p-1">
         {shown.map((role) => {
           const pinned = isRoleOrderLocked(role);
           const selectedRow = role.id === selectedId;
@@ -266,6 +268,11 @@ export function RoleRankList({
               className={cn(
                 "flex touch-none items-center outline-none focus-visible:bg-signal/12",
                 selectedRow && !isGhostSource && "bg-signal/12",
+                // Under the redesign a role is the list row's small pill.
+                "redesign:rounded-[var(--list-row-radius)] redesign:focus-visible:bg-transparent redesign:focus-visible:ring-2 redesign:focus-visible:ring-inset redesign:focus-visible:ring-[color:var(--list-row-ring)]",
+                selectedRow && !isGhostSource
+                  ? "redesign:bg-[color:color-mix(in_oklab,var(--color-text)_10%,transparent)] redesign:focus-visible:bg-[color:color-mix(in_oklab,var(--color-text)_10%,transparent)] redesign:font-semibold redesign:[--role-row-text:var(--color-text)]"
+                  : "redesign:hover:bg-[color:var(--list-row-hover)]",
                 !pinned && !disabled && !drag && "cursor-grab",
                 Boolean(drag) && "cursor-grabbing",
                 isGhostSource && "bg-ink-3/50",
@@ -284,7 +291,7 @@ export function RoleRankList({
       {drag && dragging
         ? createPortal(
             <div
-              className="pointer-events-none fixed z-[80] overflow-hidden rounded-xl bg-ink-2 shadow-[var(--shadow-popover)] ring-1 ring-ink-4"
+              className="pointer-events-none fixed z-[80] overflow-hidden rounded-xl bg-ink-2 shadow-[var(--shadow-popover)] ring-1 ring-ink-4 redesign:rounded-[var(--list-row-radius)] redesign:bg-[color:var(--popover-surface)]"
               style={{
                 width: drag.width,
                 height: drag.height,
@@ -324,20 +331,25 @@ function RoleRowFace({
     <div
       className={cn(
         "flex min-w-0 flex-1 items-center gap-2.5 px-3 py-2.5 text-sm",
+        "redesign:min-h-[var(--list-row-h-sm)] redesign:gap-[var(--list-row-gap-sm)] redesign:px-[var(--list-row-px)] redesign:py-0",
         muted && "opacity-35",
         lifted ? "font-medium text-paper" : "text-paper",
+        "redesign:text-[color:var(--role-row-text,var(--color-text))]",
       )}
     >
       <span
-        className="h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-ink-4/80"
+        className="h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-ink-4/80 redesign:h-3 redesign:w-3 redesign:ring-[color:color-mix(in_oklab,var(--color-text)_24%,transparent)]"
         style={{ backgroundColor: color ?? "transparent" }}
         aria-hidden
       />
       <span className="min-w-0 flex-1 truncate">{name}</span>
       {handle ? (
-        <GripVertical
-          className="h-4 w-4 shrink-0 text-paper-muted"
-          aria-hidden
+        <IconSwap
+          off={GripVertical}
+          on={DotsSixVertical}
+          kind="symbol"
+          offClassName="h-4 w-4 shrink-0 text-paper-muted"
+          className="text-text-tertiary"
         />
       ) : null}
     </div>

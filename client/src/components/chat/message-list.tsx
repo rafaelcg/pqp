@@ -1,8 +1,14 @@
 import { StoryQuoteCard } from "@/components/stories/story-quote-card";
 import { Badge } from "@/components/ui/badge";
-import { Icon } from "@/components/ui/icon";
+import {
+  ChatsCircle,
+  PushPin as PushPinFill,
+  UsersThree,
+  WarningCircle as WarningCircleFill,
+  WifiSlash,
+} from "@phosphor-icons/react";
+import { Icon, Icon as Glyph } from "@/components/ui/icon";
 import { EmptyState as EmptyStateView } from "@/components/ui/empty-state";
-import { ChatsCircle, UsersThree } from "@phosphor-icons/react";
 import type {
   Embed,
   MessageReaction,
@@ -45,6 +51,7 @@ import {
 } from "lucide-react";
 import {
   Fragment,
+  cloneElement,
   memo,
   useCallback,
   useEffect,
@@ -54,9 +61,11 @@ import {
   useState,
   type CSSProperties,
   type MouseEvent as ReactMouseEvent,
+  type ReactElement,
   type ReactNode,
   type Ref,
 } from "react";
+import { useRedesign } from "@/lib/redesign";
 import { createPortal } from "react-dom";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useChatDisplay } from "@/hooks/use-chat-display";
@@ -617,16 +626,62 @@ function mentionJoins(
 }
 
 function mentionRowRadius(joinTop: boolean, joinBottom: boolean): string {
+  // Under the redesign the same joins, on the row's own corner.
   if (joinTop && joinBottom) {
-    return "rounded-none";
+    return "rounded-none redesign:rounded-none";
   }
   if (joinTop) {
-    return "rounded-b-md";
+    return "rounded-b-md redesign:rounded-t-none redesign:rounded-b-[var(--message-row-radius)]";
   }
   if (joinBottom) {
-    return "rounded-t-md";
+    return "rounded-t-md redesign:rounded-b-none redesign:rounded-t-[var(--message-row-radius)]";
   }
   return "rounded-md";
+}
+
+/*
+ * A message row under the redesign: inset from the pane's edges with the
+ * row's corner, so the hover and a mention are rounded fills as in the
+ * mockup. The padding gives back what the inset takes, so the text does not
+ * move. Every string is redesign-only.
+ */
+const MESSAGE_ROW_REDESIGN =
+  "redesign:mx-2 redesign:rounded-[var(--message-row-radius)] redesign:px-3";
+/** The time beside a name and in the gutter. */
+const MESSAGE_TIME_REDESIGN = "redesign:text-xs redesign:text-text-tertiary";
+
+/**
+ * A continuation row's gutter. A pinned line has no header to carry its pin,
+ * so under the redesign the pin sits in the gutter at rest and gives way to
+ * the time on hover. Off the redesign the wrapper is `contents` and the pin
+ * is not drawn, so the row is what it was.
+ */
+function ContinuationGutter({
+  pinned,
+  pinTitle,
+  pinLabel,
+  children,
+}: {
+  pinned: boolean;
+  pinTitle: string;
+  pinLabel: string;
+  children: ReactElement<{ title?: string }>;
+}) {
+  const redesign = useRedesign();
+  if (!pinned) return children;
+  // The pin hides on hover, so its credit rides on the time's tooltip.
+  const time = redesign ? cloneElement(children, { title: `${children.props.title} · ${pinTitle}` }) : children;
+  return (
+    <span className="contents redesign:relative redesign:flex redesign:w-14 redesign:shrink-0">
+      {time}
+      <span
+        className="hidden redesign:absolute redesign:inset-y-0 redesign:right-2 redesign:flex redesign:items-center redesign:text-text-secondary redesign:transition-opacity redesign:group-hover:pointer-events-none redesign:group-hover:opacity-0"
+      >
+        <Glyph icon={PushPinFill} size="sm" className="h-3.5 w-3.5" />
+        <span className="sr-only">{pinLabel}</span>
+      </span>
+    </span>
+  );
 }
 
 /**
@@ -2557,8 +2612,11 @@ export const MessageList = memo(function MessageList({
   );
 });
 
-const FAILED_ACTION_TILE =
-  "inline-flex h-8 w-full min-w-0 items-center justify-center whitespace-nowrap rounded-md border border-ink-4 bg-ink-3 px-2.5 text-xs font-medium text-paper outline-none hover:border-signal/50 hover:text-signal focus-visible:ring-2 focus-visible:ring-signal/60 disabled:pointer-events-none disabled:opacity-40";
+const FAILED_ACTION_TILE = cn(
+  "inline-flex h-8 w-full min-w-0 items-center justify-center whitespace-nowrap rounded-md border border-ink-4 bg-ink-3 px-2.5 text-xs font-medium text-paper outline-none hover:border-signal/50 hover:text-signal focus-visible:ring-2 focus-visible:ring-signal/60 disabled:pointer-events-none disabled:opacity-40",
+  // The secondary button's pill under the redesign.
+  "redesign:rounded-full redesign:border-0 redesign:bg-[color:var(--button-secondary-bg)] redesign:font-semibold redesign:text-text redesign:hover:bg-[color:var(--button-secondary-hover)] redesign:hover:text-text redesign:focus-visible:ring-accent",
+);
 
 /**
  * Failed bubble: one status line, then equal-width actions. Retry stays
@@ -2580,8 +2638,9 @@ function QueuedSendFooter({
   const { t } = useTranslation();
   return (
     <div className="mt-1.5">
-      <p className="flex items-start gap-2 text-xs text-text-muted">
-        <WifiOff className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+      <p className="flex items-start gap-2 text-xs text-text-muted redesign:text-[13px] redesign:text-text-secondary">
+        <WifiOff className="mt-0.5 h-3.5 w-3.5 shrink-0 redesign:hidden" aria-hidden />
+        <Glyph icon={WifiSlash} kind="symbol" size="sm" className="mt-0.5 hidden shrink-0 redesign:block" />
         <span>{t("chat.queuedOffline")}</span>
       </p>
       <div className="mt-1.5 grid max-w-[8rem] grid-cols-1 gap-2">
@@ -2627,8 +2686,9 @@ function FailedSendFooter({
 
   return (
     <div className="mt-1.5">
-      <p className="flex items-start gap-2 text-xs text-danger">
-        <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+      <p className="flex items-start gap-2 text-xs text-danger redesign:text-[13px]">
+        <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 redesign:hidden" aria-hidden />
+        <Glyph icon={WarningCircleFill} size="sm" className="mt-0.5 hidden shrink-0 redesign:block" />
         <span>{copy.text ?? t(copy.key, copy.vars)}</span>
       </p>
       <div
@@ -2643,7 +2703,12 @@ function FailedSendFooter({
             tabIndex={tabIndex}
             disabled={!ready}
             onClick={onRetry}
-            className={cn(FAILED_ACTION_TILE, "tabular-nums")}
+            className={cn(
+              FAILED_ACTION_TILE,
+              "tabular-nums",
+              // Retry is the way forward; Discard stays neutral.
+              "redesign:bg-accent-soft redesign:text-on-accent-soft redesign:hover:bg-[color:color-mix(in_oklab,var(--color-accent-soft),var(--color-on-accent-soft)_10%)] redesign:hover:text-on-accent-soft",
+            )}
           >
             {waitSeconds > 0
               ? t("chat.retryWait", { seconds: waitSeconds })
@@ -3506,7 +3571,11 @@ const MessageRow = memo(function MessageRow({
           aria-label={t("chat.blocked")}
           onFocus={onFocusRow}
           onKeyDown={(event) => onNavigate(event, message.id)}
-          className="group mt-1 flex items-center gap-2 rounded-md px-5 py-1 text-xs text-paper-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+          className={cn(
+            "group mt-1 flex items-center gap-2 rounded-md px-5 py-1 text-xs text-paper-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
+            MESSAGE_ROW_REDESIGN,
+            "redesign:text-text-tertiary redesign:focus-visible:ring-accent",
+          )}
           style={ROW_CONTENT_VISIBILITY}
         >
           <span className="italic">{t("chat.blocked")}</span>
@@ -3514,7 +3583,7 @@ const MessageRow = memo(function MessageRow({
             type="button"
             tabIndex={controlTabIndex}
             onClick={onReveal}
-            className="underline underline-offset-2 hover:text-paper"
+            className="underline underline-offset-2 hover:text-paper redesign:font-medium redesign:text-text-secondary redesign:hover:text-text"
           >
             {t("chat.showBlocked")}
           </button>
@@ -3792,6 +3861,15 @@ const MessageRow = memo(function MessageRow({
             selecting && !selected && "hover:bg-ink-3/40",
             selected && "bg-danger/15 ring-1 ring-danger/50",
             forumAnswer && "shadow-[inset_3px_0_0_var(--color-success)]",
+            !stream && MESSAGE_ROW_REDESIGN,
+            // After the row's corner, so a mention's joins keep theirs.
+            mentionsYou && !isFlashing && !stream
+              ? mentionRowRadius(mentionJoinTop, mentionJoinBottom)
+              : null,
+            "redesign:focus-visible:ring-accent",
+            !mentionsYou && !isFlashing && !selecting &&
+              "redesign:hover:bg-[color:var(--message-hover)] redesign:hover:[--avatar-dot-ring:var(--message-hover-solid)]",
+            selecting && !selected && "redesign:hover:bg-[color:var(--message-hover)]",
           )}
           data-forum-answer={forumAnswer ? "" : undefined}
         >
@@ -3871,17 +3949,26 @@ const MessageRow = memo(function MessageRow({
                 </div>
               </div>
             ) : (
-              <time
-                className={cn(
-                  "w-14 shrink-0 pr-2 text-right text-[12px] leading-[var(--chat-line-height)] whitespace-nowrap tabular-nums text-paper-muted",
-                  compact ? "opacity-70" : "opacity-0 group-hover:opacity-100",
-                )}
-                dateTime={message.createdAt}
-                title={formatFullTimestamp(message.createdAt)}
-                data-row-gutter=""
+              <ContinuationGutter
+                pinned={isMessagePinned && !compact}
+                pinTitle={
+                  message.pinnedBy ? t("chat.pinnedBy", { name: message.pinnedBy.displayName }) : t("chat.pinned")
+                }
+                pinLabel={t("chat.pinned")}
               >
-                {formatTime(message.createdAt)}
-              </time>
+                <time
+                  className={cn(
+                    "w-14 shrink-0 pr-2 text-right text-[12px] leading-[var(--chat-line-height)] whitespace-nowrap tabular-nums text-paper-muted",
+                    MESSAGE_TIME_REDESIGN,
+                    compact ? "opacity-70" : "opacity-0 group-hover:opacity-100",
+                  )}
+                  dateTime={message.createdAt}
+                  title={formatFullTimestamp(message.createdAt)}
+                  data-row-gutter=""
+                >
+                  {formatTime(message.createdAt)}
+                </time>
+              </ContinuationGutter>
             )}
 
             <div className="min-w-0 flex-1">
@@ -3914,8 +4001,15 @@ const MessageRow = memo(function MessageRow({
                       className={cn(
                         "rounded text-[length:var(--chat-font-size)] font-bold leading-[var(--chat-line-height)]",
                         !roleColor && (isMine ? "text-signal" : "text-paper"),
+                        !roleColor && (isMine ? "redesign:text-[color:var(--message-own-name)]" : "redesign:text-text"),
+                        // A role colour has no contrast floor, so its lightness is
+                        // clamped: no darker than 0.72 in dark, no lighter than 0.52
+                        // (the light accent's) in light. A browser without relative
+                        // colours drops the rule and keeps the inline colour.
+                        roleColor &&
+                          "redesign:text-[color:oklch(from_var(--role-color)_max(l,0.72)_c_h)]! redesign:[:root[data-theme=light]_&]:text-[color:oklch(from_var(--role-color)_min(l,0.52)_c_h)]!",
                       )}
-                      style={roleColor ? { color: roleColor } : undefined}
+                      style={roleColor ? ({ color: roleColor, "--role-color": roleColor } as CSSProperties) : undefined}
                     >
                       {message.authorName}
                     </AuthorButton>
@@ -3971,7 +4065,7 @@ const MessageRow = memo(function MessageRow({
                     message.isWebhook && (
                       <Badge
                         size="tag"
-                        className="rounded bg-ink-4 text-paper-muted"
+                        className="rounded bg-ink-4 text-paper-muted redesign:rounded-full redesign:bg-surface-3 redesign:text-text-secondary"
                         title={t("chat.webhookPosted")}
                       >
                         Webhook
@@ -3980,7 +4074,7 @@ const MessageRow = memo(function MessageRow({
                   )}
                   {!compact && (
                     <time
-                      className="whitespace-nowrap text-[12px] leading-[var(--chat-line-height)] text-paper-muted"
+                      className={cn("whitespace-nowrap text-[12px] leading-[var(--chat-line-height)] text-paper-muted", MESSAGE_TIME_REDESIGN)}
                       dateTime={message.createdAt}
                       title={formatFullTimestamp(message.createdAt)}
                     >
@@ -3989,7 +4083,7 @@ const MessageRow = memo(function MessageRow({
                   )}
                   {isMessagePinned && (
                     <span
-                      className="inline-flex items-center gap-0.5 text-[12px] leading-[var(--chat-line-height)] text-signal"
+                      className="inline-flex items-center gap-0.5 text-[12px] leading-[var(--chat-line-height)] text-signal redesign:self-center redesign:text-text-secondary"
                       title={
                         message.pinnedBy
                           ? t("chat.pinnedBy", {
@@ -3998,7 +4092,8 @@ const MessageRow = memo(function MessageRow({
                           : t("chat.pinned")
                       }
                     >
-                      <Pin className="h-3 w-3" aria-hidden />
+                      <Pin className="h-3 w-3 redesign:hidden" aria-hidden />
+                      <Glyph icon={PushPinFill} size="sm" className="hidden h-3.5 w-3.5 redesign:block" />
                       <span className="sr-only">{t("chat.pinned")}</span>
                     </span>
                   )}
@@ -4048,8 +4143,12 @@ const MessageRow = memo(function MessageRow({
                   ) : message.body && !hideBodyForBauCard ? (
                     <div
                       className={cn(
-                        "markdown-body text-[length:var(--chat-font-size)] leading-[var(--chat-line-height)] text-paper/90",
+                        "markdown-body text-[length:var(--chat-font-size)] leading-[var(--chat-line-height)] text-paper/90 redesign:text-text",
                         stream && "[&>p]:inline",
+                        // "(editada)" ends the last line it belongs to, never a line of its own:
+                        // the marker is the last child, so only a paragraph right before it goes
+                        // inline. A body ending in a list, quote or code keeps its block.
+                        message.editedAt && attachments.length === 0 && !message.forward && "redesign:[&>p:nth-last-child(2)]:inline",
                       )}
                     >
                       {streamAuthor}
@@ -4089,7 +4188,7 @@ const MessageRow = memo(function MessageRow({
                   {!message.body &&
                     attachments.length === 0 &&
                     message.webhookEmbeds.length === 0 && (
-                      <p className="text-[length:var(--chat-font-size)] italic leading-relaxed text-paper-muted">
+                      <p className="text-[length:var(--chat-font-size)] italic leading-relaxed text-paper-muted redesign:text-text-tertiary">
                         {t("chat.attachmentUnavailable")}
                       </p>
                     )}
@@ -4567,7 +4666,7 @@ function EditedMarker({ editedAt }: { editedAt: string | null | undefined }) {
   }
   return (
     <span
-      className="ml-1 align-baseline text-[10px] text-paper-muted"
+      className="ml-1 align-baseline text-[10px] text-paper-muted redesign:text-[11px] redesign:text-text-tertiary"
       title={formatFullTimestamp(editedAt)}
     >
       ({translateMessage("chat.edited")})
