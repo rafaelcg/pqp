@@ -1286,7 +1286,7 @@ function PrimitiveSheet() {
           </div>
         </div>
         {/* On the canvas, as in the app, so the pane's edge reads in light. */}
-        <div className="rounded-[calc(var(--radius-pane)+0.5rem)] bg-canvas p-2">
+        <div className="self-start rounded-[calc(var(--radius-pane)+0.5rem)] bg-canvas p-2">
           <div className="flex h-72 overflow-hidden rounded-[var(--radius-pane)] bg-pane-main">
             <MessageListSkeleton />
           </div>
