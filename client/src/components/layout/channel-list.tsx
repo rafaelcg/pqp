@@ -170,6 +170,7 @@ import {
   stepAvailability,
   type DropEdge,
 } from "@/components/layout/channel-list-mixed";
+import { PANE_SIDE_REDESIGN } from "@/components/ui/pane";
 
 const EMPTY_THREAD_IDS: ReadonlySet<string> = new Set();
 
@@ -879,7 +880,7 @@ export const ChannelList = memo(function ChannelList({
       <aside
         data-immersive-hide=""
         data-channel-rail=""
-        className="hidden w-[72px] shrink-0 flex-col border-r border-ink-4/60 bg-channel md:flex"
+        className={cn("hidden w-[72px] shrink-0 flex-col border-r border-ink-4/60 bg-channel md:flex", PANE_SIDE_REDESIGN)}
       >
         <div className="flex flex-col items-center gap-1 border-b border-ink-4/60 px-2 py-2">
           <Tooltip label={t("chrome.expandChannelList")} side="right">
@@ -2286,7 +2287,7 @@ export const ChannelList = memo(function ChannelList({
       style={
         { "--channel-sidebar-width": `${sidebarWidth}px` } as CSSProperties
       }
-      className={`fixed inset-y-0 left-[72px] z-30 flex w-[min(100%-72px,16rem)] flex-col border-r border-ink-4/60 bg-channel transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] md:relative md:left-auto md:z-auto md:w-[var(--channel-sidebar-width)] md:translate-x-0 ${
+      className={`fixed inset-y-0 left-[72px] z-30 flex w-[min(100%-72px,16rem)] flex-col border-r border-ink-4/60 bg-channel ${PANE_SIDE_REDESIGN} transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] md:relative md:left-auto md:z-auto md:w-[var(--channel-sidebar-width)] md:translate-x-0 ${
         mobileOpen
           ? "translate-x-0"
           : "-translate-x-[calc(100%+72px)] md:translate-x-0"

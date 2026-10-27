@@ -52,6 +52,7 @@ import { useServerRailReorder } from "@/hooks/use-server-rail-reorder";
 import { UpdateIndicator } from "@/components/layout/update-indicator";
 import { useUpdateOffered } from "@/lib/update-prompt-state";
 import { cn } from "@/lib/utils";
+import { RAIL_REDESIGN } from "@/components/ui/pane";
 
 interface ServerRailProps {
   servers: Server[];
@@ -267,6 +268,7 @@ export function ServerRail({
       data-rail-phone-hidden={phoneHidden ? "" : undefined}
       className={cn(
         "relative flex h-full w-[72px] shrink-0 flex-col items-center gap-2 overflow-y-auto border-r border-ink-4/40 bg-rail py-3",
+        RAIL_REDESIGN,
         reorder.drag && "cursor-grabbing",
         phoneHidden &&
           (mobileNavOpen
