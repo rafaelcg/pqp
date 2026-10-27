@@ -498,6 +498,7 @@ export function CreateServerDialog({
                 }
               }}
               placeholder={t("communities.create.placeholder")}
+              aria-label={t("communities.create.placeholder")}
               autoFocus
               disabled={busy}
             />
@@ -510,7 +511,7 @@ export function CreateServerDialog({
               type="button"
               data-discord-import-path=""
               disabled={busy}
-              className="flex w-full items-start gap-3 rounded-xl border border-signal/35 bg-signal/5 px-4 py-3.5 text-left transition-colors hover:border-signal/60 hover:bg-signal/10 disabled:opacity-50 redesign:items-center redesign:rounded-[var(--radius-card)] redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:hover:border-[color:var(--card-border)] redesign:hover:bg-[color:var(--card-row-hover)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--list-row-ring)]"
+              className="flex w-full items-start gap-3 rounded-xl border border-signal/35 bg-signal/5 px-4 py-3.5 text-left transition-colors hover:border-signal/60 hover:bg-signal/10 disabled:opacity-50 redesign:items-center redesign:rounded-[var(--radius-card)] redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:hover:border-[color:var(--card-border)] redesign:hover:bg-[color:var(--card-row-hover)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--list-row-ring)] redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-ring-offset"
               onClick={() => {
                 setStep("paste");
                 setError(null);

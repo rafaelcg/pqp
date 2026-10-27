@@ -464,7 +464,7 @@ export function InvitePanel({
                     <div className="flex items-center gap-2">
                       <p className="min-w-0 flex-1 truncate font-mono text-sm text-signal redesign:font-sans redesign:font-medium redesign:text-text-secondary">
                         {inviteLinkBase()}
-                        <span className="redesign:font-mono redesign:font-semibold redesign:text-text">
+                        <span className="redesign:font-mono redesign:text-[0.92em] redesign:font-medium redesign:text-text">
                           {encodeURIComponent(invite.code)}
                         </span>
                       </p>
