@@ -54,7 +54,11 @@ export function SearchDialog({
   const [cursor, setCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [selected, setSelected] = useState(0);
-  const lastArrowAt = useRef(0);
+  // The arrows scroll rows under a resting pointer, and the browser then sends
+  // a synthetic mouse event; only a real move of the pointer may take the
+  // selection back from the keyboard.
+  const lastPointer = useRef<{ x: number; y: number } | null>(null);
+  const [scrolled, setScrolled] = useState(false);
 
   const navigate = useNavigate();
   const rowRefs = useRef(new Map<string, HTMLButtonElement>());
@@ -161,7 +165,6 @@ export function SearchDialog({
   function handleKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
-      lastArrowAt.current = Date.now();
       setSelected((current) =>
         clampSelection(current, event.key === "ArrowDown" ? 1 : -1, results.length),
       );
@@ -191,7 +194,7 @@ export function SearchDialog({
           className={cn(
             "flex items-center gap-2 border-b border-border px-5 py-3",
             // Under the redesign: the input's round field, inset in the body.
-            "redesign:mx-[var(--dialog-px)] redesign:mt-1 redesign:mb-2 redesign:h-[var(--input-h)] redesign:gap-2.5 redesign:rounded-full redesign:border redesign:border-[color:var(--input-border)] redesign:bg-[color:var(--input-bg)] redesign:px-[var(--input-px)] redesign:py-0 redesign:focus-within:ring-0 redesign:focus-within:ring-offset-0 redesign:focus-within:border-[color:var(--input-ring,var(--color-focus-ring))]",
+            "redesign:mx-[var(--dialog-px)] redesign:mt-1 redesign:mb-2 redesign:h-[var(--input-h)] redesign:gap-2.5 redesign:rounded-full redesign:border redesign:border-[color:var(--input-border)] redesign:bg-[color:var(--input-bg)] redesign:px-[var(--input-px)] redesign:py-0 redesign:not-focus-within:hover:border-[color:var(--input-hover-border)] redesign:focus-within:ring-0 redesign:focus-within:ring-offset-0 redesign:focus-within:border-[color:var(--input-ring,var(--color-focus-ring))]",
           )}
         >
           <Search className="h-4 w-4 shrink-0 text-text-muted redesign:hidden" />
@@ -220,7 +223,14 @@ export function SearchDialog({
           )}
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <div
+          className={cn(
+            "min-h-0 flex-1 overflow-y-auto",
+            // A soft edge under the field once the list has scrolled.
+            scrolled && "redesign:[mask-image:linear-gradient(to_bottom,transparent,black_12px)]",
+          )}
+          onScroll={(event) => setScrolled(event.currentTarget.scrollTop > 0)}
+        >
           {status === "error" ? (
             <SearchEmpty
               icon="error"
@@ -262,10 +272,11 @@ export function SearchDialog({
                       role="option"
                       aria-selected={index === selected}
                       tabIndex={-1}
-                      onMouseEnter={() => {
-                        // The arrows scroll rows under a resting pointer; a
-                        // row arriving there must not take the selection back.
-                        if (Date.now() - lastArrowAt.current > 150) setSelected(index);
+                      onMouseMove={(event) => {
+                        const last = lastPointer.current;
+                        if (last && last.x === event.clientX && last.y === event.clientY) return;
+                        lastPointer.current = { x: event.clientX, y: event.clientY };
+                        if (index !== selected) setSelected(index);
                       }}
                       onClick={() => openResult(result)}
                       className={cn(
@@ -284,9 +295,9 @@ export function SearchDialog({
                       )}
                     >
                       <div className="flex items-baseline gap-2 text-xs text-text-muted">
-                        <span className="flex min-w-0 items-center gap-1 font-medium text-text redesign:font-semibold">
+                        <span className="flex min-w-0 items-center gap-1 font-medium text-text redesign:gap-2.5 redesign:font-semibold">
                           <Hash className="h-3 w-3 shrink-0 redesign:hidden" />
-                          <Icon icon={HashGlyph} kind="symbol" size="sm" className="hidden h-3.5 w-3.5 text-text-secondary redesign:block" />
+                          <Icon icon={HashGlyph} kind="symbol" size="sm" className="hidden h-4 w-4 text-text-secondary redesign:block" />
                           <span className="truncate">{result.channelName}</span>
                         </span>
                         <span className="truncate redesign:text-text-secondary">{result.authorName}</span>
@@ -365,7 +376,7 @@ function SearchEmpty({
       // Under the redesign only, so it leads like every other inline state.
       icon={
         icon === "none" ? undefined : icon === "error" ? (
-          <Icon icon={WarningCircle} size="md" className="text-danger" />
+          <Icon icon={WarningCircle} size="sm" className="text-danger" />
         ) : (
           // Quiet, so the field's glass stays the one search mark.
           <Icon icon={MagnifyingGlass} kind="symbol" size="sm" className="text-text-tertiary" />
