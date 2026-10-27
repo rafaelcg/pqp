@@ -70,7 +70,7 @@ export function ConnectionGlyph({
         "inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-sm p-0.5",
         PROVIDER_CHROME[provider],
         // The near-black marks keep an edge on a dark pane.
-        DARK_TILE.has(provider) && "redesign:ring-1 redesign:ring-inset redesign:ring-[color:var(--card-border)]",
+        DARK_TILE.has(provider) && "redesign:ring-1 redesign:ring-inset redesign:ring-[color:color-mix(in_oklab,var(--color-text)_14%,transparent)]",
         className,
       )}
     >
@@ -133,7 +133,7 @@ export function ConnectionBadges({
                 <span className="min-w-0 flex-1 truncate text-[13px] text-paper redesign:font-semibold redesign:text-text">
                   {connection.displayName}
                 </span>
-                <span className="shrink-0 text-[11px] text-paper-muted redesign:text-[color:var(--list-row-detail)]">
+                <span className="shrink-0 text-[11px] text-paper-muted redesign:text-xs redesign:text-[color:var(--list-row-detail)]">
                   {t(PROVIDER_LABEL[connection.provider])}
                 </span>
               </>

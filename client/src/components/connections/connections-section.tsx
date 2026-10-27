@@ -346,7 +346,7 @@ export function ConnectionsSection() {
               >
                 <ConnectionGlyph
                   provider={provider}
-                  className="h-5 w-5 opacity-60"
+                  className="h-5 w-5 opacity-60 redesign:opacity-100 redesign:[&>svg]:opacity-60"
                 />
                 {t(PROVIDER_NAME[provider])}
               </li>
@@ -516,17 +516,16 @@ function ProviderRow({
         type="button"
         ref={actionRef}
         // Under the redesign the primitive's danger ghost, at the size and
-        // hover the Conectar beside it uses, with the secondary edge.
+        // hover the Conectar beside it uses.
         variant={redesign ? "danger-ghost" : "ghost"}
         size="sm"
         aria-describedby={nameId}
         aria-busy={busy || undefined}
         {...blockedProps}
         className={cn(
-          "shrink-0 border",
-          redesign
-            ? "border-[color:var(--button-secondary-border)]"
-            : "border-border-strong text-sm text-danger hover:text-danger",
+          "shrink-0",
+          // Under the redesign the primitive alone, like every other danger ghost.
+          !redesign && "border border-border-strong text-sm text-danger hover:text-danger",
           TOUCH_TARGET,
           blockedProps.className,
         )}

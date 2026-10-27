@@ -1368,6 +1368,13 @@ to seven lines at the card's width.
    reads as "limited to one use". The council suggests "Usado 1 vez · sem
    limite" and "{used} de {max} usos". That is a copy change in three
    languages and shows with the toggle off too. Change it?
+6. Connections and profile: three notices say a feature is "not active on
+   this server" ("não estão ativas neste servidor"). In pqp a "servidor" is
+   a chat server, so the council reads it as wrong. Suggested pt-BR: "ainda
+   não estão disponíveis aqui", with en and es to match, for
+   `settings.connections.unconfigured`, `settings.profile.banner.unconfigured`
+   and `settings.profile.media.unconfigured`. It shows with the toggle off
+   too. Change it?
 
 ## Decisions
 
