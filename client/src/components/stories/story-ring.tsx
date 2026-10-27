@@ -217,6 +217,7 @@ export function StoryRing({
           state === "unseen" || state === "none"
             ? "font-semibold text-text"
             : "font-medium text-text-tertiary",
+          state !== "unseen" && state !== "none" && "redesign:text-text-secondary",
           failed && "text-danger",
         )}
       >
