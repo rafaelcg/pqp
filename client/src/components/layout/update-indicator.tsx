@@ -1,5 +1,5 @@
 import { DownloadSimple } from "@phosphor-icons/react";
-import { Download, Info, LoaderCircle, TriangleAlert } from "lucide-react";
+import { Download, Info, TriangleAlert } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -23,6 +23,7 @@ import {
 import { RUNNING_BUILD } from "@/lib/build-info";
 import { useBuildStaleness, useUpdateOffered } from "@/lib/update-prompt-state";
 import { Icon } from "@/components/ui/icon";
+import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 
 /**
@@ -282,7 +283,12 @@ export function UpdateIndicator({
             // On the rail it is a small tile like the ones above it.
             variant === "rail" &&
               !emphasised &&
-              "redesign:bg-[color:var(--rail-tile-bg)] redesign:hover:bg-[color:var(--rail-tile-hover)] redesign:focus-visible:ring-accent redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-canvas",
+              "redesign:bg-[color:var(--rail-tile-bg)] redesign:hover:bg-[color:var(--rail-tile-hover)]",
+            // The rail's focus ring, urgent or not: the text colour with a gap.
+            variant === "rail" &&
+              "redesign:focus-visible:ring-text redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-canvas",
+            // Every door on the rail is one tile size, this one too.
+            variant === "rail" && "redesign:h-[var(--rail-tile)] redesign:w-[var(--rail-tile)]",
             variant === "rail" && open && !emphasised && "redesign:bg-[color:var(--rail-tile-hover)]",
             className,
           )}
@@ -294,7 +300,7 @@ export function UpdateIndicator({
             className="absolute -right-0.5 -top-0.5 flex h-2.5 w-2.5"
           >
             {emphasised && (
-              <span className="absolute inline-flex h-full w-full rounded-full bg-accent opacity-60 motion-safe:animate-ping" />
+              <span className="absolute inline-flex h-full w-full rounded-full bg-accent opacity-60 motion-safe:animate-ping redesign:motion-safe:animate-none" />
             )}
             <span
               className={cn(
@@ -432,10 +438,7 @@ export function UpdateIndicator({
                   onClick={apply_}
                 >
                   {updating ? (
-                    <LoaderCircle
-                      className="h-4 w-4 motion-safe:animate-spin"
-                      aria-hidden="true"
-                    />
+                    <Spinner className="h-4 w-4 motion-safe:animate-spin" />
                   ) : null}
                   {updating
                     ? t("update.updating")

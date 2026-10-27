@@ -823,6 +823,19 @@
   --slider-ring: var(--color-accent);
   --slider-ring-offset-color: transparent;
 
+  /* Cards (ui/card.tsx): tints of the text, so a card reads on a pane and
+     on a dialog alike. */
+  --card-bg: color-mix(in oklab, var(--color-text) 4%, transparent);
+  --card-border: color-mix(in oklab, var(--color-text) 8%, transparent);
+  --card-row-hover: color-mix(in oklab, var(--color-text) 6%, transparent);
+
+  /* The monogram disc's edge: none in dark, where surface-3 already stands
+     off the panes; a hairline in light, where it is close to the white pane. */
+  --avatar-edge: transparent;
+  /* The cutout behind a presence dot: the colour of the pane the avatar
+     sits on (the side panes by default, the conversation below). */
+  --avatar-dot-ring: var(--color-pane-side);
+
   /* Banners (ui/banner.tsx): an inset card on the look's soft tone fill,
      with a faint edge of the tone, so a strip reads as a note pinned to
      the conversation rather than a stripe across it. */
@@ -847,10 +860,77 @@
      square; a hover only lifts the fill, so lime always means "here". */
   --rail-tile: 2.75rem;
   --rail-tile-radius-selected: 1rem;
-  --rail-tile-bg: var(--color-pane-side);
+  /* A touch of text over the side pane, so an idle door reads on the dark canvas. */
+  --rail-tile-bg: color-mix(in oklab, var(--color-text) 4%, var(--color-pane-side));
   --rail-tile-hover: color-mix(in oklab, var(--color-text) 9%, var(--color-pane-side));
   --rail-tile-shadow: 0 2px 8px -2px oklch(0 0 0 / 0.45);
   --rail-divider: var(--color-border);
+  /* Empty states (ui/empty-state.tsx): a page empty state leads with its
+     glyph on a soft disc of the raised fill, then a Gabarito title. */
+  --empty-icon-disc: 3.5rem;
+  --empty-icon-bg: var(--color-surface-3);
+  --empty-title-size: 1.25rem;
+
+  /* Loading (ui/spinner.tsx, ui/skeleton.tsx): a ring with a faint track,
+     and placeholder shapes as a faint text tint, so both read on a pane, a
+     card or a dialog. */
+  --spinner-track-opacity: 0.25;
+  --skeleton-bg: color-mix(in oklab, var(--color-text) 8%, transparent);
+
+  /* Section headers (ui/section-header.tsx). A pane's title is Gabarito at
+     20px with its line under it; a section label inside a list or a dialog
+     is a 13px semibold label in sentence case, no tracking, one step
+     quieter than the body. */
+  --pane-header-title-size: 1.25rem;
+  --pane-header-gap: 1.5rem;
+  --section-label-size: 0.8125rem;
+  --section-label-gap: 0.375rem;
+  --section-group-size: 0.9375rem;
+
+  /* List rows (ui/list-row.tsx): Salas pills on the row roles, a step
+     taller than before, with more room inside. */
+  --list-row-radius: var(--radius-pill);
+  --list-row-px: 0.75rem;
+  /* 8px: at 6px on a 36px pill the pip read as a full stop. */
+  --list-row-pip: 0.5rem;
+  --list-row-h-sm: 2.25rem;
+  --list-row-h-md: 2.75rem;
+  --list-row-h-lg: 3.25rem;
+  --list-row-gap-sm: 0.5rem;
+  --list-row-gap: 0.75rem;
+  --list-row-hover: var(--color-row-hover);
+  --list-row-selected: var(--color-row-selected);
+  --list-row-selected-text: var(--color-on-row-selected);
+  /* A row's second line (a tag, a status, a count): the tertiary text. */
+  --list-row-detail: var(--color-text-tertiary);
+  /* A muted row (a channel you silenced) stays a step above a disabled one
+     (0.4), so the two read apart. */
+  --list-row-muted-opacity: 0.6;
+  /* The solid accent, as IconButton's and Slider's rings: the 60% focus
+     ring all but vanishes on the light selected fill. */
+  --list-row-ring: var(--color-accent);
+
+  /* Dialogs: a deeper scrim with more blur, so the app behind recedes; the
+     panel takes a text edge and the deepest lift. The header loses its rule
+     (the title and the space under it separate it) and the footer's rule
+     softens. Titles step down from 24px to 22px, the inset grows to 24px. */
+  /* The sheets' one scrim (--sheet-scrim), so a dialog and a sheet agree. */
+  --dialog-scrim: var(--sheet-scrim);
+  --dialog-scrim-blur: var(--sheet-scrim-blur);
+  --dialog-border: color-mix(in oklab, var(--color-text) 10%, transparent);
+  --dialog-shadow: inset 0 1px 0 oklch(1 0 0 / 0.05), var(--shadow-3);
+  --dialog-header-rule: transparent;
+  --dialog-header-pt: 1.25rem;
+  --dialog-header-pb: 0.5rem;
+  --dialog-solo-header-pb: 1rem;
+  --dialog-solo-footer-pt: 0.5rem;
+  --dialog-footer-pb: 1.25rem;
+  --dialog-close-glyph: 1.125rem;
+  --dialog-eyebrow-size: 0.8125rem;
+  --dialog-footer-rule: color-mix(in oklab, var(--color-text) 8%, transparent);
+  --dialog-px: 1.5rem;
+  --dialog-title-size: 1.375rem;
+  --dialog-title-leading: 1.875rem;
 
   /* Sidebar header (layout/channel-list.tsx): the server's name in the title
      face over no rule, a search pill a step off the pane, the banner as an
@@ -960,13 +1040,25 @@
   /* A modal is the one thing that floats over everything, so it gets the
      deepest rung instead of sharing a menu's. */
   --elevation-3-shadow: var(--shadow-3);
+  /* Sheets (ui/sheet.tsx): a panel rising from a phone's bottom edge. A
+     larger top radius than a card, the raised fill, a hairline on the top
+     edge only and a shadow cast upwards. */
+  --sheet-radius: 1.5rem;
+  --sheet-surface: var(--color-surface-2);
+  --sheet-edge: color-mix(in oklab, var(--color-text) 10%, transparent);
+  /* One top edge: the 10% border, no inset highlight doubling it. */
+  --sheet-shadow: 0 -12px 32px oklch(0.06 0.02 262 / 0.45);
+  --sheet-scrim: oklch(0.06 0.02 262 / 0.62);
+  --sheet-scrim-blur: 6px;
 }
 
 /*
- * Gutters cost width a phone does not have: under 640px the panes meet, as
- * they do today. A council risk named for direction B in round D1.
+ * Gutters cost width a phone does not have: under `md` (768px) the panes
+ * meet, as they do today, and the frame classes in ui/pane.ts float from
+ * `md` up, so the token and the classes switch together. A council risk
+ * named for direction B in round D1.
  */
-@media (max-width: 639px) {
+@media (max-width: 767px) {
   :root[data-redesign] {
     --space-gutter: 0rem;
   }
@@ -1148,6 +1240,22 @@
 
 /* The redesign's shadows on a light page: tinted, never black. Every look. */
 :root[data-redesign][data-theme="light"] {
+  /* On the near-white panes the 8% tint all but vanishes at the pulse's low
+     point, and a 25% track at 12px is a hairline. */
+  --skeleton-bg: color-mix(in oklab, var(--color-text) 10%, transparent);
+  --spinner-track-opacity: 0.3;
+
+  /* Cards. In light a text tint darkens into a grey tray; a white wash lifts
+     the card on a grey dialog and leaves the edge alone on the white pane. */
+  --card-bg: color-mix(in oklab, var(--color-surface-0) 60%, transparent);
+  /* Lighter than dark's: over the white wash on a grey dialog, 6% lands at
+     the dialog's own grey and the row reads as a hole. */
+  --card-row-hover: color-mix(in oklab, var(--color-text) 4%, transparent);
+  --card-border: color-mix(in oklab, var(--color-text) 10%, transparent);
+
+  /* Avatars: a hairline keeps the monogram disc a disc on the white pane. */
+  --avatar-edge: var(--color-border);
+
   /* Banners: the soft fills are pale in light; a lighter edge keeps them calm. */
   --banner-edge: 22%;
   /* Rail: a softer drop under the accent tile on a light canvas, and a hover
@@ -1159,6 +1267,7 @@
   --sidebar-search-bg: var(--color-field);
   --sidebar-search-hover: var(--color-surface-0);
   --sidebar-search-border: var(--color-border);
+  --rail-tile-bg: var(--color-pane-side);
   --input-invalid-bg: color-mix(in oklab, var(--color-danger) 6%, var(--color-field));
   /* Tabs */
   /* 7 points over the 8% ghost hover, so a hovered pill never reads as selected. */
@@ -1183,6 +1292,9 @@
   /* No top highlight on a light panel; a close shadow under the wide one.
      The fill is the brightest surface, so the panel sits above the pane. */
   --popover-surface: var(--color-surface-0);
+  /* A plain dialog on the same white as a popover and a phone sheet; the
+     beige surface-2 made it the darkest thing floating. */
+  --dialog-surface: var(--color-surface-0);
   --popover-border: color-mix(in oklab, var(--color-text) 10%, transparent);
   --popover-shadow: 0 1px 2px oklch(0.4 0.02 262 / 0.1), var(--shadow-2);
   /* Light raises the thumb as a white chip on the grey track. */
@@ -1199,6 +1311,14 @@
      takes a grey fill instead. */
   --slider-thumb-disabled-bg: color-mix(in oklab, var(--color-text) 22%, var(--color-surface-0));
   --slider-thumb-shadow: 0 1px 2px oklch(0.4 0.02 262 / 0.2), 0 2px 6px oklch(0.4 0.02 262 / 0.14);
+  /* The brightest surface in light, so a sheet reads lifted, not sunk. */
+  --sheet-surface: var(--color-surface-0);
+  /* One top edge: the border alone, as in dark. */
+  --sheet-shadow: 0 -8px 24px oklch(0.4 0.02 262 / 0.22);
+  --sheet-scrim: oklch(0.3 0.02 262 / 0.3);
+  /* 10% as in dark: a pale panel over a pale scrim needs the edge. */
+  --dialog-border: color-mix(in oklab, var(--color-text) 10%, transparent);
+  --dialog-shadow: 0 1px 2px oklch(0.4 0.02 262 / 0.1), var(--shadow-3);
 }
 
 /*
@@ -2645,6 +2765,12 @@ html[data-app-shell] body {
   overflow: hidden;
 }
 
+/* Under the redesign a presence dot in the conversation is cut out of the
+   conversation pane's colour. */
+:where([data-redesign]) main {
+  --avatar-dot-ring: var(--color-pane-main);
+}
+
 html[data-app-shell] #root {
   overflow: hidden;
   overflow: clip;
@@ -4073,7 +4199,7 @@ html[data-pre] [data-home-hero] .animate-rise {
 }
 
 .safe-pb {
-  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  padding-bottom: max(var(--safe-pb-min, 0.75rem), env(safe-area-inset-bottom));
 }
 
 /*
