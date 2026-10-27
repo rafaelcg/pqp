@@ -573,17 +573,15 @@ test("captures the design council screens", async ({ browser }) => {
       await page.getByRole("button", { name: "Desligar a câmera", exact: true }).first().click({ timeout: 5_000 }).catch(() => {});
       await page.waitForTimeout(1200);
       await page.getByTestId("call-more").first().click();
+      // The stage may stay open after the camera goes off; open it if not.
       const expand = page.getByRole("menuitem", { name: "Expandir a call" });
       if (await expand.isVisible().catch(() => false)) {
         await expand.click();
-        await page.waitForTimeout(800);
-        await shoot(page, `f-call-stage-audio-${theme}`);
-        await page.getByTestId("call-more").first().click();
-        await page.getByRole("menuitem", { name: "Recolher a call" }).first().click().catch(() => {});
       } else {
-        console.log("f-call: expand skipped");
+        await page.keyboard.press("Escape");
       }
-      await page.keyboard.press("Escape");
+      await page.waitForTimeout(800);
+      await shoot(page, `f-call-stage-audio-${theme}`);
       await page.getByRole("button", { name: "Ligar a câmera", exact: true }).first().click({ timeout: 5_000 }).catch(() => {});
       await page.waitForTimeout(1500);
     }
