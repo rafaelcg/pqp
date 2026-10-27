@@ -1710,6 +1710,22 @@ the light open row a step under the selected channel, the segmented status
 and the inverse toggles written down in DESIGN.md. Not done: an unread post
 in the light shots (the dark pass marks the fixture read first).
 
+### f-watch-party
+
+Spec (audit: `watch-party/` (24 files): the sidebar block with its live
+card, create, teaser, scheduled and history rows; the create dialog; the
+host's pane (setup, scheduled card, live bar, dock, transmission strip,
+activity feed, options, people, co-hosts); history; waitlist; guests):
+
+1. Job: make, announce, run and watch a party; tell everyone it is live.
+2. Redesign, this pass: the sidebar rows are cards (the open live card a
+   soft red), the live badge solid red, the scheduled card a pane card with
+   a sentence-case label, the host bar on the pane like a header, the mic
+   chip a pill on the call's tints, the transmission strip on card tokens.
+   Dialogs, the dock and the options use the merged primitives already.
+3. Merges: none yet; the five dialog shells stay (each is `ui/Dialog`).
+4. Kept: every state, the copy (the live badge stays uppercase).
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss

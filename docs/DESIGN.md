@@ -596,11 +596,20 @@ Every hint renders through `layout/corner-card.tsx`. Under the redesign it
 is a popover (`--popover-surface`, `--popover-border`, `--popover-shadow`,
 `--popover-radius`) with a round close, glass on a hero. The first-run card
 is a pane-radius card; its steps sit in accent-soft wells.
+
 ### The music queue
 
 `voice/music-classes.ts` holds the queue's recipe: rows, covers, the search
 highlight, icon buttons and headings. The composer's sheet and the drawer
 share it, so the two homes look the same under the redesign.
+### Watch parties
+
+`components/watch-party/`. Under the redesign the sidebar's live card, its
+create row and its scheduled row follow the sidebar blocks (`SIDEBAR_CARD_REDESIGN`,
+`SIDEBAR_INVITE_REDESIGN`). The live badge is the one solid red
+(`bg-danger`, text `on-danger`); recovering stays the soft warning. The
+host's scheduled card is a pane-radius card; the live bar sits on the pane
+like a header; the mic chip is a pill on the call's tints.
 
 ### The settings kit
 
