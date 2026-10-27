@@ -3958,7 +3958,13 @@ const MessageRow = memo(function MessageRow({
                     compact ? "opacity-70" : "opacity-0 group-hover:opacity-100",
                   )}
                   dateTime={message.createdAt}
-                  title={formatFullTimestamp(message.createdAt)}
+                  title={
+                    isMessagePinned && !compact
+                      ? `${formatFullTimestamp(message.createdAt)} · ${
+                          message.pinnedBy ? t("chat.pinnedBy", { name: message.pinnedBy.displayName }) : t("chat.pinned")
+                        }`
+                      : formatFullTimestamp(message.createdAt)
+                  }
                   data-row-gutter=""
                 >
                   {formatTime(message.createdAt)}
@@ -4143,7 +4149,7 @@ const MessageRow = memo(function MessageRow({
                         // "(editada)" ends the last line it belongs to, never a line of its own:
                         // the marker is the last child, so only a paragraph right before it goes
                         // inline. A body ending in a list, quote or code keeps its block.
-                        message.editedAt && "redesign:[&>p:nth-last-child(2)]:inline",
+                        message.editedAt && attachments.length === 0 && !message.forward && "redesign:[&>p:nth-last-child(2)]:inline",
                       )}
                     >
                       {streamAuthor}
