@@ -1082,6 +1082,27 @@ server settings do not use it, so its roles field label in caps moves to
    Phosphor icons through a shared `IconSwap`. Empty and result take the
    `p-empty` shape once that merges.
 
+### m-sheets
+
+Spec (audit: the four phone sheets in the inventory. The app launcher, the
+soundboard, every `Dialog` below `sm` and the settings strip already draw
+the merged sheet, popover or list row tokens; the music queue is the one
+left: `voice/music-fila.tsx` as the composer's sheet and as the drawer,
+`music-queue-list.tsx`, the history in `music-extras.tsx` and the field in
+`music-search-picker.tsx`):
+
+1. Job: see what plays next, add a song, reorder, play one again.
+2. Redesign: one recipe in `voice/music-classes.ts` for both homes: rows at
+   the control radius on the list row hover, covers nested inside, the
+   highlighted result on the menu's highlight, round ghost icons, sentence
+   case headings, card-edge seams; the drawer on the side pane with the
+   sheet's scrim and shadow; Phosphor glyphs.
+3. Merges: the drawer's paper tokens and the sheet's surface tokens meet in
+   one look under the redesign.
+4. Kept: drag and Alt+arrow reordering, the row menu, history, shuffle,
+   watch on stage, the field's hint, outside-press close.
+5. Left: the player bar under the queue is call chrome (`f-call`).
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss

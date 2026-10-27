@@ -1,4 +1,13 @@
+import { DotsSixVertical, DotsThree } from "@phosphor-icons/react";
 import { GripVertical, MoreHorizontal } from "lucide-react";
+import { IconSwap } from "@/components/ui/icon";
+import {
+  MUSIC_COVER_REDESIGN,
+  MUSIC_ICON_REDESIGN,
+  MUSIC_MUTED_REDESIGN,
+  MUSIC_ROW_REDESIGN,
+  MUSIC_TEXT_REDESIGN,
+} from "@/components/voice/music-classes";
 import { useMemo, useState, type DragEvent, type KeyboardEvent } from "react";
 import type { MusicTrack } from "@pqp/shared";
 import { ContextMenu } from "@/components/ui/context-menu";
@@ -186,6 +195,8 @@ function QueueRow({
         className={cn(
           "group/row relative flex items-center gap-2 rounded-md px-1 py-1",
           composer ? "hover:bg-surface-3" : "hover:bg-ink-3",
+          MUSIC_ROW_REDESIGN,
+          "redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-inset redesign:focus-visible:ring-focus-ring",
           dragging && "opacity-40",
           dropBefore &&
             "before:absolute before:inset-x-1 before:-top-[2px] before:h-[2px] before:rounded-full before:bg-accent",
@@ -197,6 +208,7 @@ function QueueRow({
           className={cn(
             "relative h-8 w-8 shrink-0 overflow-hidden rounded-md",
             composer ? "bg-surface-3" : "bg-ink-3",
+            MUSIC_COVER_REDESIGN,
           )}
         >
           {track.thumbnailUrl ? (
@@ -207,15 +219,16 @@ function QueueRow({
               className={cn(
                 "absolute inset-0 flex cursor-grab items-center justify-center opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 active:cursor-grabbing",
                 composer ? "bg-surface/70 text-text" : "bg-ink/70 text-paper",
+                "redesign:bg-black/45 redesign:text-white",
               )}
               aria-hidden="true"
             >
-              <GripVertical className="h-3.5 w-3.5" />
+              <IconSwap off={GripVertical} on={DotsSixVertical} kind="symbol" size="sm" offClassName="h-3.5 w-3.5" />
             </span>
           ) : null}
         </span>
         <span
-          className={cn("min-w-0 flex-1 truncate text-sm", composer ? "text-text" : "text-paper")}
+          className={cn("min-w-0 flex-1 truncate text-sm", composer ? "text-text" : "text-paper", MUSIC_TEXT_REDESIGN)}
           title={track.title}
         >
           {track.title}
@@ -229,7 +242,7 @@ function QueueRow({
               fallbackClassName={
                 composer
                   ? "bg-surface-3 text-[8px] text-text"
-                  : "bg-ink-3 text-[8px] text-paper"
+                  : "bg-ink-3 text-[8px] text-paper redesign:bg-surface-3 redesign:text-text"
               }
               rounded="full"
             />
@@ -240,6 +253,7 @@ function QueueRow({
             className={cn(
               "shrink-0 text-[11px] tabular-nums",
               composer ? "text-text-secondary" : "text-paper-muted",
+              MUSIC_MUTED_REDESIGN,
             )}
           >
             {formatMusicClock(track.durationMs)}
@@ -255,10 +269,11 @@ function QueueRow({
                 composer
                   ? "text-text-tertiary hover:bg-surface-2 hover:text-text"
                   : "text-paper-muted hover:bg-ink-2 hover:text-paper",
+                MUSIC_ICON_REDESIGN,
               )}
               aria-label={t("music.overflow")}
             >
-              <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+              <IconSwap off={MoreHorizontal} on={DotsThree} kind="symbol" size="sm" offClassName="h-4 w-4" />
             </button>
           </Menu>
         </span>

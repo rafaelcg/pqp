@@ -2,6 +2,7 @@ import type { DmSummary, PublicUser, Server } from "@pqp/shared";
 import { useEffect, type ReactNode } from "react";
 import { ServerRail } from "@/components/layout/server-rail";
 import { setUpdateWaiting } from "@/lib/update-prompt-state";
+import { MusicQueueSpecimen } from "@/pages/qa-music-queue";
 
 /**
  * The shell's pieces on `/qa/ui`, drawn by the real components with made-up
@@ -121,6 +122,8 @@ export function ShellSheet() {
           />
         </RailFrame>
       </div>
+      {/* The music queue in a call's composer: three waiting, one played. */}
+      <MusicQueueSpecimen />
     </div>
   );
 }

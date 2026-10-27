@@ -687,6 +687,8 @@ const PRIMITIVES: {
   // Two real rails: Conversas open with people waiting, and a server open
   // beside every server cue. Keyboard focus on "Praça", hover on "Oficina".
   { id: "s-rail", testId: "qa-shell-rail", focus: "Praça", hover: "Oficina" },
+  // The music queue open in a call's composer; hover a waiting song.
+  { id: "m-sheets", testId: "qa-music-queue" },
   { id: "p-settings-kit", testId: "qa-settings-kit", tiles: 1300 },
 ];
 

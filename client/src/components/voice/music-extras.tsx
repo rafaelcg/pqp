@@ -16,6 +16,18 @@ import {
   Volume2,
   X,
 } from "lucide-react";
+import {
+  DotsThree,
+  Plus as PlusGlyph,
+  Shuffle as ShuffleGlyph,
+} from "@phosphor-icons/react";
+import { IconSwap } from "@/components/ui/icon";
+import {
+  MUSIC_ICON_REDESIGN,
+  MUSIC_LABEL_REDESIGN,
+  MUSIC_ROW_REDESIGN,
+  MUSIC_TEXT_REDESIGN,
+} from "@/components/voice/music-classes";
 import type { MusicRepeat, MusicState, MusicTrack } from "@pqp/shared";
 import { musicSkipVotesNeeded } from "@pqp/shared";
 import { musicRelatedTracks } from "@/lib/music-related";
@@ -74,8 +86,10 @@ function repeatLabel(t: (key: MessageKey) => string, repeat: MusicRepeat): strin
   return t("music.repeat.off");
 }
 
-const ghostIcon =
-  "h-8 w-8 shrink-0 text-text-tertiary hover:bg-surface-2 hover:text-text";
+const ghostIcon = cn(
+  "h-8 w-8 shrink-0 text-text-tertiary hover:bg-surface-2 hover:text-text",
+  MUSIC_ICON_REDESIGN,
+);
 
 export function MusicRepeatButton({
   repeat,
@@ -185,7 +199,7 @@ export function MusicShuffleButton({
         disabled={disabled}
         onClick={() => shuffle()}
       >
-        <Shuffle className="h-4 w-4" aria-hidden="true" />
+        <IconSwap off={Shuffle} on={ShuffleGlyph} kind="symbol" size="sm" offClassName="h-4 w-4" />
       </Button>
     </Tooltip>
   );
@@ -500,7 +514,7 @@ export function MusicOverflowMenu({
           className={triggerClassName}
           aria-label={t("music.overflow")}
         >
-          <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+          <IconSwap off={MoreHorizontal} on={DotsThree} kind="symbol" size="sm" offClassName="h-4 w-4" />
         </button>
       </Menu>
       <ConfirmDialog
@@ -595,6 +609,8 @@ export function MusicHistoryList({
           composer
             ? "text-text-secondary hover:text-text"
             : "text-paper-muted hover:text-paper",
+          MUSIC_LABEL_REDESIGN,
+          "redesign:rounded-[var(--radius-control)] redesign:px-1.5 redesign:hover:text-text",
         )}
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
@@ -610,12 +626,14 @@ export function MusicHistoryList({
               className={cn(
                 "group/row flex items-center gap-2 rounded-md px-1 py-1",
                 composer ? "hover:bg-surface-3" : "hover:bg-ink-3",
+                MUSIC_ROW_REDESIGN,
               )}
             >
               <span
                 className={cn(
                   "min-w-0 flex-1 truncate text-sm",
                   composer ? "text-text" : "text-paper",
+                  MUSIC_TEXT_REDESIGN,
                 )}
                 title={track.title}
               >
@@ -627,11 +645,11 @@ export function MusicHistoryList({
                   variant="ghost"
                   size="icon"
                   data-music-play-again=""
-                  className="h-8 w-8 shrink-0"
+                  className={cn("h-8 w-8 shrink-0", MUSIC_ICON_REDESIGN)}
                   aria-label={t("music.playAgain")}
                   onClick={() => readdFromHistory(track.id)}
                 >
-                  <Plus className="h-4 w-4" aria-hidden="true" />
+                  <IconSwap off={Plus} on={PlusGlyph} kind="symbol" size="sm" offClassName="h-4 w-4" />
                 </Button>
               </Tooltip>
             </li>

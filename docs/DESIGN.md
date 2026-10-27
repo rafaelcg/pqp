@@ -491,6 +491,12 @@ yet. `--icon-stroke` is the stroke a Lucide icon takes when a primitive passes i
 replacement under the redesign, for a surface whose callers still pass Lucide.
 A filled glyph that turns into a blob (two copy squares) takes `symbol`.
 
+### The music queue
+
+`voice/music-classes.ts` holds the queue's recipe: rows, covers, the search
+highlight, icon buttons and headings. The composer's sheet and the drawer
+share it, so the two homes look the same under the redesign.
+
 ### The settings kit
 
 `components/settings/kit/` builds every tab of user settings. Under the
