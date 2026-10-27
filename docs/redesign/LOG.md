@@ -742,7 +742,8 @@ buttons, a search entry styled as a faint field, the banner strip in
    message search, and the banner when the server has one.
 2. States: hover and open menu, a long name (tooltip), public, loading, no
    server, with and without a banner, phone drawer.
-3. Redesign: the name in the title face over no rule; the three buttons are
+3. Redesign: the name in the title face over no rule, without the icon
+   the rail tile already shows beside it; the three buttons are
    IconButton; search is a pill a step off the pane; the banner is an inset
    card. The search dialog itself is `f-search`.
 

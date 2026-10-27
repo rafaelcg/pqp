@@ -454,8 +454,9 @@ The top of the channel list (`layout/channel-list.tsx`). Under the
 redesign:
 
 - No rule under it. The server's name is the title face at 16px semibold
-  (`--sidebar-header-title-size`), its icon a 28px rounded square, the row
-  a pill on `row-hover` when hovered or open.
+  (`--sidebar-header-title-size`), with no icon (the open server's tile is
+  right beside it on the rail), the row a pill on `row-hover` when hovered
+  or open.
 - Members, collapse and close are `IconButton`, which keeps their toggle-off
   size (`touch={false}`, `HEADER_ICON_BUTTON`).
 - Search is a pill (`--sidebar-search-*`): a text tint off the pane in dark,

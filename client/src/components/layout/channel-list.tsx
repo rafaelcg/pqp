@@ -2952,7 +2952,10 @@ const ServerHeaderMenuTrigger = forwardRef<
       className="group flex min-w-0 flex-1 items-center gap-2 rounded-[var(--radius-control)] px-1 text-left transition-colors duration-[var(--duration-fast)] hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 data-[state=open]:bg-surface-2 redesign:min-h-11 redesign:gap-2.5 redesign:rounded-[var(--radius-row)] redesign:px-2 redesign:hover:bg-row-hover redesign:data-[state=open]:bg-row-hover redesign:focus-visible:ring-accent redesign:focus-visible:ring-offset-0"
       {...triggerProps}
     >
-      <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-[var(--radius-control)] bg-surface-2 font-display text-[11px] font-bold text-text redesign:h-7 redesign:w-7 redesign:rounded-[var(--rail-tile-radius-selected)] redesign:bg-surface-3 redesign:font-sans! redesign:tracking-normal! redesign:font-semibold">
+      {/* Under the redesign the open server's tile sits right beside this
+          header on the rail, picture and all, so the header gives the name
+          that room instead of drawing the icon twice. */}
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-[var(--radius-control)] bg-surface-2 font-display text-[11px] font-bold text-text redesign:hidden">
         <ServerIcon name={server.name} iconUrl={server.iconUrl} />
       </span>
       {isPublic ? (
