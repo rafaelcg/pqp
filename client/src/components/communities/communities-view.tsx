@@ -206,8 +206,10 @@ export function CommunitiesView({
   }
 
   const chips = categoryChips(category);
-  /** A category or a search narrows the list, so an empty result can be undone. */
-  const filtered = category !== null || rawQuery.trim() !== "";
+  /** A category, a language or a search narrows the list, so an empty result can be undone. */
+  const filtered = category !== null || language !== null || rawQuery.trim() !== "";
+  /** Under the redesign an empty, unfiltered directory has one create button: the empty state's. */
+  const soloCreate = redesign && !loading && !error && communities.length === 0 && !filtered;
   const languages = languageSegments(language);
   const empty = emptyStateKeys(query);
 
@@ -360,7 +362,7 @@ export function CommunitiesView({
               A directory whose only answer to "none of these are mine" is a
               scroll to the bottom teaches people that making one is an advanced
               move. It is not: it is the other half of the feature. */}
-          <div className="mt-6 flex flex-col gap-3 rounded-2xl border border-signal/25 bg-signal/[0.06] p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5 redesign:rounded-[var(--radius-card)] redesign:border-[color:color-mix(in_oklab,var(--color-accent)_25%,transparent)] redesign:bg-[color:var(--glow-accent-soft)]">
+          <div className={cn(soloCreate && "hidden", "mt-6 flex flex-col gap-3 rounded-2xl border border-signal/25 bg-signal/[0.06] p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5 redesign:rounded-[var(--radius-card)] redesign:border-[color:color-mix(in_oklab,var(--color-accent)_25%,transparent)] redesign:bg-[color:var(--glow-accent-soft)]")}>
             <div className="min-w-0">
               <p className="flex items-center gap-2 font-display text-base font-bold">
                 <Sparkles aria-hidden="true" className="h-4 w-4 text-signal redesign:hidden" />
@@ -426,8 +428,8 @@ export function CommunitiesView({
             <EmptyState
               className="mt-14 redesign:mt-0"
               icon={<span className="text-[2rem] drop-shadow-sm">🦗</span>}
-              iconClassName="redesign:bg-[color:var(--glow-accent-soft)]"
-              title={t(empty.title)}
+              iconClassName="redesign:bg-[color:var(--glow-accent-soft)]!"
+              title={t(filtered ? "communities.empty.titleFiltered" : empty.title)}
               body={
                 <>
                   {t(filtered ? empty.body : "communities.empty.bodyAll")}
@@ -436,19 +438,20 @@ export function CommunitiesView({
               }
               actions={
                 // Nothing matched a filter: the way back is to see everything.
-                // Nothing at all: create (secondary; the card above owns the primary).
+                // Nothing at all: create, the page's one primary (the card above is hidden).
                 filtered ? (
                   <Button
                     variant="secondary"
                     onClick={() => {
                       setCategory(null);
+                      setLanguage(null);
                       setRawQuery("");
                     }}
                   >
                     {t("communities.empty.reset")}
                   </Button>
                 ) : (
-                  <Button variant="secondary" onClick={onCreateCommunity}>
+                  <Button onClick={onCreateCommunity}>
                     <IconSwap off={Plus} on={PlusGlyph} kind="symbol" offClassName="h-4 w-4" className="h-4 w-4" />
                     {t("communities.create.action")}
                   </Button>
