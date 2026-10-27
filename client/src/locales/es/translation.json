@@ -947,6 +947,7 @@
   "communities.empty.searchHint": "Las comunidades recién creadas solo aparecen en la búsqueda hasta que alguien más entra.",
   "communities.failed": "No se pudieron cargar las comunidades.",
   "communities.retry": "Reintentar",
+  "communities.errorTitle": "No se pudieron cargar las comunidades",
   "communities.joinedBadge": "Ya estás aquí",
   "communities.create.title": "Crea la tuya",
   "communities.create.body": "¿Nada te convence? Arma una comunidad, ponle un nombre ridículo y manda el link.",

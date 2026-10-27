@@ -947,6 +947,7 @@
   "communities.empty.searchHint": "Brand-new communities only show up in search until somebody else joins.",
   "communities.failed": "Could not load communities.",
   "communities.retry": "Try again",
+  "communities.errorTitle": "Couldn't load communities",
   "communities.joinedBadge": "You're in",
   "communities.create.title": "Make your own",
   "communities.create.body": "Nothing here fits? Start a community, name it something stupid, and send the link.",

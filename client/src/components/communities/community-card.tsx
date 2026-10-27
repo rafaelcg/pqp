@@ -96,7 +96,7 @@ function tintStyle(hue: number, strength: number): CSSProperties {
 
 /** The share and report buttons over the header: 28px round glass, the control-over-a-picture look. */
 const CARD_CORNER_BUTTON_REDESIGN =
-  "redesign:grid redesign:h-7 redesign:w-7 redesign:place-items-center redesign:rounded-full redesign:p-0 redesign:bg-[color:var(--glass-bg)] redesign:text-[color:var(--glass-fg)] redesign:ring-1 redesign:ring-[color:var(--glass-border)] redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--color-focus-ring)]";
+  "redesign:grid redesign:h-7 redesign:w-7 redesign:place-items-center redesign:rounded-full redesign:p-0 redesign:bg-[color:var(--glass-bg)] redesign:text-[color:var(--glass-fg)] redesign:ring-1 redesign:ring-[color:var(--glass-border)] redesign:hover:bg-[color:color-mix(in_oklab,var(--glass-bg)_80%,var(--glass-fg))] redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--list-row-ring)]";
 
 export function CommunityCard({
   community,
@@ -188,7 +188,6 @@ export function CommunityCard({
           className="absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-ink-2 to-transparent redesign:from-[color:var(--community-card-bg)]"
         />
         <span
-          aria-hidden="true"
           className="absolute left-3 top-3 flex items-center gap-1.5 rounded-full bg-ink/55 px-2.5 py-1 text-[11px] font-semibold text-paper backdrop-blur-sm redesign:bg-[color:var(--glass-bg)] redesign:text-[color:var(--glass-fg)] redesign:ring-1 redesign:ring-[color:var(--glass-border)]"
         >
           <span aria-hidden="true">{CATEGORY_EMOJI[community.category]}</span>
@@ -335,7 +334,11 @@ export function CommunityCardSkeleton({ className }: { className?: string }) {
       )}
       aria-hidden="true"
     >
-      <Skeleton className="h-20 w-full rounded-none" />
+      <div className="relative">
+        <Skeleton className="h-20 w-full rounded-none" />
+        {/* The real card's fade, so the stub has no hard seam under the redesign. */}
+        <span aria-hidden="true" className="absolute inset-x-0 bottom-0 hidden h-10 bg-gradient-to-t from-[color:var(--community-card-bg)] to-transparent redesign:block" />
+      </div>
       <div className="px-4 pb-4">
         <Skeleton className="-mt-7 h-14 w-14 rounded-2xl ring-4 ring-ink-2 redesign:rounded-full redesign:ring-[color:var(--community-card-bg)]" />
         <Skeleton className="mt-3 h-4 w-2/3" />

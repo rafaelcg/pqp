@@ -22,10 +22,7 @@ import {
 import { Compass as CompassGlyph, MagnifyingGlass, Plus as PlusGlyph, Sparkle as SparkleGlyph, X as XGlyph } from "@phosphor-icons/react";
 import { Icon, IconSwap } from "@/components/ui/icon";
 import { useRedesign } from "@/lib/redesign";
-
-/** The empty and error glyph on the empty state's soft disc, as `ui/empty-state` draws it. */
-const EMPTY_DISC_REDESIGN =
-  "redesign:grid redesign:h-[var(--empty-icon-disc)] redesign:w-[var(--empty-icon-disc)] redesign:place-items-center redesign:rounded-full redesign:bg-[color:var(--empty-icon-bg)] redesign:text-3xl";
+import { EmptyState } from "@/components/ui/empty-state";
 
 /** Long enough that typing a word does not fire five requests. */
 const SEARCH_DEBOUNCE_MS = 250;
@@ -306,10 +303,10 @@ export function CommunitiesView({
                   chip.active
                     ? "border-signal bg-signal font-semibold text-ink"
                     : "border-ink-4 bg-ink-2 text-paper-muted hover:border-ink-4 hover:bg-ink-3 hover:text-paper",
-                  // Under the redesign: the same pill choices as everywhere,
-                  // the selected row's fill with an accent edge when on.
-                  "redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--list-row-ring)]",
-                  chip.active ? "redesign:border-accent redesign:bg-[color:var(--list-row-selected)] redesign:text-[color:var(--list-row-selected-text)]" : "redesign:border-[color:var(--card-border)] redesign:bg-transparent redesign:text-text-secondary redesign:hover:border-[color:var(--card-border)] redesign:hover:bg-[color:var(--card-row-hover)] redesign:hover:text-text",
+                  // Under the redesign: the merged chip (ui/radio-group, chips),
+                  // whose weight never changes, so a picked chip keeps its width.
+                  "redesign:h-[var(--chip-h)] redesign:px-3 redesign:py-0 redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--list-row-ring)]",
+                  chip.active ? "redesign:font-normal redesign:border-accent redesign:bg-accent-soft redesign:text-on-accent-soft redesign:shadow-[var(--chip-on-ring)]" : "redesign:border-[color:var(--chip-border)] redesign:bg-transparent redesign:text-text-secondary redesign:hover:border-[color:var(--chip-border)] redesign:hover:bg-[color:var(--chip-hover)] redesign:hover:text-text",
                 )}
                 onClick={() => setCategory(chip.id)}
               >
@@ -394,9 +391,23 @@ export function CommunitiesView({
                 <CommunityCardSkeleton key={i} />
               ))}
             </ul>
+          ) : error && redesign ? (
+            // Under the redesign the failure is the page empty state's alert:
+            // the warning disc, a title, the reason and a retry.
+            <EmptyState
+              role="alert"
+              className="mt-14"
+              title={t("communities.errorTitle")}
+              body={error}
+              actions={
+                <Button variant="secondary" onClick={() => setReloadKey((n) => n + 1)}>
+                  {t("communities.retry")}
+                </Button>
+              }
+            />
           ) : error ? (
             <div className="mt-14 flex flex-col items-center gap-4 text-center">
-              <span aria-hidden="true" className={cn("text-4xl", EMPTY_DISC_REDESIGN)}>
+              <span aria-hidden="true" className="text-4xl">
                 🛰️
               </span>
               <p role="alert" className="text-sm text-danger">
@@ -409,21 +420,39 @@ export function CommunitiesView({
                 {t("communities.retry")}
               </Button>
             </div>
+          ) : communities.length === 0 && redesign ? (
+            <EmptyState
+              className="mt-14"
+              icon={<span className="text-3xl">🦗</span>}
+              title={t(empty.title)}
+              body={
+                <>
+                  {t(empty.body)}
+                  {empty.hint && <span className="mt-1 block text-xs text-text-tertiary">{t(empty.hint)}</span>}
+                </>
+              }
+              actions={
+                // The create card above owns the primary.
+                <Button variant="secondary" onClick={onCreateCommunity}>
+                  <IconSwap off={Plus} on={PlusGlyph} kind="symbol" offClassName="h-4 w-4" className="h-4 w-4" />
+                  {t("communities.create.action")}
+                </Button>
+              }
+            />
           ) : communities.length === 0 ? (
             <div className="mx-auto mt-14 flex max-w-md flex-col items-center gap-3 text-center">
               {/* Personality rather than an empty box: the directory is
                   supposed to be a place with a sense of humour, and the moment
                   it has nothing to show is the moment that matters most. */}
-              <span aria-hidden="true" className={cn("text-5xl", EMPTY_DISC_REDESIGN)}>
+              <span aria-hidden="true" className="text-5xl">
                 🦗
               </span>
-              <p className="font-display text-xl font-bold redesign:text-[length:var(--empty-title-size)]">{t(empty.title)}</p>
-              <p className="text-sm text-paper-muted redesign:text-text-secondary">{t(empty.body)}</p>
+              <p className="font-display text-xl font-bold">{t(empty.title)}</p>
+              <p className="text-sm text-paper-muted">{t(empty.body)}</p>
               {empty.hint && (
                 <p className="text-xs text-paper-muted">{t(empty.hint)}</p>
               )}
-              {/* The create card above owns the primary under the redesign. */}
-              <Button className="mt-2" variant={redesign ? "secondary" : "default"} onClick={onCreateCommunity}>
+              <Button className="mt-2" onClick={onCreateCommunity}>
                 <IconSwap off={Plus} on={PlusGlyph} kind="symbol" offClassName="h-4 w-4" className="h-4 w-4" />
                 {t("communities.create.action")}
               </Button>
