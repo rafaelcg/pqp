@@ -1267,6 +1267,33 @@ Spec (audit: one renderer, `ChannelList` folded by `iconsOnly` on desktop,
    does not read as a second server rail) on the list row's fills; round
    expand and search buttons; counts are `CountBadge` cut out of the pane.
    The full-width Baú row (no preview card) takes the channel row's look.
+
+### s-voice-strip
+
+Spec (audit: `VoiceStatusBar` wide and compact, `MusicMiniPlayer` idle and
+playing in the sidebar footer, three call sites through `sidebarFooter`):
+
+1. Job: the call you are in, from anywhere: status, quality, the room,
+   leave, camera and share; music in the call.
+2. States: connecting, connected, listen only, audience mode, push-to-talk
+   idle, camera on, sharing, at the camera or share limit, a call in a text
+   channel, leave hidden, compact; music idle and playing; two coachmarks.
+3. Redesign: the footer's blocks are inset cards on the card tint
+   (`SIDEBAR_FOOTER_CARD_REDESIGN`), leave is a round danger button, the room
+   a pill, camera and share pills on the secondary fill (accent soft when
+   on). `MusicNowPlaying` is shared with the composer's music bar and moves
+   with `s-composer`.
+
+Rounds (Opus only): r1 7.6, r2 8.0, r3 7.8 (no MUST). r3 fixes: status
+labels on one edge, the room's microphone glyph. Decision: the 6px gap
+between the voice strip and the user panel is the footer stack's gap, and
+both cards keep the 8px side inset; not changed.
+r4 8.0, r5 8.1 (cap, no MUST). r5 fixes: the footer cards draw
+`--card-border` (the light card barely separated from the pane), and the
+72px room button takes the row's shape. Follow-ups: the composer dock's
+hang-up moves to `PhoneDisconnect` (`s-composer`); the music idle row needs
+the music store fixture (`m-sheets`) before it can be reviewed.
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss
