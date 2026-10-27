@@ -48,6 +48,7 @@ Read this file and the inventory at the start of every session.
 | 2 | `p-banner` | Merged (approved at round 3: 8.3 Opus, 8.5 Codex r2, no MUST) |
 | 2 | `p-badge` | Merged (approved at round 2: 8.3 Opus, 8.3 Codex r1, no MUST) |
 | 2 | `p-toast` | Merged (cap at round 5: 8.5 Opus r5, 8.7 Codex r2, no MUST) |
+| 2 | `p-avatar` | Merged (cap at round 5: 8.6 Opus r5, 8.7 Codex r2, no MUST) |
 
 ## Phase 0: directions
 
@@ -703,6 +704,42 @@ Verified: typecheck; 10,417 unit tests; `bench:tokens`; i18n check;
 `dm-toast`, `dm-toast-suppression`, `retro-look` and `watch-party` e2e (37
 passed); retro, Halloween, high contrast, 390px and toggle off. Screenshots:
 `~/pqp-redesign/p-toast/`.
+
+### p-avatar
+
+Spec (audit: every person avatar already renders through `UserAvatar`, 65
+sites; 30 different monogram palettes passed as `fallbackClassName`):
+
+1. Job: a person's picture or monogram, a bot's face, presence on a corner.
+2. Redesign: direction B's round avatars everywhere, the monogram on one
+   neutral disc. Callers keep their sizes; the toggle off keeps their
+   shapes and colours.
+3. Kept: Modo 2005's monogram (plain CSS, it wins), story media avatars
+   (`ownPalette`), bot faces.
+4. Left for their owners: the server rail tiles and `ServerIcon` (`s-rail`),
+   `ChannelIcon` (`s-channel-row`), the call banner's faces (`f-call`), the
+   story ring (`f-stories`).
+
+Council (Opus 5.5, GPT-6 Luna via Codex), overall after. One reviewer per
+round, Opus for the sign-off:
+
+| Round | Opus | Codex |
+|---|---|---|
+| 1 | not run | 8.1 |
+| 2 | not run | 8.7 |
+| 3 | 8.4 | not run |
+| 4 | 8.5 | not run |
+| 5 | 8.6 | not run |
+
+Capped at round 5, no MUST open. Round 5's notes were applied after it: the
+avatar notes moved under UserAvatar, and the sheet's stack cuts its overlap
+with `--avatar-dot-ring`. Not done (logged): a 40px monogram's letter at
+15px under the redesign, which needs each 40px caller to opt in.
+Verified: typecheck; 10,420 unit tests; `bench:tokens`; i18n check;
+`channel-presence`, `member-sidebar`, `profile-popover-avatar`,
+`retro-look`, `conversations-home` and `dm-list-polish` e2e (26 passed);
+retro, Halloween, high contrast, 390px and toggle off. Screenshots:
+`~/pqp-redesign/p-avatar/`.
 
 ### p-list-row
 

@@ -198,7 +198,7 @@ export function ConversationsEmpty({
                   {member.status && (
                     <StatusDot
                       status={member.status}
-                      className="absolute -bottom-0.5 -right-0.5 bg-surface-card"
+                      className="absolute -bottom-0.5 -right-0.5 redesign:bottom-0 redesign:right-0 bg-surface-card"
                       ringClassName="rounded-full ring-2 ring-surface-card"
                     />
                   )}
