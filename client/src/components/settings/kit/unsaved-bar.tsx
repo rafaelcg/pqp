@@ -110,12 +110,17 @@ export function UnsavedChangesBar({
         <div
           className={cn(
             "pointer-events-auto mx-auto w-full max-w-[40rem] animate-pop-in rounded-[var(--radius-card)]",
-            blocked && !settled && "border border-danger",
+            // Under the redesign the red edge is the bar's own border (below),
+            // so a refused close never draws two edges.
+            blocked && !settled && "border border-danger redesign:border-0",
           )}
         >
           <div
             data-unsaved-bar=""
-            className="elevation-2 flex w-full flex-wrap items-center gap-3 rounded-[var(--radius-card)] px-4 py-3"
+            className={cn(
+              "elevation-2 flex w-full flex-wrap items-center gap-3 rounded-[var(--radius-card)] px-4 py-3",
+              blocked && !settled && "redesign:[--elevation-2-border:var(--color-danger)]",
+            )}
           >
             {/* `min-w-40`: on a phone the buttons wrap under the message rather
                 than squeezing it into a column of single words. */}

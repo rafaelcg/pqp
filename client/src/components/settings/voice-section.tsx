@@ -1,4 +1,4 @@
-import { LockSimple as LockSimpleGlyph } from "@phosphor-icons/react";
+import { LockSimple as LockSimpleGlyph, SpeakerHigh, Stop } from "@phosphor-icons/react";
 import {
   useCallback,
   useEffect,
@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import { Keyboard, Lock, Mic, MicOff, Square, Video, Volume2, Wifi } from "lucide-react";
+import { IconSwap } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import {
@@ -1749,9 +1750,9 @@ export function VoiceSection({
                     }}
                   >
                     {micTest.playing ? (
-                      <Square className="h-3.5 w-3.5" aria-hidden />
+                      <IconSwap off={Square} on={Stop} offClassName="h-3.5 w-3.5" />
                     ) : (
-                      <Volume2 className="h-3.5 w-3.5" aria-hidden />
+                      <IconSwap off={Volume2} on={SpeakerHigh} offClassName="h-3.5 w-3.5" />
                     )}
                     {/* Both labels share one grid cell, so the button is as wide
                         as the longer one and the select beside it never resizes
