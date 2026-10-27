@@ -21,6 +21,13 @@ import {
 } from "@/components/layout/channel-list";
 import { ChannelIcon } from "@/components/layout/channel-icon";
 import { UserPanel } from "@/components/layout/user-panel";
+import { ConnectionBanner } from "@/components/layout/connection-banner";
+import { ArrivalBanner } from "@/components/onboarding/arrival-banner";
+import { BringCrewStrip } from "@/components/onboarding/bring-crew-strip";
+import { DiscordImportNotice } from "@/components/onboarding/discord-import-notice";
+import { NewcomerInviteStrip } from "@/components/onboarding/newcomer-invite-strip";
+import { UpcomingSessionCard } from "@/components/voice/upcoming-session-card";
+import { WatchNowBanner } from "@/components/watch-now/watch-now-banner";
 import { VoiceStatusBar } from "@/components/voice/voice-status-bar";
 import { VoiceOccupantRow } from "@/components/layout/voice-occupant-row";
 import { ChannelMusicCard } from "@/components/voice/channel-music-card";
@@ -521,6 +528,70 @@ function UserPanelBlock() {
   );
 }
 
+/** The conversation pane, for the strips that sit under its header. */
+function MainPane({ children }: { children: ReactNode }) {
+  return (
+    <div className="flex w-[720px] max-w-full flex-col overflow-hidden rounded-lg bg-surface-0 pb-3 redesign:rounded-[var(--radius-pane)] redesign:bg-pane-main">
+      {children}
+    </div>
+  );
+}
+
+const NOW = Date.UTC(2026, 9, 27, 20, 0);
+const asyncNoop = () => Promise.resolve();
+
+function BannersBlock() {
+  return (
+    <div data-testid="qa-shell-banners" className="flex flex-col gap-6">
+      {/* Top: a live share (with a second one folded under "more"), the
+          arrival strip for a member, and the owner's with "Copiar convite".
+          Bottom: who came over from Discord, a newcomer alone, the Discord
+          import notice, a scheduled session, and the connection strip as the
+          banner they all follow. */}
+      <MainPane>
+        <WatchNowBanner
+          now={NOW}
+          streams={[
+            { key: "a", channelId: "c1", kind: "voice", place: "Lobby", sharerUserId: "u1", sharerName: "Rafa", startedAt: NOW - 12 * 60_000, watching: 3, inRoom: false },
+            { key: "b", channelId: "c2", kind: "party", place: "Sessão de terror", sharerUserId: "u2", sharerName: "Caio", startedAt: NOW - 3 * 60_000, watching: 14, inRoom: false },
+          ]}
+          onWatch={noop}
+          onDismiss={noop}
+        />
+        <ArrivalBanner variant="text" serverName="Turma do Fliperama" channelName="general" onDismiss={noop} />
+        <ArrivalBanner variant="owner" serverName="Turma do Fliperama" channelName="general" onCopyInvite={asyncNoop} onDismiss={noop} />
+      </MainPane>
+      <MainPane>
+        <BringCrewStrip kind="arrived" count={4} serverName="Turma do Fliperama" resolveInviteCode={() => Promise.resolve("abc123")} onDismiss={noop} />
+        <NewcomerInviteStrip onInvite={noop} onDismiss={noop} />
+        <DiscordImportNotice serverId="fliperama" existing={false} onImport={noop} onDismiss={noop} />
+        <UpcomingSessionCard
+          session={{
+            id: "00000000-0000-4000-8000-000000000201",
+            channelId: "00000000-0000-4000-8000-000000000202",
+            serverId: null,
+            title: "Maratona de Zelda",
+            description: null,
+            coverImageUrl: null,
+            startsAt: new Date(NOW + 2 * 3_600_000).toISOString(),
+            status: "scheduled",
+            createdBy: "00000000-0000-4000-8000-000000000203",
+            createdAt: new Date(NOW).toISOString(),
+            updatedAt: new Date(NOW).toISOString(),
+            reminding: true,
+          }}
+          now={new Date(NOW)}
+          canManage
+          onToggleReminder={asyncNoop}
+          onCancel={asyncNoop}
+          onEdit={noop}
+        />
+        <ConnectionBanner status="reconnecting" refusedRepeatedly={false} onRetry={noop} onCheck={noop} onSignInAgain={noop} />
+      </MainPane>
+    </div>
+  );
+}
+
 /**
  * A new build waiting, so both rails draw the update tile. The store is
  * this page's own; it goes back to nothing waiting when the sheet unmounts.
@@ -684,6 +755,9 @@ export function ShellSheet() {
 
       {/* The user panel at the foot of the sidebar. */}
       <UserPanelBlock />
+
+      {/* The strips above the conversation. */}
+      <BannersBlock />
 
       <div data-testid="qa-shell-rail" className="flex gap-6">
         <RailFrame>

@@ -1075,6 +1075,24 @@ drawn by hand: forum, Baú, friends, Novidades on a phone, two skeletons):
    topic sits beside the name after a rule, as in the mockup. Left for their
    elements: the thread panel's header (`s-thread`), the call split's own
    bar (`f-call`), the party bar (`f-watch-party`).
+
+### s-banners
+
+Spec (audit: connection, sanction, error, idle and handle strips already use
+`ui/banner` since `p-banner`; six strips still drew their own: watch now,
+arrival (five variants), bring the crew, newcomer invite, the Discord import
+notice, the upcoming session card):
+
+1. Job: one strip at a time under the header that says something about the
+   conversation and offers one way forward.
+2. States: watch now with a second stream folded, joining, failed; arrival
+   for a member and for the owner (copy, copied, failed); bring the crew
+   arrived, reminder, empty; newcomer; import; a session scheduled or live.
+3. Merge: each keeps its markup (confetti, faces, the folded list) and takes
+   the banner's card through `bannerSurfaceRedesign(tone)` in
+   `ui/banner.tsx`: inset, `--banner-radius`, the tone's soft fill and edge,
+   text in the text colour, a round dismiss in the tone's ink. The session
+   card is news, not a tone: the same inset and corner on the card tint.
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss

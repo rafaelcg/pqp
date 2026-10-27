@@ -1,7 +1,9 @@
 import { Bell, BellOff, CalendarClock, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ChannelSession } from "@pqp/shared";
+import { Bell as BellFill, BellSlash, CalendarDots, X as XBold } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
+import { Icon } from "@/components/ui/icon";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { formatSessionRelativeTime } from "@/lib/channel-session-schedule";
 import { useTranslation } from "@/lib/i18n";
@@ -79,15 +81,23 @@ export function UpcomingSessionCard({
     <div
       data-upcoming-session-card
       data-session-status={session.status}
-      className="mx-3 mt-3 flex items-center gap-3 rounded-xl border border-ink-4/70 bg-ink-2 px-3 py-2.5"
+      className={cn(
+        "mx-3 mt-3 flex items-center gap-3 rounded-xl border border-ink-4/70 bg-ink-2 px-3 py-2.5",
+        // A strip's inset and corner, on the card tint: news, not a warning.
+        "redesign:mx-2 redesign:mt-2 redesign:rounded-[var(--banner-radius)] redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:sm:mx-4",
+      )}
     >
       <span
         className={cn(
           "flex h-9 w-9 shrink-0 items-center justify-center rounded-full",
           isLive ? "bg-danger/20 text-danger" : "bg-ink-3 text-paper-muted",
+          isLive
+            ? "redesign:bg-danger-soft redesign:text-on-danger-soft"
+            : "redesign:bg-surface-3 redesign:text-text-secondary",
         )}
       >
-        <CalendarClock className="h-4.5 w-4.5" aria-hidden />
+        <CalendarClock className="h-4.5 w-4.5 redesign:hidden" aria-hidden />
+        <Icon icon={CalendarDots} size="sm" className="hidden redesign:block" />
       </span>
       <button
         type="button"
@@ -95,10 +105,10 @@ export function UpcomingSessionCard({
         onClick={isScheduled ? onEdit : undefined}
         disabled={!canManage || !onEdit || !isScheduled}
       >
-        <span className="block truncate text-sm font-semibold text-paper">
+        <span className="block truncate text-sm font-semibold text-paper redesign:text-text">
           {session.title}
         </span>
-        <span className="block truncate text-xs text-paper-muted">
+        <span className="block truncate text-xs text-paper-muted redesign:text-text-secondary">
           {subtitle}
         </span>
       </button>
@@ -114,9 +124,15 @@ export function UpcomingSessionCard({
             aria-pressed={reminding}
           >
             {reminding ? (
-              <Bell className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+              <>
+                <Bell className="mr-1.5 h-3.5 w-3.5 redesign:hidden" aria-hidden />
+                <Icon icon={BellFill} size="sm" className="hidden redesign:block" />
+              </>
             ) : (
-              <BellOff className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+              <>
+                <BellOff className="mr-1.5 h-3.5 w-3.5 redesign:hidden" aria-hidden />
+                <Icon icon={BellSlash} size="sm" className="hidden redesign:block" />
+              </>
             )}
             {t("watchPartySchedule.card.remind")}
           </Button>
@@ -129,7 +145,8 @@ export function UpcomingSessionCard({
               onClick={() => setConfirmCancel(true)}
               data-session-cancel
             >
-              <X className="h-3.5 w-3.5" aria-hidden />
+              <X className="h-3.5 w-3.5 redesign:hidden" aria-hidden />
+              <Icon icon={XBold} kind="symbol" size="sm" className="hidden redesign:block" />
             </Button>
           )}
         </div>

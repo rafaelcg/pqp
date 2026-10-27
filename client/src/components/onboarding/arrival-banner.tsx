@@ -1,6 +1,15 @@
 import { Check, Copy, PartyPopper, Sparkles, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import {
+  Check as CheckBold,
+  Confetti as ConfettiFill,
+  Copy as CopyBold,
+  Sparkle,
+  X as XBold,
+} from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
+import { BANNER_DISMISS_REDESIGN, bannerSurfaceRedesign } from "@/components/ui/banner";
+import { Icon as Glyph } from "@/components/ui/icon";
 import { Confetti } from "@/components/onboarding/confetti";
 import type { ArrivalVariant } from "@/lib/arrival";
 import { useTranslation } from "@/lib/i18n";
@@ -116,29 +125,37 @@ export function ArrivalBanner({
           ? t("arrival.body", { channel: channelName })
           : t("arrival.bodyNoChannel");
   const Icon = owner ? Sparkles : PartyPopper;
+  const RedesignIcon = owner ? Sparkle : ConfettiFill;
 
   return (
     <div
       data-arrival-banner=""
       data-arrival-variant={variant}
       role="status"
-      className="animate-rise flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-border bg-accent-soft px-4 py-3"
+      className={cn(
+        "animate-rise flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-border bg-accent-soft px-4 py-3",
+        // The banner's card in the accent tone; the disc and the actions
+        // keep the strip's own shape.
+        bannerSurfaceRedesign("accent"),
+        "redesign:items-center redesign:gap-y-2 redesign:py-2.5",
+      )}
     >
       {celebrate && <Confetti />}
       <span
         aria-hidden="true"
         className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-on-accent"
       >
-        <Icon className="h-4 w-4" />
+        <Icon className="h-4 w-4 redesign:hidden" />
+        <Glyph icon={RedesignIcon} size="sm" className="hidden redesign:block" />
       </span>
       <div className="min-w-0 flex-1">
-        <p className="text-balance text-sm font-semibold text-on-accent-soft">
+        <p className="text-balance text-sm font-semibold text-on-accent-soft redesign:text-text">
           {title}
         </p>
         <p
           className={cn(
             "mt-0.5 text-pretty text-sm",
-            copyState === "failed" ? "text-danger" : "text-on-accent-soft/80",
+            copyState === "failed" ? "text-danger" : "text-on-accent-soft/80 redesign:text-text-secondary",
           )}
         >
           {body}
@@ -158,9 +175,15 @@ export function ArrivalBanner({
             onClick={() => void copy()}
           >
             {copyState === "copied" ? (
-              <Check aria-hidden="true" className="animate-icon-swap h-3.5 w-3.5" />
+              <>
+                <Check aria-hidden="true" className="animate-icon-swap h-3.5 w-3.5 redesign:hidden" />
+                <Glyph icon={CheckBold} kind="symbol" size="sm" className="animate-icon-swap hidden redesign:block" />
+              </>
             ) : (
-              <Copy aria-hidden="true" className="h-3.5 w-3.5" />
+              <>
+                <Copy aria-hidden="true" className="h-3.5 w-3.5 redesign:hidden" />
+                <Glyph icon={CopyBold} kind="symbol" size="sm" className="hidden redesign:block" />
+              </>
             )}
             {copyState === "copied"
               ? t("arrival.owner.copied")
@@ -190,9 +213,11 @@ export function ArrivalBanner({
           // A 28px glyph with a 40px hit area.
           "after:absolute after:-inset-1.5 after:content-['']",
           !owner && "sm:hidden",
+          BANNER_DISMISS_REDESIGN,
         )}
       >
-        <X aria-hidden="true" className="h-4 w-4" />
+        <X aria-hidden="true" className="h-4 w-4 redesign:hidden" />
+        <Glyph icon={XBold} kind="symbol" size="sm" className="hidden redesign:block" />
       </button>
     </div>
   );
