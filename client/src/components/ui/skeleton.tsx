@@ -11,25 +11,29 @@ export function Skeleton({ className }: SkeletonProps) {
       className={cn(
         "animate-pulse rounded-[var(--radius-control)] bg-surface-3/50",
         className,
+        "redesign:bg-[color:var(--skeleton-bg)] redesign:motion-reduce:animate-none",
       )}
       aria-hidden
     />
   );
 }
 
+/** A channel row's placeholder: the row's pill and height under the redesign. */
+const ROW = "redesign:h-[var(--control-row)] redesign:rounded-[var(--radius-row)]";
+
 export function ChannelListSkeleton() {
   return (
     <div className="space-y-4 p-2" aria-busy="true" aria-label={translateMessage("a11y.loadingChannels")}>
       <div className="space-y-2 px-2">
         <Skeleton className="h-3 w-12" />
-        <Skeleton className="h-8 w-full" />
-        <Skeleton className="h-8 w-[85%]" />
-        <Skeleton className="h-8 w-[70%]" />
+        <Skeleton className={cn("h-8 w-full", ROW)} />
+        <Skeleton className={cn("h-8 w-[85%]", ROW)} />
+        <Skeleton className={cn("h-8 w-[70%]", ROW)} />
       </div>
       <div className="space-y-2 px-2">
         <Skeleton className="h-3 w-14" />
-        <Skeleton className="h-8 w-full" />
-        <Skeleton className="h-8 w-[75%]" />
+        <Skeleton className={cn("h-8 w-full", ROW)} />
+        <Skeleton className={cn("h-8 w-[75%]", ROW)} />
       </div>
     </div>
   );
@@ -45,7 +49,7 @@ export function MessageListSkeleton() {
       {Array.from({ length: 6 }).map((_, i) => (
         <div key={i} className="flex items-start px-5">
           <div className="flex w-14 shrink-0 justify-end pr-2">
-            <Skeleton className="h-9 w-9 shrink-0 rounded-[var(--radius-card)]" />
+            <Skeleton className="h-9 w-9 shrink-0 rounded-[var(--radius-card)] redesign:rounded-full" />
           </div>
           <div className="min-w-0 flex-1 space-y-2">
             <div className="flex items-baseline gap-2">

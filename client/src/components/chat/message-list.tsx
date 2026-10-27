@@ -22,7 +22,6 @@ import {
   ImagePlay,
   Link,
   ListChecks,
-  Loader2,
   Mail,
   MailOpen,
   MessageSquarePlus,
@@ -144,6 +143,7 @@ import type {
   AuthorGoneCheck,
   MissingAuthor,
 } from "@/hooks/use-confirmed-gone-authors";
+import { Spinner } from "@/components/ui/spinner";
 
 /** Consecutive messages from one author within this window render as one block. */
 const GROUP_WINDOW_MS = 5 * 60 * 1000;
@@ -2041,7 +2041,7 @@ export const MessageList = memo(function MessageList({
           <div className="flex justify-center pb-3">
             {isLoadingOlder ? (
               <span className="flex items-center gap-2 text-xs text-paper-muted">
-                <Loader2 className="h-3 w-3 animate-spin" />
+                <Spinner className="h-3 w-3 animate-spin" />
                 Loading older messages…
               </span>
             ) : (
@@ -2445,7 +2445,7 @@ export const MessageList = memo(function MessageList({
           <div className="flex justify-center pt-3">
             {isLoadingNewer ? (
               <span className="flex items-center gap-2 text-xs text-paper-muted">
-                <Loader2 className="h-3 w-3 animate-spin" />
+                <Spinner className="h-3 w-3 animate-spin" />
                 {t("chat.loadingNewer")}
               </span>
             ) : (
@@ -2989,7 +2989,7 @@ function BotActivityRows({
                   key={key}
                   className="chat-swap-in mt-0.5 inline-flex items-center gap-1.5 rounded-full bg-surface-2 px-2.5 py-1 text-sm text-text-secondary"
                 >
-                  <Loader2 className="h-3.5 w-3.5 shrink-0 motion-safe:animate-spin" aria-hidden />
+                  <Spinner className="h-3.5 w-3.5 shrink-0 motion-safe:animate-spin" />
                   <span className="bot-shimmer">{t(key, { name: user.displayName })}</span>
                 </span>
               )}
@@ -3836,11 +3836,11 @@ const MessageRow = memo(function MessageRow({
                     author={authorInfo}
                     tabIndex={controlTabIndex}
                     onOpenProfile={openProfile}
-                    className="block h-9 w-9 shrink-0 overflow-hidden rounded-lg leading-none hover:no-underline"
+                    className="block h-9 w-9 shrink-0 overflow-hidden rounded-lg leading-none hover:no-underline redesign:rounded-full"
                   >
                     {message.isAutomod ? (
                       <span
-                        className="grid h-9 w-9 place-items-center rounded-lg bg-accent-soft text-on-accent-soft"
+                        className="grid h-9 w-9 place-items-center rounded-lg bg-accent-soft text-on-accent-soft redesign:rounded-full"
                         title={t("chat.automodPosted")}
                       >
                         <ShieldCheck className="h-5 w-5" aria-hidden />
@@ -3859,8 +3859,8 @@ const MessageRow = memo(function MessageRow({
                   {!message.isWebhook && authorInfo?.status && (
                     <StatusDot
                       status={authorInfo.status}
-                      className="absolute -bottom-0.5 -right-0.5"
-                      ringClassName="rounded-full bg-channel ring-2 ring-channel"
+                      className="absolute -bottom-0.5 -right-0.5 redesign:bottom-0 redesign:right-0"
+                      ringClassName="rounded-full bg-channel ring-2 ring-channel redesign:bg-[color:var(--avatar-dot-ring)] redesign:ring-[color:var(--avatar-dot-ring)]"
                     />
                   )}
                 </div>

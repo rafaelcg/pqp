@@ -1,4 +1,6 @@
 import type { Server, UserStatus } from "@pqp/shared";
+import { cn } from "@/lib/utils";
+import { CARD_SURFACE } from "@/components/ui/card";
 import { Check, Hand, Link2, UserPlus } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -176,7 +178,7 @@ export function ConversationsEmpty({
         </Button>
       </div>
       {suggestions.length > 0 && (
-        <div className="mt-6 w-full rounded-[var(--radius-card)] border border-border bg-surface-card p-3 text-left">
+        <div className={cn(CARD_SURFACE, "mt-6 w-full p-3 text-left")}>
           <h3 className="px-1 pb-2 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
             {t("conversations.emptyHero.suggestions")}
           </h3>
@@ -198,7 +200,7 @@ export function ConversationsEmpty({
                   {member.status && (
                     <StatusDot
                       status={member.status}
-                      className="absolute -bottom-0.5 -right-0.5 bg-surface-card"
+                      className="absolute -bottom-0.5 -right-0.5 redesign:bottom-0 redesign:right-0 bg-surface-card"
                       ringClassName="rounded-full ring-2 ring-surface-card"
                     />
                   )}
