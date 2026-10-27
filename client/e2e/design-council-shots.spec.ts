@@ -634,6 +634,7 @@ const PRIMITIVES: {
   { id: "s-sidebar-special", testId: "qa-shell-sidebar-special" },
   { id: "s-category", testId: "qa-shell-categories", hover: "Bate-papo" },
   { id: "s-channel-row", testId: "qa-shell-channel-rows", hover: "clipes" },
+  { id: "s-voice-row", testId: "qa-shell-voice-rows" },
 ];
 
 test("captures the primitives", async ({ browser }) => {

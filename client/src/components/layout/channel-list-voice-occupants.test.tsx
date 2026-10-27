@@ -132,7 +132,7 @@ describe("ChannelList voice occupants", () => {
     expect(html).toContain("data-voice-occupant=\"" + andre.userId);
     expect(html).toContain(">Andre<");
     expect(html).toContain(">Rafa<");
-    expect(html).toContain("ring-accent");
+    expect(html).toContain("shadow-[var(--shadow-speaking)]");
     expect(html).toContain('data-channel-type="voice"');
     expect(html).toContain('data-channel-type="text"');
   });
@@ -181,9 +181,10 @@ describe("ChannelList voice occupants", () => {
         speakingPeerIds={[andre.peerId]}
       />,
     );
-    // The occupants only: the header's focus rings are accent too.
+    // The occupants only, and the speaking ring itself: the header's and
+    // the row's focus rings are accent too.
     const occupants = html.slice(html.indexOf("data-voice-occupant="));
-    expect(occupants).not.toContain("ring-accent");
+    expect(occupants).not.toContain("shadow-[var(--shadow-speaking)]");
   });
 
   /**

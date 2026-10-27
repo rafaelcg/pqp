@@ -1,5 +1,7 @@
 import { useRef, type DragEvent } from "react";
+import { SpeakerHigh, SpeakerSlash } from "@phosphor-icons/react";
 import { Volume2, VolumeX } from "lucide-react";
+import { Icon } from "@/components/ui/icon";
 import type { VoiceParticipant } from "@pqp/shared";
 import {
   ContextMenu,
@@ -220,6 +222,9 @@ export function VoiceOccupantRow({
             hasAudio && "cursor-pointer",
             canDrag && "cursor-grab active:cursor-grabbing",
             isDragging && "opacity-40",
+            // Under the redesign an occupant is a small list row: a 32px
+            // pill, the row's text and hover roles, the accent ring.
+            "redesign:gap-2 redesign:rounded-[var(--list-row-radius)] redesign:px-2 redesign:text-[13px] redesign:text-[color:var(--list-row-text)] redesign:hover:bg-[color:var(--list-row-hover)] redesign:hover:text-text redesign:focus-visible:ring-accent",
           )}
         >
           <VoiceAvatar
@@ -240,7 +245,7 @@ export function VoiceOccupantRow({
             </span>
             {appLine ? (
               <span
-                className="block truncate text-[11px] leading-4 text-text-tertiary"
+                className="block truncate text-[11px] leading-4 text-text-tertiary redesign:text-xs redesign:text-[color:var(--list-row-detail)]"
                 data-voice-occupant-app={person.userId}
               >
                 {appLine}
@@ -266,9 +271,15 @@ export function VoiceOccupantRow({
               )}
             >
               {silenced ? (
-                <VolumeX className="h-3 w-3" />
+                <>
+                  <VolumeX className="h-3 w-3 redesign:hidden" />
+                  <Icon icon={SpeakerSlash} className="hidden h-3.5 w-3.5 redesign:block" />
+                </>
               ) : (
-                <Volume2 className="h-3 w-3" />
+                <>
+                  <Volume2 className="h-3 w-3 redesign:hidden" />
+                  <Icon icon={SpeakerHigh} className="hidden h-3.5 w-3.5 redesign:block" />
+                </>
               )}
             </span>
           )}

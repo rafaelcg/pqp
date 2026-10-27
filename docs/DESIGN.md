@@ -519,6 +519,19 @@ the redesign they take `ui/list-row.tsx`'s tokens:
   "AO VIVO" words stay for a screen reader. "Assistir" is a soft danger pill.
 - `ChannelListSkeleton` draws the same 36px pills, 2px apart.
 
+### The voice row
+
+A voice channel is a channel row (`ChannelRow`). The room you are in takes
+`success-soft` with its `on-` text instead of the signal ring. Under it:
+
+- `VoiceOccupantRow` is a 32px list row: the row roles, 13px names, the
+  accent focus ring. The speaking ring stays on the avatar.
+- `VoiceOccupantBadges` are 14px Phosphor glyphs: hand, screen and camera in
+  `accent-text`, muted and deafened in `danger`. Deafened is `EarSlash` in
+  the bold outline (Phosphor has no headphones with a slash).
+- `ChannelMusicCard` is a card on the card tokens with a 28px cover.
+- The occupants and threads sit under a rule in the card edge.
+
 ### Icons
 
 The redesign's icons are Phosphor (`@phosphor-icons/react`), drawn through

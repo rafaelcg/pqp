@@ -991,6 +991,21 @@ Spec (audit: `ChannelRow` for text, forum and watch party rooms,
    `ChannelIcon` (every site), round action tiles, the live pill as a dot.
    The voice row and its occupants are `s-voice-row`.
 
+### s-voice-row
+
+Spec (audit: voice rooms through `ChannelRow`, `VoiceOccupantRow`,
+`VoiceOccupantBadges`, `ChannelMusicCard`, `ChannelSessionHint`):
+
+1. Job: show who is in a room and what they are doing; join with a double
+   click; per-person sound from a click; drag a person to another room.
+2. States: connected, occupants speaking, muted, deafened, sharing, camera,
+   hand (queue number), app line, soundboard marks, dragging; music playing
+   (in the call or not, with "Ouvir"); a scheduled session hint.
+3. Redesign: occupants as small list rows, filled 14px badges, the music
+   card on the card tokens, the connected room on `success-soft`.
+4. For `s-user-panel`: deafened is `EarSlash`; the panel's deafen button
+   should use the same glyph.
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss

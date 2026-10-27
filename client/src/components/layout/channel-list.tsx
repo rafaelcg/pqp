@@ -1948,7 +1948,7 @@ export const ChannelList = memo(function ChannelList({
           />
         )}
         {occupants.length > 0 && (
-          <ul className="ml-2 space-y-0.5 border-l border-ink-4/70 py-0.5 pl-2">
+          <ul className="ml-2 space-y-0.5 border-l border-ink-4/70 py-0.5 pl-2 redesign:ml-5 redesign:border-[color:var(--card-border)] redesign:pl-1.5">
             {occupants.map((person) => {
               const isSelf = Boolean(
                 currentUserId && person.userId === currentUserId,
@@ -4208,6 +4208,9 @@ export function ChannelRow({
             ? "redesign:bg-[color:var(--list-row-selected)] redesign:font-medium redesign:text-[color:var(--list-row-selected-text)]"
             : "redesign:text-[color:var(--list-row-text)] redesign:hover:bg-[color:var(--list-row-hover)] redesign:hover:text-text",
           hasUnread && !muted && !selected && !connected && "redesign:text-text",
+          // The room you are in: the success tone's soft fill, no ring.
+          connected &&
+            "redesign:bg-success-soft redesign:text-on-success-soft redesign:ring-0 redesign:hover:bg-success-soft redesign:hover:text-on-success-soft",
           muted && !selected && !connected && "redesign:opacity-[var(--list-row-muted-opacity)]",
           isDragOver && !occupantDragActive && "redesign:ring-accent",
         )}
