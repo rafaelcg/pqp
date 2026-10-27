@@ -56,6 +56,7 @@ Read this file and the inventory at the start of every session.
 | 2 | `p-empty` | Merged, capped at round 5 (Opus 8.6) |
 | 2 | `p-sheet` | Merged, capped at round 5 (Opus 8.6) |
 | 2 | `p-dialog` | Merged, capped at round 5 (Codex 8.7 r2, Opus 8.2 r4) |
+| 3 | `s-sidebar-header` | Merged, capped at round 5 (Opus 8.3 r5, 8.7 r3) |
 | 3 | `s-frame` | Merged, capped at round 5 (Opus 8.8) |
 | 3 | `s-rail` | Merged, capped at round 5 (Opus 8.2 r5, 8.8 r3) |
 
@@ -1058,6 +1059,13 @@ buttons, a search entry styled as a faint field, the banner strip in
    IconButton; search is a pill a step off the pane; the banner is an inset
    card. The search dialog itself is `f-search`.
 
+Rounds (Opus / Codex): r1 - / 8.3, r2 - / 8.6, r3 8.7 / -, r4 7.8 / -,
+r5 8.3 / - (no MUST, would approve). Last fixes: the trigger's hover is the
+ghost step (8%) above the search's 6%, open 10%, both tokens
+(`--sidebar-trigger-*`); the banner on the header's 12px inset. Kept: the
+members button on desktop (round 5 suggested hiding it at every width; the
+server menu has Membros too; question 4).
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss
@@ -1075,6 +1083,9 @@ buttons, a search entry styled as a faint field, the banner strip in
    - Channel list: mixed layout (`mixed_channel_list`) or legacy sections.
 3. `error-boundary.tsx` is English only, and AGENTS.md says to leave it alone.
    Redesign its look and keep the copy as is?
+4. Sidebar header: the members button duplicates the server menu's Membros
+   and the chat header's members control. Hide it on desktop too, so a long
+   server name fits? It is hidden in the phone drawer already.
 
 ## Decisions
 
