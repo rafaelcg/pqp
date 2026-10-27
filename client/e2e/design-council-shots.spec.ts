@@ -478,6 +478,11 @@ test("captures the design council screens", async ({ browser }) => {
       await page.getByRole("button", { name: "Abrir configurações" }).first().click();
       await expect(page.getByRole("dialog")).toBeVisible();
       await shoot(page, `04-settings-${theme}`);
+      // Game connections: the providers this host offers, or the note
+      // that it offers none.
+      await page.getByRole("dialog").getByText("Conexões", { exact: true }).first().click();
+      await page.waitForTimeout(600);
+      await shoot(page, `37-settings-connections-${theme}`);
       // A section made of switches, for the choice controls.
       await page.getByRole("dialog").getByText("Notificações", { exact: true }).first().click();
       await expect(page.getByRole("dialog").getByRole("switch").first()).toBeVisible();

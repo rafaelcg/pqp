@@ -89,8 +89,8 @@ export function ConnectionCallbackOverlay({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/80 px-6">
-      <p className="text-sm text-paper-muted">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/80 px-6 redesign:bg-[color:var(--sheet-scrim,oklch(0_0_0/0.6))]">
+      <p className="text-sm text-paper-muted redesign:rounded-full redesign:bg-[color:var(--popover-surface)] redesign:px-4 redesign:py-2 redesign:font-semibold redesign:text-text redesign:shadow-[var(--popover-shadow)]">
         {t("settings.connections.completing")}
       </p>
     </div>

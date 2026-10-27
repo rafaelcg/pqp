@@ -1,4 +1,6 @@
+import { ArrowUpRight as ArrowUpRightGlyph } from "@phosphor-icons/react";
 import { ArrowUpRight } from "lucide-react";
+import { IconSwap } from "@/components/ui/icon";
 import type { ConnectionProvider, VisibleConnection } from "@pqp/shared";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -108,15 +110,15 @@ export function ConnectionBadges({
       <section
         aria-label={t("connections.listLabel")}
         className={
-          plain ? undefined : "mt-3 overflow-hidden rounded-xl bg-ink-3/60"
+          plain ? undefined : "mt-3 overflow-hidden rounded-xl bg-ink-3/60 redesign:rounded-[var(--radius-card)] redesign:border redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)]"
         }
       >
         {!plain && (
-          <h3 className="px-3 pb-1 pt-2.5 text-[11px] font-semibold uppercase tracking-wide text-paper-muted">
+          <h3 className="px-3 pb-1 pt-2.5 text-[11px] font-semibold uppercase tracking-wide text-paper-muted redesign:text-[13px] redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">
             {t("connections.listLabel")}
           </h3>
         )}
-        <ul className="divide-y divide-ink-4/50">
+        <ul className="divide-y divide-ink-4/50 redesign:divide-[color:var(--card-border)]">
           {connections.map((connection) => {
             const row = (
               <>
@@ -124,10 +126,10 @@ export function ConnectionBadges({
                   provider={connection.provider}
                   className="h-6 w-6 rounded-md p-1"
                 />
-                <span className="min-w-0 flex-1 truncate text-[13px] text-paper">
+                <span className="min-w-0 flex-1 truncate text-[13px] text-paper redesign:font-semibold redesign:text-text">
                   {connection.displayName}
                 </span>
-                <span className="shrink-0 text-[11px] text-paper-muted">
+                <span className="shrink-0 text-[11px] text-paper-muted redesign:text-[color:var(--list-row-detail)]">
                   {t(PROVIDER_LABEL[connection.provider])}
                 </span>
               </>
@@ -139,12 +141,15 @@ export function ConnectionBadges({
                     href={connection.profileUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="flex items-center gap-2.5 px-3 py-2 transition-colors hover:bg-ink-3 focus-visible:bg-ink-3 focus-visible:outline-none"
+                    className="flex items-center gap-2.5 px-3 py-2 transition-colors hover:bg-ink-3 focus-visible:bg-ink-3 focus-visible:outline-none redesign:hover:bg-[color:var(--card-row-hover)] redesign:focus-visible:bg-[color:var(--card-row-hover)]"
                   >
                     {row}
-                    <ArrowUpRight
-                      aria-hidden
-                      className="h-3.5 w-3.5 shrink-0 text-paper-muted"
+                    <IconSwap
+                      off={ArrowUpRight}
+                      on={ArrowUpRightGlyph}
+                      kind="symbol"
+                      offClassName="h-3.5 w-3.5 shrink-0 text-paper-muted"
+                      className="text-text-tertiary"
                     />
                   </a>
                 ) : (

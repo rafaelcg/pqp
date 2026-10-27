@@ -684,7 +684,7 @@ function LinkedAs({ name }: { name: string }) {
   return (
     <span className="block truncate" title={name}>
       {before}
-      <span className="font-mono text-text-secondary">{name}</span>
+      <span className="font-mono text-text-secondary redesign:font-sans redesign:font-semibold redesign:text-text">{name}</span>
       {after}
     </span>
   );

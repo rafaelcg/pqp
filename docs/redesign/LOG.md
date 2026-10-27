@@ -1053,6 +1053,21 @@ confirm, the delete account dialog, the phone tab strip):
 4. Kept: every section, the close guard, the handle confirm, the 44px phone
    targets, the dirty dot and its spoken description.
 
+### f-connections
+
+Spec (audit: `connections-section.tsx` in user settings (built on the kit),
+`connection-badges.tsx` on the profile card, `connection-callback.tsx` the
+overlay while a provider redirect completes):
+
+1. Job: link Steam, Battle.net and Twitch, choose who sees them, show them
+   on a profile.
+2. Redesign: the section is the kit's (already reviewed); the badges list on
+   the profile is a card with semibold names, provider in the detail colour
+   and a bold arrow; the linked name is sans semibold; the callback is a pill
+   on the popover surface over the sheet scrim.
+3. Merges: nothing.
+4. Kept: per-provider visibility, the unavailable list, the callback overlay.
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss
