@@ -1254,6 +1254,9 @@
   /* No top highlight on a light panel; a close shadow under the wide one.
      The fill is the brightest surface, so the panel sits above the pane. */
   --popover-surface: var(--color-surface-0);
+  /* A plain dialog on the same white as a popover and a phone sheet; the
+     beige surface-2 made it the darkest thing floating. */
+  --dialog-surface: var(--color-surface-0);
   --popover-border: color-mix(in oklab, var(--color-text) 10%, transparent);
   --popover-shadow: 0 1px 2px oklch(0.4 0.02 262 / 0.1), var(--shadow-2);
   /* Light raises the thumb as a white chip on the grey track. */
