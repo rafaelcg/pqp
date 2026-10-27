@@ -552,6 +552,13 @@ export default defineConfig(({ command }) => ({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  // The dev server's dependency scan crawls every `.html` under the client, and
+  // `e2e/app-frame/frames/coop.html` imports `@pqp/app-sdk`, which the client
+  // does not depend on (that suite aliases it in its own build). The scan threw
+  // on it ("imported but could not be resolved") on every cold start and fell
+  // back to discovering dependencies page by page, each discovery reloading the
+  // open pages: the Locadora e2e suites ran into it in CI. The app has one entry.
+  optimizeDeps: { entries: ["index.html"] },
   server: {
     port: 5173,
     allowedHosts: [".ngrok-free.app"],
