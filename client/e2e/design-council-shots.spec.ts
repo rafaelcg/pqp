@@ -761,6 +761,8 @@ const PRIMITIVES: {
   id: string;
   testId: string;
   hover?: string;
+  /** Hover the element holding this text (a row with no button role). */
+  hoverText?: string;
   focus?: string;
   /** The role the hover and focus targets have. Buttons by default. */
   role?: "button" | "textbox" | "combobox" | "checkbox" | "radio" | "tab" | "slider";
@@ -838,7 +840,7 @@ const PRIMITIVES: {
   { id: "s-user-panel", testId: "qa-shell-user-panel", hover: "Abrir configurações" },
   { id: "s-banners", testId: "qa-shell-banners" },
   // Message rows in their states.
-  { id: "s-message-row", testId: "qa-shell-message-rows", hover: "as regras do campeonato" },
+  { id: "s-message-row", testId: "qa-shell-message-rows", hoverText: "as regras do campeonato tão aqui" },
 ];
 
 test("captures the primitives", async ({ browser }) => {
@@ -869,6 +871,9 @@ test("captures the primitives", async ({ browser }) => {
       }
       if (primitive.hover) {
         await block.getByRole(primitive.role ?? "button", { name: primitive.hover, exact: true }).first().hover();
+      }
+      if (primitive.hoverText) {
+        await block.getByText(primitive.hoverText, { exact: true }).first().hover();
       }
       if (primitive.open) {
         await block.getByRole("button", { name: primitive.open.button, exact: true }).focus();
