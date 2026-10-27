@@ -1199,15 +1199,16 @@ overlay while a provider redirect completes):
    on a profile.
 2. Redesign: the section is the kit's (already reviewed); the badges list on
    the profile is a card with semibold names, provider in the detail colour
-   and a bold arrow; the linked name is sans semibold; the callback is a pill
+   and a bold arrow; the linked name is sans medium; the callback is a pill
    on the popover surface over the sheet scrim.
 3. Merges: nothing.
 4. Kept: per-provider visibility, the unavailable list, the callback overlay.
-Rounds (Opus only): r1 8.0 (no MUST). r1 fixes: Desconectar on the
-`danger-ghost` primitive, a spinner and `role="status"` on the callback pill,
-an edge on the near-black provider tiles. Open (copy, shows with the toggle
-off too): "não estão ativas neste servidor" reads as a chat server; the
-council suggests "ainda não estão disponíveis aqui".
+Rounds (Opus only): r1 8.0, r2 8.2, r3 8.4, r4 8.4, r5 8.3 (cap, no
+MUST in any round). Changes: Desconectar on the plain `danger-ghost` at the
+action edge, a spinner and `role="status"` on the callback pill, an edge on
+the near-black tiles in dark, coming-soon tiles muted (grey and faded in
+light), the linked name at medium weight, a mocked linked-state shot
+(`38-*`). Open: question 6 (copy, shows with the toggle off).
 
 ### f-server-settings
 

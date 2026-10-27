@@ -13,7 +13,6 @@ import {
   ConnectionGlyph,
   UPCOMING_CONNECTION_PROVIDERS,
   type ConnectionGlyphProvider,
-  DARK_TILE,
 } from "@/components/connections/connection-badges";
 import {
   SettingsGroup,
@@ -349,8 +348,8 @@ export function ConnectionsSection() {
                   provider={provider}
                   className={cn(
                     "h-5 w-5 opacity-60 redesign:opacity-100 redesign:saturate-[.4] redesign:[&>svg]:opacity-60",
-                    // Saturation cannot quiet a black tile; in light it fades.
-                    DARK_TILE.has(provider) && "redesign:[:root[data-theme=light]_&]:opacity-60",
+                    // In light one rule for all four: grey and faded, the brand shape kept.
+                    "redesign:[:root[data-theme=light]_&]:opacity-50 redesign:[:root[data-theme=light]_&]:grayscale",
                   )}
                 />
                 {t(PROVIDER_NAME[provider])}
@@ -687,7 +686,7 @@ function ProviderRow({
 
 /**
  * "Conectado como {name}", the account's own name in mono with the toggle off
- * and in sans semibold under the redesign. One line:
+ * and in sans medium under the redesign. One line:
  * a long name is cut with an ellipsis and shown whole in the tooltip.
  */
 function LinkedAs({ name }: { name: string }) {
