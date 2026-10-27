@@ -492,6 +492,32 @@ The open block takes `row-selected`, like any row. Red stays on the live
 badge alone. A party being set up is the one block on `warning-soft`. Section
 labels are `SectionLabel`; counts are `CountBadge`.
 
+### The category headers
+
+Three headers fold the channel list: `ChannelSectionHeader` (Texto, Voz,
+Pinados, and each category of the classic list), the mixed list's
+`MixedCategoryHeader`, and the "Categorias" label. Under the redesign they
+share one recipe from `layout/channel-section-header.tsx`:
+
+- `CATEGORY_ROW_REDESIGN`: a 32px pill row whose text brightens on hover, with
+  no fill.
+- `CATEGORY_LABEL_REDESIGN`: the section label's face. Sentence case, so a
+  category keeps the case its owner typed.
+- `SectionCaret`: a bold caret that turns when the section folds.
+- `CATEGORY_ACTION_REDESIGN` and `SectionActionGlyph`: round 24px actions
+  ("+", the lock, the new category) with 14px glyphs.
+- `CATEGORY_SUMMARY_REDESIGN`: "3 canais" and the unread dot on a folded
+  section.
+- `CATEGORY_DROP_INTO_REDESIGN`: a header a dragged channel would drop into.
+  `bg-accent-soft`, `text-on-accent-soft`, a 1px inset `ring-accent`, and no
+  hover change. The caret follows the label's colour.
+
+A drop target hides the summary and the actions and shows `chrome.dropHere`
+("Soltar aqui"); the name is already on the row. The lock is a filled glyph
+(an object). The new-category folder keeps the bold outline: filled, its plus
+is unreadable at 14px. The classic list always shows "+"; the mixed list shows
+it on hover and focus, because it has many more headers.
+
 ### Icons
 
 The redesign's icons are Phosphor (`@phosphor-icons/react`), drawn through

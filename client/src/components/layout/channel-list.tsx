@@ -43,7 +43,10 @@ import {
 } from "lucide-react";
 import {
   CaretDown,
+  FolderSimplePlus,
+  Lock as LockGlyph,
   MagnifyingGlass,
+  Plus as PlusBold,
   SidebarSimple,
   Users as UsersFill,
   X as XBold,
@@ -152,8 +155,11 @@ import {
   toggleCollapsedCategory,
 } from "@/lib/collapsed-categories";
 import {
+  CATEGORY_ACTION_REDESIGN,
+  CATEGORY_LABEL_REDESIGN,
   ChannelSectionHeader,
   SECTION_FOCUS_RING,
+  SectionActionGlyph,
 } from "@/components/layout/channel-section-header";
 import {
   notificationLevelItems,
@@ -2689,10 +2695,17 @@ export const ChannelList = memo(function ChannelList({
 
             {(categories.length > 0 || canManage) && (
               <div className="mb-4">
-                <div className="mb-1 flex min-h-6 items-center justify-between px-2">
+                <div className="mb-1 flex min-h-6 items-center justify-between px-2 redesign:min-h-8">
                   {/* Indented past the chevron the folding headers carry, so
                       every section label starts on one line. */}
-                  <span className="pl-4 text-[11px] font-semibold uppercase tracking-[0.12em] text-text-tertiary">
+                  <span
+                    className={cn(
+                      "pl-4 text-[11px] font-semibold uppercase tracking-[0.12em] text-text-tertiary",
+                      CATEGORY_LABEL_REDESIGN,
+                      // A label, not a fold control: no caret and no hover.
+                      "redesign:pl-[1.125rem] redesign:text-text-secondary",
+                    )}
+                  >
                     {t("chrome.categories")}
                   </span>
                   {canManage && (
@@ -2705,10 +2718,11 @@ export const ChannelList = memo(function ChannelList({
                         className={cn(
                           "rounded-sm p-0.5 text-text-tertiary hover:bg-surface-2 hover:text-text",
                           SECTION_FOCUS_RING,
+                          CATEGORY_ACTION_REDESIGN,
                         )}
                         onClick={() => onCreateChannel("category", false)}
                       >
-                        <FolderPlus className="h-3.5 w-3.5" aria-hidden="true" />
+                        <SectionActionGlyph off={FolderPlus} on={FolderSimplePlus} kind="symbol" />
                       </button>
                     </Tooltip>
                   )}
@@ -3082,7 +3096,7 @@ interface SectionFold {
   hasUnread: boolean;
 }
 
-function ChannelSection({
+export function ChannelSection({
   label,
   fold,
   canManage,
@@ -3116,6 +3130,7 @@ function ChannelSection({
   const addButtonClass = cn(
     "rounded-sm p-0.5 text-text-tertiary hover:bg-surface-2 hover:text-text data-[state=open]:bg-surface-2 data-[state=open]:text-text",
     SECTION_FOCUS_RING,
+    CATEGORY_ACTION_REDESIGN,
   );
   return (
     <div className="mb-4">
@@ -3146,7 +3161,7 @@ function ChannelSection({
         }
         actions={
           canManage && (
-            <div className="flex shrink-0 gap-0.5 tracking-normal">
+            <div className="flex shrink-0 gap-0.5 tracking-normal redesign:gap-0">
               {addMenu && addMenu.length > 0 ? (
                 // The tooltip wraps the menu's trigger, not the other way
                 // round: Radix's trigger is `asChild`, and a Tooltip inside it
@@ -3158,7 +3173,7 @@ function ChannelSection({
                     aria-label={t("chrome.newInSection", { name: typeName })}
                     className={addButtonClass}
                   >
-                    <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                    <SectionActionGlyph off={Plus} on={PlusBold} kind="symbol" />
                   </button>
                 </Menu>
               ) : (
@@ -3169,7 +3184,7 @@ function ChannelSection({
                     className={addButtonClass}
                     onClick={onAdd}
                   >
-                    <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                    <SectionActionGlyph off={Plus} on={PlusBold} kind="symbol" />
                   </button>
                 </Tooltip>
               )}
@@ -3179,7 +3194,7 @@ function ChannelSection({
                   className={addButtonClass}
                   onClick={onAddPrivate}
                 >
-                  <Lock className="h-3 w-3" aria-hidden="true" />
+                  <SectionActionGlyph off={Lock} on={LockGlyph} offClassName="h-3 w-3" />
                 </button>
               </Tooltip>
             </div>
@@ -3191,7 +3206,7 @@ function ChannelSection({
   );
 }
 
-function CategoryHeader({
+export function CategoryHeader({
   category,
   collapsed,
   onToggle,
@@ -3260,10 +3275,15 @@ function CategoryHeader({
         className={cn(
           "rounded-[var(--radius-control)] hover:bg-surface-2/70",
           isDragOver && "ring-1 ring-inset ring-accent/60",
+          // Under the redesign a category reads like any other header: the
+          // text brightens, no fill.
+          "redesign:rounded-full redesign:hover:bg-transparent",
+          isDragOver && "redesign:ring-0",
         )}
       >
         <ChannelSectionHeader
           label={category.name}
+          dropFill={isDragOver}
           uppercase={false}
           collapsed={collapsed}
           onToggle={onToggle}

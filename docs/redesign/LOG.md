@@ -1203,6 +1203,20 @@ Rounds: Codex 8.2 (r1); Opus 8.5 (r2), 8.0 (r3), 8.5 (r5), no MUST left.
 Round 5 fixes: the copy failure glyph at 14px, the info tint at 7% in
 dark, the rail build line in mono. Merged on the cap.
 
+### s-category
+
+Spec (audit: `ChannelSectionHeader` in `channel-section-header.tsx` used by the
+classic sections, Pinados and `CategoryHeader`; `MixedCategoryHeader` in
+`channel-list-mixed.tsx`; the "Categorias" label in `channel-list.tsx`):
+
+1. Job: fold a group of channels; for a manager, add a channel, a private
+   channel or a category, rename, delete and drag a category.
+2. States: open, folded (count and unread dot), hover, focus, drop target,
+   drop into (mixed), dragging, the "+" menu open, a phone (always shows "+").
+3. Redesign: one recipe for all three (section label face in sentence case,
+   pill row, bold caret, round actions). The three keep their own markup
+   because their drag rules differ; only the look is shared.
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss

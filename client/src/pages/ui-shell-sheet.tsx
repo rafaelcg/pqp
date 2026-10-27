@@ -1,6 +1,11 @@
-import type { DmSummary, PublicUser, Server, WatchParty } from "@pqp/shared";
+import type { Channel, DmSummary, PublicUser, Server, WatchParty } from "@pqp/shared";
 import { useEffect, type ReactNode } from "react";
 import { CommunityHomePreview } from "@/components/community-home/community-home-preview";
+import { CategoryHeader, ChannelSection } from "@/components/layout/channel-list";
+import {
+  MixedCategoryHeader,
+  type CategoryHeaderDrag,
+} from "@/components/layout/channel-list-mixed";
 import { ServerRail } from "@/components/layout/server-rail";
 import { LivePartyBlock } from "@/components/watch-party/live-party-block";
 import { ServerIcon } from "@/components/layout/server-identity";
@@ -94,6 +99,35 @@ const BAU_NEW: LatestPreview = {
 };
 const BAU_SEEN: LatestPreview = { unread: 0, lastSeenAt: null, posts: [post("03", "Regras do servidor", false)] };
 const BAU_EMPTY: LatestPreview = { unread: 0, lastSeenAt: null, posts: [] };
+
+function category(id: string, name: string): Channel {
+  return { id, name, type: "category", serverId: "fliperama", parentId: null, position: 0 } as unknown as Channel;
+}
+
+function drag(drop: CategoryHeaderDrag["drop"] = null): CategoryHeaderDrag {
+  return {
+    draggable: false,
+    dragging: false,
+    drop,
+    onDragStart: noop,
+    onDragEnd: noop,
+    onDragOver: noop,
+    onDragLeave: noop,
+    onDrop: noop,
+  };
+}
+
+const ADD_ITEMS = [
+  { id: "text", label: "Canal de texto", onSelect: noop },
+  { id: "voice", label: "Canal de voz", onSelect: noop },
+];
+
+const fold = (collapsed: boolean, childCount: number, hasUnread = false) => ({
+  collapsed,
+  onToggle: noop,
+  childCount,
+  hasUnread,
+});
 
 /** A slice of the side pane, as wide as the sidebar. */
 function SidePane({ children }: { children: ReactNode }) {
@@ -201,6 +235,97 @@ export function ShellSheet() {
             onOpen={noop}
             onOpenPost={noop}
             onCompose={noop}
+          />
+        </SidePane>
+      </div>
+
+      {/* Category headers. Left, the classic list: Texto open with the
+          manager's "+" and lock, Voz folded with an unread channel, Texto as
+          a drop target, a category open and a category folded. Right, the
+          mixed list: open with "+", folded with an unread channel, and a
+          channel being dropped into it. */}
+      <div data-testid="qa-shell-categories" className="flex flex-wrap items-start gap-6">
+        <SidePane>
+          <ChannelSection label="Texto" fold={fold(false, 3)} canManage onAdd={noop} onAddPrivate={noop}>
+            {null}
+          </ChannelSection>
+          <ChannelSection label="Voz" fold={fold(true, 2, true)} canManage={false} onAdd={noop} onAddPrivate={noop}>
+            {null}
+          </ChannelSection>
+          <ChannelSection label="Texto" fold={fold(false, 3)} canManage onAdd={noop} onAddPrivate={noop} isDragOver>
+            {null}
+          </ChannelSection>
+          <ChannelSection label="Voz" fold={fold(true, 2)} canManage onAdd={noop} onAddPrivate={noop} isDragOver>
+            {null}
+          </ChannelSection>
+          <CategoryHeader
+            category={category("c1", "Jogos da semana")}
+            controlsId="qa-category-1"
+            canManage
+            onRename={noop}
+            onDelete={noop}
+            isDragOver={false}
+            onDragStart={noop}
+            onDragEnd={noop}
+            onDragOverRow={noop}
+            onDrop={noop}
+            {...fold(false, 4)}
+          />
+          <CategoryHeader
+            category={category("c2", "Arquivo")}
+            controlsId="qa-category-2"
+            canManage
+            onRename={noop}
+            onDelete={noop}
+            isDragOver={false}
+            onDragStart={noop}
+            onDragEnd={noop}
+            onDragOverRow={noop}
+            onDrop={noop}
+            {...fold(true, 6, true)}
+          />
+          <CategoryHeader
+            category={category("c3", "Campeonatos de fim de semana")}
+            controlsId="qa-category-3"
+            canManage
+            onRename={noop}
+            onDelete={noop}
+            isDragOver
+            onDragStart={noop}
+            onDragEnd={noop}
+            onDragOverRow={noop}
+            onDrop={noop}
+            {...fold(false, 2)}
+          />
+        </SidePane>
+        <SidePane>
+          <MixedCategoryHeader
+            category={category("m1", "Canais")}
+            addItems={ADD_ITEMS}
+            menuItems={[]}
+            drag={drag()}
+            {...fold(false, 5)}
+          />
+          <MixedCategoryHeader
+            category={category("m2", "Bate-papo")}
+            addItems={ADD_ITEMS}
+            menuItems={[]}
+            drag={drag()}
+            {...fold(true, 4, true)}
+          />
+          <MixedCategoryHeader
+            category={category("m3", "Jogos")}
+            addItems={ADD_ITEMS}
+            menuItems={[]}
+            drag={drag("into")}
+            {...fold(false, 2)}
+          />
+          <MixedCategoryHeader
+            category={category("m4", "Campeonatos de fim de semana")}
+            addItems={ADD_ITEMS}
+            menuItems={[]}
+            drag={drag("into")}
+            {...fold(false, 3)}
           />
         </SidePane>
       </div>
