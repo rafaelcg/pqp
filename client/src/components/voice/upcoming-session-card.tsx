@@ -1,7 +1,7 @@
 import { Bell, BellOff, CalendarClock, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ChannelSession } from "@pqp/shared";
-import { Bell as BellFill, BellSlash, CalendarDots, CalendarX } from "@phosphor-icons/react";
+import { Bell as BellFill, Bell as BellRegular, CalendarDots, CalendarX } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -123,9 +123,10 @@ export function UpcomingSessionCard({
             disabled={reminderBusy}
             onClick={() => void toggleReminder()}
             data-session-remind-toggle
-            aria-pressed={reminding}
-            // A toggle keeps one name; the visible "Lembrete ligado" is the state.
-            aria-label={redesign ? t("watchPartySchedule.card.remind") : undefined}
+            // Under the redesign the label itself says the state ("Lembrete
+            // ligado"), so the name follows the text and `aria-pressed` goes:
+            // a toggle keeps its label or drops the pressed state, never both.
+            aria-pressed={redesign ? undefined : reminding}
             // On reads as a state (the soft accent), never as a call to act.
             className={reminding ? "redesign:bg-accent-soft redesign:text-on-accent-soft redesign:shadow-none redesign:hover:bg-[color:color-mix(in_oklab,var(--color-accent-soft),var(--color-on-accent-soft)_10%)]" : undefined}
           >
@@ -137,7 +138,7 @@ export function UpcomingSessionCard({
             ) : (
               <>
                 <BellOff className="mr-1.5 h-3.5 w-3.5 redesign:hidden" aria-hidden />
-                <Icon icon={BellSlash} size="sm" className="hidden redesign:block" />
+                <Icon icon={BellRegular} kind="symbol" size="sm" className="hidden redesign:block" />
               </>
             )}
             {reminding && redesign ? t("watchPartySchedule.card.reminding") : t("watchPartySchedule.card.remind")}

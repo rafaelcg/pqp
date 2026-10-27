@@ -618,6 +618,40 @@ function BannersBlock() {
         />
         <ConnectionBanner status="reconnecting" refusedRepeatedly={false} onRetry={noop} onCheck={noop} onSignInAgain={noop} />
       </MainPane>
+      {/* The harder states: a watch-now join that failed, and a session
+          with no reminder set (the ghost "Lembrar"). */}
+      <MainPane>
+        <WatchNowBanner
+          now={NOW}
+          streams={[
+            { key: "c", channelId: "c3", kind: "voice", place: "Lobby", sharerUserId: "u1", sharerName: "Rafa", startedAt: NOW - 4 * 60_000, watching: 2, inRoom: false },
+          ]}
+          failure="A transmissão terminou."
+          onWatch={noop}
+          onDismiss={noop}
+        />
+        <UpcomingSessionCard
+          session={{
+            id: "00000000-0000-4000-8000-000000000211",
+            channelId: "00000000-0000-4000-8000-000000000212",
+            serverId: null,
+            title: "Noite do Mario Kart",
+            description: null,
+            coverImageUrl: null,
+            startsAt: new Date(NOW + 26 * 3_600_000).toISOString(),
+            status: "scheduled",
+            createdBy: "00000000-0000-4000-8000-000000000203",
+            createdAt: new Date(NOW).toISOString(),
+            updatedAt: new Date(NOW).toISOString(),
+            reminding: false,
+          }}
+          now={new Date(NOW)}
+          canManage={false}
+          onToggleReminder={asyncNoop}
+          onCancel={asyncNoop}
+          onEdit={noop}
+        />
+      </MainPane>
     </div>
   );
 }

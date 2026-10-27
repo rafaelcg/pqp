@@ -199,7 +199,7 @@ export function WatchNowBanner({
               aria-expanded={open}
               aria-controls="watch-now-list"
               onClick={() => setOpen((value) => !value)}
-              className="relative inline-flex min-h-8 items-center gap-1 rounded-[var(--radius-control)] px-1 text-xs font-medium text-on-accent-soft/80 hover:text-on-accent-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring redesign:min-h-7 redesign:rounded-full redesign:px-2 redesign:font-semibold redesign:text-[color:var(--banner-ink)] redesign:hover:bg-[color:color-mix(in_oklab,var(--banner-ink)_16%,transparent)] redesign:hover:text-[color:var(--banner-ink)]"
+              className="relative inline-flex min-h-8 items-center gap-1 rounded-[var(--radius-control)] px-1 text-xs font-medium text-on-accent-soft/80 hover:text-on-accent-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring redesign:min-h-7 redesign:rounded-full redesign:px-2 redesign:text-[13px] redesign:font-semibold redesign:text-[color:var(--banner-ink)] redesign:hover:bg-[color:color-mix(in_oklab,var(--banner-ink)_16%,transparent)] redesign:hover:text-[color:var(--banner-ink)]"
             >
               {t("watchNow.more", { count: rest.length })}
               {open ? (
