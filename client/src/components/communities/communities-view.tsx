@@ -362,7 +362,7 @@ export function CommunitiesView({
               A directory whose only answer to "none of these are mine" is a
               scroll to the bottom teaches people that making one is an advanced
               move. It is not: it is the other half of the feature. */}
-          <div className={cn(soloCreate && "hidden", "mt-6 flex flex-col gap-3 rounded-2xl border border-signal/25 bg-signal/[0.06] p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5 redesign:rounded-[var(--radius-card)] redesign:border-[color:color-mix(in_oklab,var(--color-accent)_25%,transparent)] redesign:bg-[color:var(--glow-accent-soft)]")}>
+          <div className={cn("mt-6 flex flex-col gap-3 rounded-2xl border border-signal/25 bg-signal/[0.06] p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5 redesign:rounded-[var(--radius-card)] redesign:border-[color:color-mix(in_oklab,var(--color-accent)_25%,transparent)] redesign:bg-[color:var(--glow-accent-soft)]", soloCreate && "hidden")}>
             <div className="min-w-0">
               <p className="flex items-center gap-2 font-display text-base font-bold">
                 <Sparkles aria-hidden="true" className="h-4 w-4 text-signal redesign:hidden" />
@@ -428,7 +428,7 @@ export function CommunitiesView({
             <EmptyState
               className="mt-14 redesign:mt-0"
               icon={<span className="text-[2rem] drop-shadow-sm">🦗</span>}
-              iconClassName="redesign:bg-[color:var(--glow-accent-soft)]!"
+              iconClassName="redesign:!bg-[color:var(--glow-accent-soft)]"
               title={t(filtered ? "communities.empty.titleFiltered" : empty.title)}
               body={
                 <>
