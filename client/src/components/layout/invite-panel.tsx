@@ -542,7 +542,7 @@ export function InvitePanel({
                           {copied === `code:${invite.id}` ? (
                             <IconSwap off={Check} on={CheckGlyph} kind="symbol" offClassName="h-4 w-4 text-success" className="text-success" />
                           ) : (
-                            <IconSwap off={Copy} on={CopyGlyph} offClassName="h-4 w-4" />
+                            <IconSwap off={Copy} on={CopyGlyph} kind="symbol" offClassName="h-4 w-4" />
                           )}
                         </Button>
                       </Tooltip>
@@ -599,7 +599,7 @@ export function InvitePanel({
         )}
 
         {!isCreate && (
-          <div className="space-y-2">
+          <div className="space-y-2 redesign:space-y-1.5">
             <label className="block">
               <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted redesign:sr-only redesign:mb-1.5 redesign:text-[13px] redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">
                 {t("invite.join.label")}
