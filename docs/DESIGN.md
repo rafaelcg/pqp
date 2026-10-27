@@ -643,6 +643,10 @@ redesign:
   are 32px.
 - Glyphs are filled Phosphor objects through `IconSwap`; "⋯" and the
   fullscreen corners are bold symbols.
+- A conversation call rings in a popover card; answer (green) and decline
+  (the hang-up) are the bar's 44px circles. The join strip over a
+  conversation is a pill card. The rating prompt after a call is a card
+  with round scores.
 
 ## Components
 

@@ -1710,6 +1710,20 @@ the light open row a step under the selected channel, the segmented status
 and the inverse toggles written down in DESIGN.md. Not done: an unread post
 in the light shots (the dark pass marks the fixture read first).
 
+### f-dm-call
+
+Spec (audit: `dm/dm-call-stage.tsx` (the join strip, then the shared
+`CallStage`), `dm/incoming-call-overlay.tsx`, `voice/call-rating-prompt.tsx`):
+
+1. Job: ring, answer or decline a conversation call, join one in progress,
+   and rate a call after it ends.
+2. Redesign: the ring card is a popover with the caller's face ringed in the
+   speaking colour; answer and decline are the call bar's 44px circles. The
+   join strip is a pill card with a round green button. The rating prompt is
+   a card with round scores (the chosen one solid accent) and an input well.
+3. Merges: decline uses the call bar's hang-up recipe.
+4. Kept: ignore, the ringtone, the note under a low score, the auto-close.
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss
