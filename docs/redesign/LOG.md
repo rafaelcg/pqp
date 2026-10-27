@@ -1093,6 +1093,24 @@ notice, the upcoming session card):
    `ui/banner.tsx`: inset, `--banner-radius`, the tone's soft fill and edge,
    text in the text colour, a round dismiss in the tone's ink. The session
    card is news, not a tone: the same inset and corner on the card tint.
+
+### s-message-row
+
+Spec (audit: `MessageRow` in `chat/message-list.tsx`, its gutter and author
+line, `RankMarks`, `StatusDot`, the failed and queued footers, the blocked
+row; one renderer with a stream variant and compact density):
+
+1. Job: one message: who, when, what, and its delivery state.
+2. States: first in a group, continued, compact, own, role colour, rank
+   marks, bot, OP, webhook, AutoMod, gone; pinned, edited; sending, queued,
+   failed (retry, wait, discard); blocked; mentions you (joined in a run);
+   flash; bulk select; forum answer; stream rows.
+3. Redesign: the row is inset 8px with an 8px corner and gives the inset
+   back as padding, so text does not move; hover is a 3% text tint; a
+   mention is the accent's soft fill (as in the mockup); your own name is
+   accent text; times are tertiary; the failed and queued footers use the
+   secondary pill. The hover toolbar, reactions, reply and thread chip are
+   `s-message-chrome`; the inline edit field is `s-composer`.
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss

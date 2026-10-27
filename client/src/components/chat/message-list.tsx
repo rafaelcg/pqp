@@ -1,5 +1,11 @@
 import { StoryQuoteCard } from "@/components/stories/story-quote-card";
 import { Badge } from "@/components/ui/badge";
+import {
+  PushPin as PushPinFill,
+  WarningCircle as WarningCircleFill,
+  WifiSlash,
+} from "@phosphor-icons/react";
+import { Icon as Glyph } from "@/components/ui/icon";
 import type {
   Embed,
   MessageReaction,
@@ -614,17 +620,29 @@ function mentionJoins(
 }
 
 function mentionRowRadius(joinTop: boolean, joinBottom: boolean): string {
+  // Under the redesign the same joins, on the row's own corner.
   if (joinTop && joinBottom) {
-    return "rounded-none";
+    return "rounded-none redesign:rounded-none";
   }
   if (joinTop) {
-    return "rounded-b-md";
+    return "rounded-b-md redesign:rounded-t-none redesign:rounded-b-[var(--message-row-radius)]";
   }
   if (joinBottom) {
-    return "rounded-t-md";
+    return "rounded-t-md redesign:rounded-b-none redesign:rounded-t-[var(--message-row-radius)]";
   }
   return "rounded-md";
 }
+
+/*
+ * A message row under the redesign: inset from the pane's edges with the
+ * row's corner, so the hover and a mention are rounded fills as in the
+ * mockup. The padding gives back what the inset takes, so the text does not
+ * move. Every string is redesign-only.
+ */
+const MESSAGE_ROW_REDESIGN =
+  "redesign:mx-2 redesign:rounded-[var(--message-row-radius)] redesign:px-3";
+/** The time beside a name and in the gutter. */
+const MESSAGE_TIME_REDESIGN = "redesign:text-xs redesign:text-text-tertiary";
 
 /**
  * Wrapped in `memo()` on top of `MessageRow`'s own: without it, ANY render
@@ -2554,8 +2572,11 @@ export const MessageList = memo(function MessageList({
   );
 });
 
-const FAILED_ACTION_TILE =
-  "inline-flex h-8 w-full min-w-0 items-center justify-center whitespace-nowrap rounded-md border border-ink-4 bg-ink-3 px-2.5 text-xs font-medium text-paper outline-none hover:border-signal/50 hover:text-signal focus-visible:ring-2 focus-visible:ring-signal/60 disabled:pointer-events-none disabled:opacity-40";
+const FAILED_ACTION_TILE = cn(
+  "inline-flex h-8 w-full min-w-0 items-center justify-center whitespace-nowrap rounded-md border border-ink-4 bg-ink-3 px-2.5 text-xs font-medium text-paper outline-none hover:border-signal/50 hover:text-signal focus-visible:ring-2 focus-visible:ring-signal/60 disabled:pointer-events-none disabled:opacity-40",
+  // The secondary button's pill under the redesign.
+  "redesign:rounded-full redesign:border-0 redesign:bg-[color:var(--button-secondary-bg)] redesign:font-semibold redesign:text-text redesign:hover:bg-[color:var(--button-secondary-hover)] redesign:hover:text-text redesign:focus-visible:ring-accent",
+);
 
 /**
  * Failed bubble: one status line, then equal-width actions. Retry stays
@@ -2577,8 +2598,9 @@ function QueuedSendFooter({
   const { t } = useTranslation();
   return (
     <div className="mt-1.5">
-      <p className="flex items-start gap-2 text-xs text-text-muted">
-        <WifiOff className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+      <p className="flex items-start gap-2 text-xs text-text-muted redesign:text-[13px] redesign:text-text-secondary">
+        <WifiOff className="mt-0.5 h-3.5 w-3.5 shrink-0 redesign:hidden" aria-hidden />
+        <Glyph icon={WifiSlash} kind="symbol" size="sm" className="mt-0.5 hidden shrink-0 redesign:block" />
         <span>{t("chat.queuedOffline")}</span>
       </p>
       <div className="mt-1.5 grid max-w-[8rem] grid-cols-1 gap-2">
@@ -2624,8 +2646,9 @@ function FailedSendFooter({
 
   return (
     <div className="mt-1.5">
-      <p className="flex items-start gap-2 text-xs text-danger">
-        <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+      <p className="flex items-start gap-2 text-xs text-danger redesign:text-[13px]">
+        <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 redesign:hidden" aria-hidden />
+        <Glyph icon={WarningCircleFill} size="sm" className="mt-0.5 hidden shrink-0 redesign:block" />
         <span>{copy.text ?? t(copy.key, copy.vars)}</span>
       </p>
       <div
@@ -3501,7 +3524,11 @@ const MessageRow = memo(function MessageRow({
           aria-label={t("chat.blocked")}
           onFocus={onFocusRow}
           onKeyDown={(event) => onNavigate(event, message.id)}
-          className="group mt-1 flex items-center gap-2 rounded-md px-5 py-1 text-xs text-paper-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+          className={cn(
+            "group mt-1 flex items-center gap-2 rounded-md px-5 py-1 text-xs text-paper-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
+            MESSAGE_ROW_REDESIGN,
+            "redesign:text-text-tertiary redesign:focus-visible:ring-accent",
+          )}
           style={ROW_CONTENT_VISIBILITY}
         >
           <span className="italic">{t("chat.blocked")}</span>
@@ -3509,7 +3536,7 @@ const MessageRow = memo(function MessageRow({
             type="button"
             tabIndex={controlTabIndex}
             onClick={onReveal}
-            className="underline underline-offset-2 hover:text-paper"
+            className="underline underline-offset-2 hover:text-paper redesign:font-medium redesign:text-text-secondary redesign:hover:text-text"
           >
             {t("chat.showBlocked")}
           </button>
@@ -3787,6 +3814,14 @@ const MessageRow = memo(function MessageRow({
             selecting && !selected && "hover:bg-ink-3/40",
             selected && "bg-danger/15 ring-1 ring-danger/50",
             forumAnswer && "shadow-[inset_3px_0_0_var(--color-success)]",
+            !stream && MESSAGE_ROW_REDESIGN,
+            // After the row's corner, so a mention's joins keep theirs.
+            mentionsYou && !isFlashing && !stream
+              ? mentionRowRadius(mentionJoinTop, mentionJoinBottom)
+              : null,
+            "redesign:focus-visible:ring-accent",
+            !mentionsYou && !isFlashing && !selecting && "redesign:hover:bg-[color:var(--message-hover)]",
+            selecting && !selected && "redesign:hover:bg-[color:var(--message-hover)]",
           )}
           data-forum-answer={forumAnswer ? "" : undefined}
         >
@@ -3869,6 +3904,7 @@ const MessageRow = memo(function MessageRow({
               <time
                 className={cn(
                   "w-14 shrink-0 pr-2 text-right text-[12px] leading-[var(--chat-line-height)] whitespace-nowrap tabular-nums text-paper-muted",
+                  MESSAGE_TIME_REDESIGN,
                   compact ? "opacity-70" : "opacity-0 group-hover:opacity-100",
                 )}
                 dateTime={message.createdAt}
@@ -3909,6 +3945,7 @@ const MessageRow = memo(function MessageRow({
                       className={cn(
                         "rounded text-[length:var(--chat-font-size)] font-bold leading-[var(--chat-line-height)]",
                         !roleColor && (isMine ? "text-signal" : "text-paper"),
+                        !roleColor && (isMine ? "redesign:text-accent-text" : "redesign:text-text"),
                       )}
                       style={roleColor ? { color: roleColor } : undefined}
                     >
@@ -3966,7 +4003,7 @@ const MessageRow = memo(function MessageRow({
                     message.isWebhook && (
                       <Badge
                         size="tag"
-                        className="rounded bg-ink-4 text-paper-muted"
+                        className="rounded bg-ink-4 text-paper-muted redesign:rounded-full redesign:bg-surface-3 redesign:text-text-secondary"
                         title={t("chat.webhookPosted")}
                       >
                         Webhook
@@ -3975,7 +4012,7 @@ const MessageRow = memo(function MessageRow({
                   )}
                   {!compact && (
                     <time
-                      className="whitespace-nowrap text-[12px] leading-[var(--chat-line-height)] text-paper-muted"
+                      className={cn("whitespace-nowrap text-[12px] leading-[var(--chat-line-height)] text-paper-muted", MESSAGE_TIME_REDESIGN)}
                       dateTime={message.createdAt}
                       title={formatFullTimestamp(message.createdAt)}
                     >
@@ -3984,7 +4021,7 @@ const MessageRow = memo(function MessageRow({
                   )}
                   {isMessagePinned && (
                     <span
-                      className="inline-flex items-center gap-0.5 text-[12px] leading-[var(--chat-line-height)] text-signal"
+                      className="inline-flex items-center gap-0.5 text-[12px] leading-[var(--chat-line-height)] text-signal redesign:self-center redesign:text-accent-text"
                       title={
                         message.pinnedBy
                           ? t("chat.pinnedBy", {
@@ -3993,7 +4030,8 @@ const MessageRow = memo(function MessageRow({
                           : t("chat.pinned")
                       }
                     >
-                      <Pin className="h-3 w-3" aria-hidden />
+                      <Pin className="h-3 w-3 redesign:hidden" aria-hidden />
+                      <Glyph icon={PushPinFill} size="sm" className="hidden h-3.5 w-3.5 redesign:block" />
                       <span className="sr-only">{t("chat.pinned")}</span>
                     </span>
                   )}
@@ -4043,7 +4081,7 @@ const MessageRow = memo(function MessageRow({
                   ) : message.body && !hideBodyForBauCard ? (
                     <div
                       className={cn(
-                        "markdown-body text-[length:var(--chat-font-size)] leading-[var(--chat-line-height)] text-paper/90",
+                        "markdown-body text-[length:var(--chat-font-size)] leading-[var(--chat-line-height)] text-paper/90 redesign:text-text",
                         stream && "[&>p]:inline",
                       )}
                     >
@@ -4084,7 +4122,7 @@ const MessageRow = memo(function MessageRow({
                   {!message.body &&
                     attachments.length === 0 &&
                     message.webhookEmbeds.length === 0 && (
-                      <p className="text-[length:var(--chat-font-size)] italic leading-relaxed text-paper-muted">
+                      <p className="text-[length:var(--chat-font-size)] italic leading-relaxed text-paper-muted redesign:text-text-tertiary">
                         {t("chat.attachmentUnavailable")}
                       </p>
                     )}
@@ -4562,7 +4600,7 @@ function EditedMarker({ editedAt }: { editedAt: string | null | undefined }) {
   }
   return (
     <span
-      className="ml-1 align-baseline text-[10px] text-paper-muted"
+      className="ml-1 align-baseline text-[10px] text-paper-muted redesign:text-[11px] redesign:text-text-tertiary"
       title={formatFullTimestamp(editedAt)}
     >
       ({translateMessage("chat.edited")})

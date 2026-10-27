@@ -880,6 +880,13 @@
   --sidebar-card-radius: 0.875rem;
   --sidebar-invite-border: color-mix(in oklab, var(--color-text) 22%, transparent);
 
+  /* Message rows (chat/message-list.tsx): inset with a corner, a faint
+     tint of the text on hover, the accent's soft fill when you are named. */
+  --message-row-radius: 0.5rem;
+  --message-hover: color-mix(in oklab, var(--color-text) 3%, transparent);
+  --message-mention-bg: var(--color-accent-soft);
+  --message-mention-hover: color-mix(in oklab, var(--color-accent-soft) 88%, var(--color-text));
+
   /* Pane headers (ui/pane-header.ts): the chat's and every other pane's
      top bar, on one rule, one inset and one title size. */
   --pane-header-rule: color-mix(in oklab, var(--color-text) 8%, transparent);
@@ -2965,6 +2972,15 @@ h2,
 
 .pqp-message-mention:hover {
   background: color-mix(in oklch, var(--color-accent) 20%, transparent);
+}
+
+/* Under the redesign a mention is the accent's soft fill, as in the mockup. */
+:root[data-redesign] .pqp-message-mention {
+  background: var(--message-mention-bg);
+}
+
+:root[data-redesign] .pqp-message-mention:hover {
+  background: var(--message-mention-hover);
 }
 
 @keyframes rise-in {
