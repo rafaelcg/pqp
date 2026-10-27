@@ -761,6 +761,7 @@ const SHEET_WAVEFORM = btoa(
 const CONTENT_MARKDOWN = [
   "**bora** fechar hoje, o mapa novo tá em `maps/v2` e as regras em https://pqp.gg/regras",
   "> quem perder paga o lanche",
+  "",
   "@bia cê traz o controle? o @rafa já confirmou",
   "- 20h: aquecimento",
   "- 21h: final",
@@ -807,6 +808,22 @@ const CONTENT_MESSAGES_A: ChatMessage[] = [
       },
     ],
   }),
+  // Bia's note, not heard yet: the unheard dot and the quiet bars.
+  contentMessage(9, ROW_BIA, "Bia", "", {
+    createdAt: new Date(NOW - 26.5 * 60_000).toISOString(),
+    attachments: [
+      {
+        id: "00000000-0000-4000-8000-000000000604",
+        filename: "nota-da-bia.webm",
+        contentType: "audio/webm",
+        byteSize: 36_000,
+        width: null,
+        height: null,
+        url: `${SHEET_ORIGIN}/nota-da-bia.webm`,
+        voice: { durationMs: 9_000, waveform: SHEET_WAVEFORM, listenedByMe: false },
+      },
+    ],
+  }),
   contentMessage(4, ROW_RAFA, "Rafa", "olha isso que o Caio mandou no outro server", {
     forward: {
       v: 1,
@@ -841,8 +858,9 @@ const CONTENT_MESSAGES_B: ChatMessage[] = [
       totalVotes: 4,
       canClose: false,
       options: [
-        { id: "00000000-0000-4000-8000-000000000801", label: "20h", votes: 3, voted: true, voters: CONTENT_VOTERS },
-        { id: "00000000-0000-4000-8000-000000000802", label: "21h", votes: 1, voted: false, voters: [CONTENT_VOTERS[1]] },
+        // You voted 21h; 20h leads. So the ring and the leading fill show apart.
+        { id: "00000000-0000-4000-8000-000000000801", label: "20h", votes: 3, voted: false, voters: CONTENT_VOTERS.slice(0, 2) },
+        { id: "00000000-0000-4000-8000-000000000802", label: "21h", votes: 1, voted: true, voters: [CONTENT_VOTERS[2]] },
         { id: "00000000-0000-4000-8000-000000000803", label: "Amanhã", votes: 0, voted: false, voters: [] },
       ],
     },

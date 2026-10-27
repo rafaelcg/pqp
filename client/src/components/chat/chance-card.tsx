@@ -29,7 +29,7 @@ const SHELL = cn(
   "shadow-[var(--shadow-chance-card)]",
   // Under the redesign, the card every message carries (ui/content-card.ts).
   CONTENT_CARD_REDESIGN,
-  "redesign:px-4 redesign:py-3.5",
+  "redesign:p-[var(--content-card-pad)]",
 );
 
 export function ChanceCard({ result }: { result: ChanceResult }) {

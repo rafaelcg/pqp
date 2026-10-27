@@ -907,7 +907,9 @@
   --content-media-radius: 0.75rem;
   /* A message card rests on the pane: no lift. */
   --content-card-shadow: none;
-  --content-card-hover: color-mix(in oklab, var(--color-text) 7%, transparent);
+  --content-card-hover: var(--card-hover);
+  /* Every message card pads its content the same. */
+  --content-card-pad: 0.875rem;
   --content-glyph-bg: color-mix(in oklab, var(--color-text) 7%, transparent);
   --content-quote-bar: color-mix(in oklab, var(--color-text) 22%, transparent);
   --content-link-line: color-mix(in oklab, var(--color-accent-text) 45%, transparent);
@@ -1359,8 +1361,6 @@
   --footer-card-solid: color-mix(in oklab, var(--color-surface-0) 60%, var(--color-pane-side));
   --footer-card-solid-hover: color-mix(in oklab, var(--color-text) 4%, var(--footer-card-solid));
   --card-border: color-mix(in oklab, var(--color-text) 10%, transparent);
-  /* A message card's hover: white over the grey wash would vanish. */
-  --content-card-hover: color-mix(in oklab, var(--color-text) 4%, var(--color-surface-0));
 
   /* Avatars: a hairline keeps the monogram disc a disc on the white pane. */
   --avatar-edge: var(--color-border);
@@ -3180,7 +3180,16 @@ h2,
   padding: 0.125rem 0.375rem;
 }
 
+/* Inline code on the family's tint in the text colour: lime is for what
+   can be acted on (links, mentions). The theme's code colours stay in code
+   blocks. */
+:root[data-redesign] .markdown-body :not(pre) > code {
+  background: var(--content-glyph-bg);
+  color: var(--color-text);
+}
+
 :root[data-redesign] .markdown-body pre {
+  background: var(--card-bg);
   border-color: var(--card-border);
   border-radius: var(--radius-control);
   padding: 0.625rem 0.75rem;
@@ -3204,11 +3213,6 @@ h2,
   font-weight: 600;
   background: color-mix(in oklch, var(--color-accent) 18%, transparent);
   color: var(--color-accent-text);
-}
-
-:root[data-redesign] .pqp-mention-self {
-  background: color-mix(in oklch, var(--color-accent) 34%, transparent);
-  color: var(--color-text);
 }
 
 @keyframes rise-in {

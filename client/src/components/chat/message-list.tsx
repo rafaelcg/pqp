@@ -4847,7 +4847,7 @@ function EmbedCard({ embed }: { embed: Embed }) {
         CONTENT_CARD_REDESIGN,
         CONTENT_CARD_HOVER_REDESIGN,
         CONTENT_CARD_FOCUS_REDESIGN,
-        "redesign:p-3.5",
+        "redesign:p-[var(--content-card-pad)]",
       )}
     >
       <div className="min-w-0 flex-1">
@@ -4857,7 +4857,7 @@ function EmbedCard({ embed }: { embed: Embed }) {
           </p>
         )}
         {embed.title && (
-          <p className="mt-0.5 line-clamp-2 text-sm font-medium text-signal redesign:mt-1 redesign:text-[0.9375rem] redesign:font-semibold redesign:leading-snug redesign:text-accent-text">
+          <p className="mt-0.5 line-clamp-2 text-sm font-medium text-signal redesign:mt-1 redesign:font-display redesign:text-[0.9375rem] redesign:font-semibold redesign:leading-snug redesign:text-accent-text">
             {embed.title}
           </p>
         )}
@@ -4914,14 +4914,16 @@ function WebhookEmbedCard({ embed }: { embed: WebhookEmbed }) {
         CONTENT_CARD_REDESIGN,
         embed.url && CONTENT_CARD_HOVER_REDESIGN,
         embed.url && CONTENT_CARD_FOCUS_REDESIGN,
-        "redesign:p-3.5",
+        "redesign:p-[var(--content-card-pad)]",
+        // A sender that chose no colour gets the plain card edge, not a lime stripe.
+        !accent && "redesign:![border-left-width:1px] redesign:![border-left-color:var(--card-border)]",
       )}
       style={{ borderLeftWidth: "3px", borderLeftColor: accent ?? "var(--color-signal)" }}
     >
       {embed.title && (
         <p
           className={cn(
-            "text-sm font-medium redesign:text-[0.9375rem] redesign:font-semibold",
+            "text-sm font-medium redesign:font-display redesign:text-[0.9375rem] redesign:font-semibold",
             embed.url ? "text-signal redesign:text-accent-text" : "text-paper",
           )}
         >
