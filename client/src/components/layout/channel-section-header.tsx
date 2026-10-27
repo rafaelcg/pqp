@@ -40,6 +40,14 @@ export const CATEGORY_LABEL_REDESIGN = cn(
 export const CATEGORY_SUMMARY_REDESIGN =
   "redesign:text-[11px] redesign:tabular-nums redesign:text-text-tertiary";
 
+/**
+ * A header a dragged channel would drop into: the mixed list's "into" fill,
+ * so every list says it the same way. Under the redesign only; the base keeps
+ * the ring it always drew.
+ */
+export const CATEGORY_DROP_INTO_REDESIGN =
+  "redesign:bg-accent-soft redesign:text-on-accent-soft redesign:ring-1 redesign:ring-inset redesign:ring-accent redesign:hover:bg-accent-soft redesign:hover:text-on-accent-soft";
+
 /** "+", the lock, the new category: a round 24px button. */
 export const CATEGORY_ACTION_REDESIGN =
   "redesign:flex redesign:h-6 redesign:w-6 redesign:items-center redesign:justify-center redesign:rounded-full redesign:p-0 redesign:text-text-tertiary redesign:hover:bg-row-hover redesign:hover:text-text redesign:data-[state=open]:bg-row-hover redesign:data-[state=open]:text-text redesign:focus-visible:ring-accent redesign:focus-visible:ring-offset-0";
@@ -56,7 +64,9 @@ export function SectionCaret({ collapsed }: { collapsed: boolean }) {
       <Icon
         icon={CaretDown}
         kind="symbol"
-        className={cn("hidden h-3 w-3 text-text-tertiary redesign:block", turn)}
+        // The label's colour, a step quieter: it brightens on hover and turns
+        // lime on a drop target with the words beside it.
+        className={cn("hidden h-3 w-3 opacity-80 redesign:block", turn)}
       />
     </>
   );
@@ -68,16 +78,18 @@ export function SectionActionGlyph({
   on,
   kind = "object",
   offClassName = "h-3.5 w-3.5",
+  onClassName = "h-3.5 w-3.5",
 }: {
   off: LucideIcon;
   on: PhosphorIcon;
   kind?: IconKind;
   offClassName?: string;
+  onClassName?: string;
 }) {
   return (
     <>
       <Off aria-hidden="true" className={cn(offClassName, "redesign:hidden")} />
-      <Icon icon={on} kind={kind} className="hidden h-3.5 w-3.5 redesign:block" />
+      <Icon icon={on} kind={kind} className={cn("hidden redesign:block", onClassName)} />
     </>
   );
 }
@@ -92,6 +104,7 @@ export function ChannelSectionHeader({
   uppercase = true,
   actions,
   isDragOver = false,
+  dropFill = false,
   onDragOver,
   onDrop,
   className,
@@ -110,6 +123,11 @@ export function ChannelSectionHeader({
   uppercase?: boolean;
   actions?: ReactNode;
   isDragOver?: boolean;
+  /**
+   * The drop fill and "Soltar em" under the redesign, with no base ring: for
+   * a header whose wrapper already draws the ring with the toggle off.
+   */
+  dropFill?: boolean;
   onDragOver?: (event: DragEvent) => void;
   onDrop?: (event: DragEvent) => void;
   className?: string;
@@ -127,6 +145,7 @@ export function ChannelSectionHeader({
         isDragOver && "ring-1 ring-inset ring-accent",
         className,
         CATEGORY_ROW_REDESIGN,
+        (isDragOver || dropFill) && CATEGORY_DROP_INTO_REDESIGN,
       )}
     >
       <button
@@ -168,6 +187,14 @@ export function ChannelSectionHeader({
           </span>
         )}
       </button>
+      {(isDragOver || dropFill) && (
+        <span
+          data-category-drop-label=""
+          className="hidden shrink-0 text-[11px] font-semibold normal-case tracking-normal redesign:inline"
+        >
+          {t("chrome.dropOnCategory", { name: label })}
+        </span>
+      )}
       {actions}
     </div>
   );

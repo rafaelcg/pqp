@@ -2719,7 +2719,7 @@ export const ChannelList = memo(function ChannelList({
                         )}
                         onClick={() => onCreateChannel("category", false)}
                       >
-                        <SectionActionGlyph off={FolderPlus} on={FolderSimplePlus} />
+                        <SectionActionGlyph off={FolderPlus} on={FolderSimplePlus} kind="symbol" onClassName="h-4 w-4" />
                       </button>
                     </Tooltip>
                   )}
@@ -3187,7 +3187,7 @@ export function ChannelSection({
                   className={addButtonClass}
                   onClick={onAddPrivate}
                 >
-                  <SectionActionGlyph off={Lock} on={LockFill} offClassName="h-3 w-3" />
+                  <SectionActionGlyph off={Lock} on={LockFill} kind="symbol" offClassName="h-3 w-3" />
                 </button>
               </Tooltip>
             </div>
@@ -3271,11 +3271,12 @@ export function CategoryHeader({
           // Under the redesign a category reads like any other header: the
           // text brightens, no fill.
           "redesign:rounded-full redesign:hover:bg-transparent",
-          isDragOver && "redesign:ring-accent",
+          isDragOver && "redesign:ring-0",
         )}
       >
         <ChannelSectionHeader
           label={category.name}
+          dropFill={isDragOver}
           uppercase={false}
           collapsed={collapsed}
           onToggle={onToggle}
