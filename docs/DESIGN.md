@@ -858,8 +858,11 @@ no track, at the platform's width. A strip that scrolls sideways may hide
 its bar (`[scrollbar-width:none]`); a list that scrolls down keeps it at
 the platform's width. The one exception is a strip under 6rem tall (the
 listener strip's wrapped list, the friends tabs), which may stay `thin`.
-A pane under the pointer lifts its thumb to `--scrollbar-thumb-hover`
-(secondary text at 80%, 90% in light). Modo 2005 follows the same rule; its
+The innermost scroller under the pointer (`overflow-y-auto`,
+`overflow-auto`, `overflow-x-auto` or a textarea) lifts its thumb to
+`--scrollbar-thumb-hover` (secondary text at 80%, 90% in light). A scroller
+written another way (`overflow-y-scroll`, an inline style) does not lift;
+use one of those classes to opt in. Modo 2005 follows the same rule; its
 toolbar hides its bar because it is a sideways strip.
 
 ### Textarea

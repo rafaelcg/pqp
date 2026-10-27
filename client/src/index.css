@@ -2641,8 +2641,13 @@ html[data-redesign] {
 /*
  * A pane under the pointer lifts its thumb to secondary text, so hover reads
  * as a state even where the platform draws one colour for rest, hover and drag.
+ * Only the innermost scroller under the pointer lifts: `scrollbar-color`
+ * inherits, so without the `:has` a log would light every bar inside it.
  */
-html[data-redesign] :where(.overflow-y-auto, .overflow-auto):hover {
+html[data-redesign]
+  :where(.overflow-y-auto, .overflow-auto, .overflow-x-auto, textarea):hover:not(
+    :has(:where(.overflow-y-auto, .overflow-auto, .overflow-x-auto, textarea):hover)
+  ) {
   scrollbar-color: var(--scrollbar-thumb-hover) transparent;
 }
 
