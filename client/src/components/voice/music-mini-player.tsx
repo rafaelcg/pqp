@@ -173,7 +173,9 @@ export function MusicMiniPlayer({
     return (
       <div
         data-music-mini-player={current ? (music.listening ? "dock" : "dismissed") : "idle"}
-        className="h-0 overflow-hidden"
+        // Out of the flow under the redesign: as a child of the frame's
+        // row, even a zero-width box got a gutter on each side.
+        className="h-0 overflow-hidden redesign:absolute"
       >
         {dock}
       </div>
