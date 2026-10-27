@@ -16,6 +16,7 @@ import {
   CATEGORY_ACTION_REDESIGN,
   CATEGORY_LABEL_REDESIGN,
   CATEGORY_ROW_REDESIGN,
+  CATEGORY_TOGGLE_REDESIGN,
   CATEGORY_SUMMARY_REDESIGN,
   SectionActionGlyph,
   SectionCaret,
@@ -155,10 +156,11 @@ export function MixedCategoryHeader({
           type="button"
           onClick={onToggle}
           aria-expanded={!collapsed}
+          data-section-toggle=""
           className={cn(
             "flex min-w-0 flex-1 items-center gap-1 rounded-sm text-left",
             FOCUS_RING,
-            "redesign:gap-1.5 redesign:rounded-full redesign:focus-visible:ring-accent",
+            CATEGORY_TOGGLE_REDESIGN,
           )}
         >
           <SectionCaret collapsed={collapsed} />

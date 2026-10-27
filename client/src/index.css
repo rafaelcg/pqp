@@ -972,7 +972,8 @@
   --sidebar-card-radius: 0.875rem;
   --sidebar-invite-border: color-mix(in oklab, var(--color-text) 22%, transparent);
   /* The solid AO VIVO badge: the danger hue a step deeper on a dark page,
-     so white 10px text clears 4.5:1 in every look. */
+     where on-danger is white, so 10px text clears 4.5:1. Looks whose
+     on-danger is a dark ink keep the plain danger (below). */
   --live-badge-bg: color-mix(in oklab, var(--color-danger) 78%, black);
 
   --icon-button-radius: var(--radius-pill);
@@ -1268,6 +1269,12 @@
   --color-tooltip-border: transparent;
   --color-on-tooltip: var(--color-surface-0);
   --color-field: color-mix(in oklab, var(--color-text) 3%, var(--color-surface-0));
+}
+
+/* Catppuccin and Everforest dark draw on-danger in a dark ink: darkening the
+   badge would lower its contrast there, so they keep the plain danger. */
+:root[data-redesign]:where([data-appearance="catppuccin"], [data-appearance="everforest"]):not([data-theme="light"]) {
+  --live-badge-bg: var(--color-danger);
 }
 
 /* The redesign's shadows on a light page: tinted, never black. Every look. */
