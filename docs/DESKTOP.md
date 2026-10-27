@@ -41,8 +41,16 @@ Clerk-identical to the web app. It needs no server-side change of its own.
 |---|---|---|
 | Hosted (default, packaged) | no env override | `https://pqp.gg` |
 | Dev | `pnpm electron:dev` | `http://localhost:5173` |
-| Explicit | `PQP_APP_URL=https://…` | that URL |
+| Explicit | `PQP_APP_URL=https://…` | that URL, in `pnpm electron:dev` only. An installed build ignores it (and `VITE_APP_URL`) and loads production, unless `PQP_ALLOW_APP_URL_OVERRIDE=1` is set too |
 | Bundled client | `PQP_LOAD_STATIC=1` | `http://127.0.0.1:<random>` |
+
+**Testing an installed build against staging** needs both variables:
+`PQP_ALLOW_APP_URL_OVERRIDE=1 PQP_APP_URL=https://staging.pqp-3yr.pages.dev`
+(`set` / `$env:` on Windows). Without the switch a packaged app logs
+`ignoring PQP_APP_URL / VITE_APP_URL in a packaged build` and loads
+`https://pqp.gg/app`, so a shortcut or launcher that does not know about it
+cannot point the signed app, with its microphone, camera and input-monitoring
+grants, at another site. See `electron/lib/app-url.js`.
 
 `PQP_LOAD_STATIC=1` is kept for offline use and self-hosting. A self-hoster
 either leaves `CORS_ALLOWED_ORIGINS` unset (which falls open to `*`) or accepts
@@ -913,6 +921,55 @@ runtime breaks Electron without the first three:
 | `device.camera` | video in voice channels |
 | `network.client` / `network.server` | API, WS, WebRTC; loopback static server; desktop sign-in callback |
 | `files.user-selected.read-write` | attachment pickers |
+
+**Open question, deliberately not changed yet (2026-10-26 audit).**
+`allow-dyld-environment-variables` and `disable-library-validation` together let
+another local process start pqp with `DYLD_INSERT_LIBRARIES` or load an unsigned
+dylib into it, and inherit the app's microphone, camera, Accessibility and Input
+Monitoring grants. Removing them is the right direction and cannot be judged
+without a signed, notarized build on a real Mac, which is why it is a follow-up
+and not part of the Electron 44.9 PR. What that test has to cover:
+
+- Remove `allow-dyld-environment-variables` first. Nothing in the shell sets a
+  `DYLD_*` variable; Electron needs it only for debugging. Check the signed app
+  launches, notarizes and joins a call.
+- Then `disable-library-validation`. With it off, every Mach-O the app loads must
+  carry OUR Team ID. electron-builder re-signs Electron's frameworks and helpers
+  with our identity, so those should pass. The one to watch is
+  `uiohook-napi`'s prebuilt `.node` files (the global push-to-talk hook, in
+  `app.asar.unpacked/node_modules/uiohook-napi/prebuilds/darwin-*`): they come
+  from npm, so confirm `codesign -dv` on the packaged `.node` shows our Team ID
+  and that `pqp:ptt-bind-native` still installs the hook after granting
+  Accessibility and Input Monitoring. Every platform's prebuild is packed
+  into the app (win32 and linux ones included), but only `darwin-arm64` and
+  `darwin-x64` ever load on macOS, and `win-share-audio` is Windows only.
+- Test the arm64 and the x64 build, the dmg-installed app and the app after an
+  electron-updater (Squirrel.Mac) update.
+
+### 3.6b Electron fuses
+
+`electronFuses` in `electron/package.json` flips, at pack time and before
+signing: `RunAsNode`, `EnableNodeOptionsEnvironmentVariable` and
+`EnableNodeCliInspectArguments` off (no `ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS` or
+`--inspect` against the installed binary; the shell has no use for any of them,
+the Windows share-audio helper is a `utilityProcess`, which does not need
+`RunAsNode`), and `GrantFileProtocolExtraPrivileges` off (the only `file://` page
+is the share picker, plain scripts with no `fetch`). `resetAdHocDarwinSignature`
+is on because an unsigned arm64 pack is otherwise killed at launch by the broken
+ad-hoc signature a fuse flip leaves behind; a signed build is signed after the
+flip, so it changes nothing there.
+
+Not flipped, with the reason: `EnableEmbeddedAsarIntegrityValidation` and
+`OnlyLoadAppFromAsar` (the pair is what makes tampering with `app.asar` detectable,
+but it is macOS and Windows only, has to be proven on a signed Windows build and on
+the auto-update path, and a failure is "does not start" for every user of that OS;
+do it as its own release), `EnableCookieEncryption` (one-way: cookies written after
+it cannot be read by a build without it, so a rollback would sign everybody out).
+Read the state of a build with
+`node node_modules/@electron/fuses/dist/bin.js read --app <path to pqp.app>`.
+A packaged binary can no longer be driven by Playwright's `_electron.launch`
+(that needs `--inspect`); the smoke specs launch the unpackaged Electron and are
+unaffected.
 
 ### 3.7 Microphone
 

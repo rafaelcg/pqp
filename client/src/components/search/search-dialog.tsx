@@ -4,7 +4,7 @@ import {
   type MessageSearchResult,
 } from "@pqp/shared";
 import { MagnifyingGlass } from "@phosphor-icons/react";
-import { Hash, Loader2, Search } from "lucide-react";
+import { Hash, Search } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,7 @@ import { useTranslation } from "@/lib/i18n";
 import { cn, formatDayLabel, formatFullTimestamp } from "@/lib/utils";
 import { EmptyState } from "@/components/ui/empty-state";
 import { appendUniqueResults, clampSelection } from "./search-results";
+import { Spinner } from "@/components/ui/spinner";
 
 /** Long enough that a typed word is one query, short enough to feel live. */
 const DEBOUNCE_MS = 300;
@@ -201,10 +202,7 @@ export function SearchDialog({
             className="min-w-0 flex-1 bg-transparent text-sm text-text placeholder:text-text-muted focus:outline-none"
           />
           {status === "loading" && (
-            <Loader2
-              aria-hidden="true"
-              className="h-4 w-4 shrink-0 animate-spin text-text-muted"
-            />
+            <Spinner className="h-4 w-4 shrink-0 animate-spin text-text-muted" />
           )}
         </div>
 

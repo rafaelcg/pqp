@@ -1,4 +1,3 @@
-import { Loader2 } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   CONNECTION_PROVIDERS,
@@ -36,6 +35,7 @@ import { takeConnectionErrorFromWindow } from "@/lib/connection-callback";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { Select } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { Spinner as SpinnerGlyph } from "@/components/ui/spinner";
 
 const PROVIDER_NAME: Record<ConnectionGlyphProvider, MessageKey> = {
   steam: "connections.provider.steam",
@@ -691,5 +691,5 @@ function LinkedAs({ name }: { name: string }) {
 }
 
 function Spinner() {
-  return <Loader2 aria-hidden className="h-3.5 w-3.5 motion-safe:animate-spin" />;
+  return <SpinnerGlyph className="h-3.5 w-3.5 motion-safe:animate-spin" />;
 }

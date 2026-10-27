@@ -17,6 +17,7 @@ import {
   type ServerBotTool,
   type ServerBotToolGroup,
 } from "@pqp/shared";
+import { CARD_LIST, CARD_SURFACE } from "@/components/ui/card";
 import { useEffect, useId, useRef, useState } from "react";
 import {
   AlarmClock,
@@ -541,7 +542,7 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
                   title={t("bots.wizard.lives.title", { name: shownName })}
                   description={t("bots.wizard.lives.description")}
                 />
-                <div className="max-h-72 overflow-y-auto rounded-[var(--radius-card)] border border-border bg-surface-card p-1">
+                <div className={cn(CARD_SURFACE, "max-h-72 overflow-y-auto p-1")}>
                   {channels.map((channel) => (
                     <CheckRow
                       key={channel.id}
@@ -813,7 +814,7 @@ function IntroPreview({
     }
   }
   return (
-    <div className="rounded-[var(--radius-card)] border border-border bg-surface-card p-3">
+    <div className={cn(CARD_SURFACE, "p-3")}>
       <p className="mb-2 text-xs font-bold uppercase tracking-wide text-text-tertiary">
         {t("bots.intro.preview", { channel: `#${home.name}` })}
       </p>
@@ -917,10 +918,10 @@ function TestChat({
   }
 
   return (
-    <div className="flex flex-col rounded-[var(--radius-card)] border border-border bg-surface-card">
+    <div className={cn(CARD_SURFACE, "flex flex-col")}>
       <div className="max-h-72 min-h-40 space-y-3 overflow-y-auto p-3" aria-live="polite">
         {messages.length === 0 && (
-          <p className="text-sm text-text-tertiary">{t("bots.wizard.test.empty", { name })}</p>
+          <p className="text-sm text-text-tertiary redesign:text-text-secondary">{t("bots.wizard.test.empty", { name })}</p>
         )}
         {messages.map((message, index) =>
           message.from === "bot" ? (
@@ -992,7 +993,7 @@ function StepTitle({ eyebrow, title, description }: { eyebrow: string; title: st
 
 function HowTo({ title, body }: { title: string; body: string }) {
   return (
-    <li className="rounded-[var(--radius-card)] border border-border bg-surface-card p-3">
+    <li className={cn(CARD_SURFACE, "p-3")}>
       <p className="text-sm font-semibold text-text">{title}</p>
       <p className="text-sm text-text-secondary">{body}</p>
     </li>
@@ -1015,7 +1016,7 @@ function IdCard({ draft, name }: { draft: BotDraft; name: string }) {
     [t("bots.card.powers"), t("bots.card.powersValue", { count: draft.tools.length })],
   ];
   return (
-    <div className="w-full rounded-[var(--radius-card)] border border-border bg-surface-card p-4">
+    <div className={cn(CARD_SURFACE, "w-full p-4")}>
       <p className="mb-2 text-xs font-bold uppercase tracking-wide text-text-tertiary">{t("bots.card.title")}</p>
       <dl className="space-y-1.5 text-sm">
         {rows.map(([label, value]) => (
@@ -1091,7 +1092,7 @@ export function ToolPicker({
         <ModeChip mode="now" />
         <ModeChip mode="confirms" />
       </div>
-      <div className="divide-y divide-border overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface-card">
+      <div className={cn(CARD_SURFACE, CARD_LIST)}>
         {TOOL_GROUPS.map(([group, groupTools]) => {
           const on = groupTools.filter((tool) => tools.includes(tool));
           const Icon = GROUP_ICON[group];
@@ -1099,7 +1100,7 @@ export function ToolPicker({
           return (
             <div key={group}>
               <div className="flex items-center gap-3 px-3 py-2.5">
-                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-[var(--radius-control)] bg-surface-2 text-text-secondary">
+                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-[var(--radius-control)] bg-surface-2 text-text-secondary redesign:bg-[color:var(--card-row-hover)]">
                   <Icon className="h-4 w-4" aria-hidden />
                 </span>
                 <button
@@ -1118,7 +1119,7 @@ export function ToolPicker({
                       aria-hidden
                     />
                   </span>
-                  <span className="block truncate text-xs text-text-tertiary">
+                  <span className="block truncate text-xs text-text-tertiary redesign:text-text-secondary">
                     {t("bots.tools.count", { on: on.length, total: groupTools.length })} ·{" "}
                     {t(`bots.tools.groupHint.${group}`)}
                   </span>

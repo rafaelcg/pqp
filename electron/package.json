@@ -32,7 +32,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
-    "electron": "^44.0.0",
+    "electron": "44.9.0",
     "electron-builder": "^26.16.1"
   },
   "build": {
@@ -62,6 +62,13 @@
       "native/win-share-audio/prebuilds/**/*"
     ],
     "npmRebuild": false,
+    "electronFuses": {
+      "runAsNode": false,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "grantFileProtocolExtraPrivileges": false,
+      "resetAdHocDarwinSignature": true
+    },
     "publish": [
       {
         "provider": "github",
