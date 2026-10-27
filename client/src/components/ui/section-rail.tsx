@@ -78,6 +78,15 @@ export interface SectionRailItem<Id extends string = string> {
 const RAIL_SURFACE_REDESIGN =
   "redesign:border-[color:var(--settings-rule)] redesign:sm:border-r-0";
 
+/**
+ * The page beside the rail under the redesign: an inset pane in the
+ * conversation's tone, 8px from the dialog's right and bottom edges on `sm`
+ * and up, rounded like the app's panes. One recipe for the three settings
+ * dialogs.
+ */
+export const SETTINGS_PANE_REDESIGN =
+  "redesign:bg-[color:var(--settings-pane-bg)] sm:redesign:mr-[var(--settings-pane-inset)] sm:redesign:mb-[var(--settings-pane-inset)] sm:redesign:rounded-[var(--radius-pane)]";
+
 const TAB_REDESIGN =
   "redesign:min-h-[var(--list-row-h-sm)] redesign:gap-[var(--list-row-gap-sm)] redesign:rounded-[var(--list-row-radius)] redesign:px-[var(--list-row-px)] redesign:py-0 redesign:focus-visible:ring-[color:var(--list-row-ring)] redesign:focus-visible:ring-offset-0";
 const TAB_SELECTED_REDESIGN =

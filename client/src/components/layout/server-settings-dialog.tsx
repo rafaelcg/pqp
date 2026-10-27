@@ -1,3 +1,19 @@
+import {
+  Confetti as ConfettiGlyph,
+  GlobeSimple as GlobeGlyph,
+  Image as ImageGlyph,
+  Key as KeyGlyph,
+  Robot as RobotGlyph,
+  Scroll as ScrollGlyph,
+  ShieldCheck as ShieldCheckGlyph,
+  ShieldSlash as ShieldSlashGlyph,
+  Smiley as SmileyGlyph,
+  SquaresFour as SquaresFourGlyph,
+  Users as UsersGlyph,
+  Warning as WarningGlyph,
+  WebhooksLogo as WebhooksLogoGlyph,
+  type Icon as PhosphorIcon,
+} from "@phosphor-icons/react";
 import type {
   AuditAction,
   AuditLogEntry,
@@ -24,7 +40,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { SectionRail } from "@/components/ui/section-rail";
+import { SectionRail, SETTINGS_PANE_REDESIGN } from "@/components/ui/section-rail";
+import { SETTINGS_CARD_REDESIGN } from "@/components/settings/kit/classes";
 import { Select } from "@/components/ui/select";
 import { ReportsSection } from "@/components/layout/reports-section";
 import { AutomodSettingsSection } from "@/components/layout/automod-settings-section";
@@ -319,6 +336,8 @@ interface SectionDef {
   label: MessageKey;
   description: MessageKey;
   icon: LucideIcon;
+  /** Under the redesign: the filled Phosphor icon. */
+  glyph: PhosphorIcon;
   /** False for a section an admin may see too. */
   ownerOnly: boolean;
 }
@@ -329,6 +348,7 @@ const SECTIONS: SectionDef[] = [
     label: "serverSettings.section.overview",
     description: "serverSettings.overview.description",
     icon: ImageIcon,
+    glyph: ImageGlyph,
     ownerOnly: true,
   },
   {
@@ -337,6 +357,7 @@ const SECTIONS: SectionDef[] = [
     label: "serverSettings.section.emoji",
     description: "serverSettings.emoji.description",
     icon: Smile,
+    glyph: SmileyGlyph,
     ownerOnly: false,
   },
   {
@@ -347,6 +368,7 @@ const SECTIONS: SectionDef[] = [
     label: "serverSettings.section.community",
     description: "serverSettings.community.description",
     icon: Globe,
+    glyph: GlobeGlyph,
     ownerOnly: false,
   },
   {
@@ -354,6 +376,7 @@ const SECTIONS: SectionDef[] = [
     label: "serverSettings.section.access",
     description: "serverSettings.access.description",
     icon: KeyRound,
+    glyph: KeyGlyph,
     ownerOnly: true,
   },
   {
@@ -361,6 +384,7 @@ const SECTIONS: SectionDef[] = [
     label: "serverSettings.section.roles",
     description: "serverSettings.roles.description",
     icon: Users,
+    glyph: UsersGlyph,
     ownerOnly: false,
   },
   {
@@ -368,6 +392,7 @@ const SECTIONS: SectionDef[] = [
     label: "serverSettings.section.soundboard",
     description: "serverSettings.soundboard.description",
     icon: PartyPopper,
+    glyph: ConfettiGlyph,
     ownerOnly: false,
   },
   {
@@ -375,6 +400,7 @@ const SECTIONS: SectionDef[] = [
     label: "serverSettings.section.bots",
     description: "serverSettings.bots.description",
     icon: Bot,
+    glyph: RobotGlyph,
     ownerOnly: false,
   },
   {
@@ -384,6 +410,7 @@ const SECTIONS: SectionDef[] = [
     label: "serverSettings.section.apps",
     description: "serverSettings.apps.description",
     icon: LayoutGrid,
+    glyph: SquaresFourGlyph,
     ownerOnly: false,
   },
   {
@@ -391,6 +418,7 @@ const SECTIONS: SectionDef[] = [
     label: "serverSettings.section.integrations",
     description: "serverSettings.integrations.description",
     icon: Webhook,
+    glyph: WebhooksLogoGlyph,
     ownerOnly: false,
   },
   {
@@ -398,6 +426,7 @@ const SECTIONS: SectionDef[] = [
     label: "serverSettings.section.moderation",
     description: "serverSettings.moderation.description",
     icon: ShieldCheck,
+    glyph: ShieldCheckGlyph,
     ownerOnly: false,
   },
   {
@@ -405,6 +434,7 @@ const SECTIONS: SectionDef[] = [
     label: "serverSettings.section.automod",
     description: "serverSettings.automod.description",
     icon: ShieldBan,
+    glyph: ShieldSlashGlyph,
     ownerOnly: false,
   },
   {
@@ -412,6 +442,7 @@ const SECTIONS: SectionDef[] = [
     label: "serverSettings.section.audit",
     description: "serverSettings.audit.description",
     icon: ScrollText,
+    glyph: ScrollGlyph,
     ownerOnly: false,
   },
   {
@@ -419,6 +450,7 @@ const SECTIONS: SectionDef[] = [
     label: "serverSettings.section.danger",
     description: "serverSettings.danger.description",
     icon: TriangleAlert,
+    glyph: WarningGlyph,
     ownerOnly: true,
   },
 ];
@@ -453,6 +485,9 @@ function Block({
       className={cn(
         "space-y-2",
         tone === "danger" && "rounded-lg border border-danger/40 bg-danger/5 p-4",
+        // Under the redesign: a card with the danger banner's edge.
+        tone === "danger" &&
+          "redesign:rounded-[var(--radius-card)] redesign:border-[color:color-mix(in_oklab,var(--color-danger)_var(--banner-edge),transparent)] redesign:bg-[color:color-mix(in_oklab,var(--color-danger)_6%,transparent)] redesign:p-5",
       )}
     >
       <SectionLabel
@@ -557,7 +592,7 @@ function AuditLogSection({ serverId }: { serverId: string }) {
             return (
               <li
                 key={entry.id}
-                className="rounded-md border border-ink-4 bg-ink-3/40 p-2 text-sm"
+                className={cn("rounded-md border border-ink-4 bg-ink-3/40 p-2 text-sm", SETTINGS_CARD_REDESIGN, "redesign:px-3.5 redesign:py-2.5")}
               >
                 {/* A reason is free text and can be one unbroken run of
                     characters, so it wraps anywhere rather than pushing the
@@ -1068,6 +1103,7 @@ export function ServerSettingsDialog({
             id: section.id,
             label: t(section.label),
             icon: section.icon,
+            glyph: section.glyph,
             danger: section.id === "danger",
             dirty: section.id === "automod" && automodDirty,
           }))}
@@ -1083,7 +1119,11 @@ export function ServerSettingsDialog({
           role="tabpanel"
           aria-labelledby={`${tabIdPrefix}-${active.id}`}
           tabIndex={0}
-          className="min-w-0 flex-1 space-y-6 overflow-y-auto overscroll-contain px-5 py-5 focus-visible:outline-none"
+          className={cn(
+            "min-w-0 flex-1 space-y-6 overflow-y-auto overscroll-contain px-5 py-5 focus-visible:outline-none",
+            SETTINGS_PANE_REDESIGN,
+            "sm:redesign:px-8 sm:redesign:pt-7 sm:redesign:pb-8",
+          )}
         >
           <SectionHeader section={active} />
 

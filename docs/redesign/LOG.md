@@ -1053,6 +1053,23 @@ confirm, the delete account dialog, the phone tab strip):
 4. Kept: every section, the close guard, the handle confirm, the 44px phone
    targets, the dirty dot and its spoken description.
 
+
+### f-server-settings
+
+Spec (audit: `server-settings-dialog.tsx` with 13 sections and its own
+`Block` and `SectionHeader`, `channel-settings-dialog.tsx` with 5, roles and
+the rank list, emoji, AutoMod, webhooks in and out, the audit log, danger):
+
+1. Job: run a server or a channel: a rail of sections, a page each, a Fechar
+   footer; owner-only sections and the armed transfer and delete.
+2. Redesign: the user settings frame (side tone, inset page, pill tabs with
+   filled glyphs). Bespoke boxes take the card look (`SETTINGS_CARD_REDESIGN`),
+   uppercase eyebrows become section labels, field labels sentence case,
+   roles are list row pills with a Phosphor grip, the danger block is a card
+   with the danger banner's edge, status pills take the badge recipe.
+3. Merges: nothing; `Block` stays (the kit's group has rows, these do not).
+4. Kept: every section, drag to reorder, the armed confirms, the footer.
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss

@@ -513,7 +513,27 @@ test("captures the design council screens", async ({ browser }) => {
       await page.getByRole("dialog").getByRole("tab", { name: "Permissões" }).click();
       await page.waitForTimeout(300);
       await shoot(page, `13-server-roles-perms-${theme}`);
+      // The audit log's entries and the danger zone's card.
+      await page.getByRole("dialog").getByText("Registro", { exact: true }).first().click();
+      await page.waitForTimeout(800);
+      await shoot(page, `26-server-audit-${theme}`);
+      await page.getByRole("dialog").getByText("Zona de risco", { exact: true }).first().click();
+      await page.waitForTimeout(300);
+      await shoot(page, `27-server-danger-${theme}`);
       await page.keyboard.press("Escape");
+      // Channel settings, from the open channel's gear. Best effort: a
+      // missing gear skips the shot instead of the screens after it.
+      try {
+        const gear = page.getByRole("button", { name: /Configurações do canal/ }).first();
+        await gear.hover({ force: true, timeout: 5_000 });
+        await gear.click({ force: true, timeout: 5_000 });
+        await expect(page.getByRole("dialog")).toBeVisible({ timeout: 5_000 });
+        await page.waitForTimeout(500);
+        await shoot(page, `28-channel-settings-${theme}`);
+        await page.keyboard.press("Escape");
+      } catch {
+        console.log("channel settings gear not found, shot 28 skipped");
+      }
 
       await context.close();
     }
