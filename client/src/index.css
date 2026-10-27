@@ -912,6 +912,12 @@
   /* The solid accent, as IconButton's and Slider's rings: the 60% focus
      ring all but vanishes on the light selected fill. */
   --list-row-ring: var(--color-accent);
+  /* Settings dialogs: a small frame. The band and the rail sit on the side
+     pane's tone, the page is an inset pane in the conversation's tone. */
+  --settings-surface: var(--color-pane-side);
+  --settings-pane-bg: var(--color-pane-main);
+  --settings-pane-inset: 0.5rem;
+  --settings-rule: color-mix(in oklab, var(--color-border) 70%, transparent);
 
   /* Dialogs: a deeper scrim with more blur, so the app behind recedes; the
      panel takes a text edge and the deepest lift. The header loses its rule

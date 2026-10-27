@@ -1105,6 +1105,24 @@ server settings do not use it, so its roles field label in caps moves to
    Phosphor icons through a shared `IconSwap`. Empty and result take the
    `p-empty` shape once that merges.
 
+
+### f-user-settings
+
+Spec (audit: `settings-modal.tsx`, `SectionRail` shared with server and
+channel settings, 13 sections, the kit, `UnsavedChangesBar`, the handle
+confirm, the delete account dialog, the phone tab strip):
+
+1. Job: one place for the account and the app: a rail of tabs in groups, a
+   page per tab, profile drafts with an unsaved bar, instant save elsewhere.
+2. Redesign: a small frame. The band and the rail on the side pane's tone,
+   the page an inset rounded pane (`--settings-*`). Tabs are the list row's
+   small pill with filled Phosphor glyphs; group names are section labels;
+   the account card in the rail foot is a pill.
+3. Merges: nothing. `SectionRail` and the `fill` dialog surface are shared,
+   so server and channel settings take the rail and the frame tone too;
+   their pages stay for `f-server-settings`.
+4. Kept: every section, the close guard, the handle confirm, the 44px phone
+   targets, the dirty dot and its spoken description.
 Rounds: Codex 8.2 (r1); Opus 8.5 (r2), 8.0 (r3), 8.5 (r5), no MUST left.
 Round 5 fixes: the copy failure glyph at 14px, the info tint at 7% in
 dark, the rail build line in mono. Merged on the cap.

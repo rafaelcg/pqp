@@ -521,6 +521,15 @@ test("captures the design council screens", async ({ browser }) => {
       await page.getByRole("dialog").getByText("Voz e vídeo", { exact: true }).first().click();
       await expect(page.getByRole("dialog").getByRole("slider").first()).toBeVisible();
       await shoot(page, `14-settings-voice-${theme}`);
+      // An unsaved profile: the bar at the foot of the page and the dot on
+      // the Perfil tab, seen from the next tab. Discarded before closing.
+      await page.getByRole("dialog").getByText("Perfil", { exact: true }).first().click();
+      await page.getByRole("dialog").getByLabel("Nome de exibição").fill("Lia Fliperama");
+      await page.getByRole("dialog").getByText("Privacidade", { exact: true }).first().click();
+      await expect(page.getByRole("button", { name: "Salvar alterações" })).toBeVisible();
+      await page.waitForTimeout(400);
+      await shoot(page, `25-settings-unsaved-${theme}`);
+      await page.getByRole("button", { name: "Descartar" }).click();
       await page.keyboard.press("Escape");
 
       await page.locator("[data-server-menu-trigger]").first().click();
@@ -606,6 +615,17 @@ test("captures the design council screens", async ({ browser }) => {
       await shoot(phonePage, `19-phone-sheet-${theme}`);
       await phonePage.keyboard.press("Escape");
     }
+    // Settings on a phone: the rail is a strip of tabs over the page.
+    await as(phonePage, "dark");
+    await phonePage.goto(chatUrl);
+    await expect(phonePage.getByText(PAPO.at(-1)![1])).toBeVisible({ timeout: 30_000 });
+    await hideDevBanner(phonePage);
+    await phonePage.getByRole("button", { name: "Abrir navegação" }).first().click();
+    await phonePage.waitForTimeout(500);
+    await phonePage.getByRole("button", { name: "Abrir configurações" }).first().click();
+    await expect(phonePage.getByRole("dialog")).toBeVisible();
+    await phonePage.waitForTimeout(500);
+    await shoot(phonePage, "24-phone-settings-dark");
     await phone.close();
   } finally {
     for (const socket of sockets.values()) {

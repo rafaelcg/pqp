@@ -9,7 +9,10 @@ import {
   type ReactNode,
 } from "react";
 import { flushSync } from "react-dom";
+import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
 import type { LucideIcon } from "lucide-react";
+import { IconSwap } from "@/components/ui/icon";
+import { RAIL_LABEL_REDESIGN } from "@/components/ui/section-header";
 import { SM_UP_QUERY, useMediaQuery } from "@/components/ui/use-media-query";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -28,6 +31,8 @@ export interface SectionRailItem<Id extends string = string> {
   id: Id;
   label: string;
   icon: LucideIcon;
+  /** The filled Phosphor icon the tab draws under the redesign. */
+  glyph?: PhosphorIcon;
   danger?: boolean;
   dirty?: boolean;
   /**
@@ -65,6 +70,21 @@ export interface SectionRailItem<Id extends string = string> {
  * `footer` renders after the tablist, outside it, on `sm` and up: a tablist's
  * children are tabs, and anything else in it lies about how many there are.
  */
+/**
+ * Under the redesign the rail stands on the dialog's own surface (the side
+ * pane's tone, `--settings-surface`) with no rule beside it, the way the
+ * sidebar sits beside the conversation. The phone strip keeps a faint rule.
+ */
+const RAIL_SURFACE_REDESIGN =
+  "redesign:border-[color:var(--settings-rule)] redesign:sm:border-r-0";
+
+const TAB_REDESIGN =
+  "redesign:min-h-[var(--list-row-h-sm)] redesign:gap-[var(--list-row-gap-sm)] redesign:rounded-[var(--list-row-radius)] redesign:px-[var(--list-row-px)] redesign:py-0 redesign:focus-visible:ring-[color:var(--list-row-ring)] redesign:focus-visible:ring-offset-0";
+const TAB_SELECTED_REDESIGN =
+  "redesign:bg-[color:var(--list-row-selected)] redesign:font-semibold redesign:text-[color:var(--list-row-selected-text)]";
+const TAB_IDLE_REDESIGN =
+  "redesign:text-text-secondary redesign:hover:bg-[color:var(--list-row-hover)] redesign:hover:text-text";
+
 export function SectionRail<Id extends string>({
   sections,
   active,
@@ -270,6 +290,7 @@ export function SectionRail<Id extends string>({
           ? "min-h-0 flex-1 max-sm:items-center"
           : cn(
               "border-b border-border sm:w-56 sm:border-b-0 sm:border-r",
+              RAIL_SURFACE_REDESIGN,
               className,
             ),
       )}
@@ -300,7 +321,11 @@ export function SectionRail<Id extends string>({
                 id={groupId(section.group!)}
                 role="presentation"
                 aria-hidden="true"
-                className="hidden px-3 pb-1 pt-4 text-xs font-medium text-text-tertiary first:pt-0 sm:block"
+                className={cn(
+                  "hidden px-3 pb-1 pt-4 text-xs font-medium text-text-tertiary first:pt-0 sm:block",
+                  RAIL_LABEL_REDESIGN,
+                  "redesign:mb-0 redesign:px-[var(--list-row-px)] redesign:pb-1.5 redesign:pt-5",
+                )}
               >
                 {heading}
               </div>
@@ -309,7 +334,7 @@ export function SectionRail<Id extends string>({
               <div
                 role="presentation"
                 aria-hidden="true"
-                className="mx-3 my-2 hidden border-t border-border sm:block"
+                className="mx-3 my-2 hidden border-t border-border sm:block redesign:border-[color:var(--settings-rule)]"
               />
             ) : null}
             <button
@@ -331,9 +356,14 @@ export function SectionRail<Id extends string>({
                   ? "bg-accent/12 font-medium text-text"
                   : "text-text-tertiary hover:bg-surface-2 hover:text-text",
                 section.danger && !selected && "text-danger/80",
+                // Under the redesign a tab is the list row's small pill: the
+                // row hover, and the accent's soft fill when it is open.
+                TAB_REDESIGN,
+                selected ? TAB_SELECTED_REDESIGN : TAB_IDLE_REDESIGN,
+                section.danger && !selected && "redesign:text-danger",
                 // Phone strip: stays at the start edge while the strip scrolls.
                 pinned &&
-                  "max-sm:sticky max-sm:left-0 max-sm:z-10 max-sm:bg-surface-2 max-sm:text-text",
+                  "max-sm:sticky max-sm:left-0 max-sm:z-10 max-sm:bg-surface-2 max-sm:text-text redesign:max-sm:bg-[color:var(--settings-surface)] redesign:max-sm:shadow-[12px_0_12px_-4px_var(--settings-surface)]",
                 // Phone strip: 36px drawn, 44px to a finger. The hit area grows
                 // into the strip's padding, so the strip itself never gains a
                 // vertical scroll.
@@ -341,12 +371,16 @@ export function SectionRail<Id extends string>({
                 "max-sm:after:absolute max-sm:after:inset-x-0 max-sm:after:-inset-y-1 max-sm:after:content-['']",
               )}
             >
-              <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+              {section.glyph ? (
+                <IconSwap off={Icon} on={section.glyph} offClassName="h-4 w-4 shrink-0" />
+              ) : (
+                <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+              )}
               <span className="min-w-0">{section.label}</span>
               {section.dirty ? (
                 <span
                   data-rail-dirty
-                  className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-accent"
+                  className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-accent redesign:h-2 redesign:w-2"
                   aria-hidden
                 />
               ) : null}
@@ -372,11 +406,12 @@ export function SectionRail<Id extends string>({
     <div
       className={cn(
         "flex shrink-0 flex-col border-b border-border sm:w-56 sm:border-b-0 sm:border-r",
+        RAIL_SURFACE_REDESIGN,
         className,
       )}
     >
       {tablist}
-      <div className="hidden shrink-0 border-t border-border px-3 pt-3 pb-4 sm:block">
+      <div className="hidden shrink-0 border-t border-border px-3 pt-3 pb-4 sm:block redesign:border-t-0 redesign:px-3 redesign:pt-2 redesign:pb-3">
         {footer}
       </div>
     </div>
