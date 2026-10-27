@@ -53,8 +53,8 @@ export function ChannelMusicCard({
         // Keyboard focus on the title rings the whole card, as on a row.
         "redesign:has-[[data-music-title]:focus-visible]:ring-2 redesign:has-[[data-music-title]:focus-visible]:ring-inset redesign:has-[[data-music-title]:focus-visible]:ring-[color:var(--list-row-ring)]",
         // In the call the whole card opens the music, so it answers the
-        // pointer on the row hover the occupants use.
-        inCall && "redesign:relative redesign:cursor-pointer redesign:hover:bg-[color:var(--list-row-hover)]",
+        // pointer, one step over the card in either theme.
+        inCall && "redesign:relative redesign:cursor-pointer redesign:hover:bg-[color:var(--card-hover)]",
       )}
     >
       <span className="relative h-6 w-6 shrink-0 overflow-hidden rounded-[var(--radius-control)] bg-surface-3 redesign:flex redesign:h-7 redesign:w-7 redesign:items-center redesign:rounded-lg">

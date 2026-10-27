@@ -2,7 +2,7 @@ import {
   EarSlash,
   Hand as HandFill,
   MicrophoneSlash,
-  Screencast,
+  MonitorArrowUp,
   VideoCamera,
   type Icon as PhosphorIcon,
 } from "@phosphor-icons/react";
@@ -123,7 +123,7 @@ export function VoiceOccupantBadges({
       {person.sharingScreen && (
         <BadgeGlyph
           off={ScreenShare}
-          on={Screencast}
+          on={MonitorArrowUp}
           label={t("chrome.sharingScreen")}
           tone="accent"
         />
