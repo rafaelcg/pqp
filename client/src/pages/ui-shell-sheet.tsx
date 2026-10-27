@@ -909,7 +909,7 @@ function MessageContentBlock() {
           in; a dice roll; a link preview; a webhook's own embed. */}
       {[CONTENT_MESSAGES_A, CONTENT_MESSAGES_B].map((messages, index) => (
         <MainPane key={index}>
-          <div className="flex h-[900px] min-h-0 flex-col">
+          <div className={cn("flex min-h-0 flex-col", index === 0 ? "h-[1180px]" : "h-[900px]")}>
             <MessageList
               messages={messages}
               currentUserId={ROW_ME}

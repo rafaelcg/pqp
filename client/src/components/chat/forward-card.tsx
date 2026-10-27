@@ -81,7 +81,7 @@ export function ForwardCardView({
   return (
     <div
       className={cn(
-        "group/fwd mt-1.5 w-full max-w-[26rem] overflow-hidden rounded-[var(--radius-card)] border border-border border-l-[3px] border-l-accent bg-surface-1 text-left transition-[border-color,background-color] duration-[var(--duration-fast)] hover:border-accent/50 hover:bg-surface-2",
+        "group/fwd mt-1.5 w-full max-w-[26rem] redesign:max-w-md overflow-hidden rounded-[var(--radius-card)] border border-border border-l-[3px] border-l-accent bg-surface-1 text-left transition-[border-color,background-color] duration-[var(--duration-fast)] hover:border-accent/50 hover:bg-surface-2",
         CONTENT_CARD_REDESIGN,
         CONTENT_CARD_HOVER_REDESIGN,
       )}

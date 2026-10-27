@@ -4945,7 +4945,7 @@ function WebhookEmbedCard({ embed }: { embed: WebhookEmbed }) {
               <p className={cn("text-[11px] font-semibold uppercase tracking-wide text-paper-muted", CONTENT_KICKER_REDESIGN, "redesign:font-semibold redesign:text-text-secondary")}>
                 {field.name}
               </p>
-              <p className="text-xs text-paper">{field.value}</p>
+              <p className="text-xs text-paper redesign:text-[0.8125rem] redesign:text-text">{field.value}</p>
             </div>
           ))}
         </div>

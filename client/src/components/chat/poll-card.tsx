@@ -31,7 +31,8 @@ const SHELL = cn(
 );
 
 /** The avatar cutout on the card: the pane under its faint tint. */
-const VOTER_RING_REDESIGN = "redesign:ring-[color:var(--color-pane-main)]";
+// A hairline in the card's own fill, so a disc on the leader's accent fill gets no dark halo.
+const VOTER_RING_REDESIGN = "redesign:ring-1 redesign:ring-[color:var(--card-bg)]";
 
 export function PollCard({ poll, canManage = false, onVote, onClose }: PollCardProps) {
   const { t } = useTranslation();
