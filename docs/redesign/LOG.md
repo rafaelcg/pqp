@@ -72,6 +72,7 @@ Read this file and the inventory at the start of every session.
 | 3 | `s-banners` | Merged, capped at round 5 (Opus 8.2 r5, MUST fixed after). Not done: a dark-only accent edge |
 | 3 | `s-message-row` | Merged, capped at round 5 (Opus 8.5 r5) |
 | 4 | `f-onboarding` | Merged, capped at round 5 (Opus 8.3 r3 and r5) |
+| 5 | `m-sheets` | Merged, approved at round 5 (Opus 9.0, no MUST) |
 | 4 | `f-user-settings` | Merged, capped at round 5 (Opus 8.1 r5, 8.2 r4) |
 | 4 | `f-connections` | Merged, capped at round 5 (Opus 8.4 r3 and r4, 8.3 r5). Open: question 6 (copy) |
 | 4 | `f-search` | Merged, capped at round 5 (Opus 8.5 r5). Not done: `<li role="none">` inside the listbox (it changes the toggle-off tree too) |
@@ -1160,6 +1161,36 @@ server settings do not use it, so its roles field label in caps moves to
    `ui/Badge`, notices take the banner's shape with a tinted info tone,
    Phosphor icons through a shared `IconSwap`. Empty and result take the
    `p-empty` shape once that merges.
+Rounds: Codex 8.2 (r1); Opus 8.5 (r2), 8.0 (r3), 8.5 (r5), no MUST left.
+Round 5 fixes: the copy failure glyph at 14px, the info tint at 7% in
+dark, the rail build line in mono. Merged on the cap.
+
+### m-sheets
+
+Spec (audit: the four phone sheets in the inventory. The app launcher, the
+soundboard, every `Dialog` below `sm` and the settings strip already draw
+the merged sheet, popover or list row tokens; the music queue is the one
+left: `voice/music-fila.tsx` as the composer's sheet and as the drawer,
+`music-queue-list.tsx`, the history in `music-extras.tsx` and the field in
+`music-search-picker.tsx`):
+
+1. Job: see what plays next, add a song, reorder, play one again.
+2. Redesign: one recipe in `voice/music-classes.ts` for both homes: rows at
+   the control radius on the menu's translucent hover, covers nested inside, the
+   highlighted result on the menu's highlight, round ghost icons, sentence
+   case headings, card-edge seams; the drawer on the side pane with the
+   sheet's scrim and a sideways shadow; Phosphor glyphs.
+3. Merges: the drawer's paper tokens and the sheet's surface tokens meet in
+   one look under the redesign.
+4. Kept: drag and Alt+arrow reordering, the row menu, history, shuffle,
+   watch on stage, the field's hint, outside-press close.
+5. Left: the player bar under the queue is call chrome (`f-call`).
+Rounds (Opus only): r1 7.0 (MUST fixed: the row hover vanished on the
+composer's well), r2 8.2 (MUST fixed: history rows had no cover), r3 8.6,
+r4 8.1, r5 9.0 (approved, no MUST). Also: one right icon column, Subir and
+Descer in a row's menu under the redesign (touch has no drag), still
+history rows, a sideways drawer shadow. New copy: `music.moveUp`,
+`music.moveDown`.
 
 ### f-search
 
@@ -1252,9 +1283,7 @@ the rank list, emoji, AutoMod, webhooks in and out, the audit log, danger):
    with the danger banner's edge, status pills take the badge recipe.
 3. Merges: nothing; `Block` stays (the kit's group has rows, these do not).
 4. Kept: every section, drag to reorder, the armed confirms, the footer.
-Rounds: Codex 8.2 (r1); Opus 8.5 (r2), 8.0 (r3), 8.5 (r5), no MUST left.
-Round 5 fixes: the copy failure glyph at 14px, the info tint at 7% in
-dark, the rail build line in mono. Merged on the cap.
+Rounds (Opus only): r2 7.6, r3 7.4, r4 7.9, r5 7.8 (cap). Merged on the cap.
 
 ### s-category
 

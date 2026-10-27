@@ -46,6 +46,7 @@ import { CornerCard } from "@/components/layout/corner-card";
 import { FirstRunCard } from "@/components/onboarding/first-run-card";
 import { Button } from "@/components/ui/button";
 import { setUpdateWaiting } from "@/lib/update-prompt-state";
+import { MusicQueueSpecimen } from "@/pages/qa-music-queue";
 
 /**
  * The shell's pieces on `/qa/ui`, drawn by the real components with made-up
@@ -1246,6 +1247,8 @@ export function ShellSheet() {
           </div>
         </div>
       </div>
+      {/* The music queue in a call's composer: three waiting, one played. */}
+      <MusicQueueSpecimen />
     </div>
   );
 }
