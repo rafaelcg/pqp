@@ -488,6 +488,31 @@ redesign it uses the merged primitives' tokens:
 - A choice card is a card; the chosen one has a 2px accent edge (the accent border plus a 1px inset ring) and a check.
 - Icons are Phosphor through `IconSwap`.
 
+### The call
+
+`voice/call-stage.tsx` and its controls, with the recipes in
+`voice/call-control-classes.ts` and the `--call-*` tokens. Under the
+redesign:
+
+- The open stage sits on the canvas (`--call-stage-bg`). Its floating bar is a
+  popover: `--call-bar-bg`, `--call-bar-border`, `--call-bar-shadow`.
+- A control on the open stage is a 44px round well (`--call-control-bg`,
+  hover `--call-control-hover`). Docked in the composer the controls rest as
+  ghosts beside the composer's own icons and fill on hover.
+- A control that is on (camera, share, music, a raised hand, a pinned video
+  size, audience mode) takes the soft accent (`--call-control-on-bg`). A
+  muted mic takes the soft danger (`--call-control-off-bg`); a moderator's
+  mute takes the soft warning. The hang-up is the one solid red, 64px wide.
+- The audience's raise-hand stays the solid accent: it is their one action.
+- A tile is `--call-tile-bg` on the card radius (`--call-tile-radius`).
+  Whoever is talking gets a 2px ring in `--call-speaking` with a 2px gap cut
+  from the stage.
+- What floats on a picture (the name, "⋯", fullscreen) is dark glass
+  (`--call-badge-bg`), the same in both looks. Names are pills; the controls
+  are 32px.
+- Glyphs are filled Phosphor objects through `IconSwap`; "⋯" and the
+  fullscreen corners are bold symbols.
+
 ## Components
 
 Everything in `client/src/components/ui/`. Import from `@/components/ui/<name>`.
