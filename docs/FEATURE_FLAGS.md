@@ -850,6 +850,26 @@ build that hides unknown channel types must be out, or a forum inside a
 category is a dead row there. `server/src/lib/flag-client-contract.test.ts`
 pins the route, the field and the create guard.
 
+## `forum_announcement` (per server, client presentation only)
+
+"O fórum abriu": a one-time corner card that tells the members of a server its
+forum is live, with **Abrir o fórum** and **Agora não**. Behind
+`FORUM_ANNOUNCEMENT` (default off, **per server**, born as a flag). Served as
+`announce` on `GET /api/forum/config?serverId=` (`server/src/lib/forum-config.ts`),
+which answers true only for a named server where `forum_channels` is on too, so
+the card can never send people to a forum whose posts are paused.
+
+Off is nothing at all: no card, nothing stored. On, the client still draws it
+only for a member of that server who can see a forum channel there, is not on
+it, has not closed it or opened the forum on that browser, and is not in a call,
+a share, an app or a live party (`client/src/lib/forum-announcement.ts`,
+`docs/ONBOARDING.md`). It is a campaign: turn it on for one server
+(`PUT /api/admin/flag-overrides { key: "forum_announcement", serverId,
+enabled: true }` or controles → interruptores), and off again (`enabled: null`)
+once it has done its job. Open tabs follow on the next config refresh (focus or
+10 min). `server/src/lib/flag-client-contract.test.ts` pins the field on both
+sides; `server/src/api/forum-flag.test.ts` pins the answer with rows.
+
 ## `apps` (per server)
 
 The apps platform: small interactive things (Locadora, a game room) that a person

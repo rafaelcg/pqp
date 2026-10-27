@@ -97,6 +97,7 @@ describe("the id list", () => {
     for (const kept of [
       "qg",
       "listingNudge",
+      "forumNews",
       "mobileBeta",
       "notifyOffer",
       "communityHomePost",

@@ -26,11 +26,21 @@ import { onConfigRefresh } from "@/lib/config-refresh";
  */
 export interface ForumConfigState {
   enabled: boolean;
+  /**
+   * `forum_announcement`: the one-time "O fórum abriu" corner card may be
+   * offered to this server's members (`lib/forum-announcement.ts`). Only ever
+   * true where `enabled` is.
+   */
+  announce: boolean;
   /** The server has answered at least once for this server. */
   loaded: boolean;
 }
 
-const OFF_UNKNOWN: ForumConfigState = { enabled: false, loaded: false };
+const OFF_UNKNOWN: ForumConfigState = {
+  enabled: false,
+  announce: false,
+  loaded: false,
+};
 /** One more ask after a failed first one (not after a 404, which is an answer). */
 export const FORUM_CONFIG_RETRY_MS = 5_000;
 
@@ -46,7 +56,11 @@ function stateFor(serverId: string | null | undefined): ForumConfigState {
   const answer = settled.get(serverId);
   return answer === undefined
     ? OFF_UNKNOWN
-    : { enabled: answer.enabled === true, loaded: true };
+    : {
+        enabled: answer.enabled === true,
+        announce: answer.enabled === true && answer.announce === true,
+        loaded: true,
+      };
 }
 
 function notify(serverId: string): void {
@@ -63,7 +77,11 @@ export function loadForumConfig(serverId: string): Promise<ForumConfig> {
       .then((answer) => {
         const before = settled.get(serverId);
         settled.set(serverId, answer);
-        if (before === undefined || before.enabled !== answer.enabled) {
+        if (
+          before === undefined ||
+          before.enabled !== answer.enabled ||
+          before.announce !== answer.announce
+        ) {
           notify(serverId);
         }
         return answer;

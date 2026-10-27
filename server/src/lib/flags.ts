@@ -772,6 +772,19 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/forum/config?serverId= (enabled)",
   },
+  forum_announcement: {
+    description:
+      "Aviso do fórum (só cliente): quem é membro do servidor vê uma vez um cartão no canto, \"O fórum abriu\", com Abrir o fórum e Agora não. Só aparece com o forum_channels ligado no mesmo servidor e um canal fórum que a pessoa enxerga; nunca numa call, compartilhando, numa watch party ou digitando.",
+    env: "FORUM_ANNOUNCEMENT",
+    parseEnv: exactTrue,
+    // Off: a campaign is switched on for one server (the QG) from the
+    // dashboard and off again when it has done its job.
+    codeDefault: false,
+    // The client asks `GET /api/forum/config?serverId=` for the server it has
+    // open; nothing else reads it.
+    perServer: true,
+    clientVia: "GET /api/forum/config?serverId= (announce)",
+  },
   report_attachment_preview: {
     description:
       "Moderação: no cartão de uma denúncia, o botão Mostrar que abre, borrado e só com um clique, a imagem ou o gif da mensagem denunciada. Desligado: a lista de anexos (tipo, veredito do scanner) continua aparecendo, só o botão e a rota somem.",
