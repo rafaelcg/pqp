@@ -430,14 +430,17 @@ test("captures the design council screens", async ({ browser }) => {
       await shoot(page, `01-chat-${theme}`);
       // A profile card, from a message author's name.
       try {
-        await page.locator("[data-author-trigger]").first().click({ timeout: 5_000 });
+        // The newest author: the first one in the DOM may sit above the fold.
+        const author = page.locator("[data-author-trigger]").last();
+        await author.scrollIntoViewIfNeeded();
+        await author.click({ timeout: 5_000 });
         await expect(page.locator("[data-profile-card]")).toBeVisible({ timeout: 5_000 });
         await page.waitForTimeout(800);
         await shoot(page, `36-profile-card-${theme}`);
         await page.keyboard.press("Escape");
         await page.waitForTimeout(300);
-      } catch {
-        console.log("profile card shot skipped");
+      } catch (error) {
+        console.log(`profile card shot skipped (${String(error).slice(0, 160)})`);
         await page.keyboard.press("Escape");
       }
       // A popover in place: the composer's emoji picker.
