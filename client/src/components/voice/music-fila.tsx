@@ -46,6 +46,7 @@ import {
   MUSIC_COVER_REDESIGN,
   MUSIC_ICON_REDESIGN,
   MUSIC_LABEL_REDESIGN,
+  MUSIC_TITLE_REDESIGN,
   MUSIC_MUTED_REDESIGN,
   MUSIC_TEXT_REDESIGN,
 } from "@/components/voice/music-classes";
@@ -187,7 +188,7 @@ export function MusicFila({
           className={cn(
             "truncate text-[11px] font-semibold uppercase tracking-wider",
             muted,
-            MUSIC_LABEL_REDESIGN,
+            MUSIC_TITLE_REDESIGN,
           )}
         >
           {t("memberList.sectionHeading", {
@@ -425,7 +426,7 @@ export function MusicFila({
             </div>
           )}
           {music.state?.autoplay && queue.length === 0 && current ? (
-            <p data-music-autoplay-next="" className={cn("px-1 py-1 text-[11px]", muted)}>
+            <p data-music-autoplay-next="" className={cn("px-1 py-1 text-[11px] redesign:px-1.5", muted)}>
               {t("music.autoplay.next")}
             </p>
           ) : null}
@@ -464,7 +465,7 @@ export function MusicFila({
               data-music-fila="drawer"
               data-immersive-hide=""
               aria-label={t("music.fila")}
-              className="fixed inset-y-0 right-0 z-30 flex w-[min(100%,15rem)] shrink-0 flex-col border-l border-ink-4/60 bg-channel shadow-[var(--shadow-popover)] redesign:border-[color:var(--card-border)] redesign:bg-pane-side redesign:shadow-[var(--sheet-shadow)]"
+              className="fixed inset-y-0 right-0 z-30 flex w-[min(100%,15rem)] shrink-0 flex-col border-l border-ink-4/60 bg-channel shadow-[var(--shadow-popover)] redesign:border-[color:var(--card-border)] redesign:bg-pane-side redesign:shadow-[var(--drawer-shadow)]"
             >
               {panel}
             </aside>

@@ -1051,6 +1051,8 @@
   --sheet-edge: color-mix(in oklab, var(--color-text) 10%, transparent);
   /* One top edge: the 10% border, no inset highlight doubling it. */
   --sheet-shadow: 0 -12px 32px oklch(0.06 0.02 262 / 0.45);
+  /* A right-edge drawer casts to the left. */
+  --drawer-shadow: -12px 0 32px oklch(0.06 0.02 262 / 0.45);
   --sheet-scrim: oklch(0.06 0.02 262 / 0.62);
   --sheet-scrim-blur: 6px;
 }
@@ -1321,6 +1323,7 @@
   --sheet-surface: var(--color-surface-0);
   /* One top edge: the border alone, as in dark. */
   --sheet-shadow: 0 -8px 24px oklch(0.4 0.02 262 / 0.22);
+  --drawer-shadow: -8px 0 24px oklch(0.4 0.02 262 / 0.22);
   --sheet-scrim: oklch(0.3 0.02 262 / 0.3);
   /* 10% as in dark: a pale panel over a pale scrim needs the edge. */
   --dialog-border: color-mix(in oklab, var(--color-text) 10%, transparent);

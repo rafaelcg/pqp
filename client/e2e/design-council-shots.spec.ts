@@ -624,6 +624,10 @@ const PRIMITIVES: {
   id: string;
   testId: string;
   hover?: string;
+  /** Hover the element holding this text (a row with no button role). */
+  hoverText?: string;
+  /** Click this button first (opens a disclosure), by its name's start. */
+  click?: string;
   focus?: string;
   /** The role the hover and focus targets have. Buttons by default. */
   role?: "button" | "textbox" | "combobox" | "checkbox" | "radio" | "tab" | "slider";
@@ -688,7 +692,8 @@ const PRIMITIVES: {
   // beside every server cue. Keyboard focus on "Praça", hover on "Oficina".
   { id: "s-rail", testId: "qa-shell-rail", focus: "Praça", hover: "Oficina" },
   // The music queue open in a call's composer; hover a waiting song.
-  { id: "m-sheets", testId: "qa-music-queue" },
+  // The history open, a queue row hovered.
+  { id: "m-sheets", testId: "qa-music-queue", click: "Tocadas", hoverText: "Gal Costa - Vapor Barato" },
   { id: "p-settings-kit", testId: "qa-settings-kit", tiles: 1300 },
   { id: "p-settings-kit", testId: "qa-settings-kit", tiles: 1300 },
   // Two real rails: Conversas open with people waiting, and a server open
@@ -722,8 +727,14 @@ test("captures the primitives", async ({ browser }) => {
         await page.keyboard.press("Shift+Tab");
         await page.keyboard.press("Tab");
       }
+      if (primitive.click) {
+        await block.getByRole("button", { name: primitive.click }).first().click();
+      }
       if (primitive.hover) {
         await block.getByRole(primitive.role ?? "button", { name: primitive.hover, exact: true }).first().hover();
+      }
+      if (primitive.hoverText) {
+        await block.getByText(primitive.hoverText, { exact: true }).first().hover();
       }
       if (primitive.open) {
         await block.getByRole("button", { name: primitive.open.button, exact: true }).focus();

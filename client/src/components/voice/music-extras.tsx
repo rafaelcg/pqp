@@ -17,6 +17,7 @@ import {
   X,
 } from "lucide-react";
 import {
+  CaretRight as CaretRightGlyph,
   DotsThree,
   Plus as PlusGlyph,
   Shuffle as ShuffleGlyph,
@@ -610,12 +611,20 @@ export function MusicHistoryList({
             ? "text-text-secondary hover:text-text"
             : "text-paper-muted hover:text-paper",
           MUSIC_LABEL_REDESIGN,
-          "redesign:rounded-[var(--radius-control)] redesign:px-1.5 redesign:hover:text-text",
+          "redesign:rounded-[var(--radius-control)] redesign:px-1.5 redesign:hover:bg-[color:var(--menu-row-hover)] redesign:hover:text-text",
         )}
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
       >
-        <span>{t("music.history")}</span>
+        <span className="inline-flex items-center gap-1">
+          {/* A caret says the heading opens; drawn only under the redesign. */}
+          <CaretRightGlyph
+            weight="bold"
+            aria-hidden
+            className={cn("hidden h-3 w-3 transition-transform redesign:inline-block", open && "rotate-90")}
+          />
+          {t("music.history")}
+        </span>
         <span className="tabular-nums">{history.length}</span>
       </button>
       {open ? (

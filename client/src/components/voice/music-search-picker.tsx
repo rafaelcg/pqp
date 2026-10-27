@@ -444,7 +444,7 @@ export function MusicSearchPicker({
                 type="button"
                 size="icon"
                 variant="secondary"
-                className="h-8 w-8 shrink-0 redesign:h-[var(--control-sm)] redesign:w-[var(--control-sm)]"
+                className="h-8 w-8 shrink-0 redesign:h-[var(--control-sm)] redesign:w-[var(--control-sm)] redesign:disabled:border-transparent redesign:disabled:bg-transparent"
                 disabled={busy || !query.trim()}
                 onClick={() => void submit()}
               >
