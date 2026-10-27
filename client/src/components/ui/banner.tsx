@@ -47,9 +47,13 @@ const EDGE = {
   bottom: "border-t redesign:mb-2",
 } as const;
 
-/** The card alone: inset, corner, the tone's fill and edge, the text colour. */
+/**
+ * The card alone: inset, corner, the tone's fill and edge, the text colour.
+ * A button inside rings its focus off the card's own fill, and the primary
+ * button drops its glow, so every action on a card focuses and sits alike.
+ */
 const BANNER_CARD_REDESIGN =
-  "redesign:mx-2 redesign:sm:mx-4 redesign:rounded-[var(--banner-radius)] redesign:border redesign:border-[color:color-mix(in_oklab,var(--banner-tone)_var(--banner-edge),transparent)] redesign:bg-[color:var(--banner-fill)] redesign:px-3 redesign:py-2 redesign:text-start redesign:text-sm redesign:text-text";
+  "redesign:[--color-ring-offset:var(--banner-fill)] redesign:[--button-primary-shadow:0_0_transparent] redesign:mx-2 redesign:sm:mx-4 redesign:rounded-[var(--banner-radius)] redesign:border redesign:border-[color:color-mix(in_oklab,var(--banner-tone)_var(--banner-edge),transparent)] redesign:bg-[color:var(--banner-fill)] redesign:px-3 redesign:py-2 redesign:text-start redesign:text-sm redesign:text-text";
 
 export const BANNER_REDESIGN = `redesign:flex redesign:flex-wrap redesign:items-start redesign:justify-start redesign:gap-x-3 redesign:gap-y-1.5 ${BANNER_CARD_REDESIGN}`;
 
@@ -135,7 +139,8 @@ export function Banner({
             icon={icon}
             kind={iconKind}
             size="sm"
-            className="hidden shrink-0 redesign:mt-1.5 redesign:block redesign:text-[color:var(--banner-ink)]"
+            // A 32px slot, the width of the strips' discs, so the text shares their column.
+            className="hidden shrink-0 redesign:mt-1.5 redesign:block redesign:w-8 redesign:text-[color:var(--banner-ink)]"
           />
         ) : null}
         {children}

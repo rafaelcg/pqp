@@ -1,7 +1,7 @@
 import { Bell, BellOff, CalendarClock, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ChannelSession } from "@pqp/shared";
-import { Bell as BellFill, BellSlash, CalendarDots, X as XBold } from "@phosphor-icons/react";
+import { Bell as BellFill, BellSlash, CalendarDots, CalendarX } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -122,6 +122,8 @@ export function UpcomingSessionCard({
             onClick={() => void toggleReminder()}
             data-session-remind-toggle
             aria-pressed={reminding}
+            // On reads as a state (the soft accent), never as a call to act.
+            className={reminding ? "redesign:bg-accent-soft redesign:text-on-accent-soft redesign:shadow-none redesign:hover:bg-[color:color-mix(in_oklab,var(--color-accent-soft),var(--color-on-accent-soft)_10%)]" : undefined}
           >
             {reminding ? (
               <>
@@ -146,7 +148,8 @@ export function UpcomingSessionCard({
               data-session-cancel
             >
               <X className="h-3.5 w-3.5 redesign:hidden" aria-hidden />
-              <Icon icon={XBold} kind="symbol" size="sm" className="hidden redesign:block" />
+              {/* Cancels the session for everyone: not the strips' corner X, which only hides. */}
+              <Icon icon={CalendarX} size="sm" className="hidden text-text-secondary redesign:block" />
             </Button>
           )}
         </div>
