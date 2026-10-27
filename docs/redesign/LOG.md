@@ -54,6 +54,7 @@ Read this file and the inventory at the start of every session.
 | 2 | `p-section-header` | Merged (cap at round 5: 8.0 Opus r5, 8.4 Codex r2, no MUST) |
 | 2 | `p-loading` | Merged (cap at round 5: 8.6 Opus r5, 8.6 Codex r4, no MUST) |
 | 2 | `p-empty` | Merged, capped at round 5 (Opus 8.6) |
+| 2 | `p-sheet` | Merged, capped at round 5 (Opus 8.6) |
 
 ## Phase 0: directions
 
@@ -521,6 +522,16 @@ launcher's phone form, the cinema stage's picker and three story sheets):
 4. Left: the story sheets (their own media styling) move with `f-stories`;
    the cinema picker's desktop card moves with `f-call`. No grab handle:
    nothing drags.
+
+Rounds: r1 Codex 8.4, r2 Opus 8.4, r3 Codex 8.5, r4 Opus 8.5, r5 Opus 8.6.
+Capped at round 5, no MUST. Round 5 SHOULDs applied before the merge: the
+light sheet keeps one top edge (the border; the 1px shadow layer is gone),
+and `SHEET_SAFE_BOTTOM` (`max(0.75rem, env(safe-area-inset-bottom))`) pads
+every footerless phone sheet the same. Left as COULD: desktop dialogs share
+the 6px scrim blur (watch GPU over a playing share), landscape side safe
+areas. The dialog footer two-tone belongs to `p-dialog`. Verified:
+typecheck, 10,454 unit tests, bench:tokens, i18n:check, forum-shell and
+mobile-immersive-stage e2e. Screenshots: ~/pqp-redesign/p-sheet/.
 
 ### p-radio
 
