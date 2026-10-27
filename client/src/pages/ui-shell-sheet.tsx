@@ -47,6 +47,8 @@ import type { LatestCard, LatestPreview } from "@/lib/community-home/latest";
 import { CornerCard } from "@/components/layout/corner-card";
 import { FirstRunCard } from "@/components/onboarding/first-run-card";
 import { Button } from "@/components/ui/button";
+import { CallRatingPrompt } from "@/components/voice/call-rating-prompt";
+import type { RatableCall } from "@/lib/call-rating";
 import { setUpdateWaiting } from "@/lib/update-prompt-state";
 import { AppBootstrapError, AppLoadingShell } from "@/components/layout/app-loading-shell";
 import { MusicQueueSpecimen } from "@/pages/qa-music-queue";
@@ -1136,6 +1138,13 @@ function CommunityCardsBlock() {
     </div>
   );
 }
+const RATED_CALL: RatableCall = {
+  durationSeconds: 1260,
+  peerCount: 3,
+  transport: "mesh",
+  hadScreenShare: false,
+  channelId: null,
+};
 
 export function ShellSheet() {
   useUpdateWaitingFixture();
@@ -1451,6 +1460,12 @@ export function ShellSheet() {
       </div>
       {/* The music queue in a call's composer: three waiting, one played. */}
       <MusicQueueSpecimen />
+      {/* After a call: the rating prompt fresh, and with a low score picked,
+          which opens the note. */}
+      <div data-testid="qa-call-rating" className="grid max-w-3xl grid-cols-2 gap-6 p-4">
+        <CallRatingPrompt call={RATED_CALL} onDone={noop} />
+        <CallRatingPrompt call={RATED_CALL} onDone={noop} initialRating={2} />
+      </div>
     </div>
   );
 }

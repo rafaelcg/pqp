@@ -1,4 +1,6 @@
 import { Phone } from "lucide-react";
+import { Phone as PhoneFill } from "@phosphor-icons/react";
+import { IconSwap } from "@/components/ui/icon";
 import type { DmSummary } from "@pqp/shared";
 import type { VoiceState } from "@/hooks/use-voice";
 import type { CallStageShape } from "@/lib/call-split";
@@ -104,7 +106,7 @@ export function DmCallStage({
 
   if (!inThisCall) {
     return (
-      <div className="flex items-center gap-3 border-b border-border/60 bg-surface-1/70 px-4 py-2">
+      <div className="flex items-center gap-3 border-b border-border/60 bg-surface-1/70 px-4 py-2 redesign:mx-3 redesign:mt-2 redesign:rounded-full redesign:border redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:py-1.5 redesign:pl-2 redesign:pr-1.5">
         <OccupantFaces
           faces={occupants.map((person) => ({
             key: person.peerId,
@@ -112,15 +114,15 @@ export function DmCallStage({
             avatarUrl: person.avatarUrl,
           }))}
         />
-        <p className="min-w-0 flex-1 truncate text-sm text-text-tertiary">
+        <p className="min-w-0 flex-1 truncate text-sm text-text-tertiary redesign:text-text-secondary">
           {t("call.panel.inCall", { count: occupants.length })}
         </p>
         <button
           type="button"
-          className="flex items-center gap-1.5 rounded-md bg-success/90 px-3 py-1.5 text-xs font-semibold text-surface-0 hover:bg-success"
+          className="flex items-center gap-1.5 rounded-md bg-success/90 px-3 py-1.5 text-xs font-semibold text-surface-0 hover:bg-success redesign:h-[var(--control-sm)] redesign:rounded-full redesign:bg-success redesign:px-4 redesign:text-sm redesign:hover:bg-[color:color-mix(in_oklab,var(--color-success)_85%,var(--color-text))] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-[color:var(--card-bg)] redesign:focus-visible:ring-[color:var(--color-focus-ring)]"
           onClick={onJoinCall}
         >
-          <Phone className="h-3.5 w-3.5" />
+          <IconSwap off={Phone} on={PhoneFill} offClassName="h-3.5 w-3.5" />
           {t("call.panel.join")}
         </button>
       </div>

@@ -5,6 +5,12 @@ import { apiFetch } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import type { RatableCall } from "@/hooks/use-call-rating";
+import { X } from "@phosphor-icons/react";
+import { Icon } from "@/components/ui/icon";
+
+/** Under the redesign the prompt is a card, on the card tokens. */
+const CARD =
+  "redesign:rounded-[var(--radius-card)] redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:px-5 redesign:py-4";
 
 /**
  * "How was that call?", once, after a call that was long enough to have an
@@ -29,12 +35,15 @@ import type { RatableCall } from "@/hooks/use-call-rating";
 export function CallRatingPrompt({
   call,
   onDone,
+  initialRating = null,
 }: {
   call: RatableCall;
   onDone: () => void;
+  /** The QA sheet's way to show the note step; the app never passes it. */
+  initialRating?: number | null;
 }) {
   const { t } = useTranslation();
-  const [rating, setRating] = useState<number | null>(null);
+  const [rating, setRating] = useState<number | null>(initialRating);
   const [note, setNote] = useState("");
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
@@ -86,7 +95,7 @@ export function CallRatingPrompt({
     return (
       <div
         role="status"
-        className="rounded-lg border border-paper/10 bg-surface-2 px-4 py-3 text-sm text-paper-muted"
+        className={cn("rounded-lg border border-paper/10 bg-surface-2 px-4 py-3 text-sm text-paper-muted", CARD, "redesign:text-text-secondary")}
       >
         {t("call.rating.thanks")}
       </div>
@@ -94,20 +103,21 @@ export function CallRatingPrompt({
   }
 
   return (
-    <div className="rounded-lg border border-paper/10 bg-surface-2 px-4 py-3">
+    <div className={cn("rounded-lg border border-paper/10 bg-surface-2 px-4 py-3", CARD)}>
       <div className="flex items-start justify-between gap-3">
-        <p className="text-sm font-medium text-paper">{t("call.rating.ask")}</p>
+        <p className="text-sm font-medium text-paper redesign:font-semibold redesign:text-text">{t("call.rating.ask")}</p>
         <button
           type="button"
           onClick={onDone}
           aria-label={t("call.rating.dismiss")}
-          className="-mr-1 -mt-1 rounded p-1 text-paper-muted transition-colors hover:text-paper"
+          className="-mr-1 -mt-1 rounded p-1 text-paper-muted transition-colors hover:text-paper redesign:-mr-2 redesign:-mt-1.5 redesign:flex redesign:h-7 redesign:w-7 redesign:items-center redesign:justify-center redesign:rounded-full redesign:p-0 redesign:text-text-tertiary redesign:hover:bg-[color:var(--card-row-hover)] redesign:hover:text-text redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--color-focus-ring)]"
         >
-          <span aria-hidden>&times;</span>
+          <span aria-hidden className="redesign:hidden">&times;</span>
+          <Icon icon={X} kind="symbol" size="sm" className="hidden redesign:block" />
         </button>
       </div>
 
-      <div className="mt-3 flex items-center gap-1.5">
+      <div className="mt-3 flex items-center gap-1.5 redesign:gap-2">
         {[1, 2, 3, 4, 5].map((score) => (
           <button
             key={score}
@@ -121,6 +131,10 @@ export function CallRatingPrompt({
               rating === score
                 ? "border-signal bg-signal text-ink"
                 : "border-paper/15 text-paper-muted hover:border-paper/40 hover:text-paper",
+              "redesign:rounded-full redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-ring-offset redesign:focus-visible:ring-[color:var(--color-focus-ring)]",
+              rating === score
+                ? "redesign:border-accent redesign:bg-accent redesign:text-on-accent"
+                : "redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--call-control-bg)] redesign:text-text-secondary redesign:hover:border-[color:var(--card-border)] redesign:hover:bg-[color:var(--call-control-hover)] redesign:hover:text-text",
             )}
           >
             {score}
@@ -128,7 +142,7 @@ export function CallRatingPrompt({
         ))}
       </div>
 
-      <div className="mt-2 flex justify-between text-[11px] text-paper-muted/70">
+      <div className="mt-2 flex justify-between text-[11px] text-paper-muted/70 redesign:text-text-tertiary">
         <span>{t("call.rating.low")}</span>
         <span>{t("call.rating.high")}</span>
       </div>
@@ -144,7 +158,7 @@ export function CallRatingPrompt({
             onChange={(event) => setNote(event.target.value)}
             maxLength={CALL_RATING_NOTE_MAX_LENGTH}
             placeholder={t("call.rating.notePlaceholder")}
-            className="w-full rounded-md border border-paper/15 bg-surface-1 px-3 py-2 text-sm text-paper placeholder:text-paper-muted/60 focus:border-signal focus:outline-none"
+            className="w-full rounded-md border border-paper/15 bg-surface-1 px-3 py-2 text-sm text-paper placeholder:text-paper-muted/60 focus:border-signal focus:outline-none redesign:h-[var(--input-h)] redesign:rounded-[var(--input-radius,var(--radius-control))] redesign:border-[color:var(--input-border)] redesign:bg-[color:var(--input-bg)] redesign:px-[var(--input-px)] redesign:text-text redesign:placeholder:text-text-tertiary redesign:focus:border-[color:var(--input-border)] redesign:focus-visible:ring-2 redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-ring-offset redesign:focus-visible:ring-[color:var(--input-ring,var(--color-focus-ring))]"
           />
           <Button
             size="sm"
