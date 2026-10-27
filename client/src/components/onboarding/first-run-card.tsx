@@ -145,13 +145,13 @@ export function FirstRunCard({
           onClick={onDismiss}
           aria-label={t("firstRun.dismiss")}
           title={t("firstRun.dismiss")}
-          className="-mr-1 -mt-1 shrink-0 rounded-md p-1.5 text-paper-muted transition-colors hover:bg-ink-4 hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60 redesign:rounded-full redesign:p-2 redesign:text-text-tertiary redesign:hover:bg-[color:var(--menu-row-hover)] redesign:hover:text-text redesign:focus-visible:ring-[color:var(--color-focus-ring)]"
+          className="-mr-1 -mt-1 shrink-0 rounded-md p-1.5 text-paper-muted transition-colors hover:bg-ink-4 hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60 redesign:-mr-1.5 redesign:-mt-1.5 redesign:inline-flex redesign:h-8 redesign:w-8 redesign:items-center redesign:justify-center redesign:rounded-full redesign:p-0 redesign:text-text-tertiary redesign:hover:bg-[color:var(--menu-row-hover)] redesign:hover:text-text redesign:focus-visible:ring-[color:var(--color-focus-ring)]"
         >
           <IconSwap off={X} on={XBold} kind="symbol" offClassName="h-4 w-4" className="h-4 w-4" />
         </button>
       </div>
 
-      <ul className="space-y-3 redesign:space-y-4">
+      <ul className="space-y-3 redesign:space-y-5">
         {rows.map((row, index) => {
           const done = doneById.get(row.id) ?? false;
           const Icon = done ? Check : row.icon;
@@ -170,7 +170,7 @@ export function FirstRunCard({
                 className={cn(
                   "mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border redesign:-mt-1 redesign:h-8 redesign:w-8 redesign:border-0",
                   done
-                    ? "border-success/40 bg-success/15 text-success"
+                    ? "border-success/40 bg-success/15 text-success redesign:bg-success/20"
                     : "border-ink-4 bg-ink text-signal redesign:bg-accent-soft redesign:text-on-accent-soft",
                 )}
               >
@@ -185,7 +185,8 @@ export function FirstRunCard({
                 <p
                   className={cn(
                     "text-sm font-semibold redesign:font-display redesign:text-[0.9375rem]",
-                    done && "text-paper-muted line-through decoration-1 redesign:text-text-tertiary",
+                    // Under the redesign the check and "Feito" say done; no strike.
+                    done && "text-paper-muted line-through decoration-1 redesign:text-text-tertiary redesign:no-underline",
                   )}
                 >
                   {t(row.title)}
