@@ -1,11 +1,14 @@
 import { StoryQuoteCard } from "@/components/stories/story-quote-card";
 import { Badge } from "@/components/ui/badge";
 import {
+  ChatsCircle,
   PushPin as PushPinFill,
+  UsersThree,
   WarningCircle as WarningCircleFill,
   WifiSlash,
 } from "@phosphor-icons/react";
-import { Icon as Glyph } from "@/components/ui/icon";
+import { Icon, Icon as Glyph } from "@/components/ui/icon";
+import { EmptyState as EmptyStateView } from "@/components/ui/empty-state";
 import type {
   Embed,
   MessageReaction,
@@ -2791,24 +2794,25 @@ function EmptyState({
       timer.current = window.setTimeout(() => setState("idle"), 1600);
     };
     return (
-      <div
+      <EmptyStateView
         data-empty-owner=""
-        className="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-16 text-center"
-      >
-        <p className="text-balance font-display text-xl font-bold text-text">
-          {t("chat.empty.owner.title")}
-        </p>
-        <p className="max-w-xs text-pretty text-sm text-text-tertiary">
-          {state === "failed"
+        icon={<Icon icon={UsersThree} size="lg" />}
+        title={t("chat.empty.owner.title")}
+        body={
+          state === "failed"
             ? t("chat.empty.owner.failed")
-            : t("chat.empty.owner.body")}
-        </p>
-        {showCopyButton ? (
+            : t("chat.empty.owner.body")
+        }
+        className="flex-1 justify-center gap-2 px-6 py-16"
+        iconClassName="hidden redesign:flex"
+        titleClassName="text-balance font-display text-xl font-bold text-text"
+        bodyClassName="max-w-xs text-pretty text-sm text-text-tertiary"
+        actions={showCopyButton ? (
           <Button
             // Secondary: the owner banner above carries the loud copy of this
             // same action, and two accent buttons a screen apart compete.
             variant="secondary"
-            className="mt-3"
+            className="mt-3 redesign:mt-0"
             data-empty-copy-invite=""
             disabled={state === "busy"}
             onClick={() => void copy()}
@@ -2822,20 +2826,21 @@ function EmptyState({
               ? t("chat.empty.owner.copied")
               : t("chat.empty.owner.copy")}
           </Button>
-        ) : null}
-      </div>
+        ) : undefined}
+      />
     );
   }
 
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-16 text-center">
-      <p className="text-balance font-display text-xl font-bold text-paper">
-        {t("chat.empty.title")}
-      </p>
-      <p className="max-w-xs text-pretty text-sm text-paper-muted">
-        {t("chat.empty.body")}
-      </p>
-    </div>
+    <EmptyStateView
+      icon={<Icon icon={ChatsCircle} size="lg" />}
+      title={t("chat.empty.title")}
+      body={t("chat.empty.body")}
+      className="flex-1 justify-center gap-2 px-6 py-16"
+      iconClassName="hidden redesign:flex"
+      titleClassName="text-balance font-display text-xl font-bold text-text"
+      bodyClassName="max-w-xs text-pretty text-sm text-text-tertiary"
+    />
   );
 }
 

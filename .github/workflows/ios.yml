@@ -58,10 +58,10 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Select Xcode
-        uses: maxim-lobanov/setup-xcode@v1
+        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
         with:
           xcode-version: ${{ env.XCODE_VERSION }}
 
@@ -95,7 +95,7 @@ jobs:
       # back to a same-OS cache even when project.yml has changed instead of
       # resolving every package from empty.
       - name: Cache SPM packages
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ios/DerivedData/SourcePackages
           key: ios-spm-${{ runner.os }}-${{ hashFiles('ios/project.yml') }}
@@ -210,7 +210,7 @@ jobs:
       - name: Upload test results
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: pqp-ios-test-results
           path: ios/DerivedData/Logs/Test/*.xcresult
@@ -239,7 +239,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # Full history: "Verify the tag is reachable from main" below
           # walks it.
@@ -281,7 +281,7 @@ jobs:
           echo "Target commit is reachable from main."
 
       - name: Select Xcode
-        uses: maxim-lobanov/setup-xcode@v1
+        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
         with:
           xcode-version: ${{ env.XCODE_VERSION }}
 
@@ -296,7 +296,7 @@ jobs:
         run: xcodegen generate
 
       - name: Cache SPM packages
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ios/DerivedData/SourcePackages
           key: ios-spm-${{ runner.os }}-${{ hashFiles('ios/project.yml') }}
@@ -480,7 +480,7 @@ jobs:
       - name: Upload .ipa artifact
         if: steps.signing.outputs.ready == 'true'
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: pqp-ios-ipa
           path: ${{ runner.temp }}/export/*.ipa
