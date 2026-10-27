@@ -271,7 +271,7 @@ export function RoleRankList({
                 // Under the redesign a role is the list row's small pill.
                 "redesign:rounded-[var(--list-row-radius)] redesign:focus-visible:bg-transparent redesign:focus-visible:ring-2 redesign:focus-visible:ring-inset redesign:focus-visible:ring-[color:var(--list-row-ring)]",
                 selectedRow && !isGhostSource
-                  ? "redesign:bg-[color:var(--list-row-selected)] redesign:font-semibold redesign:[--role-row-text:var(--list-row-selected-text)]"
+                  ? "redesign:bg-[color:color-mix(in_oklab,var(--color-text)_10%,transparent)] redesign:focus-visible:bg-[color:color-mix(in_oklab,var(--color-text)_10%,transparent)] redesign:font-semibold redesign:[--role-row-text:var(--color-text)]"
                   : "redesign:hover:bg-[color:var(--list-row-hover)]",
                 !pinned && !disabled && !drag && "cursor-grab",
                 Boolean(drag) && "cursor-grabbing",
@@ -338,7 +338,7 @@ function RoleRowFace({
       )}
     >
       <span
-        className="h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-ink-4/80 redesign:h-3 redesign:w-3"
+        className="h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-ink-4/80 redesign:h-3 redesign:w-3 redesign:ring-[color:color-mix(in_oklab,var(--color-text)_24%,transparent)]"
         style={{ backgroundColor: color ?? "transparent" }}
         aria-hidden
       />

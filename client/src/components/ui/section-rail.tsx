@@ -12,7 +12,7 @@ import { flushSync } from "react-dom";
 import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
 import type { LucideIcon } from "lucide-react";
 import { IconSwap } from "@/components/ui/icon";
-import { SECTION_LABEL_REDESIGN } from "@/components/ui/section-header";
+import { RAIL_LABEL_REDESIGN } from "@/components/ui/section-header";
 import { SM_UP_QUERY, useMediaQuery } from "@/components/ui/use-media-query";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -85,7 +85,7 @@ const RAIL_SURFACE_REDESIGN =
  * dialogs.
  */
 export const SETTINGS_PANE_REDESIGN =
-  "redesign:bg-[color:var(--settings-pane-bg)] sm:redesign:mr-[var(--settings-pane-inset)] sm:redesign:mb-[var(--settings-pane-inset)] sm:redesign:rounded-[var(--radius-pane)] sm:redesign:ring-1 sm:redesign:ring-inset sm:redesign:ring-[color:var(--settings-rule)]";
+  "redesign:bg-[color:var(--settings-pane-bg)] sm:redesign:mr-[var(--settings-pane-inset)] sm:redesign:mb-[var(--settings-pane-inset)] sm:redesign:rounded-[var(--radius-pane)] sm:redesign:rounded-b-[calc(var(--radius-panel)-var(--settings-pane-inset))] sm:redesign:ring-1 sm:redesign:ring-inset sm:redesign:ring-[color:var(--settings-rule)]";
 
 const TAB_REDESIGN =
   "redesign:min-h-[var(--list-row-h-sm)] redesign:gap-[var(--list-row-gap-sm)] redesign:rounded-[var(--list-row-radius)] redesign:px-[var(--list-row-px)] redesign:py-0 redesign:focus-visible:ring-[color:var(--list-row-ring)] redesign:focus-visible:ring-offset-0";
@@ -332,8 +332,8 @@ export function SectionRail<Id extends string>({
                 aria-hidden="true"
                 className={cn(
                   "hidden px-3 pb-1 pt-4 text-xs font-medium text-text-tertiary first:pt-0 sm:block",
-                  SECTION_LABEL_REDESIGN,
-                  "redesign:mb-0 redesign:px-[var(--list-row-px)] redesign:pb-1.5 redesign:pt-5 redesign:text-text-tertiary",
+                  RAIL_LABEL_REDESIGN,
+                  "redesign:mb-0 redesign:px-[var(--list-row-px)] redesign:pb-1.5 redesign:pt-5",
                 )}
               >
                 {heading}
@@ -370,9 +370,13 @@ export function SectionRail<Id extends string>({
                 TAB_REDESIGN,
                 selected ? TAB_SELECTED_REDESIGN : TAB_IDLE_REDESIGN,
                 section.danger && !selected && "redesign:text-danger",
+                // The one risky tab stays risky when open: a danger tint, not lime.
+                section.danger &&
+                  selected &&
+                  "redesign:bg-[color:color-mix(in_oklab,var(--color-danger)_12%,transparent)] redesign:text-danger",
                 // Phone strip: stays at the start edge while the strip scrolls.
                 pinned &&
-                  "max-sm:sticky max-sm:left-0 max-sm:z-10 max-sm:bg-surface-2 max-sm:text-text",
+                  "max-sm:sticky max-sm:left-0 max-sm:z-10 max-sm:bg-surface-2 max-sm:text-text redesign:max-sm:bg-[color:var(--settings-surface)] redesign:max-sm:shadow-[12px_0_12px_-4px_var(--settings-surface)]",
                 // Phone strip: 36px drawn, 44px to a finger. The hit area grows
                 // into the strip's padding, so the strip itself never gains a
                 // vertical scroll.

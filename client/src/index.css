@@ -793,6 +793,9 @@
   --menu-row-py: 0.4375rem;
   --menu-row-gap: 0.625rem;
   --menu-row-hover: color-mix(in oklab, var(--color-text) 9%, transparent);
+  /* Message search's highlighted result: the menu's row fill, a step up in
+     light so it never reads as a second field under the search field. */
+  --search-row-selected: var(--menu-row-hover);
   --menu-danger-hover: color-mix(in oklab, var(--color-danger) 16%, transparent);
   --menu-icon: var(--color-text-secondary);
   --menu-icon-size: var(--icon-sm);
@@ -828,9 +831,15 @@
   --card-bg: color-mix(in oklab, var(--color-text) 4%, transparent);
   --card-border: color-mix(in oklab, var(--color-text) 8%, transparent);
   --card-row-hover: color-mix(in oklab, var(--color-text) 6%, transparent);
+  /* A whole card under the pointer: one step over the card's own fill. */
+  --card-hover: color-mix(in oklab, var(--color-text) 7%, transparent);
+  /* A footer card's fill as a solid colour over the side pane, for cutouts
+     (the presence dot's ring) that must match the card exactly. */
+  --footer-card-solid: color-mix(in oklab, var(--color-text) 4%, var(--color-pane-side));
+  --footer-card-solid-hover: color-mix(in oklab, var(--color-text) 6%, var(--footer-card-solid));
   /* A settings notice in the info tone, on its own (settings/kit/notice.tsx):
      a quiet tint of the text, a step over the card it usually sits in. */
-  --settings-notice-info-bg: color-mix(in oklab, var(--color-text) 6%, transparent);
+  --settings-notice-info-bg: color-mix(in oklab, var(--color-text) 7%, transparent);
 
   /* The monogram disc's edge: none in dark, where surface-3 already stands
      off the panes; a hairline in light, where it is close to the white pane. */
@@ -858,11 +867,55 @@
   --count-badge-text: 0.6875rem;
   --count-badge-sm-text: 0.625rem;
 
+  /* Scrollbars: a thumb of the tertiary text on no track, at least 3:1 on
+     both panes (see the rule on html[data-redesign] below). It resolves at
+     :root, so a subtree that redefines --color-text-tertiary keeps the
+     root's thumb. */
+  --scrollbar-thumb: color-mix(in oklab, var(--color-text-tertiary) 65%, transparent);
+  --scrollbar-thumb-hover: color-mix(in oklab, var(--color-text-secondary) 80%, transparent);
+  /* Server rail (layout/server-rail.tsx): round tiles on the canvas, in the
+     side pane's colour. The selected one turns into the accent's rounded
+     square; a hover only lifts the fill, so lime always means "here". */
+  --rail-tile: 2.75rem;
+  --rail-tile-radius-selected: 1rem;
+  /* A touch of text over the side pane, so an idle door reads on the dark canvas. */
+  --rail-tile-bg: color-mix(in oklab, var(--color-text) 4%, var(--color-pane-side));
+  --rail-tile-hover: color-mix(in oklab, var(--color-text) 9%, var(--color-pane-side));
+  --rail-tile-shadow: 0 2px 8px -2px oklch(0 0 0 / 0.45);
+  --rail-divider: var(--color-border);
   /* Empty states (ui/empty-state.tsx): a page empty state leads with its
      glyph on a soft disc of the raised fill, then a Gabarito title. */
   --empty-icon-disc: 3.5rem;
   --empty-icon-bg: var(--color-surface-3);
   --empty-title-size: 1.25rem;
+
+  /* Message rows (chat/message-list.tsx): inset with a corner, a faint
+     tint of the text on hover, the accent's soft fill when you are named. */
+  --message-row-radius: 0.5rem;
+  --message-hover: color-mix(in oklab, var(--color-text) 4.5%, transparent);
+  /* The same hover laid on the pane, for the presence dot's cutout. */
+  --message-hover-solid: color-mix(in oklab, var(--color-text) 4.5%, var(--color-pane-main));
+  /* The system's mention row, tuned per appearance so a mention never reads
+     as the selected channel; the hover one step toward the accent. */
+  --message-mention-bg: var(--color-mention-row);
+  --message-mention-hover: color-mix(in oklab, var(--message-mention-bg) 85%, var(--color-accent));
+  /* Your own name on your messages. */
+  --message-own-name: var(--color-accent-text);
+
+  /* Glass: a close or control laid over a picture (corner-card heroes). */
+  --glass-bg: oklch(0.12 0.01 262 / 0.62);
+  --glass-fg: oklch(0.98 0 0);
+  --glass-border: transparent;
+
+  /* Pane headers (ui/pane-header.ts): the chat's and every other pane's
+     top bar, on one rule, one inset and one title size. */
+  --pane-header-rule: color-mix(in oklab, var(--color-text) 8%, transparent);
+  --pane-header-px: 1rem;
+  --pane-bar-title-size: 1rem;
+
+  /* The icons-only sidebar (layout/channel-list.tsx): a channel is a
+     rounded square, so the strip does not read as a second server rail. */
+  --strip-tile-radius: 0.75rem;
 
   /* Loading (ui/spinner.tsx, ui/skeleton.tsx): a ring with a faint track,
      and placeholder shapes as a faint text tint, so both read on a pane, a
@@ -894,6 +947,14 @@
   --list-row-hover: var(--color-row-hover);
   --list-row-selected: var(--color-row-selected);
   --list-row-selected-text: var(--color-on-row-selected);
+  /* A row's second line (a tag, a status, a count): the tertiary text. */
+  --list-row-detail: var(--color-text-tertiary);
+  /* A read row's name and its icon: a step and two steps under the body,
+     so unread (full text, semibold) reads by colour as well as weight. */
+  --list-row-text: var(--color-text-secondary);
+  --list-row-icon: var(--color-text-tertiary);
+  /* The room after a row's last tile: the 28px tiles sit close to the cap. */
+  --list-row-action-pr: 0.25rem;
   /* A muted row (a channel you silenced) stays a step above a disabled one
      (0.4), so the two read apart. */
   --list-row-muted-opacity: 0.6;
@@ -928,6 +989,29 @@
   --dialog-px: 1.5rem;
   --dialog-title-size: 1.375rem;
   --dialog-title-leading: 1.875rem;
+
+  /* Sidebar header (layout/channel-list.tsx): the server's name in the title
+     face over no rule, a search pill a step off the pane, the banner as an
+     inset card. */
+  --sidebar-header-title-size: 1rem;
+  --sidebar-search-h: 2.25rem;
+  --sidebar-search-bg: color-mix(in oklab, var(--color-text) 6%, var(--color-pane-side));
+  --sidebar-search-hover: color-mix(in oklab, var(--color-text) 9%, var(--color-pane-side));
+  --sidebar-search-border: transparent;
+  /* The header trigger's ladder over the search pill (6%): hover 8%, the
+     ghost buttons' step beside it; open 10%. */
+  --sidebar-trigger-hover: var(--button-ghost-hover);
+  --sidebar-trigger-open: color-mix(in oklab, var(--color-text) 10%, transparent);
+  --sidebar-banner-radius: 0.75rem;
+
+  /* Sidebar blocks (ui/sidebar-block.ts): stories, a watch party and the Baú
+     above the channels, as cards on the card tint or dashed invitations. */
+  --sidebar-card-radius: 0.875rem;
+  --sidebar-invite-border: color-mix(in oklab, var(--color-text) 22%, transparent);
+  /* The solid AO VIVO badge: the danger hue a step deeper on a dark page,
+     where on-danger is white, so 10px text clears 4.5:1. Looks whose
+     on-danger is a dark ink keep the plain danger (below). */
+  --live-badge-bg: color-mix(in oklab, var(--color-danger) 78%, black);
 
   --icon-button-radius: var(--radius-pill);
   --icon-button-text: var(--color-text-secondary);
@@ -1031,6 +1115,8 @@
   --sheet-edge: color-mix(in oklab, var(--color-text) 10%, transparent);
   /* One top edge: the 10% border, no inset highlight doubling it. */
   --sheet-shadow: 0 -12px 32px oklch(0.06 0.02 262 / 0.45);
+  /* A right-edge drawer casts to the left. */
+  --drawer-shadow: -12px 0 32px oklch(0.06 0.02 262 / 0.45);
   --sheet-scrim: oklch(0.06 0.02 262 / 0.62);
   --sheet-scrim-blur: 6px;
 }
@@ -1041,7 +1127,8 @@
  * `md` up, so the token and the classes switch together. A council risk
  * named for direction B in round D1.
  */
-@media (max-width: 767px) {
+/* lib/breakpoints.ts BELOW_MD */
+@media (max-width: 47.999rem) {
   :root[data-redesign] {
     --space-gutter: 0rem;
   }
@@ -1223,8 +1310,32 @@
   --color-field: color-mix(in oklab, var(--color-text) 3%, var(--color-surface-0));
 }
 
+/* Catppuccin and Everforest dark draw on-danger in a dark ink: darkening the
+   badge would lower its contrast there, so they keep the plain danger. */
+:root[data-redesign]:where([data-appearance="catppuccin"], [data-appearance="everforest"]):not([data-theme="light"]) {
+  --live-badge-bg: var(--color-danger);
+}
+
 /* The redesign's shadows on a light page: tinted, never black. Every look. */
 :root[data-redesign][data-theme="light"] {
+  /* 3% reads in light; dark needs 4.5%. */
+  --message-hover: color-mix(in oklab, var(--color-text) 3%, transparent);
+  --message-hover-solid: color-mix(in oklab, var(--color-text) 3%, var(--color-pane-main));
+  /* The full soft accent is the selected channel's fill in light; a mention
+     sits a step quieter so it never reads as selected. */
+  --message-mention-bg: color-mix(in oklab, var(--color-accent-soft) 70%, var(--color-pane-main));
+  /* A smaller step than dark, so the @you chip keeps its edge on a hovered row. */
+  --message-mention-hover: color-mix(in oklab, var(--message-mention-bg) 92%, var(--color-accent));
+  /* Your own name: the lime itself in light, where accent-text is a near-black olive. */
+  --message-own-name: var(--color-accent);
+  --glass-bg: oklch(0.99 0 0 / 0.72);
+  --glass-fg: var(--color-text);
+  --glass-border: var(--popover-border);
+  /* Light panes need a stronger thumb to clear 3:1. */
+  --scrollbar-thumb: color-mix(in oklab, var(--color-text-tertiary) 80%, transparent);
+  --scrollbar-thumb-hover: color-mix(in oklab, var(--color-text-secondary) 90%, transparent);
+  /* The light danger is already deep enough for white text. */
+  --live-badge-bg: var(--color-danger);
   /* On the near-white panes the 8% tint all but vanishes at the pulse's low
      point, and a 25% track at 12px is a hairline. */
   --skeleton-bg: color-mix(in oklab, var(--color-text) 10%, transparent);
@@ -1236,6 +1347,9 @@
   /* Lighter than dark's: over the white wash on a grey dialog, 6% lands at
      the dialog's own grey and the row reads as a hole. */
   --card-row-hover: color-mix(in oklab, var(--color-text) 4%, transparent);
+  --card-hover: color-mix(in oklab, var(--color-text) 3%, var(--color-surface-0));
+  --footer-card-solid: color-mix(in oklab, var(--color-surface-0) 60%, var(--color-pane-side));
+  --footer-card-solid-hover: color-mix(in oklab, var(--color-text) 4%, var(--footer-card-solid));
   --card-border: color-mix(in oklab, var(--color-text) 10%, transparent);
 
   /* Avatars: a hairline keeps the monogram disc a disc on the white pane. */
@@ -1243,6 +1357,16 @@
 
   /* Banners: the soft fills are pale in light; a lighter edge keeps them calm. */
   --banner-edge: 22%;
+  /* Rail: a softer drop under the accent tile on a light canvas, and a hover
+     that lifts to the brightest surface (a text tint lands on the canvas's
+     own grey and the tile disappears). */
+  --rail-tile-shadow: 0 2px 6px -2px oklch(0.4 0.02 262 / 0.3);
+  --rail-tile-hover: var(--color-surface-0);
+  /* Sidebar search: the field's white with its edge, on the light pane. */
+  --sidebar-search-bg: var(--color-field);
+  --sidebar-search-hover: var(--color-surface-0);
+  --sidebar-search-border: var(--color-border);
+  --rail-tile-bg: var(--color-pane-side);
   --input-invalid-bg: color-mix(in oklab, var(--color-danger) 6%, var(--color-field));
   /* Tabs */
   /* 7 points over the 8% ghost hover, so a hovered pill never reads as selected. */
@@ -1277,6 +1401,7 @@
   --segmented-thumb-shadow: 0 1px 2px oklch(0.4 0.02 262 / 0.2), 0 0 0 0.5px oklch(0.4 0.02 262 / 0.12);
   /* Light shows a 7% step as clearly as dark shows 9%. */
   --menu-row-hover: color-mix(in oklab, var(--color-text) 7%, transparent);
+  --search-row-selected: color-mix(in oklab, var(--color-text) 10%, transparent);
   --menu-danger-hover: color-mix(in oklab, var(--color-danger) 11%, transparent);
   /* A white knob with a hairline, as the segmented thumb is a white chip. */
   --slider-track: color-mix(in oklab, var(--color-text) 13%, transparent);
@@ -1290,6 +1415,7 @@
   --sheet-surface: var(--color-surface-0);
   /* One top edge: the border alone, as in dark. */
   --sheet-shadow: 0 -8px 24px oklch(0.4 0.02 262 / 0.22);
+  --drawer-shadow: -8px 0 24px oklch(0.4 0.02 262 / 0.22);
   --sheet-scrim: oklch(0.3 0.02 262 / 0.3);
   /* 10% as in dark: a pale panel over a pale scrim needs the edge. */
   --dialog-border: color-mix(in oklab, var(--color-text) 10%, transparent);
@@ -2752,6 +2878,30 @@ html[data-app-shell] #root {
 }
 
 /*
+ * Under the redesign a native scrollbar takes the look's colours: a thumb
+ * of tertiary text at 65% (80% in light) and no track. It keeps the platform's width, so it
+ * stays easy to grab on Windows and Linux. `scrollbar-color` inherits, so
+ * one rule on the root reaches every pane; an element that hides its bar
+ * (`scrollbar-width: none`) still does.
+ */
+html[data-redesign] {
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+/*
+ * A pane under the pointer lifts its thumb to secondary text, so hover reads
+ * as a state even where the platform draws one colour for rest, hover and drag.
+ * Only the innermost scroller under the pointer lifts: `scrollbar-color`
+ * inherits, so without the `:has` a log would light every bar inside it.
+ */
+html[data-redesign]
+  :where(.overflow-y-auto, .overflow-auto, .overflow-x-auto, textarea):hover:not(
+    :has(:where(.overflow-y-auto, .overflow-auto, .overflow-x-auto, textarea):hover)
+  ) {
+  scrollbar-color: var(--scrollbar-thumb-hover) transparent;
+}
+
+/*
  * Installed to the home screen with `apple-mobile-web-app-status-bar-style:
  * black-translucent`, the app draws under the status bar and the home
  * indicator — so the shell has to inset itself or the top row sits beneath the
@@ -2971,6 +3121,13 @@ h2,
   background: color-mix(in oklch, var(--color-accent) 26%, transparent);
 }
 
+/* Under the redesign the @you chip takes the chip tokens, measured against
+   the mention row it sits on. */
+:root[data-redesign] .pqp-mention-self {
+  background: var(--color-mention-chip);
+  color: var(--color-on-mention-chip);
+}
+
 .pqp-mention-mass {
   font-weight: 600;
 }
@@ -2983,6 +3140,17 @@ h2,
 
 .pqp-message-mention:hover {
   background: color-mix(in oklch, var(--color-accent) 20%, transparent);
+}
+
+/* Under the redesign a mention is the accent's soft fill, as in the mockup. */
+:root[data-redesign] .pqp-message-mention {
+  background: var(--message-mention-bg);
+  --avatar-dot-ring: var(--message-mention-bg);
+}
+
+:root[data-redesign] .pqp-message-mention:hover {
+  background: var(--message-mention-hover);
+  --avatar-dot-ring: var(--message-mention-hover);
 }
 
 @keyframes rise-in {
@@ -4177,6 +4345,13 @@ html[data-pre] [data-home-hero] .animate-rise {
   padding-bottom: max(var(--safe-pb-min, 0.75rem), env(safe-area-inset-bottom));
 }
 
+/* The user panel's card under the redesign: the home-indicator inset sits
+   below the card, never inside it, so the row stays centred. */
+:root[data-redesign] .safe-pb[data-user-panel-card] {
+  padding-bottom: 0;
+  margin-bottom: max(0.5rem, env(safe-area-inset-bottom));
+}
+
 /*
  * iOS Safari magnifies the whole page when focus lands on a field whose text is
  * smaller than 16px, and the viewport meta deliberately allows scaling (taking
@@ -4193,7 +4368,8 @@ html[data-pre] [data-home-hero] .animate-rise {
  * the zoom to exist. Only on the screens that can be zoomed that way — a
  * pointer device or a wide window keeps the tighter type.
  */
-@media (max-width: 639px), (pointer: coarse) {
+/* lib/breakpoints.ts BELOW_SM */
+@media (max-width: 39.999rem), (pointer: coarse) {
   input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not(
       [type="color"]
     ),
@@ -4977,7 +5153,8 @@ html[data-immersive-stage] [data-immersive-hide] {
   width: min(100vw, calc((100dvh - var(--story-cmp-top) - var(--story-cmp-bottom)) * 9 / 16));
   max-height: 100dvh;
 }
-@media (max-width: 640px) {
+/* lib/breakpoints.ts BELOW_SM */
+@media (max-width: 39.999rem) {
   .story-cmp {
     --story-cmp-top: 52px;
     --story-cmp-bottom: 168px;
@@ -5018,7 +5195,8 @@ html[data-immersive-stage] [data-immersive-hide] {
   container-type: size;
   box-shadow: 0 0 0 1px var(--story-hairline);
 }
-@media (max-width: 640px) {
+/* lib/breakpoints.ts BELOW_SM */
+@media (max-width: 39.999rem) {
   .story-cmp-canvas {
     border-radius: 14px;
   }

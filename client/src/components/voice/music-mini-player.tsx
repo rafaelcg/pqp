@@ -1,6 +1,13 @@
 import { Music } from "lucide-react";
+import { MusicNotes } from "@phosphor-icons/react";
 import { useLayoutEffect, useMemo, useRef, type MutableRefObject } from "react";
 import { Button } from "@/components/ui/button";
+import { Icon } from "@/components/ui/icon";
+import { cn } from "@/lib/utils";
+import {
+  SIDEBAR_FOOTER_CARD_COMPACT_REDESIGN as VOICE_STRIP_CARD_COMPACT_REDESIGN,
+  SIDEBAR_FOOTER_CARD_REDESIGN as VOICE_STRIP_CARD_REDESIGN,
+} from "@/components/ui/sidebar-block";
 import type { VoiceState } from "@/hooks/use-voice";
 import { useTranslation } from "@/lib/i18n";
 import { useMusicJoinGate, useMusicPrefs } from "@/lib/music-prefs";
@@ -211,18 +218,19 @@ export function MusicMiniPlayer({
       return (
         <div
           data-music-mini-player="idle"
-          className="flex flex-col items-center border-t border-ink-4/60 bg-ink py-2"
+          className={cn("flex flex-col items-center border-t border-ink-4/60 bg-ink py-2", VOICE_STRIP_CARD_COMPACT_REDESIGN)}
         >
           {dock}
           <Button
             type="button"
             variant="ghost"
             size="icon"
-            className="h-8 w-8 shrink-0"
+            className="h-8 w-8 shrink-0 redesign:rounded-full redesign:focus-visible:ring-accent"
             aria-label={t("music.bar.start")}
             onClick={() => setMusicOpen(true)}
           >
-            <Music className="h-4 w-4" aria-hidden="true" />
+            <Music className="h-4 w-4 redesign:hidden" aria-hidden="true" />
+            <Icon icon={MusicNotes} size="sm" className="hidden redesign:block" />
           </Button>
           {fila}
         </div>
@@ -240,16 +248,20 @@ export function MusicMiniPlayer({
     return (
       <div
         data-music-mini-player="idle"
-        className="border-t border-ink-4/60 bg-ink"
+        className={cn("border-t border-ink-4/60 bg-ink", VOICE_STRIP_CARD_REDESIGN)}
       >
         {dock}
         <button
           type="button"
-          className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm text-paper hover:bg-ink-3"
+          className={cn(
+            "flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm text-paper hover:bg-ink-3",
+            "redesign:gap-2.5 redesign:rounded-[var(--sidebar-card-radius)] redesign:p-1.5 redesign:font-medium redesign:text-text-secondary redesign:hover:bg-[color:var(--card-row-hover)] redesign:hover:text-text redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent",
+          )}
           onClick={() => setMusicOpen(true)}
         >
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-ink-3 text-paper-muted">
-            <Music className="h-4 w-4" aria-hidden="true" />
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-ink-3 text-paper-muted redesign:rounded-[calc(var(--sidebar-card-radius)-0.375rem)] redesign:bg-surface-3 redesign:text-text-secondary">
+            <Music className="h-4 w-4 redesign:hidden" aria-hidden="true" />
+            <Icon icon={MusicNotes} size="sm" className="hidden redesign:block" />
           </span>
           {t("music.bar.start")}
         </button>
@@ -261,7 +273,7 @@ export function MusicMiniPlayer({
   return (
     <div
       data-music-mini-player={music.listening ? "" : "dismissed"}
-      className="border-t border-ink-4/60 bg-ink text-xs"
+      className={cn("border-t border-ink-4/60 bg-ink text-xs", VOICE_STRIP_CARD_REDESIGN)}
     >
       {dock}
       {nowPlaying}

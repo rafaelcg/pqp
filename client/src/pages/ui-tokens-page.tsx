@@ -94,6 +94,7 @@ import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { setRedesignChoice, useRedesign } from "@/lib/redesign";
 import { SettingsKitSheet } from "@/pages/ui-settings-kit-sheet";
+import { ShellSheet } from "@/pages/ui-shell-sheet";
 
 /**
  * The token sheet: every role token and every ui/ primitive on one page, in
@@ -1265,6 +1266,43 @@ function PrimitiveSheet() {
         </Tooltip>
       </div>
 
+      {/* A list that scrolls, on a pane and on a dialog: the native bar in
+          the look's colours under the redesign. */}
+      <div data-testid="qa-primitive-scroll" className="grid gap-4 sm:grid-cols-2">
+        {(["pane", "dialog"] as const).map((where) => (
+          <div
+            key={where}
+            className={cn(
+              "h-40 overflow-y-auto rounded-[var(--radius-pane)] p-2",
+              where === "pane" ? "bg-pane-side" : "elevation-3",
+            )}
+          >
+            {/* Says the drawn bar is a swatch, so a tester on Windows or
+                Linux does not read it beside the real one as two bars. */}
+            <p className="hidden px-2 pb-1 text-xs text-text-tertiary redesign:block">
+              Barras desenhadas: a barra de rolagem parada e sob o ponteiro
+            </p>
+            <div className="relative">
+              {/* The thumb's colour drawn as a bar, because macOS hides an
+                  overlay scrollbar at rest and a screenshot cannot show it. */}
+              <span
+                aria-hidden="true"
+                className="absolute right-0 top-1 hidden h-16 w-2 rounded-full bg-[color:var(--scrollbar-thumb)] redesign:block"
+              />
+              <span
+                aria-hidden="true"
+                className="absolute right-3 top-1 hidden h-16 w-2 rounded-full bg-[color:var(--scrollbar-thumb-hover)] redesign:block"
+              />
+              {Array.from({ length: 12 }, (_, i) => (
+                <p key={i} className="px-2 py-1.5 text-sm text-text-secondary">
+                  # canal-{i + 1}
+                </p>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+
       {/* Badges: the status word on a card, the tag beside a name, and the
           count in a pill. */}
       {/* Empty states: a pane's and a group's, with the toggle-off classes
@@ -1888,6 +1926,9 @@ export function UiTokensPage() {
         </Section>
         <Section title={t("qaUi.section.kit")} note={t("qaUi.kit.note")}>
           <SettingsKitSheet />
+        </Section>
+        <Section title={t("qaUi.section.shellParts")} note={t("qaUi.shellParts.note")}>
+          <ShellSheet />
         </Section>
       </main>
     </TooltipProvider>

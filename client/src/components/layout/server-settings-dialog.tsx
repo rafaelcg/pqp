@@ -475,19 +475,23 @@ function Block({
   title,
   children,
   tone = "normal",
+  card = false,
 }: {
   title: string;
   children: ReactNode;
   tone?: "normal" | "danger";
+  /** Under the redesign: the title and the fields in one card, like the channel overview's groups. */
+  card?: boolean;
 }) {
   return (
     <section
       className={cn(
         "space-y-2",
+        card && cn(SETTINGS_CARD_REDESIGN, "redesign:p-4"),
         tone === "danger" && "rounded-lg border border-danger/40 bg-danger/5 p-4",
         // Under the redesign: a card with the danger banner's edge.
         tone === "danger" &&
-          "redesign:rounded-[var(--radius-card)] redesign:border-[color:color-mix(in_oklab,var(--color-danger)_var(--banner-edge),transparent)] redesign:bg-[color:color-mix(in_oklab,var(--color-danger)_6%,transparent)] redesign:p-5",
+          "redesign:rounded-[var(--radius-card)] redesign:border-[color:color-mix(in_oklab,var(--color-danger)_var(--banner-edge),transparent)] redesign:bg-[color:color-mix(in_oklab,var(--color-danger)_6%,transparent)] redesign:p-4",
       )}
     >
       <SectionLabel
@@ -577,12 +581,12 @@ function AuditLogSection({ serverId }: { serverId: string }) {
         </p>
       )}
       {!loading && entries.length === 0 && !error && (
-        <p className="text-sm text-paper-muted">
+        <p className="text-sm text-paper-muted redesign:rounded-[var(--radius-card)] redesign:border redesign:border-dashed redesign:border-[color:var(--card-border)] redesign:px-6 redesign:py-8 redesign:text-center redesign:text-text-secondary">
           {t("serverSettings.audit.empty")}
         </p>
       )}
       {entries.length > 0 && (
-        <ul className="space-y-1.5">
+        <ul className={cn("space-y-1.5", SETTINGS_CARD_REDESIGN, "redesign:space-y-0 redesign:overflow-hidden")}>
           {entries.map((entry) => {
             const key = (
               AUDIT_ACTION_KEYS as Partial<Record<string, MessageKey>>
@@ -592,7 +596,7 @@ function AuditLogSection({ serverId }: { serverId: string }) {
             return (
               <li
                 key={entry.id}
-                className={cn("rounded-md border border-ink-4 bg-ink-3/40 p-2 text-sm", SETTINGS_CARD_REDESIGN, "redesign:px-3.5 redesign:py-2.5")}
+                className="rounded-md border border-ink-4 bg-ink-3/40 p-2 text-sm redesign:rounded-none redesign:border-0 redesign:bg-transparent redesign:px-4 redesign:py-3 redesign:not-last:border-b redesign:not-last:border-[color:var(--card-border)]"
               >
                 {/* A reason is free text and can be one unbroken run of
                     characters, so it wraps anywhere rather than pushing the
@@ -1074,7 +1078,7 @@ export function ServerSettingsDialog({
         }
       >
         <div className="space-y-2 px-5 py-5">
-          <p className="text-sm text-paper-muted">
+          <p className="text-sm text-paper-muted redesign:text-[13px] redesign:text-text-secondary">
             {t("serverSettings.readOnly.member")}
           </p>
         </div>
@@ -1120,7 +1124,7 @@ export function ServerSettingsDialog({
           aria-labelledby={`${tabIdPrefix}-${active.id}`}
           tabIndex={0}
           className={cn(
-            "min-w-0 flex-1 space-y-6 overflow-y-auto overscroll-contain px-5 py-5 focus-visible:outline-none",
+            "min-w-0 flex-1 space-y-6 overflow-y-auto overscroll-contain px-5 py-5 focus-visible:outline-none redesign:space-y-4",
             SETTINGS_PANE_REDESIGN,
             "sm:redesign:px-8 sm:redesign:pt-7 sm:redesign:pb-8",
           )}
@@ -1129,7 +1133,8 @@ export function ServerSettingsDialog({
 
           {active.id === "overview" && (
             <>
-              <Block title={t("serverSettings.name.title")}>
+              <Block title={t("serverSettings.name.title")} card>
+                <div className="space-y-2">
                 <div className="flex gap-2">
                   <Input
                     value={name}
@@ -1164,6 +1169,7 @@ export function ServerSettingsDialog({
                     {nameError}
                   </p>
                 )}
+                </div>
               </Block>
 
               {serverId && (
@@ -1210,8 +1216,8 @@ export function ServerSettingsDialog({
           )}
 
           {active.id === "access" && (
-            <Block title={t("serverSettings.sso.title")}>
-              <p className="text-sm text-paper-muted">
+            <Block title={t("serverSettings.sso.title")} card>
+              <p className="text-sm text-paper-muted redesign:text-[13px] redesign:text-text-secondary">
                 {t("serverSettings.sso.description", { server: server.name })}
               </p>
               <div className="flex gap-2">
@@ -1279,8 +1285,8 @@ export function ServerSettingsDialog({
               {serverId && <ReportsSection serverId={serverId} />}
 
               {isOwner && (
-                <Block title={t("serverSettings.retention.title")}>
-                  <p className="text-sm text-paper-muted">
+                <Block title={t("serverSettings.retention.title")} card>
+                  <p className="text-sm text-paper-muted redesign:text-[13px] redesign:text-text-secondary">
                     {t("serverSettings.retention.description", {
                       server: server.name,
                     })}
@@ -1340,8 +1346,8 @@ export function ServerSettingsDialog({
 
           {active.id === "danger" && (
             <>
-              <Block title={t("serverSettings.export.title")}>
-                <p className="text-sm text-paper-muted">
+              <Block title={t("serverSettings.export.title")} card>
+                <p className="text-sm text-paper-muted redesign:text-[13px] redesign:text-text-secondary">
                   {t("serverSettings.export.description", {
                     server: server.name,
                   })}
@@ -1362,8 +1368,8 @@ export function ServerSettingsDialog({
                 )}
               </Block>
 
-              <Block title={t("serverSettings.transfer.title")}>
-                <p className="text-sm text-paper-muted">
+              <Block title={t("serverSettings.transfer.title")} card>
+                <p className="text-sm text-paper-muted redesign:text-[13px] redesign:text-text-secondary">
                   {t("serverSettings.transfer.description", {
                     server: server.name,
                   })}
@@ -1378,7 +1384,7 @@ export function ServerSettingsDialog({
                     {t("serverSettings.transfer.loading")}
                   </p>
                 ) : candidates.length === 0 ? (
-                  <p className="text-sm text-paper-muted">
+                  <p className="text-sm text-paper-muted redesign:text-[13px] redesign:text-text-secondary">
                     {t("serverSettings.transfer.nobody")}
                   </p>
                 ) : (
@@ -1466,7 +1472,7 @@ export function ServerSettingsDialog({
               </Block>
 
               <Block title={t("serverSettings.delete.title")} tone="danger">
-                <p className="text-sm text-paper-muted">
+                <p className="text-sm text-paper-muted redesign:text-[13px] redesign:text-text-secondary">
                   {t("serverSettings.delete.description", {
                     server: server.name,
                   })}
