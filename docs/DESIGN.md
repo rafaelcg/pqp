@@ -453,12 +453,14 @@ form, so a derived role is measured like any other.
 The top of the channel list (`layout/channel-list.tsx`). Under the
 redesign:
 
-- No rule under it. The server's name is the title face at 16px semibold
+- No rule under it. The server's name is the title face at 16px bold
   (`--sidebar-header-title-size`), with no icon (the open server's tile is
-  right beside it on the rail), the row a pill on `row-hover` when hovered
-  or open.
-- Members, collapse and close are `IconButton`, which keeps their toggle-off
-  size (`touch={false}`, `HEADER_ICON_BUTTON`).
+  right beside it on the rail). The caret sits right after the name. The
+  row is a 44px pill on `row-hover` when hovered, a step stronger (text at
+  10%) while the menu is open.
+- Members, collapse and close are `IconButton`'s round ghost: 32px from
+  `md`, like the chat header's, and 44px on a phone (`HEADER_ICON_BUTTON`).
+  On a phone the members button is hidden: the chat header has its own.
 - Search is a pill (`--sidebar-search-*`): a text tint off the pane in dark,
   the field's white with its edge in light.
 - The banner (`ServerBannerStrip`) is an inset card with

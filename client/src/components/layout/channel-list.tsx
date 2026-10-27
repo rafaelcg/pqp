@@ -2371,7 +2371,9 @@ export const ChannelList = memo(function ChannelList({
                 <IconButton
                   label={t("chrome.members")}
                   touch={false}
-                  className={HEADER_ICON_BUTTON}
+                  // On a phone the chat header has its own members button, so
+                  // under the redesign the drawer gives the name that room.
+                  className={cn(HEADER_ICON_BUTTON, "max-sm:redesign:hidden")}
                   onClick={onOpenMembers}
                 >
                   <Users className="h-4 w-4 redesign:hidden" aria-hidden="true" />
@@ -2899,10 +2901,11 @@ export const ChannelList = memo(function ChannelList({
 /**
  * The header's icon buttons with the toggle off: 32px, 28px from `md`, the
  * ring offset they always had. Under the redesign IconButton's own round
- * ghost draws them, 44px on a phone so a thumb lands on it.
+ * ghost draws them: 32px from `md` like the chat header's, 44px on a phone
+ * so a thumb lands on it.
  */
 const HEADER_ICON_BUTTON =
-  "md:h-7 md:w-7 focus-visible:ring-offset-2 max-sm:redesign:h-11 max-sm:redesign:w-11";
+  "md:h-7 md:w-7 focus-visible:ring-offset-2 max-sm:redesign:h-11 max-sm:redesign:w-11 md:redesign:h-8 md:redesign:w-8";
 
 const ServerHeaderMenuTrigger = forwardRef<
   HTMLButtonElement,
@@ -2922,7 +2925,7 @@ const ServerHeaderMenuTrigger = forwardRef<
       ref={nameRef}
       id={nameId}
       data-server-name=""
-      className="min-w-0 flex-1 truncate font-display text-sm font-bold tracking-tight leading-tight text-text redesign:font-[family-name:var(--type-title-font)]! redesign:text-[length:var(--sidebar-header-title-size)] redesign:font-bold redesign:tracking-[-0.012em]!"
+      className="min-w-0 flex-1 redesign:flex-initial truncate font-display text-sm font-bold tracking-tight leading-tight text-text redesign:font-[family-name:var(--type-title-font)]! redesign:text-[length:var(--sidebar-header-title-size)] redesign:font-bold redesign:tracking-[-0.012em]!"
     >
       {server.name}
     </p>
@@ -2949,8 +2952,10 @@ const ServerHeaderMenuTrigger = forwardRef<
       // markup cannot see this (no layout engine), which is why it took a
       // real Playwright run to catch. `items-center` on the row still
       // centers everything; only the click/hover rectangle's own height
-      // changed, not the icon's position.
-      className="group flex min-w-0 flex-1 items-center gap-2 rounded-[var(--radius-control)] px-1 text-left transition-colors duration-[var(--duration-fast)] hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 data-[state=open]:bg-surface-2 redesign:min-h-11 redesign:gap-1.5 redesign:rounded-[var(--radius-row)] redesign:px-2 redesign:hover:bg-row-hover redesign:data-[state=open]:bg-row-hover redesign:focus-visible:ring-accent redesign:focus-visible:ring-offset-0"
+      // changed, not the icon's position. Under the redesign there is no
+      // icon: the trigger is a 44px pill (`min-h-11`) and the name and caret
+      // sit together at its start.
+      className="group flex min-w-0 flex-1 items-center gap-2 rounded-[var(--radius-control)] px-1 text-left transition-colors duration-[var(--duration-fast)] hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 data-[state=open]:bg-surface-2 redesign:min-h-11 redesign:gap-1.5 redesign:rounded-[var(--radius-row)] redesign:px-2 redesign:hover:bg-row-hover redesign:data-[state=open]:bg-[color:color-mix(in_oklab,var(--color-text)_10%,transparent)] redesign:focus-visible:ring-accent redesign:focus-visible:ring-offset-0"
       {...triggerProps}
     >
       {/* Under the redesign the open server's tile sits right beside this
@@ -2965,7 +2970,7 @@ const ServerHeaderMenuTrigger = forwardRef<
         // is never invisible from the inside, and a mark that eats the name is
         // one people learn to resent. 16px tall so the row stays under its
         // 48px floor (name line plus mark come to about 34px).
-        <span className="flex min-w-0 flex-1 flex-col items-start">
+        <span className="flex min-w-0 flex-1 flex-col items-start redesign:flex-initial">
           {nameBlock}
           <PublicBadge id={publicId} className="h-4" />
         </span>
