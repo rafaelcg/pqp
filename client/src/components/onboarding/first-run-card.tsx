@@ -116,7 +116,7 @@ export function FirstRunCard({
     <section
       data-first-run
       aria-labelledby="first-run-title"
-      className="animate-rise mb-6 max-w-2xl rounded-2xl border border-ink-4 bg-ink-3/40 p-4 sm:p-5"
+      className="animate-rise mb-6 max-w-2xl rounded-2xl border border-ink-4 bg-ink-3/40 p-4 sm:p-5 redesign:rounded-[var(--radius-pane)] redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] sm:redesign:p-6"
     >
       <div className="mb-4 flex items-start gap-3">
         <h2
@@ -131,7 +131,7 @@ export function FirstRunCard({
           onClick={onDismiss}
           aria-label={t("firstRun.dismiss")}
           title={t("firstRun.dismiss")}
-          className="-mr-1 -mt-1 shrink-0 rounded-md p-1.5 text-paper-muted transition-colors hover:bg-ink-4 hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+          className="-mr-1 -mt-1 shrink-0 rounded-md p-1.5 text-paper-muted transition-colors hover:bg-ink-4 hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60 redesign:rounded-full redesign:p-2 redesign:text-text-tertiary redesign:hover:bg-[color:var(--menu-row-hover)] redesign:hover:text-text redesign:focus-visible:ring-[color:var(--color-focus-ring)]"
         >
           <X aria-hidden="true" className="h-4 w-4" />
         </button>
@@ -154,10 +154,10 @@ export function FirstRunCard({
               <span
                 aria-hidden="true"
                 className={cn(
-                  "mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border",
+                  "mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border redesign:h-8 redesign:w-8 redesign:border-0",
                   done
                     ? "border-success/40 bg-success/15 text-success"
-                    : "border-ink-4 bg-ink text-signal",
+                    : "border-ink-4 bg-ink text-signal redesign:bg-accent-soft redesign:text-on-accent-soft",
                 )}
               >
                 <Icon className="h-4 w-4" />

@@ -2,6 +2,8 @@ import { X } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { escapeOwnedByOverlay } from "@/lib/escape-unless-overlay";
 import { cn } from "@/lib/utils";
+import { X as XBold } from "@phosphor-icons/react";
+import { IconSwap } from "@/components/ui/icon";
 
 /**
  * The one shell every corner card wears.
@@ -121,9 +123,14 @@ export function CornerCard({
         hero
           ? "absolute right-2 top-2 z-10 bg-ink/70 text-paper backdrop-blur-sm hover:bg-ink hover:text-paper"
           : "-mr-1 -mt-1 text-paper-muted hover:bg-ink-3 hover:text-paper",
+        // Round under the redesign: glass on a hero, a ghost on the card.
+        "redesign:rounded-full redesign:focus-visible:ring-[color:var(--color-focus-ring)]",
+        hero
+          ? "redesign:bg-[color:oklch(0.12_0.01_262/0.62)] redesign:text-[color:oklch(0.98_0_0)]"
+          : "redesign:-mr-1.5 redesign:-mt-1.5 redesign:h-8 redesign:w-8 redesign:text-text-tertiary redesign:hover:bg-[color:var(--menu-row-hover)] redesign:hover:text-text",
       )}
     >
-      <X className="h-3.5 w-3.5" aria-hidden />
+      <IconSwap off={X} on={XBold} kind="symbol" offClassName="h-3.5 w-3.5" className="h-4 w-4" />
     </button>
   );
 
@@ -142,7 +149,7 @@ export function CornerCard({
         leaving ? "animate-pop-out" : "animate-pop-in",
       )}
     >
-      <div className="relative overflow-hidden rounded-2xl border border-ink-4 bg-ink-2 shadow-[var(--shadow-popover)]">
+      <div className="relative overflow-hidden rounded-2xl border border-ink-4 bg-ink-2 shadow-[var(--shadow-popover)] redesign:rounded-[var(--popover-radius)] redesign:border-[color:var(--popover-border)] redesign:bg-[color:var(--popover-surface)] redesign:shadow-[var(--popover-shadow)]">
         {hero && (
           <div
             aria-hidden
@@ -155,11 +162,11 @@ export function CornerCard({
           </div>
         )}
         {hero && closeButton}
-        <div className="p-4">
+        <div className="p-4 redesign:p-5">
           {(title || !hero) && (
             <div className="flex items-start gap-2">
               {title && (
-                <h2 className="min-w-0 flex-1 font-display text-sm font-bold tracking-tight text-paper">
+                <h2 className="min-w-0 flex-1 font-display text-sm font-bold tracking-tight text-paper redesign:text-[0.9375rem] redesign:text-text">
                   {title}
                 </h2>
               )}
@@ -167,7 +174,7 @@ export function CornerCard({
             </div>
           )}
           {body && (
-            <p className="mt-1.5 text-pretty text-sm leading-relaxed text-paper-muted">
+            <p className="mt-1.5 text-pretty text-sm leading-relaxed text-paper-muted redesign:text-text-secondary">
               {body}
             </p>
           )}

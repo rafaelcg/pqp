@@ -579,6 +579,13 @@ yet. `--icon-stroke` is the stroke a Lucide icon takes when a primitive passes i
 replacement under the redesign, for a surface whose callers still pass Lucide.
 A filled glyph that turns into a blob (two copy squares) takes `symbol`.
 
+### Hints and first run
+
+Every hint renders through `layout/corner-card.tsx`. Under the redesign it
+is a popover (`--popover-surface`, `--popover-border`, `--popover-shadow`,
+`--popover-radius`) with a round close, glass on a hero. The first-run card
+is a pane-radius card; its steps sit in accent-soft wells.
+
 ### The settings kit
 
 `components/settings/kit/` builds every tab of user settings. Under the

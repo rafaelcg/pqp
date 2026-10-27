@@ -876,6 +876,7 @@ const PRIMITIVES: {
   // The user panel: hover on the settings gear of the first.
   { id: "s-user-panel", testId: "qa-shell-user-panel", hover: "Abrir configurações" },
   { id: "s-banners", testId: "qa-shell-banners" },
+  { id: "f-onboarding", testId: "qa-onboarding", focus: "Entendi" },
 ];
 
 test("captures the primitives", async ({ browser }) => {
