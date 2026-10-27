@@ -121,8 +121,8 @@ export function DiscordImportPreview({
       )}
       <p className="text-paper-muted">{t("importDiscord.preview.renameNote")}</p>
 
-      <aside className="overflow-hidden rounded-xl border border-ink-4/60 bg-channel">
-        <div className="flex min-h-14 items-center gap-2.5 border-b border-ink-4/60 px-4 py-3">
+      <aside className="overflow-hidden rounded-xl border border-ink-4/60 bg-channel redesign:rounded-[var(--radius-card)] redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)]">
+        <div className="flex min-h-14 items-center gap-2.5 border-b border-ink-4/60 px-4 py-3 redesign:border-[color:var(--card-border)]">
           <span className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-ink-3 font-display text-xs font-bold text-paper">
             <ServerIcon name={plan.serverName} iconUrl={plan.iconUrl} />
           </span>
@@ -208,12 +208,12 @@ export function DiscordImportPreview({
 
       <aside
         className={cn(
-          "overflow-hidden rounded-xl border border-ink-4/60 bg-channel",
+          "overflow-hidden rounded-xl border border-ink-4/60 bg-channel redesign:rounded-[var(--radius-card)] redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)]",
           !reduced && "animate-rise",
         )}
         style={reduced ? undefined : staggerVars(Math.min(comingCount, STAGGER_CAP) + 4)}
       >
-        <div className="border-b border-ink-4/60 px-4 py-3">
+        <div className="border-b border-ink-4/60 px-4 py-3 redesign:border-[color:var(--card-border)]">
           <p className="font-display text-base font-bold leading-tight text-paper-muted">
             {t("importDiscord.dropped.sectionTitle")}
           </p>
@@ -258,7 +258,7 @@ function PreviewSection({
   return (
     <div className="mb-3 last:mb-0">
       <div className="mb-1 px-2">
-        <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-paper-muted">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-paper-muted redesign:text-[13px] redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">
           {label}
         </span>
       </div>

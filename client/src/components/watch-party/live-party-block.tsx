@@ -246,7 +246,9 @@ export function LivePartyBlock({
               aria-label={t("watchParty.waitlist.teaser.aria")}
               className={cn(
                 "flex w-full items-center gap-2 rounded-lg border border-dashed border-ink-4/70 px-2.5 py-2 text-left text-paper-muted transition-colors hover:border-accent/50 hover:bg-ink-3 hover:text-paper",
-                SIDEBAR_INVITE_REDESIGN,
+                // On the list it is settled, and settled is a card; until then
+                // it is a dashed invitation.
+                teaser.onList ? SIDEBAR_CARD_REDESIGN : SIDEBAR_INVITE_REDESIGN,
                 "redesign:gap-2.5 redesign:px-3",
               )}
               onClick={teaser.onOpen}
@@ -257,7 +259,7 @@ export function LivePartyBlock({
                   in a 230px rail. */}
               <PartyGlyph />
               <span className="flex min-w-0 flex-col">
-                <span className="truncate text-sm font-medium">
+                <span className={cn("truncate text-sm font-medium redesign:font-semibold", teaser.onList && "redesign:text-text")}>
                   {t("watchParty.waitlist.teaser.label")}
                 </span>
                 <span
@@ -318,7 +320,7 @@ export function LivePartyBlock({
   }
   return (
     <div className="mb-3 px-1" data-testid="live-party-block">
-      <SectionLabel as="p" className="mb-1 px-2 text-[10px] font-semibold uppercase tracking-wider text-paper-muted">
+      <SectionLabel as="p" className="mb-1 px-2 text-[10px] font-semibold uppercase tracking-wider text-paper-muted redesign:px-3">
         {t("watchParty.block.label")}
       </SectionLabel>
       <ul className="flex flex-col gap-1.5">
@@ -403,7 +405,13 @@ export function LivePartyBlock({
                     className="h-8 w-8 shrink-0"
                   />
                   <LivePill
-                    className="mt-0.5"
+                    className={cn(
+                      "mt-0.5",
+                      // Solid under the redesign, so it reads the same on the
+                      // card tint and on the open party's selection fill.
+                      !recovering &&
+                        "redesign:bg-[color:var(--live-badge-bg)] redesign:text-[10px] redesign:text-on-danger redesign:[&>span]:bg-on-danger",
+                    )}
                     variant={recovering ? "recovering" : "live"}
                   />
                 </span>

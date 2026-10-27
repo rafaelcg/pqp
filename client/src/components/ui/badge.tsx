@@ -94,6 +94,17 @@ const SIZE_REDESIGN: Record<BadgeSize, string> = {
 export const BADGE_REDESIGN =
   "redesign:rounded-[var(--badge-radius)] redesign:text-[length:var(--badge-text)] redesign:font-semibold redesign:normal-case redesign:leading-none redesign:tracking-normal";
 
+/**
+ * The badge's look under the redesign alone, for a tag that must keep its own
+ * toggle-off markup (a choice card's "Original"). One recipe, two hosts.
+ */
+export function badgeRedesignClasses(
+  variant: BadgeVariant = "neutral",
+  size: BadgeSize = "md",
+): string {
+  return cn(BADGE_REDESIGN, SIZE_REDESIGN[size], VARIANT_REDESIGN[variant], "redesign:inline-flex redesign:items-center");
+}
+
 export function Badge({
   variant = "neutral",
   size = "md",

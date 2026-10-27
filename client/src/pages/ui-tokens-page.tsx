@@ -15,6 +15,7 @@ import {
   SpeakerHigh,
   UsersThree,
   WarningCircle as BannerErrorIcon,
+  WifiSlash,
   X,
 } from "@phosphor-icons/react";
 import {
@@ -30,6 +31,8 @@ import {
 import { CalendarClock, X as LineX } from "lucide-react";
 import { Navigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
+import { SettingsEmpty } from "@/components/settings/kit/empty";
 import { Spinner } from "@/components/ui/spinner";
 import { PaneHeader, SectionLabel } from "@/components/ui/section-header";
 import { CARD_LIST, CARD_ROW_HOVER, CARD_SURFACE } from "@/components/ui/card";
@@ -1263,8 +1266,92 @@ function PrimitiveSheet() {
         </Tooltip>
       </div>
 
+      {/* A list that scrolls, on a pane and on a dialog: the native bar in
+          the look's colours under the redesign. */}
+      <div data-testid="qa-primitive-scroll" className="grid gap-4 sm:grid-cols-2">
+        {(["pane", "dialog"] as const).map((where) => (
+          <div
+            key={where}
+            className={cn(
+              "h-40 overflow-y-auto rounded-[var(--radius-pane)] p-2",
+              where === "pane" ? "bg-pane-side" : "elevation-3",
+            )}
+          >
+            {/* Says the drawn bar is a swatch, so a tester on Windows or
+                Linux does not read it beside the real one as two bars. */}
+            <p className="hidden px-2 pb-1 text-xs text-text-tertiary redesign:block">
+              Barras desenhadas: a barra de rolagem parada e sob o ponteiro
+            </p>
+            <div className="relative">
+              {/* The thumb's colour drawn as a bar, because macOS hides an
+                  overlay scrollbar at rest and a screenshot cannot show it. */}
+              <span
+                aria-hidden="true"
+                className="absolute right-0 top-1 hidden h-16 w-2 rounded-full bg-[color:var(--scrollbar-thumb)] redesign:block"
+              />
+              <span
+                aria-hidden="true"
+                className="absolute right-3 top-1 hidden h-16 w-2 rounded-full bg-[color:var(--scrollbar-thumb-hover)] redesign:block"
+              />
+              {Array.from({ length: 12 }, (_, i) => (
+                <p key={i} className="px-2 py-1.5 text-sm text-text-secondary">
+                  # canal-{i + 1}
+                </p>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+
       {/* Badges: the status word on a card, the tag beside a name, and the
           count in a pill. */}
+      {/* Empty states: a pane's and a group's, with the toggle-off classes
+          their callers pass. */}
+      <div data-testid="qa-primitive-empty" className="grid gap-4 sm:grid-cols-2">
+        <div className="rounded-[var(--radius-pane)] bg-pane-main">
+          <EmptyState
+            icon={<Icon icon={UsersThree} size="lg" />}
+            title={t("chat.empty.owner.title")}
+            body={t("chat.empty.owner.body")}
+            actions={
+              <Button variant="secondary">
+                <Copy aria-hidden="true" className="h-4 w-4" />
+                {t("chat.empty.owner.copy")}
+              </Button>
+            }
+            className="justify-center gap-2 px-6 py-16"
+            iconClassName="hidden redesign:flex"
+            titleClassName="text-balance font-display text-xl font-bold text-text"
+            bodyClassName="max-w-xs text-pretty text-sm text-text-tertiary"
+          />
+        </div>
+        <div className="flex flex-col gap-4">
+        <div className="rounded-[var(--radius-pane)] bg-pane-main">
+          {/* The forum's failure: a load that did not come back, with a retry. */}
+          <EmptyState
+            role="alert"
+            icon={<Icon icon={WifiSlash} kind="symbol" size="lg" />}
+            title={t("forum.loadError")}
+            body={t("forum.loadError.body")}
+            actions={<Button variant="secondary">{t("forum.retry")}</Button>}
+            className="px-6 py-10"
+            iconClassName="text-text-secondary"
+            titleClassName="mt-4 forum-display text-xl font-bold text-text redesign:mt-0"
+            bodyClassName="mt-1.5 max-w-sm text-sm leading-5 text-text-secondary"
+            actionsClassName="mt-5"
+          />
+        </div>
+        <div className="rounded-[var(--radius-card)] border border-border bg-surface-card">
+          <SettingsEmpty
+            icon={LineHash}
+            glyph={Hash}
+            title={t("chat.empty.title")}
+            description={t("chat.empty.body")}
+          />
+        </div>
+        </div>
+      </div>
+
       {/* Loading: spinners at the sizes callers draw, in a status line and in
           a button; the channel and message skeletons on their panes. */}
       <div data-testid="qa-primitive-loading" className="grid gap-4 sm:grid-cols-[14rem_1fr]">

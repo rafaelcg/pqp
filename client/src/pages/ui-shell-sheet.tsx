@@ -176,7 +176,7 @@ function SheetChannelRow({
       selected={selected}
       unread={{ count: 0, mentions: 0 }}
       canManage
-      icon={<ChannelIcon channel={channel} className={channelRowIconClass(channel, selected)} />}
+      icon={<ChannelIcon channel={channel} className={channelRowIconClass(channel, selected, rest.connected)} />}
       isDragging={false}
       isDragOver={false}
       onSelect={noop}
@@ -315,6 +315,12 @@ function ChannelRowsBlock() {
           <SheetChannelRow
             channel={textChannel("cine2", "cineclube", { type: "watch_party", topic: "Clássicos de domingo" })}
             liveState={{ live: false, presenterPeerId: null, viewerCount: 0, startedAt: null } as never}
+          />
+          {/* The party you are watching from, not open: the success fill. */}
+          <SheetChannelRow
+            channel={textChannel("cine3", "sessão da tarde", { type: "watch_party", topic: "Com a turma" })}
+            liveState={{ live: true, presenterPeerId: "p2", viewerCount: 5, startedAt: null } as never}
+            connected
           />
         </div>
       </SidePane>
@@ -482,6 +488,20 @@ export function ShellSheet() {
             onCompose={noop}
           />
         </SidePane>
+        {/* The Baú open while a new post still shows as the card. */}
+        <SidePane>
+          <CommunityHomePreview
+            latest={BAU_NEW}
+            serverName="Turma do Fliperama"
+            serverHueSeed="fliperama"
+            selected
+            canPost={false}
+            face={<ServerIcon name="Turma do Fliperama" iconUrl={null} />}
+            onOpen={noop}
+            onOpenPost={noop}
+            onCompose={noop}
+          />
+        </SidePane>
       </div>
 
       {/* Category headers. Left, the classic list: Texto open with the
@@ -497,7 +517,10 @@ export function ShellSheet() {
           <ChannelSection label="Voz" fold={fold(true, 2, true)} canManage={false} onAdd={noop} onAddPrivate={noop}>
             {null}
           </ChannelSection>
-          <ChannelSection label="Texto" fold={fold(false, 3)} canManage={false} onAdd={noop} onAddPrivate={noop} isDragOver>
+          <ChannelSection label="Texto" fold={fold(false, 3)} canManage onAdd={noop} onAddPrivate={noop} isDragOver>
+            {null}
+          </ChannelSection>
+          <ChannelSection label="Voz" fold={fold(true, 2)} canManage onAdd={noop} onAddPrivate={noop} isDragOver>
             {null}
           </ChannelSection>
           <CategoryHeader
@@ -526,6 +549,19 @@ export function ShellSheet() {
             onDrop={noop}
             {...fold(true, 6, true)}
           />
+          <CategoryHeader
+            category={category("c3", "Campeonatos de fim de semana")}
+            controlsId="qa-category-3"
+            canManage
+            onRename={noop}
+            onDelete={noop}
+            isDragOver
+            onDragStart={noop}
+            onDragEnd={noop}
+            onDragOverRow={noop}
+            onDrop={noop}
+            {...fold(false, 2)}
+          />
         </SidePane>
         <SidePane>
           <MixedCategoryHeader
@@ -548,6 +584,13 @@ export function ShellSheet() {
             menuItems={[]}
             drag={drag("into")}
             {...fold(false, 2)}
+          />
+          <MixedCategoryHeader
+            category={category("m4", "Campeonatos de fim de semana")}
+            addItems={ADD_ITEMS}
+            menuItems={[]}
+            drag={drag("into")}
+            {...fold(false, 3)}
           />
         </SidePane>
       </div>
