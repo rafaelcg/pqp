@@ -443,6 +443,7 @@ test("captures the design council screens", async ({ browser }) => {
       } catch (error) {
         console.log("search shots skipped", String(error).slice(0, 300));
         await page.keyboard.press("Escape");
+      }
       // The sidebar header up close: the name hovered, the search entry.
       {
         const header = page.locator("[data-server-header]");
