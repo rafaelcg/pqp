@@ -891,6 +891,8 @@
   --list-row-hover: var(--color-row-hover);
   --list-row-selected: var(--color-row-selected);
   --list-row-selected-text: var(--color-on-row-selected);
+  /* A row's second line (a tag, a status, a count): the tertiary text. */
+  --list-row-detail: var(--color-text-tertiary);
   /* A muted row (a channel you silenced) stays a step above a disabled one
      (0.4), so the two read apart. */
   --list-row-muted-opacity: 0.6;
