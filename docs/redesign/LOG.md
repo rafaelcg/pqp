@@ -1168,6 +1168,13 @@ load more):
 3. Merges: nothing. The other search fields (about nine) belong to their
    surfaces.
 4. Kept: combobox and listbox semantics, arrows and Enter, load more.
+Rounds (Opus only): r1 7.5 (MUST fixed: four left edges), r2 8.3, r3 8.4,
+r4 8.1 (MUST fixed: the channel name sat 3px above the author). Decisions:
+the always-focused field draws a 1px accent border, not the primitive's
+2px ring with an offset, because a ring around a field that never loses
+focus is heavy. The row's `#` is the bold (symbol) glyph, the same weight
+as the field's glass. Hover selects a row only on a real pointer move.
+
 ### f-invites
 
 Spec (audit: `invite-panel.tsx` in create and join modes, `invite-choice-row`,

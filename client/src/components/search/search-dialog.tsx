@@ -273,6 +273,8 @@ export function SearchDialog({
                       aria-selected={index === selected}
                       tabIndex={-1}
                       onMouseMove={(event) => {
+                        // A synthetic move after a scroll has no movement.
+                        if (event.movementX === 0 && event.movementY === 0) return;
                         const last = lastPointer.current;
                         if (last && last.x === event.clientX && last.y === event.clientY) return;
                         lastPointer.current = { x: event.clientX, y: event.clientY };
@@ -294,7 +296,7 @@ export function SearchDialog({
                           : "redesign:hover:bg-transparent",
                       )}
                     >
-                      <div className="flex items-baseline gap-2 text-xs text-text-muted">
+                      <div className="flex items-baseline gap-2 text-xs text-text-muted redesign:items-center">
                         <span className="flex min-w-0 items-center gap-1 font-medium text-text redesign:gap-2.5 redesign:font-semibold">
                           <Hash className="h-3 w-3 shrink-0 redesign:hidden" />
                           <Icon icon={HashGlyph} kind="symbol" size="sm" className="hidden h-4 w-4 text-text-secondary redesign:block" />
@@ -309,7 +311,7 @@ export function SearchDialog({
                           {formatDayLabel(result.createdAt)}
                         </time>
                       </div>
-                      <p className="mt-1 line-clamp-2 text-sm text-text-muted redesign:text-text-secondary">
+                      <p className="mt-1 line-clamp-2 text-sm text-text-muted redesign:pl-[1.625rem] redesign:text-text-secondary">
                         <Snippet snippet={result.snippet} />
                       </p>
                     </button>
