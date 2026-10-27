@@ -591,6 +591,45 @@ test("captures the design council screens", async ({ browser }) => {
       await page.getByRole("button", { name: "Abrir configurações" }).first().click();
       await expect(page.getByRole("dialog")).toBeVisible();
       await shoot(page, `04-settings-${theme}`);
+      // Game connections: the providers this host offers, or the note
+      // that it offers none.
+      await page.getByRole("dialog").getByText("Conexões", { exact: true }).first().click();
+      await page.waitForTimeout(600);
+      await shoot(page, `37-settings-connections-${theme}`);
+      // The linked state, with the host's providers mocked: Steam linked with
+      // a long name, Twitch and Battle.net offered.
+      try {
+        await page.route("**/api/connections/config", (route) =>
+          route.fulfill({ json: { steam: true, battlenet: true, twitch: true } }),
+        );
+        await page.route("**/api/me/connections", (route) =>
+          route.fulfill({
+            json: {
+              connections: [
+                {
+                  provider: "steam",
+                  providerUserId: "76561198000000000",
+                  displayName: "lia_joga_tudo_na_madrugada_de_domingo",
+                  avatarUrl: null,
+                  profileUrl: null,
+                  visibility: "shared",
+                  connectedAt: "2026-10-01T12:00:00.000Z",
+                },
+              ],
+            },
+          }),
+        );
+        await page.getByRole("dialog").getByText("Perfil", { exact: true }).first().click();
+        await page.waitForTimeout(300);
+        await page.getByRole("dialog").getByText("Conexões", { exact: true }).first().click();
+        await expect(page.getByRole("dialog").getByText("lia_joga_tudo", { exact: false }).first()).toBeVisible({ timeout: 5_000 });
+        await page.waitForTimeout(400);
+        await shoot(page, `38-settings-connections-linked-${theme}`);
+        await page.unroute("**/api/connections/config");
+        await page.unroute("**/api/me/connections");
+      } catch (error) {
+        console.log("linked connections shot skipped", String(error).slice(0, 200));
+      }
       // A section made of switches, for the choice controls.
       await page.getByRole("dialog").getByText("Notificações", { exact: true }).first().click();
       await expect(page.getByRole("dialog").getByRole("switch").first()).toBeVisible();
@@ -841,6 +880,7 @@ const PRIMITIVES: {
   { id: "s-banners", testId: "qa-shell-banners" },
   // Message rows in their states.
   { id: "s-message-row", testId: "qa-shell-message-rows", hoverText: "@lia cê vem?" },
+  { id: "f-onboarding", testId: "qa-onboarding", focus: "Entendi" },
 ];
 
 test("captures the primitives", async ({ browser }) => {

@@ -8,7 +8,7 @@ import {
   X as XBold,
 } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
-import { BANNER_DISMISS_REDESIGN, bannerSurfaceRedesign } from "@/components/ui/banner";
+import { BANNER_DISC_REDESIGN, BANNER_DISMISS_REDESIGN, BANNER_QUIET_REDESIGN, bannerSurfaceRedesign } from "@/components/ui/banner";
 import { Icon as Glyph } from "@/components/ui/icon";
 import { Confetti } from "@/components/onboarding/confetti";
 import type { ArrivalVariant } from "@/lib/arrival";
@@ -143,7 +143,7 @@ export function ArrivalBanner({
       {celebrate && <Confetti />}
       <span
         aria-hidden="true"
-        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-on-accent"
+        className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-on-accent", BANNER_DISC_REDESIGN)}
       >
         <Icon className="h-4 w-4 redesign:hidden" />
         <Glyph icon={RedesignIcon} size="sm" className="hidden redesign:block" />
@@ -197,7 +197,7 @@ export function ArrivalBanner({
           size="sm"
           variant="secondary"
           data-arrival-dismiss=""
-          className="hidden shrink-0 sm:inline-flex"
+          className={cn("hidden shrink-0 sm:inline-flex", BANNER_QUIET_REDESIGN)}
           onClick={onDismiss}
         >
           {t("arrival.dismiss")}

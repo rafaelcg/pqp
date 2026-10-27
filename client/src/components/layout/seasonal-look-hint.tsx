@@ -130,7 +130,7 @@ export function SeasonalLookHint({
       footer={
         applied ? (
           <div className="flex items-center gap-2">
-            <Button size="sm" className="cta-lift rounded-full px-4" onClick={close}>
+            <Button size="sm" data-cta className="cta-lift rounded-full px-4" onClick={close}>
               {t("seasonalLookHint.keep")}
             </Button>
             <Button
@@ -152,7 +152,7 @@ export function SeasonalLookHint({
           <div className="flex items-center gap-2">
             <Button
               size="sm"
-              className="cta-lift rounded-full px-4"
+              data-cta className="cta-lift rounded-full px-4"
               onClick={() => {
                 setPrevious({ look: getAppearance(), retro: isRetroLookOn() });
                 chooseLook(look);

@@ -2,7 +2,7 @@ import { UserPlus, X } from "lucide-react";
 import { useEffect } from "react";
 import { UserPlus as UserPlusFill, X as XBold } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
-import { BANNER_DISMISS_REDESIGN, bannerSurfaceRedesign } from "@/components/ui/banner";
+import { BANNER_DISC_REDESIGN, BANNER_DISMISS_REDESIGN, BANNER_QUIET_REDESIGN, bannerSurfaceRedesign } from "@/components/ui/banner";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 import { useTranslation } from "@/lib/i18n";
@@ -44,7 +44,7 @@ export function NewcomerInviteStrip({
     >
       <span
         aria-hidden="true"
-        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-on-accent"
+        className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-on-accent", BANNER_DISC_REDESIGN)}
       >
         <UserPlus className="h-4 w-4 redesign:hidden" />
         <Icon icon={UserPlusFill} size="sm" className="hidden redesign:block" />
@@ -78,7 +78,7 @@ export function NewcomerInviteStrip({
           size="sm"
           variant="secondary"
           data-newcomer-invite-later=""
-          className="hidden shrink-0 sm:inline-flex"
+          className={cn("hidden shrink-0 sm:inline-flex", BANNER_QUIET_REDESIGN)}
           onClick={() => {
             track("newcomer_invite_dismiss");
             onDismiss();

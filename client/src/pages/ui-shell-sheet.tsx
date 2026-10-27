@@ -42,6 +42,9 @@ import { ServerRail } from "@/components/layout/server-rail";
 import { LivePartyBlock } from "@/components/watch-party/live-party-block";
 import { ServerIcon } from "@/components/layout/server-identity";
 import type { LatestCard, LatestPreview } from "@/lib/community-home/latest";
+import { CornerCard } from "@/components/layout/corner-card";
+import { FirstRunCard } from "@/components/onboarding/first-run-card";
+import { Button } from "@/components/ui/button";
 import { setUpdateWaiting } from "@/lib/update-prompt-state";
 
 /**
@@ -621,6 +624,40 @@ function BannersBlock() {
         />
         <ConnectionBanner status="reconnecting" refusedRepeatedly={false} onRetry={noop} onCheck={noop} onSignInAgain={noop} />
       </MainPane>
+      {/* The harder states: a watch-now join that failed, and a session
+          with no reminder set (the ghost "Lembrar"). */}
+      <MainPane>
+        <WatchNowBanner
+          now={NOW}
+          streams={[
+            { key: "c", channelId: "c3", kind: "voice", place: "Lobby", sharerUserId: "u1", sharerName: "Rafa", startedAt: NOW - 4 * 60_000, watching: 2, inRoom: false },
+          ]}
+          failure="A transmissão terminou."
+          onWatch={noop}
+          onDismiss={noop}
+        />
+        <UpcomingSessionCard
+          session={{
+            id: "00000000-0000-4000-8000-000000000211",
+            channelId: "00000000-0000-4000-8000-000000000212",
+            serverId: null,
+            title: "Noite do Mario Kart",
+            description: null,
+            coverImageUrl: null,
+            startsAt: new Date(NOW + 26 * 3_600_000).toISOString(),
+            status: "scheduled",
+            createdBy: "00000000-0000-4000-8000-000000000203",
+            createdAt: new Date(NOW).toISOString(),
+            updatedAt: new Date(NOW).toISOString(),
+            reminding: false,
+          }}
+          now={new Date(NOW)}
+          canManage={false}
+          onToggleReminder={asyncNoop}
+          onCancel={asyncNoop}
+          onEdit={noop}
+        />
+      </MainPane>
     </div>
   );
 }
@@ -708,6 +745,15 @@ function useUpdateWaitingFixture() {
     return () => setUpdateWaiting(false);
   }, []);
 }
+
+const NEW_USER = {
+  id: "u-new",
+  username: "lia",
+  discriminator: "0369",
+  tag: "lia#0369",
+  displayName: "Lia",
+  avatarUrl: null,
+} as unknown as Parameters<typeof FirstRunCard>[0]["user"];
 
 export function ShellSheet() {
   useUpdateWaitingFixture();
@@ -952,6 +998,59 @@ export function ShellSheet() {
             onOpenCommunities={noop}
           />
         </RailFrame>
+      </div>
+      {/* Onboarding: the one corner card shell, inline as it sits beside the
+          control it explains, plain and with a hero; and the first-run card
+          for a new account with nothing done yet. */}
+      <div data-testid="qa-onboarding" className="flex max-w-4xl items-start gap-6 p-4">
+        <div className="flex w-[17rem] flex-col gap-4">
+          <CornerCard
+            open
+            layout="inline"
+            onClose={noop}
+            label="Dica"
+            dismissLabel="Fechar"
+            title="Atalhos do teclado"
+            body="Aperta Ctrl K pra buscar qualquer mensagem, e Ctrl / pra ver todos os atalhos."
+            footer={<Button size="sm" data-cta className="cta-lift rounded-full px-4" onClick={noop}>Entendi</Button>}
+          />
+          <CornerCard
+            open
+            layout="inline"
+            onClose={noop}
+            label="Novidade"
+            dismissLabel="Fechar"
+            hero={<div className="h-24 bg-[linear-gradient(135deg,var(--color-accent-soft),var(--color-surface-2))]" />}
+            title="Watch party chegou"
+            body="Assiste filme junto, com a voz da galera por cima."
+            footer={<Button size="sm" variant="secondary" onClick={noop}>Ver como</Button>}
+          />
+        </div>
+        <div className="min-w-0 flex-1">
+          <FirstRunCard
+            user={NEW_USER}
+            serverCount={0}
+            friendCount={0}
+            onCreateServer={noop}
+            onJoinServer={noop}
+            onAddFriend={noop}
+            onPickAvatar={noop}
+            onDismiss={noop}
+          />
+          {/* Two steps done: ticked, dimmed and kept in place. */}
+          <div className="mt-4">
+            <FirstRunCard
+              user={{ ...NEW_USER, avatarUrl: "https://api.dicebear.com/9.x/shapes/png?seed=lia" }}
+              serverCount={1}
+              friendCount={0}
+              onCreateServer={noop}
+              onJoinServer={noop}
+              onAddFriend={noop}
+              onPickAvatar={noop}
+              onDismiss={noop}
+            />
+          </div>
+        </div>
       </div>
     </div>
   );

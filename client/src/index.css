@@ -902,6 +902,11 @@
   /* Your own name on your messages. */
   --message-own-name: var(--color-accent-text);
 
+  /* Glass: a close or control laid over a picture (corner-card heroes). */
+  --glass-bg: oklch(0.12 0.01 262 / 0.62);
+  --glass-fg: oklch(0.98 0 0);
+  --glass-border: transparent;
+
   /* Pane headers (ui/pane-header.ts): the chat's and every other pane's
      top bar, on one rule, one inset and one title size. */
   --pane-header-rule: color-mix(in oklab, var(--color-text) 8%, transparent);
@@ -1321,6 +1326,9 @@
   --message-mention-hover: color-mix(in oklab, var(--message-mention-bg) 92%, var(--color-accent));
   /* Your own name: the lime itself in light, where accent-text is a near-black olive. */
   --message-own-name: var(--color-accent);
+  --glass-bg: oklch(0.99 0 0 / 0.72);
+  --glass-fg: var(--color-text);
+  --glass-border: var(--popover-border);
   /* Light panes need a stronger thumb to clear 3:1. */
   --scrollbar-thumb: color-mix(in oklab, var(--color-text-tertiary) 80%, transparent);
   --scrollbar-thumb-hover: color-mix(in oklab, var(--color-text-secondary) 90%, transparent);

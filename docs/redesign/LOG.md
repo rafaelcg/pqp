@@ -69,7 +69,10 @@ Read this file and the inventory at the start of every session.
 | 3 | `s-voice-strip` | Merged, capped at round 5 (Opus 8.1 r5). Follow-ups: composer hang-up glyph (`s-composer`), music idle row fixture (`m-sheets`) |
 | 3 | `s-user-panel` | Merged, capped at round 5 (Opus 8.2 r5). Open: the Invisível hint is seven lines at the card width (copy, shows with the toggle off) |
 | 3 | `s-header` | Merged, capped at round 5 (Opus 8.3 r4 and r5). Follow-up: rename `--pane-header-rule` / `--pane-header-px` to `--pane-bar-*` after the chain |
+| 3 | `s-banners` | Merged, capped at round 5 (Opus 8.2 r5, MUST fixed after). Not done: a dark-only accent edge |
+| 4 | `f-onboarding` | Merged, capped at round 5 (Opus 8.3 r3 and r5) |
 | 4 | `f-user-settings` | Merged, capped at round 5 (Opus 8.1 r5, 8.2 r4) |
+| 4 | `f-connections` | Merged, capped at round 5 (Opus 8.4 r3 and r4, 8.3 r5). Open: question 6 (copy) |
 | 4 | `f-search` | Merged, capped at round 5 (Opus 8.5 r5). Not done: `<li role="none">` inside the listbox (it changes the toggle-off tree too) |
 | 4 | `f-server-settings` | Merged, capped at round 5 (Opus 7.8 r5, 7.9 r4) |
 | 4 | `f-invites` | Merged, capped at round 5 (Opus 7.8 r5, 8.1 r3 and r4) |
@@ -1212,6 +1215,27 @@ confirm, the delete account dialog, the phone tab strip):
 4. Kept: every section, the close guard, the handle confirm, the 44px phone
    targets, the dirty dot and its spoken description.
 
+### f-connections
+
+Spec (audit: `connections-section.tsx` in user settings (built on the kit),
+`connection-badges.tsx` on the profile card, `connection-callback.tsx` the
+overlay while a provider redirect completes):
+
+1. Job: link Steam, Battle.net and Twitch, choose who sees them, show them
+   on a profile.
+2. Redesign: the section is the kit's (already reviewed); the badges list on
+   the profile is a card with semibold names, provider in the detail colour
+   and a bold arrow; the linked name is sans medium; the callback is a pill
+   on the popover surface over the sheet scrim.
+3. Merges: nothing.
+4. Kept: per-provider visibility, the unavailable list, the callback overlay.
+Rounds (Opus only): r1 8.0, r2 8.2, r3 8.4, r4 8.4, r5 8.3 (cap, no
+MUST in any round). Changes: Desconectar on the plain `danger-ghost` at the
+action edge, a spinner and `role="status"` on the callback pill, an edge on
+the near-black tiles in dark, coming-soon tiles muted (grey and faded in
+light), the linked name at medium weight, a mocked linked-state shot
+(`38-*`). Open: question 6 (copy, shows with the toggle off).
+
 ### f-server-settings
 
 Spec (audit: `server-settings-dialog.tsx` with 13 sections and its own
@@ -1390,6 +1414,16 @@ notice, the upcoming session card):
    `ui/banner.tsx`: inset, `--banner-radius`, the tone's soft fill and edge,
    text in the text colour, a round dismiss in the tone's ink. The session
    card is news, not a tone: the same inset and corner on the card tint.
+Rounds (Opus only): r1 7.6 (MUST fixed: the second action was the generic
+grey secondary on a tone), r2 8.1, r3 8.1, r4 8.0, r5 8.2 (cap; MUST fixed
+after: the reminder's accessible name now follows its visible text). The
+family: one card (`bannerSurfaceRedesign`), a tinted disc
+(`BANNER_DISC_REDESIGN`), one ink-filled main action, a tinted second
+action (`BANNER_QUIET_REDESIGN`, also the primitive's quiet), the round X
+only where a strip can be hidden, one text column at 44px, meta lines at
+13px. New copy: `watchPartySchedule.card.reminding` ("Lembrete ligado").
+Not done: a dark-only accent edge at about 20% (judge with one strip in
+place, not the sheet's stack).
 
 ### s-message-row
 
@@ -1403,11 +1437,39 @@ row; one renderer with a stream variant and compact density):
    failed (retry, wait, discard); blocked; mentions you (joined in a run);
    flash; bulk select; forum answer; stream rows.
 3. Redesign: the row is inset 8px with an 8px corner and gives the inset
-   back as padding, so text does not move; hover is a 3% text tint; a
-   mention is the accent's soft fill (as in the mockup); your own name is
-   accent text; times are tertiary; the failed and queued footers use the
-   secondary pill. The hover toolbar, reactions, reply and thread chip are
-   `s-message-chrome`; the inline edit field is `s-composer`.
+   back as padding, so text does not move; hover is a text tint (4.5% in
+   dark, 3% in light); a mention is the system's mention row, a step
+   quieter in light so it never reads as the selected channel; your own
+   name is in the accent when you have no role colour; role names get a
+   lightness clamp; times are tertiary; Retry is on the soft accent and
+   Discard on the secondary fill. The hover toolbar, reactions, reply and
+   thread chip are `s-message-chrome`; the inline edit field is
+   `s-composer`.
+Rounds (Opus only): r1 7.5 (MUST fixed), r2 8.0 (MUST fixed), r3 8.1,
+r4 7.6 (MUST fixed: a pinned continuation line showed no pin), r5 8.5
+(cap, no MUST). Also: the presence dot is cut from the fill it sits on,
+a pinned continuation line carries its pin in the gutter, "(editada)"
+ends the paragraph right before it. For `s-member-list`: the same role
+lightness clamp on member rows and role chips.
+
+### f-onboarding
+
+Spec (audit: `onboarding/` (11 files), the hints in `layout/*-hint.tsx`
+and `corner-card.tsx`: the wizard, the first-run card, arrival and newcomer
+strips, ten hints that all render through `CornerCard`):
+
+1. Job: get a new person to a working setup, and teach a feature once.
+2. Redesign: `CornerCard` (the one hint shell) on the popover surface,
+   edge, lift and radius, a round close (glass on a hero), a 15px title;
+   the first-run card a pane-radius card with accent-soft step wells.
+3. Merges: none needed; the hint shapes already share `CornerCard`.
+4. Kept: every hint, the queue, the quiet contexts, the wizard.
+Rounds (Opus only): r1 7.3 (MUST fixed), r2 7.8, r3 8.3, r4 8.2, r5 8.3
+(cap, no MUST). The family: one 32px round close on every card (glass on
+a hero, from `--glass-bg` / `--glass-fg` / `--glass-border`), the shell
+sizes a footer's primary action (`data-cta`, 120px), done steps keep their
+place with a check and "Feito" and no strike. Rebuilt off `redesign`
+without the f-call work the first branch carried.
 
 ## Open questions for André
 
@@ -1433,6 +1495,14 @@ row; one renderer with a stream variant and compact density):
    reads as "limited to one use". The council suggests "Usado 1 vez · sem
    limite" and "{used} de {max} usos". That is a copy change in three
    languages and shows with the toggle off too. Change it?
+6. Connections and profile: three notices say a feature is "not active on
+   this server" ("não estão ativas neste servidor"). In pqp a "servidor" is
+   a chat server, so the council reads it as wrong. Suggested pt-BR: "ainda
+   não estão disponíveis aqui", with en and es to match, for
+   `settings.connections.unconfigured`, `settings.profile.banner.unconfigured`
+   and `settings.profile.media.unconfigured`. It shows with the toggle off
+   too. Change it? Same tab: the visibility hint says "Para usar" while
+   the rest of the tab says "pra"; the council suggests "Pra usar".
 
 ## Decisions
 
