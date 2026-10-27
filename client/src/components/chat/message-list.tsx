@@ -1,5 +1,8 @@
 import { StoryQuoteCard } from "@/components/stories/story-quote-card";
 import { Badge } from "@/components/ui/badge";
+import { Icon } from "@/components/ui/icon";
+import { EmptyState as EmptyStateView } from "@/components/ui/empty-state";
+import { ChatsCircle, UsersThree } from "@phosphor-icons/react";
 import type {
   Embed,
   MessageReaction,
@@ -22,7 +25,6 @@ import {
   ImagePlay,
   Link,
   ListChecks,
-  Loader2,
   Mail,
   MailOpen,
   MessageSquarePlus,
@@ -144,6 +146,7 @@ import type {
   AuthorGoneCheck,
   MissingAuthor,
 } from "@/hooks/use-confirmed-gone-authors";
+import { Spinner } from "@/components/ui/spinner";
 
 /** Consecutive messages from one author within this window render as one block. */
 const GROUP_WINDOW_MS = 5 * 60 * 1000;
@@ -2041,7 +2044,7 @@ export const MessageList = memo(function MessageList({
           <div className="flex justify-center pb-3">
             {isLoadingOlder ? (
               <span className="flex items-center gap-2 text-xs text-paper-muted">
-                <Loader2 className="h-3 w-3 animate-spin" />
+                <Spinner className="h-3 w-3 animate-spin" />
                 Loading older messages…
               </span>
             ) : (
@@ -2445,7 +2448,7 @@ export const MessageList = memo(function MessageList({
           <div className="flex justify-center pt-3">
             {isLoadingNewer ? (
               <span className="flex items-center gap-2 text-xs text-paper-muted">
-                <Loader2 className="h-3 w-3 animate-spin" />
+                <Spinner className="h-3 w-3 animate-spin" />
                 {t("chat.loadingNewer")}
               </span>
             ) : (
@@ -2768,24 +2771,25 @@ function EmptyState({
       timer.current = window.setTimeout(() => setState("idle"), 1600);
     };
     return (
-      <div
+      <EmptyStateView
         data-empty-owner=""
-        className="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-16 text-center"
-      >
-        <p className="text-balance font-display text-xl font-bold text-text">
-          {t("chat.empty.owner.title")}
-        </p>
-        <p className="max-w-xs text-pretty text-sm text-text-tertiary">
-          {state === "failed"
+        icon={<Icon icon={UsersThree} size="lg" />}
+        title={t("chat.empty.owner.title")}
+        body={
+          state === "failed"
             ? t("chat.empty.owner.failed")
-            : t("chat.empty.owner.body")}
-        </p>
-        {showCopyButton ? (
+            : t("chat.empty.owner.body")
+        }
+        className="flex-1 justify-center gap-2 px-6 py-16"
+        iconClassName="hidden redesign:flex"
+        titleClassName="text-balance font-display text-xl font-bold text-text"
+        bodyClassName="max-w-xs text-pretty text-sm text-text-tertiary"
+        actions={showCopyButton ? (
           <Button
             // Secondary: the owner banner above carries the loud copy of this
             // same action, and two accent buttons a screen apart compete.
             variant="secondary"
-            className="mt-3"
+            className="mt-3 redesign:mt-0"
             data-empty-copy-invite=""
             disabled={state === "busy"}
             onClick={() => void copy()}
@@ -2799,20 +2803,21 @@ function EmptyState({
               ? t("chat.empty.owner.copied")
               : t("chat.empty.owner.copy")}
           </Button>
-        ) : null}
-      </div>
+        ) : undefined}
+      />
     );
   }
 
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-16 text-center">
-      <p className="text-balance font-display text-xl font-bold text-paper">
-        {t("chat.empty.title")}
-      </p>
-      <p className="max-w-xs text-pretty text-sm text-paper-muted">
-        {t("chat.empty.body")}
-      </p>
-    </div>
+    <EmptyStateView
+      icon={<Icon icon={ChatsCircle} size="lg" />}
+      title={t("chat.empty.title")}
+      body={t("chat.empty.body")}
+      className="flex-1 justify-center gap-2 px-6 py-16"
+      iconClassName="hidden redesign:flex"
+      titleClassName="text-balance font-display text-xl font-bold text-text"
+      bodyClassName="max-w-xs text-pretty text-sm text-text-tertiary"
+    />
   );
 }
 
@@ -2989,7 +2994,7 @@ function BotActivityRows({
                   key={key}
                   className="chat-swap-in mt-0.5 inline-flex items-center gap-1.5 rounded-full bg-surface-2 px-2.5 py-1 text-sm text-text-secondary"
                 >
-                  <Loader2 className="h-3.5 w-3.5 shrink-0 motion-safe:animate-spin" aria-hidden />
+                  <Spinner className="h-3.5 w-3.5 shrink-0 motion-safe:animate-spin" />
                   <span className="bot-shimmer">{t(key, { name: user.displayName })}</span>
                 </span>
               )}
@@ -3836,11 +3841,11 @@ const MessageRow = memo(function MessageRow({
                     author={authorInfo}
                     tabIndex={controlTabIndex}
                     onOpenProfile={openProfile}
-                    className="block h-9 w-9 shrink-0 overflow-hidden rounded-lg leading-none hover:no-underline"
+                    className="block h-9 w-9 shrink-0 overflow-hidden rounded-lg leading-none hover:no-underline redesign:rounded-full"
                   >
                     {message.isAutomod ? (
                       <span
-                        className="grid h-9 w-9 place-items-center rounded-lg bg-accent-soft text-on-accent-soft"
+                        className="grid h-9 w-9 place-items-center rounded-lg bg-accent-soft text-on-accent-soft redesign:rounded-full"
                         title={t("chat.automodPosted")}
                       >
                         <ShieldCheck className="h-5 w-5" aria-hidden />
@@ -3859,8 +3864,8 @@ const MessageRow = memo(function MessageRow({
                   {!message.isWebhook && authorInfo?.status && (
                     <StatusDot
                       status={authorInfo.status}
-                      className="absolute -bottom-0.5 -right-0.5"
-                      ringClassName="rounded-full bg-channel ring-2 ring-channel"
+                      className="absolute -bottom-0.5 -right-0.5 redesign:bottom-0 redesign:right-0"
+                      ringClassName="rounded-full bg-channel ring-2 ring-channel redesign:bg-[color:var(--avatar-dot-ring)] redesign:ring-[color:var(--avatar-dot-ring)]"
                     />
                   )}
                 </div>

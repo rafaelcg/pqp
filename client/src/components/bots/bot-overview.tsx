@@ -1,4 +1,5 @@
 import type { Channel, ServerBotActivityItem, ServerBotDto, ServerBotOverview } from "@pqp/shared";
+import { CARD_LIST, CARD_SURFACE } from "@/components/ui/card";
 import {
   AlarmClock,
   BarChart3,
@@ -112,11 +113,11 @@ export function BotOverviewPanel({
       <section>
         <h3 className="mb-2 text-sm font-semibold text-text">{t("bots.overview.recent")}</h3>
         {!overview || overview.recent.length === 0 ? (
-          <p className="rounded-[var(--radius-card)] border border-border bg-surface-card p-4 text-sm text-text-tertiary">
+          <p className={cn(CARD_SURFACE, "p-4 text-sm text-text-tertiary redesign:text-text-secondary")}>
             {t("bots.overview.nothingYet", { name: bot.name })}
           </p>
         ) : (
-          <ul className="divide-y divide-border overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface-card">
+          <ul className={cn(CARD_SURFACE, CARD_LIST)}>
             {overview.recent.map((item, index) => (
               <ActivityRow key={index} item={item} locale={locale} />
             ))}
@@ -129,7 +130,7 @@ export function BotOverviewPanel({
 
 function Stat({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-[var(--radius-card)] border border-border bg-surface-card p-4">
+    <div className={cn(CARD_SURFACE, "p-4")}>
       <p className="mb-1 text-xs font-bold uppercase tracking-wide text-text-tertiary">{label}</p>
       {children}
     </div>

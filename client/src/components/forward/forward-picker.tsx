@@ -8,7 +8,6 @@ import {
 import {
   Forward,
   Hash,
-  Loader2,
   Lock,
   MessageSquareText,
   Search,
@@ -42,6 +41,8 @@ import {
   type PickerTarget,
 } from "@/lib/forward";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { Spinner } from "@/components/ui/spinner";
+import { SectionLabel } from "@/components/ui/section-header";
 
 /**
  * "Encaminhar": pick up to five places (channels you can speak in, and your
@@ -603,7 +604,7 @@ export function ForwardPicker({
           >
             {busy ? (
               <>
-                <Loader2 className="mr-1.5 h-4 w-4 animate-spin" aria-hidden />
+                <Spinner className="mr-1.5 h-4 w-4 animate-spin" />
                 {t("forward.sending")}
               </>
             ) : (
@@ -675,28 +676,28 @@ export function ForwardPicker({
         >
           {shownRecents.length > 0 && (
             <section aria-label={t("forward.recent")}>
-              <h3 className="px-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
+              <SectionLabel className="px-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
                 {t("forward.recent")}
-              </h3>
+              </SectionLabel>
               <ul>{shownRecents.map((target) => rowFor(target, true))}</ul>
             </section>
           )}
           {shownConversations.length > 0 && (
             <section aria-label={t("forward.conversations")}>
-              <h3 className="px-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
+              <SectionLabel className="px-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
                 {t("forward.conversations")}
-              </h3>
+              </SectionLabel>
               <ul>{shownConversations.map((target) => rowFor(target, false))}</ul>
             </section>
           )}
           {shownGroups.map(({ server, targets }) => (
             <section key={server.id} aria-label={server.name} data-forward-server={server.id}>
-              <h3 className="flex items-center gap-1.5 px-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
+              <SectionLabel className="flex items-center gap-1.5 px-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
                 <span className="flex h-4 w-4 items-center justify-center overflow-hidden rounded bg-surface-3 text-[8px] text-text">
                   <ServerIcon name={server.name} iconUrl={server.iconUrl} />
                 </span>
                 <span className="truncate">{server.name}</span>
-              </h3>
+              </SectionLabel>
               <ul>{targets.map((target) => rowFor(target, false))}</ul>
             </section>
           ))}
@@ -739,7 +740,7 @@ export function ForwardPicker({
               className="flex items-center gap-2 px-2 py-1 text-xs text-text-tertiary"
               role="status"
             >
-              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+              <Spinner className="h-3.5 w-3.5 animate-spin" />
               {t("forward.loading")}
             </p>
           )}

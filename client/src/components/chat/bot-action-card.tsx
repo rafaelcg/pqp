@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { answerBotAsk, ApiError, decideBotPlan } from "@/lib/api";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { intlLocale, type Locale } from "@/lib/locale";
+import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 
 /** A card younger than this animates in; older ones are drawn still. */
@@ -84,7 +85,11 @@ function CardHeader({
   return (
     <div className="flex items-center gap-2.5 px-3 pb-2 pt-3">
       <span className={cn("grid h-7 w-7 shrink-0 place-items-center rounded-[var(--radius-control)]", TILE[tone])}>
-        <Icon className={cn("h-4 w-4", spin && "motion-safe:animate-spin")} aria-hidden />
+        {spin ? (
+          <Spinner className="h-4 w-4 motion-safe:animate-spin" />
+        ) : (
+          <Icon className="h-4 w-4" aria-hidden />
+        )}
       </span>
       <div className="min-w-0 flex-1">
         <p className="truncate text-[13px] font-semibold leading-tight text-text">{title}</p>
@@ -222,10 +227,9 @@ function StatusMark({
   }
   if (running) {
     return (
-      <Loader2
+      <Spinner
         className="h-5 w-5 shrink-0 text-accent motion-safe:animate-spin"
-        aria-label={t("chat.botCard.status.running")}
-        role="img"
+        label={t("chat.botCard.status.running")}
       />
     );
   }
@@ -317,6 +321,7 @@ export function BotActionCard({
     };
   } else if (running) {
     header = {
+      // Drawn as the shared Spinner (`spin`); the glyph is only the type.
       icon: Loader2,
       tone: "accent",
       spin: true,
@@ -638,7 +643,7 @@ function AskCard({
                     )}
                     style={{ animationDelay: `${index * STAGGER_MS}ms` }}
                   >
-                    {sending === index && <Loader2 className="h-3.5 w-3.5 shrink-0 motion-safe:animate-spin" aria-hidden />}
+                    {sending === index && <Spinner className="h-3.5 w-3.5 shrink-0 motion-safe:animate-spin" />}
                     <span className="min-w-0 break-words">{option}</span>
                   </button>
                 ) : (
@@ -695,7 +700,7 @@ function PlanButtons({ planId }: { planId: string }) {
     <div className="flex flex-wrap items-center gap-2 border-t border-border px-3 py-2.5">
       <Button type="button" size="sm" disabled={sending !== null} onClick={() => void decide("yes")}>
         {sending === "yes" ? (
-          <Loader2 className="mr-1.5 h-3.5 w-3.5 motion-safe:animate-spin" aria-hidden />
+          <Spinner className="mr-1.5 h-3.5 w-3.5 motion-safe:animate-spin" />
         ) : (
           <Check className="mr-1.5 h-3.5 w-3.5" aria-hidden />
         )}

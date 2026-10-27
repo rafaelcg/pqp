@@ -292,6 +292,7 @@ import {
 } from "@/lib/watch-party-history-access";
 import { useWatchPartyHistoryAvailability } from "@/lib/use-watch-party-history-availability";
 import { useWatchParties } from "@/hooks/use-watch-parties";
+import { FRAME_REDESIGN, PANE_MAIN_REDESIGN, PANE_ROW_REDESIGN } from "@/components/ui/pane";
 import {
   claimWatchPartyHost as apiClaimWatchPartyHost,
   createServerWatchParty as apiCreateServerWatchParty,
@@ -829,6 +830,7 @@ import { openStoryComposer } from "@/lib/stories/ui-store";
 import { useStoriesEnabledFor } from "@/lib/stories/use-story-strip";
 import { EmulatorRoom } from "@/components/emulator/emulator-room";
 import { useEmulatorEnabledFor } from "@/lib/emulator/use-emulator-enabled";
+import { Skeleton } from "@/components/ui/skeleton";
 
 export type TokenResolver = (options?: {
   forceRefresh?: boolean;
@@ -13313,7 +13315,7 @@ function MainAppContent({
     {/* `app-shell`, not `overflow-hidden`: see index.css. A hidden box is
         still a scroll container that script can move, and it was moved. */}
     <div
-      className="app-shell animate-fade-in relative flex h-full"
+      className={cn("app-shell animate-fade-in relative flex h-full", FRAME_REDESIGN)}
       data-phone-tabs={phoneShell ? "" : undefined}
       data-phone-bar={phoneBarVisible ? "" : undefined}
     >
@@ -13651,6 +13653,7 @@ function MainAppContent({
       <div
         className={cn(
           "flex min-h-0 min-w-0 flex-1",
+          PANE_ROW_REDESIGN,
           whatsNewOpen && "hidden",
         )}
       >
@@ -13886,7 +13889,7 @@ function MainAppContent({
         />
       )}
 
-      <main className="flex min-w-0 flex-1 flex-col bg-transparent">
+      <main className={cn("flex min-w-0 flex-1 flex-col bg-transparent", PANE_MAIN_REDESIGN)}>
         {isDevAuthBypassEnabled() && (
           <Banner
             tone="warning"
@@ -14137,7 +14140,7 @@ function MainAppContent({
         {!selectedChannel && channelsLoading && !communityHomeOpen && (
           <div className="flex min-h-0 flex-1 flex-col">
             <header className="flex h-14 shrink-0 items-center border-b border-ink-4/60 px-4">
-              <div className="h-5 w-36 animate-pulse rounded-md bg-ink-4/50" />
+              <Skeleton className="h-5 w-36 rounded-md bg-ink-4/50" />
             </header>
             <MessageList
               messages={[]}

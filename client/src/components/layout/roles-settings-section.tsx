@@ -38,6 +38,9 @@ import { displayRoleName } from "@/lib/role-labels";
 import { loadServerStoriesEnabled } from "@/lib/stories/config";
 import { useAppsConfig } from "@/hooks/use-apps-config";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { SectionLabel } from "@/components/ui/section-header";
+import { SETTINGS_CARD_REDESIGN, SETTINGS_FIELD_LABEL_REDESIGN } from "@/components/settings/kit/classes";
+import { cn } from "@/lib/utils";
 
 const FLAG_LABEL: Record<PermissionFlagKey, MessageKey> = {
   CREATE_INVITE: "roles.perm.CREATE_INVITE",
@@ -478,10 +481,10 @@ export function RolesSettingsSection({ serverId }: { serverId: string }) {
   return (
     <div className="-mt-1 flex min-h-0 flex-col gap-6 sm:flex-row sm:gap-8">
       <div className="w-full shrink-0 sm:w-64">
-        <p className="mb-2 px-1 text-xs leading-relaxed text-paper-muted">
+        <p className="mb-2 px-1 text-xs leading-relaxed text-paper-muted redesign:text-[13px] redesign:text-text-secondary">
           {t("roles.hierarchyHint")}
         </p>
-        <div className="overflow-hidden rounded-2xl bg-ink-2">
+        <div className={cn("overflow-hidden rounded-2xl bg-ink-2", SETTINGS_CARD_REDESIGN)}>
           <RoleRankList
             roles={rankedRoles}
             selectedId={selectedId}
@@ -542,11 +545,11 @@ export function RolesSettingsSection({ serverId }: { serverId: string }) {
 
           {activeTab === "display" && (
             <div className="space-y-4">
-              <div className="rounded-2xl bg-ink-2 px-3 py-3">
+              <div className={cn("rounded-2xl bg-ink-2 px-3 py-3", SETTINGS_CARD_REDESIGN)}>
                 <div className="flex flex-wrap items-center justify-between gap-2 px-1">
                   <label
                     htmlFor="role-name"
-                    className="text-[11px] font-semibold uppercase tracking-wider text-paper-muted"
+                    className={cn("text-[11px] font-semibold uppercase tracking-wider text-paper-muted", SETTINGS_FIELD_LABEL_REDESIGN)}
                   >
                     {t("roles.name")}
                   </label>
@@ -568,16 +571,16 @@ export function RolesSettingsSection({ serverId }: { serverId: string }) {
                   disabled={selected.isEveryone}
                   maxLength={32}
                   aria-label={t("roles.name")}
-                  className="mt-1.5 border-0 bg-ink px-3"
+                  className="mt-1.5 border-0 bg-ink px-3 redesign:border redesign:border-[color:var(--input-border)] redesign:bg-[color:var(--input-bg)] redesign:disabled:bg-transparent redesign:disabled:border-[color:var(--card-border)] redesign:disabled:text-text-tertiary"
                 />
                 {staffHint && (
-                  <p className="mt-2 px-1 text-xs leading-relaxed text-paper-muted">
+                  <p className="mt-2 px-1 text-xs leading-relaxed text-paper-muted redesign:text-[13px] redesign:text-text-secondary">
                     {staffHint}
                   </p>
                 )}
               </div>
 
-              <div className="divide-y divide-ink-4/60 overflow-hidden rounded-2xl bg-ink-2">
+              <div className={cn("divide-y divide-ink-4/60 overflow-hidden rounded-2xl bg-ink-2", SETTINGS_CARD_REDESIGN)}>
                 <Switch
                   checked={mentionable}
                   onCheckedChange={setMentionable}
@@ -627,7 +630,7 @@ export function RolesSettingsSection({ serverId }: { serverId: string }) {
                   </button>
                 </div>
               )}
-              <div className="overflow-hidden rounded-2xl bg-ink-2">
+              <div className={cn("overflow-hidden rounded-2xl bg-ink-2", SETTINGS_CARD_REDESIGN)}>
                 <Switch
                   checked={isAdministrator}
                   disabled={selected.isEveryone}
@@ -651,10 +654,10 @@ export function RolesSettingsSection({ serverId }: { serverId: string }) {
                 }
                 return (
                   <div key={group.heading}>
-                    <p className="mb-2 px-1 text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
+                    <SectionLabel as="p" variant="group" className="mb-2 px-1 text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
                       {t(group.heading)}
-                    </p>
-                    <div className="divide-y divide-ink-4/60 overflow-hidden rounded-2xl bg-ink-2">
+                    </SectionLabel>
+                    <div className={cn("divide-y divide-ink-4/60 overflow-hidden rounded-2xl bg-ink-2", SETTINGS_CARD_REDESIGN)}>
                       {keys.map((key) => {
                         const lockedOnEveryone =
                           selected.isEveryone && EVERYONE_LOCKED_KEYS.has(key);
@@ -837,7 +840,7 @@ function RoleMembersTab({
             </p>
           )}
           {(visibleHolding.length > 0 || addable.length > 0) && (
-            <ul className="divide-y divide-ink-4/60 overflow-hidden rounded-2xl bg-ink-2">
+            <ul className={cn("divide-y divide-ink-4/60 overflow-hidden rounded-2xl bg-ink-2", SETTINGS_CARD_REDESIGN)}>
               {visibleHolding.map((member) => {
                 const shown = memberDisplayName(member);
                 return (

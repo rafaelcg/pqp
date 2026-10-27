@@ -23,10 +23,10 @@ const priority = read("lib", "share-priority.js");
 describe("the share priority wiring in main.js", () => {
   it("answers the app window only, on both channels", () => {
     for (const channel of ["share-live", "share-health"]) {
-      const at = main.indexOf(`ipcMain.handle("pqp:${channel}"`);
-      assert.notEqual(at, -1, `no handler for ${channel}`);
-      const body = main.slice(at, main.indexOf("\n  });", at));
-      assert.match(body, /senderMatchesAppOrigin\(event, sessionAppOrigin\)/, channel);
+      // Registered through the shared guard (lib/ipc-guard.js), which asks the
+      // sender's origin before the handler runs; `ipc-guard.test.mjs` pins that
+      // no channel is registered any other way.
+      assert.match(main, new RegExp(`ipcGuard\\.handle\\(\\s*"pqp:${channel}"`), channel);
     }
   });
 
