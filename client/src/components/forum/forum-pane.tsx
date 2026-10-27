@@ -1207,7 +1207,7 @@ export function ForumPane({
   // carries the forum's name and Novo post; otherwise the large title below
   // does, the way an Apple large title sits under a quiet bar.
   const header = (
-    <header className={cn("flex h-14 shrink-0 items-center gap-1.5 px-3 sm:px-4", PANE_HEADER_REDESIGN, "redesign:gap-1.5 redesign:max-sm:px-2")}>
+    <header className={cn("flex h-14 shrink-0 items-center gap-1.5 px-3 sm:px-4", PANE_HEADER_REDESIGN, "redesign:gap-1.5 redesign:max-sm:px-2", compactList && "redesign:border-b")}>
       <button
         type="button"
         className={cn(

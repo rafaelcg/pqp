@@ -12078,7 +12078,7 @@ function MainAppContent({
             selectedChannel.kind === "server" &&
             selectedChannel.type === "text" &&
             !selectedChannel.isPrivate ? (
-              <span className="redesign:font-normal redesign:text-text-tertiary">#</span>
+              <span className="redesign:text-[18px] redesign:leading-none redesign:font-normal redesign:text-text-tertiary">#</span>
             ) : !selectedChannel.imageUrl &&
               selectedChannel.kind === "server" &&
               isVoiceRoomChannelType(selectedChannel.type) &&

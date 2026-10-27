@@ -11,8 +11,8 @@
 
 /**
  * The bar: 56px, a faint rule of the text under it, the pane's inset. The
- * rule only shows where the header draws a base `border-b`; the forum leaves
- * it off on purpose, a quiet bar over its own large title.
+ * rule only shows where the header draws a base `border-b`; the forum draws
+ * it only with a post open, and leaves it off over its own large title.
  */
 export const PANE_HEADER_REDESIGN =
   "redesign:h-14 redesign:gap-2 redesign:border-[color:var(--pane-header-rule)] redesign:px-[var(--pane-header-px)]";
