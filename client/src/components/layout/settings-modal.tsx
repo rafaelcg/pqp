@@ -324,7 +324,7 @@ function RailFooter({ user }: { user: User | null }) {
   return (
     <div className="flex flex-col gap-2">
       {user ? (
-        <div className="flex items-center gap-2 pl-2 redesign:min-h-[var(--list-row-h-md)] redesign:rounded-[var(--list-row-radius)] redesign:bg-[color:var(--settings-pane-bg)] redesign:py-1 redesign:pl-1 redesign:pr-1 redesign:ring-1 redesign:ring-inset redesign:ring-[color:var(--settings-rule)]">
+        <div className="flex items-center gap-2 pl-2 redesign:min-h-[var(--list-row-h-md)] redesign:rounded-[var(--list-row-radius)] redesign:bg-[color:var(--settings-pane-bg)] redesign:py-1 redesign:pl-1.5 redesign:pr-1 redesign:ring-1 redesign:ring-inset redesign:ring-[color:var(--settings-rule)]">
           <UserAvatar
             name={user.displayName}
             avatarUrl={user.avatarUrl}
