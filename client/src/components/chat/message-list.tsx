@@ -1,3 +1,4 @@
+import { MENU_SEPARATOR } from "@/components/ui/menu-items";
 import { StoryQuoteCard } from "@/components/stories/story-quote-card";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -674,7 +675,8 @@ const TOOLBAR_REDESIGN =
 const TOOLBAR_BUTTON_REDESIGN =
   "redesign:h-8 redesign:w-8 redesign:rounded-full redesign:text-text-secondary redesign:hover:bg-[color:var(--menu-row-hover)] redesign:hover:text-text";
 /** A quick reaction you already gave: the accent's soft fill. */
-const TOOLBAR_BUTTON_ON_REDESIGN = "redesign:bg-accent-soft redesign:hover:bg-accent-soft";
+const TOOLBAR_BUTTON_ON_REDESIGN =
+  "redesign:bg-accent-soft redesign:hover:bg-accent-soft redesign:shadow-[inset_0_0_0_1.5px_var(--color-accent)]";
 const MORE_PANEL_REDESIGN =
   "redesign:w-56 redesign:rounded-[var(--menu-radius)] redesign:border-[color:var(--popover-border)] redesign:bg-[color:var(--popover-surface)] redesign:p-[var(--menu-pad)] redesign:shadow-[var(--popover-shadow)]";
 /** A reaction: a pill on a text tint; yours is the accent's soft fill, ringed. */
@@ -4522,6 +4524,10 @@ const MessageRow = memo(function MessageRow({
                         {unreadHeld ? t("chat.markRead") : t("chat.markUnread")}
                       </MoreMenuItem>
                     )}
+                    {(canReport || canDelete) && (
+                      // The right-click menu's rule before its red rows; drawn under the redesign only.
+                      <div role="separator" className={cn("hidden redesign:block", MENU_SEPARATOR)} />
+                    )}
                     {canReport && (
                       <MoreMenuItem
                         icon={Flag}
@@ -4709,17 +4715,20 @@ function MoreMenuItem({
   /** Left of the label, the same glyph the right-click menu draws for it. */
   icon?: LucideIcon;
 }) {
+  const redesign = useRedesign();
   return (
     <button
       type="button"
       role="menuitem"
+      // Under the redesign the pointer moves focus, so only one row is ever filled.
+      onPointerMove={redesign ? (event) => event.currentTarget.focus({ preventScroll: true }) : undefined}
       className={cn(
         "flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-sm outline-none hover:bg-ink-3 focus-visible:bg-ink-3",
         danger ? "text-danger" : "text-paper",
         // The menu's row under the redesign (ui/menu-items.tsx).
-        "group/more redesign:gap-[var(--menu-row-gap)] redesign:rounded-[var(--menu-row-radius)] redesign:py-[var(--menu-row-py)] redesign:hover:bg-[color:var(--menu-row-hover)] redesign:focus-visible:bg-[color:var(--menu-row-hover)]",
+        "group/more redesign:gap-[var(--menu-row-gap)] redesign:rounded-[var(--menu-row-radius)] redesign:py-[var(--menu-row-py)] redesign:hover:bg-transparent redesign:focus:bg-[color:var(--menu-row-hover)]",
         danger
-          ? "redesign:hover:bg-[color:var(--menu-danger-hover)] redesign:focus-visible:bg-[color:var(--menu-danger-hover)]"
+          ? "redesign:focus:bg-[color:var(--menu-danger-hover)]"
           : "redesign:text-text",
       )}
       onClick={onSelect}
@@ -4729,7 +4738,7 @@ function MoreMenuItem({
           className={cn(
             "h-3.5 w-3.5 shrink-0 opacity-80",
             "redesign:size-[var(--menu-icon-size)] redesign:opacity-100 redesign:[stroke-width:var(--icon-stroke)]",
-            !danger && "redesign:text-[color:var(--menu-icon)] redesign:group-hover/more:text-current redesign:group-focus-visible/more:text-current",
+            !danger && "redesign:text-[color:var(--menu-icon)] redesign:group-focus/more:text-current",
           )}
           aria-hidden
         />
@@ -5345,10 +5354,12 @@ function ReactionBar({
         tabIndex={tabIndex}
         aria-label={t("chat.addReaction")}
         onClick={onOpenPicker}
-        className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-dashed border-ink-4 text-paper-muted hover:border-signal/50 hover:text-signal focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60 redesign:h-7 redesign:w-7 redesign:border-transparent redesign:text-text-tertiary redesign:hover:border-transparent redesign:hover:bg-[color:var(--content-glyph-bg)] redesign:hover:text-text redesign:focus-visible:ring-accent"
+        className="group/add inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-dashed border-ink-4 text-paper-muted hover:border-signal/50 hover:text-signal focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60 redesign:h-7 redesign:w-7 redesign:border-transparent redesign:text-text-tertiary redesign:hover:border-transparent redesign:hover:bg-[color:var(--content-glyph-bg)] redesign:hover:text-text redesign:focus-visible:ring-accent"
       >
         <SmilePlus className="h-3 w-3 redesign:hidden" />
-        <Glyph icon={Smiley} size="sm" className="hidden redesign:block" />
+        {/* Under the redesign a quiet outline at rest that fills on hover and focus. */}
+        <Glyph icon={Smiley} kind="symbol" size="sm" className="hidden redesign:block redesign:group-hover/add:hidden redesign:group-focus-visible/add:hidden" />
+        <Glyph icon={Smiley} size="sm" className="hidden redesign:group-hover/add:block redesign:group-focus-visible/add:block" />
       </button>
       {isPickerOpen && (
         <EmojiPickerPanel

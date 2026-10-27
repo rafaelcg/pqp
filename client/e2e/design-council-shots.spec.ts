@@ -899,6 +899,8 @@ const PRIMITIVES: {
     testId: "qa-shell-message-chrome",
     open: { button: "Mais", menu: '[role="menu"][aria-label="Mais"]', arrows: 0, hoverText: "eu topo, levo o lanche" },
   },
+  // Ten reactions that wrap over a thread chip; the one-line continuation hovered.
+  { id: "s-message-chrome-wrap", testId: "qa-shell-message-chrome-wrap", hoverText: "quem chegar depois das 20h fica de fora" },
 ];
 
 test("captures the primitives", async ({ browser }) => {

@@ -986,6 +986,51 @@ const CHROME_MESSAGES: ChatMessage[] = [
 
 const CHROME_UNREAD_THREADS = new Set([CHROME_THREAD]);
 
+/** A row with ten reactions (they wrap) above a thread chip, then a one-line continuation. */
+const CHROME_WRAP_MESSAGES: ChatMessage[] = [
+  contentMessage(16, ROW_RAFA, "Rafa", "chaveamento fechado, 16 duplas", {
+    reactions: [
+      { emoji: "👍", count: 4, me: false, users: [] },
+      { emoji: "🔥", count: 2, me: false, users: [] },
+      { emoji: "😂", count: 3, me: false, users: [] },
+      { emoji: "❤️", count: 1, me: false, users: [] },
+      { emoji: "🎮", count: 5, me: true, users: [] },
+      { emoji: "👀", count: 2, me: false, users: [] },
+      { emoji: "🍕", count: 1, me: false, users: [] },
+      { emoji: "🏆", count: 2, me: true, users: [] },
+      { emoji: "😭", count: 1, me: false, users: [] },
+      { emoji: "🙏", count: 3, me: false, users: [] },
+    ],
+    thread: chromeThread("00000000-0000-4000-8000-000000000904", "Chaveamento", 7, { participants: CHROME_FACES.slice(0, 2) }),
+  }),
+  contentMessage(17, ROW_RAFA, "Rafa", "quem chegar depois das 20h fica de fora"),
+];
+
+function MessageChromeWrapBlock() {
+  return (
+    <div data-testid="qa-shell-message-chrome-wrap" className="flex flex-col gap-6">
+      {/* The shot hovers the continuation, so its toolbar rises over the row above. */}
+      <MainPane>
+        <div className="flex h-[320px] min-h-0 flex-col">
+          <MessageList
+            messages={CHROME_WRAP_MESSAGES}
+            currentUserId={ROW_ME}
+            currentUsername="lia"
+            channelId={ROW_CHANNEL}
+            onToggleReaction={noop}
+            onRetryMessage={noop}
+            onReplyTo={noop}
+            onStartThread={noop}
+            onOpenThread={noop}
+            authors={ROW_AUTHORS}
+            authorsComplete
+          />
+        </div>
+      </MainPane>
+    </div>
+  );
+}
+
 function MessageChromeBlock() {
   return (
     <div data-testid="qa-shell-message-chrome" className="flex flex-col gap-6">
@@ -1240,6 +1285,7 @@ export function ShellSheet() {
       <MessageRowsBlock />
       <MessageContentBlock />
       <MessageChromeBlock />
+      <MessageChromeWrapBlock />
 
       <div data-testid="qa-shell-rail" className="flex gap-6">
         <RailFrame>

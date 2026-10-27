@@ -84,10 +84,12 @@ export function ThreadChip({
         // Under the redesign a pill on a text tint, like a reaction: the
         // thread hangs off the message without a stripe. Open is the
         // selected row's fill.
+        // In light the open chip is the accent's soft fill, quieter than the selected row.
+        // `--thread-chip-fill` is the fill the faces are cut from.
         "redesign:min-h-7 redesign:gap-2 redesign:rounded-full redesign:border-l-0 redesign:py-1 redesign:pl-1.5 redesign:pr-3 redesign:focus-visible:ring-accent",
         isOpen
-          ? "redesign:bg-row-selected redesign:text-on-row-selected"
-          : "redesign:bg-[color:var(--content-glyph-bg)] redesign:text-text-secondary redesign:hover:bg-[color:var(--content-card-hover)] redesign:hover:text-text",
+          ? "redesign:bg-row-selected redesign:text-on-row-selected redesign:[--thread-chip-fill:var(--color-row-selected)] redesign:[:root[data-theme=light]_&]:bg-accent-soft redesign:[:root[data-theme=light]_&]:text-on-accent-soft redesign:[:root[data-theme=light]_&]:[--thread-chip-fill:var(--color-accent-soft)]"
+          : "redesign:bg-[color:var(--content-glyph-bg)] redesign:text-text-secondary redesign:hover:bg-[color:var(--content-card-hover)] redesign:hover:text-text redesign:[--thread-chip-fill:color-mix(in_oklab,var(--color-text)_7%,var(--color-pane-main))]",
       )}
     >
       {thread.archived ? (
@@ -108,7 +110,7 @@ export function ThreadChip({
               avatarUrl={person.avatarUrl}
               rounded="full"
               className={cn(
-                "h-4 w-4 ring-2 ring-surface-0 redesign:h-5 redesign:w-5 redesign:ring-[color:var(--color-pane-main)]",
+                "h-4 w-4 ring-2 ring-surface-0 redesign:h-5 redesign:w-5 redesign:ring-[1.5px] redesign:ring-[color:var(--thread-chip-fill)]",
                 index > 0 && "-ml-1.5",
               )}
               fallbackClassName="bg-surface-3 text-[8px] text-text-secondary"
@@ -129,7 +131,13 @@ export function ThreadChip({
           {thread.name}
         </span>
       )}
-      <span className="shrink-0 font-medium tabular-nums text-accent redesign:font-semibold redesign:text-accent-text">
+      <span
+        className={cn(
+          "shrink-0 font-medium tabular-nums text-accent redesign:font-semibold",
+          // The accent ink says "new replies"; a read or archived thread's count is secondary.
+          unread && !isOpen && !thread.archived ? "redesign:text-accent-text" : "redesign:text-text-secondary",
+        )}
+      >
         {replies}
       </span>
       {thread.archived ? (
