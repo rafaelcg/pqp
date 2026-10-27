@@ -1159,6 +1159,25 @@ the right-click menu is the merged `ContextMenu`):
    with the toggle off, so it waits (question below).
 5. Question: should "Mais" become the shared `Menu` (arrow keys, type to
    find) for everybody, not only under the redesign?
+
+### s-log-chrome
+
+Spec (audit: `DaySeparator`, `UnreadSeparator`, the load older and newer
+buttons, `TypingIndicator` and `BotActivityRows`, `BotNoticeRow`, the jump
+pill and the "message is gone" note, the bulk delete bar; the empty and
+failed states are `p-empty`'s, already merged):
+
+1. Job: where I am in the log, and what is happening around it.
+2. States: day rule, NEW rule, older or newer history to load (loading),
+   typing (one, two, many; bots at work), the bot's note to me, jump to the
+   present (missed count, stream "paused"), jump target gone, bulk select.
+3. Redesign: the day is a pill in sentence case on faint rules; NEW is the
+   danger fill's pill; load buttons are the secondary pill; the jump pill,
+   the gone note and the bulk bar float on the popover surface; the bot's
+   note is a message card with a round dismiss.
+4. Question: "Load older messages" and "Loading older messages…" are
+   English in every language. Translating them changes the toggle-off app.
+5. Not on the sheet: the bulk bar and the gone note need a live list state.
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss

@@ -687,6 +687,7 @@ const PRIMITIVES: {
     testId: "qa-shell-message-chrome",
     open: { button: "Mais", menu: '[role="menu"][aria-label="Mais"]', arrows: 0, hoverText: "eu topo, levo o lanche" },
   },
+  { id: "s-log-chrome", testId: "qa-shell-log-chrome" },
 ];
 
 test("captures the primitives", async ({ browser }) => {

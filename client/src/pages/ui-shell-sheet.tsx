@@ -928,6 +928,84 @@ function MessageChromeBlock() {
   );
 }
 
+/** Two days of messages, for the list's chrome (s-log-chrome). */
+function logMessage(n: number, minutesAgo: number, authorId: string, authorName: string, body: string): ChatMessage {
+  return contentMessage(n, authorId, authorName, body, {
+    createdAt: new Date(NOW - minutesAgo * 60_000).toISOString(),
+  });
+}
+
+const LOG_MESSAGES: ChatMessage[] = [
+  logMessage(41, 26 * 60, ROW_BIA, "Bia", "amanhã tem final, hein"),
+  logMessage(42, 25 * 60, ROW_RAFA, "Rafa", "tô dentro"),
+  logMessage(43, 40, ROW_ME, "Lia", "chegando em meia hora"),
+  logMessage(44, 12, ROW_RAFA, "Rafa", "já tô na call"),
+  logMessage(45, 8, ROW_BIA, "Bia", "abri a sala de espera"),
+];
+
+const LOG_TYPING = [
+  { userId: ROW_RAFA, displayName: "Rafa" },
+  { userId: ROW_BIA, displayName: "Bia" },
+];
+
+const LOG_BOT_NOTICE = {
+  type: "bot-notice" as const,
+  channelId: ROW_CHANNEL,
+  botUserId: ROW_HOOK,
+  botName: "Breu",
+  reason: "member-hour" as const,
+  limit: 20,
+  retryAt: new Date(NOW + 25 * 60_000).toISOString(),
+};
+
+function LogChromeBlock() {
+  return (
+    <div data-testid="qa-shell-log-chrome" className="flex flex-wrap items-start gap-6">
+      {/* First: older history to load, two days ("Ontem", "Hoje"), the NEW
+          rule over what came in since you left, newer history below, the
+          jump pill, the bot's note to you and two people typing. Then an
+          empty channel, and one whose history failed to load. */}
+      <MainPane>
+        <div className="flex h-[640px] min-h-0 flex-col">
+          <MessageList
+            messages={LOG_MESSAGES}
+            currentUserId={ROW_ME}
+            currentUsername="lia"
+            channelId={ROW_CHANNEL}
+            onToggleReaction={noop}
+            onRetryMessage={noop}
+            authors={ROW_AUTHORS}
+            authorsComplete
+            hasMore
+            hasNewer
+            unreadSince={LOG_MESSAGES[2].createdAt}
+            typingUsers={LOG_TYPING}
+            botNotice={LOG_BOT_NOTICE}
+            onDismissBotNotice={noop}
+          />
+        </div>
+      </MainPane>
+      <MainPane>
+        <div className="flex h-[300px] min-h-0 flex-col">
+          <MessageList messages={[]} currentUserId={ROW_ME} channelId={ROW_CHANNEL} onToggleReaction={noop} />
+        </div>
+      </MainPane>
+      <MainPane>
+        <div className="flex h-[300px] min-h-0 flex-col">
+          <MessageList
+            messages={[]}
+            currentUserId={ROW_ME}
+            channelId={ROW_CHANNEL}
+            onToggleReaction={noop}
+            historyFailed
+            onRetryHistory={noop}
+          />
+        </div>
+      </MainPane>
+    </div>
+  );
+}
+
 /**
  * A new build waiting, so both rails draw the update tile. The store is
  * this page's own; it goes back to nothing waiting when the sheet unmounts.
@@ -1099,6 +1177,7 @@ export function ShellSheet() {
       <MessageRowsBlock />
       <MessageContentBlock />
       <MessageChromeBlock />
+      <LogChromeBlock />
 
       <div data-testid="qa-shell-rail" className="flex gap-6">
         <RailFrame>
