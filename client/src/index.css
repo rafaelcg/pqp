@@ -828,6 +828,8 @@
   --card-bg: color-mix(in oklab, var(--color-text) 4%, transparent);
   --card-border: color-mix(in oklab, var(--color-text) 8%, transparent);
   --card-row-hover: color-mix(in oklab, var(--color-text) 6%, transparent);
+  /* A whole card under the pointer: one step over the card's own fill. */
+  --card-hover: color-mix(in oklab, var(--color-text) 7%, transparent);
   /* A settings notice in the info tone, on its own (settings/kit/notice.tsx):
      a quiet tint of the text, a step over the card it usually sits in. */
   --settings-notice-info-bg: color-mix(in oklab, var(--color-text) 7%, transparent);
@@ -1295,6 +1297,7 @@
   /* Lighter than dark's: over the white wash on a grey dialog, 6% lands at
      the dialog's own grey and the row reads as a hole. */
   --card-row-hover: color-mix(in oklab, var(--color-text) 4%, transparent);
+  --card-hover: color-mix(in oklab, var(--color-text) 3%, var(--color-surface-0));
   --card-border: color-mix(in oklab, var(--color-text) 10%, transparent);
 
   /* Avatars: a hairline keeps the monogram disc a disc on the white pane. */

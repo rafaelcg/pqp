@@ -543,6 +543,24 @@ the redesign they take `ui/list-row.tsx`'s tokens:
   the thread's X and "Assistir" use the same token.
 - `ChannelListSkeleton` draws the same 36px pills, 2px apart.
 
+### The voice row
+
+A voice channel is a channel row (`ChannelRow`). The room you are in takes
+`success-soft` with its `on-` text instead of the signal ring, open or not:
+icon, name, dot, second line and tiles are all `on-success-soft`. Under it:
+
+- `VoiceOccupantRow` is a 32px list row: the row roles, 13px names, the
+  inset `--list-row-ring` focus ring. The speaking ring stays on the avatar,
+  with no offset; the glow does the work.
+- `VoiceOccupantBadges` take a `tone`: hand, screen and camera in
+  `accent-text`, muted and deafened in `danger`. Glyphs are 14px Phosphor
+  fill; deafened is `EarSlash` in the bold outline at 16px, so the ear's
+  shape survives beside the mic (Phosphor has no headphones with a slash). A queued hand is
+  `HandPositionBadge`: the filled hand at 14px and its number at 11px.
+- `ChannelMusicCard` is a card on the card tokens with a 28px cover. A title
+  that does not fit fades at the right edge.
+- The occupants and threads sit under a rule in the card edge.
+
 ### Icons
 
 The redesign's icons are Phosphor (`@phosphor-icons/react`), drawn through

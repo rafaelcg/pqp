@@ -1,4 +1,12 @@
-import type { Channel, DmSummary, PublicUser, Server, ThreadSummary, WatchParty } from "@pqp/shared";
+import type {
+  Channel,
+  DmSummary,
+  PublicUser,
+  Server,
+  ThreadSummary,
+  VoiceParticipant,
+  WatchParty,
+} from "@pqp/shared";
 import { useEffect, type ComponentProps, type ReactNode } from "react";
 import { CommunityHomePreview } from "@/components/community-home/community-home-preview";
 import {
@@ -9,6 +17,8 @@ import {
   channelRowIconClass,
 } from "@/components/layout/channel-list";
 import { ChannelIcon } from "@/components/layout/channel-icon";
+import { VoiceOccupantRow } from "@/components/layout/voice-occupant-row";
+import { ChannelMusicCard } from "@/components/voice/channel-music-card";
 import {
   MixedCategoryHeader,
   type CategoryHeaderDrag,
@@ -207,6 +217,69 @@ function RailFrame({ children }: { children: ReactNode }) {
     <div className="flex h-[680px] overflow-hidden rounded-lg bg-rail redesign:bg-canvas">
       {children}
       <div className="my-2 w-6 rounded-l-[var(--radius-pane)] bg-surface-1 redesign:bg-pane-side" />
+    </div>
+  );
+}
+
+function seat(id: string, displayName: string, extra: Partial<VoiceParticipant> = {}): VoiceParticipant {
+  return {
+    peerId: `qa-peer-${id}`,
+    userId: `qa-user-${id}`,
+    displayName,
+    avatarUrl: null,
+    sharingScreen: false,
+    muted: false,
+    deafened: false,
+    serverMuted: false,
+    ...extra,
+  } as VoiceParticipant;
+}
+
+const SEATS: { person: VoiceParticipant; speaking?: boolean; hand?: number }[] = [
+  { person: { ...seat("rafa", "Rafa"), avatarUrl: "https://api.dicebear.com/9.x/shapes/png?seed=relay" }, speaking: true },
+  { person: seat("bia", "Bia", { muted: true }) },
+  { person: seat("caio", "Caio", { deafened: true, muted: true }) },
+  { person: seat("lia", "Lia", { sharingScreen: true, cameraStreamId: "cam" }) },
+  { person: seat("teo", "Téo", { handRaisedAt: Date.now() }), hand: 1 },
+];
+
+/** Voice rows: the room you are in with five people and the music it plays, and an empty room. */
+function VoiceRowsBlock() {
+  const lobby = textChannel("lobby", "Lobby", { type: "voice" });
+  return (
+    <div data-testid="qa-shell-voice-rows" className="flex flex-wrap items-start gap-6">
+      <SidePane>
+        <div className="flex flex-col gap-0.5">
+          <SheetChannelRow channel={lobby} connected onJoinVoice={noop} />
+          <ChannelMusicCard
+            channelId={lobby.id}
+            track={{ videoId: "qa", title: "Lo-fi pra jogar junto", thumbnailUrl: null, listeners: 3 }}
+            inCall
+          />
+          <ul className="ml-2 space-y-0.5 border-l border-ink-4/70 py-0.5 pl-2 redesign:ml-5 redesign:border-[color:var(--card-border)] redesign:pl-1.5">
+            {SEATS.map(({ person, speaking, hand }) => (
+              <VoiceOccupantRow
+                key={person.peerId}
+                person={person}
+                channelId={lobby.id}
+                isSpeaking={Boolean(speaking)}
+                handPosition={hand ?? null}
+                canDrag={false}
+                items={[]}
+                onDragStart={noop}
+                onDragEnd={noop}
+              />
+            ))}
+          </ul>
+          <SheetChannelRow channel={textChannel("sala", "sala-do-jogo", { type: "voice" })} onJoinVoice={noop} />
+          <ChannelMusicCard
+            channelId="qa-channel-sala"
+            track={{ videoId: "qa2", title: "Trilha do campeonato", thumbnailUrl: null, listeners: 1 }}
+            inCall={false}
+            onJoin={noop}
+          />
+        </div>
+      </SidePane>
     </div>
   );
 }
@@ -445,6 +518,11 @@ export function ShellSheet() {
           unread), mentions, private, pinned, and "clipes" for the
           hover. Right: a forum and a live watch party room. */}
       <ChannelRowsBlock />
+
+      {/* Voice rows. The room you are in (its music, five seats: speaking,
+          muted, deafened, sharing with the camera on, first in the hand
+          queue), and a room with music you are not in. */}
+      <VoiceRowsBlock />
 
       <div data-testid="qa-shell-rail" className="flex gap-6">
         <RailFrame>

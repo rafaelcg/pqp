@@ -752,6 +752,7 @@ const PRIMITIVES: {
   { id: "s-sidebar-special", testId: "qa-shell-sidebar-special" },
   { id: "s-category", testId: "qa-shell-categories", focus: "Jogos da semana", hover: "Bate-papo" },
   { id: "s-channel-row", testId: "qa-shell-channel-rows", focus: "general", hover: "clipes" },
+  { id: "s-voice-row", testId: "qa-shell-voice-rows" },
 ];
 
 test("captures the primitives", async ({ browser }) => {

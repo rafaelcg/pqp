@@ -1956,7 +1956,7 @@ export const ChannelList = memo(function ChannelList({
           />
         )}
         {occupants.length > 0 && (
-          <ul className="ml-2 space-y-0.5 border-l border-ink-4/70 py-0.5 pl-2">
+          <ul className="ml-2 space-y-0.5 border-l border-ink-4/70 py-0.5 pl-2 redesign:ml-5 redesign:border-[color:var(--card-border)] redesign:pl-1.5">
             {occupants.map((person) => {
               const isSelf = Boolean(
                 currentUserId && person.userId === currentUserId,
