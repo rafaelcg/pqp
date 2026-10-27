@@ -1412,6 +1412,16 @@ notice, the upcoming session card):
    `ui/banner.tsx`: inset, `--banner-radius`, the tone's soft fill and edge,
    text in the text colour, a round dismiss in the tone's ink. The session
    card is news, not a tone: the same inset and corner on the card tint.
+Rounds (Opus only): r1 7.6 (MUST fixed: the second action was the generic
+grey secondary on a tone), r2 8.1, r3 8.1, r4 8.0, r5 8.2 (cap; MUST fixed
+after: the reminder's accessible name now follows its visible text). The
+family: one card (`bannerSurfaceRedesign`), a tinted disc
+(`BANNER_DISC_REDESIGN`), one ink-filled main action, a tinted second
+action (`BANNER_QUIET_REDESIGN`, also the primitive's quiet), the round X
+only where a strip can be hidden, one text column at 44px, meta lines at
+13px. New copy: `watchPartySchedule.card.reminding` ("Lembrete ligado").
+Not done: a dark-only accent edge at about 20% (judge with one strip in
+place, not the sheet's stack).
 
 ## Open questions for André
 
