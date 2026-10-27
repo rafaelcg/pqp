@@ -775,6 +775,23 @@ i18n check; no call site adopts it yet, so no e2e changes; retro,
 Halloween, high contrast, 390px and toggle off. Screenshots:
 `~/pqp-redesign/p-list-row/`.
 
+### p-card
+
+Spec (audit: 15 in-app copies of one card class in seven files, plus
+bespoke cards in Baú, polls, voice notes, the forward and the corner card):
+
+1. Job: a bounded group that sits in a pane or a dialog.
+2. Redesign: fill and edge as tints of the text, so the same card reads on
+   any surface.
+3. Folded: the 15 copies (bot wizard and overview, bots settings, connection
+   check, profile popover, conversations empty and phone screens).
+4. Left for their owners: Baú posts (`f-bau`), polls and voice notes
+   (`s-message-content`), the forward card (`s-message-content`), the corner card
+   (`f-onboarding`), the public `/apps` page (out of scope).
+5. Two eyebrow labels inside cards (bot overview, conversations empty) draw
+   different specs. Unifying them changes the toggle-off look, so they fold
+   onto `SectionLabel` with `p-section-header`.
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss

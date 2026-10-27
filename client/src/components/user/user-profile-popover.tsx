@@ -6,6 +6,7 @@ import {
   MoreHorizontal,
   Phone,
 } from "lucide-react";
+import { CARD_SURFACE } from "@/components/ui/card";
 import {
   createContext,
   useCallback,
@@ -1443,7 +1444,7 @@ function UserProfileCard({
         {serverBot && (
           <div className="mt-3 space-y-2 text-left">
             <p className="text-xs text-warning">{t("bots.profile.beta")}</p>
-            <div className="rounded-[var(--radius-card)] border border-border bg-surface-card p-2.5">
+            <div className={cn(CARD_SURFACE, "p-2.5")}>
               <p className="text-xs font-semibold text-text">
                 {t("bots.profile.seesTitle", { name: subject.displayName })}
               </p>

@@ -30,6 +30,7 @@ import {
 import { CalendarClock, X as LineX } from "lucide-react";
 import { Navigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { CARD_LIST, CARD_ROW_HOVER, CARD_SURFACE } from "@/components/ui/card";
 import { StatusDot } from "@/components/user/status-dot";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { BANNER_FILL_REDESIGN, Banner, BannerAction, BannerText } from "@/components/ui/banner";
@@ -1383,6 +1384,43 @@ function PrimitiveSheet() {
             {t("qaUi.menu.open")}
           </Button>
         </Menu>
+      </div>
+
+      {/* Cards: one on the pane, one inside a dialog's surface, each with a
+          list inside, to show the tint reads on both. */}
+      <div data-testid="qa-primitive-card" className="grid gap-4 sm:grid-cols-2">
+        {(["pane", "dialog"] as const).map((where) => (
+          <div
+            key={where}
+            className={cn(
+              "rounded-[var(--radius-pane)] p-4",
+              where === "pane" ? "bg-pane-main" : "elevation-3",
+            )}
+          >
+            <div className={cn(CARD_SURFACE, "p-4")}>
+              <p className="text-sm font-semibold text-text">{t("qaUi.card.title")}</p>
+              <p className="mt-1 text-xs text-text-tertiary redesign:text-text-secondary">{t("qaUi.card.body")}</p>
+            </div>
+            <ul className={cn(CARD_SURFACE, CARD_LIST, "mt-3")}>
+              <li className="px-4 py-2.5 text-sm text-text-secondary">{t("qaUi.card.rowOne")}</li>
+              {/* A row that opens something: its hover fill over the card's tint. */}
+              <li>
+                <button
+                  type="button"
+                  className={cn(
+                    "flex w-full px-4 py-2.5 text-left text-sm text-text-secondary hover:bg-surface-2 hover:text-text",
+                    CARD_ROW_HOVER,
+                    // On the dialog the hover is drawn at rest, so both
+                    // surfaces show it in one screenshot.
+                    where === "dialog" && "redesign:bg-[color:var(--card-row-hover)] redesign:text-text",
+                  )}
+                >
+                  {t("qaUi.card.rowTwo")}
+                </button>
+              </li>
+            </ul>
+          </div>
+        ))}
       </div>
 
       {/* Avatars: monograms at the list, message and profile sizes, each

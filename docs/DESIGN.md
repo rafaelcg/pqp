@@ -1041,6 +1041,31 @@ tag.
 - **Accessibility.** The word is the meaning, so colour is never the only
   signal; the icon is `aria-hidden`.
 
+### Card
+
+`card.tsx`. `CARD_SURFACE` is a bounded group inside a pane or a dialog: a
+bot's summary, a list of checks, an empty note. The element and padding are
+the caller's, beside it in `cn`. Not a popover: a card does not float.
+
+- **Toggle off.** The card radius, the plain border, `surface-card`.
+- **Redesign.** In dark the fill and edge are tints of the text
+  (`--card-bg` 4%, `--card-border` 8%), so one card lifts a little on a pane
+  and on a dialog alike. In light a text tint would darken into a grey tray,
+  so the fill is a white wash (`surface-0` at 60%) with a 10% text edge: it
+  lifts on a grey dialog, and on the white pane the edge alone sets it off.
+- **A list in a card.** Put `CARD_LIST` beside `CARD_SURFACE`: rules between
+  rows in the card's edge (the plain border with the toggle off), clipped
+  to the corners.
+- **Rows.** A row that opens something takes `CARD_ROW_HOVER`; a static row
+  (a check, an activity line) takes no hover at all, never a bare
+  `hover:bg-surface-2`.
+- **Padding** is the caller's, on one scale: `p-3` compact, `p-4` default,
+  `px-6 py-8` an empty note, `p-2.5` only inside the profile popover.
+- **Between cards** a 12px gap (`gap-3` or `space-y-3`).
+- **A row that opens something** inside a card adds `CARD_ROW_HOVER` beside
+  its own hover: a text tint over the card's fill, the same on any surface.
+- **Body copy** in a card is secondary text under the redesign; tertiary at
+  12px on the light card is near the floor.
 ### UserAvatar
 
 `components/user/user-avatar.tsx`. Every person's picture goes through it:

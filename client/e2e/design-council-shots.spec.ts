@@ -596,6 +596,8 @@ const PRIMITIVES: {
   { id: "p-radio", testId: "qa-primitive-radio", role: "radio", focus: "Escuro", hover: "Menções" },
   // Focus the selected underline tab, hover an unselected pill.
   { id: "p-tabs", testId: "qa-primitive-tabs", role: "tab", focus: "Visão geral", hover: "Todos" },
+  // A card on a pane and inside a dialog surface; no interaction.
+  { id: "p-card", testId: "qa-primitive-card", hover: "Microfone liberado" },
   // Monograms with presence, dimmed, a bot and a stack; no interaction.
   { id: "p-avatar", testId: "qa-primitive-avatar" },
   // Status words, the tags beside a name, and counts; no interaction.

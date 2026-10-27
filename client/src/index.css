@@ -823,6 +823,12 @@
   --slider-ring: var(--color-accent);
   --slider-ring-offset-color: transparent;
 
+  /* Cards (ui/card.tsx): tints of the text, so a card reads on a pane and
+     on a dialog alike. */
+  --card-bg: color-mix(in oklab, var(--color-text) 4%, transparent);
+  --card-border: color-mix(in oklab, var(--color-text) 8%, transparent);
+  --card-row-hover: color-mix(in oklab, var(--color-text) 6%, transparent);
+
   /* The monogram disc's edge: none in dark, where surface-3 already stands
      off the panes; a hairline in light, where it is close to the white pane. */
   --avatar-edge: transparent;
@@ -1152,6 +1158,15 @@
 
 /* The redesign's shadows on a light page: tinted, never black. Every look. */
 :root[data-redesign][data-theme="light"] {
+  /* Cards. In light a text tint darkens into a grey tray; a white wash lifts
+     the card on a grey dialog and leaves the edge alone on the white pane. */
+  --card-bg: color-mix(in oklab, var(--color-surface-0) 60%, transparent);
+  /* Lighter than dark's: over the white wash on a grey dialog, 6% lands at
+     the dialog's own grey and the row reads as a hole. */
+  --card-row-hover: color-mix(in oklab, var(--color-text) 4%, transparent);
+  --card-border: color-mix(in oklab, var(--color-text) 10%, transparent);
+
+  /* Avatars: a hairline keeps the monogram disc a disc on the white pane. */
   --avatar-edge: var(--color-border);
 
   /* Banners: the soft fills are pale in light; a lighter edge keeps them calm. */
