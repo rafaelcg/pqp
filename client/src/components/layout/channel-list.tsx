@@ -3499,7 +3499,10 @@ export function ChannelRailItem({
             "redesign:bg-success-soft redesign:text-on-success-soft redesign:ring-1 redesign:ring-inset redesign:ring-[color:color-mix(in_oklab,var(--color-success)_45%,transparent)] redesign:hover:bg-success-soft redesign:hover:text-on-success-soft",
           // In the call and viewing it: the edge goes solid, so the strip
           // still shows which tile is open.
-          connected && selected && "redesign:ring-2 redesign:ring-[color:var(--color-success)]",
+          connected && selected && "redesign:ring-2 redesign:ring-[color:var(--color-success)] redesign:text-text",
+          // A live party: the danger soft fill, as the call has the success
+          // one, so the live dot has a tile corner to sit on.
+          live && !selected && !connected && "redesign:bg-danger-soft redesign:hover:bg-danger-soft",
           muted && !selected && !connected && "redesign:opacity-[var(--list-row-muted-opacity)]",
         )}
         onClick={() => {
@@ -3548,9 +3551,13 @@ export function ChannelRailItem({
             className={cn(
               "absolute -left-1 -top-1 h-2.5 w-2.5 rounded-full bg-danger ring-2 ring-channel motion-safe:animate-pulse",
               STRIP_RING_REDESIGN,
-              "redesign:-left-0.5 redesign:-top-0.5",
+              // Under the redesign only the inner dot pulses, so the cutout
+              // ring stays solid and the dot keeps the glyph's red.
+              "redesign:-left-0.5 redesign:-top-0.5 redesign:bg-[color:var(--color-pane-side)] redesign:motion-safe:animate-none",
             )}
-          />
+          >
+            <span className="hidden h-full w-full rounded-full bg-danger motion-safe:animate-pulse redesign:block" />
+          </span>
         )}
         {hasUnread && (
           <>
