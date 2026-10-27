@@ -1263,7 +1263,6 @@ function PrimitiveSheet() {
       <div data-testid="qa-primitive-loading" className="grid gap-4 sm:grid-cols-[14rem_1fr]">
         <div className="flex flex-col gap-4">
           <div className="flex items-center gap-4 text-text-secondary">
-            <Spinner className="h-3 w-3 animate-spin" />
             <Spinner className="h-3.5 w-3.5 motion-safe:animate-spin" />
             <Spinner className="h-4 w-4 animate-spin" />
             <Spinner className="h-5 w-5 animate-spin text-accent" />
