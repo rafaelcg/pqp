@@ -71,6 +71,7 @@ Read this file and the inventory at the start of every session.
 | 3 | `s-header` | Merged, capped at round 5 (Opus 8.3 r4 and r5). Follow-up: rename `--pane-header-rule` / `--pane-header-px` to `--pane-bar-*` after the chain |
 | 3 | `s-banners` | Merged, capped at round 5 (Opus 8.2 r5, MUST fixed after). Not done: a dark-only accent edge |
 | 3 | `s-message-row` | Merged, capped at round 5 (Opus 8.5 r5) |
+| 3 | `s-message-content` | Merged, capped at round 5 (Opus 8.6 r5). Open: the broken-image chip is English in every language (question in the spec) |
 | 4 | `f-onboarding` | Merged, capped at round 5 (Opus 8.3 r3 and r5) |
 | 5 | `m-sheets` | Merged, approved at round 5 (Opus 9.0, no MUST) |
 | 4 | `f-user-settings` | Merged, capped at round 5 (Opus 8.1 r5, 8.2 r4) |
