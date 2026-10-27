@@ -33,4 +33,4 @@ export const PANE_MAIN_REDESIGN =
  * its own rounded pane, inset by the gutter, on the side panes' colour.
  */
 export const PANE_INSET_REDESIGN =
-  "md:redesign:my-[var(--space-gutter)] md:redesign:mr-[var(--space-gutter)] md:redesign:h-auto md:redesign:rounded-[calc(var(--radius-pane)-var(--space-gutter))] md:redesign:border-0 md:redesign:bg-pane-side md:redesign:overflow-clip";
+  "md:redesign:my-[var(--space-gutter)] md:redesign:mx-[var(--space-gutter)] md:redesign:h-auto md:redesign:rounded-[calc(var(--radius-pane)-var(--space-gutter))] md:redesign:border-0 md:redesign:bg-pane-side md:redesign:overflow-clip";
