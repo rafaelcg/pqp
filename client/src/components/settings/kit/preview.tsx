@@ -31,13 +31,13 @@ export function SettingsPreview({
   decorative = true,
 }: SettingsPreviewProps) {
   return (
-    <div className="overflow-hidden rounded-[var(--radius-card)] border border-border">
+    <div className="overflow-hidden rounded-[var(--radius-card)] border border-border redesign:border-[color:var(--card-border)]">
       {summary ? <p className="sr-only">{summary}</p> : null}
       <div aria-hidden={decorative || undefined} className="bg-surface-0">
         {children}
       </div>
       {controls ? (
-        <div className="divide-y divide-border border-t border-border bg-surface-card">
+        <div className="divide-y divide-border border-t border-border bg-surface-card redesign:divide-[color:var(--card-border)] redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)]">
           {controls}
         </div>
       ) : null}

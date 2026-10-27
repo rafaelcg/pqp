@@ -1,3 +1,4 @@
+import { UserMinus } from "@phosphor-icons/react";
 import {
   useEffect,
   useId,
@@ -493,6 +494,7 @@ export function PrivacySection({
         {listed.length === 0 && !adding ? (
           <SettingsEmpty
             icon={UserX}
+            glyph={UserMinus}
             title={t("settings.privacy.blockedEmpty")}
             description={t("settings.privacy.blockedEmptyHint")}
           />

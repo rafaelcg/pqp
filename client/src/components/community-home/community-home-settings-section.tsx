@@ -14,6 +14,9 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { useTranslation } from "@/lib/i18n";
 import { notifyBauFollowConfigChanged } from "./bau-follow";
+import { SETTINGS_CARD_REDESIGN } from "@/components/settings/kit/classes";
+import { badgeRedesignClasses } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
 
 export function CommunityHomeSettingsSection({
   serverId,
@@ -106,6 +109,9 @@ export function CommunityHomeSettingsSection({
 
   return (
     <section className="space-y-2" data-community-home-settings>
+      {/* Under the redesign the switch row sits in a card, like every
+          other block on this page. */}
+      <div className={cn(SETTINGS_CARD_REDESIGN, "redesign:px-2 redesign:py-1")}>
       <Switch
         checked={checked}
         onCheckedChange={(next) => void update(next)}
@@ -116,7 +122,7 @@ export function CommunityHomeSettingsSection({
           showNew ? (
             <span
               data-community-home-settings-new
-              className="shrink-0 rounded bg-accent/15 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-accent"
+              className={cn("shrink-0 rounded bg-accent/15 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-accent", badgeRedesignClasses("new"))}
             >
               {t("communityHome.badge.new")}
             </span>
@@ -124,6 +130,7 @@ export function CommunityHomeSettingsSection({
         }
         description={t("communityHome.settings.helper")}
       />
+      </div>
       <p
         role="status"
         aria-live="polite"

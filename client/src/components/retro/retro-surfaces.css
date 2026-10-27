@@ -425,7 +425,8 @@
 
 /* The DM cards move to the bottom right, framed, under a little title bar,
    stacked above this look's own corner cards. */
-@media (min-width: 640px) {
+/* lib/breakpoints.ts SM_UP */
+@media (min-width: 40rem) {
   [data-appearance="retro"] [data-dm-toasts] {
     top: auto;
     bottom: calc(
@@ -525,7 +526,8 @@
 }
 
 /* No room for decoration on a phone. */
-@media (max-width: 639px) {
+/* lib/breakpoints.ts BELOW_SM */
+@media (max-width: 39.999rem) {
   .retro-winbuttons {
     display: none;
   }
