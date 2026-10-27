@@ -476,6 +476,26 @@ test("captures the design council screens", async ({ browser }) => {
       await page.locator("[data-server-menu-trigger]").first().click();
       await expect(page.locator("[data-server-menu]")).toBeVisible();
       await shoot(page, `15-server-menu-${theme}`);
+      // Invites: the panel with the active links, from the same menu.
+      await page.getByRole("menuitem", { name: "Convidar pessoas" }).click();
+      await expect(page.getByRole("dialog")).toBeVisible();
+      await page.waitForTimeout(600);
+      await shoot(page, `29-invite-create-${theme}`);
+      await page.keyboard.press("Escape");
+      // A new server: the name step, then the Discord path.
+      await page.getByRole("button", { name: "Criar comunidade" }).first().click();
+      await expect(page.getByRole("dialog")).toBeVisible();
+      await page.waitForTimeout(400);
+      await shoot(page, `30-create-server-${theme}`);
+      await page.getByRole("dialog").getByText("Copiar uma estrutura do Discord", { exact: true }).click();
+      await page.waitForTimeout(300);
+      await shoot(page, `31-create-server-paste-${theme}`);
+      await page.keyboard.press("Escape");
+      // Joining with a code.
+      await page.getByRole("button", { name: "Entrar com convite" }).first().click();
+      await expect(page.getByRole("dialog")).toBeVisible();
+      await page.waitForTimeout(400);
+      await shoot(page, `32-invite-join-${theme}`);
       await page.keyboard.press("Escape");
       await page.getByText(PAPO.at(-1)![1]).click({ button: "right" });
       await expect(page.locator("[data-context-menu]")).toBeVisible();

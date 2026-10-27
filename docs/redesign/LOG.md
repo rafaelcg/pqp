@@ -1107,6 +1107,21 @@ server settings do not use it, so its roles field label in caps moves to
    Phosphor icons through a shared `IconSwap`. Empty and result take the
    `p-empty` shape once that merges.
 
+### f-invites
+
+Spec (audit: `invite-panel.tsx` in create and join modes, `invite-choice-row`,
+`invite-paste`, `create-server-dialog.tsx` with name, paste, preview and done
+steps, `discord-import-preview`, `server-ready-panel`, `bring-crew-announcement`):
+
+1. Job: make and share invite links, join with a code, start a server from a
+   name or a copied Discord layout.
+2. Redesign: invite rows are the shared card with filled share, link, copy
+   and bin glyphs; expiry and limit chips are pills (selected row fill with
+   an accent edge); field and group labels sentence case; the Discord path is
+   a card row with a caret; text areas take the input tokens.
+3. Merges: nothing. The chip row stays (it wraps on a 360px panel, a
+   segmented control would not).
+4. Kept: every step, the system share sheet, the paste helpers.
 
 ### f-user-settings
 
