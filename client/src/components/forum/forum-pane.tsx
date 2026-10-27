@@ -91,6 +91,14 @@ import { starterTagsFor } from "@/lib/forum-tag-draft";
 import { useTranslation } from "@/lib/i18n";
 import type { MentionCandidate } from "@/lib/mention-autocomplete";
 import { cn } from "@/lib/utils";
+import { EmptyState } from "@/components/ui/empty-state";
+import {
+  ChatsCircle as PhChatsCircle,
+  Funnel as PhFunnel,
+  MagnifyingGlass as PhMagnifyingGlass,
+  WifiSlash as PhWifiSlash,
+} from "@phosphor-icons/react";
+import { Icon } from "@/components/ui/icon";
 import { ForumComposerDialog } from "./forum-composer-dialog";
 import { ForumTagIcon } from "./forum-tag-icon";
 import {
@@ -102,6 +110,7 @@ import {
 import { ForumPinnedTile, ForumPostCard } from "./forum-post-card";
 import { ForumPostView, type ForumPostViewProps } from "./forum-post-view";
 import { Spinner } from "@/components/ui/spinner";
+import { BELOW_MD_QUERY } from "@/lib/breakpoints";
 
 /**
  * A forum channel (UX.md, "Forum channels: UX and UI"): the list of posts,
@@ -214,6 +223,16 @@ function CardSkeleton({ short = false }: { short?: boolean }) {
   );
 }
 
+/** Today's outline glyph with the toggle off, the filled one under the redesign. */
+function ForumEmptyGlyph({ line, filled }: { line: ReactNode; filled: ReactNode }) {
+  return (
+    <>
+      <span className="contents redesign:hidden">{line}</span>
+      <span className="hidden redesign:contents">{filled}</span>
+    </>
+  );
+}
+
 function EmptyBlock({
   icon,
   title,
@@ -228,14 +247,18 @@ function EmptyBlock({
   role?: "alert" | "status";
 }) {
   return (
-    <div role={role} className="flex flex-col items-center px-6 py-16 text-center animate-fade-in">
-      <div className="text-text-secondary">{icon}</div>
-      <p className="mt-4 forum-display text-xl font-bold text-text">{title}</p>
-      {body && <p className="mt-1.5 max-w-sm text-sm leading-5 text-text-secondary">{body}</p>}
-      {children && (
-        <div className="mt-5 flex flex-wrap items-center justify-center gap-2">{children}</div>
-      )}
-    </div>
+    <EmptyState
+      role={role}
+      icon={icon}
+      title={title}
+      body={body}
+      actions={children}
+      className="px-6 py-16 animate-fade-in"
+      iconClassName="text-text-secondary"
+      titleClassName="mt-4 forum-display text-xl font-bold text-text redesign:mt-0"
+      bodyClassName="mt-1.5 max-w-sm text-sm leading-5 text-text-secondary"
+      actionsClassName="mt-5"
+    />
   );
 }
 
@@ -270,7 +293,7 @@ export function ForumPane({
 }: ForumPaneProps) {
   const { t } = useTranslation();
   const forumId = channel.id;
-  const isPhone = useMediaQuery("(max-width: 767px)");
+  const isPhone = useMediaQuery(BELOW_MD_QUERY);
 
   // ---------------------------------------------------------- the visit
   // The cursor this visit replaced, from the shell (see `markRead`). The
@@ -1355,7 +1378,7 @@ export function ForumPane({
     listBody = (
       <EmptyBlock
         role="alert"
-        icon={<WifiOff className="h-7 w-7" aria-hidden strokeWidth={1.5} />}
+        icon={<ForumEmptyGlyph line={<WifiOff className="h-7 w-7" aria-hidden strokeWidth={1.5} />} filled={<Icon icon={PhWifiSlash} kind="symbol" size="lg" />} />}
         title={t("forum.loadError")}
         body={t("forum.loadError.body")}
       >
@@ -1367,7 +1390,7 @@ export function ForumPane({
   } else if (forumEmpty) {
     listBody = (
       <EmptyBlock
-        icon={<MessagesSquare className="h-7 w-7" aria-hidden strokeWidth={1.5} />}
+        icon={<ForumEmptyGlyph line={<MessagesSquare className="h-7 w-7" aria-hidden strokeWidth={1.5} />} filled={<Icon icon={PhChatsCircle} size="lg" />} />}
         title={t("forum.empty")}
         body={t("forum.empty.body")}
       >
@@ -1451,7 +1474,7 @@ export function ForumPane({
         {noResults && list.posts.length === 0 ? (
           filters.q ? (
             <EmptyBlock
-              icon={<SearchX className="h-7 w-7" aria-hidden strokeWidth={1.5} />}
+              icon={<ForumEmptyGlyph line={<SearchX className="h-7 w-7" aria-hidden strokeWidth={1.5} />} filled={<Icon icon={PhMagnifyingGlass} kind="symbol" size="lg" />} />}
               title={t("forum.searchEmpty", { query: filters.q })}
               body={t("forum.searchEmpty.body")}
             >
@@ -1473,7 +1496,7 @@ export function ForumPane({
             </EmptyBlock>
           ) : filters.mine && filters.tagIds.length === 0 && filters.status === null ? (
             <EmptyBlock
-              icon={<ListFilter className="h-7 w-7" aria-hidden strokeWidth={1.5} />}
+              icon={<ForumEmptyGlyph line={<ListFilter className="h-7 w-7" aria-hidden strokeWidth={1.5} />} filled={<Icon icon={PhFunnel} kind="symbol" size="lg" />} />}
               title={t("forum.mineEmpty")}
             >
               <Button variant="secondary" className="h-10" onClick={() => changeFilters({ mine: false })}>
@@ -1482,7 +1505,7 @@ export function ForumPane({
             </EmptyBlock>
           ) : (
             <EmptyBlock
-              icon={<ListFilter className="h-7 w-7" aria-hidden strokeWidth={1.5} />}
+              icon={<ForumEmptyGlyph line={<ListFilter className="h-7 w-7" aria-hidden strokeWidth={1.5} />} filled={<Icon icon={PhFunnel} kind="symbol" size="lg" />} />}
               title={t("forum.filterEmpty")}
               body={describeActiveFilters(filters, tags, t)}
             >

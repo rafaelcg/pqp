@@ -1,3 +1,4 @@
+import { Check as CheckBold } from "@phosphor-icons/react";
 import { Check } from "lucide-react";
 import { useId, type ReactNode } from "react";
 import { useRovingRadio } from "@/components/ui/radio-group";
@@ -5,6 +6,8 @@ import {
   SETTINGS_FOCUS,
   SETTINGS_TRANSITION,
 } from "@/components/settings/kit/classes";
+import { badgeRedesignClasses } from "@/components/ui/badge";
+import { IconSwap } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 
 export interface SettingsChoice<T extends string> {
@@ -100,6 +103,13 @@ export function SettingsChoiceGrid<T extends string>({
                 ? "border-accent bg-surface-2"
                 : "border-border hover:border-border-strong",
               option.disabled && "cursor-not-allowed opacity-40",
+              // Under the redesign a choice is a card (ui/card.tsx); the
+              // chosen one keeps the accent edge, two pixels so it reads
+              // without the fill, and the accent ring for focus.
+              "redesign:focus-visible:ring-accent",
+              checked
+                ? "redesign:bg-[color:var(--card-row-hover)] redesign:shadow-[inset_0_0_0_1px_var(--color-accent)]"
+                : "redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:hover:border-[color:color-mix(in_oklab,var(--color-text)_18%,transparent)]",
             )}
           >
             <span aria-hidden className="block">
@@ -120,7 +130,12 @@ export function SettingsChoiceGrid<T extends string>({
               {option.badge ? (
                 <span
                   id={badgeId}
-                  className="rounded-[var(--radius-control)] bg-surface-1 px-1.5 py-0.5 text-[11px] text-text-secondary"
+                  className={cn(
+                    "rounded-[var(--radius-control)] bg-surface-1 px-1.5 py-0.5 text-[11px] text-text-secondary",
+                    // Under the redesign: ui/Badge's neutral, one recipe.
+                    badgeRedesignClasses("neutral"),
+                    "redesign:py-0",
+                  )}
                 >
                   {option.badge}
                 </span>
@@ -131,7 +146,13 @@ export function SettingsChoiceGrid<T extends string>({
                 aria-hidden
                 className="absolute top-3 right-3 flex h-4 w-4 items-center justify-center rounded-full bg-accent text-on-accent"
               >
-                <Check className="h-3 w-3" strokeWidth={3} />
+                <IconSwap
+                  off={Check}
+                  on={CheckBold}
+                  kind="symbol"
+                  offClassName="h-3 w-3 [stroke-width:3]"
+                  className="h-3 w-3"
+                />
               </span>
             ) : null}
           </button>
