@@ -447,6 +447,13 @@ test("captures the design council screens", async ({ browser }) => {
       await shoot(page, `20-sidebar-strip-${theme}`);
       await page.locator("[data-channel-rail-expand]").click();
       await expect(page.locator("[data-channel-rail]")).toBeHidden();
+      // The status menu, open from the user panel.
+      await page.locator("[data-user-panel-trigger]").first().click();
+      await expect(page.getByRole("menu", { name: "Mudar o seu status" })).toBeVisible();
+      await page.waitForTimeout(300);
+      await shoot(page, `21-status-menu-${theme}`);
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("menu", { name: "Mudar o seu status" })).toBeHidden();
       // A popover in place: the composer's emoji picker.
       await page.getByRole("button", { name: "Adicionar emoji", exact: true }).first().click();
       await expect(page.locator(".emoji-mart-shell")).toBeVisible();
@@ -654,6 +661,8 @@ const PRIMITIVES: {
   { id: "s-sidebar-rail", testId: "qa-shell-sidebar-strip", hover: "general" },
   // The voice strip in its states.
   { id: "s-voice-strip", testId: "qa-shell-voice-strip" },
+  // The user panel: hover on the settings gear of the first.
+  { id: "s-user-panel", testId: "qa-shell-user-panel", hover: "Abrir configurações" },
 ];
 
 test("captures the primitives", async ({ browser }) => {
