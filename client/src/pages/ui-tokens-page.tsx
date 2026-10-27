@@ -94,6 +94,7 @@ import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { setRedesignChoice, useRedesign } from "@/lib/redesign";
 import { SettingsKitSheet } from "@/pages/ui-settings-kit-sheet";
+import { ShellSheet } from "@/pages/ui-shell-sheet";
 
 /**
  * The token sheet: every role token and every ui/ primitive on one page, in
@@ -1888,6 +1889,9 @@ export function UiTokensPage() {
         </Section>
         <Section title={t("qaUi.section.kit")} note={t("qaUi.kit.note")}>
           <SettingsKitSheet />
+        </Section>
+        <Section title={t("qaUi.section.shellParts")} note={t("qaUi.shellParts.note")}>
+          <ShellSheet />
         </Section>
       </main>
     </TooltipProvider>

@@ -1,3 +1,4 @@
+import { DownloadSimple } from "@phosphor-icons/react";
 import { Download, Info, TriangleAlert } from "lucide-react";
 import {
   useCallback,
@@ -21,6 +22,7 @@ import {
 } from "@/lib/update-changes";
 import { RUNNING_BUILD } from "@/lib/build-info";
 import { useBuildStaleness, useUpdateOffered } from "@/lib/update-prompt-state";
+import { Icon } from "@/components/ui/icon";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 
@@ -278,21 +280,32 @@ export function UpdateIndicator({
               ? "bg-accent text-on-accent hover:bg-accent-hover"
               : "bg-surface-2 text-text-secondary hover:bg-border hover:text-text",
             open && !emphasised && "bg-border text-text",
+            // On the rail it is a small tile like the ones above it.
+            variant === "rail" &&
+              !emphasised &&
+              "redesign:bg-[color:var(--rail-tile-bg)] redesign:hover:bg-[color:var(--rail-tile-hover)]",
+            // The rail's focus ring, urgent or not: the text colour with a gap.
+            variant === "rail" &&
+              "redesign:focus-visible:ring-text redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-canvas",
+            // Every door on the rail is one tile size, this one too.
+            variant === "rail" && "redesign:h-[var(--rail-tile)] redesign:w-[var(--rail-tile)]",
+            variant === "rail" && open && !emphasised && "redesign:bg-[color:var(--rail-tile-hover)]",
             className,
           )}
         >
-          <Download className="h-4 w-4" aria-hidden="true" />
+          <Download className="h-4 w-4 redesign:hidden" aria-hidden="true" />
+          <Icon icon={DownloadSimple} kind="symbol" size="sm" className="hidden redesign:block" />
           <span
             aria-hidden="true"
             className="absolute -right-0.5 -top-0.5 flex h-2.5 w-2.5"
           >
             {emphasised && (
-              <span className="absolute inline-flex h-full w-full rounded-full bg-accent opacity-60 motion-safe:animate-ping" />
+              <span className="absolute inline-flex h-full w-full rounded-full bg-accent opacity-60 motion-safe:animate-ping redesign:motion-safe:animate-none" />
             )}
             <span
               className={cn(
                 "relative inline-flex h-2.5 w-2.5 rounded-full ring-2",
-                variant === "rail" ? "ring-rail" : "ring-surface-1",
+                variant === "rail" ? "ring-rail redesign:ring-canvas" : "ring-surface-1",
                 emphasised ? "bg-on-accent ring-accent" : "bg-accent",
               )}
             />
