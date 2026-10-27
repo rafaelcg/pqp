@@ -333,7 +333,7 @@ function Row({
         {meta.length > 0 && (
           <p
             aria-hidden="true"
-            className="mt-0.5 text-xs text-on-accent-soft/80 redesign:text-text-secondary"
+            className="mt-0.5 text-xs text-on-accent-soft/80 redesign:text-[13px] redesign:text-text-secondary"
           >
             {meta.join(" · ")}
           </p>

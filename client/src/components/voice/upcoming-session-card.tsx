@@ -110,7 +110,7 @@ export function UpcomingSessionCard({
         <span className="block truncate text-sm font-semibold text-paper redesign:text-text">
           {session.title}
         </span>
-        <span className="block truncate text-xs text-paper-muted redesign:text-text-secondary">
+        <span className="block truncate text-xs text-paper-muted redesign:text-[13px] redesign:text-text-secondary">
           {subtitle}
         </span>
       </button>
@@ -124,6 +124,8 @@ export function UpcomingSessionCard({
             onClick={() => void toggleReminder()}
             data-session-remind-toggle
             aria-pressed={reminding}
+            // A toggle keeps one name; the visible "Lembrete ligado" is the state.
+            aria-label={redesign ? t("watchPartySchedule.card.remind") : undefined}
             // On reads as a state (the soft accent), never as a call to act.
             className={reminding ? "redesign:bg-accent-soft redesign:text-on-accent-soft redesign:shadow-none redesign:hover:bg-[color:color-mix(in_oklab,var(--color-accent-soft),var(--color-on-accent-soft)_10%)]" : undefined}
           >
@@ -149,13 +151,13 @@ export function UpcomingSessionCard({
               title={t("watchPartySchedule.card.cancel")}
               // The strips' dismiss square, so its edge lines up with theirs;
               // the danger tint on hover says it ends something for everyone.
-              className="redesign:h-[var(--control-sm)] redesign:w-[var(--control-sm)] redesign:rounded-full redesign:p-0 redesign:hover:bg-danger-soft redesign:hover:text-on-danger-soft"
+              className="redesign:h-[var(--control-sm)] redesign:w-[var(--control-sm)] redesign:rounded-full redesign:p-0 redesign:text-[color:color-mix(in_oklab,var(--color-danger)_55%,var(--color-text-secondary))] redesign:hover:bg-danger-soft redesign:hover:text-on-danger-soft"
               onClick={() => setConfirmCancel(true)}
               data-session-cancel
             >
               <X className="h-3.5 w-3.5 redesign:hidden" aria-hidden />
               {/* Cancels the session for everyone: not the strips' corner X, which only hides. */}
-              <Icon icon={CalendarX} size="sm" className="hidden text-text-secondary redesign:block" />
+              <Icon icon={CalendarX} size="sm" className="hidden redesign:block" />
             </Button>
           )}
         </div>
