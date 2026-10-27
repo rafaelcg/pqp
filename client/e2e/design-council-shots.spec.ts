@@ -450,6 +450,13 @@ test("captures the design council screens", async ({ browser }) => {
       await expect(page.locator("[data-context-menu]")).toBeVisible();
       await shoot(page, `16-message-menu-${theme}`);
       await page.keyboard.press("Escape");
+      // A confirm dialog in place: deleting your own message.
+      await page.getByText(PAPO.find(([who]) => who === VIEWER)![1]).click({ button: "right" });
+      await page.getByRole("menuitem", { name: "Excluir mensagem" }).click();
+      await expect(page.getByRole("dialog")).toBeVisible();
+      await page.waitForTimeout(400);
+      await shoot(page, `18-confirm-dialog-${theme}`);
+      await page.keyboard.press("Escape");
 
       await page.goto(`/app/dm/${conversation.channelId}?lang=pt-BR`);
       await expect(page.getByTestId("app-chat-column").getByText(DM.at(-1)![1])).toBeVisible({ timeout: 30_000 });
@@ -460,6 +467,10 @@ test("captures the design council screens", async ({ browser }) => {
       await expect(page.getByText(DM.at(-1)![1]).first()).toBeVisible({ timeout: 30_000 });
       await hideDevBanner(page);
       await shoot(page, `03-home-${theme}`);
+      // Novidades: a pane of its own beside the rail.
+      await page.getByRole("button", { name: /^Novidades/ }).first().click();
+      await page.waitForTimeout(1200);
+      await shoot(page, `18-whats-new-${theme}`);
 
       await page.goto(chatUrl);
       await expect(page.getByRole("button", { name: "Enviar" })).toBeVisible({ timeout: 30_000 });
@@ -541,6 +552,29 @@ test("captures the design council screens", async ({ browser }) => {
     await expect(phonePage.getByText(PAPO.at(-1)![1])).toBeVisible({ timeout: 30_000 });
     await hideDevBanner(phonePage);
     await shoot(phonePage, "08-phone-chat-dark");
+    // The drawer open: the sidebar header with its close button.
+    await phonePage.getByRole("button", { name: "Abrir navegação" }).first().click();
+    await phonePage.waitForTimeout(800);
+    await shoot(phonePage, "08-phone-drawer-dark");
+    // Close the drawer: reload the conversation before the sheet.
+    await phonePage.goto(chatUrl);
+    await expect(phonePage.getByText(PAPO.at(-1)![1])).toBeVisible({ timeout: 30_000 });
+    await hideDevBanner(phonePage);
+    // A sheet: below `sm` a dialog rises from the bottom edge.
+    for (const theme of ["dark", "light"] as const) {
+      if (theme === "light") {
+        await as(phonePage, "light");
+        await phonePage.goto(chatUrl);
+        await expect(phonePage.getByText(PAPO.at(-1)![1])).toBeVisible({ timeout: 30_000 });
+        await hideDevBanner(phonePage);
+      }
+      await phonePage.getByText(PAPO.find(([who]) => who === VIEWER)![1]).click({ button: "right" });
+      await phonePage.getByRole("menuitem", { name: "Excluir mensagem" }).click();
+      await expect(phonePage.getByRole("dialog")).toBeVisible();
+      await phonePage.waitForTimeout(500);
+      await shoot(phonePage, `19-phone-sheet-${theme}`);
+      await phonePage.keyboard.press("Escape");
+    }
     await phone.close();
   } finally {
     for (const socket of sockets.values()) {
