@@ -1,4 +1,7 @@
+import { Check as CheckGlyph, X as XGlyph } from "@phosphor-icons/react";
 import { Check, X } from "lucide-react";
+import { Icon } from "@/components/ui/icon";
+import { useRedesign } from "@/lib/redesign";
 import { useState } from "react";
 import type { Depoimento } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
@@ -43,6 +46,7 @@ export function PendingDepoimentos({
   onApprove,
   onReject,
 }: PendingDepoimentosProps) {
+  const redesign = useRedesign();
   const { t, locale } = useTranslation();
   /** The one being published, held for its second tap. */
   const [confirming, setConfirming] = useState<string | null>(null);
@@ -58,12 +62,14 @@ export function PendingDepoimentos({
       className="mb-4"
     >
       <h2 className={cn("mb-2 text-xs font-semibold uppercase tracking-wider text-paper-muted", SECTION_LABEL_REDESIGN, "redesign:px-2")}>
-        {t("depoimentos.pending")}
+        {redesign
+          ? t("memberList.sectionHeading", { label: t("depoimentos.pendingLabel"), count: depoimentos.length })
+          : t("depoimentos.pending")}
       </h2>
       <p className="mb-2 text-xs text-paper-muted redesign:px-2 redesign:text-[0.8125rem] redesign:text-text-secondary">
         {t("depoimentos.pending.hint")}
       </p>
-      <ul className="max-w-2xl space-y-1.5">
+      <ul className="max-w-2xl space-y-1.5 redesign:max-w-none">
         {depoimentos.map((one) => {
           const busy = busyId === one.id;
           return (
@@ -144,19 +150,21 @@ export function PendingDepoimentos({
                     data-depoimento-publish={one.id}
                     onClick={() => setConfirming(one.id)}
                   >
-                    <Check aria-hidden className="h-3.5 w-3.5" />
+                    <Check aria-hidden className="h-3.5 w-3.5 redesign:hidden" />
+                    <Icon icon={CheckGlyph} kind="symbol" size="sm" className="hidden redesign:block" />
                     {t("depoimentos.approve")}
                   </Button>
                   {/* One tap, no confirmation, and silent to the author — the
                       row simply stops existing. */}
                   <Button
                     size="sm"
-                    variant="ghost"
+                    variant={redesign ? "secondary" : "ghost"}
                     disabled={busy}
                     data-depoimento-reject={one.id}
                     onClick={() => onReject(one.id)}
                   >
-                    <X aria-hidden className="h-3.5 w-3.5" />
+                    <X aria-hidden className="h-3.5 w-3.5 redesign:hidden" />
+                    <Icon icon={XGlyph} kind="symbol" size="sm" className="hidden redesign:block" />
                     {t("depoimentos.reject")}
                   </Button>
                 </div>

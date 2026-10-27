@@ -1147,6 +1147,7 @@
   "depoimentos.compose.sendAsDm": "Enviar por DM",
   "depoimentos.compose.cancel": "Cancelar",
   "depoimentos.pending": "Testimonios esperando tu respuesta",
+  "depoimentos.pendingLabel": "Testimonios",
   "depoimentos.pending.hint": "Solo tú los ves. Si publicas uno, va a tu perfil; si lo rechazas, desaparece, y a la otra persona nunca se le avisa en ningún caso.",
   "depoimentos.approve": "Publicar",
   "depoimentos.reject": "Rechazar",

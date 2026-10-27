@@ -638,6 +638,15 @@ test("captures the design council screens", async ({ browser }) => {
         headers: headers("duda"),
         body: JSON.stringify({ userId: ids[VIEWER]! }),
       });
+      // And a depoimento from Rafa waiting for approval, rejected after the shot.
+      const depoimento = (await (
+        await fetch(`${API}/api/users/${ids[VIEWER]!}/depoimentos`, {
+          method: "POST",
+          headers: headers("rafa"),
+          body: JSON.stringify({ body: "A Lia salva qualquer call. Melhor parceira de fliperama!" }),
+        })
+      ).json()) as { depoimento?: { id: string }; id?: string };
+      const depoimentoId = depoimento.depoimento?.id ?? depoimento.id;
       await page.goto(`/app/dm?lang=pt-BR`);
       await expect(page.getByRole("button", { name: "Adicionar amigo" }).first()).toBeVisible({ timeout: 30_000 });
       await hideDevBanner(page);
@@ -648,6 +657,9 @@ test("captures the design council screens", async ({ browser }) => {
       await expect(page.getByText("Duda").first()).toBeVisible({ timeout: 15_000 });
       await shoot(page, `23-friends-pending-${theme}`);
       await fetch(`${API}/api/friends/${ids.duda!}`, { method: "DELETE", headers: headers(VIEWER) });
+      if (depoimentoId) {
+        await fetch(`${API}/api/depoimentos/${depoimentoId}`, { method: "DELETE", headers: headers(VIEWER) });
+      }
 
       await page.goto(chatUrl);
       await expect(page.getByRole("button", { name: "Enviar" })).toBeVisible({ timeout: 30_000 });

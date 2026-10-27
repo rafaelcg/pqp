@@ -385,13 +385,13 @@ export function FriendsView({
           }}
         >
           <UserPlus aria-hidden="true" className="h-4 w-4 redesign:hidden" />
-          <Icon icon={adding ? XGlyph : UserPlusGlyph} kind={adding ? "symbol" : "object"} size="sm" className="hidden redesign:block" />
+          <Icon icon={UserPlusGlyph} size="sm" className="hidden redesign:block" />
           {t("friends.addFriend")}
         </Button>
       </header>
 
       {adding && (
-        <div className="border-b border-ink-4/60 bg-ink-2/50 px-4 py-3 redesign:border-[color:var(--pane-header-rule)] redesign:bg-transparent redesign:px-6 redesign:py-4">
+        <div className="border-b border-ink-4/60 bg-ink-2/50 px-4 py-3 redesign:border-[color:var(--pane-header-rule)] redesign:bg-transparent redesign:px-4 redesign:py-4">
           <div className="max-w-md">
             <UserSearch
               label={t("friends.addFriend.label")}
@@ -426,7 +426,7 @@ export function FriendsView({
       <div
         id={panelId}
         role="tabpanel"
-        className="flex-1 overflow-y-auto p-4"
+        className="flex-1 overflow-y-auto p-4 redesign:px-2"
       >
         {/* Above the tab content, because it is the reason this screen is not
             empty. It stays put while they switch tabs — the three errands do not
