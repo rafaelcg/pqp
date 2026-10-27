@@ -2,6 +2,11 @@ import type { BauPostLink, CommunityHomePostCard } from "@pqp/shared";
 import { Archive, ArrowRight, Heart, Lock, MessageCircle, Pin, Play } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 import { useInRouterContext, useNavigate } from "react-router-dom";
+import {
+  CONTENT_CARD_FOCUS_REDESIGN,
+  CONTENT_CARD_HOVER_REDESIGN,
+  CONTENT_CARD_REDESIGN,
+} from "@/components/ui/content-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { homeRoutePath, messageLinkState } from "@/lib/app-route";
@@ -114,6 +119,9 @@ export function BauPostCardView({
       data-bau-card-media={poster ?? "none"}
       className={cn(
         "group/bau mt-1.5 block w-full max-w-[26rem] overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface-1 text-left no-underline shadow-[0_1px_0_var(--glow-accent-soft)] transition-[border-color,transform] duration-[var(--duration-fast)] hover:border-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
+        CONTENT_CARD_REDESIGN,
+        CONTENT_CARD_HOVER_REDESIGN,
+        CONTENT_CARD_FOCUS_REDESIGN,
       )}
     >
       <div
@@ -263,7 +271,7 @@ export function BauPostCardView({
 export function BauPostCardSkeleton() {
   return (
     <div
-      className="mt-1.5 w-full max-w-[26rem] overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface-1"
+      className={cn("mt-1.5 w-full max-w-[26rem] overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface-1", CONTENT_CARD_REDESIGN)}
       aria-hidden
       data-bau-card-skeleton=""
     >

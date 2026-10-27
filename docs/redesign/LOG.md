@@ -71,7 +71,9 @@ Read this file and the inventory at the start of every session.
 | 3 | `s-header` | Merged, capped at round 5 (Opus 8.3 r4 and r5). Follow-up: rename `--pane-header-rule` / `--pane-header-px` to `--pane-bar-*` after the chain |
 | 3 | `s-banners` | Merged, capped at round 5 (Opus 8.2 r5, MUST fixed after). Not done: a dark-only accent edge |
 | 3 | `s-message-row` | Merged, capped at round 5 (Opus 8.5 r5) |
+| 3 | `s-message-content` | Merged, capped at round 5 (Opus 8.6 r5). Open: the broken-image chip is English in every language (question in the spec) |
 | 4 | `f-onboarding` | Merged, capped at round 5 (Opus 8.3 r3 and r5) |
+| 5 | `m-sheets` | Merged, approved at round 5 (Opus 9.0, no MUST) |
 | 4 | `f-user-settings` | Merged, capped at round 5 (Opus 8.1 r5, 8.2 r4) |
 | 4 | `f-connections` | Merged, capped at round 5 (Opus 8.4 r3 and r4, 8.3 r5). Open: question 6 (copy) |
 | 4 | `f-search` | Merged, capped at round 5 (Opus 8.5 r5). Not done: `<li role="none">` inside the listbox (it changes the toggle-off tree too) |
@@ -1181,6 +1183,40 @@ error, empty per filter, results, load more):
 4. Kept: the hover lift and glow, share and report on every card, the
    create call to action above the grid.
 
+Rounds (Opus only): r1 7.4 (MUST fixed), r2 7.8 (MUST fixed), r3 8.1, r4
+8.0 (MUST fixed: the language filter hid every community while the page
+said none existed), r5 7.6 (no MUST, cap; best r3). After r5: the
+language-only empty result names the language, the language control has a
+visible label, a louder cricket, no lift on card hover. Not done: a balanced
+chip wrap (11 chips leave "Geral" alone at 1440px).
+
+### m-sheets
+
+Spec (audit: the four phone sheets in the inventory. The app launcher, the
+soundboard, every `Dialog` below `sm` and the settings strip already draw
+the merged sheet, popover or list row tokens; the music queue is the one
+left: `voice/music-fila.tsx` as the composer's sheet and as the drawer,
+`music-queue-list.tsx`, the history in `music-extras.tsx` and the field in
+`music-search-picker.tsx`):
+
+1. Job: see what plays next, add a song, reorder, play one again.
+2. Redesign: one recipe in `voice/music-classes.ts` for both homes: rows at
+   the control radius on the menu's translucent hover, covers nested inside, the
+   highlighted result on the menu's highlight, round ghost icons, sentence
+   case headings, card-edge seams; the drawer on the side pane with the
+   sheet's scrim and a sideways shadow; Phosphor glyphs.
+3. Merges: the drawer's paper tokens and the sheet's surface tokens meet in
+   one look under the redesign.
+4. Kept: drag and Alt+arrow reordering, the row menu, history, shuffle,
+   watch on stage, the field's hint, outside-press close.
+5. Left: the player bar under the queue is call chrome (`f-call`).
+Rounds (Opus only): r1 7.0 (MUST fixed: the row hover vanished on the
+composer's well), r2 8.2 (MUST fixed: history rows had no cover), r3 8.6,
+r4 8.1, r5 9.0 (approved, no MUST). Also: one right icon column, Subir and
+Descer in a row's menu under the redesign (touch has no drag), still
+history rows, a sideways drawer shadow. New copy: `music.moveUp`,
+`music.moveDown`.
+
 ### f-search
 
 Spec (audit: `search/search-dialog.tsx`, one caller, the sidebar search pill
@@ -1470,6 +1506,37 @@ r4 7.6 (MUST fixed: a pinned continuation line showed no pin), r5 8.5
 a pinned continuation line carries its pin in the gutter, "(editada)"
 ends the paragraph right before it. For `s-member-list`: the same role
 lightness clamp on member rows and role chips.
+
+### s-message-content
+
+Spec (audit: `MessageBody` and the `.markdown-body` rules, `AttachmentGrid`
+and its four tiles, `VoiceNoteCard`, `ForwardCard`, `PollCard`, `ChanceCard`,
+`BotActionCard`, `BauPostCard`, `StoryQuoteCard`, `GifAttachment`,
+`EmbedCard`, `WebhookEmbedCard`; custom emoji draw an image only):
+
+1. Job: what a message carries, readable and one family.
+2. States: markdown (bold, code, link, quote, list, code block, mentions:
+   you, someone, everyone), picture (loading box, broken falls to the chip),
+   video, audio, file, voice note (playing, unheard, broken, receipts),
+   forward (restricted, media chip, thumbnail), poll (voted, leading,
+   closed), dice, bot plan and ask, Baú post (locked, pinned, video), story
+   quote (live, expired), GIF (reduced motion), link preview, webhook embed.
+3. Redesign: one card (`ui/content-card.ts`): the card's text tint and edge
+   at the card radius, no stripe and no shadow; pictures on a 12px media
+   radius; file and media glyphs are Phosphor on a 36px tile; links in the
+   accent ink with a soft underline; mentions a rounded accent tint; the
+   voice note a pill. A webhook keeps the sender's colour on its left edge.
+4. Kept as is: the lightbox (already the IconButton primitives; its chrome
+   moves with the overlays), the bot notice (`s-log-chrome`).
+5. Question: the broken-image chip says "Image unavailable" in English for
+   every language (`attachment-grid.tsx`). Translating it changes the
+   toggle-off app, so it waits for a yes.
+
+Rounds (Opus only): r1 7.8 (MUST fixed: your own mention lost the cascade),
+r2 8.2, r3 7.9 (MUST fixed: the webhook edge thinned at the corners), r4
+8.2, r5 8.6 (no MUST, cap). After r5: one title scale (poll 16px), the
+poll's other options at 14% under the 26% leader, the roll comment on the
+kicker, named chips at medium weight. Not done: none.
 
 ### f-onboarding
 
