@@ -355,7 +355,9 @@ export function UserPanel({
         // An inset card at the foot of the sidebar, like the voice strip
         // above it. The presence dot's cutout is the card's colour, opaque.
         compact ? SIDEBAR_FOOTER_CARD_COMPACT_REDESIGN : SIDEBAR_FOOTER_CARD_REDESIGN,
-        "redesign:mb-2 redesign:[--avatar-dot-ring:var(--footer-card-solid)]",
+        // Only a real home-indicator inset adds space below; the row keeps its own
+        // padding, so the content sits centred in the card.
+        "redesign:mb-2 redesign:[--safe-pb-min:0px] redesign:[--avatar-dot-ring:var(--footer-card-solid)]",
       )}
     >
       {showHint && (
@@ -381,6 +383,8 @@ export function UserPanel({
             className={cn(
               "absolute bottom-full left-0 z-50 mb-2 w-64 overflow-hidden rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)] animate-fade-in",
               MENU_PANEL_REDESIGN,
+              // Lines up with both edges of the card instead of a fixed 256px.
+              "redesign:right-0 redesign:w-auto",
             )}
           >
           {/* Renaming lives first because this menu is where people look for
@@ -615,9 +619,9 @@ export function UserPanel({
         className={cn(
           "flex min-w-0 items-center gap-2 rounded-md px-1 py-0.5 text-left hover:bg-ink-2",
           !compact && "flex-1",
-          "redesign:gap-2.5 redesign:rounded-full redesign:py-1 redesign:pl-1 redesign:pr-2 redesign:hover:bg-[color:var(--card-row-hover)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent",
+          "redesign:gap-2.5 redesign:rounded-full redesign:py-1 redesign:pl-1 redesign:pr-2 redesign:hover:bg-[color:var(--card-row-hover)] redesign:hover:[--avatar-dot-ring:var(--footer-card-solid-hover)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent",
           compact && "redesign:p-1",
-          open && "redesign:bg-[color:var(--card-row-hover)]",
+          open && "redesign:bg-[color:var(--card-row-hover)] redesign:[--avatar-dot-ring:var(--footer-card-solid-hover)]",
         )}
         onClick={() => setOpen((prev) => !prev)}
       >
@@ -703,7 +707,7 @@ export function UserPanel({
               serverMuted && "redesign:bg-warning-soft redesign:text-on-warning-soft redesign:[--button-disabled-opacity:1]",
               // Listen only: locked, not unavailable. A neutral fill and the
               // slashed mic at full strength.
-              listenOnly && "redesign:bg-[color:var(--card-row-hover)] redesign:text-text-secondary redesign:[--button-disabled-opacity:1]",
+              listenOnly && "redesign:bg-transparent redesign:text-text-secondary redesign:ring-1 redesign:ring-inset redesign:ring-[color:var(--card-border)] redesign:[--button-disabled-opacity:1]",
             )}
             onClick={onToggleMute}
             disabled={!inVoice || !canSpeak || serverMuted}

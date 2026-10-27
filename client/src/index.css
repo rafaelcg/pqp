@@ -833,6 +833,7 @@
   /* A footer card's fill as a solid colour over the side pane, for cutouts
      (the presence dot's ring) that must match the card exactly. */
   --footer-card-solid: color-mix(in oklab, var(--color-text) 4%, var(--color-pane-side));
+  --footer-card-solid-hover: color-mix(in oklab, var(--color-text) 6%, var(--footer-card-solid));
   /* A settings notice in the info tone, on its own (settings/kit/notice.tsx):
      a quiet tint of the text, a step over the card it usually sits in. */
   --settings-notice-info-bg: color-mix(in oklab, var(--color-text) 7%, transparent);
@@ -1306,6 +1307,7 @@
   --card-row-hover: color-mix(in oklab, var(--color-text) 4%, transparent);
   --card-hover: color-mix(in oklab, var(--color-text) 3%, var(--color-surface-0));
   --footer-card-solid: color-mix(in oklab, var(--color-surface-0) 60%, var(--color-pane-side));
+  --footer-card-solid-hover: color-mix(in oklab, var(--color-text) 4%, var(--footer-card-solid));
   --card-border: color-mix(in oklab, var(--color-text) 10%, transparent);
 
   /* Avatars: a hairline keeps the monogram disc a disc on the white pane. */
