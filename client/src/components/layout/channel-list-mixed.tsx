@@ -169,7 +169,7 @@ export function MixedCategoryHeader({
         {into ? (
           <span
             data-category-drop-label=""
-            className="shrink-0 text-[10px] font-semibold normal-case tracking-normal"
+            className="shrink-0 text-[10px] font-semibold normal-case tracking-normal redesign:text-[11px]"
           >
             {t("chrome.dropOnCategory", { name: category.name })}
           </span>
