@@ -761,7 +761,7 @@ const PRIMITIVES: {
   { id: "s-channel-row", testId: "qa-shell-channel-rows", focus: "general", hover: "clipes" },
   { id: "s-voice-row", testId: "qa-shell-voice-rows" },
   // The icons-only sidebar: hover on "general".
-  { id: "s-sidebar-rail", testId: "qa-shell-sidebar-strip", hover: "general" },
+  { id: "s-sidebar-rail", testId: "qa-shell-sidebar-strip", focus: "clipes", hover: "general" },
 ];
 
 test("captures the primitives", async ({ browser }) => {
