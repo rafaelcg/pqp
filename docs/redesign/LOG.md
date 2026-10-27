@@ -1870,6 +1870,24 @@ swatch row 6px apart so the fade cuts a swatch; the states shot focuses a
 new ring beside a seen one. Not done: a brighter light-only unseen ring
 (the accent ladder has no step for it), the label's 2px offset.
 
+### f-friends
+
+Spec (audit: `FriendsView` (header from `s-header`, tabs from `p-tabs`), the
+add panel and `UserSearch`, notices, `FriendRows`, the remove confirm,
+`PendingLists` and `RequestRow`, `PendingDepoimentos`, the empty line and
+`NoFriendsYet`, `FriendsSkeleton`; the first-run card is `f-onboarding`):
+
+1. Job: your people, who is around, and the requests waiting on you.
+2. States: Online, Todos, Pendentes (incoming, outgoing, depoimentos with
+   their confirm), add panel open (search, results, none), remove confirm,
+   busy row, notice and error, loading, empty, first run.
+3. Redesign: a person is the list row's `lg` pill (two lines, the tag in the
+   row's detail, the presence dot cut from the pane); section labels are the
+   section label; the confirm and a depoimento are cards; the add panel
+   sits on the pane under the header's rule; the search is a round field.
+4. Kept: "Remover" stays a ghost X beside "Mensagem" (question: move it into
+   a row menu, as the member list does?).
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss
