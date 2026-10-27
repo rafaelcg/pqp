@@ -454,8 +454,8 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
                     <Button
                       type="button"
                       variant="secondary"
-                      // Under the redesign it stands beside the face cards, so it takes their corner.
-                      className="h-auto self-stretch redesign:rounded-[var(--radius-card)]"
+                      // Under the redesign it stays a pill at button height, so it never reads as a sixth face.
+                      className="h-auto self-stretch redesign:h-[var(--control-md)] redesign:self-center"
                       onClick={() => {
                         const color = BOT_COLORS[Math.floor(Math.random() * BOT_COLORS.length)]!;
                         const face = BOT_BASE_FACES[Math.floor(Math.random() * BOT_BASE_FACES.length)]!;

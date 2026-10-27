@@ -738,6 +738,34 @@ test("captures the design council screens", async ({ browser }) => {
         } catch (error) {
           console.log("bots wizard shot skipped", String(error).slice(0, 300));
         }
+        // The overview: a bot made through the API, shot, then removed so the
+        // next theme's intro shot still finds no bot.
+        let botId: string | null = null;
+        try {
+          const made = await fetch(`${API}/api/servers/${turma.id}/bots`, {
+            method: "POST",
+            headers: headers(VIEWER),
+            body: JSON.stringify({ name: "Tico", color: "coral", face: "curioso", tagline: "Pergunte qualquer coisa", answerToName: true }),
+          });
+          const body = (await made.json()) as { bot?: { id: string }; id?: string };
+          botId = body.bot?.id ?? body.id ?? null;
+          await page.keyboard.press("Escape");
+          await page.keyboard.press("Escape");
+          await page.reload();
+          await expect(page.getByRole("button", { name: "Enviar" })).toBeVisible({ timeout: 30_000 });
+          await hideDevBanner(page);
+          await page.locator("[data-server-menu-trigger]").first().click();
+          await page.getByRole("menuitem", { name: "Configurações da comunidade" }).click();
+          await page.getByRole("dialog").getByText("Bots", { exact: true }).first().click({ timeout: 5_000 });
+          await page.waitForTimeout(1200);
+          await shoot(page, `38-server-bots-overview-${theme}`);
+        } catch (error) {
+          console.log("bots overview shot skipped", String(error).slice(0, 300));
+        } finally {
+          if (botId) {
+            await fetch(`${API}/api/servers/${turma.id}/bots/${botId}`, { method: "DELETE", headers: headers(VIEWER) });
+          }
+        }
         await page.keyboard.press("Escape");
       } catch (error) {
         console.log("bots shot skipped", String(error).slice(0, 300));

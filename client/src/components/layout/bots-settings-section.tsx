@@ -53,6 +53,7 @@ import {
   BOT_CHOICE_FOCUS_REDESIGN,
   BOT_SWATCH_CHOSEN_REDESIGN,
   BOT_SWATCH_REDESIGN,
+  BOT_RING_OFFSET_PANE_REDESIGN,
   ChosenCheck,
 } from "@/components/bots/bot-choice";
 
@@ -396,6 +397,7 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
                 BOT_SWATCH_REDESIGN,
                 selected && BOT_SWATCH_CHOSEN_REDESIGN,
                 BOT_CHOICE_FOCUS_REDESIGN,
+                BOT_RING_OFFSET_PANE_REDESIGN,
               )
             }
             renderItem={(color, selected) => (
@@ -418,6 +420,7 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
                   : "border-border bg-surface-2 text-text-secondary",
                 selected ? BOT_CARD_CHOSEN_REDESIGN : BOT_CARD_REDESIGN,
                 BOT_CHOICE_FOCUS_REDESIGN,
+                BOT_RING_OFFSET_PANE_REDESIGN,
               )
             }
             renderItem={(face, selected) => (
