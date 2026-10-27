@@ -1059,6 +1059,23 @@ server settings do not use it, so its roles field label in caps moves to
    Phosphor icons through a shared `IconSwap`. Empty and result take the
    `p-empty` shape once that merges.
 
+### f-states
+
+Spec (audit: `app-loading-shell.tsx` (the boot shell and the cannot-reach-
+the-API page, from `main.tsx` and `App.tsx`), `ui/skeleton.tsx` and the
+spinner (merged as `p-loading`), `error-boundary.tsx`, `HistoryFailed`
+(merged as `p-empty`)):
+
+1. Job: what the app shows before it can show the app, and when it cannot.
+2. Redesign: the boot shell is the frame (canvas, rail on it, floating side
+   and main panes on the frame recipes) with its skeletons, the composer a
+   rounded well, the label sentence case, "pqp" in Gabarito; the API error
+   page takes Gabarito and sentence case.
+3. Not touched: `error-boundary.tsx`. AGENTS.md says to leave it alone, and
+   question 3 asks André first.
+4. Kept: the stored sidebar width on first paint, the retry and the docs
+   pointers on the error page.
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss

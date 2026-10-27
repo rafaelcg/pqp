@@ -657,6 +657,8 @@ const PRIMITIVES: {
   // Two real rails: Conversas open with people waiting, and a server open
   // beside every server cue. Keyboard focus on "Praça", hover on "Oficina".
   { id: "s-rail", testId: "qa-shell-rail", focus: "Praça", hover: "Oficina" },
+  // The boot shell and the cannot-reach-the-API page, in desktop frames.
+  { id: "f-states", testId: "qa-shell-states", focus: "Tentar de novo" },
 ];
 
 test("captures the primitives", async ({ browser }) => {

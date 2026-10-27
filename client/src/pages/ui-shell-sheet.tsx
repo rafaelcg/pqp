@@ -2,6 +2,7 @@ import type { DmSummary, PublicUser, Server } from "@pqp/shared";
 import { useEffect, type ReactNode } from "react";
 import { ServerRail } from "@/components/layout/server-rail";
 import { setUpdateWaiting } from "@/lib/update-prompt-state";
+import { AppBootstrapError, AppLoadingShell } from "@/components/layout/app-loading-shell";
 
 /**
  * The shell's pieces on `/qa/ui`, drawn by the real components with made-up
@@ -68,6 +69,16 @@ export function ShellSheet() {
   useUpdateWaitingFixture();
   return (
     <div className="flex flex-col gap-6">
+      {/* App states: the shell while the app boots, and the page when it
+          cannot reach the API. Each in a fixed desktop-sized frame. */}
+      <div data-testid="qa-shell-states" className="flex flex-col gap-6">
+        <div className="h-[560px] w-[1100px] overflow-hidden rounded-[var(--radius-card)] border border-border">
+          <AppLoadingShell />
+        </div>
+        <div className="h-[420px] w-[1100px] overflow-hidden rounded-[var(--radius-card)] border border-border bg-[color:var(--color-pane-main)]">
+          <AppBootstrapError message="Não deu pra falar com o servidor (502)." onRetry={noop} />
+        </div>
+      </div>
       {/* Server rail. Left: Conversas open, two friend requests, two people
           waiting and a pinned conversation; Oficina unread, Memes with three
           mentions. Right: a server open; a photo icon, a Baú count, a Baú ring
