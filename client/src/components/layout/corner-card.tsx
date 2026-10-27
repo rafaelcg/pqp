@@ -126,8 +126,8 @@ export function CornerCard({
         // Round under the redesign: glass on a hero, a ghost on the card.
         "redesign:rounded-full redesign:focus-visible:ring-[color:var(--color-focus-ring)]",
         hero
-          ? // Dark glass in dark; a light glass with a hairline in light.
-            "redesign:right-2.5 redesign:top-2.5 redesign:h-8 redesign:w-8 redesign:bg-[color:oklch(0.12_0.01_262/0.62)] redesign:text-[color:oklch(0.98_0_0)] redesign:[:root[data-theme=light]_&]:bg-[color:oklch(0.99_0_0/0.72)] redesign:[:root[data-theme=light]_&]:text-text redesign:[:root[data-theme=light]_&]:ring-1 redesign:[:root[data-theme=light]_&]:ring-[color:var(--popover-border)]"
+          ? // Glass on a hero: dark in dark, light with a hairline in light.
+            "redesign:right-2.5 redesign:top-2.5 redesign:h-8 redesign:w-8 redesign:bg-[color:var(--glass-bg)] redesign:text-[color:var(--glass-fg)] redesign:ring-[color:var(--glass-border)] redesign:[:root[data-theme=light]_&]:ring-1"
           : "redesign:-mr-1.5 redesign:-mt-1.5 redesign:h-8 redesign:w-8 redesign:text-text-tertiary redesign:hover:bg-[color:var(--menu-row-hover)] redesign:hover:text-text",
       )}
     >
@@ -180,7 +180,8 @@ export function CornerCard({
             </p>
           )}
           {children}
-          {footer && <div className="mt-3">{footer}</div>}
+          {/* The shell owns the CTA's width, so every hint's first action is the same size. */}
+          {footer && <div className="mt-3 redesign:[&>:is(button,a):first-child]:min-w-[7.5rem]">{footer}</div>}
         </div>
       </div>
     </aside>

@@ -132,7 +132,7 @@ export function FirstRunCard({
       aria-labelledby="first-run-title"
       className="animate-rise mb-6 max-w-2xl rounded-2xl border border-ink-4 bg-ink-3/40 p-4 sm:p-5 redesign:rounded-[var(--radius-pane)] redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] sm:redesign:p-6"
     >
-      <div className="mb-4 flex items-start gap-3">
+      <div className="mb-4 flex items-start gap-3 redesign:mb-6">
         <h2
           id="first-run-title"
           className="min-w-0 flex-1 font-display text-lg font-bold"
@@ -170,7 +170,9 @@ export function FirstRunCard({
                 className={cn(
                   "mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border redesign:-mt-1 redesign:h-8 redesign:w-8 redesign:border-0",
                   done
-                    ? "border-success/40 bg-success/15 text-success redesign:bg-success/20"
+                    ? // Done is an outlined green token in dark, so it never reads as a
+                      // to-do well; light keeps the plain green fill.
+                      "border-success/40 bg-success/15 text-success redesign:bg-success/20 redesign:[:root:not([data-theme=light])_&]:bg-success/15 redesign:[:root:not([data-theme=light])_&]:ring-1 redesign:[:root:not([data-theme=light])_&]:ring-success/35"
                     : "border-ink-4 bg-ink text-signal redesign:bg-accent-soft redesign:text-on-accent-soft",
                 )}
               >
@@ -204,7 +206,7 @@ export function FirstRunCard({
                         prints a `name#0000` handle, which is one unbreakable
                         token up to 37 characters long, and at 390px a long one
                         ran off the edge of the card rather than wrapping. */}
-                    <p className="mt-0.5 break-words text-sm text-paper-muted redesign:mt-1 redesign:text-text-secondary">
+                    <p className="mt-0.5 break-words text-sm text-paper-muted redesign:mt-1 redesign:leading-relaxed redesign:text-text-secondary">
                       {/* Only the friend row interpolates, and it wants the
                           reader's own tag — see the catalogue comment. */}
                       {t(row.body, { tag: user.tag ?? user.username ?? "" })}
