@@ -56,9 +56,11 @@ Read this file and the inventory at the start of every session.
 | 2 | `p-empty` | Merged, capped at round 5 (Opus 8.6) |
 | 2 | `p-sheet` | Merged, capped at round 5 (Opus 8.6) |
 | 2 | `p-dialog` | Merged, capped at round 5 (Codex 8.7 r2, Opus 8.2 r4) |
+| 2 | `p-settings-kit` | Merged, capped at round 5 (Opus 8.5 r5, 8.5 r2) |
 | 3 | `s-frame` | Merged, capped at round 5 (Opus 8.8) |
 | 3 | `s-rail` | Merged, capped at round 5 (Opus 8.2 r5, 8.8 r3) |
 | 3 | `s-sidebar-header` | Merged, capped at round 5 (Opus 8.3 r5, 8.7 r3) |
+| 5 | `m-breakpoints` | Merged (code only, no council) |
 
 ## Phase 0: directions
 
@@ -1066,6 +1068,27 @@ ghost step (8%) above the search's 6%, open 10%, both tokens
 members button on desktop (round 5 suggested hiding it at every width; the
 server menu has Membros too; question 4).
 
+### m-breakpoints
+
+Spec (audit: width queries in the signed-in app: `PHONE_QUERY`, `SM_UP_QUERY`,
+`use-sm-up`, `use-md-up`, `use-lg-up`, the forum's 767px, stories' 640px,
+the soundboard sheet, the voice note card, the thread panel, two device
+probes, and the stylesheets' 639, 640 and 767px):
+
+1. Job: one definition of where the layout changes.
+2. Change: `lib/breakpoints.ts` names Tailwind's `sm`, `md` and `lg` in rem,
+   with "below" queries at `.999`; every caller imports it; each stylesheet
+   query writes the same rem value and names the file.
+3. Merges: the forum's 767px and stories' 640px become `md` and `sm`.
+4. Same at a 16px base font, except one pixel: stories' `max-width: 640px`
+   overlapped `sm` at exactly 640px and now stops at 639.99px. With another
+   base font size, JS and CSS now switch with the `sm:` and `md:` utilities.
+5. No council: it draws nothing new. Verified by unit tests (a new
+   breakpoints test), forum, stories, shell and phone e2e.
+6. Found on the way: `app-shell-scroll` failed on `redesign` (not on main):
+   `/vem` renders after network idle once the dev server loads the icon
+   package. The test now waits for the page to render.
+
 ### p-settings-kit
 
 Spec (audit: 28 files in `settings/kit/`, about 30 callers in user settings;
@@ -1102,6 +1125,9 @@ left: `voice/music-fila.tsx` as the composer's sheet and as the drawer,
 4. Kept: drag and Alt+arrow reordering, the row menu, history, shuffle,
    watch on stage, the field's hint, outside-press close.
 5. Left: the player bar under the queue is call chrome (`f-call`).
+Rounds: Codex 8.2 (r1); Opus 8.5 (r2), 8.0 (r3), 8.5 (r5), no MUST left.
+Round 5 fixes: the copy failure glyph at 14px, the info tint at 7% in
+dark, the rail build line in mono. Merged on the cap.
 
 ## Open questions for André
 
