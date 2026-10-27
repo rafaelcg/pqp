@@ -587,9 +587,10 @@ export function Dialog({
                   "relative -my-1 -mr-1 grid h-[var(--control-md)] w-[var(--control-md)] shrink-0 place-items-center rounded-[var(--radius-control)] text-text-tertiary transition-colors hover:bg-surface-2 hover:text-text max-sm:after:absolute max-sm:after:-inset-1 max-sm:after:content-['']",
                   // Under the redesign, IconButton's ghost: a round hover in
                   // the text tint, the glyph a step brighter.
-                  // The glyph's right edge on the title's inset: hand back the
-                  // button's inner padding, less the 4px it always gave.
-                  "redesign:-mr-[calc((var(--control-md)-var(--dialog-close-glyph))/2-0.25rem)]",
+                  // The X's visible stroke on the title's inset: hand back the
+                  // button's inner padding and the glyph's own 5/24 margin.
+                  // (This class replaces `-mr-1`, it does not add to it.)
+                  "redesign:-mr-[calc((var(--control-md)-var(--dialog-close-glyph))/2+var(--dialog-close-glyph)*5/24)]",
                   "redesign:rounded-[var(--icon-button-radius)] redesign:text-[color:var(--icon-button-text)] redesign:hover:bg-[color:var(--icon-button-hover)] redesign:hover:text-text",
                   // and its focus ring, where the toggle off keeps the
                   // browser's own outline.

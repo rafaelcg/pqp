@@ -28,6 +28,15 @@ describe("Dialog tokens", () => {
     expect(source).toContain("hover:bg-surface-2 hover:text-text");
   });
 
+  it("lines the close X's stroke up with the title's inset only under the redesign", () => {
+    expect(source).toContain("redesign:-mr-[calc((var(--control-md)-var(--dialog-close-glyph))/2+var(--dialog-close-glyph)*5/24)]");
+    expect(source).toContain("relative -my-1 -mr-1 grid");
+  });
+
+  it("floats a plain dialog on the dialog surface only under the redesign", () => {
+    expect(source).toContain("!fill && \"redesign:[--elevation-3-surface:var(--dialog-surface,var(--color-surface-2))]\"");
+  });
+
   it("gives the close button IconButton's focus ring only under the redesign", () => {
     // With a fallback: the dark block does not set --icon-button-ring.
     expect(source).toContain("redesign:focus-visible:ring-[color:var(--icon-button-ring,var(--color-focus-ring))]");
