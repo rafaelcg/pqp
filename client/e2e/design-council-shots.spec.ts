@@ -1162,6 +1162,76 @@ test("captures the primitives", async ({ browser }) => {
  * A forum post open beside its list: the header's icon buttons (expand,
  * close) in context. Last, so its server is not in the other scenes' rail.
  */
+/**
+ * f-stories: the stories flag on for one server, two friends with a text
+ * story each. The strip in the sidebar, a story open, and the composer.
+ * The viewer and the composer are dark in every theme by design.
+ */
+test("captures the stories", async ({ browser }) => {
+  fs.mkdirSync(OUT!, { recursive: true });
+  await person(VIEWER, "Lia", PRESET(4));
+  await person("rafa", "Rafa", PRESET(1));
+  await person("bia", "Bia", null);
+  const home = await server(VIEWER, "Turma dos stories");
+  await join(VIEWER, home.id, "rafa");
+  await join(VIEWER, home.id, "bia");
+  const flag = await fetch(`${API}/api/admin/flag-overrides`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${ADMIN_TOKEN}` },
+    body: JSON.stringify({ key: "stories", serverId: home.id, enabled: true }),
+  });
+  expect(flag.status).toBe(200);
+  for (const [who, text, background] of [
+    ["rafa", "bora de cs hoje?", "grape"],
+    ["bia", "alguém viu meu fone?", "ocean"],
+  ] as const) {
+    const res = await fetch(`${API}/api/stories`, {
+      method: "POST",
+      headers: headers(who),
+      body: JSON.stringify({
+        kind: "text",
+        text,
+        background,
+        audiences: { serverIds: [home.id] },
+        publish: true,
+      }),
+    });
+    if (!res.ok) {
+      console.log(`f-stories: story refused ${res.status} ${await res.text()}`);
+    }
+  }
+  const text = home.channels.find((channel) => channel.type === "text")!;
+
+  for (const theme of ["dark", "light"] as const) {
+    const context = await browser.newContext({ viewport: DESKTOP, locale: "pt-BR" });
+    const page = await context.newPage();
+    await as(page, theme);
+    await page.goto(`/app/server/${home.id}/channel/${text.id}?lang=pt-BR`);
+    await expect(page.getByRole("button", { name: "Enviar" })).toBeVisible({ timeout: 30_000 });
+    await hideDevBanner(page);
+    try {
+      const ring = page.getByRole("button", { name: /^Story de Rafa/ });
+      await expect(ring).toBeVisible({ timeout: 20_000 });
+      await page.waitForTimeout(600);
+      await shoot(page, `f-stories-strip-${theme}`);
+      await ring.click();
+      await expect(page.locator("[data-story-viewer]")).toBeVisible({ timeout: 10_000 });
+      await page.waitForTimeout(900);
+      await shoot(page, `f-stories-viewer-${theme}`);
+      await page.keyboard.press("Escape");
+      await page.waitForTimeout(500);
+      await page.locator("[data-server-menu-trigger]").first().click();
+      await page.getByRole("menuitem", { name: "Postar story" }).click();
+      await page.waitForTimeout(900);
+      await shoot(page, `f-stories-composer-${theme}`);
+      await page.keyboard.press("Escape");
+    } catch (error) {
+      console.log(`f-stories: skipped (${String(error).slice(0, 200)})`);
+    }
+    await context.close();
+  }
+});
+
 test("captures the forum post", async ({ browser }) => {
   fs.mkdirSync(OUT!, { recursive: true });
   await person(VIEWER, "Lia", PRESET(4));
