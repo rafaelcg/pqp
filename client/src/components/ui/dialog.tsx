@@ -12,7 +12,7 @@ import {
 import { createPortal } from "react-dom";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
-import { SHEET_SAFE_BOTTOM, SHEET_SCRIM, SHEET_SURFACE_PHONE } from "@/components/ui/sheet";
+import { SHEET_SAFE_BOTTOM, SHEET_SURFACE_PHONE } from "@/components/ui/sheet";
 
 // A roving group (radios, tabs) parks its other members at `tabindex="-1"`:
 // they are focusable by script but not Tab stops, so they are not the trap's
@@ -254,6 +254,8 @@ export function Dialog({
   phoneFullScreen = false,
 }: DialogProps) {
   const { t } = useTranslation();
+  // ConfirmDialog and friends pass no body: the header and footer meet.
+  const solo = children == null || children === false;
   const panelRef = useRef<HTMLDivElement>(null);
   const previouslyFocused = useRef<HTMLElement | null>(null);
   // The opener is read while rendering the open dialog, before any child
@@ -441,9 +443,7 @@ export function Dialog({
           layer below owns the dismiss gesture. */}
       <div
         aria-hidden="true"
-        // Under the redesign the sheets' one scrim, which darkens the app in
-        // both themes (the old one lightened it in light).
-        className={cn("fixed inset-0 z-[60] bg-surface-0/80 backdrop-blur-[2px]", SHEET_SCRIM)}
+        className="fixed inset-0 z-[60] bg-[color:var(--dialog-scrim,color-mix(in_oklab,var(--color-surface-0)_80%,transparent))] backdrop-blur-[var(--dialog-scrim-blur,2px)]"
       />
       <div
         data-dialog-layer=""
@@ -476,6 +476,12 @@ export function Dialog({
             // rectangle — never `vh`, which no browser shrinks for a keyboard.
             entrance && "animate-rise",
             "elevation-3 flex max-h-[calc(100%-1.5rem)] w-full max-w-full flex-col overflow-hidden outline-none sm:max-h-full sm:rounded-[var(--radius-panel)]",
+            // Under the redesign the panel takes its own edge and lift, set
+            // through the elevation variables like a popover's.
+            "redesign:[--elevation-3-border:var(--dialog-border)] redesign:[--elevation-3-shadow:var(--dialog-shadow)]",
+            // A plain dialog floats on the dialog surface (the popover's in
+            // light); a settings dialog keeps its rail against its pane.
+            !fill && "redesign:[--elevation-3-surface:var(--dialog-surface,var(--color-surface-2))]",
             // A sheet rounds its top corners; a full-screen phone dialog has
             // no corners to round.
             !phoneFullScreen && "rounded-t-[var(--radius-panel)]",
@@ -494,7 +500,10 @@ export function Dialog({
         >
           <div
             className={cn(
-              "flex items-start justify-between gap-3 border-b border-border px-5 py-4",
+              "flex items-start justify-between gap-3 border-b border-[color:var(--dialog-header-rule,var(--color-border))] px-[var(--dialog-px,1.25rem)] pb-[var(--dialog-header-pb,1rem)] pt-[var(--dialog-header-pt,1rem)]",
+              // A dialog that is only a question (no body): under the
+              // redesign the question and its buttons read as one block.
+              solo && "redesign:pb-[var(--dialog-solo-header-pb)]",
               phoneFullScreen &&
                 "max-sm:items-center max-sm:gap-2 max-sm:px-3 max-sm:pb-2 max-sm:pt-[max(0.5rem,env(safe-area-inset-top))]",
               headerClassName,
@@ -504,7 +513,7 @@ export function Dialog({
               <button
                 type="button"
                 aria-label={t("a11y.closeDialog")}
-                className="grid h-11 w-11 shrink-0 place-items-center rounded-[var(--radius-control)] text-text-secondary transition-colors hover:bg-surface-2 hover:text-text sm:hidden"
+                className="grid h-11 w-11 shrink-0 place-items-center rounded-[var(--radius-control)] text-text-secondary transition-colors hover:bg-surface-2 hover:text-text sm:hidden redesign:rounded-[var(--icon-button-radius)] redesign:text-[color:var(--icon-button-text)] redesign:hover:bg-[color:var(--icon-button-hover)] redesign:hover:text-text redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--icon-button-ring,var(--color-focus-ring))] redesign:focus-visible:ring-offset-[length:var(--icon-button-ring-offset)] redesign:focus-visible:ring-offset-[color:var(--icon-button-ring-offset-color)]"
                 onClick={onClose}
               >
                 <X className="h-5 w-5" />
@@ -521,7 +530,7 @@ export function Dialog({
               {eyebrow && (
                 <p
                   className={cn(
-                    "text-xs uppercase tracking-[0.18em] text-accent",
+                    "text-xs uppercase tracking-[0.18em] text-accent redesign:font-medium redesign:normal-case redesign:tracking-normal redesign:text-[length:var(--dialog-eyebrow-size)]",
                     phoneFullScreen && "max-sm:hidden",
                   )}
                 >
@@ -531,7 +540,7 @@ export function Dialog({
               <h2
                 id={titleId}
                 className={cn(
-                  "min-w-0 font-display text-2xl font-bold",
+                  "min-w-0 font-display text-[length:var(--dialog-title-size,1.5rem)] font-bold leading-[var(--dialog-title-leading,2rem)]",
                   phoneFullScreen && "max-sm:text-[17px] max-sm:leading-6",
                 )}
               >
@@ -547,7 +556,7 @@ export function Dialog({
                 )}
               </h2>
               {description && (
-                <p id={descriptionId} className="mt-1 text-pretty text-sm text-text-tertiary">
+                <p id={descriptionId} className="mt-1 text-pretty text-sm text-text-tertiary redesign:text-text-secondary">
                   {description}
                 </p>
               )}
@@ -576,12 +585,22 @@ export function Dialog({
                 // on a phone: the pseudo-element reaches 4px past the box on every side.
                 className={cn(
                   "relative -my-1 -mr-1 grid h-[var(--control-md)] w-[var(--control-md)] shrink-0 place-items-center rounded-[var(--radius-control)] text-text-tertiary transition-colors hover:bg-surface-2 hover:text-text max-sm:after:absolute max-sm:after:-inset-1 max-sm:after:content-['']",
+                  // Under the redesign, IconButton's ghost: a round hover in
+                  // the text tint, the glyph a step brighter.
+                  // The X's visible stroke on the title's inset: hand back the
+                  // button's inner padding and the glyph's own 5/24 margin.
+                  // (This class replaces `-mr-1`, it does not add to it.)
+                  "redesign:-mr-[calc((var(--control-md)-var(--dialog-close-glyph))/2+var(--dialog-close-glyph)*5/24)]",
+                  "redesign:rounded-[var(--icon-button-radius)] redesign:text-[color:var(--icon-button-text)] redesign:hover:bg-[color:var(--icon-button-hover)] redesign:hover:text-text",
+                  // and its focus ring, where the toggle off keeps the
+                  // browser's own outline.
+                  "redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--icon-button-ring,var(--color-focus-ring))] redesign:focus-visible:ring-offset-[length:var(--icon-button-ring-offset)] redesign:focus-visible:ring-offset-[color:var(--icon-button-ring-offset-color)]",
                   // A full-screen phone dialog closes from the left.
                   phoneFullScreen && "max-sm:hidden",
                 )}
                 onClick={onClose}
               >
-                <X className="h-4 w-4" />
+                <X className="h-4 w-4 redesign:size-[var(--dialog-close-glyph)]" />
               </button>
             )}
           </div>
@@ -599,7 +618,15 @@ export function Dialog({
           </div>
 
           {footer && (
-            <div className="safe-pb flex shrink-0 flex-wrap justify-end gap-2 border-t border-border px-5 py-4">
+            <div
+              className={cn(
+                "safe-pb flex shrink-0 flex-wrap justify-end gap-2 border-t border-[color:var(--dialog-footer-rule,var(--color-border))] px-[var(--dialog-px,1.25rem)] py-4",
+                // `.safe-pb` beats `py-4` at the bottom; under the redesign
+                // its floor matches the header's top inset.
+                "redesign:[--safe-pb-min:var(--dialog-footer-pb)]",
+                solo && "redesign:border-transparent redesign:pt-[var(--dialog-solo-footer-pt)]",
+              )}
+            >
               {footer}
             </div>
           )}
@@ -637,7 +664,7 @@ export function DialogBody({
   children: ReactNode;
 } & Omit<ComponentPropsWithoutRef<"div">, "className" | "children">) {
   return (
-    <div className={cn("px-5 py-4", className)} {...rest}>
+    <div className={cn("px-[var(--dialog-px,1.25rem)] py-4", className)} {...rest}>
       {children}
     </div>
   );

@@ -989,6 +989,27 @@ Verified: typecheck, 10,454 unit tests, bench:tokens, i18n:check, e2e
 app-shell-scroll, forum-shell, channel-layout, call-split-layout,
 forum-pane. Screenshots: ~/pqp-redesign/s-frame/.
 
+### p-dialog
+
+Spec (audit: Dialog in 50 files, ConfirmDialog in 24, PromptDialog in 1;
+14 `role="dialog"` overlays outside it, 4 sheets, 3 native prompts):
+
+1. Job: a modal panel over the app: a title, a body, an optional footer of
+   actions; a full-screen page on a phone when asked.
+2. Redesign: a deeper scrim, a text edge and the deepest lift, no header
+   rule, a softer footer rule, a 24px inset, a 22px title, a sentence-case
+   eyebrow, the close button as IconButton's ghost.
+3. Merges: nothing folds without changing the toggle-off look. The close
+   button keeps its element (IconButton's `lg` has a 20px glyph and another
+   hover) and borrows IconButton's tokens under the redesign.
+4. Left for their surfaces: the 14 overlays outside Dialog, the sheets
+   (`p-sheet`), and the native `window.prompt` and `confirm` (nickname,
+   kick), which belong to `f-profile-popover` and `f-server-settings`.
+5. Round 1: the close button takes IconButton's focus ring and an 18px
+   glyph, the header 20px at the top, a body-less dialog drops its footer
+   rule. Left for `f-server-settings`: its rail divider starts in mid-air
+   now that the header rule is gone.
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss
