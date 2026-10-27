@@ -13,6 +13,9 @@
 export const MUSIC_ROW_REDESIGN =
   "redesign:rounded-[var(--radius-control)] redesign:px-1.5 redesign:hover:bg-[color:var(--menu-row-hover)]";
 
+/** A history row: the row's shape without its hover, since only play again acts. */
+export const MUSIC_ROW_STILL_REDESIGN = "redesign:rounded-[var(--radius-control)] redesign:px-1.5 redesign:hover:bg-transparent";
+
 /** The highlighted search result, on the menu's highlight. */
 export const MUSIC_ROW_HIGHLIGHT_REDESIGN = "redesign:bg-[color:var(--menu-row-hover)]";
 
@@ -30,7 +33,7 @@ export const MUSIC_LABEL_REDESIGN =
 
 /** The panel's title ("Fila · 4"): a step above the group headings, in the title face. */
 export const MUSIC_TITLE_REDESIGN =
-  "redesign:font-display redesign:text-[14px] redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text";
+  "redesign:font-display redesign:text-[15px] redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text";
 
 /** Body text and secondary text in the drawer, which is on the paper tokens with the toggle off. */
 export const MUSIC_TEXT_REDESIGN = "redesign:text-text";

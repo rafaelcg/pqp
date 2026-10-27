@@ -3,6 +3,8 @@ import {
   ExternalLink,
   HeadphoneOff,
   Headphones,
+  ArrowDown,
+  ArrowUp,
   ListStart,
   Infinity as InfinityIcon,
   MoreHorizontal,
@@ -27,7 +29,7 @@ import {
   MUSIC_COVER_REDESIGN,
   MUSIC_ICON_REDESIGN,
   MUSIC_LABEL_REDESIGN,
-  MUSIC_ROW_REDESIGN,
+  MUSIC_ROW_STILL_REDESIGN,
   MUSIC_TEXT_REDESIGN,
 } from "@/components/voice/music-classes";
 import type { MusicRepeat, MusicState, MusicTrack } from "@pqp/shared";
@@ -643,7 +645,7 @@ export function MusicHistoryList({
               className={cn(
                 "group/row flex items-center gap-2 rounded-md px-1 py-1",
                 composer ? "hover:bg-surface-3" : "hover:bg-ink-3",
-                MUSIC_ROW_REDESIGN,
+                MUSIC_ROW_STILL_REDESIGN,
               )}
             >
               {/* The cover under the redesign, so a played song shares the queue's title column. */}
@@ -691,6 +693,12 @@ export function queueRowMenuItems(input: {
   openLabel: string;
   onPlayNext: () => void;
   onRemove: () => void;
+  /**
+   * One step up or down, for a phone where dragging does nothing. Passed
+   * only under the redesign; each is left out at its end of the queue.
+   */
+  onMoveUp?: () => void;
+  onMoveDown?: () => void;
 }): ContextMenuItemDef[] {
   const items: ContextMenuItemDef[] = [];
   if (input.canManage) {
@@ -700,6 +708,12 @@ export function queueRowMenuItems(input: {
       icon: ListStart,
       onSelect: input.onPlayNext,
     });
+    if (input.onMoveUp) {
+      items.push({ id: "move-up", label: input.t("music.moveUp"), icon: ArrowUp, onSelect: input.onMoveUp });
+    }
+    if (input.onMoveDown) {
+      items.push({ id: "move-down", label: input.t("music.moveDown"), icon: ArrowDown, onSelect: input.onMoveDown });
+    }
   }
   if (input.canRemove) {
     items.push({

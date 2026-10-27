@@ -16,6 +16,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { UserAvatar } from "@/components/user/user-avatar";
 import type { VoiceState } from "@/hooks/use-voice";
 import { useTranslation } from "@/lib/i18n";
+import { useRedesign } from "@/lib/redesign";
 import { moveInQueue, moveTrackTo, removeFromQueue } from "@/lib/music-store";
 import { cn } from "@/lib/utils";
 import { queueRowMenuItems } from "@/components/voice/music-extras";
@@ -149,6 +150,7 @@ function QueueRow({
   const openLabel = trackSourceIsSpotify(track) ? t("music.openSource") : t("music.openYoutube");
   const canRemove = canManage || mine;
   const composer = tone === "composer";
+  const redesign = useRedesign();
   const menuItems = useMemo(
     () =>
       queueRowMenuItems({
@@ -159,8 +161,10 @@ function QueueRow({
         openLabel,
         onPlayNext: () => moveTrackTo(track.id, 0),
         onRemove: () => removeFromQueue(track.id),
+        onMoveUp: redesign && index > 0 ? () => moveInQueue(track.id, -1) : undefined,
+        onMoveDown: redesign && !last ? () => moveInQueue(track.id, 1) : undefined,
       }),
-    [t, canManage, canRemove, href, openLabel, track.id],
+    [t, canManage, canRemove, href, openLabel, track.id, redesign, index, last],
   );
 
   const onKeyDown = (event: KeyboardEvent<HTMLLIElement>) => {

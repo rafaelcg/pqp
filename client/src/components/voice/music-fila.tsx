@@ -349,7 +349,7 @@ export function MusicFila({
           </div>
         ) : null}
 
-        <div className="shrink-0 px-2 pt-2">
+        <div className={cn("shrink-0 px-2 pt-2", sheet && "redesign:pr-3.5")}>
           <MusicSearchPicker
             compact
             chrome={sheet ? "default" : "rail"}
