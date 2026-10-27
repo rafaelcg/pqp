@@ -16,9 +16,9 @@ export const MUSIC_ROW_REDESIGN =
 /** The highlighted search result, on the menu's highlight. */
 export const MUSIC_ROW_HIGHLIGHT_REDESIGN = "redesign:bg-[color:var(--menu-row-hover)]";
 
-/** A cover: nested inside the row's corner, on the card's fill while it loads. */
+/** A cover: nested inside the row's corner, on a ghost fill that shows on the well while it loads. */
 export const MUSIC_COVER_REDESIGN =
-  "redesign:rounded-[calc(var(--radius-control)-4px)] redesign:bg-[color:var(--card-bg)]";
+  "redesign:rounded-[calc(var(--radius-control)-4px)] redesign:bg-[color:var(--button-ghost-hover)]";
 
 /** A small icon button in the panel: a round ghost. */
 export const MUSIC_ICON_REDESIGN =

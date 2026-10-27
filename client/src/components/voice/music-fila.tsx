@@ -178,7 +178,7 @@ export function MusicFila({
     <>
       <div
         className={cn(
-          "flex shrink-0 items-center justify-between gap-2 px-3 redesign:pl-3.5",
+          "flex shrink-0 items-center justify-between gap-2 px-3 redesign:px-3.5",
           sheet ? "h-10" : "h-14",
           "border-b",
           rule,
@@ -400,6 +400,8 @@ export function MusicFila({
           className={cn(
             "flex-1 overflow-y-auto px-2 py-2",
             queue.length > 0 ? "min-h-12" : "min-h-0",
+            // The sheet closes its list with the header's seam, so the last row never reads as the player's.
+            sheet && "redesign:border-b redesign:border-[color:var(--card-border)]",
           )}
         >
           {queue.length > 0 && (

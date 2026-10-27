@@ -19,7 +19,7 @@ import {
 import {
   CaretRight as CaretRightGlyph,
   DotsThree,
-  Plus as PlusGlyph,
+  ArrowCounterClockwise as PlayAgainGlyph,
   Shuffle as ShuffleGlyph,
 } from "@phosphor-icons/react";
 import { IconSwap } from "@/components/ui/icon";
@@ -626,11 +626,14 @@ export function MusicHistoryList({
           </span>
         </span>
         <span className="tabular-nums redesign:hidden">{history.length}</span>
-        <CaretRightGlyph
-          weight="bold"
-          aria-hidden
-          className={cn("hidden h-3 w-3 shrink-0 transition-transform redesign:inline-block", open && "rotate-90")}
-        />
+        {/* In a 32px slot, so the caret sits on the row menus' column. */}
+        <span className="hidden w-8 shrink-0 justify-center redesign:flex">
+          <CaretRightGlyph
+            weight="bold"
+            aria-hidden
+            className={cn("h-3 w-3 transition-transform", open && "rotate-90")}
+          />
+        </span>
       </button>
       {open ? (
         <ol className="max-h-40 space-y-0.5 overflow-y-auto">
@@ -669,7 +672,7 @@ export function MusicHistoryList({
                   aria-label={t("music.playAgain")}
                   onClick={() => readdFromHistory(track.id)}
                 >
-                  <IconSwap off={Plus} on={PlusGlyph} kind="symbol" size="sm" offClassName="h-4 w-4" />
+                  <IconSwap off={Plus} on={PlayAgainGlyph} kind="symbol" size="sm" offClassName="h-4 w-4" />
                 </Button>
               </Tooltip>
             </li>

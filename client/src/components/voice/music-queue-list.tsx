@@ -259,7 +259,7 @@ function QueueRow({
             {formatMusicClock(track.durationMs)}
           </span>
         ) : null}
-        <span className="flex w-8 shrink-0 items-center justify-center opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100">
+        <span className="flex w-8 shrink-0 items-center justify-center opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 redesign:[@media(hover:none)]:opacity-100">
           <Menu items={menuItems} align="end" side="bottom">
             <button
               type="button"
