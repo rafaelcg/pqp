@@ -814,9 +814,9 @@ export function UserPanel({
           <Button
             variant="ghost"
             size="icon"
-            // Red alone means Não Perturbe, as its presence dot does; a fill
-            // in this row always means voice is off.
-            className={cn("h-8 w-8 shrink-0 text-danger", PANEL_BUTTON_REDESIGN, "redesign:bg-[color:var(--card-row-hover)] redesign:text-danger")}
+            // Red alone means Não Perturbe, as its presence dot does; a coloured
+            // fill in this row always means voice is off.
+            className={cn("h-8 w-8 shrink-0 text-danger", PANEL_BUTTON_REDESIGN, "redesign:bg-transparent redesign:text-danger redesign:hover:bg-[color:var(--card-row-hover)] redesign:hover:text-danger")}
             onClick={() => onSetStatus("online")}
           >
             <BellOff className="h-4 w-4 redesign:hidden" />
