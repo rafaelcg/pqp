@@ -1034,6 +1034,21 @@ server settings do not use it, so its roles field label in caps moves to
    Phosphor icons through a shared `IconSwap`. Empty and result take the
    `p-empty` shape once that merges.
 
+### f-search
+
+Spec (audit: `search/search-dialog.tsx`, one caller, the sidebar search pill
+and Ctrl K; states: prompt, too short, searching, no match, error, results,
+load more):
+
+1. Job: find a message in this server by words and jump to it.
+2. Redesign: the field is the input's round field inset in the body with a
+   Phosphor glass; a result is a card-cornered row, the highlighted one on
+   the menu's highlight; channel name semibold with a bold `#`; author and
+   snippet in secondary text; the match a soft accent tint.
+3. Merges: nothing. The other search fields (about nine) belong to their
+   surfaces.
+4. Kept: combobox and listbox semantics, arrows and Enter, load more.
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss

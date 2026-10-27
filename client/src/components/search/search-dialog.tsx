@@ -3,7 +3,7 @@ import {
   SEARCH_QUERY_MIN_LENGTH,
   type MessageSearchResult,
 } from "@pqp/shared";
-import { MagnifyingGlass } from "@phosphor-icons/react";
+import { Hash as HashGlyph, MagnifyingGlass } from "@phosphor-icons/react";
 import { Hash, Search } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -185,8 +185,20 @@ export function SearchDialog({
       onClose={onClose}
     >
       <div className="flex h-[70vh] flex-col sm:h-[26rem]">
-        <div className="flex items-center gap-2 border-b border-border px-5 py-3">
-          <Search className="h-4 w-4 shrink-0 text-text-muted" />
+        <div
+          className={cn(
+            "flex items-center gap-2 border-b border-border px-5 py-3",
+            // Under the redesign: the input's round field, inset in the body.
+            "redesign:mx-5 redesign:mt-1 redesign:mb-2 redesign:h-[var(--input-h)] redesign:gap-2.5 redesign:rounded-full redesign:border redesign:border-[color:var(--input-border)] redesign:bg-[color:var(--input-bg)] redesign:px-[var(--input-px)] redesign:py-0 redesign:focus-within:ring-2 redesign:focus-within:ring-offset-2 redesign:focus-within:ring-offset-ring-offset redesign:focus-within:ring-[color:var(--input-ring,var(--color-focus-ring))]",
+          )}
+        >
+          <Search className="h-4 w-4 shrink-0 text-text-muted redesign:hidden" />
+          <Icon
+            icon={MagnifyingGlass}
+            kind="symbol"
+            size="sm"
+            className="hidden text-[color:var(--input-placeholder)] redesign:block"
+          />
           <input
             autoFocus
             value={query}
@@ -199,7 +211,7 @@ export function SearchDialog({
             aria-controls={LISTBOX_ID}
             aria-autocomplete="list"
             aria-activedescendant={activeId ? `search-${activeId}` : undefined}
-            className="min-w-0 flex-1 bg-transparent text-sm text-text placeholder:text-text-muted focus:outline-none"
+            className="min-w-0 flex-1 bg-transparent text-sm text-text placeholder:text-text-muted focus:outline-none redesign:placeholder:text-[color:var(--input-placeholder)]"
           />
           {status === "loading" && (
             <Spinner className="h-4 w-4 shrink-0 animate-spin text-text-muted" />
@@ -230,7 +242,7 @@ export function SearchDialog({
                 id={LISTBOX_ID}
                 role="listbox"
                 aria-label={t("search.results")}
-                className="p-2"
+                className="p-2 redesign:space-y-0.5 redesign:px-3"
               >
                 {results.map((result, index) => (
                   <li key={result.messageId}>
@@ -254,14 +266,22 @@ export function SearchDialog({
                         index === selected
                           ? "border-border-strong bg-surface-2"
                           : "hover:bg-surface-2/60",
+                        // Under the redesign a result is a card-cornered row;
+                        // the highlighted one takes the menu's highlight, so
+                        // the arrows read like a menu's.
+                        "redesign:rounded-[var(--radius-card)] redesign:px-3.5 redesign:py-2.5",
+                        index === selected
+                          ? "redesign:border-transparent redesign:bg-[color:var(--menu-row-hover)]"
+                          : "redesign:hover:bg-[color:var(--card-row-hover)]",
                       )}
                     >
                       <div className="flex items-baseline gap-2 text-xs text-text-muted">
-                        <span className="flex min-w-0 items-center gap-1 font-medium text-text">
-                          <Hash className="h-3 w-3 shrink-0" />
+                        <span className="flex min-w-0 items-center gap-1 font-medium text-text redesign:font-semibold">
+                          <Hash className="h-3 w-3 shrink-0 redesign:hidden" />
+                          <Icon icon={HashGlyph} kind="symbol" size="sm" className="hidden h-3.5 w-3.5 text-text-tertiary redesign:block" />
                           <span className="truncate">{result.channelName}</span>
                         </span>
-                        <span className="truncate">{result.authorName}</span>
+                        <span className="truncate redesign:text-text-secondary">{result.authorName}</span>
                         <time
                           dateTime={result.createdAt}
                           title={formatFullTimestamp(result.createdAt)}
@@ -270,7 +290,7 @@ export function SearchDialog({
                           {formatDayLabel(result.createdAt)}
                         </time>
                       </div>
-                      <p className="mt-1 line-clamp-2 text-sm text-text-muted">
+                      <p className="mt-1 line-clamp-2 text-sm text-text-muted redesign:text-text-secondary">
                         <Snippet snippet={result.snippet} />
                       </p>
                     </button>
@@ -309,7 +329,7 @@ function Snippet({ snippet }: { snippet: string }) {
         segment.match ? (
           <mark
             key={index}
-            className="rounded-sm bg-accent/25 px-0.5 font-medium text-text"
+            className="rounded-sm bg-accent/25 px-0.5 font-medium text-text redesign:rounded-[var(--radius-tick)] redesign:bg-[color:color-mix(in_oklab,var(--color-accent)_30%,transparent)] redesign:font-semibold"
           >
             {segment.text}
           </mark>
