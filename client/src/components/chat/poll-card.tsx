@@ -96,8 +96,8 @@ export function PollCard({ poll, canManage = false, onVote, onClose }: PollCardP
                     leading
                       ? "bg-[color-mix(in_oklab,var(--color-signal)_36%,var(--color-surface-3))] redesign:bg-[color:color-mix(in_oklab,var(--color-accent)_26%,transparent)]"
                       : "bg-[color-mix(in_oklab,var(--color-signal)_20%,var(--color-surface-3))] redesign:bg-[color:color-mix(in_oklab,var(--color-accent)_16%,transparent)]",
-                    // Your own vote outweighs the leader's fill, so "mine" reads before "winning".
-                    !leading && option.voted && "redesign:bg-[color:color-mix(in_oklab,var(--color-accent)_22%,transparent)]",
+                    // Your own vote reads by its ring and check; its fill sits a clear step under the leader's.
+                    !leading && option.voted && "redesign:bg-[color:color-mix(in_oklab,var(--color-accent)_18%,transparent)]",
                   )}
                   style={{ width: `${fill}%` }}
                 />
@@ -169,13 +169,13 @@ function VoterStack({ voters, names }: { voters: PollVoter[]; names: string }) {
           key={voter.userId}
           name={voter.displayName}
           avatarUrl={voter.avatarUrl}
-          className={cn("h-5 w-5 ring-2 ring-surface-1", VOTER_RING_REDESIGN)}
-          fallbackClassName="bg-surface-3 text-[9px] text-paper"
+          className={cn("h-5 w-5 ring-2 ring-surface-1 redesign:h-[22px] redesign:w-[22px]", VOTER_RING_REDESIGN)}
+          fallbackClassName="bg-surface-3 text-[9px] text-paper redesign:text-[10px] redesign:text-text"
           rounded="full"
         />
       ))}
       {overflow > 0 && (
-        <span className={cn("relative flex h-5 min-w-5 items-center justify-center rounded-full bg-surface-3 px-1 text-[9px] font-semibold text-paper ring-2 ring-surface-1 redesign:text-text", VOTER_RING_REDESIGN)}>
+        <span className={cn("relative flex h-5 min-w-5 items-center justify-center rounded-full bg-surface-3 px-1 text-[9px] font-semibold text-paper ring-2 ring-surface-1 redesign:h-[22px] redesign:min-w-[22px] redesign:text-[10px] redesign:text-text", VOTER_RING_REDESIGN)}>
           +{overflow}
         </span>
       )}

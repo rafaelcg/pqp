@@ -772,7 +772,7 @@ const CONTENT_MARKDOWN = [
 
 const CONTENT_MESSAGES_A: ChatMessage[] = [
   contentMessage(1, ROW_RAFA, "Rafa", CONTENT_MARKDOWN),
-  contentMessage(2, ROW_BIA, "Bia", "@lia trago sim. print da última partida e o chaveamento:", {
+  contentMessage(2, ROW_BIA, "Bia", "@lia trago sim, e o @rafa leva o chaveamento:", {
     attachments: [
       {
         id: "00000000-0000-4000-8000-000000000601",

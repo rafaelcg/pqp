@@ -3189,6 +3189,8 @@ h2,
 }
 
 :root[data-redesign] .markdown-body pre {
+  /* The cards' width, so a code block stops on their right edge. */
+  max-width: 28rem;
   background: var(--card-bg);
   border-color: var(--card-border);
   border-radius: var(--radius-control);

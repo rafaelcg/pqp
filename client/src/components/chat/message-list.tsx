@@ -4919,13 +4919,15 @@ function WebhookEmbedCard({ embed }: { embed: WebhookEmbed }) {
         // sender's colour, when it chose one, is an inner bar below, so it never
         // thins into a crescent along the rounded corners.
         "redesign:relative redesign:![border-left-width:1px] redesign:![border-left-color:var(--card-border)]",
+        // With a colour, the content clears the bar by 10px.
+        accent && "redesign:pl-[calc(var(--content-card-pad)+3px+0.625rem)]",
       )}
       style={{ borderLeftWidth: "3px", borderLeftColor: accent ?? "var(--color-signal)" }}
     >
       {accent && (
         <span
           aria-hidden
-          className="absolute bottom-[var(--content-card-pad)] left-1.5 top-[var(--content-card-pad)] hidden w-[3px] rounded-full redesign:block"
+          className="absolute bottom-[var(--content-card-pad)] left-[var(--content-card-pad)] top-[var(--content-card-pad)] hidden w-[3px] rounded-full redesign:block"
           style={{ background: accent }}
         />
       )}
@@ -4951,7 +4953,7 @@ function WebhookEmbedCard({ embed }: { embed: WebhookEmbed }) {
               key={index}
               className={field.inline ? "" : "col-span-2"}
             >
-              <p className={cn("text-[11px] font-semibold uppercase tracking-wide text-paper-muted", CONTENT_KICKER_REDESIGN, "redesign:font-semibold redesign:text-text-secondary")}>
+              <p className={cn("text-[11px] font-semibold uppercase tracking-wide text-paper-muted", CONTENT_KICKER_REDESIGN, "redesign:font-medium redesign:text-text-tertiary")}>
                 {field.name}
               </p>
               <p className="text-xs text-paper redesign:text-[0.8125rem] redesign:text-text">{field.value}</p>
