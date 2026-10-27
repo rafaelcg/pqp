@@ -42,6 +42,9 @@ import { ServerRail } from "@/components/layout/server-rail";
 import { LivePartyBlock } from "@/components/watch-party/live-party-block";
 import { ServerIcon } from "@/components/layout/server-identity";
 import type { LatestCard, LatestPreview } from "@/lib/community-home/latest";
+import { CornerCard } from "@/components/layout/corner-card";
+import { FirstRunCard } from "@/components/onboarding/first-run-card";
+import { Button } from "@/components/ui/button";
 import { setUpdateWaiting } from "@/lib/update-prompt-state";
 
 /**
@@ -188,7 +191,7 @@ function SheetChannelRow({
       selected={selected}
       unread={{ count: 0, mentions: 0 }}
       canManage
-      icon={<ChannelIcon channel={channel} className={channelRowIconClass(channel, selected)} />}
+      icon={<ChannelIcon channel={channel} className={channelRowIconClass(channel, selected, rest.connected)} />}
       isDragging={false}
       isDragOver={false}
       onSelect={noop}
@@ -328,6 +331,19 @@ function ChannelRowsBlock() {
             channel={textChannel("cine2", "cineclube", { type: "watch_party", topic: "Clássicos de domingo" })}
             liveState={{ live: false, presenterPeerId: null, viewerCount: 0, startedAt: null } as never}
           />
+          {/* The party you are watching from, not open: the success fill. */}
+          <SheetChannelRow
+            channel={textChannel("cine3", "sessão da tarde", { type: "watch_party", topic: "Com a turma" })}
+            liveState={{ live: true, presenterPeerId: "p2", viewerCount: 5, startedAt: null } as never}
+            connected
+          />
+          {/* Connected with something unread: the pip takes the dot's place. */}
+          <SheetChannelRow
+            channel={textChannel("cine4", "maratona", { type: "watch_party", topic: "Trilogia inteira" })}
+            liveState={{ live: true, presenterPeerId: "p3", viewerCount: 3, startedAt: null } as never}
+            unread={{ count: 2, mentions: 0 }}
+            connected
+          />
         </div>
       </SidePane>
     </div>
@@ -337,7 +353,7 @@ function ChannelRowsBlock() {
 /** One icons-only sidebar: the side pane at the strip's 72px. */
 function StripPane({ children }: { children: ReactNode }) {
   return (
-    <div className="flex w-[72px] flex-col items-center gap-1 rounded-lg bg-surface-1 px-2 py-3 redesign:rounded-[var(--radius-pane)] redesign:bg-pane-side">
+    <div className="flex w-[72px] flex-col items-center gap-1 rounded-lg bg-surface-1 px-2 py-3 redesign:gap-1.5 redesign:rounded-[var(--radius-pane)] redesign:bg-pane-side">
       {children}
     </div>
   );
@@ -347,8 +363,10 @@ function StripGroup({ first = false, children }: { first?: boolean; children: Re
   return (
     <div
       className={cn(
-        "flex w-full flex-col items-center gap-1",
+        "flex w-full flex-col items-center gap-1 redesign:gap-1.5",
         !first && "mt-1 border-t border-ink-4/50 pt-2 redesign:border-[color:var(--card-border)]",
+        // Under a Baú the first group takes the rule too, as in the app.
+        first && "redesign:mt-1 redesign:border-t redesign:pt-2 redesign:border-[color:var(--card-border)]",
       )}
     >
       {children}
@@ -414,6 +432,10 @@ function SidebarStripBlock() {
           {tile(textChannel("ajuda", "ajuda", { type: "forum" }))}
           {tile(textChannel("clipes", "clipes"))}
         </StripGroup>
+        <StripGroup>
+          {/* In the call and viewing it: the solid green edge. */}
+          {tile(textChannel("lobby2", "Lobby", { type: "voice" }), { connected: true, selected: true, occupants: 3, onJoinVoice: noop })}
+        </StripGroup>
       </StripPane>
     </div>
   );
@@ -445,6 +467,10 @@ function VoiceStripBlock() {
           channel; the 72px strip. */}
       <FooterPane>
         <VoiceStatusBar {...base} status="connected" isCameraOn />
+      </FooterPane>
+      {/* Sharing the screen: the share pill pressed, its "on air" glyph. */}
+      <FooterPane>
+        <VoiceStatusBar {...base} status="connected" isSharingScreen />
       </FooterPane>
       <FooterPane>
         <VoiceStatusBar {...base} status="joining" />
@@ -517,6 +543,13 @@ function UserPanelBlock() {
       </FooterPane>
       <FooterPane>
         <UserPanel {...base} inVoice serverMuted />
+      </FooterPane>
+      {/* Listen only (audience mode): the mic locked, not unavailable. */}
+      <FooterPane>
+        <UserPanel {...base} inVoice canSpeak={false} />
+      </FooterPane>
+      <FooterPane>
+        <UserPanel {...base} inVoice canSpeak={false} isMuted />
       </FooterPane>
       <FooterPane>
         <UserPanel {...base} manualStatus="dnd" effectiveStatus="dnd" />
@@ -591,6 +624,40 @@ function BannersBlock() {
         />
         <ConnectionBanner status="reconnecting" refusedRepeatedly={false} onRetry={noop} onCheck={noop} onSignInAgain={noop} />
       </MainPane>
+      {/* The harder states: a watch-now join that failed, and a session
+          with no reminder set (the ghost "Lembrar"). */}
+      <MainPane>
+        <WatchNowBanner
+          now={NOW}
+          streams={[
+            { key: "c", channelId: "c3", kind: "voice", place: "Lobby", sharerUserId: "u1", sharerName: "Rafa", startedAt: NOW - 4 * 60_000, watching: 2, inRoom: false },
+          ]}
+          failure="A transmissão terminou."
+          onWatch={noop}
+          onDismiss={noop}
+        />
+        <UpcomingSessionCard
+          session={{
+            id: "00000000-0000-4000-8000-000000000211",
+            channelId: "00000000-0000-4000-8000-000000000212",
+            serverId: null,
+            title: "Noite do Mario Kart",
+            description: null,
+            coverImageUrl: null,
+            startsAt: new Date(NOW + 26 * 3_600_000).toISOString(),
+            status: "scheduled",
+            createdBy: "00000000-0000-4000-8000-000000000203",
+            createdAt: new Date(NOW).toISOString(),
+            updatedAt: new Date(NOW).toISOString(),
+            reminding: false,
+          }}
+          now={new Date(NOW)}
+          canManage={false}
+          onToggleReminder={asyncNoop}
+          onCancel={asyncNoop}
+          onEdit={noop}
+        />
+      </MainPane>
     </div>
   );
 }
@@ -621,7 +688,15 @@ const ROW_MESSAGES: ChatMessage[] = [
   rowMessage(1, ROW_RAFA, "Rafa", "alguém on hoje à noite pra fechar aquela campanha?"),
   rowMessage(2, ROW_RAFA, "Rafa", "trouxe o mapa novo, ficou insano", { editedAt: new Date(NOW - 15 * 60_000).toISOString() }),
   rowMessage(3, ROW_RAFA, "Rafa", "@lia cê vem?"),
+  // A second mention right under it, so the joined corners show.
+  rowMessage(9, ROW_RAFA, "Rafa", "@lia traz o controle extra", {
+    createdAt: new Date(NOW - 16.5 * 60_000).toISOString(),
+  }),
   rowMessage(4, ROW_ME, "Lia", "vou sim, levo o lanche dessa vez"),
+  // A mention that starts a group, so the avatar and its dot sit on the fill.
+  rowMessage(10, ROW_BIA, "Bia", "@lia guarda um lugar pra mim", {
+    createdAt: new Date(NOW - 15.5 * 60_000).toISOString(),
+  }),
   rowMessage(5, ROW_BIA, "Bia", "as regras do campeonato tão aqui", {
     pinnedAt: new Date(NOW - 5 * 60_000).toISOString(),
   }),
@@ -639,8 +714,8 @@ const ROW_AUTHORS = new Map<string, MessageAuthorInfo>([
 function MessageRowsBlock() {
   return (
     <div data-testid="qa-shell-message-rows" className="flex flex-col gap-6">
-      {/* Rafa: a group of three (one edited, the last names you). You. Bia
-          with a pinned line. A webhook. Then yours sending, and one that
+      {/* Rafa: a group of four (one edited, the last two name you). You. Bia
+          naming you, then a pinned line. A webhook. Then yours sending, and one that
           failed with Retry and Discard. */}
       <MainPane>
         <div className="flex h-[620px] min-h-0 flex-col">
@@ -845,6 +920,15 @@ function useUpdateWaitingFixture() {
   }, []);
 }
 
+const NEW_USER = {
+  id: "u-new",
+  username: "lia",
+  discriminator: "0369",
+  tag: "lia#0369",
+  displayName: "Lia",
+  avatarUrl: null,
+} as unknown as Parameters<typeof FirstRunCard>[0]["user"];
+
 export function ShellSheet() {
   useUpdateWaitingFixture();
   return (
@@ -909,6 +993,20 @@ export function ShellSheet() {
             onCompose={noop}
           />
         </SidePane>
+        {/* The Baú open while a new post still shows as the card. */}
+        <SidePane>
+          <CommunityHomePreview
+            latest={BAU_NEW}
+            serverName="Turma do Fliperama"
+            serverHueSeed="fliperama"
+            selected
+            canPost={false}
+            face={<ServerIcon name="Turma do Fliperama" iconUrl={null} />}
+            onOpen={noop}
+            onOpenPost={noop}
+            onCompose={noop}
+          />
+        </SidePane>
       </div>
 
       {/* Category headers. Left, the classic list: Texto open with the
@@ -924,7 +1022,10 @@ export function ShellSheet() {
           <ChannelSection label="Voz" fold={fold(true, 2, true)} canManage={false} onAdd={noop} onAddPrivate={noop}>
             {null}
           </ChannelSection>
-          <ChannelSection label="Texto" fold={fold(false, 3)} canManage={false} onAdd={noop} onAddPrivate={noop} isDragOver>
+          <ChannelSection label="Texto" fold={fold(false, 3)} canManage onAdd={noop} onAddPrivate={noop} isDragOver>
+            {null}
+          </ChannelSection>
+          <ChannelSection label="Voz" fold={fold(true, 2)} canManage onAdd={noop} onAddPrivate={noop} isDragOver>
             {null}
           </ChannelSection>
           <CategoryHeader
@@ -953,6 +1054,19 @@ export function ShellSheet() {
             onDrop={noop}
             {...fold(true, 6, true)}
           />
+          <CategoryHeader
+            category={category("c3", "Campeonatos de fim de semana")}
+            controlsId="qa-category-3"
+            canManage
+            onRename={noop}
+            onDelete={noop}
+            isDragOver
+            onDragStart={noop}
+            onDragEnd={noop}
+            onDragOverRow={noop}
+            onDrop={noop}
+            {...fold(false, 2)}
+          />
         </SidePane>
         <SidePane>
           <MixedCategoryHeader
@@ -975,6 +1089,13 @@ export function ShellSheet() {
             menuItems={[]}
             drag={drag("into")}
             {...fold(false, 2)}
+          />
+          <MixedCategoryHeader
+            category={category("m4", "Campeonatos de fim de semana")}
+            addItems={ADD_ITEMS}
+            menuItems={[]}
+            drag={drag("into")}
+            {...fold(false, 3)}
           />
         </SidePane>
       </div>
@@ -1052,6 +1173,59 @@ export function ShellSheet() {
             onOpenCommunities={noop}
           />
         </RailFrame>
+      </div>
+      {/* Onboarding: the one corner card shell, inline as it sits beside the
+          control it explains, plain and with a hero; and the first-run card
+          for a new account with nothing done yet. */}
+      <div data-testid="qa-onboarding" className="flex max-w-4xl items-start gap-6 p-4">
+        <div className="flex w-[17rem] flex-col gap-4">
+          <CornerCard
+            open
+            layout="inline"
+            onClose={noop}
+            label="Dica"
+            dismissLabel="Fechar"
+            title="Atalhos do teclado"
+            body="Aperta Ctrl K pra buscar qualquer mensagem, e Ctrl / pra ver todos os atalhos."
+            footer={<Button size="sm" data-cta className="cta-lift rounded-full px-4" onClick={noop}>Entendi</Button>}
+          />
+          <CornerCard
+            open
+            layout="inline"
+            onClose={noop}
+            label="Novidade"
+            dismissLabel="Fechar"
+            hero={<div className="h-24 bg-[linear-gradient(135deg,var(--color-accent-soft),var(--color-surface-2))]" />}
+            title="Watch party chegou"
+            body="Assiste filme junto, com a voz da galera por cima."
+            footer={<Button size="sm" variant="secondary" onClick={noop}>Ver como</Button>}
+          />
+        </div>
+        <div className="min-w-0 flex-1">
+          <FirstRunCard
+            user={NEW_USER}
+            serverCount={0}
+            friendCount={0}
+            onCreateServer={noop}
+            onJoinServer={noop}
+            onAddFriend={noop}
+            onPickAvatar={noop}
+            onDismiss={noop}
+          />
+          {/* Two steps done: ticked, dimmed and kept in place. */}
+          <div className="mt-4">
+            <FirstRunCard
+              user={{ ...NEW_USER, avatarUrl: "https://api.dicebear.com/9.x/shapes/png?seed=lia" }}
+              serverCount={1}
+              friendCount={0}
+              onCreateServer={noop}
+              onJoinServer={noop}
+              onAddFriend={noop}
+              onPickAvatar={noop}
+              onDismiss={noop}
+            />
+          </div>
+        </div>
       </div>
     </div>
   );

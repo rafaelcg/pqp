@@ -47,9 +47,13 @@ const EDGE = {
   bottom: "border-t redesign:mb-2",
 } as const;
 
-/** The card alone: inset, corner, the tone's fill and edge, the text colour. */
+/**
+ * The card alone: inset, corner, the tone's fill and edge, the text colour.
+ * A button inside rings its focus off the card's own fill, and the primary
+ * button drops its glow, so every action on a card focuses and sits alike.
+ */
 const BANNER_CARD_REDESIGN =
-  "redesign:mx-2 redesign:sm:mx-4 redesign:rounded-[var(--banner-radius)] redesign:border redesign:border-[color:color-mix(in_oklab,var(--banner-tone)_var(--banner-edge),transparent)] redesign:bg-[color:var(--banner-fill)] redesign:px-3 redesign:py-2 redesign:text-start redesign:text-sm redesign:text-text";
+  "redesign:[--color-ring-offset:var(--banner-fill)] redesign:[--button-primary-shadow:0_0_transparent] redesign:mx-2 redesign:sm:mx-4 redesign:rounded-[var(--banner-radius)] redesign:border redesign:border-[color:color-mix(in_oklab,var(--banner-tone)_var(--banner-edge),transparent)] redesign:bg-[color:var(--banner-fill)] redesign:px-3 redesign:py-2 redesign:text-start redesign:text-sm redesign:text-text";
 
 export const BANNER_REDESIGN = `redesign:flex redesign:flex-wrap redesign:items-start redesign:justify-start redesign:gap-x-3 redesign:gap-y-1.5 ${BANNER_CARD_REDESIGN}`;
 
@@ -72,6 +76,20 @@ export function bannerSurfaceRedesign(
     edge === "top" ? "redesign:mt-2" : "redesign:mb-2",
   );
 }
+
+/**
+ * A strip's second action ("Entendi", "Agora não", share): the tone's ink on
+ * a quiet tint of it, never the generic secondary grey on a tone.
+ */
+export const BANNER_QUIET_REDESIGN =
+  "redesign:border-0 redesign:bg-[color:color-mix(in_oklab,var(--banner-ink)_14%,transparent)] redesign:text-[color:var(--banner-ink)] redesign:hover:bg-[color:color-mix(in_oklab,var(--banner-ink)_22%,transparent)] redesign:hover:text-[color:var(--banner-ink)]";
+
+/**
+ * The disc a strip leads with: a tint of the tone's ink, so the main action
+ * stays the one loud mark on the card.
+ */
+export const BANNER_DISC_REDESIGN =
+  "redesign:bg-[color:color-mix(in_oklab,var(--banner-ink)_18%,transparent)] redesign:text-[color:var(--banner-ink)]";
 
 /** A round dismiss in a strip's corner, in the tone's ink. */
 export const BANNER_DISMISS_REDESIGN =
@@ -121,7 +139,8 @@ export function Banner({
             icon={icon}
             kind={iconKind}
             size="sm"
-            className="hidden shrink-0 redesign:mt-1.5 redesign:block redesign:text-[color:var(--banner-ink)]"
+            // A 32px slot, the width of the strips' discs, so the text shares their column.
+            className="hidden shrink-0 redesign:mt-1.5 redesign:block redesign:w-8 redesign:text-[color:var(--banner-ink)]"
           />
         ) : null}
         {children}
@@ -175,14 +194,14 @@ const FILL_INK =
   "redesign:border-0 redesign:bg-[color:var(--banner-ink)] redesign:text-[color:var(--banner-fill)] redesign:hover:bg-[color:color-mix(in_oklab,var(--banner-ink)_88%,var(--color-text))]";
 
 const ACTION_REDESIGN =
-  "redesign:ml-auto redesign:inline-flex redesign:h-7 redesign:shrink-0 redesign:items-center redesign:rounded-[var(--radius-pill)] redesign:px-3 redesign:text-xs redesign:font-semibold redesign:no-underline redesign:transition-colors redesign:duration-[var(--duration-fast)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--color-focus-ring)] redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-[color:var(--banner-fill)]";
+  "redesign:ml-auto redesign:inline-flex redesign:h-[var(--control-sm)] redesign:shrink-0 redesign:items-center redesign:rounded-[var(--radius-pill)] redesign:px-3.5 redesign:text-[length:var(--button-text-sm)] redesign:font-semibold redesign:no-underline redesign:transition-colors redesign:duration-[var(--duration-fast)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--color-focus-ring)] redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-[color:var(--banner-fill)]";
 
 const ACTION = {
   /** The main way out: "Tentar agora", "Entrar de novo". */
   fill: `rounded-[var(--radius-control)] px-2 py-0.5 font-semibold ${FILL_INK}`,
   /** A second action beside it: "Verificar". */
   quiet:
-    "rounded-[var(--radius-control)] px-2 py-0.5 font-semibold underline-offset-2 hover:underline redesign:text-[color:var(--banner-ink)] redesign:hover:bg-[color:color-mix(in_oklab,var(--banner-ink)_16%,transparent)]",
+    "rounded-[var(--radius-control)] px-2 py-0.5 font-semibold underline-offset-2 hover:underline redesign:bg-[color:color-mix(in_oklab,var(--banner-ink)_14%,transparent)] redesign:text-[color:var(--banner-ink)] redesign:hover:bg-[color:color-mix(in_oklab,var(--banner-ink)_22%,transparent)] redesign:hover:no-underline",
   /** Dismiss, or the one plain action a strip offers ("Ainda tô aqui"). */
   link: "shrink-0 text-xs underline underline-offset-2 redesign:text-[color:var(--banner-ink)] redesign:hover:bg-[color:color-mix(in_oklab,var(--banner-ink)_16%,transparent)]",
 } as const;

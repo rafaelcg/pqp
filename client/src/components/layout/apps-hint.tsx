@@ -46,7 +46,7 @@ export function AppsHint({
       title={t("appsHint.title")}
       body={t("appsHint.body")}
       footer={
-        <Button size="sm" className="cta-lift rounded-full px-4" onClick={close}>
+        <Button size="sm" data-cta className="cta-lift rounded-full px-4" onClick={close}>
           {t("appsHint.cta")}
         </Button>
       }

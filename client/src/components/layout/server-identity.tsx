@@ -237,7 +237,7 @@ export function ServerBannerStrip({
       data-server-banner-strip=""
       // Under the redesign an inset card inside the pane, so its corners
       // follow the pane's instead of poking past them.
-      className="h-18 w-full shrink-0 overflow-hidden border-b border-border bg-surface-2 redesign:mx-2 redesign:mt-2 redesign:w-auto redesign:rounded-[var(--sidebar-banner-radius)] redesign:border-b-0"
+      className="h-18 w-full shrink-0 overflow-hidden border-b border-border bg-surface-2 redesign:mx-3 redesign:mt-2 redesign:w-auto redesign:rounded-[var(--sidebar-banner-radius)] redesign:border-b-0"
     >
       <img
         src={resolved}

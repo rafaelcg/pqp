@@ -38,6 +38,7 @@ import { useTranslation } from "@/lib/i18n";
 import type { MentionCandidate } from "@/lib/mention-autocomplete";
 import { cn, formatDayLabel } from "@/lib/utils";
 import { PANE_INSET_REDESIGN, PANE_SIDE_REDESIGN } from "@/components/ui/pane";
+import { MD_UP_QUERY } from "@/lib/breakpoints";
 
 /**
  * The thread's own conversation: a side panel on desktop, the whole viewport
@@ -197,7 +198,7 @@ export function ThreadPanel({
   const touchStart = useRef<{ x: number; y: number } | null>(null);
   const isDockedPanel = () =>
     typeof window !== "undefined" &&
-    window.matchMedia("(min-width: 768px)").matches;
+    window.matchMedia(MD_UP_QUERY).matches;
 
   /**
    * What the quote above the thread says. A message with no text is not a

@@ -867,14 +867,14 @@ function HeaderGlyph({ off, on, kind = "object" }: { off: ReactNode; on: Phospho
   return (
     <>
       <span className="contents redesign:hidden">{off}</span>
-      <Icon icon={on} kind={kind} size="sm" className="hidden redesign:block" />
+      <Icon icon={on} kind={kind} size="sm" className="hidden h-[1.125rem] w-[1.125rem] redesign:block" />
     </>
   );
 }
 
 /** A green "join the call" pill in a header. */
 const HEADER_JOIN_REDESIGN =
-  "redesign:h-8 redesign:rounded-full redesign:px-3.5 redesign:py-0 redesign:text-[13px] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-pane-main";
+  "redesign:mr-1.5 redesign:h-8 redesign:rounded-full redesign:px-3.5 redesign:py-0 redesign:text-[13px] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-pane-main";
 
 /**
  * A reconnect's message refetch (`transport.onReady`, `reconnected` branch)
@@ -11931,7 +11931,7 @@ function MainAppContent({
                   setWatchPartyHistoryChannelId(selectedChannel.id)
                 }
               >
-                <HeaderGlyph off={<History className="h-4 w-4" />} on={HeaderHistoryIcon} kind="symbol" />
+                <HeaderGlyph off={<History className="h-4 w-4" />} on={HeaderHistoryIcon} />
               </button>
             </Tooltip>
           )}
@@ -11951,7 +11951,7 @@ function MainAppContent({
                   })
                 }
               >
-                <HeaderGlyph off={<Settings className="h-4 w-4" />} on={HeaderSettingsIcon} kind="symbol" />
+                <HeaderGlyph off={<Settings className="h-4 w-4" />} on={HeaderSettingsIcon} />
               </button>
             </Tooltip>
           )}
@@ -12058,8 +12058,8 @@ function MainAppContent({
             on `ChannelList`). */}
         {/* Under the redesign, from `md` up, the topic sits beside the name
             after a rule, as in the mockup; on a phone it stays under it. */}
-        <div className="min-w-0 redesign:md:flex redesign:md:items-center redesign:md:gap-3">
-          <p className={cn("flex items-center gap-1.5 truncate font-display text-base font-bold", PANE_HEADER_TITLE_REDESIGN, "redesign:shrink-0 redesign:max-w-[60%]")}>
+        <div className="min-w-0 redesign:flex-1 redesign:md:flex redesign:md:items-center redesign:md:gap-3">
+          <p className={cn("flex items-center gap-1.5 truncate font-display text-base font-bold", PANE_HEADER_TITLE_REDESIGN, "redesign:gap-2 redesign:md:shrink-0 redesign:md:max-w-[60%]")}>
             {selectedChannel.imageUrl ? (
               <ChannelIcon channel={selectedChannel} className="h-4 w-4" />
             ) : (
@@ -12078,7 +12078,16 @@ function MainAppContent({
             selectedChannel.kind === "server" &&
             selectedChannel.type === "text" &&
             !selectedChannel.isPrivate ? (
-              <span className="redesign:font-medium redesign:text-text-tertiary">#</span>
+              <span className="redesign:text-[18px] redesign:leading-none redesign:font-normal redesign:text-text-tertiary">#</span>
+            ) : !selectedChannel.imageUrl &&
+              selectedChannel.kind === "server" &&
+              isVoiceRoomChannelType(selectedChannel.type) &&
+              !selectedChannel.isPrivate ? (
+              // Under the redesign a voice room's chat carries the room's
+              // glyph, as `#` marks a text channel.
+              <span className="hidden text-text-tertiary redesign:inline-flex">
+                <ChannelIcon channel={selectedChannel} className="h-4 w-4" />
+              </span>
             ) : (
               ""
             )}
@@ -12470,7 +12479,7 @@ function MainAppContent({
                     title={t("chrome.moreActions")}
                     data-channel-header-more=""
                   >
-                    <HeaderGlyph off={<MoreHorizontal className="h-4 w-4" aria-hidden />} on={HeaderMoreIcon} kind="symbol" />
+                    <HeaderGlyph off={<MoreHorizontal className="h-4 w-4" aria-hidden />} on={HeaderMoreIcon} />
                   </button>
                 </ActionMenu>
               ) : undefined
@@ -14278,7 +14287,7 @@ function MainAppContent({
                           })
                         }
                       >
-                        <Settings className="h-4 w-4" />
+                        <HeaderGlyph off={<Settings className="h-4 w-4" />} on={HeaderSettingsIcon} />
                       </button>
                     </Tooltip>
                   )}
@@ -14291,10 +14300,11 @@ function MainAppContent({
                         className={cn(
                           HEADER_ACTION_TILE,
                           memberSidebar.open && "text-paper",
+                          memberSidebar.open && PANE_HEADER_ACTION_ON_REDESIGN,
                         )}
                         onClick={() => memberSidebar.toggle()}
                       >
-                        <Users className="h-4 w-4" />
+                        <HeaderGlyph off={<Users className="h-4 w-4" />} on={HeaderMembersIcon} />
                       </button>
                     </Tooltip>
                   )}

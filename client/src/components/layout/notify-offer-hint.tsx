@@ -77,7 +77,7 @@ export function NotifyOfferHint({
         <div className="flex items-center gap-2">
           <Button
             size="sm"
-            className="cta-lift rounded-full px-4"
+            data-cta className="cta-lift rounded-full px-4"
             disabled={busy}
             onClick={() => void turnOn()}
           >
