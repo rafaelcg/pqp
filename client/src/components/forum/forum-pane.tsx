@@ -1217,14 +1217,14 @@ export function ForumPane({
       >
         <IconSwap off={MenuIcon} on={ListIcon} kind="symbol" offClassName="h-5 w-5" />
       </button>
-      <div className="flex min-w-0 flex-1 items-center gap-2">
+      <div className="flex min-w-0 flex-1 items-center gap-2 redesign:gap-3">
         {compactList ? (
           <>
             <span className={cn("forum-display truncate text-lg font-bold text-text", PANE_HEADER_TITLE_REDESIGN)}>
               {channel.name}
             </span>
             {countsLine && (
-              <span className={cn("truncate text-xs tabular-nums text-text-secondary max-lg:hidden", PANE_HEADER_DETAIL_REDESIGN)}>
+              <span className={cn("truncate text-xs tabular-nums text-text-secondary max-lg:hidden", PANE_HEADER_DETAIL_REDESIGN, "redesign:border-l redesign:border-[color:var(--pane-header-rule)] redesign:pl-3")}>
                 {countsLine}
               </span>
             )}

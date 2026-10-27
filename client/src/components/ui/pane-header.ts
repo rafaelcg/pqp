@@ -19,7 +19,7 @@ export const PANE_HEADER_REDESIGN =
 
 /** The title: the display face at 16px in the text colour. */
 export const PANE_HEADER_TITLE_REDESIGN =
-  "redesign:text-[length:var(--pane-header-title-size)] redesign:text-text";
+  "redesign:text-[length:var(--pane-bar-title-size)] redesign:text-text";
 
 /** The topic, the count or the members line: 13px secondary text. */
 export const PANE_HEADER_DETAIL_REDESIGN = "redesign:text-[13px] redesign:text-text-secondary";
@@ -29,7 +29,7 @@ export const PANE_HEADER_DETAIL_REDESIGN = "redesign:text-[13px] redesign:text-t
  * tile in the row's icon colour, a tint of the text on hover.
  */
 export const PANE_HEADER_ACTION_REDESIGN =
-  "redesign:h-9 redesign:w-9 redesign:max-sm:h-11 redesign:max-sm:w-11 redesign:rounded-full redesign:text-[color:var(--list-row-icon)] redesign:hover:bg-[color:var(--list-row-hover)] redesign:hover:text-text redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent";
+  "redesign:h-9 redesign:w-9 redesign:max-sm:h-11 redesign:max-sm:w-11 redesign:rounded-full redesign:text-[color:var(--list-row-icon)] redesign:hover:bg-[color:var(--list-row-hover)] redesign:hover:text-text redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-pane-main";
 
 /**
  * The same tile while its panel is open (the member list): the selected

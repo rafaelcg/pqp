@@ -874,7 +874,7 @@ function HeaderGlyph({ off, on, kind = "object" }: { off: ReactNode; on: Phospho
 
 /** A green "join the call" pill in a header. */
 const HEADER_JOIN_REDESIGN =
-  "redesign:h-8 redesign:rounded-full redesign:px-3.5 redesign:py-0 redesign:text-[13px] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-pane-main";
+  "redesign:mr-1.5 redesign:h-8 redesign:rounded-full redesign:px-3.5 redesign:py-0 redesign:text-[13px] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-pane-main";
 
 /**
  * A reconnect's message refetch (`transport.onReady`, `reconnected` branch)
@@ -12079,6 +12079,15 @@ function MainAppContent({
             selectedChannel.type === "text" &&
             !selectedChannel.isPrivate ? (
               <span className="redesign:font-normal redesign:text-text-tertiary">#</span>
+            ) : !selectedChannel.imageUrl &&
+              selectedChannel.kind === "server" &&
+              selectedChannel.type === "voice" &&
+              !selectedChannel.isPrivate ? (
+              // Under the redesign a voice room's chat carries the room's
+              // glyph, as `#` marks a text channel.
+              <span className="hidden text-text-tertiary redesign:inline-flex">
+                <ChannelIcon channel={selectedChannel} className="h-4 w-4" />
+              </span>
             ) : (
               ""
             )}
