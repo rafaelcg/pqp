@@ -715,8 +715,18 @@ few sideways strips hide their bar):
 2. Redesign: native scrollbars take the look's colours (a thumb of tertiary
    text at 65%, 80% in light, at least 3:1 on both panes; no track) at the platform's width, from one rule on the root.
 3. Not verifiable here: the captures run on macOS, whose overlay bars are
-   hidden at rest; the sheet draws the thumb's colour as a bar instead. A
-   Windows or Linux look at rest, hover and drag is for André's machine.
+   hidden at rest; the sheet draws the thumb's colour as a bar instead.
+   Headless Chromium ignores "Show scroll bars: Always" too (tried
+   2026-10-27). For André, about a minute each:
+   - macOS: System Settings, Appearance, Show scroll bars "Always"; open
+     the Electron app with the toggle on; check the thumb at rest, on hover
+     and while dragging.
+   - Windows: the same, plus the arrow buttons, which Chromium draws in the
+     thumb colour once `scrollbar-color` is set. Do they look like legacy
+     chrome next to the rounded panes?
+   - Linux (GTK): rest, hover, drag.
+   Values to confirm: `scrollbar-width: auto`, thumb at 65% (dark) and 80%
+   (light) of tertiary text.
 
 ## Open questions for André
 

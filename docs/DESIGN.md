@@ -855,7 +855,9 @@ the root sets `scrollbar-color` to `--scrollbar-thumb` (tertiary text at
 65%, 80% in light: 3.2:1 to 4.3:1 on both panes in Clássico, Catppuccin,
 Everforest and Modo 2005, measured in Chromium) on
 no track, at the platform's width. A strip that scrolls sideways may hide
-its bar (`[scrollbar-width:none]`); a list that scrolls down keeps it.
+its bar (`[scrollbar-width:none]`); a list that scrolls down keeps it at
+the platform's width. The one exception is a strip under 6rem tall (the
+listener strip's wrapped list, the friends tabs), which may stay `thin`.
 
 ### Textarea
 

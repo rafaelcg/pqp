@@ -1255,8 +1255,6 @@ function PrimitiveSheet() {
         </Tooltip>
       </div>
 
-      {/* Badges: the status word on a card, the tag beside a name, and the
-          count in a pill. */}
       {/* A list that scrolls, on a pane and on a dialog: the native bar in
           the look's colours under the redesign. */}
       <div data-testid="qa-primitive-scroll" className="grid gap-4 sm:grid-cols-2">
@@ -1285,6 +1283,8 @@ function PrimitiveSheet() {
         ))}
       </div>
 
+      {/* Badges: the status word on a card, the tag beside a name, and the
+          count in a pill. */}
       <div data-testid="qa-primitive-badge" className="flex flex-col gap-3">
         <p
           className="text-text-tertiary"

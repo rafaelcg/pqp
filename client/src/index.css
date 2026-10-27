@@ -843,7 +843,9 @@
   --count-badge-sm-text: 0.625rem;
 
   /* Scrollbars: a thumb of the tertiary text on no track, at least 3:1 on
-     both panes (see the rule on html[data-redesign] below). */
+     both panes (see the rule on html[data-redesign] below). It resolves at
+     :root, so a subtree that redefines --color-text-tertiary keeps the
+     root's thumb. */
   --scrollbar-thumb: color-mix(in oklab, var(--color-text-tertiary) 65%, transparent);
 
   --icon-button-radius: var(--radius-pill);
