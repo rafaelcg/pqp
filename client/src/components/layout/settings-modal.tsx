@@ -1,6 +1,22 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Gamepad2, Bell, Bug, CircleHelp, Database, FlaskConical, Keyboard, Mic, Palette, Puzzle, ShieldCheck, Siren, UserRound, type LucideIcon } from "lucide-react";
 import {
+  Bell as BellGlyph,
+  Bug as BugGlyph,
+  Database as DatabaseGlyph,
+  Flask as FlaskGlyph,
+  GameController as GameControllerGlyph,
+  Keyboard as KeyboardGlyph,
+  Microphone as MicrophoneGlyph,
+  Palette as PaletteGlyph,
+  PuzzlePiece as PuzzlePieceGlyph,
+  Question as QuestionGlyph,
+  ShieldCheck as ShieldCheckGlyph,
+  Siren as SirenGlyph,
+  User as UserGlyph,
+  type Icon as PhosphorIcon,
+} from "@phosphor-icons/react";
+import {
   type BlockedUser,
   type User,
   HANDLE_RENAME_COOLDOWN_DAYS,
@@ -136,6 +152,8 @@ interface SectionDef {
   label: MessageKey;
   description: MessageKey;
   icon: LucideIcon;
+  /** Under the redesign: the filled Phosphor icon. */
+  glyph: PhosphorIcon;
   group: SectionGroup;
   /** Drop the 40rem reading width: Moderação's report list wants the room. */
   wide?: boolean;
@@ -147,6 +165,7 @@ const SECTIONS: SectionDef[] = [
     label: "settings.section.profile",
     description: "settings.profile.description",
     icon: UserRound,
+    glyph: UserGlyph,
     group: "account",
   },
   {
@@ -154,6 +173,7 @@ const SECTIONS: SectionDef[] = [
     label: "settings.section.connections",
     description: "settings.connections.description",
     icon: Gamepad2,
+    glyph: GameControllerGlyph,
     group: "account",
   },
   {
@@ -161,6 +181,7 @@ const SECTIONS: SectionDef[] = [
     label: "settings.section.apps",
     description: "settings.apps.description",
     icon: Puzzle,
+    glyph: PuzzlePieceGlyph,
     group: "account",
   },
   {
@@ -168,6 +189,7 @@ const SECTIONS: SectionDef[] = [
     label: "settings.section.privacy",
     description: "settings.privacy.description",
     icon: ShieldCheck,
+    glyph: ShieldCheckGlyph,
     group: "account",
   },
   {
@@ -175,6 +197,7 @@ const SECTIONS: SectionDef[] = [
     label: "settings.section.data",
     description: "settings.data.description",
     icon: Database,
+    glyph: DatabaseGlyph,
     group: "account",
   },
   {
@@ -182,6 +205,7 @@ const SECTIONS: SectionDef[] = [
     label: "settings.section.voice",
     description: "settings.voice.description",
     icon: Mic,
+    glyph: MicrophoneGlyph,
     group: "app",
   },
   {
@@ -189,6 +213,7 @@ const SECTIONS: SectionDef[] = [
     label: "settings.section.notifications",
     description: "settings.notifications.description",
     icon: Bell,
+    glyph: BellGlyph,
     group: "app",
   },
   {
@@ -196,6 +221,7 @@ const SECTIONS: SectionDef[] = [
     label: "settings.section.appearance",
     description: "settings.appearance.description",
     icon: Palette,
+    glyph: PaletteGlyph,
     group: "app",
   },
   {
@@ -203,6 +229,7 @@ const SECTIONS: SectionDef[] = [
     label: "settings.section.keyboard",
     description: "settings.keyboard.description",
     icon: Keyboard,
+    glyph: KeyboardGlyph,
     group: "app",
   },
   {
@@ -210,6 +237,7 @@ const SECTIONS: SectionDef[] = [
     label: "settings.section.beta",
     description: "settings.beta.description",
     icon: FlaskConical,
+    glyph: FlaskGlyph,
     group: "app",
   },
   {
@@ -217,6 +245,7 @@ const SECTIONS: SectionDef[] = [
     label: "settings.section.feedback",
     description: "settings.feedback.description",
     icon: Bug,
+    glyph: BugGlyph,
     group: "support",
   },
   {
@@ -224,6 +253,7 @@ const SECTIONS: SectionDef[] = [
     label: "settings.section.help",
     description: "help.description",
     icon: CircleHelp,
+    glyph: QuestionGlyph,
     group: "support",
   },
   // Hidden from the rail unless `canModerateInstance` resolves true — see
@@ -235,6 +265,7 @@ const SECTIONS: SectionDef[] = [
     label: "settings.section.moderation",
     description: "settings.moderation.description",
     icon: Siren,
+    glyph: SirenGlyph,
     group: "moderation",
     wide: true,
   },
@@ -293,21 +324,21 @@ function RailFooter({ user }: { user: User | null }) {
   return (
     <div className="flex flex-col gap-2">
       {user ? (
-        <div className="flex items-center gap-2 pl-2">
+        <div className="flex items-center gap-2 pl-2 redesign:min-h-[var(--list-row-h-md)] redesign:rounded-[var(--list-row-radius)] redesign:bg-[color:var(--settings-pane-bg)] redesign:py-1 redesign:pl-1.5 redesign:pr-1">
           <UserAvatar
             name={user.displayName}
             avatarUrl={user.avatarUrl}
             rounded="full"
-            className="h-6 w-6"
+            className="h-6 w-6 redesign:h-8 redesign:w-8"
             fallbackClassName="bg-accent text-[10px] font-bold text-on-accent"
           />
-          <span className="min-w-0 flex-1 truncate text-sm font-medium text-text">
+          <span className="min-w-0 flex-1 truncate text-sm font-medium text-text redesign:font-semibold">
             {user.displayName}
           </span>
           <SignOutButton className="h-[var(--control-sm)] shrink-0 px-2 text-xs" />
         </div>
       ) : null}
-      <SettingsBuildLine className="self-start" />
+      <SettingsBuildLine className="self-start redesign:pl-2" />
     </div>
   );
 }
@@ -1269,6 +1300,7 @@ export function SettingsModal({
         id: entry.id,
         label: t(entry.label),
         icon: entry.icon,
+        glyph: entry.glyph,
         group: entry.group,
         // The dot that says Perfil has edits the bar is waiting on, so the
         // unsaved state is visible from any tab, not only from the bar.
@@ -1319,7 +1351,9 @@ export function SettingsModal({
 
               <div
                 ref={paneRef}
-                className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-surface-1"
+                // Under the redesign the page is an inset pane on the
+                // dialog's side tone, rounded like the app's panes.
+                className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-surface-1 redesign:overflow-hidden redesign:bg-[color:var(--settings-pane-bg)] sm:redesign:mr-[var(--settings-pane-inset)] sm:redesign:mb-[var(--settings-pane-inset)] sm:redesign:rounded-[var(--radius-pane)]"
               >
                 <div
                   ref={scrollerRef}
