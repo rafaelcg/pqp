@@ -87,7 +87,7 @@ export function PendingDepoimentos({
                   className="h-6 w-6"
                   fallbackClassName="bg-ink-3 text-[10px] text-paper"
                 />
-                <span className="truncate text-sm font-medium text-paper">
+                <span className="truncate text-sm font-medium text-paper redesign:font-semibold redesign:text-text">
                   {one.author.displayName}
                 </span>
                 <span className="truncate text-[11px] text-paper-muted redesign:text-xs redesign:text-text-tertiary">
@@ -98,7 +98,7 @@ export function PendingDepoimentos({
                 </span>
               </div>
 
-              <p className="mt-1.5 whitespace-pre-wrap break-words text-sm text-paper">
+              <p className="mt-1.5 whitespace-pre-wrap break-words text-sm text-paper redesign:text-text">
                 {one.body}
               </p>
 

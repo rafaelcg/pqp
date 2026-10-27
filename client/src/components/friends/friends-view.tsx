@@ -501,7 +501,7 @@ export function FriendsView({
           </>
         )}
 
-        {extras && <div className="mt-6 max-w-md">{extras}</div>}
+        {extras && <div className="mt-6 max-w-md redesign:px-2">{extras}</div>}
       </div>
     </div>
   );
@@ -518,7 +518,7 @@ export function FriendsView({
       return null;
     }
     return (
-      <div className="max-w-sm">
+      <div className="max-w-sm redesign:px-2">
         <p className="font-display text-xl font-bold redesign:text-text">
           {t("friends.empty.all.title")}
         </p>
@@ -666,6 +666,7 @@ function PendingLists({
                   disabled={busyId === person.id}
                   onClick={() => onRemove(person.id)}
                 >
+                  <Icon icon={XGlyph} kind="symbol" size="sm" className="hidden redesign:block" />
                   {t("friends.decline")}
                 </Button>
               </RequestRow>
