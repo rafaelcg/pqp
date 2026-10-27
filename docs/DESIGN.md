@@ -457,7 +457,7 @@ redesign it uses the merged primitives' tokens:
 - A notice on its own takes the banner's corners (`--banner-radius`). Info is
   a tint (`--settings-notice-info-bg`), not an outline. A notice in a group
   stays a row.
-- A choice card is a card; the chosen one has a 1px inset accent ring and a check.
+- A choice card is a card; the chosen one has a 2px accent edge (the accent border plus a 1px inset ring) and a check.
 - Icons are Phosphor through `IconSwap`.
 
 ## Components

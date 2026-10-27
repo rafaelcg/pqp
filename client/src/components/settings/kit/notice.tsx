@@ -33,6 +33,10 @@ interface SettingsNoticeProps {
   inGroup?: boolean;
   /** Replaces the tone's icon (a `Bug` on the Feedback badge notice). */
   icon?: LucideIcon;
+  /** The redesign's glyph for `icon` (Phosphor, filled). Without it the
+   *  tone's own glyph stands in, so a line icon never sits beside the filled
+   *  ones. */
+  glyph?: PhosphorIcon;
   /**
    * The live role. Default: `alert` for danger, `status` otherwise. `alert`
    * for a refusal that answers an action the person just took (it is read at
@@ -77,9 +81,11 @@ export function SettingsNotice({
   action,
   inGroup = false,
   icon,
+  glyph: customGlyph,
   role,
 }: SettingsNoticeProps) {
-  const { icon: toneIcon, glyph, className } = TONE[tone];
+  const { icon: toneIcon, glyph: toneGlyph, className } = TONE[tone];
+  const glyph = customGlyph ?? toneGlyph;
   const Icon = icon ?? toneIcon;
   const live = role ?? (tone === "danger" ? "alert" : "status");
   // Inside Settings a live notice speaks through the dialog's announcer: a
@@ -127,15 +133,19 @@ export function SettingsNotice({
               "redesign:rounded-[var(--banner-radius)]",
               tone === "info" &&
                 "redesign:border-transparent redesign:bg-[color:var(--settings-notice-info-bg)]",
+              // A tinted notice takes the banner's tone edge, so a notice and
+              // a `ui/Banner` of the same tone match.
+              tone === "warning" &&
+                "redesign:border redesign:border-[color:color-mix(in_oklab,var(--color-warning)_var(--banner-edge),transparent)]",
+              tone === "danger" &&
+                "redesign:border redesign:border-[color:color-mix(in_oklab,var(--color-danger)_var(--banner-edge),transparent)]",
+              tone === "success" &&
+                "redesign:border redesign:border-[color:color-mix(in_oklab,var(--color-success)_var(--banner-edge),transparent)]",
             ),
         "redesign:gap-2.5",
       )}
     >
-      {icon ? (
-        <Icon aria-hidden className="mt-px h-4 w-4 shrink-0" />
-      ) : (
-        <IconSwap off={Icon} on={glyph} offClassName="mt-px h-4 w-4 shrink-0" className="mt-px" />
-      )}
+      <IconSwap off={Icon} on={glyph} offClassName="mt-px h-4 w-4 shrink-0" className="mt-px" />
       <div ref={textRef} className="min-w-0 flex-1 text-pretty">
         {title ? <p className="text-sm font-medium redesign:font-semibold">{title}</p> : null}
         <div className={title ? "mt-0.5" : undefined}>{children}</div>

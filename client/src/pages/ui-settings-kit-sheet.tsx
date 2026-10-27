@@ -1,4 +1,4 @@
-import { Prohibit } from "@phosphor-icons/react";
+import { Bug as BugGlyph, Prohibit } from "@phosphor-icons/react";
 import { Ban, Bug } from "lucide-react";
 import { Select } from "@/components/ui/select";
 import { useId, useState, type ReactNode } from "react";
@@ -518,7 +518,7 @@ export function SettingsKitSheet() {
               </SettingsNotice>
               <SettingsNotice tone="danger">{t("qaUi.kit.notice.danger")}</SettingsNotice>
               <SettingsNotice tone="success">{t("qaUi.kit.notice.success")}</SettingsNotice>
-              <SettingsNotice tone="info" icon={Bug} role="note">
+              <SettingsNotice tone="info" icon={Bug} glyph={BugGlyph} role="note">
                 {t("qaUi.kit.notice.icon")}
               </SettingsNotice>
             </SettingsGroup>

@@ -55,7 +55,7 @@ export function SettingsResult({
         <IconSwap
           off={Icon}
           on={glyph}
-          size="md"
+          size="lg"
           offClassName={cn("h-5 w-5", className)}
           className={className}
         />

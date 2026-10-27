@@ -1,3 +1,4 @@
+import { LockSimple as LockSimpleGlyph } from "@phosphor-icons/react";
 import {
   useCallback,
   useEffect,
@@ -1802,7 +1803,7 @@ export function VoiceSection({
             >
               {micBusy ? t("settings.voice.micBusy") : devicesError}
             </SettingsNotice>
-            <SettingsNotice tone="info" inGroup role="note" icon={Lock}>
+            <SettingsNotice tone="info" inGroup role="note" icon={Lock} glyph={LockSimpleGlyph}>
               {t("settings.voice.allowMicSteps", desktopContext())}
             </SettingsNotice>
           </>

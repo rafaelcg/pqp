@@ -27,7 +27,7 @@ export function SettingsEmpty({
       icon={
         Icon ? (
           glyph ? (
-            <IconSwap off={Icon} on={glyph} size="md" offClassName="h-5 w-5" />
+            <IconSwap off={Icon} on={glyph} size="lg" offClassName="h-5 w-5" />
           ) : (
             <Icon className="h-5 w-5" />
           )
