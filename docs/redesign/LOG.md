@@ -49,6 +49,7 @@ Read this file and the inventory at the start of every session.
 | 2 | `p-badge` | Merged (approved at round 2: 8.3 Opus, 8.3 Codex r1, no MUST) |
 | 2 | `p-toast` | Merged (cap at round 5: 8.5 Opus r5, 8.7 Codex r2, no MUST) |
 | 2 | `p-avatar` | Merged (cap at round 5: 8.6 Opus r5, 8.7 Codex r2, no MUST) |
+| 2 | `p-list-row` | Merged (cap at round 5: 8.6 Opus r5, 8.4 Codex r2, no MUST) |
 
 ## Phase 0: directions
 
@@ -753,6 +754,26 @@ the row roles in `index.css` were defined and drawn only on `/qa/ui`):
    row keeps its toggle-off look only if it moves together with its shell
    element (`s-channel-row`, `s-voice-row`, `s-member-list`, `f-dm-home`,
    `f-friends`), so the folds happen there.
+
+Council (Opus 5.5, GPT-6 Luna via Codex), overall after. One reviewer per
+round, Opus for the sign-off:
+
+| Round | Opus | Codex |
+|---|---|---|
+| 1 | not run | 8.0 |
+| 2 | not run | 8.4 |
+| 3 | 8.5 | not run |
+| 4 | 8.4 | not run |
+| 5 | 8.6 | not run |
+
+Capped at round 5, no MUST open. Round 5's notes were applied after it: a
+time stacks over a count on a two-line row, the selected row's action takes
+the label's colour, the pip is 8px. Decided: the end pip (or a count) is the
+one unread mark; the sidebar's left-edge bar goes when `s-channel-row`
+adopts ListRow. Verified: typecheck; 10,430 unit tests; `bench:tokens`;
+i18n check; no call site adopts it yet, so no e2e changes; retro,
+Halloween, high contrast, 390px and toggle off. Screenshots:
+`~/pqp-redesign/p-list-row/`.
 
 ## Open questions for André
 
