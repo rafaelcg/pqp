@@ -12,6 +12,8 @@ import {
 import {
   Hash as HashBold,
   PhoneDisconnect,
+  CircleNotch,
+  MonitorArrowUp,
   Screencast,
   SpeakerHigh,
   VideoCamera,
@@ -20,7 +22,7 @@ import {
 import { BringFriendsHint } from "@/components/layout/bring-friends-hint";
 import { FeatureHint } from "@/components/layout/feature-hint";
 import { Button } from "@/components/ui/button";
-import { Icon } from "@/components/ui/icon";
+import { Icon, IconSwap } from "@/components/ui/icon";
 import {
   SIDEBAR_FOOTER_CARD_COMPACT_REDESIGN as VOICE_STRIP_CARD_COMPACT_REDESIGN,
   SIDEBAR_FOOTER_CARD_REDESIGN as VOICE_STRIP_CARD_REDESIGN,
@@ -208,9 +210,12 @@ export function VoiceStatusBar({
             className="h-2 w-2 shrink-0 rounded-full bg-success shadow-[0_0_8px_var(--glow-success)]"
           />
         ) : (
-          <Loader2
-            aria-hidden="true"
-            className="h-3 w-3 shrink-0 animate-spin text-warning"
+          <IconSwap
+            off={Loader2}
+            on={CircleNotch}
+            kind="symbol"
+            offClassName="h-3 w-3 shrink-0 animate-spin text-warning"
+            className="h-3.5 w-3.5 shrink-0 animate-spin text-warning"
           />
         )}
         {connected && (
@@ -252,7 +257,7 @@ export function VoiceStatusBar({
             onClick={onLeave}
           >
             <PhoneOff className="h-4 w-4 text-danger redesign:hidden" />
-            <Icon icon={PhoneDisconnect} size="sm" className="hidden redesign:block" />
+            <Icon icon={PhoneDisconnect} size="md" className="hidden redesign:block" />
           </Button>
         </Tooltip>
         )}
@@ -263,7 +268,7 @@ export function VoiceStatusBar({
   return (
     <div
       data-voice-status-bar=""
-      className={cn("border-t border-ink-4/60 bg-ink px-2 py-2", VOICE_STRIP_CARD_REDESIGN, "redesign:px-2.5 redesign:py-2")}
+      className={cn("border-t border-ink-4/60 bg-ink px-2 py-2", VOICE_STRIP_CARD_REDESIGN, "redesign:px-2.5 redesign:pt-2 redesign:pb-2.5")}
     >
       {/* Above the strip, out of the flow: in it the card lifted the whole
           bar (and the user row under it) by its own height. */}
@@ -288,9 +293,12 @@ export function VoiceStatusBar({
             aria-hidden="true"
           />
         ) : (
-          <Loader2
-            className="h-3 w-3 shrink-0 animate-spin text-warning"
-            aria-hidden="true"
+          <IconSwap
+            off={Loader2}
+            on={CircleNotch}
+            kind="symbol"
+            offClassName="h-3 w-3 shrink-0 animate-spin text-warning"
+            className="h-3.5 w-3.5 shrink-0 animate-spin text-warning"
           />
         )}
         <p
@@ -325,12 +333,12 @@ export function VoiceStatusBar({
           <Button
             variant="ghost"
             size="icon"
-            className={cn("h-7 w-7 shrink-0 text-paper-muted hover:text-danger", STRIP_ICON_REDESIGN, "redesign:h-8 redesign:w-8", LEAVE_REDESIGN)}
+            className={cn("h-7 w-7 shrink-0 text-paper-muted hover:text-danger", STRIP_ICON_REDESIGN, "redesign:-my-1 redesign:h-8 redesign:w-8", LEAVE_REDESIGN)}
             aria-label={t("voice.bar.leave")}
             onClick={onLeave}
           >
             <PhoneOff className="h-4 w-4 redesign:hidden" />
-            <Icon icon={PhoneDisconnect} size="sm" className="hidden redesign:block" />
+            <Icon icon={PhoneDisconnect} size="md" className="hidden redesign:block" />
           </Button>
         </Tooltip>
         )}
@@ -428,8 +436,8 @@ export function VoiceStatusBar({
               ) : (
                 <ScreenShare className="h-4 w-4 redesign:hidden" aria-hidden="true" />
               )}
-              {/* One glyph under the redesign: the pressed fill says it is on. */}
-              <Icon icon={Screencast} size="sm" className="hidden redesign:block" />
+              {/* A glyph per state, as the camera has: sending up, then on air. */}
+              <Icon icon={isSharingScreen ? Screencast : MonitorArrowUp} size="sm" className="hidden redesign:block" />
             </VoiceBarAction>
           )}
         </div>
@@ -471,9 +479,11 @@ function VoiceBarAction({
             // A pill on the secondary button's fill; on, the accent's soft pair.
             "redesign:h-8 redesign:rounded-full redesign:bg-[color:var(--button-secondary-bg)] redesign:text-text redesign:hover:bg-[color:var(--button-secondary-hover)] redesign:hover:text-text redesign:focus-visible:ring-accent",
             pressed &&
-              "redesign:bg-accent-soft redesign:text-on-accent-soft redesign:hover:bg-accent-soft redesign:hover:text-on-accent-soft",
+              "redesign:bg-accent-soft redesign:text-on-accent-soft redesign:hover:bg-[color:color-mix(in_oklab,var(--color-accent-soft),var(--color-on-accent-soft)_10%)] redesign:hover:text-on-accent-soft",
+            // At its limit the pill keeps its fill and only the glyph fades,
+            // so it still reads as a button on a light pane.
             disabled &&
-              "redesign:hover:bg-[color:var(--button-secondary-bg)] redesign:hover:text-text",
+              "redesign:opacity-100 redesign:[&>svg]:opacity-40 redesign:hover:bg-[color:var(--button-secondary-bg)] redesign:hover:text-text",
           )}
           onClick={() => {
             if (disabled) {

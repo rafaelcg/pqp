@@ -828,6 +828,15 @@
   --card-bg: color-mix(in oklab, var(--color-text) 4%, transparent);
   --card-border: color-mix(in oklab, var(--color-text) 8%, transparent);
   --card-row-hover: color-mix(in oklab, var(--color-text) 6%, transparent);
+  /* A whole card under the pointer: one step over the card's own fill. */
+  --card-hover: color-mix(in oklab, var(--color-text) 7%, transparent);
+  /* A footer card's fill as a solid colour over the side pane, for cutouts
+     (the presence dot's ring) that must match the card exactly. */
+  --footer-card-solid: color-mix(in oklab, var(--color-text) 4%, var(--color-pane-side));
+  --footer-card-solid-hover: color-mix(in oklab, var(--color-text) 6%, var(--footer-card-solid));
+  /* A settings notice in the info tone, on its own (settings/kit/notice.tsx):
+     a quiet tint of the text, a step over the card it usually sits in. */
+  --settings-notice-info-bg: color-mix(in oklab, var(--color-text) 7%, transparent);
 
   /* The monogram disc's edge: none in dark, where surface-3 already stands
      off the panes; a hairline in light, where it is close to the white pane. */
@@ -855,30 +864,27 @@
   --count-badge-text: 0.6875rem;
   --count-badge-sm-text: 0.625rem;
 
+  /* Scrollbars: a thumb of the tertiary text on no track, at least 3:1 on
+     both panes (see the rule on html[data-redesign] below). It resolves at
+     :root, so a subtree that redefines --color-text-tertiary keeps the
+     root's thumb. */
+  --scrollbar-thumb: color-mix(in oklab, var(--color-text-tertiary) 65%, transparent);
+  --scrollbar-thumb-hover: color-mix(in oklab, var(--color-text-secondary) 80%, transparent);
   /* Server rail (layout/server-rail.tsx): round tiles on the canvas, in the
      side pane's colour. The selected one turns into the accent's rounded
      square; a hover only lifts the fill, so lime always means "here". */
   --rail-tile: 2.75rem;
   --rail-tile-radius-selected: 1rem;
-  --rail-tile-bg: var(--color-pane-side);
+  /* A touch of text over the side pane, so an idle door reads on the dark canvas. */
+  --rail-tile-bg: color-mix(in oklab, var(--color-text) 4%, var(--color-pane-side));
   --rail-tile-hover: color-mix(in oklab, var(--color-text) 9%, var(--color-pane-side));
   --rail-tile-shadow: 0 2px 8px -2px oklch(0 0 0 / 0.45);
   --rail-divider: var(--color-border);
-
-  /* Sidebar header (layout/channel-list.tsx): the server's name in the title
-     face over no rule, a search pill a step off the pane, the banner as an
-     inset card. */
-  --sidebar-header-title-size: 1rem;
-  --sidebar-search-h: 2.25rem;
-  --sidebar-search-bg: color-mix(in oklab, var(--color-text) 6%, var(--color-pane-side));
-  --sidebar-search-hover: color-mix(in oklab, var(--color-text) 9%, var(--color-pane-side));
-  --sidebar-search-border: transparent;
-  --sidebar-banner-radius: 0.75rem;
-
-  /* Sidebar blocks (ui/sidebar-block.ts): stories, a watch party and the Baú
-     above the channels, as cards on the card tint or dashed invitations. */
-  --sidebar-card-radius: 0.875rem;
-  --sidebar-invite-border: color-mix(in oklab, var(--color-text) 22%, transparent);
+  /* Empty states (ui/empty-state.tsx): a page empty state leads with its
+     glyph on a soft disc of the raised fill, then a Gabarito title. */
+  --empty-icon-disc: 3.5rem;
+  --empty-icon-bg: var(--color-surface-3);
+  --empty-title-size: 1.25rem;
 
   /* Pane headers (ui/pane-header.ts): the chat's and every other pane's
      top bar, on one rule, one inset and one title size. */
@@ -920,12 +926,71 @@
   --list-row-hover: var(--color-row-hover);
   --list-row-selected: var(--color-row-selected);
   --list-row-selected-text: var(--color-on-row-selected);
+  /* A row's second line (a tag, a status, a count): the tertiary text. */
+  --list-row-detail: var(--color-text-tertiary);
+  /* A read row's name and its icon: a step and two steps under the body,
+     so unread (full text, semibold) reads by colour as well as weight. */
+  --list-row-text: var(--color-text-secondary);
+  --list-row-icon: var(--color-text-tertiary);
+  /* The room after a row's last tile: the 28px tiles sit close to the cap. */
+  --list-row-action-pr: 0.25rem;
   /* A muted row (a channel you silenced) stays a step above a disabled one
      (0.4), so the two read apart. */
   --list-row-muted-opacity: 0.6;
   /* The solid accent, as IconButton's and Slider's rings: the 60% focus
      ring all but vanishes on the light selected fill. */
   --list-row-ring: var(--color-accent);
+  /* Settings dialogs: a small frame. The band and the rail sit on the side
+     pane's tone, the page is an inset pane in the conversation's tone. */
+  --settings-surface: var(--color-pane-side);
+  --settings-pane-bg: var(--color-pane-main);
+  --settings-pane-inset: 0.5rem;
+  --settings-rule: color-mix(in oklab, var(--color-border) 70%, transparent);
+
+  /* Dialogs: a deeper scrim with more blur, so the app behind recedes; the
+     panel takes a text edge and the deepest lift. The header loses its rule
+     (the title and the space under it separate it) and the footer's rule
+     softens. Titles step down from 24px to 22px, the inset grows to 24px. */
+  /* The sheets' one scrim (--sheet-scrim), so a dialog and a sheet agree. */
+  --dialog-scrim: var(--sheet-scrim);
+  --dialog-scrim-blur: var(--sheet-scrim-blur);
+  --dialog-border: color-mix(in oklab, var(--color-text) 10%, transparent);
+  --dialog-shadow: inset 0 1px 0 oklch(1 0 0 / 0.05), var(--shadow-3);
+  --dialog-header-rule: transparent;
+  --dialog-header-pt: 1.25rem;
+  --dialog-header-pb: 0.5rem;
+  --dialog-solo-header-pb: 1rem;
+  --dialog-solo-footer-pt: 0.5rem;
+  --dialog-footer-pb: 1.25rem;
+  --dialog-close-glyph: 1.125rem;
+  --dialog-eyebrow-size: 0.8125rem;
+  --dialog-footer-rule: color-mix(in oklab, var(--color-text) 8%, transparent);
+  --dialog-px: 1.5rem;
+  --dialog-title-size: 1.375rem;
+  --dialog-title-leading: 1.875rem;
+
+  /* Sidebar header (layout/channel-list.tsx): the server's name in the title
+     face over no rule, a search pill a step off the pane, the banner as an
+     inset card. */
+  --sidebar-header-title-size: 1rem;
+  --sidebar-search-h: 2.25rem;
+  --sidebar-search-bg: color-mix(in oklab, var(--color-text) 6%, var(--color-pane-side));
+  --sidebar-search-hover: color-mix(in oklab, var(--color-text) 9%, var(--color-pane-side));
+  --sidebar-search-border: transparent;
+  /* The header trigger's ladder over the search pill (6%): hover 8%, the
+     ghost buttons' step beside it; open 10%. */
+  --sidebar-trigger-hover: var(--button-ghost-hover);
+  --sidebar-trigger-open: color-mix(in oklab, var(--color-text) 10%, transparent);
+  --sidebar-banner-radius: 0.75rem;
+
+  /* Sidebar blocks (ui/sidebar-block.ts): stories, a watch party and the Baú
+     above the channels, as cards on the card tint or dashed invitations. */
+  --sidebar-card-radius: 0.875rem;
+  --sidebar-invite-border: color-mix(in oklab, var(--color-text) 22%, transparent);
+  /* The solid AO VIVO badge: the danger hue a step deeper on a dark page,
+     where on-danger is white, so 10px text clears 4.5:1. Looks whose
+     on-danger is a dark ink keep the plain danger (below). */
+  --live-badge-bg: color-mix(in oklab, var(--color-danger) 78%, black);
 
   --icon-button-radius: var(--radius-pill);
   --icon-button-text: var(--color-text-secondary);
@@ -1021,13 +1086,26 @@
   /* A modal is the one thing that floats over everything, so it gets the
      deepest rung instead of sharing a menu's. */
   --elevation-3-shadow: var(--shadow-3);
+  /* Sheets (ui/sheet.tsx): a panel rising from a phone's bottom edge. A
+     larger top radius than a card, the raised fill, a hairline on the top
+     edge only and a shadow cast upwards. */
+  --sheet-radius: 1.5rem;
+  --sheet-surface: var(--color-surface-2);
+  --sheet-edge: color-mix(in oklab, var(--color-text) 10%, transparent);
+  /* One top edge: the 10% border, no inset highlight doubling it. */
+  --sheet-shadow: 0 -12px 32px oklch(0.06 0.02 262 / 0.45);
+  --sheet-scrim: oklch(0.06 0.02 262 / 0.62);
+  --sheet-scrim-blur: 6px;
 }
 
 /*
- * Gutters cost width a phone does not have: under 640px the panes meet, as
- * they do today. A council risk named for direction B in round D1.
+ * Gutters cost width a phone does not have: under `md` (768px) the panes
+ * meet, as they do today, and the frame classes in ui/pane.ts float from
+ * `md` up, so the token and the classes switch together. A council risk
+ * named for direction B in round D1.
  */
-@media (max-width: 639px) {
+/* lib/breakpoints.ts BELOW_MD */
+@media (max-width: 47.999rem) {
   :root[data-redesign] {
     --space-gutter: 0rem;
   }
@@ -1078,6 +1156,8 @@
  * it in both themes, so a light scrim would be a bug rather than a theme.
  */
 :root[data-theme="light"] {
+  /* A quieter info tint on light, the weight of a row hover: at 6% it read as a disabled field. */
+  --settings-notice-info-bg: color-mix(in oklab, var(--color-text) 4%, transparent);
   color-scheme: light;
 
   --color-surface-0: oklch(0.98 0.005 95);
@@ -1207,8 +1287,19 @@
   --color-field: color-mix(in oklab, var(--color-text) 3%, var(--color-surface-0));
 }
 
+/* Catppuccin and Everforest dark draw on-danger in a dark ink: darkening the
+   badge would lower its contrast there, so they keep the plain danger. */
+:root[data-redesign]:where([data-appearance="catppuccin"], [data-appearance="everforest"]):not([data-theme="light"]) {
+  --live-badge-bg: var(--color-danger);
+}
+
 /* The redesign's shadows on a light page: tinted, never black. Every look. */
 :root[data-redesign][data-theme="light"] {
+  /* Light panes need a stronger thumb to clear 3:1. */
+  --scrollbar-thumb: color-mix(in oklab, var(--color-text-tertiary) 80%, transparent);
+  --scrollbar-thumb-hover: color-mix(in oklab, var(--color-text-secondary) 90%, transparent);
+  /* The light danger is already deep enough for white text. */
+  --live-badge-bg: var(--color-danger);
   /* On the near-white panes the 8% tint all but vanishes at the pulse's low
      point, and a 25% track at 12px is a hairline. */
   --skeleton-bg: color-mix(in oklab, var(--color-text) 10%, transparent);
@@ -1220,6 +1311,9 @@
   /* Lighter than dark's: over the white wash on a grey dialog, 6% lands at
      the dialog's own grey and the row reads as a hole. */
   --card-row-hover: color-mix(in oklab, var(--color-text) 4%, transparent);
+  --card-hover: color-mix(in oklab, var(--color-text) 3%, var(--color-surface-0));
+  --footer-card-solid: color-mix(in oklab, var(--color-surface-0) 60%, var(--color-pane-side));
+  --footer-card-solid-hover: color-mix(in oklab, var(--color-text) 4%, var(--footer-card-solid));
   --card-border: color-mix(in oklab, var(--color-text) 10%, transparent);
 
   /* Avatars: a hairline keeps the monogram disc a disc on the white pane. */
@@ -1235,7 +1329,8 @@
   /* Sidebar search: the field's white with its edge, on the light pane. */
   --sidebar-search-bg: var(--color-field);
   --sidebar-search-hover: var(--color-surface-0);
-  --sidebar-search-border: var(--color-field-border);
+  --sidebar-search-border: var(--color-border);
+  --rail-tile-bg: var(--color-pane-side);
   --input-invalid-bg: color-mix(in oklab, var(--color-danger) 6%, var(--color-field));
   /* Tabs */
   /* 7 points over the 8% ghost hover, so a hovered pill never reads as selected. */
@@ -1260,6 +1355,9 @@
   /* No top highlight on a light panel; a close shadow under the wide one.
      The fill is the brightest surface, so the panel sits above the pane. */
   --popover-surface: var(--color-surface-0);
+  /* A plain dialog on the same white as a popover and a phone sheet; the
+     beige surface-2 made it the darkest thing floating. */
+  --dialog-surface: var(--color-surface-0);
   --popover-border: color-mix(in oklab, var(--color-text) 10%, transparent);
   --popover-shadow: 0 1px 2px oklch(0.4 0.02 262 / 0.1), var(--shadow-2);
   /* Light raises the thumb as a white chip on the grey track. */
@@ -1276,6 +1374,14 @@
      takes a grey fill instead. */
   --slider-thumb-disabled-bg: color-mix(in oklab, var(--color-text) 22%, var(--color-surface-0));
   --slider-thumb-shadow: 0 1px 2px oklch(0.4 0.02 262 / 0.2), 0 2px 6px oklch(0.4 0.02 262 / 0.14);
+  /* The brightest surface in light, so a sheet reads lifted, not sunk. */
+  --sheet-surface: var(--color-surface-0);
+  /* One top edge: the border alone, as in dark. */
+  --sheet-shadow: 0 -8px 24px oklch(0.4 0.02 262 / 0.22);
+  --sheet-scrim: oklch(0.3 0.02 262 / 0.3);
+  /* 10% as in dark: a pale panel over a pale scrim needs the edge. */
+  --dialog-border: color-mix(in oklab, var(--color-text) 10%, transparent);
+  --dialog-shadow: 0 1px 2px oklch(0.4 0.02 262 / 0.1), var(--shadow-3);
 }
 
 /*
@@ -2734,6 +2840,30 @@ html[data-app-shell] #root {
 }
 
 /*
+ * Under the redesign a native scrollbar takes the look's colours: a thumb
+ * of tertiary text at 65% (80% in light) and no track. It keeps the platform's width, so it
+ * stays easy to grab on Windows and Linux. `scrollbar-color` inherits, so
+ * one rule on the root reaches every pane; an element that hides its bar
+ * (`scrollbar-width: none`) still does.
+ */
+html[data-redesign] {
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+/*
+ * A pane under the pointer lifts its thumb to secondary text, so hover reads
+ * as a state even where the platform draws one colour for rest, hover and drag.
+ * Only the innermost scroller under the pointer lifts: `scrollbar-color`
+ * inherits, so without the `:has` a log would light every bar inside it.
+ */
+html[data-redesign]
+  :where(.overflow-y-auto, .overflow-auto, .overflow-x-auto, textarea):hover:not(
+    :has(:where(.overflow-y-auto, .overflow-auto, .overflow-x-auto, textarea):hover)
+  ) {
+  scrollbar-color: var(--scrollbar-thumb-hover) transparent;
+}
+
+/*
  * Installed to the home screen with `apple-mobile-web-app-status-bar-style:
  * black-translucent`, the app draws under the status bar and the home
  * indicator — so the shell has to inset itself or the top row sits beneath the
@@ -4156,7 +4286,7 @@ html[data-pre] [data-home-hero] .animate-rise {
 }
 
 .safe-pb {
-  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  padding-bottom: max(var(--safe-pb-min, 0.75rem), env(safe-area-inset-bottom));
 }
 
 /*
@@ -4175,7 +4305,8 @@ html[data-pre] [data-home-hero] .animate-rise {
  * the zoom to exist. Only on the screens that can be zoomed that way — a
  * pointer device or a wide window keeps the tighter type.
  */
-@media (max-width: 639px), (pointer: coarse) {
+/* lib/breakpoints.ts BELOW_SM */
+@media (max-width: 39.999rem), (pointer: coarse) {
   input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not(
       [type="color"]
     ),
@@ -4959,7 +5090,8 @@ html[data-immersive-stage] [data-immersive-hide] {
   width: min(100vw, calc((100dvh - var(--story-cmp-top) - var(--story-cmp-bottom)) * 9 / 16));
   max-height: 100dvh;
 }
-@media (max-width: 640px) {
+/* lib/breakpoints.ts BELOW_SM */
+@media (max-width: 39.999rem) {
   .story-cmp {
     --story-cmp-top: 52px;
     --story-cmp-bottom: 168px;
@@ -5000,7 +5132,8 @@ html[data-immersive-stage] [data-immersive-hide] {
   container-type: size;
   box-shadow: 0 0 0 1px var(--story-hairline);
 }
-@media (max-width: 640px) {
+/* lib/breakpoints.ts BELOW_SM */
+@media (max-width: 39.999rem) {
   .story-cmp-canvas {
     border-radius: 14px;
   }

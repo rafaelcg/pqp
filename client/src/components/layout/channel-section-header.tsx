@@ -28,7 +28,14 @@ export const SECTION_FOCUS_RING =
  * and round actions.
  */
 export const CATEGORY_ROW_REDESIGN =
-  "redesign:min-h-8 redesign:gap-1.5 redesign:rounded-full redesign:px-2 redesign:text-text-secondary redesign:hover:text-text";
+  "redesign:min-h-8 redesign:gap-1.5 redesign:rounded-full redesign:px-2 redesign:text-text-secondary redesign:hover:text-text redesign:has-[[data-section-toggle]:focus-visible]:ring-2 redesign:has-[[data-section-toggle]:focus-visible]:ring-inset redesign:has-[[data-section-toggle]:focus-visible]:ring-accent redesign:has-[[data-section-toggle]:focus-visible]:bg-row-hover";
+
+/**
+ * The fold button inside the row. Its own ring is off under the redesign:
+ * the row draws it on the whole 32px pill (see `CATEGORY_ROW_REDESIGN`).
+ */
+export const CATEGORY_TOGGLE_REDESIGN =
+  "redesign:gap-1.5 redesign:rounded-full redesign:focus-visible:ring-0 redesign:focus-visible:ring-offset-0";
 
 /** The name: the section label's face, in the row's colour. */
 export const CATEGORY_LABEL_REDESIGN = cn(
@@ -39,6 +46,14 @@ export const CATEGORY_LABEL_REDESIGN = cn(
 /** "3 canais" on a folded section, and its unread dot. */
 export const CATEGORY_SUMMARY_REDESIGN =
   "redesign:text-[11px] redesign:tabular-nums redesign:text-text-tertiary";
+
+/**
+ * A header a dragged channel would drop into: the mixed list's "into" fill,
+ * so every list says it the same way. Under the redesign only; the base keeps
+ * the ring it always drew.
+ */
+export const CATEGORY_DROP_INTO_REDESIGN =
+  "redesign:bg-accent-soft redesign:text-on-accent-soft redesign:ring-1 redesign:ring-inset redesign:ring-accent redesign:hover:bg-accent-soft redesign:hover:text-on-accent-soft";
 
 /** "+", the lock, the new category: a round 24px button. */
 export const CATEGORY_ACTION_REDESIGN =
@@ -56,7 +71,9 @@ export function SectionCaret({ collapsed }: { collapsed: boolean }) {
       <Icon
         icon={CaretDown}
         kind="symbol"
-        className={cn("hidden h-3 w-3 text-text-tertiary redesign:block", turn)}
+        // The label's colour, a step quieter: it brightens on hover and turns
+        // lime on a drop target with the words beside it.
+        className={cn("hidden h-3 w-3 opacity-80 redesign:block", turn)}
       />
     </>
   );
@@ -68,16 +85,18 @@ export function SectionActionGlyph({
   on,
   kind = "object",
   offClassName = "h-3.5 w-3.5",
+  onClassName = "h-3.5 w-3.5",
 }: {
   off: LucideIcon;
   on: PhosphorIcon;
   kind?: IconKind;
   offClassName?: string;
+  onClassName?: string;
 }) {
   return (
     <>
       <Off aria-hidden="true" className={cn(offClassName, "redesign:hidden")} />
-      <Icon icon={on} kind={kind} className="hidden h-3.5 w-3.5 redesign:block" />
+      <Icon icon={on} kind={kind} className={cn("hidden redesign:block", onClassName)} />
     </>
   );
 }
@@ -92,6 +111,7 @@ export function ChannelSectionHeader({
   uppercase = true,
   actions,
   isDragOver = false,
+  dropFill = false,
   onDragOver,
   onDrop,
   className,
@@ -110,11 +130,17 @@ export function ChannelSectionHeader({
   uppercase?: boolean;
   actions?: ReactNode;
   isDragOver?: boolean;
+  /**
+   * The drop fill and "Soltar em" under the redesign, with no base ring: for
+   * a header whose wrapper already draws the ring with the toggle off.
+   */
+  dropFill?: boolean;
   onDragOver?: (event: DragEvent) => void;
   onDrop?: (event: DragEvent) => void;
   className?: string;
 }) {
   const { t } = useTranslation();
+  const drop = isDragOver || dropFill;
   return (
     <div
       data-section-header=""
@@ -127,6 +153,7 @@ export function ChannelSectionHeader({
         isDragOver && "ring-1 ring-inset ring-accent",
         className,
         CATEGORY_ROW_REDESIGN,
+        drop && CATEGORY_DROP_INTO_REDESIGN,
       )}
     >
       <button
@@ -134,10 +161,11 @@ export function ChannelSectionHeader({
         onClick={onToggle}
         aria-expanded={!collapsed}
         aria-controls={controlsId}
+        data-section-toggle=""
         className={cn(
           "flex min-w-0 flex-1 items-center gap-1 rounded-sm text-left",
           SECTION_FOCUS_RING,
-          "redesign:gap-1.5 redesign:rounded-full redesign:focus-visible:ring-accent",
+          CATEGORY_TOGGLE_REDESIGN,
         )}
       >
         <SectionCaret collapsed={collapsed} />
@@ -156,6 +184,8 @@ export function ChannelSectionHeader({
             className={cn(
               "ml-auto flex shrink-0 items-center gap-1 pl-1 text-[10px] font-medium normal-case tracking-normal text-text-tertiary",
               CATEGORY_SUMMARY_REDESIGN,
+              // A drop target says only where the channel goes.
+              drop && "redesign:hidden",
             )}
           >
             {t("chrome.categoryChannelCount", { count: childCount })}
@@ -168,7 +198,17 @@ export function ChannelSectionHeader({
           </span>
         )}
       </button>
-      {actions}
+      {drop && (
+        // The name is already on the row, so a long one is never cut twice.
+        <span
+          data-category-drop-label=""
+          className="hidden shrink-0 text-[11px] font-semibold normal-case tracking-normal redesign:inline"
+        >
+          {t("chrome.dropHere")}
+        </span>
+      )}
+      {/* While a channel hovers, the drop label takes the actions' place. */}
+      <span className={cn("contents", drop && "redesign:hidden")}>{actions}</span>
     </div>
   );
 }

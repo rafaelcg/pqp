@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { MarqueeText } from "@/components/ui/marquee-text";
 import { useTranslation } from "@/lib/i18n";
+import { cn } from "@/lib/utils";
 import { setMusicOpen } from "@/lib/music-store";
 
 export type { ChannelMusicCardRights } from "@/components/voice/channel-music-card-rights";
@@ -47,7 +48,14 @@ export function ChannelMusicCard({
   return (
     <div
       data-channel-music={channelId}
-      className="group ml-2 mt-0.5 flex min-w-0 items-center gap-1.5 rounded-[var(--radius-card)] bg-surface-2 py-1 pl-1.5 pr-1 text-[11px] text-text ring-1 ring-border redesign:ml-5 redesign:gap-2 redesign:rounded-[var(--sidebar-card-radius)] redesign:bg-[color:var(--card-bg)] redesign:py-1.5 redesign:pl-1.5 redesign:pr-1.5 redesign:text-xs redesign:ring-[color:var(--card-border)]"
+      className={cn(
+        "group ml-2 mt-0.5 flex min-w-0 items-center gap-1.5 rounded-[var(--radius-card)] bg-surface-2 py-1 pl-1.5 pr-1 text-[11px] text-text ring-1 ring-border redesign:ml-5 redesign:gap-2 redesign:rounded-[var(--sidebar-card-radius)] redesign:bg-[color:var(--card-bg)] redesign:py-1.5 redesign:pl-1.5 redesign:pr-1.5 redesign:text-xs redesign:ring-[color:var(--card-border)]",
+        // Keyboard focus on the title rings the whole card, as on a row.
+        "redesign:has-[[data-music-title]:focus-visible]:ring-2 redesign:has-[[data-music-title]:focus-visible]:ring-inset redesign:has-[[data-music-title]:focus-visible]:ring-[color:var(--list-row-ring)]",
+        // In the call the whole card opens the music, so it answers the
+        // pointer, one step over the card in either theme.
+        inCall && "redesign:relative redesign:cursor-pointer redesign:hover:bg-[color:var(--card-hover)]",
+      )}
     >
       <span className="relative h-6 w-6 shrink-0 overflow-hidden rounded-[var(--radius-control)] bg-surface-3 redesign:flex redesign:h-7 redesign:w-7 redesign:items-center redesign:rounded-lg">
         {track.thumbnailUrl ? (
@@ -61,11 +69,17 @@ export function ChannelMusicCard({
       </span>
       <button
         type="button"
-        className="min-w-0 flex-1 text-left"
+        data-music-title=""
+        className={cn(
+          "min-w-0 flex-1 text-left redesign:focus-visible:outline-none",
+          // In the call the title's hit area covers the card, cover included.
+          inCall && "redesign:after:absolute redesign:after:inset-0 redesign:after:content-['']",
+        )}
         aria-label={inCall ? t("music.open") : t("music.sidebar.join", { title: track.title })}
         onClick={onTitleClick}
       >
-        <MarqueeText text={track.title} className="w-full min-w-0 text-[11px] text-text redesign:text-xs redesign:font-medium" />
+        {/* A title that does not fit fades at the edge instead of cutting mid-letter. */}
+        <MarqueeText text={track.title} className="w-full min-w-0 text-[11px] text-text redesign:text-xs redesign:font-medium redesign:data-[overflows]:[mask-image:linear-gradient(90deg,#000_85%,transparent)]" />
         {track.listeners != null && track.listeners > 0 ? (
           <span className="block truncate text-[10px] text-text-tertiary tabular-nums redesign:text-[11px]">
             {t("music.listening", { count: track.listeners })}

@@ -251,6 +251,8 @@ export function UserPanel({
   // Deafen forces the mic off, so both slashes show. Undeafen can leave the
   // mic slash up: that is the mute from before, not a second deafen.
   const micShownOff = serverMuted || isMuted || isDeafened;
+  /** In a call without the right to speak (audience mode), not muted by anyone. */
+  const listenOnly = inVoice && !canSpeak && !micShownOff;
 
   // Re-seed the draft from the truth: when the menu opens, and whenever the
   // saved value moves under it (another tab, another device, or this write
@@ -353,7 +355,9 @@ export function UserPanel({
         // An inset card at the foot of the sidebar, like the voice strip
         // above it. The presence dot's cutout is the card's colour, opaque.
         compact ? SIDEBAR_FOOTER_CARD_COMPACT_REDESIGN : SIDEBAR_FOOTER_CARD_REDESIGN,
-        "redesign:mb-2 redesign:[--avatar-dot-ring:color-mix(in_oklab,var(--color-text)_4%,var(--color-pane-side))]",
+        // Only a real home-indicator inset adds space below; the row keeps its own
+        // padding, so the content sits centred in the card.
+        "redesign:mb-2 redesign:[--safe-pb-min:0px] redesign:[--avatar-dot-ring:var(--footer-card-solid)]",
       )}
     >
       {showHint && (
@@ -379,6 +383,8 @@ export function UserPanel({
             className={cn(
               "absolute bottom-full left-0 z-50 mb-2 w-64 overflow-hidden rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)] animate-fade-in",
               MENU_PANEL_REDESIGN,
+              // Lines up with both edges of the card instead of a fixed 256px.
+              "redesign:right-0 redesign:w-auto",
             )}
           >
           {/* Renaming lives first because this menu is where people look for
@@ -613,9 +619,9 @@ export function UserPanel({
         className={cn(
           "flex min-w-0 items-center gap-2 rounded-md px-1 py-0.5 text-left hover:bg-ink-2",
           !compact && "flex-1",
-          "redesign:gap-2.5 redesign:rounded-full redesign:py-1 redesign:pl-1 redesign:pr-2 redesign:hover:bg-[color:var(--card-row-hover)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent",
+          "redesign:gap-2.5 redesign:rounded-full redesign:py-1 redesign:pl-1 redesign:pr-2 redesign:hover:bg-[color:var(--card-row-hover)] redesign:hover:[--avatar-dot-ring:var(--footer-card-solid-hover)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent",
           compact && "redesign:p-1",
-          open && "redesign:bg-[color:var(--card-row-hover)]",
+          open && "redesign:bg-[color:var(--card-row-hover)] redesign:[--avatar-dot-ring:var(--footer-card-solid-hover)]",
         )}
         onClick={() => setOpen((prev) => !prev)}
       >
@@ -696,7 +702,12 @@ export function UserPanel({
               "h-8 w-8 shrink-0",
               PANEL_BUTTON_REDESIGN,
               micShownOff && inVoice && !serverMuted && PANEL_BUTTON_OFF_REDESIGN,
-              serverMuted && "redesign:bg-warning-soft redesign:text-on-warning-soft",
+              // A moderator's mute is disabled, and must still read at full
+              // strength: it is the one time "am I heard" matters most.
+              serverMuted && "redesign:bg-warning-soft redesign:text-on-warning-soft redesign:[--button-disabled-opacity:1]",
+              // Listen only: locked, not unavailable. A neutral fill and the
+              // slashed mic at full strength.
+              listenOnly && "redesign:bg-transparent redesign:text-text-secondary redesign:ring-1 redesign:ring-inset redesign:ring-[color:var(--card-border)] redesign:[--button-disabled-opacity:1]",
             )}
             onClick={onToggleMute}
             disabled={!inVoice || !canSpeak || serverMuted}
@@ -710,18 +721,17 @@ export function UserPanel({
             }
           >
             {micShownOff ? (
-              <>
-                <MicOff
-                  className={cn("h-4 w-4 redesign:hidden", serverMuted ? "text-warning" : "text-danger")}
-                />
-                <Icon icon={MicrophoneSlash} size="sm" className="hidden redesign:block" />
-              </>
+              <MicOff
+                className={cn("h-4 w-4 redesign:hidden", serverMuted ? "text-warning" : "text-danger")}
+              />
             ) : (
-              <>
-                <Mic className="h-4 w-4 redesign:hidden" />
-                <Icon icon={Microphone} size="sm" className="hidden redesign:block" />
-              </>
+              <Mic className="h-4 w-4 redesign:hidden" />
             )}
+            <Icon
+              icon={micShownOff || listenOnly ? MicrophoneSlash : Microphone}
+              size="sm"
+              className="hidden redesign:block"
+            />
           </Button>
         </span>
       </Tooltip>

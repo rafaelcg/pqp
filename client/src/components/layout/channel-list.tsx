@@ -49,7 +49,7 @@ import {
   GearSix,
   PencilSimple,
   PushPin,
-  Lock as LockFill,
+  Lock as LockGlyph,
   MagnifyingGlass,
   Plus as PlusBold,
   SidebarSimple,
@@ -278,15 +278,22 @@ const CHANNEL_ROW_REDESIGN =
  * the list row's icon colour (the selected text on the open row). A private
  * channel's padlock keeps its warning colour.
  */
-export function channelRowIconClass(channel: Channel, selected: boolean): string {
+export function channelRowIconClass(channel: Channel, selected: boolean, connected = false): string {
   return cn(
     "h-3.5 w-3.5 redesign:h-4 redesign:w-4",
     !channelIconIsPrivateLock(channel) &&
-      (selected
-        ? "redesign:text-[color:var(--list-row-selected-text)]"
-        : "redesign:text-[color:var(--list-row-icon)]"),
+      (connected
+        ? // The room you are in, open or not: the icon follows its green text.
+          "redesign:text-on-success-soft"
+        : selected
+          ? "redesign:text-[color:var(--list-row-selected-text)]"
+          : "redesign:text-[color:var(--list-row-icon)]"),
   );
 }
+
+/** A connected room's second line: its green, a step quieter. */
+const CHANNEL_DETAIL_CONNECTED_REDESIGN =
+  "redesign:text-[color:color-mix(in_oklab,var(--color-on-success-soft)_80%,transparent)]";
 
 /** A watch party room's second line (its viewers, its topic). */
 const CHANNEL_DETAIL_REDESIGN =
@@ -299,9 +306,9 @@ const CHANNEL_DETAIL_REDESIGN =
  * success tone. The two buttons at the top are round, as the header's are.
  */
 const STRIP_TILE_REDESIGN =
-  "redesign:rounded-[var(--strip-tile-radius)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent";
+  "redesign:rounded-[var(--strip-tile-radius)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-[color:var(--color-pane-side)]";
 const STRIP_BUTTON_REDESIGN =
-  "redesign:rounded-full redesign:text-[color:var(--list-row-icon)] redesign:hover:bg-[color:var(--list-row-hover)] redesign:hover:text-text redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent";
+  "redesign:rounded-full redesign:text-[color:var(--list-row-icon)] redesign:hover:bg-[color:var(--list-row-hover)] redesign:hover:text-text redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-[color:var(--color-pane-side)]";
 /** The pip, the mention and the call count cut out of the side pane. */
 const STRIP_RING_REDESIGN = "redesign:ring-2 redesign:ring-[color:var(--color-pane-side)]";
 
@@ -311,7 +318,7 @@ const BAU_NEW_CHIP_REDESIGN =
 
 /** The pin and settings tiles: round, a tint of the text on hover so it shows on a selected row too. */
 const CHANNEL_ACTION_REDESIGN =
-  "redesign:rounded-full redesign:text-[color:var(--list-row-icon)] redesign:hover:bg-[color:var(--card-row-hover)] redesign:hover:text-text redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent";
+  "redesign:rounded-full redesign:text-[color:var(--list-row-icon)] redesign:hover:bg-[color:var(--card-row-hover)] redesign:hover:text-text redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--list-row-ring)]";
 
 export { formatBadgeCount };
 
@@ -952,7 +959,7 @@ export const ChannelList = memo(function ChannelList({
         data-channel-rail=""
         className={cn("hidden w-[72px] shrink-0 flex-col border-r border-ink-4/60 bg-channel md:flex", PANE_SIDE_REDESIGN)}
       >
-        <div className="flex flex-col items-center gap-1 border-b border-ink-4/60 px-2 py-2 redesign:border-[color:var(--card-border)]">
+        <div className="flex flex-col items-center gap-1 border-b border-ink-4/60 px-2 py-2 redesign:mx-2 redesign:border-[color:var(--card-border)] redesign:px-0">
           <Tooltip label={t("chrome.expandChannelList")} side="right">
             {/* The same control as the header's fold button, in its other
                 state: one identity per boundary, pressed while folded. */}
@@ -1003,7 +1010,7 @@ export const ChannelList = memo(function ChannelList({
             initialQuery={searchSeed}
           />
         )}
-        <div className="flex flex-1 flex-col items-center gap-1 overflow-y-auto px-2 py-2">
+        <div className="flex flex-1 flex-col items-center gap-1 overflow-y-auto px-2 py-2 redesign:gap-1.5">
           {(communityHomeEnabled || server?.isCommunity) &&
             server &&
             onSelectCommunityHome && (
@@ -1021,7 +1028,16 @@ export const ChannelList = memo(function ChannelList({
             <div
               key={group.key}
               className={cn(
-                "flex w-full flex-col items-center gap-1",
+                // 6px between tiles under the redesign: a badge hanging off
+                // one tile's corner never meets the next tile's.
+                "flex w-full flex-col items-center gap-1 redesign:gap-1.5",
+                // The Baú is a page, not a channel: under the redesign a rule
+                // sets it apart from the first group too.
+                index === 0 &&
+                  (communityHomeEnabled || server?.isCommunity) &&
+                  server &&
+                  onSelectCommunityHome &&
+                  "redesign:mt-1 redesign:border-t redesign:pt-2 redesign:border-[color:var(--card-border)]",
                 index > 0 && "mt-1 border-t border-ink-4/50 pt-2 redesign:border-[color:var(--card-border)]",
               )}
             >
@@ -1807,6 +1823,7 @@ export const ChannelList = memo(function ChannelList({
               className={channelRowIconClass(
                 channel,
                 selectedChannelId === channel.id,
+                activeVoiceChannelId === channel.id,
               )}
             />
           }
@@ -2404,7 +2421,7 @@ export const ChannelList = memo(function ChannelList({
           // (`e2e/server-header.spec.ts`), not by `channel-list-header.test.tsx`
           // — jsdom has no layout engine, so a static-markup test cannot see
           // a box model computation like this one.
-          className="flex min-h-12 shrink-0 items-center gap-2 border-b border-border px-3 py-1.5 redesign:min-h-14 redesign:border-b-0 redesign:px-2 redesign:pt-2 redesign:pb-1"
+          className="flex min-h-12 shrink-0 items-center gap-2 border-b border-border px-3 py-1.5 redesign:min-h-14 redesign:border-b-0 redesign:px-3 redesign:pt-2 redesign:pb-1"
         >
           {server ? (
             <Menu
@@ -2449,7 +2466,9 @@ export const ChannelList = memo(function ChannelList({
                 <IconButton
                   label={t("chrome.members")}
                   touch={false}
-                  className={HEADER_ICON_BUTTON}
+                  // On a phone the chat header has its own members button, so
+                  // under the redesign the drawer gives the name that room.
+                  className={cn(HEADER_ICON_BUTTON, "max-sm:redesign:hidden")}
                   onClick={onOpenMembers}
                 >
                   <Users className="h-4 w-4 redesign:hidden" aria-hidden="true" />
@@ -2505,7 +2524,7 @@ export const ChannelList = memo(function ChannelList({
             <Search className="h-3.5 w-3.5 shrink-0 redesign:hidden" />
             <Icon icon={MagnifyingGlass} kind="symbol" size="sm" className="hidden redesign:block" />
             <span className="truncate">{t("chrome.searchMessages")}</span>
-            <kbd className="ml-auto hidden shrink-0 rounded border border-border px-1 py-px text-[10px] font-sans md:inline redesign:rounded-md redesign:border-0 redesign:bg-surface-3 redesign:px-1.5 redesign:text-text-secondary">
+            <kbd className="ml-auto hidden shrink-0 rounded border border-border px-1 py-px text-[10px] font-sans md:inline redesign:rounded-md redesign:border-0 redesign:bg-surface-3 redesign:px-1.5 redesign:py-0.5 redesign:text-[11px] redesign:text-text-secondary">
               {searchShortcutHint(conversationsHome)}
             </kbd>
           </button>
@@ -2772,6 +2791,7 @@ export const ChannelList = memo(function ChannelList({
                     className={cn(
                       "pl-4 text-[11px] font-semibold uppercase tracking-[0.12em] text-text-tertiary",
                       CATEGORY_LABEL_REDESIGN,
+                      // A label, not a fold control: no caret and no hover.
                       "redesign:pl-[1.125rem] redesign:text-text-secondary",
                     )}
                   >
@@ -2791,7 +2811,7 @@ export const ChannelList = memo(function ChannelList({
                         )}
                         onClick={() => onCreateChannel("category", false)}
                       >
-                        <SectionActionGlyph off={FolderPlus} on={FolderSimplePlus} />
+                        <SectionActionGlyph off={FolderPlus} on={FolderSimplePlus} kind="symbol" />
                       </button>
                     </Tooltip>
                   )}
@@ -2984,9 +3004,11 @@ export const ChannelList = memo(function ChannelList({
 /**
  * The header's icon buttons with the toggle off: 32px, 28px from `md`, the
  * ring offset they always had. Under the redesign IconButton's own round
- * ghost draws them.
+ * ghost draws them: 32px from `md` like the chat header's, 44px on a phone
+ * so a thumb lands on it.
  */
-const HEADER_ICON_BUTTON = "md:h-7 md:w-7 focus-visible:ring-offset-2";
+const HEADER_ICON_BUTTON =
+  "md:h-7 md:w-7 focus-visible:ring-offset-2 max-sm:redesign:h-11 max-sm:redesign:w-11 md:redesign:h-8 md:redesign:w-8";
 
 const ServerHeaderMenuTrigger = forwardRef<
   HTMLButtonElement,
@@ -3006,7 +3028,7 @@ const ServerHeaderMenuTrigger = forwardRef<
       ref={nameRef}
       id={nameId}
       data-server-name=""
-      className="min-w-0 flex-1 truncate font-display text-sm font-bold tracking-tight leading-tight text-text redesign:font-[family-name:var(--type-title-font)]! redesign:text-[length:var(--sidebar-header-title-size)] redesign:font-semibold redesign:tracking-[-0.012em]!"
+      className="min-w-0 flex-1 redesign:flex-initial truncate font-display text-sm font-bold tracking-tight leading-tight text-text redesign:font-[family-name:var(--type-title-font)]! redesign:text-[length:var(--sidebar-header-title-size)] redesign:font-bold redesign:tracking-[-0.012em]!"
     >
       {server.name}
     </p>
@@ -3033,8 +3055,10 @@ const ServerHeaderMenuTrigger = forwardRef<
       // markup cannot see this (no layout engine), which is why it took a
       // real Playwright run to catch. `items-center` on the row still
       // centers everything; only the click/hover rectangle's own height
-      // changed, not the icon's position.
-      className="group flex min-w-0 flex-1 items-center gap-2 rounded-[var(--radius-control)] px-1 text-left transition-colors duration-[var(--duration-fast)] hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 data-[state=open]:bg-surface-2 redesign:min-h-11 redesign:gap-2.5 redesign:rounded-[var(--radius-row)] redesign:px-2 redesign:hover:bg-row-hover redesign:data-[state=open]:bg-row-hover redesign:focus-visible:ring-accent redesign:focus-visible:ring-offset-0"
+      // changed, not the icon's position. Under the redesign there is no
+      // icon: the trigger is a 44px pill (`min-h-11`) and the name and caret
+      // sit together at its start.
+      className="group flex min-w-0 flex-1 items-center gap-2 rounded-[var(--radius-control)] px-1 text-left transition-colors duration-[var(--duration-fast)] hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 data-[state=open]:bg-surface-2 redesign:min-h-11 redesign:gap-1.5 redesign:rounded-[var(--radius-row)] redesign:px-2 redesign:hover:bg-[color:var(--sidebar-trigger-hover)] redesign:data-[state=open]:bg-[color:var(--sidebar-trigger-open)] redesign:focus-visible:ring-accent redesign:focus-visible:ring-offset-0"
       {...triggerProps}
     >
       {/* Under the redesign the open server's tile sits right beside this
@@ -3049,7 +3073,7 @@ const ServerHeaderMenuTrigger = forwardRef<
         // is never invisible from the inside, and a mark that eats the name is
         // one people learn to resent. 16px tall so the row stays under its
         // 48px floor (name line plus mark come to about 34px).
-        <span className="flex min-w-0 flex-1 flex-col items-start">
+        <span className="flex min-w-0 flex-1 flex-col items-start redesign:flex-initial">
           {nameBlock}
           <PublicBadge id={publicId} className="h-4" />
         </span>
@@ -3259,7 +3283,7 @@ export function ChannelSection({
                   className={addButtonClass}
                   onClick={onAddPrivate}
                 >
-                  <SectionActionGlyph off={Lock} on={LockFill} offClassName="h-3 w-3" />
+                  <SectionActionGlyph off={Lock} on={LockGlyph} offClassName="h-3 w-3" />
                 </button>
               </Tooltip>
             </div>
@@ -3343,11 +3367,12 @@ export function CategoryHeader({
           // Under the redesign a category reads like any other header: the
           // text brightens, no fill.
           "redesign:rounded-full redesign:hover:bg-transparent",
-          isDragOver && "redesign:ring-accent",
+          isDragOver && "redesign:ring-0",
         )}
       >
         <ChannelSectionHeader
           label={category.name}
+          dropFill={isDragOver}
           uppercase={false}
           collapsed={collapsed}
           onToggle={onToggle}
@@ -3458,7 +3483,7 @@ export function ChannelRailItem({
         className={cn(
           // `touch-manipulation` for the same reason the wide row has it: the
           // double tap is the only pointer gesture that joins.
-          "relative flex h-10 w-10 shrink-0 touch-manipulation items-center justify-center rounded-lg transition-colors",
+          "group/strip-tile relative flex h-10 w-10 shrink-0 touch-manipulation items-center justify-center rounded-lg transition-colors",
           selected
             ? "bg-ink-3 text-paper"
             : "text-paper-muted hover:bg-ink-3/70 hover:text-paper",
@@ -3471,8 +3496,13 @@ export function ChannelRailItem({
             ? "redesign:bg-[color:var(--list-row-selected)] redesign:text-[color:var(--list-row-selected-text)]"
             : "redesign:text-[color:var(--list-row-icon)] redesign:hover:bg-[color:var(--list-row-hover)] redesign:hover:text-text",
           hasUnread && !selected && !connected && "redesign:text-text",
+          // The call you are in: green, with a faint green edge so it reads
+          // apart from the open tile's lime by more than hue.
           connected &&
-            "redesign:bg-success-soft redesign:text-on-success-soft redesign:ring-0 redesign:hover:bg-success-soft redesign:hover:text-on-success-soft",
+            "redesign:bg-success-soft redesign:text-on-success-soft redesign:ring-1 redesign:ring-inset redesign:ring-[color:color-mix(in_oklab,var(--color-success)_45%,transparent)] redesign:hover:bg-success-soft redesign:hover:text-on-success-soft",
+          // In the call and viewing it: the edge goes solid, so the strip
+          // still shows which tile is open.
+          connected && selected && "redesign:ring-2 redesign:ring-[color:var(--color-success)]",
           muted && !selected && !connected && "redesign:opacity-[var(--list-row-muted-opacity)]",
         )}
         onClick={() => {
@@ -3523,7 +3553,9 @@ export function ChannelRailItem({
           <>
             <span
               aria-hidden="true"
-              className="absolute -left-2 top-1/2 h-4 w-1 -translate-y-1/2 rounded-r-full bg-paper redesign:h-2 redesign:bg-text"
+              // Flush to the pane's edge, as the server rail's pill sits on
+              // the window's; it grows on hover like that one.
+              className="absolute -left-2 top-1/2 h-4 w-1 -translate-y-1/2 rounded-r-full bg-paper redesign:-left-4 redesign:h-2 redesign:bg-text redesign:transition-[height] redesign:group-hover/strip-tile:h-5"
             />
             <span className="sr-only">{t("chrome.unreadSr")}</span>
           </>
@@ -3544,7 +3576,7 @@ export function ChannelRailItem({
         {occupants > 0 && (
           <span
             className={cn(
-              "absolute -bottom-1 -right-1 min-w-4 rounded-full bg-ink-4 px-1 py-0.5 text-center text-[10px] font-bold leading-none text-paper",
+              "absolute -bottom-1 -right-1 min-w-4 rounded-full bg-ink-4 px-1 py-0.5 text-center text-[10px] font-bold leading-none text-paper redesign:-bottom-0.5 redesign:-right-0.5",
               // How many are in the call: a quiet count, not an alert.
               "redesign:flex redesign:h-4 redesign:items-center redesign:justify-center redesign:bg-surface-3 redesign:py-0 redesign:text-[length:var(--count-badge-sm-text)] redesign:font-semibold redesign:tabular-nums redesign:text-text-secondary",
               STRIP_RING_REDESIGN,
@@ -3581,9 +3613,11 @@ export function DraftMark() {
 function CommunityHomeFace({
   server,
   compact,
+  selected = false,
 }: {
   server: Pick<Server, "name" | "iconUrl" | "isCommunity" | "communitySlug">;
   compact?: boolean;
+  selected?: boolean;
 }) {
   const tile = cn(
     compact ? "h-9 w-9 rounded-[10px]" : "h-8 w-8 rounded-lg",
@@ -3599,11 +3633,14 @@ function CommunityHomeFace({
           "flex shrink-0 items-center justify-center bg-ink-4 text-paper-muted",
           tile,
           "redesign:bg-surface-3 redesign:text-text-secondary",
+          // In the strip the tile itself is the chest: no face of its own,
+          // so the open and hover fills show whole.
+          compact && "redesign:bg-transparent redesign:text-inherit",
         )}
         data-community-home-face="chest"
       >
         <Archive className="h-4 w-4 redesign:hidden" aria-hidden />
-        <Icon icon={ArchiveFill} size="sm" className="hidden redesign:block" />
+        <Icon icon={ArchiveFill} size="sm" className={cn("hidden redesign:block", compact && "h-[1.125rem] w-[1.125rem]")} />
       </span>
     );
   }
@@ -3614,6 +3651,8 @@ function CommunityHomeFace({
         "relative flex shrink-0 items-center justify-center overflow-hidden font-display font-bold text-paper",
         tile,
         type,
+        // A poster keeps its picture, so the open one takes a lime ring.
+        compact && selected && "redesign:ring-2 redesign:ring-accent",
       )}
       style={heroTintStyle(hue, 60)}
       data-community-home-face="poster"
@@ -3710,7 +3749,7 @@ export function CommunityHomeNavButton({
       )}
       onClick={onSelect}
     >
-      <CommunityHomeFace server={server} compact={compact} />
+      <CommunityHomeFace server={server} compact={compact} selected={selected} />
       {!compact && (
         <span className="min-w-0 flex-1 truncate text-sm font-semibold text-paper redesign:font-medium redesign:text-inherit">
           {t("communityHome.channelName")}
@@ -4052,6 +4091,7 @@ export function ChannelRow({
         }
       }}
       aria-current={announceCurrent ? "page" : undefined}
+      data-channel-row-main=""
       className="flex min-w-0 flex-1 touch-manipulation items-center gap-1.5 text-left redesign:gap-[var(--list-row-gap-sm)] redesign:self-stretch redesign:rounded-[inherit] redesign:focus-visible:outline-none"
     >
       {/* Private is the glyph, not a word. The pill that used to sit at
@@ -4103,6 +4143,7 @@ export function ChannelRow({
                 "truncate text-[10px] text-paper-muted",
                 CHANNEL_DETAIL_REDESIGN,
                 selected && "redesign:text-[color:var(--list-row-selected-text)]",
+                connected && CHANNEL_DETAIL_CONNECTED_REDESIGN,
               )}
             >
               {/* Under the redesign the live mark is this dot, not the
@@ -4125,6 +4166,7 @@ export function ChannelRow({
                   "truncate text-[10px] text-paper-muted",
                   CHANNEL_DETAIL_REDESIGN,
                   selected && "redesign:text-[color:var(--list-row-selected-text)]",
+                  connected && CHANNEL_DETAIL_CONNECTED_REDESIGN,
                 )}
               >
                 {topic}
@@ -4175,7 +4217,11 @@ export function ChannelRow({
           <>
             <span
               aria-hidden="true"
-              className="h-1.5 w-1.5 rounded-full bg-signal"
+              className={cn(
+                // Under the redesign the success fill says connected; the
+                // end column only ever means "something is waiting".
+                "h-1.5 w-1.5 rounded-full bg-signal redesign:hidden",
+              )}
             />
             <span className="sr-only">{t("chrome.connected")}</span>
           </>
@@ -4196,6 +4242,8 @@ export function ChannelRow({
               // The pill it always was with the toggle off.
               "h-auto py-0.5 text-center text-paper normal-nums",
               "redesign:h-[var(--count-badge-h)] redesign:min-w-[var(--count-badge-h)] redesign:py-0 redesign:text-[length:var(--count-badge-text)] redesign:tabular-nums redesign:text-on-danger",
+              // Ends at the row's 12px padding, as the name starts at it.
+              "redesign:mr-2",
             )}
           />
         )}
@@ -4206,7 +4254,7 @@ export function ChannelRow({
             aria-hidden="true"
             data-channel-unread-pip=""
             className={cn(
-              "hidden h-[var(--list-row-pip)] w-[var(--list-row-pip)] shrink-0 rounded-full bg-indicator redesign:block",
+              "hidden h-[var(--list-row-pip)] w-[var(--list-row-pip)] shrink-0 rounded-full bg-indicator redesign:mr-2 redesign:block",
               // The tiles take its place on hover (a count stays).
               (onToggleFavorite || canOpenSettings) &&
                 "redesign:group-hover:hidden redesign:group-focus-within:hidden",
@@ -4275,11 +4323,18 @@ export function ChannelRow({
             ? "redesign:bg-[color:var(--list-row-selected)] redesign:font-medium redesign:text-[color:var(--list-row-selected-text)]"
             : "redesign:text-[color:var(--list-row-text)] redesign:hover:bg-[color:var(--list-row-hover)] redesign:hover:text-text",
           hasUnread && !muted && !selected && !connected && "redesign:text-text",
-          // The room you are in: the success tone's soft fill, no ring.
-          connected &&
-            "redesign:bg-success-soft redesign:text-on-success-soft redesign:ring-0 redesign:hover:bg-success-soft redesign:hover:text-on-success-soft",
           muted && !selected && !connected && "redesign:opacity-[var(--list-row-muted-opacity)]",
           isDragOver && !occupantDragActive && "redesign:ring-accent",
+          // The room you are in, as a voice room says it: the success fill,
+          // no ring. It wins over the selected fill too, because being in the
+          // room is the usual reason it is open.
+          connected &&
+            "redesign:bg-success-soft redesign:text-on-success-soft redesign:hover:bg-success-soft redesign:hover:text-on-success-soft",
+          // A channel dragged over it still shows the drop ring.
+          connected && !isDragOver && "redesign:ring-0",
+          // The row's focus ring, on the whole pill: the button inside
+          // drops its outline under the redesign.
+          "redesign:has-[[data-channel-row-main]:focus-visible]:ring-2 redesign:has-[[data-channel-row-main]:focus-visible]:ring-inset redesign:has-[[data-channel-row-main]:focus-visible]:ring-[color:var(--list-row-ring)]",
         )}
       >
         {hasUnread && !muted && (
@@ -4319,7 +4374,7 @@ export function ChannelRow({
             data-channel-join=""
             data-channel-watch=""
             draggable={false}
-            className="shrink-0 rounded-md bg-danger/15 px-1.5 py-0.5 text-[10px] font-semibold text-danger hover:bg-danger/25 redesign:rounded-full redesign:bg-danger-soft redesign:px-2.5 redesign:py-1 redesign:text-xs redesign:text-on-danger-soft redesign:hover:bg-[color:color-mix(in_oklab,var(--color-danger-soft)_85%,var(--color-text))] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent"
+            className="shrink-0 rounded-md bg-danger/15 px-1.5 py-0.5 text-[10px] font-semibold text-danger hover:bg-danger/25 redesign:rounded-full redesign:bg-danger-soft redesign:px-2.5 redesign:py-1 redesign:text-xs redesign:text-on-danger-soft redesign:hover:bg-[color:color-mix(in_oklab,var(--color-danger-soft)_85%,var(--color-text))] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--list-row-ring)]"
             title={t("watchParty.live.watchHint")}
             onClick={(event) => {
               event.preventDefault();
@@ -4354,8 +4409,12 @@ export function ChannelRow({
                 // Under the redesign a hidden tile takes no room, so the pip
                 // ends the row; it comes in on hover or focus.
                 isFavorite
-                  ? "redesign:text-current"
+                  ? // The icon colour, not the text: a bright pin at the
+                    // row's end would read as the unread pip.
+                    "redesign:text-[color:var(--list-row-icon)]"
                   : "redesign:hidden redesign:group-hover:flex redesign:group-focus-within:flex",
+                // After the pin's own colour: the room you are in stays green.
+                connected && "redesign:text-on-success-soft redesign:hover:text-on-success-soft",
               )}
               aria-label={
                 isFavorite ? t("chrome.unpinChannel") : t("chrome.pinChannel")
@@ -4389,6 +4448,8 @@ export function ChannelRow({
                 selected
                   ? "redesign:text-[color:var(--list-row-selected-text)]"
                   : "redesign:hidden redesign:group-hover:flex redesign:group-focus-within:flex",
+                // After the selected colour: the room you are in stays green.
+                connected && "redesign:text-on-success-soft redesign:hover:text-on-success-soft",
                 // Same as the pin: not drawn on a touch screen unless the
                 // channel is selected. Settings is in the long-press menu.
                 selected
@@ -4467,8 +4528,13 @@ export function SidebarThreadRow({
                 : "text-text-tertiary hover:text-text",
               // Under the redesign a thread is a smaller list row: a 32px
               // pill, the row's text roles, the end pip for unread.
-              "redesign:min-h-8 redesign:gap-[var(--list-row-gap-sm)] redesign:rounded-[inherit] redesign:px-[var(--list-row-px)] redesign:text-[13px] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-inset redesign:focus-visible:ring-accent",
+              "redesign:min-h-8 redesign:gap-[var(--list-row-gap-sm)] redesign:rounded-[inherit] redesign:pl-[var(--list-row-px)] redesign:text-[13px] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-inset redesign:focus-visible:ring-[color:var(--list-row-ring)]",
               !unread && "redesign:text-[color:var(--list-row-text)]",
+              // With a leave button the base right padding keeps its room.
+              !onLeave && "redesign:pr-[var(--list-row-px)]",
+              // On a pointer the X only shows on hover, over the pip's slot
+              // (which fades then), so the pip keeps the channels' column.
+              onLeave && "redesign:[@media(hover:hover)]:pr-[var(--list-row-px)]",
             )}
           >
             <MessageSquareText
@@ -4498,7 +4564,7 @@ export function SidebarThreadRow({
                 data-thread-leave=""
                 aria-label={t("thread.leaveNamed", { name: thread.name })}
                 onClick={onLeave}
-                className="absolute right-1 flex h-5 w-5 items-center justify-center rounded text-text-tertiary opacity-0 [@media(hover:none)]:right-0 [@media(hover:none)]:h-8 [@media(hover:none)]:w-8 hover:bg-surface-3 hover:text-text focus:outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-focus-ring group-hover/thread:opacity-100 group-focus-within/thread:opacity-100 [@media(hover:none)]:opacity-100 redesign:h-6 redesign:w-6 redesign:rounded-full redesign:hover:bg-[color:var(--card-row-hover)] redesign:focus-visible:ring-accent"
+                className="absolute right-1 flex h-5 w-5 items-center justify-center rounded text-text-tertiary opacity-0 [@media(hover:none)]:right-0 [@media(hover:none)]:h-8 [@media(hover:none)]:w-8 hover:bg-surface-3 hover:text-text focus:outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-focus-ring group-hover/thread:opacity-100 group-focus-within/thread:opacity-100 [@media(hover:none)]:opacity-100 redesign:h-6 redesign:w-6 redesign:rounded-full redesign:hover:bg-[color:var(--card-row-hover)] redesign:focus-visible:ring-[color:var(--list-row-ring)]"
               >
                 <X className="h-3 w-3 redesign:hidden" aria-hidden />
                 <Icon icon={XBold} kind="symbol" className="hidden h-3 w-3 redesign:block" />
