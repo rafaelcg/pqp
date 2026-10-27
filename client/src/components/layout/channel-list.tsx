@@ -4314,7 +4314,6 @@ export function ChannelRow({
                   ? "text-paper"
                   : "translate-x-2 text-paper-muted opacity-0 group-hover:translate-x-0 group-hover:opacity-100 group-focus-within:translate-x-0 group-focus-within:opacity-100 [@media(hover:none)]:hidden",
                 CHANNEL_ACTION_REDESIGN,
-                connected && "redesign:text-on-success-soft",
                 // Under the redesign a hidden tile takes no room, so the pip
                 // ends the row; it comes in on hover or focus.
                 isFavorite
@@ -4322,6 +4321,8 @@ export function ChannelRow({
                     // row's end would read as the unread pip.
                     "redesign:text-[color:var(--list-row-icon)]"
                   : "redesign:hidden redesign:group-hover:flex redesign:group-focus-within:flex",
+                // After the pin's own colour: the room you are in stays green.
+                connected && "redesign:text-on-success-soft",
               )}
               aria-label={
                 isFavorite ? t("chrome.unpinChannel") : t("chrome.pinChannel")
@@ -4352,10 +4353,11 @@ export function ChannelRow({
                 CHANNEL_ACTION_TILE,
                 "text-paper-muted transition-opacity duration-150 ease-out motion-reduce:transition-none",
                 CHANNEL_ACTION_REDESIGN,
-                connected && "redesign:text-on-success-soft",
                 selected
                   ? "redesign:text-[color:var(--list-row-selected-text)]"
                   : "redesign:hidden redesign:group-hover:flex redesign:group-focus-within:flex",
+                // After the selected colour: the room you are in stays green.
+                connected && "redesign:text-on-success-soft",
                 // Same as the pin: not drawn on a touch screen unless the
                 // channel is selected. Settings is in the long-press menu.
                 selected
