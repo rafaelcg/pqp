@@ -1355,7 +1355,7 @@ function PrimitiveSheet() {
               <UserAvatar
                 key={name}
                 name={name}
-                className="h-7 w-7 ring-2 ring-surface-0"
+                className="h-7 w-7 ring-2 ring-surface-0 redesign:ring-[color:var(--avatar-dot-ring)]"
                 fallbackClassName="bg-surface-3 text-[11px] font-semibold text-text"
                 rounded="full"
               />
