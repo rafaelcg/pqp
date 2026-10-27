@@ -55,6 +55,7 @@ Read this file and the inventory at the start of every session.
 | 2 | `p-loading` | Merged (cap at round 5: 8.6 Opus r5, 8.6 Codex r4, no MUST) |
 | 2 | `p-empty` | Merged, capped at round 5 (Opus 8.6) |
 | 2 | `p-sheet` | Merged, capped at round 5 (Opus 8.6) |
+| 2 | `p-dialog` | Merged, capped at round 5 (Codex 8.7 r2, Opus 8.2 r4) |
 | 3 | `s-frame` | Merged, capped at round 5 (Opus 8.8) |
 
 ## Phase 0: directions
@@ -1009,6 +1010,13 @@ Spec (audit: Dialog in 50 files, ConfirmDialog in 24, PromptDialog in 1;
    glyph, the header 20px at the top, a body-less dialog drops its footer
    rule. Left for `f-server-settings`: its rail divider starts in mid-air
    now that the header rule is gone.
+
+6. Rounds 2 to 5: Codex 8.7 at round 2; the round 3 MUST is fixed; Opus
+   8.2 at round 4 and 8.1 at round 5. Fixed on the way: light dialogs sit
+   on the brightest surface (`--dialog-surface`), and the close glyph lines
+   up with the title's right edge. Capped at round 5, no MUST open.
+Verified: typecheck, 10,462 unit tests, bench:tokens, i18n:check, e2e
+dialog-mobile-layout (16). Screenshots: ~/pqp-redesign/p-dialog/.
 
 ## Open questions for André
 
