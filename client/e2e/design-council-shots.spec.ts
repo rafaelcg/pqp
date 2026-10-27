@@ -611,12 +611,12 @@ test("captures the design council screens", async ({ browser }) => {
       } catch {
         console.log("channel settings gear not found, shot 28 skipped");
       }
-      // A voice room's header, not in the call: the "Entrar na call" pill.
+      // A voice room's header, not in the call: the "Entre na call" pill.
       // Best effort, last in the context so a join cannot touch other shots.
       try {
         await page.getByRole("button", { name: /^Lobby/ }).first().click({ timeout: 5_000 });
         const header = page.locator("[data-chat-header]");
-        await expect(header.getByRole("button", { name: /Entrar na call/ })).toBeVisible({ timeout: 5_000 });
+        await expect(header.getByRole("button", { name: /Entre na call/ })).toBeVisible({ timeout: 5_000 });
         await page.waitForTimeout(400);
         const box = (await header.boundingBox())!;
         await page.screenshot({
