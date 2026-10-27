@@ -31,7 +31,20 @@ describe("ListRow", () => {
     );
   });
 
+  it("stacks a time over its count on a two-line row, as over a pip", () => {
+    const html = renderToStaticMarkup(
+      <ListRow size="lg" unread trailing="16:10" count="2">
+        Duda
+      </ListRow>,
+    );
+    const trailing = html.slice(html.indexOf("data-list-row-trailing"));
+    expect(trailing).toContain("flex-col items-end");
+    expect(trailing.indexOf("16:10")).toBeLessThan(trailing.indexOf("data-list-row-count"));
+  });
+
   it("fades a muted row, never a selected one", () => {
+    // 0.5 with the toggle off; the redesign sets the token to 0.6, where the
+    // bell-off mark tells it apart from a disabled row at 0.4.
     expect(classes(renderToStaticMarkup(<ListRow muted>clipes</ListRow>))).toContain(
       "opacity-[var(--list-row-muted-opacity,0.5)]",
     );

@@ -1069,7 +1069,7 @@ line).
 - **States.** Hover is a fill; `selected` is the row-selected role with its
   own label colour and `aria-current` (a selected row is the one being
   read, so it drops the unread look); `unread` is weight 600 plus the
-  indicator pip at the end (a `count` replaces it; a `trailing` time keeps it beside, or over it on an `lg` row); `muted` fades
+  indicator pip at the end, 8px under the redesign (a `count` replaces it; a `trailing` time keeps either beside it, or over it on an `lg` row); `muted` fades
   the row (0.5, 0.6 under the redesign, so it stays above disabled at 0.4).
 - **Tokens.** Every value is `--list-row-*` with the old value as its
   fallback. Under the redesign: a pill, 36/44/52px tall, 12px inside, on
@@ -1081,7 +1081,8 @@ line).
   not told apart from disabled by opacity alone.
 - **Selected.** The second line and a trailing time take the selected
   label's colour under the redesign (tertiary falls under 4.5:1 on the
-  selected fill in several looks); the pip and a count are not drawn.
+  selected fill in several looks), and so does the action; the pip and a
+  count are not drawn.
 - **Focus** is a 2px inset ring in the solid accent (`--list-row-ring`).
 - **Unread for a screen reader.** The pip is `aria-hidden`; put the state in
   the row's name (an `sr-only` "não lida"), once, in the row that adopts it.

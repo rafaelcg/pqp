@@ -846,6 +846,8 @@
      taller than before, with more room inside. */
   --list-row-radius: var(--radius-pill);
   --list-row-px: 0.75rem;
+  /* 8px: at 6px on a 36px pill the pip read as a full stop. */
+  --list-row-pip: 0.5rem;
   --list-row-h-sm: 2.25rem;
   --list-row-h-md: 2.75rem;
   --list-row-h-lg: 3.25rem;

@@ -1479,6 +1479,17 @@ function PrimitiveSheet() {
           >
             Caio
           </ListRow>
+          {/* A time over a count on a two-line row. */}
+          <ListRow
+            size="lg"
+            unread
+            leading={<UserAvatar name="Duda" className="h-9 w-9" fallbackClassName="bg-surface-3 text-sm text-text" rounded="full" />}
+            detail={t("qaUi.listRow.lastMessage")}
+            trailing="16:10"
+            count={<CountBadge count={2} />}
+          >
+            Duda
+          </ListRow>
         </div>
       </div>
 

@@ -88,6 +88,20 @@ export const ListRow = React.forwardRef<HTMLButtonElement, ListRowProps>(functio
   ref,
 ) {
   const pip = unread && !selected;
+  // What is new, after any time: a count, or else the pip. Neither on the
+  // selected row.
+  const mark =
+    count != null && !selected ? (
+      <span data-list-row-count="" className="flex shrink-0 items-center">
+        {count}
+      </span>
+    ) : count == null && pip ? (
+      <span
+        data-list-row-pip=""
+        aria-hidden="true"
+        className="h-[var(--list-row-pip,0.375rem)] w-[var(--list-row-pip,0.375rem)] shrink-0 rounded-full bg-indicator"
+      />
+    ) : null;
   const content = (
     <>
       {leading ? (
@@ -120,12 +134,7 @@ export const ListRow = React.forwardRef<HTMLButtonElement, ListRowProps>(functio
           </span>
         ) : null}
       </span>
-      {count != null && !selected ? (
-        <span data-list-row-count="" className="flex shrink-0 items-center">
-          {count}
-        </span>
-      ) : null}
-      {trailing || (count == null && pip) ? (
+      {trailing || mark ? (
         <span
           data-list-row-trailing=""
           className={cn(
@@ -133,18 +142,12 @@ export const ListRow = React.forwardRef<HTMLButtonElement, ListRowProps>(functio
             // the selected fill (where tertiary falls under 4.5:1).
             "flex shrink-0 items-center gap-1.5 text-xs font-normal text-[color:var(--list-row-detail,var(--color-text-tertiary))]",
             selected && "redesign:text-[color:var(--list-row-selected-text)]",
-            // A time over its pip on a two-line row.
-            size === "lg" && trailing && pip && "flex-col items-end gap-1",
+            // A time over its count or pip on a two-line row.
+            size === "lg" && trailing && mark && "flex-col items-end gap-1",
           )}
         >
           {trailing}
-          {count == null && pip ? (
-            <span
-              data-list-row-pip=""
-              aria-hidden="true"
-              className="h-[var(--list-row-pip,0.375rem)] w-[var(--list-row-pip,0.375rem)] shrink-0 rounded-full bg-indicator"
-            />
-          ) : null}
+          {mark}
         </span>
       ) : null}
     </>
@@ -206,7 +209,11 @@ export const ListRow = React.forwardRef<HTMLButtonElement, ListRowProps>(functio
         // A disabled row's action is out of reach of the pointer (above) and
         // of the keyboard.
         inert={rest.disabled ? true : undefined}
-        className="flex shrink-0 items-center gap-0.5"
+        className={cn(
+          "flex shrink-0 items-center gap-0.5",
+          // On the selected fill the action takes the label's colour.
+          selected && "redesign:text-[color:var(--list-row-selected-text)]",
+        )}
       >
         {action}
       </span>
