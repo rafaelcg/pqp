@@ -95,7 +95,7 @@ export function InvitePaste({
         className,
       )}
     >
-      <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-text-tertiary">
+      <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-text-tertiary redesign:text-[13px] redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">
         {t("invite.paste.title")}
       </h3>
       <PasteRow

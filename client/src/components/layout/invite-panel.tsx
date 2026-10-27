@@ -1,4 +1,13 @@
+import {
+  Check as CheckGlyph,
+  Copy as CopyGlyph,
+  LinkSimple,
+  ShareNetwork,
+  Trash,
+} from "@phosphor-icons/react";
 import { Check, Copy, Link2, Share2, Trash2 } from "lucide-react";
+import { IconSwap } from "@/components/ui/icon";
+import { cn } from "@/lib/utils";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Invite } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
@@ -21,6 +30,10 @@ import {
   previewInvite,
 } from "@/lib/api";
 import { SectionLabel } from "@/components/ui/section-header";
+
+/** An invite under the redesign: the shared card's fill, edge and corners. */
+const CARD_REDESIGN =
+  "redesign:rounded-[var(--radius-card)] redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)]";
 
 interface InvitePanelProps {
   open: boolean;
@@ -437,10 +450,15 @@ export function InvitePanel({
                 {invites.map((invite) => (
                   <li
                     key={invite.id}
-                    className="rounded-lg border border-ink-4 bg-ink p-3"
+                    className={cn(
+                      "rounded-lg border border-ink-4 bg-ink p-3",
+                      // Under the redesign: the shared card, a 16px inset.
+                      "redesign:p-4",
+                      CARD_REDESIGN,
+                    )}
                   >
                     <div className="flex items-center gap-2">
-                      <p className="min-w-0 flex-1 truncate font-mono text-sm text-signal">
+                      <p className="min-w-0 flex-1 truncate font-mono text-sm text-signal redesign:font-sans redesign:font-semibold redesign:text-text">
                         {inviteLink(invite.code)}
                       </p>
                       {/* The system share sheet where one exists (phones,
@@ -471,7 +489,7 @@ export function InvitePanel({
                                 .catch(() => {})
                             }
                           >
-                            <Share2 className="h-4 w-4" />
+                            <IconSwap off={Share2} on={ShareNetwork} offClassName="h-4 w-4" />
                           </Button>
                         </Tooltip>
                       )}
@@ -492,9 +510,9 @@ export function InvitePanel({
                           }
                         >
                           {copied === `link:${invite.id}` ? (
-                            <Check className="h-4 w-4 text-success" />
+                            <IconSwap off={Check} on={CheckGlyph} kind="symbol" offClassName="h-4 w-4 text-success" className="text-success" />
                           ) : (
-                            <Link2 className="h-4 w-4" />
+                            <IconSwap off={Link2} on={LinkSimple} kind="symbol" offClassName="h-4 w-4" />
                           )}
                         </Button>
                       </Tooltip>
@@ -515,9 +533,9 @@ export function InvitePanel({
                           }
                         >
                           {copied === `code:${invite.id}` ? (
-                            <Check className="h-4 w-4 text-success" />
+                            <IconSwap off={Check} on={CheckGlyph} kind="symbol" offClassName="h-4 w-4 text-success" className="text-success" />
                           ) : (
-                            <Copy className="h-4 w-4" />
+                            <IconSwap off={Copy} on={CopyGlyph} offClassName="h-4 w-4" />
                           )}
                         </Button>
                       </Tooltip>
@@ -534,7 +552,7 @@ export function InvitePanel({
                           disabled={pendingId === invite.id}
                           onClick={() => void handleRevoke(invite.id)}
                         >
-                          <Trash2 className="h-4 w-4 text-danger" />
+                          <IconSwap off={Trash2} on={Trash} offClassName="h-4 w-4 text-danger" className="text-danger" />
                         </Button>
                       </Tooltip>
                       )}
@@ -572,7 +590,7 @@ export function InvitePanel({
         {!isCreate && (
           <div className="space-y-2">
             <label className="block">
-              <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
+              <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted redesign:mb-1.5 redesign:text-[13px] redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">
                 {t("invite.join.label")}
               </span>
               <Input
