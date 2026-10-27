@@ -1,3 +1,4 @@
+import { Prohibit } from "@phosphor-icons/react";
 import { Ban, Bug } from "lucide-react";
 import { Select } from "@/components/ui/select";
 import { useId, useState, type ReactNode } from "react";
@@ -541,6 +542,7 @@ export function SettingsKitSheet() {
             <SettingsGroup title={t("qaUi.kit.group.empty")}>
               <SettingsEmpty
                 icon={Ban}
+                glyph={Prohibit}
                 title={t("qaUi.kit.empty.title")}
                 description={t("qaUi.kit.empty.description")}
               />
