@@ -1160,6 +1160,9 @@ server settings do not use it, so its roles field label in caps moves to
    `ui/Badge`, notices take the banner's shape with a tinted info tone,
    Phosphor icons through a shared `IconSwap`. Empty and result take the
    `p-empty` shape once that merges.
+Rounds: Codex 8.2 (r1); Opus 8.5 (r2), 8.0 (r3), 8.5 (r5), no MUST left.
+Round 5 fixes: the copy failure glyph at 14px, the info tint at 7% in
+dark, the rail build line in mono. Merged on the cap.
 
 ### f-communities
 
@@ -1269,9 +1272,7 @@ the rank list, emoji, AutoMod, webhooks in and out, the audit log, danger):
    with the danger banner's edge, status pills take the badge recipe.
 3. Merges: nothing; `Block` stays (the kit's group has rows, these do not).
 4. Kept: every section, drag to reorder, the armed confirms, the footer.
-Rounds: Codex 8.2 (r1); Opus 8.5 (r2), 8.0 (r3), 8.5 (r5), no MUST left.
-Round 5 fixes: the copy failure glyph at 14px, the info tint at 7% in
-dark, the rail build line in mono. Merged on the cap.
+Rounds (Opus only): r2 7.6, r3 7.4, r4 7.9, r5 7.8 (cap). Merged on the cap.
 
 ### s-category
 
