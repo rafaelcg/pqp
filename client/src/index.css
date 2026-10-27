@@ -889,6 +889,19 @@
   --empty-icon-bg: var(--color-surface-3);
   --empty-title-size: 1.25rem;
 
+  /* Message rows (chat/message-list.tsx): inset with a corner, a faint
+     tint of the text on hover, the accent's soft fill when you are named. */
+  --message-row-radius: 0.5rem;
+  --message-hover: color-mix(in oklab, var(--color-text) 4.5%, transparent);
+  /* The same hover laid on the pane, for the presence dot's cutout. */
+  --message-hover-solid: color-mix(in oklab, var(--color-text) 4.5%, var(--color-pane-main));
+  /* The system's mention row, tuned per appearance so a mention never reads
+     as the selected channel; the hover one step toward the accent. */
+  --message-mention-bg: var(--color-mention-row);
+  --message-mention-hover: color-mix(in oklab, var(--message-mention-bg) 85%, var(--color-accent));
+  /* Your own name on your messages. */
+  --message-own-name: var(--color-accent-text);
+
   /* Glass: a close or control laid over a picture (corner-card heroes). */
   --glass-bg: oklch(0.12 0.01 262 / 0.62);
   --glass-fg: oklch(0.98 0 0);
@@ -1303,6 +1316,16 @@
 
 /* The redesign's shadows on a light page: tinted, never black. Every look. */
 :root[data-redesign][data-theme="light"] {
+  /* 3% reads in light; dark needs 4.5%. */
+  --message-hover: color-mix(in oklab, var(--color-text) 3%, transparent);
+  --message-hover-solid: color-mix(in oklab, var(--color-text) 3%, var(--color-pane-main));
+  /* The full soft accent is the selected channel's fill in light; a mention
+     sits a step quieter so it never reads as selected. */
+  --message-mention-bg: color-mix(in oklab, var(--color-accent-soft) 70%, var(--color-pane-main));
+  /* A smaller step than dark, so the @you chip keeps its edge on a hovered row. */
+  --message-mention-hover: color-mix(in oklab, var(--message-mention-bg) 92%, var(--color-accent));
+  /* Your own name: the lime itself in light, where accent-text is a near-black olive. */
+  --message-own-name: var(--color-accent);
   --glass-bg: oklch(0.99 0 0 / 0.72);
   --glass-fg: var(--color-text);
   --glass-border: var(--popover-border);
@@ -3095,6 +3118,13 @@ h2,
   background: color-mix(in oklch, var(--color-accent) 26%, transparent);
 }
 
+/* Under the redesign the @you chip takes the chip tokens, measured against
+   the mention row it sits on. */
+:root[data-redesign] .pqp-mention-self {
+  background: var(--color-mention-chip);
+  color: var(--color-on-mention-chip);
+}
+
 .pqp-mention-mass {
   font-weight: 600;
 }
@@ -3107,6 +3137,17 @@ h2,
 
 .pqp-message-mention:hover {
   background: color-mix(in oklch, var(--color-accent) 20%, transparent);
+}
+
+/* Under the redesign a mention is the accent's soft fill, as in the mockup. */
+:root[data-redesign] .pqp-message-mention {
+  background: var(--message-mention-bg);
+  --avatar-dot-ring: var(--message-mention-bg);
+}
+
+:root[data-redesign] .pqp-message-mention:hover {
+  background: var(--message-mention-hover);
+  --avatar-dot-ring: var(--message-mention-hover);
 }
 
 @keyframes rise-in {

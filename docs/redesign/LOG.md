@@ -1425,6 +1425,33 @@ only where a strip can be hidden, one text column at 44px, meta lines at
 Not done: a dark-only accent edge at about 20% (judge with one strip in
 place, not the sheet's stack).
 
+### s-message-row
+
+Spec (audit: `MessageRow` in `chat/message-list.tsx`, its gutter and author
+line, `RankMarks`, `StatusDot`, the failed and queued footers, the blocked
+row; one renderer with a stream variant and compact density):
+
+1. Job: one message: who, when, what, and its delivery state.
+2. States: first in a group, continued, compact, own, role colour, rank
+   marks, bot, OP, webhook, AutoMod, gone; pinned, edited; sending, queued,
+   failed (retry, wait, discard); blocked; mentions you (joined in a run);
+   flash; bulk select; forum answer; stream rows.
+3. Redesign: the row is inset 8px with an 8px corner and gives the inset
+   back as padding, so text does not move; hover is a text tint (4.5% in
+   dark, 3% in light); a mention is the system's mention row, a step
+   quieter in light so it never reads as the selected channel; your own
+   name is in the accent when you have no role colour; role names get a
+   lightness clamp; times are tertiary; Retry is on the soft accent and
+   Discard on the secondary fill. The hover toolbar, reactions, reply and
+   thread chip are `s-message-chrome`; the inline edit field is
+   `s-composer`.
+Rounds (Opus only): r1 7.5 (MUST fixed), r2 8.0 (MUST fixed), r3 8.1,
+r4 7.6 (MUST fixed: a pinned continuation line showed no pin), r5 8.5
+(cap, no MUST). Also: the presence dot is cut from the fill it sits on,
+a pinned continuation line carries its pin in the gutter, "(editada)"
+ends the paragraph right before it. For `s-member-list`: the same role
+lightness clamp on member rows and role chips.
+
 ### f-onboarding
 
 Spec (audit: `onboarding/` (11 files), the hints in `layout/*-hint.tsx`

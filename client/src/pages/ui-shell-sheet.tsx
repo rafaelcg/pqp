@@ -1,3 +1,4 @@
+import { messageSchema } from "@pqp/shared";
 import type {
   Channel,
   DmSummary,
@@ -21,6 +22,8 @@ import {
 } from "@/components/layout/channel-list";
 import { ChannelIcon } from "@/components/layout/channel-icon";
 import { UserPanel } from "@/components/layout/user-panel";
+import { MessageList, type MessageAuthorInfo } from "@/components/chat/message-list";
+import type { ChatMessage } from "@/hooks/use-chat";
 import { ConnectionBanner } from "@/components/layout/connection-banner";
 import { ArrivalBanner } from "@/components/onboarding/arrival-banner";
 import { BringCrewStrip } from "@/components/onboarding/bring-crew-strip";
@@ -659,6 +662,79 @@ function BannersBlock() {
   );
 }
 
+const ROW_CHANNEL = "00000000-0000-4000-8000-000000000301";
+const ROW_ME = "00000000-0000-4000-8000-000000000302";
+const ROW_RAFA = "00000000-0000-4000-8000-000000000303";
+const ROW_BIA = "00000000-0000-4000-8000-000000000304";
+const ROW_HOOK = "00000000-0000-4000-8000-000000000305";
+
+function rowMessage(n: number, authorId: string, authorName: string, body: string, extra: Partial<ChatMessage> = {}): ChatMessage {
+  return {
+    ...messageSchema.parse({
+      id: `00000000-0000-4000-8000-0000000004${String(n).padStart(2, "0")}`,
+      channelId: ROW_CHANNEL,
+      authorId,
+      authorName,
+      authorTag: null,
+      authorAvatarUrl: null,
+      body,
+      createdAt: new Date(NOW - (20 - n) * 60_000).toISOString(),
+    }),
+    ...extra,
+  };
+}
+
+const ROW_MESSAGES: ChatMessage[] = [
+  rowMessage(1, ROW_RAFA, "Rafa", "alguém on hoje à noite pra fechar aquela campanha?"),
+  rowMessage(2, ROW_RAFA, "Rafa", "trouxe o mapa novo, ficou insano", { editedAt: new Date(NOW - 15 * 60_000).toISOString() }),
+  rowMessage(3, ROW_RAFA, "Rafa", "@lia cê vem?"),
+  // A second mention right under it, so the joined corners show.
+  rowMessage(9, ROW_RAFA, "Rafa", "@lia traz o controle extra", {
+    createdAt: new Date(NOW - 16.5 * 60_000).toISOString(),
+  }),
+  rowMessage(4, ROW_ME, "Lia", "vou sim, levo o lanche dessa vez"),
+  // A mention that starts a group, so the avatar and its dot sit on the fill.
+  rowMessage(10, ROW_BIA, "Bia", "@lia guarda um lugar pra mim", {
+    createdAt: new Date(NOW - 15.5 * 60_000).toISOString(),
+  }),
+  rowMessage(5, ROW_BIA, "Bia", "as regras do campeonato tão aqui", {
+    pinnedAt: new Date(NOW - 5 * 60_000).toISOString(),
+  }),
+  rowMessage(6, ROW_HOOK, "Deploys", "build 1.4.2 no ar", { isWebhook: true }),
+  rowMessage(7, ROW_ME, "Lia", "mandando agora", { pending: true, nonce: "n1" }),
+  rowMessage(8, ROW_ME, "Lia", "e essa não foi", { failed: true, nonce: "n2" }),
+];
+
+const ROW_AUTHORS = new Map<string, MessageAuthorInfo>([
+  [ROW_ME, { username: "lia", status: "online" }],
+  [ROW_RAFA, { username: "rafa", status: "online" }],
+  [ROW_BIA, { username: "bia", status: "idle" }],
+]);
+
+function MessageRowsBlock() {
+  return (
+    <div data-testid="qa-shell-message-rows" className="flex flex-col gap-6">
+      {/* Rafa: a group of four (one edited, the last two name you). You. Bia
+          naming you, then a pinned line. A webhook. Then yours sending, and one that
+          failed with Retry and Discard. */}
+      <MainPane>
+        <div className="flex h-[620px] min-h-0 flex-col">
+          <MessageList
+            messages={ROW_MESSAGES}
+            currentUserId={ROW_ME}
+            currentUsername="lia"
+            channelId={ROW_CHANNEL}
+            onToggleReaction={noop}
+            onRetryMessage={noop}
+            authors={ROW_AUTHORS}
+            authorsComplete
+          />
+        </div>
+      </MainPane>
+    </div>
+  );
+}
+
 /**
  * A new build waiting, so both rails draw the update tile. The store is
  * this page's own; it goes back to nothing waiting when the sheet unmounts.
@@ -871,6 +947,9 @@ export function ShellSheet() {
 
       {/* The strips above the conversation. */}
       <BannersBlock />
+
+      {/* Message rows. */}
+      <MessageRowsBlock />
 
       <div data-testid="qa-shell-rail" className="flex gap-6">
         <RailFrame>
