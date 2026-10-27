@@ -51,7 +51,7 @@ export function PollCard({ poll, canManage = false, onVote, onClose }: PollCardP
           </span>
         )}
       </div>
-      <p className="mt-2 font-display text-lg font-semibold leading-snug text-paper redesign:text-text">
+      <p className="mt-2 font-display text-lg font-semibold leading-snug text-paper redesign:text-base redesign:text-text">
         {poll.question}
       </p>
       <ul className="mt-3 space-y-1.5">
@@ -95,9 +95,8 @@ export function PollCard({ poll, canManage = false, onVote, onClose }: PollCardP
                     "absolute inset-y-0 left-0 transition-[width] duration-500 ease-out",
                     leading
                       ? "bg-[color-mix(in_oklab,var(--color-signal)_36%,var(--color-surface-3))] redesign:bg-[color:color-mix(in_oklab,var(--color-accent)_26%,transparent)]"
-                      : "bg-[color-mix(in_oklab,var(--color-signal)_20%,var(--color-surface-3))] redesign:bg-[color:color-mix(in_oklab,var(--color-accent)_16%,transparent)]",
-                    // Your own vote reads by its ring and check; its fill sits a clear step under the leader's.
-                    !leading && option.voted && "redesign:bg-[color:color-mix(in_oklab,var(--color-accent)_18%,transparent)]",
+                      : "bg-[color-mix(in_oklab,var(--color-signal)_20%,var(--color-surface-3))] redesign:bg-[color:color-mix(in_oklab,var(--color-accent)_14%,transparent)]",
+                    // Your own vote reads by its ring and check; every other fill sits a clear step under the leader's.
                   )}
                   style={{ width: `${fill}%` }}
                 />

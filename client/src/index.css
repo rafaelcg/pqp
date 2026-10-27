@@ -3141,6 +3141,7 @@ h2,
    one lime chip on the fill. */
 :root[data-redesign] .pqp-message-mention .pqp-mention:not(.pqp-mention-self) {
   background: color-mix(in oklab, var(--color-text) 9%, transparent);
+  font-weight: 500;
   color: var(--color-text);
 }
 

@@ -43,7 +43,7 @@ export function ChanceCard({ result }: { result: ChanceResult }) {
           <span className="font-mono text-[11px] text-paper-muted">{result.notation}</span>
         )}
         {result.type === "roll" && result.comment && (
-          <span className="text-[13px] text-paper">{result.comment}</span>
+          <span className="text-[13px] text-paper redesign:text-xs redesign:text-text-tertiary">{result.comment}</span>
         )}
       </div>
 

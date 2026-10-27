@@ -846,6 +846,7 @@ const CONTENT_VOTERS = [
   { userId: ROW_RAFA, displayName: "Rafa", avatarUrl: null },
   { userId: ROW_BIA, displayName: "Bia", avatarUrl: null },
   { userId: ROW_ME, displayName: "Lia", avatarUrl: null },
+  { userId: "00000000-0000-4000-8000-0000000008a1", displayName: "Caio", avatarUrl: null },
 ];
 
 const CONTENT_MESSAGES_B: ChatMessage[] = [
@@ -859,7 +860,7 @@ const CONTENT_MESSAGES_B: ChatMessage[] = [
       canClose: false,
       options: [
         // You voted 21h; 20h leads. So the ring and the leading fill show apart.
-        { id: "00000000-0000-4000-8000-000000000801", label: "20h", votes: 3, voted: false, voters: CONTENT_VOTERS.slice(0, 2) },
+        { id: "00000000-0000-4000-8000-000000000801", label: "20h", votes: 3, voted: false, voters: [CONTENT_VOTERS[0], CONTENT_VOTERS[1], CONTENT_VOTERS[3]] },
         { id: "00000000-0000-4000-8000-000000000802", label: "21h", votes: 1, voted: true, voters: [CONTENT_VOTERS[2]] },
         { id: "00000000-0000-4000-8000-000000000803", label: "Amanhã", votes: 0, voted: false, voters: [] },
       ],
