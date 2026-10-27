@@ -178,7 +178,7 @@ export function MusicFila({
     <>
       <div
         className={cn(
-          "flex shrink-0 items-center justify-between gap-2 px-3",
+          "flex shrink-0 items-center justify-between gap-2 px-3 redesign:pl-3.5",
           sheet ? "h-10" : "h-14",
           "border-b",
           rule,
@@ -384,7 +384,7 @@ export function MusicFila({
              The sources line stays for as long as the field is empty, so
              opening the queue mid-song answers the question too; the longer
              explanation is for a room with nothing on. */
-          <div data-music-empty="" className="shrink-0 space-y-1.5 px-3 pt-2">
+          <div data-music-empty="" className="shrink-0 space-y-1.5 px-3 pt-2 redesign:px-3.5">
             {current ? null : (
               <p className={cn("text-[12px] leading-snug", muted)}>
                 {t("music.empty.what")}

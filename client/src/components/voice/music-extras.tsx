@@ -24,6 +24,7 @@ import {
 } from "@phosphor-icons/react";
 import { IconSwap } from "@/components/ui/icon";
 import {
+  MUSIC_COVER_REDESIGN,
   MUSIC_ICON_REDESIGN,
   MUSIC_LABEL_REDESIGN,
   MUSIC_ROW_REDESIGN,
@@ -616,16 +617,20 @@ export function MusicHistoryList({
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
       >
-        <span className="inline-flex items-center gap-1">
-          {/* A caret says the heading opens; drawn only under the redesign. */}
-          <CaretRightGlyph
-            weight="bold"
-            aria-hidden
-            className={cn("hidden h-3 w-3 transition-transform redesign:inline-block", open && "rotate-90")}
-          />
-          {t("music.history")}
+        {/* Under the redesign the count sits inline like "A seguir · 3", and a
+            trailing caret says the heading opens. */}
+        <span>
+          <span className="redesign:hidden">{t("music.history")}</span>
+          <span className="hidden redesign:inline">
+            {t("memberList.sectionHeading", { label: t("music.history"), count: history.length })}
+          </span>
         </span>
-        <span className="tabular-nums">{history.length}</span>
+        <span className="tabular-nums redesign:hidden">{history.length}</span>
+        <CaretRightGlyph
+          weight="bold"
+          aria-hidden
+          className={cn("hidden h-3 w-3 shrink-0 transition-transform redesign:inline-block", open && "rotate-90")}
+        />
       </button>
       {open ? (
         <ol className="max-h-40 space-y-0.5 overflow-y-auto">
@@ -638,6 +643,12 @@ export function MusicHistoryList({
                 MUSIC_ROW_REDESIGN,
               )}
             >
+              {/* The cover under the redesign, so a played song shares the queue's title column. */}
+              <span className={cn("relative hidden h-8 w-8 shrink-0 overflow-hidden redesign:block", MUSIC_COVER_REDESIGN)}>
+                {track.thumbnailUrl ? (
+                  <img src={track.thumbnailUrl} alt="" className="h-full w-full object-cover" />
+                ) : null}
+              </span>
               <span
                 className={cn(
                   "min-w-0 flex-1 truncate text-sm",

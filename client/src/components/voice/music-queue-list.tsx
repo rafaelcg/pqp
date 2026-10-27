@@ -241,8 +241,8 @@ function QueueRow({
               className="h-4 w-4"
               fallbackClassName={
                 composer
-                  ? "bg-surface-3 text-[8px] text-text"
-                  : "bg-ink-3 text-[8px] text-paper redesign:bg-surface-3 redesign:text-text"
+                  ? "bg-surface-3 text-[8px] text-text redesign:bg-[color:var(--card-bg)] redesign:ring-1 redesign:ring-[color:var(--card-border)]"
+                  : "bg-ink-3 text-[8px] text-paper redesign:bg-[color:var(--card-bg)] redesign:text-text redesign:ring-1 redesign:ring-[color:var(--card-border)]"
               }
               rounded="full"
             />
