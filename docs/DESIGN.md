@@ -1056,6 +1056,9 @@ the caller's, beside it in `cn`. Not a popover: a card does not float.
 - **A list in a card.** Put `CARD_LIST` beside `CARD_SURFACE`: rules between
   rows in the card's edge (the plain border with the toggle off), clipped
   to the corners.
+- **Rows.** A row that opens something takes `CARD_ROW_HOVER`; a static row
+  (a check, an activity line) takes no hover at all, never a bare
+  `hover:bg-surface-2`.
 - **Padding** is the caller's, on one scale: `p-3` compact, `p-4` default,
   `px-6 py-8` an empty note, `p-2.5` only inside the profile popover.
 - **Between cards** a 12px gap (`gap-3` or `space-y-3`).

@@ -1100,7 +1100,7 @@ export function ToolPicker({
           return (
             <div key={group}>
               <div className="flex items-center gap-3 px-3 py-2.5">
-                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-[var(--radius-control)] bg-surface-2 text-text-secondary">
+                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-[var(--radius-control)] bg-surface-2 text-text-secondary redesign:bg-[color:var(--card-row-hover)]">
                   <Icon className="h-4 w-4" aria-hidden />
                 </span>
                 <button

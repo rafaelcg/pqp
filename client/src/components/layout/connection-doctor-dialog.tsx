@@ -184,7 +184,7 @@ export function ConnectionDoctorDialog({
                 />
                 <span className="min-w-0 flex-1">
                   <span className="block text-text">{t(CHECK_LABEL[id])}</span>
-                  <span className="mt-0.5 block text-xs text-text-tertiary">
+                  <span className="mt-0.5 block text-xs text-text-tertiary redesign:text-text-secondary">
                     {t(line.key, line.params)}
                   </span>
                 </span>
