@@ -1,6 +1,9 @@
 import { isPollClosed, type Poll, type PollVoter } from "@pqp/shared";
+import { Check as CheckGlyph } from "@phosphor-icons/react";
 import { BarChart3, Check } from "lucide-react";
 import { CommandChip } from "@/components/chat/command-chip";
+import { CONTENT_CARD_REDESIGN } from "@/components/ui/content-card";
+import { Icon } from "@/components/ui/icon";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useTranslation, type Translator } from "@/lib/i18n";
 import { cn, formatFullTimestamp } from "@/lib/utils";
@@ -22,7 +25,13 @@ const SHELL = cn(
   "mt-1.5 max-w-md rounded-2xl px-4 py-3",
   "bg-[linear-gradient(165deg,color-mix(in_oklab,var(--color-signal)_6%,var(--color-surface-2)),var(--color-surface-2)_72%)]",
   "shadow-[var(--shadow-chance-card)]",
+  // Under the redesign, the card every message carries (ui/content-card.ts).
+  CONTENT_CARD_REDESIGN,
+  "redesign:px-4 redesign:py-3.5",
 );
+
+/** The avatar cutout on the card: the pane under its faint tint. */
+const VOTER_RING_REDESIGN = "redesign:ring-[color:var(--color-pane-main)]";
 
 export function PollCard({ poll, canManage = false, onVote, onClose }: PollCardProps) {
   const { t } = useTranslation();
@@ -41,7 +50,7 @@ export function PollCard({ poll, canManage = false, onVote, onClose }: PollCardP
           </span>
         )}
       </div>
-      <p className="mt-2 font-display text-lg font-semibold leading-snug text-paper">
+      <p className="mt-2 font-display text-lg font-semibold leading-snug text-paper redesign:text-text">
         {poll.question}
       </p>
       <ul className="mt-3 space-y-1.5">
@@ -73,6 +82,10 @@ export function PollCard({ poll, canManage = false, onVote, onClose }: PollCardP
                   !closed &&
                     "hover:bg-[color-mix(in_oklab,var(--color-paper)_10%,var(--color-surface-1))]",
                   closed && "cursor-default",
+                  // A pill on the card's tint; your own vote is ringed in the accent.
+                  "redesign:rounded-full redesign:bg-[color:var(--content-glyph-bg)] redesign:shadow-none redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent",
+                  option.voted && "redesign:shadow-[inset_0_0_0_1.5px_var(--color-accent)]",
+                  !closed && "redesign:hover:bg-[color:var(--content-card-hover)]",
                 )}
               >
                 <span
@@ -80,18 +93,21 @@ export function PollCard({ poll, canManage = false, onVote, onClose }: PollCardP
                   className={cn(
                     "absolute inset-y-0 left-0 transition-[width] duration-500 ease-out",
                     leading
-                      ? "bg-[color-mix(in_oklab,var(--color-signal)_36%,var(--color-surface-3))]"
-                      : "bg-[color-mix(in_oklab,var(--color-signal)_20%,var(--color-surface-3))]",
+                      ? "bg-[color-mix(in_oklab,var(--color-signal)_36%,var(--color-surface-3))] redesign:bg-[color:color-mix(in_oklab,var(--color-accent)_34%,transparent)]"
+                      : "bg-[color-mix(in_oklab,var(--color-signal)_20%,var(--color-surface-3))] redesign:bg-[color:color-mix(in_oklab,var(--color-accent)_16%,transparent)]",
                   )}
                   style={{ width: `${fill}%` }}
                 />
                 <span className="relative flex min-w-0 flex-1 items-center gap-2">
                   {option.voted && (
-                    <Check className="h-4 w-4 shrink-0 text-signal" strokeWidth={3} aria-hidden />
+                    <>
+                      <Check className="h-4 w-4 shrink-0 text-signal redesign:hidden" strokeWidth={3} aria-hidden />
+                      <Icon icon={CheckGlyph} kind="symbol" size="sm" className="hidden text-accent-text redesign:block" />
+                    </>
                   )}
                   <span
                     className={cn(
-                      "min-w-0 truncate text-paper",
+                      "min-w-0 truncate text-paper redesign:text-text",
                       leading && "font-medium",
                     )}
                   >
@@ -103,7 +119,7 @@ export function PollCard({ poll, canManage = false, onVote, onClose }: PollCardP
                   <span
                     className={cn(
                       "relative ml-2 shrink-0 tabular-nums text-xs",
-                      leading ? "font-semibold text-paper" : "text-paper-muted",
+                      leading ? "font-semibold text-paper redesign:text-text" : "text-paper-muted redesign:text-text-secondary",
                     )}
                   >
                     {Math.round(ratio * 100)}%
@@ -114,7 +130,7 @@ export function PollCard({ poll, canManage = false, onVote, onClose }: PollCardP
           );
         })}
       </ul>
-      <div className="mt-2.5 flex items-center justify-between gap-3 text-[11px] text-paper-muted">
+      <div className="mt-2.5 flex items-center justify-between gap-3 text-[11px] text-paper-muted redesign:mt-3 redesign:text-xs redesign:text-text-tertiary">
         <span title={formatFullTimestamp(poll.closesAt)}>
           {closed
             ? t("poll.closed")
@@ -126,7 +142,7 @@ export function PollCard({ poll, canManage = false, onVote, onClose }: PollCardP
           <button
             type="button"
             onClick={onClose}
-            className="shrink-0 whitespace-nowrap font-medium text-paper-muted transition-colors hover:text-paper"
+            className="shrink-0 whitespace-nowrap font-medium text-paper-muted transition-colors hover:text-paper redesign:rounded-full redesign:px-2 redesign:py-0.5 redesign:text-text-secondary redesign:hover:bg-[color:var(--content-card-hover)] redesign:hover:text-text redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent"
           >
             {t("poll.close")}
           </button>
@@ -150,13 +166,13 @@ function VoterStack({ voters, names }: { voters: PollVoter[]; names: string }) {
           key={voter.userId}
           name={voter.displayName}
           avatarUrl={voter.avatarUrl}
-          className="h-5 w-5 ring-2 ring-surface-1"
+          className={cn("h-5 w-5 ring-2 ring-surface-1", VOTER_RING_REDESIGN)}
           fallbackClassName="bg-surface-3 text-[9px] text-paper"
           rounded="full"
         />
       ))}
       {overflow > 0 && (
-        <span className="relative flex h-5 min-w-5 items-center justify-center rounded-full bg-surface-3 px-1 text-[9px] font-semibold text-paper ring-2 ring-surface-1">
+        <span className={cn("relative flex h-5 min-w-5 items-center justify-center rounded-full bg-surface-3 px-1 text-[9px] font-semibold text-paper ring-2 ring-surface-1 redesign:text-text", VOTER_RING_REDESIGN)}>
           +{overflow}
         </span>
       )}

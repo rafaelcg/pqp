@@ -886,6 +886,15 @@
   --message-hover: color-mix(in oklab, var(--color-text) 3%, transparent);
   --message-mention-bg: var(--color-accent-soft);
   --message-mention-hover: color-mix(in oklab, var(--color-accent-soft) 88%, var(--color-text));
+  /* What a message carries (s-message-content): every card in a message is
+     the card surface at the card radius; a picture is a step tighter. */
+  --content-media-radius: 0.75rem;
+  /* A message card rests on the pane: no lift. */
+  --content-card-shadow: none;
+  --content-card-hover: color-mix(in oklab, var(--color-text) 7%, transparent);
+  --content-glyph-bg: color-mix(in oklab, var(--color-text) 7%, transparent);
+  --content-quote-bar: color-mix(in oklab, var(--color-text) 22%, transparent);
+  --content-link-line: color-mix(in oklab, var(--color-accent-text) 45%, transparent);
 
   /* Pane headers (ui/pane-header.ts): the chat's and every other pane's
      top bar, on one rule, one inset and one title size. */
@@ -1228,6 +1237,8 @@
      the dialog's own grey and the row reads as a hole. */
   --card-row-hover: color-mix(in oklab, var(--color-text) 4%, transparent);
   --card-border: color-mix(in oklab, var(--color-text) 10%, transparent);
+  /* A message card's hover: white over the grey wash would vanish. */
+  --content-card-hover: color-mix(in oklab, var(--color-text) 4%, var(--color-surface-0));
 
   /* Avatars: a hairline keeps the monogram disc a disc on the white pane. */
   --avatar-edge: var(--color-border);
@@ -2981,6 +2992,55 @@ h2,
 
 :root[data-redesign] .pqp-message-mention:hover {
   background: var(--message-mention-hover);
+}
+
+/* Markdown under the redesign (s-message-content): links in the accent's
+   readable ink with a soft underline, rounded code, a quote bar in a text
+   tint, a code block on the card radius. */
+:root[data-redesign] .markdown-body a {
+  color: var(--color-accent-text);
+  text-decoration-color: var(--content-link-line);
+  text-decoration-thickness: 1px;
+}
+
+:root[data-redesign] .markdown-body a:hover {
+  text-decoration-color: currentColor;
+}
+
+:root[data-redesign] .markdown-body code {
+  border-radius: 0.375rem;
+  padding: 0.125rem 0.375rem;
+}
+
+:root[data-redesign] .markdown-body pre {
+  border-color: var(--card-border);
+  border-radius: var(--radius-control);
+  padding: 0.625rem 0.75rem;
+  margin: 0.375rem 0;
+}
+
+:root[data-redesign] .markdown-body pre code {
+  padding: 0;
+}
+
+:root[data-redesign] .markdown-body blockquote {
+  border-left: 3px solid var(--content-quote-bar);
+  border-radius: 1px;
+  padding-left: 0.75rem;
+  color: var(--color-text-secondary);
+}
+
+:root[data-redesign] .pqp-mention {
+  border-radius: 0.375rem;
+  padding: 0.0625rem 0.3125rem;
+  font-weight: 600;
+  background: color-mix(in oklch, var(--color-accent) 18%, transparent);
+  color: var(--color-accent-text);
+}
+
+:root[data-redesign] .pqp-mention-self {
+  background: color-mix(in oklch, var(--color-accent) 34%, transparent);
+  color: var(--color-text);
 }
 
 @keyframes rise-in {

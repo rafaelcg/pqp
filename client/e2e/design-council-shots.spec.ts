@@ -678,6 +678,7 @@ const PRIMITIVES: {
   { id: "s-banners", testId: "qa-shell-banners" },
   // Message rows in their states.
   { id: "s-message-row", testId: "qa-shell-message-rows" },
+  { id: "s-message-content", testId: "qa-shell-message-content" },
 ];
 
 test("captures the primitives", async ({ browser }) => {

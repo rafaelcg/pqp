@@ -1,9 +1,21 @@
 import type { ForwardMediaKind, MessageForward } from "@pqp/shared";
+import {
+  ArrowBendUpRight,
+  Image as ImageGlyph,
+  LockSimple,
+  Play as PlayGlyph,
+  VideoCamera,
+} from "@phosphor-icons/react";
 import { Forward, Image as ImageIcon, Lock, Play, Video } from "lucide-react";
 import { useCallback, type MouseEvent } from "react";
 import { useInRouterContext, useNavigate } from "react-router-dom";
 import { BauShareButton } from "@/components/community-home/community-home-share-public";
 import { ServerIcon } from "@/components/layout/server-identity";
+import {
+  CONTENT_CARD_HOVER_REDESIGN,
+  CONTENT_CARD_REDESIGN,
+} from "@/components/ui/content-card";
+import { Icon } from "@/components/ui/icon";
 import { messageLinkState } from "@/lib/app-route";
 import { resolveUploadedImageUrl } from "@/lib/avatar";
 import {
@@ -13,6 +25,7 @@ import {
   isKnownNonMember,
 } from "@/lib/forward";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { cn } from "@/lib/utils";
 
 /**
  * A forwarded Baú post or chat message, drawn from the snapshot the server
@@ -67,7 +80,11 @@ export function ForwardCardView({
   const shareUrl = forwardShareUrl(forward);
   return (
     <div
-      className="group/fwd mt-1.5 w-full max-w-[26rem] overflow-hidden rounded-[var(--radius-card)] border border-border border-l-[3px] border-l-accent bg-surface-1 text-left transition-[border-color,background-color] duration-[var(--duration-fast)] hover:border-accent/50 hover:bg-surface-2"
+      className={cn(
+        "group/fwd mt-1.5 w-full max-w-[26rem] overflow-hidden rounded-[var(--radius-card)] border border-border border-l-[3px] border-l-accent bg-surface-1 text-left transition-[border-color,background-color] duration-[var(--duration-fast)] hover:border-accent/50 hover:bg-surface-2",
+        CONTENT_CARD_REDESIGN,
+        CONTENT_CARD_HOVER_REDESIGN,
+      )}
       data-forward-card-frame=""
     >
       <a
@@ -77,13 +94,14 @@ export function ForwardCardView({
         aria-label={label}
         data-forward-card=""
         data-forward-kind={forward.kind}
-        className="block w-full text-left no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring"
+        className="block w-full text-left no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring redesign:rounded-[var(--radius-card)] redesign:focus-visible:ring-accent"
       >
-        <div className="flex items-center gap-1.5 px-3 pt-2.5 text-xs text-text-tertiary">
-          <Forward className="h-3.5 w-3.5 shrink-0" aria-hidden />
+        <div className="flex items-center gap-1.5 px-3 pt-2.5 text-xs text-text-tertiary redesign:px-3.5 redesign:pt-3">
+          <Forward className="h-3.5 w-3.5 shrink-0 redesign:hidden" aria-hidden />
+          <Icon icon={ArrowBendUpRight} kind="symbol" size="sm" className="hidden redesign:block" />
           <span className="shrink-0">{t("forwardCard.from")}</span>
           <span
-            className="flex h-4 w-4 shrink-0 items-center justify-center overflow-hidden rounded bg-surface-3 text-[8px] font-semibold text-text"
+            className="flex h-4 w-4 shrink-0 items-center justify-center overflow-hidden rounded bg-surface-3 text-[8px] font-semibold text-text redesign:rounded-full"
             data-forward-server-icon=""
           >
             <ServerIcon
@@ -98,14 +116,19 @@ export function ForwardCardView({
           </span>
           {where && <span className="shrink-0 whitespace-nowrap">{`· ${where}`}</span>}
           {forward.restricted && (
-            <Lock
-              className="ml-auto h-3 w-3 shrink-0"
-              aria-label={t("forwardCard.restricted")}
-            />
+            <>
+              <Lock
+                className="ml-auto h-3 w-3 shrink-0 redesign:hidden"
+                aria-label={t("forwardCard.restricted")}
+              />
+              <span className="ml-auto hidden redesign:block" role="img" aria-label={t("forwardCard.restricted")}>
+                <Icon icon={LockSimple} size="sm" />
+              </span>
+            </>
           )}
         </div>
 
-        <div className="flex gap-3 px-3 pb-3 pt-1.5 max-sm:flex-col">
+        <div className="flex gap-3 px-3 pb-3 pt-1.5 max-sm:flex-col redesign:px-3.5 redesign:pb-3.5">
           <div className="min-w-0 flex-1 space-y-1">
             {title && (
               <p
@@ -130,15 +153,24 @@ export function ForwardCardView({
             )}
             {mediaKind && !thumb && (
               <span
-                className="inline-flex items-center gap-1 rounded-full bg-surface-3 px-2 py-0.5 text-[11px] font-medium text-text-secondary"
+                className="inline-flex items-center gap-1 rounded-full bg-surface-3 px-2 py-0.5 text-[11px] font-medium text-text-secondary redesign:bg-[color:var(--content-glyph-bg)] redesign:text-xs"
                 data-forward-media-chip=""
               >
                 {mediaKind === "image" ? (
-                  <ImageIcon className="h-3 w-3" aria-hidden />
+                  <>
+                    <ImageIcon className="h-3 w-3 redesign:hidden" aria-hidden />
+                    <Icon icon={ImageGlyph} size="sm" className="hidden redesign:block" />
+                  </>
                 ) : mediaKind === "video" || mediaKind === "youtube" ? (
-                  <Video className="h-3 w-3" aria-hidden />
+                  <>
+                    <Video className="h-3 w-3 redesign:hidden" aria-hidden />
+                    <Icon icon={VideoCamera} size="sm" className="hidden redesign:block" />
+                  </>
                 ) : (
-                  <Play className="h-3 w-3" aria-hidden />
+                  <>
+                    <Play className="h-3 w-3 redesign:hidden" aria-hidden />
+                    <Icon icon={PlayGlyph} size="sm" className="hidden redesign:block" />
+                  </>
                 )}
                 {t(MEDIA_LABEL[mediaKind])}
               </span>
@@ -146,7 +178,7 @@ export function ForwardCardView({
           </div>
           {thumb && (
             <div
-              className="relative h-16 w-24 shrink-0 self-start overflow-hidden rounded-[var(--radius-control)] bg-surface-2 max-sm:order-first max-sm:h-32 max-sm:w-full max-sm:self-stretch"
+              className="relative h-16 w-24 shrink-0 self-start overflow-hidden rounded-[var(--radius-control)] bg-surface-2 max-sm:order-first max-sm:h-32 max-sm:w-full max-sm:self-stretch redesign:rounded-[var(--content-media-radius)]"
               data-forward-thumb=""
             >
               <img

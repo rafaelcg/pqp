@@ -1111,6 +1111,31 @@ row; one renderer with a stream variant and compact density):
    accent text; times are tertiary; the failed and queued footers use the
    secondary pill. The hover toolbar, reactions, reply and thread chip are
    `s-message-chrome`; the inline edit field is `s-composer`.
+
+### s-message-content
+
+Spec (audit: `MessageBody` and the `.markdown-body` rules, `AttachmentGrid`
+and its four tiles, `VoiceNoteCard`, `ForwardCard`, `PollCard`, `ChanceCard`,
+`BotActionCard`, `BauPostCard`, `StoryQuoteCard`, `GifAttachment`,
+`EmbedCard`, `WebhookEmbedCard`; custom emoji draw an image only):
+
+1. Job: what a message carries, readable and one family.
+2. States: markdown (bold, code, link, quote, list, code block, mentions:
+   you, someone, everyone), picture (loading box, broken falls to the chip),
+   video, audio, file, voice note (playing, unheard, broken, receipts),
+   forward (restricted, media chip, thumbnail), poll (voted, leading,
+   closed), dice, bot plan and ask, Baú post (locked, pinned, video), story
+   quote (live, expired), GIF (reduced motion), link preview, webhook embed.
+3. Redesign: one card (`ui/content-card.ts`): the card's text tint and edge
+   at the card radius, no stripe and no shadow; pictures on a 12px media
+   radius; file and media glyphs are Phosphor on a 36px tile; links in the
+   accent ink with a soft underline; mentions a rounded accent tint; the
+   voice note a pill. A webhook keeps the sender's colour on its left edge.
+4. Kept as is: the lightbox (already the IconButton primitives; its chrome
+   moves with the overlays), the bot notice (`s-log-chrome`).
+5. Question: the broken-image chip says "Image unavailable" in English for
+   every language (`attachment-grid.tsx`). Translating it changes the
+   toggle-off app, so it waits for a yes.
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss

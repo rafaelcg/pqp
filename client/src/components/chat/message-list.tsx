@@ -1,11 +1,19 @@
 import { StoryQuoteCard } from "@/components/stories/story-quote-card";
 import { Badge } from "@/components/ui/badge";
 import {
+  Play as PlayFill,
   PushPin as PushPinFill,
   WarningCircle as WarningCircleFill,
   WifiSlash,
 } from "@phosphor-icons/react";
 import { Icon as Glyph } from "@/components/ui/icon";
+import {
+  CONTENT_CARD_FOCUS_REDESIGN,
+  CONTENT_CARD_HOVER_REDESIGN,
+  CONTENT_CARD_REDESIGN,
+  CONTENT_KICKER_REDESIGN,
+  CONTENT_MEDIA_REDESIGN,
+} from "@/components/ui/content-card";
 import type {
   Embed,
   MessageReaction,
@@ -643,6 +651,8 @@ const MESSAGE_ROW_REDESIGN =
   "redesign:mx-2 redesign:rounded-[var(--message-row-radius)] redesign:px-3";
 /** The time beside a name and in the gutter. */
 const MESSAGE_TIME_REDESIGN = "redesign:text-xs redesign:text-text-tertiary";
+/** A GIF or a pasted picture link: the media radius on the card's edge. */
+const MEDIA_REDESIGN = cn(CONTENT_MEDIA_REDESIGN, "redesign:bg-transparent");
 
 /**
  * Wrapped in `memo()` on top of `MessageRow`'s own: without it, ANY render
@@ -4667,7 +4677,7 @@ export function GifAttachment({ media }: { media: GifMedia }) {
         decoding="async"
         referrerPolicy="no-referrer"
         style={style}
-        className="mt-1 w-auto max-w-full rounded-md border border-border"
+        className={cn("mt-1 w-auto max-w-full rounded-md border border-border", MEDIA_REDESIGN)}
       />
     );
   }
@@ -4679,7 +4689,11 @@ export function GifAttachment({ media }: { media: GifMedia }) {
       type="button"
       onClick={() => setIsPlaying(true)}
       aria-label={translateMessage("chat.playMedia", { name: media.alt })}
-      className="group/gif relative mt-1 block w-fit max-w-full overflow-hidden rounded-md border border-border text-left hover:border-border-strong"
+      className={cn(
+        "group/gif relative mt-1 block w-fit max-w-full overflow-hidden rounded-md border border-border text-left hover:border-border-strong",
+        MEDIA_REDESIGN,
+        CONTENT_CARD_FOCUS_REDESIGN,
+      )}
     >
       {media.stillUrl ? (
         <img
@@ -4698,8 +4712,9 @@ export function GifAttachment({ media }: { media: GifMedia }) {
         </span>
       )}
       <span className="absolute inset-0 flex items-center justify-center">
-        <span className="flex h-9 w-9 items-center justify-center rounded-full border border-border bg-surface-1/90 text-text opacity-85 transition-opacity group-hover/gif:opacity-100">
-          <Play className="h-4 w-4" />
+        <span className="flex h-9 w-9 items-center justify-center rounded-full border border-border bg-surface-1/90 text-text opacity-85 transition-opacity group-hover/gif:opacity-100 redesign:h-11 redesign:w-11 redesign:border-0 redesign:bg-accent redesign:text-on-accent redesign:opacity-100">
+          <Play className="h-4 w-4 redesign:hidden" />
+          <Glyph icon={PlayFill} size="md" className="ml-0.5 hidden redesign:block" />
         </span>
       </span>
     </button>
@@ -4731,7 +4746,11 @@ function EmbedCard({ embed }: { embed: Embed }) {
         href={embed.url}
         target="_blank"
         rel="noopener noreferrer"
-        className="mt-1.5 block w-fit max-w-full overflow-hidden rounded-md border border-border"
+        className={cn(
+          "mt-1.5 block w-fit max-w-full overflow-hidden rounded-md border border-border",
+          MEDIA_REDESIGN,
+          CONTENT_CARD_FOCUS_REDESIGN,
+        )}
       >
         <img
           src={imageUrl}
@@ -4757,21 +4776,27 @@ function EmbedCard({ embed }: { embed: Embed }) {
       href={embed.url}
       target="_blank"
       rel="noopener noreferrer"
-      className="mt-1.5 flex max-w-md gap-3 overflow-hidden rounded-md border border-border border-l-[3px] border-l-signal bg-surface-2/60 p-2.5 transition-colors hover:bg-surface-2"
+      className={cn(
+        "mt-1.5 flex max-w-md gap-3 overflow-hidden rounded-md border border-border border-l-[3px] border-l-signal bg-surface-2/60 p-2.5 transition-colors hover:bg-surface-2",
+        CONTENT_CARD_REDESIGN,
+        CONTENT_CARD_HOVER_REDESIGN,
+        CONTENT_CARD_FOCUS_REDESIGN,
+        "redesign:p-3.5",
+      )}
     >
       <div className="min-w-0 flex-1">
         {embed.siteName && (
-          <p className="truncate text-[11px] uppercase tracking-wide text-paper-muted">
+          <p className={cn("truncate text-[11px] uppercase tracking-wide text-paper-muted", CONTENT_KICKER_REDESIGN)}>
             {embed.siteName}
           </p>
         )}
         {embed.title && (
-          <p className="mt-0.5 line-clamp-2 text-sm font-medium text-signal">
+          <p className="mt-0.5 line-clamp-2 text-sm font-medium text-signal redesign:mt-1 redesign:text-[0.9375rem] redesign:font-semibold redesign:leading-snug redesign:text-accent-text">
             {embed.title}
           </p>
         )}
         {embed.description && (
-          <p className="mt-1 line-clamp-3 text-xs text-paper-muted">
+          <p className="mt-1 line-clamp-3 text-xs text-paper-muted redesign:text-[0.8125rem] redesign:leading-snug redesign:text-text-secondary">
             {embed.description}
           </p>
         )}
@@ -4782,7 +4807,7 @@ function EmbedCard({ embed }: { embed: Embed }) {
           alt=""
           loading="lazy"
           decoding="async"
-          className="h-16 w-16 shrink-0 rounded object-cover"
+          className="h-16 w-16 shrink-0 rounded object-cover redesign:h-[4.5rem] redesign:w-[4.5rem] redesign:rounded-[var(--radius-control)]"
         />
       )}
     </a>
@@ -4816,21 +4841,29 @@ function WebhookEmbedCard({ embed }: { embed: WebhookEmbed }) {
       {...(embed.url
         ? { href: embed.url, target: "_blank", rel: "noopener noreferrer" }
         : {})}
-      className="mt-1.5 block max-w-md space-y-1.5 rounded-md border border-border bg-surface-2/60 p-2.5"
+      className={cn(
+        "mt-1.5 block max-w-md space-y-1.5 rounded-md border border-border bg-surface-2/60 p-2.5",
+        // The sender's colour stays on the left edge (the inline style beats
+        // the card's edge); the rest is the card every message carries.
+        CONTENT_CARD_REDESIGN,
+        embed.url && CONTENT_CARD_HOVER_REDESIGN,
+        embed.url && CONTENT_CARD_FOCUS_REDESIGN,
+        "redesign:p-3.5",
+      )}
       style={{ borderLeftWidth: "3px", borderLeftColor: accent ?? "var(--color-signal)" }}
     >
       {embed.title && (
         <p
           className={cn(
-            "text-sm font-medium",
-            embed.url ? "text-signal" : "text-paper",
+            "text-sm font-medium redesign:text-[0.9375rem] redesign:font-semibold",
+            embed.url ? "text-signal redesign:text-accent-text" : "text-paper",
           )}
         >
           {embed.title}
         </p>
       )}
       {embed.description && (
-        <p className="whitespace-pre-wrap text-xs text-paper-muted">
+        <p className="whitespace-pre-wrap text-xs text-paper-muted redesign:text-[0.8125rem] redesign:leading-snug redesign:text-text-secondary">
           {embed.description}
         </p>
       )}
@@ -4841,7 +4874,7 @@ function WebhookEmbedCard({ embed }: { embed: WebhookEmbed }) {
               key={index}
               className={field.inline ? "" : "col-span-2"}
             >
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-paper-muted">
+              <p className={cn("text-[11px] font-semibold uppercase tracking-wide text-paper-muted", CONTENT_KICKER_REDESIGN, "redesign:font-semibold redesign:text-text-secondary")}>
                 {field.name}
               </p>
               <p className="text-xs text-paper">{field.value}</p>
@@ -4850,7 +4883,7 @@ function WebhookEmbedCard({ embed }: { embed: WebhookEmbed }) {
         </div>
       )}
       {embed.footer?.text && (
-        <p className="pt-1 text-[11px] text-paper-muted">{embed.footer.text}</p>
+        <p className="pt-1 text-[11px] text-paper-muted redesign:text-xs redesign:text-text-tertiary">{embed.footer.text}</p>
       )}
     </Wrapper>
   );
