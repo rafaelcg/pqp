@@ -53,7 +53,7 @@ export function AppIconTile({
     <span
       aria-hidden
       className={cn(
-        "flex h-11 w-11 shrink-0 items-center justify-center rounded-[var(--radius-control)] bg-accent-soft text-on-accent-soft sm:h-10 sm:w-10",
+        "flex h-11 w-11 shrink-0 items-center justify-center rounded-[var(--radius-control)] bg-accent-soft text-on-accent-soft sm:h-10 sm:w-10 redesign:rounded-[var(--radius-card)]",
         dimmed && "bg-surface-2 text-text-tertiary",
         className,
       )}

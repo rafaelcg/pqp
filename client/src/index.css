@@ -993,6 +993,9 @@
   --settings-pane-bg: var(--color-pane-main);
   --settings-pane-inset: 0.5rem;
   --settings-rule: color-mix(in oklab, var(--color-border) 70%, transparent);
+  /* Faces stacked in an app strip or card cut their rings from the ground
+     they sit on: the pane for the strip, the card for a card. */
+  --app-face-cut: var(--color-pane-main, var(--color-surface-1));
 
   /* The call (voice/call-stage.tsx). The bar's controls are round wells on
      a text tint; a control that is on (camera, share, a raised hand) takes

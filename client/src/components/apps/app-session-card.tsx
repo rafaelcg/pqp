@@ -89,6 +89,14 @@ export const AppSessionCard = memo(function AppSessionCard({
           : inside
             ? "border-accent bg-surface-1"
             : "border-border bg-surface-1",
+        // The card tokens under the redesign; ended keeps its dashed edge.
+        "redesign:p-4",
+        !ended && "redesign:[--app-face-cut:var(--card-bg)]",
+        ended
+          ? "redesign:border-[color:var(--card-border)]"
+          : inside
+            ? "redesign:bg-[color:var(--card-bg)]"
+            : "redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)]",
         fresh && "app-card-in",
         settling && "app-card-settle",
       )}
@@ -290,6 +298,7 @@ export function Avatars({
           className={cn(
             "h-6 w-6 ring-2",
             ended ? "ring-surface-0" : "ring-surface-1",
+            "redesign:ring-[color:var(--app-face-cut)]",
             known && !known.has(person.userId) && "app-avatar-in",
           )}
           fallbackClassName="bg-surface-3 text-[10px] font-semibold text-text"
@@ -301,7 +310,7 @@ export function Avatars({
           name={person.displayName}
           avatarUrl={person.avatarUrl}
           rounded="full"
-          className="app-avatar-out h-6 w-6 ring-2 ring-surface-1"
+          className="app-avatar-out h-6 w-6 ring-2 ring-surface-1 redesign:ring-[color:var(--app-face-cut)]"
           fallbackClassName="bg-surface-3 text-[10px] font-semibold text-text"
         />
       ))}
@@ -310,6 +319,7 @@ export function Avatars({
           className={cn(
             "z-[1] flex h-6 min-w-6 items-center justify-center rounded-full px-1 text-[10px] font-semibold text-text-secondary ring-2",
             ended ? "bg-surface-2 ring-surface-0" : "bg-surface-2 ring-surface-1",
+            "redesign:ring-[color:var(--app-face-cut)]",
           )}
         >
           +{more}
