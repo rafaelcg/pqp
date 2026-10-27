@@ -508,6 +508,15 @@ share one recipe from `layout/channel-section-header.tsx`:
   ("+", the lock, the new category) with 14px glyphs.
 - `CATEGORY_SUMMARY_REDESIGN`: "3 canais" and the unread dot on a folded
   section.
+- `CATEGORY_DROP_INTO_REDESIGN`: a header a dragged channel would drop into.
+  `bg-accent-soft`, `text-on-accent-soft`, a 1px inset `ring-accent`, and no
+  hover change. The caret follows the label's colour.
+
+A drop target hides the summary and the actions and shows `chrome.dropHere`
+("Soltar aqui"); the name is already on the row. The lock is a filled glyph
+(an object). The new-category folder keeps the bold outline: filled, its plus
+is unreadable at 14px. The classic list always shows "+"; the mixed list shows
+it on hover and focus, because it has many more headers.
 
 ### The channel row
 
@@ -526,19 +535,30 @@ the redesign they take `ui/list-row.tsx`'s tokens:
   they show on a selected row.
 - A live watch party room says live with a red dot on its viewer line; the
   "AO VIVO" words stay for a screen reader. "Assistir" is a soft danger pill.
+- The room you are in: `bg-success-soft`, with the name, icon and tiles in
+  `on-success-soft` and the second line at 80%. It wins over selected. The
+  fill says connected (the dot is for a screen reader only), so the end
+  column only ever means something is waiting.
+- Keyboard focus rings the whole pill in `--list-row-ring`; the row's tiles,
+  the thread's X and "Assistir" use the same token.
 - `ChannelListSkeleton` draws the same 36px pills, 2px apart.
 
 ### The voice row
 
 A voice channel is a channel row (`ChannelRow`). The room you are in takes
-`success-soft` with its `on-` text instead of the signal ring. Under it:
+`success-soft` with its `on-` text instead of the signal ring, open or not:
+icon, name, dot, second line and tiles are all `on-success-soft`. Under it:
 
 - `VoiceOccupantRow` is a 32px list row: the row roles, 13px names, the
-  accent focus ring. The speaking ring stays on the avatar.
-- `VoiceOccupantBadges` are 14px Phosphor glyphs: hand, screen and camera in
-  `accent-text`, muted and deafened in `danger`. Deafened is `EarSlash` in
-  the bold outline (Phosphor has no headphones with a slash).
-- `ChannelMusicCard` is a card on the card tokens with a 28px cover.
+  inset `--list-row-ring` focus ring. The speaking ring stays on the avatar,
+  with no offset; the glow does the work.
+- `VoiceOccupantBadges` take a `tone`: hand, screen and camera in
+  `accent-text`, muted and deafened in `danger`. Glyphs are 14px Phosphor
+  fill; deafened is `EarSlash` in the bold outline at 16px, so the ear's
+  shape survives beside the mic (Phosphor has no headphones with a slash). A queued hand is
+  `HandPositionBadge`: the filled hand at 14px and its number at 11px.
+- `ChannelMusicCard` is a card on the card tokens with a 28px cover. A title
+  that does not fit fades at the right edge.
 - The occupants and threads sit under a rule in the card edge.
 
 ### Icons

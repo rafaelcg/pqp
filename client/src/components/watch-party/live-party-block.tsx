@@ -309,7 +309,8 @@ export function LivePartyBlock({
           )}
           onClick={onCreate}
         >
-          <PartyGlyph />
+          {/* "Make something" at the empty Baú's volume: the glyph in the accent. */}
+          <PartyGlyph className="redesign:text-accent-text" />
           <span className="truncate text-sm font-medium">
             {t("watchParty.create.button")}
           </span>
@@ -415,10 +416,23 @@ export function LivePartyBlock({
                     variant={recovering ? "recovering" : "live"}
                   />
                 </span>
-                <span className="line-clamp-2 break-words text-sm font-semibold leading-snug text-paper redesign:text-text">
+                <span
+                  className={cn(
+                    "line-clamp-2 break-words text-sm font-semibold leading-snug text-paper redesign:text-text",
+                    // The open party's lines follow the open row's: the first
+                    // in the selected text, the meta at 72% of it.
+                    selected && "redesign:text-on-row-selected",
+                  )}
+                >
                   {party.name}
                 </span>
-                <span className="flex min-w-0 items-baseline justify-between gap-2 text-[11px] text-paper-muted redesign:text-xs redesign:text-text-secondary">
+                <span
+                  className={cn(
+                    "flex min-w-0 items-baseline justify-between gap-2 text-[11px] text-paper-muted redesign:text-xs redesign:text-text-secondary",
+                    selected &&
+                      "redesign:text-[color:color-mix(in_oklab,var(--color-on-row-selected)_72%,transparent)]",
+                  )}
+                >
                   <span className="min-w-0 truncate">
                     {t("watchParty.live.hostedBy", {
                       name: party.hostDisplayName,

@@ -322,6 +322,13 @@ function ChannelRowsBlock() {
             liveState={{ live: true, presenterPeerId: "p2", viewerCount: 5, startedAt: null } as never}
             connected
           />
+          {/* Connected with something unread: the pip takes the dot's place. */}
+          <SheetChannelRow
+            channel={textChannel("cine4", "maratona", { type: "watch_party", topic: "Trilogia inteira" })}
+            liveState={{ live: true, presenterPeerId: "p3", viewerCount: 3, startedAt: null } as never}
+            unread={{ count: 2, mentions: 0 }}
+            connected
+          />
         </div>
       </SidePane>
     </div>

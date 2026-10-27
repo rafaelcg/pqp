@@ -828,6 +828,8 @@
   --card-bg: color-mix(in oklab, var(--color-text) 4%, transparent);
   --card-border: color-mix(in oklab, var(--color-text) 8%, transparent);
   --card-row-hover: color-mix(in oklab, var(--color-text) 6%, transparent);
+  /* A whole card under the pointer: one step over the card's own fill. */
+  --card-hover: color-mix(in oklab, var(--color-text) 7%, transparent);
   /* A settings notice in the info tone, on its own (settings/kit/notice.tsx):
      a quiet tint of the text, a step over the card it usually sits in. */
   --settings-notice-info-bg: color-mix(in oklab, var(--color-text) 7%, transparent);
@@ -976,7 +978,8 @@
   --sidebar-card-radius: 0.875rem;
   --sidebar-invite-border: color-mix(in oklab, var(--color-text) 22%, transparent);
   /* The solid AO VIVO badge: the danger hue a step deeper on a dark page,
-     so white 10px text clears 4.5:1 in every look. */
+     where on-danger is white, so 10px text clears 4.5:1. Looks whose
+     on-danger is a dark ink keep the plain danger (below). */
   --live-badge-bg: color-mix(in oklab, var(--color-danger) 78%, black);
 
   --icon-button-radius: var(--radius-pill);
@@ -1274,6 +1277,12 @@
   --color-field: color-mix(in oklab, var(--color-text) 3%, var(--color-surface-0));
 }
 
+/* Catppuccin and Everforest dark draw on-danger in a dark ink: darkening the
+   badge would lower its contrast there, so they keep the plain danger. */
+:root[data-redesign]:where([data-appearance="catppuccin"], [data-appearance="everforest"]):not([data-theme="light"]) {
+  --live-badge-bg: var(--color-danger);
+}
+
 /* The redesign's shadows on a light page: tinted, never black. Every look. */
 :root[data-redesign][data-theme="light"] {
   /* Light panes need a stronger thumb to clear 3:1. */
@@ -1292,6 +1301,7 @@
   /* Lighter than dark's: over the white wash on a grey dialog, 6% lands at
      the dialog's own grey and the row reads as a hole. */
   --card-row-hover: color-mix(in oklab, var(--color-text) 4%, transparent);
+  --card-hover: color-mix(in oklab, var(--color-text) 3%, var(--color-surface-0));
   --card-border: color-mix(in oklab, var(--color-text) 10%, transparent);
 
   /* Avatars: a hairline keeps the monogram disc a disc on the white pane. */
