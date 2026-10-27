@@ -1507,6 +1507,12 @@ and its four tiles, `VoiceNoteCard`, `ForwardCard`, `PollCard`, `ChanceCard`,
    every language (`attachment-grid.tsx`). Translating it changes the
    toggle-off app, so it waits for a yes.
 
+Rounds (Opus only): r1 7.8 (MUST fixed: your own mention lost the cascade),
+r2 8.2, r3 7.9 (MUST fixed: the webhook edge thinned at the corners), r4
+8.2, r5 8.6 (no MUST, cap). After r5: one title scale (poll 16px), the
+poll's other options at 14% under the 26% leader, the roll comment on the
+kicker, named chips at medium weight. Not done: none.
+
 ### f-onboarding
 
 Spec (audit: `onboarding/` (11 files), the hints in `layout/*-hint.tsx`
