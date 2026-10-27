@@ -497,7 +497,7 @@ function UserPanelBlock() {
           the mic off; deafened; muted by a moderator; Não Perturbe. Then
           invisible, and the 72px strip. */}
       <FooterPane>
-        <UserPanel {...base} handle="lia" />
+        <UserPanel {...base} handle="lia" hideDownloadHint={false} />
       </FooterPane>
       <FooterPane>
         <UserPanel {...base} inVoice isMuted />
