@@ -427,6 +427,52 @@ States are never told apart by colour alone:
 The mixes are `color-mix(in oklab, …)`. The bench and the sheet both read that
 form, so a derived role is measured like any other.
 
+### The server rail
+
+`layout/server-rail.tsx`, on the canvas with no edge (`RAIL_REDESIGN` in
+`ui/pane.ts`). Under the redesign:
+
+- Every tile is a 44px circle (`--rail-tile`) in the side pane's colour
+  (`--rail-tile-bg`). The monogram is 13px semibold in secondary text; the
+  Conversas caption under its tile is 11px semibold.
+- The selected tile is the accent's rounded square
+  (`--rail-tile-radius-selected`, 16px) with a short drop
+  (`--rail-tile-shadow`). A face (a pinned or waiting conversation) stays
+  round and takes an accent ring instead, because its photo fills the tile.
+- A hover lifts the fill (`--rail-tile-hover`) and rounds the tile toward the
+  selected square. It never turns lime: a lime tile fill only means "you
+  are here". Small lime marks (a friend request count, a Baú count, the
+  Novidades and update dots) mean "new for you", and they never fill a tile.
+- Every door, join included, sits on the same disc (`--rail-tile-bg`).
+- The pip on the left edge is the text colour: tall for selected, a dot for
+  unread.
+- The Baú's ring (new posts beside a mention) hugs the disc with no gap, like
+  a story ring. Keyboard focus is a ring with a gap in the text colour, so it
+  never reads as a chosen face or the Baú.
+- Counts are `CountBadge` with a ring cut from the canvas. The public globe
+  and the live dot sit on canvas discs at the lower corners; the live dot is
+  solid, never pulsing.
+- Every door is one 44px tile, the update tile included.
+- Glyphs are filled Phosphor objects; `+` is a bold symbol.
+
+### The sidebar header
+
+The top of the channel list (`layout/channel-list.tsx`). Under the
+redesign:
+
+- No rule under it. The server's name is the title face at 16px bold
+  (`--sidebar-header-title-size`), with no icon (the open server's tile is
+  right beside it on the rail). The caret sits right after the name. The
+  row is a 44px pill on `row-hover` when hovered, a step stronger (text at
+  10%) while the menu is open.
+- Members, collapse and close are `IconButton`'s round ghost: 32px from
+  `md`, like the chat header's, and 44px on a phone (`HEADER_ICON_BUTTON`).
+  On a phone the members button is hidden: the chat header has its own.
+- Search is a pill (`--sidebar-search-*`): a text tint off the pane in dark,
+  the field's white with its edge in light.
+- The banner (`ServerBannerStrip`) is an inset card with
+  `--sidebar-banner-radius`.
+
 ### Icons
 
 The redesign's icons are Phosphor (`@phosphor-icons/react`), drawn through
