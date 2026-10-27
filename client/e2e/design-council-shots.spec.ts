@@ -428,6 +428,37 @@ test("captures the design council screens", async ({ browser }) => {
       await expect(page.getByText(PAPO.at(-1)![1])).toBeVisible();
       await hideDevBanner(page);
       await shoot(page, `01-chat-${theme}`);
+      // The sidebar header up close: the name hovered, the search entry.
+      {
+        const header = page.locator("[data-server-header]");
+        await page.locator("[data-server-menu-trigger]").hover();
+        await page.waitForTimeout(300);
+        const box = (await header.boundingBox())!;
+        await page.screenshot({
+          path: path.join(OUT!, `s-sidebar-header-${theme}.png`),
+          clip: { x: Math.max(0, box.x - 8), y: Math.max(0, box.y - 8), width: box.width + 16, height: box.height + 72 },
+        });
+        await page.mouse.move(0, 0);
+      }
+      // A short name, so the caret's place after the name shows.
+      try {
+        await page.getByRole("button", { name: /Faculdade ADS/ }).first().click({ timeout: 5_000 });
+        await expect(page.locator("[data-server-name]").first()).toHaveText("Faculdade ADS", { timeout: 10_000 });
+        await page.locator("[data-server-menu-trigger]").hover();
+        await page.waitForTimeout(300);
+        const header = page.locator("[data-server-header]");
+        const box = (await header.boundingBox())!;
+        await page.screenshot({
+          path: path.join(OUT!, `s-sidebar-header-short-${theme}.png`),
+          clip: { x: Math.max(0, box.x - 8), y: Math.max(0, box.y - 8), width: box.width + 16, height: box.height + 72 },
+        });
+        await page.mouse.move(0, 0);
+        await page.goto(chatUrl);
+        await expect(page.getByRole("button", { name: "Enviar" })).toBeVisible({ timeout: 30_000 });
+        await hideDevBanner(page);
+      } catch {
+        console.log("short-name header shot skipped");
+      }
       // A popover in place: the composer's emoji picker.
       await page.getByRole("button", { name: "Adicionar emoji", exact: true }).first().click();
       await expect(page.locator(".emoji-mart-shell")).toBeVisible();
@@ -510,6 +541,15 @@ test("captures the design council screens", async ({ browser }) => {
       await page.getByRole("dialog").getByText("Voz e vídeo", { exact: true }).first().click();
       await expect(page.getByRole("dialog").getByRole("slider").first()).toBeVisible();
       await shoot(page, `14-settings-voice-${theme}`);
+      // An unsaved profile: the bar at the foot of the page and the dot on
+      // the Perfil tab, seen from the next tab. Discarded before closing.
+      await page.getByRole("dialog").getByText("Perfil", { exact: true }).first().click();
+      await page.getByRole("dialog").getByLabel("Nome de exibição").fill("Lia Fliperama");
+      await page.getByRole("dialog").getByText("Privacidade", { exact: true }).first().click();
+      await expect(page.getByRole("button", { name: "Salvar alterações" })).toBeVisible();
+      await page.waitForTimeout(400);
+      await shoot(page, `25-settings-unsaved-${theme}`);
+      await page.getByRole("button", { name: "Descartar" }).click();
       await page.keyboard.press("Escape");
 
       await page.locator("[data-server-menu-trigger]").first().click();
@@ -524,7 +564,27 @@ test("captures the design council screens", async ({ browser }) => {
       await page.getByRole("dialog").getByRole("tab", { name: "Permissões" }).click();
       await page.waitForTimeout(300);
       await shoot(page, `13-server-roles-perms-${theme}`);
+      // The audit log's entries and the danger zone's card.
+      await page.getByRole("dialog").getByText("Registro", { exact: true }).first().click();
+      await page.waitForTimeout(800);
+      await shoot(page, `26-server-audit-${theme}`);
+      await page.getByRole("dialog").getByText("Zona de risco", { exact: true }).first().click();
+      await page.waitForTimeout(300);
+      await shoot(page, `27-server-danger-${theme}`);
       await page.keyboard.press("Escape");
+      // Channel settings, from the open channel's gear. Best effort: a
+      // missing gear skips the shot instead of the screens after it.
+      try {
+        const gear = page.getByRole("button", { name: /Configurações do canal/ }).first();
+        await gear.hover({ force: true, timeout: 5_000 });
+        await gear.click({ force: true, timeout: 5_000 });
+        await expect(page.getByRole("dialog")).toBeVisible({ timeout: 5_000 });
+        await page.waitForTimeout(500);
+        await shoot(page, `28-channel-settings-${theme}`);
+        await page.keyboard.press("Escape");
+      } catch {
+        console.log("channel settings gear not found, shot 28 skipped");
+      }
 
       await context.close();
     }
@@ -595,6 +655,17 @@ test("captures the design council screens", async ({ browser }) => {
       await shoot(phonePage, `19-phone-sheet-${theme}`);
       await phonePage.keyboard.press("Escape");
     }
+    // Settings on a phone: the rail is a strip of tabs over the page.
+    await as(phonePage, "dark");
+    await phonePage.goto(chatUrl);
+    await expect(phonePage.getByText(PAPO.at(-1)![1])).toBeVisible({ timeout: 30_000 });
+    await hideDevBanner(phonePage);
+    await phonePage.getByRole("button", { name: "Abrir navegação" }).first().click();
+    await phonePage.waitForTimeout(500);
+    await phonePage.getByRole("button", { name: "Abrir configurações" }).first().click();
+    await expect(phonePage.getByRole("dialog")).toBeVisible();
+    await phonePage.waitForTimeout(500);
+    await shoot(phonePage, "24-phone-settings-dark");
     await phone.close();
   } finally {
     for (const socket of sockets.values()) {
@@ -674,6 +745,9 @@ const PRIMITIVES: {
   // Focus the connection strip's main action, hover the error's dismiss.
   { id: "p-banner", testId: "qa-primitive-banner", focus: "Tentar agora", hover: "Dispensar" },
   { id: "p-settings-kit", testId: "qa-settings-kit", tiles: 1300 },
+  // Two real rails: Conversas open with people waiting, and a server open
+  // beside every server cue. Keyboard focus on "Praça", hover on "Oficina".
+  { id: "s-rail", testId: "qa-shell-rail", focus: "Praça", hover: "Oficina" },
 ];
 
 test("captures the primitives", async ({ browser }) => {

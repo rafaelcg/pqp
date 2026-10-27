@@ -56,7 +56,13 @@ Read this file and the inventory at the start of every session.
 | 2 | `p-empty` | Merged, capped at round 5 (Opus 8.6) |
 | 2 | `p-sheet` | Merged, capped at round 5 (Opus 8.6) |
 | 2 | `p-dialog` | Merged, capped at round 5 (Codex 8.7 r2, Opus 8.2 r4) |
+| 2 | `p-settings-kit` | Merged, capped at round 5 (Opus 8.5 r5, 8.5 r2) |
 | 3 | `s-frame` | Merged, capped at round 5 (Opus 8.8) |
+| 3 | `s-rail` | Merged, capped at round 5 (Opus 8.2 r5, 8.8 r3) |
+| 3 | `s-sidebar-header` | Merged, capped at round 5 (Opus 8.3 r5, 8.7 r3) |
+| 4 | `f-user-settings` | Merged, capped at round 5 (Opus 8.1 r5, 8.2 r4) |
+| 4 | `f-server-settings` | Merged, capped at round 5 (Opus 7.8 r5, 7.9 r4) |
+| 5 | `m-breakpoints` | Merged (code only, no council) |
 
 ## Phase 0: directions
 
@@ -976,6 +982,20 @@ their own edge and fill; the phone breakpoint is defined three ways):
 3. Built as class strings in `ui/pane.ts`, appended after each pane's own.
 4. Left: below 768px the drawers keep their edges (`m-shell`, `m-breakpoints`).
 
+### s-rail
+
+Spec (audit: one rail in `server-rail.tsx`, six tile kinds each drawing its
+own lime-on-hover square, a hand-made count pill, legacy tokens throughout):
+
+1. Job: the doors on the left edge: Conversas, waiting and pinned people,
+   servers, create and join, Novidades, Discover, the update button.
+2. States: selected, unread pip, mention and request counts, muted, Baú
+   count or ring, live party, public community, dragged, keyboard focus.
+3. Redesign: 44px round tiles in the side pane's colour; the selected one is
+   the accent's rounded square; a hover lifts the fill and never turns lime;
+   filled Phosphor glyphs; counts on `CountBadge`; marks cut from the canvas.
+4. Left: `PhoneServersScreen` (`m-shell`) and `ServerRailSkeleton`
+   (`p-loading`, which is in review).
 Rounds: r1 Codex 8.0, r2 Codex 8.5, r3 Opus 8.3 (MUST: a call added a
 second gutter; fixed), r4 Opus 8.6, r5 Opus 8.8. Capped at round 5, no MUST.
 Applied before the merge: `--space-gutter` is 0 under 768px, the same width
@@ -989,6 +1009,16 @@ where the frame classes stop floating. Left as COULD:
 Verified: typecheck, 10,454 unit tests, bench:tokens, i18n:check, e2e
 app-shell-scroll, forum-shell, channel-layout, call-split-layout,
 forum-pane. Screenshots: ~/pqp-redesign/s-frame/.
+
+Rounds 3 to 5 (Opus; Codex out of usage): 8.8, 8.0, 8.2. Fixed on the way:
+the join door on the same disc, idle doors lifted 4% in dark, a quieter grey
+globe, one focus ring on the update tile, the lime rule written down (a lime
+fill is "you are here", small lime marks are "new for you"). Capped at round
+5, no MUST open. Open: the sheet's face fixtures load from dicebear, so a
+capture can miss them.
+Verified: typecheck, 10,462 unit tests, bench:tokens, i18n:check, e2e
+conversations-home, dm-list-polish, live-read-ack (17). Screenshots:
+~/pqp-redesign/s-rail/.
 
 ### p-dialog
 
@@ -1017,6 +1047,49 @@ Spec (audit: Dialog in 50 files, ConfirmDialog in 24, PromptDialog in 1;
    up with the title's right edge. Capped at round 5, no MUST open.
 Verified: typecheck, 10,462 unit tests, bench:tokens, i18n:check, e2e
 dialog-mobile-layout (16). Screenshots: ~/pqp-redesign/p-dialog/.
+
+### s-sidebar-header
+
+Spec (audit: one header in `channel-list.tsx`, three hand-built icon
+buttons, a search entry styled as a faint field, the banner strip in
+`server-identity.tsx`):
+
+1. Job: the open server's name and menu, members, collapse, close (phone),
+   message search, and the banner when the server has one.
+2. States: hover and open menu, a long name (tooltip), public, loading, no
+   server, with and without a banner, phone drawer.
+3. Redesign: the name in the title face over no rule, without the icon
+   the rail tile already shows beside it; the three buttons are
+   IconButton; search is a pill a step off the pane; the banner is an inset
+   card. The search dialog itself is `f-search`.
+
+Rounds (Opus / Codex): r1 - / 8.3, r2 - / 8.6, r3 8.7 / -, r4 7.8 / -,
+r5 8.3 / - (no MUST, would approve). Last fixes: the trigger's hover is the
+ghost step (8%) above the search's 6%, open 10%, both tokens
+(`--sidebar-trigger-*`); the banner on the header's 12px inset. Kept: the
+members button on desktop (round 5 suggested hiding it at every width; the
+server menu has Membros too; question 4).
+
+### m-breakpoints
+
+Spec (audit: width queries in the signed-in app: `PHONE_QUERY`, `SM_UP_QUERY`,
+`use-sm-up`, `use-md-up`, `use-lg-up`, the forum's 767px, stories' 640px,
+the soundboard sheet, the voice note card, the thread panel, two device
+probes, and the stylesheets' 639, 640 and 767px):
+
+1. Job: one definition of where the layout changes.
+2. Change: `lib/breakpoints.ts` names Tailwind's `sm`, `md` and `lg` in rem,
+   with "below" queries at `.999`; every caller imports it; each stylesheet
+   query writes the same rem value and names the file.
+3. Merges: the forum's 767px and stories' 640px become `md` and `sm`.
+4. Same at a 16px base font, except one pixel: stories' `max-width: 640px`
+   overlapped `sm` at exactly 640px and now stops at 639.99px. With another
+   base font size, JS and CSS now switch with the `sm:` and `md:` utilities.
+5. No council: it draws nothing new. Verified by unit tests (a new
+   breakpoints test), forum, stories, shell and phone e2e.
+6. Found on the way: `app-shell-scroll` failed on `redesign` (not on main):
+   `/vem` renders after network idle once the dev server loads the icon
+   package. The test now waits for the page to render.
 
 ### p-settings-kit
 
@@ -1050,6 +1123,44 @@ steps, `discord-import-preview`, `server-ready-panel`, `bring-crew-announcement`
    segmented control would not).
 4. Kept: every step, the system share sheet, the paste helpers.
 
+### f-user-settings
+
+Spec (audit: `settings-modal.tsx`, `SectionRail` shared with server and
+channel settings, 13 sections, the kit, `UnsavedChangesBar`, the handle
+confirm, the delete account dialog, the phone tab strip):
+
+1. Job: one place for the account and the app: a rail of tabs in groups, a
+   page per tab, profile drafts with an unsaved bar, instant save elsewhere.
+2. Redesign: a small frame. The band and the rail on the side pane's tone,
+   the page an inset rounded pane (`--settings-*`). Tabs are the list row's
+   small pill with filled Phosphor glyphs; group names are section labels;
+   the account card in the rail foot is a pill.
+3. Merges: nothing. `SectionRail` and the `fill` dialog surface are shared,
+   so server and channel settings take the rail and the frame tone too;
+   their pages stay for `f-server-settings`.
+4. Kept: every section, the close guard, the handle confirm, the 44px phone
+   targets, the dirty dot and its spoken description.
+
+
+### f-server-settings
+
+Spec (audit: `server-settings-dialog.tsx` with 13 sections and its own
+`Block` and `SectionHeader`, `channel-settings-dialog.tsx` with 5, roles and
+the rank list, emoji, AutoMod, webhooks in and out, the audit log, danger):
+
+1. Job: run a server or a channel: a rail of sections, a page each, a Fechar
+   footer; owner-only sections and the armed transfer and delete.
+2. Redesign: the user settings frame (side tone, inset page, pill tabs with
+   filled glyphs). Bespoke boxes take the card look (`SETTINGS_CARD_REDESIGN`),
+   uppercase eyebrows become section labels, field labels sentence case,
+   roles are list row pills with a Phosphor grip, the danger block is a card
+   with the danger banner's edge, status pills take the badge recipe.
+3. Merges: nothing; `Block` stays (the kit's group has rows, these do not).
+4. Kept: every section, drag to reorder, the armed confirms, the footer.
+Rounds: Codex 8.2 (r1); Opus 8.5 (r2), 8.0 (r3), 8.5 (r5), no MUST left.
+Round 5 fixes: the copy failure glyph at 14px, the info tint at 7% in
+dark, the rail build line in mono. Merged on the cap.
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss
@@ -1067,6 +1178,13 @@ steps, `discord-import-preview`, `server-ready-panel`, `bring-crew-announcement`
    - Channel list: mixed layout (`mixed_channel_list`) or legacy sections.
 3. `error-boundary.tsx` is English only, and AGENTS.md says to leave it alone.
    Redesign its look and keep the copy as is?
+4. Sidebar header: the members button duplicates the server menu's Membros
+   and the chat header's members control. Hide it on desktop too, so a long
+   server name fits? It is hidden in the phone drawer already.
+5. Invites: each invite card says "1 uso" under a "Usos" chip row, which
+   reads as "limited to one use". The council suggests "Usado 1 vez · sem
+   limite" and "{used} de {max} usos". That is a copy change in three
+   languages and shows with the toggle off too. Change it?
 
 ## Decisions
 
@@ -1077,6 +1195,7 @@ steps, `discord-import-preview`, `server-ready-panel`, `bring-crew-announcement`
 
 | Date | Decision | Why |
 |---|---|---|
+| 2026-10-27 | `f-friends` merges after the shell chain | Its branch sits on top of `s-sidebar-special` through `s-member-list`; merging it first would bring unreviewed shell work into `redesign`. |
 | 2026-10-26 | Element branches use `rd/<id>` | Git ref conflict with `redesign`. |
 | 2026-10-26 | Direction mockups are a dev-only page on an unmerged branch | Real pixels for the pick, no change to production components, nothing to clean up on `redesign`. |
 | 2026-10-26 | Direction B (Salas), with filled icons instead of outlines | André's pick. The council preferred A; B was second for both reviewers (7.2, 7.4), and the risks they named for B go into the Phase 1 tokens: gutters cost width on small screens, and a third surface level invites card-in-card settings. |

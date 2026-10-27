@@ -347,6 +347,21 @@ Promotion is also refused when `readSfuStats().reachable` is `false`, and set
 `VOICE_PROMOTION_MAX_SFU_MBPS=0` to turn the whole feature off without a
 deploy.
 
+**Production value: 900 since 2026-10-27.** The default stays 600 in code; the
+Vultr box sets `VOICE_PROMOTION_MAX_SFU_MBPS=900` in `/opt/pqp/.env` (backup
+`.env.bak-budget-20261027`). Why: on 2026-10-20 the estimate reached 605 and
+refused 56 cameras and screens while the SFU sat at about 30% CPU, and the
+2026-10-25 capacity re-read found the logged estimate at 514 on a normal
+weekend night against a measured peak of 243 Mbit/s of real traffic, so the
+estimate runs about 2 to 6 times the bytes it stands for. At 900 the real load
+at the estimate's ceiling is well under half of the 935 Mbit/s the path was
+measured clean at. Watch real SFU transmit and CPU for a few evenings after a
+raise (the `pqp-capacity` alert rules in `tools/monitoring/` cover both) and
+lower it if either comes near its warning line. Rollback: delete the line from
+`/opt/pqp/.env` and roll the replicas (the `pqp` account's `sudo` needs a
+password, so roll through a deploy of a commit the API needs, see
+`tools/api-host/README.md`).
+
 **Log lines:** `voice.transportPromoted` (room, user, reason, room size,
 `loadMbps`, `addedMbps`, `budgetMbps`), `voice.transportPromotionRefused` (the
 same plus `refusal`: `unconfigured` / `unreachable` / `budget` /
