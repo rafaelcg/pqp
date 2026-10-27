@@ -1,10 +1,11 @@
 import type { DmSummary, PublicUser, Server, WatchParty } from "@pqp/shared";
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { CommunityHomePreview } from "@/components/community-home/community-home-preview";
 import { ServerRail } from "@/components/layout/server-rail";
 import { LivePartyBlock } from "@/components/watch-party/live-party-block";
 import { ServerIcon } from "@/components/layout/server-identity";
 import type { LatestCard, LatestPreview } from "@/lib/community-home/latest";
+import { setUpdateWaiting } from "@/lib/update-prompt-state";
 
 /**
  * The shell's pieces on `/qa/ui`, drawn by the real components with made-up
@@ -113,14 +114,26 @@ function RailFrame({ children }: { children: ReactNode }) {
   );
 }
 
+/**
+ * A new build waiting, so both rails draw the update tile. The store is
+ * this page's own; it goes back to nothing waiting when the sheet unmounts.
+ */
+function useUpdateWaitingFixture() {
+  useEffect(() => {
+    setUpdateWaiting(true);
+    return () => setUpdateWaiting(false);
+  }, []);
+}
+
 export function ShellSheet() {
+  useUpdateWaitingFixture();
   return (
     <div className="flex flex-col gap-6">
       {/* Server rail. Left: Conversas open, two friend requests, two people
           waiting and a pinned conversation; Oficina unread, Memes with three
           mentions. Right: a server open; a photo icon, a Baú count, a Baú ring
           beside a mention, a live party, a public community, Novidades
-          unread. */}
+          unread. Both: a new build waiting (the update tile). */}
       {/* The blocks above the channels. Left: two live parties (one open)
           and the Baú with new posts as a card. Middle: a party being set up,
           the waitlist teaser, the Baú with nothing new (a row) and opened.
