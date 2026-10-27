@@ -428,6 +428,27 @@ test("captures the design council screens", async ({ browser }) => {
       await expect(page.getByText(PAPO.at(-1)![1])).toBeVisible();
       await hideDevBanner(page);
       await shoot(page, `01-chat-${theme}`);
+      // Message search: the prompt, then results with the arrows on one.
+      try {
+        await page.getByRole("button", { name: /Buscar mensagens/ }).first().click({ timeout: 5_000 });
+        await expect(page.getByRole("dialog")).toBeVisible();
+        await page.waitForTimeout(300);
+        await shoot(page, `33-search-empty-${theme}`);
+        // The pointer out of the way, so the first row keeps the highlight.
+        await page.mouse.move(0, 0);
+        await page.getByRole("dialog").getByRole("combobox").fill("zzqxv");
+        await expect(page.getByRole("dialog").getByText(/zzqxv/).last()).toBeVisible({ timeout: 10_000 });
+        await page.waitForTimeout(300);
+        await shoot(page, `35-search-none-${theme}`);
+        await page.getByRole("dialog").getByRole("combobox").fill("caverna");
+        await expect(page.getByRole("dialog").getByRole("option").first()).toBeVisible({ timeout: 10_000 });
+        await page.waitForTimeout(300);
+        await shoot(page, `34-search-results-${theme}`);
+        await page.keyboard.press("Escape");
+      } catch (error) {
+        console.log("search shots skipped", String(error).slice(0, 300));
+        await page.keyboard.press("Escape");
+      }
       // The sidebar header up close: the name hovered, the search entry.
       {
         const header = page.locator("[data-server-header]");
@@ -439,6 +460,33 @@ test("captures the design council screens", async ({ browser }) => {
           clip: { x: Math.max(0, box.x - 8), y: Math.max(0, box.y - 8), width: box.width + 16, height: box.height + 72 },
         });
         await page.mouse.move(0, 0);
+      }
+      // The conversation header up close, the pins tile hovered.
+      {
+        const header = page.locator("[data-chat-header]");
+        await header.getByRole("button", { name: "Fixadas" }).hover();
+        await page.waitForTimeout(400);
+        const box = (await header.boundingBox())!;
+        await page.screenshot({
+          path: path.join(OUT!, `s-header-${theme}.png`),
+          clip: { x: box.x, y: box.y, width: box.width, height: box.height + 48 },
+        });
+        await page.mouse.move(0, 0);
+      }
+      // The open members tile with keyboard focus: the ring sits off the fill.
+      try {
+        const header = page.locator("[data-chat-header]");
+        await page.keyboard.press("Shift");
+        await header.locator("[data-member-sidebar-toggle]").focus();
+        await page.waitForTimeout(300);
+        const box = (await header.boundingBox())!;
+        await page.screenshot({
+          path: path.join(OUT!, `s-header-focus-${theme}.png`),
+          clip: { x: box.x + box.width - 260, y: box.y, width: 260, height: box.height + 8 },
+        });
+        await page.locator("body").focus();
+      } catch {
+        console.log("header focus shot skipped");
       }
       // The channel list folded to icons, in place; then unfolded again.
       await page.locator("[data-channel-sidebar-toggle]").first().click();
@@ -637,6 +685,21 @@ test("captures the design council screens", async ({ browser }) => {
         await page.keyboard.press("Escape");
       } catch {
         console.log("channel settings gear not found, shot 28 skipped");
+      }
+      // A voice room's header, not in the call: the "Entre na call" pill.
+      // Best effort, last in the context so a join cannot touch other shots.
+      try {
+        await page.getByRole("button", { name: /^Lobby/ }).first().click({ timeout: 5_000 });
+        const header = page.locator("[data-chat-header]");
+        await expect(header.getByRole("button", { name: /Entre na call/ })).toBeVisible({ timeout: 5_000 });
+        await page.waitForTimeout(400);
+        const box = (await header.boundingBox())!;
+        await page.screenshot({
+          path: path.join(OUT!, `s-header-voice-${theme}.png`),
+          clip: { x: box.x, y: box.y, width: box.width, height: box.height + 48 },
+        });
+      } catch {
+        console.log("voice room header pill not found, s-header-voice skipped");
       }
 
       await context.close();
