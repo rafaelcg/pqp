@@ -760,14 +760,14 @@ const SHEET_WAVEFORM = btoa(
 
 const CONTENT_MARKDOWN = [
   "**bora** fechar hoje, o mapa novo tá em `maps/v2` e as regras em https://pqp.gg/regras",
-  "> quem perder paga o lanche",
-  "",
   "@bia cê traz o controle? o @rafa já confirmou",
   "- 20h: aquecimento",
   "- 21h: final",
   "```",
   "/roll 2d6+1",
   "```",
+  // Last, so nothing after it is pulled into the quote.
+  "> quem perder paga o lanche",
 ].join("\n");
 
 const CONTENT_MESSAGES_A: ChatMessage[] = [
