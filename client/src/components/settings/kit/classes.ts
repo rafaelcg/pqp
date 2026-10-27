@@ -29,3 +29,14 @@ export const SETTINGS_DESCRIPTION = "text-xs text-pretty text-text-tertiary";
  * on the page while the request runs.
  */
 export const SETTINGS_BUSY = "cursor-not-allowed opacity-40 active:scale-100";
+
+/**
+ * A group's box under the redesign: the card's fill and edge
+ * (`ui/card.tsx`), the edge again between its rows, no shadow. Its rows
+ * hover with `SETTINGS_ROW_HOVER`.
+ */
+export const SETTINGS_GROUP_REDESIGN =
+  "redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:shadow-none redesign:divide-[color:var(--card-border)]";
+
+/** A row inside a group, hovered: the card's row tint under the redesign. */
+export const SETTINGS_ROW_HOVER = "redesign:hover:bg-[color:var(--card-row-hover)]";

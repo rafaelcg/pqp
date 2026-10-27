@@ -1,4 +1,6 @@
+import { Check as CheckBold, Copy as CopyBold, XCircle } from "@phosphor-icons/react";
 import { Check, CircleX, Copy } from "lucide-react";
+import { IconSwap } from "@/components/ui/icon";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -77,7 +79,7 @@ export function SettingsBuildLine({
           variant === "row" && "justify-end",
         )}
       >
-        <CircleX aria-hidden className="h-3.5 w-3.5 shrink-0" />
+        <IconSwap off={CircleX} on={XCircle} offClassName="h-3.5 w-3.5 shrink-0" />
         {t("settings.status.copyFailed")}
       </span>
     ) : null;
@@ -155,11 +157,11 @@ function BuildCopyButton({
           className="w-[var(--control-sm)] shrink-0 px-0"
         >
           {copied ? (
-            <Check aria-hidden className="h-3.5 w-3.5 shrink-0 animate-icon-swap text-success" />
+            <IconSwap off={Check} on={CheckBold} kind="symbol" offClassName="h-3.5 w-3.5 shrink-0 animate-icon-swap text-success" className="animate-icon-swap text-success" />
           ) : failed ? (
-            <CircleX aria-hidden className="h-3.5 w-3.5 shrink-0 animate-icon-swap text-danger" />
+            <IconSwap off={CircleX} on={XCircle} offClassName="h-3.5 w-3.5 shrink-0 animate-icon-swap text-danger" className="animate-icon-swap text-danger" />
           ) : (
-            <Copy aria-hidden className="h-3.5 w-3.5 shrink-0" />
+            <IconSwap off={Copy} on={CopyBold} kind="symbol" offClassName="h-3.5 w-3.5 shrink-0" />
           )}
         </Button>
       </Tooltip>
@@ -204,11 +206,11 @@ function BuildLineRail({
             {copied ? t("settings.rail.copied") : line}
           </span>
           {copied ? (
-            <Check aria-hidden className="h-3 w-3 shrink-0 animate-icon-swap text-success" />
+            <IconSwap off={Check} on={CheckBold} kind="symbol" offClassName="h-3 w-3 shrink-0 animate-icon-swap text-success" className="h-3 w-3 animate-icon-swap text-success" />
           ) : failed ? (
-            <CircleX aria-hidden className="h-3 w-3 shrink-0 animate-icon-swap text-danger" />
+            <IconSwap off={CircleX} on={XCircle} offClassName="h-3 w-3 shrink-0 animate-icon-swap text-danger" className="h-3 w-3 animate-icon-swap text-danger" />
           ) : (
-            <Copy aria-hidden className="h-3 w-3 shrink-0" />
+            <IconSwap off={Copy} on={CopyBold} kind="symbol" offClassName="h-3 w-3 shrink-0" className="h-3 w-3" />
           )}
         </button>
       </Tooltip>
