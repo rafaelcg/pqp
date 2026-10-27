@@ -4143,7 +4143,12 @@ export function ChannelRow({
           <span
             aria-hidden="true"
             data-channel-unread-pip=""
-            className="hidden h-[var(--list-row-pip)] w-[var(--list-row-pip)] shrink-0 rounded-full bg-indicator redesign:block"
+            className={cn(
+              "hidden h-[var(--list-row-pip)] w-[var(--list-row-pip)] shrink-0 rounded-full bg-indicator redesign:block",
+              // The tiles take its place on hover (a count stays).
+              (onToggleFavorite || canOpenSettings) &&
+                "redesign:group-hover:hidden redesign:group-focus-within:hidden",
+            )}
           />
         )}
       </span>
@@ -4284,7 +4289,11 @@ export function ChannelRow({
                   ? "text-paper"
                   : "translate-x-2 text-paper-muted opacity-0 group-hover:translate-x-0 group-hover:opacity-100 group-focus-within:translate-x-0 group-focus-within:opacity-100 [@media(hover:none)]:hidden",
                 CHANNEL_ACTION_REDESIGN,
-                isFavorite && "redesign:text-current",
+                // Under the redesign a hidden tile takes no room, so the pip
+                // ends the row; it comes in on hover or focus.
+                isFavorite
+                  ? "redesign:text-current"
+                  : "redesign:hidden redesign:group-hover:flex redesign:group-focus-within:flex",
               )}
               aria-label={
                 isFavorite ? t("chrome.unpinChannel") : t("chrome.pinChannel")
@@ -4315,7 +4324,9 @@ export function ChannelRow({
                 CHANNEL_ACTION_TILE,
                 "text-paper-muted transition-opacity duration-150 ease-out motion-reduce:transition-none",
                 CHANNEL_ACTION_REDESIGN,
-                selected && "redesign:text-[color:var(--list-row-selected-text)]",
+                selected
+                  ? "redesign:text-[color:var(--list-row-selected-text)]"
+                  : "redesign:hidden redesign:group-hover:flex redesign:group-focus-within:flex",
                 // Same as the pin: not drawn on a touch screen unless the
                 // channel is selected. Settings is in the long-press menu.
                 selected
