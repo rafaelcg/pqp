@@ -611,6 +611,21 @@ test("captures the design council screens", async ({ browser }) => {
       } catch {
         console.log("channel settings gear not found, shot 28 skipped");
       }
+      // A voice room's header, not in the call: the "Entrar na call" pill.
+      // Best effort, last in the context so a join cannot touch other shots.
+      try {
+        await page.getByRole("button", { name: /^Lobby/ }).first().click({ timeout: 5_000 });
+        const header = page.locator("[data-chat-header]");
+        await expect(header.getByRole("button", { name: /Entrar na call/ })).toBeVisible({ timeout: 5_000 });
+        await page.waitForTimeout(400);
+        const box = (await header.boundingBox())!;
+        await page.screenshot({
+          path: path.join(OUT!, `s-header-voice-${theme}.png`),
+          clip: { x: box.x, y: box.y, width: box.width, height: box.height + 48 },
+        });
+      } catch {
+        console.log("voice room header pill not found, s-header-voice skipped");
+      }
 
       await context.close();
     }

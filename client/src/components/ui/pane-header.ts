@@ -9,7 +9,11 @@
  * the bar, the title, the line under or beside it, and the action tiles.
  */
 
-/** The bar: 56px, a faint rule of the text under it, the pane's inset. */
+/**
+ * The bar: 56px, a faint rule of the text under it, the pane's inset. The
+ * rule only shows where the header draws a base `border-b`; the forum leaves
+ * it off on purpose, a quiet bar over its own large title.
+ */
 export const PANE_HEADER_REDESIGN =
   "redesign:h-14 redesign:gap-2 redesign:border-[color:var(--pane-header-rule)] redesign:px-[var(--pane-header-px)]";
 
@@ -25,11 +29,14 @@ export const PANE_HEADER_DETAIL_REDESIGN = "redesign:text-[13px] redesign:text-t
  * tile in the row's icon colour, a tint of the text on hover.
  */
 export const PANE_HEADER_ACTION_REDESIGN =
-  "redesign:h-9 redesign:w-9 redesign:rounded-full redesign:text-[color:var(--list-row-icon)] redesign:hover:bg-[color:var(--list-row-hover)] redesign:hover:text-text redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent";
+  "redesign:h-9 redesign:w-9 redesign:max-sm:h-11 redesign:max-sm:w-11 redesign:rounded-full redesign:text-[color:var(--list-row-icon)] redesign:hover:bg-[color:var(--list-row-hover)] redesign:hover:text-text redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent";
 
-/** The same tile while its panel is open (the member list). */
+/**
+ * The same tile while its panel is open (the member list): the selected
+ * row's fill, so it never reads as a hovered tile.
+ */
 export const PANE_HEADER_ACTION_ON_REDESIGN =
-  "redesign:bg-[color:var(--list-row-hover)] redesign:text-text";
+  "redesign:bg-[color:var(--list-row-selected)] redesign:text-[color:var(--list-row-selected-text)] redesign:hover:bg-[color:var(--list-row-selected)] redesign:hover:text-[color:var(--list-row-selected-text)]";
 
 /** The phone's "open the navigation" button at a header's start. */
 export const PANE_HEADER_NAV_REDESIGN = `${PANE_HEADER_ACTION_REDESIGN} redesign:flex redesign:items-center redesign:justify-center redesign:p-0`;

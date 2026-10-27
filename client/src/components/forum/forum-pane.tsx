@@ -1,4 +1,9 @@
-import { PANE_HEADER_REDESIGN } from "@/components/ui/pane-header";
+import {
+  PANE_HEADER_DETAIL_REDESIGN,
+  PANE_HEADER_NAV_REDESIGN,
+  PANE_HEADER_REDESIGN,
+  PANE_HEADER_TITLE_REDESIGN,
+} from "@/components/ui/pane-header";
 import type { AuthorGoneCheck } from "@/hooks/use-confirmed-gone-authors";
 import {
   forumTagIconEmoji,
@@ -98,8 +103,9 @@ import {
   Funnel as PhFunnel,
   MagnifyingGlass as PhMagnifyingGlass,
   WifiSlash as PhWifiSlash,
+  List as ListIcon,
 } from "@phosphor-icons/react";
-import { Icon } from "@/components/ui/icon";
+import { Icon, IconSwap } from "@/components/ui/icon";
 import { ForumComposerDialog } from "./forum-composer-dialog";
 import { ForumTagIcon } from "./forum-tag-icon";
 import {
@@ -1201,20 +1207,24 @@ export function ForumPane({
     <header className={cn("flex h-14 shrink-0 items-center gap-1.5 px-3 sm:px-4", PANE_HEADER_REDESIGN, "redesign:gap-1.5 redesign:max-sm:px-2")}>
       <button
         type="button"
-        className="grid h-11 w-11 shrink-0 place-items-center rounded-[var(--radius-control)] hover:bg-surface-2 md:hidden"
+        className={cn(
+          "grid h-11 w-11 shrink-0 place-items-center rounded-[var(--radius-control)] hover:bg-surface-2 md:hidden",
+          PANE_HEADER_NAV_REDESIGN,
+          "redesign:md:hidden",
+        )}
         aria-label={t("chrome.openNav")}
         onClick={onOpenNav}
       >
-        <MenuIcon className="h-5 w-5" aria-hidden />
+        <IconSwap off={MenuIcon} on={ListIcon} kind="symbol" offClassName="h-5 w-5" />
       </button>
       <div className="flex min-w-0 flex-1 items-center gap-2">
         {compactList ? (
           <>
-            <span className="forum-display truncate text-lg font-bold text-text">
+            <span className={cn("forum-display truncate text-lg font-bold text-text", PANE_HEADER_TITLE_REDESIGN)}>
               {channel.name}
             </span>
             {countsLine && (
-              <span className="truncate text-xs tabular-nums text-text-secondary max-lg:hidden">
+              <span className={cn("truncate text-xs tabular-nums text-text-secondary max-lg:hidden", PANE_HEADER_DETAIL_REDESIGN)}>
                 {countsLine}
               </span>
             )}
