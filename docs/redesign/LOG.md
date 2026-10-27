@@ -507,6 +507,20 @@ reviewer, at André's request to spend less on agents:
 Round 4's MUST (the gap under the emoji category bar had no effect) was
 fixed in round 5. Stopped at the five-round cap with no MUST. Best round: 5.
 Screenshots: `~/pqp-redesign/p-popover/`.
+### p-sheet
+
+Spec (audit: no sheet primitive; Dialog is a sheet below `sm`, plus the app
+launcher's phone form, the cinema stage's picker and three story sheets):
+
+1. Job: the look of a panel rising from a phone's bottom edge.
+2. Redesign: a 24px top radius, the raised fill, a top hairline only, an
+   upward shadow, the dialog's scrim. Tokens `--sheet-*`.
+3. Merges: `SHEET_SURFACE` / `SHEET_SURFACE_PHONE` / `SHEET_SCRIM` in
+   Dialog, the app launcher and the cinema picker. Redesign only: the three
+   drew three different surfaces with the toggle off.
+4. Left: the story sheets (their own media styling) move with `f-stories`;
+   the cinema picker's desktop card moves with `f-call`. No grab handle:
+   nothing drags.
 
 ### p-radio
 
