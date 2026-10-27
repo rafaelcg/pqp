@@ -1,4 +1,11 @@
 import {
+  CheckCircle,
+  Info as InfoFill,
+  Warning,
+  XCircle,
+  type Icon as PhosphorIcon,
+} from "@phosphor-icons/react";
+import {
   CircleCheck,
   CircleX,
   Info,
@@ -10,6 +17,7 @@ import {
   settingsPaneSettled,
   useSettingsAnnounce,
 } from "@/components/settings/kit/announcer";
+import { IconSwap } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 
 interface SettingsNoticeProps {
@@ -34,12 +42,23 @@ interface SettingsNoticeProps {
   role?: "status" | "alert" | "note";
 }
 
-const TONE = {
-  info: { icon: Info, className: "text-text-secondary" },
-  warning: { icon: TriangleAlert, className: "bg-warning-soft text-on-warning-soft" },
-  danger: { icon: CircleX, className: "bg-danger-soft text-on-danger-soft" },
-  success: { icon: CircleCheck, className: "bg-success-soft text-on-success-soft" },
-} as const;
+const TONE: Record<
+  SettingsNoticeProps["tone"],
+  { icon: LucideIcon; glyph: PhosphorIcon; className: string }
+> = {
+  info: { icon: Info, glyph: InfoFill, className: "text-text-secondary" },
+  warning: {
+    icon: TriangleAlert,
+    glyph: Warning,
+    className: "bg-warning-soft text-on-warning-soft",
+  },
+  danger: { icon: CircleX, glyph: XCircle, className: "bg-danger-soft text-on-danger-soft" },
+  success: {
+    icon: CircleCheck,
+    glyph: CheckCircle,
+    className: "bg-success-soft text-on-success-soft",
+  },
+};
 
 /**
  * A state, not content: a permission that is missing, a capability this device
@@ -60,7 +79,7 @@ export function SettingsNotice({
   icon,
   role,
 }: SettingsNoticeProps) {
-  const { icon: toneIcon, className } = TONE[tone];
+  const { icon: toneIcon, glyph, className } = TONE[tone];
   const Icon = icon ?? toneIcon;
   const live = role ?? (tone === "danger" ? "alert" : "status");
   // Inside Settings a live notice speaks through the dialog's announcer: a
@@ -102,12 +121,23 @@ export function SettingsNotice({
           : cn(
               "rounded-[var(--radius-card)]",
               tone === "info" && "border border-border",
+              // Under the redesign a notice on its own is a banner's inset
+              // card; info is a quiet tint, not an outline that reads as an
+              // empty field.
+              "redesign:rounded-[var(--banner-radius)]",
+              tone === "info" &&
+                "redesign:border-transparent redesign:bg-[color:var(--settings-notice-info-bg)]",
             ),
+        "redesign:gap-2.5",
       )}
     >
-      <Icon aria-hidden className="mt-px h-4 w-4 shrink-0" />
+      {icon ? (
+        <Icon aria-hidden className="mt-px h-4 w-4 shrink-0" />
+      ) : (
+        <IconSwap off={Icon} on={glyph} offClassName="mt-px h-4 w-4 shrink-0" className="mt-px" />
+      )}
       <div ref={textRef} className="min-w-0 flex-1 text-pretty">
-        {title ? <p className="text-sm font-medium">{title}</p> : null}
+        {title ? <p className="text-sm font-medium redesign:font-semibold">{title}</p> : null}
         <div className={title ? "mt-0.5" : undefined}>{children}</div>
       </div>
       {action ? <div className="shrink-0 self-center">{action}</div> : null}

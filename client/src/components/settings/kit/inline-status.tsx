@@ -1,8 +1,10 @@
 import { useEffect } from "react";
+import { Check as CheckBold, XCircle } from "@phosphor-icons/react";
 import { Check, CircleX } from "lucide-react";
 import { useSettingsAnnounce } from "@/components/settings/kit/announcer";
 import type { InlineSaveState } from "@/components/settings/kit/use-inline-save";
 import { useTranslation } from "@/lib/i18n";
+import { IconSwap } from "@/components/ui/icon";
 import { Spinner } from "@/components/ui/spinner";
 
 /**
@@ -64,14 +66,25 @@ export function SettingsInlineStatus({
         {...live}
         className="mt-1.5 flex animate-fade-in items-center gap-1.5 text-xs text-text-secondary"
       >
-        <Check aria-hidden className="h-3.5 w-3.5 shrink-0 text-success" />
+        <IconSwap
+          off={Check}
+          on={CheckBold}
+          kind="symbol"
+          offClassName="h-3.5 w-3.5 shrink-0 text-success"
+          className="h-3.5 w-3.5 text-success"
+        />
         {spoken}
       </p>
     );
   }
   return (
     <p {...alert} className="mt-1.5 flex items-start gap-1.5 text-xs text-danger">
-      <CircleX aria-hidden className="mt-px h-3.5 w-3.5 shrink-0" />
+      <IconSwap
+        off={CircleX}
+        on={XCircle}
+        offClassName="mt-px h-3.5 w-3.5 shrink-0"
+        className="mt-px h-3.5 w-3.5"
+      />
       <span className="min-w-0 text-pretty">{state.message}</span>
     </p>
   );

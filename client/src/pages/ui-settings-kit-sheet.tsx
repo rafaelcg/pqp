@@ -108,7 +108,7 @@ export function SettingsKitSheet() {
   );
 
   return (
-    <div className="flex flex-col gap-6">
+    <div data-testid="qa-settings-kit" className="flex flex-col gap-6">
       <div className="@container rounded-[var(--radius-panel)] border border-border bg-surface-1">
         <div className="mx-auto w-full max-w-[40rem] px-4 py-5 sm:px-8 sm:py-8">
           <SettingsPaneHeader

@@ -1,6 +1,8 @@
+import { Check as CheckBold } from "@phosphor-icons/react";
 import { Check } from "lucide-react";
 import { SETTINGS_BUSY } from "@/components/settings/kit/classes";
 import { Button } from "@/components/ui/button";
+import { IconSwap } from "@/components/ui/icon";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -120,7 +122,13 @@ export function UnsavedChangesBar({
             <div className="min-w-40 flex-1">
               <p className="flex items-center gap-1.5 text-sm text-text">
                 {settled ? (
-                  <Check aria-hidden className="h-4 w-4 shrink-0 text-success" />
+                  <IconSwap
+                    off={Check}
+                    on={CheckBold}
+                    kind="symbol"
+                    offClassName="h-4 w-4 shrink-0 text-success"
+                    className="text-success"
+                  />
                 ) : null}
                 {message}
               </p>

@@ -1,12 +1,22 @@
+import {
+  CheckCircle,
+  Info as InfoFill,
+  XCircle,
+  type Icon as PhosphorIcon,
+} from "@phosphor-icons/react";
 import { CircleCheck, CircleX, Info, type LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
+import { IconSwap } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 
-const TONE = {
-  success: { icon: CircleCheck, className: "text-success" },
-  danger: { icon: CircleX, className: "text-danger" },
-  info: { icon: Info, className: "text-text-tertiary" },
-} as const;
+const TONE: Record<
+  SettingsResultProps["tone"],
+  { icon: LucideIcon; glyph: PhosphorIcon; className: string }
+> = {
+  success: { icon: CircleCheck, glyph: CheckCircle, className: "text-success" },
+  danger: { icon: CircleX, glyph: XCircle, className: "text-danger" },
+  info: { icon: Info, glyph: InfoFill, className: "text-text-tertiary" },
+};
 
 export interface SettingsResultProps {
   tone: "success" | "danger" | "info";
@@ -35,11 +45,21 @@ export function SettingsResult({
   action,
   icon,
 }: SettingsResultProps) {
-  const { icon: toneIcon, className } = TONE[tone];
+  const { icon: toneIcon, glyph, className } = TONE[tone];
   const Icon = icon ?? toneIcon;
   return (
     <div className="flex flex-col items-center gap-3 px-4 py-6 text-center">
-      <Icon aria-hidden className={cn("h-5 w-5", className)} />
+      {icon ? (
+        <Icon aria-hidden className={cn("h-5 w-5", className)} />
+      ) : (
+        <IconSwap
+          off={Icon}
+          on={glyph}
+          size="md"
+          offClassName={cn("h-5 w-5", className)}
+          className={className}
+        />
+      )}
       <div>
         <p
           tabIndex={-1}
