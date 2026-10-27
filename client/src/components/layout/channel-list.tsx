@@ -49,7 +49,7 @@ import {
   GearSix,
   PencilSimple,
   PushPin,
-  Lock as LockFill,
+  Lock as LockGlyph,
   MagnifyingGlass,
   Plus as PlusBold,
   SidebarSimple,
@@ -282,14 +282,18 @@ export function channelRowIconClass(channel: Channel, selected: boolean, connect
   return cn(
     "h-3.5 w-3.5 redesign:h-4 redesign:w-4",
     !channelIconIsPrivateLock(channel) &&
-      (selected
-        ? "redesign:text-[color:var(--list-row-selected-text)]"
-        : connected
-          ? // The room you are in: the icon follows its green text.
-            "redesign:text-on-success-soft"
+      (connected
+        ? // The room you are in, open or not: the icon follows its green text.
+          "redesign:text-on-success-soft"
+        : selected
+          ? "redesign:text-[color:var(--list-row-selected-text)]"
           : "redesign:text-[color:var(--list-row-icon)]"),
   );
 }
+
+/** A connected room's second line: its green, a step quieter. */
+const CHANNEL_DETAIL_CONNECTED_REDESIGN =
+  "redesign:text-[color:color-mix(in_oklab,var(--color-on-success-soft)_80%,transparent)]";
 
 /** A watch party room's second line (its viewers, its topic). */
 const CHANNEL_DETAIL_REDESIGN =
@@ -301,8 +305,10 @@ const CHANNEL_DETAIL_REDESIGN =
  * the list row's fills: the open one selected, the call you are in the
  * success tone. The two buttons at the top are round, as the header's are.
  */
+// Focus is an outline 2px outside the tile, never a ring: the call tile's
+// green edge is a ring, and the two must never stack.
 const STRIP_TILE_REDESIGN =
-  "redesign:rounded-[var(--strip-tile-radius)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-[color:var(--color-pane-side)]";
+  "redesign:rounded-[var(--strip-tile-radius)] redesign:focus-visible:outline-2 redesign:focus-visible:outline-offset-2 redesign:focus-visible:outline-accent redesign:focus-visible:ring-0";
 const STRIP_BUTTON_REDESIGN =
   "redesign:rounded-full redesign:text-[color:var(--list-row-icon)] redesign:hover:bg-[color:var(--list-row-hover)] redesign:hover:text-text redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-[color:var(--color-pane-side)]";
 /** The pip, the mention and the call count cut out of the side pane. */
@@ -2787,6 +2793,7 @@ export const ChannelList = memo(function ChannelList({
                     className={cn(
                       "pl-4 text-[11px] font-semibold uppercase tracking-[0.12em] text-text-tertiary",
                       CATEGORY_LABEL_REDESIGN,
+                      // A label, not a fold control: no caret and no hover.
                       "redesign:pl-[1.125rem] redesign:text-text-secondary",
                     )}
                   >
@@ -2806,7 +2813,7 @@ export const ChannelList = memo(function ChannelList({
                         )}
                         onClick={() => onCreateChannel("category", false)}
                       >
-                        <SectionActionGlyph off={FolderPlus} on={FolderSimplePlus} kind="symbol" onClassName="h-4 w-4" />
+                        <SectionActionGlyph off={FolderPlus} on={FolderSimplePlus} kind="symbol" />
                       </button>
                     </Tooltip>
                   )}
@@ -3278,7 +3285,7 @@ export function ChannelSection({
                   className={addButtonClass}
                   onClick={onAddPrivate}
                 >
-                  <SectionActionGlyph off={Lock} on={LockFill} kind="symbol" offClassName="h-3 w-3" />
+                  <SectionActionGlyph off={Lock} on={LockGlyph} offClassName="h-3 w-3" />
                 </button>
               </Tooltip>
             </div>
@@ -3497,7 +3504,10 @@ export function ChannelRailItem({
             "redesign:bg-success-soft redesign:text-on-success-soft redesign:ring-1 redesign:ring-inset redesign:ring-[color:color-mix(in_oklab,var(--color-success)_45%,transparent)] redesign:hover:bg-success-soft redesign:hover:text-on-success-soft",
           // In the call and viewing it: the edge goes solid, so the strip
           // still shows which tile is open.
-          connected && selected && "redesign:ring-2 redesign:ring-[color:var(--color-success)]",
+          connected && selected && "redesign:ring-2 redesign:ring-[color:var(--color-success)] redesign:text-text",
+          // A live party: the danger soft fill, as the call has the success
+          // one, so the live dot has a tile corner to sit on.
+          live && !selected && !connected && "redesign:bg-danger-soft redesign:hover:bg-danger-soft",
           muted && !selected && !connected && "redesign:opacity-[var(--list-row-muted-opacity)]",
         )}
         onClick={() => {
@@ -3531,7 +3541,12 @@ export function ChannelRailItem({
           }
         }}
       >
-        <ChannelIcon channel={channel} className="h-4 w-4 redesign:h-[1.125rem] redesign:w-[1.125rem]" />
+        <ChannelIcon
+          channel={channel}
+          // A live party draws its glyph in the live red, so the dot on its
+          // corner belongs to a tile that already says it.
+          className={cn("h-4 w-4 redesign:h-[1.125rem] redesign:w-[1.125rem]", live && "redesign:text-danger")}
+        />
         {live && (
           /* The strip has no room for words: a red dot in the corner is the
              pill. The viewer count below it is the ordinary occupancy badge. */
@@ -3541,8 +3556,13 @@ export function ChannelRailItem({
             className={cn(
               "absolute -left-1 -top-1 h-2.5 w-2.5 rounded-full bg-danger ring-2 ring-channel motion-safe:animate-pulse",
               STRIP_RING_REDESIGN,
+              // Under the redesign only the inner dot pulses, so the cutout
+              // ring stays solid and the dot keeps the glyph's red.
+              "redesign:-left-0.5 redesign:-top-0.5 redesign:bg-[color:var(--color-pane-side)] redesign:motion-safe:animate-none",
             )}
-          />
+          >
+            <span className="hidden h-full w-full rounded-full bg-danger motion-safe:animate-pulse redesign:block" />
+          </span>
         )}
         {hasUnread && (
           <>
@@ -3564,6 +3584,8 @@ export function ChannelRailItem({
           aria-label={t("chrome.unreadMentions", { count: mentions })}
           className={cn(
             "absolute -right-1 -top-1 h-auto py-0.5 text-center text-paper normal-nums",
+            // Every corner badge hangs 2px off the tile, so the corners line up.
+            "redesign:-right-0.5 redesign:-top-0.5",
             "redesign:h-4 redesign:py-0 redesign:tabular-nums redesign:text-on-danger",
             STRIP_RING_REDESIGN,
           )}
@@ -3682,7 +3704,7 @@ function CommunityHomeUnreadBadge({
         // it never borrows the red the mention counts use.
         "min-w-4 rounded-full bg-signal px-1 py-0.5 text-center text-[10px] font-bold leading-none text-ink",
         "redesign:flex redesign:h-4 redesign:items-center redesign:justify-center redesign:bg-accent redesign:py-0 redesign:text-[length:var(--count-badge-sm-text)] redesign:font-semibold redesign:tabular-nums redesign:text-on-accent",
-        compact && "absolute -right-1 -top-1",
+        compact && "absolute -right-1 -top-1 redesign:-right-0.5 redesign:-top-0.5",
         compact && STRIP_RING_REDESIGN,
         !compact && "shrink-0",
         !compact && pushRight && "ml-auto",
@@ -4138,6 +4160,7 @@ export function ChannelRow({
                 "truncate text-[10px] text-paper-muted",
                 CHANNEL_DETAIL_REDESIGN,
                 selected && "redesign:text-[color:var(--list-row-selected-text)]",
+                connected && CHANNEL_DETAIL_CONNECTED_REDESIGN,
               )}
             >
               {/* Under the redesign the live mark is this dot, not the
@@ -4160,6 +4183,7 @@ export function ChannelRow({
                   "truncate text-[10px] text-paper-muted",
                   CHANNEL_DETAIL_REDESIGN,
                   selected && "redesign:text-[color:var(--list-row-selected-text)]",
+                  connected && CHANNEL_DETAIL_CONNECTED_REDESIGN,
                 )}
               >
                 {topic}
@@ -4210,7 +4234,11 @@ export function ChannelRow({
           <>
             <span
               aria-hidden="true"
-              className="h-1.5 w-1.5 rounded-full bg-signal redesign:mr-2 redesign:bg-on-success-soft"
+              className={cn(
+                // Under the redesign the success fill says connected; the
+                // end column only ever means "something is waiting".
+                "h-1.5 w-1.5 rounded-full bg-signal redesign:hidden",
+              )}
             />
             <span className="sr-only">{t("chrome.connected")}</span>
           </>
@@ -4312,17 +4340,15 @@ export function ChannelRow({
             ? "redesign:bg-[color:var(--list-row-selected)] redesign:font-medium redesign:text-[color:var(--list-row-selected-text)]"
             : "redesign:text-[color:var(--list-row-text)] redesign:hover:bg-[color:var(--list-row-hover)] redesign:hover:text-text",
           hasUnread && !muted && !selected && !connected && "redesign:text-text",
-          // The room you are in: the success tone's soft fill, no ring.
-          connected &&
-            "redesign:bg-success-soft redesign:text-on-success-soft redesign:ring-0 redesign:hover:bg-success-soft redesign:hover:text-on-success-soft",
           muted && !selected && !connected && "redesign:opacity-[var(--list-row-muted-opacity)]",
           isDragOver && !occupantDragActive && "redesign:ring-accent",
           // The room you are in, as a voice room says it: the success fill,
-          // no ring. The selected fill still wins on the open room.
+          // no ring. It wins over the selected fill too, because being in the
+          // room is the usual reason it is open.
           connected &&
-            !selected &&
-            "redesign:bg-success-soft redesign:text-on-success-soft redesign:ring-0 redesign:hover:bg-success-soft redesign:hover:text-on-success-soft",
-          connected && selected && "redesign:ring-0",
+            "redesign:bg-success-soft redesign:text-on-success-soft redesign:hover:bg-success-soft redesign:hover:text-on-success-soft",
+          // A channel dragged over it still shows the drop ring.
+          connected && !isDragOver && "redesign:ring-0",
           // The row's focus ring, on the whole pill: the button inside
           // drops its outline under the redesign.
           "redesign:has-[[data-channel-row-main]:focus-visible]:ring-2 redesign:has-[[data-channel-row-main]:focus-visible]:ring-inset redesign:has-[[data-channel-row-main]:focus-visible]:ring-[color:var(--list-row-ring)]",
@@ -4365,7 +4391,7 @@ export function ChannelRow({
             data-channel-join=""
             data-channel-watch=""
             draggable={false}
-            className="shrink-0 rounded-md bg-danger/15 px-1.5 py-0.5 text-[10px] font-semibold text-danger hover:bg-danger/25 redesign:rounded-full redesign:bg-danger-soft redesign:px-2.5 redesign:py-1 redesign:text-xs redesign:text-on-danger-soft redesign:hover:bg-[color:color-mix(in_oklab,var(--color-danger-soft)_85%,var(--color-text))] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent"
+            className="shrink-0 rounded-md bg-danger/15 px-1.5 py-0.5 text-[10px] font-semibold text-danger hover:bg-danger/25 redesign:rounded-full redesign:bg-danger-soft redesign:px-2.5 redesign:py-1 redesign:text-xs redesign:text-on-danger-soft redesign:hover:bg-[color:color-mix(in_oklab,var(--color-danger-soft)_85%,var(--color-text))] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--list-row-ring)]"
             title={t("watchParty.live.watchHint")}
             onClick={(event) => {
               event.preventDefault();
@@ -4404,6 +4430,8 @@ export function ChannelRow({
                     // row's end would read as the unread pip.
                     "redesign:text-[color:var(--list-row-icon)]"
                   : "redesign:hidden redesign:group-hover:flex redesign:group-focus-within:flex",
+                // After the pin's own colour: the room you are in stays green.
+                connected && "redesign:text-on-success-soft redesign:hover:text-on-success-soft",
               )}
               aria-label={
                 isFavorite ? t("chrome.unpinChannel") : t("chrome.pinChannel")
@@ -4437,6 +4465,8 @@ export function ChannelRow({
                 selected
                   ? "redesign:text-[color:var(--list-row-selected-text)]"
                   : "redesign:hidden redesign:group-hover:flex redesign:group-focus-within:flex",
+                // After the selected colour: the room you are in stays green.
+                connected && "redesign:text-on-success-soft redesign:hover:text-on-success-soft",
                 // Same as the pin: not drawn on a touch screen unless the
                 // channel is selected. Settings is in the long-press menu.
                 selected
@@ -4551,7 +4581,7 @@ export function SidebarThreadRow({
                 data-thread-leave=""
                 aria-label={t("thread.leaveNamed", { name: thread.name })}
                 onClick={onLeave}
-                className="absolute right-1 flex h-5 w-5 items-center justify-center rounded text-text-tertiary opacity-0 [@media(hover:none)]:right-0 [@media(hover:none)]:h-8 [@media(hover:none)]:w-8 hover:bg-surface-3 hover:text-text focus:outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-focus-ring group-hover/thread:opacity-100 group-focus-within/thread:opacity-100 [@media(hover:none)]:opacity-100 redesign:h-6 redesign:w-6 redesign:rounded-full redesign:hover:bg-[color:var(--card-row-hover)] redesign:focus-visible:ring-accent"
+                className="absolute right-1 flex h-5 w-5 items-center justify-center rounded text-text-tertiary opacity-0 [@media(hover:none)]:right-0 [@media(hover:none)]:h-8 [@media(hover:none)]:w-8 hover:bg-surface-3 hover:text-text focus:outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-focus-ring group-hover/thread:opacity-100 group-focus-within/thread:opacity-100 [@media(hover:none)]:opacity-100 redesign:h-6 redesign:w-6 redesign:rounded-full redesign:hover:bg-[color:var(--card-row-hover)] redesign:focus-visible:ring-[color:var(--list-row-ring)]"
               >
                 <X className="h-3 w-3 redesign:hidden" aria-hidden />
                 <Icon icon={XBold} kind="symbol" className="hidden h-3 w-3 redesign:block" />
