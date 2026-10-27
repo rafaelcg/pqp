@@ -50,6 +50,7 @@ Read this file and the inventory at the start of every session.
 | 2 | `p-toast` | Merged (cap at round 5: 8.5 Opus r5, 8.7 Codex r2, no MUST) |
 | 2 | `p-avatar` | Merged (cap at round 5: 8.6 Opus r5, 8.7 Codex r2, no MUST) |
 | 2 | `p-list-row` | Merged (cap at round 5: 8.6 Opus r5, 8.4 Codex r2, no MUST) |
+| 2 | `p-card` | Merged (cap at round 5: 8.5 Opus r5, 8.4 Codex r1, no MUST) |
 
 ## Phase 0: directions
 
@@ -791,6 +792,26 @@ bespoke cards in Baú, polls, voice notes, the forward and the corner card):
 5. Two eyebrow labels inside cards (bot overview, conversations empty) draw
    different specs. Unifying them changes the toggle-off look, so they fold
    onto `SectionLabel` with `p-section-header`.
+
+Council (Opus 5.5, GPT-6 Luna via Codex), overall after. One reviewer per
+round, Opus for the sign-off:
+
+| Round | Opus | Codex |
+|---|---|---|
+| 1 | not run | 8.4 |
+| 2 | 8.4 | not run |
+| 3 | 8.3 | not run |
+| 4 | 8.3 | not run |
+| 5 | 8.5 | not run |
+
+Capped at round 5, no MUST open. Round 5's notes were applied after it: the
+connection check's detail line is secondary text, the bot wizard's tool tile
+takes the card's row tint, the light card tokens have their own comment, and
+DESIGN.md says a static row takes no hover. Verified: typecheck; 10,434 unit
+tests; `bench:tokens`; i18n check; `conversations-home`,
+`profile-popover-menu`, `dialog-mobile-layout` and `settings-sections` e2e
+(41 passed); retro, Halloween, high contrast, 390px and toggle off.
+Screenshots: `~/pqp-redesign/p-card/`.
 
 ## Open questions for André
 
