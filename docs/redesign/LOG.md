@@ -54,6 +54,12 @@ Read this file and the inventory at the start of every session.
 | 2 | `p-section-header` | Merged (cap at round 5: 8.0 Opus r5, 8.4 Codex r2, no MUST) |
 | 2 | `p-loading` | Merged (cap at round 5: 8.6 Opus r5, 8.6 Codex r4, no MUST) |
 | 2 | `p-empty` | Merged, capped at round 5 (Opus 8.6) |
+| 2 | `p-sheet` | Merged, capped at round 5 (Opus 8.6) |
+| 2 | `p-dialog` | Merged, capped at round 5 (Codex 8.7 r2, Opus 8.2 r4) |
+| 3 | `s-frame` | Merged, capped at round 5 (Opus 8.8) |
+| 3 | `s-rail` | Merged, capped at round 5 (Opus 8.2 r5, 8.8 r3) |
+| 3 | `s-sidebar-header` | Merged, capped at round 5 (Opus 8.3 r5, 8.7 r3) |
+| 5 | `m-breakpoints` | Merged (code only, no council) |
 
 ## Phase 0: directions
 
@@ -507,6 +513,30 @@ reviewer, at André's request to spend less on agents:
 Round 4's MUST (the gap under the emoji category bar had no effect) was
 fixed in round 5. Stopped at the five-round cap with no MUST. Best round: 5.
 Screenshots: `~/pqp-redesign/p-popover/`.
+### p-sheet
+
+Spec (audit: no sheet primitive; Dialog is a sheet below `sm`, plus the app
+launcher's phone form, the cinema stage's picker and three story sheets):
+
+1. Job: the look of a panel rising from a phone's bottom edge.
+2. Redesign: a 24px top radius, the raised fill, a top hairline only, an
+   upward shadow, the dialog's scrim. Tokens `--sheet-*`.
+3. Merges: `SHEET_SURFACE` / `SHEET_SURFACE_PHONE` / `SHEET_SCRIM` in
+   Dialog, the app launcher and the cinema picker. Redesign only: the three
+   drew three different surfaces with the toggle off.
+4. Left: the story sheets (their own media styling) move with `f-stories`;
+   the cinema picker's desktop card moves with `f-call`. No grab handle:
+   nothing drags.
+
+Rounds: r1 Codex 8.4, r2 Opus 8.4, r3 Codex 8.5, r4 Opus 8.5, r5 Opus 8.6.
+Capped at round 5, no MUST. Round 5 SHOULDs applied before the merge: the
+light sheet keeps one top edge (the border; the 1px shadow layer is gone),
+and `SHEET_SAFE_BOTTOM` (`max(0.75rem, env(safe-area-inset-bottom))`) pads
+every footerless phone sheet the same. Left as COULD: desktop dialogs share
+the 6px scrim blur (watch GPU over a playing share), landscape side safe
+areas. The dialog footer two-tone belongs to `p-dialog`. Verified:
+typecheck, 10,454 unit tests, bench:tokens, i18n:check, forum-shell and
+mobile-immersive-stage e2e. Screenshots: ~/pqp-redesign/p-sheet/.
 
 ### p-radio
 
@@ -936,6 +966,127 @@ secondary fill (`f-forum`); `SettingsEmpty` takes a filled Phosphor glyph in
 suite timed out under load once and passed alone); `bench:tokens`; i18n
 check; `forum-pane` and `forum-shell` e2e (6 passed); retro, Halloween, high
 contrast, 390px and toggle off. Screenshots: `~/pqp-redesign/p-empty/`.
+### s-frame
+
+Spec (audit: the root, the rail, five side panes and Novidades each drew
+their own edge and fill; the phone breakpoint is defined three ways):
+
+1. Job: the canvas, the panes, their corners and the gutter between them.
+2. Redesign: the rail sits on the canvas with no edge; from 768px the
+   sidebar, conversation, member list, docked thread, forum side post and
+   Novidades float as `--radius-pane` panes with the `--space-gutter`
+   gutter; the conversation is the brightest pane.
+3. Built as class strings in `ui/pane.ts`, appended after each pane's own.
+4. Left: below 768px the drawers keep their edges (`m-shell`, `m-breakpoints`).
+
+### s-rail
+
+Spec (audit: one rail in `server-rail.tsx`, six tile kinds each drawing its
+own lime-on-hover square, a hand-made count pill, legacy tokens throughout):
+
+1. Job: the doors on the left edge: Conversas, waiting and pinned people,
+   servers, create and join, Novidades, Discover, the update button.
+2. States: selected, unread pip, mention and request counts, muted, Baú
+   count or ring, live party, public community, dragged, keyboard focus.
+3. Redesign: 44px round tiles in the side pane's colour; the selected one is
+   the accent's rounded square; a hover lifts the fill and never turns lime;
+   filled Phosphor glyphs; counts on `CountBadge`; marks cut from the canvas.
+4. Left: `PhoneServersScreen` (`m-shell`) and `ServerRailSkeleton`
+   (`p-loading`, which is in review).
+Rounds: r1 Codex 8.0, r2 Codex 8.5, r3 Opus 8.3 (MUST: a call added a
+second gutter; fixed), r4 Opus 8.6, r5 Opus 8.8. Capped at round 5, no MUST.
+Applied before the merge: `--space-gutter` is 0 under 768px, the same width
+where the frame classes stop floating. Left as COULD:
+- Light `pane-side` is close to `pane-main`; only the gutter parts them.
+  Try `color-mix(in oklab, var(--color-surface-1) 98%, var(--color-text))`
+  if a later element removes the sidebar divider (re-run the bench).
+- For `s-user-panel`: the mockup draws the user panel as its own inset
+  rounded card, not a full-width divider.
+- For `s-thread`: shoot the docked thread pane.
+Verified: typecheck, 10,454 unit tests, bench:tokens, i18n:check, e2e
+app-shell-scroll, forum-shell, channel-layout, call-split-layout,
+forum-pane. Screenshots: ~/pqp-redesign/s-frame/.
+
+Rounds 3 to 5 (Opus; Codex out of usage): 8.8, 8.0, 8.2. Fixed on the way:
+the join door on the same disc, idle doors lifted 4% in dark, a quieter grey
+globe, one focus ring on the update tile, the lime rule written down (a lime
+fill is "you are here", small lime marks are "new for you"). Capped at round
+5, no MUST open. Open: the sheet's face fixtures load from dicebear, so a
+capture can miss them.
+Verified: typecheck, 10,462 unit tests, bench:tokens, i18n:check, e2e
+conversations-home, dm-list-polish, live-read-ack (17). Screenshots:
+~/pqp-redesign/s-rail/.
+
+### p-dialog
+
+Spec (audit: Dialog in 50 files, ConfirmDialog in 24, PromptDialog in 1;
+14 `role="dialog"` overlays outside it, 4 sheets, 3 native prompts):
+
+1. Job: a modal panel over the app: a title, a body, an optional footer of
+   actions; a full-screen page on a phone when asked.
+2. Redesign: a deeper scrim, a text edge and the deepest lift, no header
+   rule, a softer footer rule, a 24px inset, a 22px title, a sentence-case
+   eyebrow, the close button as IconButton's ghost.
+3. Merges: nothing folds without changing the toggle-off look. The close
+   button keeps its element (IconButton's `lg` has a 20px glyph and another
+   hover) and borrows IconButton's tokens under the redesign.
+4. Left for their surfaces: the 14 overlays outside Dialog, the sheets
+   (`p-sheet`), and the native `window.prompt` and `confirm` (nickname,
+   kick), which belong to `f-profile-popover` and `f-server-settings`.
+5. Round 1: the close button takes IconButton's focus ring and an 18px
+   glyph, the header 20px at the top, a body-less dialog drops its footer
+   rule. Left for `f-server-settings`: its rail divider starts in mid-air
+   now that the header rule is gone.
+
+6. Rounds 2 to 5: Codex 8.7 at round 2; the round 3 MUST is fixed; Opus
+   8.2 at round 4 and 8.1 at round 5. Fixed on the way: light dialogs sit
+   on the brightest surface (`--dialog-surface`), and the close glyph lines
+   up with the title's right edge. Capped at round 5, no MUST open.
+Verified: typecheck, 10,462 unit tests, bench:tokens, i18n:check, e2e
+dialog-mobile-layout (16). Screenshots: ~/pqp-redesign/p-dialog/.
+
+### s-sidebar-header
+
+Spec (audit: one header in `channel-list.tsx`, three hand-built icon
+buttons, a search entry styled as a faint field, the banner strip in
+`server-identity.tsx`):
+
+1. Job: the open server's name and menu, members, collapse, close (phone),
+   message search, and the banner when the server has one.
+2. States: hover and open menu, a long name (tooltip), public, loading, no
+   server, with and without a banner, phone drawer.
+3. Redesign: the name in the title face over no rule, without the icon
+   the rail tile already shows beside it; the three buttons are
+   IconButton; search is a pill a step off the pane; the banner is an inset
+   card. The search dialog itself is `f-search`.
+
+Rounds (Opus / Codex): r1 - / 8.3, r2 - / 8.6, r3 8.7 / -, r4 7.8 / -,
+r5 8.3 / - (no MUST, would approve). Last fixes: the trigger's hover is the
+ghost step (8%) above the search's 6%, open 10%, both tokens
+(`--sidebar-trigger-*`); the banner on the header's 12px inset. Kept: the
+members button on desktop (round 5 suggested hiding it at every width; the
+server menu has Membros too; question 4).
+
+### m-breakpoints
+
+Spec (audit: width queries in the signed-in app: `PHONE_QUERY`, `SM_UP_QUERY`,
+`use-sm-up`, `use-md-up`, `use-lg-up`, the forum's 767px, stories' 640px,
+the soundboard sheet, the voice note card, the thread panel, two device
+probes, and the stylesheets' 639, 640 and 767px):
+
+1. Job: one definition of where the layout changes.
+2. Change: `lib/breakpoints.ts` names Tailwind's `sm`, `md` and `lg` in rem,
+   with "below" queries at `.999`; every caller imports it; each stylesheet
+   query writes the same rem value and names the file.
+3. Merges: the forum's 767px and stories' 640px become `md` and `sm`.
+4. Same at a 16px base font, except one pixel: stories' `max-width: 640px`
+   overlapped `sm` at exactly 640px and now stops at 639.99px. With another
+   base font size, JS and CSS now switch with the `sm:` and `md:` utilities.
+5. No council: it draws nothing new. Verified by unit tests (a new
+   breakpoints test), forum, stories, shell and phone e2e.
+6. Found on the way: `app-shell-scroll` failed on `redesign` (not on main):
+   `/vem` renders after network idle once the dev server loads the icon
+   package. The test now waits for the page to render.
 
 ### p-settings-kit
 
@@ -959,7 +1110,9 @@ server settings do not use it, so its roles field label in caps moves to
   themselves. Sharing one behaviour means adding `@radix-ui/react-popover`
   (a new dependency and lockfile change). Only the look is shared for now.
 
-1. Resolved 2026-10-26: Grok 4.7 is the third reviewer.
+1. Reviewers: André dropped Grok (too slow), so the council is Opus and
+   Codex. On 2026-10-27 Codex hit its usage limit (until November 25,
+   2026), and rounds since then are Opus only. Add a second provider?
 2. Four features live in two versions behind flags. The redesign should
    rebuild only the version that stays. Which one stays for each?
    - DM list: classic or Conversas home (`conversations_home`).
@@ -968,6 +1121,9 @@ server settings do not use it, so its roles field label in caps moves to
    - Channel list: mixed layout (`mixed_channel_list`) or legacy sections.
 3. `error-boundary.tsx` is English only, and AGENTS.md says to leave it alone.
    Redesign its look and keep the copy as is?
+4. Sidebar header: the members button duplicates the server menu's Membros
+   and the chat header's members control. Hide it on desktop too, so a long
+   server name fits? It is hidden in the phone drawer already.
 
 ## Decisions
 

@@ -29,7 +29,9 @@ export default defineConfig({
   workers: 1,
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
-  retries: 0,
+  // One retry in CI only, and the first failure is not lost: its trace, screenshots and the media report that the
+  // spec logs stay in `test-results` (uploaded by the job), and the log line says which attempt failed.
+  retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [["list"]] : "list",
   timeout: 180_000,
   expect: { timeout: 20_000 },
@@ -38,20 +40,35 @@ export default defineConfig({
     viewport: { width: 1280, height: 800 },
     locale: "en-US",
     screenshot: "only-on-failure",
+    trace: "retain-on-failure",
     // `E2E_REAL_CAPTURE=1` runs a headed browser that really captures its own tab (one window at a time); the
     // default stands a canvas in for the picker, because headless Chromium cannot capture a tab
+    //
+    // Both branches name the WebRTC address policy. Neither client in this suite is granted a microphone, and
+    // Chromium then restricts ICE to the default interface behind an obfuscated `<uuid>.local` name. In about one
+    // run in ten one of the two peer connections never produced a single candidate (`iceGatheringState` stuck on
+    // "gathering", the other side holding its candidates and the connection "new" for the whole test), the share's
+    // tracks arrived muted and the tone read exact silence: this suite's one flake, in CI and locally, and the
+    // reason a longer wait never helped. With the full interface list and plain addresses it passed 40 of 40
+    // where the same loop failed 2 in 5, 1 in 30 and 2 in 17. Two clients on one machine have nothing to hide.
     launchOptions:
       process.env.E2E_REAL_CAPTURE === "1"
         ? {
             headless: false,
             args: [
+              "--disable-features=WebRtcHideLocalIpsWithMdns",
               "--auto-accept-this-tab-capture",
               // a real prompt for the microphone would stall the join: a granted one, silent, from a file
               "--use-fake-device-for-media-stream",
               ...(process.env.E2E_SILENT_WAV ? [`--use-file-for-fake-audio-capture=${process.env.E2E_SILENT_WAV}`] : []),
             ],
           }
-        : {},
+        : {
+            args: [
+              "--disable-features=WebRtcHideLocalIpsWithMdns",
+              "--force-webrtc-ip-handling-policy=default_public_and_private_interfaces",
+            ],
+          },
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 800 } } }],
   webServer: [

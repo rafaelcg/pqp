@@ -428,6 +428,37 @@ test("captures the design council screens", async ({ browser }) => {
       await expect(page.getByText(PAPO.at(-1)![1])).toBeVisible();
       await hideDevBanner(page);
       await shoot(page, `01-chat-${theme}`);
+      // The sidebar header up close: the name hovered, the search entry.
+      {
+        const header = page.locator("[data-server-header]");
+        await page.locator("[data-server-menu-trigger]").hover();
+        await page.waitForTimeout(300);
+        const box = (await header.boundingBox())!;
+        await page.screenshot({
+          path: path.join(OUT!, `s-sidebar-header-${theme}.png`),
+          clip: { x: Math.max(0, box.x - 8), y: Math.max(0, box.y - 8), width: box.width + 16, height: box.height + 72 },
+        });
+        await page.mouse.move(0, 0);
+      }
+      // A short name, so the caret's place after the name shows.
+      try {
+        await page.getByRole("button", { name: /Faculdade ADS/ }).first().click({ timeout: 5_000 });
+        await expect(page.locator("[data-server-name]").first()).toHaveText("Faculdade ADS", { timeout: 10_000 });
+        await page.locator("[data-server-menu-trigger]").hover();
+        await page.waitForTimeout(300);
+        const header = page.locator("[data-server-header]");
+        const box = (await header.boundingBox())!;
+        await page.screenshot({
+          path: path.join(OUT!, `s-sidebar-header-short-${theme}.png`),
+          clip: { x: Math.max(0, box.x - 8), y: Math.max(0, box.y - 8), width: box.width + 16, height: box.height + 72 },
+        });
+        await page.mouse.move(0, 0);
+        await page.goto(chatUrl);
+        await expect(page.getByRole("button", { name: "Enviar" })).toBeVisible({ timeout: 30_000 });
+        await hideDevBanner(page);
+      } catch {
+        console.log("short-name header shot skipped");
+      }
       // A popover in place: the composer's emoji picker.
       await page.getByRole("button", { name: "Adicionar emoji", exact: true }).first().click();
       await expect(page.locator(".emoji-mart-shell")).toBeVisible();
@@ -450,6 +481,13 @@ test("captures the design council screens", async ({ browser }) => {
       await expect(page.locator("[data-context-menu]")).toBeVisible();
       await shoot(page, `16-message-menu-${theme}`);
       await page.keyboard.press("Escape");
+      // A confirm dialog in place: deleting your own message.
+      await page.getByText(PAPO.find(([who]) => who === VIEWER)![1]).click({ button: "right" });
+      await page.getByRole("menuitem", { name: "Excluir mensagem" }).click();
+      await expect(page.getByRole("dialog")).toBeVisible();
+      await page.waitForTimeout(400);
+      await shoot(page, `18-confirm-dialog-${theme}`);
+      await page.keyboard.press("Escape");
 
       await page.goto(`/app/dm/${conversation.channelId}?lang=pt-BR`);
       await expect(page.getByTestId("app-chat-column").getByText(DM.at(-1)![1])).toBeVisible({ timeout: 30_000 });
@@ -460,6 +498,10 @@ test("captures the design council screens", async ({ browser }) => {
       await expect(page.getByText(DM.at(-1)![1]).first()).toBeVisible({ timeout: 30_000 });
       await hideDevBanner(page);
       await shoot(page, `03-home-${theme}`);
+      // Novidades: a pane of its own beside the rail.
+      await page.getByRole("button", { name: /^Novidades/ }).first().click();
+      await page.waitForTimeout(1200);
+      await shoot(page, `18-whats-new-${theme}`);
 
       await page.goto(chatUrl);
       await expect(page.getByRole("button", { name: "Enviar" })).toBeVisible({ timeout: 30_000 });
@@ -541,6 +583,29 @@ test("captures the design council screens", async ({ browser }) => {
     await expect(phonePage.getByText(PAPO.at(-1)![1])).toBeVisible({ timeout: 30_000 });
     await hideDevBanner(phonePage);
     await shoot(phonePage, "08-phone-chat-dark");
+    // The drawer open: the sidebar header with its close button.
+    await phonePage.getByRole("button", { name: "Abrir navegação" }).first().click();
+    await phonePage.waitForTimeout(800);
+    await shoot(phonePage, "08-phone-drawer-dark");
+    // Close the drawer: reload the conversation before the sheet.
+    await phonePage.goto(chatUrl);
+    await expect(phonePage.getByText(PAPO.at(-1)![1])).toBeVisible({ timeout: 30_000 });
+    await hideDevBanner(phonePage);
+    // A sheet: below `sm` a dialog rises from the bottom edge.
+    for (const theme of ["dark", "light"] as const) {
+      if (theme === "light") {
+        await as(phonePage, "light");
+        await phonePage.goto(chatUrl);
+        await expect(phonePage.getByText(PAPO.at(-1)![1])).toBeVisible({ timeout: 30_000 });
+        await hideDevBanner(phonePage);
+      }
+      await phonePage.getByText(PAPO.find(([who]) => who === VIEWER)![1]).click({ button: "right" });
+      await phonePage.getByRole("menuitem", { name: "Excluir mensagem" }).click();
+      await expect(phonePage.getByRole("dialog")).toBeVisible();
+      await phonePage.waitForTimeout(500);
+      await shoot(phonePage, `19-phone-sheet-${theme}`);
+      await phonePage.keyboard.press("Escape");
+    }
     await phone.close();
   } finally {
     for (const socket of sockets.values()) {
@@ -620,6 +685,9 @@ const PRIMITIVES: {
   // Focus the connection strip's main action, hover the error's dismiss.
   { id: "p-banner", testId: "qa-primitive-banner", focus: "Tentar agora", hover: "Dispensar" },
   { id: "p-settings-kit", testId: "qa-settings-kit", tiles: 1300 },
+  // Two real rails: Conversas open with people waiting, and a server open
+  // beside every server cue. Keyboard focus on "Praça", hover on "Oficina".
+  { id: "s-rail", testId: "qa-shell-rail", focus: "Praça", hover: "Oficina" },
 ];
 
 test("captures the primitives", async ({ browser }) => {
