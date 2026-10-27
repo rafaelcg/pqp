@@ -12,7 +12,7 @@ import {
 import { createPortal } from "react-dom";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
-import { SHEET_SURFACE_PHONE } from "@/components/ui/sheet";
+import { SHEET_SCRIM, SHEET_SURFACE_PHONE } from "@/components/ui/sheet";
 
 // A roving group (radios, tabs) parks its other members at `tabindex="-1"`:
 // they are focusable by script but not Tab stops, so they are not the trap's
@@ -441,7 +441,9 @@ export function Dialog({
           layer below owns the dismiss gesture. */}
       <div
         aria-hidden="true"
-        className="fixed inset-0 z-[60] bg-surface-0/80 backdrop-blur-[2px]"
+        // Under the redesign the sheets' one scrim, which darkens the app in
+        // both themes (the old one lightened it in light).
+        className={cn("fixed inset-0 z-[60] bg-surface-0/80 backdrop-blur-[2px]", SHEET_SCRIM)}
       />
       <div
         data-dialog-layer=""
@@ -479,6 +481,9 @@ export function Dialog({
             !phoneFullScreen && "rounded-t-[var(--radius-panel)]",
             // Under the redesign a phone sheet is the shared sheet surface.
             !phoneFullScreen && SHEET_SURFACE_PHONE,
+            // A phone sheet with no footer keeps its body above the home
+            // indicator; the footer carries `safe-pb` itself.
+            !phoneFullScreen && !footer && "redesign:max-sm:pb-[env(safe-area-inset-bottom)]",
             fill && "h-[calc(100%-1.5rem)] sm:h-full",
             // Settings: a fixed height so the rail stays put between panes,
             // but not the whole of a tall monitor.
