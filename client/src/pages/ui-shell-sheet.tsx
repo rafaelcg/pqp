@@ -963,8 +963,8 @@ function LogChromeBlock() {
     <div data-testid="qa-shell-log-chrome" className="flex flex-wrap items-start gap-6">
       {/* First: older history to load, two days ("Ontem", "Hoje"), the NEW
           rule over what came in since you left, newer history below, the
-          jump pill, the bot's note to you and two people typing. Then an
-          empty channel, and one whose history failed to load. */}
+          jump pill, the bot's note to you and two people typing. The empty
+          and failed states are p-empty's (the primitives sheet). */}
       <MainPane>
         <div className="flex h-[640px] min-h-0 flex-col">
           <MessageList
@@ -982,23 +982,6 @@ function LogChromeBlock() {
             typingUsers={LOG_TYPING}
             botNotice={LOG_BOT_NOTICE}
             onDismissBotNotice={noop}
-          />
-        </div>
-      </MainPane>
-      <MainPane>
-        <div className="flex h-[300px] min-h-0 flex-col">
-          <MessageList messages={[]} currentUserId={ROW_ME} channelId={ROW_CHANNEL} onToggleReaction={noop} />
-        </div>
-      </MainPane>
-      <MainPane>
-        <div className="flex h-[300px] min-h-0 flex-col">
-          <MessageList
-            messages={[]}
-            currentUserId={ROW_ME}
-            channelId={ROW_CHANNEL}
-            onToggleReaction={noop}
-            historyFailed
-            onRetryHistory={noop}
           />
         </div>
       </MainPane>
