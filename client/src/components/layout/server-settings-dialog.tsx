@@ -475,15 +475,19 @@ function Block({
   title,
   children,
   tone = "normal",
+  card = false,
 }: {
   title: string;
   children: ReactNode;
   tone?: "normal" | "danger";
+  /** Under the redesign: the title and the fields in one card, like the channel overview's groups. */
+  card?: boolean;
 }) {
   return (
     <section
       className={cn(
         "space-y-2",
+        card && cn(SETTINGS_CARD_REDESIGN, "redesign:p-4"),
         tone === "danger" && "rounded-lg border border-danger/40 bg-danger/5 p-4",
         // Under the redesign: a card with the danger banner's edge.
         tone === "danger" &&
@@ -582,7 +586,7 @@ function AuditLogSection({ serverId }: { serverId: string }) {
         </p>
       )}
       {entries.length > 0 && (
-        <ul className={cn("space-y-1.5", SETTINGS_CARD_REDESIGN, "redesign:space-y-0 redesign:divide-y redesign:overflow-hidden")}>
+        <ul className={cn("space-y-1.5", SETTINGS_CARD_REDESIGN, "redesign:space-y-0 redesign:overflow-hidden")}>
           {entries.map((entry) => {
             const key = (
               AUDIT_ACTION_KEYS as Partial<Record<string, MessageKey>>
@@ -592,7 +596,7 @@ function AuditLogSection({ serverId }: { serverId: string }) {
             return (
               <li
                 key={entry.id}
-                className="rounded-md border border-ink-4 bg-ink-3/40 p-2 text-sm redesign:rounded-none redesign:border-0 redesign:bg-transparent redesign:px-4 redesign:py-3"
+                className="rounded-md border border-ink-4 bg-ink-3/40 p-2 text-sm redesign:rounded-none redesign:border-0 redesign:bg-transparent redesign:px-4 redesign:py-3 redesign:not-last:border-b redesign:not-last:border-[color:var(--card-border)]"
               >
                 {/* A reason is free text and can be one unbroken run of
                     characters, so it wraps anywhere rather than pushing the
@@ -1129,10 +1133,8 @@ export function ServerSettingsDialog({
 
           {active.id === "overview" && (
             <>
-              <Block title={t("serverSettings.name.title")}>
-                {/* Under the redesign the field sits in a card, like the
-                    channel overview's fields. */}
-                <div className={cn("space-y-2", SETTINGS_CARD_REDESIGN, "redesign:p-4")}>
+              <Block title={t("serverSettings.name.title")} card>
+                <div className="space-y-2">
                 <div className="flex gap-2">
                   <Input
                     value={name}
