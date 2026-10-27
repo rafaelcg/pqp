@@ -1058,7 +1058,8 @@
  * `md` up, so the token and the classes switch together. A council risk
  * named for direction B in round D1.
  */
-@media (max-width: 767px) {
+/* lib/breakpoints.ts BELOW_MD */
+@media (max-width: 47.999rem) {
   :root[data-redesign] {
     --space-gutter: 0rem;
   }
@@ -4218,7 +4219,8 @@ html[data-pre] [data-home-hero] .animate-rise {
  * the zoom to exist. Only on the screens that can be zoomed that way — a
  * pointer device or a wide window keeps the tighter type.
  */
-@media (max-width: 639px), (pointer: coarse) {
+/* lib/breakpoints.ts BELOW_SM */
+@media (max-width: 39.999rem), (pointer: coarse) {
   input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not(
       [type="color"]
     ),
@@ -5002,7 +5004,8 @@ html[data-immersive-stage] [data-immersive-hide] {
   width: min(100vw, calc((100dvh - var(--story-cmp-top) - var(--story-cmp-bottom)) * 9 / 16));
   max-height: 100dvh;
 }
-@media (max-width: 640px) {
+/* lib/breakpoints.ts BELOW_SM */
+@media (max-width: 39.999rem) {
   .story-cmp {
     --story-cmp-top: 52px;
     --story-cmp-bottom: 168px;
@@ -5043,7 +5046,8 @@ html[data-immersive-stage] [data-immersive-hide] {
   container-type: size;
   box-shadow: 0 0 0 1px var(--story-hairline);
 }
-@media (max-width: 640px) {
+/* lib/breakpoints.ts BELOW_SM */
+@media (max-width: 39.999rem) {
   .story-cmp-canvas {
     border-radius: 14px;
   }

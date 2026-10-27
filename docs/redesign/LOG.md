@@ -1066,6 +1066,27 @@ ghost step (8%) above the search's 6%, open 10%, both tokens
 members button on desktop (round 5 suggested hiding it at every width; the
 server menu has Membros too; question 4).
 
+### m-breakpoints
+
+Spec (audit: width queries in the signed-in app: `PHONE_QUERY`, `SM_UP_QUERY`,
+`use-sm-up`, `use-md-up`, `use-lg-up`, the forum's 767px, stories' 640px,
+the soundboard sheet, the voice note card, the thread panel, two device
+probes, and the stylesheets' 639, 640 and 767px):
+
+1. Job: one definition of where the layout changes.
+2. Change: `lib/breakpoints.ts` names Tailwind's `sm`, `md` and `lg` in rem,
+   with "below" queries at `.999`; every caller imports it; each stylesheet
+   query writes the same rem value and names the file.
+3. Merges: the forum's 767px and stories' 640px become `md` and `sm`.
+4. Same at a 16px base font, except one pixel: stories' `max-width: 640px`
+   overlapped `sm` at exactly 640px and now stops at 639.99px. With another
+   base font size, JS and CSS now switch with the `sm:` and `md:` utilities.
+5. No council: it draws nothing new. Verified by unit tests (a new
+   breakpoints test), forum, stories, shell and phone e2e.
+6. Found on the way: `app-shell-scroll` failed on `redesign` (not on main):
+   `/vem` renders after network idle once the dev server loads the icon
+   package. The test now waits for the page to render.
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss
