@@ -1162,6 +1162,79 @@ test("captures the primitives", async ({ browser }) => {
  * A forum post open beside its list: the header's icon buttons (expand,
  * close) in context. Last, so its server is not in the other scenes' rail.
  */
+/**
+ * f-bau: a hall with Baú on, three posts (one pinned, one for members with a
+ * teaser) and a comment from a member. The feed in both looks, then a post.
+ */
+test("captures the bau", async ({ browser }) => {
+  fs.mkdirSync(OUT!, { recursive: true });
+  await person(VIEWER, "Lia", PRESET(4));
+  await person("rafa", "Rafa", PRESET(1));
+  const home = await server(VIEWER, "Baú da Lia");
+  await join(VIEWER, home.id, "rafa");
+  await fetch(`${API}/api/servers/${home.id}/home/config`, {
+    method: "PATCH",
+    headers: headers(VIEWER),
+    body: JSON.stringify({ enabled: true }),
+  });
+  const post = async (body: Record<string, unknown>) =>
+    (
+      await json<{ post: { id: string } }>(
+        await fetch(`${API}/api/servers/${home.id}/home/posts`, {
+          method: "POST",
+          headers: headers(VIEWER),
+          body: JSON.stringify({ status: "published", ...body }),
+        }),
+      )
+    ).post.id;
+  const welcome = await post({
+    title: "Bem-vindo ao Baú",
+    body: "Aqui ficam os avisos, os clipes e as fotos que não podem sumir no chat.",
+  });
+  await fetch(`${API}/api/servers/${home.id}/home/posts/${welcome}/pin`, {
+    method: "POST",
+    headers: headers(VIEWER),
+    body: JSON.stringify({ pinned: true }),
+  });
+  const night = await post({
+    title: "Noite do quiz na sexta",
+    body: "Sexta às 21h no Lobby. Traz a sua pergunta mais difícil.",
+  });
+  await post({
+    title: "Bastidores do torneio",
+    body: "O vídeo inteiro com os erros de gravação.",
+    visibility: "members",
+    teaser: "Os erros de gravação ficaram melhores que o torneio.",
+  });
+  await fetch(`${API}/api/servers/${home.id}/home/posts/${night}/comments`, {
+    method: "POST",
+    headers: headers("rafa"),
+    body: JSON.stringify({ body: "tô dentro, levo pipoca" }),
+  });
+
+  for (const theme of ["dark", "light"] as const) {
+    const context = await browser.newContext({ viewport: DESKTOP, locale: "pt-BR" });
+    const page = await context.newPage();
+    await as(page, theme);
+    await page.goto(`/app/server/${home.id}?lang=pt-BR&communityHome=1`);
+    await hideDevBanner(page);
+    try {
+      const feed = page.locator("[data-community-home-feed]");
+      await expect(feed.locator("[data-home-post]").first()).toBeVisible({ timeout: 30_000 });
+      await page.waitForTimeout(600);
+      await shoot(page, `f-bau-feed-${theme}`);
+      const card = feed.locator("[data-home-post]").nth(1);
+      await card.screenshot({ path: path.join(OUT!, `f-bau-card-${theme}.png`) });
+      await feed.locator("[data-home-post] h2").nth(1).click();
+      await page.waitForTimeout(800);
+      await shoot(page, `f-bau-post-${theme}`);
+    } catch (error) {
+      console.log(`f-bau: skipped (${String(error).slice(0, 200)})`);
+    }
+    await context.close();
+  }
+});
+
 test("captures the forum post", async ({ browser }) => {
   fs.mkdirSync(OUT!, { recursive: true });
   await person(VIEWER, "Lia", PRESET(4));
