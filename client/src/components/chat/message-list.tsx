@@ -51,6 +51,7 @@ import {
 } from "lucide-react";
 import {
   Fragment,
+  cloneElement,
   memo,
   useCallback,
   useEffect,
@@ -60,9 +61,11 @@ import {
   useState,
   type CSSProperties,
   type MouseEvent as ReactMouseEvent,
+  type ReactElement,
   type ReactNode,
   type Ref,
 } from "react";
+import { useRedesign } from "@/lib/redesign";
 import { createPortal } from "react-dom";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useChatDisplay } from "@/hooks/use-chat-display";
@@ -662,15 +665,17 @@ function ContinuationGutter({
   pinned: boolean;
   pinTitle: string;
   pinLabel: string;
-  children: ReactNode;
+  children: ReactElement<{ title?: string }>;
 }) {
-  if (!pinned) return <>{children}</>;
+  const redesign = useRedesign();
+  if (!pinned) return children;
+  // The pin hides on hover, so its credit rides on the time's tooltip.
+  const time = redesign ? cloneElement(children, { title: `${children.props.title} · ${pinTitle}` }) : children;
   return (
     <span className="contents redesign:relative redesign:flex redesign:w-14 redesign:shrink-0">
-      {children}
+      {time}
       <span
         className="hidden redesign:absolute redesign:inset-y-0 redesign:right-2 redesign:flex redesign:items-center redesign:text-text-secondary redesign:transition-opacity redesign:group-hover:pointer-events-none redesign:group-hover:opacity-0"
-        title={pinTitle}
       >
         <Glyph icon={PushPinFill} size="sm" className="h-3.5 w-3.5" />
         <span className="sr-only">{pinLabel}</span>
@@ -3958,13 +3963,7 @@ const MessageRow = memo(function MessageRow({
                     compact ? "opacity-70" : "opacity-0 group-hover:opacity-100",
                   )}
                   dateTime={message.createdAt}
-                  title={
-                    isMessagePinned && !compact
-                      ? `${formatFullTimestamp(message.createdAt)} · ${
-                          message.pinnedBy ? t("chat.pinnedBy", { name: message.pinnedBy.displayName }) : t("chat.pinned")
-                        }`
-                      : formatFullTimestamp(message.createdAt)
-                  }
+                  title={formatFullTimestamp(message.createdAt)}
                   data-row-gutter=""
                 >
                   {formatTime(message.createdAt)}
