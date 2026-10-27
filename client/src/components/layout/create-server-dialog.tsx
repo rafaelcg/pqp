@@ -594,7 +594,7 @@ export function CreateServerDialog({
                 readOnly
                 rows={4}
                 value={pasteMessage}
-                className="mt-1 w-full resize-none rounded-md border border-ink-4 bg-ink px-3 py-2 text-sm text-paper redesign:rounded-[var(--input-radius,var(--radius-control))] redesign:border-transparent redesign:bg-[color:var(--input-bg)] redesign:px-[var(--input-px)] redesign:text-text"
+                className="mt-1 w-full resize-none rounded-md border border-ink-4 bg-ink px-3 py-2 text-sm text-paper redesign:rounded-[var(--input-radius,var(--radius-control))] redesign:border-transparent redesign:bg-[color:color-mix(in_oklab,var(--color-text)_5%,var(--input-bg))] redesign:px-[var(--input-px)] redesign:text-text"
               />
               <Button
                 type="button"
@@ -605,7 +605,7 @@ export function CreateServerDialog({
                 {copied === "message" ? (
                   <IconSwap off={Check} on={CheckGlyph} kind="symbol" offClassName="h-4 w-4" />
                 ) : (
-                  <IconSwap off={Copy} on={CopyGlyph} offClassName="h-4 w-4" />
+                  <IconSwap off={Copy} on={CopyGlyph} kind="symbol" offClassName="h-4 w-4" />
                 )}
                 {copied === "message"
                   ? t("importDiscord.done.copied")

@@ -160,7 +160,7 @@ function PasteRow({
     <div className="space-y-1.5">
       <p className="text-xs font-medium text-text-secondary redesign:font-semibold">{label}</p>
       <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch redesign:sm:items-center">
-        <p className="min-w-0 flex-1 rounded-md border border-border bg-surface-1 px-3 py-2 text-sm leading-snug text-text [overflow-wrap:anywhere] redesign:rounded-[var(--input-radius,var(--radius-control))] redesign:border-transparent redesign:bg-[color:color-mix(in_oklab,var(--color-text)_3%,var(--input-bg))] redesign:px-[var(--input-px)]">
+        <p className="min-w-0 flex-1 rounded-md border border-border bg-surface-1 px-3 py-2 text-sm leading-snug text-text [overflow-wrap:anywhere] redesign:rounded-[var(--input-radius,var(--radius-control))] redesign:border-transparent redesign:bg-[color:color-mix(in_oklab,var(--color-text)_5%,var(--input-bg))] redesign:px-[var(--input-px)]">
           {text}
         </p>
         <Button

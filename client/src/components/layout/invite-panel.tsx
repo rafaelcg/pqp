@@ -560,7 +560,7 @@ export function InvitePanel({
                           onClick={() => void handleRevoke(invite.id)}
                         >
                           {/* Under the redesign the bin is quiet at rest and red on hover or focus, so the copy action leads. */}
-                          <IconSwap off={Trash2} on={Trash} offClassName="h-4 w-4 text-danger" className="text-text-tertiary group-hover/bin:text-danger group-focus-visible/bin:text-danger" />
+                          <IconSwap off={Trash2} on={Trash} kind="symbol" offClassName="h-4 w-4 text-danger" className="text-text-tertiary group-hover/bin:text-danger group-focus-visible/bin:text-danger" />
                         </Button>
                       </Tooltip>
                       )}
