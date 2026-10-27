@@ -704,6 +704,21 @@ Verified: typecheck; 10,417 unit tests; `bench:tokens`; i18n check;
 passed); retro, Halloween, high contrast, 390px and toggle off. Screenshots:
 `~/pqp-redesign/p-toast/`.
 
+### p-avatar
+
+Spec (audit: every person avatar already renders through `UserAvatar`, 65
+sites; 30 different monogram palettes passed as `fallbackClassName`):
+
+1. Job: a person's picture or monogram, a bot's face, presence on a corner.
+2. Redesign: direction B's round avatars everywhere, the monogram on one
+   neutral disc. Callers keep their sizes; the toggle off keeps their
+   shapes and colours.
+3. Kept: Modo 2005's monogram (plain CSS, it wins), story media avatars
+   (`ownPalette`), bot faces.
+4. Left for their owners: the server rail tiles and `ServerIcon` (`s-rail`),
+   `ChannelIcon` (`s-channel-row`), the call banner's faces (`f-call`), the
+   story ring (`f-stories`).
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss

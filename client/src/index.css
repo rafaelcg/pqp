@@ -823,6 +823,13 @@
   --slider-ring: var(--color-accent);
   --slider-ring-offset-color: transparent;
 
+  /* The monogram disc's edge: none in dark, where surface-3 already stands
+     off the panes; a hairline in light, where it is close to the white pane. */
+  --avatar-edge: transparent;
+  /* The cutout behind a presence dot: the colour of the pane the avatar
+     sits on (the side panes by default, the conversation below). */
+  --avatar-dot-ring: var(--color-pane-side);
+
   /* Banners (ui/banner.tsx): an inset card on the look's soft tone fill,
      with a faint edge of the tone, so a strip reads as a note pinned to
      the conversation rather than a stripe across it. */
@@ -1124,6 +1131,8 @@
 
 /* The redesign's shadows on a light page: tinted, never black. Every look. */
 :root[data-redesign][data-theme="light"] {
+  --avatar-edge: var(--color-border);
+
   /* Banners: the soft fills are pale in light; a lighter edge keeps them calm. */
   --banner-edge: 22%;
   --input-invalid-bg: color-mix(in oklab, var(--color-danger) 6%, var(--color-field));
@@ -2610,6 +2619,12 @@ body,
 html[data-app-shell],
 html[data-app-shell] body {
   overflow: hidden;
+}
+
+/* Under the redesign a presence dot in the conversation is cut out of the
+   conversation pane's colour. */
+:where([data-redesign]) main {
+  --avatar-dot-ring: var(--color-pane-main);
 }
 
 html[data-app-shell] #root {

@@ -1041,6 +1041,32 @@ tag.
 - **Accessibility.** The word is the meaning, so colour is never the only
   signal; the icon is `aria-hidden`.
 
+### UserAvatar
+
+`components/user/user-avatar.tsx`. Every person's picture goes through it:
+the URL rules, the monogram fallback and a server bot's live face are in one
+place. `StatusDot` (`status-dot.tsx`) draws presence on its corner.
+
+- **Toggle off.** The caller's shape (`rounded`: `md`, `lg`, `full`) and its
+  monogram colours (`fallbackClassName`).
+- **Redesign.** A person is always a circle, and the monogram sits on one
+  neutral disc (`surface-3`, body text, semibold, measured at 4.5:1 in
+  every look by the bench); the caller still
+  sets its size. A bot keeps its own shape. `ownPalette` keeps the caller's
+  colours for an avatar drawn inside a story, which paints in its own
+  palette.
+- **Presence dot.** Under the redesign a caller puts `StatusDot` at
+  `redesign:bottom-0 redesign:right-0`, so its centre sits on the circle's
+  edge at 45 degrees instead of hanging off a square's corner.
+- **Light.** The monogram disc takes a 1px inner edge (`--avatar-edge`), so
+  it stays a disc on the white pane.
+- **Dimmed** (offline, muted): under the redesign the letter dims to
+  tertiary text and the disc stays, so it still reads on a white pane.
+- **Dot cutout.** A pane call site's `StatusDot` ring reads
+  `--avatar-dot-ring`: the side pane's colour by default, the conversation
+  pane's inside `main`.
+- **Stacks** cut their overlap with the same token
+  (`ring-[color:var(--avatar-dot-ring)]`).
 ### CountBadge
 
 `count-badge.tsx`. A number in a pill: unread messages, mentions,
