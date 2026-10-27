@@ -858,6 +858,16 @@
   --count-badge-text: 0.6875rem;
   --count-badge-sm-text: 0.625rem;
 
+  /* Server rail (layout/server-rail.tsx): round tiles on the canvas, in the
+     side pane's colour. The selected one turns into the accent's rounded
+     square; a hover only lifts the fill, so lime always means "here". */
+  --rail-tile: 2.75rem;
+  --rail-tile-radius-selected: 1rem;
+  /* A touch of text over the side pane, so an idle door reads on the dark canvas. */
+  --rail-tile-bg: color-mix(in oklab, var(--color-text) 4%, var(--color-pane-side));
+  --rail-tile-hover: color-mix(in oklab, var(--color-text) 9%, var(--color-pane-side));
+  --rail-tile-shadow: 0 2px 8px -2px oklch(0 0 0 / 0.45);
+  --rail-divider: var(--color-border);
   /* Empty states (ui/empty-state.tsx): a page empty state leads with its
      glyph on a soft disc of the raised fill, then a Gabarito title. */
   --empty-icon-disc: 3.5rem;
@@ -894,12 +904,36 @@
   --list-row-hover: var(--color-row-hover);
   --list-row-selected: var(--color-row-selected);
   --list-row-selected-text: var(--color-on-row-selected);
+  /* A row's second line (a tag, a status, a count): the tertiary text. */
+  --list-row-detail: var(--color-text-tertiary);
   /* A muted row (a channel you silenced) stays a step above a disabled one
      (0.4), so the two read apart. */
   --list-row-muted-opacity: 0.6;
   /* The solid accent, as IconButton's and Slider's rings: the 60% focus
      ring all but vanishes on the light selected fill. */
   --list-row-ring: var(--color-accent);
+
+  /* Dialogs: a deeper scrim with more blur, so the app behind recedes; the
+     panel takes a text edge and the deepest lift. The header loses its rule
+     (the title and the space under it separate it) and the footer's rule
+     softens. Titles step down from 24px to 22px, the inset grows to 24px. */
+  /* The sheets' one scrim (--sheet-scrim), so a dialog and a sheet agree. */
+  --dialog-scrim: var(--sheet-scrim);
+  --dialog-scrim-blur: var(--sheet-scrim-blur);
+  --dialog-border: color-mix(in oklab, var(--color-text) 10%, transparent);
+  --dialog-shadow: inset 0 1px 0 oklch(1 0 0 / 0.05), var(--shadow-3);
+  --dialog-header-rule: transparent;
+  --dialog-header-pt: 1.25rem;
+  --dialog-header-pb: 0.5rem;
+  --dialog-solo-header-pb: 1rem;
+  --dialog-solo-footer-pt: 0.5rem;
+  --dialog-footer-pb: 1.25rem;
+  --dialog-close-glyph: 1.125rem;
+  --dialog-eyebrow-size: 0.8125rem;
+  --dialog-footer-rule: color-mix(in oklab, var(--color-text) 8%, transparent);
+  --dialog-px: 1.5rem;
+  --dialog-title-size: 1.375rem;
+  --dialog-title-leading: 1.875rem;
 
   --icon-button-radius: var(--radius-pill);
   --icon-button-text: var(--color-text-secondary);
@@ -995,13 +1029,25 @@
   /* A modal is the one thing that floats over everything, so it gets the
      deepest rung instead of sharing a menu's. */
   --elevation-3-shadow: var(--shadow-3);
+  /* Sheets (ui/sheet.tsx): a panel rising from a phone's bottom edge. A
+     larger top radius than a card, the raised fill, a hairline on the top
+     edge only and a shadow cast upwards. */
+  --sheet-radius: 1.5rem;
+  --sheet-surface: var(--color-surface-2);
+  --sheet-edge: color-mix(in oklab, var(--color-text) 10%, transparent);
+  /* One top edge: the 10% border, no inset highlight doubling it. */
+  --sheet-shadow: 0 -12px 32px oklch(0.06 0.02 262 / 0.45);
+  --sheet-scrim: oklch(0.06 0.02 262 / 0.62);
+  --sheet-scrim-blur: 6px;
 }
 
 /*
- * Gutters cost width a phone does not have: under 640px the panes meet, as
- * they do today. A council risk named for direction B in round D1.
+ * Gutters cost width a phone does not have: under `md` (768px) the panes
+ * meet, as they do today, and the frame classes in ui/pane.ts float from
+ * `md` up, so the token and the classes switch together. A council risk
+ * named for direction B in round D1.
  */
-@media (max-width: 639px) {
+@media (max-width: 767px) {
   :root[data-redesign] {
     --space-gutter: 0rem;
   }
@@ -1203,6 +1249,12 @@
 
   /* Banners: the soft fills are pale in light; a lighter edge keeps them calm. */
   --banner-edge: 22%;
+  /* Rail: a softer drop under the accent tile on a light canvas, and a hover
+     that lifts to the brightest surface (a text tint lands on the canvas's
+     own grey and the tile disappears). */
+  --rail-tile-shadow: 0 2px 6px -2px oklch(0.4 0.02 262 / 0.3);
+  --rail-tile-hover: var(--color-surface-0);
+  --rail-tile-bg: var(--color-pane-side);
   --input-invalid-bg: color-mix(in oklab, var(--color-danger) 6%, var(--color-field));
   /* Tabs */
   /* 7 points over the 8% ghost hover, so a hovered pill never reads as selected. */
@@ -1227,6 +1279,9 @@
   /* No top highlight on a light panel; a close shadow under the wide one.
      The fill is the brightest surface, so the panel sits above the pane. */
   --popover-surface: var(--color-surface-0);
+  /* A plain dialog on the same white as a popover and a phone sheet; the
+     beige surface-2 made it the darkest thing floating. */
+  --dialog-surface: var(--color-surface-0);
   --popover-border: color-mix(in oklab, var(--color-text) 10%, transparent);
   --popover-shadow: 0 1px 2px oklch(0.4 0.02 262 / 0.1), var(--shadow-2);
   /* Light raises the thumb as a white chip on the grey track. */
@@ -1243,6 +1298,14 @@
      takes a grey fill instead. */
   --slider-thumb-disabled-bg: color-mix(in oklab, var(--color-text) 22%, var(--color-surface-0));
   --slider-thumb-shadow: 0 1px 2px oklch(0.4 0.02 262 / 0.2), 0 2px 6px oklch(0.4 0.02 262 / 0.14);
+  /* The brightest surface in light, so a sheet reads lifted, not sunk. */
+  --sheet-surface: var(--color-surface-0);
+  /* One top edge: the border alone, as in dark. */
+  --sheet-shadow: 0 -8px 24px oklch(0.4 0.02 262 / 0.22);
+  --sheet-scrim: oklch(0.3 0.02 262 / 0.3);
+  /* 10% as in dark: a pale panel over a pale scrim needs the edge. */
+  --dialog-border: color-mix(in oklab, var(--color-text) 10%, transparent);
+  --dialog-shadow: 0 1px 2px oklch(0.4 0.02 262 / 0.1), var(--shadow-3);
 }
 
 /*
@@ -4123,7 +4186,7 @@ html[data-pre] [data-home-hero] .animate-rise {
 }
 
 .safe-pb {
-  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  padding-bottom: max(var(--safe-pb-min, 0.75rem), env(safe-area-inset-bottom));
 }
 
 /*

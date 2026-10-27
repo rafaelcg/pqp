@@ -390,7 +390,7 @@ selectors in a comment in `index.css`: the bench finds blocks by regex.
 | `--type-title-font` (new) | `--font-sans` | `--font-display` (Gabarito) |
 | `--type-body-leading` | 20px | 22px |
 | `--control-row` (new) | 32px | 36px |
-| `--space-gutter` (new) | 0 | 8px (0 under 640px) |
+| `--space-gutter` (new) | 0 | 8px (0 under 768px, where the frame stops floating) |
 | `--space-pane` (new) | 16px | 16px |
 | `--duration-fast` / `base` / `slow` | 150 / 200 / 300 ms | 120 / 180 / 280 ms |
 | `--icon-sm` / `md` / `lg` (new) | 16 / 20 / 24 px | same |
@@ -426,6 +426,34 @@ States are never told apart by colour alone:
 
 The mixes are `color-mix(in oklab, …)`. The bench and the sheet both read that
 form, so a derived role is measured like any other.
+
+### The server rail
+
+`layout/server-rail.tsx`, on the canvas with no edge (`RAIL_REDESIGN` in
+`ui/pane.ts`). Under the redesign:
+
+- Every tile is a 44px circle (`--rail-tile`) in the side pane's colour
+  (`--rail-tile-bg`). The monogram is 13px semibold in secondary text; the
+  Conversas caption under its tile is 11px semibold.
+- The selected tile is the accent's rounded square
+  (`--rail-tile-radius-selected`, 16px) with a short drop
+  (`--rail-tile-shadow`). A face (a pinned or waiting conversation) stays
+  round and takes an accent ring instead, because its photo fills the tile.
+- A hover lifts the fill (`--rail-tile-hover`) and rounds the tile toward the
+  selected square. It never turns lime: a lime tile fill only means "you
+  are here". Small lime marks (a friend request count, a Baú count, the
+  Novidades and update dots) mean "new for you", and they never fill a tile.
+- Every door, join included, sits on the same disc (`--rail-tile-bg`).
+- The pip on the left edge is the text colour: tall for selected, a dot for
+  unread.
+- The Baú's ring (new posts beside a mention) hugs the disc with no gap, like
+  a story ring. Keyboard focus is a ring with a gap in the text colour, so it
+  never reads as a chosen face or the Baú.
+- Counts are `CountBadge` with a ring cut from the canvas. The public globe
+  and the live dot sit on canvas discs at the lower corners; the live dot is
+  solid, never pulsing.
+- Every door is one 44px tile, the update tile included.
+- Glyphs are filled Phosphor objects; `+` is a bold symbol.
 
 ### Icons
 
@@ -679,6 +707,22 @@ form submits it. A row in a checklist is `CheckRow`; a setting is `Switch`.
   box never sits beside a full-strength label. A hint under the label indents
   by `calc(var(--tick-size)+0.5rem)` under the redesign.
 
+### Sheet
+
+`sheet.tsx`. Not a component: the look of a panel that rises from a phone's
+bottom edge. Dialog is a sheet below `sm`; the app launcher and the cinema
+stage's picker draw their own.
+
+- With the toggle off each sheet keeps the surface it drew before.
+- **Under the redesign.** `SHEET_SURFACE` (a sheet at every width) and
+  `SHEET_SURFACE_PHONE` (below `sm` only) give a 24px top radius, the raised
+  fill (`surface-2` in dark, `surface-0` in light), a 10% text hairline on
+  the top edge only and a shadow cast upwards. `SHEET_SCRIM` is the scrim
+  for a sheet that draws its own; a dialog's `--dialog-scrim` and
+  `--dialog-scrim-blur` alias the same tokens. Every value is a `--sheet-*` token.
+- **Use it** for a new phone panel anchored to the bottom edge. **Do not**
+  add a grab handle unless the sheet can be dragged.
+
 ### Skeleton
 
 `skeleton.tsx`. A pulsing block at `bg-surface-3/50`, plus three composed
@@ -781,6 +825,20 @@ shrinks `vh` for an on-screen keyboard.
   4px past the box on every side, so the touch target is 44px.
 - **Accessibility.** `role="dialog"`, `aria-modal`, labelled by its title and
   described by its description. Escape is stopped from reaching a menu inside.
+
+- **Under the redesign.** A deeper scrim with more blur (62% of near-black
+  in dark, a 30% grey in light). The panel takes a 10% text edge in both
+  themes and the deepest lift, through the elevation variables. The header
+  loses its rule and keeps 8px under the title; the footer's rule is an 8%
+  text tint. The inset is 24px, the title 22px, with 20px above the header
+  and below the footer. The eyebrow is sentence case at 13px; the
+  description is `text-secondary`. The close button is IconButton's ghost,
+  with its focus ring and an 18px glyph. A dialog with no body (a confirm)
+  keeps 16px under the question, drops the footer rule and keeps 8px above
+  the buttons, so the question and its answers read as one block.
+  The close button draws as IconButton's ghost (round, `text-secondary`, the
+  text-tint hover). Every value is a `--dialog-*` token with the old value
+  as its fallback. PromptDialog's field labels are sentence case too.
 
 ### ConfirmDialog
 
