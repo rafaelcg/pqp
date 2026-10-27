@@ -428,6 +428,27 @@ test("captures the design council screens", async ({ browser }) => {
       await expect(page.getByText(PAPO.at(-1)![1])).toBeVisible();
       await hideDevBanner(page);
       await shoot(page, `01-chat-${theme}`);
+      // Message search: the prompt, then results with the arrows on one.
+      try {
+        await page.getByRole("button", { name: /Buscar mensagens/ }).first().click({ timeout: 5_000 });
+        await expect(page.getByRole("dialog")).toBeVisible();
+        await page.waitForTimeout(300);
+        await shoot(page, `33-search-empty-${theme}`);
+        // The pointer out of the way, so the first row keeps the highlight.
+        await page.mouse.move(0, 0);
+        await page.getByRole("dialog").getByRole("combobox").fill("zzqxv");
+        await expect(page.getByRole("dialog").getByText(/zzqxv/).last()).toBeVisible({ timeout: 10_000 });
+        await page.waitForTimeout(300);
+        await shoot(page, `35-search-none-${theme}`);
+        await page.getByRole("dialog").getByRole("combobox").fill("caverna");
+        await expect(page.getByRole("dialog").getByRole("option").first()).toBeVisible({ timeout: 10_000 });
+        await page.waitForTimeout(300);
+        await shoot(page, `34-search-results-${theme}`);
+        await page.keyboard.press("Escape");
+      } catch (error) {
+        console.log("search shots skipped", String(error).slice(0, 300));
+        await page.keyboard.press("Escape");
+      }
       // The sidebar header up close: the name hovered, the search entry.
       {
         const header = page.locator("[data-server-header]");
@@ -570,6 +591,45 @@ test("captures the design council screens", async ({ browser }) => {
       await page.getByRole("button", { name: "Abrir configurações" }).first().click();
       await expect(page.getByRole("dialog")).toBeVisible();
       await shoot(page, `04-settings-${theme}`);
+      // Game connections: the providers this host offers, or the note
+      // that it offers none.
+      await page.getByRole("dialog").getByText("Conexões", { exact: true }).first().click();
+      await page.waitForTimeout(600);
+      await shoot(page, `37-settings-connections-${theme}`);
+      // The linked state, with the host's providers mocked: Steam linked with
+      // a long name, Twitch and Battle.net offered.
+      try {
+        await page.route("**/api/connections/config", (route) =>
+          route.fulfill({ json: { steam: true, battlenet: true, twitch: true } }),
+        );
+        await page.route("**/api/me/connections", (route) =>
+          route.fulfill({
+            json: {
+              connections: [
+                {
+                  provider: "steam",
+                  providerUserId: "76561198000000000",
+                  displayName: "lia_joga_tudo_na_madrugada_de_domingo",
+                  avatarUrl: null,
+                  profileUrl: null,
+                  visibility: "shared",
+                  connectedAt: "2026-10-01T12:00:00.000Z",
+                },
+              ],
+            },
+          }),
+        );
+        await page.getByRole("dialog").getByText("Perfil", { exact: true }).first().click();
+        await page.waitForTimeout(300);
+        await page.getByRole("dialog").getByText("Conexões", { exact: true }).first().click();
+        await expect(page.getByRole("dialog").getByText("lia_joga_tudo", { exact: false }).first()).toBeVisible({ timeout: 5_000 });
+        await page.waitForTimeout(400);
+        await shoot(page, `38-settings-connections-linked-${theme}`);
+        await page.unroute("**/api/connections/config");
+        await page.unroute("**/api/me/connections");
+      } catch (error) {
+        console.log("linked connections shot skipped", String(error).slice(0, 200));
+      }
       // A section made of switches, for the choice controls.
       await page.getByRole("dialog").getByText("Notificações", { exact: true }).first().click();
       await expect(page.getByRole("dialog").getByRole("switch").first()).toBeVisible();

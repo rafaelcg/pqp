@@ -793,6 +793,9 @@
   --menu-row-py: 0.4375rem;
   --menu-row-gap: 0.625rem;
   --menu-row-hover: color-mix(in oklab, var(--color-text) 9%, transparent);
+  /* Message search's highlighted result: the menu's row fill, a step up in
+     light so it never reads as a second field under the search field. */
+  --search-row-selected: var(--menu-row-hover);
   --menu-danger-hover: color-mix(in oklab, var(--color-danger) 16%, transparent);
   --menu-icon: var(--color-text-secondary);
   --menu-icon-size: var(--icon-sm);
@@ -1365,6 +1368,7 @@
   --segmented-thumb-shadow: 0 1px 2px oklch(0.4 0.02 262 / 0.2), 0 0 0 0.5px oklch(0.4 0.02 262 / 0.12);
   /* Light shows a 7% step as clearly as dark shows 9%. */
   --menu-row-hover: color-mix(in oklab, var(--color-text) 7%, transparent);
+  --search-row-selected: color-mix(in oklab, var(--color-text) 10%, transparent);
   --menu-danger-hover: color-mix(in oklab, var(--color-danger) 11%, transparent);
   /* A white knob with a hairline, as the segmented thumb is a white chip. */
   --slider-track: color-mix(in oklab, var(--color-text) 13%, transparent);

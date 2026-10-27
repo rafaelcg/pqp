@@ -70,6 +70,8 @@ Read this file and the inventory at the start of every session.
 | 3 | `s-user-panel` | Merged, capped at round 5 (Opus 8.2 r5). Open: the Invisível hint is seven lines at the card width (copy, shows with the toggle off) |
 | 3 | `s-header` | Merged, capped at round 5 (Opus 8.3 r4 and r5). Follow-up: rename `--pane-header-rule` / `--pane-header-px` to `--pane-bar-*` after the chain |
 | 4 | `f-user-settings` | Merged, capped at round 5 (Opus 8.1 r5, 8.2 r4) |
+| 4 | `f-connections` | Merged, capped at round 5 (Opus 8.4 r3 and r4, 8.3 r5). Open: question 6 (copy) |
+| 4 | `f-search` | Merged, capped at round 5 (Opus 8.5 r5). Not done: `<li role="none">` inside the listbox (it changes the toggle-off tree too) |
 | 4 | `f-server-settings` | Merged, capped at round 5 (Opus 7.8 r5, 7.9 r4) |
 | 4 | `f-invites` | Merged, capped at round 5 (Opus 7.8 r5, 8.1 r3 and r4) |
 | 5 | `m-breakpoints` | Merged (code only, no council) |
@@ -1156,6 +1158,27 @@ server settings do not use it, so its roles field label in caps moves to
    Phosphor icons through a shared `IconSwap`. Empty and result take the
    `p-empty` shape once that merges.
 
+### f-search
+
+Spec (audit: `search/search-dialog.tsx`, one caller, the sidebar search pill
+and Ctrl K; states: prompt, too short, searching, no match, error, results,
+load more):
+
+1. Job: find a message in this server by words and jump to it.
+2. Redesign: the field is the input's round field inset in the body with a
+   Phosphor glass; a result is a card-cornered row, the highlighted one on
+   the menu's highlight; channel name semibold with a bold `#`; author and
+   snippet in secondary text; the match a soft accent tint.
+3. Merges: nothing. The other search fields (about nine) belong to their
+   surfaces.
+4. Kept: combobox and listbox semantics, arrows and Enter, load more.
+Rounds (Opus only): r1 7.5 (MUST fixed: four left edges), r2 8.3, r3 8.4,
+r4 8.1 (MUST fixed: the channel name sat 3px above the author). Decisions:
+the always-focused field draws a 1px accent border, not the primitive's
+2px ring with an offset, because a ring around a field that never loses
+focus is heavy. The row's `#` is the bold (symbol) glyph, the same weight
+as the field's glass. Hover selects a row only on a real pointer move.
+
 ### f-invites
 
 Spec (audit: `invite-panel.tsx` in create and join modes, `invite-choice-row`,
@@ -1189,6 +1212,27 @@ confirm, the delete account dialog, the phone tab strip):
    their pages stay for `f-server-settings`.
 4. Kept: every section, the close guard, the handle confirm, the 44px phone
    targets, the dirty dot and its spoken description.
+
+### f-connections
+
+Spec (audit: `connections-section.tsx` in user settings (built on the kit),
+`connection-badges.tsx` on the profile card, `connection-callback.tsx` the
+overlay while a provider redirect completes):
+
+1. Job: link Steam, Battle.net and Twitch, choose who sees them, show them
+   on a profile.
+2. Redesign: the section is the kit's (already reviewed); the badges list on
+   the profile is a card with semibold names, provider in the detail colour
+   and a bold arrow; the linked name is sans medium; the callback is a pill
+   on the popover surface over the sheet scrim.
+3. Merges: nothing.
+4. Kept: per-provider visibility, the unavailable list, the callback overlay.
+Rounds (Opus only): r1 8.0, r2 8.2, r3 8.4, r4 8.4, r5 8.3 (cap, no
+MUST in any round). Changes: Desconectar on the plain `danger-ghost` at the
+action edge, a spinner and `role="status"` on the callback pill, an edge on
+the near-black tiles in dark, coming-soon tiles muted (grey and faded in
+light), the linked name at medium weight, a mocked linked-state shot
+(`38-*`). Open: question 6 (copy, shows with the toggle off).
 
 ### f-server-settings
 
@@ -1393,6 +1437,14 @@ notice, the upcoming session card):
    reads as "limited to one use". The council suggests "Usado 1 vez · sem
    limite" and "{used} de {max} usos". That is a copy change in three
    languages and shows with the toggle off too. Change it?
+6. Connections and profile: three notices say a feature is "not active on
+   this server" ("não estão ativas neste servidor"). In pqp a "servidor" is
+   a chat server, so the council reads it as wrong. Suggested pt-BR: "ainda
+   não estão disponíveis aqui", with en and es to match, for
+   `settings.connections.unconfigured`, `settings.profile.banner.unconfigured`
+   and `settings.profile.media.unconfigured`. It shows with the toggle off
+   too. Change it? Same tab: the visibility hint says "Para usar" while
+   the rest of the tab says "pra"; the council suggests "Pra usar".
 
 ## Decisions
 
