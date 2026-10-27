@@ -3,14 +3,17 @@ import {
   Bell,
   CaretDown,
   ChatCircle,
+  CheckCircle as BannerCheckIcon,
   GearSix,
   Hash,
+  HourglassMedium as BannerIdleIcon,
   MagnifyingGlass,
   Microphone,
   PaperPlaneRight,
   Plus,
   SpeakerHigh,
   UsersThree,
+  WarningCircle as BannerErrorIcon,
   X,
 } from "@phosphor-icons/react";
 import {
@@ -23,18 +26,26 @@ import {
   LogOut,
   Pencil,
 } from "lucide-react";
+import { CalendarClock, X as LineX } from "lucide-react";
 import { Navigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { CARD_LIST, CARD_ROW_HOVER, CARD_SURFACE } from "@/components/ui/card";
-import { cn } from "@/lib/utils";
+import { BANNER_FILL_REDESIGN, Banner, BannerAction, BannerText } from "@/components/ui/banner";
+import { ShareHandleButton } from "@/components/handle/share-handle-button";
+import { ConnectionBanner } from "@/components/layout/connection-banner";
+import { SanctionNoticeBar } from "@/components/layout/sanction-notice-bar";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
+import { CountBadge } from "@/components/ui/count-badge";
+import { ServerBotTags } from "@/components/bots/server-bot-tags";
 import { CheckRow } from "@/components/ui/check-row";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Icon } from "@/components/ui/icon";
 import { IconButton, type IconButtonSize } from "@/components/ui/icon-button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
+import { cn } from "@/lib/utils";
 import { PopoverPanel } from "@/components/ui/popover";
+import { TOAST_CLOSE, TOAST_SURFACE, TOAST_SURFACE_REDESIGN } from "@/components/ui/toast";
 import { RadioGroup } from "@/components/ui/radio-group";
 import { Tabs } from "@/components/ui/tabs";
 import { Menu } from "@/components/ui/menu";
@@ -771,13 +782,14 @@ function ControlSheet() {
 }
 
 const BUTTON_VARIANTS = ["default", "secondary", "ghost", "danger", "danger-ghost"] as const;
-const BADGE_VARIANTS: BadgeVariant[] = [
-  "new",
-  "accent",
-  "success",
-  "warning",
-  "danger",
-  "neutral",
+const BADGE_VARIANTS: { variant: BadgeVariant; word: MessageKey }[] = [
+  { variant: "new", word: "qaUi.badge.new" },
+  { variant: "accent", word: "qaUi.badge.accent" },
+  { variant: "success", word: "qaUi.badge.success" },
+  { variant: "warning", word: "qaUi.badge.warning" },
+  { variant: "danger", word: "qaUi.badge.danger" },
+  { variant: "neutral", word: "qaUi.badge.neutral" },
+  { variant: "muted", word: "qaUi.badge.muted" },
 ];
 const ICON_BUTTON_SIZES: IconButtonSize[] = ["xs", "sm", "md", "lg"];
 const BUTTON_SIZES = ["lg", "default", "sm", "icon-lg", "icon", "icon-sm"] as const;
@@ -1244,22 +1256,74 @@ function PrimitiveSheet() {
         </Tooltip>
       </div>
 
-      <div>
+      {/* Badges: the status word on a card, the tag beside a name, and the
+          count in a pill. */}
+      <div data-testid="qa-primitive-badge" className="flex flex-col gap-3">
         <p
-          className="mb-2 text-text-tertiary"
+          className="text-text-tertiary"
           style={{ fontSize: "var(--type-label-size)" }}
         >
           Badge
         </p>
         <div className="flex flex-wrap items-center gap-2">
-          {BADGE_VARIANTS.map((variant) => (
+          {BADGE_VARIANTS.map(({ variant, word }) => (
             <Badge key={variant} variant={variant}>
-              {variant}
+              {t(word)}
             </Badge>
           ))}
           <Badge variant="success" icon={CheckIcon}>
-            success + icon
+            {t("qaUi.badge.success")}
           </Badge>
+        </div>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+          <span className="flex items-baseline gap-1.5">
+            <span className="font-semibold text-text">Lia</span>
+            <Badge size="tag" className="self-center font-bold">
+              {t("forum.badge.op")}
+            </Badge>
+          </span>
+          <span className="flex items-baseline gap-1.5">
+            <span className="font-semibold text-text">Breu</span>
+            <ServerBotTags />
+          </span>
+          <span className="flex items-baseline gap-1.5">
+            <span className="font-semibold text-text">Breu</span>
+            <ServerBotTags gone />
+          </span>
+          <span className="flex items-baseline gap-1.5">
+            <span className="font-semibold text-text">pqp</span>
+            <Badge variant="accent" size="tag" className="rounded">
+              AutoMod
+            </Badge>
+          </span>
+          <span className="flex items-baseline gap-1.5">
+            <span className="font-semibold text-text">GitHub</span>
+            <Badge size="tag" className="rounded bg-ink-4 text-paper-muted">
+              Webhook
+            </Badge>
+          </span>
+          <span className="flex items-baseline gap-1.5">
+            <span className="font-semibold text-text-tertiary">Téo</span>
+            <Badge variant="muted" size="tag" className="self-center">
+              {t("chat.authorGone")}
+            </Badge>
+          </span>
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <CountBadge count={3} />
+          <CountBadge count={12} />
+          <CountBadge count={120} />
+          <CountBadge count={2} size="sm" />
+          <CountBadge count={120} size="sm" />
+          <span className="relative inline-flex h-10 w-10 items-center justify-center rounded-[var(--radius-control)] bg-surface-2">
+            <LineHash className="h-4 w-4" aria-hidden />
+            <CountBadge
+              count={4}
+              tone="accent"
+              size="sm"
+              className="absolute right-0.5 top-0.5 ring-2 ring-surface-1"
+            />
+          </span>
         </div>
       </div>
 
@@ -1353,6 +1417,89 @@ function PrimitiveSheet() {
             </ul>
           </div>
         ))}
+      </div>
+
+      {/* Banners: the strips above the conversation (connection, an error,
+          the idle warning, a notice) and the one above the composer. */}
+      <div
+        data-testid="qa-primitive-banner"
+        className="flex max-w-2xl flex-col gap-2 pb-2 redesign:gap-0"
+      >
+        <ConnectionBanner
+          status="reconnecting"
+          refusedRepeatedly={false}
+          onRetry={() => {}}
+          onCheck={() => {}}
+          onSignInAgain={() => {}}
+        />
+        <Banner tone="danger" icon={BannerErrorIcon}>
+          <BannerText>{t("qaUi.banner.error")}</BannerText>
+          <BannerAction>{t("connection.dismiss")}</BannerAction>
+        </Banner>
+        <Banner tone="warning" icon={BannerIdleIcon}>
+          <BannerText>{t("voice.idle.warning", { count: 1 })}</BannerText>
+          <BannerAction prominent>{t("voice.idle.stillHere")}</BannerAction>
+        </Banner>
+        <Banner tone="success" icon={BannerCheckIcon}>
+          <BannerText>{t("qaUi.banner.notice")}</BannerText>
+          <ShareHandleButton handle="lia" className={BANNER_FILL_REDESIGN} />
+          <BannerAction>{t("connection.dismiss")}</BannerAction>
+        </Banner>
+        {/* The composer's strip: in the app it sits above the composer. */}
+        <div className="h-4" aria-hidden />
+        <SanctionNoticeBar
+          notice={{
+            type: "sanction-notice",
+            sanction: "timeout",
+            serverId: "00000000-0000-4000-8000-000000000000",
+            channelId: "00000000-0000-4000-8000-000000000001",
+            expiresAt: "2026-10-26T21:30:00.000Z",
+            reason: null,
+            message: t("qaUi.banner.sanction"),
+          }}
+          onDismiss={() => {}}
+        />
+      </div>
+
+      {/* Toasts: a note that arrives and a plain notice (both on the level-3
+          card), and a session reminder (which drew its own dark card). */}
+      <div data-testid="qa-primitive-toast" className="flex flex-col items-start gap-3 p-4">
+        <div role="status" className={cn(TOAST_SURFACE, "flex w-80 items-center gap-3 p-3")}>
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent-soft font-semibold text-on-accent-soft">
+            B
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-semibold text-text">{t("qaUi.toast.dmName")}</span>
+            <span className="block truncate text-xs text-text-secondary">{t("qaUi.toast.dmBody")}</span>
+          </span>
+          <button type="button" aria-label={t("qaUi.toast.close")} className={TOAST_CLOSE}>
+            <LineX className="h-4 w-4" aria-hidden />
+          </button>
+        </div>
+        <div role="status" className={cn(TOAST_SURFACE, "flex w-80 items-center gap-3 p-3")}>
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-on-accent redesign:mx-1">
+            <CheckIcon className="h-4 w-4" strokeWidth={3} aria-hidden />
+          </span>
+          <p className="min-w-0 flex-1 text-sm font-semibold text-text">{t("qaUi.toast.forwarded")}</p>
+          <button type="button" aria-label={t("qaUi.toast.close")} className={TOAST_CLOSE}>
+            <LineX className="h-4 w-4" aria-hidden />
+          </button>
+        </div>
+        <div
+          role="status"
+          className={cn(
+            "flex w-80 items-center gap-3 rounded-xl border border-ink-4/70 bg-ink-2 p-3 shadow-[var(--shadow-popover)]",
+            TOAST_SURFACE_REDESIGN,
+          )}
+        >
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-ink-3 text-paper-muted redesign:bg-surface-3 redesign:text-text-secondary">
+            <CalendarClock className="h-5 w-5" aria-hidden />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-semibold text-text">{t("qaUi.toast.sessionTitle")}</span>
+            <span className="block truncate text-xs text-text-tertiary redesign:text-text-secondary">{t("qaUi.toast.sessionBody")}</span>
+          </span>
+        </div>
       </div>
 
       <div data-testid="qa-primitive-slider" className="grid gap-4 sm:grid-cols-2">

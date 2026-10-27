@@ -829,6 +829,25 @@
   --card-border: color-mix(in oklab, var(--color-text) 8%, transparent);
   --card-row-hover: color-mix(in oklab, var(--color-text) 6%, transparent);
 
+  /* Banners (ui/banner.tsx): an inset card on the look's soft tone fill,
+     with a faint edge of the tone, so a strip reads as a note pinned to
+     the conversation rather than a stripe across it. */
+  --banner-radius: 0.75rem;
+  --banner-edge: 28%;
+
+  /* Badges (ui/badge.tsx): a small pill in sentence case; a tag beside a
+     name is a step smaller. Counts are a touch larger in type than the old
+     10px, with tabular figures. */
+  --badge-radius: var(--radius-pill);
+  --badge-h: 1.25rem;
+  --badge-px: 0.5rem;
+  --badge-tag-h: 1.125rem;
+  --badge-tag-px: 0.375rem;
+  --badge-text: 0.6875rem;
+  --count-badge-h: 1.125rem;
+  --count-badge-text: 0.6875rem;
+  --count-badge-sm-text: 0.625rem;
+
   --icon-button-radius: var(--radius-pill);
   --icon-button-text: var(--color-text-secondary);
   /* Tints, like the button's: an icon button sits on panes and dialogs. */
@@ -1118,6 +1137,9 @@
      the dialog's own grey and the row reads as a hole. */
   --card-row-hover: color-mix(in oklab, var(--color-text) 4%, transparent);
   --card-border: color-mix(in oklab, var(--color-text) 10%, transparent);
+
+  /* Banners: the soft fills are pale in light; a lighter edge keeps them calm. */
+  --banner-edge: 22%;
   --input-invalid-bg: color-mix(in oklab, var(--color-danger) 6%, var(--color-field));
   /* Tabs */
   /* 7 points over the 8% ghost hover, so a hovered pill never reads as selected. */

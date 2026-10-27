@@ -1,7 +1,6 @@
 import type { DmSummary, UnreadCounts } from "@pqp/shared";
 import { LayoutGrid, MessageCircle } from "lucide-react";
 import type { ReactNode } from "react";
-import { formatBadgeCount } from "@/components/layout/channel-list";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useNotificationState } from "@/hooks/use-notifications";
 import { conversationsWithUnread } from "@/lib/conversation-list";
@@ -10,6 +9,7 @@ import { useTranslation } from "@/lib/i18n";
 import type { PhoneTab } from "@/lib/phone-tabs";
 import { useUpdateOffered } from "@/lib/update-prompt-state";
 import { cn } from "@/lib/utils";
+import { CountBadge } from "@/components/ui/count-badge";
 
 interface PhoneTabBarProps {
   tab: PhoneTab;
@@ -143,13 +143,12 @@ function TabButton({
           />
         )}
         {badge > 0 && (
-          <span
-            key={badge}
+          <CountBadge
+            count={badge}
+            pop
             data-phone-tab-badge={badge}
-            className="absolute -right-3 -top-1.5 inline-flex h-[18px] min-w-[18px] animate-badge-pop items-center justify-center rounded-full bg-danger px-1 text-[10px] font-bold leading-none tabular-nums text-on-danger ring-2 ring-surface-1"
-          >
-            {formatBadgeCount(badge)}
-          </span>
+            className="absolute -right-3 -top-1.5 ring-2 ring-surface-1"
+          />
         )}
       </span>
       <span className={cn("text-[11px] leading-none", active ? "font-semibold text-text" : "font-medium")}>
