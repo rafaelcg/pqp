@@ -1317,6 +1317,8 @@
   /* The full soft accent is the selected channel's fill in light; a mention
      sits a step quieter so it never reads as selected. */
   --message-mention-bg: color-mix(in oklab, var(--color-accent-soft) 70%, var(--color-pane-main));
+  /* A smaller step than dark, so the @you chip keeps its edge on a hovered row. */
+  --message-mention-hover: color-mix(in oklab, var(--message-mention-bg) 92%, var(--color-accent));
   /* Your own name: the lime itself in light, where accent-text is a near-black olive. */
   --message-own-name: var(--color-accent);
   /* Light panes need a stronger thumb to clear 3:1. */

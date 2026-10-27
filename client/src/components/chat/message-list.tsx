@@ -648,6 +648,38 @@ const MESSAGE_ROW_REDESIGN =
 const MESSAGE_TIME_REDESIGN = "redesign:text-xs redesign:text-text-tertiary";
 
 /**
+ * A continuation row's gutter. A pinned line has no header to carry its pin,
+ * so under the redesign the pin sits in the gutter at rest and gives way to
+ * the time on hover. Off the redesign the wrapper is `contents` and the pin
+ * is not drawn, so the row is what it was.
+ */
+function ContinuationGutter({
+  pinned,
+  pinTitle,
+  pinLabel,
+  children,
+}: {
+  pinned: boolean;
+  pinTitle: string;
+  pinLabel: string;
+  children: ReactNode;
+}) {
+  if (!pinned) return <>{children}</>;
+  return (
+    <span className="contents redesign:relative redesign:flex redesign:w-14 redesign:shrink-0">
+      {children}
+      <span
+        className="hidden redesign:absolute redesign:inset-y-0 redesign:right-2 redesign:flex redesign:items-center redesign:text-text-secondary redesign:transition-opacity redesign:group-hover:pointer-events-none redesign:group-hover:opacity-0"
+        title={pinTitle}
+      >
+        <Glyph icon={PushPinFill} size="sm" className="h-3.5 w-3.5" />
+        <span className="sr-only">{pinLabel}</span>
+      </span>
+    </span>
+  );
+}
+
+/**
  * Wrapped in `memo()` on top of `MessageRow`'s own: without it, ANY render
  * of the parent (`App` — a presence tick, a typing broadcast, an unrelated
  * bit of app state) re-runs this entire function regardless of whether
@@ -3912,18 +3944,26 @@ const MessageRow = memo(function MessageRow({
                 </div>
               </div>
             ) : (
-              <time
-                className={cn(
-                  "w-14 shrink-0 pr-2 text-right text-[12px] leading-[var(--chat-line-height)] whitespace-nowrap tabular-nums text-paper-muted",
-                  MESSAGE_TIME_REDESIGN,
-                  compact ? "opacity-70" : "opacity-0 group-hover:opacity-100",
-                )}
-                dateTime={message.createdAt}
-                title={formatFullTimestamp(message.createdAt)}
-                data-row-gutter=""
+              <ContinuationGutter
+                pinned={isMessagePinned && !compact}
+                pinTitle={
+                  message.pinnedBy ? t("chat.pinnedBy", { name: message.pinnedBy.displayName }) : t("chat.pinned")
+                }
+                pinLabel={t("chat.pinned")}
               >
-                {formatTime(message.createdAt)}
-              </time>
+                <time
+                  className={cn(
+                    "w-14 shrink-0 pr-2 text-right text-[12px] leading-[var(--chat-line-height)] whitespace-nowrap tabular-nums text-paper-muted",
+                    MESSAGE_TIME_REDESIGN,
+                    compact ? "opacity-70" : "opacity-0 group-hover:opacity-100",
+                  )}
+                  dateTime={message.createdAt}
+                  title={formatFullTimestamp(message.createdAt)}
+                  data-row-gutter=""
+                >
+                  {formatTime(message.createdAt)}
+                </time>
+              </ContinuationGutter>
             )}
 
             <div className="min-w-0 flex-1">
@@ -4101,7 +4141,7 @@ const MessageRow = memo(function MessageRow({
                         "markdown-body text-[length:var(--chat-font-size)] leading-[var(--chat-line-height)] text-paper/90 redesign:text-text",
                         stream && "[&>p]:inline",
                         // "(editada)" ends the last line it belongs to, never a line of its own.
-                        message.editedAt && "redesign:[&>p:last-of-type]:inline",
+                        message.editedAt && "redesign:[&>p:last-child]:inline",
                       )}
                     >
                       {streamAuthor}
