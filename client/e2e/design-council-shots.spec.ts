@@ -428,6 +428,22 @@ test("captures the design council screens", async ({ browser }) => {
       await expect(page.getByText(PAPO.at(-1)![1])).toBeVisible();
       await hideDevBanner(page);
       await shoot(page, `01-chat-${theme}`);
+      // Message search: the prompt, then results with the arrows on one.
+      try {
+        await page.getByRole("button", { name: /Buscar mensagens/ }).first().click({ timeout: 5_000 });
+        await expect(page.getByRole("dialog")).toBeVisible();
+        await page.waitForTimeout(300);
+        await shoot(page, `33-search-empty-${theme}`);
+        await page.getByRole("combobox").fill("caverna");
+        await expect(page.getByRole("option").first()).toBeVisible({ timeout: 10_000 });
+        await page.keyboard.press("ArrowDown");
+        await page.waitForTimeout(300);
+        await shoot(page, `34-search-results-${theme}`);
+        await page.keyboard.press("Escape");
+      } catch {
+        console.log("search shots skipped");
+        await page.keyboard.press("Escape");
+      }
       // A popover in place: the composer's emoji picker.
       await page.getByRole("button", { name: "Adicionar emoji", exact: true }).first().click();
       await expect(page.locator(".emoji-mart-shell")).toBeVisible();
