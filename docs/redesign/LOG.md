@@ -55,6 +55,7 @@ Read this file and the inventory at the start of every session.
 | 2 | `p-loading` | Merged (cap at round 5: 8.6 Opus r5, 8.6 Codex r4, no MUST) |
 | 2 | `p-empty` | Merged, capped at round 5 (Opus 8.6) |
 | 2 | `p-sheet` | Merged, capped at round 5 (Opus 8.6) |
+| 3 | `s-frame` | Merged, capped at round 5 (Opus 8.8) |
 
 ## Phase 0: directions
 
@@ -961,6 +962,32 @@ secondary fill (`f-forum`); `SettingsEmpty` takes a filled Phosphor glyph in
 suite timed out under load once and passed alone); `bench:tokens`; i18n
 check; `forum-pane` and `forum-shell` e2e (6 passed); retro, Halloween, high
 contrast, 390px and toggle off. Screenshots: `~/pqp-redesign/p-empty/`.
+### s-frame
+
+Spec (audit: the root, the rail, five side panes and Novidades each drew
+their own edge and fill; the phone breakpoint is defined three ways):
+
+1. Job: the canvas, the panes, their corners and the gutter between them.
+2. Redesign: the rail sits on the canvas with no edge; from 768px the
+   sidebar, conversation, member list, docked thread, forum side post and
+   Novidades float as `--radius-pane` panes with the `--space-gutter`
+   gutter; the conversation is the brightest pane.
+3. Built as class strings in `ui/pane.ts`, appended after each pane's own.
+4. Left: below 768px the drawers keep their edges (`m-shell`, `m-breakpoints`).
+
+Rounds: r1 Codex 8.0, r2 Codex 8.5, r3 Opus 8.3 (MUST: a call added a
+second gutter; fixed), r4 Opus 8.6, r5 Opus 8.8. Capped at round 5, no MUST.
+Applied before the merge: `--space-gutter` is 0 under 768px, the same width
+where the frame classes stop floating. Left as COULD:
+- Light `pane-side` is close to `pane-main`; only the gutter parts them.
+  Try `color-mix(in oklab, var(--color-surface-1) 98%, var(--color-text))`
+  if a later element removes the sidebar divider (re-run the bench).
+- For `s-user-panel`: the mockup draws the user panel as its own inset
+  rounded card, not a full-width divider.
+- For `s-thread`: shoot the docked thread pane.
+Verified: typecheck, 10,454 unit tests, bench:tokens, i18n:check, e2e
+app-shell-scroll, forum-shell, channel-layout, call-split-layout,
+forum-pane. Screenshots: ~/pqp-redesign/s-frame/.
 
 ### p-dialog
 

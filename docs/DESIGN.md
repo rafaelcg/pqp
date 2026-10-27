@@ -390,7 +390,7 @@ selectors in a comment in `index.css`: the bench finds blocks by regex.
 | `--type-title-font` (new) | `--font-sans` | `--font-display` (Gabarito) |
 | `--type-body-leading` | 20px | 22px |
 | `--control-row` (new) | 32px | 36px |
-| `--space-gutter` (new) | 0 | 8px (0 under 640px) |
+| `--space-gutter` (new) | 0 | 8px (0 under 768px, where the frame stops floating) |
 | `--space-pane` (new) | 16px | 16px |
 | `--duration-fast` / `base` / `slow` | 150 / 200 / 300 ms | 120 / 180 / 280 ms |
 | `--icon-sm` / `md` / `lg` (new) | 16 / 20 / 24 px | same |
