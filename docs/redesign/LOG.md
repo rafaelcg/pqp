@@ -45,6 +45,9 @@ Read this file and the inventory at the start of every session.
 | 2 | `p-tabs` | Merged (cap at round 5: 8.4 Opus r5, 8.7 Codex r4, no MUST) |
 | 2 | `p-menu` | Merged (cap at round 5: 8.4 Opus r5, 8.4 Codex r4, no MUST, approved) |
 | 2 | `p-slider` | Merged (cap at round 5: 8.0 Opus r4, 8.8 Codex r5, no MUST) |
+| 2 | `p-banner` | Merged (approved at round 3: 8.3 Opus, 8.5 Codex r2, no MUST) |
+| 2 | `p-badge` | Merged (approved at round 2: 8.3 Opus, 8.3 Codex r1, no MUST) |
+| 2 | `p-toast` | Merged (cap at round 5: 8.5 Opus r5, 8.7 Codex r2, no MUST) |
 
 ## Phase 0: directions
 
@@ -600,6 +603,106 @@ Round 4's MUST (the voice settings' 100% label collided with the hint under
 it) was fixed; round 5 found nothing left. The slider group naming and the
 unity tick are logged for `f-music` and `f-call`. Stopped at the five-round
 cap with no MUST. Screenshots: `~/pqp-redesign/p-slider/`.
+### p-banner
+
+Spec (audit: six hand-built strips in `App.tsx`, `connection-banner.tsx` and
+`sanction-notice-bar.tsx`, each its own tinted bar):
+
+1. Job: state something about the app or the conversation until it stops
+   being true, with at most two actions.
+2. Redesign: an inset rounded card on the look's soft tone fill, the message
+   in the text colour, a leading icon and pill actions in the tone's ink.
+3. Folded: dev bypass, connection, app error, idle warning, success notice,
+   sanction. Each keeps its toggle-off bar.
+4. Left for their owners: watch now (`s-banners`), arrival, bring-crew and
+   newcomer strips (`f-onboarding`), the Discord import note
+   (`f-server-settings`). pt-BR idle copy moved to "tu".
+
+Council (Opus 5.5, GPT-6 Luna via Codex), overall after. One reviewer per
+round, Opus for the sign-off:
+
+| Round | Opus | Codex |
+|---|---|---|
+| 1 | not run | 8.2 |
+| 2 | not run | 8.5 |
+| 3 | 8.3 | not run |
+
+Round 1's phone check led to `BannerText` (two actions wrap under the
+message). Round 3 approved; its notes were applied after it: the share
+button and "Ainda tô aqui" draw as the main way out under the redesign, the
+icon and actions align to the first line, and the filled pill's focus ring
+has an offset. Logged, not done: the dark warning fill reads heavy beside
+success and danger; revisit if it does in use. Screenshots:
+`~/pqp-redesign/p-banner/`.
+
+### p-badge
+
+Spec (audit: 7 `Badge` callers, six hand-built count pills with one shared
+class string, six hand-built name tags in message headers):
+
+1. Job: name a state (Badge), a tag beside a name (Badge `tag`), or a
+   waiting count (new `CountBadge`).
+2. Redesign: sentence-case pills, 11px semibold, the variant's pair always;
+   counts in 11px semibold tabular figures. The beta tag beside BOT matches.
+3. Folded: six count pills (DM list, conversations home twice, quick
+   switcher, phone tabs, phone conversations) and the OP, gone, AutoMod,
+   Webhook, BOT and removed tags. New `muted` variant for gone and removed.
+4. Left for their owners: the server rail counts (`s-rail`), the
+   channel list's counts and live chips (`s-channel-row`), Baú media
+   overlays (`f-bau`), the voice-clean chip (`f-call`).
+
+Council (Opus 5.5, GPT-6 Luna via Codex), overall after. One reviewer per
+round, Opus for the sign-off:
+
+| Round | Opus | Codex |
+|---|---|---|
+| 1 | not run | 8.3 |
+| 2 | 8.3 | not run |
+
+Round 2 approved; its notes were applied after it. The bench now measures
+the neutral and muted badges, and under the redesign they are a step
+stronger (body text on `surface-3`; secondary text on `surface-2`) because
+Catppuccin, Everforest, Ocean and Modo 2005 fell under 4.5:1. The 16px
+count takes 10px type; the beta tag beside Bot drops its wash; the sheet
+shows a painted Webhook tag and a "Saiu" tag. Screenshots:
+`~/pqp-redesign/p-badge/`.
+
+### p-toast
+
+Spec (audit: no toast primitive; seven toasts, each with its own corner and
+queue; five drew the level-3 card, two drew their own):
+
+1. Job: the look of a note that arrives and leaves on its own.
+2. Redesign: the popover's card (radius, fill, edge, lift) and IconButton's
+   round ghost for the dismiss button.
+3. Merges: `TOAST_SURFACE` in the DM, friend, forward, not-in-server and
+   app-join toasts (exact with the toggle off); `TOAST_SURFACE_REDESIGN` in
+   the session reminders and the watch party approval (redesign only, they
+   drew another card); `TOAST_CLOSE` in four close buttons.
+4. Left: the retro toasts (their own look), the image lightbox's notice
+   (a media overlay, `s-message-content`) and the voice-clean confirmation
+   in `App.tsx` (`f-call`). Placement and queues stay per toast.
+
+Council (Opus 5.5, GPT-6 Luna via Codex), overall after. One reviewer per
+round, Opus for the sign-off:
+
+| Round | Opus | Codex |
+|---|---|---|
+| 1 | not run | 8.3 |
+| 2 | not run | 8.7 |
+| 3 | 8.1 | not run |
+| 4 | 8.4 | not run |
+| 5 | 8.5 | not run |
+
+Capped at round 5, no MUST open. Round 3's MUST (two dismiss buttons with
+no focus ring) was fixed in round 4. Round 5's notes were applied after it:
+every 32px leading mark in the 40px slot, the DM fallback disc on
+`surface-3`, one body tone, the app join's undo ring. Not done: a toast
+over a busy screen, because the capture rig renders the sheet only.
+Verified: typecheck; 10,417 unit tests; `bench:tokens`; i18n check;
+`dm-toast`, `dm-toast-suppression`, `retro-look` and `watch-party` e2e (37
+passed); retro, Halloween, high contrast, 390px and toggle off. Screenshots:
+`~/pqp-redesign/p-toast/`.
 
 ### p-avatar
 

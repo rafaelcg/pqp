@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { cn } from "@/lib/utils";
 import { Check, Share2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useTranslation } from "@/lib/i18n";
@@ -21,7 +22,7 @@ import {
  * sitting silently on somebody's clipboard is how a share button loses their
  * trust the first time they use it.
  */
-export function ShareHandleButton({ handle }: { handle: string }) {
+export function ShareHandleButton({ handle, className }: { handle: string; className?: string }) {
   const { t, locale } = useTranslation();
   const [outcome, setOutcome] = useState<ShareOutcome | null>(null);
 
@@ -36,7 +37,7 @@ export function ShareHandleButton({ handle }: { handle: string }) {
     <Button
       size="sm"
       variant="secondary"
-      className="shrink-0 gap-1.5"
+      className={cn("shrink-0 gap-1.5", className)}
       onClick={() => {
         void shareHandle(handle, locale, browserShareCapabilities()).then(
           (result) => {

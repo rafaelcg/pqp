@@ -670,6 +670,29 @@ shapes: `ChannelListSkeleton`, `MessageListSkeleton`, `ServerRailSkeleton`.
 - **Accessibility.** A bare `Skeleton` is `aria-hidden`. The composed ones carry
   `aria-busy` and a translated label.
 
+### Toast
+
+`toast.tsx`. Not a component: the look of a note that arrives on its own and
+leaves on its own (a DM, a friend who accepted, a forward, an app join, a
+session reminder, a watch party approval). Each toast keeps its own corner,
+queue, timer and swipe.
+
+- `TOAST_SURFACE` is the popover's card: with the toggle off the level-3
+  card the toasts already drew, under the redesign the pane radius, the
+  raised fill, the faint edge and the lift. `TOAST_SURFACE_REDESIGN` moves a
+  toast that draws its own card (the session reminders, the watch party
+  approval) onto the same card under the redesign only.
+- `TOAST_CLOSE` is the dismiss button: today's small square with the toggle
+  off, IconButton's round ghost with its focus ring under the redesign.
+  `TOAST_OPEN_REDESIGN` gives a toast's whole-card button (a DM, a session
+  reminder) the same ring. A 32px leading mark sits in the 40px slot
+  (`redesign:mx-1`), so the text of stacked toasts lines up.
+- **Not toasts.** The retro presence card, the lightbox notice and the Baú
+  post hint are notes of their own and stay off this recipe on purpose.
+- **Use it** for news the person did not ask for and can ignore. **Do not**
+  use it for the result of a write the person just made; say that in the
+  row (`InlineStatus`).
+
 ### Tooltip
 
 `tooltip.tsx`. `TooltipProvider` is mounted once at the root; every `Tooltip`
@@ -962,6 +985,29 @@ bottom border) and `hue`.
 Home and End keys, a vertical rail on desktop and a horizontal strip on phones.
 Supports a danger tint and an unsaved-changes dot per section.
 
+### Banner
+
+`banner.tsx`. A strip that states something about the whole app or the
+conversation and stays until it stops being true or is dismissed: the
+connection dropped, an error, the idle hangup warning, a notice, a timeout.
+
+- **Props.** `tone` (`warning`, `danger`, `success`, `accent`), `edge` (`top`
+  under the header, `bottom` above the composer), `icon` (a Phosphor icon,
+  drawn only under the redesign). `BannerText` is the message: it takes the
+  room the actions leave and, under the redesign, keeps 10rem, so two
+  actions wrap under it on a phone. `BannerAction` is its button: `fill` for
+  the main way out, `quiet` for a second action, `link` (the default) for
+  dismiss; `BannerActions` holds two of them.
+- **Toggle off.** The full-width bar each strip drew: a 10% tone fill, a 40%
+  tone rule on the inner edge, tone text. A strip whose bar differed passes
+  those classes and keeps them.
+- **Redesign.** An inset card (16px from the column, 8px on a phone) on the
+  look's soft tone fill, with a `--banner-edge` tone border, the message in
+  the text colour, and the icon and pill actions in the tone's ink.
+- **Use it** for a state of the app or the conversation. **Do not** use it
+  for news that arrives on its own (a toast) or for the result of a write
+  the person just made (`InlineStatus`).
+
 ### BetaTag
 
 `beta-tag.tsx`. The pill next to the wordmark. Two variants: `default` on app
@@ -972,18 +1018,26 @@ because "beta" is the same word in both of this product's languages.
 ### Badge
 
 `badge.tsx`. A short status word on a card or beside a name: "Novo",
-"Resolvido", "Fixado", "Fechado", "OP", the "Staff" marker on a forum tag.
-One size (18px, 10px uppercase bold, `--radius-tick`), so the same signal
-reads the same on every surface.
+"Resolvido", "Fixado", "Fechado", "OP", "BOT", the "Staff" marker on a forum
+tag.
 
 - **Variants.** `new` (solid accent, something the viewer has not seen),
-  `accent`, `success`, `warning`, `danger` (the soft pairs) and `neutral`
-  (`surface-3` with `text-secondary`). Every variant is a pair the bench
-  already measures; there is no opacity wash.
+  `accent`, `success`, `warning`, `danger` (the soft pairs), `neutral`
+  (`surface-3` with `text-secondary`) and `muted` (the same fill, tertiary
+  text: gone, removed). Every variant is a pair the bench already measures;
+  there is no opacity wash.
+- **Sizes.** `md` (18px, the badge on a card or row) and `tag` (the smaller
+  one beside a name in a message header: OP, BOT, AutoMod, Webhook).
 - **`icon`.** An optional lucide icon before the word, decorative.
-- **Use it** for a state. **Do not** use it for a count (the mention pill and
-  the unread pip are their own shapes) or for the product's own "beta"
-  (`BetaTag`).
+- **Toggle off.** 10px uppercase bold on `--radius-tick`, the geometry each
+  caller drew. **Redesign.** A pill in sentence case, 11px semibold
+  (`--badge-*`; `md` 20px, `tag` 18px), the variant's pair whatever the
+  caller painted (`neutral` and `muted` a step stronger, so 11px clears
+  4.5:1 in every look), so every
+  tag on a message header is the same shape. The `BetaTag` beside a bot's
+  BOT takes the tag's shape there.
+- **Use it** for a state. **Do not** use it for a count (`CountBadge`) or
+  for the product's own "beta" (`BetaTag`).
 - **Accessibility.** The word is the meaning, so colour is never the only
   signal; the icon is `aria-hidden`.
 
@@ -1013,6 +1067,20 @@ place. `StatusDot` (`status-dot.tsx`) draws presence on its corner.
   pane's inside `main`.
 - **Stacks** cut their overlap with the same token
   (`ring-[color:var(--avatar-dot-ring)]`).
+### CountBadge
+
+`count-badge.tsx`. A number in a pill: unread messages, mentions,
+conversations or friend requests waiting. Draws nothing at zero and caps at
+"99+".
+
+- **Props.** `count`, `tone` (`danger` default, `accent`), `size` (`md`
+  18px, `sm` 16px), `pop` (the arrival animation, re-played for each new
+  number). A corner position and a ring against the surface behind it are
+  the caller's `className`.
+- **Redesign.** 11px semibold with tabular figures (`--count-badge-*`); the
+  16px `sm` keeps its height and takes 10px type, so "99+" fits.
+- The server rail's and the channel list's counts are drawn in place for
+  now; they move here with their shell elements.
 
 ## Planned primitives
 
@@ -1021,8 +1089,6 @@ variant set, and then use it everywhere.
 
 - **Toast.** The animations (`animate-toast-in`, `animate-toast-out`) exist in
   `index.css` and each caller draws its own container.
-- **Count badge.** The status `Badge` exists; a general count pill does not
-  (the sidebar's mention number is drawn in place).
 
 ## Rules
 

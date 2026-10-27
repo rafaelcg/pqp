@@ -589,6 +589,8 @@ const PRIMITIVES: {
   },
   // Two panels in place: a note with actions, and a picker grid.
   { id: "p-popover", testId: "qa-primitive-popover" },
+  // A note that arrived and a session reminder; the close button focused.
+  { id: "p-toast", testId: "qa-primitive-toast", focus: "Fechar" },
   // Focus the checked segment, hover an unchecked chip (the first of each
   // name: the small groups repeat the labels).
   { id: "p-radio", testId: "qa-primitive-radio", role: "radio", focus: "Escuro", hover: "Menções" },
@@ -596,10 +598,14 @@ const PRIMITIVES: {
   { id: "p-tabs", testId: "qa-primitive-tabs", role: "tab", focus: "Visão geral", hover: "Todos" },
   // Monograms with presence, dimmed, a bot and a stack; no interaction.
   { id: "p-avatar", testId: "qa-primitive-avatar" },
+  // Status words, the tags beside a name, and counts; no interaction.
+  { id: "p-badge", testId: "qa-primitive-badge" },
   // Opened from the keyboard, the highlight on "Só menções" (its detail line).
   { id: "p-menu", testId: "qa-primitive-menu", open: { button: "Abrir menu", menu: "[data-server-menu]", arrows: 1 } },
   // Hovering the scrub shows its thumb; the volume is keyboard-focused.
   { id: "p-slider", testId: "qa-primitive-slider", focus: "Volume", role: "slider", hover: "Scrub" },
+  // Focus the connection strip's main action, hover the error's dismiss.
+  { id: "p-banner", testId: "qa-primitive-banner", focus: "Tentar agora", hover: "Dispensar" },
 ];
 
 test("captures the primitives", async ({ browser }) => {

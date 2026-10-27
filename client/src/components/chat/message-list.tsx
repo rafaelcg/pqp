@@ -1,4 +1,5 @@
 import { StoryQuoteCard } from "@/components/stories/story-quote-card";
+import { Badge } from "@/components/ui/badge";
 import type {
   Embed,
   MessageReaction,
@@ -3928,16 +3929,19 @@ const MessageRow = memo(function MessageRow({
                     {serverBot && <ServerBotTags gone={authorGone} />}
                   </span>
                   {forumOp && (
-                    <span
-                      className="self-center rounded-[var(--radius-tick)] bg-surface-3 px-1 py-px text-[10px] font-bold uppercase tracking-wide text-text-secondary"
+                    <Badge
+                      size="tag"
+                      className="self-center font-bold"
                       title={t("forum.badge.opHint")}
                     >
                       {t("forum.badge.op")}
-                    </span>
+                    </Badge>
                   )}
                   {authorGone && !serverBot && (
-                    <span
-                      className="self-center rounded-[var(--radius-tick)] bg-surface-3 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-text-tertiary"
+                    <Badge
+                      variant="muted"
+                      size="tag"
+                      className="self-center"
                       title={t("chat.authorGoneHint", { name: message.authorName })}
                     >
                       {/* `title` reaches neither keyboard nor touch nor a
@@ -3947,23 +3951,26 @@ const MessageRow = memo(function MessageRow({
                       <span className="sr-only">
                         {t("chat.authorGoneHint", { name: message.authorName })}
                       </span>
-                    </span>
+                    </Badge>
                   )}
                   {message.isAutomod ? (
-                    <span
-                      className="rounded bg-accent-soft px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-on-accent-soft"
+                    <Badge
+                      variant="accent"
+                      size="tag"
+                      className="rounded"
                       title={t("chat.automodPosted")}
                     >
                       AutoMod
-                    </span>
+                    </Badge>
                   ) : (
                     message.isWebhook && (
-                      <span
-                        className="rounded bg-ink-4 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-paper-muted"
+                      <Badge
+                        size="tag"
+                        className="rounded bg-ink-4 text-paper-muted"
                         title={t("chat.webhookPosted")}
                       >
                         Webhook
-                      </span>
+                      </Badge>
                     )
                   )}
                   {!compact && (
