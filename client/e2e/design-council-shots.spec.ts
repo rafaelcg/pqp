@@ -888,6 +888,8 @@ const PRIMITIVES: {
   // The user panel: hover on the settings gear of the first.
   { id: "s-user-panel", testId: "qa-shell-user-panel", hover: "Abrir configurações" },
   { id: "s-banners", testId: "qa-shell-banners" },
+  // Directory cards: joined, with a banner, plain, and the skeleton.
+  { id: "f-communities", testId: "qa-community-cards" },
   // Message rows in their states.
   { id: "s-message-row", testId: "qa-shell-message-rows", hoverText: "@lia cê vem?" },
   { id: "f-onboarding", testId: "qa-onboarding", focus: "Entendi" },
