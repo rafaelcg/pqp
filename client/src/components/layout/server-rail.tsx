@@ -767,8 +767,8 @@ export function ServerRail({
 
           The update indicator goes LAST, below everything else, and only
           exists while there is a build to take. It is not a door: a small round
-          button, smaller than the tiles above it, with a dot, and a popover when
-          it is clicked. See `components/layout/update-indicator.tsx`. */}
+          button, smaller than the tiles above it (under the redesign a 44px
+          tile like them), with a dot, and a popover when it is clicked. See `components/layout/update-indicator.tsx`. */}
       {onOpenWhatsNew && (
         <>
           <span

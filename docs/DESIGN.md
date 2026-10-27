@@ -433,7 +433,8 @@ form, so a derived role is measured like any other.
 `ui/pane.ts`). Under the redesign:
 
 - Every tile is a 44px circle (`--rail-tile`) in the side pane's colour
-  (`--rail-tile-bg`), the label 13px semibold in secondary text.
+  (`--rail-tile-bg`). The monogram is 13px semibold in secondary text; the
+  Conversas caption under its tile is 11px semibold.
 - The selected tile is the accent's rounded square
   (`--rail-tile-radius-selected`, 16px) with a short drop
   (`--rail-tile-shadow`). A face (a pinned or waiting conversation) stays
