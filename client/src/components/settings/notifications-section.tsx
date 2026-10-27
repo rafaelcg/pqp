@@ -1,4 +1,6 @@
+import { Info as InfoGlyph } from "@phosphor-icons/react";
 import { Info, Volume2 } from "lucide-react";
+import { IconSwap } from "@/components/ui/icon";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
   SettingsGroup,
@@ -597,7 +599,7 @@ function DirectMessagesGroup({
         status={
           unavailable ? (
             <p className="mt-1 flex items-center gap-1.5 text-xs text-text-secondary">
-              <Info aria-hidden className="h-3.5 w-3.5 shrink-0" />
+              <IconSwap off={Info} on={InfoGlyph} offClassName="h-3.5 w-3.5 shrink-0" />
               {t(
                 // Refused is not the same as unsupported: the person can
                 // undo a block, and the row above says how.
