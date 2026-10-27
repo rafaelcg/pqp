@@ -942,10 +942,23 @@ card of settings, the "what's new" note.
 - **Use it** for anything anchored to the control that opened it. A list of
   actions is a `Menu`; a blocking question is a `Dialog`.
 
-### ScrollArea
+### Scrollbars
 
-`scroll-area.tsx`. Radix scroll area with a themed thumb. Use it where a native
-scrollbar would draw OS chrome over the design.
+Native scrolling everywhere; there is no scroll area component (the unused
+Radix one was deleted with the redesign's `p-scroll`). Under the redesign
+the root sets `scrollbar-color` to `--scrollbar-thumb` (tertiary text at
+65%, 80% in light: 3.2:1 to 4.3:1 on both panes in Clássico, Catppuccin,
+Everforest and Modo 2005, measured in Chromium) on
+no track, at the platform's width. A strip that scrolls sideways may hide
+its bar (`[scrollbar-width:none]`); a list that scrolls down keeps it at
+the platform's width. The one exception is a strip under 6rem tall (the
+listener strip's wrapped list, the friends tabs), which may stay `thin`.
+The innermost scroller under the pointer (`overflow-y-auto`,
+`overflow-auto`, `overflow-x-auto` or a textarea) lifts its thumb to
+`--scrollbar-thumb-hover` (secondary text at 80%, 90% in light). A scroller
+written another way (`overflow-y-scroll`, an inline style) does not lift;
+use one of those classes to opt in. Modo 2005 follows the same rule; its
+toolbar hides its bar because it is a sideways strip.
 
 ### Textarea
 

@@ -858,6 +858,12 @@
   --count-badge-text: 0.6875rem;
   --count-badge-sm-text: 0.625rem;
 
+  /* Scrollbars: a thumb of the tertiary text on no track, at least 3:1 on
+     both panes (see the rule on html[data-redesign] below). It resolves at
+     :root, so a subtree that redefines --color-text-tertiary keeps the
+     root's thumb. */
+  --scrollbar-thumb: color-mix(in oklab, var(--color-text-tertiary) 65%, transparent);
+  --scrollbar-thumb-hover: color-mix(in oklab, var(--color-text-secondary) 80%, transparent);
   /* Server rail (layout/server-rail.tsx): round tiles on the canvas, in the
      side pane's colour. The selected one turns into the accent's rounded
      square; a hover only lifts the fill, so lime always means "here". */
@@ -1252,6 +1258,9 @@
 
 /* The redesign's shadows on a light page: tinted, never black. Every look. */
 :root[data-redesign][data-theme="light"] {
+  /* Light panes need a stronger thumb to clear 3:1. */
+  --scrollbar-thumb: color-mix(in oklab, var(--color-text-tertiary) 80%, transparent);
+  --scrollbar-thumb-hover: color-mix(in oklab, var(--color-text-secondary) 90%, transparent);
   /* On the near-white panes the 8% tint all but vanishes at the pulse's low
      point, and a 25% track at 12px is a hairline. */
   --skeleton-bg: color-mix(in oklab, var(--color-text) 10%, transparent);
@@ -2786,6 +2795,30 @@ html[data-app-shell] body {
 html[data-app-shell] #root {
   overflow: hidden;
   overflow: clip;
+}
+
+/*
+ * Under the redesign a native scrollbar takes the look's colours: a thumb
+ * of tertiary text at 65% (80% in light) and no track. It keeps the platform's width, so it
+ * stays easy to grab on Windows and Linux. `scrollbar-color` inherits, so
+ * one rule on the root reaches every pane; an element that hides its bar
+ * (`scrollbar-width: none`) still does.
+ */
+html[data-redesign] {
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+/*
+ * A pane under the pointer lifts its thumb to secondary text, so hover reads
+ * as a state even where the platform draws one colour for rest, hover and drag.
+ * Only the innermost scroller under the pointer lifts: `scrollbar-color`
+ * inherits, so without the `:has` a log would light every bar inside it.
+ */
+html[data-redesign]
+  :where(.overflow-y-auto, .overflow-auto, .overflow-x-auto, textarea):hover:not(
+    :has(:where(.overflow-y-auto, .overflow-auto, .overflow-x-auto, textarea):hover)
+  ) {
+  scrollbar-color: var(--scrollbar-thumb-hover) transparent;
 }
 
 /*
