@@ -1024,7 +1024,9 @@ dialog-mobile-layout (16). Screenshots: ~/pqp-redesign/p-dialog/.
   themselves. Sharing one behaviour means adding `@radix-ui/react-popover`
   (a new dependency and lockfile change). Only the look is shared for now.
 
-1. Resolved 2026-10-26: Grok 4.7 is the third reviewer.
+1. Reviewers: André dropped Grok (too slow), so the council is Opus and
+   Codex. On 2026-10-27 Codex hit its usage limit (until November 25,
+   2026), and rounds since then are Opus only. Add a second provider?
 2. Four features live in two versions behind flags. The redesign should
    rebuild only the version that stays. Which one stays for each?
    - DM list: classic or Conversas home (`conversations_home`).
