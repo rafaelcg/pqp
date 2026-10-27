@@ -685,10 +685,10 @@ export function ServerRail({
                   <span
                     data-server-public=""
                     aria-hidden="true"
-                    className="absolute -bottom-0.5 -left-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-rail text-signal redesign:-bottom-1 redesign:-left-1 redesign:h-[18px] redesign:w-[18px] redesign:bg-canvas redesign:text-accent"
+                    className="absolute -bottom-0.5 -left-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-rail text-signal redesign:-bottom-1 redesign:-left-1 redesign:h-[18px] redesign:w-[18px] redesign:bg-canvas redesign:text-text-secondary"
                   >
                     <Globe className="h-3 w-3 redesign:hidden" />
-                    <Icon icon={GlobeSimple} size="sm" className="hidden h-3 w-3 redesign:block" />
+                    <Icon icon={GlobeSimple} size="sm" className="hidden h-3.5 w-3.5 redesign:block" />
                   </span>
                   <span id={publicDescId} className="sr-only">
                     {t("chrome.publicCommunity")}
@@ -751,8 +751,6 @@ export function ServerRail({
           className={cn(
             "h-12 w-12 rounded-2xl hover:rounded-xl",
             RAIL_TILE_REDESIGN,
-            // A step below "create": no fill until the pointer is on it.
-            "redesign:border-0 redesign:bg-transparent",
           )}
           onClick={onJoinServer}
         >

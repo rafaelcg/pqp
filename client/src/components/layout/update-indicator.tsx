@@ -282,7 +282,10 @@ export function UpdateIndicator({
             // On the rail it is a small tile like the ones above it.
             variant === "rail" &&
               !emphasised &&
-              "redesign:bg-[color:var(--rail-tile-bg)] redesign:hover:bg-[color:var(--rail-tile-hover)] redesign:focus-visible:ring-text redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-canvas",
+              "redesign:bg-[color:var(--rail-tile-bg)] redesign:hover:bg-[color:var(--rail-tile-hover)]",
+            // The rail's focus ring, urgent or not: the text colour with a gap.
+            variant === "rail" &&
+              "redesign:focus-visible:ring-text redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-canvas",
             // Every door on the rail is one tile size, this one too.
             variant === "rail" && "redesign:h-[var(--rail-tile)] redesign:w-[var(--rail-tile)]",
             variant === "rail" && open && !emphasised && "redesign:bg-[color:var(--rail-tile-hover)]",
@@ -296,7 +299,7 @@ export function UpdateIndicator({
             className="absolute -right-0.5 -top-0.5 flex h-2.5 w-2.5"
           >
             {emphasised && (
-              <span className="absolute inline-flex h-full w-full rounded-full bg-accent opacity-60 motion-safe:animate-ping" />
+              <span className="absolute inline-flex h-full w-full rounded-full bg-accent opacity-60 motion-safe:animate-ping redesign:motion-safe:animate-none" />
             )}
             <span
               className={cn(

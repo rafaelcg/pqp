@@ -439,7 +439,10 @@ form, so a derived role is measured like any other.
   (`--rail-tile-shadow`). A face (a pinned or waiting conversation) stays
   round and takes an accent ring instead, because its photo fills the tile.
 - A hover lifts the fill (`--rail-tile-hover`) and rounds the tile toward the
-  selected square. It never turns lime: lime only means "you are here".
+  selected square. It never turns lime: a lime tile fill only means "you
+  are here". Small lime marks (a friend request count, a Baú count, the
+  Novidades and update dots) mean "new for you", and they never fill a tile.
+- Every door, join included, sits on the same disc (`--rail-tile-bg`).
 - The pip on the left edge is the text colour: tall for selected, a dot for
   unread.
 - The Baú's ring (new posts beside a mention) hugs the disc with no gap, like

@@ -847,7 +847,8 @@
      square; a hover only lifts the fill, so lime always means "here". */
   --rail-tile: 2.75rem;
   --rail-tile-radius-selected: 1rem;
-  --rail-tile-bg: var(--color-pane-side);
+  /* A touch of text over the side pane, so an idle door reads on the dark canvas. */
+  --rail-tile-bg: color-mix(in oklab, var(--color-text) 4%, var(--color-pane-side));
   --rail-tile-hover: color-mix(in oklab, var(--color-text) 9%, var(--color-pane-side));
   --rail-tile-shadow: 0 2px 8px -2px oklch(0 0 0 / 0.45);
   --rail-divider: var(--color-border);
@@ -1141,6 +1142,7 @@
      own grey and the tile disappears). */
   --rail-tile-shadow: 0 2px 6px -2px oklch(0.4 0.02 262 / 0.3);
   --rail-tile-hover: var(--color-surface-0);
+  --rail-tile-bg: var(--color-pane-side);
   --input-invalid-bg: color-mix(in oklab, var(--color-danger) 6%, var(--color-field));
   /* Tabs */
   /* 7 points over the 8% ghost hover, so a hovered pill never reads as selected. */
