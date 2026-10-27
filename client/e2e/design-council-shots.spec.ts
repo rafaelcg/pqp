@@ -633,6 +633,7 @@ const PRIMITIVES: {
   { id: "s-rail", testId: "qa-shell-rail", focus: "Praça", hover: "Oficina" },
   { id: "s-sidebar-special", testId: "qa-shell-sidebar-special" },
   { id: "s-category", testId: "qa-shell-categories", hover: "Bate-papo" },
+  { id: "s-channel-row", testId: "qa-shell-channel-rows", hover: "clipes" },
 ];
 
 test("captures the primitives", async ({ browser }) => {

@@ -43,7 +43,11 @@ import {
 } from "lucide-react";
 import {
   CaretDown,
+  ChatText,
   FolderSimplePlus,
+  GearSix,
+  PencilSimple,
+  PushPin,
   Lock as LockFill,
   MagnifyingGlass,
   Plus as PlusBold,
@@ -124,6 +128,7 @@ import { Menu } from "@/components/ui/menu";
 import { BetaTag } from "@/components/ui/beta-tag";
 import { ChannelListSkeleton } from "@/components/ui/skeleton";
 import { Tooltip } from "@/components/ui/tooltip";
+import { CountBadge } from "@/components/ui/count-badge";
 import { Icon } from "@/components/ui/icon";
 import { IconButton } from "@/components/ui/icon-button";
 import { MENU_SEPARATOR } from "@/components/ui/menu-items";
@@ -257,6 +262,38 @@ export const SEARCH_MESSAGES_EVENT = "pqp:search-messages";
 /** Equal-width action tiles on a channel row (pin, settings). */
 const CHANNEL_ACTION_TILE =
   "flex h-7 w-7 shrink-0 items-center justify-center rounded-md hover:bg-ink-3";
+
+/*
+ * A channel row under the redesign: `ui/list-row.tsx`'s `sm` row on its
+ * tokens (a 36px pill, the row roles), with the end pip as the one unread
+ * mark instead of the bar on the left edge. The row keeps its own markup
+ * (the tooltip on the button, the pin and settings beside it, the drag).
+ */
+const CHANNEL_ROW_REDESIGN =
+  "redesign:min-h-[var(--list-row-h-sm)] redesign:gap-0.5 redesign:rounded-[var(--list-row-radius)] redesign:py-0.5 redesign:pl-[var(--list-row-px)] redesign:pr-[var(--list-row-action-pr,0.25rem)]";
+
+/**
+ * A channel row's icon: 14px with the toggle off; under the redesign 16px in
+ * the list row's icon colour (the selected text on the open row). A private
+ * channel's padlock keeps its warning colour.
+ */
+export function channelRowIconClass(channel: Channel, selected: boolean): string {
+  return cn(
+    "h-3.5 w-3.5 redesign:h-4 redesign:w-4",
+    !channelIconIsPrivateLock(channel) &&
+      (selected
+        ? "redesign:text-[color:var(--list-row-selected-text)]"
+        : "redesign:text-[color:var(--list-row-icon)]"),
+  );
+}
+
+/** A watch party room's second line (its viewers, its topic). */
+const CHANNEL_DETAIL_REDESIGN =
+  "redesign:text-xs redesign:text-[color:var(--list-row-detail)]";
+
+/** The pin and settings tiles: round, a tint of the text on hover so it shows on a selected row too. */
+const CHANNEL_ACTION_REDESIGN =
+  "redesign:rounded-full redesign:text-[color:var(--list-row-icon)] redesign:hover:bg-[color:var(--card-row-hover)] redesign:hover:text-text redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent";
 
 export { formatBadgeCount };
 
@@ -1737,7 +1774,15 @@ export const ChannelList = memo(function ChannelList({
           connected={activeVoiceChannelId === channel.id}
           canManage={canManage}
           canManageRoles={canManageRoles}
-          icon={<ChannelIcon channel={channel} />}
+          icon={
+            <ChannelIcon
+              channel={channel}
+              className={channelRowIconClass(
+                channel,
+                selectedChannelId === channel.id,
+              )}
+            />
+          }
           sessionHint={upcomingSessionStartsAtByChannel[channel.id]}
           liveState={liveStateFor(channel)}
           isDragging={draggedId === channel.id}
@@ -1876,7 +1921,7 @@ export const ChannelList = memo(function ChannelList({
         {/* --- threads --- nested under the channel they hang off, the same
             shape the voice occupants below use. */}
         {(threadsByChannel[channel.id]?.length ?? 0) > 0 && onOpenThread && (
-          <ul className="ml-2 space-y-0.5 border-l border-border/70 py-0.5 pl-2">
+          <ul className="ml-2 space-y-0.5 border-l border-border/70 py-0.5 pl-2 redesign:ml-5 redesign:border-[color:var(--card-border)] redesign:pl-1.5">
             {threadsByChannel[channel.id]!.map((thread) => (
               <SidebarThreadRow
                 key={thread.channelId}
@@ -3476,10 +3521,11 @@ export function DraftMark() {
   return (
     <>
       <Pencil
-        className="h-3 w-3 shrink-0 text-paper-muted"
+        className="h-3 w-3 shrink-0 text-paper-muted redesign:hidden"
         aria-hidden
         data-draft-mark=""
       />
+      <Icon icon={PencilSimple} className="hidden h-3 w-3 text-[color:var(--list-row-detail)] redesign:block" />
       <span className="sr-only">{t("chrome.draftSr")}</span>
     </>
   );
@@ -3647,7 +3693,7 @@ function CommunityHomeNavButton({
   return button;
 }
 
-function ChannelRow({
+export function ChannelRow({
   channel,
   selected,
   announceCurrent = selected,
@@ -3944,7 +3990,7 @@ function ChannelRow({
         }
       }}
       aria-current={announceCurrent ? "page" : undefined}
-      className="flex min-w-0 flex-1 touch-manipulation items-center gap-1.5 text-left"
+      className="flex min-w-0 flex-1 touch-manipulation items-center gap-1.5 text-left redesign:gap-[var(--list-row-gap-sm)] redesign:self-stretch redesign:rounded-[inherit] redesign:focus-visible:outline-none"
     >
       {/* Private is the glyph, not a word. The pill that used to sit at
           the end of this row was about 50px of a 256px column, which is
@@ -3991,8 +4037,19 @@ function ChannelRow({
           {live ? (
             <span
               data-watch-party-viewers=""
-              className="truncate text-[10px] text-paper-muted"
+              className={cn(
+                "truncate text-[10px] text-paper-muted",
+                CHANNEL_DETAIL_REDESIGN,
+                selected && "redesign:text-[color:var(--list-row-selected-text)]",
+              )}
             >
+              {/* Under the redesign the live mark is this dot, not the
+                  AO VIVO pill: the Assistir chip already says live, and the
+                  two together left the name three letters. */}
+              <span
+                aria-hidden="true"
+                className="mr-1 hidden h-1.5 w-1.5 rounded-full bg-danger align-middle motion-safe:animate-pulse redesign:inline-block"
+              />
               {t("chrome.watchPartyViewers", {
                 count: liveState.viewerCount,
               })}
@@ -4001,7 +4058,13 @@ function ChannelRow({
             <ChannelSessionHint startsAt={sessionHint} now={new Date()} />
           ) : (
             topic && (
-              <span className="truncate text-[10px] text-paper-muted">
+              <span
+                className={cn(
+                  "truncate text-[10px] text-paper-muted",
+                  CHANNEL_DETAIL_REDESIGN,
+                  selected && "redesign:text-[color:var(--list-row-selected-text)]",
+                )}
+              >
                 {topic}
               </span>
             )
@@ -4032,7 +4095,12 @@ function ChannelRow({
              red, which still reads as live. */
           <span
             data-watch-party-live=""
-            className="flex items-center gap-1 rounded-full bg-danger/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-danger"
+            className={cn(
+              "flex items-center gap-1 rounded-full bg-danger/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-danger",
+              // Under the redesign the dot on the viewer line says live
+              // (the words stay for a screen reader).
+              "redesign:sr-only",
+            )}
           >
             <span
               aria-hidden="true"
@@ -4058,12 +4126,25 @@ function ChannelRow({
           <BetaTag className="group-hover:hidden group-focus-within:hidden" />
         )}
         {mentions > 0 && (
-          <span
-            className="min-w-4 rounded-full bg-danger px-1 py-0.5 text-center text-[10px] font-bold leading-none text-paper"
+          <CountBadge
+            count={mentions}
+            size="sm"
             aria-label={t("chrome.unreadMentions", { count: mentions })}
-          >
-            {formatBadgeCount(mentions)}
-          </span>
+            className={cn(
+              // The pill it always was with the toggle off.
+              "h-auto py-0.5 text-center text-paper normal-nums",
+              "redesign:h-[var(--count-badge-h)] redesign:min-w-[var(--count-badge-h)] redesign:py-0 redesign:text-[length:var(--count-badge-text)] redesign:tabular-nums redesign:text-on-danger",
+            )}
+          />
+        )}
+        {/* Under the redesign the unread mark is the list row's end pip;
+            a mention count says it instead. */}
+        {hasUnread && !muted && mentions === 0 && (
+          <span
+            aria-hidden="true"
+            data-channel-unread-pip=""
+            className="hidden h-[var(--list-row-pip)] w-[var(--list-row-pip)] shrink-0 rounded-full bg-indicator redesign:block"
+          />
         )}
       </span>
     </button>
@@ -4122,12 +4203,19 @@ function ChannelRow({
             (occupantDragActive
               ? "bg-signal/15 ring-2 ring-inset ring-signal/70"
               : "ring-1 ring-inset ring-signal/60"),
+          CHANNEL_ROW_REDESIGN,
+          selected
+            ? "redesign:bg-[color:var(--list-row-selected)] redesign:font-medium redesign:text-[color:var(--list-row-selected-text)]"
+            : "redesign:text-[color:var(--list-row-text)] redesign:hover:bg-[color:var(--list-row-hover)] redesign:hover:text-text",
+          hasUnread && !muted && !selected && !connected && "redesign:text-text",
+          muted && !selected && !connected && "redesign:opacity-[var(--list-row-muted-opacity)]",
+          isDragOver && !occupantDragActive && "redesign:ring-accent",
         )}
       >
         {hasUnread && !muted && (
           <span
             aria-hidden="true"
-            className="absolute -left-1 top-1/2 h-4 w-1 -translate-y-1/2 rounded-r-full bg-paper"
+            className="absolute -left-1 top-1/2 h-4 w-1 -translate-y-1/2 rounded-r-full bg-paper redesign:hidden"
           />
         )}
         {/* A voice row opens its view the way a text row opens its channel:
@@ -4161,7 +4249,7 @@ function ChannelRow({
             data-channel-join=""
             data-channel-watch=""
             draggable={false}
-            className="shrink-0 rounded-md bg-danger/15 px-1.5 py-0.5 text-[10px] font-semibold text-danger hover:bg-danger/25"
+            className="shrink-0 rounded-md bg-danger/15 px-1.5 py-0.5 text-[10px] font-semibold text-danger hover:bg-danger/25 redesign:rounded-full redesign:bg-danger-soft redesign:px-2.5 redesign:py-1 redesign:text-xs redesign:text-on-danger-soft redesign:hover:bg-[color:color-mix(in_oklab,var(--color-danger-soft)_85%,var(--color-text))] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent"
             title={t("watchParty.live.watchHint")}
             onClick={(event) => {
               event.preventDefault();
@@ -4192,6 +4280,8 @@ function ChannelRow({
                 isFavorite
                   ? "text-paper"
                   : "translate-x-2 text-paper-muted opacity-0 group-hover:translate-x-0 group-hover:opacity-100 group-focus-within:translate-x-0 group-focus-within:opacity-100 [@media(hover:none)]:hidden",
+                CHANNEL_ACTION_REDESIGN,
+                isFavorite && "redesign:text-current",
               )}
               aria-label={
                 isFavorite ? t("chrome.unpinChannel") : t("chrome.pinChannel")
@@ -4203,7 +4293,11 @@ function ChannelRow({
               }}
             >
               <Pin
-                className={cn("h-3.5 w-3.5", isFavorite && "fill-current")}
+                className={cn("h-3.5 w-3.5", isFavorite && "fill-current", "redesign:hidden")}
+              />
+              <Icon
+                icon={PushPin}
+                className="hidden h-3.5 w-3.5 redesign:block"
               />
             </button>
           </Tooltip>
@@ -4217,6 +4311,8 @@ function ChannelRow({
               className={cn(
                 CHANNEL_ACTION_TILE,
                 "text-paper-muted transition-opacity duration-150 ease-out motion-reduce:transition-none",
+                CHANNEL_ACTION_REDESIGN,
+                selected && "redesign:text-[color:var(--list-row-selected-text)]",
                 // Same as the pin: not drawn on a touch screen unless the
                 // channel is selected. Settings is in the long-press menu.
                 selected
@@ -4230,7 +4326,8 @@ function ChannelRow({
                 openSettings();
               }}
             >
-              <Settings className="h-3.5 w-3.5" />
+              <Settings className="h-3.5 w-3.5 redesign:hidden" />
+              <Icon icon={GearSix} className="hidden h-3.5 w-3.5 redesign:block" />
             </button>
           </Tooltip>
         )}
@@ -4248,7 +4345,7 @@ function ChannelRow({
  * Leaving is not destructive (the thread, its messages and its chip are all
  * still there, and replying rejoins it), so it asks for no confirmation.
  */
-function SidebarThreadRow({
+export function SidebarThreadRow({
   thread,
   unread,
   onOpen,
@@ -4282,7 +4379,7 @@ function SidebarThreadRow({
   return (
     <li>
       <ContextMenu items={items} disabled={items.length === 0}>
-        <div className="group/thread relative flex items-center rounded-md hover:bg-surface-2/60">
+        <div className="group/thread relative flex items-center rounded-md hover:bg-surface-2/60 redesign:rounded-[var(--list-row-radius)] redesign:hover:bg-[color:var(--list-row-hover)]">
           <button
             type="button"
             onClick={onOpen}
@@ -4292,17 +4389,23 @@ function SidebarThreadRow({
               unread
                 ? "font-semibold text-text"
                 : "text-text-tertiary hover:text-text",
+              // Under the redesign a thread is a smaller list row: a 32px
+              // pill, the row's text roles, the end pip for unread.
+              "redesign:min-h-8 redesign:gap-[var(--list-row-gap-sm)] redesign:rounded-[inherit] redesign:px-[var(--list-row-px)] redesign:text-[13px] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-inset redesign:focus-visible:ring-accent",
+              !unread && "redesign:text-[color:var(--list-row-text)]",
             )}
           >
             <MessageSquareText
-              className="h-3 w-3 shrink-0 text-accent"
+              className="h-3 w-3 shrink-0 text-accent redesign:hidden"
               aria-hidden
             />
+            <Icon icon={ChatText} className="hidden h-3.5 w-3.5 text-[color:var(--list-row-icon)] redesign:block" />
             <span className="min-w-0 truncate">{thread.name}</span>
             {unread && (
               <span
                 className={cn(
                   "ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-accent",
+                  "redesign:h-[var(--list-row-pip)] redesign:w-[var(--list-row-pip)] redesign:bg-indicator",
                   // Makes way for the X on hover. On touch the X is always
                   // there beside it, in the room `pr-7` keeps, so both stay.
                   onLeave &&
@@ -4319,9 +4422,10 @@ function SidebarThreadRow({
                 data-thread-leave=""
                 aria-label={t("thread.leaveNamed", { name: thread.name })}
                 onClick={onLeave}
-                className="absolute right-1 flex h-5 w-5 items-center justify-center rounded text-text-tertiary opacity-0 [@media(hover:none)]:right-0 [@media(hover:none)]:h-8 [@media(hover:none)]:w-8 hover:bg-surface-3 hover:text-text focus:outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-focus-ring group-hover/thread:opacity-100 group-focus-within/thread:opacity-100 [@media(hover:none)]:opacity-100"
+                className="absolute right-1 flex h-5 w-5 items-center justify-center rounded text-text-tertiary opacity-0 [@media(hover:none)]:right-0 [@media(hover:none)]:h-8 [@media(hover:none)]:w-8 hover:bg-surface-3 hover:text-text focus:outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-focus-ring group-hover/thread:opacity-100 group-focus-within/thread:opacity-100 [@media(hover:none)]:opacity-100 redesign:h-6 redesign:w-6 redesign:rounded-full redesign:hover:bg-[color:var(--card-row-hover)] redesign:focus-visible:ring-accent"
               >
-                <X className="h-3 w-3" aria-hidden />
+                <X className="h-3 w-3 redesign:hidden" aria-hidden />
+                <Icon icon={XBold} kind="symbol" className="hidden h-3 w-3 redesign:block" />
               </button>
             </Tooltip>
           )}
