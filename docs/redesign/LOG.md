@@ -1251,6 +1251,21 @@ Spec (audit: voice rooms through `ChannelRow`, `VoiceOccupantRow`,
 4. For `s-user-panel`: deafened is `EarSlash`; the panel's deafen button
    should use the same glyph.
 
+
+### s-sidebar-rail
+
+Spec (audit: one renderer, `ChannelList` folded by `iconsOnly` on desktop,
+`ChannelRailItem` per channel, the Baú's `CommunityHomeNavButton compact`):
+
+1. Job: the channel list at 72px: expand, search, the Baú, every channel as
+   a glyph in groups (favourites, text, voice, categories).
+2. States: selected, unread pip, mention count, muted, private (tooltip
+   detail), the call you are in with its count, people in a room, a live
+   watch party, hover, focus; Baú with new posts, Baú open.
+3. Redesign: 40px rounded squares (`--strip-tile-radius`, 12px, so the strip
+   does not read as a second server rail) on the list row's fills; round
+   expand and search buttons; counts are `CountBadge` cut out of the pane.
+   The full-width Baú row (no preview card) takes the channel row's look.
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss

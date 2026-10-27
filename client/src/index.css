@@ -882,6 +882,10 @@
   --empty-icon-bg: var(--color-surface-3);
   --empty-title-size: 1.25rem;
 
+  /* The icons-only sidebar (layout/channel-list.tsx): a channel is a
+     rounded square, so the strip does not read as a second server rail. */
+  --strip-tile-radius: 0.75rem;
+
   /* Loading (ui/spinner.tsx, ui/skeleton.tsx): a ring with a faint track,
      and placeholder shapes as a faint text tint, so both read on a pane, a
      card or a dialog. */

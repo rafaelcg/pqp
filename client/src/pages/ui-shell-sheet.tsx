@@ -8,11 +8,14 @@ import type {
   WatchParty,
 } from "@pqp/shared";
 import { useEffect, type ComponentProps, type ReactNode } from "react";
+import { cn } from "@/lib/utils";
 import { CommunityHomePreview } from "@/components/community-home/community-home-preview";
 import {
   CategoryHeader,
+  ChannelRailItem,
   ChannelRow,
   ChannelSection,
+  CommunityHomeNavButton,
   SidebarThreadRow,
   channelRowIconClass,
 } from "@/components/layout/channel-list";
@@ -332,6 +335,97 @@ function ChannelRowsBlock() {
   );
 }
 
+/** One icons-only sidebar: the side pane at the strip's 72px. */
+function StripPane({ children }: { children: ReactNode }) {
+  return (
+    <div className="flex w-[72px] flex-col items-center gap-1 rounded-lg bg-surface-1 px-2 py-3 redesign:gap-1.5 redesign:rounded-[var(--radius-pane)] redesign:bg-pane-side">
+      {children}
+    </div>
+  );
+}
+
+function StripGroup({ first = false, children }: { first?: boolean; children: ReactNode }) {
+  return (
+    <div
+      className={cn(
+        "flex w-full flex-col items-center gap-1 redesign:gap-1.5",
+        !first && "mt-1 border-t border-ink-4/50 pt-2 redesign:border-[color:var(--card-border)]",
+        // Under a Baú the first group takes the rule too, as in the app.
+        first && "redesign:mt-1 redesign:border-t redesign:pt-2 redesign:border-[color:var(--card-border)]",
+      )}
+    >
+      {children}
+    </div>
+  );
+}
+
+const NOTHING_UNREAD = { count: 0, mentions: 0 };
+
+function SidebarStripBlock() {
+  const tile = (channel: Channel, extra: Partial<ComponentProps<typeof ChannelRailItem>> = {}) => (
+    <ChannelRailItem
+      key={channel.id}
+      channel={channel}
+      selected={false}
+      connected={false}
+      unread={NOTHING_UNREAD}
+      occupants={0}
+      onSelect={noop}
+      {...extra}
+    />
+  );
+  return (
+    <div data-testid="qa-shell-sidebar-strip" className="flex flex-wrap items-start gap-6">
+      {/* Left: the Baú with new posts; plain, unread, open, mentions and a
+          private channel; then the call you are in, a room with people and a
+          live watch party. Right: the Baú open, a forum. */}
+      <StripPane>
+        <CommunityHomeNavButton
+          server={{ name: "Turma do Fliperama", iconUrl: null, isCommunity: false, communitySlug: null }}
+          selected={false}
+          unread={3}
+          showNew={false}
+          compact
+          onSelect={noop}
+        />
+        <StripGroup first>
+          {tile(textChannel("general", "general"))}
+          {tile(textChannel("avisos", "avisos"), { unread: { count: 4, mentions: 0 } })}
+          {tile(textChannel("papo", "papo"), { selected: true })}
+          {tile(textChannel("anuncios", "anúncios"), { unread: { count: 9, mentions: 3 } })}
+          {tile(textChannel("staff", "staff", { isPrivate: true }))}
+        </StripGroup>
+        <StripGroup>
+          {tile(textChannel("lobby", "Lobby", { type: "voice" }), { connected: true, occupants: 4, onJoinVoice: noop })}
+          {tile(textChannel("jogo", "sala-do-jogo", { type: "voice" }), { occupants: 2, onJoinVoice: noop })}
+          {tile(textChannel("cinema", "cinema", { type: "watch_party" }), {
+            occupants: 12,
+            liveState: { live: true, presenterPeerId: "p1", viewerCount: 12, startedAt: null } as never,
+          })}
+        </StripGroup>
+      </StripPane>
+      <StripPane>
+        <CommunityHomeNavButton
+          server={{ name: "Turma do Fliperama", iconUrl: null, isCommunity: false, communitySlug: null }}
+          selected
+          unread={0}
+          showNew={false}
+          compact
+          onSelect={noop}
+        />
+        <StripGroup first>
+          {tile(textChannel("ajuda", "ajuda", { type: "forum" }))}
+          {tile(textChannel("clipes", "clipes"))}
+        </StripGroup>
+        <StripGroup>
+          {/* In the call and viewing it: the solid green edge. */}
+          {tile(textChannel("lobby2", "Lobby", { type: "voice" }), { connected: true, selected: true, occupants: 3, onJoinVoice: noop })}
+        </StripGroup>
+      </StripPane>
+    </div>
+  );
+}
+
 /**
  * A new build waiting, so both rails draw the update tile. The store is
  * this page's own; it goes back to nothing waiting when the sheet unmounts.
@@ -523,6 +617,9 @@ export function ShellSheet() {
           muted, deafened, sharing with the camera on, first in the hand
           queue), and a room with music you are not in. */}
       <VoiceRowsBlock />
+
+      {/* The channel list folded to icons. */}
+      <SidebarStripBlock />
 
       <div data-testid="qa-shell-rail" className="flex gap-6">
         <RailFrame>
