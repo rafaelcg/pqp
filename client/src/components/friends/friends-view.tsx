@@ -50,6 +50,7 @@ import {
   type FriendsTab,
 } from "./friends-model";
 import { useFriends } from "./use-friends";
+import { useRedesign } from "@/lib/redesign";
 
 /**
  * The Friends view: what the app shows when you are "home" — no server, no
@@ -115,6 +116,7 @@ export function FriendsView({
   firstRun,
 }: FriendsViewProps) {
   const { t } = useTranslation();
+  const redesign = useRedesign();
   const {
     data,
     pendingDepoimentos,
@@ -298,7 +300,7 @@ export function FriendsView({
           aria-hidden="true"
           className="hidden h-5 w-5 shrink-0 text-paper-muted @sm:block redesign:!hidden"
         />
-        <Icon icon={UsersFill} size="sm" className="hidden shrink-0 text-text-tertiary redesign:@sm:block" />
+        <Icon icon={UsersFill} size="md" className="hidden shrink-0 text-text-tertiary redesign:@sm:block" />
         <h1 className={cn("min-w-0 truncate font-display text-base font-bold", PANE_HEADER_TITLE_REDESIGN)}>
           {t("friends.title")}
         </h1>
@@ -316,7 +318,13 @@ export function FriendsView({
 
         <Button
           size="sm"
-          className="ml-auto shrink-0"
+          className={cn(
+            "ml-auto shrink-0",
+            // Open, the button steps down to secondary under the redesign so
+            // it is not a second lime shape beside the field's lime ring.
+            adding &&
+              "redesign:bg-[color:var(--button-secondary-bg)] redesign:text-text redesign:hover:bg-[color:var(--button-secondary-hover)]",
+          )}
           aria-expanded={adding}
           onClick={() => {
             setAdding((open) => !open);
@@ -325,7 +333,7 @@ export function FriendsView({
           }}
         >
           <UserPlus aria-hidden="true" className="h-4 w-4 redesign:hidden" />
-          <Icon icon={UserPlusGlyph} size="sm" className="hidden redesign:block" />
+          <Icon icon={adding ? XGlyph : UserPlusGlyph} kind={adding ? "symbol" : "object"} size="sm" className="hidden redesign:block" />
           {t("friends.addFriend")}
         </Button>
       </header>
@@ -407,12 +415,57 @@ export function FriendsView({
           />
         ) : (
           <>
+            {/* Under the redesign the confirm sits above the section's label,
+                so it never splits the label from its rows. With the toggle off it
+                stays after the label, where it always was. */}
+            {redesign && confirmingRemoval && (
+              <div
+                role="alertdialog"
+                aria-label={t("friends.remove.confirm.title", {
+                  name: confirmingRemoval.displayName,
+                })}
+                data-remove-confirm=""
+                className="mb-3 max-w-2xl rounded-md border border-ink-4 bg-ink-3/60 p-3 redesign:rounded-[var(--radius-card)] redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:mb-4 redesign:p-4"
+              >
+                <p className="text-sm font-semibold text-paper redesign:text-text">
+                  {t("friends.remove.confirm.title", {
+                    name: confirmingRemoval.displayName,
+                  })}
+                </p>
+                {/* States the surprising part rather than asking "are you
+                    sure?": what makes this worth confirming is that it is
+                    silent and that it is undoable only by asking again. */}
+                <p className="mt-1 text-xs text-paper-muted redesign:text-[0.8125rem] redesign:text-text-secondary">
+                  {t("friends.remove.confirm.body")}
+                </p>
+                <div className="mt-2.5 flex gap-1.5 redesign:mt-3 redesign:gap-2">
+                  <Button
+                    size="sm"
+                    variant="danger"
+                    onClick={() => {
+                      const person = confirmingRemoval;
+                      setConfirmingRemoval(null);
+                      void run(person.id, () => remove(person.id));
+                    }}
+                  >
+                    {t("friends.remove")}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setConfirmingRemoval(null)}
+                  >
+                    {t("friends.remove.keep")}
+                  </Button>
+                </div>
+              </div>
+            )}
             {tab === "online" && online.length > 0 && (
               <h2 className={cn("mb-2 text-xs font-semibold uppercase tracking-wider text-paper-muted", FRIEND_SECTION_REDESIGN)}>
                 {t("friends.onlineCount", { count: online.length })}
               </h2>
             )}
-            {confirmingRemoval && (
+            {!redesign && confirmingRemoval && (
               <div
                 role="alertdialog"
                 aria-label={t("friends.remove.confirm.title", {
