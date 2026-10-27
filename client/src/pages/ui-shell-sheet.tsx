@@ -536,6 +536,9 @@ function UserPanelBlock() {
         <UserPanel {...base} inVoice canSpeak={false} />
       </FooterPane>
       <FooterPane>
+        <UserPanel {...base} inVoice canSpeak={false} isMuted />
+      </FooterPane>
+      <FooterPane>
         <UserPanel {...base} manualStatus="dnd" effectiveStatus="dnd" />
       </FooterPane>
       <FooterPane>

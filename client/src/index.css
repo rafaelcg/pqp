@@ -4283,6 +4283,13 @@ html[data-pre] [data-home-hero] .animate-rise {
   padding-bottom: max(var(--safe-pb-min, 0.75rem), env(safe-area-inset-bottom));
 }
 
+/* The user panel's card under the redesign: the home-indicator inset sits
+   below the card, never inside it, so the row stays centred. */
+:root[data-redesign] .safe-pb[data-user-panel-card] {
+  padding-bottom: 0;
+  margin-bottom: max(0.5rem, env(safe-area-inset-bottom));
+}
+
 /*
  * iOS Safari magnifies the whole page when focus lands on a field whose text is
  * smaller than 16px, and the viewport meta deliberately allows scaling (taking
