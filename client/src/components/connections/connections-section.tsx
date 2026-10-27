@@ -1,3 +1,4 @@
+import { useRedesign } from "@/lib/redesign";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   CONNECTION_PROVIDERS,
@@ -375,6 +376,7 @@ function ProviderRow({
   const selectId = useId();
   const nameId = useId();
   const hintId = useId();
+  const redesign = useRedesign();
   const visibility = useInlineSave();
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -513,13 +515,18 @@ function ProviderRow({
       <Button
         type="button"
         ref={actionRef}
-        variant="ghost"
+        // Under the redesign the primitive's danger ghost, at the size and
+        // hover the Conectar beside it uses, with the secondary edge.
+        variant={redesign ? "danger-ghost" : "ghost"}
         size="sm"
         aria-describedby={nameId}
         aria-busy={busy || undefined}
         {...blockedProps}
         className={cn(
-          "shrink-0 border border-border-strong text-sm text-danger hover:text-danger",
+          "shrink-0 border",
+          redesign
+            ? "border-[color:var(--button-secondary-border)]"
+            : "border-border-strong text-sm text-danger hover:text-danger",
           TOUCH_TARGET,
           blockedProps.className,
         )}
@@ -673,7 +680,8 @@ function ProviderRow({
 }
 
 /**
- * "Conectado como {name}", with the account's own name set in mono. One line:
+ * "Conectado como {name}", the account's own name in mono with the toggle off
+ * and in sans semibold under the redesign. One line:
  * a long name is cut with an ellipsis and shown whole in the tooltip.
  */
 function LinkedAs({ name }: { name: string }) {

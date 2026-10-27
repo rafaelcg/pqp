@@ -1,3 +1,4 @@
+import { Spinner } from "@/components/ui/spinner";
 import { useEffect, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { completeConnection } from "@/lib/api";
@@ -90,7 +91,12 @@ export function ConnectionCallbackOverlay({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/80 px-6 redesign:bg-[color:var(--sheet-scrim,oklch(0_0_0/0.6))]">
-      <p className="text-sm text-paper-muted redesign:rounded-full redesign:bg-[color:var(--popover-surface)] redesign:px-4 redesign:py-2 redesign:font-semibold redesign:text-text redesign:shadow-[var(--popover-shadow)]">
+      <p
+        role="status"
+        className="text-sm text-paper-muted redesign:inline-flex redesign:items-center redesign:gap-2 redesign:rounded-full redesign:bg-[color:var(--popover-surface)] redesign:px-4 redesign:py-2 redesign:font-semibold redesign:text-text redesign:shadow-[var(--popover-shadow)]"
+      >
+        {/* A moving sign, so a slow link never looks frozen. */}
+        <Spinner className="hidden h-3.5 w-3.5 motion-safe:animate-spin redesign:block" />
         {t("settings.connections.completing")}
       </p>
     </div>

@@ -1203,9 +1203,11 @@ overlay while a provider redirect completes):
    on the popover surface over the sheet scrim.
 3. Merges: nothing.
 4. Kept: per-provider visibility, the unavailable list, the callback overlay.
-Rounds: Codex 8.2 (r1); Opus 8.5 (r2), 8.0 (r3), 8.5 (r5), no MUST left.
-Round 5 fixes: the copy failure glyph at 14px, the info tint at 7% in
-dark, the rail build line in mono. Merged on the cap.
+Rounds (Opus only): r1 8.0 (no MUST). r1 fixes: Desconectar on the
+`danger-ghost` primitive, a spinner and `role="status"` on the callback pill,
+an edge on the near-black provider tiles. Open (copy, shows with the toggle
+off too): "não estão ativas neste servidor" reads as a chat server; the
+council suggests "ainda não estão disponíveis aqui".
 
 ### f-server-settings
 
