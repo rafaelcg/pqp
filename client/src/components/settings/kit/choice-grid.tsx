@@ -6,6 +6,7 @@ import {
   SETTINGS_FOCUS,
   SETTINGS_TRANSITION,
 } from "@/components/settings/kit/classes";
+import { badgeRedesignClasses } from "@/components/ui/badge";
 import { IconSwap } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 
@@ -129,7 +130,12 @@ export function SettingsChoiceGrid<T extends string>({
               {option.badge ? (
                 <span
                   id={badgeId}
-                  className="rounded-[var(--radius-control)] bg-surface-1 px-1.5 py-0.5 text-[11px] text-text-secondary redesign:rounded-[var(--badge-radius)] redesign:bg-surface-3 redesign:px-[var(--badge-px)] redesign:font-semibold redesign:text-text"
+                  className={cn(
+                    "rounded-[var(--radius-control)] bg-surface-1 px-1.5 py-0.5 text-[11px] text-text-secondary",
+                    // Under the redesign: ui/Badge's neutral, one recipe.
+                    badgeRedesignClasses("neutral"),
+                    "redesign:py-0",
+                  )}
                 >
                   {option.badge}
                 </span>
