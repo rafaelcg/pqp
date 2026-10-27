@@ -3836,11 +3836,11 @@ const MessageRow = memo(function MessageRow({
                     author={authorInfo}
                     tabIndex={controlTabIndex}
                     onOpenProfile={openProfile}
-                    className="block h-9 w-9 shrink-0 overflow-hidden rounded-lg leading-none hover:no-underline"
+                    className="block h-9 w-9 shrink-0 overflow-hidden rounded-lg leading-none hover:no-underline redesign:rounded-full"
                   >
                     {message.isAutomod ? (
                       <span
-                        className="grid h-9 w-9 place-items-center rounded-lg bg-accent-soft text-on-accent-soft"
+                        className="grid h-9 w-9 place-items-center rounded-lg bg-accent-soft text-on-accent-soft redesign:rounded-full"
                         title={t("chat.automodPosted")}
                       >
                         <ShieldCheck className="h-5 w-5" aria-hidden />
@@ -3859,8 +3859,8 @@ const MessageRow = memo(function MessageRow({
                   {!message.isWebhook && authorInfo?.status && (
                     <StatusDot
                       status={authorInfo.status}
-                      className="absolute -bottom-0.5 -right-0.5"
-                      ringClassName="rounded-full bg-channel ring-2 ring-channel"
+                      className="absolute -bottom-0.5 -right-0.5 redesign:bottom-0 redesign:right-0"
+                      ringClassName="rounded-full bg-channel ring-2 ring-channel redesign:bg-[color:var(--avatar-dot-ring)] redesign:ring-[color:var(--avatar-dot-ring)]"
                     />
                   )}
                 </div>

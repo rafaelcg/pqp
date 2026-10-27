@@ -72,4 +72,41 @@ describe("UserAvatar", () => {
     expect(html).toContain("h-6 w-6");
     expect(html).toContain("bg-ink-4");
   });
+
+  it("keeps the caller's shape and monogram colour with the toggle off, a neutral circle under the redesign", () => {
+    const html = renderToStaticMarkup(
+      <UserAvatar name="Lia" className="h-8 w-8" fallbackClassName="bg-signal text-xs text-ink" />,
+    );
+    const classes = (html.match(/class="([^"]*)"/)?.[1] ?? "").split(" ");
+    const off = classes.filter((c) => !c.startsWith("redesign:"));
+    expect(off).toEqual(expect.arrayContaining(["rounded-md", "bg-signal", "text-ink", "font-bold"]));
+    expect(classes).toEqual(
+      expect.arrayContaining([
+        "redesign:rounded-full",
+        "redesign:bg-surface-3",
+        "redesign:text-text",
+        "redesign:font-semibold",
+      ]),
+    );
+  });
+
+  it("draws a picture as a circle under the redesign too", () => {
+    const html = renderToStaticMarkup(
+      <UserAvatar name="Lia" avatarUrl="https://example.test/lia.png" rounded="lg" />,
+    );
+    expect(html).toContain("<img");
+    expect(html).toContain("rounded-lg");
+    expect(html).toContain("redesign:rounded-full");
+  });
+
+  it("keeps the caller's palette for an avatar drawn inside a story", () => {
+    const html = renderToStaticMarkup(
+      <UserAvatar name="Bia" ownPalette fallbackClassName="bg-accent text-on-accent" />,
+    );
+    expect(html).toContain("bg-accent text-on-accent");
+    expect(html).not.toContain("redesign:bg-surface-3");
+    // Still a circle under the redesign.
+    expect(html).toContain("redesign:rounded-full");
+  });
 });
+

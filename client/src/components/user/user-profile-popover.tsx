@@ -5,6 +5,7 @@ import {
   MoreHorizontal,
   Phone,
 } from "lucide-react";
+import { CARD_SURFACE } from "@/components/ui/card";
 import {
   createContext,
   useCallback,
@@ -112,6 +113,7 @@ import {
   type ProfileSubject,
 } from "./profile-relations";
 import { Spinner } from "@/components/ui/spinner";
+import { SectionLabel } from "@/components/ui/section-header";
 
 /**
  * The profile card: who this person is, and everything you can do about them,
@@ -1282,9 +1284,9 @@ function UserProfileCard({
   const manageSection =
     manageItems.length > 0 ? (
       <div className="mt-3 overflow-hidden rounded-xl bg-ink-3/60">
-        <p className="px-3 pb-1 pt-2.5 text-[11px] font-semibold uppercase tracking-wide text-paper-muted">
+        <SectionLabel as="p" className="px-3 pb-1 pt-2.5 text-[11px] font-semibold uppercase tracking-wide text-paper-muted">
           {t("profile.mod.section")}
-        </p>
+        </SectionLabel>
         <div className="divide-y divide-ink-4/50">
           {manageItems.map((item) => (
             <button
@@ -1309,9 +1311,9 @@ function UserProfileCard({
   const cargosSection =
     assignableCargos.length > 0 ? (
       <div className="mt-3 overflow-hidden rounded-xl bg-ink-3/60">
-        <p className="px-3 pb-1 pt-2.5 text-[11px] font-semibold uppercase tracking-wide text-paper-muted">
+        <SectionLabel as="p" className="px-3 pb-1 pt-2.5 text-[11px] font-semibold uppercase tracking-wide text-paper-muted">
           {t("profile.cargos")}
-        </p>
+        </SectionLabel>
         <div className="px-1 pb-1">
           {assignableCargos.map((role) => (
             <div key={role.id} data-profile-cargo={role.id}>
@@ -1443,7 +1445,7 @@ function UserProfileCard({
         {serverBot && (
           <div className="mt-3 space-y-2 text-left">
             <p className="text-xs text-warning">{t("bots.profile.beta")}</p>
-            <div className="rounded-[var(--radius-card)] border border-border bg-surface-card p-2.5">
+            <div className={cn(CARD_SURFACE, "p-2.5")}>
               <p className="text-xs font-semibold text-text">
                 {t("bots.profile.seesTitle", { name: subject.displayName })}
               </p>

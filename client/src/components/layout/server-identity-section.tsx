@@ -12,6 +12,7 @@ import { ApiError, deleteServerImage, fetchServerImageConfig } from "@/lib/api";
 import { uploadServerImage } from "@/lib/server-image-upload";
 import { firstDroppedFile, type DroppedItems } from "@/lib/file-drop";
 import { useTranslation } from "@/lib/i18n";
+import { SectionLabel } from "@/components/ui/section-header";
 
 /**
  * Memoised for the life of the tab, like `avatar-picker.tsx` does with its own
@@ -64,9 +65,9 @@ export function ServerIdentitySection({
 
   return (
     <section className="space-y-3 border-t border-ink-4 pt-5" data-server-identity>
-      <h4 className="font-display text-sm font-bold uppercase tracking-wider text-paper-muted">
+      <SectionLabel as="h4" variant="group" className="font-display text-sm font-bold uppercase tracking-wider text-paper-muted">
         {t("serverSettings.identity.title")}
-      </h4>
+      </SectionLabel>
       <p className="text-sm text-paper-muted">
         {t("serverSettings.identity.description")}
       </p>
