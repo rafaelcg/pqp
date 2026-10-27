@@ -554,8 +554,8 @@ icon, name, dot, second line and tiles are all `on-success-soft`. Under it:
   with no offset; the glow does the work.
 - `VoiceOccupantBadges` take a `tone`: hand, screen and camera in
   `accent-text`, muted and deafened in `danger`. Glyphs are 14px Phosphor
-  fill; deafened is `EarSlash` fill at 16px, so the ear survives beside the
-  mic (Phosphor has no headphones with a slash). A queued hand is
+  fill; deafened is `EarSlash` in the bold outline at 16px, so the ear's
+  shape survives beside the mic (Phosphor has no headphones with a slash). A queued hand is
   `HandPositionBadge`: the filled hand at 14px and its number at 11px.
 - `ChannelMusicCard` is a card on the card tokens with a 28px cover. A title
   that does not fit fades at the right edge.

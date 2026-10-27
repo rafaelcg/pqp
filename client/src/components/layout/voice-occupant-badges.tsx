@@ -132,8 +132,8 @@ export function VoiceOccupantBadges({
         <BadgeGlyph off={Video} on={VideoCamera} label={t("chrome.cameraOn")} tone="accent" />
       )}
       {person.deafened ? (
-        // The filled ear at 16px: bold at 14px it was a red scribble beside the mic.
-          <BadgeGlyph off={HeadphoneOff} on={EarSlash} label={t("chrome.deafened")} tone="danger" onClassName="h-4 w-4" />
+        // The bold ear at 16px: filled it read as a "no" sign, at 14px as a scribble.
+          <BadgeGlyph off={HeadphoneOff} on={EarSlash} kind="symbol" label={t("chrome.deafened")} tone="danger" onClassName="h-4 w-4" />
       ) : (
         person.muted && (
           <BadgeGlyph off={MicOff} on={MicrophoneSlash} label={t("chrome.muted")} tone="danger" />
