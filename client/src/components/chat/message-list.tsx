@@ -2666,7 +2666,12 @@ function FailedSendFooter({
             tabIndex={tabIndex}
             disabled={!ready}
             onClick={onRetry}
-            className={cn(FAILED_ACTION_TILE, "tabular-nums")}
+            className={cn(
+              FAILED_ACTION_TILE,
+              "tabular-nums",
+              // Retry is the way forward; Discard stays neutral.
+              "redesign:bg-accent-soft redesign:text-on-accent-soft redesign:hover:bg-[color:color-mix(in_oklab,var(--color-accent-soft),var(--color-on-accent-soft)_10%)] redesign:hover:text-on-accent-soft",
+            )}
           >
             {waitSeconds > 0
               ? t("chat.retryWait", { seconds: waitSeconds })
@@ -3950,7 +3955,7 @@ const MessageRow = memo(function MessageRow({
                       className={cn(
                         "rounded text-[length:var(--chat-font-size)] font-bold leading-[var(--chat-line-height)]",
                         !roleColor && (isMine ? "text-signal" : "text-paper"),
-                        !roleColor && (isMine ? "redesign:text-accent-text" : "redesign:text-text"),
+                        !roleColor && (isMine ? "redesign:text-[color:var(--message-own-name)]" : "redesign:text-text"),
                       )}
                       style={roleColor ? { color: roleColor } : undefined}
                     >
@@ -4026,7 +4031,7 @@ const MessageRow = memo(function MessageRow({
                   )}
                   {isMessagePinned && (
                     <span
-                      className="inline-flex items-center gap-0.5 text-[12px] leading-[var(--chat-line-height)] text-signal redesign:self-center redesign:text-accent-text"
+                      className="inline-flex items-center gap-0.5 text-[12px] leading-[var(--chat-line-height)] text-signal redesign:self-center redesign:text-text-secondary"
                       title={
                         message.pinnedBy
                           ? t("chat.pinnedBy", {
@@ -4088,6 +4093,8 @@ const MessageRow = memo(function MessageRow({
                       className={cn(
                         "markdown-body text-[length:var(--chat-font-size)] leading-[var(--chat-line-height)] text-paper/90 redesign:text-text",
                         stream && "[&>p]:inline",
+                        // "(editada)" ends the last line it belongs to, never a line of its own.
+                        message.editedAt && "redesign:[&>p:last-of-type]:inline",
                       )}
                     >
                       {streamAuthor}

@@ -894,7 +894,9 @@
   --message-row-radius: 0.5rem;
   --message-hover: color-mix(in oklab, var(--color-text) 3%, transparent);
   --message-mention-bg: var(--color-accent-soft);
-  --message-mention-hover: color-mix(in oklab, var(--color-accent-soft) 88%, var(--color-text));
+  --message-mention-hover: color-mix(in oklab, var(--color-accent-soft) 85%, var(--color-accent));
+  /* Your own name on your messages. */
+  --message-own-name: var(--color-accent-text);
 
   /* Pane headers (ui/pane-header.ts): the chat's and every other pane's
      top bar, on one rule, one inset and one title size. */
@@ -1305,6 +1307,8 @@
 
 /* The redesign's shadows on a light page: tinted, never black. Every look. */
 :root[data-redesign][data-theme="light"] {
+  /* Your own name: the lime itself in light, where accent-text is a near-black olive. */
+  --message-own-name: var(--color-accent);
   /* Light panes need a stronger thumb to clear 3:1. */
   --scrollbar-thumb: color-mix(in oklab, var(--color-text-tertiary) 80%, transparent);
   --scrollbar-thumb-hover: color-mix(in oklab, var(--color-text-secondary) 90%, transparent);

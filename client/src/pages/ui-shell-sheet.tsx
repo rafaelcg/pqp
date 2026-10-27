@@ -651,6 +651,10 @@ const ROW_MESSAGES: ChatMessage[] = [
   rowMessage(1, ROW_RAFA, "Rafa", "alguém on hoje à noite pra fechar aquela campanha?"),
   rowMessage(2, ROW_RAFA, "Rafa", "trouxe o mapa novo, ficou insano", { editedAt: new Date(NOW - 15 * 60_000).toISOString() }),
   rowMessage(3, ROW_RAFA, "Rafa", "@lia cê vem?"),
+  // A second mention right under it, so the joined corners show.
+  rowMessage(9, ROW_RAFA, "Rafa", "@lia traz o controle extra", {
+    createdAt: new Date(NOW - 16.5 * 60_000).toISOString(),
+  }),
   rowMessage(4, ROW_ME, "Lia", "vou sim, levo o lanche dessa vez"),
   rowMessage(5, ROW_BIA, "Bia", "as regras do campeonato tão aqui", {
     pinnedAt: new Date(NOW - 5 * 60_000).toISOString(),
@@ -669,7 +673,7 @@ const ROW_AUTHORS = new Map<string, MessageAuthorInfo>([
 function MessageRowsBlock() {
   return (
     <div data-testid="qa-shell-message-rows" className="flex flex-col gap-6">
-      {/* Rafa: a group of three (one edited, the last names you). You. Bia
+      {/* Rafa: a group of four (one edited, the last two name you). You. Bia
           with a pinned line. A webhook. Then yours sending, and one that
           failed with Retry and Discard. */}
       <MainPane>
