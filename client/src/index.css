@@ -828,6 +828,12 @@
   --card-bg: color-mix(in oklab, var(--color-text) 4%, transparent);
   --card-border: color-mix(in oklab, var(--color-text) 8%, transparent);
   --card-row-hover: color-mix(in oklab, var(--color-text) 6%, transparent);
+  /* A whole card under the pointer: one step over the card's own fill. */
+  --card-hover: color-mix(in oklab, var(--color-text) 7%, transparent);
+  /* A footer card's fill as a solid colour over the side pane, for cutouts
+     (the presence dot's ring) that must match the card exactly. */
+  --footer-card-solid: color-mix(in oklab, var(--color-text) 4%, var(--color-pane-side));
+  --footer-card-solid-hover: color-mix(in oklab, var(--color-text) 6%, var(--footer-card-solid));
   /* A settings notice in the info tone, on its own (settings/kit/notice.tsx):
      a quiet tint of the text, a step over the card it usually sits in. */
   --settings-notice-info-bg: color-mix(in oklab, var(--color-text) 7%, transparent);
@@ -858,6 +864,12 @@
   --count-badge-text: 0.6875rem;
   --count-badge-sm-text: 0.625rem;
 
+  /* Scrollbars: a thumb of the tertiary text on no track, at least 3:1 on
+     both panes (see the rule on html[data-redesign] below). It resolves at
+     :root, so a subtree that redefines --color-text-tertiary keeps the
+     root's thumb. */
+  --scrollbar-thumb: color-mix(in oklab, var(--color-text-tertiary) 65%, transparent);
+  --scrollbar-thumb-hover: color-mix(in oklab, var(--color-text-secondary) 80%, transparent);
   /* Server rail (layout/server-rail.tsx): round tiles on the canvas, in the
      side pane's colour. The selected one turns into the accent's rounded
      square; a hover only lifts the fill, so lime always means "here". */
@@ -873,6 +885,10 @@
   --empty-icon-disc: 3.5rem;
   --empty-icon-bg: var(--color-surface-3);
   --empty-title-size: 1.25rem;
+
+  /* The icons-only sidebar (layout/channel-list.tsx): a channel is a
+     rounded square, so the strip does not read as a second server rail. */
+  --strip-tile-radius: 0.75rem;
 
   /* Loading (ui/spinner.tsx, ui/skeleton.tsx): a ring with a faint track,
      and placeholder shapes as a faint text tint, so both read on a pane, a
@@ -906,6 +922,12 @@
   --list-row-selected-text: var(--color-on-row-selected);
   /* A row's second line (a tag, a status, a count): the tertiary text. */
   --list-row-detail: var(--color-text-tertiary);
+  /* A read row's name and its icon: a step and two steps under the body,
+     so unread (full text, semibold) reads by colour as well as weight. */
+  --list-row-text: var(--color-text-secondary);
+  --list-row-icon: var(--color-text-tertiary);
+  /* The room after a row's last tile: the 28px tiles sit close to the cap. */
+  --list-row-action-pr: 0.25rem;
   /* A muted row (a channel you silenced) stays a step above a disabled one
      (0.4), so the two read apart. */
   --list-row-muted-opacity: 0.6;
@@ -954,6 +976,15 @@
   --sidebar-trigger-hover: var(--button-ghost-hover);
   --sidebar-trigger-open: color-mix(in oklab, var(--color-text) 10%, transparent);
   --sidebar-banner-radius: 0.75rem;
+
+  /* Sidebar blocks (ui/sidebar-block.ts): stories, a watch party and the Baú
+     above the channels, as cards on the card tint or dashed invitations. */
+  --sidebar-card-radius: 0.875rem;
+  --sidebar-invite-border: color-mix(in oklab, var(--color-text) 22%, transparent);
+  /* The solid AO VIVO badge: the danger hue a step deeper on a dark page,
+     where on-danger is white, so 10px text clears 4.5:1. Looks whose
+     on-danger is a dark ink keep the plain danger (below). */
+  --live-badge-bg: color-mix(in oklab, var(--color-danger) 78%, black);
 
   --icon-button-radius: var(--radius-pill);
   --icon-button-text: var(--color-text-secondary);
@@ -1250,8 +1281,19 @@
   --color-field: color-mix(in oklab, var(--color-text) 3%, var(--color-surface-0));
 }
 
+/* Catppuccin and Everforest dark draw on-danger in a dark ink: darkening the
+   badge would lower its contrast there, so they keep the plain danger. */
+:root[data-redesign]:where([data-appearance="catppuccin"], [data-appearance="everforest"]):not([data-theme="light"]) {
+  --live-badge-bg: var(--color-danger);
+}
+
 /* The redesign's shadows on a light page: tinted, never black. Every look. */
 :root[data-redesign][data-theme="light"] {
+  /* Light panes need a stronger thumb to clear 3:1. */
+  --scrollbar-thumb: color-mix(in oklab, var(--color-text-tertiary) 80%, transparent);
+  --scrollbar-thumb-hover: color-mix(in oklab, var(--color-text-secondary) 90%, transparent);
+  /* The light danger is already deep enough for white text. */
+  --live-badge-bg: var(--color-danger);
   /* On the near-white panes the 8% tint all but vanishes at the pulse's low
      point, and a 25% track at 12px is a hairline. */
   --skeleton-bg: color-mix(in oklab, var(--color-text) 10%, transparent);
@@ -1263,6 +1305,9 @@
   /* Lighter than dark's: over the white wash on a grey dialog, 6% lands at
      the dialog's own grey and the row reads as a hole. */
   --card-row-hover: color-mix(in oklab, var(--color-text) 4%, transparent);
+  --card-hover: color-mix(in oklab, var(--color-text) 3%, var(--color-surface-0));
+  --footer-card-solid: color-mix(in oklab, var(--color-surface-0) 60%, var(--color-pane-side));
+  --footer-card-solid-hover: color-mix(in oklab, var(--color-text) 4%, var(--footer-card-solid));
   --card-border: color-mix(in oklab, var(--color-text) 10%, transparent);
 
   /* Avatars: a hairline keeps the monogram disc a disc on the white pane. */
@@ -2789,6 +2834,30 @@ html[data-app-shell] #root {
 }
 
 /*
+ * Under the redesign a native scrollbar takes the look's colours: a thumb
+ * of tertiary text at 65% (80% in light) and no track. It keeps the platform's width, so it
+ * stays easy to grab on Windows and Linux. `scrollbar-color` inherits, so
+ * one rule on the root reaches every pane; an element that hides its bar
+ * (`scrollbar-width: none`) still does.
+ */
+html[data-redesign] {
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+/*
+ * A pane under the pointer lifts its thumb to secondary text, so hover reads
+ * as a state even where the platform draws one colour for rest, hover and drag.
+ * Only the innermost scroller under the pointer lifts: `scrollbar-color`
+ * inherits, so without the `:has` a log would light every bar inside it.
+ */
+html[data-redesign]
+  :where(.overflow-y-auto, .overflow-auto, .overflow-x-auto, textarea):hover:not(
+    :has(:where(.overflow-y-auto, .overflow-auto, .overflow-x-auto, textarea):hover)
+  ) {
+  scrollbar-color: var(--scrollbar-thumb-hover) transparent;
+}
+
+/*
  * Installed to the home screen with `apple-mobile-web-app-status-bar-style:
  * black-translucent`, the app draws under the status bar and the home
  * indicator — so the shell has to inset itself or the top row sits beneath the
@@ -4212,6 +4281,13 @@ html[data-pre] [data-home-hero] .animate-rise {
 
 .safe-pb {
   padding-bottom: max(var(--safe-pb-min, 0.75rem), env(safe-area-inset-bottom));
+}
+
+/* The user panel's card under the redesign: the home-indicator inset sits
+   below the card, never inside it, so the row stays centred. */
+:root[data-redesign] .safe-pb[data-user-panel-card] {
+  padding-bottom: 0;
+  margin-bottom: max(0.5rem, env(safe-area-inset-bottom));
 }
 
 /*

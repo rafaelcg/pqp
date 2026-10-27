@@ -56,10 +56,21 @@ Read this file and the inventory at the start of every session.
 | 2 | `p-empty` | Merged, capped at round 5 (Opus 8.6) |
 | 2 | `p-sheet` | Merged, capped at round 5 (Opus 8.6) |
 | 2 | `p-dialog` | Merged, capped at round 5 (Codex 8.7 r2, Opus 8.2 r4) |
+| 2 | `p-scroll` | Merged, capped at round 5 (Opus 7.9 r5, 8.6 r4). Hover thumb contrast not measured; Windows check open |
 | 2 | `p-settings-kit` | Merged, capped at round 5 (Opus 8.5 r5, 8.5 r2) |
 | 3 | `s-frame` | Merged, capped at round 5 (Opus 8.8) |
 | 3 | `s-rail` | Merged, capped at round 5 (Opus 8.2 r5, 8.8 r3) |
 | 3 | `s-sidebar-header` | Merged, capped at round 5 (Opus 8.3 r5, 8.7 r3) |
+| 3 | `s-sidebar-special` | Merged, capped at round 5 (Opus 8.1 r5, 8.6 r2; r5 MUST fixed after) |
+| 3 | `s-category` | Merged, capped at round 5 (Opus 7.9 r5, 8.3 r3) |
+| 3 | `s-channel-row` | Merged, capped at round 5 (Opus 8.5 r5). Follow-up: tooltip `sideOffset` so the name bubble clears the tiles |
+| 3 | `s-voice-row` | Merged, capped at round 5 (Opus 8.0 r5, 8.2 r3). Open: light selected and connected fills are close; check with the token owner |
+| 3 | `s-sidebar-rail` | Merged, capped at round 5 (Opus 8.1 r4 and r5) |
+| 3 | `s-voice-strip` | Merged, capped at round 5 (Opus 8.1 r5). Follow-ups: composer hang-up glyph (`s-composer`), music idle row fixture (`m-sheets`) |
+| 3 | `s-user-panel` | Merged, capped at round 5 (Opus 8.2 r5). Open: the Invisível hint is seven lines at the card width (copy, shows with the toggle off) |
+| 4 | `f-user-settings` | Merged, capped at round 5 (Opus 8.1 r5, 8.2 r4) |
+| 4 | `f-server-settings` | Merged, capped at round 5 (Opus 7.8 r5, 7.9 r4) |
+| 4 | `f-invites` | Merged, capped at round 5 (Opus 7.8 r5, 8.1 r3 and r4) |
 | 5 | `m-breakpoints` | Merged (code only, no council) |
 
 ## Phase 0: directions
@@ -741,6 +752,29 @@ Verified: typecheck; 10,417 unit tests; `bench:tokens`; i18n check;
 passed); retro, Halloween, high contrast, 390px and toggle off. Screenshots:
 `~/pqp-redesign/p-toast/`.
 
+### p-scroll
+
+Spec (audit: `ScrollArea` had no callers; every list scrolls natively, a
+few sideways strips hide their bar):
+
+1. Decision: delete `ScrollArea` and its Radix dependency. Adopting it
+   would change how every pane scrolls (an overlay bar, Radix's own
+   viewport), which is behaviour, not look.
+2. Redesign: native scrollbars take the look's colours (a thumb of tertiary
+   text at 65%, 80% in light, at least 3:1 on both panes; no track) at the platform's width, from one rule on the root.
+3. Not verifiable here: the captures run on macOS, whose overlay bars are
+   hidden at rest; the sheet draws the thumb's colour as a bar instead.
+   Headless Chromium ignores "Show scroll bars: Always" too (tried
+   2026-10-27). For André, about a minute each:
+   - macOS: System Settings, Appearance, Show scroll bars "Always"; open
+     the Electron app with the toggle on; check the thumb at rest, on hover
+     and while dragging.
+   - Windows: the same, plus the arrow buttons, which Chromium draws in the
+     thumb colour once `scrollbar-color` is set. Do they look like legacy
+     chrome next to the rounded panes?
+   - Linux (GTK): rest, hover, drag.
+   Values to confirm: `scrollbar-width: auto`, thumb at 65% (dark) and 80%
+   (light) of tertiary text.
 ### p-avatar
 
 Spec (audit: every person avatar already renders through `UserAvatar`, 65
@@ -1061,6 +1095,22 @@ buttons, a search entry styled as a faint field, the banner strip in
    IconButton; search is a pill a step off the pane; the banner is an inset
    card. The search dialog itself is `f-search`.
 
+### s-sidebar-special
+
+Spec (audit: `story-strip.tsx`, `live-party-block.tsx` and
+`community-home-preview.tsx`, each with its own card, dashed invite and
+label; the pinned section is a category header and channel rows, so it
+moves with `s-category` and `s-channel-row`):
+
+1. Job: what is happening on this server before its channels: stories, a
+   live or pending watch party, the Baú's newest posts.
+2. States: party live (open, not open, audience), pending, waitlist teaser
+   (open, on the list), create, history links; Baú card (new posts), row
+   (nothing new, open), empty for staff and for members; stories with and
+   without new, first run, notice.
+3. Redesign: one family from `ui/sidebar-block.ts` (card, dashed invite,
+   row). The open block is `row-selected`; red stays on the live badge;
+   labels are `SectionLabel`, counts `CountBadge`.
 Rounds (Opus / Codex): r1 - / 8.3, r2 - / 8.6, r3 8.7 / -, r4 7.8 / -,
 r5 8.3 / - (no MUST, would approve). Last fixes: the trigger's hover is the
 ghost step (8%) above the search's 6%, open 10%, both tokens
@@ -1105,6 +1155,21 @@ server settings do not use it, so its roles field label in caps moves to
    Phosphor icons through a shared `IconSwap`. Empty and result take the
    `p-empty` shape once that merges.
 
+### f-invites
+
+Spec (audit: `invite-panel.tsx` in create and join modes, `invite-choice-row`,
+`invite-paste`, `create-server-dialog.tsx` with name, paste, preview and done
+steps, `discord-import-preview`, `server-ready-panel`, `bring-crew-announcement`):
+
+1. Job: make and share invite links, join with a code, start a server from a
+   name or a copied Discord layout.
+2. Redesign: invite rows are the shared card with filled share, link, copy
+   and bin glyphs; expiry and limit chips are pills (selected row fill with
+   an accent edge); field and group labels sentence case; the Discord path is
+   a card row with a caret; text areas take the input tokens.
+3. Merges: nothing. The chip row stays (it wraps on a 360px panel, a
+   segmented control would not).
+4. Kept: every step, the system share sheet, the paste helpers.
 
 ### f-user-settings
 
@@ -1142,6 +1207,141 @@ Rounds: Codex 8.2 (r1); Opus 8.5 (r2), 8.0 (r3), 8.5 (r5), no MUST left.
 Round 5 fixes: the copy failure glyph at 14px, the info tint at 7% in
 dark, the rail build line in mono. Merged on the cap.
 
+### f-server-settings
+
+Spec (audit: `server-settings-dialog.tsx` with 13 sections and its own
+`Block` and `SectionHeader`, `channel-settings-dialog.tsx` with 5, roles and
+the rank list, emoji, AutoMod, webhooks in and out, the audit log, danger):
+
+1. Job: run a server or a channel: a rail of sections, a page each, a Fechar
+   footer; owner-only sections and the armed transfer and delete.
+2. Redesign: the user settings frame (side tone, inset page, pill tabs with
+   filled glyphs). Bespoke boxes take the card look (`SETTINGS_CARD_REDESIGN`),
+   uppercase eyebrows become section labels, field labels sentence case,
+   roles are list row pills with a Phosphor grip, the danger block is a card
+   with the danger banner's edge, status pills take the badge recipe.
+3. Merges: nothing; `Block` stays (the kit's group has rows, these do not).
+4. Kept: every section, drag to reorder, the armed confirms, the footer.
+Rounds: Codex 8.2 (r1); Opus 8.5 (r2), 8.0 (r3), 8.5 (r5), no MUST left.
+Round 5 fixes: the copy failure glyph at 14px, the info tint at 7% in
+dark, the rail build line in mono. Merged on the cap.
+
+### s-category
+
+Spec (audit: `ChannelSectionHeader` in `channel-section-header.tsx` used by the
+classic sections, Pinados and `CategoryHeader`; `MixedCategoryHeader` in
+`channel-list-mixed.tsx`; the "Categorias" label in `channel-list.tsx`):
+
+1. Job: fold a group of channels; for a manager, add a channel, a private
+   channel or a category, rename, delete and drag a category.
+2. States: open, folded (count and unread dot), hover, focus, drop target,
+   drop into (mixed), dragging, the "+" menu open, a phone (always shows "+").
+3. Redesign: one recipe for all three (section label face in sentence case,
+   pill row, bold caret, round actions). The three keep their own markup
+   because their drag rules differ; only the look is shared.
+
+### s-channel-row
+
+Spec (audit: `ChannelRow` for text, forum and watch party rooms,
+`SidebarThreadRow`, `ChannelIcon` at nine render sites, `DraftMark`,
+`ChannelListSkeleton`):
+
+1. Job: open a channel, show what is waiting in it, and for a manager pin it,
+   open its settings and drag it; threads nested under their channel.
+2. States: plain, hover, focus, selected, unread, mentions, muted, draft,
+   private, pinned, forum beta, watch party live (viewers, Assistir) and not
+   live (topic), connected, drag and drop, loading.
+3. Redesign: the `sm` list row on its tokens with the end pip as the one
+   unread mark (decided in `p-list-row`), `CountBadge`, Phosphor icons in
+   `ChannelIcon` (every site), round action tiles, the live pill as a dot.
+   The voice row and its occupants are `s-voice-row`.
+
+### s-voice-row
+
+Spec (audit: voice rooms through `ChannelRow`, `VoiceOccupantRow`,
+`VoiceOccupantBadges`, `ChannelMusicCard`, `ChannelSessionHint`):
+
+1. Job: show who is in a room and what they are doing; join with a double
+   click; per-person sound from a click; drag a person to another room.
+2. States: connected, occupants speaking, muted, deafened, sharing, camera,
+   hand (queue number), app line, soundboard marks, dragging; music playing
+   (in the call or not, with "Ouvir"); a scheduled session hint.
+3. Redesign: occupants as small list rows, filled 14px badges, the music
+   card on the card tokens, the connected room on `success-soft`.
+4. For `s-user-panel`: deafened is `EarSlash`; the panel's deafen button
+   should use the same glyph.
+
+
+### s-sidebar-rail
+
+Spec (audit: one renderer, `ChannelList` folded by `iconsOnly` on desktop,
+`ChannelRailItem` per channel, the Baú's `CommunityHomeNavButton compact`):
+
+1. Job: the channel list at 72px: expand, search, the Baú, every channel as
+   a glyph in groups (favourites, text, voice, categories).
+2. States: selected, unread pip, mention count, muted, private (tooltip
+   detail), the call you are in with its count, people in a room, a live
+   watch party, hover, focus; Baú with new posts, Baú open.
+3. Redesign: 40px rounded squares (`--strip-tile-radius`, 12px, so the strip
+   does not read as a second server rail) on the list row's fills; round
+   expand and search buttons; counts are `CountBadge` cut out of the pane.
+   The full-width Baú row (no preview card) takes the channel row's look.
+
+### s-voice-strip
+
+Spec (audit: `VoiceStatusBar` wide and compact, `MusicMiniPlayer` idle and
+playing in the sidebar footer, three call sites through `sidebarFooter`):
+
+1. Job: the call you are in, from anywhere: status, quality, the room,
+   leave, camera and share; music in the call.
+2. States: connecting, connected, listen only, audience mode, push-to-talk
+   idle, camera on, sharing, at the camera or share limit, a call in a text
+   channel, leave hidden, compact; music idle and playing; two coachmarks.
+3. Redesign: the footer's blocks are inset cards on the card tint
+   (`SIDEBAR_FOOTER_CARD_REDESIGN`), leave is a round danger button, the room
+   a pill, camera and share pills on the secondary fill (accent soft when
+   on). `MusicNowPlaying` is shared with the composer's music bar and moves
+   with `s-composer`.
+
+Rounds (Opus only): r1 7.6, r2 8.0, r3 7.8 (no MUST). r3 fixes: status
+labels on one edge, the room's microphone glyph. Decision: the 6px gap
+between the voice strip and the user panel is the footer stack's gap, and
+both cards keep the 8px side inset; not changed.
+r4 8.0, r5 8.1 (cap, no MUST). r5 fixes: the footer cards draw
+`--card-border` (the light card barely separated from the pane), and the
+72px room button takes the row's shape. Follow-ups: the composer dock's
+hang-up moves to `PhoneDisconnect` (`s-composer`); the music idle row needs
+the music store fixture (`m-sheets`) before it can be reviewed.
+
+### s-user-panel
+
+Spec (audit: `UserPanel` wide and compact through `sidebarFooter`; its
+hand-built status menu with the recado field; `DownloadHint` above it):
+
+1. Job: who you are and your presence, mute, deafen, Não Perturbe, settings;
+   the menu to rename, set the recado, pick a status, send feedback, get
+   help, download.
+2. States: off a call (mute and deafen disabled), mic off, deafened, muted
+   by a moderator, listen only, DND, invisible, saving, error, compact;
+   menu: the recado typed, over the limit, a status chosen.
+3. Redesign: an inset card at the foot of the sidebar; round buttons, a soft
+   danger fill when the mic or sound is off (warning for a moderator's
+   mute); the deafen glyph is the bold ear the voice row uses. The menu
+   keeps its own behaviour (not a Radix menu: the field and roving focus)
+   and takes the popover surface and the menu row tokens.
+4. Question for André: the status menu could become `ui/menu`'s
+   `DropdownMenu` with the field as top content. That is behaviour, so it is
+   not done here.
+
+Rounds (Opus only): r1 7.5 (MUST fixed), r2 7.8, r3 8.1, r4 8.1, r5 8.2
+(cap, no MUST). Changes over the rounds: the moderator's mute at full
+strength; listen only as an outlined mic with a lock badge, named "Só
+ouvindo" under the redesign; the home-indicator inset below the card;
+`--footer-card-solid-hover` for the dot cutout; the status menu as wide as
+the card with the dots in 16px slots; Não Perturbe as a red glyph without a
+fill. Open (copy, shows with the toggle off too): the Invisível hint wraps
+to seven lines at the card's width.
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss
@@ -1162,6 +1362,10 @@ dark, the rail build line in mono. Merged on the cap.
 4. Sidebar header: the members button duplicates the server menu's Membros
    and the chat header's members control. Hide it on desktop too, so a long
    server name fits? It is hidden in the phone drawer already.
+5. Invites: each invite card says "1 uso" under a "Usos" chip row, which
+   reads as "limited to one use". The council suggests "Usado 1 vez · sem
+   limite" and "{used} de {max} usos". That is a copy change in three
+   languages and shows with the toggle off too. Change it?
 
 ## Decisions
 
@@ -1172,6 +1376,7 @@ dark, the rail build line in mono. Merged on the cap.
 
 | Date | Decision | Why |
 |---|---|---|
+| 2026-10-27 | `f-friends` merges after the shell chain | Its branch sits on top of `s-sidebar-special` through `s-member-list`; merging it first would bring unreviewed shell work into `redesign`. |
 | 2026-10-26 | Element branches use `rd/<id>` | Git ref conflict with `redesign`. |
 | 2026-10-26 | Direction mockups are a dev-only page on an unmerged branch | Real pixels for the pick, no change to production components, nothing to clean up on `redesign`. |
 | 2026-10-26 | Direction B (Salas), with filled icons instead of outlines | André's pick. The council preferred A; B was second for both reviewers (7.2, 7.4), and the risks they named for B go into the Phase 1 tokens: gutters cost width on small screens, and a third surface level invites card-in-card settings. |

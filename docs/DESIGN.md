@@ -473,6 +473,94 @@ redesign:
 - The banner (`ServerBannerStrip`) is an inset card with
   `--sidebar-banner-radius`.
 
+### The sidebar blocks
+
+The blocks above the channels: stories (`stories/story-strip.tsx`), a watch
+party (`watch-party/live-party-block.tsx`) and the Baú
+(`community-home/community-home-preview.tsx`). Under the redesign they share
+three strings from `ui/sidebar-block.ts`:
+
+- `SIDEBAR_CARD_REDESIGN`: something to look at (a live party, the Baú's
+  newest post). The card tint and edge, radius `--sidebar-card-radius`.
+- `SIDEBAR_INVITE_REDESIGN`: something to make (start a party, the first
+  story, the first Baú post). A dashed edge (`--sidebar-invite-border`), no
+  fill until hovered.
+- `SIDEBAR_ROW_REDESIGN` and `SIDEBAR_ROW_SELECTED_REDESIGN`: a one-line
+  entry, the list row's pill and fills.
+
+The open block takes `row-selected`, like any row. Red stays on the live
+badge alone. A party being set up is the one block on `warning-soft`. Section
+labels are `SectionLabel`; counts are `CountBadge`.
+
+### The category headers
+
+Three headers fold the channel list: `ChannelSectionHeader` (Texto, Voz,
+Pinados, and each category of the classic list), the mixed list's
+`MixedCategoryHeader`, and the "Categorias" label. Under the redesign they
+share one recipe from `layout/channel-section-header.tsx`:
+
+- `CATEGORY_ROW_REDESIGN`: a 32px pill row whose text brightens on hover, with
+  no fill.
+- `CATEGORY_LABEL_REDESIGN`: the section label's face. Sentence case, so a
+  category keeps the case its owner typed.
+- `SectionCaret`: a bold caret that turns when the section folds.
+- `CATEGORY_ACTION_REDESIGN` and `SectionActionGlyph`: round 24px actions
+  ("+", the lock, the new category) with 14px glyphs.
+- `CATEGORY_SUMMARY_REDESIGN`: "3 canais" and the unread dot on a folded
+  section.
+- `CATEGORY_DROP_INTO_REDESIGN`: a header a dragged channel would drop into.
+  `bg-accent-soft`, `text-on-accent-soft`, a 1px inset `ring-accent`, and no
+  hover change. The caret follows the label's colour.
+
+A drop target hides the summary and the actions and shows `chrome.dropHere`
+("Soltar aqui"); the name is already on the row. The lock is a filled glyph
+(an object). The new-category folder keeps the bold outline: filled, its plus
+is unreadable at 14px. The classic list always shows "+"; the mixed list shows
+it on hover and focus, because it has many more headers.
+
+### The channel row
+
+`ChannelRow` and `SidebarThreadRow` in `layout/channel-list.tsx` keep their
+markup (the tooltip on the button, pin and settings beside it, drag). Under
+the redesign they take `ui/list-row.tsx`'s tokens:
+
+- A channel is the `sm` list row: 36px (`--list-row-h-sm`), a pill, the row
+  roles for hover and selected. A thread is a 32px row under a rule in the
+  card edge.
+- The unread mark is the end pip (`--list-row-pip`, `bg-indicator`), not the
+  bar on the left edge. A mention count (`CountBadge`) replaces the pip.
+- The icon (`ChannelIcon`, Phosphor) is 16px in `--list-row-icon`; a
+  private padlock keeps the warning colour.
+- Pin and settings are round tiles that hover with `--card-row-hover`, so
+  they show on a selected row.
+- A live watch party room says live with a red dot on its viewer line; the
+  "AO VIVO" words stay for a screen reader. "Assistir" is a soft danger pill.
+- The room you are in: `bg-success-soft`, with the name, icon and tiles in
+  `on-success-soft` and the second line at 80%. It wins over selected. The
+  fill says connected (the dot is for a screen reader only), so the end
+  column only ever means something is waiting.
+- Keyboard focus rings the whole pill in `--list-row-ring`; the row's tiles,
+  the thread's X and "Assistir" use the same token.
+- `ChannelListSkeleton` draws the same 36px pills, 2px apart.
+
+### The voice row
+
+A voice channel is a channel row (`ChannelRow`). The room you are in takes
+`success-soft` with its `on-` text instead of the signal ring, open or not:
+icon, name, dot, second line and tiles are all `on-success-soft`. Under it:
+
+- `VoiceOccupantRow` is a 32px list row: the row roles, 13px names, the
+  inset `--list-row-ring` focus ring. The speaking ring stays on the avatar,
+  with no offset; the glow does the work.
+- `VoiceOccupantBadges` take a `tone`: hand, screen and camera in
+  `accent-text`, muted and deafened in `danger`. Glyphs are 14px Phosphor
+  fill; deafened is `EarSlash` in the bold outline at 16px, so the ear's
+  shape survives beside the mic (Phosphor has no headphones with a slash). A queued hand is
+  `HandPositionBadge`: the filled hand at 14px and its number at 11px.
+- `ChannelMusicCard` is a card on the card tokens with a 28px cover. A title
+  that does not fit fades at the right edge.
+- The occupants and threads sit under a rule in the card edge.
+
 ### Icons
 
 The redesign's icons are Phosphor (`@phosphor-icons/react`), drawn through
@@ -942,10 +1030,23 @@ card of settings, the "what's new" note.
 - **Use it** for anything anchored to the control that opened it. A list of
   actions is a `Menu`; a blocking question is a `Dialog`.
 
-### ScrollArea
+### Scrollbars
 
-`scroll-area.tsx`. Radix scroll area with a themed thumb. Use it where a native
-scrollbar would draw OS chrome over the design.
+Native scrolling everywhere; there is no scroll area component (the unused
+Radix one was deleted with the redesign's `p-scroll`). Under the redesign
+the root sets `scrollbar-color` to `--scrollbar-thumb` (tertiary text at
+65%, 80% in light: 3.2:1 to 4.3:1 on both panes in Clássico, Catppuccin,
+Everforest and Modo 2005, measured in Chromium) on
+no track, at the platform's width. A strip that scrolls sideways may hide
+its bar (`[scrollbar-width:none]`); a list that scrolls down keeps it at
+the platform's width. The one exception is a strip under 6rem tall (the
+listener strip's wrapped list, the friends tabs), which may stay `thin`.
+The innermost scroller under the pointer (`overflow-y-auto`,
+`overflow-auto`, `overflow-x-auto` or a textarea) lifts its thumb to
+`--scrollbar-thumb-hover` (secondary text at 80%, 90% in light). A scroller
+written another way (`overflow-y-scroll`, an inline style) does not lift;
+use one of those classes to opt in. Modo 2005 follows the same rule; its
+toolbar hides its bar because it is a sideways strip.
 
 ### Textarea
 

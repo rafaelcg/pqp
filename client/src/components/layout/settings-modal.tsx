@@ -26,7 +26,7 @@ import {
 import { SignOutButton } from "@/components/layout/sign-out-button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dialog } from "@/components/ui/dialog";
-import { SectionRail } from "@/components/ui/section-rail";
+import { SectionRail, SETTINGS_PANE_REDESIGN } from "@/components/ui/section-rail";
 import { useTouchOnly } from "@/components/ui/use-media-query";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { ConnectionsSection } from "@/components/connections/connections-section";
@@ -324,7 +324,7 @@ function RailFooter({ user }: { user: User | null }) {
   return (
     <div className="flex flex-col gap-2">
       {user ? (
-        <div className="flex items-center gap-2 pl-2 redesign:min-h-[var(--list-row-h-md)] redesign:rounded-[var(--list-row-radius)] redesign:bg-[color:var(--settings-pane-bg)] redesign:py-1 redesign:pl-1 redesign:pr-1">
+        <div className="flex items-center gap-2 pl-2 redesign:min-h-[var(--list-row-h-md)] redesign:rounded-[var(--list-row-radius)] redesign:bg-[color:var(--settings-pane-bg)] redesign:py-1 redesign:pl-1.5 redesign:pr-1 redesign:ring-1 redesign:ring-inset redesign:ring-[color:var(--settings-rule)]">
           <UserAvatar
             name={user.displayName}
             avatarUrl={user.avatarUrl}
@@ -338,7 +338,7 @@ function RailFooter({ user }: { user: User | null }) {
           <SignOutButton className="h-[var(--control-sm)] shrink-0 px-2 text-xs redesign:rounded-full redesign:px-3" />
         </div>
       ) : null}
-      <SettingsBuildLine className="self-start redesign:pl-3" />
+      <SettingsBuildLine className="self-start redesign:pl-1.5" />
     </div>
   );
 }
@@ -1353,7 +1353,10 @@ export function SettingsModal({
                 ref={paneRef}
                 // Under the redesign the page is an inset pane on the
                 // dialog's side tone, rounded like the app's panes.
-                className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-surface-1 redesign:overflow-hidden redesign:bg-[color:var(--settings-pane-bg)] sm:redesign:mr-[var(--settings-pane-inset)] sm:redesign:mb-[var(--settings-pane-inset)] sm:redesign:rounded-[var(--radius-pane)] sm:redesign:ring-1 sm:redesign:ring-inset sm:redesign:ring-[color:var(--settings-rule)]"
+                className={cn(
+                  "relative flex min-h-0 min-w-0 flex-1 flex-col bg-surface-1 redesign:overflow-hidden",
+                  SETTINGS_PANE_REDESIGN,
+                )}
               >
                 <div
                   ref={scrollerRef}
