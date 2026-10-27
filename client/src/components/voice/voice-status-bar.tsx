@@ -207,8 +207,10 @@ export function VoiceStatusBar({
         {connected ? (
           <span
             aria-hidden="true"
-            className="h-2 w-2 shrink-0 rounded-full bg-success shadow-[0_0_8px_var(--glow-success)]"
-          />
+            className="flex shrink-0 items-center justify-center redesign:h-3.5 redesign:w-3.5"
+          >
+            <span className="h-2 w-2 rounded-full bg-success shadow-[0_0_8px_var(--glow-success)]" />
+          </span>
         ) : (
           <IconSwap
             off={Loader2}
@@ -230,7 +232,7 @@ export function VoiceStatusBar({
             <Button
               variant="ghost"
               size="icon"
-              className={cn("h-8 w-8 shrink-0", STRIP_ICON_REDESIGN)}
+              className={cn("h-8 w-8 shrink-0", STRIP_ICON_REDESIGN, "redesign:bg-[color:var(--card-row-hover)]")}
               data-voice-bar-channel={channelType}
               onClick={onOpen}
             >
@@ -322,7 +324,7 @@ export function VoiceStatusBar({
             </span>
           )}
           {showPttIdle && (
-            <span className="ml-1 shrink-0 text-[9px] font-medium uppercase tracking-wide text-paper-muted redesign:ml-1.5 redesign:text-[11px] redesign:normal-case redesign:tracking-normal redesign:text-text-tertiary">
+            <span className="ml-1 shrink-0 text-[9px] font-medium uppercase tracking-wide text-paper-muted redesign:ml-1.5 redesign:text-[11px] redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">
               {t("voice.bar.pttIdle")}
             </span>
           )}
