@@ -428,6 +428,27 @@ test("captures the design council screens", async ({ browser }) => {
       await expect(page.getByText(PAPO.at(-1)![1])).toBeVisible();
       await hideDevBanner(page);
       await shoot(page, `01-chat-${theme}`);
+      // Message search: the prompt, then results with the arrows on one.
+      try {
+        await page.getByRole("button", { name: /Buscar mensagens/ }).first().click({ timeout: 5_000 });
+        await expect(page.getByRole("dialog")).toBeVisible();
+        await page.waitForTimeout(300);
+        await shoot(page, `33-search-empty-${theme}`);
+        // The pointer out of the way, so the first row keeps the highlight.
+        await page.mouse.move(0, 0);
+        await page.getByRole("dialog").getByRole("combobox").fill("zzqxv");
+        await expect(page.getByRole("dialog").getByText(/zzqxv/).last()).toBeVisible({ timeout: 10_000 });
+        await page.waitForTimeout(300);
+        await shoot(page, `35-search-none-${theme}`);
+        await page.getByRole("dialog").getByRole("combobox").fill("caverna");
+        await expect(page.getByRole("dialog").getByRole("option").first()).toBeVisible({ timeout: 10_000 });
+        await page.waitForTimeout(300);
+        await shoot(page, `34-search-results-${theme}`);
+        await page.keyboard.press("Escape");
+      } catch (error) {
+        console.log("search shots skipped", String(error).slice(0, 300));
+        await page.keyboard.press("Escape");
+      }
       // The sidebar header up close: the name hovered, the search entry.
       {
         const header = page.locator("[data-server-header]");

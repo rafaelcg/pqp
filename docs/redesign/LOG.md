@@ -1156,6 +1156,27 @@ server settings do not use it, so its roles field label in caps moves to
    Phosphor icons through a shared `IconSwap`. Empty and result take the
    `p-empty` shape once that merges.
 
+### f-search
+
+Spec (audit: `search/search-dialog.tsx`, one caller, the sidebar search pill
+and Ctrl K; states: prompt, too short, searching, no match, error, results,
+load more):
+
+1. Job: find a message in this server by words and jump to it.
+2. Redesign: the field is the input's round field inset in the body with a
+   Phosphor glass; a result is a card-cornered row, the highlighted one on
+   the menu's highlight; channel name semibold with a bold `#`; author and
+   snippet in secondary text; the match a soft accent tint.
+3. Merges: nothing. The other search fields (about nine) belong to their
+   surfaces.
+4. Kept: combobox and listbox semantics, arrows and Enter, load more.
+Rounds (Opus only): r1 7.5 (MUST fixed: four left edges), r2 8.3, r3 8.4,
+r4 8.1 (MUST fixed: the channel name sat 3px above the author). Decisions:
+the always-focused field draws a 1px accent border, not the primitive's
+2px ring with an offset, because a ring around a field that never loses
+focus is heavy. The row's `#` is the bold (symbol) glyph, the same weight
+as the field's glass. Hover selects a row only on a real pointer move.
+
 ### f-invites
 
 Spec (audit: `invite-panel.tsx` in create and join modes, `invite-choice-row`,
