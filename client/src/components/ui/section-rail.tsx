@@ -324,7 +324,7 @@ export function SectionRail<Id extends string>({
                 className={cn(
                   "hidden px-3 pb-1 pt-4 text-xs font-medium text-text-tertiary first:pt-0 sm:block",
                   SECTION_LABEL_REDESIGN,
-                  "redesign:mb-0 redesign:px-[var(--list-row-px)] redesign:pb-1.5 redesign:pt-5 redesign:text-text-tertiary",
+                  "redesign:mb-0 redesign:px-[var(--list-row-px)] redesign:pb-1.5 redesign:pt-5 redesign:font-medium redesign:text-text-tertiary",
                 )}
               >
                 {heading}
@@ -363,7 +363,7 @@ export function SectionRail<Id extends string>({
                 section.danger && !selected && "redesign:text-danger",
                 // Phone strip: stays at the start edge while the strip scrolls.
                 pinned &&
-                  "max-sm:sticky max-sm:left-0 max-sm:z-10 max-sm:bg-surface-2 max-sm:text-text",
+                  "max-sm:sticky max-sm:left-0 max-sm:z-10 max-sm:bg-surface-2 max-sm:text-text redesign:max-sm:bg-[color:var(--settings-surface)]",
                 // Phone strip: 36px drawn, 44px to a finger. The hit area grows
                 // into the strip's padding, so the strip itself never gains a
                 // vertical scroll.
