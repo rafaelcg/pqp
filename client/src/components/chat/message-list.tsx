@@ -3956,8 +3956,12 @@ const MessageRow = memo(function MessageRow({
                         "rounded text-[length:var(--chat-font-size)] font-bold leading-[var(--chat-line-height)]",
                         !roleColor && (isMine ? "text-signal" : "text-paper"),
                         !roleColor && (isMine ? "redesign:text-[color:var(--message-own-name)]" : "redesign:text-text"),
+                        // A role colour has no contrast floor; in light it leans toward
+                        // the text so a pale gold name stays readable.
+                        roleColor &&
+                          "redesign:[:root[data-theme=light]_&]:text-[color:color-mix(in_oklab,var(--role-color)_70%,var(--color-text))]!",
                       )}
-                      style={roleColor ? { color: roleColor } : undefined}
+                      style={roleColor ? ({ color: roleColor, "--role-color": roleColor } as CSSProperties) : undefined}
                     >
                       {message.authorName}
                     </AuthorButton>

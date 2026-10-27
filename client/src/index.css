@@ -892,9 +892,11 @@
   /* Message rows (chat/message-list.tsx): inset with a corner, a faint
      tint of the text on hover, the accent's soft fill when you are named. */
   --message-row-radius: 0.5rem;
-  --message-hover: color-mix(in oklab, var(--color-text) 3%, transparent);
-  --message-mention-bg: var(--color-accent-soft);
-  --message-mention-hover: color-mix(in oklab, var(--color-accent-soft) 85%, var(--color-accent));
+  --message-hover: color-mix(in oklab, var(--color-text) 4.5%, transparent);
+  /* The system's mention row, tuned per appearance so a mention never reads
+     as the selected channel; the hover one step toward the accent. */
+  --message-mention-bg: var(--color-mention-row);
+  --message-mention-hover: color-mix(in oklab, var(--color-mention-row) 85%, var(--color-accent));
   /* Your own name on your messages. */
   --message-own-name: var(--color-accent-text);
 
@@ -1307,6 +1309,8 @@
 
 /* The redesign's shadows on a light page: tinted, never black. Every look. */
 :root[data-redesign][data-theme="light"] {
+  /* 3% reads in light; dark needs 4.5%. */
+  --message-hover: color-mix(in oklab, var(--color-text) 3%, transparent);
   /* Your own name: the lime itself in light, where accent-text is a near-black olive. */
   --message-own-name: var(--color-accent);
   /* Light panes need a stronger thumb to clear 3:1. */
@@ -3096,6 +3100,13 @@ h2,
 
 .pqp-mention-self {
   background: color-mix(in oklch, var(--color-accent) 26%, transparent);
+}
+
+/* Under the redesign the @you chip takes the chip tokens, measured against
+   the mention row it sits on. */
+:root[data-redesign] .pqp-mention-self {
+  background: var(--color-mention-chip);
+  color: var(--color-on-mention-chip);
 }
 
 .pqp-mention-mass {
