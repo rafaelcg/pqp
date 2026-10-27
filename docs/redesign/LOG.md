@@ -1517,6 +1517,10 @@ spinner (merged as `p-loading`), `error-boundary.tsx`, `HistoryFailed`
    question 3 asks André first.
 4. Kept: the stored sidebar width on first paint, the retry and the docs
    pointers on the error page.
+5. Question (copy, shows with the toggle off): the deploy notes on the
+   error page name "Railway/Docker", but production runs on Vultr. Under
+   the redesign they fold behind "Detalhes para quem hospeda"; the text
+   itself waits for a yes.
 
 ## Open questions for André
 

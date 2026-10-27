@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { useTranslation } from "@/lib/i18n";
+import { useRedesign } from "@/lib/redesign";
 import {
   loadChannelSidebarWidth,
 } from "@/lib/channel-sidebar-width";
@@ -70,8 +71,9 @@ export function AppLoadingShell({ label }: AppLoadingShellProps) {
         </div>
       </main>
 
-      <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-ink/40 backdrop-blur-[1px] redesign:bg-[color:color-mix(in_oklab,var(--color-canvas)_40%,transparent)]">
-        <div className="flex flex-col items-center gap-3">
+      <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-ink/40 backdrop-blur-[1px] redesign:bg-[color:color-mix(in_oklab,var(--color-canvas)_40%,transparent)] redesign:[:root[data-theme=light]_&]:bg-[color:color-mix(in_oklab,var(--color-canvas)_25%,transparent)]">
+        {/* Under the redesign the spinner and its label sit on their own card, off the skeleton bars. */}
+        <div className="flex flex-col items-center gap-3 redesign:rounded-[var(--radius-card)] redesign:bg-pane-main/90 redesign:px-5 redesign:py-4">
           <div className="relative flex h-12 w-12 items-center justify-center">
             <span className="absolute inset-0 rounded-full border-2 border-signal/20 redesign:border-[color:color-mix(in_oklab,var(--color-accent)_25%,transparent)]" />
             <span className="absolute inset-0 animate-spin rounded-full border-2 border-transparent border-t-signal motion-reduce:animate-none" />
@@ -95,6 +97,17 @@ interface AppBootstrapErrorProps {
 
 export function AppBootstrapError({ message, onRetry }: AppBootstrapErrorProps) {
   const { t } = useTranslation();
+  const redesign = useRedesign();
+  const deploy = (
+    <>
+      {t("bootstrapError.deploy.1")}{" "}
+      <code className="text-signal redesign:text-accent-text">VITE_API_URL</code>{" "}
+      {t("bootstrapError.deploy.2")}{" "}
+      <code className="text-signal redesign:text-accent-text">VITE_WS_URL</code>{" "}
+      {t("bootstrapError.deploy.3")}{" "}
+      <code className="text-signal redesign:text-accent-text">docs/DEPLOY.md</code>.
+    </>
+  );
   return (
     <div className="relative flex h-full flex-col items-start justify-end overflow-hidden p-8 sm:p-12">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_80%_10%,var(--glow-danger),transparent_45%)]" />
@@ -109,14 +122,18 @@ export function AppBootstrapError({ message, onRetry }: AppBootstrapErrorProps) 
           {t("bootstrapError.title")}
         </h1>
         <p className="mt-4 text-paper-muted redesign:text-text-secondary">{message}</p>
-        <p className="mt-3 text-sm text-paper-muted">
-          {t("bootstrapError.deploy.1")}{" "}
-          <code className="text-signal">VITE_API_URL</code>{" "}
-          {t("bootstrapError.deploy.2")}{" "}
-          <code className="text-signal">VITE_WS_URL</code>{" "}
-          {t("bootstrapError.deploy.3")}{" "}
-          <code className="text-signal">docs/DEPLOY.md</code>.
-        </p>
+        {redesign ? (
+          // The deploy notes are for whoever hosts pqp, so under the redesign
+          // they fold behind a disclosure instead of greeting every reader.
+          <details className="group mt-3 text-sm text-text-secondary">
+            <summary className="cursor-pointer select-none rounded-[var(--radius-control)] font-medium text-text marker:text-text-tertiary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--color-focus-ring)]">
+              {t("bootstrapError.deploy.details")}
+            </summary>
+            <p className="mt-2">{deploy}</p>
+          </details>
+        ) : (
+          <p className="mt-3 text-sm text-paper-muted">{deploy}</p>
+        )}
         <div className="mt-8 flex flex-wrap gap-3">
           <Button onClick={onRetry}>{t("bootstrapError.retry")}</Button>
           <Button variant="secondary" asChild>
