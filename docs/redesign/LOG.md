@@ -1034,6 +1034,25 @@ server settings do not use it, so its roles field label in caps moves to
    Phosphor icons through a shared `IconSwap`. Empty and result take the
    `p-empty` shape once that merges.
 
+### f-profile
+
+Spec (audit: `user-profile-popover.tsx` (self, other, bot, blocked; action
+strip, Mais menu, manage and cargos sections, inline timeout and ban
+composers, medals, depoimentos, connections, communities),
+`member-moderation-dialog.tsx`, `depoimentos-section.tsx`):
+
+1. Job: who this person is and what you can do about them, from any name.
+2. Redesign: the card is the shared popover (surface, edge, lift, radius);
+   the action wells are round on the card tint with filled glyphs; Mais is
+   the shared menu's rows; manage, cargos and the about pane are cards; the
+   name in Gabarito, the tag in sans; role chips and timeout presets are
+   pills; inline fields take the input tokens.
+3. Merges: Mais stays its own fixed menu (the card scrolls, a portal menu
+   must not clip). Question kept: native `prompt` and `confirm` for nickname
+   and kick still belong to the browser.
+4. Kept: every action, the moderation composers inline (the evidence stays
+   in view), the contact-sheet strip.
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss

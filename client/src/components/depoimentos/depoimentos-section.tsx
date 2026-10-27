@@ -53,11 +53,11 @@ export function DepoimentosSection({
       }
     >
       {!plain && (
-        <h3 className="px-3 pb-1 pt-2.5 text-[11px] font-semibold uppercase tracking-wide text-paper-muted">
+        <h3 className="px-3 pb-1 pt-2.5 text-[11px] font-semibold uppercase tracking-wide text-paper-muted redesign:text-[13px] redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">
           {t("depoimentos.section")}
         </h3>
       )}
-      <ul className="divide-y divide-ink-4/50">
+      <ul className="divide-y divide-ink-4/50 redesign:divide-[color:var(--card-border)]">
         {depoimentos.map((one) => (
           <li
             key={one.id}
@@ -144,7 +144,7 @@ export function CommunityBadges({
       }
     >
       {!plain && (
-        <h3 className="px-3 pb-1 pt-2.5 text-[11px] font-semibold uppercase tracking-wide text-paper-muted">
+        <h3 className="px-3 pb-1 pt-2.5 text-[11px] font-semibold uppercase tracking-wide text-paper-muted redesign:text-[13px] redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">
           {t("depoimentos.communities")}
         </h3>
       )}
@@ -156,12 +156,12 @@ export function CommunityBadges({
               data-profile-community={one.id}
               title={one.name}
               disabled={!onOpen}
-              className="flex w-full items-center gap-2 rounded-lg px-1.5 py-1.5 text-left transition-colors hover:bg-ink-3 focus-visible:bg-ink-3 focus-visible:outline-none disabled:pointer-events-none"
+              className="flex w-full items-center gap-2 rounded-lg px-1.5 py-1.5 text-left transition-colors hover:bg-ink-3 focus-visible:bg-ink-3 redesign:rounded-full redesign:hover:bg-[color:var(--card-row-hover)] redesign:focus-visible:bg-[color:var(--card-row-hover)] focus-visible:outline-none disabled:pointer-events-none"
               onClick={() => onOpen?.(one.id)}
             >
               <span
                 aria-hidden="true"
-                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-ink-4 font-display text-[10px] font-bold uppercase text-paper"
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-ink-4 font-display text-[10px] font-bold uppercase text-paper redesign:rounded-full redesign:bg-[color:var(--card-bg)] redesign:text-text"
               >
                 {one.name.slice(0, 2)}
               </span>

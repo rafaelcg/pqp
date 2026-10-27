@@ -428,6 +428,18 @@ test("captures the design council screens", async ({ browser }) => {
       await expect(page.getByText(PAPO.at(-1)![1])).toBeVisible();
       await hideDevBanner(page);
       await shoot(page, `01-chat-${theme}`);
+      // A profile card, from a message author's name.
+      try {
+        await page.locator("[data-author-trigger]").first().click({ timeout: 5_000 });
+        await expect(page.locator("[data-profile-card]")).toBeVisible({ timeout: 5_000 });
+        await page.waitForTimeout(800);
+        await shoot(page, `36-profile-card-${theme}`);
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(300);
+      } catch {
+        console.log("profile card shot skipped");
+        await page.keyboard.press("Escape");
+      }
       // A popover in place: the composer's emoji picker.
       await page.getByRole("button", { name: "Adicionar emoji", exact: true }).first().click();
       await expect(page.locator(".emoji-mart-shell")).toBeVisible();
