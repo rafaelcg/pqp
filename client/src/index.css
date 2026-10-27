@@ -912,6 +912,10 @@
   /* The solid accent, as IconButton's and Slider's rings: the 60% focus
      ring all but vanishes on the light selected fill. */
   --list-row-ring: var(--color-accent);
+  /* Forum cards (forum/forum-post-card.tsx): the card tokens; a hover
+     strengthens the edge, the open post's edge is a step stronger still. */
+  --forum-card-hover-border: color-mix(in oklab, var(--color-text) 18%, transparent);
+  --forum-card-open-border: color-mix(in oklab, var(--color-text) 32%, transparent);
 
   /* Dialogs: a deeper scrim with more blur, so the app behind recedes; the
      panel takes a text edge and the deepest lift. The header loses its rule

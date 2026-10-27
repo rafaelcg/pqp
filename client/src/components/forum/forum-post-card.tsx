@@ -30,6 +30,14 @@ import type { ForumUnreadState } from "@/lib/forum-list";
 import { useForumTagLabel } from "@/lib/forum-tag-icons";
 import { useTranslation, type Translator } from "@/lib/i18n";
 import { cn, formatRelativeShort } from "@/lib/utils";
+import { badgeRedesignClasses } from "@/components/ui/badge";
+
+/** A tag under the redesign: the neutral badge's tint at the chip's size. */
+const TAG_REDESIGN = "redesign:bg-[color:var(--segmented-bg)] redesign:font-medium";
+/** Cards, tiles and pinned rows under the redesign: the card tokens. */
+const FORUM_CARD_REDESIGN = "redesign:border redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:rounded-[var(--radius-card)] redesign:hover:border-[color:var(--forum-card-hover-border)] redesign:hover:bg-[color:var(--card-bg)]";
+/** The open post's card: a stronger edge on the row-hover fill. */
+const FORUM_CARD_OPEN_REDESIGN = "redesign:border-[color:var(--forum-card-open-border)] redesign:bg-[color:var(--card-row-hover)] redesign:hover:bg-[color:var(--card-row-hover)]";
 
 /**
  * One post in the list, in the layout the reader picked (`forum-prefs`):
@@ -101,6 +109,7 @@ export function ForumTagChip({ tag, size = "md" }: { tag: ForumTag; size?: "sm" 
         "inline-flex max-w-[11rem] shrink-0 items-center gap-1 rounded-full bg-surface-2 text-text-secondary",
         size === "sm" ? "h-5 px-2 text-[11px]" : "h-6 px-2.5 text-xs",
         tag.moderated && "ring-1 ring-inset ring-border-strong text-text",
+        TAG_REDESIGN,
       )}
     >
       <ForumTagIcon tag={tag} />
@@ -139,6 +148,7 @@ export function ForumTagList({
           className={cn(
             "inline-flex shrink-0 items-center rounded-full bg-surface-2 tabular-nums text-text-secondary",
             size === "sm" ? "h-5 px-2 text-[11px]" : "h-6 px-2.5 text-xs",
+            TAG_REDESIGN,
           )}
           title={tags
             .slice(max)
@@ -556,10 +566,13 @@ export const ForumPostCard = memo(function ForumPostCard({
           shell,
           "flex min-h-16 items-center gap-3 rounded-[var(--radius-card)] px-3 py-2.5 hover:bg-surface-1",
           open && "bg-surface-2 hover:bg-surface-2",
+          // A list row: the row roles, the selected fill says which is open.
+          "redesign:hover:bg-[color:var(--list-row-hover)]",
+          open && "redesign:bg-[color:var(--list-row-selected)] redesign:hover:bg-[color:var(--list-row-selected)]",
         )}
       >
         {open && (
-          <span aria-hidden className="absolute inset-y-3 left-0 w-[3px] rounded-r-full bg-text" />
+          <span aria-hidden className="absolute inset-y-3 left-0 w-[3px] rounded-r-full bg-text redesign:hidden" />
         )}
         <span className="grid w-4 shrink-0 place-items-center text-text-secondary">
           {isUnread ? (
@@ -616,7 +629,7 @@ export const ForumPostCard = memo(function ForumPostCard({
         data-forum-post={post.id}
         data-unread={unread.kind}
         data-forum-variant="tile"
-        className={cn(shell, "flex flex-col rounded-[var(--radius-panel)] p-2 hover:bg-surface-1", open && "bg-surface-2")}
+        className={cn(shell, "flex flex-col rounded-[var(--radius-panel)] p-2 hover:bg-surface-1", open && "bg-surface-2", FORUM_CARD_REDESIGN, open && FORUM_CARD_OPEN_REDESIGN)}
       >
         {hasMedia(post) ? (
           <Thumbnail post={post} fit="tile" className="aspect-[4/3] w-full" />
@@ -663,13 +676,15 @@ export const ForumPostCard = memo(function ForumPostCard({
         shell,
         "rounded-[var(--radius-panel)] px-4 pb-2.5 pt-4 hover:bg-surface-1",
         open && "bg-surface-2 hover:bg-surface-2",
+        FORUM_CARD_REDESIGN,
+        open && FORUM_CARD_OPEN_REDESIGN,
       )}
     >
       <div className="flex min-w-0 items-center gap-2 text-[13px] leading-[18px] text-text-secondary">
         {avatar("h-5 w-5")}
         <span className="truncate font-semibold text-text">{author}</span>
         {post.authorIsWebhook && (
-          <span className="shrink-0 rounded-[var(--radius-tick)] bg-accent-soft px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide text-on-accent-soft">
+          <span className={cn("shrink-0 rounded-[var(--radius-tick)] bg-accent-soft px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide text-on-accent-soft", badgeRedesignClasses("new", "tag"))}>
             {t("forum.badge.feed")}
           </span>
         )}
@@ -812,6 +827,8 @@ export const ForumPinnedTile = memo(function ForumPinnedTile({
       className={cn(
         "group/card relative flex min-h-[76px] flex-col rounded-[var(--radius-card)] bg-surface-1 px-3.5 py-3 transition-colors duration-[var(--duration-fast)] hover:bg-surface-2",
         open && "bg-surface-2",
+        FORUM_CARD_REDESIGN,
+        open && FORUM_CARD_OPEN_REDESIGN,
       )}
     >
       <span className="flex items-center gap-1.5 text-xs font-semibold text-text-secondary">

@@ -1280,7 +1280,7 @@ export function ForumPane({
 
   const searchField = (
     <label
-      className="flex h-10 min-w-0 flex-1 items-center gap-2 rounded-[var(--radius-card)] bg-surface-1 px-3 text-sm text-text-secondary transition-shadow duration-[var(--duration-fast)] focus-within:ring-2 focus-within:ring-focus-ring"
+      className="flex h-10 min-w-0 flex-1 items-center gap-2 rounded-[var(--radius-card)] bg-surface-1 px-3 text-sm text-text-secondary transition-shadow duration-[var(--duration-fast)] focus-within:ring-2 focus-within:ring-focus-ring redesign:h-[var(--input-h)] redesign:rounded-full redesign:border redesign:border-[color:var(--input-border)] redesign:bg-[color:var(--input-bg)] redesign:px-[var(--input-px)] redesign:focus-within:ring-offset-2 redesign:focus-within:ring-offset-ring-offset redesign:focus-within:ring-[color:var(--input-ring,var(--color-focus-ring))]"
     >
       <Search className="h-4 w-4 shrink-0" aria-hidden />
       <input
@@ -1322,7 +1322,7 @@ export function ForumPane({
           <X className="h-3.5 w-3.5" aria-hidden />
         </button>
       ) : (
-        <kbd className="hidden h-5 min-w-5 items-center justify-center rounded-[var(--radius-tick)] bg-surface-2 px-1 font-sans text-[11px] font-semibold text-text-secondary sm:inline-flex">
+        <kbd className="hidden h-5 min-w-5 items-center justify-center rounded-[var(--radius-tick)] bg-surface-2 px-1 font-sans text-[11px] font-semibold text-text-secondary sm:inline-flex redesign:rounded-md redesign:bg-[color:var(--segmented-bg)]">
           /
         </kbd>
       )}
