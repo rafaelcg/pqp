@@ -143,7 +143,7 @@ export function CommunityHomePreview({
   const leadTitle = postTitle(lead, t);
 
   return (
-    <div data-community-home-row data-bau-preview={mode}>
+    <div data-community-home-row data-bau-preview={mode} className="redesign:px-1">
       <div
         className={cn(SWAP, card ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0")}
         inert={!card}
@@ -189,7 +189,8 @@ export function CommunityHomePreview({
                   className="h-[1.0625rem] min-w-[1.125rem] text-[10.5px]"
                 />
               )}
-              <span className="ml-auto font-semibold text-text-tertiary">
+              {/* Already open: the selection says it, so "Abrir" goes quiet. */}
+              <span className={cn("ml-auto font-semibold text-text-tertiary", selected && "redesign:invisible")}>
                 {t("communityHome.preview.open")}
               </span>
             </button>

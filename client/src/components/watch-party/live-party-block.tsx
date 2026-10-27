@@ -248,6 +248,8 @@ export function LivePartyBlock({
                 "flex w-full items-center gap-2 rounded-lg border border-dashed border-ink-4/70 px-2.5 py-2 text-left text-paper-muted transition-colors hover:border-accent/50 hover:bg-ink-3 hover:text-paper",
                 SIDEBAR_INVITE_REDESIGN,
                 "redesign:gap-2.5 redesign:px-3",
+                // On the list: a settled state, so the edge stops being a dashed invitation.
+                teaser.onList && "redesign:border-solid",
               )}
               onClick={teaser.onOpen}
             >
@@ -257,7 +259,7 @@ export function LivePartyBlock({
                   in a 230px rail. */}
               <PartyGlyph />
               <span className="flex min-w-0 flex-col">
-                <span className="truncate text-sm font-medium">
+                <span className="truncate text-sm font-medium redesign:font-semibold">
                   {t("watchParty.waitlist.teaser.label")}
                 </span>
                 <span
