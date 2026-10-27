@@ -487,6 +487,25 @@ A filled `#` or `+` is a solid box, so symbols take the bold outline. Sizes are
 the three `--icon-*` tokens. Lucide stays on every surface that is not rebuilt
 yet. `--icon-stroke` is the stroke a Lucide icon takes when a primitive passes it.
 
+`IconSwap` draws a Lucide icon with the toggle off and its Phosphor
+replacement under the redesign, for a surface whose callers still pass Lucide.
+A filled glyph that turns into a blob (two copy squares) takes `symbol`.
+
+### The settings kit
+
+`components/settings/kit/` builds every tab of user settings. Under the
+redesign it uses the merged primitives' tokens:
+
+- A group box is a card (`SETTINGS_GROUP_REDESIGN`): `--card-bg`,
+  `--card-border`, the same edge between rows. Rows hover with
+  `SETTINGS_ROW_HOVER` (`--card-row-hover`).
+- `SettingsBadge` is `ui/Badge` (`new`, `neutral`).
+- A notice on its own takes the banner's corners (`--banner-radius`). Info is
+  a tint (`--settings-notice-info-bg`), not an outline. A notice in a group
+  stays a row.
+- A choice card is a card; the chosen one has a 2px accent edge (the accent border plus a 1px inset ring) and a check.
+- Icons are Phosphor through `IconSwap`.
+
 ## Components
 
 Everything in `client/src/components/ui/`. Import from `@/components/ui/<name>`.

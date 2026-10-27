@@ -828,6 +828,9 @@
   --card-bg: color-mix(in oklab, var(--color-text) 4%, transparent);
   --card-border: color-mix(in oklab, var(--color-text) 8%, transparent);
   --card-row-hover: color-mix(in oklab, var(--color-text) 6%, transparent);
+  /* A settings notice in the info tone, on its own (settings/kit/notice.tsx):
+     a quiet tint of the text, a step over the card it usually sits in. */
+  --settings-notice-info-bg: color-mix(in oklab, var(--color-text) 6%, transparent);
 
   /* The monogram disc's edge: none in dark, where surface-3 already stands
      off the panes; a hairline in light, where it is close to the white pane. */
@@ -1109,6 +1112,8 @@
  * it in both themes, so a light scrim would be a bug rather than a theme.
  */
 :root[data-theme="light"] {
+  /* A quieter info tint on light, the weight of a row hover: at 6% it read as a disabled field. */
+  --settings-notice-info-bg: color-mix(in oklab, var(--color-text) 4%, transparent);
   color-scheme: light;
 
   --color-surface-0: oklch(0.98 0.005 95);
