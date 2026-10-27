@@ -11520,6 +11520,7 @@ function MainAppContent({
         sharing: voiceState.isSharingScreen || watchingAShare,
         appRunning: hintQuietSources.appRunning,
         campaignsYield,
+        arriving: arrivalServerId === forumNewsServerId,
         typing: hintQuietSources.composerBusy,
         showing: forumNewsShowing,
       })

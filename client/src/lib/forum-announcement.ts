@@ -18,7 +18,9 @@ import { isHintSeen, rememberHint } from "@/lib/hints";
  * `CORNER_HINT_ORDER`), and on top of the queue's own rules it never shows in
  * a call, while sharing or watching a share, in a running app, or over a live
  * party, whatever `hint_budget` says: the announcement is the kind of thing
- * that must not interrupt. Typing (the composer focused or holding a draft)
+ * that must not interrupt. Nor while the arrival strip is up for somebody who
+ * just joined: "start in #general" and "open the forum" are two instructions
+ * for one screen. Typing (the composer focused or holding a draft)
  * only holds its ENTRANCE: once it is up, clicking into the composer does not
  * pull it away, or it would blink out under the cursor.
  *
@@ -83,6 +85,11 @@ export interface ForumAnnouncementFacts {
   appRunning: boolean;
   /** A live party or the watch-now strip owns the moment (`campaignsYield`). */
   campaignsYield: boolean;
+  /**
+   * The arrival strip is up for this server (joined this session): its "start
+   * in #general" is the one instruction a newcomer gets on that screen.
+   */
+  arriving: boolean;
   /** The composer has focus or holds a draft. */
   typing: boolean;
   /** The card is on screen already; typing does not take it away. */
@@ -101,7 +108,8 @@ export function forumAnnouncementTarget(facts: ForumAnnouncementFacts): string |
     facts.inCall ||
     facts.sharing ||
     facts.appRunning ||
-    facts.campaignsYield
+    facts.campaignsYield ||
+    facts.arriving
   ) {
     return null;
   }

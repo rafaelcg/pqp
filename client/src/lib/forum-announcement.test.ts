@@ -21,6 +21,7 @@ const base: ForumAnnouncementFacts = {
   sharing: false,
   appRunning: false,
   campaignsYield: false,
+  arriving: false,
   typing: false,
   showing: false,
 };
@@ -69,12 +70,13 @@ describe("who is offered the forum card", () => {
 });
 
 describe("it never interrupts", () => {
-  it("not in a call, a share, an app or over a live party, even when already up", () => {
+  it("not in a call, a share, an app, over a live party or a fresh arrival, even when already up", () => {
     for (const busy of [
       { inCall: true },
       { sharing: true },
       { appRunning: true },
       { campaignsYield: true },
+      { arriving: true },
     ]) {
       expect(forumAnnouncementTarget({ ...base, ...busy }), JSON.stringify(busy)).toBeNull();
       expect(
