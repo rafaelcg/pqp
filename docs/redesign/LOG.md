@@ -1283,6 +1283,12 @@ playing in the sidebar footer, three call sites through `sidebarFooter`):
    a pill, camera and share pills on the secondary fill (accent soft when
    on). `MusicNowPlaying` is shared with the composer's music bar and moves
    with `s-composer`.
+
+Rounds (Opus only): r1 7.6, r2 8.0, r3 7.8 (no MUST). r3 fixes: status
+labels on one edge, the room's microphone glyph. Decision: the 6px gap
+between the voice strip and the user panel is the footer stack's gap, and
+both cards keep the 8px side inset; not changed.
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss
