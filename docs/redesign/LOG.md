@@ -1059,6 +1059,22 @@ server settings do not use it, so its roles field label in caps moves to
    Phosphor icons through a shared `IconSwap`. Empty and result take the
    `p-empty` shape once that merges.
 
+### f-call
+
+Spec (audit: `voice/call-stage.tsx`, 5,900 lines: the controls in three homes
+(the open stage's floating bar, the composer's dock, the column beside an
+app), camera and primary tiles, the room view, the listener ring, badges,
+tile and share overlays; soundboard, audience, video quality as their own
+files):
+
+1. Job: be in a call: see who talks, mute, camera, share, hand, music, leave.
+2. Redesign: one recipe for every control (`call-control-classes.ts`): wells
+   on the stage, ghosts in the dock, on is the soft accent, muted the soft
+   danger, hang-up solid red; tiles on the card radius with a gapped speaking
+   ring; dark glass on pictures; filled Phosphor glyphs.
+3. Merges: the four look-alike control strings into one recipe.
+4. Kept: every control, the folding rules, the idle fade, all three homes.
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss
