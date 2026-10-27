@@ -51,6 +51,7 @@ Read this file and the inventory at the start of every session.
 | 2 | `p-avatar` | Merged (cap at round 5: 8.6 Opus r5, 8.7 Codex r2, no MUST) |
 | 2 | `p-list-row` | Merged (cap at round 5: 8.6 Opus r5, 8.4 Codex r2, no MUST) |
 | 2 | `p-card` | Merged (cap at round 5: 8.5 Opus r5, 8.4 Codex r1, no MUST) |
+| 2 | `p-section-header` | Merged (cap at round 5: 8.0 Opus r5, 8.4 Codex r2, no MUST) |
 
 ## Phase 0: directions
 
@@ -832,6 +833,31 @@ in 50 files, in four sizes, three trackings and two colours):
 5. Council round 3 (Opus): the roles field label ("Nome do cargo") is still
    11px caps beside sentence-case labels, and the settings rail headings are
    12px. Queued for `p-settings-kit` (field labels) and the settings rail.
+
+Council (Opus 5.5, GPT-6 Luna via Codex), overall after. One reviewer per
+round, Opus for the sign-off:
+
+| Round | Opus | Codex |
+|---|---|---|
+| 1 | not run | 8.0 |
+| 2 | not run | 8.4 |
+| 3 | 7.8 | not run |
+| 4 | 7.5 | not run |
+| 5 | 8.0 | not run |
+
+Capped at round 5, no MUST open. Round 3's two MUST and round 4's MUST (the
+unlayered `.font-display` rule beating the sans face) were fixed, and a
+browser test reads the computed face. Round 5's notes were applied after it:
+the variant notes sit under PaneHeader and SectionLabel, and a test pins the
+danger colour on a group title. Not done (logged): a `--section-group-gap`
+token, because each caller sets its own gap today and both would add up.
+Queued: the dialog title against the pane title in both settings dialogs
+(`p-dialog`), and the roles field label in caps (`p-settings-kit`).
+Verified: typecheck; 10,440 unit tests; `bench:tokens`; i18n check;
+`section-label-face`, `server-settings-sections`, `settings-sections`,
+`settings-keyboard`, `profile-popover-menu` and `profile-popover-friends`
+e2e (26 passed); retro, Halloween, high contrast, 390px and toggle off.
+Screenshots: `~/pqp-redesign/p-section-header/`.
 
 ## Open questions for André
 
