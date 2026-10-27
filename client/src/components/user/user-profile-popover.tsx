@@ -1,7 +1,6 @@
 import {
   ArrowUpRight,
   AtSign,
-  Loader2,
   MessageCircle,
   MoreHorizontal,
   Phone,
@@ -113,6 +112,7 @@ import {
   type ProfileRoleChip,
   type ProfileSubject,
 } from "./profile-relations";
+import { Spinner } from "@/components/ui/spinner";
 import { SectionLabel } from "@/components/ui/section-header";
 
 /**
@@ -1532,7 +1532,7 @@ function UserProfileCard({
           </>
         ) : loading ? (
           <div className="mt-4 flex h-9 items-center justify-center text-paper-muted">
-            <Loader2 aria-hidden className="h-4 w-4 animate-spin" />
+            <Spinner className="h-4 w-4 animate-spin" />
             <span className="sr-only">{t("profile.loading")}</span>
           </div>
         ) : (
@@ -1580,7 +1580,7 @@ function UserProfileCard({
                 }}
               >
                 {busy && (
-                  <Loader2 aria-hidden className="h-3.5 w-3.5 animate-spin" />
+                  <Spinner className="h-3.5 w-3.5 animate-spin" />
                 )}
                 {action === "alreadyFriends"
                   ? `${primaryLabel[action]} ✓`

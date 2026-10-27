@@ -11,7 +11,6 @@ import {
   CirclePause,
   Info,
   ListFilter,
-  Loader2,
   Menu as MenuIcon,
   MessagesSquare,
   Plus,
@@ -102,6 +101,7 @@ import {
 } from "./forum-filter-bar";
 import { ForumPinnedTile, ForumPostCard } from "./forum-post-card";
 import { ForumPostView, type ForumPostViewProps } from "./forum-post-view";
+import { Spinner } from "@/components/ui/spinner";
 
 /**
  * A forum channel (UX.md, "Forum channels: UX and UI"): the list of posts,
@@ -1404,7 +1404,7 @@ export function ForumPane({
               aria-busy={starterBusy || undefined}
               className="gap-1 font-semibold text-text"
             >
-              {starterBusy && <Loader2 className="h-3 w-3 animate-spin" aria-hidden />}
+              {starterBusy && <Spinner className="h-3 w-3 animate-spin" />}
               {t("forum.empty.starterUse")}
             </Button>
             {onOpenSettings && (
@@ -1517,7 +1517,7 @@ export function ForumPane({
         <div ref={sentinelRef} aria-hidden className="h-px" />
         {moreState === "loading" && (
           <p className="flex items-center justify-center gap-2 py-5 text-xs text-text-secondary">
-            <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+            <Spinner className="h-4 w-4 animate-spin" />
           </p>
         )}
         {moreState === "error" && (

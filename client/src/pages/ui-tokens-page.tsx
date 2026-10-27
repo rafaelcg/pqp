@@ -30,6 +30,7 @@ import {
 import { CalendarClock, X as LineX } from "lucide-react";
 import { Navigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import { PaneHeader, SectionLabel } from "@/components/ui/section-header";
 import { CARD_LIST, CARD_ROW_HOVER, CARD_SURFACE } from "@/components/ui/card";
 import { StatusDot } from "@/components/user/status-dot";
@@ -54,7 +55,7 @@ import { TOAST_CLOSE, TOAST_SURFACE, TOAST_SURFACE_REDESIGN } from "@/components
 import { RadioGroup } from "@/components/ui/radio-group";
 import { Tabs } from "@/components/ui/tabs";
 import { Menu } from "@/components/ui/menu";
-import { Skeleton } from "@/components/ui/skeleton";
+import { ChannelListSkeleton, MessageListSkeleton, Skeleton } from "@/components/ui/skeleton";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
@@ -1263,6 +1264,35 @@ function PrimitiveSheet() {
 
       {/* Badges: the status word on a card, the tag beside a name, and the
           count in a pill. */}
+      {/* Loading: spinners at the sizes callers draw, in a status line and in
+          a button; the channel and message skeletons on their panes. */}
+      <div data-testid="qa-primitive-loading" className="grid gap-4 sm:grid-cols-[14rem_1fr]">
+        <div className="flex flex-col gap-4">
+          <div className="flex items-center gap-4 text-text-secondary">
+            <Spinner className="h-3.5 w-3.5 motion-safe:animate-spin" />
+            <Spinner className="h-4 w-4 animate-spin" />
+            <Spinner className="h-5 w-5 animate-spin text-accent" />
+          </div>
+          <p className="flex items-center gap-1.5 text-xs text-text-tertiary">
+            <Spinner className="h-3.5 w-3.5 shrink-0 motion-safe:animate-spin" />
+            {t("search.searching")}
+          </p>
+          <Button variant="secondary" disabled className="self-start">
+            <Spinner className="h-4 w-4 animate-spin" />
+            {t("search.searching")}
+          </Button>
+          <div className="rounded-[var(--radius-pane)] bg-pane-side">
+            <ChannelListSkeleton />
+          </div>
+        </div>
+        {/* On the canvas, as in the app, so the pane's edge reads in light. */}
+        <div className="self-start rounded-[calc(var(--radius-pane)+0.5rem)] bg-canvas p-2">
+          <div className="flex h-72 overflow-hidden rounded-[var(--radius-pane)] bg-pane-main">
+            <MessageListSkeleton />
+          </div>
+        </div>
+      </div>
+
       <div data-testid="qa-primitive-badge" className="flex flex-col gap-3">
         <p
           className="text-text-tertiary"

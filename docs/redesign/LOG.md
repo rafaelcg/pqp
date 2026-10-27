@@ -859,6 +859,23 @@ Verified: typecheck; 10,440 unit tests; `bench:tokens`; i18n check;
 e2e (26 passed); retro, Halloween, high contrast, 390px and toggle off.
 Screenshots: `~/pqp-redesign/p-section-header/`.
 
+### p-loading
+
+Spec (audit: 44 `animate-spin` sites, about 30 of them the Lucide
+`Loader2`, a few hand-built bordered rings; `Skeleton` in 16 files plus
+local placeholders):
+
+1. Job: show that something is on its way, or hold the shape of content.
+2. Redesign: a ring spinner with a faint track; skeletons as a faint text
+   tint, pill rows and round avatars; both still under reduced motion.
+3. Folded: the spinners in the settings kit and settings tabs,
+   connections, the profile popover, forward picker, depoimentos, search,
+   user search, GIF picker, message list and forum. Every `Skeleton` user
+   gets the new fill.
+4. Left for their owners: call, stories, apps, watch party and voice note
+   spinners (their surfaces), the splash ring (`f-states`), the server
+   rail skeleton (`s-rail`).
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss

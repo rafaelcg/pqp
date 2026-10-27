@@ -1,4 +1,4 @@
-import { CircleCheck, CircleX, Copy, Loader2, Minus } from "lucide-react";
+import { CircleCheck, CircleX, Copy, Minus } from "lucide-react";
 import { CARD_LIST, CARD_SURFACE } from "@/components/ui/card";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ import {
 import { doctorLine } from "@/components/layout/connection-doctor-lines";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import type { RealtimeTransport } from "@/lib/realtime";
+import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 
 const CHECK_LABEL: Record<CheckId, MessageKey> = {
@@ -158,7 +159,7 @@ export function ConnectionDoctorDialog({
           {rows.map((id) => {
             const result = by.get(id);
             const Icon = !result
-              ? Loader2
+              ? Spinner
               : result.verdict === "ok"
                 ? CircleCheck
                 : result.verdict === "fail"

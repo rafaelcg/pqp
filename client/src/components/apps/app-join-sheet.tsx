@@ -71,7 +71,7 @@ const FAILURE_KEY: Record<JoinFailure, MessageKey> = {
   unavailable: "apps.join.failedUnavailable",
 };
 
-function Spinner() {
+function AppSpinner() {
   return (
     <LoaderCircle
       aria-hidden
@@ -149,7 +149,7 @@ export function AppJoinSheet(props: AppJoinSheetProps) {
                   className="max-sm:h-12"
                   onClick={props.onEnter}
                 >
-                  {entering ? <Spinner /> : null}
+                  {entering ? <AppSpinner /> : null}
                   {entering
                     ? t("apps.join.entering")
                     : face === "failed"

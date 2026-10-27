@@ -829,6 +829,7 @@ import { openStoryComposer } from "@/lib/stories/ui-store";
 import { useStoriesEnabledFor } from "@/lib/stories/use-story-strip";
 import { EmulatorRoom } from "@/components/emulator/emulator-room";
 import { useEmulatorEnabledFor } from "@/lib/emulator/use-emulator-enabled";
+import { Skeleton } from "@/components/ui/skeleton";
 
 export type TokenResolver = (options?: {
   forceRefresh?: boolean;
@@ -14137,7 +14138,7 @@ function MainAppContent({
         {!selectedChannel && channelsLoading && !communityHomeOpen && (
           <div className="flex min-h-0 flex-1 flex-col">
             <header className="flex h-14 shrink-0 items-center border-b border-ink-4/60 px-4">
-              <div className="h-5 w-36 animate-pulse rounded-md bg-ink-4/50" />
+              <Skeleton className="h-5 w-36 rounded-md bg-ink-4/50" />
             </header>
             <MessageList
               messages={[]}
