@@ -1,3 +1,4 @@
+import { PANE_HEADER_REDESIGN } from "@/components/ui/pane-header";
 import type { AuthorGoneCheck } from "@/hooks/use-confirmed-gone-authors";
 import {
   forumTagIconEmoji,
@@ -1174,7 +1175,7 @@ export function ForumPane({
   // carries the forum's name and Novo post; otherwise the large title below
   // does, the way an Apple large title sits under a quiet bar.
   const header = (
-    <header className="flex h-14 shrink-0 items-center gap-1.5 px-3 sm:px-4">
+    <header className={cn("flex h-14 shrink-0 items-center gap-1.5 px-3 sm:px-4", PANE_HEADER_REDESIGN, "redesign:gap-1.5 redesign:max-sm:px-2")}>
       <button
         type="button"
         className="grid h-11 w-11 shrink-0 place-items-center rounded-[var(--radius-control)] hover:bg-surface-2 md:hidden"

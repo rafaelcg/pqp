@@ -1057,6 +1057,24 @@ hand-built status menu with the recado field; `DownloadHint` above it):
 4. Question for André: the status menu could become `ui/menu`'s
    `DropdownMenu` with the field as top content. That is behaviour, so it is
    not done here.
+
+### s-header
+
+Spec (audit: the chat header in `App.tsx` with `channelHeaderTools` and
+`HEADER_ACTION_TILE`, shared with the call split's header; six more headers
+drawn by hand: forum, Baú, friends, Novidades on a phone, two skeletons):
+
+1. Job: where you are (name, topic or "N aqui", a conversation's line) and
+   the pane's tools (join, call, nudge, schedule, pins, history, settings,
+   members, more).
+2. States: text, private, with an image, voice room (join), DM (call,
+   video, join with count), in the call, members open, phone back or menu
+   with the update dot, loading.
+3. Merge: one recipe, `ui/pane-header.ts` (bar, title, detail, 36px round
+   action tile, phone nav button), on every header above. From `md` up the
+   topic sits beside the name after a rule, as in the mockup. Left for their
+   elements: the thread panel's header (`s-thread`), the call split's own
+   bar (`f-call`), the party bar (`f-watch-party`).
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss

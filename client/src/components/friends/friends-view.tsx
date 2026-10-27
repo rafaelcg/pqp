@@ -1,3 +1,7 @@
+import { PANE_HEADER_NAV_REDESIGN, PANE_HEADER_TITLE_REDESIGN } from "@/components/ui/pane-header";
+import { List as ListBold, Users as UsersFill } from "@phosphor-icons/react";
+import { Icon } from "@/components/ui/icon";
+import { cn } from "@/lib/utils";
 import type {
   Depoimento,
   DmSummary,
@@ -21,7 +25,6 @@ import { UserAvatar } from "@/components/user/user-avatar";
 import { UserSearch } from "@/components/user/user-search";
 import { ApiError, createConversation } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
-import { cn } from "@/lib/utils";
 import {
   onlineFriends,
   pendingActionCount,
@@ -261,22 +264,24 @@ export function FriendsView({
     // the tabs drop to a second row that scrolls sideways instead of clipping,
     // so "Pendentes (3)" and "Adicionar amigo" stay on the screen.
     <div className="@container flex min-h-0 flex-1 flex-col">
-      <header className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-ink-4/60 px-4 py-2 @2xl:h-14 @2xl:flex-nowrap @2xl:py-0">
+      <header className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-ink-4/60 px-4 py-2 @2xl:h-14 @2xl:flex-nowrap @2xl:py-0 redesign:border-[color:var(--pane-header-rule)] redesign:px-[var(--pane-header-px)]">
         {onOpenNav && (
           <button
             type="button"
-            className="rounded-md p-1.5 hover:bg-ink-3 md:hidden"
+            className={cn("rounded-md p-1.5 hover:bg-ink-3 md:hidden", PANE_HEADER_NAV_REDESIGN, "redesign:md:hidden")}
             aria-label={t("empty.openNav")}
             onClick={onOpenNav}
           >
-            <Menu className="h-5 w-5" />
+            <Menu className="h-5 w-5 redesign:hidden" />
+            <Icon icon={ListBold} kind="symbol" size="sm" className="hidden redesign:block" />
           </button>
         )}
         <Users
           aria-hidden="true"
-          className="hidden h-5 w-5 shrink-0 text-paper-muted @sm:block"
+          className="hidden h-5 w-5 shrink-0 text-paper-muted @sm:block redesign:!hidden"
         />
-        <h1 className="min-w-0 truncate font-display text-base font-bold">
+        <Icon icon={UsersFill} size="sm" className="hidden shrink-0 text-text-tertiary redesign:@sm:block" />
+        <h1 className={cn("min-w-0 truncate font-display text-base font-bold", PANE_HEADER_TITLE_REDESIGN)}>
           {t("friends.title")}
         </h1>
 

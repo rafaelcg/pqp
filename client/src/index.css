@@ -880,6 +880,12 @@
   --sidebar-card-radius: 0.875rem;
   --sidebar-invite-border: color-mix(in oklab, var(--color-text) 22%, transparent);
 
+  /* Pane headers (ui/pane-header.ts): the chat's and every other pane's
+     top bar, on one rule, one inset and one title size. */
+  --pane-header-rule: color-mix(in oklab, var(--color-text) 8%, transparent);
+  --pane-header-px: 1rem;
+  --pane-header-title-size: 1rem;
+
   /* The icons-only sidebar (layout/channel-list.tsx): a channel is a
      rounded square, so the strip does not read as a second server rail. */
   --strip-tile-radius: 0.75rem;

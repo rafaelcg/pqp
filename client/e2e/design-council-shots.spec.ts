@@ -440,6 +440,18 @@ test("captures the design council screens", async ({ browser }) => {
         });
         await page.mouse.move(0, 0);
       }
+      // The conversation header up close, the pins tile hovered.
+      {
+        const header = page.locator("[data-chat-header]");
+        await header.getByRole("button", { name: "Fixadas" }).hover();
+        await page.waitForTimeout(400);
+        const box = (await header.boundingBox())!;
+        await page.screenshot({
+          path: path.join(OUT!, `s-header-${theme}.png`),
+          clip: { x: box.x, y: box.y, width: box.width, height: box.height + 48 },
+        });
+        await page.mouse.move(0, 0);
+      }
       // The channel list folded to icons, in place; then unfolded again.
       await page.locator("[data-channel-sidebar-toggle]").first().click();
       await expect(page.locator("[data-channel-rail]")).toBeVisible();
