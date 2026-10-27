@@ -21,6 +21,29 @@ import {
   X,
 } from "lucide-react";
 import {
+  CornersIn,
+  CornersOut,
+  DotsThree,
+  HandPalm,
+  Microphone,
+  MicrophoneSlash,
+  MonitorArrowUp,
+  MusicNotes,
+  PhoneDisconnect,
+  PictureInPicture,
+  ShieldSlash,
+  VideoCamera,
+  VideoCameraSlash,
+} from "@phosphor-icons/react";
+import { IconSwap } from "@/components/ui/icon";
+import {
+  CALL_BAR_REDESIGN,
+  CALL_CONTROL_REDESIGN,
+  CALL_TILE_REDESIGN,
+  TILE_BUTTON_REDESIGN,
+  TILE_GLASS_REDESIGN,
+} from "@/components/voice/call-control-classes";
+import {
   createContext,
   useCallback,
   useContext,
@@ -2525,7 +2548,7 @@ function ActiveCall({
       data-music-picture={musicPictureOnly ? "" : undefined}
       data-chrome-hidden={chrome.hidden ? "true" : "false"}
       className={cn(
-        "relative shrink-0 overflow-hidden border-b border-ink-4/60 bg-ink",
+        "relative shrink-0 overflow-hidden border-b border-ink-4/60 bg-ink redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--call-stage-bg)]",
         // The pointer goes with the controls, as in every player. `!` and the
         // descendant selector because the tiles set their own cursors, and the
         // pointer has to be gone over the picture whoever owns that element.
@@ -3692,8 +3715,12 @@ export function CallControls({
     ? "h-9 w-9 pointer-coarse:h-11 pointer-coarse:w-11"
     : collapsed
       ? "h-9 w-9 @max-[24rem]:h-8 @max-[24rem]:w-8"
-      : "h-10 w-10";
-  const iconSize = collapsed ? "h-4 w-4" : "h-4 w-4";
+      : "h-10 w-10 redesign:h-11 redesign:w-11";
+  // The redesign's filled glyphs read small at 16 px in a 44 px well.
+  const iconSize = collapsed ? "h-4 w-4 redesign:h-[1.125rem] redesign:w-[1.125rem]" : "h-4 w-4 redesign:h-5 redesign:w-5";
+  // Docked in the composer the controls sit in a row of the composer's own
+  // icons, so at rest they are ghosts; on the open stage they are wells.
+  const idle = collapsed ? CALL_CONTROL_REDESIGN.dock : CALL_CONTROL_REDESIGN.idle;
   // On a narrow stage a cluster is not a unit: its tiles fold into the pill's
   // wrapping row one by one. The bell's group keeps its own rule (hidden
   // below `sm`), which a `contents` here would override. The docked strip
@@ -3874,10 +3901,14 @@ export function CallControls({
                 // that looks like a button.
                 "bg-accent text-on-accent ring-2 ring-accent/40 hover:bg-accent-hover"
               : "bg-ink-3 text-paper hover:bg-ink-4",
+          CALL_CONTROL_REDESIGN.base,
+          handRaised
+            ? CALL_CONTROL_REDESIGN.on
+            : !audienceLocked && idle,
         )}
         onClick={onToggleRaisedHand}
       >
-        <Hand className={iconSize} />
+        <IconSwap off={Hand} on={HandPalm} offClassName={iconSize} className={iconSize} />
       </button>
     </Tooltip>
   ) : null;
@@ -3891,6 +3922,7 @@ export function CallControls({
         onToggle={audienceHost.onToggle}
         size={size}
         iconSize={iconSize}
+        idleClassName={idle}
       />
     ) : null;
 
@@ -4093,8 +4125,8 @@ export function CallControls({
           : appColumn.active
             ? // The column beside an app is ~300 px: six 44 px touch tiles fit
               // one row only with the tighter gap and padding.
-              "max-w-full flex-wrap justify-center gap-0.5 rounded-[1.625rem] bg-ink-2/90 px-1.5 py-1.5 shadow-lg ring-1 ring-ink-4/60 backdrop-blur"
-            : "max-w-full flex-wrap justify-center gap-2 rounded-[1.625rem] bg-ink-2/90 px-2.5 py-1.5 shadow-lg ring-1 ring-ink-4/60 backdrop-blur @max-[40rem]:gap-1",
+              cn("max-w-full flex-wrap justify-center gap-0.5 rounded-[1.625rem] bg-ink-2/90 px-1.5 py-1.5 shadow-lg ring-1 ring-ink-4/60 backdrop-blur", CALL_BAR_REDESIGN)
+            : cn("max-w-full flex-wrap justify-center gap-2 rounded-[1.625rem] bg-ink-2/90 px-2.5 py-1.5 shadow-lg ring-1 ring-ink-4/60 backdrop-blur @max-[40rem]:gap-1", CALL_BAR_REDESIGN, "redesign:px-2 redesign:py-2"),
       )}
     >
       {/* Every control in this bar used to carry a `title` beside its
@@ -4160,15 +4192,21 @@ export function CallControls({
                     ? "bg-danger/20 text-danger"
                     : "bg-ink-3 text-paper hover:bg-ink-4",
                 listenOnly && "opacity-60",
+                CALL_CONTROL_REDESIGN.base,
+                !listenOnly && voiceState.self?.serverMuted
+                  ? CALL_CONTROL_REDESIGN.warn
+                  : micShownOff
+                    ? CALL_CONTROL_REDESIGN.off
+                    : idle,
               )}
               onClick={onToggleMute}
             >
               {!listenOnly && voiceState.self?.serverMuted ? (
-                <ShieldBan className={iconSize} />
+                <IconSwap off={ShieldBan} on={ShieldSlash} offClassName={iconSize} className={iconSize} />
               ) : micShownOff ? (
-                <MicOff className={iconSize} />
+                <IconSwap off={MicOff} on={MicrophoneSlash} offClassName={iconSize} className={iconSize} />
               ) : (
-                <Mic className={iconSize} />
+                <IconSwap off={Mic} on={Microphone} offClassName={iconSize} className={iconSize} />
               )}
             </button>
           </span>
@@ -4177,7 +4215,7 @@ export function CallControls({
       {listenOnly && !collapsed && !audienceLocked && (
         <span
           data-listen-only
-          className="shrink-0 rounded bg-warning/20 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-warning"
+          className="shrink-0 rounded bg-warning/20 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-warning redesign:rounded-full redesign:px-2 redesign:text-[11px] redesign:font-medium redesign:normal-case redesign:tracking-normal"
         >
           {t("voice.bar.listenOnly")}
         </span>
@@ -4212,6 +4250,10 @@ export function CallControls({
             voiceState.isCameraOn
               ? "bg-signal/20 text-signal"
               : "bg-ink-3 text-paper hover:bg-ink-4",
+            CALL_CONTROL_REDESIGN.base,
+            voiceState.isCameraOn
+              ? CALL_CONTROL_REDESIGN.on
+              : idle,
           )}
           onClick={() => {
             if (cameraCappedOut) {
@@ -4221,9 +4263,9 @@ export function CallControls({
           }}
         >
           {voiceState.isCameraOn ? (
-            <Video className={iconSize} />
+            <IconSwap off={Video} on={VideoCamera} offClassName={iconSize} className={iconSize} />
           ) : (
-            <VideoOff className={iconSize} />
+            <IconSwap off={VideoOff} on={VideoCameraSlash} offClassName={iconSize} className={iconSize} />
           )}
         </button>
       </Tooltip>
@@ -4255,6 +4297,7 @@ export function CallControls({
           participantCount={voiceState.remotePeers.length + 1}
           buttonClassName={size}
           iconClassName={iconSize}
+          idleClassName={idle}
         />
       )}
       {/* Whether your mouse pointer goes out with the share.
@@ -4280,12 +4323,14 @@ export function CallControls({
             className={cn(
               "flex items-center justify-center rounded-full bg-ink-3 text-paper opacity-50",
               size,
+              CALL_CONTROL_REDESIGN.base,
+              idle,
             )}
             onClick={() =>
               setShareHint(screenShareUnavailableMessage("no-api"))
             }
           >
-            <ScreenShare className={iconSize} />
+            <IconSwap off={ScreenShare} on={MonitorArrowUp} offClassName={iconSize} className={iconSize} />
           </button>
         </Tooltip>
       )}
@@ -4320,6 +4365,10 @@ export function CallControls({
               voiceState.isSharingScreen
                 ? "bg-signal/20 text-signal"
                 : "bg-ink-3 text-paper hover:bg-ink-4",
+              CALL_CONTROL_REDESIGN.base,
+              voiceState.isSharingScreen
+                ? CALL_CONTROL_REDESIGN.on
+                : idle,
             )}
             onClick={() => {
               if (shareCappedOut) {
@@ -4333,9 +4382,9 @@ export function CallControls({
             }}
           >
             {voiceState.isSharingScreen ? (
-              <ScreenShareOff className={iconSize} />
+              <IconSwap off={ScreenShareOff} on={MonitorArrowUp} offClassName={iconSize} className={iconSize} />
             ) : (
-              <ScreenShare className={iconSize} />
+              <IconSwap off={ScreenShare} on={MonitorArrowUp} offClassName={iconSize} className={iconSize} />
             )}
           </button>
         </Tooltip>
@@ -4368,6 +4417,7 @@ export function CallControls({
         canManage={voiceState.canManageSoundboard}
         size={size}
         iconSize={iconSize}
+        idleClassName={idle}
       />
       {!musicFolded && (
       <Tooltip
@@ -4384,17 +4434,21 @@ export function CallControls({
             musicDock.open
               ? "bg-signal/20 text-signal"
               : "bg-ink-3 text-paper hover:bg-ink-4",
+            CALL_CONTROL_REDESIGN.base,
+            musicDock.open
+              ? CALL_CONTROL_REDESIGN.on
+              : idle,
           )}
           onClick={toggleMusicOpen}
         >
-          <Music className={iconSize} />
+          <IconSwap off={Music} on={MusicNotes} offClassName={iconSize} className={iconSize} />
           {/* NOVO, until the panel has been opened once. Never beside the
               dot below: that one needs a track on and this one needs none. */}
           {musicPip ? (
             <span
               data-music-pip=""
               aria-hidden="true"
-              className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-signal ring-2 ring-ink"
+              className={cn("absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-signal ring-2 ring-ink", CALL_CONTROL_REDESIGN.pip)}
             />
           ) : null}
           {/* The room has music and this machine is not hearing it. Nothing
@@ -4403,7 +4457,7 @@ export function CallControls({
             <span
               data-music-dock-dot=""
               aria-hidden="true"
-              className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-signal ring-2 ring-ink"
+              className={cn("absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-signal ring-2 ring-ink", CALL_CONTROL_REDESIGN.pip)}
             />
           ) : null}
         </button>
@@ -4420,10 +4474,12 @@ export function CallControls({
               "flex items-center justify-center rounded-full bg-ink-3 text-paper hover:bg-ink-4",
               size,
               pip.active && "text-signal",
+              CALL_CONTROL_REDESIGN.base,
+              pip.active ? CALL_CONTROL_REDESIGN.on : idle,
             )}
             onClick={pip.toggle}
           >
-            <PictureInPicture2 className={iconSize} />
+            <IconSwap off={PictureInPicture2} on={PictureInPicture} offClassName={iconSize} className={iconSize} />
           </button>
         </Tooltip>
       )}
@@ -4446,19 +4502,21 @@ export function CallControls({
             className={cn(
               "relative flex items-center justify-center rounded-full bg-ink-3 text-paper hover:bg-ink-4 data-[state=open]:bg-ink-4",
               size,
+              CALL_CONTROL_REDESIGN.base,
+              idle,
             )}
           >
-            <MoreHorizontal className={iconSize} aria-hidden="true" />
+            <IconSwap off={MoreHorizontal} on={DotsThree} kind="symbol" offClassName={iconSize} className={iconSize} />
             {musicAttention ? (
               <span
                 data-music-dock-dot=""
                 aria-hidden="true"
-                className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-signal ring-2 ring-ink"
+                className={cn("absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-signal ring-2 ring-ink", CALL_CONTROL_REDESIGN.pip)}
               />
             ) : joinLeaveMuted ? (
               <span
                 aria-hidden="true"
-                className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-warning ring-2 ring-ink"
+                className={cn("absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-warning ring-2 ring-ink", CALL_CONTROL_REDESIGN.pip)}
               />
             ) : null}
           </button>
@@ -4481,11 +4539,13 @@ export function CallControls({
               ? "h-9 w-12 pointer-coarse:h-11 pointer-coarse:w-11"
               : collapsed
                 ? size
-                : "h-10 w-14",
+                : "h-10 w-14 redesign:h-11 redesign:w-16",
+            CALL_CONTROL_REDESIGN.base,
+            CALL_CONTROL_REDESIGN.leave,
           )}
           onClick={onLeave}
         >
-          <PhoneOff className={iconSize} />
+          <IconSwap off={PhoneOff} on={PhoneDisconnect} offClassName={iconSize} className={iconSize} />
         </button>
       </Tooltip>
       </div>
@@ -4669,9 +4729,9 @@ function TileOverlay({
               type="button"
               data-testid="tile-more"
               aria-label={t("call.tile.more", { name })}
-              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4 data-[state=open]:bg-ink-4"
+              className={cn("flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4 data-[state=open]:bg-ink-4", TILE_BUTTON_REDESIGN)}
             >
-              <MoreHorizontal className="h-3.5 w-3.5" aria-hidden="true" />
+              <IconSwap off={MoreHorizontal} on={DotsThree} kind="symbol" offClassName="h-3.5 w-3.5" className="h-4 w-4" />
             </button>
           </Menu>
         )}
@@ -4689,13 +4749,13 @@ function TileOverlay({
               type="button"
               data-testid="camera-fullscreen"
               aria-pressed={isFullscreen}
-              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4"
+              className={cn("flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4", TILE_BUTTON_REDESIGN)}
               onClick={onToggleFullscreen}
             >
               {isFullscreen ? (
-                <Minimize2 className="h-3.5 w-3.5" />
+                <IconSwap off={Minimize2} on={CornersIn} kind="symbol" offClassName="h-3.5 w-3.5" className="h-4 w-4" />
               ) : (
-                <Maximize2 className="h-3.5 w-3.5" />
+                <IconSwap off={Maximize2} on={CornersOut} kind="symbol" offClassName="h-3.5 w-3.5" className="h-4 w-4" />
               )}
             </button>
           </Tooltip>
@@ -4759,6 +4819,8 @@ function PrimaryTile({
       className={cn(
         "group relative h-full w-full bg-ink-2",
         person.speaking && "ring-2 ring-inset ring-success",
+        CALL_TILE_REDESIGN.surface,
+        person.speaking && "redesign:ring-[color:var(--call-speaking)]",
       )}
     >
       {person.stream ? (
@@ -4871,6 +4933,9 @@ export function CameraTile({
         rounded && "rounded-xl",
         wideRow && "col-span-full",
         person.speaking && "ring-2 ring-success",
+        CALL_TILE_REDESIGN.surface,
+        rounded && CALL_TILE_REDESIGN.rounded,
+        person.speaking && CALL_TILE_REDESIGN.speaking,
         person.connecting && "opacity-70",
       )}
     >
@@ -5076,7 +5141,7 @@ function RoomFace({
             muted={person.muted}
             size="lg"
           />
-          <span className="max-w-[5rem] truncate text-[11px] text-paper-muted">
+          <span className="max-w-[5rem] truncate text-[11px] text-paper-muted redesign:text-xs redesign:text-text-secondary">
             {person.name}
           </span>
         </button>
@@ -5089,7 +5154,7 @@ function RoomFace({
             muted={person.muted}
             size="lg"
           />
-          <span className="max-w-full truncate text-[11px] text-paper-muted">
+          <span className="max-w-full truncate text-[11px] text-paper-muted redesign:text-xs redesign:text-text-secondary">
             {person.isSelf ? `${person.name} ${youLabel}` : person.name}
           </span>
         </>
@@ -5140,7 +5205,7 @@ function RingView({
               name={person.displayName}
               avatarUrl={person.avatarUrl}
               rounded="full"
-              className="relative h-20 w-20 ring-2 ring-ink-2 sm:h-24 sm:w-24"
+              className="relative h-20 w-20 ring-2 ring-ink-2 sm:h-24 sm:w-24 redesign:ring-4 redesign:ring-[color:var(--call-stage-bg)]"
               fallbackClassName="bg-ink-4 text-2xl text-paper"
             />
           </span>
@@ -5206,21 +5271,23 @@ function TileBadge({
     <span
       className={cn(
         "flex max-w-full items-center gap-1 truncate bg-ink/70 text-paper",
+        TILE_GLASS_REDESIGN,
+        "redesign:font-medium",
         inline
           ? // On a very narrow picture the name steps aside, so the mute
             // button is not pushed under "⋯". What the badge says about
             // the person (muted, moderator-muted, connecting) stays; a
             // badge with nothing but the name goes with it.
             cn(
-              "min-w-[4.5rem] rounded-md @max-[12rem]/picture:min-w-0",
+              "min-w-[4.5rem] rounded-md @max-[12rem]/picture:min-w-0 redesign:rounded-full",
               !muted &&
                 !serverMuted &&
                 !connecting &&
                 handPosition === null &&
                 "@max-[12rem]/picture:hidden",
             )
-          : cn("absolute bottom-0 left-0 rounded-tr-md", STAGE_LAYER.labels),
-        prominent ? "px-2 py-1 text-xs" : "px-1.5 py-0.5 text-[10px]",
+          : cn("absolute bottom-0 left-0 rounded-tr-md redesign:bottom-2 redesign:left-2 redesign:rounded-full", STAGE_LAYER.labels),
+        prominent ? "px-2 py-1 text-xs redesign:px-2.5" : "px-1.5 py-0.5 text-[10px] redesign:px-2 redesign:text-[11px]",
       )}
     >
       {serverMuted ? (
@@ -5734,9 +5801,9 @@ export function ScreenTileFrame({
             ? t("call.share.moreSelf")
             : t("call.share.more", { name: tile.presenterName })
         }
-        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4 data-[state=open]:bg-ink-4"
+        className={cn("flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4 data-[state=open]:bg-ink-4", TILE_BUTTON_REDESIGN)}
       >
-        <MoreHorizontal className="h-3.5 w-3.5" aria-hidden="true" />
+        <IconSwap off={MoreHorizontal} on={DotsThree} kind="symbol" offClassName="h-3.5 w-3.5" className="h-4 w-4" />
       </button>
     </Menu>
   );
@@ -5750,10 +5817,12 @@ export function ScreenTileFrame({
         className={cn(
           "flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4",
           pip.active && "text-signal",
+          TILE_BUTTON_REDESIGN,
+          pip.active && "redesign:text-accent",
         )}
         onClick={pip.toggle}
       >
-        <PictureInPicture2 className="h-3.5 w-3.5" />
+        <IconSwap off={PictureInPicture2} on={PictureInPicture} offClassName="h-3.5 w-3.5" className="h-4 w-4" />
       </button>
     </Tooltip>
   ) : null;
@@ -5766,13 +5835,13 @@ export function ScreenTileFrame({
           // alone cannot tell a test which one it pressed.
           data-testid="share-fullscreen"
           aria-pressed={isFullscreen}
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4"
+          className={cn("flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4", TILE_BUTTON_REDESIGN)}
           onClick={onToggleFullscreen}
         >
           {isFullscreen ? (
-            <Minimize2 className="h-3.5 w-3.5" />
+            <IconSwap off={Minimize2} on={CornersIn} kind="symbol" offClassName="h-3.5 w-3.5" className="h-4 w-4" />
           ) : (
-            <Maximize2 className="h-3.5 w-3.5" />
+            <IconSwap off={Maximize2} on={CornersOut} kind="symbol" offClassName="h-3.5 w-3.5" className="h-4 w-4" />
           )}
         </button>
       </Tooltip>
