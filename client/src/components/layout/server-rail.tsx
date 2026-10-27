@@ -15,14 +15,23 @@ import {
   UserPlus,
   Users,
 } from "lucide-react";
+import {
+  ChatCircle,
+  Compass as CompassFill,
+  GlobeSimple,
+  Plus as PlusBold,
+  Sparkle,
+  UserPlus as UserPlusFill,
+  type Icon as PhosphorIcon,
+} from "@phosphor-icons/react";
+import type { LucideIcon } from "lucide-react";
 import type { DmSummary, PublicUser, Server } from "@pqp/shared";
 import { useId, useMemo } from "react";
-import {
-  formatBadgeCount,
-  type UnreadState,
-} from "@/components/layout/channel-list";
+import type { UnreadState } from "@/components/layout/channel-list";
 import { ServerIcon } from "@/components/layout/server-identity";
 import { Button } from "@/components/ui/button";
+import { CountBadge } from "@/components/ui/count-badge";
+import { Icon, type IconKind } from "@/components/ui/icon";
 import { Tooltip } from "@/components/ui/tooltip";
 import {
   ContextMenu,
@@ -181,6 +190,44 @@ interface ServerRailProps {
 /** Faces under the door before the rest fold into a "+N". */
 export const RAIL_UNREAD_FACES = 3;
 
+/**
+ * Under the redesign every tile on the rail is one shape: a 44px circle in the
+ * side pane's colour (`--rail-tile-*`), the label in secondary text. A hover
+ * lifts the fill and rounds it toward the selected square; it never turns
+ * lime, so lime only ever means "you are here". Appended after each tile's own
+ * classes, so the toggle off draws what it always drew.
+ */
+const RAIL_TILE_REDESIGN =
+  "redesign:h-[var(--rail-tile)] redesign:w-[var(--rail-tile)] redesign:rounded-full redesign:bg-[color:var(--rail-tile-bg)] redesign:text-text-secondary redesign:font-sans! redesign:tracking-normal! redesign:text-[13px] redesign:font-semibold redesign:hover:rounded-[var(--rail-tile-radius-selected)] redesign:hover:bg-[color:var(--rail-tile-hover)] redesign:hover:text-text redesign:transition-[border-radius,background-color,color] redesign:duration-[var(--duration-fast)] redesign:motion-reduce:transition-none redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-canvas";
+
+/** The place on screen: the accent's rounded square, lifted. */
+const RAIL_TILE_SELECTED_REDESIGN =
+  "redesign:rounded-[var(--rail-tile-radius-selected)] redesign:bg-accent redesign:text-on-accent redesign:shadow-[var(--rail-tile-shadow)] redesign:hover:bg-accent redesign:hover:text-on-accent";
+
+/** A rule between the rail's groups. */
+const RAIL_DIVIDER_REDESIGN = "redesign:bg-[color:var(--rail-divider)]";
+
+/**
+ * A rail glyph: the Lucide outline with the toggle off, the redesign's
+ * Phosphor glyph (filled object, bold symbol) under it.
+ */
+function RailGlyph({
+  off: Off,
+  on,
+  kind = "object",
+}: {
+  off: LucideIcon;
+  on: PhosphorIcon;
+  kind?: IconKind;
+}) {
+  return (
+    <>
+      <Off className="h-5 w-5 redesign:hidden" aria-hidden="true" />
+      <Icon icon={on} kind={kind} className="hidden redesign:block" />
+    </>
+  );
+}
+
 export function ServerRail({
   communitiesEnabled = false,
   liveServerIds,
@@ -304,10 +351,12 @@ export function ServerRail({
           homeSelected
             ? "rounded-xl bg-signal text-ink"
             : "bg-ink-3 text-paper hover:bg-signal hover:text-ink",
+          RAIL_TILE_REDESIGN,
+          homeSelected && RAIL_TILE_SELECTED_REDESIGN,
         )}
       >
         <RailPill kind={homeSelected ? "selected" : doorCount > 0 ? "unread" : "none"} />
-        <MessageCircle className="h-5 w-5" />
+        <RailGlyph off={MessageCircle} on={ChatCircle} />
         {/* Friend requests stay lime and take the top-right corner. Unread
             DMs use the red bubble Discord puts on Home — that is how a
             waiting conversation shows up on this rail at all. Both can
@@ -387,7 +436,10 @@ export function ServerRail({
             type="button"
             data-rail-conversations-more={foldedFaces}
             onClick={onSelectHome}
-            className="flex h-12 w-12 shrink-0 animate-pop-in items-center justify-center rounded-full bg-ink-3 font-display text-sm font-bold text-paper transition-colors hover:bg-signal hover:text-ink"
+            className={cn(
+              "flex h-12 w-12 shrink-0 animate-pop-in items-center justify-center rounded-full bg-ink-3 font-display text-sm font-bold text-paper transition-colors hover:bg-signal hover:text-ink",
+              RAIL_TILE_REDESIGN,
+            )}
           >
             +{foldedFaces}
           </button>
@@ -409,7 +461,7 @@ export function ServerRail({
       ))}
       <span
         aria-hidden="true"
-        className="h-px w-8 shrink-0 rounded-full bg-ink-4/70"
+        className={cn("h-px w-8 shrink-0 rounded-full bg-ink-4/70", RAIL_DIVIDER_REDESIGN)}
       />
 
       {/* The reorderable part: only servers live in here. While one is dragged
@@ -582,11 +634,15 @@ export function ServerRail({
                   ? "bg-signal text-ink"
                   : "bg-ink-3 text-paper hover:bg-signal hover:text-ink",
                 muted && !selected && "opacity-50",
+                RAIL_TILE_REDESIGN,
+                selected && RAIL_TILE_SELECTED_REDESIGN,
                 // The Baú's ring: only when a red mention count holds the
                 // corner. The glow is the same signal token, so it follows
-                // the theme's accent.
+                // the theme's accent. Under the redesign it hugs the disc with
+                // no gap, the way a story ring does; a ring with a gap is
+                // keyboard focus.
                 bauCue === "ring" &&
-                  "ring-2 ring-signal ring-offset-2 ring-offset-rail shadow-[0_0_12px_1px_color-mix(in_oklab,var(--color-signal)_55%,transparent)]",
+                  "ring-2 ring-signal ring-offset-2 ring-offset-rail shadow-[0_0_12px_1px_color-mix(in_oklab,var(--color-signal)_55%,transparent)] redesign:ring-accent redesign:ring-offset-0",
               )}
               data-bau-cue={bauCue === "none" ? undefined : bauCue}
             >
@@ -629,9 +685,10 @@ export function ServerRail({
                   <span
                     data-server-public=""
                     aria-hidden="true"
-                    className="absolute -bottom-0.5 -left-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-rail text-signal"
+                    className="absolute -bottom-0.5 -left-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-rail text-signal redesign:-bottom-1 redesign:-left-1 redesign:h-[18px] redesign:w-[18px] redesign:bg-canvas redesign:text-accent"
                   >
-                    <Globe className="h-3 w-3" />
+                    <Globe className="h-3 w-3 redesign:hidden" />
+                    <Icon icon={GlobeSimple} size="sm" className="hidden h-3 w-3 redesign:block" />
                   </span>
                   <span id={publicDescId} className="sr-only">
                     {t("chrome.publicCommunity")}
@@ -641,7 +698,7 @@ export function ServerRail({
               {liveServerIds?.has(server.id) && mentions === 0 && (
                 <span
                   data-server-live=""
-                  className="absolute -bottom-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-rail"
+                  className="absolute -bottom-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-rail redesign:-bottom-1 redesign:-right-1 redesign:h-[18px] redesign:w-[18px] redesign:bg-canvas"
                 >
                   <span className="h-2.5 w-2.5 rounded-full bg-danger motion-safe:animate-pulse" />
                   <span className="sr-only">{t("chrome.livePartySr")}</span>
@@ -679,20 +736,25 @@ export function ServerRail({
         <Button
           variant="secondary"
           size="icon"
-          className="h-12 w-12 rounded-2xl hover:rounded-xl"
+          className={cn("h-12 w-12 rounded-2xl hover:rounded-xl", RAIL_TILE_REDESIGN, "redesign:border-0")}
           onClick={onCreateServer}
         >
-          <Plus className="h-5 w-5" />
+          <RailGlyph off={Plus} on={PlusBold} kind="symbol" />
         </Button>
       </Tooltip>
       <Tooltip label={t("chrome.joinInvite")} side="right" tone="rail">
         <Button
           variant="ghost"
           size="icon"
-          className="h-12 w-12 rounded-2xl hover:rounded-xl"
+          className={cn(
+            "h-12 w-12 rounded-2xl hover:rounded-xl",
+            RAIL_TILE_REDESIGN,
+            // A step below "create": no fill until the pointer is on it.
+            "redesign:border-0 redesign:bg-transparent",
+          )}
           onClick={onJoinServer}
         >
-          <UserPlus className="h-5 w-5" />
+          <RailGlyph off={UserPlus} on={UserPlusFill} />
         </Button>
       </Tooltip>
 
@@ -711,7 +773,7 @@ export function ServerRail({
         <>
           <span
             aria-hidden="true"
-            className="mt-auto h-px w-8 shrink-0 rounded-full bg-ink-4/70"
+            className={cn("mt-auto h-px w-8 shrink-0 rounded-full bg-ink-4/70", RAIL_DIVIDER_REDESIGN)}
           />
           <Tooltip
             label={
@@ -730,6 +792,8 @@ export function ServerRail({
                 whatsNewSelected
                   ? "rounded-xl bg-signal text-ink"
                   : "bg-ink-3 text-paper hover:bg-signal hover:text-ink",
+                RAIL_TILE_REDESIGN,
+                whatsNewSelected && RAIL_TILE_SELECTED_REDESIGN,
               )}
             >
               <RailPill
@@ -737,11 +801,11 @@ export function ServerRail({
                   whatsNewSelected ? "selected" : whatsNewUnread ? "unread" : "none"
                 }
               />
-              <Sparkles className="h-5 w-5" />
+              <RailGlyph off={Sparkles} on={Sparkle} />
               {whatsNewUnread && !whatsNewSelected && (
                 <span
                   aria-hidden="true"
-                  className="absolute right-[-2px] top-[-2px] h-2.5 w-2.5 rounded-full bg-signal ring-[3px] ring-rail"
+                  className="absolute right-[-2px] top-[-2px] h-2.5 w-2.5 rounded-full bg-signal ring-[3px] ring-rail redesign:bg-accent redesign:ring-canvas"
                 />
               )}
             </button>
@@ -753,7 +817,7 @@ export function ServerRail({
           {!onOpenWhatsNew && (
             <span
               aria-hidden="true"
-              className="mt-auto h-px w-8 shrink-0 rounded-full bg-ink-4/70"
+              className={cn("mt-auto h-px w-8 shrink-0 rounded-full bg-ink-4/70", RAIL_DIVIDER_REDESIGN)}
             />
           )}
           <Tooltip label={t("communities.title")} side="right" tone="rail">
@@ -767,10 +831,12 @@ export function ServerRail({
                 communitiesSelected
                   ? "rounded-xl bg-signal text-ink"
                   : "bg-ink-3 text-paper hover:bg-signal hover:text-ink",
+                RAIL_TILE_REDESIGN,
+                communitiesSelected && RAIL_TILE_SELECTED_REDESIGN,
               )}
             >
               <RailPill kind={communitiesSelected ? "selected" : "none"} />
-              <Compass className="h-5 w-5" />
+              <RailGlyph off={Compass} on={CompassFill} />
             </button>
           </Tooltip>
         </>
@@ -846,6 +912,12 @@ function PinnedConversationButton({
           ? "bg-signal text-ink"
           : "bg-ink-3 text-paper hover:bg-signal hover:text-ink",
         muted && !selected && "opacity-50",
+        RAIL_TILE_REDESIGN,
+        // A face stays round: the photo fills the tile, so "here" is an
+        // accent ring outside it rather than a fill behind it.
+        "redesign:hover:rounded-full",
+        selected &&
+          "redesign:ring-2 redesign:ring-accent redesign:ring-offset-2 redesign:ring-offset-canvas",
       )}
     >
       <RailPill kind={selected ? "selected" : hasUnread ? "unread" : "none"} />
@@ -884,7 +956,7 @@ function PinnedAvatarStack({
   const shown = participants.slice(0, MAX_PINNED_AVATARS);
   if (shown.length === 0) {
     return (
-      <span className="h-full w-full rounded-full bg-ink-4" aria-hidden="true" />
+      <span className="h-full w-full rounded-full bg-ink-4 redesign:bg-surface-3" aria-hidden="true" />
     );
   }
   if (shown.length === 1) {
@@ -894,7 +966,7 @@ function PinnedAvatarStack({
         name={person.displayName}
         avatarUrl={person.avatarUrl}
         className="h-full w-full"
-        fallbackClassName="bg-ink-4 text-sm text-paper"
+        fallbackClassName="bg-ink-4 text-sm text-paper redesign:bg-surface-3 redesign:text-[13px] redesign:font-semibold redesign:text-text"
         rounded="full"
       />
     );
@@ -907,7 +979,7 @@ function PinnedAvatarStack({
           name={person.displayName}
           avatarUrl={person.avatarUrl}
           className="h-5 w-5"
-          fallbackClassName="bg-ink-4 text-[8px] text-paper"
+          fallbackClassName="bg-ink-4 text-[8px] text-paper redesign:bg-surface-3 redesign:text-text"
           rounded="full"
         />
       ))}
@@ -927,6 +999,8 @@ function RailPill({ kind }: { kind: "selected" | "unread" | "none" }) {
         kind === "selected"
           ? "h-8 bg-signal"
           : "h-2 bg-paper group-hover:h-5",
+        // In text colour under the redesign: the tile is already lime.
+        "redesign:bg-text redesign:-left-[14px] redesign:motion-reduce:transition-none",
       )}
     />
   );
@@ -951,24 +1025,32 @@ function RailCountBadge({
   label?: string;
   dataBau?: boolean;
 }) {
-  if (count <= 0) {
-    return null;
-  }
   return (
-    <span
-      // Re-mounts on every change so the pop plays for each new count.
-      key={count}
+    // The shared count pill; the rail adds its corner and a ring cut out of
+    // the canvas. With the toggle off the classes below are what this badge
+    // always drew (11px bold on `signal` or `danger`, ringed in the rail).
+    <CountBadge
+      count={count}
+      tone={tone === "signal" ? "accent" : "danger"}
+      pop
+      label={label}
       aria-hidden="true"
       {...(dataFriendRequests ? { "data-friend-requests": count } : {})}
       {...(dataBau ? { "data-bau-count": count } : {})}
       {...(dataConversations ? { "data-conversations-waiting": count } : {})}
       className={cn(
-        "absolute right-[-5px] flex h-[18px] min-w-[18px] animate-badge-pop items-center justify-center rounded-full px-1 text-[11px] font-bold leading-none ring-[3px] ring-rail",
+        // `normal-nums`: the old pill had proportional figures.
+        "absolute right-[-5px] flex text-[11px] font-bold normal-nums ring-[3px] ring-rail",
         corner === "top" ? "top-[-5px]" : "bottom-[-5px]",
         tone === "danger" ? "bg-danger text-paper" : "bg-signal text-ink",
+        "redesign:ring-canvas redesign:tabular-nums",
+        tone === "danger"
+          ? "redesign:bg-danger redesign:text-on-danger"
+          : "redesign:bg-accent redesign:text-on-accent",
+        corner === "top"
+          ? "redesign:top-[-4px] redesign:right-[-4px]"
+          : "redesign:bottom-[-4px] redesign:right-[-4px]",
       )}
-    >
-      {label ?? formatBadgeCount(count)}
-    </span>
+    />
   );
 }

@@ -604,6 +604,9 @@ const PRIMITIVES: {
   { id: "p-slider", testId: "qa-primitive-slider", focus: "Volume", role: "slider", hover: "Scrub" },
   // Focus the connection strip's main action, hover the error's dismiss.
   { id: "p-banner", testId: "qa-primitive-banner", focus: "Tentar agora", hover: "Dispensar" },
+  // Two real rails: Conversas open with people waiting, and a server open
+  // beside every server cue. Keyboard focus on "Praça", hover on "Oficina".
+  { id: "s-rail", testId: "qa-shell-rail", focus: "Praça", hover: "Oficina" },
 ];
 
 test("captures the primitives", async ({ browser }) => {

@@ -717,6 +717,21 @@ their own edge and fill; the phone breakpoint is defined three ways):
 3. Built as class strings in `ui/pane.ts`, appended after each pane's own.
 4. Left: below 768px the drawers keep their edges (`m-shell`, `m-breakpoints`).
 
+### s-rail
+
+Spec (audit: one rail in `server-rail.tsx`, six tile kinds each drawing its
+own lime-on-hover square, a hand-made count pill, legacy tokens throughout):
+
+1. Job: the doors on the left edge: Conversas, waiting and pinned people,
+   servers, create and join, Novidades, Discover, the update button.
+2. States: selected, unread pip, mention and request counts, muted, Baú
+   count or ring, live party, public community, dragged, keyboard focus.
+3. Redesign: 44px round tiles in the side pane's colour; the selected one is
+   the accent's rounded square; a hover lifts the fill and never turns lime;
+   filled Phosphor glyphs; counts on `CountBadge`; marks cut from the canvas.
+4. Left: `PhoneServersScreen` (`m-shell`) and `ServerRailSkeleton`
+   (`p-loading`, which is in review).
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss

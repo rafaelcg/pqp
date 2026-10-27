@@ -427,6 +427,27 @@ States are never told apart by colour alone:
 The mixes are `color-mix(in oklab, …)`. The bench and the sheet both read that
 form, so a derived role is measured like any other.
 
+### The server rail
+
+`layout/server-rail.tsx`, on the canvas with no edge (`RAIL_REDESIGN` in
+`ui/pane.ts`). Under the redesign:
+
+- Every tile is a 44px circle (`--rail-tile`) in the side pane's colour
+  (`--rail-tile-bg`), the label 13px semibold in secondary text.
+- The selected tile is the accent's rounded square
+  (`--rail-tile-radius-selected`, 16px) with a short drop
+  (`--rail-tile-shadow`). A face (a pinned or waiting conversation) stays
+  round and takes an accent ring instead, because its photo fills the tile.
+- A hover lifts the fill (`--rail-tile-hover`) and rounds the tile toward the
+  selected square. It never turns lime: lime only means "you are here".
+- The pip on the left edge is the text colour: tall for selected, a dot for
+  unread.
+- The Baú's ring (new posts beside a mention) hugs the disc with no gap, like
+  a story ring; a ring with a gap is keyboard focus.
+- Counts are `CountBadge` with a ring cut from the canvas. The public globe
+  and the live dot sit on canvas discs at the lower corners.
+- Glyphs are filled Phosphor objects; `+` is a bold symbol.
+
 ### Icons
 
 The redesign's icons are Phosphor (`@phosphor-icons/react`), drawn through
