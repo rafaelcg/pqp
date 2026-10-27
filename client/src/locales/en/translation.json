@@ -3793,6 +3793,7 @@
   "chrome.newPrivateChannel": "New private {name} channel",
   "chrome.emptyCategory": "Empty. Drag a channel here.",
   "chrome.dropOnCategory": "Drop in {name}",
+  "chrome.dropHere": "Drop here",
   "chrome.categoryChannelCount_one": "{count} channel",
   "chrome.categoryChannelCount_other": "{count} channels",
   "chrome.createInCategory": "Create a channel in {name}",

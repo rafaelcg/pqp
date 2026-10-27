@@ -455,6 +455,13 @@ test("captures the design council screens", async ({ browser }) => {
         });
         await page.mouse.move(0, 0);
       }
+      // The channel list folded to icons, in place; then unfolded again.
+      await page.locator("[data-channel-sidebar-toggle]").first().click();
+      await expect(page.locator("[data-channel-rail]")).toBeVisible();
+      await page.waitForTimeout(300);
+      await shoot(page, `20-sidebar-strip-${theme}`);
+      await page.locator("[data-channel-rail-expand]").click();
+      await expect(page.locator("[data-channel-rail]")).toBeHidden();
       // A short name, so the caret's place after the name shows.
       try {
         await page.getByRole("button", { name: /Faculdade ADS/ }).first().click({ timeout: 5_000 });
@@ -491,6 +498,26 @@ test("captures the design council screens", async ({ browser }) => {
       await page.locator("[data-server-menu-trigger]").first().click();
       await expect(page.locator("[data-server-menu]")).toBeVisible();
       await shoot(page, `15-server-menu-${theme}`);
+      // Invites: the panel with the active links, from the same menu.
+      await page.getByRole("menuitem", { name: "Convidar pessoas" }).click();
+      await expect(page.getByRole("dialog")).toBeVisible();
+      await page.waitForTimeout(600);
+      await shoot(page, `29-invite-create-${theme}`);
+      await page.keyboard.press("Escape");
+      // A new server: the name step, then the Discord path.
+      await page.getByRole("button", { name: "Criar comunidade" }).first().click();
+      await expect(page.getByRole("dialog")).toBeVisible();
+      await page.waitForTimeout(400);
+      await shoot(page, `30-create-server-${theme}`);
+      await page.getByRole("dialog").getByText("Copiar uma estrutura do Discord", { exact: true }).click();
+      await page.waitForTimeout(300);
+      await shoot(page, `31-create-server-paste-${theme}`);
+      await page.keyboard.press("Escape");
+      // Joining with a code.
+      await page.getByRole("button", { name: "Entrar com convite" }).first().click();
+      await expect(page.getByRole("dialog")).toBeVisible();
+      await page.waitForTimeout(400);
+      await shoot(page, `32-invite-join-${theme}`);
       await page.keyboard.press("Escape");
       await page.getByText(PAPO.at(-1)![1]).click({ button: "right" });
       await expect(page.locator("[data-context-menu]")).toBeVisible();
@@ -536,6 +563,15 @@ test("captures the design council screens", async ({ browser }) => {
       await page.getByRole("dialog").getByText("Voz e vídeo", { exact: true }).first().click();
       await expect(page.getByRole("dialog").getByRole("slider").first()).toBeVisible();
       await shoot(page, `14-settings-voice-${theme}`);
+      // An unsaved profile: the bar at the foot of the page and the dot on
+      // the Perfil tab, seen from the next tab. Discarded before closing.
+      await page.getByRole("dialog").getByText("Perfil", { exact: true }).first().click();
+      await page.getByRole("dialog").getByLabel("Nome de exibição").fill("Lia Fliperama");
+      await page.getByRole("dialog").getByText("Privacidade", { exact: true }).first().click();
+      await expect(page.getByRole("button", { name: "Salvar alterações" })).toBeVisible();
+      await page.waitForTimeout(400);
+      await shoot(page, `25-settings-unsaved-${theme}`);
+      await page.getByRole("button", { name: "Descartar" }).click();
       await page.keyboard.press("Escape");
 
       await page.locator("[data-server-menu-trigger]").first().click();
@@ -550,7 +586,27 @@ test("captures the design council screens", async ({ browser }) => {
       await page.getByRole("dialog").getByRole("tab", { name: "Permissões" }).click();
       await page.waitForTimeout(300);
       await shoot(page, `13-server-roles-perms-${theme}`);
+      // The audit log's entries and the danger zone's card.
+      await page.getByRole("dialog").getByText("Registro", { exact: true }).first().click();
+      await page.waitForTimeout(800);
+      await shoot(page, `26-server-audit-${theme}`);
+      await page.getByRole("dialog").getByText("Zona de risco", { exact: true }).first().click();
+      await page.waitForTimeout(300);
+      await shoot(page, `27-server-danger-${theme}`);
       await page.keyboard.press("Escape");
+      // Channel settings, from the open channel's gear. Best effort: a
+      // missing gear skips the shot instead of the screens after it.
+      try {
+        const gear = page.getByRole("button", { name: /Configurações do canal/ }).first();
+        await gear.hover({ force: true, timeout: 5_000 });
+        await gear.click({ force: true, timeout: 5_000 });
+        await expect(page.getByRole("dialog")).toBeVisible({ timeout: 5_000 });
+        await page.waitForTimeout(500);
+        await shoot(page, `28-channel-settings-${theme}`);
+        await page.keyboard.press("Escape");
+      } catch {
+        console.log("channel settings gear not found, shot 28 skipped");
+      }
 
       await context.close();
     }
@@ -621,6 +677,17 @@ test("captures the design council screens", async ({ browser }) => {
       await shoot(phonePage, `19-phone-sheet-${theme}`);
       await phonePage.keyboard.press("Escape");
     }
+    // Settings on a phone: the rail is a strip of tabs over the page.
+    await as(phonePage, "dark");
+    await phonePage.goto(chatUrl);
+    await expect(phonePage.getByText(PAPO.at(-1)![1])).toBeVisible({ timeout: 30_000 });
+    await hideDevBanner(phonePage);
+    await phonePage.getByRole("button", { name: "Abrir navegação" }).first().click();
+    await phonePage.waitForTimeout(500);
+    await phonePage.getByRole("button", { name: "Abrir configurações" }).first().click();
+    await expect(phonePage.getByRole("dialog")).toBeVisible();
+    await phonePage.waitForTimeout(500);
+    await shoot(phonePage, "24-phone-settings-dark");
     await phone.close();
   } finally {
     for (const socket of sockets.values()) {
@@ -688,6 +755,7 @@ const PRIMITIVES: {
   { id: "p-avatar", testId: "qa-primitive-avatar" },
   // Status words, the tags beside a name, and counts; no interaction.
   { id: "p-badge", testId: "qa-primitive-badge" },
+  { id: "p-scroll", testId: "qa-primitive-scroll" },
   { id: "p-empty", testId: "qa-primitive-empty", hover: "Copiar convite" },
   { id: "p-loading", testId: "qa-primitive-loading" },
   { id: "p-section-header", testId: "qa-primitive-section-header" },
@@ -703,6 +771,14 @@ const PRIMITIVES: {
   // Two real rails: Conversas open with people waiting, and a server open
   // beside every server cue. Keyboard focus on "Praça", hover on "Oficina".
   { id: "s-rail", testId: "qa-shell-rail", focus: "Praça", hover: "Oficina" },
+  { id: "s-sidebar-special", testId: "qa-shell-sidebar-special" },
+  { id: "s-category", testId: "qa-shell-categories", focus: "Jogos da semana", hover: "Bate-papo" },
+  { id: "s-channel-row", testId: "qa-shell-channel-rows", focus: "general", hover: "clipes" },
+  { id: "s-voice-row", testId: "qa-shell-voice-rows" },
+  // The icons-only sidebar: hover on "general".
+  { id: "s-sidebar-rail", testId: "qa-shell-sidebar-strip", focus: "clipes", hover: "general" },
+  // The voice strip in its states.
+  { id: "s-voice-strip", testId: "qa-shell-voice-strip", focus: "Sair da call" },
 ];
 
 test("captures the primitives", async ({ browser }) => {
@@ -835,6 +911,55 @@ test("captures the forum post", async ({ browser }) => {
     await page.getByRole("button", { name: "Criar comunidade", exact: true }).first().hover();
     await page.waitForTimeout(600);
     await page.screenshot({ path: path.join(OUT!, `10-tooltip-rail-${theme}.png`) });
+    await context.close();
+  }
+});
+
+/**
+ * The stories strip above the channels (`s-sidebar-special`): my own ring and
+ * a friend's new story. Its own server, so the other scenes stay as they were.
+ */
+test("captures the stories strip", async ({ browser }) => {
+  fs.mkdirSync(OUT!, { recursive: true });
+  await person(VIEWER, "Lia", PRESET(4));
+  await person("bia", "Bia", null);
+  const home = await server(VIEWER, "Cineclube");
+  await join(VIEWER, home.id, "bia");
+  const flag = await fetch(`${API}/api/admin/flag-overrides`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${ADMIN_TOKEN}` },
+    body: JSON.stringify({ key: "stories", serverId: home.id, enabled: true }),
+  });
+  expect(flag.status).toBe(200);
+  for (const [suffix, text] of [
+    [VIEWER, "sessão hoje às 20h"],
+    ["bia", "trouxe pipoca"],
+  ] as const) {
+    const story = await fetch(`${API}/api/stories`, {
+      method: "POST",
+      headers: headers(suffix),
+      body: JSON.stringify({ kind: "text", text, background: "night", audiences: { serverIds: [home.id] } }),
+    });
+    expect(story.status).toBe(201);
+  }
+  const text = home.channels.find((c) => c.type === "text")!;
+
+  for (const theme of ["dark", "light"] as const) {
+    const context = await browser.newContext({ viewport: DESKTOP, locale: "pt-BR" });
+    const page = await context.newPage();
+    await as(page, theme);
+    await page.goto(`/app/server/${home.id}/channel/${text.id}?lang=pt-BR`);
+    const strip = page.locator(`[data-story-strip="server:${home.id}"]`);
+    await expect(strip.locator("[data-story-ring]")).toHaveCount(2, { timeout: 30_000 });
+    await hideDevBanner(page);
+    await page.evaluate(() => document.fonts.ready);
+    await page.waitForTimeout(1200);
+    await page.mouse.move(0, 0);
+    const box = (await strip.boundingBox())!;
+    await page.screenshot({
+      path: path.join(OUT!, `s-sidebar-stories-${theme}.png`),
+      clip: { x: Math.max(0, box.x - 24), y: Math.max(0, box.y - 112), width: box.width + 48, height: box.height + 200 },
+    });
     await context.close();
   }
 });

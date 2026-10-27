@@ -3835,6 +3835,7 @@
   "chrome.newPrivateChannel": "Nuevo canal privado de {name}",
   "chrome.emptyCategory": "Vacía. Arrastra un canal aquí.",
   "chrome.dropOnCategory": "Soltar en {name}",
+  "chrome.dropHere": "Soltar aquí",
   "chrome.categoryChannelCount_one": "{count} canal",
   "chrome.categoryChannelCount_other": "{count} canales",
   "chrome.createInCategory": "Crear un canal en {name}",
