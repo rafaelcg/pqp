@@ -16,11 +16,13 @@ import {
   CATEGORY_ACTION_REDESIGN,
   CATEGORY_LABEL_REDESIGN,
   CATEGORY_ROW_REDESIGN,
+  CATEGORY_TOGGLE_REDESIGN,
   CATEGORY_SUMMARY_REDESIGN,
   SectionActionGlyph,
   SectionCaret,
 } from "@/components/layout/channel-section-header";
 import { useTranslation } from "@/lib/i18n";
+import { useRedesign } from "@/lib/redesign";
 import { cn } from "@/lib/utils";
 
 /**
@@ -123,6 +125,7 @@ export function MixedCategoryHeader({
   drag: CategoryHeaderDrag;
 }) {
   const { t } = useTranslation();
+  const redesign = useRedesign();
   const into = drag.drop === "into";
   return (
     <ContextMenu items={menuItems}>
@@ -153,10 +156,11 @@ export function MixedCategoryHeader({
           type="button"
           onClick={onToggle}
           aria-expanded={!collapsed}
+          data-section-toggle=""
           className={cn(
             "flex min-w-0 flex-1 items-center gap-1 rounded-sm text-left",
             FOCUS_RING,
-            "redesign:gap-1.5 redesign:rounded-full redesign:focus-visible:ring-accent",
+            CATEGORY_TOGGLE_REDESIGN,
           )}
         >
           <SectionCaret collapsed={collapsed} />
@@ -169,9 +173,9 @@ export function MixedCategoryHeader({
         {into ? (
           <span
             data-category-drop-label=""
-            className="shrink-0 text-[10px] font-semibold normal-case tracking-normal"
+            className="shrink-0 text-[10px] font-semibold normal-case tracking-normal redesign:text-[11px]"
           >
-            {t("chrome.dropOnCategory", { name: category.name })}
+            {redesign ? t("chrome.dropHere") : t("chrome.dropOnCategory", { name: category.name })}
           </span>
         ) : collapsed && childCount > 0 ? (
           <span

@@ -1,11 +1,12 @@
 import { useSyncExternalStore } from "react";
+import { SM_UP_QUERY } from "@/lib/breakpoints";
 
 /**
  * Tailwind's `sm` breakpoint (640px) — the line `docs/ONBOARDING.md` draws
  * for the Voz limpa nudge: below it the card never shows, and the NOVO dot
  * on the Settings row is the only discoverability a phone gets.
  */
-export const SM_QUERY = "(min-width: 40rem)";
+export const SM_QUERY = SM_UP_QUERY;
 
 function query(): MediaQueryList | null {
   try {

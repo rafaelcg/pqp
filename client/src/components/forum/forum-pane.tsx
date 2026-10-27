@@ -1,4 +1,10 @@
-import { PANE_HEADER_REDESIGN } from "@/components/ui/pane-header";
+import {
+  PANE_HEADER_ACTION_REDESIGN,
+  PANE_HEADER_DETAIL_REDESIGN,
+  PANE_HEADER_NAV_REDESIGN,
+  PANE_HEADER_REDESIGN,
+  PANE_HEADER_TITLE_REDESIGN,
+} from "@/components/ui/pane-header";
 import type { AuthorGoneCheck } from "@/hooks/use-confirmed-gone-authors";
 import {
   forumTagIconEmoji,
@@ -91,7 +97,18 @@ import { forumTagLabel } from "@/lib/forum-tag-icons";
 import { starterTagsFor } from "@/lib/forum-tag-draft";
 import { useTranslation } from "@/lib/i18n";
 import type { MentionCandidate } from "@/lib/mention-autocomplete";
+import { ChannelIcon } from "@/components/layout/channel-icon";
 import { cn } from "@/lib/utils";
+import { EmptyState } from "@/components/ui/empty-state";
+import {
+  ChatsCircle as PhChatsCircle,
+  Funnel as PhFunnel,
+  MagnifyingGlass as PhMagnifyingGlass,
+  NotePencil as PhNotePencil,
+  WifiSlash as PhWifiSlash,
+  List as ListIcon,
+} from "@phosphor-icons/react";
+import { Icon, IconSwap } from "@/components/ui/icon";
 import { ForumComposerDialog } from "./forum-composer-dialog";
 import { ForumTagIcon } from "./forum-tag-icon";
 import {
@@ -103,6 +120,7 @@ import {
 import { ForumPinnedTile, ForumPostCard } from "./forum-post-card";
 import { ForumPostView, type ForumPostViewProps } from "./forum-post-view";
 import { Spinner } from "@/components/ui/spinner";
+import { BELOW_MD_QUERY } from "@/lib/breakpoints";
 
 /**
  * A forum channel (UX.md, "Forum channels: UX and UI"): the list of posts,
@@ -215,6 +233,16 @@ function CardSkeleton({ short = false }: { short?: boolean }) {
   );
 }
 
+/** Today's outline glyph with the toggle off, the filled one under the redesign. */
+function ForumEmptyGlyph({ line, filled }: { line: ReactNode; filled: ReactNode }) {
+  return (
+    <>
+      <span className="contents redesign:hidden">{line}</span>
+      <span className="hidden redesign:contents">{filled}</span>
+    </>
+  );
+}
+
 function EmptyBlock({
   icon,
   title,
@@ -229,14 +257,18 @@ function EmptyBlock({
   role?: "alert" | "status";
 }) {
   return (
-    <div role={role} className="flex flex-col items-center px-6 py-16 text-center animate-fade-in">
-      <div className="text-text-secondary">{icon}</div>
-      <p className="mt-4 forum-display text-xl font-bold text-text">{title}</p>
-      {body && <p className="mt-1.5 max-w-sm text-sm leading-5 text-text-secondary">{body}</p>}
-      {children && (
-        <div className="mt-5 flex flex-wrap items-center justify-center gap-2">{children}</div>
-      )}
-    </div>
+    <EmptyState
+      role={role}
+      icon={icon}
+      title={title}
+      body={body}
+      actions={children}
+      className="px-6 py-16 animate-fade-in"
+      iconClassName="text-text-secondary"
+      titleClassName="mt-4 forum-display text-xl font-bold text-text redesign:mt-0"
+      bodyClassName="mt-1.5 max-w-sm text-sm leading-5 text-text-secondary"
+      actionsClassName="mt-5"
+    />
   );
 }
 
@@ -271,7 +303,7 @@ export function ForumPane({
 }: ForumPaneProps) {
   const { t } = useTranslation();
   const forumId = channel.id;
-  const isPhone = useMediaQuery("(max-width: 767px)");
+  const isPhone = useMediaQuery(BELOW_MD_QUERY);
 
   // ---------------------------------------------------------- the visit
   // The cursor this visit replaced, from the shell (see `markRead`). The
@@ -1175,23 +1207,31 @@ export function ForumPane({
   // carries the forum's name and Novo post; otherwise the large title below
   // does, the way an Apple large title sits under a quiet bar.
   const header = (
-    <header className={cn("flex h-14 shrink-0 items-center gap-1.5 px-3 sm:px-4", PANE_HEADER_REDESIGN, "redesign:gap-1.5 redesign:max-sm:px-2")}>
+    <header className={cn("flex h-14 shrink-0 items-center gap-1.5 px-3 sm:px-4", PANE_HEADER_REDESIGN, "redesign:gap-1.5 redesign:max-sm:px-2", compactList && "redesign:border-b")}>
       <button
         type="button"
-        className="grid h-11 w-11 shrink-0 place-items-center rounded-[var(--radius-control)] hover:bg-surface-2 md:hidden"
+        className={cn(
+          "grid h-11 w-11 shrink-0 place-items-center rounded-[var(--radius-control)] hover:bg-surface-2 md:hidden",
+          PANE_HEADER_NAV_REDESIGN,
+          "redesign:md:hidden",
+        )}
         aria-label={t("chrome.openNav")}
         onClick={onOpenNav}
       >
-        <MenuIcon className="h-5 w-5" aria-hidden />
+        <IconSwap off={MenuIcon} on={ListIcon} kind="symbol" offClassName="h-5 w-5" />
       </button>
-      <div className="flex min-w-0 flex-1 items-center gap-2">
+      <div className="flex min-w-0 flex-1 items-center gap-2 redesign:gap-3">
         {compactList ? (
           <>
-            <span className="forum-display truncate text-lg font-bold text-text">
-              {channel.name}
+            <span className={cn("forum-display flex min-w-0 items-center text-lg font-bold text-text", PANE_HEADER_TITLE_REDESIGN, "redesign:gap-2")}>
+              {/* The forum's glyph before its name, as `#` marks a text channel. */}
+              <span className="hidden text-text-tertiary redesign:inline-flex">
+                <ChannelIcon channel={channel} className="h-4 w-4" />
+              </span>
+              <span className="truncate">{channel.name}</span>
             </span>
             {countsLine && (
-              <span className="truncate text-xs tabular-nums text-text-secondary max-lg:hidden">
+              <span className={cn("truncate text-xs tabular-nums text-text-secondary max-lg:hidden", PANE_HEADER_DETAIL_REDESIGN, "redesign:border-l redesign:border-[color:var(--pane-header-rule)] redesign:pl-3")}>
                 {countsLine}
               </span>
             )}
@@ -1211,9 +1251,9 @@ export function ForumPane({
             setPhoneSearchOpen(true);
             window.setTimeout(() => searchRef.current?.focus(), 0);
           }}
-          className="grid h-11 w-11 shrink-0 place-items-center rounded-[var(--radius-control)] text-text hover:bg-surface-2"
+          className={cn("grid h-11 w-11 shrink-0 place-items-center rounded-[var(--radius-control)] text-text hover:bg-surface-2", PANE_HEADER_ACTION_REDESIGN)}
         >
-          <Search className="h-5 w-5" aria-hidden />
+          <IconSwap off={Search} on={PhMagnifyingGlass} kind="symbol" offClassName="h-5 w-5" />
         </button>
       )}
       {rulesButton}
@@ -1223,9 +1263,9 @@ export function ForumPane({
           aria-label={t("forum.newPost")}
           onClick={() => openComposer()}
           data-forum-new-post=""
-          className="grid h-11 w-11 shrink-0 place-items-center rounded-[var(--radius-control)] text-accent hover:bg-surface-2"
+          className={cn("grid h-11 w-11 shrink-0 place-items-center rounded-[var(--radius-control)] text-accent hover:bg-surface-2", PANE_HEADER_ACTION_REDESIGN, "redesign:text-accent redesign:hover:text-accent")}
         >
-          <SquarePen className="h-5 w-5" aria-hidden />
+          <IconSwap off={SquarePen} on={PhNotePencil} offClassName="h-5 w-5" />
         </button>
       )}
       {compactList && !isPhone && newPostButton}
@@ -1356,7 +1396,7 @@ export function ForumPane({
     listBody = (
       <EmptyBlock
         role="alert"
-        icon={<WifiOff className="h-7 w-7" aria-hidden strokeWidth={1.5} />}
+        icon={<ForumEmptyGlyph line={<WifiOff className="h-7 w-7" aria-hidden strokeWidth={1.5} />} filled={<Icon icon={PhWifiSlash} kind="symbol" size="lg" />} />}
         title={t("forum.loadError")}
         body={t("forum.loadError.body")}
       >
@@ -1368,7 +1408,7 @@ export function ForumPane({
   } else if (forumEmpty) {
     listBody = (
       <EmptyBlock
-        icon={<MessagesSquare className="h-7 w-7" aria-hidden strokeWidth={1.5} />}
+        icon={<ForumEmptyGlyph line={<MessagesSquare className="h-7 w-7" aria-hidden strokeWidth={1.5} />} filled={<Icon icon={PhChatsCircle} size="lg" />} />}
         title={t("forum.empty")}
         body={t("forum.empty.body")}
       >
@@ -1452,7 +1492,7 @@ export function ForumPane({
         {noResults && list.posts.length === 0 ? (
           filters.q ? (
             <EmptyBlock
-              icon={<SearchX className="h-7 w-7" aria-hidden strokeWidth={1.5} />}
+              icon={<ForumEmptyGlyph line={<SearchX className="h-7 w-7" aria-hidden strokeWidth={1.5} />} filled={<Icon icon={PhMagnifyingGlass} kind="symbol" size="lg" />} />}
               title={t("forum.searchEmpty", { query: filters.q })}
               body={t("forum.searchEmpty.body")}
             >
@@ -1474,7 +1514,7 @@ export function ForumPane({
             </EmptyBlock>
           ) : filters.mine && filters.tagIds.length === 0 && filters.status === null ? (
             <EmptyBlock
-              icon={<ListFilter className="h-7 w-7" aria-hidden strokeWidth={1.5} />}
+              icon={<ForumEmptyGlyph line={<ListFilter className="h-7 w-7" aria-hidden strokeWidth={1.5} />} filled={<Icon icon={PhFunnel} kind="symbol" size="lg" />} />}
               title={t("forum.mineEmpty")}
             >
               <Button variant="secondary" className="h-10" onClick={() => changeFilters({ mine: false })}>
@@ -1483,7 +1523,7 @@ export function ForumPane({
             </EmptyBlock>
           ) : (
             <EmptyBlock
-              icon={<ListFilter className="h-7 w-7" aria-hidden strokeWidth={1.5} />}
+              icon={<ForumEmptyGlyph line={<ListFilter className="h-7 w-7" aria-hidden strokeWidth={1.5} />} filled={<Icon icon={PhFunnel} kind="symbol" size="lg" />} />}
               title={t("forum.filterEmpty")}
               body={describeActiveFilters(filters, tags, t)}
             >
