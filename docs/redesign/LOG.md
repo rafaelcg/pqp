@@ -53,6 +53,7 @@ Read this file and the inventory at the start of every session.
 | 2 | `p-card` | Merged (cap at round 5: 8.5 Opus r5, 8.4 Codex r1, no MUST) |
 | 2 | `p-section-header` | Merged (cap at round 5: 8.0 Opus r5, 8.4 Codex r2, no MUST) |
 | 2 | `p-loading` | Merged (cap at round 5: 8.6 Opus r5, 8.6 Codex r4, no MUST) |
+| 2 | `p-empty` | Merged, capped at round 5 (Opus 8.6) |
 
 ## Phase 0: directions
 
@@ -900,6 +901,41 @@ Verified: typecheck; 10,444 unit tests; `bench:tokens`; i18n check;
 `profile-popover-menu`, `retro-look` and `message-permalink-scroll` e2e (39
 passed); retro, Halloween, high contrast, 390px and toggle off.
 Screenshots: `~/pqp-redesign/p-loading/`.
+
+### p-empty
+
+Spec (audit: four local empty components and about 30 hand-built empty
+blocks, each with its own sizes, colours and spacing):
+
+1. Job: say what is not here yet and the next step; `page` and `inline`.
+2. Redesign: the glyph on a soft disc, a Gabarito title, a secondary body
+   line, the actions under it; inline is quiet.
+3. Folded: the empty channel (both versions), the forum's empty and failed
+   blocks (six uses), search's empty and prompt states, the settings kit's
+   `SettingsEmpty` (every settings tab).
+4. Left for their owners: watch party, communities, stories, call stage,
+   apps, conversations home, friends (their surfaces' elements); the error
+   boundary (`f-states`, André's question 3).
+
+5. Council: one reviewer per round, Opus for the sign-off.
+
+| Round | Opus | Codex |
+|---|---|---|
+| 1 | not run | 8.2 |
+| 2 | not run | 8.4 |
+| 3 | 8.5 | not run |
+| 4 | not run | 8.4 |
+| 5 | 8.6 | not run |
+
+Capped at round 5, no MUST open. Round 5's notes applied after it: search's
+empty state leads with a magnifier under the redesign, and the light theme's
+neutral disc is a tint of the text so it holds its shape. Logged: the two
+secondary buttons differ in dark because the forum pane remaps the
+secondary fill (`f-forum`); `SettingsEmpty` takes a filled Phosphor glyph in
+`p-settings-kit`. Verified: typecheck; 10,418 unit tests (the HLS rebuild
+suite timed out under load once and passed alone); `bench:tokens`; i18n
+check; `forum-pane` and `forum-shell` e2e (6 passed); retro, Halloween, high
+contrast, 390px and toggle off. Screenshots: `~/pqp-redesign/p-empty/`.
 
 ### p-settings-kit
 

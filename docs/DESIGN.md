@@ -1126,6 +1126,30 @@ conversations or friend requests waiting. Draws nothing at zero and caps at
 - The server rail's and the channel list's counts are drawn in place for
   now; they move here with their shell elements.
 
+### EmptyState
+
+`empty-state.tsx`. What is not here yet, and what to do about it. `page`
+fills a pane (an empty channel, a forum with no posts); `inline` sits in a
+group or a list (no results, nothing saved; the settings kit's
+`SettingsEmpty` is this).
+
+- **Props.** `icon`, `title`, `body`, `actions` (one or two buttons), `role`
+  (`status` or `alert` when it replaces content that failed), `data-*`.
+- **Toggle off.** Each caller passes the classes it always drew
+  (`className`, `iconClassName`, `titleClassName`, `bodyClassName`,
+  `actionsClassName`); a caller that drew no icon hides it with
+  `hidden redesign:flex`.
+- **Redesign.** A page empty state leads with its glyph on a soft disc
+  (`--empty-icon-disc` 56px, `--empty-icon-bg` `surface-3`), a Gabarito
+  title at `--empty-title-size` (20px), a body line in secondary text, the
+  actions 20px under it. An inline one is a quiet glyph, a 14px label in
+  secondary text and a 12px line.
+- **Failure.** A load that did not come back is a `role="alert"` empty
+  state with the retry as its action; under the redesign its disc takes the
+  warning tone (`warning-soft`, `on-warning-soft`), so it reads apart from
+  an empty list. A page failure with no glyph gets `WarningCircle` there.
+- **Copy.** Say what is missing and the next step, in the casual voice.
+
 ### Spinner and Skeleton
 
 `spinner.tsx`, `skeleton.tsx`. A spinner says something is on its way (a

@@ -858,6 +858,12 @@
   --count-badge-text: 0.6875rem;
   --count-badge-sm-text: 0.625rem;
 
+  /* Empty states (ui/empty-state.tsx): a page empty state leads with its
+     glyph on a soft disc of the raised fill, then a Gabarito title. */
+  --empty-icon-disc: 3.5rem;
+  --empty-icon-bg: var(--color-surface-3);
+  --empty-title-size: 1.25rem;
+
   /* Loading (ui/spinner.tsx, ui/skeleton.tsx): a ring with a faint track,
      and placeholder shapes as a faint text tint, so both read on a pane, a
      card or a dialog. */

@@ -608,6 +608,7 @@ const PRIMITIVES: {
   { id: "p-avatar", testId: "qa-primitive-avatar" },
   // Status words, the tags beside a name, and counts; no interaction.
   { id: "p-badge", testId: "qa-primitive-badge" },
+  { id: "p-empty", testId: "qa-primitive-empty", hover: "Copiar convite" },
   { id: "p-loading", testId: "qa-primitive-loading" },
   { id: "p-section-header", testId: "qa-primitive-section-header" },
   // Focus a person row, hover a plain channel.
