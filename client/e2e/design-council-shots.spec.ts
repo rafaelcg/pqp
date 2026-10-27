@@ -535,6 +535,40 @@ test("captures the design council screens", async ({ browser }) => {
     });
     await page.waitForTimeout(2000);
     await shoot(page, "07-call-camera-dark");
+    // f-call: the dock alone, the stage open with a camera and with audio
+    // only, and the overflow menu, in both looks. The theme flips in place:
+    // a second join would cost the three socket friends their seats.
+    for (const theme of ["dark", "light"] as const) {
+      await page.evaluate((value) => {
+        document.documentElement.dataset.theme = value;
+      }, theme);
+      await page.waitForTimeout(500);
+      const dock = page.locator("[data-call-dock]").first();
+      if (await dock.isVisible().catch(() => false)) {
+        await page.mouse.move(0, 0);
+        await dock.screenshot({ path: path.join(OUT!, `f-call-dock-${theme}.png`) });
+      }
+      await page.getByTestId("call-more").first().click();
+      await expect(page.getByRole("menu")).toBeVisible();
+      await shoot(page, `f-call-menu-${theme}`);
+      const expand = page.getByRole("menuitem", { name: "Expandir a call" });
+      if (await expand.isVisible().catch(() => false)) {
+        await expand.click();
+        await page.waitForTimeout(800);
+        await shoot(page, `f-call-stage-camera-${theme}`);
+        await page.getByRole("button", { name: "Desligar a câmera", exact: true }).first().click();
+        await page.waitForTimeout(1200);
+        await shoot(page, `f-call-stage-audio-${theme}`);
+        await page.getByRole("button", { name: "Ligar a câmera", exact: true }).first().click();
+        await page.waitForTimeout(1500);
+        await page.getByTestId("call-more").first().click();
+        await page.getByRole("menuitem", { name: /Recolher|Minimizar/ }).first().click().catch(() => {});
+        await page.keyboard.press("Escape");
+      } else {
+        console.log("f-call: expand skipped");
+        await page.keyboard.press("Escape");
+      }
+    }
     await page.getByRole("button", { name: "Sair da call" }).first().click().catch(() => {});
     await context.close();
 
