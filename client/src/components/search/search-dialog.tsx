@@ -289,7 +289,7 @@ export function SearchDialog({
                         // Under the redesign a result is a card-cornered row;
                         // the highlighted one takes the menu's highlight, so
                         // the arrows read like a menu's.
-                        "redesign:rounded-[var(--radius-card)] redesign:px-3.5 redesign:py-2.5",
+                        "redesign:rounded-[var(--radius-card)] redesign:px-[var(--input-px)] redesign:py-2.5",
                         index === selected
                           ? "redesign:border-transparent redesign:bg-[color:var(--search-row-selected)]"
                           // Hover moves the selection, so one fill serves both.
@@ -299,7 +299,10 @@ export function SearchDialog({
                       <div className="flex items-baseline gap-2 text-xs text-text-muted redesign:items-center">
                         <span className="flex min-w-0 items-center gap-1 font-medium text-text redesign:gap-2.5 redesign:font-semibold">
                           <Hash className="h-3 w-3 shrink-0 redesign:hidden" />
-                          <Icon icon={HashGlyph} kind="symbol" size="sm" className="hidden h-4 w-4 text-text-secondary redesign:block" />
+                          {/* 14px in the 16px column under the field's glass. */}
+                          <span className="hidden size-4 shrink-0 place-items-center redesign:grid">
+                            <Icon icon={HashGlyph} kind="symbol" size="sm" className="size-3.5 text-text-secondary" />
+                          </span>
                           <span className="truncate">{result.channelName}</span>
                         </span>
                         <span className="truncate redesign:text-text-secondary">{result.authorName}</span>
