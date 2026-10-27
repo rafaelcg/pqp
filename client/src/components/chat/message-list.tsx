@@ -5118,9 +5118,9 @@ function EditComposer({
             void submit();
           }
         }}
-        className="w-full resize-none rounded-md border border-ink-4 bg-ink-3 px-2.5 py-1.5 text-[length:var(--chat-font-size)] text-paper outline-none focus:border-signal/60"
+        className="w-full resize-none rounded-md border border-ink-4 bg-ink-3 px-2.5 py-1.5 text-[length:var(--chat-font-size)] text-paper outline-none focus:border-signal/60 redesign:rounded-[var(--radius-card)] redesign:border-[color:var(--composer-border)] redesign:bg-[color:var(--composer-bg)] redesign:px-3 redesign:py-2 redesign:text-text redesign:focus:border-[color:var(--composer-border-focus)]"
       />
-      <p className="mt-1 text-[11px] text-paper-muted">
+      <p className="mt-1 text-[11px] text-paper-muted redesign:mt-1.5 redesign:text-xs redesign:text-text-tertiary">
         Enter to save · Escape to cancel
       </p>
     </div>

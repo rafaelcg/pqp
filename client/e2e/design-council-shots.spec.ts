@@ -688,6 +688,12 @@ const PRIMITIVES: {
     open: { button: "Mais", menu: '[role="menu"][aria-label="Mais"]', arrows: 0, hoverText: "eu topo, levo o lanche" },
   },
   { id: "s-log-chrome", testId: "qa-shell-log-chrome" },
+  // The resting composer's format bar open (it is a toolbar, not a menu).
+  {
+    id: "s-composer",
+    testId: "qa-shell-composer",
+    open: { button: "Formatação", menu: '[data-testid="qa-shell-composer"] [role="toolbar"]', arrows: 0 },
+  },
 ];
 
 test("captures the primitives", async ({ browser }) => {
@@ -723,7 +729,7 @@ test("captures the primitives", async ({ browser }) => {
         if (primitive.open.hoverText) {
           await block.getByText(primitive.open.hoverText, { exact: true }).hover();
         }
-        await block.getByRole("button", { name: primitive.open.button, exact: true }).focus();
+        await block.getByRole("button", { name: primitive.open.button, exact: true }).first().focus();
         await page.keyboard.press("Enter");
         const menu = page.locator(primitive.open.menu);
         await expect(menu).toBeVisible();

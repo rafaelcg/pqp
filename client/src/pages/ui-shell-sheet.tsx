@@ -23,6 +23,8 @@ import {
 import { ChannelIcon } from "@/components/layout/channel-icon";
 import { UserPanel } from "@/components/layout/user-panel";
 import { MessageList, type MessageAuthorInfo } from "@/components/chat/message-list";
+import { MessageComposer } from "@/components/chat/message-composer";
+import { ComposerReadOnlyNotice } from "@/components/chat/composer-read-only-notice";
 import type { ChatMessage } from "@/hooks/use-chat";
 import { ConnectionBanner } from "@/components/layout/connection-banner";
 import { ArrivalBanner } from "@/components/onboarding/arrival-banner";
@@ -989,6 +991,44 @@ function LogChromeBlock() {
   );
 }
 
+/** A composer at the foot of a pane, as the conversation draws it. */
+function ComposerPane({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <MainPane>
+      <p className="px-4 pb-2 pt-3 text-xs text-text-tertiary">{label}</p>
+      {children}
+    </MainPane>
+  );
+}
+
+const COMPOSER_SLOW_UNTIL = Date.now() + 5 * 60_000;
+
+function ComposerBlock() {
+  return (
+    <div data-testid="qa-shell-composer" className="flex flex-col gap-6">
+      {/* Resting; replying to Rafa; slow mode with a wait; read-only. The
+          shot opens the format bar on the first one. */}
+      <ComposerPane label="Em repouso">
+        <MessageComposer onSend={noop} placeholder="Mensagem em #geral" />
+      </ComposerPane>
+      <ComposerPane label="Respondendo">
+        <MessageComposer
+          onSend={noop}
+          placeholder="Mensagem em #geral"
+          replyTarget={{ id: "00000000-0000-4000-8000-000000000511", authorName: "Rafa" }}
+          onCancelReply={noop}
+        />
+      </ComposerPane>
+      <ComposerPane label="Modo lento">
+        <MessageComposer onSend={noop} placeholder="Mensagem em #geral" slowModeUntil={COMPOSER_SLOW_UNTIL} />
+      </ComposerPane>
+      <ComposerPane label="Só leitura">
+        <ComposerReadOnlyNotice />
+      </ComposerPane>
+    </div>
+  );
+}
+
 /**
  * A new build waiting, so both rails draw the update tile. The store is
  * this page's own; it goes back to nothing waiting when the sheet unmounts.
@@ -1161,6 +1201,7 @@ export function ShellSheet() {
       <MessageContentBlock />
       <MessageChromeBlock />
       <LogChromeBlock />
+      <ComposerBlock />
 
       <div data-testid="qa-shell-rail" className="flex gap-6">
         <RailFrame>

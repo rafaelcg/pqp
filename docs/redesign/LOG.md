@@ -1178,6 +1178,30 @@ failed states are `p-empty`'s, already merged):
 4. Question: "Load older messages" and "Loading older messages…" are
    English in every language. Translating them changes the toggle-off app.
 5. Not on the sheet: the bulk bar and the gone note need a live list state.
+
+### s-composer
+
+Spec (audit: `MessageComposer` (the well, reply chip, attachment chips,
+format bar and preview, feedback strip, tools, send, slow mode), the "+"
+menu (already `MENU_SURFACE`), `AutocompleteMenu`, the emoji and GIF panels
+(already `POPOVER_SURFACE`), `PollComposer`, the voice note mic and panel,
+`ComposerReadOnlyNotice`, the inline `EditComposer`; one composer serves the
+channel, the thread panel and the forum dialog):
+
+1. Job: write and send, with everything a message can carry.
+2. States: resting, typing, replying, attachments (uploading, failed),
+   format bar open, a panel open (+, emoji, GIF, autocomplete row and grid),
+   poll, voice note (hold, locked, review), slow mode, read-only, stream
+   variant, embedded, editing a message, feedback (error, success, info).
+3. Redesign: one 20px well on a faint text tint whose edge comes up while
+   typing; 36px round tools with Phosphor glyphs, a held fill when a panel
+   is open; a round accent send; the reply chip a pill; chips are cards;
+   autocomplete is the menu's panel and rows; the poll composer a card with
+   the input's fields and accent-ringed chips; feedback floats on the
+   popover surface with a toned glyph.
+4. Kept: the music bar and call dock inside the well move with `f-call`; the
+   poll composer's hand-made switch stays (question: swap it for `Switch`).
+5. Not on the sheet: the "+" menu (needs attachments or slash commands).
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss

@@ -895,6 +895,12 @@
   --content-glyph-bg: color-mix(in oklab, var(--color-text) 7%, transparent);
   --content-quote-bar: color-mix(in oklab, var(--color-text) 22%, transparent);
   --content-link-line: color-mix(in oklab, var(--color-accent-text) 45%, transparent);
+  /* The composer (s-composer): one rounded well on a faint text tint, whose
+     edge comes up a step while you type in it. */
+  --composer-radius: 1.25rem;
+  --composer-bg: color-mix(in oklab, var(--color-text) 5%, transparent);
+  --composer-border: color-mix(in oklab, var(--color-text) 9%, transparent);
+  --composer-border-focus: color-mix(in oklab, var(--color-text) 22%, transparent);
 
   /* Pane headers (ui/pane-header.ts): the chat's and every other pane's
      top bar, on one rule, one inset and one title size. */
@@ -1239,6 +1245,9 @@
   --card-border: color-mix(in oklab, var(--color-text) 10%, transparent);
   /* A message card's hover: white over the grey wash would vanish. */
   --content-card-hover: color-mix(in oklab, var(--color-text) 4%, var(--color-surface-0));
+  /* The composer on the white pane: a light grey well with a firmer edge. */
+  --composer-bg: color-mix(in oklab, var(--color-text) 3%, transparent);
+  --composer-border: color-mix(in oklab, var(--color-text) 13%, transparent);
 
   /* Avatars: a hairline keeps the monogram disc a disc on the white pane. */
   --avatar-edge: var(--color-border);
