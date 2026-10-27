@@ -277,13 +277,16 @@ const CHANNEL_ROW_REDESIGN =
  * the list row's icon colour (the selected text on the open row). A private
  * channel's padlock keeps its warning colour.
  */
-export function channelRowIconClass(channel: Channel, selected: boolean): string {
+export function channelRowIconClass(channel: Channel, selected: boolean, connected = false): string {
   return cn(
     "h-3.5 w-3.5 redesign:h-4 redesign:w-4",
     !channelIconIsPrivateLock(channel) &&
       (selected
         ? "redesign:text-[color:var(--list-row-selected-text)]"
-        : "redesign:text-[color:var(--list-row-icon)]"),
+        : connected
+          ? // The room you are in: the icon follows its green text.
+            "redesign:text-on-success-soft"
+          : "redesign:text-[color:var(--list-row-icon)]"),
   );
 }
 
@@ -1780,6 +1783,7 @@ export const ChannelList = memo(function ChannelList({
               className={channelRowIconClass(
                 channel,
                 selectedChannelId === channel.id,
+                activeVoiceChannelId === channel.id,
               )}
             />
           }

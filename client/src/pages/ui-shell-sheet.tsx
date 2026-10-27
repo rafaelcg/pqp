@@ -173,7 +173,7 @@ function SheetChannelRow({
       selected={selected}
       unread={{ count: 0, mentions: 0 }}
       canManage
-      icon={<ChannelIcon channel={channel} className={channelRowIconClass(channel, selected)} />}
+      icon={<ChannelIcon channel={channel} className={channelRowIconClass(channel, selected, rest.connected)} />}
       isDragging={false}
       isDragOver={false}
       onSelect={noop}
