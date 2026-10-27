@@ -131,7 +131,7 @@ export function BotOverviewPanel({
 function Stat({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className={cn(CARD_SURFACE, "p-4")}>
-      <p className="mb-1 text-xs font-bold uppercase tracking-wide text-text-tertiary">{label}</p>
+      <p className="mb-1 text-xs font-bold uppercase tracking-wide text-text-tertiary redesign:text-[13px] redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">{label}</p>
       {children}
     </div>
   );
@@ -156,7 +156,7 @@ function ActivityRow({ item, locale }: { item: ServerBotActivityItem; locale: Pa
       : t("bots.overview.askedBy", { who });
   return (
     <li className="flex items-center gap-3 px-3 py-2.5">
-      <span className={cn("grid h-7 w-7 shrink-0 place-items-center rounded-[var(--radius-control)]", tone)}>
+      <span className={cn("grid h-7 w-7 shrink-0 place-items-center rounded-[var(--radius-control)] redesign:rounded-full", tone)}>
         <Icon className="h-4 w-4" aria-hidden />
       </span>
       <p className="min-w-0 flex-1 truncate text-sm text-text">

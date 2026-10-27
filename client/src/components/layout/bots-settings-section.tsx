@@ -385,6 +385,7 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
               cn(
                 "grid h-10 w-10 place-items-center rounded-full border-2 bg-surface-2",
                 selected ? "border-text" : "border-transparent",
+                selected && "redesign:border-accent",
               )
             }
             renderItem={(color) => <BotFace color={color} face="oi" live={false} className="h-7 w-7" />}
@@ -400,6 +401,7 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
                 selected
                   ? "border-accent bg-accent-soft text-on-accent-soft"
                   : "border-border bg-surface-2 text-text-secondary",
+                selected ? "redesign:border-accent redesign:bg-[color:var(--card-row-hover)] redesign:text-text redesign:ring-1 redesign:ring-inset redesign:ring-accent" : "redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:hover:bg-[color:var(--card-row-hover)]",
               )
             }
             renderItem={(face) => (

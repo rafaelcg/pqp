@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { E2E_ADMIN_TOKEN } from "../playwright.config";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -533,6 +534,33 @@ test("captures the design council screens", async ({ browser }) => {
         await page.keyboard.press("Escape");
       } catch {
         console.log("channel settings gear not found, shot 28 skipped");
+      }
+      // Server bots: the flag on for this one shot, then back to its default.
+      try {
+        await fetch(`${API}/api/admin/flags`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${E2E_ADMIN_TOKEN}` },
+          body: JSON.stringify({ key: "custom_bots", enabled: true }),
+        });
+        await page.reload();
+        await expect(page.getByRole("button", { name: "Enviar" })).toBeVisible({ timeout: 30_000 });
+        await hideDevBanner(page);
+        await page.locator("[data-server-menu-trigger]").first().click();
+        await page.getByRole("menuitem", { name: "Configurações da comunidade" }).click();
+        await expect(page.getByRole("dialog")).toBeVisible();
+        await page.getByRole("dialog").getByText("Bots", { exact: true }).first().click({ timeout: 5_000 });
+        await page.waitForTimeout(800);
+        await shoot(page, `38-server-bots-${theme}`);
+        await page.keyboard.press("Escape");
+      } catch (error) {
+        console.log("bots shot skipped", String(error).slice(0, 300));
+        await page.keyboard.press("Escape");
+      } finally {
+        await fetch(`${API}/api/admin/flags`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${E2E_ADMIN_TOKEN}` },
+          body: JSON.stringify({ key: "custom_bots", enabled: null }),
+        });
       }
 
       await context.close();

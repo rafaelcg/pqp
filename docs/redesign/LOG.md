@@ -1070,6 +1070,21 @@ the rank list, emoji, AutoMod, webhooks in and out, the audit log, danger):
 3. Merges: nothing; `Block` stays (the kit's group has rows, these do not).
 4. Kept: every section, drag to reorder, the armed confirms, the footer.
 
+### f-bots
+
+Spec (audit: `bots-settings-section.tsx` in server settings, `bots/` (the
+wizard with its preview pane, the overview, the face, radio choices, tags,
+the intro hint); behind the per-server `custom_bots` flag):
+
+1. Job: give a server a helper bot: name, face, colour, what it may do, and
+   see what it did.
+2. Redesign: the server settings frame around it; eyebrows sentence case;
+   face and colour choices take the kit's chosen-card recipe and the accent
+   ring; icon tiles round.
+3. Merges: question kept: `radio-choices.tsx` duplicates the roving radio
+   group; folding it into `ui/RadioGroup` would change the toggle-off look.
+4. Kept: the wizard steps, the practice chat, the activity list.
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss

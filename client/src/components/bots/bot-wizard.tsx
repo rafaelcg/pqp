@@ -401,6 +401,8 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
                       cn(
                         "grid h-11 w-11 place-items-center rounded-full border-2 bg-surface-2 transition-transform duration-[var(--duration-fast)] active:scale-95",
                         selected ? "border-text" : "border-transparent",
+                        // Under the redesign a chosen face takes the accent ring, like an avatar preset.
+                        selected && "redesign:border-accent",
                       )
                     }
                     renderItem={(color) => <BotFace color={color} face="oi" live={false} className="h-8 w-8" />}
@@ -421,6 +423,8 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
                           selected
                             ? "border-accent bg-accent-soft text-on-accent-soft"
                             : "border-border bg-surface-2 text-text-secondary hover:text-text",
+                          // Under the redesign: the kit's chosen card.
+                          selected ? "redesign:border-accent redesign:bg-[color:var(--card-row-hover)] redesign:text-text redesign:ring-1 redesign:ring-inset redesign:ring-accent" : "redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:hover:bg-[color:var(--card-row-hover)]",
                         )
                       }
                       renderItem={(face) => (
@@ -600,7 +604,7 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
 
             {step === "born" && created && (
               <div className="space-y-4">
-                <p className="text-xs font-bold uppercase tracking-wide text-text-tertiary">
+                <p className="text-xs font-bold uppercase tracking-wide text-text-tertiary redesign:text-[13px] redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">
                   {t("bots.wizard.born.eyebrow")}
                 </p>
                 <h2 className="font-display text-3xl font-extrabold text-text">
@@ -815,7 +819,7 @@ function IntroPreview({
   }
   return (
     <div className={cn(CARD_SURFACE, "p-3")}>
-      <p className="mb-2 text-xs font-bold uppercase tracking-wide text-text-tertiary">
+      <p className="mb-2 text-xs font-bold uppercase tracking-wide text-text-tertiary redesign:text-[13px] redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">
         {t("bots.intro.preview", { channel: `#${home.name}` })}
       </p>
       <div className="flex gap-3">
@@ -984,7 +988,7 @@ function TestChat({
 function StepTitle({ eyebrow, title, description }: { eyebrow: string; title: string; description: string }) {
   return (
     <div className="space-y-1">
-      <p className="text-xs font-bold uppercase tracking-wide text-text-tertiary">{eyebrow}</p>
+      <p className="text-xs font-bold uppercase tracking-wide text-text-tertiary redesign:text-[13px] redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">{eyebrow}</p>
       <h2 className="font-display text-2xl font-extrabold text-text">{title}</h2>
       <p className="text-sm text-text-secondary">{description}</p>
     </div>
@@ -1017,7 +1021,7 @@ function IdCard({ draft, name }: { draft: BotDraft; name: string }) {
   ];
   return (
     <div className={cn(CARD_SURFACE, "w-full p-4")}>
-      <p className="mb-2 text-xs font-bold uppercase tracking-wide text-text-tertiary">{t("bots.card.title")}</p>
+      <p className="mb-2 text-xs font-bold uppercase tracking-wide text-text-tertiary redesign:text-[13px] redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">{t("bots.card.title")}</p>
       <dl className="space-y-1.5 text-sm">
         {rows.map(([label, value]) => (
           <div key={label} className="flex gap-3">
@@ -1100,7 +1104,7 @@ export function ToolPicker({
           return (
             <div key={group}>
               <div className="flex items-center gap-3 px-3 py-2.5">
-                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-[var(--radius-control)] bg-surface-2 text-text-secondary redesign:bg-[color:var(--card-row-hover)]">
+                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-[var(--radius-control)] bg-surface-2 text-text-secondary redesign:rounded-full redesign:bg-[color:var(--card-row-hover)]">
                   <Icon className="h-4 w-4" aria-hidden />
                 </span>
                 <button
