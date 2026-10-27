@@ -1,6 +1,9 @@
 import { Import, X } from "lucide-react";
 import { useEffect, useId } from "react";
+import { DownloadSimple, X as XBold } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
+import { BANNER_DISC_REDESIGN, BANNER_DISMISS_REDESIGN, bannerSurfaceRedesign } from "@/components/ui/banner";
+import { Icon } from "@/components/ui/icon";
 import { useTranslation } from "@/lib/i18n";
 import { track } from "@/lib/track";
 import { cn } from "@/lib/utils";
@@ -56,22 +59,27 @@ export function DiscordImportNotice({
     <section
       data-discord-import-notice=""
       aria-labelledby={titleId}
-      className="animate-rise flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-border bg-accent-soft px-4 py-3"
+      className={cn(
+        "animate-rise flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-border bg-accent-soft px-4 py-3",
+        bannerSurfaceRedesign("accent"),
+        "redesign:items-center redesign:gap-y-2 redesign:py-2.5",
+      )}
     >
       <span
         aria-hidden="true"
-        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-on-accent"
+        className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-on-accent", BANNER_DISC_REDESIGN)}
       >
-        <Import className="h-4 w-4" />
+        <Import className="h-4 w-4 redesign:hidden" />
+        <Icon icon={DownloadSimple} kind="symbol" size="sm" className="hidden redesign:block" />
       </span>
       <div className="min-w-0 flex-1">
         <p
           id={titleId}
-          className="text-balance text-sm font-semibold text-on-accent-soft"
+          className="text-balance text-sm font-semibold text-on-accent-soft redesign:text-text"
         >
           {t("discordImportNotice.title")}
         </p>
-        <p className="mt-0.5 text-pretty text-sm text-on-accent-soft/80">
+        <p className="mt-0.5 text-pretty text-sm text-on-accent-soft/80 redesign:text-text-secondary">
           {existing
             ? t("discordImportNotice.bodyExisting")
             : t("discordImportNotice.body")}
@@ -104,9 +112,11 @@ export function DiscordImportNotice({
         className={cn(
           "relative shrink-0 rounded-[var(--radius-control)] p-1.5 text-on-accent-soft/70 transition-colors hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
           "after:absolute after:-inset-1.5 after:content-['']",
+          BANNER_DISMISS_REDESIGN,
         )}
       >
-        <X aria-hidden="true" className="h-4 w-4" />
+        <X aria-hidden="true" className="h-4 w-4 redesign:hidden" />
+        <Icon icon={XBold} kind="symbol" size="sm" className="hidden redesign:block" />
       </button>
     </section>
   );

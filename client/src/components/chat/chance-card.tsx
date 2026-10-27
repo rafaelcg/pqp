@@ -2,6 +2,7 @@ import type { ChanceResult } from "@pqp/shared";
 import { rollGroups } from "@pqp/shared";
 import { Coins, Dices, RefreshCw, Shuffle, Spade, type LucideIcon } from "lucide-react";
 import { CommandChip } from "@/components/chat/command-chip";
+import { CONTENT_CARD_REDESIGN } from "@/components/ui/content-card";
 import coinHeadsUrl from "@/assets/chance/coin-heads.svg?url";
 import coinTailsUrl from "@/assets/chance/coin-tails.svg?url";
 import { d6FaceUrl, playingCardUrl, polyhedralDieUrl } from "@/lib/chance-art";
@@ -26,6 +27,9 @@ const SHELL = cn(
   "mt-1.5 max-w-md rounded-2xl px-4 py-3",
   "bg-[linear-gradient(165deg,color-mix(in_oklab,var(--color-signal)_6%,var(--color-surface-2)),var(--color-surface-2)_72%)]",
   "shadow-[var(--shadow-chance-card)]",
+  // Under the redesign, the card every message carries (ui/content-card.ts).
+  CONTENT_CARD_REDESIGN,
+  "redesign:p-[var(--content-card-pad)]",
 );
 
 export function ChanceCard({ result }: { result: ChanceResult }) {
@@ -39,7 +43,7 @@ export function ChanceCard({ result }: { result: ChanceResult }) {
           <span className="font-mono text-[11px] text-paper-muted">{result.notation}</span>
         )}
         {result.type === "roll" && result.comment && (
-          <span className="text-[13px] text-paper">{result.comment}</span>
+          <span className="text-[13px] text-paper redesign:text-xs redesign:text-text-tertiary">{result.comment}</span>
         )}
       </div>
 

@@ -480,13 +480,18 @@ export function Dialog({
             // through the elevation variables like a popover's.
             "redesign:[--elevation-3-border:var(--dialog-border)] redesign:[--elevation-3-shadow:var(--dialog-shadow)]",
             // A plain dialog floats on the dialog surface (the popover's in
-            // light); a settings dialog keeps its rail against its pane.
+            // light). A settings dialog is a small frame: the band and the
+            // rail on the side pane's tone, its page an inset pane.
             !fill && "redesign:[--elevation-3-surface:var(--dialog-surface,var(--color-surface-2))]",
+            fill && "redesign:[--elevation-3-surface:var(--settings-surface)]",
             // A sheet rounds its top corners; a full-screen phone dialog has
             // no corners to round.
             !phoneFullScreen && "rounded-t-[var(--radius-panel)]",
             // Under the redesign a phone sheet is the shared sheet surface.
             !phoneFullScreen && SHEET_SURFACE_PHONE,
+            // A settings sheet keeps the frame's tone on a phone too, so its
+            // page stays the lighter pane, as on a desktop.
+            !phoneFullScreen && fill && "redesign:max-sm:bg-[color:var(--settings-surface)]",
             // A phone sheet with no footer keeps its body above the home
             // indicator; the footer carries `safe-pb` itself.
             !phoneFullScreen && !footer && SHEET_SAFE_BOTTOM,
