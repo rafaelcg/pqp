@@ -1,4 +1,12 @@
+import {
+  CaretLeft,
+  CaretRight,
+  Check as CheckGlyph,
+  Copy as CopyGlyph,
+  ListDashes,
+} from "@phosphor-icons/react";
 import { Check, ChevronRight, Copy, LayoutList } from "lucide-react";
+import { IconSwap } from "@/components/ui/icon";
 import { intlLocale } from "@/lib/locale";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -490,34 +498,35 @@ export function CreateServerDialog({
                 }
               }}
               placeholder={t("communities.create.placeholder")}
+              aria-label={t("communities.create.placeholder")}
               autoFocus
               disabled={busy}
             />
-            <div className="flex items-center gap-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-paper-muted">
-              <span className="h-px flex-1 bg-ink-4" />
+            <div className="flex items-center gap-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-paper-muted redesign:text-[13px] redesign:normal-case redesign:tracking-normal redesign:text-text-tertiary">
+              <span className="h-px flex-1 bg-ink-4 redesign:bg-[color:var(--card-border)]" />
               {t("importDiscord.mode.or")}
-              <span className="h-px flex-1 bg-ink-4" />
+              <span className="h-px flex-1 bg-ink-4 redesign:bg-[color:var(--card-border)]" />
             </div>
             <button
               type="button"
               data-discord-import-path=""
               disabled={busy}
-              className="flex w-full items-start gap-3 rounded-xl border border-signal/35 bg-signal/5 px-4 py-3.5 text-left transition-colors hover:border-signal/60 hover:bg-signal/10 disabled:opacity-50"
+              className="flex w-full items-start gap-3 rounded-xl border border-signal/35 bg-signal/5 px-4 py-3.5 text-left transition-colors hover:border-signal/60 hover:bg-signal/10 disabled:opacity-50 redesign:items-center redesign:rounded-[var(--radius-card)] redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:hover:border-[color:var(--card-border)] redesign:hover:bg-[color:var(--card-row-hover)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--list-row-ring)] redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-ring-offset"
               onClick={() => {
                 setStep("paste");
                 setError(null);
               }}
             >
-              <LayoutList className="mt-0.5 h-5 w-5 shrink-0 text-signal" />
+              <IconSwap off={LayoutList} on={ListDashes} kind="symbol" size="md" offClassName="mt-0.5 h-5 w-5 shrink-0 text-signal" className="text-accent-text" />
               <span className="min-w-0 flex-1">
-                <span className="block font-semibold text-paper">
+                <span className="block font-semibold text-paper redesign:text-text">
                   {t("importDiscord.mode.discord")}
                 </span>
                 <span className="mt-0.5 block text-sm text-paper-muted">
                   {t("importDiscord.mode.discordBody")}
                 </span>
               </span>
-              <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-paper-muted" />
+              <IconSwap off={ChevronRight} on={CaretRight} kind="symbol" offClassName="mt-0.5 h-4 w-4 shrink-0 text-paper-muted" className="text-text-tertiary" />
             </button>
           </>
         )}
@@ -536,16 +545,17 @@ export function CreateServerDialog({
               disabled={busy}
               autoFocus
               placeholder={t("importDiscord.paste.placeholder")}
-              className="w-full resize-none rounded-md border border-ink-4 bg-ink px-3 py-2 text-sm text-paper placeholder:text-paper-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/50 disabled:cursor-not-allowed disabled:opacity-50"
+              className="w-full resize-none rounded-md border border-ink-4 bg-ink px-3 py-2 text-sm text-paper placeholder:text-paper-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/50 disabled:cursor-not-allowed disabled:opacity-50 redesign:rounded-[var(--input-radius,var(--radius-control))] redesign:border-[color:var(--input-border)] redesign:bg-[color:var(--input-bg)] redesign:px-[var(--input-px)] redesign:text-text redesign:focus-visible:ring-[color:var(--input-ring,var(--color-focus-ring))] redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-ring-offset redesign:enabled:hover:border-[color:var(--input-hover-border)] redesign:disabled:bg-transparent"
             />
             <button
               type="button"
-              className="text-sm text-paper-muted hover:text-paper hover:underline"
+              className="text-sm text-paper-muted hover:text-paper hover:underline redesign:inline-flex redesign:items-center redesign:gap-1 redesign:self-start redesign:font-medium redesign:text-text-secondary redesign:hover:text-text redesign:hover:no-underline"
               onClick={() => {
                 setStep("name");
                 setError(null);
               }}
             >
+              <CaretLeft weight="bold" aria-hidden className="hidden h-3.5 w-3.5 redesign:inline" />
               {t("importDiscord.mode.name")}
             </button>
           </>
@@ -584,7 +594,7 @@ export function CreateServerDialog({
                 readOnly
                 rows={4}
                 value={pasteMessage}
-                className="mt-1 w-full resize-none rounded-md border border-ink-4 bg-ink px-3 py-2 text-sm text-paper"
+                className="mt-1 w-full resize-none rounded-md border border-ink-4 bg-ink px-3 py-2 text-sm text-paper redesign:rounded-[var(--input-radius,var(--radius-control))] redesign:border-transparent redesign:bg-[color:color-mix(in_oklab,var(--color-text)_5%,var(--input-bg))] redesign:px-[var(--input-px)] redesign:text-text"
               />
               <Button
                 type="button"
@@ -593,9 +603,9 @@ export function CreateServerDialog({
                 onClick={() => void copyText("message", pasteMessage)}
               >
                 {copied === "message" ? (
-                  <Check className="h-4 w-4" />
+                  <IconSwap off={Check} on={CheckGlyph} kind="symbol" offClassName="h-4 w-4" />
                 ) : (
-                  <Copy className="h-4 w-4" />
+                  <IconSwap off={Copy} on={CopyGlyph} kind="symbol" offClassName="h-4 w-4" />
                 )}
                 {copied === "message"
                   ? t("importDiscord.done.copied")

@@ -1,6 +1,10 @@
 import { UserPlus, X } from "lucide-react";
 import { useEffect } from "react";
+import { UserPlus as UserPlusFill, X as XBold } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
+import { BANNER_DISC_REDESIGN, BANNER_DISMISS_REDESIGN, BANNER_QUIET_REDESIGN, bannerSurfaceRedesign } from "@/components/ui/banner";
+import { Icon } from "@/components/ui/icon";
+import { cn } from "@/lib/utils";
 import { useTranslation } from "@/lib/i18n";
 import { track } from "@/lib/track";
 
@@ -32,19 +36,24 @@ export function NewcomerInviteStrip({
     <div
       data-newcomer-invite-strip=""
       role="status"
-      className="animate-rise flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-border bg-accent-soft px-4 py-3"
+      className={cn(
+        "animate-rise flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-border bg-accent-soft px-4 py-3",
+        bannerSurfaceRedesign("accent"),
+        "redesign:items-center redesign:gap-y-2 redesign:py-2.5",
+      )}
     >
       <span
         aria-hidden="true"
-        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-on-accent"
+        className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-on-accent", BANNER_DISC_REDESIGN)}
       >
-        <UserPlus className="h-4 w-4" />
+        <UserPlus className="h-4 w-4 redesign:hidden" />
+        <Icon icon={UserPlusFill} size="sm" className="hidden redesign:block" />
       </span>
       <div className="min-w-0 flex-1">
-        <p className="text-balance text-sm font-semibold text-on-accent-soft">
+        <p className="text-balance text-sm font-semibold text-on-accent-soft redesign:text-text">
           {t("newcomerInvite.title")}
         </p>
-        <p className="mt-0.5 text-pretty text-sm text-on-accent-soft/80">
+        <p className="mt-0.5 text-pretty text-sm text-on-accent-soft/80 redesign:text-text-secondary">
           {t("newcomerInvite.body")}
         </p>
       </div>
@@ -61,14 +70,15 @@ export function NewcomerInviteStrip({
             onInvite();
           }}
         >
-          <UserPlus aria-hidden="true" className="h-3.5 w-3.5" />
+          <UserPlus aria-hidden="true" className="h-3.5 w-3.5 redesign:hidden" />
+          <Icon icon={UserPlusFill} size="sm" className="hidden redesign:block" />
           {t("newcomerInvite.action")}
         </Button>
         <Button
           size="sm"
           variant="secondary"
           data-newcomer-invite-later=""
-          className="hidden shrink-0 sm:inline-flex"
+          className={cn("hidden shrink-0 sm:inline-flex", BANNER_QUIET_REDESIGN)}
           onClick={() => {
             track("newcomer_invite_dismiss");
             onDismiss();
@@ -85,9 +95,13 @@ export function NewcomerInviteStrip({
           track("newcomer_invite_dismiss");
           onDismiss();
         }}
-        className="relative shrink-0 rounded-[var(--radius-control)] p-1.5 text-on-accent-soft/70 transition-colors hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring after:absolute after:-inset-1.5 after:content-[''] sm:hidden"
+        className={cn(
+          "relative shrink-0 rounded-[var(--radius-control)] p-1.5 text-on-accent-soft/70 transition-colors hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring after:absolute after:-inset-1.5 after:content-[''] sm:hidden",
+          BANNER_DISMISS_REDESIGN,
+        )}
       >
-        <X aria-hidden="true" className="h-4 w-4" />
+        <X aria-hidden="true" className="h-4 w-4 redesign:hidden" />
+        <Icon icon={XBold} kind="symbol" size="sm" className="hidden redesign:block" />
       </button>
     </div>
   );

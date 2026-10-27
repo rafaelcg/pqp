@@ -27,6 +27,7 @@ import {
   usePlaybackRate,
   type VoiceNoteEntry,
 } from "@/lib/voice-note-player";
+import { BELOW_SM_QUERY } from "@/lib/breakpoints";
 
 /** The message a voice note belongs to, as the card needs it. */
 export interface VoiceNoteMessage {
@@ -320,7 +321,7 @@ export function VoiceNoteCard({
   );
 }
 
-const NARROW_QUERY = "(max-width: 639px)";
+const NARROW_QUERY = BELOW_SM_QUERY;
 
 function subscribeNarrow(onChange: () => void): () => void {
   if (typeof window === "undefined" || !window.matchMedia) {

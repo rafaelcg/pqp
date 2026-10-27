@@ -56,7 +56,28 @@ Read this file and the inventory at the start of every session.
 | 2 | `p-empty` | Merged, capped at round 5 (Opus 8.6) |
 | 2 | `p-sheet` | Merged, capped at round 5 (Opus 8.6) |
 | 2 | `p-dialog` | Merged, capped at round 5 (Codex 8.7 r2, Opus 8.2 r4) |
+| 2 | `p-scroll` | Merged, capped at round 5 (Opus 7.9 r5, 8.6 r4). Hover thumb contrast not measured; Windows check open |
+| 2 | `p-settings-kit` | Merged, capped at round 5 (Opus 8.5 r5, 8.5 r2) |
 | 3 | `s-frame` | Merged, capped at round 5 (Opus 8.8) |
+| 3 | `s-rail` | Merged, capped at round 5 (Opus 8.2 r5, 8.8 r3) |
+| 3 | `s-sidebar-header` | Merged, capped at round 5 (Opus 8.3 r5, 8.7 r3) |
+| 3 | `s-sidebar-special` | Merged, capped at round 5 (Opus 8.1 r5, 8.6 r2; r5 MUST fixed after) |
+| 3 | `s-category` | Merged, capped at round 5 (Opus 7.9 r5, 8.3 r3) |
+| 3 | `s-channel-row` | Merged, capped at round 5 (Opus 8.5 r5). Follow-up: tooltip `sideOffset` so the name bubble clears the tiles |
+| 3 | `s-voice-row` | Merged, capped at round 5 (Opus 8.0 r5, 8.2 r3). Open: light selected and connected fills are close; check with the token owner |
+| 3 | `s-sidebar-rail` | Merged, capped at round 5 (Opus 8.1 r4 and r5) |
+| 3 | `s-voice-strip` | Merged, capped at round 5 (Opus 8.1 r5). Follow-ups: composer hang-up glyph (`s-composer`), music idle row fixture (`m-sheets`) |
+| 3 | `s-user-panel` | Merged, capped at round 5 (Opus 8.2 r5). Open: the Invisível hint is seven lines at the card width (copy, shows with the toggle off) |
+| 3 | `s-header` | Merged, capped at round 5 (Opus 8.3 r4 and r5). Follow-up: rename `--pane-header-rule` / `--pane-header-px` to `--pane-bar-*` after the chain |
+| 3 | `s-banners` | Merged, capped at round 5 (Opus 8.2 r5, MUST fixed after). Not done: a dark-only accent edge |
+| 3 | `s-message-row` | Merged, capped at round 5 (Opus 8.5 r5) |
+| 4 | `f-onboarding` | Merged, capped at round 5 (Opus 8.3 r3 and r5) |
+| 4 | `f-user-settings` | Merged, capped at round 5 (Opus 8.1 r5, 8.2 r4) |
+| 4 | `f-connections` | Merged, capped at round 5 (Opus 8.4 r3 and r4, 8.3 r5). Open: question 6 (copy) |
+| 4 | `f-search` | Merged, capped at round 5 (Opus 8.5 r5). Not done: `<li role="none">` inside the listbox (it changes the toggle-off tree too) |
+| 4 | `f-server-settings` | Merged, capped at round 5 (Opus 7.8 r5, 7.9 r4) |
+| 4 | `f-invites` | Merged, capped at round 5 (Opus 7.8 r5, 8.1 r3 and r4) |
+| 5 | `m-breakpoints` | Merged (code only, no council) |
 
 ## Phase 0: directions
 
@@ -737,6 +758,29 @@ Verified: typecheck; 10,417 unit tests; `bench:tokens`; i18n check;
 passed); retro, Halloween, high contrast, 390px and toggle off. Screenshots:
 `~/pqp-redesign/p-toast/`.
 
+### p-scroll
+
+Spec (audit: `ScrollArea` had no callers; every list scrolls natively, a
+few sideways strips hide their bar):
+
+1. Decision: delete `ScrollArea` and its Radix dependency. Adopting it
+   would change how every pane scrolls (an overlay bar, Radix's own
+   viewport), which is behaviour, not look.
+2. Redesign: native scrollbars take the look's colours (a thumb of tertiary
+   text at 65%, 80% in light, at least 3:1 on both panes; no track) at the platform's width, from one rule on the root.
+3. Not verifiable here: the captures run on macOS, whose overlay bars are
+   hidden at rest; the sheet draws the thumb's colour as a bar instead.
+   Headless Chromium ignores "Show scroll bars: Always" too (tried
+   2026-10-27). For André, about a minute each:
+   - macOS: System Settings, Appearance, Show scroll bars "Always"; open
+     the Electron app with the toggle on; check the thumb at rest, on hover
+     and while dragging.
+   - Windows: the same, plus the arrow buttons, which Chromium draws in the
+     thumb colour once `scrollbar-color` is set. Do they look like legacy
+     chrome next to the rounded panes?
+   - Linux (GTK): rest, hover, drag.
+   Values to confirm: `scrollbar-width: auto`, thumb at 65% (dark) and 80%
+   (light) of tertiary text.
 ### p-avatar
 
 Spec (audit: every person avatar already renders through `UserAvatar`, 65
@@ -976,6 +1020,20 @@ their own edge and fill; the phone breakpoint is defined three ways):
 3. Built as class strings in `ui/pane.ts`, appended after each pane's own.
 4. Left: below 768px the drawers keep their edges (`m-shell`, `m-breakpoints`).
 
+### s-rail
+
+Spec (audit: one rail in `server-rail.tsx`, six tile kinds each drawing its
+own lime-on-hover square, a hand-made count pill, legacy tokens throughout):
+
+1. Job: the doors on the left edge: Conversas, waiting and pinned people,
+   servers, create and join, Novidades, Discover, the update button.
+2. States: selected, unread pip, mention and request counts, muted, Baú
+   count or ring, live party, public community, dragged, keyboard focus.
+3. Redesign: 44px round tiles in the side pane's colour; the selected one is
+   the accent's rounded square; a hover lifts the fill and never turns lime;
+   filled Phosphor glyphs; counts on `CountBadge`; marks cut from the canvas.
+4. Left: `PhoneServersScreen` (`m-shell`) and `ServerRailSkeleton`
+   (`p-loading`, which is in review).
 Rounds: r1 Codex 8.0, r2 Codex 8.5, r3 Opus 8.3 (MUST: a call added a
 second gutter; fixed), r4 Opus 8.6, r5 Opus 8.8. Capped at round 5, no MUST.
 Applied before the merge: `--space-gutter` is 0 under 768px, the same width
@@ -989,6 +1047,16 @@ where the frame classes stop floating. Left as COULD:
 Verified: typecheck, 10,454 unit tests, bench:tokens, i18n:check, e2e
 app-shell-scroll, forum-shell, channel-layout, call-split-layout,
 forum-pane. Screenshots: ~/pqp-redesign/s-frame/.
+
+Rounds 3 to 5 (Opus; Codex out of usage): 8.8, 8.0, 8.2. Fixed on the way:
+the join door on the same disc, idle doors lifted 4% in dark, a quieter grey
+globe, one focus ring on the update tile, the lime rule written down (a lime
+fill is "you are here", small lime marks are "new for you"). Capped at round
+5, no MUST open. Open: the sheet's face fixtures load from dicebear, so a
+capture can miss them.
+Verified: typecheck, 10,462 unit tests, bench:tokens, i18n:check, e2e
+conversations-home, dm-list-polish, live-read-ack (17). Screenshots:
+~/pqp-redesign/s-rail/.
 
 ### p-dialog
 
@@ -1017,6 +1085,65 @@ Spec (audit: Dialog in 50 files, ConfirmDialog in 24, PromptDialog in 1;
    up with the title's right edge. Capped at round 5, no MUST open.
 Verified: typecheck, 10,462 unit tests, bench:tokens, i18n:check, e2e
 dialog-mobile-layout (16). Screenshots: ~/pqp-redesign/p-dialog/.
+
+### s-sidebar-header
+
+Spec (audit: one header in `channel-list.tsx`, three hand-built icon
+buttons, a search entry styled as a faint field, the banner strip in
+`server-identity.tsx`):
+
+1. Job: the open server's name and menu, members, collapse, close (phone),
+   message search, and the banner when the server has one.
+2. States: hover and open menu, a long name (tooltip), public, loading, no
+   server, with and without a banner, phone drawer.
+3. Redesign: the name in the title face over no rule, without the icon
+   the rail tile already shows beside it; the three buttons are
+   IconButton; search is a pill a step off the pane; the banner is an inset
+   card. The search dialog itself is `f-search`.
+
+### s-sidebar-special
+
+Spec (audit: `story-strip.tsx`, `live-party-block.tsx` and
+`community-home-preview.tsx`, each with its own card, dashed invite and
+label; the pinned section is a category header and channel rows, so it
+moves with `s-category` and `s-channel-row`):
+
+1. Job: what is happening on this server before its channels: stories, a
+   live or pending watch party, the Baú's newest posts.
+2. States: party live (open, not open, audience), pending, waitlist teaser
+   (open, on the list), create, history links; Baú card (new posts), row
+   (nothing new, open), empty for staff and for members; stories with and
+   without new, first run, notice.
+3. Redesign: one family from `ui/sidebar-block.ts` (card, dashed invite,
+   row). The open block is `row-selected`; red stays on the live badge;
+   labels are `SectionLabel`, counts `CountBadge`.
+Rounds (Opus / Codex): r1 - / 8.3, r2 - / 8.6, r3 8.7 / -, r4 7.8 / -,
+r5 8.3 / - (no MUST, would approve). Last fixes: the trigger's hover is the
+ghost step (8%) above the search's 6%, open 10%, both tokens
+(`--sidebar-trigger-*`); the banner on the header's 12px inset. Kept: the
+members button on desktop (round 5 suggested hiding it at every width; the
+server menu has Membros too; question 4).
+
+### m-breakpoints
+
+Spec (audit: width queries in the signed-in app: `PHONE_QUERY`, `SM_UP_QUERY`,
+`use-sm-up`, `use-md-up`, `use-lg-up`, the forum's 767px, stories' 640px,
+the soundboard sheet, the voice note card, the thread panel, two device
+probes, and the stylesheets' 639, 640 and 767px):
+
+1. Job: one definition of where the layout changes.
+2. Change: `lib/breakpoints.ts` names Tailwind's `sm`, `md` and `lg` in rem,
+   with "below" queries at `.999`; every caller imports it; each stylesheet
+   query writes the same rem value and names the file.
+3. Merges: the forum's 767px and stories' 640px become `md` and `sm`.
+4. Same at a 16px base font, except one pixel: stories' `max-width: 640px`
+   overlapped `sm` at exactly 640px and now stops at 639.99px. With another
+   base font size, JS and CSS now switch with the `sm:` and `md:` utilities.
+5. No council: it draws nothing new. Verified by unit tests (a new
+   breakpoints test), forum, stories, shell and phone e2e.
+6. Found on the way: `app-shell-scroll` failed on `redesign` (not on main):
+   `/vem` renders after network idle once the dev server loads the icon
+   package. The test now waits for the page to render.
 
 ### p-settings-kit
 
@@ -1051,6 +1178,317 @@ error, empty per filter, results, load more):
 4. Kept: the hover lift and glow, share and report on every card, the
    create call to action above the grid.
 
+### f-search
+
+Spec (audit: `search/search-dialog.tsx`, one caller, the sidebar search pill
+and Ctrl K; states: prompt, too short, searching, no match, error, results,
+load more):
+
+1. Job: find a message in this server by words and jump to it.
+2. Redesign: the field is the input's round field inset in the body with a
+   Phosphor glass; a result is a card-cornered row, the highlighted one on
+   the menu's highlight; channel name semibold with a bold `#`; author and
+   snippet in secondary text; the match a soft accent tint.
+3. Merges: nothing. The other search fields (about nine) belong to their
+   surfaces.
+4. Kept: combobox and listbox semantics, arrows and Enter, load more.
+Rounds (Opus only): r1 7.5 (MUST fixed: four left edges), r2 8.3, r3 8.4,
+r4 8.1 (MUST fixed: the channel name sat 3px above the author). Decisions:
+the always-focused field draws a 1px accent border, not the primitive's
+2px ring with an offset, because a ring around a field that never loses
+focus is heavy. The row's `#` is the bold (symbol) glyph, the same weight
+as the field's glass. Hover selects a row only on a real pointer move.
+
+### f-invites
+
+Spec (audit: `invite-panel.tsx` in create and join modes, `invite-choice-row`,
+`invite-paste`, `create-server-dialog.tsx` with name, paste, preview and done
+steps, `discord-import-preview`, `server-ready-panel`, `bring-crew-announcement`):
+
+1. Job: make and share invite links, join with a code, start a server from a
+   name or a copied Discord layout.
+2. Redesign: invite rows are the shared card with filled share, link, copy
+   and bin glyphs; expiry and limit chips are pills (selected row fill with
+   an accent edge); field and group labels sentence case; the Discord path is
+   a card row with a caret; text areas take the input tokens.
+3. Merges: nothing. The chip row stays (it wraps on a 360px panel, a
+   segmented control would not).
+4. Kept: every step, the system share sheet, the paste helpers.
+
+### f-user-settings
+
+Spec (audit: `settings-modal.tsx`, `SectionRail` shared with server and
+channel settings, 13 sections, the kit, `UnsavedChangesBar`, the handle
+confirm, the delete account dialog, the phone tab strip):
+
+1. Job: one place for the account and the app: a rail of tabs in groups, a
+   page per tab, profile drafts with an unsaved bar, instant save elsewhere.
+2. Redesign: a small frame. The band and the rail on the side pane's tone,
+   the page an inset rounded pane (`--settings-*`). Tabs are the list row's
+   small pill with filled Phosphor glyphs; group names are section labels;
+   the account card in the rail foot is a pill.
+3. Merges: nothing. `SectionRail` and the `fill` dialog surface are shared,
+   so server and channel settings take the rail and the frame tone too;
+   their pages stay for `f-server-settings`.
+4. Kept: every section, the close guard, the handle confirm, the 44px phone
+   targets, the dirty dot and its spoken description.
+
+### f-connections
+
+Spec (audit: `connections-section.tsx` in user settings (built on the kit),
+`connection-badges.tsx` on the profile card, `connection-callback.tsx` the
+overlay while a provider redirect completes):
+
+1. Job: link Steam, Battle.net and Twitch, choose who sees them, show them
+   on a profile.
+2. Redesign: the section is the kit's (already reviewed); the badges list on
+   the profile is a card with semibold names, provider in the detail colour
+   and a bold arrow; the linked name is sans medium; the callback is a pill
+   on the popover surface over the sheet scrim.
+3. Merges: nothing.
+4. Kept: per-provider visibility, the unavailable list, the callback overlay.
+Rounds (Opus only): r1 8.0, r2 8.2, r3 8.4, r4 8.4, r5 8.3 (cap, no
+MUST in any round). Changes: Desconectar on the plain `danger-ghost` at the
+action edge, a spinner and `role="status"` on the callback pill, an edge on
+the near-black tiles in dark, coming-soon tiles muted (grey and faded in
+light), the linked name at medium weight, a mocked linked-state shot
+(`38-*`). Open: question 6 (copy, shows with the toggle off).
+
+### f-server-settings
+
+Spec (audit: `server-settings-dialog.tsx` with 13 sections and its own
+`Block` and `SectionHeader`, `channel-settings-dialog.tsx` with 5, roles and
+the rank list, emoji, AutoMod, webhooks in and out, the audit log, danger):
+
+1. Job: run a server or a channel: a rail of sections, a page each, a Fechar
+   footer; owner-only sections and the armed transfer and delete.
+2. Redesign: the user settings frame (side tone, inset page, pill tabs with
+   filled glyphs). Bespoke boxes take the card look (`SETTINGS_CARD_REDESIGN`),
+   uppercase eyebrows become section labels, field labels sentence case,
+   roles are list row pills with a Phosphor grip, the danger block is a card
+   with the danger banner's edge, status pills take the badge recipe.
+3. Merges: nothing; `Block` stays (the kit's group has rows, these do not).
+4. Kept: every section, drag to reorder, the armed confirms, the footer.
+Rounds: Codex 8.2 (r1); Opus 8.5 (r2), 8.0 (r3), 8.5 (r5), no MUST left.
+Round 5 fixes: the copy failure glyph at 14px, the info tint at 7% in
+dark, the rail build line in mono. Merged on the cap.
+
+### s-category
+
+Spec (audit: `ChannelSectionHeader` in `channel-section-header.tsx` used by the
+classic sections, Pinados and `CategoryHeader`; `MixedCategoryHeader` in
+`channel-list-mixed.tsx`; the "Categorias" label in `channel-list.tsx`):
+
+1. Job: fold a group of channels; for a manager, add a channel, a private
+   channel or a category, rename, delete and drag a category.
+2. States: open, folded (count and unread dot), hover, focus, drop target,
+   drop into (mixed), dragging, the "+" menu open, a phone (always shows "+").
+3. Redesign: one recipe for all three (section label face in sentence case,
+   pill row, bold caret, round actions). The three keep their own markup
+   because their drag rules differ; only the look is shared.
+
+### s-channel-row
+
+Spec (audit: `ChannelRow` for text, forum and watch party rooms,
+`SidebarThreadRow`, `ChannelIcon` at nine render sites, `DraftMark`,
+`ChannelListSkeleton`):
+
+1. Job: open a channel, show what is waiting in it, and for a manager pin it,
+   open its settings and drag it; threads nested under their channel.
+2. States: plain, hover, focus, selected, unread, mentions, muted, draft,
+   private, pinned, forum beta, watch party live (viewers, Assistir) and not
+   live (topic), connected, drag and drop, loading.
+3. Redesign: the `sm` list row on its tokens with the end pip as the one
+   unread mark (decided in `p-list-row`), `CountBadge`, Phosphor icons in
+   `ChannelIcon` (every site), round action tiles, the live pill as a dot.
+   The voice row and its occupants are `s-voice-row`.
+
+### s-voice-row
+
+Spec (audit: voice rooms through `ChannelRow`, `VoiceOccupantRow`,
+`VoiceOccupantBadges`, `ChannelMusicCard`, `ChannelSessionHint`):
+
+1. Job: show who is in a room and what they are doing; join with a double
+   click; per-person sound from a click; drag a person to another room.
+2. States: connected, occupants speaking, muted, deafened, sharing, camera,
+   hand (queue number), app line, soundboard marks, dragging; music playing
+   (in the call or not, with "Ouvir"); a scheduled session hint.
+3. Redesign: occupants as small list rows, filled 14px badges, the music
+   card on the card tokens, the connected room on `success-soft`.
+4. For `s-user-panel`: deafened is `EarSlash`; the panel's deafen button
+   should use the same glyph.
+
+### s-sidebar-rail
+
+Spec (audit: one renderer, `ChannelList` folded by `iconsOnly` on desktop,
+`ChannelRailItem` per channel, the Baú's `CommunityHomeNavButton compact`):
+
+1. Job: the channel list at 72px: expand, search, the Baú, every channel as
+   a glyph in groups (favourites, text, voice, categories).
+2. States: selected, unread pip, mention count, muted, private (tooltip
+   detail), the call you are in with its count, people in a room, a live
+   watch party, hover, focus; Baú with new posts, Baú open.
+3. Redesign: 40px rounded squares (`--strip-tile-radius`, 12px, so the strip
+   does not read as a second server rail) on the list row's fills; round
+   expand and search buttons; counts are `CountBadge` cut out of the pane.
+   The full-width Baú row (no preview card) takes the channel row's look.
+
+### s-voice-strip
+
+Spec (audit: `VoiceStatusBar` wide and compact, `MusicMiniPlayer` idle and
+playing in the sidebar footer, three call sites through `sidebarFooter`):
+
+1. Job: the call you are in, from anywhere: status, quality, the room,
+   leave, camera and share; music in the call.
+2. States: connecting, connected, listen only, audience mode, push-to-talk
+   idle, camera on, sharing, at the camera or share limit, a call in a text
+   channel, leave hidden, compact; music idle and playing; two coachmarks.
+3. Redesign: the footer's blocks are inset cards on the card tint
+   (`SIDEBAR_FOOTER_CARD_REDESIGN`), leave is a round danger button, the room
+   a pill, camera and share pills on the secondary fill (accent soft when
+   on). `MusicNowPlaying` is shared with the composer's music bar and moves
+   with `s-composer`.
+
+Rounds (Opus only): r1 7.6, r2 8.0, r3 7.8 (no MUST). r3 fixes: status
+labels on one edge, the room's microphone glyph. Decision: the 6px gap
+between the voice strip and the user panel is the footer stack's gap, and
+both cards keep the 8px side inset; not changed.
+r4 8.0, r5 8.1 (cap, no MUST). r5 fixes: the footer cards draw
+`--card-border` (the light card barely separated from the pane), and the
+72px room button takes the row's shape. Follow-ups: the composer dock's
+hang-up moves to `PhoneDisconnect` (`s-composer`); the music idle row needs
+the music store fixture (`m-sheets`) before it can be reviewed.
+
+### s-user-panel
+
+Spec (audit: `UserPanel` wide and compact through `sidebarFooter`; its
+hand-built status menu with the recado field; `DownloadHint` above it):
+
+1. Job: who you are and your presence, mute, deafen, Não Perturbe, settings;
+   the menu to rename, set the recado, pick a status, send feedback, get
+   help, download.
+2. States: off a call (mute and deafen disabled), mic off, deafened, muted
+   by a moderator, listen only, DND, invisible, saving, error, compact;
+   menu: the recado typed, over the limit, a status chosen.
+3. Redesign: an inset card at the foot of the sidebar; round buttons, a soft
+   danger fill when the mic or sound is off (warning for a moderator's
+   mute); the deafen glyph is the bold ear the voice row uses. The menu
+   keeps its own behaviour (not a Radix menu: the field and roving focus)
+   and takes the popover surface and the menu row tokens.
+4. Question for André: the status menu could become `ui/menu`'s
+   `DropdownMenu` with the field as top content. That is behaviour, so it is
+   not done here.
+
+Rounds (Opus only): r1 7.5 (MUST fixed), r2 7.8, r3 8.1, r4 8.1, r5 8.2
+(cap, no MUST). Changes over the rounds: the moderator's mute at full
+strength; listen only as an outlined mic with a lock badge, named "Só
+ouvindo" under the redesign; the home-indicator inset below the card;
+`--footer-card-solid-hover` for the dot cutout; the status menu as wide as
+the card with the dots in 16px slots; Não Perturbe as a red glyph without a
+fill. Open (copy, shows with the toggle off too): the Invisível hint wraps
+to seven lines at the card's width.
+
+### s-header
+
+Spec (audit: the chat header in `App.tsx` with `channelHeaderTools` and
+`HEADER_ACTION_TILE`, shared with the call split's header; six more headers
+drawn by hand: forum, Baú, friends, Novidades on a phone, two skeletons):
+
+1. Job: where you are (name, topic or "N aqui", a conversation's line) and
+   the pane's tools (join, call, nudge, schedule, pins, history, settings,
+   members, more).
+2. States: text, private, with an image, voice room (join), DM (call,
+   video, join with count), in the call, members open, phone back or menu
+   with the update dot, loading.
+3. Merge: one recipe, `ui/pane-header.ts` (bar, title, detail, 36px round
+   action tile, phone nav button), on every header above. From `md` up the
+   topic sits beside the name after a rule, as in the mockup. Left for their
+   elements: the thread panel's header (`s-thread`), the call split's own
+   bar (`f-call`), the party bar (`f-watch-party`).
+Rounds (Opus only): r1 7.0 (two MUST fixed: the phone title cut to "# p.",
+`--list-row-icon` undefined on the branch), r2 7.9 (MUST fixed: the title
+size token declared twice, so every title drew at 20px; the bar now has
+`--pane-bar-title-size`), r3 8.0, r4 8.3, r5 8.3 (cap). Also: one baseline
+and tracking with the sidebar header, the room's glyph before a voice or
+forum title, the open members tile on the selected fill, 18px glyphs, the
+forum and friends on the recipe. Follow-up after the chain: rename the
+bar's `--pane-header-rule` and `--pane-header-px` to `--pane-bar-*` (six
+chain branches use them now). Not done: an avatar before a DM's name.
+
+### s-banners
+
+Spec (audit: connection, sanction, error, idle and handle strips already use
+`ui/banner` since `p-banner`; six strips still drew their own: watch now,
+arrival (five variants), bring the crew, newcomer invite, the Discord import
+notice, the upcoming session card):
+
+1. Job: one strip at a time under the header that says something about the
+   conversation and offers one way forward.
+2. States: watch now with a second stream folded, joining, failed; arrival
+   for a member and for the owner (copy, copied, failed); bring the crew
+   arrived, reminder, empty; newcomer; import; a session scheduled or live.
+3. Merge: each keeps its markup (confetti, faces, the folded list) and takes
+   the banner's card through `bannerSurfaceRedesign(tone)` in
+   `ui/banner.tsx`: inset, `--banner-radius`, the tone's soft fill and edge,
+   text in the text colour, a round dismiss in the tone's ink. The session
+   card is news, not a tone: the same inset and corner on the card tint.
+Rounds (Opus only): r1 7.6 (MUST fixed: the second action was the generic
+grey secondary on a tone), r2 8.1, r3 8.1, r4 8.0, r5 8.2 (cap; MUST fixed
+after: the reminder's accessible name now follows its visible text). The
+family: one card (`bannerSurfaceRedesign`), a tinted disc
+(`BANNER_DISC_REDESIGN`), one ink-filled main action, a tinted second
+action (`BANNER_QUIET_REDESIGN`, also the primitive's quiet), the round X
+only where a strip can be hidden, one text column at 44px, meta lines at
+13px. New copy: `watchPartySchedule.card.reminding` ("Lembrete ligado").
+Not done: a dark-only accent edge at about 20% (judge with one strip in
+place, not the sheet's stack).
+
+### s-message-row
+
+Spec (audit: `MessageRow` in `chat/message-list.tsx`, its gutter and author
+line, `RankMarks`, `StatusDot`, the failed and queued footers, the blocked
+row; one renderer with a stream variant and compact density):
+
+1. Job: one message: who, when, what, and its delivery state.
+2. States: first in a group, continued, compact, own, role colour, rank
+   marks, bot, OP, webhook, AutoMod, gone; pinned, edited; sending, queued,
+   failed (retry, wait, discard); blocked; mentions you (joined in a run);
+   flash; bulk select; forum answer; stream rows.
+3. Redesign: the row is inset 8px with an 8px corner and gives the inset
+   back as padding, so text does not move; hover is a text tint (4.5% in
+   dark, 3% in light); a mention is the system's mention row, a step
+   quieter in light so it never reads as the selected channel; your own
+   name is in the accent when you have no role colour; role names get a
+   lightness clamp; times are tertiary; Retry is on the soft accent and
+   Discard on the secondary fill. The hover toolbar, reactions, reply and
+   thread chip are `s-message-chrome`; the inline edit field is
+   `s-composer`.
+Rounds (Opus only): r1 7.5 (MUST fixed), r2 8.0 (MUST fixed), r3 8.1,
+r4 7.6 (MUST fixed: a pinned continuation line showed no pin), r5 8.5
+(cap, no MUST). Also: the presence dot is cut from the fill it sits on,
+a pinned continuation line carries its pin in the gutter, "(editada)"
+ends the paragraph right before it. For `s-member-list`: the same role
+lightness clamp on member rows and role chips.
+
+### f-onboarding
+
+Spec (audit: `onboarding/` (11 files), the hints in `layout/*-hint.tsx`
+and `corner-card.tsx`: the wizard, the first-run card, arrival and newcomer
+strips, ten hints that all render through `CornerCard`):
+
+1. Job: get a new person to a working setup, and teach a feature once.
+2. Redesign: `CornerCard` (the one hint shell) on the popover surface,
+   edge, lift and radius, a round close (glass on a hero), a 15px title;
+   the first-run card a pane-radius card with accent-soft step wells.
+3. Merges: none needed; the hint shapes already share `CornerCard`.
+4. Kept: every hint, the queue, the quiet contexts, the wizard.
+Rounds (Opus only): r1 7.3 (MUST fixed), r2 7.8, r3 8.3, r4 8.2, r5 8.3
+(cap, no MUST). The family: one 32px round close on every card (glass on
+a hero, from `--glass-bg` / `--glass-fg` / `--glass-border`), the shell
+sizes a footer's primary action (`data-cta`, 120px), done steps keep their
+place with a check and "Feito" and no strike. Rebuilt off `redesign`
+without the f-call work the first branch carried.
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss
@@ -1068,6 +1506,21 @@ error, empty per filter, results, load more):
    - Channel list: mixed layout (`mixed_channel_list`) or legacy sections.
 3. `error-boundary.tsx` is English only, and AGENTS.md says to leave it alone.
    Redesign its look and keep the copy as is?
+4. Sidebar header: the members button duplicates the server menu's Membros
+   and the chat header's members control. Hide it on desktop too, so a long
+   server name fits? It is hidden in the phone drawer already.
+5. Invites: each invite card says "1 uso" under a "Usos" chip row, which
+   reads as "limited to one use". The council suggests "Usado 1 vez · sem
+   limite" and "{used} de {max} usos". That is a copy change in three
+   languages and shows with the toggle off too. Change it?
+6. Connections and profile: three notices say a feature is "not active on
+   this server" ("não estão ativas neste servidor"). In pqp a "servidor" is
+   a chat server, so the council reads it as wrong. Suggested pt-BR: "ainda
+   não estão disponíveis aqui", with en and es to match, for
+   `settings.connections.unconfigured`, `settings.profile.banner.unconfigured`
+   and `settings.profile.media.unconfigured`. It shows with the toggle off
+   too. Change it? Same tab: the visibility hint says "Para usar" while
+   the rest of the tab says "pra"; the council suggests "Pra usar".
 
 ## Decisions
 
@@ -1078,6 +1531,7 @@ error, empty per filter, results, load more):
 
 | Date | Decision | Why |
 |---|---|---|
+| 2026-10-27 | `f-friends` merges after the shell chain | Its branch sits on top of `s-sidebar-special` through `s-member-list`; merging it first would bring unreviewed shell work into `redesign`. |
 | 2026-10-26 | Element branches use `rd/<id>` | Git ref conflict with `redesign`. |
 | 2026-10-26 | Direction mockups are a dev-only page on an unmerged branch | Real pixels for the pick, no change to production components, nothing to clean up on `redesign`. |
 | 2026-10-26 | Direction B (Salas), with filled icons instead of outlines | André's pick. The council preferred A; B was second for both reviewers (7.2, 7.4), and the risks they named for B go into the Phase 1 tokens: gutters cost width on small screens, and a third surface level invites card-in-card settings. |

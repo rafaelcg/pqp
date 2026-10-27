@@ -176,7 +176,7 @@ export function QgHint({
       footer={
         <Button
           size="sm"
-          className="cta-lift rounded-full px-4"
+          data-cta className="cta-lift rounded-full px-4"
           disabled={joining}
           onClick={() => void join()}
         >
