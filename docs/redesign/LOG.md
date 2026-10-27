@@ -79,6 +79,7 @@ Read this file and the inventory at the start of every session.
 | 4 | `f-search` | Merged, capped at round 5 (Opus 8.5 r5). Not done: `<li role="none">` inside the listbox (it changes the toggle-off tree too) |
 | 4 | `f-server-settings` | Merged, capped at round 5 (Opus 7.8 r5, 7.9 r4) |
 | 4 | `f-invites` | Merged, capped at round 5 (Opus 7.8 r5, 8.1 r3 and r4) |
+| 4 | `f-communities` | Merged, capped at round 5 (Opus 7.6 r5, 8.1 r3). Not done: a balanced chip wrap |
 | 5 | `m-breakpoints` | Merged (code only, no council) |
 
 ## Phase 0: directions
