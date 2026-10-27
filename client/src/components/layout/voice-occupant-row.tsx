@@ -236,7 +236,15 @@ export function VoiceOccupantRow({
           />
           <span className="flex min-w-0 flex-1 flex-col">
             <span className="flex min-w-0 items-center gap-1.5">
-              <span className="truncate">{person.displayName}</span>
+              <span
+                className={cn(
+                  "truncate",
+                  // Muted or deafened: the name a step quieter, beside the red glyph.
+                  (person.muted || person.deafened) && "redesign:text-[color:var(--list-row-detail)]",
+                )}
+              >
+                {person.displayName}
+              </span>
               <SoundboardOccupantMark userId={person.userId} />
               <SoundboardMutedMark
                 userId={person.userId}

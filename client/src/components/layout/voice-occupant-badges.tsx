@@ -15,6 +15,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Icon, type IconKind } from "@/components/ui/icon";
+import { useRedesign } from "@/lib/redesign";
 import { cn } from "@/lib/utils";
 import { HandPositionBadge } from "@/components/voice/hand-position-badge";
 import type { VoiceParticipant } from "@pqp/shared";
@@ -70,10 +71,14 @@ function BadgeGlyph({
   /** The Phosphor glyph's size, 14px unless a shape needs more room. */
   onClassName?: string;
 }) {
+  const redesign = useRedesign();
   return (
     <span
       role="img"
       aria-label={label}
+      // Under the redesign the glyph says its state on hover too: a filled
+      // ear at 16px is easy to take for a "no" sign.
+      title={redesign ? label : undefined}
       className={cn(
         "flex",
         // The accent as a mark on the pane needs its text step (lime is
