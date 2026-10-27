@@ -755,3 +755,52 @@ test("captures the forum post", async ({ browser }) => {
     await context.close();
   }
 });
+
+/**
+ * The stories strip above the channels (`s-sidebar-special`): my own ring and
+ * a friend's new story. Its own server, so the other scenes stay as they were.
+ */
+test("captures the stories strip", async ({ browser }) => {
+  fs.mkdirSync(OUT!, { recursive: true });
+  await person(VIEWER, "Lia", PRESET(4));
+  await person("bia", "Bia", null);
+  const home = await server(VIEWER, "Cineclube");
+  await join(VIEWER, home.id, "bia");
+  const flag = await fetch(`${API}/api/admin/flag-overrides`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${ADMIN_TOKEN}` },
+    body: JSON.stringify({ key: "stories", serverId: home.id, enabled: true }),
+  });
+  expect(flag.status).toBe(200);
+  for (const [suffix, text] of [
+    [VIEWER, "sessão hoje às 20h"],
+    ["bia", "trouxe pipoca"],
+  ] as const) {
+    const story = await fetch(`${API}/api/stories`, {
+      method: "POST",
+      headers: headers(suffix),
+      body: JSON.stringify({ kind: "text", text, background: "night", audiences: { serverIds: [home.id] } }),
+    });
+    expect(story.status).toBe(201);
+  }
+  const text = home.channels.find((c) => c.type === "text")!;
+
+  for (const theme of ["dark", "light"] as const) {
+    const context = await browser.newContext({ viewport: DESKTOP, locale: "pt-BR" });
+    const page = await context.newPage();
+    await as(page, theme);
+    await page.goto(`/app/server/${home.id}/channel/${text.id}?lang=pt-BR`);
+    const strip = page.locator(`[data-story-strip="server:${home.id}"]`);
+    await expect(strip.locator("[data-story-ring]")).toHaveCount(2, { timeout: 30_000 });
+    await hideDevBanner(page);
+    await page.evaluate(() => document.fonts.ready);
+    await page.waitForTimeout(1200);
+    await page.mouse.move(0, 0);
+    const box = (await strip.boundingBox())!;
+    await page.screenshot({
+      path: path.join(OUT!, `s-sidebar-stories-${theme}.png`),
+      clip: { x: Math.max(0, box.x - 24), y: Math.max(0, box.y - 112), width: box.width + 48, height: box.height + 200 },
+    });
+    await context.close();
+  }
+});
