@@ -1178,7 +1178,8 @@
   --slider-thumb-shadow: 0 1px 2px oklch(0.4 0.02 262 / 0.2), 0 2px 6px oklch(0.4 0.02 262 / 0.14);
   /* The brightest surface in light, so a sheet reads lifted, not sunk. */
   --sheet-surface: var(--color-surface-0);
-  --sheet-shadow: 0 -1px 0 oklch(0.4 0.02 262 / 0.06), 0 -8px 24px oklch(0.4 0.02 262 / 0.22);
+  /* One top edge: the border alone, as in dark. */
+  --sheet-shadow: 0 -8px 24px oklch(0.4 0.02 262 / 0.22);
   --sheet-scrim: oklch(0.3 0.02 262 / 0.3);
 }
 

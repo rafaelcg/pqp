@@ -621,6 +621,7 @@ function LauncherPanel(props: PanelProps) {
           "app-launcher-panel z-50 flex flex-col overflow-hidden border border-border-strong bg-surface-1 shadow-[var(--shadow-2)] focus:outline-none",
           modal
             ? cn(
+                // The old radius is the toggle-off look; SHEET_SURFACE's wins under the redesign.
                 "app-launcher-sheet fixed inset-x-0 bottom-0 max-h-[88dvh] rounded-t-[var(--radius-panel)] pb-[env(safe-area-inset-bottom)]",
                 SHEET_SURFACE,
               )

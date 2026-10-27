@@ -21,6 +21,12 @@ export const SHEET_SURFACE =
 export const SHEET_SURFACE_PHONE =
   "redesign:max-sm:rounded-t-[var(--sheet-radius)] redesign:max-sm:rounded-b-[0px] redesign:max-sm:border-x-0 redesign:max-sm:border-b-0 redesign:max-sm:border-t redesign:max-sm:border-t-[color:var(--sheet-edge)] redesign:max-sm:bg-[color:var(--sheet-surface)] redesign:max-sm:shadow-[var(--sheet-shadow)]";
 
+/**
+ * Clear of the home indicator on a phone sheet with no footer of its own,
+ * with a floor for a device whose inset is zero.
+ */
+export const SHEET_SAFE_BOTTOM = "redesign:max-sm:pb-[max(0.75rem,env(safe-area-inset-bottom))]";
+
 /** The scrim behind a sheet that draws its own (a dialog draws its own scrim). */
 export const SHEET_SCRIM =
   "redesign:bg-[color:var(--sheet-scrim)] redesign:backdrop-blur-[var(--sheet-scrim-blur)]";

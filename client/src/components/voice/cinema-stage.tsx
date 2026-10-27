@@ -8,7 +8,7 @@ import { useTranslation } from "@/lib/i18n";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { cn } from "@/lib/utils";
 import { STAGE_LAYER } from "@/lib/stage-layers";
-import { SHEET_SCRIM, SHEET_SURFACE_PHONE } from "@/components/ui/sheet";
+import { SHEET_SAFE_BOTTOM, SHEET_SCRIM, SHEET_SURFACE_PHONE } from "@/components/ui/sheet";
 
 /**
  * Full-bleed HLS video for a live stream's audience: no roster, no mute or
@@ -178,7 +178,7 @@ export function CinemaStage({
               SHEET_SURFACE_PHONE,
               // Clear of the home indicator on a phone, as the dialog footer
               // and the launcher already are.
-              "redesign:max-sm:pb-[max(0.75rem,env(safe-area-inset-bottom))]",
+              SHEET_SAFE_BOTTOM,
             )}
             onClick={(event) => event.stopPropagation()}
           >

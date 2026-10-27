@@ -12,7 +12,7 @@ import {
 import { createPortal } from "react-dom";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
-import { SHEET_SCRIM, SHEET_SURFACE_PHONE } from "@/components/ui/sheet";
+import { SHEET_SAFE_BOTTOM, SHEET_SCRIM, SHEET_SURFACE_PHONE } from "@/components/ui/sheet";
 
 // A roving group (radios, tabs) parks its other members at `tabindex="-1"`:
 // they are focusable by script but not Tab stops, so they are not the trap's
@@ -483,7 +483,7 @@ export function Dialog({
             !phoneFullScreen && SHEET_SURFACE_PHONE,
             // A phone sheet with no footer keeps its body above the home
             // indicator; the footer carries `safe-pb` itself.
-            !phoneFullScreen && !footer && "redesign:max-sm:pb-[env(safe-area-inset-bottom)]",
+            !phoneFullScreen && !footer && SHEET_SAFE_BOTTOM,
             fill && "h-[calc(100%-1.5rem)] sm:h-full",
             // Settings: a fixed height so the rail stays put between panes,
             // but not the whole of a tall monitor.
