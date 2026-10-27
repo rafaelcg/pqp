@@ -1295,6 +1295,35 @@ r4 8.0, r5 8.1 (cap, no MUST). r5 fixes: the footer cards draw
 hang-up moves to `PhoneDisconnect` (`s-composer`); the music idle row needs
 the music store fixture (`m-sheets`) before it can be reviewed.
 
+### s-user-panel
+
+Spec (audit: `UserPanel` wide and compact through `sidebarFooter`; its
+hand-built status menu with the recado field; `DownloadHint` above it):
+
+1. Job: who you are and your presence, mute, deafen, Não Perturbe, settings;
+   the menu to rename, set the recado, pick a status, send feedback, get
+   help, download.
+2. States: off a call (mute and deafen disabled), mic off, deafened, muted
+   by a moderator, listen only, DND, invisible, saving, error, compact;
+   menu: the recado typed, over the limit, a status chosen.
+3. Redesign: an inset card at the foot of the sidebar; round buttons, a soft
+   danger fill when the mic or sound is off (warning for a moderator's
+   mute); the deafen glyph is the bold ear the voice row uses. The menu
+   keeps its own behaviour (not a Radix menu: the field and roving focus)
+   and takes the popover surface and the menu row tokens.
+4. Question for André: the status menu could become `ui/menu`'s
+   `DropdownMenu` with the field as top content. That is behaviour, so it is
+   not done here.
+
+Rounds (Opus only): r1 7.5 (MUST fixed), r2 7.8, r3 8.1, r4 8.1, r5 8.2
+(cap, no MUST). Changes over the rounds: the moderator's mute at full
+strength; listen only as an outlined mic with a lock badge, named "Só
+ouvindo" under the redesign; the home-indicator inset below the card;
+`--footer-card-solid-hover` for the dot cutout; the status menu as wide as
+the card with the dots in 16px slots; Não Perturbe as a red glyph without a
+fill. Open (copy, shows with the toggle off too): the Invisível hint wraps
+to seven lines at the card's width.
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss

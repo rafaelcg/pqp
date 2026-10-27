@@ -830,6 +830,10 @@
   --card-row-hover: color-mix(in oklab, var(--color-text) 6%, transparent);
   /* A whole card under the pointer: one step over the card's own fill. */
   --card-hover: color-mix(in oklab, var(--color-text) 7%, transparent);
+  /* A footer card's fill as a solid colour over the side pane, for cutouts
+     (the presence dot's ring) that must match the card exactly. */
+  --footer-card-solid: color-mix(in oklab, var(--color-text) 4%, var(--color-pane-side));
+  --footer-card-solid-hover: color-mix(in oklab, var(--color-text) 6%, var(--footer-card-solid));
   /* A settings notice in the info tone, on its own (settings/kit/notice.tsx):
      a quiet tint of the text, a step over the card it usually sits in. */
   --settings-notice-info-bg: color-mix(in oklab, var(--color-text) 7%, transparent);
@@ -1302,6 +1306,8 @@
      the dialog's own grey and the row reads as a hole. */
   --card-row-hover: color-mix(in oklab, var(--color-text) 4%, transparent);
   --card-hover: color-mix(in oklab, var(--color-text) 3%, var(--color-surface-0));
+  --footer-card-solid: color-mix(in oklab, var(--color-surface-0) 60%, var(--color-pane-side));
+  --footer-card-solid-hover: color-mix(in oklab, var(--color-text) 4%, var(--footer-card-solid));
   --card-border: color-mix(in oklab, var(--color-text) 10%, transparent);
 
   /* Avatars: a hairline keeps the monogram disc a disc on the white pane. */
@@ -4275,6 +4281,13 @@ html[data-pre] [data-home-hero] .animate-rise {
 
 .safe-pb {
   padding-bottom: max(var(--safe-pb-min, 0.75rem), env(safe-area-inset-bottom));
+}
+
+/* The user panel's card under the redesign: the home-indicator inset sits
+   below the card, never inside it, so the row stays centred. */
+:root[data-redesign] .safe-pb[data-user-panel-card] {
+  padding-bottom: 0;
+  margin-bottom: max(0.5rem, env(safe-area-inset-bottom));
 }
 
 /*

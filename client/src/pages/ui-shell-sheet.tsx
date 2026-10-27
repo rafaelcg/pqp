@@ -20,6 +20,7 @@ import {
   channelRowIconClass,
 } from "@/components/layout/channel-list";
 import { ChannelIcon } from "@/components/layout/channel-icon";
+import { UserPanel } from "@/components/layout/user-panel";
 import { VoiceStatusBar } from "@/components/voice/voice-status-bar";
 import { VoiceOccupantRow } from "@/components/layout/voice-occupant-row";
 import { ChannelMusicCard } from "@/components/voice/channel-music-card";
@@ -488,6 +489,68 @@ function VoiceStripBlock() {
   );
 }
 
+function UserPanelBlock() {
+  const base = {
+    displayName: "Lia",
+    tag: "lia#3716",
+    isMuted: false,
+    isDeafened: false,
+    inVoice: false,
+    showUserButton: false,
+    manualStatus: "online",
+    effectiveStatus: "online",
+    statusSaving: false,
+    statusError: null,
+    onSetStatus: noop,
+    customStatus: "",
+    customStatusSaving: false,
+    customStatusError: null,
+    onSetCustomStatus: noop,
+    onClearCustomStatusError: noop,
+    onToggleMute: noop,
+    onToggleDeafen: noop,
+    onOpenSettings: noop,
+    onOpenFeedback: noop,
+    onOpenProfile: noop,
+    hideDownloadHint: true,
+  } as const;
+  return (
+    <div data-testid="qa-shell-user-panel" className="flex flex-wrap items-end gap-6">
+      {/* Off a call (mute and deafen disabled), with a handle. In a call:
+          the mic off; deafened; muted by a moderator; Não Perturbe. Then
+          invisible, and the 72px strip. */}
+      <FooterPane>
+        <UserPanel {...base} handle="lia" hideDownloadHint={false} />
+      </FooterPane>
+      <FooterPane>
+        <UserPanel {...base} inVoice isMuted />
+      </FooterPane>
+      <FooterPane>
+        <UserPanel {...base} inVoice isDeafened />
+      </FooterPane>
+      <FooterPane>
+        <UserPanel {...base} inVoice serverMuted />
+      </FooterPane>
+      {/* Listen only (audience mode): the mic locked, not unavailable. */}
+      <FooterPane>
+        <UserPanel {...base} inVoice canSpeak={false} />
+      </FooterPane>
+      <FooterPane>
+        <UserPanel {...base} inVoice canSpeak={false} isMuted />
+      </FooterPane>
+      <FooterPane>
+        <UserPanel {...base} manualStatus="dnd" effectiveStatus="dnd" />
+      </FooterPane>
+      <FooterPane>
+        <UserPanel {...base} manualStatus="invisible" effectiveStatus="offline" />
+      </FooterPane>
+      <FooterPane width="w-[72px]">
+        <UserPanel {...base} inVoice compact />
+      </FooterPane>
+    </div>
+  );
+}
+
 /**
  * A new build waiting, so both rails draw the update tile. The store is
  * this page's own; it goes back to nothing waiting when the sheet unmounts.
@@ -685,6 +748,9 @@ export function ShellSheet() {
 
       {/* The voice strip above the user panel. */}
       <VoiceStripBlock />
+
+      {/* The user panel at the foot of the sidebar. */}
+      <UserPanelBlock />
 
       <div data-testid="qa-shell-rail" className="flex gap-6">
         <RailFrame>
