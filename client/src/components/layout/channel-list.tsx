@@ -2423,7 +2423,7 @@ export const ChannelList = memo(function ChannelList({
           // (`e2e/server-header.spec.ts`), not by `channel-list-header.test.tsx`
           // — jsdom has no layout engine, so a static-markup test cannot see
           // a box model computation like this one.
-          className="flex min-h-12 shrink-0 items-center gap-2 border-b border-border px-3 py-1.5 redesign:min-h-14 redesign:border-b-0 redesign:px-3 redesign:pt-2 redesign:pb-1"
+          className="flex min-h-12 shrink-0 items-center gap-2 border-b border-border px-3 py-1.5 redesign:min-h-14 redesign:border-b-0 redesign:px-3 redesign:py-1.5"
         >
           {server ? (
             <Menu

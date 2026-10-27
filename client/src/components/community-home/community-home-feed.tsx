@@ -1,3 +1,4 @@
+import { PANE_HEADER_REDESIGN, PANE_HEADER_TITLE_REDESIGN } from "@/components/ui/pane-header";
 import {
   bauPostPath,
   parseCommunityLink,
@@ -3024,11 +3025,11 @@ export function CommunityHomeFeed({
     >
     <div className="flex min-h-0 flex-1 flex-col" data-community-home-feed>
       {showPaneHeader && (
-        <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border px-4">
+        <header className={cn("flex h-14 shrink-0 items-center gap-3 border-b border-border px-4", PANE_HEADER_REDESIGN, "redesign:gap-3")}>
           {onOpenNav && (
             <HomeDrawerButton onOpenNav={onOpenNav} />
           )}
-          <h1 className="min-w-0 flex-1 font-display text-base font-bold text-text">
+          <h1 className={cn("min-w-0 flex-1 font-display text-base font-bold text-text", PANE_HEADER_TITLE_REDESIGN)}>
             {identityEditing
               ? t("communityHome.identity.editing")
               : t("communityHome.title")}

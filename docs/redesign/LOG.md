@@ -1189,7 +1189,6 @@ confirm, the delete account dialog, the phone tab strip):
 4. Kept: every section, the close guard, the handle confirm, the 44px phone
    targets, the dirty dot and its spoken description.
 
-
 ### f-server-settings
 
 Spec (audit: `server-settings-dialog.tsx` with 13 sections and its own
@@ -1253,7 +1252,6 @@ Spec (audit: voice rooms through `ChannelRow`, `VoiceOccupantRow`,
    card on the card tokens, the connected room on `success-soft`.
 4. For `s-user-panel`: deafened is `EarSlash`; the panel's deafen button
    should use the same glyph.
-
 
 ### s-sidebar-rail
 
@@ -1324,6 +1322,33 @@ ouvindo" under the redesign; the home-indicator inset below the card;
 the card with the dots in 16px slots; Não Perturbe as a red glyph without a
 fill. Open (copy, shows with the toggle off too): the Invisível hint wraps
 to seven lines at the card's width.
+
+### s-header
+
+Spec (audit: the chat header in `App.tsx` with `channelHeaderTools` and
+`HEADER_ACTION_TILE`, shared with the call split's header; six more headers
+drawn by hand: forum, Baú, friends, Novidades on a phone, two skeletons):
+
+1. Job: where you are (name, topic or "N aqui", a conversation's line) and
+   the pane's tools (join, call, nudge, schedule, pins, history, settings,
+   members, more).
+2. States: text, private, with an image, voice room (join), DM (call,
+   video, join with count), in the call, members open, phone back or menu
+   with the update dot, loading.
+3. Merge: one recipe, `ui/pane-header.ts` (bar, title, detail, 36px round
+   action tile, phone nav button), on every header above. From `md` up the
+   topic sits beside the name after a rule, as in the mockup. Left for their
+   elements: the thread panel's header (`s-thread`), the call split's own
+   bar (`f-call`), the party bar (`f-watch-party`).
+Rounds (Opus only): r1 7.0 (two MUST fixed: the phone title cut to "# p.",
+`--list-row-icon` undefined on the branch), r2 7.9 (MUST fixed: the title
+size token declared twice, so every title drew at 20px; the bar now has
+`--pane-bar-title-size`), r3 8.0, r4 8.3, r5 8.3 (cap). Also: one baseline
+and tracking with the sidebar header, the room's glyph before a voice or
+forum title, the open members tile on the selected fill, 18px glyphs, the
+forum and friends on the recipe. Follow-up after the chain: rename the
+bar's `--pane-header-rule` and `--pane-header-px` to `--pane-bar-*` (six
+chain branches use them now). Not done: an avatar before a DM's name.
 
 ## Open questions for André
 
