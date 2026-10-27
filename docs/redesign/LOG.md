@@ -1166,6 +1166,30 @@ Rounds: Codex 8.2 (r1); Opus 8.5 (r2), 8.0 (r3), 8.5 (r5), no MUST left.
 Round 5 fixes: the copy failure glyph at 14px, the info tint at 7% in
 dark, the rail build line in mono. Merged on the cap.
 
+### f-communities
+
+Spec (audit: `communities-view.tsx`, a full-screen overlay from the rail's
+Comunidades door; `community-card.tsx` with its skeleton; states: loading,
+error, empty per filter, results, load more):
+
+1. Job: browse and join public communities by search, category and language,
+   and start one.
+2. Redesign: the page on the conversation's tone (`--communities-bg`), cards
+   one solid step above (`--community-card-bg`) with card corners and a
+   round icon; category chips are the shared pill choices; the language
+   filter is the segmented control; search on the input tokens; Gabarito
+   titles; filled Compass and Sparkle; a round close.
+3. Merges: nothing. The emoji in empty states and chips stay (character).
+4. Kept: the hover lift and glow, share and report on every card, the
+   create call to action above the grid.
+
+Rounds (Opus only): r1 7.4 (MUST fixed), r2 7.8 (MUST fixed), r3 8.1, r4
+8.0 (MUST fixed: the language filter hid every community while the page
+said none existed), r5 7.6 (no MUST, cap; best r3). After r5: the
+language-only empty result names the language, the language control has a
+visible label, a louder cricket, no lift on card hover. Not done: a balanced
+chip wrap (11 chips leave "Geral" alone at 1440px).
+
 ### m-sheets
 
 Spec (audit: the four phone sheets in the inventory. The app launcher, the
