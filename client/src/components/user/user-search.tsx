@@ -158,7 +158,7 @@ export function UserSearch({
           "flex items-center gap-2 rounded-md border border-border bg-surface-0/60 px-2.5 py-2",
           "focus-within:border-border-strong",
           // The input's field under the redesign, as a round search.
-          "redesign:h-10 redesign:gap-2.5 redesign:rounded-full redesign:border-[color:var(--input-border)] redesign:bg-[color:var(--input-bg)] redesign:px-3.5 redesign:py-0 redesign:hover:border-[color:var(--input-hover-border)] redesign:focus-within:border-[color:var(--input-hover-border)] redesign:focus-within:ring-2 redesign:focus-within:ring-accent",
+          "redesign:h-[var(--input-h)] redesign:gap-2.5 redesign:rounded-full redesign:border-[color:var(--input-border)] redesign:bg-[color:var(--input-bg)] redesign:px-[var(--input-px)] redesign:py-0 redesign:hover:border-[color:var(--input-hover-border)] redesign:focus-within:ring-2 redesign:focus-within:ring-offset-2 redesign:focus-within:ring-offset-ring-offset redesign:focus-within:ring-[color:var(--input-ring,var(--color-focus-ring))]",
         )}
       >
         <Search aria-hidden="true" className="h-4 w-4 shrink-0 text-text-muted redesign:hidden" />

@@ -15,7 +15,7 @@ import { Check as CheckGlyph, UserPlus as UserPlusGlyph, X as XGlyph } from "@ph
  */
 const FRIEND_ROW_REDESIGN =
   "redesign:mb-0.5 redesign:min-h-[var(--list-row-h-lg)] redesign:gap-[var(--list-row-gap)] redesign:rounded-[var(--list-row-radius)] redesign:py-1.5 redesign:pl-2 redesign:pr-2 redesign:hover:bg-[color:var(--list-row-hover)]";
-const FRIEND_NAME_REDESIGN = "redesign:font-medium redesign:text-text";
+const FRIEND_NAME_REDESIGN = "redesign:font-semibold redesign:text-text";
 const FRIEND_TAG_REDESIGN =
   "redesign:font-sans redesign:text-xs redesign:text-[color:var(--list-row-detail)]";
 const FRIEND_SECTION_REDESIGN = cn(SECTION_LABEL_REDESIGN, "redesign:px-2");
@@ -331,7 +331,7 @@ export function FriendsView({
       </header>
 
       {adding && (
-        <div className="border-b border-ink-4/60 bg-ink-2/50 px-4 py-3 redesign:border-[color:var(--pane-header-rule)] redesign:bg-transparent redesign:px-[var(--pane-header-px)] redesign:py-4">
+        <div className="border-b border-ink-4/60 bg-ink-2/50 px-4 py-3 redesign:border-[color:var(--pane-header-rule)] redesign:bg-transparent redesign:px-6 redesign:py-4">
           <div className="max-w-md">
             <UserSearch
               label={t("friends.addFriend.label")}
@@ -345,7 +345,7 @@ export function FriendsView({
               ]}
               onSelect={(person) => void handleAdd(person)}
             />
-            <p className="mt-1.5 text-xs text-paper-muted redesign:mt-2 redesign:text-[0.8125rem] redesign:text-text-secondary">
+            <p className="mt-1.5 text-xs text-paper-muted redesign:mt-2 redesign:px-3.5 redesign:text-[0.8125rem] redesign:text-text-secondary">
               {t("friends.addFriend.hint")}
             </p>
           </div>
