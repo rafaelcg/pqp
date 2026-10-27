@@ -92,8 +92,12 @@ function expirySlot(hours: ExpiryHours): "1" | "24" | "168" | "720" | "never" {
   return "never";
 }
 
+function inviteLinkBase(): string {
+  return `${window.location.origin}/app/invite/`;
+}
+
 function inviteLink(code: string): string {
-  return `${window.location.origin}/app/invite/${encodeURIComponent(code)}`;
+  return `${inviteLinkBase()}${encodeURIComponent(code)}`;
 }
 
 /** Accepts a bare code or a pasted `/app/invite/<code>` link. */
@@ -411,7 +415,7 @@ export function InvitePanel({
         )}
 
         {isCreate && canCreate && (
-          <section className="space-y-3">
+          <section className="space-y-3 redesign:space-y-4">
             <InviteChoiceRow
               label={t("invite.create.expiryLabel")}
               value={expiryHours === null ? "never" : String(expiryHours)}
@@ -434,7 +438,7 @@ export function InvitePanel({
             >
               {createSummary}
             </p>
-            <SectionLabel className="text-[11px] font-semibold uppercase tracking-[0.14em] text-paper-muted">
+            <SectionLabel className="text-[11px] font-semibold uppercase tracking-[0.14em] text-paper-muted redesign:pt-3">
               {t("invite.create.activeTitle")}
             </SectionLabel>
             {loadingInvites ? (
@@ -442,7 +446,7 @@ export function InvitePanel({
                 {t("invite.create.loading")}
               </p>
             ) : invites.length === 0 ? (
-              <p className="text-sm text-paper-muted">
+              <p className="text-sm text-paper-muted redesign:rounded-[var(--radius-card)] redesign:border redesign:border-dashed redesign:border-[color:var(--card-border)] redesign:p-4 redesign:text-text-tertiary">
                 {t("invite.create.none")}
               </p>
             ) : (
@@ -458,8 +462,11 @@ export function InvitePanel({
                     )}
                   >
                     <div className="flex items-center gap-2">
-                      <p className="min-w-0 flex-1 truncate font-mono text-sm text-signal redesign:font-sans redesign:font-semibold redesign:text-text">
-                        {inviteLink(invite.code)}
+                      <p className="min-w-0 flex-1 truncate font-mono text-sm text-signal redesign:font-sans redesign:font-medium redesign:text-text-secondary">
+                        {inviteLinkBase()}
+                        <span className="redesign:font-mono redesign:font-semibold redesign:text-text">
+                          {encodeURIComponent(invite.code)}
+                        </span>
                       </p>
                       {/* The system share sheet where one exists (phones,
                           mostly) — straight into WhatsApp, same journey as

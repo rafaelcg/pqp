@@ -1,4 +1,5 @@
 import {
+  CaretLeft,
   CaretRight,
   Check as CheckGlyph,
   Copy as CopyGlyph,
@@ -543,16 +544,17 @@ export function CreateServerDialog({
               disabled={busy}
               autoFocus
               placeholder={t("importDiscord.paste.placeholder")}
-              className="w-full resize-none rounded-md border border-ink-4 bg-ink px-3 py-2 text-sm text-paper placeholder:text-paper-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/50 disabled:cursor-not-allowed disabled:opacity-50 redesign:rounded-[var(--input-radius)] redesign:border-[color:var(--input-border)] redesign:bg-[color:var(--input-bg)] redesign:px-[var(--input-px)] redesign:text-text redesign:focus-visible:ring-[color:var(--input-ring)]"
+              className="w-full resize-none rounded-md border border-ink-4 bg-ink px-3 py-2 text-sm text-paper placeholder:text-paper-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/50 disabled:cursor-not-allowed disabled:opacity-50 redesign:rounded-[var(--input-radius,var(--radius-control))] redesign:border-[color:var(--input-border)] redesign:bg-[color:var(--input-bg)] redesign:px-[var(--input-px)] redesign:text-text redesign:focus-visible:ring-[color:var(--input-ring,var(--color-focus-ring))]"
             />
             <button
               type="button"
-              className="text-sm text-paper-muted hover:text-paper hover:underline"
+              className="text-sm text-paper-muted hover:text-paper hover:underline redesign:inline-flex redesign:items-center redesign:gap-1 redesign:self-start redesign:font-medium redesign:text-text-secondary redesign:hover:text-text redesign:hover:no-underline"
               onClick={() => {
                 setStep("name");
                 setError(null);
               }}
             >
+              <CaretLeft weight="bold" aria-hidden className="hidden h-3.5 w-3.5 redesign:inline" />
               {t("importDiscord.mode.name")}
             </button>
           </>
@@ -591,7 +593,7 @@ export function CreateServerDialog({
                 readOnly
                 rows={4}
                 value={pasteMessage}
-                className="mt-1 w-full resize-none rounded-md border border-ink-4 bg-ink px-3 py-2 text-sm text-paper redesign:rounded-[var(--input-radius)] redesign:border-[color:var(--input-border)] redesign:bg-[color:var(--input-bg)] redesign:px-[var(--input-px)] redesign:text-text"
+                className="mt-1 w-full resize-none rounded-md border border-ink-4 bg-ink px-3 py-2 text-sm text-paper redesign:rounded-[var(--input-radius,var(--radius-control))] redesign:border-transparent redesign:bg-[color:var(--input-bg)] redesign:px-[var(--input-px)] redesign:text-text"
               />
               <Button
                 type="button"

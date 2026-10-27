@@ -94,6 +94,7 @@ export function InvitePaste({
       data-invite-paste=""
       className={cn(
         "space-y-3 rounded-lg border border-border bg-surface-2/40 p-3",
+        "redesign:rounded-[calc(var(--radius-card)-4px)] redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:p-4",
         className,
       )}
     >
@@ -159,7 +160,7 @@ function PasteRow({
     <div className="space-y-1.5">
       <p className="text-xs font-medium text-text-secondary redesign:font-semibold">{label}</p>
       <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch redesign:sm:items-center">
-        <p className="min-w-0 flex-1 rounded-md border border-border bg-surface-1 px-3 py-2 text-sm leading-snug text-text [overflow-wrap:anywhere] redesign:rounded-[var(--input-radius)] redesign:border-[color:var(--input-border)] redesign:bg-[color:var(--input-bg)] redesign:px-[var(--input-px)]">
+        <p className="min-w-0 flex-1 rounded-md border border-border bg-surface-1 px-3 py-2 text-sm leading-snug text-text [overflow-wrap:anywhere] redesign:rounded-[var(--input-radius,var(--radius-control))] redesign:border-transparent redesign:bg-[color:var(--input-bg)] redesign:px-[var(--input-px)]">
           {text}
         </p>
         <Button
