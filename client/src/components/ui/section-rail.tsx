@@ -324,7 +324,7 @@ export function SectionRail<Id extends string>({
                 className={cn(
                   "hidden px-3 pb-1 pt-4 text-xs font-medium text-text-tertiary first:pt-0 sm:block",
                   SECTION_LABEL_REDESIGN,
-                  "redesign:mb-0 redesign:px-[var(--list-row-px)] redesign:pb-1.5 redesign:pt-5",
+                  "redesign:mb-0 redesign:px-[var(--list-row-px)] redesign:pb-1.5 redesign:pt-5 redesign:text-text-tertiary",
                 )}
               >
                 {heading}

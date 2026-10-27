@@ -489,6 +489,9 @@ export function Dialog({
             !phoneFullScreen && "rounded-t-[var(--radius-panel)]",
             // Under the redesign a phone sheet is the shared sheet surface.
             !phoneFullScreen && SHEET_SURFACE_PHONE,
+            // A settings sheet keeps the frame's tone on a phone too, so its
+            // page stays the lighter pane, as on a desktop.
+            !phoneFullScreen && fill && "redesign:max-sm:bg-[color:var(--settings-surface)]",
             // A phone sheet with no footer keeps its body above the home
             // indicator; the footer carries `safe-pb` itself.
             !phoneFullScreen && !footer && SHEET_SAFE_BOTTOM,

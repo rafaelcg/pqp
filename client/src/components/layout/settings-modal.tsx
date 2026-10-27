@@ -324,7 +324,7 @@ function RailFooter({ user }: { user: User | null }) {
   return (
     <div className="flex flex-col gap-2">
       {user ? (
-        <div className="flex items-center gap-2 pl-2 redesign:min-h-[var(--list-row-h-md)] redesign:rounded-[var(--list-row-radius)] redesign:bg-[color:var(--settings-pane-bg)] redesign:py-1 redesign:pl-1.5 redesign:pr-1">
+        <div className="flex items-center gap-2 pl-2 redesign:min-h-[var(--list-row-h-md)] redesign:rounded-[var(--list-row-radius)] redesign:bg-[color:var(--settings-pane-bg)] redesign:py-1 redesign:pl-1 redesign:pr-1">
           <UserAvatar
             name={user.displayName}
             avatarUrl={user.avatarUrl}
@@ -335,10 +335,10 @@ function RailFooter({ user }: { user: User | null }) {
           <span className="min-w-0 flex-1 truncate text-sm font-medium text-text redesign:font-semibold">
             {user.displayName}
           </span>
-          <SignOutButton className="h-[var(--control-sm)] shrink-0 px-2 text-xs" />
+          <SignOutButton className="h-[var(--control-sm)] shrink-0 px-2 text-xs redesign:rounded-full redesign:px-3" />
         </div>
       ) : null}
-      <SettingsBuildLine className="self-start redesign:pl-2" />
+      <SettingsBuildLine className="self-start redesign:pl-3" />
     </div>
   );
 }
@@ -1325,7 +1325,7 @@ export function SettingsModal({
         size="2xl"
         fill
         // 56px: the band only names the dialog, the pane title names the page.
-        headerClassName="h-14 shrink-0 items-center py-0 [&_h2]:text-lg"
+        headerClassName="h-14 shrink-0 items-center py-0 [&_h2]:text-lg redesign:[&_h2]:text-base"
         onClose={requestClose}
       >
         <SettingsShellContext.Provider value={shell}>
@@ -1353,7 +1353,7 @@ export function SettingsModal({
                 ref={paneRef}
                 // Under the redesign the page is an inset pane on the
                 // dialog's side tone, rounded like the app's panes.
-                className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-surface-1 redesign:overflow-hidden redesign:bg-[color:var(--settings-pane-bg)] sm:redesign:mr-[var(--settings-pane-inset)] sm:redesign:mb-[var(--settings-pane-inset)] sm:redesign:rounded-[var(--radius-pane)]"
+                className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-surface-1 redesign:overflow-hidden redesign:bg-[color:var(--settings-pane-bg)] sm:redesign:mr-[var(--settings-pane-inset)] sm:redesign:mb-[var(--settings-pane-inset)] sm:redesign:rounded-[var(--radius-pane)] sm:redesign:ring-1 sm:redesign:ring-inset sm:redesign:ring-[color:var(--settings-rule)]"
               >
                 <div
                   ref={scrollerRef}
