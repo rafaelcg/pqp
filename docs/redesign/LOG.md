@@ -1218,6 +1218,22 @@ classic sections, Pinados and `CategoryHeader`; `MixedCategoryHeader` in
    pill row, bold caret, round actions). The three keep their own markup
    because their drag rules differ; only the look is shared.
 
+### s-channel-row
+
+Spec (audit: `ChannelRow` for text, forum and watch party rooms,
+`SidebarThreadRow`, `ChannelIcon` at nine render sites, `DraftMark`,
+`ChannelListSkeleton`):
+
+1. Job: open a channel, show what is waiting in it, and for a manager pin it,
+   open its settings and drag it; threads nested under their channel.
+2. States: plain, hover, focus, selected, unread, mentions, muted, draft,
+   private, pinned, forum beta, watch party live (viewers, Assistir) and not
+   live (topic), connected, drag and drop, loading.
+3. Redesign: the `sm` list row on its tokens with the end pip as the one
+   unread mark (decided in `p-list-row`), `CountBadge`, Phosphor icons in
+   `ChannelIcon` (every site), round action tiles, the live pill as a dot.
+   The voice row and its occupants are `s-voice-row`.
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss

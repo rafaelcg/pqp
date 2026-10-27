@@ -518,6 +518,31 @@ A drop target hides the summary and the actions and shows `chrome.dropHere`
 is unreadable at 14px. The classic list always shows "+"; the mixed list shows
 it on hover and focus, because it has many more headers.
 
+### The channel row
+
+`ChannelRow` and `SidebarThreadRow` in `layout/channel-list.tsx` keep their
+markup (the tooltip on the button, pin and settings beside it, drag). Under
+the redesign they take `ui/list-row.tsx`'s tokens:
+
+- A channel is the `sm` list row: 36px (`--list-row-h-sm`), a pill, the row
+  roles for hover and selected. A thread is a 32px row under a rule in the
+  card edge.
+- The unread mark is the end pip (`--list-row-pip`, `bg-indicator`), not the
+  bar on the left edge. A mention count (`CountBadge`) replaces the pip.
+- The icon (`ChannelIcon`, Phosphor) is 16px in `--list-row-icon`; a
+  private padlock keeps the warning colour.
+- Pin and settings are round tiles that hover with `--card-row-hover`, so
+  they show on a selected row.
+- A live watch party room says live with a red dot on its viewer line; the
+  "AO VIVO" words stay for a screen reader. "Assistir" is a soft danger pill.
+- The room you are in: `bg-success-soft`, with the name, icon and tiles in
+  `on-success-soft` and the second line at 80%. It wins over selected. The
+  fill says connected (the dot is for a screen reader only), so the end
+  column only ever means something is waiting.
+- Keyboard focus rings the whole pill in `--list-row-ring`; the row's tiles,
+  the thread's X and "Assistir" use the same token.
+- `ChannelListSkeleton` draws the same 36px pills, 2px apart.
+
 ### Icons
 
 The redesign's icons are Phosphor (`@phosphor-icons/react`), drawn through

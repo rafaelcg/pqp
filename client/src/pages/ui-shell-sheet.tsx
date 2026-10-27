@@ -1,7 +1,14 @@
-import type { Channel, DmSummary, PublicUser, Server, WatchParty } from "@pqp/shared";
-import { useEffect, type ReactNode } from "react";
+import type { Channel, DmSummary, PublicUser, Server, ThreadSummary, WatchParty } from "@pqp/shared";
+import { useEffect, type ComponentProps, type ReactNode } from "react";
 import { CommunityHomePreview } from "@/components/community-home/community-home-preview";
-import { CategoryHeader, ChannelSection } from "@/components/layout/channel-list";
+import {
+  CategoryHeader,
+  ChannelRow,
+  ChannelSection,
+  SidebarThreadRow,
+  channelRowIconClass,
+} from "@/components/layout/channel-list";
+import { ChannelIcon } from "@/components/layout/channel-icon";
 import {
   MixedCategoryHeader,
   type CategoryHeaderDrag,
@@ -129,6 +136,62 @@ const fold = (collapsed: boolean, childCount: number, hasUnread = false) => ({
   hasUnread,
 });
 
+function textChannel(id: string, name: string, extra: Partial<Channel> = {}): Channel {
+  return {
+    id: `qa-channel-${id}`,
+    name,
+    type: "text",
+    serverId: "fliperama",
+    parentId: null,
+    position: 0,
+    isPrivate: false,
+    imageUrl: null,
+    topic: null,
+    ...extra,
+  } as unknown as Channel;
+}
+
+/** One channel row with every handler a no-op; pass the state that differs. */
+function SheetChannelRow({
+  channel,
+  selected = false,
+  ...rest
+}: { channel: Channel; selected?: boolean } & Partial<ComponentProps<typeof ChannelRow>>) {
+  return (
+    <ChannelRow
+      channel={channel}
+      selected={selected}
+      unread={{ count: 0, mentions: 0 }}
+      canManage
+      icon={<ChannelIcon channel={channel} className={channelRowIconClass(channel, selected, rest.connected)} />}
+      isDragging={false}
+      isDragOver={false}
+      onSelect={noop}
+      onOpenSettings={noop}
+      onDelete={noop}
+      categories={[]}
+      onMoveToCategory={noop}
+      onDragStart={noop}
+      onDragEnd={noop}
+      onDragOverRow={noop}
+      onDrop={noop}
+      {...rest}
+    />
+  );
+}
+
+function thread(id: string, name: string): ThreadSummary {
+  return {
+    channelId: `qa-thread-${id}`,
+    parentChannelId: "qa-channel-papo",
+    rootMessageId: null,
+    name,
+    replyCount: 4,
+    lastActivityAt: new Date().toISOString(),
+    archived: false,
+  } as unknown as ThreadSummary;
+}
+
 /** A slice of the side pane, as wide as the sidebar. */
 function SidePane({ children }: { children: ReactNode }) {
   return (
@@ -144,6 +207,54 @@ function RailFrame({ children }: { children: ReactNode }) {
     <div className="flex h-[680px] overflow-hidden rounded-lg bg-rail redesign:bg-canvas">
       {children}
       <div className="my-2 w-6 rounded-l-[var(--radius-pane)] bg-surface-1 redesign:bg-pane-side" />
+    </div>
+  );
+}
+
+function ChannelRowsBlock() {
+  return (
+    <div data-testid="qa-shell-channel-rows" className="flex flex-wrap items-start gap-6">
+      <SidePane>
+        <div className="flex flex-col gap-0.5">
+          <SheetChannelRow channel={textChannel("general", "general")} />
+          <SheetChannelRow channel={textChannel("avisos", "avisos")} unread={{ count: 4, mentions: 0 }} />
+          <SheetChannelRow channel={textChannel("papo", "papo")} selected />
+          <ul className="ml-2 space-y-0.5 border-l border-border/70 py-0.5 pl-2 redesign:ml-5 redesign:border-[color:var(--card-border)] redesign:pl-1.5">
+            <SidebarThreadRow thread={thread("1", "build do sábado")} unread onOpen={noop} onLeave={noop} />
+            <SidebarThreadRow thread={thread("2", "regras do campeonato")} unread={false} onOpen={noop} onLeave={noop} />
+          </ul>
+          <SheetChannelRow channel={textChannel("anuncios", "anúncios")} unread={{ count: 9, mentions: 3 }} />
+          <SheetChannelRow channel={textChannel("staff", "staff", { isPrivate: true })} />
+          <SheetChannelRow channel={textChannel("fixado", "regras")} isFavorite onToggleFavorite={noop} />
+          <SheetChannelRow channel={textChannel("clipes", "clipes")} onToggleFavorite={noop} />
+        </div>
+      </SidePane>
+      <SidePane>
+        <div className="flex flex-col gap-0.5">
+          <SheetChannelRow channel={textChannel("ajuda", "ajuda", { type: "forum" })} />
+          <SheetChannelRow
+            channel={textChannel("cinema", "cinema", { type: "watch_party", topic: "Sessão de terror" })}
+            liveState={{ live: true, presenterPeerId: "p1", viewerCount: 12, startedAt: null } as never}
+          />
+          <SheetChannelRow
+            channel={textChannel("cine2", "cineclube", { type: "watch_party", topic: "Clássicos de domingo" })}
+            liveState={{ live: false, presenterPeerId: null, viewerCount: 0, startedAt: null } as never}
+          />
+          {/* The party you are watching from, not open: the success fill. */}
+          <SheetChannelRow
+            channel={textChannel("cine3", "sessão da tarde", { type: "watch_party", topic: "Com a turma" })}
+            liveState={{ live: true, presenterPeerId: "p2", viewerCount: 5, startedAt: null } as never}
+            connected
+          />
+          {/* Connected with something unread: the pip takes the dot's place. */}
+          <SheetChannelRow
+            channel={textChannel("cine4", "maratona", { type: "watch_party", topic: "Trilogia inteira" })}
+            liveState={{ live: true, presenterPeerId: "p3", viewerCount: 3, startedAt: null } as never}
+            unread={{ count: 2, mentions: 0 }}
+            connected
+          />
+        </div>
+      </SidePane>
     </div>
   );
 }
@@ -329,6 +440,11 @@ export function ShellSheet() {
           />
         </SidePane>
       </div>
+
+      {/* Channel rows. Left: plain, unread, selected with its threads (one
+          unread), mentions, private, pinned, and "clipes" for the
+          hover. Right: a forum and a live watch party room. */}
+      <ChannelRowsBlock />
 
       <div data-testid="qa-shell-rail" className="flex gap-6">
         <RailFrame>
