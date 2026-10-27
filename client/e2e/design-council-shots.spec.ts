@@ -632,6 +632,7 @@ const PRIMITIVES: {
   // beside every server cue. Keyboard focus on "Praça", hover on "Oficina".
   { id: "s-rail", testId: "qa-shell-rail", focus: "Praça", hover: "Oficina" },
   { id: "s-sidebar-special", testId: "qa-shell-sidebar-special" },
+  { id: "s-category", testId: "qa-shell-categories", hover: "Bate-papo" },
 ];
 
 test("captures the primitives", async ({ browser }) => {

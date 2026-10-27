@@ -1,5 +1,9 @@
-import { ChevronDown } from "lucide-react";
+import { CaretDown } from "@phosphor-icons/react";
+import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
+import { ChevronDown, type LucideIcon } from "lucide-react";
 import type { DragEvent, ReactNode } from "react";
+import { Icon, type IconKind } from "@/components/ui/icon";
+import { SECTION_LABEL_REDESIGN } from "@/components/ui/section-header";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -15,6 +19,68 @@ import { cn } from "@/lib/utils";
  */
 export const SECTION_FOCUS_RING =
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring";
+
+/*
+ * Under the redesign every header in the channel list (this one, the mixed
+ * list's `MixedCategoryHeader`, the "Categorias" label) is the same thing:
+ * the section label's face (sentence case, semibold, secondary text, no
+ * tracking) on a pill row that brightens its text on hover, a bold caret,
+ * and round actions.
+ */
+export const CATEGORY_ROW_REDESIGN =
+  "redesign:min-h-8 redesign:gap-1.5 redesign:rounded-full redesign:px-2 redesign:text-text-secondary redesign:hover:text-text";
+
+/** The name: the section label's face, in the row's colour. */
+export const CATEGORY_LABEL_REDESIGN = cn(
+  SECTION_LABEL_REDESIGN,
+  "redesign:mb-0 redesign:truncate redesign:text-inherit",
+);
+
+/** "3 canais" on a folded section, and its unread dot. */
+export const CATEGORY_SUMMARY_REDESIGN =
+  "redesign:text-[11px] redesign:tabular-nums redesign:text-text-tertiary";
+
+/** "+", the lock, the new category: a round 24px button. */
+export const CATEGORY_ACTION_REDESIGN =
+  "redesign:flex redesign:h-6 redesign:w-6 redesign:items-center redesign:justify-center redesign:rounded-full redesign:p-0 redesign:text-text-tertiary redesign:hover:bg-row-hover redesign:hover:text-text redesign:data-[state=open]:bg-row-hover redesign:data-[state=open]:text-text redesign:focus-visible:ring-accent redesign:focus-visible:ring-offset-0";
+
+/** The fold caret: Lucide with the toggle off, Phosphor bold under the redesign. */
+export function SectionCaret({ collapsed }: { collapsed: boolean }) {
+  const turn = cn(
+    "shrink-0 motion-safe:transition-transform motion-safe:duration-[var(--duration-fast)]",
+    collapsed && "-rotate-90",
+  );
+  return (
+    <>
+      <ChevronDown aria-hidden="true" className={cn("h-3 w-3", turn, "redesign:hidden")} />
+      <Icon
+        icon={CaretDown}
+        kind="symbol"
+        className={cn("hidden h-3 w-3 text-text-tertiary redesign:block", turn)}
+      />
+    </>
+  );
+}
+
+/** A header action's glyph: the Lucide one off, 14px Phosphor under the redesign. */
+export function SectionActionGlyph({
+  off: Off,
+  on,
+  kind = "object",
+  offClassName = "h-3.5 w-3.5",
+}: {
+  off: LucideIcon;
+  on: PhosphorIcon;
+  kind?: IconKind;
+  offClassName?: string;
+}) {
+  return (
+    <>
+      <Off aria-hidden="true" className={cn(offClassName, "redesign:hidden")} />
+      <Icon icon={on} kind={kind} className="hidden h-3.5 w-3.5 redesign:block" />
+    </>
+  );
+}
 
 export function ChannelSectionHeader({
   label,
@@ -60,6 +126,7 @@ export function ChannelSectionHeader({
         "motion-safe:transition-colors motion-safe:duration-[var(--duration-fast)] hover:text-text-secondary",
         isDragOver && "ring-1 ring-inset ring-accent",
         className,
+        CATEGORY_ROW_REDESIGN,
       )}
     >
       <button
@@ -67,22 +134,29 @@ export function ChannelSectionHeader({
         onClick={onToggle}
         aria-expanded={!collapsed}
         aria-controls={controlsId}
-        className={cn("flex min-w-0 flex-1 items-center gap-1 rounded-sm text-left", SECTION_FOCUS_RING)}
+        className={cn(
+          "flex min-w-0 flex-1 items-center gap-1 rounded-sm text-left",
+          SECTION_FOCUS_RING,
+          "redesign:gap-1.5 redesign:rounded-full redesign:focus-visible:ring-accent",
+        )}
       >
-        <ChevronDown
-          aria-hidden="true"
+        <SectionCaret collapsed={collapsed} />
+        <span
           className={cn(
-            "h-3 w-3 shrink-0 motion-safe:transition-transform motion-safe:duration-[var(--duration-fast)]",
-            collapsed && "-rotate-90",
+            "truncate",
+            uppercase ? "uppercase" : "normal-case tracking-normal",
+            CATEGORY_LABEL_REDESIGN,
           )}
-        />
-        <span className={cn("truncate", uppercase ? "uppercase" : "normal-case tracking-normal")}>
+        >
           {label}
         </span>
         {collapsed && childCount > 0 && (
           <span
             data-section-summary=""
-            className="ml-auto flex shrink-0 items-center gap-1 pl-1 text-[10px] font-medium normal-case tracking-normal text-text-tertiary"
+            className={cn(
+              "ml-auto flex shrink-0 items-center gap-1 pl-1 text-[10px] font-medium normal-case tracking-normal text-text-tertiary",
+              CATEGORY_SUMMARY_REDESIGN,
+            )}
           >
             {t("chrome.categoryChannelCount", { count: childCount })}
             {hasUnread && (

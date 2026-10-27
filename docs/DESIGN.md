@@ -483,6 +483,23 @@ The open block takes `row-selected`, like any row. Red stays on the live
 badge alone. A party being set up is the one block on `warning-soft`. Section
 labels are `SectionLabel`; counts are `CountBadge`.
 
+### The category headers
+
+Three headers fold the channel list: `ChannelSectionHeader` (Texto, Voz,
+Pinados, and each category of the classic list), the mixed list's
+`MixedCategoryHeader`, and the "Categorias" label. Under the redesign they
+share one recipe from `layout/channel-section-header.tsx`:
+
+- `CATEGORY_ROW_REDESIGN`: a 32px pill row whose text brightens on hover, with
+  no fill.
+- `CATEGORY_LABEL_REDESIGN`: the section label's face. Sentence case, so a
+  category keeps the case its owner typed.
+- `SectionCaret`: a bold caret that turns when the section folds.
+- `CATEGORY_ACTION_REDESIGN` and `SectionActionGlyph`: round 24px actions
+  ("+", the lock, the new category) with 14px glyphs.
+- `CATEGORY_SUMMARY_REDESIGN`: "3 canais" and the unread dot on a folded
+  section.
+
 ### Icons
 
 The redesign's icons are Phosphor (`@phosphor-icons/react`), drawn through

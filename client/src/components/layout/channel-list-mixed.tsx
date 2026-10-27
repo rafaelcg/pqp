@@ -1,4 +1,5 @@
-import { ArrowDown, ArrowUp, ChevronDown, Pin, Plus } from "lucide-react";
+import { Plus as PlusBold } from "@phosphor-icons/react";
+import { ArrowDown, ArrowUp, Pin, Plus } from "lucide-react";
 import type { DragEvent, ReactNode } from "react";
 import {
   stepInLayout,
@@ -11,6 +12,14 @@ import {
   type ContextMenuItemDef,
 } from "@/components/ui/context-menu";
 import { Menu } from "@/components/ui/menu";
+import {
+  CATEGORY_ACTION_REDESIGN,
+  CATEGORY_LABEL_REDESIGN,
+  CATEGORY_ROW_REDESIGN,
+  CATEGORY_SUMMARY_REDESIGN,
+  SectionActionGlyph,
+  SectionCaret,
+} from "@/components/layout/channel-section-header";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -133,6 +142,8 @@ export function MixedCategoryHeader({
             ? "bg-accent-soft text-on-accent-soft ring-1 ring-inset ring-accent"
             : "text-text-tertiary hover:text-text-secondary",
           drag.dragging && "opacity-40",
+          CATEGORY_ROW_REDESIGN,
+          into && "redesign:text-on-accent-soft redesign:hover:text-on-accent-soft",
         )}
       >
         {drag.drop === "before" || drag.drop === "after" ? (
@@ -142,17 +153,18 @@ export function MixedCategoryHeader({
           type="button"
           onClick={onToggle}
           aria-expanded={!collapsed}
-          className={cn("flex min-w-0 flex-1 items-center gap-1 rounded-sm text-left", FOCUS_RING)}
+          className={cn(
+            "flex min-w-0 flex-1 items-center gap-1 rounded-sm text-left",
+            FOCUS_RING,
+            "redesign:gap-1.5 redesign:rounded-full redesign:focus-visible:ring-accent",
+          )}
         >
-          <ChevronDown
-            aria-hidden="true"
-            className={cn(
-              "h-3 w-3 shrink-0 motion-safe:transition-transform motion-safe:duration-[var(--duration-fast)]",
-              collapsed && "-rotate-90",
-            )}
-          />
-          {/* On the span: a browser resets text-transform on a button. */}
-          <span className="truncate uppercase">{category.name}</span>
+          <SectionCaret collapsed={collapsed} />
+          {/* On the span: a browser resets text-transform on a button. Under
+              the redesign the name keeps the case its owner typed. */}
+          <span className={cn("truncate uppercase", CATEGORY_LABEL_REDESIGN)}>
+            {category.name}
+          </span>
         </button>
         {into ? (
           <span
@@ -162,7 +174,12 @@ export function MixedCategoryHeader({
             {t("chrome.dropOnCategory", { name: category.name })}
           </span>
         ) : collapsed && childCount > 0 ? (
-          <span className="flex shrink-0 items-center gap-1 text-[10px] font-medium normal-case tracking-normal text-text-tertiary">
+          <span
+            className={cn(
+              "flex shrink-0 items-center gap-1 text-[10px] font-medium normal-case tracking-normal text-text-tertiary",
+              CATEGORY_SUMMARY_REDESIGN,
+            )}
+          >
             {t("chrome.categoryChannelCount", { count: childCount })}
             {hasUnread && (
               <>
@@ -183,9 +200,10 @@ export function MixedCategoryHeader({
                 "flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-text-tertiary hover:bg-surface-2 hover:text-text",
                 "opacity-0 group-hover/category:opacity-100 group-focus-within/category:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100 [@media(hover:none)]:opacity-100",
                 FOCUS_RING,
+                CATEGORY_ACTION_REDESIGN,
               )}
             >
-              <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+              <SectionActionGlyph off={Plus} on={PlusBold} kind="symbol" />
             </button>
           </Menu>
         )}
