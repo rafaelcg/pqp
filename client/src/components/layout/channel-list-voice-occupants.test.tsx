@@ -181,7 +181,9 @@ describe("ChannelList voice occupants", () => {
         speakingPeerIds={[andre.peerId]}
       />,
     );
-    expect(html).not.toContain("ring-accent");
+    // The occupants only: the header's focus rings are accent too.
+    const occupants = html.slice(html.indexOf("data-voice-occupant="));
+    expect(occupants).not.toContain("ring-accent");
   });
 
   /**
