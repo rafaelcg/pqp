@@ -153,7 +153,7 @@ export function ConnectionBadges({
                       on={ArrowUpRightGlyph}
                       kind="symbol"
                       offClassName="h-3.5 w-3.5 shrink-0 text-paper-muted"
-                      className="text-text-tertiary"
+                      className="h-3.5 w-3.5 shrink-0 text-text-tertiary"
                     />
                   </a>
                 ) : (

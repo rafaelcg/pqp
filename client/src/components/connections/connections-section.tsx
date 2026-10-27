@@ -346,7 +346,7 @@ export function ConnectionsSection() {
               >
                 <ConnectionGlyph
                   provider={provider}
-                  className="h-5 w-5 opacity-60 redesign:opacity-100 redesign:[&>svg]:opacity-60"
+                  className="h-5 w-5 opacity-60 redesign:opacity-100 redesign:saturate-[.4] redesign:[&>svg]:opacity-60"
                 />
                 {t(PROVIDER_NAME[provider])}
               </li>
@@ -524,7 +524,9 @@ function ProviderRow({
         {...blockedProps}
         className={cn(
           "shrink-0",
-          // Under the redesign the primitive alone, like every other danger ghost.
+          // Under the redesign the primitive alone, like every other danger
+          // ghost; its text ends on the Conectar pills' edge.
+          redesign && "-mr-3",
           !redesign && "border border-border-strong text-sm text-danger hover:text-danger",
           TOUCH_TARGET,
           blockedProps.className,
@@ -582,7 +584,7 @@ function ProviderRow({
         ))}
       </Select>
       {showHandleHint ? (
-        <p id={hintId} className="text-xs text-pretty text-text-tertiary">
+        <p id={hintId} className="text-xs text-pretty text-text-tertiary redesign:text-balance">
           {t("settings.connections.visibility.publicHint", {
             option: t(VISIBILITY_LABEL.public),
           })}

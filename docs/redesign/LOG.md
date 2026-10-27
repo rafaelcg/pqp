@@ -1374,7 +1374,8 @@ to seven lines at the card's width.
    não estão disponíveis aqui", with en and es to match, for
    `settings.connections.unconfigured`, `settings.profile.banner.unconfigured`
    and `settings.profile.media.unconfigured`. It shows with the toggle off
-   too. Change it?
+   too. Change it? Same tab: the visibility hint says "Para usar" while
+   the rest of the tab says "pra"; the council suggests "Pra usar".
 
 ## Decisions
 
