@@ -223,8 +223,8 @@ export function VoiceOccupantRow({
             canDrag && "cursor-grab active:cursor-grabbing",
             isDragging && "opacity-40",
             // Under the redesign an occupant is a small list row: a 32px
-            // pill, the row's text and hover roles, the accent ring.
-            "redesign:gap-2 redesign:rounded-[var(--list-row-radius)] redesign:px-2 redesign:text-[13px] redesign:text-[color:var(--list-row-text)] redesign:hover:bg-[color:var(--list-row-hover)] redesign:hover:text-text redesign:focus-visible:ring-accent",
+            // pill, the row's text and hover roles, the channel row's inset ring.
+            "redesign:gap-2 redesign:rounded-[var(--list-row-radius)] redesign:px-2 redesign:text-[13px] redesign:text-[color:var(--list-row-text)] redesign:hover:bg-[color:var(--list-row-hover)] redesign:hover:text-text redesign:focus-visible:ring-inset redesign:focus-visible:ring-[color:var(--list-row-ring)]",
           )}
         >
           <VoiceAvatar
