@@ -13,6 +13,7 @@ import {
   ConnectionGlyph,
   UPCOMING_CONNECTION_PROVIDERS,
   type ConnectionGlyphProvider,
+  DARK_TILE,
 } from "@/components/connections/connection-badges";
 import {
   SettingsGroup,
@@ -346,7 +347,11 @@ export function ConnectionsSection() {
               >
                 <ConnectionGlyph
                   provider={provider}
-                  className="h-5 w-5 opacity-60 redesign:opacity-100 redesign:saturate-[.4] redesign:[&>svg]:opacity-60"
+                  className={cn(
+                    "h-5 w-5 opacity-60 redesign:opacity-100 redesign:saturate-[.4] redesign:[&>svg]:opacity-60",
+                    // Saturation cannot quiet a black tile; in light it fades.
+                    DARK_TILE.has(provider) && "redesign:[:root[data-theme=light]_&]:opacity-60",
+                  )}
                 />
                 {t(PROVIDER_NAME[provider])}
               </li>
@@ -584,7 +589,7 @@ function ProviderRow({
         ))}
       </Select>
       {showHandleHint ? (
-        <p id={hintId} className="text-xs text-pretty text-text-tertiary redesign:text-balance">
+        <p id={hintId} className="text-xs text-pretty text-text-tertiary">
           {t("settings.connections.visibility.publicHint", {
             option: t(VISIBILITY_LABEL.public),
           })}
@@ -693,7 +698,7 @@ function LinkedAs({ name }: { name: string }) {
   return (
     <span className="block truncate" title={name}>
       {before}
-      <span className="font-mono text-text-secondary redesign:font-sans redesign:font-semibold redesign:text-text">{name}</span>
+      <span className="font-mono text-text-secondary redesign:font-sans redesign:font-medium redesign:text-text">{name}</span>
       {after}
     </span>
   );
