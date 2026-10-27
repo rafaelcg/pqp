@@ -188,7 +188,7 @@ export function CommunityCard({
           className="absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-ink-2 to-transparent redesign:from-[color:var(--community-card-bg)]"
         />
         <span
-          className="absolute left-3 top-3 flex items-center gap-1.5 rounded-full bg-ink/55 px-2.5 py-1 text-[11px] font-semibold text-paper backdrop-blur-sm redesign:bg-[color:var(--glass-bg)] redesign:text-[color:var(--glass-fg)] redesign:ring-1 redesign:ring-[color:var(--glass-border)]"
+          className="absolute left-3 top-3 flex items-center gap-1.5 rounded-full bg-ink/55 px-2.5 py-1 text-[11px] font-semibold text-paper backdrop-blur-sm redesign:h-[var(--badge-h)] redesign:px-[var(--badge-px)] redesign:py-0 redesign:text-[length:var(--badge-text)] redesign:bg-[color:var(--glass-bg)] redesign:text-[color:var(--glass-fg)] redesign:ring-1 redesign:ring-[color:var(--glass-border)]"
         >
           <span aria-hidden="true">{CATEGORY_EMOJI[community.category]}</span>
           {t(`communities.category.${community.category}` as never)}
@@ -269,7 +269,7 @@ export function CommunityCard({
           {community.name}
         </h3>
 
-        <p className="mt-1 flex items-center gap-1.5 text-xs text-paper-muted">
+        <p className="mt-1 flex items-center gap-1.5 text-xs text-paper-muted redesign:text-text-secondary">
           <IconSwap off={Users} on={UsersThree} kind="object" offClassName="h-3.5 w-3.5 shrink-0" className="h-3.5 w-3.5 shrink-0" />
           {/* Tabular figures so a column of counts lines up rather than
               shimmering as the digits change width. */}

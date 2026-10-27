@@ -206,6 +206,8 @@ export function CommunitiesView({
   }
 
   const chips = categoryChips(category);
+  /** A category or a search narrows the list, so an empty result can be undone. */
+  const filtered = category !== null || rawQuery.trim() !== "";
   const languages = languageSegments(language);
   const empty = emptyStateKeys(query);
 
@@ -289,7 +291,7 @@ export function CommunitiesView({
               centre them, which is where they read as a menu. */}
           <div
             role="group"
-            aria-label={t("communities.title")}
+            aria-label={redesign ? t("communities.category.label") : t("communities.title")}
             className="-mx-4 mt-6 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:justify-center sm:px-0"
           >
             {chips.map((chip) => (
@@ -336,7 +338,7 @@ export function CommunitiesView({
                   aria-pressed={segment.active}
                   data-language={segment.id ?? "all"}
                   className={cn(
-                    "rounded-full px-3 py-1 text-xs font-medium transition",
+                    "rounded-full px-3 py-1 text-xs font-medium transition redesign:text-[length:var(--radio-text-sm)]",
                     segment.active
                       ? "bg-signal text-ink"
                       : "text-paper-muted hover:text-paper",
@@ -396,7 +398,7 @@ export function CommunitiesView({
             // the warning disc, a title, the reason and a retry.
             <EmptyState
               role="alert"
-              className="mt-14"
+              className="mt-14 redesign:mt-0"
               title={t("communities.errorTitle")}
               body={error}
               actions={
@@ -422,21 +424,35 @@ export function CommunitiesView({
             </div>
           ) : communities.length === 0 && redesign ? (
             <EmptyState
-              className="mt-14"
-              icon={<span className="text-3xl">🦗</span>}
+              className="mt-14 redesign:mt-0"
+              icon={<span className="text-[2rem] drop-shadow-sm">🦗</span>}
+              iconClassName="redesign:bg-[color:var(--glow-accent-soft)]"
               title={t(empty.title)}
               body={
                 <>
-                  {t(empty.body)}
+                  {t(filtered ? empty.body : "communities.empty.bodyAll")}
                   {empty.hint && <span className="mt-1 block text-xs text-text-tertiary">{t(empty.hint)}</span>}
                 </>
               }
               actions={
-                // The create card above owns the primary.
-                <Button variant="secondary" onClick={onCreateCommunity}>
-                  <IconSwap off={Plus} on={PlusGlyph} kind="symbol" offClassName="h-4 w-4" className="h-4 w-4" />
-                  {t("communities.create.action")}
-                </Button>
+                // Nothing matched a filter: the way back is to see everything.
+                // Nothing at all: create (secondary; the card above owns the primary).
+                filtered ? (
+                  <Button
+                    variant="secondary"
+                    onClick={() => {
+                      setCategory(null);
+                      setRawQuery("");
+                    }}
+                  >
+                    {t("communities.empty.reset")}
+                  </Button>
+                ) : (
+                  <Button variant="secondary" onClick={onCreateCommunity}>
+                    <IconSwap off={Plus} on={PlusGlyph} kind="symbol" offClassName="h-4 w-4" className="h-4 w-4" />
+                    {t("communities.create.action")}
+                  </Button>
+                )
               }
             />
           ) : communities.length === 0 ? (
