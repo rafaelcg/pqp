@@ -1,4 +1,5 @@
 import type { Server } from "@pqp/shared";
+import { CARD_LIST, CARD_ROW_HOVER, CARD_SURFACE } from "@/components/ui/card";
 import {
   ChevronRight,
   CircleHelp,
@@ -9,12 +10,13 @@ import {
   UserPen,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { formatBadgeCount, type UnreadState } from "@/components/layout/channel-list";
+import { type UnreadState } from "@/components/layout/channel-list";
 import { ServerIcon } from "@/components/layout/server-identity";
 import { UpdateIndicator } from "@/components/layout/update-indicator";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { CountBadge } from "@/components/ui/count-badge";
 
 /**
  * The phone shell's two full screens beside Conversas (the list itself is
@@ -120,9 +122,7 @@ export function PhoneServersScreen({
                 )}
               </span>
               {mentions > 0 ? (
-                <span className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-danger px-1 text-[10px] font-bold leading-none tabular-nums text-on-danger">
-                  {formatBadgeCount(mentions)}
-                </span>
+                <CountBadge count={mentions} />
               ) : (unread?.count ?? 0) > 0 ? (
                 <span className="h-2 w-2 rounded-full bg-text" aria-label={t("chrome.unreadMessagesSr")} />
               ) : null}
@@ -195,7 +195,7 @@ export function PhoneYouScreen({
             </span>
           </span>
         </button>
-        <div className="mt-6 overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface-card">
+        <div className={cn(CARD_SURFACE, CARD_LIST, "mt-6")}>
           <YouRow icon={<UserPen className="h-5 w-5" aria-hidden="true" />} label={t("phoneTabs.editProfile")} onClick={onOpenProfile} />
           <YouRow icon={<Settings className="h-5 w-5" aria-hidden="true" />} label={t("phoneTabs.settings")} onClick={onOpenSettings} />
           {onOpenWhatsNew && (
@@ -229,7 +229,7 @@ function YouRow({
     <button
       type="button"
       onClick={onClick}
-      className="flex min-h-12 w-full items-center gap-3 border-b border-border px-4 text-left last:border-b-0 hover:bg-surface-2/60"
+      className={cn("flex min-h-12 w-full items-center gap-3 px-4 text-left hover:bg-surface-2/60", CARD_ROW_HOVER)}
     >
       <span className="text-text-tertiary">{icon}</span>
       <span className="min-w-0 flex-1 text-[15px] text-text">{label}</span>

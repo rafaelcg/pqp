@@ -41,6 +41,7 @@ import {
   X,
   PanelLeftClose,
 } from "lucide-react";
+import { formatBadgeCount } from "@/lib/badge-count";
 import {
   forwardRef,
   memo,
@@ -113,6 +114,7 @@ import { Menu } from "@/components/ui/menu";
 import { BetaTag } from "@/components/ui/beta-tag";
 import { ChannelListSkeleton } from "@/components/ui/skeleton";
 import { Tooltip } from "@/components/ui/tooltip";
+import { MENU_SEPARATOR } from "@/components/ui/menu-items";
 import { useIsTruncated } from "@/lib/use-is-truncated";
 import { VoiceOccupantRow } from "@/components/layout/voice-occupant-row";
 import { useProfilePopover } from "@/components/user/user-profile-popover";
@@ -240,9 +242,7 @@ export const SEARCH_MESSAGES_EVENT = "pqp:search-messages";
 const CHANNEL_ACTION_TILE =
   "flex h-7 w-7 shrink-0 items-center justify-center rounded-md hover:bg-ink-3";
 
-export function formatBadgeCount(value: number): string {
-  return value > 99 ? "99+" : String(value);
-}
+export { formatBadgeCount };
 
 export { VoiceOccupantBadges } from "./voice-occupant-badges";
 
@@ -2332,7 +2332,7 @@ export const ChannelList = memo(function ChannelList({
                     >
                       {t("chrome.publicCommunity")}
                     </div>
-                    <div className="my-1 h-px bg-border" />
+                    <div className={MENU_SEPARATOR} />
                   </>
                 ) : undefined
               }

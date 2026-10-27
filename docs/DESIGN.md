@@ -570,6 +570,35 @@ accessible name.
 - **Accessibility.** It renders no label. Wrap it in a `<label>` or point one at
   it. A placeholder is not a label.
 
+- **Focus ring.** The field family (Input, Textarea, Select) rings focus in
+  `--input-ring`: the shared 60% ring in dark, the solid accent in light,
+  where 60% reads about 2.4:1 on the page (IconButton made the same move).
+
+### Select
+
+`select.tsx`. A choice from a short list: a native `<select>` dressed as a
+text field, so a phone shows its own picker and e2e specs find options by
+value.
+
+- **Sizes.** `md` matches an `Input` (40px off, 36px under the redesign),
+  the default; `sm` is a step under it (36px off, 32px under the redesign,
+  as a small `Button`).
+- **`raised`.** With the toggle off, a `surface-2` fill instead of
+  `surface-0`, for the selects that sat on a raised fill (bots, watch
+  party). Under the redesign every select takes the field fill.
+- **`wrapperClassName`.** Width and margins go on the wrapper (`@lg:w-48`,
+  `sm:min-w-[14rem]`, `mt-1.5`); `className` is for the field itself.
+- **Under the redesign.** The `Input` box (`FIELD_BOX`), and a Phosphor caret
+  in place of the operating system's arrow (`--select-appearance: none`,
+  `--select-pr`). With the toggle off it keeps the native arrow.
+- **States.** Disabled follows the field: `--input-disabled-opacity: 1`, no
+  fill, the value at `text-tertiary` and the caret faded as far as the
+  placeholder. The caret is a `peer` of the field: `text-secondary` on hover
+  and keyboard focus, `text-danger` when invalid (hover and focus never
+  repaint an invalid caret).
+- **Use it** for every short list. It replaced `SettingsSelect` and about a
+  dozen hand-drawn selects.
+
 ### Switch
 
 `switch.tsx`. An independent on/off bit, with the whole row as the hit target.
@@ -584,11 +613,21 @@ accessible name.
   as a dark dot. Disabled dims the track and blocks the pointer.
   `dimRowWhenDisabled` dims the whole row instead (label, description and
   track at 60%, the track not dimmed twice); the settings switch row uses it.
+- **Under the redesign.** A 40 by 24 track with an 18px lifted knob. Off is a
+  faint text tint inside the field's 3:1 edge (`--switch-off-ring`, the field
+  border), so an off switch shows on a card, a dialog and a pane alike, and
+  the off knob is `text-secondary`. The row hover is the ghost tint
+  (`--choice-row-hover`). A disabled label dims to `text-tertiary` with its
+  track, and a `busy` switch keeps its track colour and pulses its knob (it steps back to 60% without motion), with a progress cursor, even in a row that dims when disabled. An off knob in dark is between `text-secondary` and `text-tertiary`. Every value is a `--switch-*` token with today's value as the
+  fallback in the class.
+- `labelAdornment` draws a badge after the label; `data-*` props land on the
+  button. `SwitchTrack` is the track alone, for a row a call site lays out
+  itself (the poll composer is still hand-drawn and will move to it).
 - **Use it** for a list of independent settings. **Do not** use it for one of
   many; that is a `RadioGroup`.
 - **Accessibility.** `role="switch"` with `aria-checked`. A `title` is rendered
   on a wrapper, because a disabled button never fires the hover that would
-  summon it.
+  summon it. While a write runs pass `busy`, not `disabled`, so focus stays.
 
 ### CheckRow
 
@@ -596,7 +635,46 @@ accessible name.
 optional colour dot. Switch is for a setting; CheckRow is for a checklist, which
 is why cargos use it.
 
+- **Under the redesign.** The tick is 18px, off is the same tint and field
+  edge as an off switch, and the check is Phosphor bold. Hover strengthens
+  the edge. `TickBox` is the tick alone: `size="sm"` (a row) or `md` (20px,
+  a tick that is its own 36px target, such as a person in a picker).
 - **Accessibility.** `role="checkbox"` with `aria-checked`.
+
+### Checkbox
+
+`checkbox.tsx`. A native `<input type="checkbox">`, for a form or beside a
+sentence ("Permitir comentários"): a `<label>` around it toggles it and a
+form submits it. A row in a checklist is `CheckRow`; a setting is `Switch`.
+
+- With the toggle off it is the browser's box tinted by `accent-color`, as
+  before. Pass `h-auto w-auto accent-auto` to keep the browser's default size
+  and tint where a box never had classes.
+- Under the redesign `appearance: none` drops the native box and the tick
+  tokens draw the same box as `TickBox`, with a Phosphor check over it that
+  ignores the pointer.
+- `wrapperClassName` takes margins; `className` styles the input.
+- Give the `<label>` around it `group/checkbox`: hovering the label then strengthens
+  the box's edge, as hovering a CheckRow's row does.
+- Also give it `redesign:has-[:disabled]:text-text-tertiary`, so a disabled
+  box never sits beside a full-strength label. A hint under the label indents
+  by `calc(var(--tick-size)+0.5rem)` under the redesign.
+
+### Sheet
+
+`sheet.tsx`. Not a component: the look of a panel that rises from a phone's
+bottom edge. Dialog is a sheet below `sm`; the app launcher and the cinema
+stage's picker draw their own.
+
+- With the toggle off each sheet keeps the surface it drew before.
+- **Under the redesign.** `SHEET_SURFACE` (a sheet at every width) and
+  `SHEET_SURFACE_PHONE` (below `sm` only) give a 24px top radius, the raised
+  fill (`surface-2` in dark, `surface-0` in light), a 10% text hairline on
+  the top edge only and a shadow cast upwards. `SHEET_SCRIM` is the scrim
+  for a sheet that draws its own; a dialog's `--dialog-scrim` and
+  `--dialog-scrim-blur` alias the same tokens. Every value is a `--sheet-*` token.
+- **Use it** for a new phone panel anchored to the bottom edge. **Do not**
+  add a grab handle unless the sheet can be dragged.
 
 ### Skeleton
 
@@ -607,6 +685,29 @@ shapes: `ChannelListSkeleton`, `MessageListSkeleton`, `ServerRailSkeleton`.
   action in flight; that is a busy state on the control the user pressed.
 - **Accessibility.** A bare `Skeleton` is `aria-hidden`. The composed ones carry
   `aria-busy` and a translated label.
+
+### Toast
+
+`toast.tsx`. Not a component: the look of a note that arrives on its own and
+leaves on its own (a DM, a friend who accepted, a forward, an app join, a
+session reminder, a watch party approval). Each toast keeps its own corner,
+queue, timer and swipe.
+
+- `TOAST_SURFACE` is the popover's card: with the toggle off the level-3
+  card the toasts already drew, under the redesign the pane radius, the
+  raised fill, the faint edge and the lift. `TOAST_SURFACE_REDESIGN` moves a
+  toast that draws its own card (the session reminders, the watch party
+  approval) onto the same card under the redesign only.
+- `TOAST_CLOSE` is the dismiss button: today's small square with the toggle
+  off, IconButton's round ghost with its focus ring under the redesign.
+  `TOAST_OPEN_REDESIGN` gives a toast's whole-card button (a DM, a session
+  reminder) the same ring. A 32px leading mark sits in the 40px slot
+  (`redesign:mx-1`), so the text of stacked toasts lines up.
+- **Not toasts.** The retro presence card, the lightbox notice and the Baú
+  post hint are notes of their own and stay off this recipe on purpose.
+- **Use it** for news the person did not ask for and can ignore. **Do not**
+  use it for the result of a write the person just made; say that in the
+  row (`InlineStatus`).
 
 ### Tooltip
 
@@ -729,6 +830,53 @@ itself on mount and flips above the pointer when it does not fit below.
 - `items.length === 0` (or `disabled`) renders the trigger alone, same as
   `ContextMenu`.
 
+Both menus, and a hand-built one that cannot be a Radix menu (the
+composer's "+"), draw from one recipe in `menu-items.tsx`: `MENU_SURFACE`,
+`MENU_ROW` (Radix rows), `MENU_ROW_BUTTON` (button rows), `MENU_ICON` and
+`MENU_SEPARATOR`. A new menu uses them; it does not copy their classes.
+
+- **Under the redesign.** The highlighted row is a 9% text tint (7% in
+  light); the old highlight was the menu surface's own colour and did not
+  show. Rows sit concentric inside the panel (the panel's radius minus its
+  6px pad) and are 34px tall. Icons are 16px in `text-secondary` and come up
+  to the label's colour on the highlighted row; a danger row's icon stays
+  red. Headings are sentence case, 12px semibold in `text-secondary` (medium
+  would sit too close to the 14px rows). A disabled row fades its icon and
+  label to 0.5 and its hint to 0.7. Groups are 6px apart, the panel's pad,
+  and separators are a 10% text tint. The tick is Phosphor's, in the accent.
+  In the composer's "+" menu only focus fills a row; the pointer moves
+  focus. Every value is a `--menu-*` token with the old value as its
+  fallback.
+
+### Popover
+
+`popover.tsx`. The panel an anchored popover floats in: a picker, a small
+card of settings, the "what's new" note.
+
+- **Shared.** `POPOVER_SURFACE` (and `PopoverPanel`, the same as an element)
+  is the surface only. Each popover keeps its own placement, portal and
+  dismissal, because each measures a different anchor.
+- **Callers.** The emoji and GIF pickers, the update note, the soundboard,
+  the forum icon picker and the music speaker panel. The profile popover
+  and the peer audio card still draw an older `ink-2` panel; they move with
+  their surfaces.
+- **Under the redesign.** The pane radius (16px), its own fill
+  (`surface-2` in dark, the brightest surface in light so the panel reads
+  lifted rather than sunk), a 10% text edge in both themes, and a lift
+  (`--shadow-2`, one rung under a dialog) with a top highlight in dark, a
+  close and a wide shadow in light. The edge and the lift are set through
+  `--elevation-3-border` and `--elevation-3-shadow` on the panel, so a
+  caller that sets its own fill or edge keeps it.
+- A caller that draws its own edge adds `POPOVER_OWN_EDGE`, so its edge is
+  the popover's whatever order the classes land in.
+- The emoji picker fills its panel: no inner corner or shadow, 38px cells
+  so eight fill its width, 6px under its category bar. Its fill is
+  `--rgb-picker-background`, an RGB triplet the picker needs; each redesign
+  look sets it by hand to its `--popover-surface` (surface-2 in dark,
+  surface-0 in light), so a look that changes those sets both.
+- **Use it** for anything anchored to the control that opened it. A list of
+  actions is a `Menu`; a blocking question is a `Dialog`.
+
 ### ScrollArea
 
 `scroll-area.tsx`. Radix scroll area with a themed thumb. Use it where a native
@@ -750,8 +898,9 @@ scrollbar would draw OS chrome over the design.
 - **Variants.** `segmented` (two to four short options on one track),
   `chips` (one of many, or tag-like options that wrap), `list` (two to four
   options that each need a description: full-width rows with a radio dot,
-  meant to sit as one child of a settings group). Sizes `md` (h-8) and `sm`
-  (h-7, 12px text) for `segmented` and `chips`.
+  meant to sit as one child of a settings group). Sizes `md` and `sm`
+  for `segmented` and `chips` (h-8 and h-7 with 12px text with the toggle
+  off; see the redesign bullet).
 - **Props.** `value`, `onValueChange`, `options` (`value`, `label`, optional
   `description` and `disabled`), `label` (required, the group's accessible
   name), `variant`, `size`, `disabled`, plus `status` (list only: drawn under
@@ -759,9 +908,25 @@ scrollbar would draw OS chrome over the design.
   `manual` where the arrows only move focus and Enter or Space selects, for an
   expensive change like a language reload) and `fit` (segmented only: `equal`
   cells that truncate, or `content` cells sized to their labels that wrap).
-- **States.** Selected is `bg-surface-2 font-medium text-text` on the segmented
-  track and `border-accent bg-accent-soft text-on-accent-soft` as a chip.
-  Disabled is `opacity-40` with `cursor-not-allowed`.
+- **States (toggle off).** Selected is `bg-surface-2 font-medium text-text`
+  on the segmented track and `border-accent bg-accent-soft text-on-accent-soft`
+  as a chip. Chips are 32px (28px small). Disabled is `opacity-40` with
+  `cursor-not-allowed`.
+- **Under the redesign.** The segmented track is a pill of a 6% text tint
+  with no border and a raised thumb (a 15% tint with a soft shadow in dark,
+  a white chip in light), so the choice reads by shape, not by a shade of
+  grey; unselected labels are `text-secondary`. The track sits on the
+  control ladder (36px, 32px small) and the focus ring stays inside it. A
+  small group's text is 13px, as on a small Button. Chips sit on the same
+  ladder (36px, 32px small), take the strong edge and the ghost tint on
+  hover, and never change weight when selected, so a chip keeps its width; a
+  selected chip's accent edge is 2px (an inset ring), so the choice reads by
+  shape as well as hue; a count after a label is 70% of it,
+  tabular. The list's dot
+  is 18px inside the field's 3:1 edge, and a filled accent disc with an
+  `on-accent` centre when selected. Disabled is 0.5, as on Button. Every
+  value is a `--segmented-*`, `--chip-*` or `--radio-*` token with today's
+  value as its fallback.
 - **Use it** for one of many. **Do not** give a segmented option a description;
   the track has no room for it, so use `list`, `chips` or a choice grid.
 - **Accessibility.** `role="radiogroup"` with `aria-label`; each option is a
@@ -770,13 +935,52 @@ scrollbar would draw OS chrome over the design.
   with the arrows on both axes (Home and End too), and skips disabled options.
   When the checked option is disabled, the first enabled one takes the tab stop.
 
+### Tabs
+
+`tabs.tsx`. A row of tabs that switch what one panel shows, with one keyboard
+model and four shapes.
+
+- **Variants.** `underline` (`md`: a page's sections, the bot overview),
+  `segmented` (`md`: two to four views of one thing, a role; `xs`: the same in
+  a popover, a profile's about), `pill` (`md`: a header's lists, friends;
+  `xs`: a compact pane header with counts, the call split) and `filled`
+  (`sm`: a status filter, the reports queues).
+- **Props.** `items` (`id`, `label`, optional `count`, `disabled` and `data`
+  for `data-*` hooks), `value`, `onValueChange`, `label` (the tablist's
+  accessible name), `variant`, `size`, `panelId` (each tab's
+  `aria-controls`), `className` for the list's layout and `tabClassName` for
+  layout on every tab.
+- **States.** Each shape draws, with the toggle off, what its call sites drew
+  before. Only `underline` had a focus ring, so only it draws one with the
+  toggle off; the others keep the browser's outline there.
+- **Under the redesign.** Unselected labels are `text-secondary`. Pills are
+  round and the hover is the ghost tint. A selected pill is an 18% tint (15%
+  in light) and medium weight, so it differs from a hovered one by more than
+  the fill. The filled filter's unselected chips are a 7% text tint, 12% on
+  hover; its selected chip takes `on-accent` text. `segmented` is
+  RadioGroup's control: its track and thumb, its 2px gap and 3px pad, its
+  cell heights (the control ladder minus the pad) and its ring offset; its
+  cells truncate, and the small one is 12px, regular until selected. The
+  underline's focus ring is rounded and inset. A count is a 16px
+  `accent-soft` pill (a circle for one digit) with `on-accent-soft` text at
+  11px, tabular. Disabled follows
+  Button's. Every value is a `--tabs-*` or `--segmented-*` token with the old
+  value as its fallback.
+- **Use it** to switch a panel. **Do not** use it for one of a few values in a
+  form (`RadioGroup`) or a settings dialog's side list (`SectionRail`).
+- **Accessibility.** `role="tablist"` with `aria-label`; each tab is a
+  `button role="tab"` with `aria-selected`. Only the selected tab is in the
+  tab order; the arrows on both axes, Home and End move and select, and skip
+  a disabled tab. When the selected tab is disabled or missing, the first
+  enabled one takes the tab stop.
+
 ### Slider
 
 `slider.tsx`. A one-dimensional value on `@radix-ui/react-slider`. Four
 variants: `scrub`, `volume`, `edge` (the compact player's fill on a panel's
 bottom border) and `hue`.
 
-- **`scrub`.** A 2px track. The thumb appears on hover or focus, so a progress
+- **`scrub`.** A 2px track (toggle off; 4px under the redesign). The thumb appears on hover or focus, so a progress
   bar does not grow a knob until someone means to move it. `readOnly` draws the
   same fill with `role="progressbar"` and no thumb: that is the bar a person
   without `MANAGE_MUSIC` sees. `indeterminate` is the same track with no fill,
@@ -786,8 +990,18 @@ bottom border) and `hue`.
   track, there is no fill, and the thumb wears the current accent with an
   `on-accent` rim. For the accent picker; it replaces the old native range
   and its `.accent-hue-slider` CSS once Aparência moves to it.
-- **States.** The fill is `accent` on `surface-3`. Focus uses the usual ring.
-  Disabled is 40% opacity.
+- **States (toggle off).** The fill is `accent` on `surface-3`. Focus uses
+  the usual ring. Disabled is 40% opacity.
+- **Under the redesign.** The track is a text tint (16% in dark, 13% in
+  light), so it shows on a pane, a card and a dialog alike. Scrub is 4px and
+  thickens to 6px under a pointer or focus; volume is 6px; hue is 10px. The
+  knob is 16px with no edge and a soft shadow in dark, a white knob with a
+  hairline in light, and it grows 12% while the slider is held anywhere.
+  Hue's knob is 20px; `edge` keeps its 12px knob. A read-only scrub never
+  thickens. Focus rings in the solid accent with a transparent offset, as
+  IconButton does. Disabled is 0.5, as on Button, and the light knob turns
+  grey so it stays visible. Every value is a `--slider-*` token with the old
+  value as its fallback.
 - **Use it** for playback position and volume. **Do not** use a native
   `<input type="range">` for those; it draws OS chrome and cannot share the
   read-only treatment.
@@ -801,6 +1015,29 @@ bottom border) and `hue`.
 Home and End keys, a vertical rail on desktop and a horizontal strip on phones.
 Supports a danger tint and an unsaved-changes dot per section.
 
+### Banner
+
+`banner.tsx`. A strip that states something about the whole app or the
+conversation and stays until it stops being true or is dismissed: the
+connection dropped, an error, the idle hangup warning, a notice, a timeout.
+
+- **Props.** `tone` (`warning`, `danger`, `success`, `accent`), `edge` (`top`
+  under the header, `bottom` above the composer), `icon` (a Phosphor icon,
+  drawn only under the redesign). `BannerText` is the message: it takes the
+  room the actions leave and, under the redesign, keeps 10rem, so two
+  actions wrap under it on a phone. `BannerAction` is its button: `fill` for
+  the main way out, `quiet` for a second action, `link` (the default) for
+  dismiss; `BannerActions` holds two of them.
+- **Toggle off.** The full-width bar each strip drew: a 10% tone fill, a 40%
+  tone rule on the inner edge, tone text. A strip whose bar differed passes
+  those classes and keeps them.
+- **Redesign.** An inset card (16px from the column, 8px on a phone) on the
+  look's soft tone fill, with a `--banner-edge` tone border, the message in
+  the text colour, and the icon and pill actions in the tone's ink.
+- **Use it** for a state of the app or the conversation. **Do not** use it
+  for news that arrives on its own (a toast) or for the result of a write
+  the person just made (`InlineStatus`).
+
 ### BetaTag
 
 `beta-tag.tsx`. The pill next to the wordmark. Two variants: `default` on app
@@ -811,36 +1048,216 @@ because "beta" is the same word in both of this product's languages.
 ### Badge
 
 `badge.tsx`. A short status word on a card or beside a name: "Novo",
-"Resolvido", "Fixado", "Fechado", "OP", the "Staff" marker on a forum tag.
-One size (18px, 10px uppercase bold, `--radius-tick`), so the same signal
-reads the same on every surface.
+"Resolvido", "Fixado", "Fechado", "OP", "BOT", the "Staff" marker on a forum
+tag.
 
 - **Variants.** `new` (solid accent, something the viewer has not seen),
-  `accent`, `success`, `warning`, `danger` (the soft pairs) and `neutral`
-  (`surface-3` with `text-secondary`). Every variant is a pair the bench
-  already measures; there is no opacity wash.
+  `accent`, `success`, `warning`, `danger` (the soft pairs), `neutral`
+  (`surface-3` with `text-secondary`) and `muted` (the same fill, tertiary
+  text: gone, removed). Every variant is a pair the bench already measures;
+  there is no opacity wash.
+- **Sizes.** `md` (18px, the badge on a card or row) and `tag` (the smaller
+  one beside a name in a message header: OP, BOT, AutoMod, Webhook).
 - **`icon`.** An optional lucide icon before the word, decorative.
-- **Use it** for a state. **Do not** use it for a count (the mention pill and
-  the unread pip are their own shapes) or for the product's own "beta"
-  (`BetaTag`).
+- **Toggle off.** 10px uppercase bold on `--radius-tick`, the geometry each
+  caller drew. **Redesign.** A pill in sentence case, 11px semibold
+  (`--badge-*`; `md` 20px, `tag` 18px), the variant's pair whatever the
+  caller painted (`neutral` and `muted` a step stronger, so 11px clears
+  4.5:1 in every look), so every
+  tag on a message header is the same shape. The `BetaTag` beside a bot's
+  BOT takes the tag's shape there.
+- **Use it** for a state. **Do not** use it for a count (`CountBadge`) or
+  for the product's own "beta" (`BetaTag`).
 - **Accessibility.** The word is the meaning, so colour is never the only
   signal; the icon is `aria-hidden`.
+
+### Card
+
+`card.tsx`. `CARD_SURFACE` is a bounded group inside a pane or a dialog: a
+bot's summary, a list of checks, an empty note. The element and padding are
+the caller's, beside it in `cn`. Not a popover: a card does not float.
+
+- **Toggle off.** The card radius, the plain border, `surface-card`.
+- **Redesign.** In dark the fill and edge are tints of the text
+  (`--card-bg` 4%, `--card-border` 8%), so one card lifts a little on a pane
+  and on a dialog alike. In light a text tint would darken into a grey tray,
+  so the fill is a white wash (`surface-0` at 60%) with a 10% text edge: it
+  lifts on a grey dialog, and on the white pane the edge alone sets it off.
+- **A list in a card.** Put `CARD_LIST` beside `CARD_SURFACE`: rules between
+  rows in the card's edge (the plain border with the toggle off), clipped
+  to the corners.
+- **Rows.** A row that opens something takes `CARD_ROW_HOVER`; a static row
+  (a check, an activity line) takes no hover at all, never a bare
+  `hover:bg-surface-2`.
+- **Padding** is the caller's, on one scale: `p-3` compact, `p-4` default,
+  `px-6 py-8` an empty note, `p-2.5` only inside the profile popover.
+- **Between cards** a 12px gap (`gap-3` or `space-y-3`).
+- **A row that opens something** inside a card adds `CARD_ROW_HOVER` beside
+  its own hover: a text tint over the card's fill, the same on any surface.
+- **Body copy** in a card is secondary text under the redesign; tertiary at
+  12px on the light card is near the floor.
+### UserAvatar
+
+`components/user/user-avatar.tsx`. Every person's picture goes through it:
+the URL rules, the monogram fallback and a server bot's live face are in one
+place. `StatusDot` (`status-dot.tsx`) draws presence on its corner.
+
+- **Toggle off.** The caller's shape (`rounded`: `md`, `lg`, `full`) and its
+  monogram colours (`fallbackClassName`).
+- **Redesign.** A person is always a circle, and the monogram sits on one
+  neutral disc (`surface-3`, body text, semibold, measured at 4.5:1 in
+  every look by the bench); the caller still
+  sets its size. A bot keeps its own shape. `ownPalette` keeps the caller's
+  colours for an avatar drawn inside a story, which paints in its own
+  palette.
+- **Presence dot.** Under the redesign a caller puts `StatusDot` at
+  `redesign:bottom-0 redesign:right-0`, so its centre sits on the circle's
+  edge at 45 degrees instead of hanging off a square's corner.
+- **Light.** The monogram disc takes a 1px inner edge (`--avatar-edge`), so
+  it stays a disc on the white pane.
+- **Dimmed** (offline, muted): under the redesign the letter dims to
+  tertiary text and the disc stays, so it still reads on a white pane.
+- **Dot cutout.** A pane call site's `StatusDot` ring reads
+  `--avatar-dot-ring`: the side pane's colour by default, the conversation
+  pane's inside `main`.
+- **Stacks** cut their overlap with the same token
+  (`ring-[color:var(--avatar-dot-ring)]`).
+### CountBadge
+
+`count-badge.tsx`. A number in a pill: unread messages, mentions,
+conversations or friend requests waiting. Draws nothing at zero and caps at
+"99+".
+
+- **Props.** `count`, `tone` (`danger` default, `accent`), `size` (`md`
+  18px, `sm` 16px), `pop` (the arrival animation, re-played for each new
+  number). A corner position and a ring against the surface behind it are
+  the caller's `className`.
+- **Redesign.** 11px semibold with tabular figures (`--count-badge-*`); the
+  16px `sm` keeps its height and takes 10px type, so "99+" fits.
+- The server rail's and the channel list's counts are drawn in place for
+  now; they move here with their shell elements.
+
+### EmptyState
+
+`empty-state.tsx`. What is not here yet, and what to do about it. `page`
+fills a pane (an empty channel, a forum with no posts); `inline` sits in a
+group or a list (no results, nothing saved; the settings kit's
+`SettingsEmpty` is this).
+
+- **Props.** `icon`, `title`, `body`, `actions` (one or two buttons), `role`
+  (`status` or `alert` when it replaces content that failed), `data-*`.
+- **Toggle off.** Each caller passes the classes it always drew
+  (`className`, `iconClassName`, `titleClassName`, `bodyClassName`,
+  `actionsClassName`); a caller that drew no icon hides it with
+  `hidden redesign:flex`.
+- **Redesign.** A page empty state leads with its glyph on a soft disc
+  (`--empty-icon-disc` 56px, `--empty-icon-bg` `surface-3`), a Gabarito
+  title at `--empty-title-size` (20px), a body line in secondary text, the
+  actions 20px under it. An inline one is a quiet glyph, a 14px label in
+  secondary text and a 12px line.
+- **Failure.** A load that did not come back is a `role="alert"` empty
+  state with the retry as its action; under the redesign its disc takes the
+  warning tone (`warning-soft`, `on-warning-soft`), so it reads apart from
+  an empty list. A page failure with no glyph gets `WarningCircle` there.
+- **Copy.** Say what is missing and the next step, in the casual voice.
+
+### Spinner and Skeleton
+
+`spinner.tsx`, `skeleton.tsx`. A spinner says something is on its way (a
+send, a save, a search); a skeleton holds the shape of content that is
+loading (the channel list, the message log, a settings row).
+
+- **Spinner.** Takes the caller's classes for size, colour and motion, as
+  the Lucide `Loader2` it replaces did. With the toggle off that glyph
+  draws. Under the redesign a ring draws: a faint track
+  (`--spinner-track-opacity` 0.25, 0.3 in light) and an arc in the icon
+  stroke. It owns its motion: it turns, and under reduced motion it fades
+  in and out instead, because a still arc reads as progress. The ring drops
+  any `animate-*` class the caller passes, so that never depends on CSS
+  order, and it is 14px at the smallest: below that the stroke is about a
+  pixel and the track disappears. `label` adds a screen reader name when
+  nothing beside it says "loading".
+- **Skeleton.** Toggle off: `surface-3` at 50%, pulsing. Redesign: a text
+  tint (`--skeleton-bg`, 8%, 10% in light), so it reads on a pane, a card or a dialog,
+  and still under reduced motion. The channel skeleton's rows are the row
+  pill at the row height; the message skeleton's avatars are round.
+- **Do not** hand-build a spinner (`animate-spin` on a bordered span) or a
+  placeholder (`animate-pulse` on a fill).
+### PaneHeader and SectionLabel
+
+`section-header.tsx`. `PaneHeader` is the title of a pane that switches by
+section (user settings, server settings): the title, one line under it, and
+actions on the title line (`actions`, or a slot other code portals into
+through `actionsRef`). `SectionLabel` is the small heading over a group in a
+list, a popover or a dialog ("Recentes", "Convites ativos", a danger zone).
+
+- **Toggle off.** Each caller passes the classes it always drew
+  (`className`, `titleClassName`, `descriptionClassName`) and keeps its look.
+- **Redesign.** The redesign classes come last and win. A pane title is
+  Gabarito (`--type-title-font`) at `--pane-header-title-size` (20px), the
+  line under it body size in secondary text, `--pane-header-gap` (24px)
+  below. A section label is semibold sentence case with no tracking, in one
+  of two variants (below). `tone="danger"` keeps a danger zone's heading in
+  the danger colour on either.
+- **Two variants.** `list` (the default) heads rows in a popover, a picker
+  or a panel: `--section-label-size` (13px), secondary text,
+  `--section-label-gap` (6px) to the first row. `group` heads a group in a
+  settings pane: `--section-group-size` (15px) semibold in the text colour,
+  a step over the 14px rows and flush with the group's edge. The settings
+  kit's `SettingsGroup` title and server settings' group titles are `group`.
+- **The face.** Both labels are the sans face with no tracking, and a pane
+  title is Gabarito at -0.012em. The unlayered `.font-display` rule outranks
+  every utility, and callers pass `font-display` as a toggle-off class, so
+  the primitive sets the face and the tracking with `!`.
+  `e2e/section-label-face.spec.ts` checks the computed face.
+- **Copy.** Write a label in sentence case. The old look upper-cases it with
+  CSS (on a span or heading, never on a button, which resets it).
+- **Not these.** A field's label over an input is the input's; a channel
+  category is a fold control (`ChannelSectionHeader`, `s-category`).
+### ListRow
+
+`list-row.tsx`. A row in a list: a channel, a person, a conversation, a
+thread, a follow. `leading` (an icon or an avatar), the label, `detail` (a
+second line), `trailing` (a time or a mark, inside the row's button, so
+nothing interactive), `count` (a `CountBadge`; it replaces the pip) and `action` (a control of its own: the row becomes a
+wrapper with the button and the action side by side). Sizes `sm` (a
+channel), `md` (a person), `lg` (a person or conversation with a second
+line).
+
+- **States.** Hover is a fill; `selected` is the row-selected role with its
+  own label colour and `aria-current` (a selected row is the one being
+  read, so it drops the unread look); `unread` is weight 600 plus the
+  indicator pip at the end, 8px under the redesign (a `count` replaces it; a `trailing` time keeps either beside it, or over it on an `lg` row); `muted` fades
+  the row (0.5, 0.6 under the redesign, so it stays above disabled at 0.4).
+- **Tokens.** Every value is `--list-row-*` with the old value as its
+  fallback. Under the redesign: a pill, 36/44/52px tall, 12px inside, on
+  `row-hover` and `row-selected`.
+- **Adopting it.** A shell row passes its old colours through `className`,
+  so the toggle off draws what it drew. The channel, member, conversation
+  and friend rows move onto it with their shell elements.
+- **Muted** also passes a mark in `trailing` (`BellSlash`, `sm`), so it is
+  not told apart from disabled by opacity alone.
+- **Selected.** The second line and a trailing time take the selected
+  label's colour under the redesign (tertiary falls under 4.5:1 on the
+  selected fill in several looks), and so does the action; the pip and a
+  count are not drawn.
+- **Focus** is a 2px inset ring in the solid accent (`--list-row-ring`).
+- **Unread for a screen reader.** The pip is `aria-hidden`; put the state in
+  the row's name (an `sr-only` "não lida"), once, in the row that adopts it.
+- **Unread mark.** The end pip (or a count) is the one unread mark; the
+  sidebar's left-edge bar goes when the channel row adopts `ListRow`.
+- **Navigation.** A channel or a conversation row passes
+  `aria-current="page"`; the default `"true"` gives way to it.
+- **Disabled with an action.** The action is `inert`, out of pointer and
+  keyboard reach.
 
 ## Planned primitives
 
 Not built. Do not invent a local one; add it here instead, in `ui/`, with a
 variant set, and then use it everywhere.
 
-- **Select.** Native `<select>` is used today. It draws OS chrome, which
-  `color-scheme` now at least tints correctly.
-- **Checkbox.** A bare `<input type="checkbox">` with `accent-[var(--color-accent)]`
-  in PromptDialog. `CheckRow` covers the row case only.
-- **Tabs.** `SectionRail` is a tablist, but it is settings-shaped and not
-  general.
 - **Toast.** The animations (`animate-toast-in`, `animate-toast-out`) exist in
   `index.css` and each caller draws its own container.
-- **Count badge.** The status `Badge` exists; a general count pill does not
-  (the sidebar's mention number is drawn in place).
 
 ## Rules
 

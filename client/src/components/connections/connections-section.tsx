@@ -1,4 +1,3 @@
-import { Loader2 } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   CONNECTION_PROVIDERS,
@@ -19,7 +18,6 @@ import {
   SettingsInlineStatus,
   SettingsNotice,
   SettingsRow,
-  SettingsSelect,
   SettingsSkeletonRows,
   inlineErrorMessage,
   useInlineSave,
@@ -35,7 +33,9 @@ import {
 } from "@/lib/api";
 import { takeConnectionErrorFromWindow } from "@/lib/connection-callback";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { Select } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { Spinner as SpinnerGlyph } from "@/components/ui/spinner";
 
 const PROVIDER_NAME: Record<ConnectionGlyphProvider, MessageKey> = {
   steam: "connections.provider.steam",
@@ -558,7 +558,7 @@ function ProviderRow({
       <label htmlFor={selectId} className="text-xs text-text-tertiary">
         {t("settings.connections.visibility.label")}
       </label>
-      <SettingsSelect
+      <Select
         id={selectId}
         aria-describedby={
           showHandleHint ? `${nameId} ${hintId}` : nameId
@@ -574,7 +574,7 @@ function ProviderRow({
             {t(VISIBILITY_LABEL[value])}
           </option>
         ))}
-      </SettingsSelect>
+      </Select>
       {showHandleHint ? (
         <p id={hintId} className="text-xs text-pretty text-text-tertiary">
           {t("settings.connections.visibility.publicHint", {
@@ -691,5 +691,5 @@ function LinkedAs({ name }: { name: string }) {
 }
 
 function Spinner() {
-  return <Loader2 aria-hidden className="h-3.5 w-3.5 motion-safe:animate-spin" />;
+  return <SpinnerGlyph className="h-3.5 w-3.5 motion-safe:animate-spin" />;
 }

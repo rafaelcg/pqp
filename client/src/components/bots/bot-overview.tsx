@@ -1,5 +1,5 @@
 import type { Channel, ServerBotActivityItem, ServerBotDto, ServerBotOverview } from "@pqp/shared";
-import type { KeyboardEvent } from "react";
+import { CARD_LIST, CARD_SURFACE } from "@/components/ui/card";
 import {
   AlarmClock,
   BarChart3,
@@ -18,6 +18,7 @@ import {
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { intlLocale } from "@/lib/locale";
 import { cn } from "@/lib/utils";
+import { Tabs } from "@/components/ui/tabs";
 
 export type BotTab = "overview" | "voice" | "powers";
 
@@ -30,35 +31,14 @@ const TABS: Array<[BotTab, MessageKey]> = [
 /** The bot page's three tabs: a real tablist, arrow keys move between them. */
 export function BotTabs({ value, onChange }: { value: BotTab; onChange: (next: BotTab) => void }) {
   const { t } = useTranslation();
-  function onKeyDown(event: KeyboardEvent<HTMLButtonElement>, index: number) {
-    const step = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
-    if (!step) return;
-    event.preventDefault();
-    const next = TABS[(index + step + TABS.length) % TABS.length]![0];
-    onChange(next);
-    const tabs = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
-    tabs?.[TABS.findIndex(([id]) => id === next)]?.focus();
-  }
   return (
-    <div role="tablist" aria-label={t("bots.settings.tabs")} className="flex gap-1 border-b border-border">
-      {TABS.map(([id, label], index) => (
-        <button
-          key={id}
-          type="button"
-          role="tab"
-          aria-selected={value === id}
-          tabIndex={value === id ? 0 : -1}
-          onClick={() => onChange(id)}
-          onKeyDown={(event) => onKeyDown(event, index)}
-          className={cn(
-            "-mb-px border-b-2 px-3 pb-2.5 pt-1 text-sm font-semibold transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-focus-ring)]",
-            value === id ? "border-accent text-text" : "border-transparent text-text-tertiary hover:text-text",
-          )}
-        >
-          {t(label)}
-        </button>
-      ))}
-    </div>
+    <Tabs
+      label={t("bots.settings.tabs")}
+      variant="underline"
+      value={value}
+      onValueChange={onChange}
+      items={TABS.map(([id, label]) => ({ id, label: t(label) }))}
+    />
   );
 }
 
@@ -133,11 +113,11 @@ export function BotOverviewPanel({
       <section>
         <h3 className="mb-2 text-sm font-semibold text-text">{t("bots.overview.recent")}</h3>
         {!overview || overview.recent.length === 0 ? (
-          <p className="rounded-[var(--radius-card)] border border-border bg-surface-card p-4 text-sm text-text-tertiary">
+          <p className={cn(CARD_SURFACE, "p-4 text-sm text-text-tertiary redesign:text-text-secondary")}>
             {t("bots.overview.nothingYet", { name: bot.name })}
           </p>
         ) : (
-          <ul className="divide-y divide-border overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface-card">
+          <ul className={cn(CARD_SURFACE, CARD_LIST)}>
             {overview.recent.map((item, index) => (
               <ActivityRow key={index} item={item} locale={locale} />
             ))}
@@ -150,7 +130,7 @@ export function BotOverviewPanel({
 
 function Stat({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-[var(--radius-card)] border border-border bg-surface-card p-4">
+    <div className={cn(CARD_SURFACE, "p-4")}>
       <p className="mb-1 text-xs font-bold uppercase tracking-wide text-text-tertiary">{label}</p>
       {children}
     </div>

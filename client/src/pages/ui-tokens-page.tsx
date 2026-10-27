@@ -1,27 +1,64 @@
 import { useEffect, useState, type ReactNode } from "react";
 import {
   Bell,
+  BellSlash,
   CaretDown,
   ChatCircle,
+  CheckCircle as BannerCheckIcon,
   GearSix,
   Hash,
+  HourglassMedium as BannerIdleIcon,
   MagnifyingGlass,
   Microphone,
   PaperPlaneRight,
   Plus,
   SpeakerHigh,
   UsersThree,
+  WarningCircle as BannerErrorIcon,
+  WifiSlash,
   X,
 } from "@phosphor-icons/react";
-import { Check as CheckIcon, Hash as LineHash } from "lucide-react";
+import {
+  AtSign,
+  Bell as LineBell,
+  BellOff,
+  Check as CheckIcon,
+  Copy,
+  Hash as LineHash,
+  LogOut,
+  Pencil,
+} from "lucide-react";
+import { CalendarClock, X as LineX } from "lucide-react";
 import { Navigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
+import { SettingsEmpty } from "@/components/settings/kit/empty";
+import { Spinner } from "@/components/ui/spinner";
+import { PaneHeader, SectionLabel } from "@/components/ui/section-header";
+import { CARD_LIST, CARD_ROW_HOVER, CARD_SURFACE } from "@/components/ui/card";
+import { StatusDot } from "@/components/user/status-dot";
+import { UserAvatar } from "@/components/user/user-avatar";
+import { BANNER_FILL_REDESIGN, Banner, BannerAction, BannerText } from "@/components/ui/banner";
+import { ShareHandleButton } from "@/components/handle/share-handle-button";
+import { ConnectionBanner } from "@/components/layout/connection-banner";
+import { SanctionNoticeBar } from "@/components/layout/sanction-notice-bar";
+import { ListRow } from "@/components/ui/list-row";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
+import { CountBadge } from "@/components/ui/count-badge";
+import { ServerBotTags } from "@/components/bots/server-bot-tags";
 import { CheckRow } from "@/components/ui/check-row";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Icon } from "@/components/ui/icon";
 import { IconButton, type IconButtonSize } from "@/components/ui/icon-button";
 import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Select } from "@/components/ui/select";
+import { cn } from "@/lib/utils";
+import { PopoverPanel } from "@/components/ui/popover";
+import { TOAST_CLOSE, TOAST_SURFACE, TOAST_SURFACE_REDESIGN } from "@/components/ui/toast";
+import { RadioGroup } from "@/components/ui/radio-group";
+import { Tabs } from "@/components/ui/tabs";
+import { Menu } from "@/components/ui/menu";
+import { ChannelListSkeleton, MessageListSkeleton, Skeleton } from "@/components/ui/skeleton";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
@@ -754,13 +791,14 @@ function ControlSheet() {
 }
 
 const BUTTON_VARIANTS = ["default", "secondary", "ghost", "danger", "danger-ghost"] as const;
-const BADGE_VARIANTS: BadgeVariant[] = [
-  "new",
-  "accent",
-  "success",
-  "warning",
-  "danger",
-  "neutral",
+const BADGE_VARIANTS: { variant: BadgeVariant; word: MessageKey }[] = [
+  { variant: "new", word: "qaUi.badge.new" },
+  { variant: "accent", word: "qaUi.badge.accent" },
+  { variant: "success", word: "qaUi.badge.success" },
+  { variant: "warning", word: "qaUi.badge.warning" },
+  { variant: "danger", word: "qaUi.badge.danger" },
+  { variant: "neutral", word: "qaUi.badge.neutral" },
+  { variant: "muted", word: "qaUi.badge.muted" },
 ];
 const ICON_BUTTON_SIZES: IconButtonSize[] = ["xs", "sm", "md", "lg"];
 const BUTTON_SIZES = ["lg", "default", "sm", "icon-lg", "icon", "icon-sm"] as const;
@@ -769,8 +807,18 @@ function PrimitiveSheet() {
   const { t } = useTranslation();
   const [switchOn, setSwitchOn] = useState(true);
   const [checked, setChecked] = useState(false);
+  const [theme, setThemeChoice] = useState<"dark" | "light" | "system">("dark");
+  const [filter, setFilter] = useState<"all" | "unread" | "mentions">("unread");
+  const [who, setWho] = useState<"everyone" | "friends" | "nobody">("friends");
+  const [botTab, setBotTab] = useState<"overview" | "voice" | "powers">("overview");
+  const [roleTab, setRoleTab] = useState<"display" | "permissions" | "members">("permissions");
+  const [aboutTab, setAboutTab] = useState<"depoimentos" | "connections" | "communities">("depoimentos");
+  const [friendsTab, setFriendsTab] = useState<"online" | "all" | "pending">("online");
+  const [paneTab, setPaneTab] = useState<"chat" | "people">("chat");
+  const [reportTab, setReportTab] = useState<"open" | "actioned" | "dismissed">("open");
   const [scrub, setScrub] = useState(42);
   const [volume, setVolume] = useState(70);
+  const [hue, setHue] = useState(96);
   const [pressed, setPressed] = useState(true);
 
   return (
@@ -921,33 +969,114 @@ function PrimitiveSheet() {
         </label>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2">
-        <div className="rounded-[var(--radius-card)] border border-border bg-surface-1 p-2">
-          <Switch
-            checked={switchOn}
-            onCheckedChange={setSwitchOn}
-            label={t("qaUi.switch.label")}
-            description={t("qaUi.switch.description")}
-          />
-          <Switch
-            checked={false}
-            onCheckedChange={() => undefined}
-            disabled
-            label={t("qaUi.state.disabled")}
-          />
-        </div>
-        <div className="rounded-[var(--radius-card)] border border-border bg-surface-1 p-2">
-          <CheckRow
-            checked={checked}
-            onCheckedChange={setChecked}
-            label={t("qaUi.check.label")}
-          />
-          <CheckRow
-            checked
-            onCheckedChange={() => undefined}
-            disabled
-            label={t("qaUi.state.disabled")}
-          />
+      <div data-testid="qa-primitive-select" className="grid gap-3 sm:grid-cols-3">
+        <label className="flex flex-col gap-1">
+          <span style={{ fontSize: "var(--type-label-size)" }}>md</span>
+          <Select defaultValue="public">
+            <option value="public">{t("qaUi.select.public")}</option>
+            <option value="friends">{t("qaUi.select.friends")}</option>
+          </Select>
+        </label>
+        <label className="flex flex-col gap-1">
+          <span style={{ fontSize: "var(--type-label-size)" }}>sm</span>
+          <Select size="sm" defaultValue="friends">
+            <option value="public">{t("qaUi.select.public")}</option>
+            <option value="friends">{t("qaUi.select.friends")}</option>
+          </Select>
+        </label>
+        <label className="flex flex-col gap-1">
+          <span style={{ fontSize: "var(--type-label-size)" }}>
+            {t("qaUi.state.disabled")}
+          </span>
+          <Select disabled defaultValue="public">
+            <option value="public">{t("qaUi.select.public")}</option>
+          </Select>
+        </label>
+      </div>
+
+      <div data-testid="qa-primitive-checkbox">
+        <p
+          className="mb-2 text-text-tertiary"
+          style={{ fontSize: "var(--type-label-size)" }}
+        >
+          {t("qaUi.group.choice")}
+        </p>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <div className="rounded-[var(--radius-card)] border border-border bg-surface-1 p-2">
+            <Switch
+              checked={switchOn}
+              onCheckedChange={setSwitchOn}
+              label={t("qaUi.switch.label")}
+              description={t("qaUi.switch.description")}
+            />
+            <Switch
+              checked={false}
+              onCheckedChange={() => undefined}
+              label={t("qaUi.check.label")}
+            />
+            <Switch
+              checked={false}
+              onCheckedChange={() => undefined}
+              disabled
+              label={t("qaUi.state.disabled")}
+            />
+            <Switch
+              checked
+              onCheckedChange={() => undefined}
+              disabled
+              dimRowWhenDisabled
+              label={`${t("qaUi.state.disabled")} · ${t("qaUi.switch.label")}`}
+            />
+            <Switch
+              checked
+              onCheckedChange={() => undefined}
+              busy
+              label={t("qaUi.state.busy")}
+            />
+          </div>
+          <div className="rounded-[var(--radius-card)] border border-border bg-surface-1 p-2">
+            <CheckRow
+              checked={checked}
+              onCheckedChange={setChecked}
+              label={t("qaUi.check.label")}
+            />
+            <CheckRow
+              checked={false}
+              onCheckedChange={() => undefined}
+              label={t("qaUi.switch.label")}
+              description={t("qaUi.check.description")}
+            />
+            <CheckRow
+              checked
+              onCheckedChange={() => undefined}
+              disabled
+              label={t("qaUi.state.disabled")}
+            />
+            <CheckRow
+              checked={false}
+              onCheckedChange={() => undefined}
+              disabled
+              label={`${t("qaUi.state.disabled")} · ${t("qaUi.check.label")}`}
+            />
+          </div>
+          <div className="flex flex-col gap-3 rounded-[var(--radius-card)] border border-border bg-surface-1 p-3 text-sm text-text">
+            <label className="group/checkbox flex items-center gap-3">
+              <Checkbox />
+              {t("qaUi.checkbox.label")}
+            </label>
+            <label className="group/checkbox flex items-center gap-3">
+              <Checkbox defaultChecked />
+              {t("qaUi.switch.label")}
+            </label>
+            <label className="group/checkbox flex items-center gap-3 text-text-tertiary">
+              <Checkbox disabled />
+              {t("qaUi.state.disabled")}
+            </label>
+            <label className="group/checkbox flex items-center gap-3 text-text-tertiary">
+              <Checkbox disabled defaultChecked />
+              {`${t("qaUi.state.disabled")} · ${t("qaUi.check.label")}`}
+            </label>
+          </div>
         </div>
       </div>
 
@@ -968,6 +1097,160 @@ function PrimitiveSheet() {
         </div>
       </div>
 
+      <div data-testid="qa-primitive-tabs" className="flex flex-col gap-3">
+        <p
+          className="text-text-tertiary"
+          style={{ fontSize: "var(--type-label-size)" }}
+        >
+          {t("qaUi.group.tabs")}
+        </p>
+        <div className="grid gap-4 rounded-[var(--radius-card)] border border-border bg-surface-1 p-3 sm:grid-cols-2">
+          <Tabs
+            label={t("qaUi.tabs.underline")}
+            variant="underline"
+            value={botTab}
+            onValueChange={setBotTab}
+            items={[
+              { id: "overview", label: t("qaUi.tabs.overview") },
+              { id: "voice", label: t("qaUi.tabs.voice") },
+              { id: "powers", label: t("qaUi.tabs.powers") },
+            ]}
+          />
+          <Tabs
+            label={t("qaUi.tabs.segmented")}
+            variant="segmented"
+            value={roleTab}
+            onValueChange={setRoleTab}
+            items={[
+              { id: "display", label: t("qaUi.tabs.display") },
+              { id: "permissions", label: t("qaUi.tabs.permissions") },
+              { id: "members", label: t("qaUi.tabs.members") },
+            ]}
+          />
+          <Tabs
+            label={t("qaUi.tabs.pill")}
+            variant="pill"
+            value={friendsTab}
+            onValueChange={setFriendsTab}
+            items={[
+              { id: "online", label: t("qaUi.tabs.online") },
+              { id: "all", label: t("qaUi.tabs.all") },
+              { id: "pending", label: t("qaUi.tabs.pending") },
+            ]}
+          />
+          {/* The profile popover's content width. */}
+          <div className="w-72">
+            <Tabs
+              label={t("qaUi.tabs.segmentedSmall")}
+              variant="segmented"
+              size="xs"
+              value={aboutTab}
+              onValueChange={setAboutTab}
+              items={[
+                { id: "depoimentos", label: t("qaUi.tabs.depoimentos") },
+                { id: "connections", label: t("qaUi.tabs.connections") },
+                { id: "communities", label: t("qaUi.tabs.communities") },
+              ]}
+            />
+          </div>
+          <div className="text-xs">
+            <Tabs
+              label={t("qaUi.tabs.pillSmall")}
+              variant="pill"
+              size="xs"
+              value={paneTab}
+              onValueChange={setPaneTab}
+              items={[
+                { id: "chat", label: t("qaUi.tabs.chat") },
+                { id: "people", label: t("qaUi.tabs.people"), count: 4 },
+              ]}
+            />
+          </div>
+          <Tabs
+            label={t("qaUi.tabs.filled")}
+            variant="filled"
+            size="sm"
+            value={reportTab}
+            onValueChange={setReportTab}
+            items={[
+              { id: "open", label: t("qaUi.tabs.open") },
+              { id: "actioned", label: t("qaUi.tabs.actioned") },
+              { id: "dismissed", label: t("qaUi.tabs.dismissed"), disabled: true },
+            ]}
+          />
+        </div>
+      </div>
+
+      <div data-testid="qa-primitive-radio" className="flex flex-col gap-3">
+        <p
+          className="text-text-tertiary"
+          style={{ fontSize: "var(--type-label-size)" }}
+        >
+          {t("qaUi.group.radio")}
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="flex flex-col gap-3">
+            <RadioGroup
+              label={t("qaUi.radio.themeLabel")}
+              value={theme}
+              onValueChange={setThemeChoice}
+              options={[
+                { value: "dark", label: t("qaUi.radio.dark") },
+                { value: "light", label: t("qaUi.radio.light") },
+                { value: "system", label: t("qaUi.radio.system") },
+              ]}
+            />
+            <RadioGroup
+              label={t("qaUi.radio.themeSmallLabel")}
+              size="sm"
+              value={theme}
+              onValueChange={setThemeChoice}
+              options={[
+                { value: "dark", label: t("qaUi.radio.dark") },
+                { value: "light", label: t("qaUi.radio.light") },
+                { value: "system", label: t("qaUi.radio.system"), disabled: true },
+              ]}
+            />
+            <RadioGroup
+              label={t("qaUi.radio.filterLabel")}
+              variant="chips"
+              value={filter}
+              onValueChange={setFilter}
+              options={[
+                { value: "all", label: t("qaUi.radio.all") },
+                { value: "unread", label: t("qaUi.radio.unread"), trailing: <span className="tabular-nums opacity-80">3</span> },
+                { value: "mentions", label: t("qaUi.radio.mentions") },
+              ]}
+            />
+            <RadioGroup
+              label={t("qaUi.radio.filterSmallLabel")}
+              variant="chips"
+              size="sm"
+              value={filter}
+              onValueChange={setFilter}
+              options={[
+                { value: "all", label: t("qaUi.radio.all") },
+                { value: "unread", label: t("qaUi.radio.unread") },
+                { value: "mentions", label: t("qaUi.radio.mentions"), disabled: true },
+              ]}
+            />
+          </div>
+          <div className="overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface-1">
+            <RadioGroup
+              label={t("qaUi.radio.whoLabel")}
+              variant="list"
+              value={who}
+              onValueChange={setWho}
+              options={[
+                { value: "everyone", label: t("qaUi.radio.everyone"), description: t("qaUi.radio.everyoneHint") },
+                { value: "friends", label: t("qaUi.radio.friends"), description: t("qaUi.radio.friendsHint") },
+                { value: "nobody", label: t("qaUi.radio.nobody"), description: t("qaUi.radio.nobodyHint"), disabled: true },
+              ]}
+            />
+          </div>
+        </div>
+      </div>
+
       <div className="flex flex-wrap items-center gap-6">
         <div className="flex w-48 flex-col gap-2">
           <Skeleton className="h-3 w-24" />
@@ -982,26 +1265,487 @@ function PrimitiveSheet() {
         </Tooltip>
       </div>
 
-      <div>
+      {/* Badges: the status word on a card, the tag beside a name, and the
+          count in a pill. */}
+      {/* Empty states: a pane's and a group's, with the toggle-off classes
+          their callers pass. */}
+      <div data-testid="qa-primitive-empty" className="grid gap-4 sm:grid-cols-2">
+        <div className="rounded-[var(--radius-pane)] bg-pane-main">
+          <EmptyState
+            icon={<Icon icon={UsersThree} size="lg" />}
+            title={t("chat.empty.owner.title")}
+            body={t("chat.empty.owner.body")}
+            actions={
+              <Button variant="secondary">
+                <Copy aria-hidden="true" className="h-4 w-4" />
+                {t("chat.empty.owner.copy")}
+              </Button>
+            }
+            className="justify-center gap-2 px-6 py-16"
+            iconClassName="hidden redesign:flex"
+            titleClassName="text-balance font-display text-xl font-bold text-text"
+            bodyClassName="max-w-xs text-pretty text-sm text-text-tertiary"
+          />
+        </div>
+        <div className="flex flex-col gap-4">
+        <div className="rounded-[var(--radius-pane)] bg-pane-main">
+          {/* The forum's failure: a load that did not come back, with a retry. */}
+          <EmptyState
+            role="alert"
+            icon={<Icon icon={WifiSlash} kind="symbol" size="lg" />}
+            title={t("forum.loadError")}
+            body={t("forum.loadError.body")}
+            actions={<Button variant="secondary">{t("forum.retry")}</Button>}
+            className="px-6 py-10"
+            iconClassName="text-text-secondary"
+            titleClassName="mt-4 forum-display text-xl font-bold text-text redesign:mt-0"
+            bodyClassName="mt-1.5 max-w-sm text-sm leading-5 text-text-secondary"
+            actionsClassName="mt-5"
+          />
+        </div>
+        <div className="rounded-[var(--radius-card)] border border-border bg-surface-card">
+          <SettingsEmpty
+            icon={LineHash}
+            title={t("chat.empty.title")}
+            description={t("chat.empty.body")}
+          />
+        </div>
+        </div>
+      </div>
+
+      {/* Loading: spinners at the sizes callers draw, in a status line and in
+          a button; the channel and message skeletons on their panes. */}
+      <div data-testid="qa-primitive-loading" className="grid gap-4 sm:grid-cols-[14rem_1fr]">
+        <div className="flex flex-col gap-4">
+          <div className="flex items-center gap-4 text-text-secondary">
+            <Spinner className="h-3.5 w-3.5 motion-safe:animate-spin" />
+            <Spinner className="h-4 w-4 animate-spin" />
+            <Spinner className="h-5 w-5 animate-spin text-accent" />
+          </div>
+          <p className="flex items-center gap-1.5 text-xs text-text-tertiary">
+            <Spinner className="h-3.5 w-3.5 shrink-0 motion-safe:animate-spin" />
+            {t("search.searching")}
+          </p>
+          <Button variant="secondary" disabled className="self-start">
+            <Spinner className="h-4 w-4 animate-spin" />
+            {t("search.searching")}
+          </Button>
+          <div className="rounded-[var(--radius-pane)] bg-pane-side">
+            <ChannelListSkeleton />
+          </div>
+        </div>
+        {/* On the canvas, as in the app, so the pane's edge reads in light. */}
+        <div className="self-start rounded-[calc(var(--radius-pane)+0.5rem)] bg-canvas p-2">
+          <div className="flex h-72 overflow-hidden rounded-[var(--radius-pane)] bg-pane-main">
+            <MessageListSkeleton />
+          </div>
+        </div>
+      </div>
+
+      <div data-testid="qa-primitive-badge" className="flex flex-col gap-3">
         <p
-          className="mb-2 text-text-tertiary"
+          className="text-text-tertiary"
           style={{ fontSize: "var(--type-label-size)" }}
         >
           Badge
         </p>
         <div className="flex flex-wrap items-center gap-2">
-          {BADGE_VARIANTS.map((variant) => (
+          {BADGE_VARIANTS.map(({ variant, word }) => (
             <Badge key={variant} variant={variant}>
-              {variant}
+              {t(word)}
             </Badge>
           ))}
           <Badge variant="success" icon={CheckIcon}>
-            success + icon
+            {t("qaUi.badge.success")}
           </Badge>
+        </div>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+          <span className="flex items-baseline gap-1.5">
+            <span className="font-semibold text-text">Lia</span>
+            <Badge size="tag" className="self-center font-bold">
+              {t("forum.badge.op")}
+            </Badge>
+          </span>
+          <span className="flex items-baseline gap-1.5">
+            <span className="font-semibold text-text">Breu</span>
+            <ServerBotTags />
+          </span>
+          <span className="flex items-baseline gap-1.5">
+            <span className="font-semibold text-text">Breu</span>
+            <ServerBotTags gone />
+          </span>
+          <span className="flex items-baseline gap-1.5">
+            <span className="font-semibold text-text">pqp</span>
+            <Badge variant="accent" size="tag" className="rounded">
+              AutoMod
+            </Badge>
+          </span>
+          <span className="flex items-baseline gap-1.5">
+            <span className="font-semibold text-text">GitHub</span>
+            <Badge size="tag" className="rounded bg-ink-4 text-paper-muted">
+              Webhook
+            </Badge>
+          </span>
+          <span className="flex items-baseline gap-1.5">
+            <span className="font-semibold text-text-tertiary">Téo</span>
+            <Badge variant="muted" size="tag" className="self-center">
+              {t("chat.authorGone")}
+            </Badge>
+          </span>
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <CountBadge count={3} />
+          <CountBadge count={12} />
+          <CountBadge count={120} />
+          <CountBadge count={2} size="sm" />
+          <CountBadge count={120} size="sm" />
+          <span className="relative inline-flex h-10 w-10 items-center justify-center rounded-[var(--radius-control)] bg-surface-2">
+            <LineHash className="h-4 w-4" aria-hidden />
+            <CountBadge
+              count={4}
+              tone="accent"
+              size="sm"
+              className="absolute right-0.5 top-0.5 ring-2 ring-surface-1"
+            />
+          </span>
         </div>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2">
+      {/* A settings pane's header and the labels over its groups, with the
+          toggle-off classes the callers pass. */}
+      <div data-testid="qa-primitive-section-header" className="grid gap-6 p-4 sm:grid-cols-2">
+        <div className="min-w-0">
+          <PaneHeader
+            title={t("serverSettings.section.overview")}
+            description={t("serverSettings.overview.description")}
+            actions={<Button size="sm">{t("common.save")}</Button>}
+            className="mb-8 gap-4"
+            titleClassName="font-display text-xl font-bold text-text"
+            descriptionClassName="mt-1 text-sm text-pretty text-text-secondary"
+          />
+          <SectionLabel
+            as="h4"
+            variant="group"
+            className="font-display text-sm font-bold uppercase tracking-wider text-paper-muted"
+          >
+            {t("serverSettings.name.title")}
+          </SectionLabel>
+          <p className="mt-2 text-sm text-text-secondary">pqp</p>
+          <SectionLabel
+            as="h4"
+            variant="group"
+            tone="danger"
+            className="mt-6 font-display text-sm font-bold uppercase tracking-wider text-danger"
+          >
+            {t("serverSettings.delete.title")}
+          </SectionLabel>
+        </div>
+        <div className="min-w-0 space-y-4 rounded-[var(--radius-card)] bg-surface-2 p-3">
+          <div>
+            <SectionLabel className="px-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
+              {t("forward.recent")}
+            </SectionLabel>
+            <p className="px-2 py-1 text-sm text-text">Bia</p>
+            <p className="px-2 py-1 text-sm text-text"># geral</p>
+          </div>
+          <div>
+            <SectionLabel className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-paper-muted">
+              {t("invite.create.activeTitle")}
+            </SectionLabel>
+            <p className="text-sm text-text-secondary">pqp.gg/i/sala</p>
+          </div>
+        </div>
+      </div>
+
+      {/* A popover's panel, drawn in place: placement is each caller's. */}
+      <div data-testid="qa-primitive-popover" className="flex flex-wrap items-start gap-4 p-4">
+        <PopoverPanel role="dialog" aria-label={t("qaUi.popover.title")} className="w-72 p-4 text-text">
+          <p className="text-sm font-semibold">{t("qaUi.popover.title")}</p>
+          <p className="mt-1 text-xs text-text-tertiary">{t("qaUi.popover.body")}</p>
+          <div className="mt-3 flex justify-end gap-2">
+            <Button variant="ghost" size="sm">
+              {t("qaUi.popover.later")}
+            </Button>
+            <Button size="sm">{t("qaUi.popover.now")}</Button>
+          </div>
+        </PopoverPanel>
+        <PopoverPanel className="grid w-56 grid-cols-6 gap-1 p-2">
+          {["😀", "😂", "🥲", "😍", "🤔", "😴", "🔥", "🎉", "👀", "💀", "🙏", "✨"].map((emoji) => (
+            <span key={emoji} className="grid h-8 place-items-center rounded-[var(--radius-control)] text-lg">
+              {emoji}
+            </span>
+          ))}
+        </PopoverPanel>
+      </div>
+
+      {/* A menu, opened by the council shot; every row kind in one list. */}
+      <div data-testid="qa-primitive-menu" className="flex items-start gap-3">
+        <Menu
+          align="start"
+          items={[
+            { id: "heading", label: t("qaUi.menu.notifications"), heading: true },
+            { id: "all", label: t("qaUi.menu.all"), icon: LineBell, checked: true, onSelect: () => undefined },
+            {
+              id: "mentions",
+              label: t("qaUi.menu.mentions"),
+              icon: AtSign,
+              detail: t("qaUi.menu.mentionsDetail"),
+              onSelect: () => undefined,
+            },
+            { id: "nothing", label: t("qaUi.menu.nothing"), icon: BellOff, onSelect: () => undefined },
+            { id: "sep-1", label: "", separator: true },
+            { id: "edit", label: t("qaUi.menu.edit"), icon: Pencil, onSelect: () => undefined },
+            {
+              id: "copy",
+              label: t("qaUi.menu.copyId"),
+              icon: Copy,
+              disabled: true,
+              detail: t("qaUi.menu.copyIdDetail"),
+            },
+            { id: "sep-2", label: "", separator: true },
+            { id: "leave", label: t("qaUi.menu.leave"), icon: LogOut, danger: true, onSelect: () => undefined },
+          ]}
+        >
+          <Button variant="secondary" size="sm">
+            {t("qaUi.menu.open")}
+          </Button>
+        </Menu>
+      </div>
+
+      {/* Cards: one on the pane, one inside a dialog's surface, each with a
+          list inside, to show the tint reads on both. */}
+      <div data-testid="qa-primitive-card" className="grid gap-4 sm:grid-cols-2">
+        {(["pane", "dialog"] as const).map((where) => (
+          <div
+            key={where}
+            className={cn(
+              "rounded-[var(--radius-pane)] p-4",
+              where === "pane" ? "bg-pane-main" : "elevation-3",
+            )}
+          >
+            <div className={cn(CARD_SURFACE, "p-4")}>
+              <p className="text-sm font-semibold text-text">{t("qaUi.card.title")}</p>
+              <p className="mt-1 text-xs text-text-tertiary redesign:text-text-secondary">{t("qaUi.card.body")}</p>
+            </div>
+            <ul className={cn(CARD_SURFACE, CARD_LIST, "mt-3")}>
+              <li className="px-4 py-2.5 text-sm text-text-secondary">{t("qaUi.card.rowOne")}</li>
+              {/* A row that opens something: its hover fill over the card's tint. */}
+              <li>
+                <button
+                  type="button"
+                  className={cn(
+                    "flex w-full px-4 py-2.5 text-left text-sm text-text-secondary hover:bg-surface-2 hover:text-text",
+                    CARD_ROW_HOVER,
+                    // On the dialog the hover is drawn at rest, so both
+                    // surfaces show it in one screenshot.
+                    where === "dialog" && "redesign:bg-[color:var(--card-row-hover)] redesign:text-text",
+                  )}
+                >
+                  {t("qaUi.card.rowTwo")}
+                </button>
+              </li>
+            </ul>
+          </div>
+        ))}
+      </div>
+
+      {/* Avatars: monograms at the list, message and profile sizes, each
+          with its presence; a dimmed (muted) person; a bot; a stack. */}
+      <div data-testid="qa-primitive-avatar" className="flex flex-col gap-3">
+        <p
+          className="text-text-tertiary"
+          style={{ fontSize: "var(--type-label-size)" }}
+        >
+          Avatar
+        </p>
+        <div className="flex flex-wrap items-end gap-5 pb-1">
+          {(
+            [
+              ["Bia", "h-6 w-6", "bg-surface-3 text-[10px] text-text", "online"],
+              ["Duda", "h-8 w-8", "bg-ink-3 text-xs", "idle"],
+              ["Nanda", "h-10 w-10", "bg-ink-3 text-sm", "dnd"],
+              ["Téo", "h-10 w-10", "bg-signal text-sm text-ink", "offline"],
+            ] as const
+          ).map(([name, size, fallback, status]) => (
+            <span key={name} className="relative inline-flex">
+              <UserAvatar name={name} className={size} fallbackClassName={fallback} />
+              <StatusDot
+                status={status}
+                className="absolute -bottom-0.5 -right-0.5 redesign:bottom-0 redesign:right-0"
+                ringClassName="rounded-full bg-surface-0 ring-2 ring-surface-0"
+              />
+            </span>
+          ))}
+          <UserAvatar name="Caio" className="h-10 w-10" fallbackClassName="bg-ink-3 text-sm" rounded="full" dimmed />
+          {/* A photo at the smallest and the usual size: how it crops in the circle. */}
+          <UserAvatar name="Lia" avatarUrl="https://api.dicebear.com/9.x/shapes/png?seed=relay" className="h-6 w-6" />
+          <UserAvatar name="Lia" avatarUrl="https://api.dicebear.com/9.x/shapes/png?seed=relay" className="h-10 w-10" />
+          <UserAvatar name="Breu" avatarUrl="/api/bot-faces/lime/oi.png" className="h-10 w-10" />
+          <span className="flex -space-x-2">
+            {["Lia", "Rafa", "Gui"].map((name) => (
+              <UserAvatar
+                key={name}
+                name={name}
+                className="h-7 w-7 ring-2 ring-surface-0 redesign:ring-[color:var(--avatar-dot-ring)]"
+                fallbackClassName="bg-surface-3 text-[11px] font-semibold text-text"
+                rounded="full"
+              />
+            ))}
+          </span>
+        </div>
+      </div>
+
+      {/* Banners: the strips above the conversation (connection, an error,
+          the idle warning, a notice) and the one above the composer. */}
+      <div
+        data-testid="qa-primitive-banner"
+        className="flex max-w-2xl flex-col gap-2 pb-2 redesign:gap-0"
+      >
+        <ConnectionBanner
+          status="reconnecting"
+          refusedRepeatedly={false}
+          onRetry={() => {}}
+          onCheck={() => {}}
+          onSignInAgain={() => {}}
+        />
+        <Banner tone="danger" icon={BannerErrorIcon}>
+          <BannerText>{t("qaUi.banner.error")}</BannerText>
+          <BannerAction>{t("connection.dismiss")}</BannerAction>
+        </Banner>
+        <Banner tone="warning" icon={BannerIdleIcon}>
+          <BannerText>{t("voice.idle.warning", { count: 1 })}</BannerText>
+          <BannerAction prominent>{t("voice.idle.stillHere")}</BannerAction>
+        </Banner>
+        <Banner tone="success" icon={BannerCheckIcon}>
+          <BannerText>{t("qaUi.banner.notice")}</BannerText>
+          <ShareHandleButton handle="lia" className={BANNER_FILL_REDESIGN} />
+          <BannerAction>{t("connection.dismiss")}</BannerAction>
+        </Banner>
+        {/* The composer's strip: in the app it sits above the composer. */}
+        <div className="h-4" aria-hidden />
+        <SanctionNoticeBar
+          notice={{
+            type: "sanction-notice",
+            sanction: "timeout",
+            serverId: "00000000-0000-4000-8000-000000000000",
+            channelId: "00000000-0000-4000-8000-000000000001",
+            expiresAt: "2026-10-26T21:30:00.000Z",
+            reason: null,
+            message: t("qaUi.banner.sanction"),
+          }}
+          onDismiss={() => {}}
+        />
+      </div>
+
+      {/* List rows: channels (every state) and people (avatar, second line). */}
+      <div data-testid="qa-primitive-list-row" className="grid gap-4 sm:grid-cols-2">
+        <div className="flex flex-col gap-0.5 rounded-[var(--radius-card)] bg-pane-side p-2">
+          {(
+            [
+              ["geral", {}],
+              ["avisos", { unread: true }],
+              ["memes", { unread: true }],
+              ["papo", { selected: true }],
+              ["clipes", { muted: true }],
+              ["arquivo", { disabled: true }],
+            ] as const
+          ).map(([name, state]) => (
+            <ListRow
+              key={name}
+              leading={<Icon icon={Hash} kind="symbol" size="sm" />}
+              trailing={name === "clipes" ? <Icon icon={BellSlash} size="sm" /> : undefined}
+              count={name === "memes" ? <CountBadge count={3} /> : undefined}
+              action={
+                name === "papo" ? (
+                  <IconButton size="xs" touch={false} side="right" label={t("qaUi.iconButton.settings")}>
+                    <Icon icon={GearSix} />
+                  </IconButton>
+                ) : undefined
+              }
+              {...state}
+            >
+              {name}
+            </ListRow>
+          ))}
+        </div>
+        <div className="flex flex-col gap-0.5 rounded-[var(--radius-card)] bg-pane-side p-2">
+          <ListRow size="md" leading={<UserAvatar name="Bia" className="h-8 w-8" fallbackClassName="bg-surface-3 text-xs text-text" rounded="full" />}>
+            Bia
+          </ListRow>
+          <ListRow
+            size="lg"
+            selected
+            leading={<UserAvatar name="Rafa" className="h-9 w-9" fallbackClassName="bg-surface-3 text-sm text-text" rounded="full" />}
+            detail={t("qaUi.listRow.inCall")}
+            trailing="19:02"
+          >
+            Rafa
+          </ListRow>
+          <ListRow
+            size="lg"
+            unread
+            leading={<UserAvatar name="Caio" className="h-9 w-9" fallbackClassName="bg-surface-3 text-sm text-text" rounded="full" />}
+            detail={t("qaUi.listRow.lastMessage")}
+            trailing="17:42"
+          >
+            Caio
+          </ListRow>
+          {/* A time over a count on a two-line row. */}
+          <ListRow
+            size="lg"
+            unread
+            leading={<UserAvatar name="Duda" className="h-9 w-9" fallbackClassName="bg-surface-3 text-sm text-text" rounded="full" />}
+            detail={t("qaUi.listRow.lastMessage")}
+            trailing="16:10"
+            count={<CountBadge count={2} />}
+          >
+            Duda
+          </ListRow>
+        </div>
+      </div>
+
+      {/* Toasts: a note that arrives and a plain notice (both on the level-3
+          card), and a session reminder (which drew its own dark card). */}
+      <div data-testid="qa-primitive-toast" className="flex flex-col items-start gap-3 p-4">
+        <div role="status" className={cn(TOAST_SURFACE, "flex w-80 items-center gap-3 p-3")}>
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent-soft font-semibold text-on-accent-soft">
+            B
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-semibold text-text">{t("qaUi.toast.dmName")}</span>
+            <span className="block truncate text-xs text-text-secondary">{t("qaUi.toast.dmBody")}</span>
+          </span>
+          <button type="button" aria-label={t("qaUi.toast.close")} className={TOAST_CLOSE}>
+            <LineX className="h-4 w-4" aria-hidden />
+          </button>
+        </div>
+        <div role="status" className={cn(TOAST_SURFACE, "flex w-80 items-center gap-3 p-3")}>
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-on-accent redesign:mx-1">
+            <CheckIcon className="h-4 w-4" strokeWidth={3} aria-hidden />
+          </span>
+          <p className="min-w-0 flex-1 text-sm font-semibold text-text">{t("qaUi.toast.forwarded")}</p>
+          <button type="button" aria-label={t("qaUi.toast.close")} className={TOAST_CLOSE}>
+            <LineX className="h-4 w-4" aria-hidden />
+          </button>
+        </div>
+        <div
+          role="status"
+          className={cn(
+            "flex w-80 items-center gap-3 rounded-xl border border-ink-4/70 bg-ink-2 p-3 shadow-[var(--shadow-popover)]",
+            TOAST_SURFACE_REDESIGN,
+          )}
+        >
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-ink-3 text-paper-muted redesign:bg-surface-3 redesign:text-text-secondary">
+            <CalendarClock className="h-5 w-5" aria-hidden />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-semibold text-text">{t("qaUi.toast.sessionTitle")}</span>
+            <span className="block truncate text-xs text-text-tertiary redesign:text-text-secondary">{t("qaUi.toast.sessionBody")}</span>
+          </span>
+        </div>
+      </div>
+
+      <div data-testid="qa-primitive-slider" className="grid gap-4 sm:grid-cols-2">
         <label className="flex flex-col gap-2">
           <span style={{ fontSize: "var(--type-label-size)" }}>
             {t("qaUi.slider.scrub")}
@@ -1038,6 +1782,45 @@ function PrimitiveSheet() {
             aria-label={t("qaUi.slider.readOnly")}
           />
         </label>
+        <label className="flex flex-col gap-2">
+          <span style={{ fontSize: "var(--type-label-size)" }}>
+            {t("qaUi.slider.hue")}
+          </span>
+          <Slider
+            variant="hue"
+            value={hue}
+            max={360}
+            aria-label={t("qaUi.slider.hue")}
+            onValueChange={setHue}
+          />
+        </label>
+        <label className="flex flex-col gap-2">
+          <span style={{ fontSize: "var(--type-label-size)" }}>
+            {t("qaUi.slider.disabled")}
+          </span>
+          <Slider
+            variant="volume"
+            value={volume}
+            max={100}
+            disabled
+            aria-label={t("qaUi.slider.disabled")}
+          />
+        </label>
+        <div className="flex flex-col gap-2 sm:col-span-2">
+          <span style={{ fontSize: "var(--type-label-size)" }}>
+            {t("qaUi.slider.edge")}
+          </span>
+          <div className="relative h-12 rounded-t-[var(--radius-card)] border-b border-border bg-surface-1">
+            <Slider
+              variant="edge"
+              value={scrub}
+              max={100}
+              aria-label={t("qaUi.slider.edge")}
+              onValueChange={setScrub}
+              className="absolute inset-x-0 -bottom-px"
+            />
+          </div>
+        </div>
       </div>
     </div>
   );

@@ -25,6 +25,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { SectionRail } from "@/components/ui/section-rail";
+import { Select } from "@/components/ui/select";
 import { ReportsSection } from "@/components/layout/reports-section";
 import { AutomodSettingsSection } from "@/components/layout/automod-settings-section";
 import { ServerIdentitySection } from "@/components/layout/server-identity-section";
@@ -44,6 +45,7 @@ import { useCommunitiesEnabled } from "@/components/communities/use-communities-
 import { shouldShowCommunityHomeSettingsRow } from "@/lib/community-home";
 import { useTranslation, type MessageKey, type Translator } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { PaneHeader, SectionLabel } from "@/components/ui/section-header";
 import {
   ApiError,
   deleteServer,
@@ -426,12 +428,13 @@ const SECTIONS: SectionDef[] = [
 function SectionHeader({ section }: { section: SectionDef }) {
   const { t } = useTranslation();
   return (
-    <div className="mb-5">
-      <h3 className="font-display text-lg font-bold text-paper">
-        {t(section.label)}
-      </h3>
-      <p className="mt-1 text-xs text-paper-muted">{t(section.description)}</p>
-    </div>
+    <PaneHeader
+      title={t(section.label)}
+      description={t(section.description)}
+      className="mb-5"
+      titleClassName="font-display text-lg font-bold text-paper"
+      descriptionClassName="mt-1 text-xs text-paper-muted"
+    />
   );
 }
 
@@ -452,14 +455,17 @@ function Block({
         tone === "danger" && "rounded-lg border border-danger/40 bg-danger/5 p-4",
       )}
     >
-      <h4
+      <SectionLabel
+        as="h4"
+        variant="group"
+        tone={tone === "danger" ? "danger" : undefined}
         className={cn(
           "font-display text-sm font-bold uppercase tracking-wider",
           tone === "danger" ? "text-danger" : "text-paper-muted",
         )}
       >
         {title}
-      </h4>
+      </SectionLabel>
       {children}
     </section>
   );
@@ -1239,11 +1245,11 @@ export function ServerSettingsDialog({
                       server: server.name,
                     })}
                   </p>
-                  <select
+                  <Select
                     value={retentionDays === null ? "" : String(retentionDays)}
                     aria-label={t("serverSettings.retention.label")}
                     disabled={savingRetention}
-                    className="h-10 w-full rounded-md border border-ink-4 bg-ink px-3 text-sm text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/50 disabled:opacity-50"
+                    
                     onChange={(e) =>
                       void saveRetention(
                         e.target.value === "" ? null : Number(e.target.value),
@@ -1262,7 +1268,7 @@ export function ServerSettingsDialog({
                     <option value="365">
                       {t("serverSettings.retention.year")}
                     </option>
-                  </select>
+                  </Select>
                   <p
                     role="status"
                     aria-live="polite"
@@ -1337,11 +1343,11 @@ export function ServerSettingsDialog({
                   </p>
                 ) : (
                   <div className="space-y-2">
-                    <select
+                    <Select
                       value={targetId}
                       aria-label={t("serverSettings.transfer.label")}
                       disabled={transferArmed || transferring}
-                      className="h-10 w-full rounded-md border border-ink-4 bg-ink px-3 text-sm text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/50 disabled:opacity-50"
+                      
                       onChange={(e) => setTargetId(e.target.value)}
                     >
                       <option value="">
@@ -1353,7 +1359,7 @@ export function ServerSettingsDialog({
                           {member.tag ? ` ${member.tag}` : ""}
                         </option>
                       ))}
-                    </select>
+                    </Select>
 
                     {!transferArmed ? (
                       <Button

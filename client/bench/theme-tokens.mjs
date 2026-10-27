@@ -80,11 +80,17 @@ const CONTRAST_PAIRS = [
   { fg: "--color-text-tertiary", bg: "--color-pane-side", floor: 4.5, label: "tertiary text (offline names) on the side pane", redesign: true },
   { fg: "--color-text-tertiary", bg: "--color-pane-main", floor: 4.5, label: "tertiary text (timestamps) on the conversation pane", redesign: true },
   { fg: "--color-text-tertiary", bg: "--color-row-hover", floor: 4.5, label: "tertiary text on a hovered row", redesign: true },
+  // The monogram under the redesign: a letter as small as 10px on its disc.
+  { fg: "--color-text", bg: "--color-surface-3", floor: 4.5, label: "a monogram on its neutral disc", redesign: true },
+  // Badges under the redesign: an 11px word on its fill.
+  { fg: "--color-text", bg: "--color-surface-3", floor: 4.5, label: "a neutral badge (OP, Fechado)", redesign: true },
+  { fg: "--color-text-secondary", bg: "--color-surface-2", floor: 4.5, label: "a muted badge (Saiu, Removido)", redesign: true },
   // Nothing but icons and the unread pip sits on the canvas (the rail), so
   // the non-text floor.
   { fg: "--color-text-secondary", bg: "--color-canvas", floor: 3.0, label: "an icon on the canvas (the rail)", redesign: true },
   { fg: "--color-accent", bg: "--color-canvas", floor: 3.0, label: "accent on the canvas", redesign: true },
-  { fg: "--color-on-row-selected", bg: "--color-row-selected", floor: 4.5, label: "label on the selected row", redesign: true },
+  { fg: "--color-on-row-selected", bg: "--color-row-selected", floor: 4.5, label: "label and second line on the selected row", redesign: true },
+  { fg: "--color-accent", bg: "--color-row-selected", floor: 3.0, label: "focus ring on the selected row", redesign: true },
   { fg: "--color-accent-text", bg: "--color-row-selected", floor: 3.0, label: "pressed icon on the selected fill", redesign: true },
   { fg: "--color-accent-text", bg: "--color-pane-side", floor: 4.5, label: "accent text on the side pane", redesign: true },
   { fg: "--color-accent-text", bg: "--color-pane-main", floor: 4.5, label: "accent text on the conversation pane", redesign: true },

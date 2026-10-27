@@ -16,7 +16,7 @@ export const Textarea = React.forwardRef<
     <textarea
       ref={ref}
       className={cn(
-        "flex min-h-28 w-full resize-y px-[var(--input-px,0.75rem)] py-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring disabled:cursor-not-allowed disabled:opacity-[var(--input-disabled-opacity,0.5)]",
+        "flex min-h-28 w-full resize-y px-[var(--input-px,0.75rem)] py-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-[color:var(--input-ring,var(--color-focus-ring))] disabled:cursor-not-allowed disabled:opacity-[var(--input-disabled-opacity,0.5)]",
         FIELD_BOX,
         FIELD_TEXT,
         className,

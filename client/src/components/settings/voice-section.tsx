@@ -22,7 +22,6 @@ import {
   SettingsNotice,
   SettingsPreview,
   SettingsRow,
-  SettingsSelect,
   SettingsSwitchRow,
 } from "@/components/settings/kit";
 import { ACTION_LABEL } from "@/components/layout/shortcut-overlay";
@@ -77,6 +76,7 @@ import {
 import { getSoundState, previewPttBeeps, setPttBeepEnabled, subscribeSounds, type SoundState } from "@/lib/sounds";
 import { requestConnectionCheck } from "@/lib/settings-request";
 import { isApplePlatform } from "@/lib/composer-formatting";
+import { Select } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { LocalSettings } from "@/components/settings/local-settings";
 import { bindableMap } from "@/components/settings/keyboard-section";
@@ -943,12 +943,16 @@ function VolumeRow({
       description={description}
       stacked
       control={
-        <div className="space-y-1">
+        // Under the redesign the 100% label hangs 6px under the knob; the hint
+        // below it starts clear of it (label box 34-46px, hint at 50px).
+        <div className="space-y-1 redesign:space-y-2.5" data-volume-stack="">
           <div className="flex items-center gap-3">
             <div className="relative flex-1">
               <Slider
                 variant="volume"
-                className="h-10"
+                // Above the unity tick under the redesign, so the tick
+                // reads as a notch on the track and the knob covers it.
+                className="h-10 redesign:z-[1]"
                 value={value}
                 min={min}
                 max={max}
@@ -968,7 +972,7 @@ function VolumeRow({
                   {tickLabel ? (
                     <span
                       aria-hidden
-                      className="pointer-events-none absolute bottom-0 -translate-x-1/2 text-xs text-text-tertiary"
+                      className="pointer-events-none absolute bottom-0 -translate-x-1/2 text-xs text-text-tertiary redesign:bottom-auto redesign:top-[calc(50%+var(--slider-thumb)/2+0.375rem)] redesign:leading-none"
                       style={{ left: `${tickPct}%` }}
                     >
                       {tickLabel}
@@ -1698,9 +1702,9 @@ export function VoiceSection({
             ) : (
               <div className="flex flex-col gap-2">
                 <div className="flex flex-col gap-2 @lg:flex-row @lg:items-center">
-                  <SettingsSelect
+                  <Select
                     id={inputId}
-                    className="min-w-0 @lg:flex-1"
+                    wrapperClassName="min-w-0 @lg:flex-1"
                     value={deviceSelectValue(draftLocal.inputDeviceId)}
                     onChange={(e) => patchLocal({ inputDeviceId: e.target.value })}
                   >
@@ -1714,7 +1718,7 @@ export function VoiceSection({
                         {device.label}
                       </option>
                     ))}
-                  </SettingsSelect>
+                  </Select>
                   <Button
                     type="button"
                     variant="secondary"
@@ -1887,9 +1891,9 @@ export function VoiceSection({
           control={
             canSelectOutput ? (
               <div className="flex flex-col gap-2">
-                <SettingsSelect
+                <Select
                   id={outputId}
-                  className="@lg:w-64"
+                  wrapperClassName="@lg:w-64"
                   value={deviceSelectValue(draftLocal.outputDeviceId)}
                   onChange={(e) => patchLocal({ outputDeviceId: e.target.value })}
                 >
@@ -1903,7 +1907,7 @@ export function VoiceSection({
                       {device.label}
                     </option>
                   ))}
-                </SettingsSelect>
+                </Select>
                 {outputSaved.missing ? (
                   <SettingsNotice tone="warning">
                     {outputSaved.name
@@ -2018,9 +2022,9 @@ export function VoiceSection({
               : t(noiseHintKey[draftLocal.micProcessing.noiseSuppression])
           }
           control={
-            <SettingsSelect
+            <Select
               id={noiseId}
-              className="@lg:w-48"
+              wrapperClassName="@lg:w-48"
               value={draftLocal.micProcessing.noiseSuppression}
               onChange={(e) =>
                 patchLocal({
@@ -2039,7 +2043,7 @@ export function VoiceSection({
                   {t(NOISE_SUPPRESSION_LABELS[mode])}
                 </option>
               ))}
-            </SettingsSelect>
+            </Select>
           }
         />
         <SettingsSwitchRow
@@ -2083,9 +2087,9 @@ export function VoiceSection({
           control={
             <div className="flex flex-col gap-3">
               <div className="flex flex-col gap-2 @lg:flex-row @lg:items-center">
-                <SettingsSelect
+                <Select
                   id={cameraId}
-                  className="min-w-0 @lg:flex-1"
+                  wrapperClassName="min-w-0 @lg:flex-1"
                   value={draftLocal.cameraDeviceId}
                   onChange={(e) => patchLocal({ cameraDeviceId: e.target.value })}
                   onFocus={() => onRevealCameras()}
@@ -2100,7 +2104,7 @@ export function VoiceSection({
                       {device.label}
                     </option>
                   ))}
-                </SettingsSelect>
+                </Select>
                 <Button
                   type="button"
                   variant="secondary"
@@ -2170,9 +2174,9 @@ export function VoiceSection({
           // sends a camera still gets it.
           status={inCall ? <OutboundVideoReadout /> : undefined}
           control={
-            <SettingsSelect
+            <Select
               id={qualityId}
-              className="@lg:w-48"
+              wrapperClassName="@lg:w-48"
               value={draftLocal.videoQuality}
               onChange={(e) =>
                 patchLocal({ videoQuality: parseVideoQuality(e.target.value) })
@@ -2183,7 +2187,7 @@ export function VoiceSection({
                   {t(VIDEO_QUALITY_LABELS[quality])}
                 </option>
               ))}
-            </SettingsSelect>
+            </Select>
           }
         />
         <SettingsRow
@@ -2192,9 +2196,9 @@ export function VoiceSection({
           htmlFor={frameRateId}
           description={t("settings.voice.screenFrameRate.hint")}
           control={
-            <SettingsSelect
+            <Select
               id={frameRateId}
-              className="@lg:w-48"
+              wrapperClassName="@lg:w-48"
               value={draftLocal.screenFrameRate}
               onChange={(e) =>
                 patchLocal({
@@ -2207,7 +2211,7 @@ export function VoiceSection({
                   {t(SCREEN_FRAME_RATE_LABELS[rate])}
                 </option>
               ))}
-            </SettingsSelect>
+            </Select>
           }
         />
       </SettingsGroup>

@@ -12,7 +12,9 @@ import {
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
 import { forgetMenuRowChosen, noteMenuRowChosen } from "@/components/ui/dialog";
 import { useFullscreenPortalHost } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 import {
+  MENU_SURFACE,
   MenuItemRows,
   type MenuItemComponentProps,
   type MenuSeparatorComponentProps,
@@ -111,7 +113,10 @@ export function Menu({
           // Named so a test can address the open menu without matching
           // translated labels.
           data-server-menu=""
-          className="elevation-3 z-[100] max-h-[var(--radix-dropdown-menu-content-available-height)] max-w-[var(--radix-dropdown-menu-content-available-width)] overflow-y-auto overscroll-contain rounded-[var(--radius-card)] p-1 animate-fade-in min-w-[11.5rem]"
+          className={cn(
+            MENU_SURFACE,
+            "z-[100] max-h-[var(--radix-dropdown-menu-content-available-height)] max-w-[var(--radix-dropdown-menu-content-available-width)] min-w-[11.5rem]",
+          )}
           onClickCapture={(event: ReactMouseEvent) => {
             if ((event.target as Element).closest?.('[role^="menuitem"]')) {
               chosenRef.current = true;

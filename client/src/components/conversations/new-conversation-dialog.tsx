@@ -4,10 +4,11 @@ import {
   type PublicUser,
   type UserStatus,
 } from "@pqp/shared";
-import { Check, X } from "lucide-react";
+import { X } from "lucide-react";
 import { useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { FriendsContext } from "@/components/friends/use-friends";
 import { Button } from "@/components/ui/button";
+import { TickBox } from "@/components/ui/check-row";
 import { Dialog } from "@/components/ui/dialog";
 import { StatusDot } from "@/components/user/status-dot";
 import { UserAvatar } from "@/components/user/user-avatar";
@@ -356,7 +357,7 @@ function PersonRow({
           {person.status && (
             <StatusDot
               status={person.status}
-              className="absolute -bottom-0.5 -right-0.5 bg-surface-2"
+              className="absolute -bottom-0.5 -right-0.5 redesign:bottom-0 redesign:right-0 bg-surface-2"
               ringClassName="rounded-full ring-2 ring-surface-2"
             />
           )}
@@ -379,15 +380,7 @@ function PersonRow({
         onClick={onToggle}
         className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-control)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:opacity-40"
       >
-        <span
-          aria-hidden="true"
-          className={cn(
-            "flex h-5 w-5 items-center justify-center rounded-[var(--radius-tick)] transition-colors duration-[var(--duration-fast)]",
-            checked ? "bg-accent" : "bg-surface-2 ring-1 ring-inset ring-border-strong",
-          )}
-        >
-          {checked && <Check className="h-3.5 w-3.5 text-on-accent" strokeWidth={3} />}
-        </span>
+        <TickBox checked={checked} size="md" />
       </button>
     </div>
   );

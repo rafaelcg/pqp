@@ -370,6 +370,13 @@ import { CallRatingPrompt } from "@/components/voice/call-rating-prompt";
 import { useCallRating } from "@/hooks/use-call-rating";
 import { usePermissions } from "@/hooks/use-permissions";
 import { ShareHandleButton } from "@/components/handle/share-handle-button";
+import { BANNER_FILL_REDESIGN, Banner, BannerAction, BannerText } from "@/components/ui/banner";
+import {
+  CheckCircle as BannerCheckIcon,
+  Code as BannerCodeIcon,
+  HourglassMedium as BannerIdleIcon,
+  WarningCircle as BannerErrorIcon,
+} from "@phosphor-icons/react";
 import { BetaTag } from "@/components/ui/beta-tag";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PromptDialog } from "@/components/ui/prompt-dialog";
@@ -822,6 +829,7 @@ import { openStoryComposer } from "@/lib/stories/ui-store";
 import { useStoriesEnabledFor } from "@/lib/stories/use-story-strip";
 import { EmulatorRoom } from "@/components/emulator/emulator-room";
 import { useEmulatorEnabledFor } from "@/lib/emulator/use-emulator-enabled";
+import { Skeleton } from "@/components/ui/skeleton";
 
 export type TokenResolver = (options?: {
   forceRefresh?: boolean;
@@ -13881,9 +13889,14 @@ function MainAppContent({
 
       <main className="flex min-w-0 flex-1 flex-col bg-transparent">
         {isDevAuthBypassEnabled() && (
-          <div className="border-b border-warning/30 bg-warning/10 px-3 py-1 text-center text-xs text-warning">
-            {t("chrome.devBypass")}
-          </div>
+          <Banner
+            tone="warning"
+            icon={BannerCodeIcon}
+            role="note"
+            className="block border-warning/30 px-3 py-1 text-center text-xs"
+          >
+            <BannerText grow={false}>{t("chrome.devBypass")}</BannerText>
+          </Banner>
         )}
 
         <ConnectionBanner
@@ -13895,31 +13908,26 @@ function MainAppContent({
         />
 
         {appError && (
-          <div className="flex items-start gap-3 border-b border-danger/40 bg-danger/10 px-4 py-2 text-sm text-danger">
-            <span className="flex-1">{appError}</span>
-            <button
-              type="button"
-              className="shrink-0 text-xs underline underline-offset-2"
-              onClick={() => setAppError(null)}
-            >
+          <Banner tone="danger" icon={BannerErrorIcon}>
+            <BannerText>{appError}</BannerText>
+            <BannerAction onClick={() => setAppError(null)}>
               {t("connection.dismiss")}
-            </button>
-          </div>
+            </BannerAction>
+          </Banner>
         )}
 
         {idleWarning && (
-          <div className="flex items-start gap-3 border-b border-warning/40 bg-warning/10 px-4 py-2 text-sm text-warning">
-            <span className="flex-1">
+          <Banner tone="warning" icon={BannerIdleIcon}>
+            <BannerText>
               {t("voice.idle.warning", {
                 count: Math.max(
                   1,
                   Math.round((idleWarning.disconnectAt - Date.now()) / 60_000),
                 ),
               })}
-            </span>
-            <button
-              type="button"
-              className="shrink-0 text-xs underline underline-offset-2"
+            </BannerText>
+            <BannerAction
+              prominent
               onClick={() => {
                 // Send and wait: the banner clears on the server's
                 // `voice-idle-warning-cancelled` confirmation, not on this
@@ -13933,26 +13941,26 @@ function MainAppContent({
               }}
             >
               {t("voice.idle.stillHere")}
-            </button>
-          </div>
+            </BannerAction>
+          </Banner>
         )}
 
         {/* Same slot, same shape, opposite tone — see `appNotice`. */}
         {appNotice && (
-          <div className="flex items-start gap-3 border-b border-success/40 bg-success/10 px-4 py-2 text-sm text-success">
-            <span className="flex-1">{appNotice}</span>
-            {claimedHandle && <ShareHandleButton handle={claimedHandle} />}
-            <button
-              type="button"
-              className="shrink-0 text-xs underline underline-offset-2"
+          <Banner tone="success" icon={BannerCheckIcon}>
+            <BannerText>{appNotice}</BannerText>
+            {claimedHandle && (
+              <ShareHandleButton handle={claimedHandle} className={BANNER_FILL_REDESIGN} />
+            )}
+            <BannerAction
               onClick={() => {
                 setAppNotice(null);
                 setClaimedHandle(null);
               }}
             >
               {t("connection.dismiss")}
-            </button>
-          </div>
+            </BannerAction>
+          </Banner>
         )}
 
         {/* Home with nothing selected is the Friends view — who is online,
@@ -14130,7 +14138,7 @@ function MainAppContent({
         {!selectedChannel && channelsLoading && !communityHomeOpen && (
           <div className="flex min-h-0 flex-1 flex-col">
             <header className="flex h-14 shrink-0 items-center border-b border-ink-4/60 px-4">
-              <div className="h-5 w-36 animate-pulse rounded-md bg-ink-4/50" />
+              <Skeleton className="h-5 w-36 rounded-md bg-ink-4/50" />
             </header>
             <MessageList
               messages={[]}

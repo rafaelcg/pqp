@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { CATEGORY_NAME_MAX_LENGTH } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import {
   CHANNEL_NAME_MAX_LENGTH,
@@ -197,12 +198,10 @@ export function PromptDialog({
         )}
 
         {checkboxLabel && (
-          <label className="flex cursor-pointer items-center gap-3">
-            <input
-              type="checkbox"
+          <label className="group/checkbox redesign:has-[:disabled]:text-text-tertiary flex cursor-pointer items-center gap-3">
+            <Checkbox
               checked={checked}
               onChange={(e) => setChecked(e.target.checked)}
-              className="h-4 w-4 accent-[var(--color-accent)]"
             />
             <span className="text-sm">{checkboxLabel}</span>
           </label>

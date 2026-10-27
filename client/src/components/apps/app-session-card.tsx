@@ -319,7 +319,7 @@ export function Avatars({
   );
 }
 
-function Spinner() {
+function AppSpinner() {
   return (
     <>
       <LoaderCircle aria-hidden className="h-4 w-4 animate-spin motion-reduce:hidden" />
@@ -374,7 +374,7 @@ function LiveBody({
         <div className="flex min-w-0 items-center gap-2">
           {showCountBadge ? (
             <Badge variant="warning">
-              <Spinner />
+              <AppSpinner />
               {t("apps.card.reconnecting")}
             </Badge>
           ) : (
@@ -434,7 +434,7 @@ function LiveBody({
           >
             {joining ? (
               <>
-                <Spinner />
+                <AppSpinner />
                 {t("apps.card.joining")}
               </>
             ) : failed ? (

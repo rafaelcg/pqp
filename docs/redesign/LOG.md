@@ -38,6 +38,23 @@ Read this file and the inventory at the start of every session.
 | 2 | `p-icon-button` | Merged (cap at round 5: 9.0, 8.9, no MUST) |
 | 2 | `p-tooltip` | Merged (cap at round 5: 8.9, 8.8, no MUST) |
 | 2 | `p-input` | Merged (cap at round 5: 8.7, 8.9, no MUST) |
+| 2 | `p-select` | Merged (cap at round 5: 8.9, 8.8, no MUST) |
+| 2 | `p-checkbox` | Merged (cap at round 5: best round 3, 8.6, 8.5; round 5 MUST fixed) |
+| 2 | `p-popover` | Merged (cap at round 5: 8.4 Opus, 8.3 Codex r4, no MUST) |
+| 2 | `p-radio` | Merged (cap at round 5: 8.3 Opus r4, 8.0 Codex r5, no MUST) |
+| 2 | `p-tabs` | Merged (cap at round 5: 8.4 Opus r5, 8.7 Codex r4, no MUST) |
+| 2 | `p-menu` | Merged (cap at round 5: 8.4 Opus r5, 8.4 Codex r4, no MUST, approved) |
+| 2 | `p-slider` | Merged (cap at round 5: 8.0 Opus r4, 8.8 Codex r5, no MUST) |
+| 2 | `p-banner` | Merged (approved at round 3: 8.3 Opus, 8.5 Codex r2, no MUST) |
+| 2 | `p-badge` | Merged (approved at round 2: 8.3 Opus, 8.3 Codex r1, no MUST) |
+| 2 | `p-toast` | Merged (cap at round 5: 8.5 Opus r5, 8.7 Codex r2, no MUST) |
+| 2 | `p-avatar` | Merged (cap at round 5: 8.6 Opus r5, 8.7 Codex r2, no MUST) |
+| 2 | `p-list-row` | Merged (cap at round 5: 8.6 Opus r5, 8.4 Codex r2, no MUST) |
+| 2 | `p-card` | Merged (cap at round 5: 8.5 Opus r5, 8.4 Codex r1, no MUST) |
+| 2 | `p-section-header` | Merged (cap at round 5: 8.0 Opus r5, 8.4 Codex r2, no MUST) |
+| 2 | `p-loading` | Merged (cap at round 5: 8.6 Opus r5, 8.6 Codex r4, no MUST) |
+| 2 | `p-empty` | Merged, capped at round 5 (Opus 8.6) |
+| 2 | `p-sheet` | Merged, capped at round 5 (Opus 8.6) |
 
 ## Phase 0: directions
 
@@ -354,6 +371,596 @@ Deferred:
 Verified: typecheck; 10,331 unit tests; `bench:tokens`; `settings-sections`,
 `server-settings-sections`, `profile-section` and `theme-switching` e2e (39
 passed); i18n check.
+### p-select
+
+Spec (audit: `SettingsSelect` in 9 places, 19 raw `<select>`s in 4 recipes):
+
+1. Job: a choice from a short list. Stays native for the phone picker and
+   for the e2e specs that find options by value.
+2. New `ui/Select` on `FIELD_BOX`; sizes md (40px) and sm (36px); layout on
+   `wrapperClassName`. Redesign: a Phosphor caret instead of the OS arrow.
+3. Folded: `SettingsSelect` (deleted), the five `ink`-palette copies, AutoMod
+   (3), Baú follow (2), the share dialog, the birth date, the waitlist. The
+   `ink` copies gain the standard focus ring (offset, focus-ring colour).
+4. Left: selects on `surface-2` (bots, watch party options and
+   transmission) and the channel overview's tall `fieldClass` fold with
+   their surfaces, since their toggle-off look differs.
+
+Council (Opus 5.5, GPT-6 Luna via Codex; Grok 4.7 through round 2, then
+dropped at André's request), overall after:
+
+| Round | Opus | Codex | Grok |
+|---|---|---|---|
+| 1 | 7.5 | 8.2 | 7.6 |
+| 2 | 8.2 | 8.8 | 8.5 |
+| 3 | 8.6 | 8.7 | not run |
+| 4 | 8.8 | 8.8 | not run |
+| 5 | 8.9 | 8.8 | not run |
+
+Stopped at the five-round cap with no MUST and every category above
+"before". Best round: 5. Round 5 took one COULD (a 14px caret on `sm`).
+Left for the settings surfaces: no context shot shows a Select in a
+settings row yet (Privacidade, Voz e vídeo). Screenshots:
+`~/pqp-redesign/p-select/`.
+
+### p-checkbox
+
+Spec (audit: Switch in 18 files, CheckRow in 9, 5 native checkboxes, 4
+hand-built switches, 3 hand-built ticks):
+
+1. Job: the independent on/off controls. Switch (a setting), CheckRow (a
+   checklist), and a new `Checkbox`, a native input for forms.
+2. Fold: the two Baú settings switches (onto Switch, with `busy` and a
+   label badge), the new-conversation tick (onto `TickBox`), and five native
+   checkboxes (prompt dialog, community address and listing, Baú composer).
+3. Left for their surfaces: the poll composer's switch (`f-chat`) and the
+   stories composer's tick and switch (`f-stories`, its own media palette).
+4. Redesign: a 40 by 24 pill track with a lifted knob, off as a faint tint
+   inside the field's 3:1 edge, an 18px tick with a bold check, the ghost
+   tint on row hover, and a disabled label that dims with its control.
+5. Tokens with fallbacks; the toggle off draws what it drew before.
+
+Council (Opus 5.5, GPT-6 Luna via Codex), overall after:
+
+| Round | Opus | Codex |
+|---|---|---|
+| 1 | not recorded | 8.4 |
+| 2 | 8.4 | 8.5 |
+| 3 | 8.6 | 8.5 |
+| 4 | 8.2 | 8.6 |
+| 5 | 8.0 | 8.1 |
+
+Stopped at the five-round cap. Best round: 3. Round 5's MUST (a saving
+switch in a settings row still faded like a disabled one) was fixed after
+the council and pinned by a test. Covers Switch, CheckRow and Checkbox.
+Screenshots: `~/pqp-redesign/p-checkbox/`.
+
+### p-menu
+
+Spec (audit: Menu in 15 files, ContextMenu in 25, one shared row renderer;
+six hand-built `role="menu"` lists):
+
+1. Job: a list of actions or exclusive choices, opened by a click (Menu) or
+   a right-click and long-press (ContextMenu, with a quick-reaction strip).
+2. Redesign: a visible highlight, concentric rows, quieter icons that come
+   up on the highlighted row, sentence-case headings, the Phosphor tick,
+   disabled at 0.5.
+3. Merges: the recipe is exported (`MENU_SURFACE`, `MENU_ROW`,
+   `MENU_ROW_BUTTON`, `MENU_ICON`, `MENU_SEPARATOR`); the composer's "+"
+   menu, which drew the same classes by hand, now uses it.
+4. Near-folds left for their surface (an `ink-2` panel with
+   `shadow-popover`, so folding changes the toggle-off look): the status
+   menu (`s-user-panel`), the profile popover's "more" (`f-profile-popover`),
+   video quality (`f-call`), the watch player's two (`f-watch-party`), the
+   message list's "more" (`s-message`).
+5. Round 1 also moved: the menu surface now builds on `POPOVER_SURFACE`;
+   `topContent` callers use `MENU_SEPARATOR` and the heading recipe; a
+   disabled row fades its icon and label, not its detail. Left for
+   `s-message`: the message menu's danger rows sit mid-list, not last.
+
+Council (Opus 5.5, GPT-6 Luna via Codex), overall after. Rounds 4 and 5 ran
+one reviewer each:
+
+| Round | Opus | Codex |
+|---|---|---|
+| 1 | 7.7 | 8.7 |
+| 2 | 8.0 | 8.5 |
+| 3 | 8.4 | 8.5 |
+| 4 | not run | 8.4 |
+| 5 | 8.4 | not run |
+
+Round 5 approved the element as it stands. Both reviewers asked to move the
+message menu's "Excluir mensagem" to the end; that changes the order with
+the toggle off, so it is logged for `s-message`. Open for the icon element:
+whether 16px menu icons go filled, as direction B says, or stay outline.
+Screenshots: `~/pqp-redesign/p-menu/`.
+
+### p-popover
+
+Spec (audit: no popover primitive; eight anchored panels, each with its own
+portal and placement):
+
+1. Job: the panel an anchored popover floats in.
+2. Redesign: the pane radius, a faint text edge and a deeper lift, set
+   through the level-3 elevation variables.
+3. Merges: `POPOVER_SURFACE` for the emoji and GIF pickers (panel and
+   loading skeleton), the update note, the soundboard, the forum icon
+   picker and the music speaker panel.
+4. Left: placement and dismissal stay per caller. One behaviour for all of
+   them needs `@radix-ui/react-popover`, a new dependency (logged as a
+   question). The profile popover and peer audio (`ink-2` panels) move with
+   `f-profile-popover` and `f-call`.
+5. Left for the composer surface: with the toggle off a window shorter
+   than the emoji picker cuts its category bar (the wrapper div never takes
+   the shell's height). The redesign fixes it; the old look keeps the bug.
+
+Council (Opus 5.5, GPT-6 Luna via Codex), overall after. Round 5 ran one
+reviewer, at André's request to spend less on agents:
+
+| Round | Opus | Codex |
+|---|---|---|
+| 1 | 7.5 | 8.1 |
+| 2 | 8.2 | 8.6 |
+| 3 | 7.9 | 8.5 |
+| 4 | 7.8 | 8.3 |
+| 5 | 8.4 | not run |
+
+Round 4's MUST (the gap under the emoji category bar had no effect) was
+fixed in round 5. Stopped at the five-round cap with no MUST. Best round: 5.
+Screenshots: `~/pqp-redesign/p-popover/`.
+### p-sheet
+
+Spec (audit: no sheet primitive; Dialog is a sheet below `sm`, plus the app
+launcher's phone form, the cinema stage's picker and three story sheets):
+
+1. Job: the look of a panel rising from a phone's bottom edge.
+2. Redesign: a 24px top radius, the raised fill, a top hairline only, an
+   upward shadow, the dialog's scrim. Tokens `--sheet-*`.
+3. Merges: `SHEET_SURFACE` / `SHEET_SURFACE_PHONE` / `SHEET_SCRIM` in
+   Dialog, the app launcher and the cinema picker. Redesign only: the three
+   drew three different surfaces with the toggle off.
+4. Left: the story sheets (their own media styling) move with `f-stories`;
+   the cinema picker's desktop card moves with `f-call`. No grab handle:
+   nothing drags.
+
+Rounds: r1 Codex 8.4, r2 Opus 8.4, r3 Codex 8.5, r4 Opus 8.5, r5 Opus 8.6.
+Capped at round 5, no MUST. Round 5 SHOULDs applied before the merge: the
+light sheet keeps one top edge (the border; the 1px shadow layer is gone),
+and `SHEET_SAFE_BOTTOM` (`max(0.75rem, env(safe-area-inset-bottom))`) pads
+every footerless phone sheet the same. Left as COULD: desktop dialogs share
+the 6px scrim blur (watch GPU over a playing share), landscape side safe
+areas. The dialog footer two-tone belongs to `p-dialog`. Verified:
+typecheck, 10,454 unit tests, bench:tokens, i18n:check, forum-shell and
+mobile-immersive-stage e2e. Screenshots: ~/pqp-redesign/p-sheet/.
+
+### p-radio
+
+Spec (audit: RadioGroup in 13 files; 14 more draw their own radios):
+
+1. Job: one of a few, in three shapes (segmented, chips, list) with one
+   keyboard model.
+2. Redesign: a tinted pill track with a raised thumb, stronger chip edges,
+   and a filled accent dot inside the field edge for the list.
+3. No hand-built group folds without changing the toggle-off look, so each
+   is left for the element that owns it: poll duration chips and Baú
+   visibility (`f-chat`, `f-bau`, near chips and segmented), the voice track
+   toggle (`f-watch-party`), invite choices (`f-invites`), the two timeout
+   grids that should share one control (`f-profile-popover`), the guest
+   setting (`f-watch-party`, near list). Swatch, image, icon and card grids
+   (appearance, bots, avatar, forum icons, the settings choice grid) are a
+   different control and stay.
+4. Tokens with fallbacks; the toggle off draws what it drew before.
+
+Council (Opus 5.5, GPT-6 Luna via Codex), overall after. Round 5 ran one
+reviewer, at André's request to spend less on agents:
+
+| Round | Opus | Codex |
+|---|---|---|
+| 1 | 7.7 | 8.7 |
+| 2 | 7.8 | 8.8 |
+| 3 | 8.0 | 8.5 |
+| 4 | 8.3 | 8.2 |
+| 5 | not run | 8.0 |
+
+Round 2's MUST (the "Modo" picker drew the old track) and round 4's MUST (a
+selected chip read by hue only) were fixed. Stopped at the five-round cap
+with no MUST. Screenshots: `~/pqp-redesign/p-radio/`.
+
+### p-tabs
+
+Spec (audit: six hand-built tab rows, two of them copies of each other):
+
+1. Job: switch one panel, in four shapes (underline, segmented, pill,
+   filled) with one keyboard model: roving tab stop, arrows, Home, End.
+2. Redesign: secondary text for unselected tabs, round tinted pills,
+   RadioGroup's track and thumb for `segmented`, a tinted filter chip.
+3. Folded: bot overview, roles, profile popover, friends, call split, and
+   both report queues (now one `ReportStatusTabs`). Each keeps its toggle-off
+   look; only the bot tabs keep a focus ring with the toggle off.
+4. Left out: the live preview (a public page), the phone tab bar (`m-*`)
+   and `SectionRail` (settings navigation, its own element).
+
+Council (Opus 5.5, GPT-6 Luna via Codex), overall after. Rounds 2 and 5 ran
+one reviewer each:
+
+| Round | Opus | Codex |
+|---|---|---|
+| 1 | 7.6 | 8.2 |
+| 2 | not run | 8.6 |
+| 3 | 7.8 | 8.4 |
+| 4 | 8.2 | 8.7 |
+| 5 | 8.4 | not run |
+
+Round 5's SHOULD (a disabled tab still took hover) is fixed: a disabled tab
+takes no pointer under the redesign. One reviewer split was settled here:
+the tabs keep their own track rather than RadioGroup's `SEGMENTED_*` strings,
+because those would change the toggle-off look. Stopped at the five-round
+cap with no MUST. Screenshots: `~/pqp-redesign/p-tabs/`.
+
+### p-slider
+
+Spec (audit: Slider in 13 files; 11 native range inputs elsewhere):
+
+1. Job: one value on a line, in four shapes: scrub (progress that seeks),
+   volume, edge (a compact player's fill on a border) and hue.
+2. Redesign: a text-tint track that shows on any surface, a scrub track
+   that thickens on hover and focus, a lifted knob (white with a hairline in
+   light), disabled at 0.5.
+3. No native range folds without changing its toggle-off look (the OS
+   slider tinted by `accent-color`), so each is logged for its surface:
+   the watch player, its PiP and the transmission gains (`f-watch-party`),
+   the story size sliders (`f-stories`), peer volume (`f-call`), the role
+   hue (server settings).
+4. Tokens with fallbacks; the toggle off draws what it drew before.
+5. Not taken in round 2: naming the group (`group/slider`). It would stop a
+   hoverable parent row from showing the knob with the toggle off too, so it
+   is a behaviour change; `f-music` decides it for the now-playing row.
+6. Left for `f-call` (voice settings): above 100% the accent fill covers the
+   middle of the unity tick. Raising the tick would paint it over the knob
+   at 100%, so it needs its own treatment there.
+
+Council (Opus 5.5, GPT-6 Luna via Codex), overall after. Rounds 4 and 5 ran
+one reviewer each:
+
+| Round | Opus | Codex |
+|---|---|---|
+| 1 | 7.6 | 8.5 |
+| 2 | 8.4 | 9.0 |
+| 3 | 8.3 | 8.6 |
+| 4 | 8.0 | not run |
+| 5 | not run | 8.8 |
+
+Round 4's MUST (the voice settings' 100% label collided with the hint under
+it) was fixed; round 5 found nothing left. The slider group naming and the
+unity tick are logged for `f-music` and `f-call`. Stopped at the five-round
+cap with no MUST. Screenshots: `~/pqp-redesign/p-slider/`.
+### p-banner
+
+Spec (audit: six hand-built strips in `App.tsx`, `connection-banner.tsx` and
+`sanction-notice-bar.tsx`, each its own tinted bar):
+
+1. Job: state something about the app or the conversation until it stops
+   being true, with at most two actions.
+2. Redesign: an inset rounded card on the look's soft tone fill, the message
+   in the text colour, a leading icon and pill actions in the tone's ink.
+3. Folded: dev bypass, connection, app error, idle warning, success notice,
+   sanction. Each keeps its toggle-off bar.
+4. Left for their owners: watch now (`s-banners`), arrival, bring-crew and
+   newcomer strips (`f-onboarding`), the Discord import note
+   (`f-server-settings`). pt-BR idle copy moved to "tu".
+
+Council (Opus 5.5, GPT-6 Luna via Codex), overall after. One reviewer per
+round, Opus for the sign-off:
+
+| Round | Opus | Codex |
+|---|---|---|
+| 1 | not run | 8.2 |
+| 2 | not run | 8.5 |
+| 3 | 8.3 | not run |
+
+Round 1's phone check led to `BannerText` (two actions wrap under the
+message). Round 3 approved; its notes were applied after it: the share
+button and "Ainda tô aqui" draw as the main way out under the redesign, the
+icon and actions align to the first line, and the filled pill's focus ring
+has an offset. Logged, not done: the dark warning fill reads heavy beside
+success and danger; revisit if it does in use. Screenshots:
+`~/pqp-redesign/p-banner/`.
+
+### p-badge
+
+Spec (audit: 7 `Badge` callers, six hand-built count pills with one shared
+class string, six hand-built name tags in message headers):
+
+1. Job: name a state (Badge), a tag beside a name (Badge `tag`), or a
+   waiting count (new `CountBadge`).
+2. Redesign: sentence-case pills, 11px semibold, the variant's pair always;
+   counts in 11px semibold tabular figures. The beta tag beside BOT matches.
+3. Folded: six count pills (DM list, conversations home twice, quick
+   switcher, phone tabs, phone conversations) and the OP, gone, AutoMod,
+   Webhook, BOT and removed tags. New `muted` variant for gone and removed.
+4. Left for their owners: the server rail counts (`s-rail`), the
+   channel list's counts and live chips (`s-channel-row`), Baú media
+   overlays (`f-bau`), the voice-clean chip (`f-call`).
+
+Council (Opus 5.5, GPT-6 Luna via Codex), overall after. One reviewer per
+round, Opus for the sign-off:
+
+| Round | Opus | Codex |
+|---|---|---|
+| 1 | not run | 8.3 |
+| 2 | 8.3 | not run |
+
+Round 2 approved; its notes were applied after it. The bench now measures
+the neutral and muted badges, and under the redesign they are a step
+stronger (body text on `surface-3`; secondary text on `surface-2`) because
+Catppuccin, Everforest, Ocean and Modo 2005 fell under 4.5:1. The 16px
+count takes 10px type; the beta tag beside Bot drops its wash; the sheet
+shows a painted Webhook tag and a "Saiu" tag. Screenshots:
+`~/pqp-redesign/p-badge/`.
+
+### p-toast
+
+Spec (audit: no toast primitive; seven toasts, each with its own corner and
+queue; five drew the level-3 card, two drew their own):
+
+1. Job: the look of a note that arrives and leaves on its own.
+2. Redesign: the popover's card (radius, fill, edge, lift) and IconButton's
+   round ghost for the dismiss button.
+3. Merges: `TOAST_SURFACE` in the DM, friend, forward, not-in-server and
+   app-join toasts (exact with the toggle off); `TOAST_SURFACE_REDESIGN` in
+   the session reminders and the watch party approval (redesign only, they
+   drew another card); `TOAST_CLOSE` in four close buttons.
+4. Left: the retro toasts (their own look), the image lightbox's notice
+   (a media overlay, `s-message-content`) and the voice-clean confirmation
+   in `App.tsx` (`f-call`). Placement and queues stay per toast.
+
+Council (Opus 5.5, GPT-6 Luna via Codex), overall after. One reviewer per
+round, Opus for the sign-off:
+
+| Round | Opus | Codex |
+|---|---|---|
+| 1 | not run | 8.3 |
+| 2 | not run | 8.7 |
+| 3 | 8.1 | not run |
+| 4 | 8.4 | not run |
+| 5 | 8.5 | not run |
+
+Capped at round 5, no MUST open. Round 3's MUST (two dismiss buttons with
+no focus ring) was fixed in round 4. Round 5's notes were applied after it:
+every 32px leading mark in the 40px slot, the DM fallback disc on
+`surface-3`, one body tone, the app join's undo ring. Not done: a toast
+over a busy screen, because the capture rig renders the sheet only.
+Verified: typecheck; 10,417 unit tests; `bench:tokens`; i18n check;
+`dm-toast`, `dm-toast-suppression`, `retro-look` and `watch-party` e2e (37
+passed); retro, Halloween, high contrast, 390px and toggle off. Screenshots:
+`~/pqp-redesign/p-toast/`.
+
+### p-avatar
+
+Spec (audit: every person avatar already renders through `UserAvatar`, 65
+sites; 30 different monogram palettes passed as `fallbackClassName`):
+
+1. Job: a person's picture or monogram, a bot's face, presence on a corner.
+2. Redesign: direction B's round avatars everywhere, the monogram on one
+   neutral disc. Callers keep their sizes; the toggle off keeps their
+   shapes and colours.
+3. Kept: Modo 2005's monogram (plain CSS, it wins), story media avatars
+   (`ownPalette`), bot faces.
+4. Left for their owners: the server rail tiles and `ServerIcon` (`s-rail`),
+   `ChannelIcon` (`s-channel-row`), the call banner's faces (`f-call`), the
+   story ring (`f-stories`).
+
+Council (Opus 5.5, GPT-6 Luna via Codex), overall after. One reviewer per
+round, Opus for the sign-off:
+
+| Round | Opus | Codex |
+|---|---|---|
+| 1 | not run | 8.1 |
+| 2 | not run | 8.7 |
+| 3 | 8.4 | not run |
+| 4 | 8.5 | not run |
+| 5 | 8.6 | not run |
+
+Capped at round 5, no MUST open. Round 5's notes were applied after it: the
+avatar notes moved under UserAvatar, and the sheet's stack cuts its overlap
+with `--avatar-dot-ring`. Not done (logged): a 40px monogram's letter at
+15px under the redesign, which needs each 40px caller to opt in.
+Verified: typecheck; 10,420 unit tests; `bench:tokens`; i18n check;
+`channel-presence`, `member-sidebar`, `profile-popover-avatar`,
+`retro-look`, `conversations-home` and `dm-list-polish` e2e (26 passed);
+retro, Halloween, high contrast, 390px and toggle off. Screenshots:
+`~/pqp-redesign/p-avatar/`.
+
+### p-list-row
+
+Spec (audit: about twelve row kinds, each hand-built with palette aliases;
+the row roles in `index.css` were defined and drawn only on `/qa/ui`):
+
+1. Job: one row with a leading mark, a label, a second line and a trailing
+   slot; states hover, selected, unread, muted, disabled.
+2. Redesign: Salas pills on the row roles, a step taller, more room inside.
+3. Built as the primitive with its sheet block. Nothing adopts it here: each
+   row keeps its toggle-off look only if it moves together with its shell
+   element (`s-channel-row`, `s-voice-row`, `s-member-list`, `f-dm-home`,
+   `f-friends`), so the folds happen there.
+
+Council (Opus 5.5, GPT-6 Luna via Codex), overall after. One reviewer per
+round, Opus for the sign-off:
+
+| Round | Opus | Codex |
+|---|---|---|
+| 1 | not run | 8.0 |
+| 2 | not run | 8.4 |
+| 3 | 8.5 | not run |
+| 4 | 8.4 | not run |
+| 5 | 8.6 | not run |
+
+Capped at round 5, no MUST open. Round 5's notes were applied after it: a
+time stacks over a count on a two-line row, the selected row's action takes
+the label's colour, the pip is 8px. Decided: the end pip (or a count) is the
+one unread mark; the sidebar's left-edge bar goes when `s-channel-row`
+adopts ListRow. Verified: typecheck; 10,430 unit tests; `bench:tokens`;
+i18n check; no call site adopts it yet, so no e2e changes; retro,
+Halloween, high contrast, 390px and toggle off. Screenshots:
+`~/pqp-redesign/p-list-row/`.
+
+### p-card
+
+Spec (audit: 15 in-app copies of one card class in seven files, plus
+bespoke cards in Baú, polls, voice notes, the forward and the corner card):
+
+1. Job: a bounded group that sits in a pane or a dialog.
+2. Redesign: fill and edge as tints of the text, so the same card reads on
+   any surface.
+3. Folded: the 15 copies (bot wizard and overview, bots settings, connection
+   check, profile popover, conversations empty and phone screens).
+4. Left for their owners: Baú posts (`f-bau`), polls and voice notes
+   (`s-message-content`), the forward card (`s-message-content`), the corner card
+   (`f-onboarding`), the public `/apps` page (out of scope).
+5. Two eyebrow labels inside cards (bot overview, conversations empty) draw
+   different specs. Unifying them changes the toggle-off look, so they fold
+   onto `SectionLabel` with `p-section-header`.
+
+Council (Opus 5.5, GPT-6 Luna via Codex), overall after. One reviewer per
+round, Opus for the sign-off:
+
+| Round | Opus | Codex |
+|---|---|---|
+| 1 | not run | 8.4 |
+| 2 | 8.4 | not run |
+| 3 | 8.3 | not run |
+| 4 | 8.3 | not run |
+| 5 | 8.5 | not run |
+
+Capped at round 5, no MUST open. Round 5's notes were applied after it: the
+connection check's detail line is secondary text, the bot wizard's tool tile
+takes the card's row tint, the light card tokens have their own comment, and
+DESIGN.md says a static row takes no hover. Verified: typecheck; 10,434 unit
+tests; `bench:tokens`; i18n check; `conversations-home`,
+`profile-popover-menu`, `dialog-mobile-layout` and `settings-sections` e2e
+(41 passed); retro, Halloween, high contrast, 390px and toggle off.
+Screenshots: `~/pqp-redesign/p-card/`.
+
+### p-section-header
+
+Spec (audit: two pane titles drawn twice, about 170 uppercase tracked labels
+in 50 files, in four sizes, three trackings and two colours):
+
+1. Job: the title of a pane, and the small label over a group.
+2. Redesign: Gabarito pane titles at 20px; labels in sentence case, 13px
+   semibold, secondary text, no tracking.
+3. Folded: settings and server settings pane titles, server settings group
+   titles, forward picker, profile popover, shortcuts, invites, roles,
+   server identity, video quality menu.
+4. Left for their owners: channel categories (`s-category`), member list
+   sections (`s-member-list`), DM sections (`f-dm-home`), Baú
+   (`f-bau`), watch party (`f-watch-party`), voice menus (`f-call`). Labels
+   over a single input are field labels, not this element: logged for
+   `p-settings-kit`.
+5. Council round 3 (Opus): the roles field label ("Nome do cargo") is still
+   11px caps beside sentence-case labels, and the settings rail headings are
+   12px. Queued for `p-settings-kit` (field labels) and the settings rail.
+
+Council (Opus 5.5, GPT-6 Luna via Codex), overall after. One reviewer per
+round, Opus for the sign-off:
+
+| Round | Opus | Codex |
+|---|---|---|
+| 1 | not run | 8.0 |
+| 2 | not run | 8.4 |
+| 3 | 7.8 | not run |
+| 4 | 7.5 | not run |
+| 5 | 8.0 | not run |
+
+Capped at round 5, no MUST open. Round 3's two MUST and round 4's MUST (the
+unlayered `.font-display` rule beating the sans face) were fixed, and a
+browser test reads the computed face. Round 5's notes were applied after it:
+the variant notes sit under PaneHeader and SectionLabel, and a test pins the
+danger colour on a group title. Not done (logged): a `--section-group-gap`
+token, because each caller sets its own gap today and both would add up.
+Queued: the dialog title against the pane title in both settings dialogs
+(`p-dialog`), and the roles field label in caps (`p-settings-kit`).
+Verified: typecheck; 10,440 unit tests; `bench:tokens`; i18n check;
+`section-label-face`, `server-settings-sections`, `settings-sections`,
+`settings-keyboard`, `profile-popover-menu` and `profile-popover-friends`
+e2e (26 passed); retro, Halloween, high contrast, 390px and toggle off.
+Screenshots: `~/pqp-redesign/p-section-header/`.
+
+### p-loading
+
+Spec (audit: 44 `animate-spin` sites, about 30 of them the Lucide
+`Loader2`, a few hand-built bordered rings; `Skeleton` in 16 files plus
+local placeholders):
+
+1. Job: show that something is on its way, or hold the shape of content.
+2. Redesign: a ring spinner with a faint track; skeletons as a faint text
+   tint, pill rows and round avatars; both still under reduced motion.
+3. Folded: the spinners in the settings kit and settings tabs,
+   connections, the profile popover, forward picker, depoimentos, search,
+   user search, GIF picker, message list and forum. Every `Skeleton` user
+   gets the new fill.
+4. Left for their owners: call, stories, apps, watch party and voice note
+   spinners (their surfaces), the splash ring (`f-states`), the server
+   rail skeleton (`s-rail`).
+
+Council (Opus 5.5, GPT-6 Luna via Codex), overall after. One reviewer per
+round, Opus for the sign-off:
+
+| Round | Opus | Codex |
+|---|---|---|
+| 1 | not run | 8.5 |
+| 2 | 8.4 | not run |
+| 3 | 8.4 | not run |
+| 4 | not run | 8.6 |
+| 5 | 8.6 | not run |
+
+Capped at round 5, no MUST open. Round 5's notes were applied after it: the
+channel header's placeholder is a Skeleton, the update button's busy state
+uses the Spinner, the sheet drops the 12px sample. Left for their owners
+(placeholders and spinners outside this element's scope):
+`community-home-feed.tsx` (`f-bau`), `pages/locadora-guest-page.tsx` and
+`pages/home/mudanca.tsx` (public pages, out of scope), `pages/claim-page.tsx`
+(signed-out), the channel skeleton's row spacing (`s-channel-row`).
+Verified: typecheck; 10,444 unit tests; `bench:tokens`; i18n check;
+`conversations-home`, `send-jumps-to-bottom`, `dialog-mobile-layout`,
+`profile-popover-menu`, `retro-look` and `message-permalink-scroll` e2e (39
+passed); retro, Halloween, high contrast, 390px and toggle off.
+Screenshots: `~/pqp-redesign/p-loading/`.
+
+### p-empty
+
+Spec (audit: four local empty components and about 30 hand-built empty
+blocks, each with its own sizes, colours and spacing):
+
+1. Job: say what is not here yet and the next step; `page` and `inline`.
+2. Redesign: the glyph on a soft disc, a Gabarito title, a secondary body
+   line, the actions under it; inline is quiet.
+3. Folded: the empty channel (both versions), the forum's empty and failed
+   blocks (six uses), search's empty and prompt states, the settings kit's
+   `SettingsEmpty` (every settings tab).
+4. Left for their owners: watch party, communities, stories, call stage,
+   apps, conversations home, friends (their surfaces' elements); the error
+   boundary (`f-states`, André's question 3).
+
+5. Council: one reviewer per round, Opus for the sign-off.
+
+| Round | Opus | Codex |
+|---|---|---|
+| 1 | not run | 8.2 |
+| 2 | not run | 8.4 |
+| 3 | 8.5 | not run |
+| 4 | not run | 8.4 |
+| 5 | 8.6 | not run |
+
+Capped at round 5, no MUST open. Round 5's notes applied after it: search's
+empty state leads with a magnifier under the redesign, and the light theme's
+neutral disc is a tint of the text so it holds its shape. Logged: the two
+secondary buttons differ in dark because the forum pane remaps the
+secondary fill (`f-forum`); `SettingsEmpty` takes a filled Phosphor glyph in
+`p-settings-kit`. Verified: typecheck; 10,418 unit tests (the HLS rebuild
+suite timed out under load once and passed alone); `bench:tokens`; i18n
+check; `forum-pane` and `forum-shell` e2e (6 passed); retro, Halloween, high
+contrast, 390px and toggle off. Screenshots: `~/pqp-redesign/p-empty/`.
 
 ### p-dialog
 
@@ -377,6 +984,10 @@ Spec (audit: Dialog in 50 files, ConfirmDialog in 24, PromptDialog in 1;
    now that the header rule is gone.
 
 ## Open questions for André
+
+- Popover behaviour: eight popovers each place, portal and dismiss
+  themselves. Sharing one behaviour means adding `@radix-ui/react-popover`
+  (a new dependency and lockfile change). Only the look is shared for now.
 
 1. Resolved 2026-10-26: Grok 4.7 is the third reviewer.
 2. Four features live in two versions behind flags. The redesign should

@@ -30,6 +30,12 @@ interface UserAvatarProps {
    * it is off), drawn over the face its avatar URL names. Ignored for people.
    */
   botFace?: BotFaceName;
+  /**
+   * Keep the caller's monogram colours under the redesign too. For an avatar
+   * drawn inside a story, which paints in the story's own palette, not the
+   * app's.
+   */
+  ownPalette?: boolean;
 }
 
 /**
@@ -65,6 +71,7 @@ export function UserAvatar({
   rounded = "md",
   dimmed = false,
   botFace,
+  ownPalette = false,
 }: UserAvatarProps) {
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
   const bot = parseBotFaceAvatar(avatarUrl);
@@ -85,6 +92,11 @@ export function UserAvatar({
         ? "rounded-lg"
         : "rounded-md";
   const dim = dimmed ? "opacity-50" : "";
+  // Under the redesign a person is always a circle, whatever the list asked
+  // for, and the monogram sits on the same neutral disc everywhere: the
+  // caller still sets its size, not its colour. A look that draws its own
+  // monogram (Modo 2005's) keeps it, since that rule is plain CSS.
+  const circle = "redesign:rounded-full";
 
   if (resolved && resolved !== failedUrl) {
     return (
@@ -95,7 +107,7 @@ export function UserAvatar({
         decoding="async"
         referrerPolicy="no-referrer"
         onError={() => setFailedUrl(resolved)}
-        className={cn("shrink-0 object-cover", shape, className, dim)}
+        className={cn("shrink-0 object-cover", shape, className, dim, circle)}
       />
     );
   }
@@ -109,6 +121,12 @@ export function UserAvatar({
         className,
         fallbackClassName,
         dim,
+        circle,
+        !ownPalette &&
+          "redesign:bg-surface-3 redesign:font-semibold redesign:tracking-[-0.02em] redesign:text-text redesign:shadow-[inset_0_0_0_1px_var(--avatar-edge)]",
+        // A dimmed (offline, muted) person keeps the disc and dims the letter,
+        // so the disc still reads on a white pane.
+        !ownPalette && dimmed && "redesign:opacity-100 redesign:text-text-tertiary",
       )}
     >
       {(name.trim().slice(0, 1) || "?").toUpperCase()}

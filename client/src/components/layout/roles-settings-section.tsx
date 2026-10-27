@@ -17,8 +17,8 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { Tabs } from "@/components/ui/tabs";
 import { UserAvatar } from "@/components/user/user-avatar";
-import { cn } from "@/lib/utils";
 import {
   ApiError,
   assignMemberRole,
@@ -38,6 +38,7 @@ import { displayRoleName } from "@/lib/role-labels";
 import { loadServerStoriesEnabled } from "@/lib/stories/config";
 import { useAppsConfig } from "@/hooks/use-apps-config";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { SectionLabel } from "@/components/ui/section-header";
 
 const FLAG_LABEL: Record<PermissionFlagKey, MessageKey> = {
   CREATE_INVITE: "roles.perm.CREATE_INVITE",
@@ -522,35 +523,22 @@ export function RolesSettingsSection({ serverId }: { serverId: string }) {
       {selected && (
         <div className="min-w-0 flex-1 space-y-4">
           {availableTabs.length > 1 && (
-            <div
-              role="tablist"
-              aria-label={t("roles.name")}
-              className="flex gap-1 rounded-xl bg-ink-3/60 p-1"
-            >
-              {availableTabs.map((id) => (
-                <button
-                  key={id}
-                  type="button"
-                  role="tab"
-                  aria-selected={activeTab === id}
-                  className={cn(
-                    "min-w-0 flex-1 rounded-lg px-3 py-1.5 text-sm",
-                    activeTab === id
-                      ? "bg-ink-2 font-medium text-paper shadow-sm"
-                      : "text-paper-muted hover:text-paper",
-                  )}
-                  onClick={() => setTab(id)}
-                >
-                  {t(
-                    id === "display"
-                      ? "roles.tab.display"
-                      : id === "permissions"
-                        ? "roles.tab.permissions"
-                        : "roles.tab.members",
-                  )}
-                </button>
-              ))}
-            </div>
+            <Tabs
+              label={t("roles.name")}
+              variant="segmented"
+              value={activeTab}
+              onValueChange={setTab}
+              items={availableTabs.map((id) => ({
+                id,
+                label: t(
+                  id === "display"
+                    ? "roles.tab.display"
+                    : id === "permissions"
+                      ? "roles.tab.permissions"
+                      : "roles.tab.members",
+                ),
+              }))}
+            />
           )}
 
           {activeTab === "display" && (
@@ -664,9 +652,9 @@ export function RolesSettingsSection({ serverId }: { serverId: string }) {
                 }
                 return (
                   <div key={group.heading}>
-                    <p className="mb-2 px-1 text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
+                    <SectionLabel as="p" variant="group" className="mb-2 px-1 text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
                       {t(group.heading)}
-                    </p>
+                    </SectionLabel>
                     <div className="divide-y divide-ink-4/60 overflow-hidden rounded-2xl bg-ink-2">
                       {keys.map((key) => {
                         const lockedOnEveryone =

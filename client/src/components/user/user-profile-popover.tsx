@@ -1,11 +1,11 @@
 import {
   ArrowUpRight,
   AtSign,
-  Loader2,
   MessageCircle,
   MoreHorizontal,
   Phone,
 } from "lucide-react";
+import { CARD_SURFACE } from "@/components/ui/card";
 import {
   createContext,
   useCallback,
@@ -44,6 +44,7 @@ import { UserAvatar } from "@/components/user/user-avatar";
 import { RankMarks } from "@/components/user/rank-marks";
 import { identityMarks, rankBadges } from "@/lib/author-display";
 import { CheckRow } from "@/components/ui/check-row";
+import { Tabs } from "@/components/ui/tabs";
 import { useFriends } from "@/components/friends/use-friends";
 import { DepoimentoComposer } from "@/components/depoimentos/depoimento-composer";
 import {
@@ -111,6 +112,8 @@ import {
   type ProfileRoleChip,
   type ProfileSubject,
 } from "./profile-relations";
+import { Spinner } from "@/components/ui/spinner";
+import { SectionLabel } from "@/components/ui/section-header";
 
 /**
  * The profile card: who this person is, and everything you can do about them,
@@ -1281,9 +1284,9 @@ function UserProfileCard({
   const manageSection =
     manageItems.length > 0 ? (
       <div className="mt-3 overflow-hidden rounded-xl bg-ink-3/60">
-        <p className="px-3 pb-1 pt-2.5 text-[11px] font-semibold uppercase tracking-wide text-paper-muted">
+        <SectionLabel as="p" className="px-3 pb-1 pt-2.5 text-[11px] font-semibold uppercase tracking-wide text-paper-muted">
           {t("profile.mod.section")}
-        </p>
+        </SectionLabel>
         <div className="divide-y divide-ink-4/50">
           {manageItems.map((item) => (
             <button
@@ -1308,9 +1311,9 @@ function UserProfileCard({
   const cargosSection =
     assignableCargos.length > 0 ? (
       <div className="mt-3 overflow-hidden rounded-xl bg-ink-3/60">
-        <p className="px-3 pb-1 pt-2.5 text-[11px] font-semibold uppercase tracking-wide text-paper-muted">
+        <SectionLabel as="p" className="px-3 pb-1 pt-2.5 text-[11px] font-semibold uppercase tracking-wide text-paper-muted">
           {t("profile.cargos")}
-        </p>
+        </SectionLabel>
         <div className="px-1 pb-1">
           {assignableCargos.map((role) => (
             <div key={role.id} data-profile-cargo={role.id}>
@@ -1442,7 +1445,7 @@ function UserProfileCard({
         {serverBot && (
           <div className="mt-3 space-y-2 text-left">
             <p className="text-xs text-warning">{t("bots.profile.beta")}</p>
-            <div className="rounded-[var(--radius-card)] border border-border bg-surface-card p-2.5">
+            <div className={cn(CARD_SURFACE, "p-2.5")}>
               <p className="text-xs font-semibold text-text">
                 {t("bots.profile.seesTitle", { name: subject.displayName })}
               </p>
@@ -1529,7 +1532,7 @@ function UserProfileCard({
           </>
         ) : loading ? (
           <div className="mt-4 flex h-9 items-center justify-center text-paper-muted">
-            <Loader2 aria-hidden className="h-4 w-4 animate-spin" />
+            <Spinner className="h-4 w-4 animate-spin" />
             <span className="sr-only">{t("profile.loading")}</span>
           </div>
         ) : (
@@ -1577,7 +1580,7 @@ function UserProfileCard({
                 }}
               >
                 {busy && (
-                  <Loader2 aria-hidden className="h-3.5 w-3.5 animate-spin" />
+                  <Spinner className="h-3.5 w-3.5 animate-spin" />
                 )}
                 {action === "alreadyFriends"
                   ? `${primaryLabel[action]} ✓`
@@ -1651,36 +1654,19 @@ function UserProfileCard({
               variant="compact"
             />
             {aboutSegmented && aboutActive && (
-              <div
-                role="tablist"
-                aria-label={t("profile.about.tabs")}
-                className="mt-3 grid gap-0.5 rounded-lg bg-ink-3/60 p-0.5"
-                style={{
-                  gridTemplateColumns: `repeat(${aboutTabs.length}, minmax(0, 1fr))`,
-                }}
-              >
-                {aboutTabs.map((tab) => {
-                  const selected = tab === aboutActive;
-                  return (
-                    <button
-                      key={tab}
-                      type="button"
-                      role="tab"
-                      aria-selected={selected}
-                      data-profile-about={tab}
-                      className={cn(
-                        "truncate rounded-md px-1.5 py-1 text-[11px] font-medium transition-colors",
-                        selected
-                          ? "bg-ink-2 text-paper"
-                          : "text-paper-muted hover:text-paper",
-                      )}
-                      onClick={() => setAboutPick(tab)}
-                    >
-                      {t(ABOUT_LABEL[tab])}
-                    </button>
-                  );
-                })}
-              </div>
+              <Tabs
+                label={t("profile.about.tabs")}
+                variant="segmented"
+                size="xs"
+                className="mt-3"
+                value={aboutActive}
+                onValueChange={setAboutPick}
+                items={aboutTabs.map((tab) => ({
+                  id: tab,
+                  label: t(ABOUT_LABEL[tab]),
+                  data: { "data-profile-about": tab },
+                }))}
+              />
             )}
             {aboutTabs.length > 0 && (
               <div

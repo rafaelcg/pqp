@@ -8,7 +8,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
-import { DraftMark, formatBadgeCount } from "@/components/layout/channel-list";
+import { DraftMark } from "@/components/layout/channel-list";
 import { useConversationRowMenu } from "@/components/conversations/use-conversation-row-menu";
 import { SidebarResizeHandle } from "@/components/layout/sidebar-resize-handle";
 import { useFriends } from "@/components/friends/use-friends";
@@ -35,6 +35,7 @@ import { useHasDraft } from "@/lib/composer-drafts";
 import { useTranslation } from "@/lib/i18n";
 import { resolveNotificationLevel } from "@/lib/notifications";
 import { cn, formatFullTimestamp, formatRecency } from "@/lib/utils";
+import { CountBadge } from "@/components/ui/count-badge";
 
 const EMPTY_UNREAD: UnreadCounts = { count: 0, mentions: 0 };
 
@@ -269,13 +270,14 @@ export function ConversationHomeList({
                 <Users className="h-[18px] w-[18px]" aria-hidden="true" />
                 {friendRequestCount > 0 && (
                   <>
-                    <span
+                    <CountBadge
+                      count={friendRequestCount}
+                      tone="accent"
+                      size="sm"
                       aria-hidden="true"
                       data-friend-requests={friendRequestCount}
-                      className="absolute right-0.5 top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-bold leading-none tabular-nums text-on-accent ring-2 ring-surface-1"
-                    >
-                      {formatBadgeCount(friendRequestCount)}
-                    </span>
+                      className="absolute right-0.5 top-0.5 ring-2 ring-surface-1"
+                    />
                     <span className="sr-only">
                       {t("friends.pendingBadge", { count: friendRequestCount })}
                     </span>
@@ -341,12 +343,11 @@ export function ConversationHomeList({
                   label: t("conversations.filter.unread"),
                   trailing:
                     unreadConversations > 0 ? (
-                      <span
+                      <CountBadge
+                        count={unreadConversations}
+                        size="sm"
                         data-conversations-unread-count={unreadConversations}
-                        className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-danger px-1 text-[10px] font-bold leading-none tabular-nums text-on-danger"
-                      >
-                        {formatBadgeCount(unreadConversations)}
-                      </span>
+                      />
                     ) : undefined,
                 },
                 { value: "groups", label: t("conversations.filter.groups") },
@@ -595,18 +596,17 @@ function ConversationHomeRow({
                 {secondLine}
               </span>
               {badge > 0 ? (
-                <span
-                  key={badge}
+                <CountBadge
+                  count={badge}
+                  pop
                   data-dm-unread=""
-                  className="inline-flex h-[18px] min-w-[18px] shrink-0 animate-badge-pop items-center justify-center rounded-full bg-danger px-1 text-[10px] font-bold leading-none tabular-nums text-on-danger"
+                  className="shrink-0"
                   aria-label={
                     mentions > 0
                       ? t("chrome.unreadMentions", { count: mentions })
                       : t("notify.messages", { count: badge })
                   }
-                >
-                  {formatBadgeCount(badge)}
-                </span>
+                />
               ) : muted ? (
                 <BellOff className="h-3.5 w-3.5 shrink-0 text-text-tertiary" aria-hidden="true" />
               ) : pinned ? (
@@ -680,7 +680,7 @@ function ConversationFace({
             status={status}
             size="md"
             ringClassName="rounded-full ring-[3px] ring-surface-1 group-hover:ring-surface-2 group-data-[selected]:ring-surface-2"
-            className="absolute -bottom-0.5 -right-0.5 bg-surface-1"
+            className="absolute -bottom-0.5 -right-0.5 redesign:bottom-0 redesign:right-0 bg-surface-1"
           />
         )}
       </span>

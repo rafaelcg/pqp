@@ -1,5 +1,5 @@
 import type { PublicUser } from "@pqp/shared";
-import { Loader2, Search } from "lucide-react";
+import { Search } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import { AutocompleteMenu } from "@/components/chat/autocomplete-menu";
 import { clampSelection } from "@/components/search/search-results";
@@ -8,6 +8,7 @@ import { ApiError, lookupUserByTag, searchUsers } from "@/lib/api";
 import { excludeUsers, readUserQuery } from "@/lib/user-search";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { Spinner } from "@/components/ui/spinner";
 
 /** Same as message search: one typed word is one request, and it still feels live. */
 const DEBOUNCE_MS = 300;
@@ -174,10 +175,7 @@ export function UserSearch({
           className="min-w-0 flex-1 bg-transparent text-sm text-text placeholder:text-text-muted focus:outline-none"
         />
         {loading && (
-          <Loader2
-            aria-hidden="true"
-            className="h-4 w-4 shrink-0 animate-spin text-text-muted"
-          />
+          <Spinner className="h-4 w-4 shrink-0 animate-spin text-text-muted" />
         )}
       </div>
 
