@@ -440,6 +440,13 @@ test("captures the design council screens", async ({ browser }) => {
         });
         await page.mouse.move(0, 0);
       }
+      // The channel list folded to icons, in place; then unfolded again.
+      await page.locator("[data-channel-sidebar-toggle]").first().click();
+      await expect(page.locator("[data-channel-rail]")).toBeVisible();
+      await page.waitForTimeout(300);
+      await shoot(page, `20-sidebar-strip-${theme}`);
+      await page.locator("[data-channel-rail-expand]").click();
+      await expect(page.locator("[data-channel-rail]")).toBeHidden();
       // A popover in place: the composer's emoji picker.
       await page.getByRole("button", { name: "Adicionar emoji", exact: true }).first().click();
       await expect(page.locator(".emoji-mart-shell")).toBeVisible();
@@ -643,6 +650,8 @@ const PRIMITIVES: {
   { id: "s-category", testId: "qa-shell-categories", hover: "Bate-papo" },
   { id: "s-channel-row", testId: "qa-shell-channel-rows", hover: "clipes" },
   { id: "s-voice-row", testId: "qa-shell-voice-rows" },
+  // The icons-only sidebar: hover on "general".
+  { id: "s-sidebar-rail", testId: "qa-shell-sidebar-strip", hover: "general" },
 ];
 
 test("captures the primitives", async ({ browser }) => {

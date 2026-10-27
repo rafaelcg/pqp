@@ -42,6 +42,7 @@ import {
   PanelLeftClose,
 } from "lucide-react";
 import {
+  Archive as ArchiveFill,
   CaretDown,
   ChatText,
   FolderSimplePlus,
@@ -290,6 +291,23 @@ export function channelRowIconClass(channel: Channel, selected: boolean): string
 /** A watch party room's second line (its viewers, its topic). */
 const CHANNEL_DETAIL_REDESIGN =
   "redesign:text-xs redesign:text-[color:var(--list-row-detail)]";
+
+/*
+ * The icons-only strip under the redesign. A channel is a 40px rounded
+ * square (the rail's servers are circles, so the two columns read apart) on
+ * the list row's fills: the open one selected, the call you are in the
+ * success tone. The two buttons at the top are round, as the header's are.
+ */
+const STRIP_TILE_REDESIGN =
+  "redesign:rounded-[var(--strip-tile-radius)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent";
+const STRIP_BUTTON_REDESIGN =
+  "redesign:rounded-full redesign:text-[color:var(--list-row-icon)] redesign:hover:bg-[color:var(--list-row-hover)] redesign:hover:text-text redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent";
+/** The pip, the mention and the call count cut out of the side pane. */
+const STRIP_RING_REDESIGN = "redesign:ring-2 redesign:ring-[color:var(--color-pane-side)]";
+
+/** The Baú's "Novo" chip as the shared `new` badge: a sentence-case pill. */
+const BAU_NEW_CHIP_REDESIGN =
+  "redesign:rounded-full redesign:bg-accent-soft redesign:px-2 redesign:py-0.5 redesign:text-[length:var(--badge-text)] redesign:normal-case redesign:tracking-normal redesign:text-on-accent-soft";
 
 /** The pin and settings tiles: round, a tint of the text on hover so it shows on a selected row too. */
 const CHANNEL_ACTION_REDESIGN =
@@ -934,7 +952,7 @@ export const ChannelList = memo(function ChannelList({
         data-channel-rail=""
         className={cn("hidden w-[72px] shrink-0 flex-col border-r border-ink-4/60 bg-channel md:flex", PANE_SIDE_REDESIGN)}
       >
-        <div className="flex flex-col items-center gap-1 border-b border-ink-4/60 px-2 py-2">
+        <div className="flex flex-col items-center gap-1 border-b border-ink-4/60 px-2 py-2 redesign:border-[color:var(--card-border)]">
           <Tooltip label={t("chrome.expandChannelList")} side="right">
             {/* The same control as the header's fold button, in its other
                 state: one identity per boundary, pressed while folded. */}
@@ -944,20 +962,29 @@ export const ChannelList = memo(function ChannelList({
               data-channel-sidebar-toggle=""
               aria-pressed="true"
               aria-label={t("chrome.expandChannelList")}
-              className="flex h-9 w-9 items-center justify-center rounded-lg text-paper-muted hover:bg-ink-3 hover:text-paper"
+              className={cn(
+                "flex h-9 w-9 items-center justify-center rounded-lg text-paper-muted hover:bg-ink-3 hover:text-paper",
+                STRIP_BUTTON_REDESIGN,
+              )}
               onClick={onExpand}
             >
-              <PanelLeftOpen className="h-4 w-4" />
+              <PanelLeftOpen className="h-4 w-4 redesign:hidden" />
+              <Icon icon={SidebarSimple} size="sm" className="hidden redesign:block" />
             </button>
           </Tooltip>
           {server && (
             <Tooltip label={t("chrome.searchMessages")} side="right">
               <button
                 type="button"
-                className="flex h-9 w-9 items-center justify-center rounded-lg text-paper-muted hover:bg-ink-3 hover:text-paper"
+                aria-label={t("chrome.searchMessages")}
+                className={cn(
+                  "flex h-9 w-9 items-center justify-center rounded-lg text-paper-muted hover:bg-ink-3 hover:text-paper",
+                  STRIP_BUTTON_REDESIGN,
+                )}
                 onClick={() => setSearchOpen(true)}
               >
-                <Search className="h-4 w-4" />
+                <Search className="h-4 w-4 redesign:hidden" />
+                <Icon icon={MagnifyingGlass} kind="symbol" size="sm" className="hidden redesign:block" />
               </button>
             </Tooltip>
           )}
@@ -995,7 +1022,7 @@ export const ChannelList = memo(function ChannelList({
               key={group.key}
               className={cn(
                 "flex w-full flex-col items-center gap-1",
-                index > 0 && "mt-1 border-t border-ink-4/50 pt-2",
+                index > 0 && "mt-1 border-t border-ink-4/50 pt-2 redesign:border-[color:var(--card-border)]",
               )}
             >
               {group.channels.map((channel) => (
@@ -3439,6 +3466,14 @@ export function ChannelRailItem({
             "bg-signal/10 text-signal ring-1 ring-inset ring-signal/30",
           hasUnread && !selected && !connected && "text-paper",
           muted && !selected && !connected && "opacity-50",
+          STRIP_TILE_REDESIGN,
+          selected
+            ? "redesign:bg-[color:var(--list-row-selected)] redesign:text-[color:var(--list-row-selected-text)]"
+            : "redesign:text-[color:var(--list-row-icon)] redesign:hover:bg-[color:var(--list-row-hover)] redesign:hover:text-text",
+          hasUnread && !selected && !connected && "redesign:text-text",
+          connected &&
+            "redesign:bg-success-soft redesign:text-on-success-soft redesign:ring-0 redesign:hover:bg-success-soft redesign:hover:text-on-success-soft",
+          muted && !selected && !connected && "redesign:opacity-[var(--list-row-muted-opacity)]",
         )}
         onClick={() => {
           // Always a select. Joining a call is never one press, on any
@@ -3471,37 +3506,49 @@ export function ChannelRailItem({
           }
         }}
       >
-        <ChannelIcon channel={channel} className="h-4 w-4" />
+        <ChannelIcon channel={channel} className="h-4 w-4 redesign:h-[1.125rem] redesign:w-[1.125rem]" />
         {live && (
           /* The strip has no room for words: a red dot in the corner is the
              pill. The viewer count below it is the ordinary occupancy badge. */
           <span
             data-watch-party-live=""
             aria-hidden="true"
-            className="absolute -left-1 -top-1 h-2.5 w-2.5 rounded-full bg-danger ring-2 ring-channel motion-safe:animate-pulse"
+            className={cn(
+              "absolute -left-1 -top-1 h-2.5 w-2.5 rounded-full bg-danger ring-2 ring-channel motion-safe:animate-pulse",
+              STRIP_RING_REDESIGN,
+            )}
           />
         )}
         {hasUnread && (
           <>
             <span
               aria-hidden="true"
-              className="absolute -left-2 top-1/2 h-4 w-1 -translate-y-1/2 rounded-r-full bg-paper"
+              className="absolute -left-2 top-1/2 h-4 w-1 -translate-y-1/2 rounded-r-full bg-paper redesign:h-2 redesign:bg-text"
             />
             <span className="sr-only">{t("chrome.unreadSr")}</span>
           </>
         )}
         {muted && <span className="sr-only">{t("chrome.mutedSr")}</span>}
-        {mentions > 0 && (
-          <span
-            className="absolute -right-1 -top-1 min-w-4 rounded-full bg-danger px-1 py-0.5 text-center text-[10px] font-bold leading-none text-paper"
-            aria-label={t("chrome.unreadMentions", { count: mentions })}
-          >
-            {formatBadgeCount(mentions)}
-          </span>
-        )}
+        {/* The shared count pill; the classes before the redesign ones are
+            the 16px pills the strip always drew. */}
+        <CountBadge
+          count={mentions}
+          size="sm"
+          aria-label={t("chrome.unreadMentions", { count: mentions })}
+          className={cn(
+            "absolute -right-1 -top-1 h-auto py-0.5 text-center text-paper normal-nums",
+            "redesign:h-4 redesign:py-0 redesign:tabular-nums redesign:text-on-danger",
+            STRIP_RING_REDESIGN,
+          )}
+        />
         {occupants > 0 && (
           <span
-            className="absolute -bottom-1 -right-1 min-w-4 rounded-full bg-ink-4 px-1 py-0.5 text-center text-[10px] font-bold leading-none text-paper"
+            className={cn(
+              "absolute -bottom-1 -right-1 min-w-4 rounded-full bg-ink-4 px-1 py-0.5 text-center text-[10px] font-bold leading-none text-paper",
+              // How many are in the call: a quiet count, not an alert.
+              "redesign:flex redesign:h-4 redesign:items-center redesign:justify-center redesign:bg-surface-3 redesign:py-0 redesign:text-[length:var(--count-badge-sm-text)] redesign:font-semibold redesign:tabular-nums redesign:text-text-secondary",
+              STRIP_RING_REDESIGN,
+            )}
             aria-label={t("chrome.inCall", { count: occupants })}
           >
             {formatBadgeCount(occupants)}
@@ -3538,7 +3585,11 @@ function CommunityHomeFace({
   server: Pick<Server, "name" | "iconUrl" | "isCommunity" | "communitySlug">;
   compact?: boolean;
 }) {
-  const tile = compact ? "h-9 w-9 rounded-[10px]" : "h-8 w-8 rounded-lg";
+  const tile = cn(
+    compact ? "h-9 w-9 rounded-[10px]" : "h-8 w-8 rounded-lg",
+    // Concentric with the strip's tile, and the row's avatar size.
+    compact ? "redesign:rounded-[calc(var(--strip-tile-radius)-2px)]" : "redesign:h-7 redesign:w-7 redesign:rounded-[0.5rem]",
+  );
   const type = compact ? "text-[11px]" : "text-[10px]";
   const poster = server.isCommunity || Boolean(server.iconUrl);
   if (!poster) {
@@ -3547,10 +3598,12 @@ function CommunityHomeFace({
         className={cn(
           "flex shrink-0 items-center justify-center bg-ink-4 text-paper-muted",
           tile,
+          "redesign:bg-surface-3 redesign:text-text-secondary",
         )}
         data-community-home-face="chest"
       >
-        <Archive className="h-4 w-4" aria-hidden />
+        <Archive className="h-4 w-4 redesign:hidden" aria-hidden />
+        <Icon icon={ArchiveFill} size="sm" className="hidden redesign:block" />
       </span>
     );
   }
@@ -3594,7 +3647,9 @@ function CommunityHomeUnreadBadge({
         // Lime, the brand signal: a new Baú post is news, not a mention, so
         // it never borrows the red the mention counts use.
         "min-w-4 rounded-full bg-signal px-1 py-0.5 text-center text-[10px] font-bold leading-none text-ink",
+        "redesign:flex redesign:h-4 redesign:items-center redesign:justify-center redesign:bg-accent redesign:py-0 redesign:text-[length:var(--count-badge-sm-text)] redesign:font-semibold redesign:tabular-nums redesign:text-on-accent",
         compact && "absolute -right-1 -top-1",
+        compact && STRIP_RING_REDESIGN,
         !compact && "shrink-0",
         !compact && pushRight && "ml-auto",
       )}
@@ -3610,7 +3665,7 @@ function CommunityHomeUnreadBadge({
  * the same face as the poster. Private halls keep the chest. No teaching
  * subtitle. The intro card already says what this is.
  */
-function CommunityHomeNavButton({
+export function CommunityHomeNavButton({
   server,
   selected,
   unread,
@@ -3645,12 +3700,19 @@ function CommunityHomeNavButton({
             ? "bg-ink-4 text-signal"
             : "bg-ink-4 text-paper"
           : "text-paper-muted hover:bg-ink-4/70 hover:text-paper",
+        // A strip tile, or a channel row: the same fills as the channels.
+        compact
+          ? STRIP_TILE_REDESIGN
+          : "redesign:min-h-[var(--list-row-h-sm)] redesign:gap-2 redesign:rounded-[var(--list-row-radius)] redesign:py-1 redesign:pl-1 redesign:pr-[var(--list-row-px)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent",
+        selected
+          ? "redesign:bg-[color:var(--list-row-selected)] redesign:text-[color:var(--list-row-selected-text)]"
+          : "redesign:text-[color:var(--list-row-text)] redesign:hover:bg-[color:var(--list-row-hover)] redesign:hover:text-text",
       )}
       onClick={onSelect}
     >
       <CommunityHomeFace server={server} compact={compact} />
       {!compact && (
-        <span className="min-w-0 flex-1 truncate text-sm font-semibold text-paper">
+        <span className="min-w-0 flex-1 truncate text-sm font-semibold text-paper redesign:font-medium redesign:text-inherit">
           {t("communityHome.channelName")}
         </span>
       )}
@@ -3662,7 +3724,7 @@ function CommunityHomeNavButton({
           {!compact && fresh && (
             <span
               data-community-home-fresh
-              className="ml-auto shrink-0 rounded bg-signal/15 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-signal motion-safe:animate-pulse"
+              className={cn("ml-auto shrink-0 rounded bg-signal/15 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-signal motion-safe:animate-pulse", BAU_NEW_CHIP_REDESIGN)}
             >
               {t("communityHome.badge.new")}
             </span>
@@ -3676,7 +3738,7 @@ function CommunityHomeNavButton({
       ) : (
         !compact &&
         showNew && (
-          <span className="shrink-0 rounded bg-signal/15 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-signal">
+          <span className={cn("shrink-0 rounded bg-signal/15 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-signal", BAU_NEW_CHIP_REDESIGN)}>
             {t("communityHome.badge.new")}
           </span>
         )
