@@ -1067,8 +1067,11 @@ loading (the channel list, the message log, a settings row).
   draws. Under the redesign a ring draws: a faint track
   (`--spinner-track-opacity` 0.25, 0.3 in light) and an arc in the icon
   stroke. It owns its motion: it turns, and under reduced motion it fades
-  in and out instead, because a still arc reads as progress. `label` adds a screen reader name when nothing
-  beside it says "loading".
+  in and out instead, because a still arc reads as progress. The ring drops
+  any `animate-*` class the caller passes, so that never depends on CSS
+  order, and it is 14px at the smallest: below that the stroke is about a
+  pixel and the track disappears. `label` adds a screen reader name when
+  nothing beside it says "loading".
 - **Skeleton.** Toggle off: `surface-3` at 50%, pulsing. Redesign: a text
   tint (`--skeleton-bg`, 8%, 10% in light), so it reads on a pane, a card or a dialog,
   and still under reduced motion. The channel skeleton's rows are the row

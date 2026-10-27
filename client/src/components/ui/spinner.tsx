@@ -13,6 +13,13 @@ import { cn } from "@/lib/utils";
  * arc reads as 25% done, not as "loading".
  */
 export function Spinner({ className, label }: { className?: string; label?: string }) {
+  // The ring takes the caller's size and colour but never its motion: a bare
+  // `animate-spin` would otherwise fight the reduced-motion pulse, and only
+  // CSS order would decide it.
+  const ringClassName = className
+    ?.split(/\s+/)
+    .filter((name) => !/(^|:)animate-/.test(name))
+    .join(" ");
   return (
     <>
       <Loader2 aria-hidden="true" data-spinner="" className={cn(className, "redesign:hidden")} />
@@ -22,8 +29,10 @@ export function Spinner({ className, label }: { className?: string; label?: stri
         aria-hidden="true"
         data-spinner=""
         className={cn(
-          className,
-          "hidden redesign:block redesign:motion-safe:animate-spin redesign:motion-reduce:animate-pulse",
+          ringClassName,
+          // 14px at the smallest: below it the stroke is about a pixel and
+          // the faint track disappears.
+          "hidden redesign:block redesign:min-h-3.5 redesign:min-w-3.5 redesign:motion-safe:animate-spin redesign:motion-reduce:animate-pulse",
         )}
       >
         <circle
