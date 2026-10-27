@@ -26,6 +26,7 @@ import {
   LogOut,
   Pencil,
 } from "lucide-react";
+import { CalendarClock, X as LineX } from "lucide-react";
 import { Navigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { PaneHeader, SectionLabel } from "@/components/ui/section-header";
@@ -42,7 +43,9 @@ import { Icon } from "@/components/ui/icon";
 import { IconButton, type IconButtonSize } from "@/components/ui/icon-button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
+import { cn } from "@/lib/utils";
 import { PopoverPanel } from "@/components/ui/popover";
+import { TOAST_CLOSE, TOAST_SURFACE, TOAST_SURFACE_REDESIGN } from "@/components/ui/toast";
 import { RadioGroup } from "@/components/ui/radio-group";
 import { Tabs } from "@/components/ui/tabs";
 import { Menu } from "@/components/ui/menu";
@@ -1465,6 +1468,49 @@ function PrimitiveSheet() {
           }}
           onDismiss={() => {}}
         />
+      </div>
+
+      {/* Toasts: a note that arrives (the four that drew the level-3 card) and
+          a session reminder (which drew its own dark card). */}
+      {/* Toasts: a note that arrives and a plain notice (both on the level-3
+          card), and a session reminder (which drew its own dark card). */}
+      <div data-testid="qa-primitive-toast" className="flex flex-col items-start gap-3 p-4">
+        <div role="status" className={cn(TOAST_SURFACE, "flex w-80 items-center gap-3 p-3")}>
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent-soft font-semibold text-on-accent-soft">
+            B
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-semibold text-text">{t("qaUi.toast.dmName")}</span>
+            <span className="block truncate text-xs text-text-secondary">{t("qaUi.toast.dmBody")}</span>
+          </span>
+          <button type="button" aria-label={t("qaUi.toast.close")} className={TOAST_CLOSE}>
+            <LineX className="h-4 w-4" aria-hidden />
+          </button>
+        </div>
+        <div role="status" className={cn(TOAST_SURFACE, "flex w-80 items-center gap-3 p-3")}>
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-on-accent redesign:mx-1">
+            <CheckIcon className="h-4 w-4" strokeWidth={3} aria-hidden />
+          </span>
+          <p className="min-w-0 flex-1 text-sm font-semibold text-text">{t("qaUi.toast.forwarded")}</p>
+          <button type="button" aria-label={t("qaUi.toast.close")} className={TOAST_CLOSE}>
+            <LineX className="h-4 w-4" aria-hidden />
+          </button>
+        </div>
+        <div
+          role="status"
+          className={cn(
+            "flex w-80 items-center gap-3 rounded-xl border border-ink-4/70 bg-ink-2 p-3 shadow-[var(--shadow-popover)]",
+            TOAST_SURFACE_REDESIGN,
+          )}
+        >
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-ink-3 text-paper-muted redesign:bg-surface-3 redesign:text-text-secondary">
+            <CalendarClock className="h-5 w-5" aria-hidden />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-semibold text-text">{t("qaUi.toast.sessionTitle")}</span>
+            <span className="block truncate text-xs text-text-tertiary redesign:text-text-secondary">{t("qaUi.toast.sessionBody")}</span>
+          </span>
+        </div>
       </div>
 
       <div data-testid="qa-primitive-slider" className="grid gap-4 sm:grid-cols-2">

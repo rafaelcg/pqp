@@ -47,6 +47,7 @@ Read this file and the inventory at the start of every session.
 | 2 | `p-slider` | Merged (cap at round 5: 8.0 Opus r4, 8.8 Codex r5, no MUST) |
 | 2 | `p-banner` | Merged (approved at round 3: 8.3 Opus, 8.5 Codex r2, no MUST) |
 | 2 | `p-badge` | Merged (approved at round 2: 8.3 Opus, 8.3 Codex r1, no MUST) |
+| 2 | `p-toast` | Merged (cap at round 5: 8.5 Opus r5, 8.7 Codex r2, no MUST) |
 
 ## Phase 0: directions
 
@@ -665,6 +666,43 @@ Catppuccin, Everforest, Ocean and Modo 2005 fell under 4.5:1. The 16px
 count takes 10px type; the beta tag beside Bot drops its wash; the sheet
 shows a painted Webhook tag and a "Saiu" tag. Screenshots:
 `~/pqp-redesign/p-badge/`.
+
+### p-toast
+
+Spec (audit: no toast primitive; seven toasts, each with its own corner and
+queue; five drew the level-3 card, two drew their own):
+
+1. Job: the look of a note that arrives and leaves on its own.
+2. Redesign: the popover's card (radius, fill, edge, lift) and IconButton's
+   round ghost for the dismiss button.
+3. Merges: `TOAST_SURFACE` in the DM, friend, forward, not-in-server and
+   app-join toasts (exact with the toggle off); `TOAST_SURFACE_REDESIGN` in
+   the session reminders and the watch party approval (redesign only, they
+   drew another card); `TOAST_CLOSE` in four close buttons.
+4. Left: the retro toasts (their own look), the image lightbox's notice
+   (a media overlay, `s-message-content`) and the voice-clean confirmation
+   in `App.tsx` (`f-call`). Placement and queues stay per toast.
+
+Council (Opus 5.5, GPT-6 Luna via Codex), overall after. One reviewer per
+round, Opus for the sign-off:
+
+| Round | Opus | Codex |
+|---|---|---|
+| 1 | not run | 8.3 |
+| 2 | not run | 8.7 |
+| 3 | 8.1 | not run |
+| 4 | 8.4 | not run |
+| 5 | 8.5 | not run |
+
+Capped at round 5, no MUST open. Round 3's MUST (two dismiss buttons with
+no focus ring) was fixed in round 4. Round 5's notes were applied after it:
+every 32px leading mark in the 40px slot, the DM fallback disc on
+`surface-3`, one body tone, the app join's undo ring. Not done: a toast
+over a busy screen, because the capture rig renders the sheet only.
+Verified: typecheck; 10,417 unit tests; `bench:tokens`; i18n check;
+`dm-toast`, `dm-toast-suppression`, `retro-look` and `watch-party` e2e (37
+passed); retro, Halloween, high contrast, 390px and toggle off. Screenshots:
+`~/pqp-redesign/p-toast/`.
 
 ### p-section-header
 
