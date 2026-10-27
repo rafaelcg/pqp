@@ -331,7 +331,7 @@ function ChannelRowsBlock() {
 /** One icons-only sidebar: the side pane at the strip's 72px. */
 function StripPane({ children }: { children: ReactNode }) {
   return (
-    <div className="flex w-[72px] flex-col items-center gap-1 rounded-lg bg-surface-1 px-2 py-3 redesign:rounded-[var(--radius-pane)] redesign:bg-pane-side">
+    <div className="flex w-[72px] flex-col items-center gap-1 rounded-lg bg-surface-1 px-2 py-3 redesign:gap-1.5 redesign:rounded-[var(--radius-pane)] redesign:bg-pane-side">
       {children}
     </div>
   );
@@ -341,8 +341,10 @@ function StripGroup({ first = false, children }: { first?: boolean; children: Re
   return (
     <div
       className={cn(
-        "flex w-full flex-col items-center gap-1",
+        "flex w-full flex-col items-center gap-1 redesign:gap-1.5",
         !first && "mt-1 border-t border-ink-4/50 pt-2 redesign:border-[color:var(--card-border)]",
+        // Under a Baú the first group takes the rule too, as in the app.
+        first && "redesign:mt-1 redesign:border-t redesign:pt-2 redesign:border-[color:var(--card-border)]",
       )}
     >
       {children}
@@ -407,6 +409,10 @@ function SidebarStripBlock() {
         <StripGroup first>
           {tile(textChannel("ajuda", "ajuda", { type: "forum" }))}
           {tile(textChannel("clipes", "clipes"))}
+        </StripGroup>
+        <StripGroup>
+          {/* In the call and viewing it: the solid green edge. */}
+          {tile(textChannel("lobby2", "Lobby", { type: "voice" }), { connected: true, selected: true, occupants: 3, onJoinVoice: noop })}
         </StripGroup>
       </StripPane>
     </div>

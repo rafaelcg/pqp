@@ -955,7 +955,7 @@ export const ChannelList = memo(function ChannelList({
         data-channel-rail=""
         className={cn("hidden w-[72px] shrink-0 flex-col border-r border-ink-4/60 bg-channel md:flex", PANE_SIDE_REDESIGN)}
       >
-        <div className="flex flex-col items-center gap-1 border-b border-ink-4/60 px-2 py-2 redesign:border-[color:var(--card-border)]">
+        <div className="flex flex-col items-center gap-1 border-b border-ink-4/60 px-2 py-2 redesign:mx-2 redesign:border-[color:var(--card-border)] redesign:px-0">
           <Tooltip label={t("chrome.expandChannelList")} side="right">
             {/* The same control as the header's fold button, in its other
                 state: one identity per boundary, pressed while folded. */}
@@ -1027,6 +1027,13 @@ export const ChannelList = memo(function ChannelList({
                 // 6px between tiles under the redesign: a badge hanging off
                 // one tile's corner never meets the next tile's.
                 "flex w-full flex-col items-center gap-1 redesign:gap-1.5",
+                // The Baú is a page, not a channel: under the redesign a rule
+                // sets it apart from the first group too.
+                index === 0 &&
+                  (communityHomeEnabled || server?.isCommunity) &&
+                  server &&
+                  onSelectCommunityHome &&
+                  "redesign:mt-1 redesign:border-t redesign:pt-2 redesign:border-[color:var(--card-border)]",
                 index > 0 && "mt-1 border-t border-ink-4/50 pt-2 redesign:border-[color:var(--card-border)]",
               )}
             >
@@ -3488,6 +3495,9 @@ export function ChannelRailItem({
           // apart from the open tile's lime by more than hue.
           connected &&
             "redesign:bg-success-soft redesign:text-on-success-soft redesign:ring-1 redesign:ring-inset redesign:ring-[color:color-mix(in_oklab,var(--color-success)_45%,transparent)] redesign:hover:bg-success-soft redesign:hover:text-on-success-soft",
+          // In the call and viewing it: the edge goes solid, so the strip
+          // still shows which tile is open.
+          connected && selected && "redesign:ring-2 redesign:ring-[color:var(--color-success)]",
           muted && !selected && !connected && "redesign:opacity-[var(--list-row-muted-opacity)]",
         )}
         onClick={() => {
