@@ -201,7 +201,7 @@ const ACTION = {
   fill: `rounded-[var(--radius-control)] px-2 py-0.5 font-semibold ${FILL_INK}`,
   /** A second action beside it: "Verificar". */
   quiet:
-    "rounded-[var(--radius-control)] px-2 py-0.5 font-semibold underline-offset-2 hover:underline redesign:text-[color:var(--banner-ink)] redesign:hover:bg-[color:color-mix(in_oklab,var(--banner-ink)_16%,transparent)]",
+    "rounded-[var(--radius-control)] px-2 py-0.5 font-semibold underline-offset-2 hover:underline redesign:bg-[color:color-mix(in_oklab,var(--banner-ink)_14%,transparent)] redesign:text-[color:var(--banner-ink)] redesign:hover:bg-[color:color-mix(in_oklab,var(--banner-ink)_22%,transparent)] redesign:hover:no-underline",
   /** Dismiss, or the one plain action a strip offers ("Ainda tô aqui"). */
   link: "shrink-0 text-xs underline underline-offset-2 redesign:text-[color:var(--banner-ink)] redesign:hover:bg-[color:color-mix(in_oklab,var(--banner-ink)_16%,transparent)]",
 } as const;

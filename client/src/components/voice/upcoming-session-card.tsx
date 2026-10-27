@@ -7,6 +7,7 @@ import { Icon } from "@/components/ui/icon";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { formatSessionRelativeTime } from "@/lib/channel-session-schedule";
 import { useTranslation } from "@/lib/i18n";
+import { useRedesign } from "@/lib/redesign";
 import { cn } from "@/lib/utils";
 
 /**
@@ -44,6 +45,7 @@ export function UpcomingSessionCard({
   onEdit?: () => void;
 }) {
   const { t, locale } = useTranslation();
+  const redesign = useRedesign();
   const [reminding, setReminding] = useState(session.reminding);
   const [reminderBusy, setReminderBusy] = useState(false);
   const [confirmCancel, setConfirmCancel] = useState(false);
@@ -84,7 +86,7 @@ export function UpcomingSessionCard({
       className={cn(
         "mx-3 mt-3 flex items-center gap-3 rounded-xl border border-ink-4/70 bg-ink-2 px-3 py-2.5",
         // A strip's inset and corner, on the card tint: news, not a warning.
-        "redesign:mx-2 redesign:mt-2 redesign:rounded-[var(--banner-radius)] redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:sm:mx-4",
+        "redesign:mx-2 redesign:mt-2 redesign:rounded-[var(--banner-radius)] redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:sm:mx-4 redesign:[--color-ring-offset:var(--card-bg)]",
       )}
     >
       <span
@@ -136,7 +138,7 @@ export function UpcomingSessionCard({
                 <Icon icon={BellSlash} size="sm" className="hidden redesign:block" />
               </>
             )}
-            {t("watchPartySchedule.card.remind")}
+            {reminding && redesign ? t("watchPartySchedule.card.reminding") : t("watchPartySchedule.card.remind")}
           </Button>
           {canManage && (
             <Button
@@ -144,6 +146,10 @@ export function UpcomingSessionCard({
               variant="ghost"
               size="sm"
               aria-label={t("watchPartySchedule.card.cancel")}
+              title={t("watchPartySchedule.card.cancel")}
+              // The strips' dismiss square, so its edge lines up with theirs;
+              // the danger tint on hover says it ends something for everyone.
+              className="redesign:h-[var(--control-sm)] redesign:w-[var(--control-sm)] redesign:rounded-full redesign:p-0 redesign:hover:bg-danger-soft redesign:hover:text-on-danger-soft"
               onClick={() => setConfirmCancel(true)}
               data-session-cancel
             >
