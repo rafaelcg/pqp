@@ -840,7 +840,7 @@ const PRIMITIVES: {
   { id: "s-user-panel", testId: "qa-shell-user-panel", hover: "Abrir configurações" },
   { id: "s-banners", testId: "qa-shell-banners" },
   // Message rows in their states.
-  { id: "s-message-row", testId: "qa-shell-message-rows", hoverText: "as regras do campeonato tão aqui" },
+  { id: "s-message-row", testId: "qa-shell-message-rows", hoverText: "@lia cê vem?" },
 ];
 
 test("captures the primitives", async ({ browser }) => {

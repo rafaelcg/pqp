@@ -893,10 +893,12 @@
      tint of the text on hover, the accent's soft fill when you are named. */
   --message-row-radius: 0.5rem;
   --message-hover: color-mix(in oklab, var(--color-text) 4.5%, transparent);
+  /* The same hover laid on the pane, for the presence dot's cutout. */
+  --message-hover-solid: color-mix(in oklab, var(--color-text) 4.5%, var(--color-pane-main));
   /* The system's mention row, tuned per appearance so a mention never reads
      as the selected channel; the hover one step toward the accent. */
   --message-mention-bg: var(--color-mention-row);
-  --message-mention-hover: color-mix(in oklab, var(--color-mention-row) 85%, var(--color-accent));
+  --message-mention-hover: color-mix(in oklab, var(--message-mention-bg) 85%, var(--color-accent));
   /* Your own name on your messages. */
   --message-own-name: var(--color-accent-text);
 
@@ -1311,6 +1313,10 @@
 :root[data-redesign][data-theme="light"] {
   /* 3% reads in light; dark needs 4.5%. */
   --message-hover: color-mix(in oklab, var(--color-text) 3%, transparent);
+  --message-hover-solid: color-mix(in oklab, var(--color-text) 3%, var(--color-pane-main));
+  /* The full soft accent is the selected channel's fill in light; a mention
+     sits a step quieter so it never reads as selected. */
+  --message-mention-bg: color-mix(in oklab, var(--color-accent-soft) 70%, var(--color-pane-main));
   /* Your own name: the lime itself in light, where accent-text is a near-black olive. */
   --message-own-name: var(--color-accent);
   /* Light panes need a stronger thumb to clear 3:1. */
@@ -3126,10 +3132,12 @@ h2,
 /* Under the redesign a mention is the accent's soft fill, as in the mockup. */
 :root[data-redesign] .pqp-message-mention {
   background: var(--message-mention-bg);
+  --avatar-dot-ring: var(--message-mention-bg);
 }
 
 :root[data-redesign] .pqp-message-mention:hover {
   background: var(--message-mention-hover);
+  --avatar-dot-ring: var(--message-mention-hover);
 }
 
 @keyframes rise-in {

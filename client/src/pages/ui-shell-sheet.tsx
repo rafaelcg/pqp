@@ -656,6 +656,10 @@ const ROW_MESSAGES: ChatMessage[] = [
     createdAt: new Date(NOW - 16.5 * 60_000).toISOString(),
   }),
   rowMessage(4, ROW_ME, "Lia", "vou sim, levo o lanche dessa vez"),
+  // A mention that starts a group, so the avatar and its dot sit on the fill.
+  rowMessage(10, ROW_BIA, "Bia", "@lia guarda um lugar pra mim", {
+    createdAt: new Date(NOW - 15.5 * 60_000).toISOString(),
+  }),
   rowMessage(5, ROW_BIA, "Bia", "as regras do campeonato tão aqui", {
     pinnedAt: new Date(NOW - 5 * 60_000).toISOString(),
   }),
@@ -674,7 +678,7 @@ function MessageRowsBlock() {
   return (
     <div data-testid="qa-shell-message-rows" className="flex flex-col gap-6">
       {/* Rafa: a group of four (one edited, the last two name you). You. Bia
-          with a pinned line. A webhook. Then yours sending, and one that
+          naming you, then a pinned line. A webhook. Then yours sending, and one that
           failed with Retry and Discard. */}
       <MainPane>
         <div className="flex h-[620px] min-h-0 flex-col">
