@@ -94,7 +94,7 @@ export function InvitePaste({
       data-invite-paste=""
       className={cn(
         "space-y-3 rounded-lg border border-border bg-surface-2/40 p-3",
-        "redesign:rounded-[calc(var(--radius-card)-4px)] redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:p-4",
+        "redesign:rounded-[calc(var(--radius-card)-4px)] redesign:border-[color:var(--card-border)] redesign:bg-transparent redesign:p-4",
         className,
       )}
     >

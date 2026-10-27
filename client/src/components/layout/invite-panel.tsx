@@ -555,20 +555,24 @@ export function InvitePanel({
                         <Button
                           size="icon"
                           variant="ghost"
-                          className="h-8 w-8 shrink-0"
+                          className="group/bin h-8 w-8 shrink-0"
                           disabled={pendingId === invite.id}
                           onClick={() => void handleRevoke(invite.id)}
                         >
-                          <IconSwap off={Trash2} on={Trash} offClassName="h-4 w-4 text-danger" className="text-danger" />
+                          {/* Under the redesign the bin is quiet at rest and red on hover or focus, so the copy action leads. */}
+                          <IconSwap off={Trash2} on={Trash} offClassName="h-4 w-4 text-danger" className="text-text-tertiary group-hover/bin:text-danger group-focus-visible/bin:text-danger" />
                         </Button>
                       </Tooltip>
                       )}
                     </div>
-                    <p className="mt-2 text-xs text-paper-muted">
-                      <span className="font-mono text-paper">
-                        {invite.code}
+                    <p className="mt-2 text-xs text-paper-muted redesign:text-text-tertiary">
+                      {/* Under the redesign the link above already shows the code. */}
+                      <span className="redesign:hidden">
+                        <span className="font-mono text-paper">
+                          {invite.code}
+                        </span>
+                        {" · "}
                       </span>
-                      {" · "}
                       {formatUses(t, invite)}
                       {" · "}
                       {formatExpiry(t, invite.expiresAt)}
@@ -597,7 +601,7 @@ export function InvitePanel({
         {!isCreate && (
           <div className="space-y-2">
             <label className="block">
-              <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted redesign:mb-1.5 redesign:text-[13px] redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">
+              <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted redesign:sr-only redesign:mb-1.5 redesign:text-[13px] redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">
                 {t("invite.join.label")}
               </span>
               <Input

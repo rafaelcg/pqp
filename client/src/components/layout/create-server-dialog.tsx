@@ -544,7 +544,7 @@ export function CreateServerDialog({
               disabled={busy}
               autoFocus
               placeholder={t("importDiscord.paste.placeholder")}
-              className="w-full resize-none rounded-md border border-ink-4 bg-ink px-3 py-2 text-sm text-paper placeholder:text-paper-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/50 disabled:cursor-not-allowed disabled:opacity-50 redesign:rounded-[var(--input-radius,var(--radius-control))] redesign:border-[color:var(--input-border)] redesign:bg-[color:var(--input-bg)] redesign:px-[var(--input-px)] redesign:text-text redesign:focus-visible:ring-[color:var(--input-ring,var(--color-focus-ring))]"
+              className="w-full resize-none rounded-md border border-ink-4 bg-ink px-3 py-2 text-sm text-paper placeholder:text-paper-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/50 disabled:cursor-not-allowed disabled:opacity-50 redesign:rounded-[var(--input-radius,var(--radius-control))] redesign:border-[color:var(--input-border)] redesign:bg-[color:var(--input-bg)] redesign:px-[var(--input-px)] redesign:text-text redesign:focus-visible:ring-[color:var(--input-ring,var(--color-focus-ring))] redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-ring-offset redesign:enabled:hover:border-[color:var(--input-hover-border)] redesign:disabled:bg-transparent"
             />
             <button
               type="button"
