@@ -110,6 +110,7 @@ import {
 import { ForumPinnedTile, ForumPostCard } from "./forum-post-card";
 import { ForumPostView, type ForumPostViewProps } from "./forum-post-view";
 import { Spinner } from "@/components/ui/spinner";
+import { BELOW_MD_QUERY } from "@/lib/breakpoints";
 
 /**
  * A forum channel (UX.md, "Forum channels: UX and UI"): the list of posts,
@@ -292,7 +293,7 @@ export function ForumPane({
 }: ForumPaneProps) {
   const { t } = useTranslation();
   const forumId = channel.id;
-  const isPhone = useMediaQuery("(max-width: 767px)");
+  const isPhone = useMediaQuery(BELOW_MD_QUERY);
 
   // ---------------------------------------------------------- the visit
   // The cursor this visit replaced, from the shell (see `markRead`). The
