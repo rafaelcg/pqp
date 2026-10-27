@@ -611,8 +611,10 @@ const PRIMITIVES: {
   /**
    * A button that opens a menu: the shot opens it, moves the highlight
    * `arrows` rows down with the keyboard, and frames the block and the menu.
+   * `hoverText` first hovers the text it names, for a button that only shows
+   * on hover (a message's toolbar).
    */
-  open?: { button: string; menu: string; arrows: number };
+  open?: { button: string; menu: string; arrows: number; hoverText?: string };
 }[] = [
   {
     id: "p-button",
@@ -679,6 +681,12 @@ const PRIMITIVES: {
   // Message rows in their states.
   { id: "s-message-row", testId: "qa-shell-message-rows" },
   { id: "s-message-content", testId: "qa-shell-message-content" },
+  // Bia's reply hovered, its toolbar up and "Mais" open.
+  {
+    id: "s-message-chrome",
+    testId: "qa-shell-message-chrome",
+    open: { button: "Mais", menu: '[role="menu"][aria-label="Mais"]', arrows: 0, hoverText: "eu topo, levo o lanche" },
+  },
 ];
 
 test("captures the primitives", async ({ browser }) => {
@@ -711,6 +719,9 @@ test("captures the primitives", async ({ browser }) => {
         await block.getByRole(primitive.role ?? "button", { name: primitive.hover, exact: true }).first().hover();
       }
       if (primitive.open) {
+        if (primitive.open.hoverText) {
+          await block.getByText(primitive.open.hoverText, { exact: true }).hover();
+        }
         await block.getByRole("button", { name: primitive.open.button, exact: true }).focus();
         await page.keyboard.press("Enter");
         const menu = page.locator(primitive.open.menu);

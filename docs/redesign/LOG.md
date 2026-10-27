@@ -1136,6 +1136,29 @@ and its four tiles, `VoiceNoteCard`, `ForwardCard`, `PollCard`, `ChanceCard`,
 5. Question: the broken-image chip says "Image unavailable" in English for
    every language (`attachment-grid.tsx`). Translating it changes the
    toggle-off app, so it waits for a yes.
+
+### s-message-chrome
+
+Spec (audit: the hover toolbar, its "Mais" panel and `MoreMenuItem`,
+`ReactionBar`, `ReactionChip` and its who-tip, `ReplyQuote`, `ThreadChip`;
+the right-click menu is the merged `ContextMenu`):
+
+1. Job: act on a message, and see what others did with it.
+2. States: toolbar (three quick reactions, yours filled; add; reply; start
+   or open a thread; edit; more), "Mais" open up or down with a danger
+   group; reactions (yours, others, many, the add button); reply (author,
+   excerpt, deleted parent); thread chip (unread dot, open, archived, faces).
+3. Redesign: the toolbar is a pill on the popover surface with 32px round
+   buttons and Phosphor glyphs; "Mais" is the menu's panel and rows, so it
+   matches the right-click menu; a reaction is a 28px pill on a text tint,
+   yours the accent's soft fill with an accent ring; the reply line reads
+   author in text and excerpt in secondary; the thread chip is a pill on a
+   text tint, open is the selected row's fill.
+4. Duplicate kept: "Mais" and the right-click menu list the same actions in
+   two components. Moving "Mais" onto `Menu` changes its keyboard behaviour
+   with the toggle off, so it waits (question below).
+5. Question: should "Mais" become the shared `Menu` (arrow keys, type to
+   find) for everybody, not only under the redesign?
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss

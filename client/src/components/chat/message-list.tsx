@@ -1,10 +1,17 @@
 import { StoryQuoteCard } from "@/components/stories/story-quote-card";
 import { Badge } from "@/components/ui/badge";
 import {
+  ArrowBendUpLeft,
+  ChatCircleText,
+  ChatsCircle,
+  DotsThree,
+  PencilSimple,
+  Smiley,
   Play as PlayFill,
   PushPin as PushPinFill,
   WarningCircle as WarningCircleFill,
   WifiSlash,
+  type Icon as PhosphorGlyph,
 } from "@phosphor-icons/react";
 import { Icon as Glyph } from "@/components/ui/icon";
 import {
@@ -651,6 +658,48 @@ const MESSAGE_ROW_REDESIGN =
   "redesign:mx-2 redesign:rounded-[var(--message-row-radius)] redesign:px-3";
 /** The time beside a name and in the gutter. */
 const MESSAGE_TIME_REDESIGN = "redesign:text-xs redesign:text-text-tertiary";
+/*
+ * The chrome on a message (s-message-chrome), under the redesign. The hover
+ * toolbar floats as a pill on the popover surface; its buttons are 32px
+ * circles. The "more" panel is the menu's panel, and its rows the menu's rows,
+ * so it matches the right-click menu that repeats it.
+ */
+const TOOLBAR_REDESIGN =
+  "redesign:-top-4 redesign:right-3 redesign:gap-0.5 redesign:rounded-full redesign:border-[color:var(--popover-border)] redesign:bg-[color:var(--popover-surface)] redesign:p-1 redesign:shadow-[var(--popover-shadow)]";
+const TOOLBAR_BUTTON_REDESIGN =
+  "redesign:h-8 redesign:w-8 redesign:rounded-full redesign:text-text-secondary redesign:hover:bg-[color:var(--menu-row-hover)] redesign:hover:text-text";
+/** A quick reaction you already gave: the accent's soft fill. */
+const TOOLBAR_BUTTON_ON_REDESIGN = "redesign:bg-accent-soft redesign:hover:bg-accent-soft";
+const MORE_PANEL_REDESIGN =
+  "redesign:w-56 redesign:rounded-[var(--menu-radius)] redesign:border-[color:var(--popover-border)] redesign:bg-[color:var(--popover-surface)] redesign:p-[var(--menu-pad)] redesign:shadow-[var(--popover-shadow)]";
+/** A reaction: a pill on a text tint; yours is the accent's soft fill, ringed. */
+const REACTION_REDESIGN =
+  "redesign:h-7 redesign:gap-1.5 redesign:border-transparent redesign:px-2.5 redesign:text-[0.8125rem] redesign:focus-visible:ring-accent";
+const REACTION_OFF_REDESIGN =
+  "redesign:bg-[color:var(--content-glyph-bg)] redesign:text-text-secondary redesign:hover:border-transparent redesign:hover:bg-[color:var(--content-card-hover)] redesign:hover:text-text";
+const REACTION_ON_REDESIGN =
+  "redesign:bg-accent-soft redesign:text-on-accent-soft redesign:shadow-[inset_0_0_0_1.5px_var(--color-accent)]";
+
+/** Both glyphs of a toolbar button: the old one, and the redesign's. */
+function ToolbarGlyph({
+  old: Old,
+  glyph,
+  kind = "object",
+  className,
+}: {
+  old: LucideIcon;
+  glyph: PhosphorGlyph;
+  kind?: "object" | "symbol";
+  className?: string;
+}) {
+  return (
+    <>
+      <Old className={cn("h-3.5 w-3.5 redesign:hidden", className)} />
+      <Glyph icon={glyph} kind={kind} size="sm" className="hidden redesign:block" />
+    </>
+  );
+}
+
 /** A GIF or a pasted picture link: the media radius on the card's edge. */
 const MEDIA_REDESIGN = cn(CONTENT_MEDIA_REDESIGN, "redesign:bg-transparent");
 
@@ -4201,6 +4250,7 @@ const MessageRow = memo(function MessageRow({
             <div
               className={cn(
                 "absolute -top-3 right-2 z-10 items-center gap-0.5 rounded-md border border-ink-4 bg-ink-2 p-0.5 shadow-sm",
+                TOOLBAR_REDESIGN,
                 moreOpen
                   ? "flex"
                   : "hidden group-hover:flex group-focus-within:flex",
@@ -4232,7 +4282,13 @@ const MessageRow = memo(function MessageRow({
                       variant="ghost"
                       size="icon"
                       tabIndex={-1}
-                      className={cn("h-6 w-6 text-sm", mine && "bg-ink-3")}
+                      className={cn(
+                        "h-6 w-6 text-sm",
+                        mine && "bg-ink-3",
+                        TOOLBAR_BUTTON_REDESIGN,
+                        "redesign:text-base",
+                        mine && TOOLBAR_BUTTON_ON_REDESIGN,
+                      )}
                       onClick={() => onToggleReaction(message.id, emoji)}
                     >
                       {emoji}
@@ -4247,10 +4303,10 @@ const MessageRow = memo(function MessageRow({
                     variant="ghost"
                     size="icon"
                     tabIndex={-1}
-                    className="h-6 w-6"
+                    className={cn("h-6 w-6", TOOLBAR_BUTTON_REDESIGN)}
                     onClick={onOpenPicker}
                   >
-                    <SmilePlus className="h-3.5 w-3.5" />
+                    <ToolbarGlyph old={SmilePlus} glyph={Smiley} />
                   </Button>
                 </Tooltip>
               )}
@@ -4261,10 +4317,10 @@ const MessageRow = memo(function MessageRow({
                     variant="ghost"
                     size="icon"
                     tabIndex={-1}
-                    className="h-6 w-6"
+                    className={cn("h-6 w-6", TOOLBAR_BUTTON_REDESIGN)}
                     onClick={onReply}
                   >
-                    <Reply className="h-3.5 w-3.5" />
+                    <ToolbarGlyph old={Reply} glyph={ArrowBendUpLeft} kind="symbol" />
                   </Button>
                 </Tooltip>
               )}
@@ -4278,10 +4334,10 @@ const MessageRow = memo(function MessageRow({
                     variant="ghost"
                     size="icon"
                     tabIndex={-1}
-                    className="h-6 w-6 text-accent"
+                    className={cn("h-6 w-6 text-accent", TOOLBAR_BUTTON_REDESIGN, "redesign:text-accent-text redesign:hover:text-accent-text")}
                     onClick={onOpenThread}
                   >
-                    <MessageSquareText className="h-3.5 w-3.5" />
+                    <ToolbarGlyph old={MessageSquareText} glyph={ChatCircleText} />
                   </Button>
                 </Tooltip>
               )}
@@ -4292,10 +4348,10 @@ const MessageRow = memo(function MessageRow({
                     variant="ghost"
                     size="icon"
                     tabIndex={-1}
-                    className="h-6 w-6"
+                    className={cn("h-6 w-6", TOOLBAR_BUTTON_REDESIGN)}
                     onClick={onStartThread}
                   >
-                    <MessageSquarePlus className="h-3.5 w-3.5" />
+                    <ToolbarGlyph old={MessageSquarePlus} glyph={ChatsCircle} />
                   </Button>
                 </Tooltip>
               )}
@@ -4306,10 +4362,10 @@ const MessageRow = memo(function MessageRow({
                     variant="ghost"
                     size="icon"
                     tabIndex={-1}
-                    className="h-6 w-6"
+                    className={cn("h-6 w-6", TOOLBAR_BUTTON_REDESIGN)}
                     onClick={onStartEdit}
                   >
-                    <Pencil className="h-3.5 w-3.5" />
+                    <ToolbarGlyph old={Pencil} glyph={PencilSimple} />
                   </Button>
                 </Tooltip>
               )}
@@ -4322,10 +4378,10 @@ const MessageRow = memo(function MessageRow({
                     tabIndex={-1}
                     aria-haspopup="menu"
                     aria-expanded={moreOpen}
-                    className="h-6 w-6"
+                    className={cn("h-6 w-6", TOOLBAR_BUTTON_REDESIGN, moreOpen && "redesign:bg-[color:var(--menu-row-hover)] redesign:text-text")}
                     onClick={() => setMoreOpen((open) => !open)}
                   >
-                    <MoreHorizontal className="h-3.5 w-3.5" />
+                    <ToolbarGlyph old={MoreHorizontal} glyph={DotsThree} kind="symbol" />
                   </Button>
                 </Tooltip>
                 {moreOpen && (
@@ -4337,6 +4393,8 @@ const MessageRow = memo(function MessageRow({
                     className={cn(
                       "absolute right-0 z-20 max-h-[18rem] w-48 overflow-y-auto rounded-md border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)]",
                       moreUp ? "bottom-full mb-0.5" : "top-full mt-0.5",
+                      MORE_PANEL_REDESIGN,
+                      moreUp ? "redesign:mb-2" : "redesign:mt-2",
                     )}
                   >
                     {onToggleAnswer && isReal && (
@@ -4593,11 +4651,23 @@ function MoreMenuItem({
       className={cn(
         "flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-sm outline-none hover:bg-ink-3 focus-visible:bg-ink-3",
         danger ? "text-danger" : "text-paper",
+        // The menu's row under the redesign (ui/menu-items.tsx).
+        "group/more redesign:gap-[var(--menu-row-gap)] redesign:rounded-[var(--menu-row-radius)] redesign:py-[var(--menu-row-py)] redesign:hover:bg-[color:var(--menu-row-hover)] redesign:focus-visible:bg-[color:var(--menu-row-hover)]",
+        danger
+          ? "redesign:hover:bg-[color:var(--menu-danger-hover)] redesign:focus-visible:bg-[color:var(--menu-danger-hover)]"
+          : "redesign:text-text",
       )}
       onClick={onSelect}
     >
       {Icon ? (
-        <Icon className="h-3.5 w-3.5 shrink-0 opacity-80" aria-hidden />
+        <Icon
+          className={cn(
+            "h-3.5 w-3.5 shrink-0 opacity-80",
+            "redesign:size-[var(--menu-icon-size)] redesign:opacity-100 redesign:[stroke-width:var(--icon-stroke)]",
+            !danger && "redesign:text-[color:var(--menu-icon)] redesign:group-hover/more:text-current redesign:group-focus-visible/more:text-current",
+          )}
+          aria-hidden
+        />
       ) : null}
       <span className="min-w-0 flex-1">{children}</span>
     </button>
@@ -4907,8 +4977,9 @@ function ReplyQuote({
   const { t } = useTranslation();
   if (replyTo.deleted) {
     return (
-      <p className="mb-0.5 flex items-center gap-1.5 text-xs text-text-muted">
-        <CornerUpLeft className="h-3 w-3 shrink-0" />
+      <p className="mb-0.5 flex items-center gap-1.5 text-xs text-text-muted redesign:mb-1 redesign:text-text-tertiary">
+        <CornerUpLeft className="h-3 w-3 shrink-0 redesign:hidden" />
+        <Glyph icon={ArrowBendUpLeft} kind="symbol" size="sm" className="hidden redesign:block" />
         <span className="italic">{t("chat.originalDeleted")}</span>
       </p>
     );
@@ -4923,10 +4994,11 @@ function ReplyQuote({
         name: replyTo.authorName ?? "",
         excerpt: replyTo.excerpt ?? "",
       })}
-      className="mb-0.5 flex w-full min-w-0 items-center gap-1.5 text-left text-xs text-text-muted hover:text-text focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+      className="mb-0.5 flex w-full min-w-0 items-center gap-1.5 text-left text-xs text-text-muted hover:text-text focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60 redesign:mb-1 redesign:w-fit redesign:max-w-full redesign:rounded-full redesign:text-[0.8125rem] redesign:text-text-secondary redesign:focus-visible:ring-accent"
     >
-      <CornerUpLeft className="h-3 w-3 shrink-0" aria-hidden />
-      <span className="shrink-0 font-medium text-accent">
+      <CornerUpLeft className="h-3 w-3 shrink-0 redesign:hidden" aria-hidden />
+      <Glyph icon={ArrowBendUpLeft} kind="symbol" size="sm" className="hidden text-text-tertiary redesign:block" />
+      <span className="shrink-0 font-medium text-accent redesign:font-semibold redesign:text-text">
         {replyTo.authorName}
       </span>
       <span className="min-w-0 flex-1 truncate">{replyTo.excerpt}</span>
@@ -5149,9 +5221,11 @@ function ReactionChip({
           reaction.me
             ? "border-signal/50 bg-signal/15 text-signal"
             : "border-ink-4 bg-ink-3/80 text-paper-muted hover:border-ink-4 hover:text-paper",
+          REACTION_REDESIGN,
+          reaction.me ? REACTION_ON_REDESIGN : REACTION_OFF_REDESIGN,
         )}
       >
-        <span className="text-sm leading-none" aria-hidden>
+        <span className="text-sm leading-none redesign:text-base" aria-hidden>
           {reaction.emoji}
         </span>
         <span className="font-medium tabular-nums">{reaction.count}</span>
@@ -5178,7 +5252,7 @@ function ReactionBar({
   }
 
   return (
-    <div className="relative mt-1.5 flex w-fit max-w-full flex-wrap items-center gap-1">
+    <div className="relative mt-1.5 flex w-fit max-w-full flex-wrap items-center gap-1 redesign:gap-1.5">
       {reactions.map((reaction) => (
         <ReactionChip
           key={reaction.emoji}
@@ -5193,9 +5267,10 @@ function ReactionBar({
         tabIndex={tabIndex}
         aria-label={t("chat.addReaction")}
         onClick={onOpenPicker}
-        className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-dashed border-ink-4 text-paper-muted hover:border-signal/50 hover:text-signal focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+        className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-dashed border-ink-4 text-paper-muted hover:border-signal/50 hover:text-signal focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60 redesign:h-7 redesign:w-7 redesign:border-transparent redesign:text-text-tertiary redesign:hover:border-transparent redesign:hover:bg-[color:var(--content-glyph-bg)] redesign:hover:text-text redesign:focus-visible:ring-accent"
       >
-        <SmilePlus className="h-3 w-3" />
+        <SmilePlus className="h-3 w-3 redesign:hidden" />
+        <Glyph icon={Smiley} size="sm" className="hidden redesign:block" />
       </button>
       {isPickerOpen && (
         <EmojiPickerPanel

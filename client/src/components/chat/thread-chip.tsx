@@ -4,7 +4,9 @@ import {
   THREAD_PARTICIPANT_FACES,
   type ThreadSummary,
 } from "@pqp/shared";
+import { Archive as ArchiveGlyph, ChatCircleText } from "@phosphor-icons/react";
 import { Archive, MessageSquareText } from "lucide-react";
+import { Icon } from "@/components/ui/icon";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useTranslation, type Translator } from "@/lib/i18n";
 import { cn, formatFullTimestamp, formatRelativeShort } from "@/lib/utils";
@@ -79,10 +81,20 @@ export function ThreadChip({
         isOpen
           ? "border-accent bg-surface-2 text-text"
           : "border-accent/60 text-text-tertiary hover:bg-surface-1 hover:text-text",
+        // Under the redesign a pill on a text tint, like a reaction: the
+        // thread hangs off the message without a stripe. Open is the
+        // selected row's fill.
+        "redesign:min-h-7 redesign:gap-2 redesign:rounded-full redesign:border-l-0 redesign:py-1 redesign:pl-1.5 redesign:pr-3 redesign:focus-visible:ring-accent",
+        isOpen
+          ? "redesign:bg-row-selected redesign:text-on-row-selected"
+          : "redesign:bg-[color:var(--content-glyph-bg)] redesign:text-text-secondary redesign:hover:bg-[color:var(--content-card-hover)] redesign:hover:text-text",
       )}
     >
       {thread.archived ? (
-        <Archive className="h-3.5 w-3.5 shrink-0" aria-hidden />
+        <>
+          <Archive className="h-3.5 w-3.5 shrink-0 redesign:hidden" aria-hidden />
+          <Icon icon={ArchiveGlyph} size="sm" className="ml-0.5 hidden redesign:block" />
+        </>
       ) : thread.participants.length > 0 ? (
         // Who is in there is the thing that makes a side conversation worth
         // opening, and the chip used to say nothing about it.
@@ -96,7 +108,7 @@ export function ThreadChip({
               avatarUrl={person.avatarUrl}
               rounded="full"
               className={cn(
-                "h-4 w-4 ring-2 ring-surface-0",
+                "h-4 w-4 ring-2 ring-surface-0 redesign:h-5 redesign:w-5 redesign:ring-[color:var(--color-pane-main)]",
                 index > 0 && "-ml-1.5",
               )}
               fallbackClassName="bg-surface-3 text-[8px] text-text-secondary"
@@ -104,17 +116,20 @@ export function ThreadChip({
           ))}
         </span>
       ) : (
-        <MessageSquareText
-          className="h-3.5 w-3.5 shrink-0 text-accent"
-          aria-hidden
-        />
+        <>
+          <MessageSquareText
+            className="h-3.5 w-3.5 shrink-0 text-accent redesign:hidden"
+            aria-hidden
+          />
+          <Icon icon={ChatCircleText} size="sm" className="ml-0.5 hidden text-accent-text redesign:block" />
+        </>
       )}
       {showName && (
-        <span className="min-w-0 truncate font-medium text-accent">
+        <span className="min-w-0 truncate font-medium text-accent redesign:font-semibold redesign:text-text">
           {thread.name}
         </span>
       )}
-      <span className="shrink-0 font-medium tabular-nums text-accent">
+      <span className="shrink-0 font-medium tabular-nums text-accent redesign:font-semibold redesign:text-accent-text">
         {replies}
       </span>
       {thread.archived ? (
