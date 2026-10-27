@@ -10,6 +10,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { CountBadge } from "@/components/ui/count-badge";
 import { Icon, IconSwap } from "@/components/ui/icon";
+import { SECTION_LABEL_REDESIGN } from "@/components/ui/section-header";
 import {
   SIDEBAR_CARD_REDESIGN,
   SIDEBAR_ROW_REDESIGN,
@@ -107,7 +108,7 @@ export function CommunityHomePreview({
             <Icon icon={ArchiveFill} size="sm" className="hidden redesign:block" />
           </span>
           <span className="min-w-0 flex-1">
-            <span className="block text-sm font-bold text-text">
+            <span className="block text-sm font-bold text-text redesign:font-semibold">
               {t("communityHome.preview.emptyTitle")}
             </span>
             <span className="mt-0.5 block text-xs leading-snug text-text-secondary">
@@ -178,6 +179,9 @@ export function CommunityHomePreview({
               aria-current={selected ? "page" : undefined}
               className={cn(
                 "flex w-full items-center gap-1.5 px-2.5 pb-2 pt-2.5 text-left text-xs font-bold text-text-secondary hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring",
+                // The section label's face, at the party cards' 12px inset.
+                SECTION_LABEL_REDESIGN,
+                "redesign:mb-0 redesign:px-3",
                 selected && "redesign:text-on-row-selected redesign:hover:text-on-row-selected",
               )}
             >
@@ -207,7 +211,7 @@ export function CommunityHomePreview({
               className="group/bauprev block w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring"
               data-bau-preview-post={lead.postId}
             >
-              <div className="px-2">
+              <div className="px-2 redesign:px-2.5">
                 <Cover
                   card={lead}
                   hue={hue}
@@ -221,7 +225,7 @@ export function CommunityHomePreview({
                   )}
                 </Cover>
               </div>
-              <div className="px-2.5 pb-2.5 pt-2">
+              <div className="px-2.5 pb-2.5 pt-2 redesign:px-3">
                 <p className="line-clamp-2 break-words text-[13.5px] font-bold leading-snug text-text redesign:text-sm redesign:font-semibold">
                   {leadTitle}
                 </p>
@@ -267,7 +271,7 @@ export function CommunityHomePreview({
                 type="button"
                 onClick={() => onOpenPost(others.first!.postId)}
                 className={cn(
-                  "flex w-full items-center gap-2 border-t border-border px-2.5 py-2 text-left text-xs font-semibold text-text-secondary hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring redesign:border-[color:var(--card-border)] redesign:hover:bg-[color:var(--card-row-hover)] redesign:focus-visible:ring-accent",
+                  "flex w-full items-center gap-2 border-t border-border px-2.5 py-2 redesign:px-3 text-left text-xs font-semibold text-text-secondary hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring redesign:border-[color:var(--card-border)] redesign:hover:bg-[color:var(--card-row-hover)] redesign:focus-visible:ring-accent",
                   // The open card keeps one fill: no lighter patch on hover.
                   selected && "redesign:hover:bg-transparent",
                 )}
@@ -359,6 +363,8 @@ function SlimRow({
         "flex w-full items-center gap-2.5 rounded-[var(--radius-control)] px-2 py-1.5 text-left transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
         selected ? "bg-surface-2" : "hover:bg-surface-2",
         SIDEBAR_ROW_REDESIGN,
+        // Two lines: the card's corner, not a 48px capsule.
+        "redesign:rounded-[var(--sidebar-card-radius)]",
         "redesign:focus-visible:ring-inset redesign:focus-visible:ring-accent",
         selected && SIDEBAR_ROW_SELECTED_REDESIGN,
       )}
@@ -377,7 +383,8 @@ function SlimRow({
         <span
           className={cn(
             "mt-0.5 block truncate text-xs text-text-tertiary",
-            selected && "redesign:text-on-row-selected",
+            selected &&
+              "redesign:text-[color:color-mix(in_oklab,var(--color-on-row-selected)_72%,transparent)]",
           )}
         >
           {line}

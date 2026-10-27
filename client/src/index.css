@@ -965,6 +965,9 @@
      above the channels, as cards on the card tint or dashed invitations. */
   --sidebar-card-radius: 0.875rem;
   --sidebar-invite-border: color-mix(in oklab, var(--color-text) 22%, transparent);
+  /* The solid AO VIVO badge: the danger hue a step deeper on a dark page,
+     so white 10px text clears 4.5:1 in every look. */
+  --live-badge-bg: color-mix(in oklab, var(--color-danger) 78%, black);
 
   --icon-button-radius: var(--radius-pill);
   --icon-button-text: var(--color-text-secondary);
@@ -1266,6 +1269,8 @@
   /* Light panes need a stronger thumb to clear 3:1. */
   --scrollbar-thumb: color-mix(in oklab, var(--color-text-tertiary) 80%, transparent);
   --scrollbar-thumb-hover: color-mix(in oklab, var(--color-text-secondary) 90%, transparent);
+  /* The light danger is already deep enough for white text. */
+  --live-badge-bg: var(--color-danger);
   /* On the near-white panes the 8% tint all but vanishes at the pulse's low
      point, and a 25% track at 12px is a hairline. */
   --skeleton-bg: color-mix(in oklab, var(--color-text) 10%, transparent);

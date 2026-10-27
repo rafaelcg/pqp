@@ -259,7 +259,7 @@ export function LivePartyBlock({
                   in a 230px rail. */}
               <PartyGlyph />
               <span className="flex min-w-0 flex-col">
-                <span className="truncate text-sm font-medium redesign:font-semibold">
+                <span className={cn("truncate text-sm font-medium redesign:font-semibold", teaser.onList && "redesign:text-text")}>
                   {t("watchParty.waitlist.teaser.label")}
                 </span>
                 <span
@@ -410,7 +410,7 @@ export function LivePartyBlock({
                       // Solid under the redesign, so it reads the same on the
                       // card tint and on the open party's selection fill.
                       !recovering &&
-                        "redesign:bg-danger redesign:text-[10px] redesign:text-on-danger redesign:[&>span]:bg-on-danger",
+                        "redesign:bg-[color:var(--live-badge-bg)] redesign:text-[10px] redesign:text-on-danger redesign:[&>span]:bg-on-danger",
                     )}
                     variant={recovering ? "recovering" : "live"}
                   />
