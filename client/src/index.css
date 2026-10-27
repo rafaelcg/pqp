@@ -3137,6 +3137,13 @@ h2,
   color: var(--color-on-mention-chip);
 }
 
+/* On a row that names you, other people's chips go neutral, so yours is the
+   one lime chip on the fill. */
+:root[data-redesign] .pqp-message-mention .pqp-mention:not(.pqp-mention-self) {
+  background: color-mix(in oklab, var(--color-text) 9%, transparent);
+  color: var(--color-text);
+}
+
 .pqp-mention-mass {
   font-weight: 600;
 }
