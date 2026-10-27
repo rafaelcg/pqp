@@ -28,7 +28,7 @@ export const SECTION_FOCUS_RING =
  * and round actions.
  */
 export const CATEGORY_ROW_REDESIGN =
-  "redesign:min-h-8 redesign:gap-1.5 redesign:rounded-full redesign:px-2 redesign:text-text-secondary redesign:hover:text-text redesign:has-[[data-section-toggle]:focus-visible]:ring-2 redesign:has-[[data-section-toggle]:focus-visible]:ring-inset redesign:has-[[data-section-toggle]:focus-visible]:ring-accent";
+  "redesign:min-h-8 redesign:gap-1.5 redesign:rounded-full redesign:px-2 redesign:text-text-secondary redesign:hover:text-text redesign:has-[[data-section-toggle]:focus-visible]:ring-2 redesign:has-[[data-section-toggle]:focus-visible]:ring-inset redesign:has-[[data-section-toggle]:focus-visible]:ring-accent redesign:has-[[data-section-toggle]:focus-visible]:bg-row-hover";
 
 /**
  * The fold button inside the row. Its own ring is off under the redesign:

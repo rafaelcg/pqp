@@ -2702,8 +2702,8 @@ export const ChannelList = memo(function ChannelList({
                     className={cn(
                       "pl-4 text-[11px] font-semibold uppercase tracking-[0.12em] text-text-tertiary",
                       CATEGORY_LABEL_REDESIGN,
-                      // A label, not a fold control: a step quieter than the headers.
-                      "redesign:pl-[1.125rem] redesign:text-text-tertiary",
+                      // A label, not a fold control: no caret and no hover.
+                      "redesign:pl-[1.125rem] redesign:text-text-secondary",
                     )}
                   >
                     {t("chrome.categories")}
