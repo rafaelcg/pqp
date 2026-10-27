@@ -508,6 +508,15 @@ share one recipe from `layout/channel-section-header.tsx`:
   ("+", the lock, the new category) with 14px glyphs.
 - `CATEGORY_SUMMARY_REDESIGN`: "3 canais" and the unread dot on a folded
   section.
+- `CATEGORY_DROP_INTO_REDESIGN`: a header a dragged channel would drop into.
+  `bg-accent-soft`, `text-on-accent-soft`, a 1px inset `ring-accent`, and no
+  hover change. The caret follows the label's colour.
+
+A drop target hides the summary and the actions and shows `chrome.dropHere`
+("Soltar aqui"); the name is already on the row. The lock is a filled glyph
+(an object). The new-category folder keeps the bold outline: filled, its plus
+is unreadable at 14px. The classic list always shows "+"; the mixed list shows
+it on hover and focus, because it has many more headers.
 
 ### The channel row
 
@@ -526,9 +535,10 @@ the redesign they take `ui/list-row.tsx`'s tokens:
   they show on a selected row.
 - A live watch party room says live with a red dot on its viewer line; the
   "AO VIVO" words stay for a screen reader. "Assistir" is a soft danger pill.
-- The room you are in: `bg-success-soft`, with the name, icon, tiles and an
-  8px dot in `on-success-soft` and the second line at 80%. It wins over
-  selected. An unread pip or a count takes the dot's place.
+- The room you are in: `bg-success-soft`, with the name, icon and tiles in
+  `on-success-soft` and the second line at 80%. It wins over selected. The
+  fill says connected (the dot is for a screen reader only), so the end
+  column only ever means something is waiting.
 - Keyboard focus rings the whole pill in `--list-row-ring`; the row's tiles,
   the thread's X and "Assistir" use the same token.
 - `ChannelListSkeleton` draws the same 36px pills, 2px apart.

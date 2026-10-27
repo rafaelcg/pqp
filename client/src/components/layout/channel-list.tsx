@@ -48,7 +48,7 @@ import {
   GearSix,
   PencilSimple,
   PushPin,
-  Lock as LockFill,
+  Lock as LockGlyph,
   MagnifyingGlass,
   Plus as PlusBold,
   SidebarSimple,
@@ -2755,6 +2755,7 @@ export const ChannelList = memo(function ChannelList({
                     className={cn(
                       "pl-4 text-[11px] font-semibold uppercase tracking-[0.12em] text-text-tertiary",
                       CATEGORY_LABEL_REDESIGN,
+                      // A label, not a fold control: no caret and no hover.
                       "redesign:pl-[1.125rem] redesign:text-text-secondary",
                     )}
                   >
@@ -2774,7 +2775,7 @@ export const ChannelList = memo(function ChannelList({
                         )}
                         onClick={() => onCreateChannel("category", false)}
                       >
-                        <SectionActionGlyph off={FolderPlus} on={FolderSimplePlus} kind="symbol" onClassName="h-4 w-4" />
+                        <SectionActionGlyph off={FolderPlus} on={FolderSimplePlus} kind="symbol" />
                       </button>
                     </Tooltip>
                   )}
@@ -3246,7 +3247,7 @@ export function ChannelSection({
                   className={addButtonClass}
                   onClick={onAddPrivate}
                 >
-                  <SectionActionGlyph off={Lock} on={LockFill} kind="symbol" offClassName="h-3 w-3" />
+                  <SectionActionGlyph off={Lock} on={LockGlyph} offClassName="h-3 w-3" />
                 </button>
               </Tooltip>
             </div>
@@ -4132,10 +4133,9 @@ export function ChannelRow({
             <span
               aria-hidden="true"
               className={cn(
-                "h-1.5 w-1.5 rounded-full bg-signal redesign:mr-2 redesign:h-[var(--list-row-pip)] redesign:w-[var(--list-row-pip)] redesign:bg-on-success-soft",
-                // The pip column means "something is waiting": an unread
-                // pip or a count takes it, and the fill still says connected.
-                ((hasUnread && !muted) || mentions > 0) && "redesign:hidden",
+                // Under the redesign the success fill says connected; the
+                // end column only ever means "something is waiting".
+                "h-1.5 w-1.5 rounded-full bg-signal redesign:hidden",
               )}
             />
             <span className="sr-only">{t("chrome.connected")}</span>

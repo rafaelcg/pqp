@@ -61,6 +61,9 @@ Read this file and the inventory at the start of every session.
 | 3 | `s-frame` | Merged, capped at round 5 (Opus 8.8) |
 | 3 | `s-rail` | Merged, capped at round 5 (Opus 8.2 r5, 8.8 r3) |
 | 3 | `s-sidebar-header` | Merged, capped at round 5 (Opus 8.3 r5, 8.7 r3) |
+| 3 | `s-sidebar-special` | Merged, capped at round 5 (Opus 8.1 r5, 8.6 r2; r5 MUST fixed after) |
+| 3 | `s-category` | Merged, capped at round 5 (Opus 7.9 r5, 8.3 r3) |
+| 3 | `s-channel-row` | Merged, capped at round 5 (Opus 8.5 r5). Follow-up: tooltip `sideOffset` so the name bubble clears the tiles |
 | 4 | `f-user-settings` | Merged, capped at round 5 (Opus 8.1 r5, 8.2 r4) |
 | 4 | `f-server-settings` | Merged, capped at round 5 (Opus 7.8 r5, 7.9 r4) |
 | 4 | `f-invites` | Merged, capped at round 5 (Opus 7.8 r5, 8.1 r3 and r4) |
