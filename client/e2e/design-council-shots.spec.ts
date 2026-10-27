@@ -585,6 +585,10 @@ test("captures the design council screens", async ({ browser }) => {
         await page.getByRole("button", { name: "Comunidades" }).first().click({ timeout: 5_000 });
         await page.waitForTimeout(1200);
         await shoot(page, `35-communities-${theme}`);
+        // Every language: the unfiltered empty directory, with its one create button.
+        await page.getByRole("button", { name: "Todos", exact: true }).first().click({ timeout: 3_000 }).catch(() => {});
+        await page.waitForTimeout(800);
+        await shoot(page, `35-communities-all-${theme}`);
         await page.keyboard.press("Escape");
         await page.waitForTimeout(300);
       } catch {
