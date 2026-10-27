@@ -78,6 +78,15 @@ export interface SectionRailItem<Id extends string = string> {
 const RAIL_SURFACE_REDESIGN =
   "redesign:border-[color:var(--settings-rule)] redesign:sm:border-r-0";
 
+/**
+ * The page beside the rail under the redesign: an inset pane in the
+ * conversation's tone, 8px from the dialog's right and bottom edges on `sm`
+ * and up, rounded like the app's panes. One recipe for the three settings
+ * dialogs.
+ */
+export const SETTINGS_PANE_REDESIGN =
+  "redesign:bg-[color:var(--settings-pane-bg)] sm:redesign:mr-[var(--settings-pane-inset)] sm:redesign:mb-[var(--settings-pane-inset)] sm:redesign:rounded-[var(--radius-pane)] sm:redesign:rounded-b-[calc(var(--radius-panel)-var(--settings-pane-inset))] sm:redesign:ring-1 sm:redesign:ring-inset sm:redesign:ring-[color:var(--settings-rule)]";
+
 const TAB_REDESIGN =
   "redesign:min-h-[var(--list-row-h-sm)] redesign:gap-[var(--list-row-gap-sm)] redesign:rounded-[var(--list-row-radius)] redesign:px-[var(--list-row-px)] redesign:py-0 redesign:focus-visible:ring-[color:var(--list-row-ring)] redesign:focus-visible:ring-offset-0";
 const TAB_SELECTED_REDESIGN =
@@ -361,6 +370,10 @@ export function SectionRail<Id extends string>({
                 TAB_REDESIGN,
                 selected ? TAB_SELECTED_REDESIGN : TAB_IDLE_REDESIGN,
                 section.danger && !selected && "redesign:text-danger",
+                // The one risky tab stays risky when open: a danger tint, not lime.
+                section.danger &&
+                  selected &&
+                  "redesign:bg-[color:color-mix(in_oklab,var(--color-danger)_12%,transparent)] redesign:text-danger",
                 // Phone strip: stays at the start edge while the strip scrolls.
                 pinned &&
                   "max-sm:sticky max-sm:left-0 max-sm:z-10 max-sm:bg-surface-2 max-sm:text-text redesign:max-sm:bg-[color:var(--settings-surface)] redesign:max-sm:shadow-[12px_0_12px_-4px_var(--settings-surface)]",

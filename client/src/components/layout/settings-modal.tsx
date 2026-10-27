@@ -26,7 +26,7 @@ import {
 import { SignOutButton } from "@/components/layout/sign-out-button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dialog } from "@/components/ui/dialog";
-import { SectionRail } from "@/components/ui/section-rail";
+import { SectionRail, SETTINGS_PANE_REDESIGN } from "@/components/ui/section-rail";
 import { useTouchOnly } from "@/components/ui/use-media-query";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { ConnectionsSection } from "@/components/connections/connections-section";
@@ -1353,7 +1353,10 @@ export function SettingsModal({
                 ref={paneRef}
                 // Under the redesign the page is an inset pane on the
                 // dialog's side tone, rounded like the app's panes.
-                className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-surface-1 redesign:overflow-hidden redesign:bg-[color:var(--settings-pane-bg)] sm:redesign:mr-[var(--settings-pane-inset)] sm:redesign:mb-[var(--settings-pane-inset)] sm:redesign:rounded-[var(--radius-pane)] sm:redesign:rounded-b-[calc(var(--radius-panel)-var(--settings-pane-inset))] sm:redesign:ring-1 sm:redesign:ring-inset sm:redesign:ring-[color:var(--settings-rule)]"
+                className={cn(
+                  "relative flex min-h-0 min-w-0 flex-1 flex-col bg-surface-1 redesign:overflow-hidden",
+                  SETTINGS_PANE_REDESIGN,
+                )}
               >
                 <div
                   ref={scrollerRef}

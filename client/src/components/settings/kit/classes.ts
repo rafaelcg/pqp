@@ -38,5 +38,19 @@ export const SETTINGS_BUSY = "cursor-not-allowed opacity-40 active:scale-100";
 export const SETTINGS_GROUP_REDESIGN =
   "redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:shadow-none redesign:divide-[color:var(--card-border)]";
 
+/**
+ * A bespoke box in a settings page (the role list, a webhook card) under the
+ * redesign: the group's card look on an element that had no edge of its own.
+ */
+export const SETTINGS_CARD_REDESIGN =
+  "redesign:rounded-[var(--radius-card)] redesign:border redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:shadow-none redesign:divide-[color:var(--card-border)]";
+
+/**
+ * A field's small label in a settings page under the redesign: sentence case
+ * at 13px, the way the kit's row labels read, not an uppercase eyebrow.
+ */
+export const SETTINGS_FIELD_LABEL_REDESIGN =
+  "redesign:text-[13px] redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text-secondary";
+
 /** A row inside a group, hovered: the card's row tint under the redesign. */
 export const SETTINGS_ROW_HOVER = "redesign:hover:bg-[color:var(--card-row-hover)]";
