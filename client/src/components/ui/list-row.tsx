@@ -211,8 +211,10 @@ export const ListRow = React.forwardRef<HTMLButtonElement, ListRowProps>(functio
         inert={rest.disabled ? true : undefined}
         className={cn(
           "flex shrink-0 items-center gap-0.5",
-          // On the selected fill the action takes the label's colour.
-          selected && "redesign:text-[color:var(--list-row-selected-text)]",
+          // On the selected fill the action takes the label's colour, its
+          // control included (an IconButton sets its own).
+          selected &&
+            "redesign:text-[color:var(--list-row-selected-text)] redesign:[&>*]:text-[color:var(--list-row-selected-text)]",
         )}
       >
         {action}
