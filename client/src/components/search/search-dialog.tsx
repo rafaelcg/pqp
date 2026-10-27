@@ -54,6 +54,7 @@ export function SearchDialog({
   const [cursor, setCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [selected, setSelected] = useState(0);
+  const lastArrowAt = useRef(0);
 
   const navigate = useNavigate();
   const rowRefs = useRef(new Map<string, HTMLButtonElement>());
@@ -160,6 +161,7 @@ export function SearchDialog({
   function handleKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
+      lastArrowAt.current = Date.now();
       setSelected((current) =>
         clampSelection(current, event.key === "ArrowDown" ? 1 : -1, results.length),
       );
@@ -189,7 +191,7 @@ export function SearchDialog({
           className={cn(
             "flex items-center gap-2 border-b border-border px-5 py-3",
             // Under the redesign: the input's round field, inset in the body.
-            "redesign:mx-[var(--dialog-px)] redesign:mt-1 redesign:mb-2 redesign:h-[var(--input-h)] redesign:gap-2.5 redesign:rounded-full redesign:border redesign:border-[color:var(--input-border)] redesign:bg-[color:var(--input-bg)] redesign:px-[var(--input-px)] redesign:py-0 redesign:focus-within:ring-1 redesign:focus-within:ring-offset-0 redesign:focus-within:border-[color:var(--input-ring,var(--color-focus-ring))] redesign:focus-within:ring-[color:var(--input-ring,var(--color-focus-ring))]",
+            "redesign:mx-[var(--dialog-px)] redesign:mt-1 redesign:mb-2 redesign:h-[var(--input-h)] redesign:gap-2.5 redesign:rounded-full redesign:border redesign:border-[color:var(--input-border)] redesign:bg-[color:var(--input-bg)] redesign:px-[var(--input-px)] redesign:py-0 redesign:focus-within:ring-0 redesign:focus-within:ring-offset-0 redesign:focus-within:border-[color:var(--input-ring,var(--color-focus-ring))]",
           )}
         >
           <Search className="h-4 w-4 shrink-0 text-text-muted redesign:hidden" />
@@ -260,7 +262,11 @@ export function SearchDialog({
                       role="option"
                       aria-selected={index === selected}
                       tabIndex={-1}
-                      onMouseEnter={() => setSelected(index)}
+                      onMouseEnter={() => {
+                        // The arrows scroll rows under a resting pointer; a
+                        // row arriving there must not take the selection back.
+                        if (Date.now() - lastArrowAt.current > 150) setSelected(index);
+                      }}
                       onClick={() => openResult(result)}
                       className={cn(
                         "w-full rounded-md border border-transparent px-3 py-2 text-left outline-none",
@@ -272,7 +278,7 @@ export function SearchDialog({
                         // the arrows read like a menu's.
                         "redesign:rounded-[var(--radius-card)] redesign:px-3.5 redesign:py-2.5",
                         index === selected
-                          ? "redesign:border-transparent redesign:bg-[color:var(--menu-row-hover)]"
+                          ? "redesign:border-transparent redesign:bg-[color:var(--search-row-selected)]"
                           // Hover moves the selection, so one fill serves both.
                           : "redesign:hover:bg-transparent",
                       )}
@@ -280,7 +286,7 @@ export function SearchDialog({
                       <div className="flex items-baseline gap-2 text-xs text-text-muted">
                         <span className="flex min-w-0 items-center gap-1 font-medium text-text redesign:font-semibold">
                           <Hash className="h-3 w-3 shrink-0 redesign:hidden" />
-                          <Icon icon={HashGlyph} kind="symbol" size="sm" className="hidden h-3.5 w-3.5 text-text-tertiary redesign:block" />
+                          <Icon icon={HashGlyph} kind="symbol" size="sm" className="hidden h-3.5 w-3.5 text-text-secondary redesign:block" />
                           <span className="truncate">{result.channelName}</span>
                         </span>
                         <span className="truncate redesign:text-text-secondary">{result.authorName}</span>
@@ -361,7 +367,8 @@ function SearchEmpty({
         icon === "none" ? undefined : icon === "error" ? (
           <Icon icon={WarningCircle} size="md" className="text-danger" />
         ) : (
-          <Icon icon={MagnifyingGlass} kind="symbol" size="md" />
+          // Quiet, so the field's glass stays the one search mark.
+          <Icon icon={MagnifyingGlass} kind="symbol" size="sm" className="text-text-tertiary" />
         )
       }
       iconClassName="hidden redesign:block"
