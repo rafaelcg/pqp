@@ -3997,6 +3997,7 @@ export function ChannelRow({
         }
       }}
       aria-current={announceCurrent ? "page" : undefined}
+      data-channel-row-main=""
       className="flex min-w-0 flex-1 touch-manipulation items-center gap-1.5 text-left redesign:gap-[var(--list-row-gap-sm)] redesign:self-stretch redesign:rounded-[inherit] redesign:focus-visible:outline-none"
     >
       {/* Private is the glyph, not a word. The pill that used to sit at
@@ -4141,6 +4142,8 @@ export function ChannelRow({
               // The pill it always was with the toggle off.
               "h-auto py-0.5 text-center text-paper normal-nums",
               "redesign:h-[var(--count-badge-h)] redesign:min-w-[var(--count-badge-h)] redesign:py-0 redesign:text-[length:var(--count-badge-text)] redesign:tabular-nums redesign:text-on-danger",
+              // Ends at the row's 12px padding, as the name starts at it.
+              "redesign:mr-2",
             )}
           />
         )}
@@ -4151,7 +4154,7 @@ export function ChannelRow({
             aria-hidden="true"
             data-channel-unread-pip=""
             className={cn(
-              "hidden h-[var(--list-row-pip)] w-[var(--list-row-pip)] shrink-0 rounded-full bg-indicator redesign:block",
+              "hidden h-[var(--list-row-pip)] w-[var(--list-row-pip)] shrink-0 rounded-full bg-indicator redesign:mr-2 redesign:block",
               // The tiles take its place on hover (a count stays).
               (onToggleFavorite || canOpenSettings) &&
                 "redesign:group-hover:hidden redesign:group-focus-within:hidden",
@@ -4222,6 +4225,9 @@ export function ChannelRow({
           hasUnread && !muted && !selected && !connected && "redesign:text-text",
           muted && !selected && !connected && "redesign:opacity-[var(--list-row-muted-opacity)]",
           isDragOver && !occupantDragActive && "redesign:ring-accent",
+          // The row's focus ring, on the whole pill: the button inside
+          // drops its outline under the redesign.
+          "redesign:has-[[data-channel-row-main]:focus-visible]:ring-2 redesign:has-[[data-channel-row-main]:focus-visible]:ring-inset redesign:has-[[data-channel-row-main]:focus-visible]:ring-[color:var(--list-row-ring)]",
         )}
       >
         {hasUnread && !muted && (
@@ -4296,7 +4302,9 @@ export function ChannelRow({
                 // Under the redesign a hidden tile takes no room, so the pip
                 // ends the row; it comes in on hover or focus.
                 isFavorite
-                  ? "redesign:text-current"
+                  ? // The icon colour, not the text: a bright pin at the
+                    // row's end would read as the unread pip.
+                    "redesign:text-[color:var(--list-row-icon)]"
                   : "redesign:hidden redesign:group-hover:flex redesign:group-focus-within:flex",
               )}
               aria-label={
@@ -4409,8 +4417,10 @@ export function SidebarThreadRow({
                 : "text-text-tertiary hover:text-text",
               // Under the redesign a thread is a smaller list row: a 32px
               // pill, the row's text roles, the end pip for unread.
-              "redesign:min-h-8 redesign:gap-[var(--list-row-gap-sm)] redesign:rounded-[inherit] redesign:px-[var(--list-row-px)] redesign:text-[13px] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-inset redesign:focus-visible:ring-accent",
+              "redesign:min-h-8 redesign:gap-[var(--list-row-gap-sm)] redesign:rounded-[inherit] redesign:pl-[var(--list-row-px)] redesign:text-[13px] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-inset redesign:focus-visible:ring-accent",
               !unread && "redesign:text-[color:var(--list-row-text)]",
+              // With a leave button the base right padding keeps its room.
+              !onLeave && "redesign:pr-[var(--list-row-px)]",
             )}
           >
             <MessageSquareText
