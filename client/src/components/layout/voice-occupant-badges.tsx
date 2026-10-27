@@ -58,14 +58,17 @@ function BadgeGlyph({
   on,
   kind = "object",
   label,
-  className,
+  tone,
+  onClassName = "h-3.5 w-3.5",
 }: {
   off: LucideIcon;
   on: PhosphorIcon;
-  /** `symbol` for a glyph that fills into a blob at 14px (the ear). */
   kind?: IconKind;
   label: string;
-  className: string;
+  /** Accent for what someone is doing, danger for what they cannot do. */
+  tone: "accent" | "danger";
+  /** The Phosphor glyph's size, 14px unless a shape needs more room. */
+  onClassName?: string;
 }) {
   return (
     <span
@@ -73,14 +76,13 @@ function BadgeGlyph({
       aria-label={label}
       className={cn(
         "flex",
-        className,
         // The accent as a mark on the pane needs its text step (lime is
         // too light on the light theme); danger reads as it is.
-        className === "text-signal" && "redesign:text-accent-text",
+        tone === "accent" ? "text-signal redesign:text-accent-text" : "text-danger",
       )}
     >
       <Off aria-hidden="true" className="h-3 w-3 redesign:hidden" />
-      <Icon icon={on} kind={kind} className="hidden h-3.5 w-3.5 redesign:block" />
+      <Icon icon={on} kind={kind} className={cn("hidden redesign:block", onClassName)} />
     </span>
   );
 }
@@ -109,26 +111,27 @@ export function VoiceOccupantBadges({
     <span className="ml-auto flex shrink-0 items-center gap-1 redesign:gap-1.5">
       {handRaised &&
         (handPosition !== null ? (
-          <HandPositionBadge position={handPosition} className="text-[10px]" />
+          <HandPositionBadge position={handPosition} className="text-[10px] redesign:text-[11px]" />
         ) : (
-          <BadgeGlyph off={Hand} on={HandFill} label={t("voice.hand.raised")} className="text-signal" />
+          <BadgeGlyph off={Hand} on={HandFill} label={t("voice.hand.raised")} tone="accent" />
         ))}
       {person.sharingScreen && (
         <BadgeGlyph
           off={ScreenShare}
           on={Screencast}
           label={t("chrome.sharingScreen")}
-          className="text-signal"
+          tone="accent"
         />
       )}
       {cameraOn && (
-        <BadgeGlyph off={Video} on={VideoCamera} label={t("chrome.cameraOn")} className="text-signal" />
+        <BadgeGlyph off={Video} on={VideoCamera} label={t("chrome.cameraOn")} tone="accent" />
       )}
       {person.deafened ? (
-        <BadgeGlyph off={HeadphoneOff} on={EarSlash} kind="symbol" label={t("chrome.deafened")} className="text-danger" />
+        // The filled ear at 16px: bold at 14px it was a red scribble beside the mic.
+          <BadgeGlyph off={HeadphoneOff} on={EarSlash} label={t("chrome.deafened")} tone="danger" onClassName="h-4 w-4" />
       ) : (
         person.muted && (
-          <BadgeGlyph off={MicOff} on={MicrophoneSlash} label={t("chrome.muted")} className="text-danger" />
+          <BadgeGlyph off={MicOff} on={MicrophoneSlash} label={t("chrome.muted")} tone="danger" />
         )
       )}
     </span>

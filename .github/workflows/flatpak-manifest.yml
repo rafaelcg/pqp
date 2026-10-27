@@ -71,11 +71,11 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       TAG: ${{ github.event.release.tag_name || inputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: main
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
 
@@ -113,7 +113,7 @@ jobs:
       # The bumped manifest and metainfo, for `pr` to commit and `bundle` to
       # build. Only those two: an artifact drops the executable bit, and the
       # rest of flatpak/ comes from each job's own checkout.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: flatpak-manifest
           path: |
@@ -134,11 +134,11 @@ jobs:
       VERSION: ${{ needs.bump.outputs.version }}
       DEB_SHA: ${{ needs.bump.outputs.deb_sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: main
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
 
@@ -148,7 +148,7 @@ jobs:
         id: main
         run: echo "version=$(node flatpak/bump.mjs --pinned)" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: flatpak-manifest
           path: flatpak/
@@ -208,9 +208,9 @@ jobs:
     outputs:
       name: ${{ steps.build.outputs.name }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
 
@@ -220,7 +220,7 @@ jobs:
 
       # Replace the checked-out manifest and metainfo with the ones `bump`
       # pinned to this release.
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         if: needs.bump.result == 'success'
         with:
           name: flatpak-manifest
@@ -253,7 +253,7 @@ jobs:
           echo "file=$RUNNER_TEMP/out/$file" >> "$GITHUB_OUTPUT"
           echo "name=$file" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: flatpak-bundle
           path: ${{ steps.build.outputs.file }}
@@ -273,7 +273,7 @@ jobs:
       TAG: ${{ github.event.release.tag_name || inputs.tag }}
       NAME: ${{ needs.bundle.outputs.name }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: flatpak-bundle
           path: ${{ runner.temp }}/bundle
