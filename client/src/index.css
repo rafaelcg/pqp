@@ -849,6 +849,27 @@
   --count-badge-text: 0.6875rem;
   --count-badge-sm-text: 0.625rem;
 
+  /* List rows (ui/list-row.tsx): Salas pills on the row roles, a step
+     taller than before, with more room inside. */
+  --list-row-radius: var(--radius-pill);
+  --list-row-px: 0.75rem;
+  /* 8px: at 6px on a 36px pill the pip read as a full stop. */
+  --list-row-pip: 0.5rem;
+  --list-row-h-sm: 2.25rem;
+  --list-row-h-md: 2.75rem;
+  --list-row-h-lg: 3.25rem;
+  --list-row-gap-sm: 0.5rem;
+  --list-row-gap: 0.75rem;
+  --list-row-hover: var(--color-row-hover);
+  --list-row-selected: var(--color-row-selected);
+  --list-row-selected-text: var(--color-on-row-selected);
+  /* A muted row (a channel you silenced) stays a step above a disabled one
+     (0.4), so the two read apart. */
+  --list-row-muted-opacity: 0.6;
+  /* The solid accent, as IconButton's and Slider's rings: the 60% focus
+     ring all but vanishes on the light selected fill. */
+  --list-row-ring: var(--color-accent);
+
   --icon-button-radius: var(--radius-pill);
   --icon-button-text: var(--color-text-secondary);
   /* Tints, like the button's: an icon button sits on panes and dialogs. */

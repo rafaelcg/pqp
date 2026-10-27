@@ -741,6 +741,19 @@ Verified: typecheck; 10,420 unit tests; `bench:tokens`; i18n check;
 retro, Halloween, high contrast, 390px and toggle off. Screenshots:
 `~/pqp-redesign/p-avatar/`.
 
+### p-list-row
+
+Spec (audit: about twelve row kinds, each hand-built with palette aliases;
+the row roles in `index.css` were defined and drawn only on `/qa/ui`):
+
+1. Job: one row with a leading mark, a label, a second line and a trailing
+   slot; states hover, selected, unread, muted, disabled.
+2. Redesign: Salas pills on the row roles, a step taller, more room inside.
+3. Built as the primitive with its sheet block. Nothing adopts it here: each
+   row keeps its toggle-off look only if it moves together with its shell
+   element (`s-channel-row`, `s-voice-row`, `s-member-list`, `f-dm-home`,
+   `f-friends`), so the folds happen there.
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss

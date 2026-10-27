@@ -5137,6 +5137,8 @@
   "qaUi.badge.danger": "Rechazado",
   "qaUi.badge.neutral": "Cerrado",
   "qaUi.badge.muted": "Eliminado",
+  "qaUi.listRow.inCall": "En llamada · Lobby",
+  "qaUi.listRow.lastMessage": "¿jugamos esta noche?",
   "qaUi.menu.open": "Abrir menú",
   "qaUi.menu.notifications": "Notificaciones",
   "qaUi.menu.all": "Todos los mensajes",

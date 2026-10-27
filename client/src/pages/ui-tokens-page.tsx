@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import {
   Bell,
+  BellSlash,
   CaretDown,
   ChatCircle,
   CheckCircle as BannerCheckIcon,
@@ -35,6 +36,7 @@ import { BANNER_FILL_REDESIGN, Banner, BannerAction, BannerText } from "@/compon
 import { ShareHandleButton } from "@/components/handle/share-handle-button";
 import { ConnectionBanner } from "@/components/layout/connection-banner";
 import { SanctionNoticeBar } from "@/components/layout/sanction-notice-bar";
+import { ListRow } from "@/components/ui/list-row";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { CountBadge } from "@/components/ui/count-badge";
 import { ServerBotTags } from "@/components/bots/server-bot-tags";
@@ -1469,6 +1471,73 @@ function PrimitiveSheet() {
           }}
           onDismiss={() => {}}
         />
+      </div>
+
+      {/* List rows: channels (every state) and people (avatar, second line). */}
+      <div data-testid="qa-primitive-list-row" className="grid gap-4 sm:grid-cols-2">
+        <div className="flex flex-col gap-0.5 rounded-[var(--radius-card)] bg-pane-side p-2">
+          {(
+            [
+              ["geral", {}],
+              ["avisos", { unread: true }],
+              ["memes", { unread: true }],
+              ["papo", { selected: true }],
+              ["clipes", { muted: true }],
+              ["arquivo", { disabled: true }],
+            ] as const
+          ).map(([name, state]) => (
+            <ListRow
+              key={name}
+              leading={<Icon icon={Hash} kind="symbol" size="sm" />}
+              trailing={name === "clipes" ? <Icon icon={BellSlash} size="sm" /> : undefined}
+              count={name === "memes" ? <CountBadge count={3} /> : undefined}
+              action={
+                name === "papo" ? (
+                  <IconButton size="xs" touch={false} side="right" label={t("qaUi.iconButton.settings")}>
+                    <Icon icon={GearSix} />
+                  </IconButton>
+                ) : undefined
+              }
+              {...state}
+            >
+              {name}
+            </ListRow>
+          ))}
+        </div>
+        <div className="flex flex-col gap-0.5 rounded-[var(--radius-card)] bg-pane-side p-2">
+          <ListRow size="md" leading={<UserAvatar name="Bia" className="h-8 w-8" fallbackClassName="bg-surface-3 text-xs text-text" rounded="full" />}>
+            Bia
+          </ListRow>
+          <ListRow
+            size="lg"
+            selected
+            leading={<UserAvatar name="Rafa" className="h-9 w-9" fallbackClassName="bg-surface-3 text-sm text-text" rounded="full" />}
+            detail={t("qaUi.listRow.inCall")}
+            trailing="19:02"
+          >
+            Rafa
+          </ListRow>
+          <ListRow
+            size="lg"
+            unread
+            leading={<UserAvatar name="Caio" className="h-9 w-9" fallbackClassName="bg-surface-3 text-sm text-text" rounded="full" />}
+            detail={t("qaUi.listRow.lastMessage")}
+            trailing="17:42"
+          >
+            Caio
+          </ListRow>
+          {/* A time over a count on a two-line row. */}
+          <ListRow
+            size="lg"
+            unread
+            leading={<UserAvatar name="Duda" className="h-9 w-9" fallbackClassName="bg-surface-3 text-sm text-text" rounded="full" />}
+            detail={t("qaUi.listRow.lastMessage")}
+            trailing="16:10"
+            count={<CountBadge count={2} />}
+          >
+            Duda
+          </ListRow>
+        </div>
       </div>
 
       {/* Toasts: a note that arrives and a plain notice (both on the level-3
