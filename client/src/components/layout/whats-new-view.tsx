@@ -1,3 +1,7 @@
+import { PANE_HEADER_NAV_REDESIGN, PANE_HEADER_REDESIGN } from "@/components/ui/pane-header";
+import { List as ListBold } from "@phosphor-icons/react";
+import { Icon } from "@/components/ui/icon";
+import { cn } from "@/lib/utils";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -16,7 +20,6 @@ import {
 } from "@/lib/blog/posts";
 import { subscribeEscapeUnlessOverlay } from "@/lib/escape-unless-overlay";
 import { useTranslation } from "@/lib/i18n";
-import { cn } from "@/lib/utils";
 import { PANE_MAIN_REDESIGN, PANE_SIDE_REDESIGN } from "@/components/ui/pane";
 
 const MARKDOWN_PLUGINS = [remarkGfm];
@@ -167,14 +170,15 @@ export function WhatsNewView({
           aria-hidden="true"
           className="pointer-events-none absolute inset-x-0 top-0 h-72 bg-[radial-gradient(90%_80%_at_50%_-10%,var(--glow-accent)_0%,transparent_70%)]"
         />
-        <header className="relative z-10 flex h-14 shrink-0 items-center border-b border-ink-4/40 px-3 md:hidden">
+        <header className={cn("relative z-10 flex h-14 shrink-0 items-center border-b border-ink-4/40 px-3 md:hidden", PANE_HEADER_REDESIGN, "redesign:px-2 redesign:md:hidden")}>
           <button
             type="button"
-            className="rounded-md p-1.5 hover:bg-ink-3"
+            className={cn("rounded-md p-1.5 hover:bg-ink-3", PANE_HEADER_NAV_REDESIGN)}
             aria-label={t("chrome.openNav")}
             onClick={onMobileOpen}
           >
-            <Menu className="h-5 w-5" />
+            <Menu className="h-5 w-5 redesign:hidden" />
+            <Icon icon={ListBold} kind="symbol" size="sm" className="hidden redesign:block" />
           </button>
         </header>
         {selected ? (

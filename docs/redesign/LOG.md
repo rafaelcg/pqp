@@ -67,6 +67,8 @@ Read this file and the inventory at the start of every session.
 | 3 | `s-voice-row` | Merged, capped at round 5 (Opus 8.0 r5, 8.2 r3). Open: light selected and connected fills are close; check with the token owner |
 | 3 | `s-sidebar-rail` | Merged, capped at round 5 (Opus 8.1 r4 and r5) |
 | 3 | `s-voice-strip` | Merged, capped at round 5 (Opus 8.1 r5). Follow-ups: composer hang-up glyph (`s-composer`), music idle row fixture (`m-sheets`) |
+| 3 | `s-user-panel` | Merged, capped at round 5 (Opus 8.2 r5). Open: the Invisível hint is seven lines at the card width (copy, shows with the toggle off) |
+| 3 | `s-header` | Merged, capped at round 5 (Opus 8.3 r4 and r5). Follow-up: rename `--pane-header-rule` / `--pane-header-px` to `--pane-bar-*` after the chain |
 | 4 | `f-user-settings` | Merged, capped at round 5 (Opus 8.1 r5, 8.2 r4) |
 | 4 | `f-server-settings` | Merged, capped at round 5 (Opus 7.8 r5, 7.9 r4) |
 | 4 | `f-invites` | Merged, capped at round 5 (Opus 7.8 r5, 8.1 r3 and r4) |
@@ -1209,7 +1211,6 @@ confirm, the delete account dialog, the phone tab strip):
 4. Kept: every section, the close guard, the handle confirm, the 44px phone
    targets, the dirty dot and its spoken description.
 
-
 ### f-server-settings
 
 Spec (audit: `server-settings-dialog.tsx` with 13 sections and its own
@@ -1274,7 +1275,6 @@ Spec (audit: voice rooms through `ChannelRow`, `VoiceOccupantRow`,
 4. For `s-user-panel`: deafened is `EarSlash`; the panel's deafen button
    should use the same glyph.
 
-
 ### s-sidebar-rail
 
 Spec (audit: one renderer, `ChannelList` folded by `iconsOnly` on desktop,
@@ -1315,6 +1315,62 @@ r4 8.0, r5 8.1 (cap, no MUST). r5 fixes: the footer cards draw
 72px room button takes the row's shape. Follow-ups: the composer dock's
 hang-up moves to `PhoneDisconnect` (`s-composer`); the music idle row needs
 the music store fixture (`m-sheets`) before it can be reviewed.
+
+### s-user-panel
+
+Spec (audit: `UserPanel` wide and compact through `sidebarFooter`; its
+hand-built status menu with the recado field; `DownloadHint` above it):
+
+1. Job: who you are and your presence, mute, deafen, Não Perturbe, settings;
+   the menu to rename, set the recado, pick a status, send feedback, get
+   help, download.
+2. States: off a call (mute and deafen disabled), mic off, deafened, muted
+   by a moderator, listen only, DND, invisible, saving, error, compact;
+   menu: the recado typed, over the limit, a status chosen.
+3. Redesign: an inset card at the foot of the sidebar; round buttons, a soft
+   danger fill when the mic or sound is off (warning for a moderator's
+   mute); the deafen glyph is the bold ear the voice row uses. The menu
+   keeps its own behaviour (not a Radix menu: the field and roving focus)
+   and takes the popover surface and the menu row tokens.
+4. Question for André: the status menu could become `ui/menu`'s
+   `DropdownMenu` with the field as top content. That is behaviour, so it is
+   not done here.
+
+Rounds (Opus only): r1 7.5 (MUST fixed), r2 7.8, r3 8.1, r4 8.1, r5 8.2
+(cap, no MUST). Changes over the rounds: the moderator's mute at full
+strength; listen only as an outlined mic with a lock badge, named "Só
+ouvindo" under the redesign; the home-indicator inset below the card;
+`--footer-card-solid-hover` for the dot cutout; the status menu as wide as
+the card with the dots in 16px slots; Não Perturbe as a red glyph without a
+fill. Open (copy, shows with the toggle off too): the Invisível hint wraps
+to seven lines at the card's width.
+
+### s-header
+
+Spec (audit: the chat header in `App.tsx` with `channelHeaderTools` and
+`HEADER_ACTION_TILE`, shared with the call split's header; six more headers
+drawn by hand: forum, Baú, friends, Novidades on a phone, two skeletons):
+
+1. Job: where you are (name, topic or "N aqui", a conversation's line) and
+   the pane's tools (join, call, nudge, schedule, pins, history, settings,
+   members, more).
+2. States: text, private, with an image, voice room (join), DM (call,
+   video, join with count), in the call, members open, phone back or menu
+   with the update dot, loading.
+3. Merge: one recipe, `ui/pane-header.ts` (bar, title, detail, 36px round
+   action tile, phone nav button), on every header above. From `md` up the
+   topic sits beside the name after a rule, as in the mockup. Left for their
+   elements: the thread panel's header (`s-thread`), the call split's own
+   bar (`f-call`), the party bar (`f-watch-party`).
+Rounds (Opus only): r1 7.0 (two MUST fixed: the phone title cut to "# p.",
+`--list-row-icon` undefined on the branch), r2 7.9 (MUST fixed: the title
+size token declared twice, so every title drew at 20px; the bar now has
+`--pane-bar-title-size`), r3 8.0, r4 8.3, r5 8.3 (cap). Also: one baseline
+and tracking with the sidebar header, the room's glyph before a voice or
+forum title, the open members tile on the selected fill, 18px glyphs, the
+forum and friends on the recipe. Follow-up after the chain: rename the
+bar's `--pane-header-rule` and `--pane-header-px` to `--pane-bar-*` (six
+chain branches use them now). Not done: an avatar before a DM's name.
 
 ## Open questions for André
 

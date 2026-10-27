@@ -461,6 +461,33 @@ test("captures the design council screens", async ({ browser }) => {
         });
         await page.mouse.move(0, 0);
       }
+      // The conversation header up close, the pins tile hovered.
+      {
+        const header = page.locator("[data-chat-header]");
+        await header.getByRole("button", { name: "Fixadas" }).hover();
+        await page.waitForTimeout(400);
+        const box = (await header.boundingBox())!;
+        await page.screenshot({
+          path: path.join(OUT!, `s-header-${theme}.png`),
+          clip: { x: box.x, y: box.y, width: box.width, height: box.height + 48 },
+        });
+        await page.mouse.move(0, 0);
+      }
+      // The open members tile with keyboard focus: the ring sits off the fill.
+      try {
+        const header = page.locator("[data-chat-header]");
+        await page.keyboard.press("Shift");
+        await header.locator("[data-member-sidebar-toggle]").focus();
+        await page.waitForTimeout(300);
+        const box = (await header.boundingBox())!;
+        await page.screenshot({
+          path: path.join(OUT!, `s-header-focus-${theme}.png`),
+          clip: { x: box.x + box.width - 260, y: box.y, width: 260, height: box.height + 8 },
+        });
+        await page.locator("body").focus();
+      } catch {
+        console.log("header focus shot skipped");
+      }
       // The channel list folded to icons, in place; then unfolded again.
       await page.locator("[data-channel-sidebar-toggle]").first().click();
       await expect(page.locator("[data-channel-rail]")).toBeVisible();
@@ -468,6 +495,13 @@ test("captures the design council screens", async ({ browser }) => {
       await shoot(page, `20-sidebar-strip-${theme}`);
       await page.locator("[data-channel-rail-expand]").click();
       await expect(page.locator("[data-channel-rail]")).toBeHidden();
+      // The status menu, open from the user panel.
+      await page.locator("[data-user-panel-trigger]").first().click();
+      await expect(page.getByRole("menu", { name: "Mudar o seu status" })).toBeVisible();
+      await page.waitForTimeout(300);
+      await shoot(page, `21-status-menu-${theme}`);
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("menu", { name: "Mudar o seu status" })).toBeHidden();
       // A short name, so the caret's place after the name shows.
       try {
         await page.getByRole("button", { name: /Faculdade ADS/ }).first().click({ timeout: 5_000 });
@@ -612,6 +646,21 @@ test("captures the design council screens", async ({ browser }) => {
         await page.keyboard.press("Escape");
       } catch {
         console.log("channel settings gear not found, shot 28 skipped");
+      }
+      // A voice room's header, not in the call: the "Entre na call" pill.
+      // Best effort, last in the context so a join cannot touch other shots.
+      try {
+        await page.getByRole("button", { name: /^Lobby/ }).first().click({ timeout: 5_000 });
+        const header = page.locator("[data-chat-header]");
+        await expect(header.getByRole("button", { name: /Entre na call/ })).toBeVisible({ timeout: 5_000 });
+        await page.waitForTimeout(400);
+        const box = (await header.boundingBox())!;
+        await page.screenshot({
+          path: path.join(OUT!, `s-header-voice-${theme}.png`),
+          clip: { x: box.x, y: box.y, width: box.width, height: box.height + 48 },
+        });
+      } catch {
+        console.log("voice room header pill not found, s-header-voice skipped");
       }
 
       await context.close();
@@ -785,6 +834,8 @@ const PRIMITIVES: {
   { id: "s-sidebar-rail", testId: "qa-shell-sidebar-strip", focus: "clipes", hover: "general" },
   // The voice strip in its states.
   { id: "s-voice-strip", testId: "qa-shell-voice-strip", focus: "Sair da call" },
+  // The user panel: hover on the settings gear of the first.
+  { id: "s-user-panel", testId: "qa-shell-user-panel", hover: "Abrir configurações" },
 ];
 
 test("captures the primitives", async ({ browser }) => {
