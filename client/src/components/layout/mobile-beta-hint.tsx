@@ -75,7 +75,7 @@ export function MobileBetaHint({
       title={t(titleKey)}
       body={t(bodyKey)}
       footer={
-        <Button asChild size="sm" className="cta-lift rounded-full px-4">
+        <Button asChild size="sm" data-cta className="cta-lift rounded-full px-4">
           <Link to={to} onClick={close}>
             {t(ctaKey)}
           </Link>

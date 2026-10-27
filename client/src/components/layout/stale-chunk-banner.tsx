@@ -42,7 +42,7 @@ export function StaleChunkBanner() {
       footer={
         <Button
           size="sm"
-          className="cta-lift rounded-full px-4"
+          data-cta className="cta-lift rounded-full px-4"
           onClick={() => window.location.reload()}
         >
           {t("update.reload")}

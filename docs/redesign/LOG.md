@@ -1424,6 +1424,25 @@ only where a strip can be hidden, one text column at 44px, meta lines at
 Not done: a dark-only accent edge at about 20% (judge with one strip in
 place, not the sheet's stack).
 
+### f-onboarding
+
+Spec (audit: `onboarding/` (11 files), the hints in `layout/*-hint.tsx`
+and `corner-card.tsx`: the wizard, the first-run card, arrival and newcomer
+strips, ten hints that all render through `CornerCard`):
+
+1. Job: get a new person to a working setup, and teach a feature once.
+2. Redesign: `CornerCard` (the one hint shell) on the popover surface,
+   edge, lift and radius, a round close (glass on a hero), a 15px title;
+   the first-run card a pane-radius card with accent-soft step wells.
+3. Merges: none needed; the hint shapes already share `CornerCard`.
+4. Kept: every hint, the queue, the quiet contexts, the wizard.
+Rounds (Opus only): r1 7.3 (MUST fixed), r2 7.8, r3 8.3, r4 8.2, r5 8.3
+(cap, no MUST). The family: one 32px round close on every card (glass on
+a hero, from `--glass-bg` / `--glass-fg` / `--glass-border`), the shell
+sizes a footer's primary action (`data-cta`, 120px), done steps keep their
+place with a check and "Feito" and no strike. Rebuilt off `redesign`
+without the f-call work the first branch carried.
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss
