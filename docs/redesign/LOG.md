@@ -1043,6 +1043,21 @@ Spec (audit: Dialog in 50 files, ConfirmDialog in 24, PromptDialog in 1;
 Verified: typecheck, 10,462 unit tests, bench:tokens, i18n:check, e2e
 dialog-mobile-layout (16). Screenshots: ~/pqp-redesign/p-dialog/.
 
+### s-sidebar-header
+
+Spec (audit: one header in `channel-list.tsx`, three hand-built icon
+buttons, a search entry styled as a faint field, the banner strip in
+`server-identity.tsx`):
+
+1. Job: the open server's name and menu, members, collapse, close (phone),
+   message search, and the banner when the server has one.
+2. States: hover and open menu, a long name (tooltip), public, loading, no
+   server, with and without a banner, phone drawer.
+3. Redesign: the name in the title face over no rule, without the icon
+   the rail tile already shows beside it; the three buttons are
+   IconButton; search is a pill a step off the pane; the banner is an inset
+   card. The search dialog itself is `f-search`.
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss

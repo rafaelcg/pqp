@@ -932,6 +932,20 @@
   --dialog-title-size: 1.375rem;
   --dialog-title-leading: 1.875rem;
 
+  /* Sidebar header (layout/channel-list.tsx): the server's name in the title
+     face over no rule, a search pill a step off the pane, the banner as an
+     inset card. */
+  --sidebar-header-title-size: 1rem;
+  --sidebar-search-h: 2.25rem;
+  --sidebar-search-bg: color-mix(in oklab, var(--color-text) 6%, var(--color-pane-side));
+  --sidebar-search-hover: color-mix(in oklab, var(--color-text) 9%, var(--color-pane-side));
+  --sidebar-search-border: transparent;
+  /* The header trigger's ladder over the search pill (6%): hover 8%, the
+     ghost buttons' step beside it; open 10%. */
+  --sidebar-trigger-hover: var(--button-ghost-hover);
+  --sidebar-trigger-open: color-mix(in oklab, var(--color-text) 10%, transparent);
+  --sidebar-banner-radius: 0.75rem;
+
   --icon-button-radius: var(--radius-pill);
   --icon-button-text: var(--color-text-secondary);
   /* Tints, like the button's: an icon button sits on panes and dialogs. */
@@ -1249,6 +1263,10 @@
      own grey and the tile disappears). */
   --rail-tile-shadow: 0 2px 6px -2px oklch(0.4 0.02 262 / 0.3);
   --rail-tile-hover: var(--color-surface-0);
+  /* Sidebar search: the field's white with its edge, on the light pane. */
+  --sidebar-search-bg: var(--color-field);
+  --sidebar-search-hover: var(--color-surface-0);
+  --sidebar-search-border: var(--color-border);
   --rail-tile-bg: var(--color-pane-side);
   --input-invalid-bg: color-mix(in oklab, var(--color-danger) 6%, var(--color-field));
   /* Tabs */
