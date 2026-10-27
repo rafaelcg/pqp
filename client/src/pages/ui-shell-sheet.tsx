@@ -350,7 +350,10 @@ export function ShellSheet() {
           <ChannelSection label="Voz" fold={fold(true, 2, true)} canManage={false} onAdd={noop} onAddPrivate={noop}>
             {null}
           </ChannelSection>
-          <ChannelSection label="Texto" fold={fold(false, 3)} canManage={false} onAdd={noop} onAddPrivate={noop} isDragOver>
+          <ChannelSection label="Texto" fold={fold(false, 3)} canManage onAdd={noop} onAddPrivate={noop} isDragOver>
+            {null}
+          </ChannelSection>
+          <ChannelSection label="Voz" fold={fold(true, 2)} canManage onAdd={noop} onAddPrivate={noop} isDragOver>
             {null}
           </ChannelSection>
           <CategoryHeader
@@ -379,6 +382,19 @@ export function ShellSheet() {
             onDrop={noop}
             {...fold(true, 6, true)}
           />
+          <CategoryHeader
+            category={category("c3", "Campeonatos de fim de semana")}
+            controlsId="qa-category-3"
+            canManage
+            onRename={noop}
+            onDelete={noop}
+            isDragOver
+            onDragStart={noop}
+            onDragEnd={noop}
+            onDragOverRow={noop}
+            onDrop={noop}
+            {...fold(false, 2)}
+          />
         </SidePane>
         <SidePane>
           <MixedCategoryHeader
@@ -401,6 +417,13 @@ export function ShellSheet() {
             menuItems={[]}
             drag={drag("into")}
             {...fold(false, 2)}
+          />
+          <MixedCategoryHeader
+            category={category("m4", "Campeonatos de fim de semana")}
+            addItems={ADD_ITEMS}
+            menuItems={[]}
+            drag={drag("into")}
+            {...fold(false, 3)}
           />
         </SidePane>
       </div>
