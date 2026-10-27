@@ -1,9 +1,16 @@
 import { Archive, Heart, MessageCircle, PenLine, Play } from "lucide-react";
 import { useCallback, useState, type ReactNode } from "react";
-import { Archive as ArchiveFill } from "@phosphor-icons/react";
+import {
+  Archive as ArchiveFill,
+  ChatCircle,
+  Heart as HeartFill,
+  PencilSimple,
+  Play as PlayFill,
+} from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { CountBadge } from "@/components/ui/count-badge";
-import { Icon } from "@/components/ui/icon";
+import { Icon, IconSwap } from "@/components/ui/icon";
+import { SECTION_LABEL_REDESIGN } from "@/components/ui/section-header";
 import {
   SIDEBAR_CARD_REDESIGN,
   SIDEBAR_ROW_REDESIGN,
@@ -101,7 +108,7 @@ export function CommunityHomePreview({
             <Icon icon={ArchiveFill} size="sm" className="hidden redesign:block" />
           </span>
           <span className="min-w-0 flex-1">
-            <span className="block text-sm font-bold text-text">
+            <span className="block text-sm font-bold text-text redesign:font-semibold">
               {t("communityHome.preview.emptyTitle")}
             </span>
             <span className="mt-0.5 block text-xs leading-snug text-text-secondary">
@@ -115,7 +122,7 @@ export function CommunityHomePreview({
           onClick={onCompose}
           data-bau-preview-compose
         >
-          <PenLine className="h-3.5 w-3.5" aria-hidden />
+          <IconSwap off={PenLine} on={PencilSimple} offClassName="h-3.5 w-3.5" />
           {t("communityHome.preview.post")}
         </Button>
       </div>
@@ -143,7 +150,7 @@ export function CommunityHomePreview({
   const leadTitle = postTitle(lead, t);
 
   return (
-    <div data-community-home-row data-bau-preview={mode}>
+    <div data-community-home-row data-bau-preview={mode} className="redesign:px-1">
       <div
         className={cn(SWAP, card ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0")}
         inert={!card}
@@ -159,7 +166,10 @@ export function CommunityHomePreview({
               // buttons, and each lights its own text.
               SIDEBAR_CARD_REDESIGN,
               "redesign:hover:bg-[color:var(--card-bg)]",
-              selected && "redesign:border-[color:var(--color-accent)]",
+              // The open Baú: the selection fill every sidebar row uses, as
+              // the party you are watching does.
+              selected &&
+                "redesign:border-transparent redesign:bg-row-selected redesign:hover:border-transparent redesign:hover:bg-row-selected",
             )}
             data-bau-preview-card
           >
@@ -167,7 +177,13 @@ export function CommunityHomePreview({
               type="button"
               onClick={onOpen}
               aria-current={selected ? "page" : undefined}
-              className="flex w-full items-center gap-1.5 px-2.5 pb-2 pt-2.5 text-left text-xs font-bold text-text-secondary hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring"
+              className={cn(
+                "flex w-full items-center gap-1.5 px-2.5 pb-2 pt-2.5 text-left text-xs font-bold text-text-secondary hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring",
+                // The section label's face, at the party cards' 12px inset.
+                SECTION_LABEL_REDESIGN,
+                "redesign:mb-0 redesign:px-3 redesign:pb-2",
+                selected && "redesign:text-on-row-selected redesign:hover:text-on-row-selected",
+              )}
             >
               <Archive className="h-3.5 w-3.5 redesign:hidden" aria-hidden />
               <Icon icon={ArchiveFill} size="sm" className="hidden h-3.5 w-3.5 redesign:block" />
@@ -183,7 +199,8 @@ export function CommunityHomePreview({
                   className="h-[1.0625rem] min-w-[1.125rem] text-[10.5px]"
                 />
               )}
-              <span className="ml-auto font-semibold text-text-tertiary">
+              {/* Already open: the selection says it, so "Abrir" goes quiet. */}
+              <span className={cn("ml-auto font-semibold text-text-tertiary", selected && "redesign:invisible")}>
                 {t("communityHome.preview.open")}
               </span>
             </button>
@@ -194,7 +211,7 @@ export function CommunityHomePreview({
               className="group/bauprev block w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring"
               data-bau-preview-post={lead.postId}
             >
-              <div className="px-2">
+              <div className="px-2 redesign:px-2.5">
                 <Cover
                   card={lead}
                   hue={hue}
@@ -208,8 +225,8 @@ export function CommunityHomePreview({
                   )}
                 </Cover>
               </div>
-              <div className="px-2.5 pb-2.5 pt-2">
-                <p className="line-clamp-2 break-words text-[13.5px] font-bold leading-snug text-text">
+              <div className="px-2.5 pb-2.5 pt-2 redesign:px-3">
+                <p className="line-clamp-2 break-words text-[13.5px] font-bold leading-snug text-text redesign:text-sm redesign:font-semibold">
                   {leadTitle}
                 </p>
                 <div className="mt-1.5 flex items-center gap-1.5 text-xs text-text-secondary">
@@ -232,7 +249,7 @@ export function CommunityHomePreview({
                         className="inline-flex items-center gap-0.5"
                         aria-label={t("bauCard.likes", { count: lead.likeCount })}
                       >
-                        <Heart className="h-3 w-3" aria-hidden />
+                        <IconSwap off={Heart} on={HeartFill} offClassName="h-3 w-3" className="h-3 w-3" />
                         {lead.likeCount}
                       </span>
                     )}
@@ -241,7 +258,7 @@ export function CommunityHomePreview({
                         className="inline-flex items-center gap-0.5"
                         aria-label={t("bauCard.comments", { count: lead.commentCount })}
                       >
-                        <MessageCircle className="h-3 w-3" aria-hidden />
+                        <IconSwap off={MessageCircle} on={ChatCircle} offClassName="h-3 w-3" className="h-3 w-3" />
                         {lead.commentCount}
                       </span>
                     )}
@@ -253,7 +270,11 @@ export function CommunityHomePreview({
               <button
                 type="button"
                 onClick={() => onOpenPost(others.first!.postId)}
-                className="flex w-full items-center gap-2 border-t border-border px-2.5 py-2 text-left text-xs font-semibold text-text-secondary hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring redesign:border-[color:var(--card-border)] redesign:hover:bg-[color:var(--card-row-hover)] redesign:focus-visible:ring-accent"
+                className={cn(
+                  "flex w-full items-center gap-2 border-t border-border px-2.5 py-2 redesign:px-3 text-left text-xs font-semibold text-text-secondary hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring redesign:border-[color:var(--card-border)] redesign:hover:bg-[color:var(--card-row-hover)] redesign:focus-visible:ring-accent",
+                  // The open card keeps one fill: no lighter patch on hover.
+                  selected && "redesign:hover:bg-transparent",
+                )}
                 data-bau-preview-more
               >
                 <Cover
@@ -342,6 +363,8 @@ function SlimRow({
         "flex w-full items-center gap-2.5 rounded-[var(--radius-control)] px-2 py-1.5 text-left transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
         selected ? "bg-surface-2" : "hover:bg-surface-2",
         SIDEBAR_ROW_REDESIGN,
+        // Two lines: the card's corner, not a 48px capsule.
+        "redesign:rounded-[var(--sidebar-card-radius)]",
         "redesign:focus-visible:ring-inset redesign:focus-visible:ring-accent",
         selected && SIDEBAR_ROW_SELECTED_REDESIGN,
       )}
@@ -360,7 +383,8 @@ function SlimRow({
         <span
           className={cn(
             "mt-0.5 block truncate text-xs text-text-tertiary",
-            selected && "redesign:text-on-row-selected",
+            selected &&
+              "redesign:text-[color:color-mix(in_oklab,var(--color-on-row-selected)_72%,transparent)]",
           )}
         >
           {line}
@@ -425,32 +449,32 @@ function Cover({
       )}
       {url && playable && showPlay === "corner" && (
         <span className="absolute right-2 top-2 flex h-6 w-6 items-center justify-center rounded-full bg-surface-0/70 text-text backdrop-blur-sm">
-          <Play className="h-3 w-3 translate-x-px fill-current" aria-hidden />
+          <IconSwap off={Play} on={PlayFill} offClassName="h-3 w-3 translate-x-px fill-current" className="h-3 w-3 translate-x-px" />
         </span>
       )}
       {playable && showPlay === "center" && (
         <span className="absolute inset-0 flex items-center justify-center">
           <span className="flex h-4 w-4 items-center justify-center rounded-full bg-surface-0/70 text-text">
-            <Play className="h-2 w-2 translate-x-px fill-current" aria-hidden />
+            <IconSwap off={Play} on={PlayFill} offClassName="h-2 w-2 translate-x-px fill-current" className="h-2 w-2 translate-x-px" />
           </span>
         </span>
       )}
       {!url && playable && showPlay === undefined && (
         <span className="absolute inset-0 flex items-center justify-center text-text">
-          <Play className="h-2.5 w-2.5 fill-current" aria-hidden />
+          <IconSwap off={Play} on={PlayFill} offClassName="h-2.5 w-2.5 fill-current" className="h-2.5 w-2.5" />
         </span>
       )}
       {source.kind === "plate" && playable && showPlay === "corner" && (
         // No picture to show: the plate says "video" in the middle, quietly.
         <span className="absolute inset-0 flex items-center justify-center">
           <span className="flex h-10 w-10 items-center justify-center rounded-full bg-surface-0/55 text-text backdrop-blur-sm">
-            <Play className="h-4 w-4 translate-x-px fill-current" aria-hidden />
+            <IconSwap off={Play} on={PlayFill} offClassName="h-4 w-4 translate-x-px fill-current" className="h-4 w-4 translate-x-px" />
           </span>
         </span>
       )}
       {source.kind === "plate" && !playable && (
         <span className="absolute inset-0 flex items-center justify-center text-text/80">
-          <Archive className="h-3.5 w-3.5" aria-hidden />
+          <IconSwap off={Archive} on={ArchiveFill} offClassName="h-3.5 w-3.5" className="h-3.5 w-3.5" />
         </span>
       )}
       {children}

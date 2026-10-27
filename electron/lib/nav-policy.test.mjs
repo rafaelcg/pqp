@@ -3,7 +3,12 @@ import { createRequire } from "node:module";
 import { describe, it } from "node:test";
 
 const require = createRequire(import.meta.url);
-const { classifyNavigation, isAuthUrl } = require("./nav-policy.js");
+const {
+  CLERK_DEV_INSTANCE_SUFFIXES,
+  CLERK_PRODUCTION_HOSTS,
+  classifyNavigation,
+  isAuthUrl,
+} = require("./nav-policy.js");
 
 /**
  * The allowlist that lets sign-in finish in-window.
@@ -45,10 +50,44 @@ describe("isAuthUrl", () => {
     for (const url of [
       "https://clerk.pqp.gg/v1/client",
       "https://accounts.pqp.gg/sign-in",
-      "https://relaxed-cat-42.clerk.accounts.dev/v1/client",
     ]) {
       assert.equal(isAuthUrl(url, APP), true, url);
     }
+  });
+
+  it("names the production Clerk hosts exactly, on any site", () => {
+    assert.deepEqual(CLERK_PRODUCTION_HOSTS, ["clerk.pqp.gg", "accounts.pqp.gg"]);
+    // A shell on a Pages preview still signs in against the production instance.
+    for (const host of CLERK_PRODUCTION_HOSTS) {
+      assert.equal(isAuthUrl(`https://${host}/v1/client`, "https://pqp-3yr.pages.dev"), true, host);
+    }
+  });
+
+  it("refuses somebody else's free Clerk development instance on the production site", () => {
+    for (const url of [
+      "https://attacker-7.accounts.dev/sign-in",
+      "https://attacker-7.clerk.accounts.dev/v1/client",
+      "https://relaxed-cat-42.clerk.accounts.dev/v1/client",
+    ]) {
+      assert.equal(isAuthUrl(url, APP), false, url);
+      assert.equal(classifyNavigation(url, APP), "external", url);
+    }
+  });
+
+  it("keeps Clerk development instances for a developer shell (Vite, staging)", () => {
+    assert.deepEqual(CLERK_DEV_INSTANCE_SUFFIXES, [".accounts.dev"]);
+    for (const origin of ["http://localhost:5173", "https://staging.pqp-3yr.pages.dev"]) {
+      for (const url of [
+        "https://relaxed-cat-42.clerk.accounts.dev/v1/client",
+        "https://relaxed-cat-42.accounts.dev/sign-in",
+      ]) {
+        // http://localhost is not https, but the AUTH host is: the origin only
+        // decides whether the dev suffixes are consulted.
+        assert.equal(isAuthUrl(url, origin), true, `${origin} ${url}`);
+      }
+    }
+    // Still a suffix match on a label boundary, never a bare endsWith.
+    assert.equal(isAuthUrl("https://evilaccounts.dev/x", "http://localhost:5173"), false);
   });
 
   it("refuses a lookalike domain that merely ends with an allowed host", () => {
@@ -85,7 +124,10 @@ describe("isAuthUrl", () => {
   });
 
   it("does not derive Clerk hosts when there is no app origin", () => {
-    assert.equal(isAuthUrl("https://clerk.pqp.gg/v1/client", null), false);
+    // `clerk.<app host>` is derived from the origin; with none there is nothing
+    // to derive. (The two exact production hosts do not need one.)
+    assert.equal(isAuthUrl("https://clerk.example.test/v1/client", null), false);
+    assert.equal(isAuthUrl("https://clerk.example.test/v1/client", "https://example.test"), true);
   });
 
   it("refuses Steam profile pages and Battle.net destinations that are not login", () => {

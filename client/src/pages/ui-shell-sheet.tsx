@@ -321,6 +321,20 @@ export function ShellSheet() {
             onCompose={noop}
           />
         </SidePane>
+        {/* The Baú open while a new post still shows as the card. */}
+        <SidePane>
+          <CommunityHomePreview
+            latest={BAU_NEW}
+            serverName="Turma do Fliperama"
+            serverHueSeed="fliperama"
+            selected
+            canPost={false}
+            face={<ServerIcon name="Turma do Fliperama" iconUrl={null} />}
+            onOpen={noop}
+            onOpenPost={noop}
+            onCompose={noop}
+          />
+        </SidePane>
       </div>
 
       {/* Category headers. Left, the classic list: Texto open with the

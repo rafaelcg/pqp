@@ -11,6 +11,8 @@ import {
   type InviteRef,
 } from "@/lib/share-invite";
 import { cn } from "@/lib/utils";
+import { Copy as CopyGlyph, ShareNetwork } from "@phosphor-icons/react";
+import { IconSwap } from "@/components/ui/icon";
 
 const COPY_MS = 1600;
 
@@ -92,10 +94,11 @@ export function InvitePaste({
       data-invite-paste=""
       className={cn(
         "space-y-3 rounded-lg border border-border bg-surface-2/40 p-3",
+        "redesign:rounded-[calc(var(--radius-card)-4px)] redesign:border-[color:var(--card-border)] redesign:bg-transparent redesign:p-4",
         className,
       )}
     >
-      <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-text-tertiary">
+      <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-text-tertiary redesign:text-[13px] redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">
         {t("invite.paste.title")}
       </h3>
       <PasteRow
@@ -124,7 +127,7 @@ export function InvitePaste({
           {copied === "share" ? (
             <Check className="animate-icon-swap h-4 w-4 text-success" />
           ) : (
-            <Share2 className="h-4 w-4" />
+            <IconSwap off={Share2} on={ShareNetwork} offClassName="h-4 w-4" />
           )}
           {copied === "share"
             ? t("invite.paste.copied")
@@ -155,21 +158,21 @@ function PasteRow({
 }) {
   return (
     <div className="space-y-1.5">
-      <p className="text-xs font-medium text-text-secondary">{label}</p>
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
-        <p className="min-w-0 flex-1 rounded-md border border-border bg-surface-1 px-3 py-2 text-sm leading-snug text-text [overflow-wrap:anywhere]">
+      <p className="text-xs font-medium text-text-secondary redesign:font-semibold">{label}</p>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch redesign:sm:items-center">
+        <p className="min-w-0 flex-1 rounded-md border border-border bg-surface-1 px-3 py-2 text-sm leading-snug text-text [overflow-wrap:anywhere] redesign:rounded-[var(--input-radius,var(--radius-control))] redesign:border-transparent redesign:bg-[color:color-mix(in_oklab,var(--color-text)_5%,var(--input-bg))] redesign:px-[var(--input-px)]">
           {text}
         </p>
         <Button
           type="button"
           variant="secondary"
-          className="h-auto min-h-[var(--control-md)] min-w-[6.5rem] shrink-0"
+          className="h-auto min-h-[var(--control-md)] min-w-[6.5rem] shrink-0 redesign:h-[var(--control-md)]"
           onClick={onCopy}
         >
           {copied ? (
             <Check className="animate-icon-swap h-4 w-4 text-success" />
           ) : (
-            <Copy className="h-4 w-4" />
+            <IconSwap off={Copy} on={CopyGlyph} kind="symbol" offClassName="h-4 w-4" />
           )}
           {copied ? copiedLabel : copyLabel}
         </Button>
