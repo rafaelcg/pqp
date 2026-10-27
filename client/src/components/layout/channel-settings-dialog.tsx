@@ -1,4 +1,11 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+  BellRinging as BellRingingGlyph,
+  Image as ImageGlyph,
+  Shield as ShieldGlyph,
+  Tag as TagGlyph,
+  WebhooksLogo as WebhooksLogoGlyph,
+} from "@phosphor-icons/react";
 import { BellRing, Image as ImageIcon, Shield, Tag, Webhook } from "lucide-react";
 import type { BauFollow, Channel, ForumSettings, ForumSort } from "@pqp/shared";
 import { FORUM_SETTINGS_DEFAULTS, isVoiceRoomChannelType } from "@pqp/shared";
@@ -13,7 +20,8 @@ import {
 } from "@/lib/forum-tag-draft";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
-import { SectionRail, type SectionRailItem } from "@/components/ui/section-rail";
+import { SectionRail, SETTINGS_PANE_REDESIGN, type SectionRailItem } from "@/components/ui/section-rail";
+import { cn } from "@/lib/utils";
 import { ChannelIcon } from "@/components/layout/channel-icon";
 import {
   ChannelOverviewSection,
@@ -411,6 +419,7 @@ export function ChannelSettingsDialog({
       id: "overview",
       label: t("channelSettings.section.overview"),
       icon: ImageIcon,
+      glyph: ImageGlyph,
       dirty: overviewDirty,
     });
   }
@@ -419,6 +428,7 @@ export function ChannelSettingsDialog({
       id: "tags",
       label: t("forum.settings.tags"),
       icon: Tag,
+      glyph: TagGlyph,
       dirty: tagsDirty,
     });
   }
@@ -427,6 +437,7 @@ export function ChannelSettingsDialog({
       id: "permissions",
       label: t("channelSettings.section.permissions"),
       icon: Shield,
+      glyph: ShieldGlyph,
     });
   }
   if (canSeeWebhooks) {
@@ -434,6 +445,7 @@ export function ChannelSettingsDialog({
       id: "webhooks",
       label: t("channelSettings.section.webhooks"),
       icon: Webhook,
+      glyph: WebhooksLogoGlyph,
     });
   }
   if (canSeeFollows) {
@@ -441,6 +453,7 @@ export function ChannelSettingsDialog({
       id: "follows",
       label: t("channelSettings.section.follows"),
       icon: BellRing,
+      glyph: BellRingingGlyph,
     });
   }
 
@@ -735,7 +748,11 @@ export function ChannelSettingsDialog({
           role="tabpanel"
           aria-labelledby={`${tabIdPrefix}-${active?.id ?? firstSection}`}
           tabIndex={0}
-          className="min-w-0 flex-1 space-y-5 overflow-y-auto overscroll-contain px-5 py-5 focus-visible:outline-none"
+          className={cn(
+            "min-w-0 flex-1 space-y-5 overflow-y-auto overscroll-contain px-5 py-5 focus-visible:outline-none",
+            SETTINGS_PANE_REDESIGN,
+            "sm:redesign:px-8 sm:redesign:pt-7 sm:redesign:pb-8",
+          )}
         >
           {loadError && (
             <p className="text-sm text-danger" role="alert">

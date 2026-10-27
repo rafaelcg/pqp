@@ -8,7 +8,7 @@ import {
   X as XBold,
 } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
-import { BANNER_DISMISS_REDESIGN, bannerSurfaceRedesign } from "@/components/ui/banner";
+import { BANNER_DISC_REDESIGN, BANNER_DISMISS_REDESIGN, BANNER_QUIET_REDESIGN, bannerSurfaceRedesign } from "@/components/ui/banner";
 import { Icon } from "@/components/ui/icon";
 import type { BringCrewStripKind } from "@/lib/bring-crew";
 import {
@@ -142,7 +142,7 @@ export function BringCrewStrip({
     >
       <span
         aria-hidden="true"
-        className="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-on-accent"
+        className={cn("relative flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-on-accent", BANNER_DISC_REDESIGN)}
       >
         <Users className="h-4 w-4 redesign:hidden" />
         <Icon icon={UsersFill} size="sm" className="hidden redesign:block" />
@@ -192,6 +192,7 @@ export function BringCrewStrip({
           <Button
             size="sm"
             variant="secondary"
+            className={BANNER_QUIET_REDESIGN}
             aria-label={t("invite.paste.share")}
             disabled={state === "busy"}
             onClick={() => void share()}

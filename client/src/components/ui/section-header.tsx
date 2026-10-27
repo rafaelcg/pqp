@@ -30,6 +30,13 @@ export const SECTION_LABEL_REDESIGN =
   "redesign:font-sans! redesign:text-[length:var(--section-label-size)] redesign:leading-5 redesign:font-semibold redesign:normal-case redesign:tracking-normal! redesign:text-text-secondary redesign:pb-0 redesign:mb-[var(--section-label-gap)]";
 
 /**
+ * A group name in a settings rail (user, server and channel settings): the
+ * section label one weight down and in the tertiary text, so it sits under
+ * the tab labels instead of competing with them.
+ */
+export const RAIL_LABEL_REDESIGN = `${SECTION_LABEL_REDESIGN} redesign:font-medium redesign:text-text-tertiary`;
+
+/**
  * Over a group in a settings pane, where the rows are paragraphs and
  * controls: 15px in the text colour, a step over the 14px rows, flush with
  * the group's edge, so the step pane, group, row holds. The settings kit's group title is this.

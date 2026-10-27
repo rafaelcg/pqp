@@ -9,11 +9,13 @@ import {
   Smiley,
   Play as PlayFill,
   PushPin as PushPinFill,
+  UsersThree,
   WarningCircle as WarningCircleFill,
   WifiSlash,
   type Icon as PhosphorGlyph,
 } from "@phosphor-icons/react";
-import { Icon as Glyph } from "@/components/ui/icon";
+import { Icon, Icon as Glyph } from "@/components/ui/icon";
+import { EmptyState as EmptyStateView } from "@/components/ui/empty-state";
 import {
   CONTENT_CARD_FOCUS_REDESIGN,
   CONTENT_CARD_HOVER_REDESIGN,
@@ -63,6 +65,7 @@ import {
 } from "lucide-react";
 import {
   Fragment,
+  cloneElement,
   memo,
   useCallback,
   useEffect,
@@ -72,9 +75,11 @@ import {
   useState,
   type CSSProperties,
   type MouseEvent as ReactMouseEvent,
+  type ReactElement,
   type ReactNode,
   type Ref,
 } from "react";
+import { useRedesign } from "@/lib/redesign";
 import { createPortal } from "react-dom";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useChatDisplay } from "@/hooks/use-chat-display";
@@ -702,6 +707,40 @@ function ToolbarGlyph({
 
 /** A GIF or a pasted picture link: the media radius on the card's edge. */
 const MEDIA_REDESIGN = cn(CONTENT_MEDIA_REDESIGN, "redesign:bg-transparent");
+
+/**
+ * A continuation row's gutter. A pinned line has no header to carry its pin,
+ * so under the redesign the pin sits in the gutter at rest and gives way to
+ * the time on hover. Off the redesign the wrapper is `contents` and the pin
+ * is not drawn, so the row is what it was.
+ */
+function ContinuationGutter({
+  pinned,
+  pinTitle,
+  pinLabel,
+  children,
+}: {
+  pinned: boolean;
+  pinTitle: string;
+  pinLabel: string;
+  children: ReactElement<{ title?: string }>;
+}) {
+  const redesign = useRedesign();
+  if (!pinned) return children;
+  // The pin hides on hover, so its credit rides on the time's tooltip.
+  const time = redesign ? cloneElement(children, { title: `${children.props.title} · ${pinTitle}` }) : children;
+  return (
+    <span className="contents redesign:relative redesign:flex redesign:w-14 redesign:shrink-0">
+      {time}
+      <span
+        className="hidden redesign:absolute redesign:inset-y-0 redesign:right-2 redesign:flex redesign:items-center redesign:text-text-secondary redesign:transition-opacity redesign:group-hover:pointer-events-none redesign:group-hover:opacity-0"
+      >
+        <Glyph icon={PushPinFill} size="sm" className="h-3.5 w-3.5" />
+        <span className="sr-only">{pinLabel}</span>
+      </span>
+    </span>
+  );
+}
 
 /**
  * Wrapped in `memo()` on top of `MessageRow`'s own: without it, ANY render
@@ -2722,7 +2761,12 @@ function FailedSendFooter({
             tabIndex={tabIndex}
             disabled={!ready}
             onClick={onRetry}
-            className={cn(FAILED_ACTION_TILE, "tabular-nums")}
+            className={cn(
+              FAILED_ACTION_TILE,
+              "tabular-nums",
+              // Retry is the way forward; Discard stays neutral.
+              "redesign:bg-accent-soft redesign:text-on-accent-soft redesign:hover:bg-[color:color-mix(in_oklab,var(--color-accent-soft),var(--color-on-accent-soft)_10%)] redesign:hover:text-on-accent-soft",
+            )}
           >
             {waitSeconds > 0
               ? t("chat.retryWait", { seconds: waitSeconds })
@@ -2850,24 +2894,25 @@ function EmptyState({
       timer.current = window.setTimeout(() => setState("idle"), 1600);
     };
     return (
-      <div
+      <EmptyStateView
         data-empty-owner=""
-        className="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-16 text-center"
-      >
-        <p className="text-balance font-display text-xl font-bold text-text">
-          {t("chat.empty.owner.title")}
-        </p>
-        <p className="max-w-xs text-pretty text-sm text-text-tertiary">
-          {state === "failed"
+        icon={<Icon icon={UsersThree} size="lg" />}
+        title={t("chat.empty.owner.title")}
+        body={
+          state === "failed"
             ? t("chat.empty.owner.failed")
-            : t("chat.empty.owner.body")}
-        </p>
-        {showCopyButton ? (
+            : t("chat.empty.owner.body")
+        }
+        className="flex-1 justify-center gap-2 px-6 py-16"
+        iconClassName="hidden redesign:flex"
+        titleClassName="text-balance font-display text-xl font-bold text-text"
+        bodyClassName="max-w-xs text-pretty text-sm text-text-tertiary"
+        actions={showCopyButton ? (
           <Button
             // Secondary: the owner banner above carries the loud copy of this
             // same action, and two accent buttons a screen apart compete.
             variant="secondary"
-            className="mt-3"
+            className="mt-3 redesign:mt-0"
             data-empty-copy-invite=""
             disabled={state === "busy"}
             onClick={() => void copy()}
@@ -2881,20 +2926,21 @@ function EmptyState({
               ? t("chat.empty.owner.copied")
               : t("chat.empty.owner.copy")}
           </Button>
-        ) : null}
-      </div>
+        ) : undefined}
+      />
     );
   }
 
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-16 text-center">
-      <p className="text-balance font-display text-xl font-bold text-paper">
-        {t("chat.empty.title")}
-      </p>
-      <p className="max-w-xs text-pretty text-sm text-paper-muted">
-        {t("chat.empty.body")}
-      </p>
-    </div>
+    <EmptyStateView
+      icon={<Icon icon={ChatsCircle} size="lg" />}
+      title={t("chat.empty.title")}
+      body={t("chat.empty.body")}
+      className="flex-1 justify-center gap-2 px-6 py-16"
+      iconClassName="hidden redesign:flex"
+      titleClassName="text-balance font-display text-xl font-bold text-text"
+      bodyClassName="max-w-xs text-pretty text-sm text-text-tertiary"
+    />
   );
 }
 
@@ -3879,7 +3925,8 @@ const MessageRow = memo(function MessageRow({
               ? mentionRowRadius(mentionJoinTop, mentionJoinBottom)
               : null,
             "redesign:focus-visible:ring-accent",
-            !mentionsYou && !isFlashing && !selecting && "redesign:hover:bg-[color:var(--message-hover)]",
+            !mentionsYou && !isFlashing && !selecting &&
+              "redesign:hover:bg-[color:var(--message-hover)] redesign:hover:[--avatar-dot-ring:var(--message-hover-solid)]",
             selecting && !selected && "redesign:hover:bg-[color:var(--message-hover)]",
           )}
           data-forum-answer={forumAnswer ? "" : undefined}
@@ -3960,18 +4007,26 @@ const MessageRow = memo(function MessageRow({
                 </div>
               </div>
             ) : (
-              <time
-                className={cn(
-                  "w-14 shrink-0 pr-2 text-right text-[12px] leading-[var(--chat-line-height)] whitespace-nowrap tabular-nums text-paper-muted",
-                  MESSAGE_TIME_REDESIGN,
-                  compact ? "opacity-70" : "opacity-0 group-hover:opacity-100",
-                )}
-                dateTime={message.createdAt}
-                title={formatFullTimestamp(message.createdAt)}
-                data-row-gutter=""
+              <ContinuationGutter
+                pinned={isMessagePinned && !compact}
+                pinTitle={
+                  message.pinnedBy ? t("chat.pinnedBy", { name: message.pinnedBy.displayName }) : t("chat.pinned")
+                }
+                pinLabel={t("chat.pinned")}
               >
-                {formatTime(message.createdAt)}
-              </time>
+                <time
+                  className={cn(
+                    "w-14 shrink-0 pr-2 text-right text-[12px] leading-[var(--chat-line-height)] whitespace-nowrap tabular-nums text-paper-muted",
+                    MESSAGE_TIME_REDESIGN,
+                    compact ? "opacity-70" : "opacity-0 group-hover:opacity-100",
+                  )}
+                  dateTime={message.createdAt}
+                  title={formatFullTimestamp(message.createdAt)}
+                  data-row-gutter=""
+                >
+                  {formatTime(message.createdAt)}
+                </time>
+              </ContinuationGutter>
             )}
 
             <div className="min-w-0 flex-1">
@@ -4004,9 +4059,15 @@ const MessageRow = memo(function MessageRow({
                       className={cn(
                         "rounded text-[length:var(--chat-font-size)] font-bold leading-[var(--chat-line-height)]",
                         !roleColor && (isMine ? "text-signal" : "text-paper"),
-                        !roleColor && (isMine ? "redesign:text-accent-text" : "redesign:text-text"),
+                        !roleColor && (isMine ? "redesign:text-[color:var(--message-own-name)]" : "redesign:text-text"),
+                        // A role colour has no contrast floor, so its lightness is
+                        // clamped: no darker than 0.72 in dark, no lighter than 0.52
+                        // (the light accent's) in light. A browser without relative
+                        // colours drops the rule and keeps the inline colour.
+                        roleColor &&
+                          "redesign:text-[color:oklch(from_var(--role-color)_max(l,0.72)_c_h)]! redesign:[:root[data-theme=light]_&]:text-[color:oklch(from_var(--role-color)_min(l,0.52)_c_h)]!",
                       )}
-                      style={roleColor ? { color: roleColor } : undefined}
+                      style={roleColor ? ({ color: roleColor, "--role-color": roleColor } as CSSProperties) : undefined}
                     >
                       {message.authorName}
                     </AuthorButton>
@@ -4080,7 +4141,7 @@ const MessageRow = memo(function MessageRow({
                   )}
                   {isMessagePinned && (
                     <span
-                      className="inline-flex items-center gap-0.5 text-[12px] leading-[var(--chat-line-height)] text-signal redesign:self-center redesign:text-accent-text"
+                      className="inline-flex items-center gap-0.5 text-[12px] leading-[var(--chat-line-height)] text-signal redesign:self-center redesign:text-text-secondary"
                       title={
                         message.pinnedBy
                           ? t("chat.pinnedBy", {
@@ -4142,6 +4203,10 @@ const MessageRow = memo(function MessageRow({
                       className={cn(
                         "markdown-body text-[length:var(--chat-font-size)] leading-[var(--chat-line-height)] text-paper/90 redesign:text-text",
                         stream && "[&>p]:inline",
+                        // "(editada)" ends the last line it belongs to, never a line of its own:
+                        // the marker is the last child, so only a paragraph right before it goes
+                        // inline. A body ending in a list, quote or code keeps its block.
+                        message.editedAt && attachments.length === 0 && !message.forward && "redesign:[&>p:nth-last-child(2)]:inline",
                       )}
                     >
                       {streamAuthor}
@@ -4851,7 +4916,7 @@ function EmbedCard({ embed }: { embed: Embed }) {
         CONTENT_CARD_REDESIGN,
         CONTENT_CARD_HOVER_REDESIGN,
         CONTENT_CARD_FOCUS_REDESIGN,
-        "redesign:p-3.5",
+        "redesign:p-[var(--content-card-pad)]",
       )}
     >
       <div className="min-w-0 flex-1">
@@ -4861,7 +4926,7 @@ function EmbedCard({ embed }: { embed: Embed }) {
           </p>
         )}
         {embed.title && (
-          <p className="mt-0.5 line-clamp-2 text-sm font-medium text-signal redesign:mt-1 redesign:text-[0.9375rem] redesign:font-semibold redesign:leading-snug redesign:text-accent-text">
+          <p className="mt-0.5 line-clamp-2 text-sm font-medium text-signal redesign:mt-1 redesign:font-display redesign:text-[0.9375rem] redesign:font-semibold redesign:leading-snug redesign:text-accent-text">
             {embed.title}
           </p>
         )}
@@ -4918,14 +4983,27 @@ function WebhookEmbedCard({ embed }: { embed: WebhookEmbed }) {
         CONTENT_CARD_REDESIGN,
         embed.url && CONTENT_CARD_HOVER_REDESIGN,
         embed.url && CONTENT_CARD_FOCUS_REDESIGN,
-        "redesign:p-3.5",
+        "redesign:p-[var(--content-card-pad)]",
+        // Under the redesign every webhook card keeps the plain card edge; the
+        // sender's colour, when it chose one, is an inner bar below, so it never
+        // thins into a crescent along the rounded corners.
+        "redesign:relative redesign:![border-left-width:1px] redesign:![border-left-color:var(--card-border)]",
+        // With a colour, the content clears the bar by 10px.
+        accent && "redesign:pl-[calc(var(--content-card-pad)+3px+0.625rem)]",
       )}
       style={{ borderLeftWidth: "3px", borderLeftColor: accent ?? "var(--color-signal)" }}
     >
+      {accent && (
+        <span
+          aria-hidden
+          className="absolute bottom-[var(--content-card-pad)] left-[var(--content-card-pad)] top-[var(--content-card-pad)] hidden w-[3px] rounded-full redesign:block"
+          style={{ background: accent }}
+        />
+      )}
       {embed.title && (
         <p
           className={cn(
-            "text-sm font-medium redesign:text-[0.9375rem] redesign:font-semibold",
+            "text-sm font-medium redesign:font-display redesign:text-[0.9375rem] redesign:font-semibold",
             embed.url ? "text-signal redesign:text-accent-text" : "text-paper",
           )}
         >
@@ -4944,10 +5022,10 @@ function WebhookEmbedCard({ embed }: { embed: WebhookEmbed }) {
               key={index}
               className={field.inline ? "" : "col-span-2"}
             >
-              <p className={cn("text-[11px] font-semibold uppercase tracking-wide text-paper-muted", CONTENT_KICKER_REDESIGN, "redesign:font-semibold redesign:text-text-secondary")}>
+              <p className={cn("text-[11px] font-semibold uppercase tracking-wide text-paper-muted", CONTENT_KICKER_REDESIGN, "redesign:font-medium redesign:text-text-tertiary")}>
                 {field.name}
               </p>
-              <p className="text-xs text-paper">{field.value}</p>
+              <p className="text-xs text-paper redesign:text-[0.8125rem] redesign:text-text">{field.value}</p>
             </div>
           ))}
         </div>

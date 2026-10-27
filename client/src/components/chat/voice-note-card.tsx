@@ -35,6 +35,7 @@ import {
   usePlaybackRate,
   type VoiceNoteEntry,
 } from "@/lib/voice-note-player";
+import { BELOW_SM_QUERY } from "@/lib/breakpoints";
 
 /** The message a voice note belongs to, as the card needs it. */
 export interface VoiceNoteMessage {
@@ -226,7 +227,7 @@ export function VoiceNoteCard({
         role="group"
         aria-label={t("voiceNote.label", { duration: formatNoteDuration(durationMs) })}
         className={cn(
-          "flex w-[27.5rem] max-w-full items-center gap-2.5 rounded-[var(--radius-card)] border border-border bg-surface-2 py-1.5 pl-1.5 pr-2",
+          "flex w-[27.5rem] redesign:w-[28rem] max-w-full items-center gap-2.5 rounded-[var(--radius-card)] border border-border bg-surface-2 py-1.5 pl-1.5 pr-2",
           CONTENT_CARD_REDESIGN,
           "redesign:rounded-full redesign:py-1.5 redesign:pl-1.5 redesign:pr-1.5",
         )}
@@ -342,7 +343,7 @@ export function VoiceNoteCard({
   );
 }
 
-const NARROW_QUERY = "(max-width: 639px)";
+const NARROW_QUERY = BELOW_SM_QUERY;
 
 function subscribeNarrow(onChange: () => void): () => void {
   if (typeof window === "undefined" || !window.matchMedia) {

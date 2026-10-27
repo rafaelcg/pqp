@@ -2,7 +2,7 @@ import { Import, X } from "lucide-react";
 import { useEffect, useId } from "react";
 import { DownloadSimple, X as XBold } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
-import { BANNER_DISMISS_REDESIGN, bannerSurfaceRedesign } from "@/components/ui/banner";
+import { BANNER_DISC_REDESIGN, BANNER_DISMISS_REDESIGN, bannerSurfaceRedesign } from "@/components/ui/banner";
 import { Icon } from "@/components/ui/icon";
 import { useTranslation } from "@/lib/i18n";
 import { track } from "@/lib/track";
@@ -67,7 +67,7 @@ export function DiscordImportNotice({
     >
       <span
         aria-hidden="true"
-        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-on-accent"
+        className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-on-accent", BANNER_DISC_REDESIGN)}
       >
         <Import className="h-4 w-4 redesign:hidden" />
         <Icon icon={DownloadSimple} kind="symbol" size="sm" className="hidden redesign:block" />
