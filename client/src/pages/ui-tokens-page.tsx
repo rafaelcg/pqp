@@ -1306,6 +1306,7 @@ function PrimitiveSheet() {
         <div className="rounded-[var(--radius-card)] border border-border bg-surface-card">
           <SettingsEmpty
             icon={LineHash}
+            glyph={Hash}
             title={t("chat.empty.title")}
             description={t("chat.empty.body")}
           />

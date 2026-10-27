@@ -1,4 +1,5 @@
 import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
+import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /**
@@ -51,5 +52,35 @@ export function Icon({
       aria-label={label}
       role={label ? "img" : undefined}
     />
+  );
+}
+
+/**
+ * A surface that is not rebuilt everywhere yet: the Lucide icon it always
+ * drew with the toggle off, the Phosphor one under the redesign. Decorative.
+ *
+ * `offClassName` is the old icon's own classes (its size, colour, margin);
+ * `className` goes on the new one, beside the size token.
+ */
+export function IconSwap({
+  off: Off,
+  on,
+  kind = "object",
+  size = "sm",
+  offClassName,
+  className,
+}: {
+  off: LucideIcon;
+  on: PhosphorIcon;
+  kind?: IconKind;
+  size?: IconSize;
+  offClassName?: string;
+  className?: string;
+}) {
+  return (
+    <>
+      <Off aria-hidden className={cn(offClassName, "redesign:hidden")} />
+      <Icon icon={on} kind={kind} size={size} className={cn("hidden redesign:block", className)} />
+    </>
   );
 }

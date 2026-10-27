@@ -601,6 +601,8 @@ const PRIMITIVES: {
    * `arrows` rows down with the keyboard, and frames the block and the menu.
    */
   open?: { button: string; menu: string; arrows: number };
+  /** A tall block, cut into shots this tall (`<id>-<n>-<theme>.png`). */
+  tiles?: number;
 }[] = [
   {
     id: "p-button",
@@ -651,6 +653,7 @@ const PRIMITIVES: {
   { id: "p-slider", testId: "qa-primitive-slider", focus: "Volume", role: "slider", hover: "Scrub" },
   // Focus the connection strip's main action, hover the error's dismiss.
   { id: "p-banner", testId: "qa-primitive-banner", focus: "Tentar agora", hover: "Dispensar" },
+  { id: "p-settings-kit", testId: "qa-settings-kit", tiles: 1300 },
 ];
 
 test("captures the primitives", async ({ browser }) => {
@@ -706,6 +709,18 @@ test("captures the primitives", async ({ browser }) => {
         continue;
       }
       await page.waitForTimeout(300);
+      if (primitive.tiles) {
+        const box = (await block.boundingBox())!;
+        const top = box.y + (await page.evaluate(() => window.scrollY));
+        for (let n = 0, y = 0; y < box.height; n++, y += primitive.tiles) {
+          await page.screenshot({
+            path: path.join(OUT!, `${primitive.id}-${n + 1}-${theme}.png`),
+            fullPage: true,
+            clip: { x: box.x, y: top + y, width: box.width, height: Math.min(primitive.tiles, box.height - y) },
+          });
+        }
+        continue;
+      }
       await block.screenshot({ path: path.join(OUT!, `${primitive.id}-${theme}.png`) });
     }
     await context.close();
