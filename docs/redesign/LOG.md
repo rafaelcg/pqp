@@ -65,6 +65,8 @@ Read this file and the inventory at the start of every session.
 | 3 | `s-category` | Merged, capped at round 5 (Opus 7.9 r5, 8.3 r3) |
 | 3 | `s-channel-row` | Merged, capped at round 5 (Opus 8.5 r5). Follow-up: tooltip `sideOffset` so the name bubble clears the tiles |
 | 3 | `s-voice-row` | Merged, capped at round 5 (Opus 8.0 r5, 8.2 r3). Open: light selected and connected fills are close; check with the token owner |
+| 3 | `s-sidebar-rail` | Merged, capped at round 5 (Opus 8.1 r4 and r5) |
+| 3 | `s-voice-strip` | Merged, capped at round 5 (Opus 8.1 r5). Follow-ups: composer hang-up glyph (`s-composer`), music idle row fixture (`m-sheets`) |
 | 4 | `f-user-settings` | Merged, capped at round 5 (Opus 8.1 r5, 8.2 r4) |
 | 4 | `f-server-settings` | Merged, capped at round 5 (Opus 7.8 r5, 7.9 r4) |
 | 4 | `f-invites` | Merged, capped at round 5 (Opus 7.8 r5, 8.1 r3 and r4) |
@@ -1302,6 +1304,16 @@ hand-built status menu with the recado field; `DownloadHint` above it):
 4. Question for André: the status menu could become `ui/menu`'s
    `DropdownMenu` with the field as top content. That is behaviour, so it is
    not done here.
+Rounds (Opus only): r1 7.6, r2 8.0, r3 7.8 (no MUST). r3 fixes: status
+labels on one edge, the room's microphone glyph. Decision: the 6px gap
+between the voice strip and the user panel is the footer stack's gap, and
+both cards keep the 8px side inset; not changed.
+r4 8.0, r5 8.1 (cap, no MUST). r5 fixes: the footer cards draw
+`--card-border` (the light card barely separated from the pane), and the
+72px room button takes the row's shape. Follow-ups: the composer dock's
+hang-up moves to `PhoneDisconnect` (`s-composer`); the music idle row needs
+the music store fixture (`m-sheets`) before it can be reviewed.
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss

@@ -305,8 +305,10 @@ const CHANNEL_DETAIL_REDESIGN =
  * the list row's fills: the open one selected, the call you are in the
  * success tone. The two buttons at the top are round, as the header's are.
  */
+// Focus is an outline 2px outside the tile, never a ring: the call tile's
+// green edge is a ring, and the two must never stack.
 const STRIP_TILE_REDESIGN =
-  "redesign:rounded-[var(--strip-tile-radius)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-[color:var(--color-pane-side)]";
+  "redesign:rounded-[var(--strip-tile-radius)] redesign:focus-visible:outline-2 redesign:focus-visible:outline-offset-2 redesign:focus-visible:outline-accent redesign:focus-visible:ring-0";
 const STRIP_BUTTON_REDESIGN =
   "redesign:rounded-full redesign:text-[color:var(--list-row-icon)] redesign:hover:bg-[color:var(--list-row-hover)] redesign:hover:text-text redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-[color:var(--color-pane-side)]";
 /** The pip, the mention and the call count cut out of the side pane. */
@@ -3502,7 +3504,10 @@ export function ChannelRailItem({
             "redesign:bg-success-soft redesign:text-on-success-soft redesign:ring-1 redesign:ring-inset redesign:ring-[color:color-mix(in_oklab,var(--color-success)_45%,transparent)] redesign:hover:bg-success-soft redesign:hover:text-on-success-soft",
           // In the call and viewing it: the edge goes solid, so the strip
           // still shows which tile is open.
-          connected && selected && "redesign:ring-2 redesign:ring-[color:var(--color-success)]",
+          connected && selected && "redesign:ring-2 redesign:ring-[color:var(--color-success)] redesign:text-text",
+          // A live party: the danger soft fill, as the call has the success
+          // one, so the live dot has a tile corner to sit on.
+          live && !selected && !connected && "redesign:bg-danger-soft redesign:hover:bg-danger-soft",
           muted && !selected && !connected && "redesign:opacity-[var(--list-row-muted-opacity)]",
         )}
         onClick={() => {
@@ -3536,7 +3541,12 @@ export function ChannelRailItem({
           }
         }}
       >
-        <ChannelIcon channel={channel} className="h-4 w-4 redesign:h-[1.125rem] redesign:w-[1.125rem]" />
+        <ChannelIcon
+          channel={channel}
+          // A live party draws its glyph in the live red, so the dot on its
+          // corner belongs to a tile that already says it.
+          className={cn("h-4 w-4 redesign:h-[1.125rem] redesign:w-[1.125rem]", live && "redesign:text-danger")}
+        />
         {live && (
           /* The strip has no room for words: a red dot in the corner is the
              pill. The viewer count below it is the ordinary occupancy badge. */
@@ -3546,8 +3556,13 @@ export function ChannelRailItem({
             className={cn(
               "absolute -left-1 -top-1 h-2.5 w-2.5 rounded-full bg-danger ring-2 ring-channel motion-safe:animate-pulse",
               STRIP_RING_REDESIGN,
+              // Under the redesign only the inner dot pulses, so the cutout
+              // ring stays solid and the dot keeps the glyph's red.
+              "redesign:-left-0.5 redesign:-top-0.5 redesign:bg-[color:var(--color-pane-side)] redesign:motion-safe:animate-none",
             )}
-          />
+          >
+            <span className="hidden h-full w-full rounded-full bg-danger motion-safe:animate-pulse redesign:block" />
+          </span>
         )}
         {hasUnread && (
           <>
@@ -3569,6 +3584,8 @@ export function ChannelRailItem({
           aria-label={t("chrome.unreadMentions", { count: mentions })}
           className={cn(
             "absolute -right-1 -top-1 h-auto py-0.5 text-center text-paper normal-nums",
+            // Every corner badge hangs 2px off the tile, so the corners line up.
+            "redesign:-right-0.5 redesign:-top-0.5",
             "redesign:h-4 redesign:py-0 redesign:tabular-nums redesign:text-on-danger",
             STRIP_RING_REDESIGN,
           )}
@@ -3687,7 +3704,7 @@ function CommunityHomeUnreadBadge({
         // it never borrows the red the mention counts use.
         "min-w-4 rounded-full bg-signal px-1 py-0.5 text-center text-[10px] font-bold leading-none text-ink",
         "redesign:flex redesign:h-4 redesign:items-center redesign:justify-center redesign:bg-accent redesign:py-0 redesign:text-[length:var(--count-badge-sm-text)] redesign:font-semibold redesign:tabular-nums redesign:text-on-accent",
-        compact && "absolute -right-1 -top-1",
+        compact && "absolute -right-1 -top-1 redesign:-right-0.5 redesign:-top-0.5",
         compact && STRIP_RING_REDESIGN,
         !compact && "shrink-0",
         !compact && pushRight && "ml-auto",
