@@ -47,6 +47,14 @@ import {
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { intlLocale } from "@/lib/locale";
 import { cn } from "@/lib/utils";
+import {
+  BOT_CARD_CHOSEN_REDESIGN,
+  BOT_CARD_REDESIGN,
+  BOT_CHOICE_FOCUS_REDESIGN,
+  BOT_SWATCH_CHOSEN_REDESIGN,
+  BOT_SWATCH_REDESIGN,
+  ChosenCheck,
+} from "@/components/bots/bot-choice";
 
 /** The channels a bot can be put in: the ones people chat in. A forum covers its posts. */
 function chatChannels(channels: Channel[]): Channel[] {
@@ -385,10 +393,17 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
               cn(
                 "grid h-10 w-10 place-items-center rounded-full border-2 bg-surface-2",
                 selected ? "border-text" : "border-transparent",
-                selected && "redesign:border-accent",
+                BOT_SWATCH_REDESIGN,
+                selected && BOT_SWATCH_CHOSEN_REDESIGN,
+                BOT_CHOICE_FOCUS_REDESIGN,
               )
             }
-            renderItem={(color) => <BotFace color={color} face="oi" live={false} className="h-7 w-7" />}
+            renderItem={(color, selected) => (
+              <>
+                <BotFace color={color} face="oi" live={false} className="h-7 w-7" />
+                {selected && <ChosenCheck corner="bottom" />}
+              </>
+            )}
           />
           <RadioChoices
             label={t("bots.wizard.face.face")}
@@ -401,13 +416,15 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
                 selected
                   ? "border-accent bg-accent-soft text-on-accent-soft"
                   : "border-border bg-surface-2 text-text-secondary",
-                selected ? "redesign:border-accent redesign:bg-[color:var(--card-row-hover)] redesign:text-text redesign:ring-1 redesign:ring-inset redesign:ring-accent" : "redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:hover:bg-[color:var(--card-row-hover)]",
+                selected ? BOT_CARD_CHOSEN_REDESIGN : BOT_CARD_REDESIGN,
+                BOT_CHOICE_FOCUS_REDESIGN,
               )
             }
-            renderItem={(face) => (
+            renderItem={(face, selected) => (
               <>
                 <BotFace color={draft.color} face={face} live={false} className="h-8 w-8" />
                 {t(`bots.face.${face}`)}
+                {selected && <ChosenCheck />}
               </>
             )}
           />
@@ -439,7 +456,11 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
                   size="sm"
                   variant="secondary"
                   aria-pressed={active}
-                  className={active ? "border-accent text-accent" : undefined}
+                  className={cn(
+                    active && "border-accent text-accent",
+                    // Under the redesign a chosen preset is the selected pill, not accent text.
+                    active && "redesign:border-transparent redesign:bg-[color:var(--list-row-selected)] redesign:text-text",
+                  )}
                   onClick={() => edit({ persona: text })}
                 >
                   {t(`serverSettings.bots.preset.${preset}.name`)}
@@ -644,7 +665,14 @@ function BotInvite({ onCreate }: { onCreate: () => void }) {
     [ShieldCheck, "bots.invite.asks", "bots.invite.asksBody"],
   ];
   return (
-    <section className={cn(CARD_SURFACE, "px-6 py-8 text-center")}>
+    <section
+      className={cn(
+        CARD_SURFACE,
+        "px-6 py-8 text-center",
+        // Under the redesign the invite sits on the pane, like a page empty state.
+        "redesign:border-0 redesign:bg-transparent redesign:shadow-none redesign:px-0",
+      )}
+    >
       <div className="flex items-end justify-center gap-3" aria-hidden="true">
         {cast.map(([color, face, size]) => (
           <BotFace key={color} color={color} face={face} variant="full" className={size} />
@@ -659,11 +687,11 @@ function BotInvite({ onCreate }: { onCreate: () => void }) {
             className={cn(
               "rounded-[var(--radius-card)] border border-border bg-surface-2 p-3",
               // A card in a card under the redesign: the tint stacks.
-              "redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)]",
+              "redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-row-hover)]",
             )}
           >
-            <p className="flex items-center gap-2 text-sm font-semibold text-text">
-              <Icon className="h-4 w-4 text-accent" aria-hidden />
+            <p className="flex items-center gap-2 text-sm font-semibold text-text redesign:items-start">
+              <Icon className="h-4 w-4 shrink-0 text-accent redesign:mt-0.5" aria-hidden />
               {t(title)}
             </p>
             <p className="mt-1 text-xs text-text-secondary">{t(body)}</p>

@@ -131,7 +131,7 @@ export function BotOverviewPanel({
 function Stat({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className={cn(CARD_SURFACE, "p-4")}>
-      <p className="mb-1 text-xs font-bold uppercase tracking-wide text-text-tertiary redesign:text-[13px] redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">{label}</p>
+      <p className="mb-1 text-xs font-bold uppercase tracking-wide text-text-tertiary redesign:text-[length:var(--section-label-size)] redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">{label}</p>
       {children}
     </div>
   );

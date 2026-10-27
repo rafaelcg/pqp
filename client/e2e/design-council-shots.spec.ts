@@ -719,6 +719,25 @@ test("captures the design council screens", async ({ browser }) => {
         await page.getByRole("dialog").getByText("Bots", { exact: true }).first().click({ timeout: 5_000 });
         await page.waitForTimeout(800);
         await shoot(page, `38-server-bots-${theme}`);
+        // The wizard: a coral face chosen, keyboard focus on the faces; then a persona chosen.
+        try {
+          const dialog = page.getByRole("dialog");
+          await dialog.getByRole("button", { name: /Criar meu bot/ }).click({ timeout: 5_000 });
+          await dialog.getByRole("textbox").first().fill("Tico");
+          await dialog.getByRole("radiogroup", { name: "Cor" }).getByRole("radio", { name: "Coral" }).click();
+          const faces = dialog.getByRole("radiogroup", { name: "Cara" });
+          await faces.getByRole("radio").nth(1).click();
+          await page.keyboard.press("ArrowRight");
+          await page.keyboard.press("ArrowLeft");
+          await page.waitForTimeout(300);
+          await shoot(page, `38-server-bots-wizard-${theme}`);
+          await dialog.getByRole("button", { name: "Continuar" }).click({ timeout: 5_000 });
+          await dialog.getByRole("button", { name: /^Zoeiro/ }).click({ timeout: 5_000 });
+          await page.waitForTimeout(300);
+          await shoot(page, `38-server-bots-persona-${theme}`);
+        } catch (error) {
+          console.log("bots wizard shot skipped", String(error).slice(0, 300));
+        }
         await page.keyboard.press("Escape");
       } catch (error) {
         console.log("bots shot skipped", String(error).slice(0, 300));

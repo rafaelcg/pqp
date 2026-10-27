@@ -52,6 +52,14 @@ import { ApiError, createServerBot, fetchBotsConfig, fetchChannels, postBotIntro
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { intlLocale } from "@/lib/locale";
 import { cn } from "@/lib/utils";
+import {
+  BOT_CARD_CHOSEN_REDESIGN,
+  BOT_CARD_REDESIGN,
+  BOT_CHOICE_FOCUS_REDESIGN,
+  BOT_SWATCH_CHOSEN_REDESIGN,
+  BOT_SWATCH_REDESIGN,
+  ChosenCheck,
+} from "@/components/bots/bot-choice";
 
 /**
  * Creating a server bot, one question at a time, with the bot on stage the
@@ -401,11 +409,18 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
                       cn(
                         "grid h-11 w-11 place-items-center rounded-full border-2 bg-surface-2 transition-transform duration-[var(--duration-fast)] active:scale-95",
                         selected ? "border-text" : "border-transparent",
-                        // Under the redesign a chosen face takes the accent ring, like an avatar preset.
-                        selected && "redesign:border-accent",
+                        // Under the redesign the chosen swatch takes an outer accent ring and a check.
+                        BOT_SWATCH_REDESIGN,
+                        selected && BOT_SWATCH_CHOSEN_REDESIGN,
+                        BOT_CHOICE_FOCUS_REDESIGN,
                       )
                     }
-                    renderItem={(color) => <BotFace color={color} face="oi" live={false} className="h-8 w-8" />}
+                    renderItem={(color, selected) => (
+                      <>
+                        <BotFace color={color} face="oi" live={false} className="h-8 w-8" />
+                        {selected && <ChosenCheck corner="bottom" />}
+                      </>
+                    )}
                   />
                 </fieldset>
 
@@ -423,14 +438,16 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
                           selected
                             ? "border-accent bg-accent-soft text-on-accent-soft"
                             : "border-border bg-surface-2 text-text-secondary hover:text-text",
-                          // Under the redesign: the kit's chosen card.
-                          selected ? "redesign:border-accent redesign:bg-[color:var(--card-row-hover)] redesign:text-text redesign:ring-1 redesign:ring-inset redesign:ring-accent" : "redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:hover:bg-[color:var(--card-row-hover)]",
+                          // Under the redesign: the kit's chosen card, with its check.
+                          selected ? BOT_CARD_CHOSEN_REDESIGN : BOT_CARD_REDESIGN,
+                          BOT_CHOICE_FOCUS_REDESIGN,
                         )
                       }
-                      renderItem={(face) => (
+                      renderItem={(face, selected) => (
                         <>
                           <BotFace color={draft.color} face={face} live={false} className="h-9 w-9" />
                           {t(`bots.face.${face}`)}
+                          {selected && <ChosenCheck />}
                         </>
                       )}
                     />
@@ -488,12 +505,17 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
                           active
                             ? "border-accent bg-accent-soft text-on-accent-soft"
                             : "border-border bg-surface-2 hover:border-border-strong",
+                          // Under the redesign: the same chosen card as the faces.
+                          active ? BOT_CARD_CHOSEN_REDESIGN : BOT_CARD_REDESIGN,
+                          BOT_CHOICE_FOCUS_REDESIGN,
+                          "redesign:pr-8",
                         )}
                       >
+                        {active && <ChosenCheck />}
                         <span className="block text-sm font-semibold">
                           {t(`serverSettings.bots.preset.${preset}.name`)}
                         </span>
-                        <span className={cn("mt-0.5 line-clamp-2 text-xs", !active && "text-text-tertiary")}>
+                        <span className={cn("mt-0.5 line-clamp-2 text-xs", !active && "text-text-tertiary", "redesign:text-text-secondary")}>
                           {text}
                         </span>
                       </button>
@@ -564,7 +586,7 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
                   ))}
                 </div>
                 {draft.channelIds.length === 0 && (
-                  <p className="rounded-[var(--radius-card)] bg-warning-soft p-3 text-sm text-on-warning-soft">
+                  <p className="rounded-[var(--radius-card)] bg-warning-soft p-3 text-sm text-on-warning-soft redesign:rounded-[var(--banner-radius)]">
                     {t("bots.wizard.lives.none", { name: shownName })}
                   </p>
                 )}
@@ -604,7 +626,7 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
 
             {step === "born" && created && (
               <div className="space-y-4">
-                <p className="text-xs font-bold uppercase tracking-wide text-text-tertiary redesign:text-[13px] redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">
+                <p className="text-xs font-bold uppercase tracking-wide text-text-tertiary redesign:text-[length:var(--section-label-size)] redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">
                   {t("bots.wizard.born.eyebrow")}
                 </p>
                 <h2 className="font-display text-3xl font-extrabold text-text">
@@ -623,7 +645,7 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
                   channels={channels.filter((channel) => created.channelIds.includes(channel.id))}
                 />
                 {missing !== 0n && (
-                  <p className="rounded-[var(--radius-card)] bg-warning-soft p-3 text-sm text-on-warning-soft">
+                  <p className="rounded-[var(--radius-card)] bg-warning-soft p-3 text-sm text-on-warning-soft redesign:rounded-[var(--banner-radius)]">
                     {t("bots.wizard.born.missing", { name: created.name })}
                   </p>
                 )}
@@ -819,7 +841,7 @@ function IntroPreview({
   }
   return (
     <div className={cn(CARD_SURFACE, "p-3")}>
-      <p className="mb-2 text-xs font-bold uppercase tracking-wide text-text-tertiary redesign:text-[13px] redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">
+      <p className="mb-2 text-xs font-bold uppercase tracking-wide text-text-tertiary redesign:text-[length:var(--section-label-size)] redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">
         {t("bots.intro.preview", { channel: `#${home.name}` })}
       </p>
       <div className="flex gap-3">
@@ -988,7 +1010,7 @@ function TestChat({
 function StepTitle({ eyebrow, title, description }: { eyebrow: string; title: string; description: string }) {
   return (
     <div className="space-y-1">
-      <p className="text-xs font-bold uppercase tracking-wide text-text-tertiary redesign:text-[13px] redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">{eyebrow}</p>
+      <p className="text-xs font-bold uppercase tracking-wide text-text-tertiary redesign:text-[length:var(--section-label-size)] redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">{eyebrow}</p>
       <h2 className="font-display text-2xl font-extrabold text-text">{title}</h2>
       <p className="text-sm text-text-secondary">{description}</p>
     </div>
@@ -1021,7 +1043,7 @@ function IdCard({ draft, name }: { draft: BotDraft; name: string }) {
   ];
   return (
     <div className={cn(CARD_SURFACE, "w-full p-4")}>
-      <p className="mb-2 text-xs font-bold uppercase tracking-wide text-text-tertiary redesign:text-[13px] redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">{t("bots.card.title")}</p>
+      <p className="mb-2 text-xs font-bold uppercase tracking-wide text-text-tertiary redesign:text-[length:var(--section-label-size)] redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">{t("bots.card.title")}</p>
       <dl className="space-y-1.5 text-sm">
         {rows.map(([label, value]) => (
           <div key={label} className="flex gap-3">
