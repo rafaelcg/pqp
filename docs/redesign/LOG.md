@@ -1021,6 +1021,22 @@ Spec (audit: one renderer, `ChannelList` folded by `iconsOnly` on desktop,
    does not read as a second server rail) on the list row's fills; round
    expand and search buttons; counts are `CountBadge` cut out of the pane.
    The full-width Baú row (no preview card) takes the channel row's look.
+
+### s-voice-strip
+
+Spec (audit: `VoiceStatusBar` wide and compact, `MusicMiniPlayer` idle and
+playing in the sidebar footer, three call sites through `sidebarFooter`):
+
+1. Job: the call you are in, from anywhere: status, quality, the room,
+   leave, camera and share; music in the call.
+2. States: connecting, connected, listen only, audience mode, push-to-talk
+   idle, camera on, sharing, at the camera or share limit, a call in a text
+   channel, leave hidden, compact; music idle and playing; two coachmarks.
+3. Redesign: the footer's blocks are inset cards on the card tint
+   (`SIDEBAR_FOOTER_CARD_REDESIGN`), leave is a round danger button, the room
+   a pill, camera and share pills on the secondary fill (accent soft when
+   on). `MusicNowPlaying` is shared with the composer's music bar and moves
+   with `s-composer`.
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss

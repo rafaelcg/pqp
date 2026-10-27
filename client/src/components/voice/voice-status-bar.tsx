@@ -9,9 +9,22 @@ import {
   VideoOff,
   Volume2,
 } from "lucide-react";
+import {
+  Hash as HashBold,
+  PhoneDisconnect,
+  Screencast,
+  SpeakerHigh,
+  VideoCamera,
+  VideoCameraSlash,
+} from "@phosphor-icons/react";
 import { BringFriendsHint } from "@/components/layout/bring-friends-hint";
 import { FeatureHint } from "@/components/layout/feature-hint";
 import { Button } from "@/components/ui/button";
+import { Icon } from "@/components/ui/icon";
+import {
+  SIDEBAR_FOOTER_CARD_COMPACT_REDESIGN as VOICE_STRIP_CARD_COMPACT_REDESIGN,
+  SIDEBAR_FOOTER_CARD_REDESIGN as VOICE_STRIP_CARD_REDESIGN,
+} from "@/components/ui/sidebar-block";
 import { Tooltip } from "@/components/ui/tooltip";
 import {
   canShareScreenAudio,
@@ -105,6 +118,13 @@ interface VoiceStatusBarProps {
 
 const ACTION = "h-9 w-full shrink-0 rounded-lg";
 
+/** A round icon button in the strip. */
+const STRIP_ICON_REDESIGN =
+  "redesign:rounded-full redesign:focus-visible:ring-accent";
+/** Hang up: the danger tone, its soft fill on hover. */
+const LEAVE_REDESIGN =
+  "redesign:text-danger redesign:hover:bg-danger-soft redesign:hover:text-on-danger-soft";
+
 /**
  * Discord's Voice Connected corner: status + hang-up, the channel, camera, share.
  *
@@ -171,7 +191,7 @@ export function VoiceStatusBar({
     return (
       <div
         data-voice-bar-compact=""
-        className="flex flex-col items-center gap-1 border-t border-ink-4/60 bg-ink px-2 py-2"
+        className={cn("flex flex-col items-center gap-1 border-t border-ink-4/60 bg-ink px-2 py-2", VOICE_STRIP_CARD_COMPACT_REDESIGN)}
       >
         {/* The sentence survives the squeeze even though the room for it does
             not. A 72px column cannot print "Voice connected", but a screen
@@ -205,14 +225,20 @@ export function VoiceStatusBar({
             <Button
               variant="ghost"
               size="icon"
-              className="h-8 w-8 shrink-0"
+              className={cn("h-8 w-8 shrink-0", STRIP_ICON_REDESIGN)}
               data-voice-bar-channel={channelType}
               onClick={onOpen}
             >
               {channelType === "text" ? (
-                <Hash className="h-4 w-4" />
+                <>
+                  <Hash className="h-4 w-4 redesign:hidden" />
+                  <Icon icon={HashBold} kind="symbol" size="sm" className="hidden redesign:block" />
+                </>
               ) : (
-                <Volume2 className="h-4 w-4" />
+                <>
+                  <Volume2 className="h-4 w-4 redesign:hidden" />
+                  <Icon icon={SpeakerHigh} size="sm" className="hidden redesign:block" />
+                </>
               )}
             </Button>
           </Tooltip>
@@ -222,10 +248,11 @@ export function VoiceStatusBar({
           <Button
             variant="ghost"
             size="icon"
-            className="h-8 w-8 shrink-0"
+            className={cn("h-8 w-8 shrink-0", STRIP_ICON_REDESIGN, LEAVE_REDESIGN)}
             onClick={onLeave}
           >
-            <PhoneOff className="h-4 w-4 text-danger" />
+            <PhoneOff className="h-4 w-4 text-danger redesign:hidden" />
+            <Icon icon={PhoneDisconnect} size="sm" className="hidden redesign:block" />
           </Button>
         </Tooltip>
         )}
@@ -234,7 +261,10 @@ export function VoiceStatusBar({
   }
 
   return (
-    <div data-voice-status-bar="" className="border-t border-ink-4/60 bg-ink px-2 py-2">
+    <div
+      data-voice-status-bar=""
+      className={cn("border-t border-ink-4/60 bg-ink px-2 py-2", VOICE_STRIP_CARD_REDESIGN, "redesign:px-2.5 redesign:py-2")}
+    >
       {/* Above the strip, out of the flow: in it the card lifted the whole
           bar (and the user row under it) by its own height. */}
       {(shareHintEnabled || bringFriendsHintEnabled) && (
@@ -266,7 +296,7 @@ export function VoiceStatusBar({
         <p
           aria-live="polite"
           className={cn(
-            "flex min-w-0 flex-1 items-baseline text-xs font-semibold",
+            "flex min-w-0 flex-1 items-baseline text-xs font-semibold redesign:ml-1 redesign:text-[13px]",
             connected ? "text-success" : "text-warning",
           )}
         >
@@ -276,13 +306,13 @@ export function VoiceStatusBar({
           {connected && listenOnly && (
             <span
               data-listen-only
-              className="ml-1.5 min-w-0 truncate text-[10px] font-normal normal-case tracking-normal text-warning"
+              className="ml-1.5 min-w-0 truncate text-[10px] font-normal normal-case tracking-normal text-warning redesign:text-[11px] redesign:font-medium"
             >
               {audienceLocked ? t("voice.audience.badge") : t("voice.bar.listenOnly")}
             </span>
           )}
           {showPttIdle && (
-            <span className="ml-1 shrink-0 text-[9px] font-medium uppercase tracking-wide text-paper-muted">
+            <span className="ml-1 shrink-0 text-[9px] font-medium uppercase tracking-wide text-paper-muted redesign:ml-1.5 redesign:text-[11px] redesign:normal-case redesign:tracking-normal redesign:text-text-tertiary">
               {t("voice.bar.pttIdle")}
             </span>
           )}
@@ -295,11 +325,12 @@ export function VoiceStatusBar({
           <Button
             variant="ghost"
             size="icon"
-            className="h-7 w-7 shrink-0 text-paper-muted hover:text-danger"
+            className={cn("h-7 w-7 shrink-0 text-paper-muted hover:text-danger", STRIP_ICON_REDESIGN, "redesign:h-8 redesign:w-8", LEAVE_REDESIGN)}
             aria-label={t("voice.bar.leave")}
             onClick={onLeave}
           >
-            <PhoneOff className="h-4 w-4" />
+            <PhoneOff className="h-4 w-4 redesign:hidden" />
+            <Icon icon={PhoneDisconnect} size="sm" className="hidden redesign:block" />
           </Button>
         </Tooltip>
         )}
@@ -322,12 +353,22 @@ export function VoiceStatusBar({
             type="button"
             onClick={onOpen}
             data-voice-bar-channel={channelType}
-            className="mt-0.5 flex w-full min-w-0 items-center gap-1 rounded-md px-0.5 py-0.5 text-left text-xs text-paper-muted transition-colors hover:bg-ink-3 hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+            className={cn(
+              "mt-0.5 flex w-full min-w-0 items-center gap-1 rounded-md px-0.5 py-0.5 text-left text-xs text-paper-muted transition-colors hover:bg-ink-3 hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
+              // The room you are in, as a pill you can open.
+              "redesign:-mx-1 redesign:w-[calc(100%+0.5rem)] redesign:gap-1.5 redesign:rounded-full redesign:px-1.5 redesign:py-1 redesign:text-[13px] redesign:text-text-secondary redesign:hover:bg-[color:var(--card-row-hover)] redesign:hover:text-text redesign:focus-visible:ring-accent",
+            )}
           >
             {channelType === "text" ? (
-              <Hash className="h-3 w-3 shrink-0" aria-hidden="true" />
+              <>
+                <Hash className="h-3 w-3 shrink-0 redesign:hidden" aria-hidden="true" />
+                <Icon icon={HashBold} kind="symbol" size="sm" className="hidden h-3.5 w-3.5 shrink-0 redesign:block" />
+              </>
             ) : (
-              <Volume2 className="h-3 w-3 shrink-0" aria-hidden="true" />
+              <>
+                <Volume2 className="h-3 w-3 shrink-0 redesign:hidden" aria-hidden="true" />
+                <Icon icon={SpeakerHigh} size="sm" className="hidden h-3.5 w-3.5 shrink-0 redesign:block" />
+              </>
             )}
             <span className="min-w-0 truncate">
               {t("voice.bar.inChannel", { name: channelName })}
@@ -339,7 +380,7 @@ export function VoiceStatusBar({
       {showActionRow && (
         <div
           className={cn(
-            "mt-1.5 grid gap-1.5",
+            "mt-1.5 grid gap-1.5 redesign:mt-2",
             showCamera && showShare ? "grid-cols-2" : "grid-cols-1",
           )}
         >
@@ -356,9 +397,15 @@ export function VoiceStatusBar({
               onClick={() => onToggleCamera?.()}
             >
               {isCameraOn ? (
-                <Video className="h-4 w-4" aria-hidden="true" />
+                <>
+                  <Video className="h-4 w-4 redesign:hidden" aria-hidden="true" />
+                  <Icon icon={VideoCamera} size="sm" className="hidden redesign:block" />
+                </>
               ) : (
-                <VideoOff className="h-4 w-4" aria-hidden="true" />
+                <>
+                  <VideoOff className="h-4 w-4 redesign:hidden" aria-hidden="true" />
+                  <Icon icon={VideoCameraSlash} size="sm" className="hidden redesign:block" />
+                </>
               )}
             </VoiceBarAction>
           )}
@@ -377,10 +424,12 @@ export function VoiceStatusBar({
               onClick={() => onToggleScreenShare?.()}
             >
               {isSharingScreen ? (
-                <ScreenShareOff className="h-4 w-4" aria-hidden="true" />
+                <ScreenShareOff className="h-4 w-4 redesign:hidden" aria-hidden="true" />
               ) : (
-                <ScreenShare className="h-4 w-4" aria-hidden="true" />
+                <ScreenShare className="h-4 w-4 redesign:hidden" aria-hidden="true" />
               )}
+              {/* One glyph under the redesign: the pressed fill says it is on. */}
+              <Icon icon={Screencast} size="sm" className="hidden redesign:block" />
             </VoiceBarAction>
           )}
         </div>
@@ -419,6 +468,12 @@ function VoiceBarAction({
               "bg-signal/30 text-signal hover:bg-signal/40 hover:text-signal",
             disabled &&
               "cursor-not-allowed opacity-40 hover:bg-ink-4 hover:text-paper",
+            // A pill on the secondary button's fill; on, the accent's soft pair.
+            "redesign:h-8 redesign:rounded-full redesign:bg-[color:var(--button-secondary-bg)] redesign:text-text redesign:hover:bg-[color:var(--button-secondary-hover)] redesign:hover:text-text redesign:focus-visible:ring-accent",
+            pressed &&
+              "redesign:bg-accent-soft redesign:text-on-accent-soft redesign:hover:bg-accent-soft redesign:hover:text-on-accent-soft",
+            disabled &&
+              "redesign:hover:bg-[color:var(--button-secondary-bg)] redesign:hover:text-text",
           )}
           onClick={() => {
             if (disabled) {

@@ -20,6 +20,7 @@ import {
   channelRowIconClass,
 } from "@/components/layout/channel-list";
 import { ChannelIcon } from "@/components/layout/channel-icon";
+import { VoiceStatusBar } from "@/components/voice/voice-status-bar";
 import { VoiceOccupantRow } from "@/components/layout/voice-occupant-row";
 import { ChannelMusicCard } from "@/components/voice/channel-music-card";
 import {
@@ -407,6 +408,63 @@ function SidebarStripBlock() {
   );
 }
 
+/** The sidebar's footer, at the sidebar's width, so the strip sits as it does above the user panel. */
+function FooterPane({ children, width = "w-64" }: { children: ReactNode; width?: string }) {
+  return (
+    <div className={cn("flex flex-col justify-end rounded-lg bg-surface-1 pt-3 redesign:rounded-[var(--radius-pane)] redesign:bg-pane-side", width)}>
+      {children}
+    </div>
+  );
+}
+
+function VoiceStripBlock() {
+  const base = {
+    channelName: "Lobby",
+    isMuted: false,
+    onOpen: noop,
+    onLeave: noop,
+    onToggleCamera: noop,
+    onToggleScreenShare: noop,
+    canShareScreen: true,
+  } as const;
+  return (
+    <div data-testid="qa-shell-voice-strip" className="flex flex-wrap items-end gap-6">
+      {/* Left: connected, the camera on. Then: connecting; listen only with
+          push-to-talk idle and the share at its limit; a call in a text
+          channel; the 72px strip. */}
+      <FooterPane>
+        <VoiceStatusBar {...base} status="connected" isCameraOn />
+      </FooterPane>
+      <FooterPane>
+        <VoiceStatusBar {...base} status="joining" />
+      </FooterPane>
+      <FooterPane>
+        <VoiceStatusBar
+          {...base}
+          status="connected"
+          listenOnly
+          shareCappedOut
+          shareLimit={2}
+        />
+      </FooterPane>
+      <FooterPane>
+        <VoiceStatusBar
+          {...base}
+          channelName="papo"
+          channelType="text"
+          status="connected"
+          inputMode="push-to-talk"
+          isTransmitting={false}
+          canStream={false}
+        />
+      </FooterPane>
+      <FooterPane width="w-[72px]">
+        <VoiceStatusBar {...base} status="connected" compact />
+      </FooterPane>
+    </div>
+  );
+}
+
 /**
  * A new build waiting, so both rails draw the update tile. The store is
  * this page's own; it goes back to nothing waiting when the sheet unmounts.
@@ -564,6 +622,9 @@ export function ShellSheet() {
 
       {/* The channel list folded to icons. */}
       <SidebarStripBlock />
+
+      {/* The voice strip above the user panel. */}
+      <VoiceStripBlock />
 
       <div data-testid="qa-shell-rail" className="flex gap-6">
         <RailFrame>
