@@ -732,6 +732,20 @@ own lime-on-hover square, a hand-made count pill, legacy tokens throughout):
 4. Left: `PhoneServersScreen` (`m-shell`) and `ServerRailSkeleton`
    (`p-loading`, which is in review).
 
+### s-sidebar-header
+
+Spec (audit: one header in `channel-list.tsx`, three hand-built icon
+buttons, a search entry styled as a faint field, the banner strip in
+`server-identity.tsx`):
+
+1. Job: the open server's name and menu, members, collapse, close (phone),
+   message search, and the banner when the server has one.
+2. States: hover and open menu, a long name (tooltip), public, loading, no
+   server, with and without a banner, phone drawer.
+3. Redesign: the name in the title face over no rule; the three buttons are
+   IconButton; search is a pill a step off the pane; the banner is an inset
+   card. The search dialog itself is `f-search`.
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss

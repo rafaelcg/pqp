@@ -41,6 +41,13 @@ import {
   X,
   PanelLeftClose,
 } from "lucide-react";
+import {
+  CaretDown,
+  MagnifyingGlass,
+  SidebarSimple,
+  Users as UsersFill,
+  X as XBold,
+} from "@phosphor-icons/react";
 import { formatBadgeCount } from "@/lib/badge-count";
 import {
   forwardRef,
@@ -114,6 +121,8 @@ import { Menu } from "@/components/ui/menu";
 import { BetaTag } from "@/components/ui/beta-tag";
 import { ChannelListSkeleton } from "@/components/ui/skeleton";
 import { Tooltip } from "@/components/ui/tooltip";
+import { Icon } from "@/components/ui/icon";
+import { IconButton } from "@/components/ui/icon-button";
 import { MENU_SEPARATOR } from "@/components/ui/menu-items";
 import { useIsTruncated } from "@/lib/use-is-truncated";
 import { VoiceOccupantRow } from "@/components/layout/voice-occupant-row";
@@ -2317,7 +2326,7 @@ export const ChannelList = memo(function ChannelList({
           // (`e2e/server-header.spec.ts`), not by `channel-list-header.test.tsx`
           // — jsdom has no layout engine, so a static-markup test cannot see
           // a box model computation like this one.
-          className="flex min-h-12 shrink-0 items-center gap-2 border-b border-border px-3 py-1.5"
+          className="flex min-h-12 shrink-0 items-center gap-2 border-b border-border px-3 py-1.5 redesign:min-h-14 redesign:border-b-0 redesign:px-2 redesign:pt-2 redesign:pb-1"
         >
           {server ? (
             <Menu
@@ -2357,61 +2366,68 @@ export const ChannelList = memo(function ChannelList({
           >
             {server && (
               <>
-                <Tooltip label={t("chrome.members")}>
-                  <button
-                    type="button"
-                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-text-tertiary transition-colors duration-[var(--duration-fast)] hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 md:h-7 md:w-7"
-                    onClick={onOpenMembers}
-                  >
-                    <Users className="h-4 w-4" aria-hidden="true" />
-                  </button>
-                </Tooltip>
+                {/* `touch={false}` and the old sizes: with the toggle off these
+                    draw the 32px (28px from `md`) buttons they always were. */}
+                <IconButton
+                  label={t("chrome.members")}
+                  touch={false}
+                  className={HEADER_ICON_BUTTON}
+                  onClick={onOpenMembers}
+                >
+                  <Users className="h-4 w-4 redesign:hidden" aria-hidden="true" />
+                  <Icon icon={UsersFill} size="sm" className="hidden redesign:block" />
+                </IconButton>
                 {channelSidebarToggle && (
-                  <Tooltip
+                  <IconButton
                     label={
                       channelSidebarToggle.iconsOnly
                         ? t("chrome.expandChannelList")
                         : t("chrome.collapseChannelList")
                     }
                     detail={t("chrome.collapseChannelListHint")}
+                    data-channel-sidebar-toggle=""
+                    pressed={channelSidebarToggle.iconsOnly}
+                    touch={false}
+                    className={cn(HEADER_ICON_BUTTON, "hidden md:grid")}
+                    onClick={channelSidebarToggle.onToggle}
                   >
-                    <button
-                      type="button"
-                      data-channel-sidebar-toggle=""
-                      aria-pressed={channelSidebarToggle.iconsOnly}
-                      className="hidden h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-text-tertiary transition-colors duration-[var(--duration-fast)] hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 md:flex md:h-7 md:w-7"
-                      onClick={channelSidebarToggle.onToggle}
-                    >
-                      <PanelLeftClose className="h-4 w-4" aria-hidden="true" />
-                    </button>
-                  </Tooltip>
+                    <PanelLeftClose className="h-4 w-4 redesign:hidden" aria-hidden="true" />
+                    <Icon icon={SidebarSimple} size="sm" className="hidden redesign:block" />
+                  </IconButton>
                 )}
               </>
             )}
             {onMobileClose && (
-              <button
-                type="button"
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-text-tertiary transition-colors duration-[var(--duration-fast)] hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 md:hidden"
-                aria-label={t("chrome.closeChannelList")}
+              <IconButton
+                label={t("chrome.closeChannelList")}
+                touch={false}
+                className={cn(HEADER_ICON_BUTTON, "md:hidden")}
                 onClick={onMobileClose}
               >
-                <X className="h-4 w-4" aria-hidden="true" />
-              </button>
+                <X className="h-4 w-4 redesign:hidden" aria-hidden="true" />
+                <Icon icon={XBold} kind="symbol" size="sm" className="hidden redesign:block" />
+              </IconButton>
             )}
           </div>
         </div>
       </ContextMenu>
 
       {server && (
-        <div className="px-3 pt-3">
+        <div className="px-3 pt-3 redesign:pt-1">
           <button
             type="button"
-            className="flex w-full items-center gap-2 rounded-md border border-border bg-surface-0/60 px-2.5 py-2 text-xs text-text-muted transition-colors hover:border-border-strong hover:text-text"
+            className={cn(
+              "flex w-full items-center gap-2 rounded-md border border-border bg-surface-0/60 px-2.5 py-2 text-xs text-text-muted transition-colors hover:border-border-strong hover:text-text",
+              // Under the redesign a pill a step off the pane, like the
+              // mockup's "Buscar": the field's look without a field's edge.
+              "redesign:h-[var(--sidebar-search-h)] redesign:rounded-full redesign:border-[color:var(--sidebar-search-border)] redesign:bg-[color:var(--sidebar-search-bg)] redesign:px-3.5 redesign:py-0 redesign:text-sm redesign:text-text-tertiary redesign:hover:border-[color:var(--sidebar-search-border)] redesign:hover:bg-[color:var(--sidebar-search-hover)] redesign:hover:text-text-secondary redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent",
+            )}
             onClick={() => setSearchOpen(true)}
           >
-            <Search className="h-3.5 w-3.5 shrink-0" />
+            <Search className="h-3.5 w-3.5 shrink-0 redesign:hidden" />
+            <Icon icon={MagnifyingGlass} kind="symbol" size="sm" className="hidden redesign:block" />
             <span className="truncate">{t("chrome.searchMessages")}</span>
-            <kbd className="ml-auto hidden shrink-0 rounded border border-border px-1 py-px text-[10px] font-sans md:inline">
+            <kbd className="ml-auto hidden shrink-0 rounded border border-border px-1 py-px text-[10px] font-sans md:inline redesign:rounded-md redesign:border-0 redesign:bg-surface-3 redesign:px-1.5 redesign:text-text-secondary">
               {searchShortcutHint(conversationsHome)}
             </kbd>
           </button>
@@ -2880,6 +2896,13 @@ export const ChannelList = memo(function ChannelList({
  * the full server name as its description, sighted or not, truncated or
  * not.
  */
+/**
+ * The header's icon buttons with the toggle off: 32px, 28px from `md`, the
+ * ring offset they always had. Under the redesign IconButton's own round
+ * ghost draws them.
+ */
+const HEADER_ICON_BUTTON = "md:h-7 md:w-7 focus-visible:ring-offset-2";
+
 const ServerHeaderMenuTrigger = forwardRef<
   HTMLButtonElement,
   { server: Server; isPublic?: boolean } & ComponentPropsWithoutRef<"button">
@@ -2898,7 +2921,7 @@ const ServerHeaderMenuTrigger = forwardRef<
       ref={nameRef}
       id={nameId}
       data-server-name=""
-      className="min-w-0 flex-1 truncate font-display text-sm font-bold tracking-tight leading-tight text-text"
+      className="min-w-0 flex-1 truncate font-display text-sm font-bold tracking-tight leading-tight text-text redesign:font-[family-name:var(--type-title-font)]! redesign:text-[length:var(--sidebar-header-title-size)] redesign:font-semibold redesign:tracking-[-0.012em]!"
     >
       {server.name}
     </p>
@@ -2926,10 +2949,10 @@ const ServerHeaderMenuTrigger = forwardRef<
       // real Playwright run to catch. `items-center` on the row still
       // centers everything; only the click/hover rectangle's own height
       // changed, not the icon's position.
-      className="group flex min-w-0 flex-1 items-center gap-2 rounded-[var(--radius-control)] px-1 text-left transition-colors duration-[var(--duration-fast)] hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 data-[state=open]:bg-surface-2"
+      className="group flex min-w-0 flex-1 items-center gap-2 rounded-[var(--radius-control)] px-1 text-left transition-colors duration-[var(--duration-fast)] hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 data-[state=open]:bg-surface-2 redesign:min-h-11 redesign:gap-2.5 redesign:rounded-[var(--radius-row)] redesign:px-2 redesign:hover:bg-row-hover redesign:data-[state=open]:bg-row-hover redesign:focus-visible:ring-accent redesign:focus-visible:ring-offset-0"
       {...triggerProps}
     >
-      <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-[var(--radius-control)] bg-surface-2 font-display text-[11px] font-bold text-text">
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-[var(--radius-control)] bg-surface-2 font-display text-[11px] font-bold text-text redesign:h-7 redesign:w-7 redesign:rounded-[var(--rail-tile-radius-selected)] redesign:bg-surface-3 redesign:font-sans! redesign:tracking-normal! redesign:font-semibold">
         <ServerIcon name={server.name} iconUrl={server.iconUrl} />
       </span>
       {isPublic ? (
@@ -2947,7 +2970,13 @@ const ServerHeaderMenuTrigger = forwardRef<
       )}
       <ChevronDown
         aria-hidden="true"
-        className="h-4 w-4 shrink-0 text-text-tertiary transition-transform duration-[var(--duration-fast)] group-data-[state=open]:rotate-180"
+        className="h-4 w-4 shrink-0 text-text-tertiary transition-transform duration-[var(--duration-fast)] group-data-[state=open]:rotate-180 redesign:hidden"
+      />
+      <Icon
+        icon={CaretDown}
+        kind="symbol"
+        size="sm"
+        className="hidden text-text-tertiary transition-transform duration-[var(--duration-fast)] group-data-[state=open]:rotate-180 motion-reduce:transition-none redesign:block"
       />
     </button>
   );

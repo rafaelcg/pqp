@@ -428,6 +428,18 @@ test("captures the design council screens", async ({ browser }) => {
       await expect(page.getByText(PAPO.at(-1)![1])).toBeVisible();
       await hideDevBanner(page);
       await shoot(page, `01-chat-${theme}`);
+      // The sidebar header up close: the name hovered, the search entry.
+      {
+        const header = page.locator("[data-server-header]");
+        await page.locator("[data-server-menu-trigger]").hover();
+        await page.waitForTimeout(300);
+        const box = (await header.boundingBox())!;
+        await page.screenshot({
+          path: path.join(OUT!, `s-sidebar-header-${theme}.png`),
+          clip: { x: Math.max(0, box.x - 8), y: Math.max(0, box.y - 8), width: box.width + 16, height: box.height + 72 },
+        });
+        await page.mouse.move(0, 0);
+      }
       // A popover in place: the composer's emoji picker.
       await page.getByRole("button", { name: "Adicionar emoji", exact: true }).first().click();
       await expect(page.locator(".emoji-mart-shell")).toBeVisible();
