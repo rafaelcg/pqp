@@ -1,4 +1,10 @@
 import { formatNoteDuration, type Attachment } from "@pqp/shared";
+import {
+  Headphones as HeadphonesGlyph,
+  Pause as PauseGlyph,
+  Play as PlayGlyph,
+  WarningCircle,
+} from "@phosphor-icons/react";
 import { AlertCircle, Headphones, Loader2, Pause, Play } from "lucide-react";
 import {
   createContext,
@@ -10,6 +16,8 @@ import {
   type KeyboardEvent,
   type PointerEvent,
 } from "react";
+import { CONTENT_CARD_REDESIGN } from "@/components/ui/content-card";
+import { Icon } from "@/components/ui/icon";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useTranslation, type MessageKey, type MessageVars } from "@/lib/i18n";
 import { cn, formatTime } from "@/lib/utils";
@@ -218,7 +226,11 @@ export function VoiceNoteCard({
       <div
         role="group"
         aria-label={t("voiceNote.label", { duration: formatNoteDuration(durationMs) })}
-        className="flex w-[27.5rem] max-w-full items-center gap-2.5 rounded-[var(--radius-card)] border border-border bg-surface-2 py-1.5 pl-1.5 pr-2"
+        className={cn(
+          "flex w-[27.5rem] redesign:w-[28rem] max-w-full items-center gap-2.5 rounded-[var(--radius-card)] border border-border bg-surface-2 py-1.5 pl-1.5 pr-2",
+          CONTENT_CARD_REDESIGN,
+          "redesign:rounded-full redesign:py-1.5 redesign:pl-1.5 redesign:pr-1.5",
+        )}
       >
         <Tooltip label={playLabel}>
           <button
@@ -227,13 +239,22 @@ export function VoiceNoteCard({
             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent text-on-accent transition-colors duration-[var(--duration-fast)] hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring"
           >
             {isBroken ? (
-              <AlertCircle className="h-4 w-4" aria-hidden />
+              <>
+                <AlertCircle className="h-4 w-4 redesign:hidden" aria-hidden />
+                <Icon icon={WarningCircle} size="sm" className="hidden redesign:block" />
+              </>
             ) : isLoading ? (
               <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
             ) : isPlaying ? (
-              <Pause className="h-4 w-4 fill-current" aria-hidden />
+              <>
+                <Pause className="h-4 w-4 fill-current redesign:hidden" aria-hidden />
+                <Icon icon={PauseGlyph} size="sm" className="hidden redesign:block" />
+              </>
             ) : (
-              <Play className="ml-0.5 h-4 w-4 fill-current" aria-hidden />
+              <>
+                <Play className="ml-0.5 h-4 w-4 fill-current redesign:hidden" aria-hidden />
+                <Icon icon={PlayGlyph} size="sm" className="ml-0.5 hidden redesign:block" />
+              </>
             )}
           </button>
         </Tooltip>
@@ -297,7 +318,7 @@ export function VoiceNoteCard({
           <button
             type="button"
             onClick={() => setPlaybackRate(nextRate(rate))}
-            className="h-6 min-w-10 shrink-0 rounded-full border border-border-strong bg-surface-1 px-2 text-xs font-semibold tabular-nums text-text transition-colors duration-[var(--duration-fast)] hover:bg-surface-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring"
+            className="h-6 min-w-10 shrink-0 rounded-full border border-border-strong bg-surface-1 px-2 text-xs font-semibold tabular-nums text-text transition-colors duration-[var(--duration-fast)] hover:bg-surface-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring redesign:h-7 redesign:border-0 redesign:bg-[color:var(--content-glyph-bg)] redesign:hover:bg-[color:var(--content-card-hover)] redesign:focus-visible:ring-accent redesign:focus-visible:ring-offset-0"
           >
             {rate}x
           </button>
@@ -313,7 +334,8 @@ export function VoiceNoteCard({
       />
       {receipts.length > 0 && (
         <p className="mt-1 flex items-center gap-1.5 text-xs text-text-tertiary" data-voice-note-receipt>
-          <Headphones className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          <Headphones className="h-3.5 w-3.5 shrink-0 redesign:hidden" aria-hidden />
+          <Icon icon={HeadphonesGlyph} size="sm" className="hidden redesign:block" />
           <span>{receiptText(receipts, nameFor, t)}</span>
         </p>
       )}

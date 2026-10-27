@@ -17,6 +17,7 @@ import { answerBotAsk, ApiError, decideBotPlan } from "@/lib/api";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { intlLocale, type Locale } from "@/lib/locale";
 import { Spinner } from "@/components/ui/spinner";
+import { CONTENT_CARD_REDESIGN } from "@/components/ui/content-card";
 import { cn } from "@/lib/utils";
 
 /** A card younger than this animates in; older ones are drawn still. */
@@ -60,6 +61,8 @@ function CardFrame({
         "mt-1.5 max-w-md overflow-hidden rounded-[var(--radius-card)] border bg-surface-card transition-colors duration-[var(--duration-base)]",
         calling ? "border-warning" : "border-border",
         fresh && "bot-step-in",
+        CONTENT_CARD_REDESIGN,
+        calling && "redesign:border-warning",
       )}
     >
       {children}
@@ -437,7 +440,7 @@ export function BotActionCard({
             {card.planId && mine ? (
               <PlanButtons planId={card.planId} />
             ) : (
-              <p className="border-t border-border px-3 py-2 text-xs text-text-tertiary">
+              <p className="border-t border-border px-3 py-2 text-xs text-text-tertiary redesign:border-[color:var(--card-border)]">
                 {t("chat.botCard.onlyRequester", { who })}
               </p>
             )}
@@ -634,10 +637,10 @@ function AskCard({
                     disabled={sending !== null}
                     onClick={() => void answer(index)}
                     className={cn(
-                      "flex max-w-full items-center gap-1.5 rounded-full border px-3 py-1.5 text-left text-[13px] font-medium text-text transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-focus-ring)] disabled:cursor-default",
+                      "flex max-w-full items-center gap-1.5 rounded-full border px-3 py-1.5 text-left text-[13px] font-medium text-text transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-focus-ring)] disabled:cursor-default redesign:focus-visible:ring-accent",
                       sending === index
                         ? "border-accent bg-accent-soft text-on-accent-soft"
-                        : "border-border-strong bg-surface-2 hover:border-accent hover:bg-accent-soft hover:text-on-accent-soft",
+                        : "border-border-strong bg-surface-2 hover:border-accent hover:bg-accent-soft hover:text-on-accent-soft redesign:border-transparent redesign:bg-[color:var(--content-glyph-bg)] redesign:hover:border-transparent",
                       sending !== null && sending !== index && "text-text-tertiary",
                       fresh && "bot-step-in",
                     )}
@@ -651,7 +654,7 @@ function AskCard({
                     key={index}
                     className={cn(
                       "max-w-full break-words rounded-full border px-3 py-1.5 text-[13px]",
-                      card.answer === index ? "border-accent bg-accent-soft text-on-accent-soft" : "border-border text-text-secondary",
+                      card.answer === index ? "border-accent bg-accent-soft text-on-accent-soft redesign:border-transparent" : "border-border text-text-secondary redesign:border-[color:var(--card-border)]",
                     )}
                   >
                     {option}
@@ -697,7 +700,7 @@ function PlanButtons({ planId }: { planId: string }) {
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-2 border-t border-border px-3 py-2.5">
+    <div className="flex flex-wrap items-center gap-2 border-t border-border px-3 py-2.5 redesign:border-[color:var(--card-border)]">
       <Button type="button" size="sm" disabled={sending !== null} onClick={() => void decide("yes")}>
         {sending === "yes" ? (
           <Spinner className="mr-1.5 h-3.5 w-3.5 motion-safe:animate-spin" />

@@ -902,6 +902,18 @@
   /* Your own name on your messages. */
   --message-own-name: var(--color-accent-text);
 
+  /* What a message carries (s-message-content): every card in a message is
+     the card surface at the card radius; a picture is a step tighter. */
+  --content-media-radius: 0.75rem;
+  /* A message card rests on the pane: no lift. */
+  --content-card-shadow: none;
+  --content-card-hover: var(--card-hover);
+  /* Every message card pads its content the same. */
+  --content-card-pad: 0.875rem;
+  --content-glyph-bg: color-mix(in oklab, var(--color-text) 7%, transparent);
+  --content-quote-bar: color-mix(in oklab, var(--color-text) 22%, transparent);
+  --content-link-line: color-mix(in oklab, var(--color-accent-text) 45%, transparent);
+
   /* Glass: a close or control laid over a picture (corner-card heroes). */
   --glass-bg: oklch(0.12 0.01 262 / 0.62);
   --glass-fg: oklch(0.98 0 0);
@@ -3123,9 +3135,17 @@ h2,
 
 /* Under the redesign the @you chip takes the chip tokens, measured against
    the mention row it sits on. */
-:root[data-redesign] .pqp-mention-self {
+:root[data-redesign] .pqp-mention.pqp-mention-self {
   background: var(--color-mention-chip);
   color: var(--color-on-mention-chip);
+}
+
+/* On a row that names you, other people's chips go neutral, so yours is the
+   one lime chip on the fill. */
+:root[data-redesign] .pqp-message-mention .pqp-mention:not(.pqp-mention-self) {
+  background: color-mix(in oklab, var(--color-text) 9%, transparent);
+  font-weight: 500;
+  color: var(--color-text);
 }
 
 .pqp-mention-mass {
@@ -3151,6 +3171,61 @@ h2,
 :root[data-redesign] .pqp-message-mention:hover {
   background: var(--message-mention-hover);
   --avatar-dot-ring: var(--message-mention-hover);
+}
+
+/* Markdown under the redesign (s-message-content): links in the accent's
+   readable ink with a soft underline, rounded code, a quote bar in a text
+   tint, a code block on the card radius. */
+:root[data-redesign] .markdown-body a {
+  color: var(--color-accent-text);
+  text-decoration-color: var(--content-link-line);
+  text-decoration-thickness: 1px;
+}
+
+:root[data-redesign] .markdown-body a:hover {
+  text-decoration-color: currentColor;
+}
+
+:root[data-redesign] .markdown-body code {
+  border-radius: 0.375rem;
+  padding: 0.125rem 0.375rem;
+}
+
+/* Inline code on the family's tint in the text colour: lime is for what
+   can be acted on (links, mentions). The theme's code colours stay in code
+   blocks. */
+:root[data-redesign] .markdown-body :not(pre) > code {
+  background: var(--content-glyph-bg);
+  color: var(--color-text);
+}
+
+:root[data-redesign] .markdown-body pre {
+  /* The cards' width, so a code block stops on their right edge. */
+  max-width: 28rem;
+  background: var(--card-bg);
+  border-color: var(--card-border);
+  border-radius: var(--radius-control);
+  padding: 0.625rem 0.75rem;
+  margin: 0.375rem 0;
+}
+
+:root[data-redesign] .markdown-body pre code {
+  padding: 0;
+}
+
+:root[data-redesign] .markdown-body blockquote {
+  border-left: 3px solid var(--content-quote-bar);
+  border-radius: 1px;
+  padding-left: 0.75rem;
+  color: var(--color-text-secondary);
+}
+
+:root[data-redesign] .pqp-mention {
+  border-radius: 0.375rem;
+  padding: 0.0625rem 0.3125rem;
+  font-weight: 600;
+  background: color-mix(in oklch, var(--color-accent) 18%, transparent);
+  color: var(--color-accent-text);
 }
 
 @keyframes rise-in {

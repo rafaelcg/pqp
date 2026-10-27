@@ -736,6 +736,199 @@ function MessageRowsBlock() {
   );
 }
 
+/** A message carrying content, for the content sheet (s-message-content). */
+function contentMessage(n: number, authorId: string, authorName: string, body: string, extra: Record<string, unknown> = {}): ChatMessage {
+  return messageSchema.parse({
+    id: `00000000-0000-4000-8000-0000000005${String(n).padStart(2, "0")}`,
+    channelId: ROW_CHANNEL,
+    authorId,
+    authorName,
+    authorTag: null,
+    authorAvatarUrl: null,
+    body,
+    createdAt: new Date(NOW - (30 - n) * 60_000).toISOString(),
+    ...extra,
+  }) as ChatMessage;
+}
+
+const SHEET_ORIGIN = typeof window === "undefined" ? "http://localhost" : window.location.origin;
+/** 64 peaks, a rise and fall, as a voice note stores them. */
+const SHEET_WAVEFORM = btoa(
+  String.fromCharCode(
+    ...Array.from({ length: 64 }, (_, i) => Math.round(60 + 160 * Math.abs(Math.sin(i / 4)) * (0.5 + 0.5 * Math.sin(i / 11)))),
+  ),
+);
+
+const CONTENT_MARKDOWN = [
+  "**bora** fechar hoje, o mapa novo tá em `maps/v2` e as regras em https://pqp.gg/regras",
+  "@bia cê traz o controle? o @rafa já confirmou",
+  "- 20h: aquecimento",
+  "- 21h: final",
+  "```",
+  "/roll 2d6+1",
+  "```",
+  // Last, so nothing after it is pulled into the quote.
+  "> quem perder paga o lanche",
+].join("\n");
+
+const CONTENT_MESSAGES_A: ChatMessage[] = [
+  contentMessage(1, ROW_RAFA, "Rafa", CONTENT_MARKDOWN),
+  contentMessage(2, ROW_BIA, "Bia", "@lia trago sim, e o @rafa leva o chaveamento:", {
+    attachments: [
+      {
+        id: "00000000-0000-4000-8000-000000000601",
+        filename: "partida.jpg",
+        contentType: "image/jpeg",
+        byteSize: 182_000,
+        width: 1280,
+        height: 720,
+        url: `${SHEET_ORIGIN}/media/bubbles-poster.jpg`,
+      },
+      {
+        id: "00000000-0000-4000-8000-000000000602",
+        filename: "chaveamento-final.pdf",
+        contentType: "application/pdf",
+        byteSize: 1_240_000,
+        width: null,
+        height: null,
+        url: `${SHEET_ORIGIN}/chaveamento-final.pdf`,
+      },
+    ],
+  }),
+  contentMessage(3, ROW_ME, "Lia", "", {
+    attachments: [
+      {
+        id: "00000000-0000-4000-8000-000000000603",
+        filename: "nota-de-voz.webm",
+        contentType: "audio/webm",
+        byteSize: 48_000,
+        width: null,
+        height: null,
+        url: `${SHEET_ORIGIN}/nota-de-voz.webm`,
+        voice: { durationMs: 14_000, waveform: SHEET_WAVEFORM, listenedByMe: false },
+      },
+    ],
+  }),
+  // Bia's note, not heard yet: the unheard dot and the quiet bars.
+  contentMessage(9, ROW_BIA, "Bia", "", {
+    createdAt: new Date(NOW - 26.5 * 60_000).toISOString(),
+    attachments: [
+      {
+        id: "00000000-0000-4000-8000-000000000604",
+        filename: "nota-da-bia.webm",
+        contentType: "audio/webm",
+        byteSize: 36_000,
+        width: null,
+        height: null,
+        url: `${SHEET_ORIGIN}/nota-da-bia.webm`,
+        voice: { durationMs: 9_000, waveform: SHEET_WAVEFORM, listenedByMe: false },
+      },
+    ],
+  }),
+  contentMessage(4, ROW_RAFA, "Rafa", "olha isso que o Caio mandou no outro server", {
+    forward: {
+      v: 1,
+      kind: "message",
+      sourceServerId: "00000000-0000-4000-8000-000000000701",
+      sourceServerName: "Turma do Fliperama",
+      sourceServerIconUrl: null,
+      sourceChannelName: "geral",
+      sourceId: "00000000-0000-4000-8000-000000000702",
+      authorDisplayName: "Caio",
+      excerpt: "achei o cartucho original no sebo, R$ 30. alguém quer testar sábado?",
+      mediaKind: "image",
+      url: `${SHEET_ORIGIN}/app/server/00000000-0000-4000-8000-000000000701/channel/00000000-0000-4000-8000-000000000703/message/00000000-0000-4000-8000-000000000702`,
+      createdAt: new Date(NOW - 3 * 3_600_000).toISOString(),
+    },
+  }),
+];
+
+const CONTENT_VOTERS = [
+  { userId: ROW_RAFA, displayName: "Rafa", avatarUrl: null },
+  { userId: ROW_BIA, displayName: "Bia", avatarUrl: null },
+  { userId: ROW_ME, displayName: "Lia", avatarUrl: null },
+  { userId: "00000000-0000-4000-8000-0000000008a1", displayName: "Caio", avatarUrl: null },
+];
+
+const CONTENT_MESSAGES_B: ChatMessage[] = [
+  contentMessage(5, ROW_BIA, "Bia", "Que horas a final?", {
+    poll: {
+      question: "Que horas a final?",
+      allowMultiselect: false,
+      closesAt: new Date(NOW + 5 * 3_600_000).toISOString(),
+      closedAt: null,
+      totalVotes: 4,
+      canClose: false,
+      options: [
+        // You voted 21h; 20h leads. So the ring and the leading fill show apart.
+        { id: "00000000-0000-4000-8000-000000000801", label: "20h", votes: 3, voted: false, voters: [CONTENT_VOTERS[0], CONTENT_VOTERS[1], CONTENT_VOTERS[3]] },
+        { id: "00000000-0000-4000-8000-000000000802", label: "21h", votes: 1, voted: true, voters: [CONTENT_VOTERS[2]] },
+        { id: "00000000-0000-4000-8000-000000000803", label: "Amanhã", votes: 0, voted: false, voters: [] },
+      ],
+    },
+  }),
+  contentMessage(6, ROW_RAFA, "Rafa", "2d6+1: 11", {
+    chance: { type: "roll", notation: "2d6+1", faces: [4, 6], modifier: 1, total: 11, comment: "quem começa" },
+  }),
+  contentMessage(7, ROW_RAFA, "Rafa", "as regras completas: https://pqp.gg/regras", {
+    embeds: [
+      {
+        url: "https://pqp.gg/regras",
+        kind: "link",
+        title: "Regras do campeonato de sábado",
+        description: "Formato, horários, o que vale e o que não vale. Leia antes da primeira partida.",
+        siteName: "pqp.gg",
+        imageUrl: null,
+        imageWidth: null,
+        imageHeight: null,
+      },
+    ],
+  }),
+  contentMessage(8, ROW_HOOK, "Deploys", "", {
+    isWebhook: true,
+    webhookEmbeds: [
+      {
+        title: "Build 1.4.2 no ar",
+        url: "https://pqp.gg/novidades",
+        description: "Notas de voz mais leves e o chaveamento novo.",
+        color: 0x5865f2,
+        fields: [
+          { name: "Ambiente", value: "produção", inline: true },
+          { name: "Duração", value: "3 min 12 s", inline: true },
+        ],
+        footer: { text: "via GitHub Actions" },
+      },
+    ],
+  }),
+];
+
+function MessageContentBlock() {
+  return (
+    <div data-testid="qa-shell-message-content" className="flex flex-wrap items-start gap-6">
+      {/* Left: markdown (bold, code, a link, a quote, two mentions, one of
+          them you, a list, a code block); a picture and a file; your voice
+          note, not heard yet; a forwarded message. Right: a poll you voted
+          in; a dice roll; a link preview; a webhook's own embed. */}
+      {[CONTENT_MESSAGES_A, CONTENT_MESSAGES_B].map((messages, index) => (
+        <MainPane key={index}>
+          <div className={cn("flex min-h-0 flex-col", index === 0 ? "h-[1180px]" : "h-[900px]")}>
+            <MessageList
+              messages={messages}
+              currentUserId={ROW_ME}
+              currentUsername="lia"
+              channelId={ROW_CHANNEL}
+              onToggleReaction={noop}
+              onRetryMessage={noop}
+              authors={ROW_AUTHORS}
+              authorsComplete
+            />
+          </div>
+        </MainPane>
+      ))}
+    </div>
+  );
+}
+
 /**
  * A new build waiting, so both rails draw the update tile. The store is
  * this page's own; it goes back to nothing waiting when the sheet unmounts.
@@ -951,6 +1144,7 @@ export function ShellSheet() {
 
       {/* Message rows. */}
       <MessageRowsBlock />
+      <MessageContentBlock />
 
       <div data-testid="qa-shell-rail" className="flex gap-6">
         <RailFrame>

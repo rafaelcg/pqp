@@ -1482,6 +1482,37 @@ a pinned continuation line carries its pin in the gutter, "(editada)"
 ends the paragraph right before it. For `s-member-list`: the same role
 lightness clamp on member rows and role chips.
 
+### s-message-content
+
+Spec (audit: `MessageBody` and the `.markdown-body` rules, `AttachmentGrid`
+and its four tiles, `VoiceNoteCard`, `ForwardCard`, `PollCard`, `ChanceCard`,
+`BotActionCard`, `BauPostCard`, `StoryQuoteCard`, `GifAttachment`,
+`EmbedCard`, `WebhookEmbedCard`; custom emoji draw an image only):
+
+1. Job: what a message carries, readable and one family.
+2. States: markdown (bold, code, link, quote, list, code block, mentions:
+   you, someone, everyone), picture (loading box, broken falls to the chip),
+   video, audio, file, voice note (playing, unheard, broken, receipts),
+   forward (restricted, media chip, thumbnail), poll (voted, leading,
+   closed), dice, bot plan and ask, Baú post (locked, pinned, video), story
+   quote (live, expired), GIF (reduced motion), link preview, webhook embed.
+3. Redesign: one card (`ui/content-card.ts`): the card's text tint and edge
+   at the card radius, no stripe and no shadow; pictures on a 12px media
+   radius; file and media glyphs are Phosphor on a 36px tile; links in the
+   accent ink with a soft underline; mentions a rounded accent tint; the
+   voice note a pill. A webhook keeps the sender's colour on its left edge.
+4. Kept as is: the lightbox (already the IconButton primitives; its chrome
+   moves with the overlays), the bot notice (`s-log-chrome`).
+5. Question: the broken-image chip says "Image unavailable" in English for
+   every language (`attachment-grid.tsx`). Translating it changes the
+   toggle-off app, so it waits for a yes.
+
+Rounds (Opus only): r1 7.8 (MUST fixed: your own mention lost the cascade),
+r2 8.2, r3 7.9 (MUST fixed: the webhook edge thinned at the corners), r4
+8.2, r5 8.6 (no MUST, cap). After r5: one title scale (poll 16px), the
+poll's other options at 14% under the 26% leader, the roll comment on the
+kicker, named chips at medium weight. Not done: none.
+
 ### f-onboarding
 
 Spec (audit: `onboarding/` (11 files), the hints in `layout/*-hint.tsx`
