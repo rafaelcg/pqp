@@ -57,6 +57,7 @@ Read this file and the inventory at the start of every session.
 | 2 | `p-sheet` | Merged, capped at round 5 (Opus 8.6) |
 | 2 | `p-dialog` | Merged, capped at round 5 (Codex 8.7 r2, Opus 8.2 r4) |
 | 3 | `s-frame` | Merged, capped at round 5 (Opus 8.8) |
+| 3 | `s-rail` | Merged, capped at round 5 (Opus 8.2 r5, 8.8 r3) |
 
 ## Phase 0: directions
 
@@ -1003,6 +1004,16 @@ where the frame classes stop floating. Left as COULD:
 Verified: typecheck, 10,454 unit tests, bench:tokens, i18n:check, e2e
 app-shell-scroll, forum-shell, channel-layout, call-split-layout,
 forum-pane. Screenshots: ~/pqp-redesign/s-frame/.
+
+Rounds 3 to 5 (Opus; Codex out of usage): 8.8, 8.0, 8.2. Fixed on the way:
+the join door on the same disc, idle doors lifted 4% in dark, a quieter grey
+globe, one focus ring on the update tile, the lime rule written down (a lime
+fill is "you are here", small lime marks are "new for you"). Capped at round
+5, no MUST open. Open: the sheet's face fixtures load from dicebear, so a
+capture can miss them.
+Verified: typecheck, 10,462 unit tests, bench:tokens, i18n:check, e2e
+conversations-home, dm-list-polish, live-read-ack (17). Screenshots:
+~/pqp-redesign/s-rail/.
 
 ### p-dialog
 
