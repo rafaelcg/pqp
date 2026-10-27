@@ -447,6 +447,10 @@ function VoiceStripBlock() {
       <FooterPane>
         <VoiceStatusBar {...base} status="connected" isCameraOn />
       </FooterPane>
+      {/* Sharing the screen: the share pill pressed, its "on air" glyph. */}
+      <FooterPane>
+        <VoiceStatusBar {...base} status="connected" isSharingScreen />
+      </FooterPane>
       <FooterPane>
         <VoiceStatusBar {...base} status="joining" />
       </FooterPane>

@@ -479,7 +479,7 @@ function VoiceBarAction({
             // A pill on the secondary button's fill; on, the accent's soft pair.
             "redesign:h-8 redesign:rounded-full redesign:bg-[color:var(--button-secondary-bg)] redesign:text-text redesign:hover:bg-[color:var(--button-secondary-hover)] redesign:hover:text-text redesign:focus-visible:ring-accent",
             pressed &&
-              "redesign:bg-accent-soft redesign:text-on-accent-soft redesign:hover:bg-accent-soft redesign:hover:text-on-accent-soft redesign:hover:brightness-110",
+              "redesign:bg-accent-soft redesign:text-on-accent-soft redesign:hover:bg-[color:color-mix(in_oklab,var(--color-accent-soft),var(--color-on-accent-soft)_10%)] redesign:hover:text-on-accent-soft",
             // At its limit the pill keeps its fill and only the glyph fades,
             // so it still reads as a button on a light pane.
             disabled &&

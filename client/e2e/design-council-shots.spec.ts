@@ -763,7 +763,7 @@ const PRIMITIVES: {
   // The icons-only sidebar: hover on "general".
   { id: "s-sidebar-rail", testId: "qa-shell-sidebar-strip", hover: "general" },
   // The voice strip in its states.
-  { id: "s-voice-strip", testId: "qa-shell-voice-strip" },
+  { id: "s-voice-strip", testId: "qa-shell-voice-strip", focus: "Sair da call" },
 ];
 
 test("captures the primitives", async ({ browser }) => {
