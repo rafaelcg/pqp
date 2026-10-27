@@ -4131,7 +4131,12 @@ export function ChannelRow({
           <>
             <span
               aria-hidden="true"
-              className="h-1.5 w-1.5 rounded-full bg-signal redesign:mr-2 redesign:h-[var(--list-row-pip)] redesign:w-[var(--list-row-pip)] redesign:bg-on-success-soft"
+              className={cn(
+                "h-1.5 w-1.5 rounded-full bg-signal redesign:mr-2 redesign:h-[var(--list-row-pip)] redesign:w-[var(--list-row-pip)] redesign:bg-on-success-soft",
+                // The pip column means "something is waiting": an unread
+                // pip or a count takes it, and the fill still says connected.
+                ((hasUnread && !muted) || mentions > 0) && "redesign:hidden",
+              )}
             />
             <span className="sr-only">{t("chrome.connected")}</span>
           </>
@@ -4239,7 +4244,9 @@ export function ChannelRow({
           // no ring. It wins over the selected fill too, because being in the
           // room is the usual reason it is open.
           connected &&
-            "redesign:bg-success-soft redesign:text-on-success-soft redesign:ring-0 redesign:hover:bg-success-soft redesign:hover:text-on-success-soft",
+            "redesign:bg-success-soft redesign:text-on-success-soft redesign:hover:bg-success-soft redesign:hover:text-on-success-soft",
+          // A channel dragged over it still shows the drop ring.
+          connected && !isDragOver && "redesign:ring-0",
           // The row's focus ring, on the whole pill: the button inside
           // drops its outline under the redesign.
           "redesign:has-[[data-channel-row-main]:focus-visible]:ring-2 redesign:has-[[data-channel-row-main]:focus-visible]:ring-inset redesign:has-[[data-channel-row-main]:focus-visible]:ring-[color:var(--list-row-ring)]",
@@ -4282,7 +4289,7 @@ export function ChannelRow({
             data-channel-join=""
             data-channel-watch=""
             draggable={false}
-            className="shrink-0 rounded-md bg-danger/15 px-1.5 py-0.5 text-[10px] font-semibold text-danger hover:bg-danger/25 redesign:rounded-full redesign:bg-danger-soft redesign:px-2.5 redesign:py-1 redesign:text-xs redesign:text-on-danger-soft redesign:hover:bg-[color:color-mix(in_oklab,var(--color-danger-soft)_85%,var(--color-text))] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent"
+            className="shrink-0 rounded-md bg-danger/15 px-1.5 py-0.5 text-[10px] font-semibold text-danger hover:bg-danger/25 redesign:rounded-full redesign:bg-danger-soft redesign:px-2.5 redesign:py-1 redesign:text-xs redesign:text-on-danger-soft redesign:hover:bg-[color:color-mix(in_oklab,var(--color-danger-soft)_85%,var(--color-text))] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--list-row-ring)]"
             title={t("watchParty.live.watchHint")}
             onClick={(event) => {
               event.preventDefault();
@@ -4322,7 +4329,7 @@ export function ChannelRow({
                     "redesign:text-[color:var(--list-row-icon)]"
                   : "redesign:hidden redesign:group-hover:flex redesign:group-focus-within:flex",
                 // After the pin's own colour: the room you are in stays green.
-                connected && "redesign:text-on-success-soft",
+                connected && "redesign:text-on-success-soft redesign:hover:text-on-success-soft",
               )}
               aria-label={
                 isFavorite ? t("chrome.unpinChannel") : t("chrome.pinChannel")
@@ -4357,7 +4364,7 @@ export function ChannelRow({
                   ? "redesign:text-[color:var(--list-row-selected-text)]"
                   : "redesign:hidden redesign:group-hover:flex redesign:group-focus-within:flex",
                 // After the selected colour: the room you are in stays green.
-                connected && "redesign:text-on-success-soft",
+                connected && "redesign:text-on-success-soft redesign:hover:text-on-success-soft",
                 // Same as the pin: not drawn on a touch screen unless the
                 // channel is selected. Settings is in the long-press menu.
                 selected

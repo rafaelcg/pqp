@@ -526,6 +526,11 @@ the redesign they take `ui/list-row.tsx`'s tokens:
   they show on a selected row.
 - A live watch party room says live with a red dot on its viewer line; the
   "AO VIVO" words stay for a screen reader. "Assistir" is a soft danger pill.
+- The room you are in: `bg-success-soft`, with the name, icon, tiles and an
+  8px dot in `on-success-soft` and the second line at 80%. It wins over
+  selected. An unread pip or a count takes the dot's place.
+- Keyboard focus rings the whole pill in `--list-row-ring`; the row's tiles,
+  the thread's X and "Assistir" use the same token.
 - `ChannelListSkeleton` draws the same 36px pills, 2px apart.
 
 ### The voice row
