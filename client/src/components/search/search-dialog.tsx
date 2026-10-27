@@ -3,10 +3,12 @@ import {
   SEARCH_QUERY_MIN_LENGTH,
   type MessageSearchResult,
 } from "@pqp/shared";
+import { MagnifyingGlass } from "@phosphor-icons/react";
 import { Hash, Loader2, Search } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { Icon } from "@/components/ui/icon";
 import { Dialog } from "@/components/ui/dialog";
 import { searchServerMessages } from "@/lib/api";
 import { messageLinkState, messageRoutePath } from "@/lib/app-route";
@@ -325,6 +327,9 @@ function SearchEmpty({ title, hint }: { title: string; hint?: string }) {
   return (
     <EmptyState
       size="inline"
+      // Under the redesign only, so it leads like every other inline state.
+      icon={<Icon icon={MagnifyingGlass} kind="symbol" size="md" />}
+      iconClassName="hidden redesign:block"
       title={title}
       body={hint}
       className="h-full justify-center gap-1 px-8"
