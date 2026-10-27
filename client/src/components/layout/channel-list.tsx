@@ -44,7 +44,7 @@ import {
 import {
   CaretDown,
   FolderSimplePlus,
-  Lock as LockFill,
+  Lock as LockGlyph,
   MagnifyingGlass,
   Plus as PlusBold,
   SidebarSimple,
@@ -2702,7 +2702,8 @@ export const ChannelList = memo(function ChannelList({
                     className={cn(
                       "pl-4 text-[11px] font-semibold uppercase tracking-[0.12em] text-text-tertiary",
                       CATEGORY_LABEL_REDESIGN,
-                      "redesign:pl-[1.125rem] redesign:text-text-secondary",
+                      // A label, not a fold control: a step quieter than the headers.
+                      "redesign:pl-[1.125rem] redesign:text-text-tertiary",
                     )}
                   >
                     {t("chrome.categories")}
@@ -2721,7 +2722,7 @@ export const ChannelList = memo(function ChannelList({
                         )}
                         onClick={() => onCreateChannel("category", false)}
                       >
-                        <SectionActionGlyph off={FolderPlus} on={FolderSimplePlus} kind="symbol" onClassName="h-4 w-4" />
+                        <SectionActionGlyph off={FolderPlus} on={FolderSimplePlus} kind="symbol" />
                       </button>
                     </Tooltip>
                   )}
@@ -3193,7 +3194,7 @@ export function ChannelSection({
                   className={addButtonClass}
                   onClick={onAddPrivate}
                 >
-                  <SectionActionGlyph off={Lock} on={LockFill} kind="symbol" offClassName="h-3 w-3" />
+                  <SectionActionGlyph off={Lock} on={LockGlyph} offClassName="h-3 w-3" />
                 </button>
               </Tooltip>
             </div>

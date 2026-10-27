@@ -508,6 +508,15 @@ share one recipe from `layout/channel-section-header.tsx`:
   ("+", the lock, the new category) with 14px glyphs.
 - `CATEGORY_SUMMARY_REDESIGN`: "3 canais" and the unread dot on a folded
   section.
+- `CATEGORY_DROP_INTO_REDESIGN`: a header a dragged channel would drop into.
+  `bg-accent-soft`, `text-on-accent-soft`, a 1px inset `ring-accent`, and no
+  hover change. The caret follows the label's colour.
+
+A drop target hides the summary and the actions and shows `chrome.dropHere`
+("Soltar aqui"); the name is already on the row. The lock is a filled glyph
+(an object). The new-category folder keeps the bold outline: filled, its plus
+is unreadable at 14px. The classic list always shows "+"; the mixed list shows
+it on hover and focus, because it has many more headers.
 
 ### Icons
 
