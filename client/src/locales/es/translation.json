@@ -945,6 +945,7 @@
   "communities.empty.title": "Todavía no hay nada aquí",
   "communities.empty.body": "Ninguna comunidad coincide. Prueba otra categoría, o crea una tú.",
   "communities.empty.titleFiltered": "Nada con ese filtro",
+  "communities.empty.bodyLanguage": "Todavía no hay comunidades en ese idioma. Míralas todas, o crea la tuya.",
   "communities.empty.bodyAll": "Ninguna comunidad abierta. Crea la primera.",
   "communities.empty.reset": "Ver todo",
   "communities.category.label": "Categoría",

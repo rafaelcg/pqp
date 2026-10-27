@@ -330,8 +330,12 @@ export function CommunitiesView({
             role="group"
             aria-label={t("communities.language.label")}
             data-language-filter
-            className="mt-3 flex justify-center sm:justify-end"
+            className={cn("mt-3 flex justify-center sm:justify-end redesign:items-center redesign:gap-2", soloCreate && "redesign:sm:justify-center")}
           >
+            {/* Under the redesign the control says what it narrows. The group's own name already reads it aloud. */}
+            <span aria-hidden="true" className="hidden text-xs text-text-secondary redesign:inline">
+              {t("communities.language.label")}
+            </span>
             <div className="inline-flex items-center gap-0.5 rounded-full border border-ink-4 bg-ink-2 p-0.5 redesign:border-0 redesign:bg-[color:var(--segmented-bg)] redesign:p-[var(--segmented-pad)]">
               {languages.map((segment) => (
                 <button
@@ -427,12 +431,18 @@ export function CommunitiesView({
           ) : communities.length === 0 && redesign ? (
             <EmptyState
               className="mt-14 redesign:mt-0"
-              icon={<span className="text-[2rem] drop-shadow-sm">🦗</span>}
-              iconClassName="redesign:!bg-[color:var(--glow-accent-soft)]"
+              icon={<span className="text-[2rem] drop-shadow-sm redesign:text-[2.25rem]">🦗</span>}
+              iconClassName="redesign:!bg-[color:var(--glow-accent-soft)] redesign:ring-1 redesign:ring-[color:color-mix(in_oklab,var(--color-accent)_20%,transparent)]"
               title={t(filtered ? "communities.empty.titleFiltered" : empty.title)}
               body={
                 <>
-                  {t(filtered ? empty.body : "communities.empty.bodyAll")}
+                  {t(
+                    !filtered
+                      ? "communities.empty.bodyAll"
+                      : category === null && rawQuery.trim() === ""
+                        ? "communities.empty.bodyLanguage"
+                        : empty.body,
+                  )}
                   {empty.hint && <span className="mt-1 block text-xs text-text-tertiary">{t(empty.hint)}</span>}
                 </>
               }

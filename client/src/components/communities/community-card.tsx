@@ -156,7 +156,7 @@ export function CommunityCard({
 
   return (
     <li
-      className="group relative flex flex-col overflow-hidden rounded-2xl border border-ink-4 bg-ink-2 transition duration-200 hover:-translate-y-0.5 hover:border-signal/45 hover:shadow-[0_14px_36px_var(--glow-accent)] focus-within:border-signal/45 redesign:rounded-[var(--radius-card)] redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--community-card-bg)] redesign:hover:border-[color:color-mix(in_oklab,var(--color-accent)_40%,transparent)] redesign:focus-within:border-[color:color-mix(in_oklab,var(--color-accent)_40%,transparent)]"
+      className="group relative flex flex-col overflow-hidden rounded-2xl border border-ink-4 bg-ink-2 transition duration-200 hover:-translate-y-0.5 hover:border-signal/45 hover:shadow-[0_14px_36px_var(--glow-accent)] focus-within:border-signal/45 redesign:rounded-[var(--radius-card)] redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--community-card-bg)] redesign:hover:translate-y-0 redesign:hover:shadow-none redesign:hover:border-[color:color-mix(in_oklab,var(--color-accent)_40%,transparent)] redesign:focus-within:border-[color:color-mix(in_oklab,var(--color-accent)_40%,transparent)]"
       data-community={community.id}
     >
       {/* The header. Short enough that it never pushes the name below the fold
