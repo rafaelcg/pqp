@@ -148,6 +148,7 @@ import {
 } from "./bau-follow";
 import { CommunityHomeShareDialog } from "./community-home-share-dialog";
 import { pickAnnounceChannel, shareableChannels } from "@/lib/community-home/announce";
+import { badgeRedesignClasses } from "@/components/ui/badge";
 
 /**
  * Baú: the durable media feed of a server. Posts, likes, flat comments,
@@ -421,7 +422,7 @@ function CommentRow({
         fallbackClassName="bg-ink-4 text-[10px] text-paper"
         rounded="full"
       />
-      <div className="min-w-0 flex-1 rounded-lg bg-ink/60 px-3 py-2 text-sm">
+      <div className="min-w-0 flex-1 rounded-lg bg-ink/60 px-3 py-2 text-sm redesign:rounded-[var(--radius-card)] redesign:bg-[color:var(--call-control-bg)]">
         <div className="mb-0.5 flex items-center gap-2">
           <span className="truncate font-semibold">
             {comment.author.displayName}
@@ -583,13 +584,13 @@ function CommentsBlock({
   }
 
   return (
-    <div className="mt-3 border-t border-ink-4/60 pt-3" data-home-comments>
+    <div className="mt-3 border-t border-ink-4/60 pt-3 redesign:border-[color:var(--card-border)] redesign:pt-4" data-home-comments>
       {!expanded && teasers.length > 0 && (
         <ul className="space-y-1.5" data-home-comment-teaser>
           {teasers.map((comment) => (
             <li
               key={comment.id}
-              className="rounded-lg bg-ink/60 px-3 py-2 text-sm"
+              className="rounded-lg bg-ink/60 px-3 py-2 text-sm redesign:rounded-[var(--radius-card)] redesign:bg-[color:var(--call-control-bg)]"
             >
               <p className="font-semibold text-paper">
                 {comment.author.displayName}
@@ -640,7 +641,7 @@ function CommentsBlock({
         <form className="mt-2 flex items-center gap-2" onSubmit={submit}>
           <input
             ref={inputRef}
-            className="min-w-0 flex-1 rounded-lg border border-ink-4 bg-ink px-3 py-1.5 text-sm placeholder:text-paper-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+            className="min-w-0 flex-1 rounded-lg border border-ink-4 bg-ink px-3 py-1.5 text-sm placeholder:text-paper-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60 redesign:h-[var(--control-md)] redesign:rounded-full redesign:border-[color:var(--input-border)] redesign:bg-[color:var(--input-bg)] redesign:px-[var(--input-px)] redesign:placeholder:text-text-tertiary redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-ring-offset redesign:focus-visible:ring-[color:var(--input-ring,var(--color-focus-ring))]"
             value={draft}
             maxLength={COMMUNITY_HOME_COMMENT_MAX}
             onChange={(event) => setDraft(event.target.value)}
@@ -658,7 +659,7 @@ function CommentsBlock({
               type="button"
               aria-label={t("composer.addEmoji")}
               title={t("composer.addEmoji")}
-              className="rounded-md p-1.5 text-paper-muted hover:bg-ink-4 hover:text-paper"
+              className="rounded-md p-1.5 text-paper-muted hover:bg-ink-4 hover:text-paper redesign:rounded-full redesign:p-2 redesign:text-text-secondary redesign:hover:bg-[color:var(--call-control-hover)] redesign:hover:text-text"
               onClick={() => {
                 setGifOpen(false);
                 setEmojiOpen((open) => !open);
@@ -671,7 +672,7 @@ function CommentsBlock({
               type="button"
               aria-label={t("composer.addGif")}
               title={t("composer.addGif")}
-              className="rounded-md p-1.5 text-paper-muted hover:bg-ink-4 hover:text-paper"
+              className="rounded-md p-1.5 text-paper-muted hover:bg-ink-4 hover:text-paper redesign:rounded-full redesign:p-2 redesign:text-text-secondary redesign:hover:bg-[color:var(--call-control-hover)] redesign:hover:text-text"
               onClick={() => {
                 setEmojiOpen(false);
                 const rect = pickerAnchorRef.current?.getBoundingClientRect();
@@ -851,6 +852,8 @@ export function PostCard({
     <article
       className={cn(
         "relative scroll-mt-4 overflow-hidden rounded-2xl border border-border bg-surface-1 transition-shadow duration-[var(--duration-slow)]",
+        // A card on the card tokens at the pane's radius under the redesign.
+        "redesign:rounded-[var(--radius-pane)] redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)]",
         isPreview && "border-dashed border-accent/40",
         highlighted &&
           "border-accent/60 shadow-[0_0_0_2px_var(--color-accent),0_0_32px_var(--glow-accent)]",
@@ -1072,7 +1075,7 @@ export function PostCard({
           </span>
           {locked && !showLockPlate && (
             <span
-              className="inline-flex items-center gap-1 rounded-full bg-ink/70 px-2 py-px text-[10px] font-semibold uppercase tracking-wider text-paper"
+              className="inline-flex items-center gap-1 rounded-full bg-ink/70 px-2 py-px text-[10px] font-semibold uppercase tracking-wider text-paper redesign:py-0.5 redesign:text-[11px] redesign:normal-case redesign:tracking-normal"
               data-home-locked-badge
             >
               <Lock className="h-2.5 w-2.5" aria-hidden />
@@ -1081,7 +1084,7 @@ export function PostCard({
           )}
           {post.pinned && (
             <span
-              className="inline-flex items-center gap-1 rounded bg-signal/15 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-signal"
+              className={cn("inline-flex items-center gap-1 rounded bg-signal/15 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-signal", badgeRedesignClasses("new", "tag"))}
               data-home-pinned-chip
             >
               <Pin className="h-2.5 w-2.5" aria-hidden />
@@ -1089,7 +1092,7 @@ export function PostCard({
             </span>
           )}
           {post.status === "draft" && (
-            <span className="rounded border border-ink-4 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-paper-muted">
+            <span className={cn("rounded border border-ink-4 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-paper-muted", badgeRedesignClasses("neutral", "tag"), "redesign:border-0")}>
               {t("communityHome.status.draft")}
             </span>
           )}
@@ -1151,12 +1154,15 @@ export function PostCard({
         )}
 
         {(interactive || isPreview) && (
-          <footer className="mt-4 flex flex-wrap items-center gap-3 text-xs text-paper-muted">
+          <footer className="mt-4 flex flex-wrap items-center gap-3 text-xs text-paper-muted redesign:gap-2 redesign:text-[13px] redesign:font-medium">
             <button
               type="button"
               className={cn(
                 "inline-flex items-center gap-1.5 rounded-md px-2 py-1 transition-colors hover:bg-ink-4 hover:text-paper",
                 post.likedByMe && "text-signal",
+                "redesign:h-8 redesign:rounded-full redesign:bg-[color:var(--call-control-bg)] redesign:px-3 redesign:text-text-secondary redesign:hover:bg-[color:var(--call-control-hover)] redesign:hover:text-text",
+                post.likedByMe &&
+                  "redesign:bg-[color:color-mix(in_oklab,var(--color-danger)_16%,transparent)] redesign:text-danger redesign:hover:bg-[color:color-mix(in_oklab,var(--color-danger)_22%,transparent)] redesign:hover:text-danger",
               )}
               onClick={() => void like()}
               disabled={isPreview || liking}
@@ -1175,7 +1181,7 @@ export function PostCard({
               <span className="tabular-nums">{post.likeCount}</span>
             </button>
             <span
-              className="inline-flex items-center gap-1.5 px-2 py-1"
+              className="inline-flex items-center gap-1.5 px-2 py-1 redesign:h-8 redesign:px-1"
               data-home-comment-count
             >
               <MessageCircle className="h-4 w-4" aria-hidden />
@@ -1187,7 +1193,7 @@ export function PostCard({
                 {onForward && post.status === "published" && (
                   <button
                     type="button"
-                    className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 transition-colors hover:bg-ink-4 hover:text-paper"
+                    className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 transition-colors hover:bg-ink-4 hover:text-paper redesign:h-8 redesign:rounded-full redesign:bg-[color:var(--call-control-bg)] redesign:px-3 redesign:text-text-secondary redesign:hover:bg-[color:var(--call-control-hover)] redesign:hover:text-text"
                     onClick={() => onForward(post)}
                     data-home-forward
                   >
@@ -1878,7 +1884,7 @@ function ComposeCard({
             type="button"
             aria-label={t("composer.addEmoji")}
             title={t("composer.addEmoji")}
-            className="rounded-md p-1.5 text-paper-muted hover:bg-ink-4 hover:text-paper"
+            className="rounded-md p-1.5 text-paper-muted hover:bg-ink-4 hover:text-paper redesign:rounded-full redesign:p-2 redesign:text-text-secondary redesign:hover:bg-[color:var(--call-control-hover)] redesign:hover:text-text"
             onClick={() => setEmojiOpen((open) => !open)}
             data-home-compose-emoji
           >
