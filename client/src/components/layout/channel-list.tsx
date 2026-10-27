@@ -302,7 +302,7 @@ const CHANNEL_DETAIL_REDESIGN =
  * success tone. The two buttons at the top are round, as the header's are.
  */
 const STRIP_TILE_REDESIGN =
-  "redesign:rounded-[var(--strip-tile-radius)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent";
+  "redesign:rounded-[var(--strip-tile-radius)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-[color:var(--color-pane-side)]";
 const STRIP_BUTTON_REDESIGN =
   "redesign:rounded-full redesign:text-[color:var(--list-row-icon)] redesign:hover:bg-[color:var(--list-row-hover)] redesign:hover:text-text redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent";
 /** The pip, the mention and the call count cut out of the side pane. */
@@ -3469,7 +3469,7 @@ export function ChannelRailItem({
         className={cn(
           // `touch-manipulation` for the same reason the wide row has it: the
           // double tap is the only pointer gesture that joins.
-          "relative flex h-10 w-10 shrink-0 touch-manipulation items-center justify-center rounded-lg transition-colors",
+          "group/strip-tile relative flex h-10 w-10 shrink-0 touch-manipulation items-center justify-center rounded-lg transition-colors",
           selected
             ? "bg-ink-3 text-paper"
             : "text-paper-muted hover:bg-ink-3/70 hover:text-paper",
@@ -3482,8 +3482,10 @@ export function ChannelRailItem({
             ? "redesign:bg-[color:var(--list-row-selected)] redesign:text-[color:var(--list-row-selected-text)]"
             : "redesign:text-[color:var(--list-row-icon)] redesign:hover:bg-[color:var(--list-row-hover)] redesign:hover:text-text",
           hasUnread && !selected && !connected && "redesign:text-text",
+          // The call you are in: green, with a faint green edge so it reads
+          // apart from the open tile's lime by more than hue.
           connected &&
-            "redesign:bg-success-soft redesign:text-on-success-soft redesign:ring-0 redesign:hover:bg-success-soft redesign:hover:text-on-success-soft",
+            "redesign:bg-success-soft redesign:text-on-success-soft redesign:ring-1 redesign:ring-inset redesign:ring-[color:color-mix(in_oklab,var(--color-success)_45%,transparent)] redesign:hover:bg-success-soft redesign:hover:text-on-success-soft",
           muted && !selected && !connected && "redesign:opacity-[var(--list-row-muted-opacity)]",
         )}
         onClick={() => {
@@ -3527,6 +3529,9 @@ export function ChannelRailItem({
             className={cn(
               "absolute -left-1 -top-1 h-2.5 w-2.5 rounded-full bg-danger ring-2 ring-channel motion-safe:animate-pulse",
               STRIP_RING_REDESIGN,
+              // On the tile's corner, where a text channel's mentions go: a
+              // watch party has none.
+              "redesign:left-auto redesign:-right-1",
             )}
           />
         )}
@@ -3534,7 +3539,9 @@ export function ChannelRailItem({
           <>
             <span
               aria-hidden="true"
-              className="absolute -left-2 top-1/2 h-4 w-1 -translate-y-1/2 rounded-r-full bg-paper redesign:h-2 redesign:bg-text"
+              // Flush to the pane's edge, as the server rail's pill sits on
+              // the window's; it grows on hover like that one.
+              className="absolute -left-2 top-1/2 h-4 w-1 -translate-y-1/2 rounded-r-full bg-paper redesign:-left-4 redesign:h-2 redesign:bg-text redesign:transition-[height] redesign:group-hover/strip-tile:h-5"
             />
             <span className="sr-only">{t("chrome.unreadSr")}</span>
           </>
@@ -3592,9 +3599,11 @@ export function DraftMark() {
 function CommunityHomeFace({
   server,
   compact,
+  selected = false,
 }: {
   server: Pick<Server, "name" | "iconUrl" | "isCommunity" | "communitySlug">;
   compact?: boolean;
+  selected?: boolean;
 }) {
   const tile = cn(
     compact ? "h-9 w-9 rounded-[10px]" : "h-8 w-8 rounded-lg",
@@ -3610,11 +3619,14 @@ function CommunityHomeFace({
           "flex shrink-0 items-center justify-center bg-ink-4 text-paper-muted",
           tile,
           "redesign:bg-surface-3 redesign:text-text-secondary",
+          // In the strip the tile itself is the chest: no face of its own,
+          // so the open and hover fills show whole.
+          compact && "redesign:bg-transparent redesign:text-inherit",
         )}
         data-community-home-face="chest"
       >
         <Archive className="h-4 w-4 redesign:hidden" aria-hidden />
-        <Icon icon={ArchiveFill} size="sm" className="hidden redesign:block" />
+        <Icon icon={ArchiveFill} size="sm" className={cn("hidden redesign:block", compact && "h-[1.125rem] w-[1.125rem]")} />
       </span>
     );
   }
@@ -3625,6 +3637,8 @@ function CommunityHomeFace({
         "relative flex shrink-0 items-center justify-center overflow-hidden font-display font-bold text-paper",
         tile,
         type,
+        // A poster keeps its picture, so the open one takes a lime ring.
+        compact && selected && "redesign:ring-2 redesign:ring-accent",
       )}
       style={heroTintStyle(hue, 60)}
       data-community-home-face="poster"
@@ -3713,7 +3727,7 @@ export function CommunityHomeNavButton({
           : "text-paper-muted hover:bg-ink-4/70 hover:text-paper",
         // A strip tile, or a channel row: the same fills as the channels.
         compact
-          ? STRIP_TILE_REDESIGN
+          ? cn(STRIP_TILE_REDESIGN, !selected && "redesign:bg-surface-3")
           : "redesign:min-h-[var(--list-row-h-sm)] redesign:gap-2 redesign:rounded-[var(--list-row-radius)] redesign:py-1 redesign:pl-1 redesign:pr-[var(--list-row-px)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent",
         selected
           ? "redesign:bg-[color:var(--list-row-selected)] redesign:text-[color:var(--list-row-selected-text)]"
@@ -3721,7 +3735,7 @@ export function CommunityHomeNavButton({
       )}
       onClick={onSelect}
     >
-      <CommunityHomeFace server={server} compact={compact} />
+      <CommunityHomeFace server={server} compact={compact} selected={selected} />
       {!compact && (
         <span className="min-w-0 flex-1 truncate text-sm font-semibold text-paper redesign:font-medium redesign:text-inherit">
           {t("communityHome.channelName")}
