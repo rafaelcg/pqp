@@ -3,7 +3,7 @@ import {
   SEARCH_QUERY_MIN_LENGTH,
   type MessageSearchResult,
 } from "@pqp/shared";
-import { Hash as HashGlyph, MagnifyingGlass } from "@phosphor-icons/react";
+import { Hash as HashGlyph, MagnifyingGlass, WarningCircle } from "@phosphor-icons/react";
 import { Hash, Search } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -189,7 +189,7 @@ export function SearchDialog({
           className={cn(
             "flex items-center gap-2 border-b border-border px-5 py-3",
             // Under the redesign: the input's round field, inset in the body.
-            "redesign:mx-5 redesign:mt-1 redesign:mb-2 redesign:h-[var(--input-h)] redesign:gap-2.5 redesign:rounded-full redesign:border redesign:border-[color:var(--input-border)] redesign:bg-[color:var(--input-bg)] redesign:px-[var(--input-px)] redesign:py-0 redesign:focus-within:ring-2 redesign:focus-within:ring-offset-2 redesign:focus-within:ring-offset-ring-offset redesign:focus-within:ring-[color:var(--input-ring,var(--color-focus-ring))]",
+            "redesign:mx-[var(--dialog-px)] redesign:mt-1 redesign:mb-2 redesign:h-[var(--input-h)] redesign:gap-2.5 redesign:rounded-full redesign:border redesign:border-[color:var(--input-border)] redesign:bg-[color:var(--input-bg)] redesign:px-[var(--input-px)] redesign:py-0 redesign:focus-within:ring-1 redesign:focus-within:ring-offset-0 redesign:focus-within:border-[color:var(--input-ring,var(--color-focus-ring))] redesign:focus-within:ring-[color:var(--input-ring,var(--color-focus-ring))]",
           )}
         >
           <Search className="h-4 w-4 shrink-0 text-text-muted redesign:hidden" />
@@ -221,6 +221,7 @@ export function SearchDialog({
         <div className="min-h-0 flex-1 overflow-y-auto">
           {status === "error" ? (
             <SearchEmpty
+              icon="error"
               title={t("search.unavailable")}
               hint={t("search.unavailableHint")}
             />
@@ -230,7 +231,7 @@ export function SearchDialog({
               hint={t("search.minChars", { count: SEARCH_QUERY_MIN_LENGTH })}
             />
           ) : status === "loading" && results.length === 0 ? (
-            <SearchEmpty title={t("search.searching")} />
+            <SearchEmpty icon="none" title={t("search.searching")} />
           ) : results.length === 0 ? (
             <SearchEmpty
               title={t("search.noMatch", { query: trimmed })}
@@ -242,7 +243,7 @@ export function SearchDialog({
                 id={LISTBOX_ID}
                 role="listbox"
                 aria-label={t("search.results")}
-                className="p-2 redesign:space-y-0.5 redesign:px-3"
+                className="p-2 redesign:space-y-0.5 redesign:px-[var(--dialog-px)]"
               >
                 {results.map((result, index) => (
                   <li key={result.messageId}>
@@ -272,7 +273,8 @@ export function SearchDialog({
                         "redesign:rounded-[var(--radius-card)] redesign:px-3.5 redesign:py-2.5",
                         index === selected
                           ? "redesign:border-transparent redesign:bg-[color:var(--menu-row-hover)]"
-                          : "redesign:hover:bg-[color:var(--card-row-hover)]",
+                          // Hover moves the selection, so one fill serves both.
+                          : "redesign:hover:bg-transparent",
                       )}
                     >
                       <div className="flex items-baseline gap-2 text-xs text-text-muted">
@@ -341,12 +343,27 @@ function Snippet({ snippet }: { snippet: string }) {
   );
 }
 
-function SearchEmpty({ title, hint }: { title: string; hint?: string }) {
+function SearchEmpty({
+  title,
+  hint,
+  icon = "search",
+}: {
+  title: string;
+  hint?: string;
+  /** The glass for the prompt and no match, a warning for an error, none while the field spins. */
+  icon?: "search" | "error" | "none";
+}) {
   return (
     <EmptyState
       size="inline"
       // Under the redesign only, so it leads like every other inline state.
-      icon={<Icon icon={MagnifyingGlass} kind="symbol" size="md" />}
+      icon={
+        icon === "none" ? undefined : icon === "error" ? (
+          <Icon icon={WarningCircle} size="md" className="text-danger" />
+        ) : (
+          <Icon icon={MagnifyingGlass} kind="symbol" size="md" />
+        )
+      }
       iconClassName="hidden redesign:block"
       title={title}
       body={hint}

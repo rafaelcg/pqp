@@ -434,9 +434,14 @@ test("captures the design council screens", async ({ browser }) => {
         await expect(page.getByRole("dialog")).toBeVisible();
         await page.waitForTimeout(300);
         await shoot(page, `33-search-empty-${theme}`);
+        // The pointer out of the way, so the first row keeps the highlight.
+        await page.mouse.move(0, 0);
+        await page.getByRole("dialog").getByRole("combobox").fill("zzqxv");
+        await expect(page.getByRole("dialog").getByText(/zzqxv/).last()).toBeVisible({ timeout: 10_000 });
+        await page.waitForTimeout(300);
+        await shoot(page, `35-search-none-${theme}`);
         await page.getByRole("dialog").getByRole("combobox").fill("caverna");
         await expect(page.getByRole("dialog").getByRole("option").first()).toBeVisible({ timeout: 10_000 });
-        await page.keyboard.press("ArrowDown");
         await page.waitForTimeout(300);
         await shoot(page, `34-search-results-${theme}`);
         await page.keyboard.press("Escape");
