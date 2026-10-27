@@ -704,6 +704,19 @@ Verified: typecheck; 10,417 unit tests; `bench:tokens`; i18n check;
 passed); retro, Halloween, high contrast, 390px and toggle off. Screenshots:
 `~/pqp-redesign/p-toast/`.
 
+### s-frame
+
+Spec (audit: the root, the rail, five side panes and Novidades each drew
+their own edge and fill; the phone breakpoint is defined three ways):
+
+1. Job: the canvas, the panes, their corners and the gutter between them.
+2. Redesign: the rail sits on the canvas with no edge; from 768px the
+   sidebar, conversation, member list, docked thread, forum side post and
+   Novidades float as `--radius-pane` panes with the `--space-gutter`
+   gutter; the conversation is the brightest pane.
+3. Built as class strings in `ui/pane.ts`, appended after each pane's own.
+4. Left: below 768px the drawers keep their edges (`m-shell`, `m-breakpoints`).
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss
