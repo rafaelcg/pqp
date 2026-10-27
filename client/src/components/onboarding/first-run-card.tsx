@@ -1,4 +1,13 @@
 import { Check, ImagePlus, ServerIcon, UserPlus, X } from "lucide-react";
+import {
+  Camera,
+  Check as CheckBold,
+  UserPlus as UserPlusFill,
+  UsersThree,
+  X as XBold,
+  type Icon as PhosphorIcon,
+} from "@phosphor-icons/react";
+import { IconSwap } from "@/components/ui/icon";
 import type { CSSProperties } from "react";
 import type { User } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
@@ -48,6 +57,8 @@ interface FirstRunCardProps {
 interface RowSpec {
   id: FirstRunTaskId;
   icon: typeof ServerIcon;
+  /** The filled glyph under the redesign. */
+  glyph: PhosphorIcon;
   title: MessageKey;
   body: MessageKey;
   /** One to three buttons. The server row is the only one with more than one. */
@@ -72,6 +83,7 @@ export function FirstRunCard({
     {
       id: "server",
       icon: ServerIcon,
+      glyph: UsersThree,
       title: "firstRun.server.title",
       body: "firstRun.server.body",
       actions: [
@@ -93,6 +105,7 @@ export function FirstRunCard({
     {
       id: "friend",
       icon: UserPlus,
+      glyph: UserPlusFill,
       title: "firstRun.friend.title",
       body: "firstRun.friend.body",
       actions: [
@@ -102,6 +115,7 @@ export function FirstRunCard({
     {
       id: "avatar",
       icon: ImagePlus,
+      glyph: Camera,
       title: "firstRun.avatar.title",
       body: "firstRun.avatar.body",
       actions: [
@@ -133,11 +147,11 @@ export function FirstRunCard({
           title={t("firstRun.dismiss")}
           className="-mr-1 -mt-1 shrink-0 rounded-md p-1.5 text-paper-muted transition-colors hover:bg-ink-4 hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60 redesign:rounded-full redesign:p-2 redesign:text-text-tertiary redesign:hover:bg-[color:var(--menu-row-hover)] redesign:hover:text-text redesign:focus-visible:ring-[color:var(--color-focus-ring)]"
         >
-          <X aria-hidden="true" className="h-4 w-4" />
+          <IconSwap off={X} on={XBold} kind="symbol" offClassName="h-4 w-4" className="h-4 w-4" />
         </button>
       </div>
 
-      <ul className="space-y-3">
+      <ul className="space-y-3 redesign:space-y-4">
         {rows.map((row, index) => {
           const done = doneById.get(row.id) ?? false;
           const Icon = done ? Check : row.icon;
@@ -160,14 +174,18 @@ export function FirstRunCard({
                     : "border-ink-4 bg-ink text-signal redesign:bg-accent-soft redesign:text-on-accent-soft",
                 )}
               >
-                <Icon className="h-4 w-4" />
+                {done ? (
+                  <IconSwap off={Check} on={CheckBold} kind="symbol" offClassName="h-4 w-4" className="h-4 w-4" />
+                ) : (
+                  <IconSwap off={Icon} on={row.glyph} offClassName="h-4 w-4" className="h-4 w-4" />
+                )}
               </span>
 
               <div className="min-w-0 flex-1">
                 <p
                   className={cn(
-                    "text-sm font-semibold",
-                    done && "text-paper-muted line-through decoration-1",
+                    "text-sm font-semibold redesign:font-display redesign:text-[0.9375rem]",
+                    done && "text-paper-muted line-through decoration-1 redesign:text-text-tertiary",
                   )}
                 >
                   {t(row.title)}
@@ -176,7 +194,7 @@ export function FirstRunCard({
                 {done ? (
                   // No sales pitch for something already done, and no praise for
                   // it either. One quiet word that the row is settled.
-                  <p className="mt-0.5 text-xs text-paper-muted">
+                  <p className="mt-0.5 text-xs text-paper-muted redesign:mt-1 redesign:text-text-secondary">
                     {t("firstRun.done")}
                   </p>
                 ) : (
@@ -185,7 +203,7 @@ export function FirstRunCard({
                         prints a `name#0000` handle, which is one unbreakable
                         token up to 37 characters long, and at 390px a long one
                         ran off the edge of the card rather than wrapping. */}
-                    <p className="mt-0.5 break-words text-sm text-paper-muted">
+                    <p className="mt-0.5 break-words text-sm text-paper-muted redesign:mt-1">
                       {/* Only the friend row interpolates, and it wants the
                           reader's own tag — see the catalogue comment. */}
                       {t(row.body, { tag: user.tag ?? user.username ?? "" })}

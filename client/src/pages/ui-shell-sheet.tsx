@@ -958,6 +958,19 @@ export function ShellSheet() {
             onPickAvatar={noop}
             onDismiss={noop}
           />
+          {/* Two steps done: ticked, dimmed and kept in place. */}
+          <div className="mt-4">
+            <FirstRunCard
+              user={{ ...NEW_USER, avatarUrl: "https://api.dicebear.com/9.x/shapes/png?seed=lia" }}
+              serverCount={1}
+              friendCount={0}
+              onCreateServer={noop}
+              onJoinServer={noop}
+              onAddFriend={noop}
+              onPickAvatar={noop}
+              onDismiss={noop}
+            />
+          </div>
         </div>
       </div>
     </div>

@@ -155,10 +155,10 @@ export function CornerCard({
             aria-hidden
             // On a phone the card is the whole width of the screen, so a
             // 10rem hero is most of what the person sees; cap it there.
-            className="relative max-h-28 overflow-hidden bg-ink-1 sm:max-h-none"
+            className="relative max-h-28 overflow-hidden bg-ink-1 sm:max-h-none redesign:bg-[color:var(--popover-surface)]"
           >
             {hero}
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-ink-2 to-transparent" />
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-ink-2 to-transparent redesign:from-[color:var(--popover-surface)]" />
           </div>
         )}
         {hero && closeButton}
