@@ -867,7 +867,7 @@ function HeaderGlyph({ off, on, kind = "object" }: { off: ReactNode; on: Phospho
   return (
     <>
       <span className="contents redesign:hidden">{off}</span>
-      <Icon icon={on} kind={kind} size="sm" className="hidden redesign:block" />
+      <Icon icon={on} kind={kind} size="sm" className="hidden h-[1.125rem] w-[1.125rem] redesign:block" />
     </>
   );
 }

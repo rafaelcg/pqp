@@ -1263,7 +1263,7 @@ export function ForumPane({
           aria-label={t("forum.newPost")}
           onClick={() => openComposer()}
           data-forum-new-post=""
-          className={cn("grid h-11 w-11 shrink-0 place-items-center rounded-[var(--radius-control)] text-accent hover:bg-surface-2", PANE_HEADER_ACTION_REDESIGN, "redesign:text-accent")}
+          className={cn("grid h-11 w-11 shrink-0 place-items-center rounded-[var(--radius-control)] text-accent hover:bg-surface-2", PANE_HEADER_ACTION_REDESIGN, "redesign:text-accent redesign:hover:text-accent")}
         >
           <IconSwap off={SquarePen} on={PhNotePencil} offClassName="h-5 w-5" />
         </button>

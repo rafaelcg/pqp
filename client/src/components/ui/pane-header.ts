@@ -26,7 +26,7 @@ export const PANE_HEADER_RULE_REDESIGN =
 
 /** The title: the display face at 16px in the text colour. */
 export const PANE_HEADER_TITLE_REDESIGN =
-  "redesign:text-[length:var(--pane-bar-title-size)] redesign:text-text";
+  "redesign:text-[length:var(--pane-bar-title-size)] redesign:tracking-[-0.012em] redesign:text-text";
 
 /** The topic, the count or the members line: 13px secondary text. */
 export const PANE_HEADER_DETAIL_REDESIGN = "redesign:text-[13px] redesign:text-text-secondary";
