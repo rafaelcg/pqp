@@ -1,5 +1,7 @@
 import { publicCommunityUrl, type CommunitySummary } from "@pqp/shared";
 import { Check, Flag, Link2, Users } from "lucide-react";
+import { Check as CheckGlyph, Flag as FlagGlyph, LinkSimple, UsersThree } from "@phosphor-icons/react";
+import { IconSwap } from "@/components/ui/icon";
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -92,6 +94,10 @@ function tintStyle(hue: number, strength: number): CSSProperties {
   } as CSSProperties;
 }
 
+/** The share and report buttons over the header: 28px round glass, the control-over-a-picture look. */
+const CARD_CORNER_BUTTON_REDESIGN =
+  "redesign:grid redesign:h-7 redesign:w-7 redesign:place-items-center redesign:rounded-full redesign:p-0 redesign:bg-[color:var(--glass-bg)] redesign:text-[color:var(--glass-fg)] redesign:ring-1 redesign:ring-[color:var(--glass-border)] redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--color-focus-ring)]";
+
 export function CommunityCard({
   community,
   joining,
@@ -183,7 +189,7 @@ export function CommunityCard({
         />
         <span
           aria-hidden="true"
-          className="absolute left-3 top-3 flex items-center gap-1.5 rounded-full bg-ink/55 px-2.5 py-1 text-[11px] font-semibold text-paper backdrop-blur-sm"
+          className="absolute left-3 top-3 flex items-center gap-1.5 rounded-full bg-ink/55 px-2.5 py-1 text-[11px] font-semibold text-paper backdrop-blur-sm redesign:bg-[color:var(--glass-bg)] redesign:text-[color:var(--glass-fg)] redesign:ring-1 redesign:ring-[color:var(--glass-border)]"
         >
           <span aria-hidden="true">{CATEGORY_EMOJI[community.category]}</span>
           {t(`communities.category.${community.category}` as never)}
@@ -200,17 +206,19 @@ export function CommunityCard({
               title={t("communities.share")}
               aria-label={`${t("communities.share")}: ${community.name}`}
               className={cn(
-                "rounded-lg bg-ink/50 p-1.5 backdrop-blur-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60 redesign:rounded-full",
+                "rounded-lg bg-ink/50 p-1.5 backdrop-blur-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
                 shared
                   ? "text-success"
                   : "text-paper-muted hover:text-signal",
+                CARD_CORNER_BUTTON_REDESIGN,
+                shared ? "redesign:text-success" : "redesign:hover:text-[color:var(--glass-fg)]",
               )}
               onClick={share}
             >
               {shared ? (
-                <Check aria-hidden="true" className="h-3.5 w-3.5" />
+                <IconSwap off={Check} on={CheckGlyph} kind="symbol" offClassName="h-3.5 w-3.5" className="h-4 w-4" />
               ) : (
-                <Link2 aria-hidden="true" className="h-3.5 w-3.5" />
+                <IconSwap off={Link2} on={LinkSimple} kind="symbol" offClassName="h-3.5 w-3.5" className="h-4 w-4" />
               )}
             </button>
           )}
@@ -218,10 +226,14 @@ export function CommunityCard({
             type="button"
             title={t("communities.report")}
             aria-label={`${t("communities.report")}: ${community.name}`}
-            className="rounded-lg bg-ink/50 p-1.5 text-paper-muted backdrop-blur-sm transition hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60 redesign:rounded-full"
+            className={cn(
+              "rounded-lg bg-ink/50 p-1.5 text-paper-muted backdrop-blur-sm transition hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
+              CARD_CORNER_BUTTON_REDESIGN,
+              "redesign:hover:text-danger",
+            )}
             onClick={onReport}
           >
-            <Flag aria-hidden="true" className="h-3.5 w-3.5" />
+            <IconSwap off={Flag} on={FlagGlyph} kind="object" offClassName="h-3.5 w-3.5" className="h-4 w-4" />
           </button>
         </div>
       </div>
@@ -259,7 +271,7 @@ export function CommunityCard({
         </h3>
 
         <p className="mt-1 flex items-center gap-1.5 text-xs text-paper-muted">
-          <Users aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
+          <IconSwap off={Users} on={UsersThree} kind="object" offClassName="h-3.5 w-3.5 shrink-0" className="h-3.5 w-3.5 shrink-0" />
           {/* Tabular figures so a column of counts lines up rather than
               shimmering as the digits change width. */}
           <span className="tabular-nums">
@@ -273,7 +285,7 @@ export function CommunityCard({
         {/* Clamped to two lines rather than truncated to one: a tagline is the
             joke, and half a joke is worse than none. */}
         {community.tagline && (
-          <p className="mt-2 line-clamp-2 text-sm leading-snug text-paper-muted">
+          <p className="mt-2 line-clamp-2 text-sm leading-snug text-paper-muted redesign:text-text-secondary">
             {community.tagline}
           </p>
         )}
@@ -296,7 +308,7 @@ export function CommunityCard({
               glance. */}
           {community.joined && (
             <span className="flex items-center gap-1 text-xs font-medium text-success">
-              <Check aria-hidden="true" className="h-3.5 w-3.5" />
+              <IconSwap off={Check} on={CheckGlyph} kind="symbol" offClassName="h-3.5 w-3.5" className="h-3.5 w-3.5" />
               {t("communities.joinedBadge")}
             </span>
           )}
@@ -330,7 +342,7 @@ export function CommunityCardSkeleton({ className }: { className?: string }) {
         <Skeleton className="mt-2 h-3 w-24" />
         <Skeleton className="mt-3 h-3 w-full" />
         <Skeleton className="mt-1.5 h-3 w-4/5" />
-        <Skeleton className="mt-4 h-8 w-24 rounded-md" />
+        <Skeleton className="mt-4 h-8 w-24 rounded-md redesign:h-[var(--control-sm)] redesign:rounded-full" />
       </div>
     </li>
   );

@@ -1332,6 +1332,9 @@
   /* Your own name: the lime itself in light, where accent-text is a near-black olive. */
   --message-own-name: var(--color-accent);
   --glass-bg: oklch(0.99 0 0 / 0.72);
+  /* The directory in light: a grey page under white cards, never a grey tray on white. */
+  --communities-bg: var(--color-surface-1);
+  --community-card-bg: var(--color-surface-0);
   --glass-fg: var(--color-text);
   --glass-border: var(--popover-border);
   /* Light panes need a stronger thumb to clear 3:1. */

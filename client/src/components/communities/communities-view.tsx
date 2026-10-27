@@ -19,8 +19,13 @@ import {
   type CategoryFilter,
   type LanguageFilter,
 } from "./communities-model";
-import { Compass as CompassGlyph, MagnifyingGlass, Sparkle as SparkleGlyph, X as XGlyph } from "@phosphor-icons/react";
-import { Icon } from "@/components/ui/icon";
+import { Compass as CompassGlyph, MagnifyingGlass, Plus as PlusGlyph, Sparkle as SparkleGlyph, X as XGlyph } from "@phosphor-icons/react";
+import { Icon, IconSwap } from "@/components/ui/icon";
+import { useRedesign } from "@/lib/redesign";
+
+/** The empty and error glyph on the empty state's soft disc, as `ui/empty-state` draws it. */
+const EMPTY_DISC_REDESIGN =
+  "redesign:grid redesign:h-[var(--empty-icon-disc)] redesign:w-[var(--empty-icon-disc)] redesign:place-items-center redesign:rounded-full redesign:bg-[color:var(--empty-icon-bg)] redesign:text-3xl";
 
 /** Long enough that typing a word does not fire five requests. */
 const SEARCH_DEBOUNCE_MS = 250;
@@ -77,6 +82,7 @@ export function CommunitiesView({
   onReport,
 }: CommunitiesViewProps) {
   const { t, locale } = useTranslation();
+  const redesign = useRedesign();
   const [category, setCategory] = useState<CategoryFilter>(null);
   // Initialised from the app's locale ONCE rather than derived per render: this
   // is a starting point the reader is meant to override, and a value recomputed
@@ -355,19 +361,19 @@ export function CommunitiesView({
               A directory whose only answer to "none of these are mine" is a
               scroll to the bottom teaches people that making one is an advanced
               move. It is not: it is the other half of the feature. */}
-          <div className="mt-6 flex flex-col gap-3 rounded-2xl border border-signal/25 bg-signal/[0.06] p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5 redesign:rounded-[var(--radius-card)] redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--community-card-bg)]">
+          <div className="mt-6 flex flex-col gap-3 rounded-2xl border border-signal/25 bg-signal/[0.06] p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5 redesign:rounded-[var(--radius-card)] redesign:border-[color:color-mix(in_oklab,var(--color-accent)_25%,transparent)] redesign:bg-[color:var(--glow-accent-soft)]">
             <div className="min-w-0">
               <p className="flex items-center gap-2 font-display text-base font-bold">
                 <Sparkles aria-hidden="true" className="h-4 w-4 text-signal redesign:hidden" />
                 <Icon icon={SparkleGlyph} size="sm" className="hidden text-accent-text redesign:block" />
                 {t("communities.create.title")}
               </p>
-              <p className="mt-1 text-sm text-paper-muted">
+              <p className="mt-1 text-sm text-paper-muted redesign:text-text-secondary">
                 {t("communities.create.body")}
               </p>
             </div>
             <Button className="shrink-0 self-start sm:self-auto" onClick={onCreateCommunity}>
-              <Plus aria-hidden="true" className="h-4 w-4" />
+              <IconSwap off={Plus} on={PlusGlyph} kind="symbol" offClassName="h-4 w-4" className="h-4 w-4" />
               {t("communities.create.action")}
             </Button>
           </div>
@@ -390,7 +396,7 @@ export function CommunitiesView({
             </ul>
           ) : error ? (
             <div className="mt-14 flex flex-col items-center gap-4 text-center">
-              <span aria-hidden="true" className="text-4xl">
+              <span aria-hidden="true" className={cn("text-4xl", EMPTY_DISC_REDESIGN)}>
                 🛰️
               </span>
               <p role="alert" className="text-sm text-danger">
@@ -408,16 +414,17 @@ export function CommunitiesView({
               {/* Personality rather than an empty box: the directory is
                   supposed to be a place with a sense of humour, and the moment
                   it has nothing to show is the moment that matters most. */}
-              <span aria-hidden="true" className="text-5xl">
+              <span aria-hidden="true" className={cn("text-5xl", EMPTY_DISC_REDESIGN)}>
                 🦗
               </span>
-              <p className="font-display text-xl font-bold">{t(empty.title)}</p>
-              <p className="text-sm text-paper-muted">{t(empty.body)}</p>
+              <p className="font-display text-xl font-bold redesign:text-[length:var(--empty-title-size)]">{t(empty.title)}</p>
+              <p className="text-sm text-paper-muted redesign:text-text-secondary">{t(empty.body)}</p>
               {empty.hint && (
                 <p className="text-xs text-paper-muted">{t(empty.hint)}</p>
               )}
-              <Button className="mt-2" onClick={onCreateCommunity}>
-                <Plus aria-hidden="true" className="h-4 w-4" />
+              {/* The create card above owns the primary under the redesign. */}
+              <Button className="mt-2" variant={redesign ? "secondary" : "default"} onClick={onCreateCommunity}>
+                <IconSwap off={Plus} on={PlusGlyph} kind="symbol" offClassName="h-4 w-4" className="h-4 w-4" />
                 {t("communities.create.action")}
               </Button>
             </div>
