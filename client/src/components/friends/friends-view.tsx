@@ -6,19 +6,14 @@ import {
 import { List as ListBold, Users as UsersFill } from "@phosphor-icons/react";
 import { Icon } from "@/components/ui/icon";
 import { SECTION_LABEL_REDESIGN } from "@/components/ui/section-header";
-import { Check as CheckGlyph, UserPlus as UserPlusGlyph, X as XGlyph } from "@phosphor-icons/react";
+import {
+  Check as CheckGlyph,
+  List as ListBold,
+  UserPlus as UserPlusGlyph,
+  Users as UsersFill,
+  X as XGlyph,
+} from "@phosphor-icons/react";
 
-/*
- * Friends under the redesign (f-friends): a person is the list row's `lg`
- * pill (two lines), section labels are the section label, the confirm is a
- * card, the add panel sits on the pane under the header's rule.
- */
-const FRIEND_ROW_REDESIGN =
-  "redesign:mb-0.5 redesign:min-h-[var(--list-row-h-lg)] redesign:gap-[var(--list-row-gap)] redesign:rounded-[var(--list-row-radius)] redesign:py-1.5 redesign:pl-2 redesign:pr-2 redesign:hover:bg-[color:var(--list-row-hover)]";
-const FRIEND_NAME_REDESIGN = "redesign:font-semibold redesign:text-text";
-const FRIEND_TAG_REDESIGN =
-  "redesign:font-sans redesign:text-xs redesign:text-[color:var(--list-row-detail)]";
-const FRIEND_SECTION_REDESIGN = cn(SECTION_LABEL_REDESIGN, "redesign:px-2");
 import { cn } from "@/lib/utils";
 import type {
   Depoimento,
@@ -51,6 +46,18 @@ import {
 } from "./friends-model";
 import { useFriends } from "./use-friends";
 import { useRedesign } from "@/lib/redesign";
+
+/*
+ * Friends under the redesign (f-friends): a person is the list row's `lg`
+ * pill (two lines), section labels are the section label, the confirm is a
+ * card, the add panel sits on the pane under the header's rule.
+ */
+const FRIEND_ROW_REDESIGN =
+  "redesign:mb-0.5 redesign:min-h-[var(--list-row-h-lg)] redesign:gap-[var(--list-row-gap)] redesign:rounded-[var(--list-row-radius)] redesign:py-1.5 redesign:pl-2 redesign:pr-2 redesign:hover:bg-[color:var(--list-row-hover)]";
+const FRIEND_NAME_REDESIGN = "redesign:font-semibold redesign:text-text";
+const FRIEND_TAG_REDESIGN =
+  "redesign:font-sans redesign:text-xs redesign:text-[color:var(--list-row-detail)]";
+const FRIEND_SECTION_REDESIGN = cn(SECTION_LABEL_REDESIGN, "redesign:px-2");
 
 /**
  * The Friends view: what the app shows when you are "home" — no server, no
@@ -277,6 +284,51 @@ export function FriendsView({
     },
   ];
 
+  // One remove confirm, drawn in one of two places: above the section label
+  // under the redesign, after it with the toggle off, where it always was.
+  const removeConfirm = confirmingRemoval ? (
+    <div
+      role="alertdialog"
+      aria-label={t("friends.remove.confirm.title", {
+        name: confirmingRemoval.displayName,
+      })}
+      data-remove-confirm=""
+      className="mb-3 max-w-2xl redesign:max-w-none rounded-md border border-ink-4 bg-ink-3/60 p-3 redesign:rounded-[var(--radius-card)] redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:mb-4 redesign:p-4"
+    >
+      <p className="text-sm font-semibold text-paper redesign:text-text">
+        {t("friends.remove.confirm.title", {
+          name: confirmingRemoval.displayName,
+        })}
+      </p>
+      {/* States the surprising part rather than asking "are you
+          sure?": what makes this worth confirming is that it is
+          silent and that it is undoable only by asking again. */}
+      <p className="mt-1 text-xs text-paper-muted redesign:text-[0.8125rem] redesign:text-text-secondary">
+        {t("friends.remove.confirm.body")}
+      </p>
+      <div className="mt-2.5 flex gap-1.5 redesign:mt-3 redesign:gap-2">
+        <Button
+          size="sm"
+          variant="danger"
+          onClick={() => {
+            const person = confirmingRemoval;
+            setConfirmingRemoval(null);
+            void run(person.id, () => remove(person.id));
+          }}
+        >
+          {t("friends.remove")}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => setConfirmingRemoval(null)}
+        >
+          {t("friends.remove.keep")}
+        </Button>
+      </div>
+    </div>
+  ) : null;
+
   return (
     // `@container`: the header breaks on its OWN width, not the window's. One
     // row needs about 580px; at 390px the column is 318px, and at 768px the
@@ -418,95 +470,15 @@ export function FriendsView({
             {/* Under the redesign the confirm sits above the section's label,
                 so it never splits the label from its rows. With the toggle off it
                 stays after the label, where it always was. */}
-            {redesign && confirmingRemoval && (
-              <div
-                role="alertdialog"
-                aria-label={t("friends.remove.confirm.title", {
-                  name: confirmingRemoval.displayName,
-                })}
-                data-remove-confirm=""
-                className="mb-3 max-w-2xl rounded-md border border-ink-4 bg-ink-3/60 p-3 redesign:rounded-[var(--radius-card)] redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:mb-4 redesign:p-4"
-              >
-                <p className="text-sm font-semibold text-paper redesign:text-text">
-                  {t("friends.remove.confirm.title", {
-                    name: confirmingRemoval.displayName,
-                  })}
-                </p>
-                {/* States the surprising part rather than asking "are you
-                    sure?": what makes this worth confirming is that it is
-                    silent and that it is undoable only by asking again. */}
-                <p className="mt-1 text-xs text-paper-muted redesign:text-[0.8125rem] redesign:text-text-secondary">
-                  {t("friends.remove.confirm.body")}
-                </p>
-                <div className="mt-2.5 flex gap-1.5 redesign:mt-3 redesign:gap-2">
-                  <Button
-                    size="sm"
-                    variant="danger"
-                    onClick={() => {
-                      const person = confirmingRemoval;
-                      setConfirmingRemoval(null);
-                      void run(person.id, () => remove(person.id));
-                    }}
-                  >
-                    {t("friends.remove")}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => setConfirmingRemoval(null)}
-                  >
-                    {t("friends.remove.keep")}
-                  </Button>
-                </div>
-              </div>
-            )}
+            {redesign && removeConfirm}
             {tab === "online" && online.length > 0 && (
               <h2 className={cn("mb-2 text-xs font-semibold uppercase tracking-wider text-paper-muted", FRIEND_SECTION_REDESIGN)}>
-                {t("friends.onlineCount", { count: online.length })}
+                {redesign
+                  ? t("memberList.sectionHeading", { label: t("friends.onlineLabel"), count: online.length })
+                  : t("friends.onlineCount", { count: online.length })}
               </h2>
             )}
-            {!redesign && confirmingRemoval && (
-              <div
-                role="alertdialog"
-                aria-label={t("friends.remove.confirm.title", {
-                  name: confirmingRemoval.displayName,
-                })}
-                data-remove-confirm=""
-                className="mb-3 max-w-2xl rounded-md border border-ink-4 bg-ink-3/60 p-3 redesign:rounded-[var(--radius-card)] redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:p-4"
-              >
-                <p className="text-sm font-semibold text-paper redesign:text-text">
-                  {t("friends.remove.confirm.title", {
-                    name: confirmingRemoval.displayName,
-                  })}
-                </p>
-                {/* States the surprising part rather than asking "are you
-                    sure?": what makes this worth confirming is that it is
-                    silent and that it is undoable only by asking again. */}
-                <p className="mt-1 text-xs text-paper-muted redesign:text-[0.8125rem] redesign:text-text-secondary">
-                  {t("friends.remove.confirm.body")}
-                </p>
-                <div className="mt-2.5 flex gap-1.5 redesign:mt-3 redesign:gap-2">
-                  <Button
-                    size="sm"
-                    variant="danger"
-                    onClick={() => {
-                      const person = confirmingRemoval;
-                      setConfirmingRemoval(null);
-                      void run(person.id, () => remove(person.id));
-                    }}
-                  >
-                    {t("friends.remove")}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => setConfirmingRemoval(null)}
-                  >
-                    {t("friends.remove.keep")}
-                  </Button>
-                </div>
-              </div>
-            )}
+            {!redesign && removeConfirm}
             <FriendRows
               friends={tab === "online" ? online : sortOnlineFirst(data.friends)}
               emptyState={
@@ -582,7 +554,7 @@ function FriendRows({
     return <>{emptyState}</>;
   }
   return (
-    <ul className="max-w-2xl">
+    <ul className="max-w-2xl redesign:max-w-none">
       {friends.map((friend) => (
         <li
           key={friend.id}
@@ -647,6 +619,7 @@ function PendingLists({
   onApproveDepoimento: (id: string) => void;
   onRejectDepoimento: (id: string) => void;
 }) {
+  const redesign = useRedesign();
   const { t } = useTranslation();
   if (
     incoming.length === 0 &&
@@ -658,7 +631,7 @@ function PendingLists({
     );
   }
   return (
-    <div className="max-w-2xl space-y-6">
+    <div className="max-w-2xl space-y-6 redesign:max-w-none">
       {/* First, and above the friend requests, because it is the one errand
           here with a warm payload — somebody wrote something about you and is
           waiting to see whether you will show it. */}
@@ -671,7 +644,9 @@ function PendingLists({
       {incoming.length > 0 && (
         <section aria-label={t("friends.incoming")}>
           <h2 className={cn("mb-2 text-xs font-semibold uppercase tracking-wider text-paper-muted", FRIEND_SECTION_REDESIGN)}>
-            {t("friends.incoming")}
+            {redesign
+              ? t("memberList.sectionHeading", { label: t("friends.incomingLabel"), count: incoming.length })
+              : t("friends.incoming")}
           </h2>
           <ul>
             {incoming.map((person) => (
@@ -687,7 +662,7 @@ function PendingLists({
                 </Button>
                 <Button
                   size="sm"
-                  variant="ghost"
+                  variant={redesign ? "secondary" : "ghost"}
                   disabled={busyId === person.id}
                   onClick={() => onRemove(person.id)}
                 >
@@ -701,14 +676,16 @@ function PendingLists({
       {outgoing.length > 0 && (
         <section aria-label={t("friends.outgoing")}>
           <h2 className={cn("mb-2 text-xs font-semibold uppercase tracking-wider text-paper-muted", FRIEND_SECTION_REDESIGN)}>
-            {t("friends.outgoing")}
+            {redesign
+              ? t("memberList.sectionHeading", { label: t("friends.outgoingLabel"), count: outgoing.length })
+              : t("friends.outgoing")}
           </h2>
           <ul>
             {outgoing.map((person) => (
               <RequestRow key={person.id} person={person} busy={busyId === person.id}>
                 <Button
                   size="sm"
-                  variant="ghost"
+                  variant={redesign ? "secondary" : "ghost"}
                   disabled={busyId === person.id}
                   onClick={() => onRemove(person.id)}
                 >
@@ -789,7 +766,7 @@ function FriendFace({
 
 function FriendsSkeleton() {
   return (
-    <div className="max-w-2xl" aria-hidden="true">
+    <div className="max-w-2xl redesign:max-w-none" aria-hidden="true">
       {[0, 1, 2, 3].map((row) => (
         <div key={row} className="mb-1 flex items-center gap-3 px-2 py-2 redesign:min-h-[var(--list-row-h-lg)] redesign:gap-[var(--list-row-gap)]">
           <div className="h-9 w-9 animate-pulse rounded-md bg-ink-3/70 redesign:h-10 redesign:w-10 redesign:rounded-full redesign:bg-[color:var(--skeleton-bg)]" />
