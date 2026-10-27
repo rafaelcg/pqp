@@ -1,3 +1,5 @@
+import { PANE_HEADER_REDESIGN } from "@/components/ui/pane-header";
+import { cn } from "@/lib/utils";
 import { type CSSProperties } from "react";
 import { Link } from "react-router-dom";
 import {
@@ -58,7 +60,7 @@ export function AppLoadingShell({ label }: AppLoadingShellProps) {
       </aside>
 
       <main className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-14 shrink-0 items-center border-b border-ink-4/60 px-4">
+        <header className={cn("flex h-14 shrink-0 items-center border-b border-ink-4/60 px-4", PANE_HEADER_REDESIGN)}>
           <Skeleton className="h-5 w-36" />
         </header>
         <MessageListSkeleton />

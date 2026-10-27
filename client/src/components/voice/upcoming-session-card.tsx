@@ -1,10 +1,13 @@
 import { Bell, BellOff, CalendarClock, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ChannelSession } from "@pqp/shared";
+import { Bell as BellFill, Bell as BellRegular, CalendarDots, CalendarX } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
+import { Icon } from "@/components/ui/icon";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { formatSessionRelativeTime } from "@/lib/channel-session-schedule";
 import { useTranslation } from "@/lib/i18n";
+import { useRedesign } from "@/lib/redesign";
 import { cn } from "@/lib/utils";
 
 /**
@@ -42,6 +45,7 @@ export function UpcomingSessionCard({
   onEdit?: () => void;
 }) {
   const { t, locale } = useTranslation();
+  const redesign = useRedesign();
   const [reminding, setReminding] = useState(session.reminding);
   const [reminderBusy, setReminderBusy] = useState(false);
   const [confirmCancel, setConfirmCancel] = useState(false);
@@ -79,15 +83,23 @@ export function UpcomingSessionCard({
     <div
       data-upcoming-session-card
       data-session-status={session.status}
-      className="mx-3 mt-3 flex items-center gap-3 rounded-xl border border-ink-4/70 bg-ink-2 px-3 py-2.5"
+      className={cn(
+        "mx-3 mt-3 flex items-center gap-3 rounded-xl border border-ink-4/70 bg-ink-2 px-3 py-2.5",
+        // A strip's inset and corner, on the card tint: news, not a warning.
+        "redesign:mx-2 redesign:mt-2 redesign:rounded-[var(--banner-radius)] redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:sm:mx-4 redesign:[--color-ring-offset:var(--card-bg)]",
+      )}
     >
       <span
         className={cn(
-          "flex h-9 w-9 shrink-0 items-center justify-center rounded-full",
+          "flex h-9 w-9 shrink-0 items-center justify-center rounded-full redesign:h-8 redesign:w-8",
           isLive ? "bg-danger/20 text-danger" : "bg-ink-3 text-paper-muted",
+          isLive
+            ? "redesign:bg-danger-soft redesign:text-on-danger-soft"
+            : "redesign:bg-surface-3 redesign:text-text-secondary",
         )}
       >
-        <CalendarClock className="h-4.5 w-4.5" aria-hidden />
+        <CalendarClock className="h-4.5 w-4.5 redesign:hidden" aria-hidden />
+        <Icon icon={CalendarDots} size="sm" className="hidden redesign:block" />
       </span>
       <button
         type="button"
@@ -95,10 +107,10 @@ export function UpcomingSessionCard({
         onClick={isScheduled ? onEdit : undefined}
         disabled={!canManage || !onEdit || !isScheduled}
       >
-        <span className="block truncate text-sm font-semibold text-paper">
+        <span className="block truncate text-sm font-semibold text-paper redesign:text-text">
           {session.title}
         </span>
-        <span className="block truncate text-xs text-paper-muted">
+        <span className="block truncate text-xs text-paper-muted redesign:text-[13px] redesign:text-text-secondary">
           {subtitle}
         </span>
       </button>
@@ -111,14 +123,25 @@ export function UpcomingSessionCard({
             disabled={reminderBusy}
             onClick={() => void toggleReminder()}
             data-session-remind-toggle
-            aria-pressed={reminding}
+            // Under the redesign the label itself says the state ("Lembrete
+            // ligado"), so the name follows the text and `aria-pressed` goes:
+            // a toggle keeps its label or drops the pressed state, never both.
+            aria-pressed={redesign ? undefined : reminding}
+            // On reads as a state (the soft accent), never as a call to act.
+            className={reminding ? "redesign:bg-accent-soft redesign:text-on-accent-soft redesign:shadow-none redesign:hover:bg-[color:color-mix(in_oklab,var(--color-accent-soft),var(--color-on-accent-soft)_10%)]" : undefined}
           >
             {reminding ? (
-              <Bell className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+              <>
+                <Bell className="mr-1.5 h-3.5 w-3.5 redesign:hidden" aria-hidden />
+                <Icon icon={BellFill} size="sm" className="hidden redesign:block" />
+              </>
             ) : (
-              <BellOff className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+              <>
+                <BellOff className="mr-1.5 h-3.5 w-3.5 redesign:hidden" aria-hidden />
+                <Icon icon={BellRegular} kind="symbol" size="sm" className="hidden redesign:block" />
+              </>
             )}
-            {t("watchPartySchedule.card.remind")}
+            {reminding && redesign ? t("watchPartySchedule.card.reminding") : t("watchPartySchedule.card.remind")}
           </Button>
           {canManage && (
             <Button
@@ -126,10 +149,16 @@ export function UpcomingSessionCard({
               variant="ghost"
               size="sm"
               aria-label={t("watchPartySchedule.card.cancel")}
+              title={t("watchPartySchedule.card.cancel")}
+              // The strips' dismiss square, so its edge lines up with theirs;
+              // the danger tint on hover says it ends something for everyone.
+              className="redesign:h-[var(--control-sm)] redesign:w-[var(--control-sm)] redesign:rounded-full redesign:p-0 redesign:text-[color:color-mix(in_oklab,var(--color-danger)_55%,var(--color-text-secondary))] redesign:hover:bg-danger-soft redesign:hover:text-on-danger-soft"
               onClick={() => setConfirmCancel(true)}
               data-session-cancel
             >
-              <X className="h-3.5 w-3.5" aria-hidden />
+              <X className="h-3.5 w-3.5 redesign:hidden" aria-hidden />
+              {/* Cancels the session for everyone: not the strips' corner X, which only hides. */}
+              <Icon icon={CalendarX} size="sm" className="hidden redesign:block" />
             </Button>
           )}
         </div>

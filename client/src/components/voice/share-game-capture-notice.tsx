@@ -78,7 +78,7 @@ export function ShareGameCaptureNotice({
         <div className="flex flex-wrap gap-2">
           <Button
             size="sm"
-            className="cta-lift rounded-full px-4"
+            data-cta className="cta-lift rounded-full px-4"
             onClick={() => setClosedAt(shown.at)}
           >
             {t("featureHint.gotIt")}
