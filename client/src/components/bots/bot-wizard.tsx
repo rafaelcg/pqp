@@ -454,7 +454,8 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
                     <Button
                       type="button"
                       variant="secondary"
-                      className="h-auto self-stretch"
+                      // Under the redesign it stands beside the face cards, so it takes their corner.
+                      className="h-auto self-stretch redesign:rounded-[var(--radius-card)]"
                       onClick={() => {
                         const color = BOT_COLORS[Math.floor(Math.random() * BOT_COLORS.length)]!;
                         const face = BOT_BASE_FACES[Math.floor(Math.random() * BOT_BASE_FACES.length)]!;
