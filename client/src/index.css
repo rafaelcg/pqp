@@ -847,6 +847,7 @@
      :root, so a subtree that redefines --color-text-tertiary keeps the
      root's thumb. */
   --scrollbar-thumb: color-mix(in oklab, var(--color-text-tertiary) 65%, transparent);
+  --scrollbar-thumb-hover: color-mix(in oklab, var(--color-text-secondary) 80%, transparent);
 
   --icon-button-radius: var(--radius-pill);
   --icon-button-text: var(--color-text-secondary);
@@ -1132,6 +1133,7 @@
 :root[data-redesign][data-theme="light"] {
   /* Light panes need a stronger thumb to clear 3:1. */
   --scrollbar-thumb: color-mix(in oklab, var(--color-text-tertiary) 80%, transparent);
+  --scrollbar-thumb-hover: color-mix(in oklab, var(--color-text-secondary) 90%, transparent);
   /* Banners: the soft fills are pale in light; a lighter edge keeps them calm. */
   --banner-edge: 22%;
   --input-invalid-bg: color-mix(in oklab, var(--color-danger) 6%, var(--color-field));
@@ -2627,13 +2629,21 @@ html[data-app-shell] #root {
 
 /*
  * Under the redesign a native scrollbar takes the look's colours: a thumb
- * of the text colour and no track. It keeps the platform's width, so it
+ * of tertiary text at 65% (80% in light) and no track. It keeps the platform's width, so it
  * stays easy to grab on Windows and Linux. `scrollbar-color` inherits, so
  * one rule on the root reaches every pane; an element that hides its bar
  * (`scrollbar-width: none`) still does.
  */
 html[data-redesign] {
   scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+/*
+ * A pane under the pointer lifts its thumb to secondary text, so hover reads
+ * as a state even where the platform draws one colour for rest, hover and drag.
+ */
+html[data-redesign] :where(.overflow-y-auto, .overflow-auto):hover {
+  scrollbar-color: var(--scrollbar-thumb-hover) transparent;
 }
 
 /*

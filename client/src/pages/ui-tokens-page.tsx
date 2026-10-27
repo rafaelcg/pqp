@@ -1266,6 +1266,11 @@ function PrimitiveSheet() {
               where === "pane" ? "bg-pane-side" : "elevation-3",
             )}
           >
+            {/* Says the drawn bar is a swatch, so a tester on Windows or
+                Linux does not read it beside the real one as two bars. */}
+            <p className="hidden px-2 pb-1 text-xs text-text-tertiary redesign:block">
+              Barra desenhada: cor do polegar
+            </p>
             <div className="relative">
               {/* The thumb's colour drawn as a bar, because macOS hides an
                   overlay scrollbar at rest and a screenshot cannot show it. */}
