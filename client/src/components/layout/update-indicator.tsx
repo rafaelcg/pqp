@@ -1,5 +1,5 @@
 import { DownloadSimple } from "@phosphor-icons/react";
-import { Download, Info, LoaderCircle, TriangleAlert } from "lucide-react";
+import { Download, Info, TriangleAlert } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -23,6 +23,7 @@ import {
 import { RUNNING_BUILD } from "@/lib/build-info";
 import { useBuildStaleness, useUpdateOffered } from "@/lib/update-prompt-state";
 import { Icon } from "@/components/ui/icon";
+import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 
 /**
@@ -437,10 +438,7 @@ export function UpdateIndicator({
                   onClick={apply_}
                 >
                   {updating ? (
-                    <LoaderCircle
-                      className="h-4 w-4 motion-safe:animate-spin"
-                      aria-hidden="true"
-                    />
+                    <Spinner className="h-4 w-4 motion-safe:animate-spin" />
                   ) : null}
                   {updating
                     ? t("update.updating")

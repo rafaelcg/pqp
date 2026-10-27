@@ -450,6 +450,13 @@ test("captures the design council screens", async ({ browser }) => {
       await expect(page.locator("[data-context-menu]")).toBeVisible();
       await shoot(page, `16-message-menu-${theme}`);
       await page.keyboard.press("Escape");
+      // A confirm dialog in place: deleting your own message.
+      await page.getByText(PAPO.find(([who]) => who === VIEWER)![1]).click({ button: "right" });
+      await page.getByRole("menuitem", { name: "Excluir mensagem" }).click();
+      await expect(page.getByRole("dialog")).toBeVisible();
+      await page.waitForTimeout(400);
+      await shoot(page, `18-confirm-dialog-${theme}`);
+      await page.keyboard.press("Escape");
 
       await page.goto(`/app/dm/${conversation.channelId}?lang=pt-BR`);
       await expect(page.getByTestId("app-chat-column").getByText(DM.at(-1)![1])).toBeVisible({ timeout: 30_000 });
@@ -493,6 +500,10 @@ test("captures the design council screens", async ({ browser }) => {
       await page.getByRole("dialog").getByText("Cargos", { exact: true }).first().click();
       await expect(page.getByRole("dialog").getByRole("tablist", { name: "Nome do cargo" })).toBeVisible();
       await shoot(page, `13-server-roles-${theme}`);
+      // The permission groups, for the section labels over them.
+      await page.getByRole("dialog").getByRole("tab", { name: "Permissões" }).click();
+      await page.waitForTimeout(300);
+      await shoot(page, `13-server-roles-perms-${theme}`);
       await page.keyboard.press("Escape");
 
       await context.close();
@@ -545,6 +556,25 @@ test("captures the design council screens", async ({ browser }) => {
     await phonePage.getByRole("button", { name: "Abrir navegação" }).first().click();
     await phonePage.waitForTimeout(800);
     await shoot(phonePage, "08-phone-drawer-dark");
+    // Close the drawer: reload the conversation before the sheet.
+    await phonePage.goto(chatUrl);
+    await expect(phonePage.getByText(PAPO.at(-1)![1])).toBeVisible({ timeout: 30_000 });
+    await hideDevBanner(phonePage);
+    // A sheet: below `sm` a dialog rises from the bottom edge.
+    for (const theme of ["dark", "light"] as const) {
+      if (theme === "light") {
+        await as(phonePage, "light");
+        await phonePage.goto(chatUrl);
+        await expect(phonePage.getByText(PAPO.at(-1)![1])).toBeVisible({ timeout: 30_000 });
+        await hideDevBanner(phonePage);
+      }
+      await phonePage.getByText(PAPO.find(([who]) => who === VIEWER)![1]).click({ button: "right" });
+      await phonePage.getByRole("menuitem", { name: "Excluir mensagem" }).click();
+      await expect(phonePage.getByRole("dialog")).toBeVisible();
+      await phonePage.waitForTimeout(500);
+      await shoot(phonePage, `19-phone-sheet-${theme}`);
+      await phonePage.keyboard.press("Escape");
+    }
     await phone.close();
   } finally {
     for (const socket of sockets.values()) {
@@ -604,8 +634,17 @@ const PRIMITIVES: {
   { id: "p-radio", testId: "qa-primitive-radio", role: "radio", focus: "Escuro", hover: "Menções" },
   // Focus the selected underline tab, hover an unselected pill.
   { id: "p-tabs", testId: "qa-primitive-tabs", role: "tab", focus: "Visão geral", hover: "Todos" },
+  // A card on a pane and inside a dialog surface; no interaction.
+  { id: "p-card", testId: "qa-primitive-card", hover: "Microfone liberado" },
+  // Monograms with presence, dimmed, a bot and a stack; no interaction.
+  { id: "p-avatar", testId: "qa-primitive-avatar" },
   // Status words, the tags beside a name, and counts; no interaction.
   { id: "p-badge", testId: "qa-primitive-badge" },
+  { id: "p-empty", testId: "qa-primitive-empty", hover: "Copiar convite" },
+  { id: "p-loading", testId: "qa-primitive-loading" },
+  { id: "p-section-header", testId: "qa-primitive-section-header" },
+  // Focus a person row, hover a plain channel.
+  { id: "p-list-row", testId: "qa-primitive-list-row", focus: "Bia", hover: "geral" },
   // Opened from the keyboard, the highlight on "Só menções" (its detail line).
   { id: "p-menu", testId: "qa-primitive-menu", open: { button: "Abrir menu", menu: "[data-server-menu]", arrows: 1 } },
   // Hovering the scrub shows its thumb; the volume is keyboard-focused.

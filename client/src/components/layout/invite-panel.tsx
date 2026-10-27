@@ -20,6 +20,7 @@ import {
   listInvites,
   previewInvite,
 } from "@/lib/api";
+import { SectionLabel } from "@/components/ui/section-header";
 
 interface InvitePanelProps {
   open: boolean;
@@ -420,9 +421,9 @@ export function InvitePanel({
             >
               {createSummary}
             </p>
-            <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-paper-muted">
+            <SectionLabel className="text-[11px] font-semibold uppercase tracking-[0.14em] text-paper-muted">
               {t("invite.create.activeTitle")}
-            </h3>
+            </SectionLabel>
             {loadingInvites ? (
               <p className="text-sm text-paper-muted">
                 {t("invite.create.loading")}

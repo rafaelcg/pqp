@@ -65,13 +65,19 @@ jobs:
     # modified fly.toml or deploy step straight to production), and
     # DEPLOY_FREEZE is checked here rather than only inside a step so a
     # frozen event can't be worked around by any of this job's trigger paths.
-    if: ${{ ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')) && vars.DEPLOY_TARGET == 'fly' && vars.DEPLOY_FREEZE != 'true' }}
+    #
+    # The workflow_run half also pins head_repository: `head_branch` is just
+    # a string a fork controls (a fork can have its own branch literally
+    # named "main"), so a CI run completing on a fork's "main" would
+    # otherwise hand this job that fork's head_sha and fly.toml. Same
+    # reasoning, same expression, as deploy-api-vultr.yml.
+    if: ${{ ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository)) && vars.DEPLOY_TARGET == 'fly' && vars.DEPLOY_FREEZE != 'true' }}
     permissions:
       contents: read
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # workflow_run checks out the default branch by default, which is not
           # necessarily the commit CI just passed on.
@@ -188,7 +194,7 @@ jobs:
 
       - name: Install flyctl
         if: steps.relevant.outputs.needed == 'true'
-        uses: superfly/flyctl-actions/setup-flyctl@master
+        uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # master 2026-04-08
 
       # --ha=false IS LOAD-BEARING, not a cost tweak. Without it Fly happily
       # brings up an extra machine on its own. The machine count is a
