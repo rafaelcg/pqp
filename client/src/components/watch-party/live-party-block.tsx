@@ -1,4 +1,10 @@
 import { useEffect, useState } from "react";
+import {
+  Check as CheckBold,
+  ClockCounterClockwise,
+  Eye as EyeFill,
+  FilmSlate,
+} from "@phosphor-icons/react";
 import { Check, Clapperboard, Copy, Eraser, Eye, History } from "lucide-react";
 import type { WatchParty } from "@pqp/shared";
 import { UserAvatar } from "@/components/user/user-avatar";
@@ -6,7 +12,23 @@ import { LivePill } from "@/components/watch-party/live-pill";
 import { ContextMenu, type ContextMenuItemDef } from "@/components/ui/context-menu";
 import { useTranslation } from "@/lib/i18n";
 import { formatLiveFor } from "@/lib/live-party-card";
+import { Icon } from "@/components/ui/icon";
+import { SectionLabel } from "@/components/ui/section-header";
+import {
+  SIDEBAR_CARD_REDESIGN,
+  SIDEBAR_INVITE_REDESIGN,
+} from "@/components/ui/sidebar-block";
 import { cn } from "@/lib/utils";
+
+/** The clapperboard: Lucide with the toggle off, filled under the redesign. */
+function PartyGlyph({ className }: { className?: string }) {
+  return (
+    <>
+      <Clapperboard className={cn("h-4 w-4 shrink-0 redesign:hidden", className)} aria-hidden />
+      <Icon icon={FilmSlate} size="sm" className={cn("hidden redesign:block", className)} />
+    </>
+  );
+}
 
 /**
  * The live watch party, at the very top of the channel list, above the
@@ -76,10 +98,11 @@ function HistoryLinks({
           <button
             type="button"
             data-live-party-history={channel.id}
-            className="flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-xs text-paper-muted transition-colors hover:text-paper"
+            className="flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-xs text-paper-muted transition-colors hover:text-paper redesign:rounded-full redesign:px-2.5 redesign:py-1.5 redesign:text-text-secondary redesign:hover:bg-row-hover redesign:hover:text-text"
             onClick={() => onOpen(channel.id)}
           >
-            <History className="h-3.5 w-3.5 shrink-0" aria-hidden />
+            <History className="h-3.5 w-3.5 shrink-0 redesign:hidden" aria-hidden />
+            <Icon icon={ClockCounterClockwise} size="sm" kind="symbol" className="hidden h-3.5 w-3.5 redesign:block" />
             <span className="truncate">
               {channels.length > 1
                 ? t("chrome.watchPartyHistoryNamed", { name: channel.name })
@@ -194,15 +217,15 @@ export function LivePartyBlock({
           <button
             type="button"
             data-live-party-pending={pending.state}
-            className="flex w-full items-center gap-2 rounded-lg border border-warning/40 bg-warning/10 px-2.5 py-2 text-left transition-colors hover:bg-warning/15"
+            className="flex w-full items-center gap-2 rounded-lg border border-warning/40 bg-warning/10 px-2.5 py-2 text-left transition-colors hover:bg-warning/15 redesign:gap-2.5 redesign:rounded-[var(--sidebar-card-radius)] redesign:border-transparent redesign:bg-warning-soft redesign:px-3 redesign:hover:bg-[color:color-mix(in_oklab,var(--color-warning-soft)_85%,var(--color-text))]"
             onClick={() => onWatch(pending.channelId)}
           >
-            <Clapperboard className="h-4 w-4 shrink-0 text-warning" aria-hidden />
+            <PartyGlyph className="text-warning redesign:text-on-warning-soft" />
             <span className="flex min-w-0 flex-col">
-              <span className="truncate text-sm font-medium text-paper">
+              <span className="truncate text-sm font-medium text-paper redesign:font-semibold redesign:text-text">
                 {pending.name}
               </span>
-              <span className="text-[11px] text-warning">
+              <span className="text-[11px] text-warning redesign:text-xs redesign:text-on-warning-soft">
                 {scheduled
                   ? t("watchParty.block.pendingScheduled")
                   : t("watchParty.block.pendingDraft")}
@@ -221,14 +244,18 @@ export function LivePartyBlock({
               type="button"
               data-live-party-teaser={teaser.onList ? "on-list" : "open"}
               aria-label={t("watchParty.waitlist.teaser.aria")}
-              className="flex w-full items-center gap-2 rounded-lg border border-dashed border-ink-4/70 px-2.5 py-2 text-left text-paper-muted transition-colors hover:border-accent/50 hover:bg-ink-3 hover:text-paper"
+              className={cn(
+                "flex w-full items-center gap-2 rounded-lg border border-dashed border-ink-4/70 px-2.5 py-2 text-left text-paper-muted transition-colors hover:border-accent/50 hover:bg-ink-3 hover:text-paper",
+                SIDEBAR_INVITE_REDESIGN,
+                "redesign:gap-2.5 redesign:px-3",
+              )}
               onClick={teaser.onOpen}
             >
               {/* Two lines, the same anatomy as the pending card above: the
                   name, and under it the one word that says what state this
                   is. A pill beside the name cut "Watch party" to "Watc..."
                   in a 230px rail. */}
-              <Clapperboard className="h-4 w-4 shrink-0" aria-hidden />
+              <PartyGlyph />
               <span className="flex min-w-0 flex-col">
                 <span className="truncate text-sm font-medium">
                   {t("watchParty.waitlist.teaser.label")}
@@ -237,9 +264,18 @@ export function LivePartyBlock({
                   className={cn(
                     "flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider",
                     teaser.onList ? "text-success" : "text-accent",
+                    // Sentence case at the second line's size, in the text
+                    // forms of the tones.
+                    "redesign:text-xs redesign:normal-case redesign:tracking-normal",
+                    teaser.onList ? "redesign:text-success-text" : "redesign:text-accent-text",
                   )}
                 >
-                  {teaser.onList && <Check className="h-3 w-3" aria-hidden />}
+                  {teaser.onList && (
+                    <>
+                      <Check className="h-3 w-3 redesign:hidden" aria-hidden />
+                      <Icon icon={CheckBold} kind="symbol" size="sm" className="hidden h-3 w-3 redesign:block" />
+                    </>
+                  )}
                   {teaser.onList
                     ? t("watchParty.waitlist.teaser.onList")
                     : t("watchParty.waitlist.teaser.badge")}
@@ -264,10 +300,14 @@ export function LivePartyBlock({
         <button
           type="button"
           data-live-party-create
-          className="flex w-full items-center gap-2 rounded-lg border border-dashed border-ink-4/70 px-2.5 py-2 text-left text-paper-muted transition-colors hover:border-danger/40 hover:bg-ink-3 hover:text-paper"
+          className={cn(
+            "flex w-full items-center gap-2 rounded-lg border border-dashed border-ink-4/70 px-2.5 py-2 text-left text-paper-muted transition-colors hover:border-danger/40 hover:bg-ink-3 hover:text-paper",
+            SIDEBAR_INVITE_REDESIGN,
+            "redesign:gap-2.5 redesign:px-3",
+          )}
           onClick={onCreate}
         >
-          <Clapperboard className="h-4 w-4 shrink-0" aria-hidden />
+          <PartyGlyph />
           <span className="truncate text-sm font-medium">
             {t("watchParty.create.button")}
           </span>
@@ -278,9 +318,9 @@ export function LivePartyBlock({
   }
   return (
     <div className="mb-3 px-1" data-testid="live-party-block">
-      <p className="mb-1 px-2 text-[10px] font-semibold uppercase tracking-wider text-paper-muted">
+      <SectionLabel as="p" className="mb-1 px-2 text-[10px] font-semibold uppercase tracking-wider text-paper-muted">
         {t("watchParty.block.label")}
-      </p>
+      </SectionLabel>
       <ul className="flex flex-col gap-1.5">
         {parties.map((party) => {
           const selected = selectedChannelId === party.channelId;
@@ -338,6 +378,12 @@ export function LivePartyBlock({
                   selected
                     ? "border-danger/50 bg-danger/10"
                     : "border-ink-4/70 bg-ink-2 hover:border-danger/40 hover:bg-ink-3",
+                  SIDEBAR_CARD_REDESIGN,
+                  "redesign:gap-1.5 redesign:p-3",
+                  // The party you are watching: the selection fill every
+                  // sidebar row uses; red stays on the badge alone.
+                  selected &&
+                    "redesign:border-transparent redesign:bg-row-selected redesign:hover:border-transparent redesign:hover:bg-row-selected",
                 )}
               >
                 {/* THE ANATOMY EVERY LIVE PRODUCT CONVERGES ON (Twitch's
@@ -361,10 +407,10 @@ export function LivePartyBlock({
                     variant={recovering ? "recovering" : "live"}
                   />
                 </span>
-                <span className="line-clamp-2 break-words text-sm font-semibold leading-snug text-paper">
+                <span className="line-clamp-2 break-words text-sm font-semibold leading-snug text-paper redesign:text-text">
                   {party.name}
                 </span>
-                <span className="flex min-w-0 items-baseline justify-between gap-2 text-[11px] text-paper-muted">
+                <span className="flex min-w-0 items-baseline justify-between gap-2 text-[11px] text-paper-muted redesign:text-xs redesign:text-text-secondary">
                   <span className="min-w-0 truncate">
                     {t("watchParty.live.hostedBy", {
                       name: party.hostDisplayName,
@@ -376,13 +422,14 @@ export function LivePartyBlock({
                       data-live-party-audience={watching}
                       data-live-party-uptime={liveFor ?? undefined}
                     >
-                      <Eye className="h-3 w-3 shrink-0" aria-hidden />
+                      <Eye className="h-3 w-3 shrink-0 redesign:hidden" aria-hidden />
+                      <Icon icon={EyeFill} size="sm" className="hidden h-3 w-3 self-center redesign:block" />
                       <span className="sr-only">
                         {t("watchParty.live.viewers", { count: watching })}
                       </span>
                       <span aria-hidden>{watching}</span>
                       {liveFor && (
-                        <span className="text-paper-muted/70" aria-hidden>
+                        <span className="text-paper-muted/70 redesign:text-text-tertiary" aria-hidden>
                           {" · "}
                           {liveFor}
                         </span>

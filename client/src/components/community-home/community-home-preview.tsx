@@ -1,6 +1,14 @@
 import { Archive, Heart, MessageCircle, PenLine, Play } from "lucide-react";
 import { useCallback, useState, type ReactNode } from "react";
+import { Archive as ArchiveFill } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
+import { CountBadge } from "@/components/ui/count-badge";
+import { Icon } from "@/components/ui/icon";
+import {
+  SIDEBAR_CARD_REDESIGN,
+  SIDEBAR_ROW_REDESIGN,
+  SIDEBAR_ROW_SELECTED_REDESIGN,
+} from "@/components/ui/sidebar-block";
 import { UserAvatar } from "@/components/user/user-avatar";
 import {
   bauPreviewMode,
@@ -80,16 +88,17 @@ export function CommunityHomePreview({
       <div
         data-community-home-row
         data-bau-preview="empty-staff"
-        className="rounded-[var(--radius-card)] border border-dashed border-border-strong p-3"
+        className="rounded-[var(--radius-card)] border border-dashed border-border-strong p-3 redesign:rounded-[var(--sidebar-card-radius)] redesign:border-[color:var(--sidebar-invite-border)]"
       >
         <button
           type="button"
           onClick={onOpen}
           aria-current={selected ? "page" : undefined}
-          className="flex w-full items-center gap-2.5 rounded-[var(--radius-control)] text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+          className="flex w-full items-center gap-2.5 rounded-[var(--radius-control)] text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring redesign:focus-visible:ring-accent"
         >
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-control)] bg-accent-soft text-on-accent-soft">
-            <Archive className="h-4 w-4" aria-hidden />
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-control)] bg-accent-soft text-on-accent-soft redesign:rounded-[var(--rail-tile-radius-selected)]">
+            <Archive className="h-4 w-4 redesign:hidden" aria-hidden />
+            <Icon icon={ArchiveFill} size="sm" className="hidden redesign:block" />
           </span>
           <span className="min-w-0 flex-1">
             <span className="block text-sm font-bold text-text">
@@ -146,6 +155,11 @@ export function CommunityHomePreview({
             className={cn(
               "overflow-hidden rounded-[var(--radius-card)] border bg-surface-0 transition-colors duration-[var(--duration-fast)]",
               selected ? "border-border-strong" : "border-border hover:border-border-strong",
+              // The card tint, without the hover fill: the card holds two
+              // buttons, and each lights its own text.
+              SIDEBAR_CARD_REDESIGN,
+              "redesign:hover:bg-[color:var(--card-bg)]",
+              selected && "redesign:border-[color:var(--color-accent)]",
             )}
             data-bau-preview-card
           >
@@ -155,16 +169,19 @@ export function CommunityHomePreview({
               aria-current={selected ? "page" : undefined}
               className="flex w-full items-center gap-1.5 px-2.5 pb-2 pt-2.5 text-left text-xs font-bold text-text-secondary hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring"
             >
-              <Archive className="h-3.5 w-3.5" aria-hidden />
+              <Archive className="h-3.5 w-3.5 redesign:hidden" aria-hidden />
+              <Icon icon={ArchiveFill} size="sm" className="hidden h-3.5 w-3.5 redesign:block" />
               {t("communityHome.channelName")}
               {latest.unread > 0 && (
-                <span
+                // The shared count pill; the classes before the redesign
+                // ones are the 17px Baú pill it always drew.
+                <CountBadge
+                  count={latest.unread}
+                  tone="accent"
                   data-community-home-unread
                   aria-label={t("communityHome.badge.unread", { count: latest.unread })}
-                  className="inline-flex h-[1.0625rem] min-w-[1.125rem] items-center justify-center rounded-full bg-accent px-1 text-[10.5px] font-bold tabular-nums text-on-accent"
-                >
-                  {latest.unread > 99 ? "99+" : latest.unread}
-                </span>
+                  className="h-[1.0625rem] min-w-[1.125rem] text-[10.5px]"
+                />
               )}
               <span className="ml-auto font-semibold text-text-tertiary">
                 {t("communityHome.preview.open")}
@@ -236,7 +253,7 @@ export function CommunityHomePreview({
               <button
                 type="button"
                 onClick={() => onOpenPost(others.first!.postId)}
-                className="flex w-full items-center gap-2 border-t border-border px-2.5 py-2 text-left text-xs font-semibold text-text-secondary hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring"
+                className="flex w-full items-center gap-2 border-t border-border px-2.5 py-2 text-left text-xs font-semibold text-text-secondary hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring redesign:border-[color:var(--card-border)] redesign:hover:bg-[color:var(--card-row-hover)] redesign:focus-visible:ring-accent"
                 data-bau-preview-more
               >
                 <Cover
@@ -324,6 +341,9 @@ function SlimRow({
       className={cn(
         "flex w-full items-center gap-2.5 rounded-[var(--radius-control)] px-2 py-1.5 text-left transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
         selected ? "bg-surface-2" : "hover:bg-surface-2",
+        SIDEBAR_ROW_REDESIGN,
+        "redesign:focus-visible:ring-inset redesign:focus-visible:ring-accent",
+        selected && SIDEBAR_ROW_SELECTED_REDESIGN,
       )}
     >
       {tile}
@@ -332,11 +352,19 @@ function SlimRow({
           className={cn(
             "block text-sm font-semibold",
             quiet && !selected ? "text-text-secondary" : "text-text",
+            selected && "redesign:text-on-row-selected",
           )}
         >
           {title}
         </span>
-        <span className="mt-0.5 block truncate text-xs text-text-tertiary">{line}</span>
+        <span
+          className={cn(
+            "mt-0.5 block truncate text-xs text-text-tertiary",
+            selected && "redesign:text-on-row-selected",
+          )}
+        >
+          {line}
+        </span>
       </span>
     </button>
   );

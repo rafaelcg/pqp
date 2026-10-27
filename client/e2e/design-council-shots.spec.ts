@@ -631,6 +631,7 @@ const PRIMITIVES: {
   // Two real rails: Conversas open with people waiting, and a server open
   // beside every server cue. Keyboard focus on "Praça", hover on "Oficina".
   { id: "s-rail", testId: "qa-shell-rail", focus: "Praça", hover: "Oficina" },
+  { id: "s-sidebar-special", testId: "qa-shell-sidebar-special" },
 ];
 
 test("captures the primitives", async ({ browser }) => {
