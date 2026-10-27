@@ -577,12 +577,12 @@ function AuditLogSection({ serverId }: { serverId: string }) {
         </p>
       )}
       {!loading && entries.length === 0 && !error && (
-        <p className="text-sm text-paper-muted">
+        <p className="text-sm text-paper-muted redesign:rounded-[var(--radius-card)] redesign:border redesign:border-dashed redesign:border-[color:var(--card-border)] redesign:px-6 redesign:py-8 redesign:text-center redesign:text-text-secondary">
           {t("serverSettings.audit.empty")}
         </p>
       )}
       {entries.length > 0 && (
-        <ul className="space-y-1.5">
+        <ul className={cn("space-y-1.5", SETTINGS_CARD_REDESIGN, "redesign:space-y-0 redesign:divide-y redesign:overflow-hidden")}>
           {entries.map((entry) => {
             const key = (
               AUDIT_ACTION_KEYS as Partial<Record<string, MessageKey>>
@@ -592,7 +592,7 @@ function AuditLogSection({ serverId }: { serverId: string }) {
             return (
               <li
                 key={entry.id}
-                className={cn("rounded-md border border-ink-4 bg-ink-3/40 p-2 text-sm", SETTINGS_CARD_REDESIGN, "redesign:px-3.5 redesign:py-2.5")}
+                className="rounded-md border border-ink-4 bg-ink-3/40 p-2 text-sm redesign:rounded-none redesign:border-0 redesign:bg-transparent redesign:px-4 redesign:py-3"
               >
                 {/* A reason is free text and can be one unbroken run of
                     characters, so it wraps anywhere rather than pushing the
@@ -1130,6 +1130,9 @@ export function ServerSettingsDialog({
           {active.id === "overview" && (
             <>
               <Block title={t("serverSettings.name.title")}>
+                {/* Under the redesign the field sits in a card, like the
+                    channel overview's fields. */}
+                <div className={cn("space-y-2", SETTINGS_CARD_REDESIGN, "redesign:p-4")}>
                 <div className="flex gap-2">
                   <Input
                     value={name}
@@ -1164,6 +1167,7 @@ export function ServerSettingsDialog({
                     {nameError}
                   </p>
                 )}
+                </div>
               </Block>
 
               {serverId && (

@@ -370,6 +370,10 @@ export function SectionRail<Id extends string>({
                 TAB_REDESIGN,
                 selected ? TAB_SELECTED_REDESIGN : TAB_IDLE_REDESIGN,
                 section.danger && !selected && "redesign:text-danger",
+                // The one risky tab stays risky when open: a danger tint, not lime.
+                section.danger &&
+                  selected &&
+                  "redesign:bg-[color:color-mix(in_oklab,var(--color-danger)_12%,transparent)] redesign:text-danger",
                 // Phone strip: stays at the start edge while the strip scrolls.
                 pinned &&
                   "max-sm:sticky max-sm:left-0 max-sm:z-10 max-sm:bg-surface-2 max-sm:text-text",

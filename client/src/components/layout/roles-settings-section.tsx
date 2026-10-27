@@ -571,7 +571,7 @@ export function RolesSettingsSection({ serverId }: { serverId: string }) {
                   disabled={selected.isEveryone}
                   maxLength={32}
                   aria-label={t("roles.name")}
-                  className="mt-1.5 border-0 bg-ink px-3"
+                  className="mt-1.5 border-0 bg-ink px-3 redesign:border redesign:border-[color:var(--input-border)] redesign:bg-[color:var(--input-bg)] redesign:disabled:bg-transparent"
                 />
                 {staffHint && (
                   <p className="mt-2 px-1 text-xs leading-relaxed text-paper-muted">
