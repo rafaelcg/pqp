@@ -4132,10 +4132,9 @@ export function ChannelRow({
             <span
               aria-hidden="true"
               className={cn(
-                "h-1.5 w-1.5 rounded-full bg-signal redesign:mr-2 redesign:h-[var(--list-row-pip)] redesign:w-[var(--list-row-pip)] redesign:bg-on-success-soft",
-                // The pip column means "something is waiting": an unread
-                // pip or a count takes it, and the fill still says connected.
-                ((hasUnread && !muted) || mentions > 0) && "redesign:hidden",
+                // Under the redesign the success fill says connected; the
+                // end column only ever means "something is waiting".
+                "h-1.5 w-1.5 rounded-full bg-signal redesign:hidden",
               )}
             />
             <span className="sr-only">{t("chrome.connected")}</span>
