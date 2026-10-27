@@ -1832,6 +1832,8 @@
   "music.mute": "Silenciar a música",
   "music.unmute": "Ativar o som da música",
   "music.playNext": "Tocar a seguir",
+  "music.moveUp": "Subir",
+  "music.moveDown": "Descer",
   "music.openYoutube": "Abrir no YouTube",
   "music.stopAllConfirm.title": "Parar a música pra todo mundo?",
   "music.stopAllConfirm.body": "Isso limpa a fila da call. Quem quiser ouvir de novo tem que adicionar de novo.",

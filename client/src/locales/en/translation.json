@@ -1832,6 +1832,8 @@
   "music.mute": "Mute the music",
   "music.unmute": "Unmute the music",
   "music.playNext": "Play next",
+  "music.moveUp": "Move up",
+  "music.moveDown": "Move down",
   "music.openYoutube": "Open on YouTube",
   "music.stopAllConfirm.title": "Stop the music for everyone?",
   "music.stopAllConfirm.body": "This clears the call's queue. Anyone who wants music again has to add it again.",

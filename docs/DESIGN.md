@@ -585,6 +585,11 @@ Every hint renders through `layout/corner-card.tsx`. Under the redesign it
 is a popover (`--popover-surface`, `--popover-border`, `--popover-shadow`,
 `--popover-radius`) with a round close, glass on a hero. The first-run card
 is a pane-radius card; its steps sit in accent-soft wells.
+### The music queue
+
+`voice/music-classes.ts` holds the queue's recipe: rows, covers, the search
+highlight, icon buttons and headings. The composer's sheet and the drawer
+share it, so the two homes look the same under the redesign.
 
 ### The settings kit
 

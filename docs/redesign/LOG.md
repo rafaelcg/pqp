@@ -1164,6 +1164,33 @@ Rounds: Codex 8.2 (r1); Opus 8.5 (r2), 8.0 (r3), 8.5 (r5), no MUST left.
 Round 5 fixes: the copy failure glyph at 14px, the info tint at 7% in
 dark, the rail build line in mono. Merged on the cap.
 
+### m-sheets
+
+Spec (audit: the four phone sheets in the inventory. The app launcher, the
+soundboard, every `Dialog` below `sm` and the settings strip already draw
+the merged sheet, popover or list row tokens; the music queue is the one
+left: `voice/music-fila.tsx` as the composer's sheet and as the drawer,
+`music-queue-list.tsx`, the history in `music-extras.tsx` and the field in
+`music-search-picker.tsx`):
+
+1. Job: see what plays next, add a song, reorder, play one again.
+2. Redesign: one recipe in `voice/music-classes.ts` for both homes: rows at
+   the control radius on the menu's translucent hover, covers nested inside, the
+   highlighted result on the menu's highlight, round ghost icons, sentence
+   case headings, card-edge seams; the drawer on the side pane with the
+   sheet's scrim and a sideways shadow; Phosphor glyphs.
+3. Merges: the drawer's paper tokens and the sheet's surface tokens meet in
+   one look under the redesign.
+4. Kept: drag and Alt+arrow reordering, the row menu, history, shuffle,
+   watch on stage, the field's hint, outside-press close.
+5. Left: the player bar under the queue is call chrome (`f-call`).
+Rounds (Opus only): r1 7.0 (MUST fixed: the row hover vanished on the
+composer's well), r2 8.2 (MUST fixed: history rows had no cover), r3 8.6,
+r4 8.1, r5 9.0 (approved, no MUST). Also: one right icon column, Subir and
+Descer in a row's menu under the redesign (touch has no drag), still
+history rows, a sideways drawer shadow. New copy: `music.moveUp`,
+`music.moveDown`.
+
 ### f-search
 
 Spec (audit: `search/search-dialog.tsx`, one caller, the sidebar search pill

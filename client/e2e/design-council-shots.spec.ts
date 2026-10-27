@@ -802,6 +802,8 @@ const PRIMITIVES: {
   hover?: string;
   /** Hover the element holding this text (a row with no button role). */
   hoverText?: string;
+  /** Click this button first (opens a disclosure), by its name's start. */
+  click?: string;
   focus?: string;
   /** The role the hover and focus targets have. Buttons by default. */
   role?: "button" | "textbox" | "combobox" | "checkbox" | "radio" | "tab" | "slider";
@@ -863,6 +865,13 @@ const PRIMITIVES: {
   { id: "p-slider", testId: "qa-primitive-slider", focus: "Volume", role: "slider", hover: "Scrub" },
   // Focus the connection strip's main action, hover the error's dismiss.
   { id: "p-banner", testId: "qa-primitive-banner", focus: "Tentar agora", hover: "Dispensar" },
+  // Two real rails: Conversas open with people waiting, and a server open
+  // beside every server cue. Keyboard focus on "Praça", hover on "Oficina".
+  { id: "s-rail", testId: "qa-shell-rail", focus: "Praça", hover: "Oficina" },
+  // The music queue open in a call's composer; hover a waiting song.
+  // The history open, a queue row hovered.
+  { id: "m-sheets", testId: "qa-music-queue", click: "Tocadas", hoverText: "Gal Costa - Vapor Barato" },
+  { id: "p-settings-kit", testId: "qa-settings-kit", tiles: 1300 },
   { id: "p-settings-kit", testId: "qa-settings-kit", tiles: 1300 },
   // Two real rails: Conversas open with people waiting, and a server open
   // beside every server cue. Keyboard focus on "Praça", hover on "Oficina".
@@ -908,6 +917,9 @@ test("captures the primitives", async ({ browser }) => {
         await block.getByRole(primitive.role ?? "button", { name: primitive.focus, exact: true }).first().focus();
         await page.keyboard.press("Shift+Tab");
         await page.keyboard.press("Tab");
+      }
+      if (primitive.click) {
+        await block.getByRole("button", { name: primitive.click }).first().click();
       }
       if (primitive.hover) {
         await block.getByRole(primitive.role ?? "button", { name: primitive.hover, exact: true }).first().hover();
