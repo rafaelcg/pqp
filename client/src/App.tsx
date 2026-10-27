@@ -8511,9 +8511,11 @@ function MainAppContent({
   const forumConfig = useForumConfig(selectedServerId);
   // Opening a forum by any route (the list, a link, the card) is the "O fórum
   // abriu" card done for that server: nobody needs to be told about a forum
-  // they are reading.
+  // they are reading. Only while the card is live: with the flag off nothing
+  // is stored at all.
   const openForumServerId =
     selection.kind === "server" &&
+    forumConfig.announce &&
     channels.find((c) => c.id === selectedChannelId)?.type === "forum"
       ? selection.serverId
       : null;
