@@ -133,7 +133,7 @@ function JoinCallButton({
           if (!join.joining) join.onJoin();
         }}
       >
-        {join.joining ? <Spinner /> : <PhoneCall aria-hidden className="h-3.5 w-3.5" />}
+        {join.joining ? <AppSpinner /> : <PhoneCall aria-hidden className="h-3.5 w-3.5" />}
         {t("apps.strip.joinCall")}
       </Button>
     </Tooltip>
@@ -261,7 +261,7 @@ function Dot({ tone }: { tone: "live" | "off" | "gone" }) {
   );
 }
 
-function Spinner({ className }: { className?: string }) {
+function AppSpinner({ className }: { className?: string }) {
   return (
     <LoaderCircle
       aria-hidden
@@ -532,7 +532,7 @@ function LiveStrip(props: AppSessionStripProps & { model: LiveStripModel }) {
               if (!busy?.join) onJoin?.({ asSpectator: model.actions.enter === "watch" });
             }}
           >
-            {busy?.join ? <Spinner /> : null}
+            {busy?.join ? <AppSpinner /> : null}
             {t(model.actions.enter === "join" ? "apps.strip.join" : "apps.strip.watch")}
           </Button>
         ) : null}
@@ -546,13 +546,13 @@ function LiveStrip(props: AppSessionStripProps & { model: LiveStripModel }) {
               if (!busy?.takeHost) onTakeHost?.();
             }}
           >
-            {busy?.takeHost ? <Spinner /> : null}
+            {busy?.takeHost ? <AppSpinner /> : null}
             {t("apps.strip.takeNow")}
           </Button>
         ) : null}
         {reconnecting ? (
           <Button type="button" size="sm" variant="secondary" aria-disabled="true">
-            <Spinner />
+            <AppSpinner />
             {t("apps.strip.reconnectingBtn")}
           </Button>
         ) : null}
@@ -894,7 +894,7 @@ function CompactStrip(props: AppSessionStripProps & { model: LiveStripModel }) {
             if (!busy?.join) onJoin?.({ asSpectator: model.actions.enter === "watch" });
           }}
         >
-          {busy?.join ? <Spinner /> : null}
+          {busy?.join ? <AppSpinner /> : null}
           {t(model.actions.enter === "join" ? "apps.strip.join" : "apps.strip.watch")}
         </Button>
       ) : null}
@@ -904,7 +904,7 @@ function CompactStrip(props: AppSessionStripProps & { model: LiveStripModel }) {
       {props.chat && !reconnecting ? <ChatToggle chat={props.chat} compact /> : null}
       {reconnecting ? (
         <span className="pr-3">
-          <Spinner className="h-4 w-4" />
+          <AppSpinner className="h-4 w-4" />
         </span>
       ) : model.seated || model.actions.end || model.actions.leave ? (
         <button

@@ -3,16 +3,20 @@ import {
   SEARCH_QUERY_MIN_LENGTH,
   type MessageSearchResult,
 } from "@pqp/shared";
-import { Hash, Loader2, Search } from "lucide-react";
+import { MagnifyingGlass } from "@phosphor-icons/react";
+import { Hash, Search } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { Icon } from "@/components/ui/icon";
 import { Dialog } from "@/components/ui/dialog";
 import { searchServerMessages } from "@/lib/api";
 import { messageLinkState, messageRoutePath } from "@/lib/app-route";
 import { useTranslation } from "@/lib/i18n";
 import { cn, formatDayLabel, formatFullTimestamp } from "@/lib/utils";
+import { EmptyState } from "@/components/ui/empty-state";
 import { appendUniqueResults, clampSelection } from "./search-results";
+import { Spinner } from "@/components/ui/spinner";
 
 /** Long enough that a typed word is one query, short enough to feel live. */
 const DEBOUNCE_MS = 300;
@@ -198,28 +202,25 @@ export function SearchDialog({
             className="min-w-0 flex-1 bg-transparent text-sm text-text placeholder:text-text-muted focus:outline-none"
           />
           {status === "loading" && (
-            <Loader2
-              aria-hidden="true"
-              className="h-4 w-4 shrink-0 animate-spin text-text-muted"
-            />
+            <Spinner className="h-4 w-4 shrink-0 animate-spin text-text-muted" />
           )}
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto">
           {status === "error" ? (
-            <EmptyState
+            <SearchEmpty
               title={t("search.unavailable")}
               hint={t("search.unavailableHint")}
             />
           ) : !searchable ? (
-            <EmptyState
+            <SearchEmpty
               title={t("search.prompt")}
               hint={t("search.minChars", { count: SEARCH_QUERY_MIN_LENGTH })}
             />
           ) : status === "loading" && results.length === 0 ? (
-            <EmptyState title={t("search.searching")} />
+            <SearchEmpty title={t("search.searching")} />
           ) : results.length === 0 ? (
-            <EmptyState
+            <SearchEmpty
               title={t("search.noMatch", { query: trimmed })}
               hint={t("search.wholeWords")}
             />
@@ -320,11 +321,18 @@ function Snippet({ snippet }: { snippet: string }) {
   );
 }
 
-function EmptyState({ title, hint }: { title: string; hint?: string }) {
+function SearchEmpty({ title, hint }: { title: string; hint?: string }) {
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-1 px-8 text-center">
-      <p className="text-sm text-text">{title}</p>
-      {hint && <p className="text-xs text-text-muted">{hint}</p>}
-    </div>
+    <EmptyState
+      size="inline"
+      // Under the redesign only, so it leads like every other inline state.
+      icon={<Icon icon={MagnifyingGlass} kind="symbol" size="md" />}
+      iconClassName="hidden redesign:block"
+      title={title}
+      body={hint}
+      className="h-full justify-center gap-1 px-8"
+      titleClassName="text-sm text-text"
+      bodyClassName="text-xs text-text-muted"
+    />
   );
 }

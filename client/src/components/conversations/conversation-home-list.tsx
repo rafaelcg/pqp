@@ -680,7 +680,7 @@ function ConversationFace({
             status={status}
             size="md"
             ringClassName="rounded-full ring-[3px] ring-surface-1 group-hover:ring-surface-2 group-data-[selected]:ring-surface-2"
-            className="absolute -bottom-0.5 -right-0.5 bg-surface-1"
+            className="absolute -bottom-0.5 -right-0.5 redesign:bottom-0 redesign:right-0 bg-surface-1"
           />
         )}
       </span>

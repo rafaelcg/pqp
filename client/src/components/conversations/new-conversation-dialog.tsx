@@ -357,7 +357,7 @@ function PersonRow({
           {person.status && (
             <StatusDot
               status={person.status}
-              className="absolute -bottom-0.5 -right-0.5 bg-surface-2"
+              className="absolute -bottom-0.5 -right-0.5 redesign:bottom-0 redesign:right-0 bg-surface-2"
               ringClassName="rounded-full ring-2 ring-surface-2"
             />
           )}

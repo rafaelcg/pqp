@@ -6,7 +6,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
-import { Check, CircleX, ExternalLink, Loader2, Upload } from "lucide-react";
+import { Check, CircleX, ExternalLink, Upload } from "lucide-react";
 import {
   canRenameHandle,
   DISPLAY_NAME_MAX_LENGTH,
@@ -64,6 +64,7 @@ import { useTranslation } from "@/lib/i18n";
 import type { CropRegion } from "@/lib/image-crop";
 import { intlLocale } from "@/lib/locale";
 import { cn } from "@/lib/utils";
+import { Spinner } from "@/components/ui/spinner";
 
 /**
  * What the drawing of each ready-made avatar looks like, in the order of
@@ -231,7 +232,7 @@ function HandleAvailabilityLine({ availability }: { availability: HandleAvailabi
   switch (availability) {
     case "checking":
       text = t("settings.profile.publicHandle.checking");
-      icon = <Loader2 aria-hidden className="h-3.5 w-3.5 shrink-0 motion-safe:animate-spin" />;
+      icon = <Spinner className="h-3.5 w-3.5 shrink-0 motion-safe:animate-spin" />;
       break;
     case "free":
       text = t("settings.profile.publicHandle.free");
