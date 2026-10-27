@@ -2,7 +2,7 @@ import {
   EarSlash,
   Hand as HandFill,
   MicrophoneSlash,
-  Screencast,
+  MonitorArrowUp,
   VideoCamera,
   type Icon as PhosphorIcon,
 } from "@phosphor-icons/react";
@@ -15,6 +15,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Icon, type IconKind } from "@/components/ui/icon";
+import { useRedesign } from "@/lib/redesign";
 import { cn } from "@/lib/utils";
 import { HandPositionBadge } from "@/components/voice/hand-position-badge";
 import type { VoiceParticipant } from "@pqp/shared";
@@ -70,10 +71,14 @@ function BadgeGlyph({
   /** The Phosphor glyph's size, 14px unless a shape needs more room. */
   onClassName?: string;
 }) {
+  const redesign = useRedesign();
   return (
     <span
       role="img"
       aria-label={label}
+      // Under the redesign the glyph says its state on hover too: a filled
+      // ear at 16px is easy to take for a "no" sign.
+      title={redesign ? label : undefined}
       className={cn(
         "flex",
         // The accent as a mark on the pane needs its text step (lime is
@@ -118,7 +123,7 @@ export function VoiceOccupantBadges({
       {person.sharingScreen && (
         <BadgeGlyph
           off={ScreenShare}
-          on={Screencast}
+          on={MonitorArrowUp}
           label={t("chrome.sharingScreen")}
           tone="accent"
         />
@@ -127,8 +132,8 @@ export function VoiceOccupantBadges({
         <BadgeGlyph off={Video} on={VideoCamera} label={t("chrome.cameraOn")} tone="accent" />
       )}
       {person.deafened ? (
-        // The filled ear at 16px: bold at 14px it was a red scribble beside the mic.
-          <BadgeGlyph off={HeadphoneOff} on={EarSlash} label={t("chrome.deafened")} tone="danger" onClassName="h-4 w-4" />
+        // The bold ear at 16px: filled it read as a "no" sign, at 14px as a scribble.
+          <BadgeGlyph off={HeadphoneOff} on={EarSlash} kind="symbol" label={t("chrome.deafened")} tone="danger" onClassName="h-4 w-4" />
       ) : (
         person.muted && (
           <BadgeGlyph off={MicOff} on={MicrophoneSlash} label={t("chrome.muted")} tone="danger" />

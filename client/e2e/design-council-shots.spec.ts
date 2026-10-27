@@ -764,7 +764,7 @@ const PRIMITIVES: {
   // beside every server cue. Keyboard focus on "Praça", hover on "Oficina".
   { id: "s-rail", testId: "qa-shell-rail", focus: "Praça", hover: "Oficina" },
   { id: "s-sidebar-special", testId: "qa-shell-sidebar-special" },
-  { id: "s-category", testId: "qa-shell-categories", hover: "Bate-papo" },
+  { id: "s-category", testId: "qa-shell-categories", focus: "Jogos da semana", hover: "Bate-papo" },
   { id: "s-channel-row", testId: "qa-shell-channel-rows", focus: "general", hover: "clipes" },
   { id: "s-voice-row", testId: "qa-shell-voice-rows" },
   // The icons-only sidebar: hover on "general".
