@@ -12,7 +12,7 @@ import { flushSync } from "react-dom";
 import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
 import type { LucideIcon } from "lucide-react";
 import { IconSwap } from "@/components/ui/icon";
-import { SECTION_LABEL_REDESIGN } from "@/components/ui/section-header";
+import { RAIL_LABEL_REDESIGN } from "@/components/ui/section-header";
 import { SM_UP_QUERY, useMediaQuery } from "@/components/ui/use-media-query";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -323,8 +323,8 @@ export function SectionRail<Id extends string>({
                 aria-hidden="true"
                 className={cn(
                   "hidden px-3 pb-1 pt-4 text-xs font-medium text-text-tertiary first:pt-0 sm:block",
-                  SECTION_LABEL_REDESIGN,
-                  "redesign:mb-0 redesign:px-[var(--list-row-px)] redesign:pb-1.5 redesign:pt-5 redesign:font-medium redesign:text-text-tertiary",
+                  RAIL_LABEL_REDESIGN,
+                  "redesign:mb-0 redesign:px-[var(--list-row-px)] redesign:pb-1.5 redesign:pt-5",
                 )}
               >
                 {heading}
@@ -363,7 +363,7 @@ export function SectionRail<Id extends string>({
                 section.danger && !selected && "redesign:text-danger",
                 // Phone strip: stays at the start edge while the strip scrolls.
                 pinned &&
-                  "max-sm:sticky max-sm:left-0 max-sm:z-10 max-sm:bg-surface-2 max-sm:text-text redesign:max-sm:bg-[color:var(--settings-surface)]",
+                  "max-sm:sticky max-sm:left-0 max-sm:z-10 max-sm:bg-surface-2 max-sm:text-text redesign:max-sm:bg-[color:var(--settings-surface)] redesign:max-sm:shadow-[12px_0_12px_-4px_var(--settings-surface)]",
                 // Phone strip: 36px drawn, 44px to a finger. The hit area grows
                 // into the strip's padding, so the strip itself never gains a
                 // vertical scroll.
