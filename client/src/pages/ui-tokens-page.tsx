@@ -30,6 +30,7 @@ import {
 import { CalendarClock, X as LineX } from "lucide-react";
 import { Navigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { PaneHeader, SectionLabel } from "@/components/ui/section-header";
 import { CARD_LIST, CARD_ROW_HOVER, CARD_SURFACE } from "@/components/ui/card";
 import { StatusDot } from "@/components/user/status-dot";
 import { UserAvatar } from "@/components/user/user-avatar";
@@ -1328,6 +1329,52 @@ function PrimitiveSheet() {
               className="absolute right-0.5 top-0.5 ring-2 ring-surface-1"
             />
           </span>
+        </div>
+      </div>
+
+      {/* A settings pane's header and the labels over its groups, with the
+          toggle-off classes the callers pass. */}
+      <div data-testid="qa-primitive-section-header" className="grid gap-6 p-4 sm:grid-cols-2">
+        <div className="min-w-0">
+          <PaneHeader
+            title={t("serverSettings.section.overview")}
+            description={t("serverSettings.overview.description")}
+            actions={<Button size="sm">{t("common.save")}</Button>}
+            className="mb-8 gap-4"
+            titleClassName="font-display text-xl font-bold text-text"
+            descriptionClassName="mt-1 text-sm text-pretty text-text-secondary"
+          />
+          <SectionLabel
+            as="h4"
+            variant="group"
+            className="font-display text-sm font-bold uppercase tracking-wider text-paper-muted"
+          >
+            {t("serverSettings.name.title")}
+          </SectionLabel>
+          <p className="mt-2 text-sm text-text-secondary">pqp</p>
+          <SectionLabel
+            as="h4"
+            variant="group"
+            tone="danger"
+            className="mt-6 font-display text-sm font-bold uppercase tracking-wider text-danger"
+          >
+            {t("serverSettings.delete.title")}
+          </SectionLabel>
+        </div>
+        <div className="min-w-0 space-y-4 rounded-[var(--radius-card)] bg-surface-2 p-3">
+          <div>
+            <SectionLabel className="px-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
+              {t("forward.recent")}
+            </SectionLabel>
+            <p className="px-2 py-1 text-sm text-text">Bia</p>
+            <p className="px-2 py-1 text-sm text-text"># geral</p>
+          </div>
+          <div>
+            <SectionLabel className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-paper-muted">
+              {t("invite.create.activeTitle")}
+            </SectionLabel>
+            <p className="text-sm text-text-secondary">pqp.gg/i/sala</p>
+          </div>
         </div>
       </div>
 

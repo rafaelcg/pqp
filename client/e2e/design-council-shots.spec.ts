@@ -489,6 +489,10 @@ test("captures the design council screens", async ({ browser }) => {
       await page.getByRole("dialog").getByText("Cargos", { exact: true }).first().click();
       await expect(page.getByRole("dialog").getByRole("tablist", { name: "Nome do cargo" })).toBeVisible();
       await shoot(page, `13-server-roles-${theme}`);
+      // The permission groups, for the section labels over them.
+      await page.getByRole("dialog").getByRole("tab", { name: "Permissões" }).click();
+      await page.waitForTimeout(300);
+      await shoot(page, `13-server-roles-perms-${theme}`);
       await page.keyboard.press("Escape");
 
       await context.close();
@@ -602,6 +606,7 @@ const PRIMITIVES: {
   { id: "p-avatar", testId: "qa-primitive-avatar" },
   // Status words, the tags beside a name, and counts; no interaction.
   { id: "p-badge", testId: "qa-primitive-badge" },
+  { id: "p-section-header", testId: "qa-primitive-section-header" },
   // Focus a person row, hover a plain channel.
   { id: "p-list-row", testId: "qa-primitive-list-row", focus: "Bia", hover: "geral" },
   // Opened from the keyboard, the highlight on "Só menções" (its detail line).

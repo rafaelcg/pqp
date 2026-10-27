@@ -1107,6 +1107,37 @@ conversations or friend requests waiting. Draws nothing at zero and caps at
 - The server rail's and the channel list's counts are drawn in place for
   now; they move here with their shell elements.
 
+### PaneHeader and SectionLabel
+
+`section-header.tsx`. `PaneHeader` is the title of a pane that switches by
+section (user settings, server settings): the title, one line under it, and
+actions on the title line (`actions`, or a slot other code portals into
+through `actionsRef`). `SectionLabel` is the small heading over a group in a
+list, a popover or a dialog ("Recentes", "Convites ativos", a danger zone).
+
+- **Toggle off.** Each caller passes the classes it always drew
+  (`className`, `titleClassName`, `descriptionClassName`) and keeps its look.
+- **Redesign.** The redesign classes come last and win. A pane title is
+  Gabarito (`--type-title-font`) at `--pane-header-title-size` (20px), the
+  line under it body size in secondary text, `--pane-header-gap` (24px)
+  below. A section label is semibold sentence case with no tracking, in one
+  of two variants (below). `tone="danger"` keeps a danger zone's heading in
+  the danger colour on either.
+- **Two variants.** `list` (the default) heads rows in a popover, a picker
+  or a panel: `--section-label-size` (13px), secondary text,
+  `--section-label-gap` (6px) to the first row. `group` heads a group in a
+  settings pane: `--section-group-size` (15px) semibold in the text colour,
+  a step over the 14px rows and flush with the group's edge. The settings
+  kit's `SettingsGroup` title and server settings' group titles are `group`.
+- **The face.** Both labels are the sans face with no tracking, and a pane
+  title is Gabarito at -0.012em. The unlayered `.font-display` rule outranks
+  every utility, and callers pass `font-display` as a toggle-off class, so
+  the primitive sets the face and the tracking with `!`.
+  `e2e/section-label-face.spec.ts` checks the computed face.
+- **Copy.** Write a label in sentence case. The old look upper-cases it with
+  CSS (on a span or heading, never on a button, which resets it).
+- **Not these.** A field's label over an input is the input's; a channel
+  category is a fold control (`ChannelSectionHeader`, `s-category`).
 ### ListRow
 
 `list-row.tsx`. A row in a list: a channel, a person, a conversation, a

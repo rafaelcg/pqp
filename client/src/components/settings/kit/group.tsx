@@ -1,5 +1,6 @@
 import { useId, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import { SectionLabel } from "@/components/ui/section-header";
 
 interface SettingsGroupProps {
   /**
@@ -51,9 +52,14 @@ export function SettingsGroup({
         <div className="flex items-end justify-between gap-4">
           <div className="min-w-0">
             {title ? (
-              <h4 id={titleId} className="text-sm font-semibold text-text">
+              <SectionLabel
+                as="h4"
+                id={titleId}
+                variant="group"
+                className="text-sm font-semibold text-text"
+              >
                 {title}
-              </h4>
+              </SectionLabel>
             ) : null}
             {description ? (
               <p className="mt-1 text-xs text-pretty text-text-tertiary">
