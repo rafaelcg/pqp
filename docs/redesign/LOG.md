@@ -64,6 +64,7 @@ Read this file and the inventory at the start of every session.
 | 3 | `s-sidebar-special` | Merged, capped at round 5 (Opus 8.1 r5, 8.6 r2; r5 MUST fixed after) |
 | 3 | `s-category` | Merged, capped at round 5 (Opus 7.9 r5, 8.3 r3) |
 | 3 | `s-channel-row` | Merged, capped at round 5 (Opus 8.5 r5). Follow-up: tooltip `sideOffset` so the name bubble clears the tiles |
+| 3 | `s-voice-row` | Merged, capped at round 5 (Opus 8.0 r5, 8.2 r3). Open: light selected and connected fills are close; check with the token owner |
 | 4 | `f-user-settings` | Merged, capped at round 5 (Opus 8.1 r5, 8.2 r4) |
 | 4 | `f-server-settings` | Merged, capped at round 5 (Opus 7.8 r5, 7.9 r4) |
 | 4 | `f-invites` | Merged, capped at round 5 (Opus 7.8 r5, 8.1 r3 and r4) |
