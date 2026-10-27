@@ -338,7 +338,7 @@ function RoleRowFace({
       )}
     >
       <span
-        className="h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-ink-4/80 redesign:h-3 redesign:w-3"
+        className="h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-ink-4/80 redesign:h-3 redesign:w-3 redesign:ring-[color:color-mix(in_oklab,var(--color-text)_24%,transparent)]"
         style={{ backgroundColor: color ?? "transparent" }}
         aria-hidden
       />

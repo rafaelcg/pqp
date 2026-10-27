@@ -1216,7 +1216,7 @@ export function ServerSettingsDialog({
           )}
 
           {active.id === "access" && (
-            <Block title={t("serverSettings.sso.title")}>
+            <Block title={t("serverSettings.sso.title")} card>
               <p className="text-sm text-paper-muted">
                 {t("serverSettings.sso.description", { server: server.name })}
               </p>
@@ -1285,7 +1285,7 @@ export function ServerSettingsDialog({
               {serverId && <ReportsSection serverId={serverId} />}
 
               {isOwner && (
-                <Block title={t("serverSettings.retention.title")}>
+                <Block title={t("serverSettings.retention.title")} card>
                   <p className="text-sm text-paper-muted">
                     {t("serverSettings.retention.description", {
                       server: server.name,
@@ -1346,7 +1346,7 @@ export function ServerSettingsDialog({
 
           {active.id === "danger" && (
             <>
-              <Block title={t("serverSettings.export.title")}>
+              <Block title={t("serverSettings.export.title")} card>
                 <p className="text-sm text-paper-muted">
                   {t("serverSettings.export.description", {
                     server: server.name,
@@ -1368,7 +1368,7 @@ export function ServerSettingsDialog({
                 )}
               </Block>
 
-              <Block title={t("serverSettings.transfer.title")}>
+              <Block title={t("serverSettings.transfer.title")} card>
                 <p className="text-sm text-paper-muted">
                   {t("serverSettings.transfer.description", {
                     server: server.name,

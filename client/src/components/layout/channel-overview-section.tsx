@@ -1,5 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { CaretRight } from "@phosphor-icons/react";
 import { ChevronRight } from "lucide-react";
+import { IconSwap } from "@/components/ui/icon";
 import type { Channel, ForumSort, VoiceRoomTransport } from "@pqp/shared";
 import {
   isVoiceRoomChannelType,
@@ -247,7 +249,7 @@ export function ChannelOverviewSection({
         <div className="flex items-center gap-3">
           <button
             type="button"
-            className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-ink text-lg ring-1 ring-ink-4 hover:ring-signal/50 redesign:rounded-[var(--radius-control)] redesign:bg-[color:var(--input-bg)] redesign:ring-[color:var(--input-border)] redesign:hover:ring-[color:var(--input-hover-border)]"
+            className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-ink text-lg ring-1 ring-ink-4 hover:ring-signal/50 redesign:h-[var(--control-md)] redesign:w-[var(--control-md)] redesign:text-base redesign:rounded-[var(--radius-control)] redesign:bg-[color:var(--input-bg)] redesign:ring-[color:var(--input-border)] redesign:hover:ring-[color:var(--input-hover-border)]"
             aria-expanded={iconOpen}
             aria-label={t("channelSettings.changeIcon")}
             onClick={() => onIconOpenChange(!iconOpen)}
@@ -480,7 +482,7 @@ export function ChannelOverviewSection({
       )}
 
       {(showPrivateBridge || showRecipeBridge) && (
-        <div className="overflow-hidden rounded-2xl bg-ink-3/70">
+        <div className={cn("overflow-hidden rounded-2xl bg-ink-3/70", SETTINGS_CARD_REDESIGN, "redesign:divide-y")}>
           {showPrivateBridge && (
             <BridgeRow
               label={t("channelSettings.bridge.private")}
@@ -535,13 +537,13 @@ function BridgeRow({
     <button
       type="button"
       onClick={onClick}
-      className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-ink-3/80"
+      className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-ink-3/80 redesign:hover:bg-[color:var(--card-row-hover)]"
     >
-      <span className="min-w-0 flex-1 text-[15px] text-paper">{label}</span>
-      <span className="max-w-[45%] truncate text-[13px] text-paper-muted">
+      <span className="min-w-0 flex-1 text-[15px] text-paper redesign:text-sm redesign:text-text">{label}</span>
+      <span className="max-w-[45%] truncate text-[13px] text-paper-muted redesign:text-text-secondary">
         {value}
       </span>
-      <ChevronRight className="h-4 w-4 shrink-0 text-paper-muted" aria-hidden />
+      <IconSwap off={ChevronRight} on={CaretRight} kind="symbol" size="sm" offClassName="h-4 w-4 shrink-0 text-paper-muted" className="text-text-tertiary" />
     </button>
   );
 }
