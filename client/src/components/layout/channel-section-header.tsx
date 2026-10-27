@@ -133,6 +133,7 @@ export function ChannelSectionHeader({
   className?: string;
 }) {
   const { t } = useTranslation();
+  const drop = isDragOver || dropFill;
   return (
     <div
       data-section-header=""
@@ -145,7 +146,7 @@ export function ChannelSectionHeader({
         isDragOver && "ring-1 ring-inset ring-accent",
         className,
         CATEGORY_ROW_REDESIGN,
-        (isDragOver || dropFill) && CATEGORY_DROP_INTO_REDESIGN,
+        drop && CATEGORY_DROP_INTO_REDESIGN,
       )}
     >
       <button
@@ -175,6 +176,8 @@ export function ChannelSectionHeader({
             className={cn(
               "ml-auto flex shrink-0 items-center gap-1 pl-1 text-[10px] font-medium normal-case tracking-normal text-text-tertiary",
               CATEGORY_SUMMARY_REDESIGN,
+              // A drop target says only where the channel goes.
+              drop && "redesign:hidden",
             )}
           >
             {t("chrome.categoryChannelCount", { count: childCount })}
@@ -187,15 +190,17 @@ export function ChannelSectionHeader({
           </span>
         )}
       </button>
-      {(isDragOver || dropFill) && (
+      {drop && (
+        // The name is already on the row, so a long one is never cut twice.
         <span
           data-category-drop-label=""
           className="hidden shrink-0 text-[11px] font-semibold normal-case tracking-normal redesign:inline"
         >
-          {t("chrome.dropOnCategory", { name: label })}
+          {t("chrome.dropHere")}
         </span>
       )}
-      {actions}
+      {/* While a channel hovers, the drop label takes the actions' place. */}
+      <span className={cn("contents", drop && "redesign:hidden")}>{actions}</span>
     </div>
   );
 }

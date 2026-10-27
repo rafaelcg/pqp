@@ -21,6 +21,7 @@ import {
   SectionCaret,
 } from "@/components/layout/channel-section-header";
 import { useTranslation } from "@/lib/i18n";
+import { useRedesign } from "@/lib/redesign";
 import { cn } from "@/lib/utils";
 
 /**
@@ -123,6 +124,7 @@ export function MixedCategoryHeader({
   drag: CategoryHeaderDrag;
 }) {
   const { t } = useTranslation();
+  const redesign = useRedesign();
   const into = drag.drop === "into";
   return (
     <ContextMenu items={menuItems}>
@@ -171,7 +173,7 @@ export function MixedCategoryHeader({
             data-category-drop-label=""
             className="shrink-0 text-[10px] font-semibold normal-case tracking-normal redesign:text-[11px]"
           >
-            {t("chrome.dropOnCategory", { name: category.name })}
+            {redesign ? t("chrome.dropHere") : t("chrome.dropOnCategory", { name: category.name })}
           </span>
         ) : collapsed && childCount > 0 ? (
           <span
