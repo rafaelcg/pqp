@@ -272,6 +272,7 @@ Verified: typecheck; 10,315 unit tests; `bench:tokens` (3,062 pairs);
 `settings-sections` and `settings-keyboard` e2e (14 passed); i18n check;
 retro dark and light, Halloween, high contrast light, 390px; toggle off
 matches the original sheet and settings screens.
+
 ### p-icon-button
 
 Spec (audit: about 180 raw icon-only `<button>`s, six heights, three hover
@@ -312,6 +313,7 @@ Decisions:
 Deferred:
 - `touch` grows the drawn circle on a phone, not only the hit area: `m-*`.
 - The forum header's Lucide glyphs: `f-forum`.
+
 ### p-tooltip
 
 Spec (audit: 153 files import `Tooltip`, 7 use the rail tone; two
@@ -354,6 +356,7 @@ Decisions:
 Deferred:
 - Native `title=` on icon-only buttons goes as each element folds onto
   `IconButton`.
+
 ### p-input
 
 Spec (audit: 37 files import `Input`, 8 `Textarea`; 87 raw text fields):
@@ -403,6 +406,7 @@ Deferred:
 Verified: typecheck; 10,331 unit tests; `bench:tokens`; `settings-sections`,
 `server-settings-sections`, `profile-section` and `theme-switching` e2e (39
 passed); i18n check.
+
 ### p-select
 
 Spec (audit: `SettingsSelect` in 9 places, 19 raw `<select>`s in 4 recipes):
@@ -540,6 +544,7 @@ reviewer, at André's request to spend less on agents:
 Round 4's MUST (the gap under the emoji category bar had no effect) was
 fixed in round 5. Stopped at the five-round cap with no MUST. Best round: 5.
 Screenshots: `~/pqp-redesign/p-popover/`.
+
 ### p-sheet
 
 Spec (audit: no sheet primitive; Dialog is a sheet below `sm`, plus the app
@@ -666,6 +671,7 @@ Round 4's MUST (the voice settings' 100% label collided with the hint under
 it) was fixed; round 5 found nothing left. The slider group naming and the
 unity tick are logged for `f-music` and `f-call`. Stopped at the five-round
 cap with no MUST. Screenshots: `~/pqp-redesign/p-slider/`.
+
 ### p-banner
 
 Spec (audit: six hand-built strips in `App.tsx`, `connection-banner.tsx` and
@@ -790,6 +796,7 @@ few sideways strips hide their bar):
    - Linux (GTK): rest, hover, drag.
    Values to confirm: `scrollbar-width: auto`, thumb at 65% (dark) and 80%
    (light) of tertiary text.
+
 ### p-avatar
 
 Spec (audit: every person avatar already renders through `UserAvatar`, 65
@@ -1016,6 +1023,7 @@ secondary fill (`f-forum`); `SettingsEmpty` takes a filled Phosphor glyph in
 suite timed out under load once and passed alone); `bench:tokens`; i18n
 check; `forum-pane` and `forum-shell` e2e (6 passed); retro, Halloween, high
 contrast, 390px and toggle off. Screenshots: `~/pqp-redesign/p-empty/`.
+
 ### s-frame
 
 Spec (audit: the root, the rail, five side panes and Novidades each drew
@@ -1709,6 +1717,20 @@ Rounds: r1 Codex 7.6, r2 Codex 8.2, r3 Opus 8.3, r4 Codex 8.3, r5 Opus 8.4
 the light open row a step under the selected channel, the segmented status
 and the inverse toggles written down in DESIGN.md. Not done: an unread post
 in the light shots (the dark pass marks the fixture read first).
+
+### f-stories
+
+Spec (audit: `stories/` (19 files): the strip and rings in the sidebar, the
+viewer, the composer with camera, text, draw, stickers and audience, the
+viewers sheet, the report dialog, the quote and call cards in chat):
+
+1. Job: see who posted, watch, react, reply; post a story.
+2. Redesign: the strip on the side pane, sentence-case label, pill see-all,
+   ring badges cut from the pane (`--story-strip-cut`), cards on card tokens.
+3. Decision: the viewer and composer keep their own dark kit (`--story-*`,
+   `composer-ui.tsx`). A story is dark in every theme, the themed primitives
+   cannot sit on it, and the kit already has round wells, pills and lime.
+4. Kept: everything; no copy changes.
 
 ## Open questions for André
 

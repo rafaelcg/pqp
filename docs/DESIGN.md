@@ -596,11 +596,19 @@ Every hint renders through `layout/corner-card.tsx`. Under the redesign it
 is a popover (`--popover-surface`, `--popover-border`, `--popover-shadow`,
 `--popover-radius`) with a round close, glass on a hero. The first-run card
 is a pane-radius card; its steps sit in accent-soft wells.
+
 ### The music queue
 
 `voice/music-classes.ts` holds the queue's recipe: rows, covers, the search
 highlight, icon buttons and headings. The composer's sheet and the drawer
 share it, so the two homes look the same under the redesign.
+
+### Stories
+
+`components/stories/`. Under the redesign the strip sits on the side pane
+with a sentence-case label and a pill "Ver todos"; ring badges are cut from
+the pane (`--story-ring-bg` set to `--color-pane-side`). The viewer and composer keep their own dark
+kit (`--story-*`, `composer-ui.tsx`) in every theme.
 
 ### The settings kit
 
@@ -1313,6 +1321,7 @@ the caller's, beside it in `cn`. Not a popover: a card does not float.
   its own hover: a text tint over the card's fill, the same on any surface.
 - **Body copy** in a card is secondary text under the redesign; tertiary at
   12px on the light card is near the floor.
+
 ### UserAvatar
 
 `components/user/user-avatar.tsx`. Every person's picture goes through it:
@@ -1339,6 +1348,7 @@ place. `StatusDot` (`status-dot.tsx`) draws presence on its corner.
   pane's inside `main`.
 - **Stacks** cut their overlap with the same token
   (`ring-[color:var(--avatar-dot-ring)]`).
+
 ### CountBadge
 
 `count-badge.tsx`. A number in a pill: unread messages, mentions,
@@ -1400,6 +1410,7 @@ loading (the channel list, the message log, a settings row).
   pill at the row height; the message skeleton's avatars are round.
 - **Do not** hand-build a spinner (`animate-spin` on a bordered span) or a
   placeholder (`animate-pulse` on a fill).
+
 ### PaneHeader and SectionLabel
 
 `section-header.tsx`. `PaneHeader` is the title of a pane that switches by
@@ -1431,6 +1442,7 @@ list, a popover or a dialog ("Recentes", "Convites ativos", a danger zone).
   CSS (on a span or heading, never on a button, which resets it).
 - **Not these.** A field's label over an input is the input's; a channel
   category is a fold control (`ChannelSectionHeader`, `s-category`).
+
 ### ListRow
 
 `list-row.tsx`. A row in a list: a channel, a person, a conversation, a
