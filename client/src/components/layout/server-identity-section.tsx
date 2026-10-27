@@ -70,12 +70,12 @@ export function ServerIdentitySection({
       <SectionLabel as="h4" variant="group" className="font-display text-sm font-bold uppercase tracking-wider text-paper-muted">
         {t("serverSettings.identity.title")}
       </SectionLabel>
-      <p className="text-sm text-paper-muted">
+      <p className="text-sm text-paper-muted redesign:text-[13px] redesign:text-text-secondary">
         {t("serverSettings.identity.description")}
       </p>
 
       {!enabled ? (
-        <p className="text-sm text-paper-muted">
+        <p className="text-sm text-paper-muted redesign:text-[13px] redesign:text-text-secondary">
           {t("serverSettings.identity.unconfigured")}
         </p>
       ) : (

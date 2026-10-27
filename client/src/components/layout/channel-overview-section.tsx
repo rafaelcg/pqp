@@ -241,7 +241,7 @@ export function ChannelOverviewSection({
     : null;
 
   return (
-    <div className="space-y-3.5">
+    <div className="space-y-3.5 redesign:space-y-4">
       <SettingsGroup
         title={t("channelSettings.name")}
         hint={t("channelSettings.nameHint")}
@@ -537,7 +537,7 @@ function BridgeRow({
     <button
       type="button"
       onClick={onClick}
-      className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-ink-3/80 redesign:hover:bg-[color:var(--card-row-hover)]"
+      className={cn("flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-ink-3/80 redesign:hover:bg-[color:var(--card-row-hover)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-inset redesign:focus-visible:ring-focus-ring")}
     >
       <span className="min-w-0 flex-1 text-[15px] text-paper redesign:text-sm redesign:text-text">{label}</span>
       <span className="max-w-[45%] truncate text-[13px] text-paper-muted redesign:text-text-secondary">

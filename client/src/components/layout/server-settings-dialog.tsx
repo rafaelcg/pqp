@@ -491,7 +491,7 @@ function Block({
         tone === "danger" && "rounded-lg border border-danger/40 bg-danger/5 p-4",
         // Under the redesign: a card with the danger banner's edge.
         tone === "danger" &&
-          "redesign:rounded-[var(--radius-card)] redesign:border-[color:color-mix(in_oklab,var(--color-danger)_var(--banner-edge),transparent)] redesign:bg-[color:color-mix(in_oklab,var(--color-danger)_6%,transparent)] redesign:p-5",
+          "redesign:rounded-[var(--radius-card)] redesign:border-[color:color-mix(in_oklab,var(--color-danger)_var(--banner-edge),transparent)] redesign:bg-[color:color-mix(in_oklab,var(--color-danger)_6%,transparent)] redesign:p-4",
       )}
     >
       <SectionLabel
@@ -1078,7 +1078,7 @@ export function ServerSettingsDialog({
         }
       >
         <div className="space-y-2 px-5 py-5">
-          <p className="text-sm text-paper-muted">
+          <p className="text-sm text-paper-muted redesign:text-[13px] redesign:text-text-secondary">
             {t("serverSettings.readOnly.member")}
           </p>
         </div>
@@ -1124,7 +1124,7 @@ export function ServerSettingsDialog({
           aria-labelledby={`${tabIdPrefix}-${active.id}`}
           tabIndex={0}
           className={cn(
-            "min-w-0 flex-1 space-y-6 overflow-y-auto overscroll-contain px-5 py-5 focus-visible:outline-none",
+            "min-w-0 flex-1 space-y-6 overflow-y-auto overscroll-contain px-5 py-5 focus-visible:outline-none redesign:space-y-4",
             SETTINGS_PANE_REDESIGN,
             "sm:redesign:px-8 sm:redesign:pt-7 sm:redesign:pb-8",
           )}
@@ -1217,7 +1217,7 @@ export function ServerSettingsDialog({
 
           {active.id === "access" && (
             <Block title={t("serverSettings.sso.title")} card>
-              <p className="text-sm text-paper-muted">
+              <p className="text-sm text-paper-muted redesign:text-[13px] redesign:text-text-secondary">
                 {t("serverSettings.sso.description", { server: server.name })}
               </p>
               <div className="flex gap-2">
@@ -1286,7 +1286,7 @@ export function ServerSettingsDialog({
 
               {isOwner && (
                 <Block title={t("serverSettings.retention.title")} card>
-                  <p className="text-sm text-paper-muted">
+                  <p className="text-sm text-paper-muted redesign:text-[13px] redesign:text-text-secondary">
                     {t("serverSettings.retention.description", {
                       server: server.name,
                     })}
@@ -1347,7 +1347,7 @@ export function ServerSettingsDialog({
           {active.id === "danger" && (
             <>
               <Block title={t("serverSettings.export.title")} card>
-                <p className="text-sm text-paper-muted">
+                <p className="text-sm text-paper-muted redesign:text-[13px] redesign:text-text-secondary">
                   {t("serverSettings.export.description", {
                     server: server.name,
                   })}
@@ -1369,7 +1369,7 @@ export function ServerSettingsDialog({
               </Block>
 
               <Block title={t("serverSettings.transfer.title")} card>
-                <p className="text-sm text-paper-muted">
+                <p className="text-sm text-paper-muted redesign:text-[13px] redesign:text-text-secondary">
                   {t("serverSettings.transfer.description", {
                     server: server.name,
                   })}
@@ -1384,7 +1384,7 @@ export function ServerSettingsDialog({
                     {t("serverSettings.transfer.loading")}
                   </p>
                 ) : candidates.length === 0 ? (
-                  <p className="text-sm text-paper-muted">
+                  <p className="text-sm text-paper-muted redesign:text-[13px] redesign:text-text-secondary">
                     {t("serverSettings.transfer.nobody")}
                   </p>
                 ) : (
@@ -1472,7 +1472,7 @@ export function ServerSettingsDialog({
               </Block>
 
               <Block title={t("serverSettings.delete.title")} tone="danger">
-                <p className="text-sm text-paper-muted">
+                <p className="text-sm text-paper-muted redesign:text-[13px] redesign:text-text-secondary">
                   {t("serverSettings.delete.description", {
                     server: server.name,
                   })}

@@ -271,7 +271,7 @@ export function RoleRankList({
                 // Under the redesign a role is the list row's small pill.
                 "redesign:rounded-[var(--list-row-radius)] redesign:focus-visible:bg-transparent redesign:focus-visible:ring-2 redesign:focus-visible:ring-inset redesign:focus-visible:ring-[color:var(--list-row-ring)]",
                 selectedRow && !isGhostSource
-                  ? "redesign:bg-[color:var(--card-row-hover)] redesign:font-semibold redesign:[--role-row-text:var(--color-text)]"
+                  ? "redesign:bg-[color:color-mix(in_oklab,var(--color-text)_10%,transparent)] redesign:focus-visible:bg-[color:color-mix(in_oklab,var(--color-text)_10%,transparent)] redesign:font-semibold redesign:[--role-row-text:var(--color-text)]"
                   : "redesign:hover:bg-[color:var(--list-row-hover)]",
                 !pinned && !disabled && !drag && "cursor-grab",
                 Boolean(drag) && "cursor-grabbing",
