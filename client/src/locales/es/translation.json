@@ -5066,6 +5066,7 @@
   "watchPartySchedule.sheet.genericError": "No se pudo guardar la sesión. Intenta de nuevo.",
   "watchPartySchedule.header.schedule": "Programar una sesión",
   "watchPartySchedule.card.remind": "Recordarme",
+  "watchPartySchedule.card.reminding": "Recordatorio activado",
   "watchPartySchedule.card.cancel": "Cancelar sesión",
   "watchPartySchedule.card.live": "En vivo ahora",
   "watchPartySchedule.card.ended": "Sesión terminada",

@@ -1395,6 +1395,34 @@ forum and friends on the recipe. Follow-up after the chain: rename the
 bar's `--pane-header-rule` and `--pane-header-px` to `--pane-bar-*` (six
 chain branches use them now). Not done: an avatar before a DM's name.
 
+### s-banners
+
+Spec (audit: connection, sanction, error, idle and handle strips already use
+`ui/banner` since `p-banner`; six strips still drew their own: watch now,
+arrival (five variants), bring the crew, newcomer invite, the Discord import
+notice, the upcoming session card):
+
+1. Job: one strip at a time under the header that says something about the
+   conversation and offers one way forward.
+2. States: watch now with a second stream folded, joining, failed; arrival
+   for a member and for the owner (copy, copied, failed); bring the crew
+   arrived, reminder, empty; newcomer; import; a session scheduled or live.
+3. Merge: each keeps its markup (confetti, faces, the folded list) and takes
+   the banner's card through `bannerSurfaceRedesign(tone)` in
+   `ui/banner.tsx`: inset, `--banner-radius`, the tone's soft fill and edge,
+   text in the text colour, a round dismiss in the tone's ink. The session
+   card is news, not a tone: the same inset and corner on the card tint.
+Rounds (Opus only): r1 7.6 (MUST fixed: the second action was the generic
+grey secondary on a tone), r2 8.1, r3 8.1, r4 8.0, r5 8.2 (cap; MUST fixed
+after: the reminder's accessible name now follows its visible text). The
+family: one card (`bannerSurfaceRedesign`), a tinted disc
+(`BANNER_DISC_REDESIGN`), one ink-filled main action, a tinted second
+action (`BANNER_QUIET_REDESIGN`, also the primitive's quiet), the round X
+only where a strip can be hidden, one text column at 44px, meta lines at
+13px. New copy: `watchPartySchedule.card.reminding` ("Lembrete ligado").
+Not done: a dark-only accent edge at about 20% (judge with one strip in
+place, not the sheet's stack).
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss

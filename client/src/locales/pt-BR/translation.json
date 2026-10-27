@@ -5002,6 +5002,7 @@
   "watchPartySchedule.sheet.genericError": "Não deu pra salvar a sessão. Tenta de novo.",
   "watchPartySchedule.header.schedule": "Agendar sessão",
   "watchPartySchedule.card.remind": "Lembrar",
+  "watchPartySchedule.card.reminding": "Lembrete ligado",
   "watchPartySchedule.card.cancel": "Cancelar sessão",
   "watchPartySchedule.card.live": "Ao vivo agora",
   "watchPartySchedule.card.ended": "Sessão encerrada",
