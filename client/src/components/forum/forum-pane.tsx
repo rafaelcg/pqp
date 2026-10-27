@@ -1442,13 +1442,17 @@ export function ForumPane({
     const noResults = list.posts.length === 0 && (filters.q || list.pinned.length === 0 || forumFiltersActive(filters));
     const listClass =
       cardVariant === "tile"
-        ? "grid grid-cols-2 gap-1 sm:grid-cols-3"
+        ? "grid grid-cols-2 gap-1 sm:grid-cols-3 redesign:gap-3"
         : cn(
             "flex flex-col",
             // A hairline between posts, inset from the edges, instead of a
             // box around each one.
             "[&>li+li]:before:mx-4 [&>li+li]:before:block [&>li+li]:before:h-px [&>li+li]:before:bg-border/60 [&>li+li]:before:content-['']",
             cardVariant === "row" && "[&>li+li]:before:mx-3",
+            // Under the redesign a card has its own edge and a row its own
+            // fill, so the hairline goes and a gap separates them.
+            "redesign:[&>li+li]:before:hidden",
+            cardVariant === "card" ? "redesign:gap-2" : "redesign:gap-0.5",
           );
     listBody = (
       <>
