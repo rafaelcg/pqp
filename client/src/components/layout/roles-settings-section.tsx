@@ -481,7 +481,7 @@ export function RolesSettingsSection({ serverId }: { serverId: string }) {
   return (
     <div className="-mt-1 flex min-h-0 flex-col gap-6 sm:flex-row sm:gap-8">
       <div className="w-full shrink-0 sm:w-64">
-        <p className="mb-2 px-1 text-xs leading-relaxed text-paper-muted">
+        <p className="mb-2 px-1 text-xs leading-relaxed text-paper-muted redesign:text-[13px] redesign:text-text-secondary">
           {t("roles.hierarchyHint")}
         </p>
         <div className={cn("overflow-hidden rounded-2xl bg-ink-2", SETTINGS_CARD_REDESIGN)}>
@@ -574,7 +574,7 @@ export function RolesSettingsSection({ serverId }: { serverId: string }) {
                   className="mt-1.5 border-0 bg-ink px-3 redesign:border redesign:border-[color:var(--input-border)] redesign:bg-[color:var(--input-bg)] redesign:disabled:bg-transparent redesign:disabled:border-[color:var(--card-border)] redesign:disabled:text-text-tertiary"
                 />
                 {staffHint && (
-                  <p className="mt-2 px-1 text-xs leading-relaxed text-paper-muted">
+                  <p className="mt-2 px-1 text-xs leading-relaxed text-paper-muted redesign:text-[13px] redesign:text-text-secondary">
                     {staffHint}
                   </p>
                 )}
