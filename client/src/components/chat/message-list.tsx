@@ -4140,8 +4140,10 @@ const MessageRow = memo(function MessageRow({
                       className={cn(
                         "markdown-body text-[length:var(--chat-font-size)] leading-[var(--chat-line-height)] text-paper/90 redesign:text-text",
                         stream && "[&>p]:inline",
-                        // "(editada)" ends the last line it belongs to, never a line of its own.
-                        message.editedAt && "redesign:[&>p:last-child]:inline",
+                        // "(editada)" ends the last line it belongs to, never a line of its own:
+                        // the marker is the last child, so only a paragraph right before it goes
+                        // inline. A body ending in a list, quote or code keeps its block.
+                        message.editedAt && "redesign:[&>p:nth-last-child(2)]:inline",
                       )}
                     >
                       {streamAuthor}
