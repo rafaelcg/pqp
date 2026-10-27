@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { BELOW_MD_QUERY } from "@/lib/breakpoints";
 
 /**
  * CONVERSAS ON A PHONE (`conversations_home_phone_tabs`): the bottom bar
@@ -68,7 +69,7 @@ export function arrivedForPerson(location: { pathname: string; search: string })
 }
 
 /** Tailwind's `md`: below it is the phone layout. Must match the `md:` utilities. */
-export const PHONE_QUERY = "(max-width: 47.999rem)";
+export const PHONE_QUERY = BELOW_MD_QUERY;
 
 function phoneQuery(): MediaQueryList | null {
   try {
