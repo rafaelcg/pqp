@@ -38,7 +38,8 @@ describe("Sheet surface", () => {
   it("is drawn by Dialog's phone sheet, the app launcher and the cinema picker", () => {
     const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
     expect(read("./dialog.tsx")).toContain("SHEET_SURFACE_PHONE");
-    expect(read("../apps/app-launcher.tsx")).toContain("SHEET_SURFACE");
+    // The full sheet, not the phone-only recipe whose name contains it.
+    expect(read("../apps/app-launcher.tsx")).toMatch(/\bSHEET_SURFACE\b(?!_)/);
     expect(read("../voice/cinema-stage.tsx")).toContain("SHEET_SCRIM");
   });
 });

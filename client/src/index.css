@@ -942,7 +942,8 @@
   --sheet-radius: 1.5rem;
   --sheet-surface: var(--color-surface-2);
   --sheet-edge: color-mix(in oklab, var(--color-text) 10%, transparent);
-  --sheet-shadow: inset 0 1px 0 oklch(1 0 0 / 0.05), 0 -12px 32px oklch(0.06 0.02 262 / 0.45);
+  /* One top edge: the 10% border, no inset highlight doubling it. */
+  --sheet-shadow: 0 -12px 32px oklch(0.06 0.02 262 / 0.45);
   --sheet-scrim: oklch(0.06 0.02 262 / 0.62);
   --sheet-scrim-blur: 6px;
 }

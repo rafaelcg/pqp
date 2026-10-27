@@ -176,6 +176,9 @@ export function CinemaStage({
               "w-full max-w-sm rounded-t-xl bg-ink-2 p-3 sm:rounded-xl",
               // A sheet on a phone; the card from `sm` up moves with `f-call`.
               SHEET_SURFACE_PHONE,
+              // Clear of the home indicator on a phone, as the dialog footer
+              // and the launcher already are.
+              "redesign:max-sm:pb-[max(0.75rem,env(safe-area-inset-bottom))]",
             )}
             onClick={(event) => event.stopPropagation()}
           >
