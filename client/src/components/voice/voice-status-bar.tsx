@@ -15,9 +15,9 @@ import {
   CircleNotch,
   MonitorArrowUp,
   Screencast,
-  SpeakerHigh,
   VideoCamera,
   VideoCameraSlash,
+  Microphone,
 } from "@phosphor-icons/react";
 import { BringFriendsHint } from "@/components/layout/bring-friends-hint";
 import { FeatureHint } from "@/components/layout/feature-hint";
@@ -207,8 +207,10 @@ export function VoiceStatusBar({
         {connected ? (
           <span
             aria-hidden="true"
-            className="h-2 w-2 shrink-0 rounded-full bg-success shadow-[0_0_8px_var(--glow-success)]"
-          />
+            className="flex shrink-0 items-center justify-center redesign:h-3.5 redesign:w-3.5"
+          >
+            <span className="h-2 w-2 rounded-full bg-success shadow-[0_0_8px_var(--glow-success)]" />
+          </span>
         ) : (
           <IconSwap
             off={Loader2}
@@ -230,7 +232,7 @@ export function VoiceStatusBar({
             <Button
               variant="ghost"
               size="icon"
-              className={cn("h-8 w-8 shrink-0", STRIP_ICON_REDESIGN)}
+              className={cn("h-8 w-8 shrink-0", STRIP_ICON_REDESIGN, "redesign:w-10 redesign:rounded-[var(--radius-row)] redesign:bg-[color:var(--card-row-hover)]")}
               data-voice-bar-channel={channelType}
               onClick={onOpen}
             >
@@ -242,7 +244,7 @@ export function VoiceStatusBar({
               ) : (
                 <>
                   <Volume2 className="h-4 w-4 redesign:hidden" />
-                  <Icon icon={SpeakerHigh} size="sm" className="hidden redesign:block" />
+                  <Icon icon={Microphone} size="sm" className="hidden redesign:block" />
                 </>
               )}
             </Button>
@@ -286,12 +288,14 @@ export function VoiceStatusBar({
           </div>
         </div>
       )}
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-1 redesign:gap-1.5 redesign:pl-0.5">
         {connected ? (
           <span
-            className="h-2 w-2 shrink-0 rounded-full bg-success shadow-[0_0_8px_var(--glow-success)]"
+            className="flex shrink-0 items-center justify-center redesign:h-3.5 redesign:w-3.5"
             aria-hidden="true"
-          />
+          >
+            <span className="h-2 w-2 rounded-full bg-success shadow-[0_0_8px_var(--glow-success)]" />
+          </span>
         ) : (
           <IconSwap
             off={Loader2}
@@ -304,7 +308,7 @@ export function VoiceStatusBar({
         <p
           aria-live="polite"
           className={cn(
-            "flex min-w-0 flex-1 items-baseline text-xs font-semibold redesign:ml-1 redesign:text-[13px]",
+            "flex min-w-0 flex-1 items-baseline text-xs font-semibold redesign:text-[13px]",
             connected ? "text-success" : "text-warning",
           )}
         >
@@ -320,7 +324,7 @@ export function VoiceStatusBar({
             </span>
           )}
           {showPttIdle && (
-            <span className="ml-1 shrink-0 text-[9px] font-medium uppercase tracking-wide text-paper-muted redesign:ml-1.5 redesign:text-[11px] redesign:normal-case redesign:tracking-normal redesign:text-text-tertiary">
+            <span className="ml-1 shrink-0 text-[9px] font-medium uppercase tracking-wide text-paper-muted redesign:ml-1.5 redesign:text-[11px] redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">
               {t("voice.bar.pttIdle")}
             </span>
           )}
@@ -375,7 +379,7 @@ export function VoiceStatusBar({
             ) : (
               <>
                 <Volume2 className="h-3 w-3 shrink-0 redesign:hidden" aria-hidden="true" />
-                <Icon icon={SpeakerHigh} size="sm" className="hidden h-3.5 w-3.5 shrink-0 redesign:block" />
+                <Icon icon={Microphone} size="sm" className="hidden h-3.5 w-3.5 shrink-0 redesign:block" />
               </>
             )}
             <span className="min-w-0 truncate">

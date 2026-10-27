@@ -1,3 +1,4 @@
+import { useRedesign } from "@/lib/redesign";
 import { BellOff, Bug, CircleHelp, Check, Download, HeadphoneOff, Headphones, Mic, MicOff, Pencil, Settings, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -13,6 +14,7 @@ import {
   PencilSimple,
   Question,
   X as XBold,
+  LockSimple,
 } from "@phosphor-icons/react";
 import { UserButton } from "@clerk/clerk-react";
 import { CUSTOM_STATUS_MAX_LENGTH, type ManualStatus, type UserStatus } from "@pqp/shared";
@@ -252,7 +254,7 @@ export function UserPanel({
   // mic slash up: that is the mute from before, not a second deafen.
   const micShownOff = serverMuted || isMuted || isDeafened;
   /** In a call without the right to speak (audience mode), not muted by anyone. */
-  const listenOnly = inVoice && !canSpeak && !micShownOff;
+  const listenOnly = inVoice && !canSpeak && !serverMuted;
 
   // Re-seed the draft from the truth: when the menu opens, and whenever the
   // saved value moves under it (another tab, another device, or this write
@@ -306,6 +308,8 @@ export function UserPanel({
   // that they are "Offline" would leave them unable to tell whether the setting
   // took, which is the failure a privacy control cannot afford.
   const retro = useRetroLook();
+  // Under the redesign a locked mic is named for what it shows.
+  const lockedName = useRedesign() && listenOnly;
   const ownLabel =
     manualStatus === "invisible"
       ? t(retro ? retroStatusKey("invisible") : "status.invisible")
@@ -355,10 +359,11 @@ export function UserPanel({
         // An inset card at the foot of the sidebar, like the voice strip
         // above it. The presence dot's cutout is the card's colour, opaque.
         compact ? SIDEBAR_FOOTER_CARD_COMPACT_REDESIGN : SIDEBAR_FOOTER_CARD_REDESIGN,
-        // Only a real home-indicator inset adds space below; the row keeps its own
-        // padding, so the content sits centred in the card.
-        "redesign:mb-2 redesign:[--safe-pb-min:0px] redesign:[--avatar-dot-ring:var(--footer-card-solid)]",
+        "redesign:[--avatar-dot-ring:var(--footer-card-solid)]",
       )}
+      // Under the redesign the home-indicator inset goes outside the card, so
+      // the row stays centred in it (`index.css`, `[data-user-panel-card]`).
+      data-user-panel-card=""
     >
       {showHint && (
         <DownloadHint
@@ -522,12 +527,16 @@ export function UserPanel({
                   setOpen(false);
                 }}
               >
-                <StatusDot
-                  status={choice.pip}
-                  size="md"
-                  className="mt-0.5"
-                  label=""
-                />
+                {/* A 16px slot under the redesign, so the label lines up with
+                    the action rows' labels above. */}
+                <span className="contents redesign:mt-0.5 redesign:flex redesign:h-4 redesign:w-4 redesign:shrink-0 redesign:items-center redesign:justify-center">
+                  <StatusDot
+                    status={choice.pip}
+                    size="md"
+                    className="mt-0.5 redesign:mt-0"
+                    label=""
+                  />
+                </span>
                 <span className="min-w-0 flex-1">
                   <span className="block text-sm text-paper redesign:text-text">
                     {t(retro ? retroStatusKey(choice.pip === "offline" ? "invisible" : choice.pip) : choice.labelKey)}
@@ -675,11 +684,19 @@ export function UserPanel({
         label={
           serverMuted
             ? t("voice.control.serverMuted")
-            : micShownOff
-              ? t("userPanel.unmute")
-              : t("userPanel.mute")
+            : lockedName
+              ? t("voice.bar.listenOnly")
+              : micShownOff
+                ? t("userPanel.unmute")
+                : t("userPanel.mute")
         }
-        name={micShownOff ? t("userPanel.unmuteMic") : t("userPanel.muteMic")}
+        name={
+          lockedName
+            ? t("voice.bar.listenOnly")
+            : micShownOff
+              ? t("userPanel.unmuteMic")
+              : t("userPanel.muteMic")
+        }
         detail={
           !inVoice
             ? t("userPanel.joinToUse")
@@ -701,21 +718,23 @@ export function UserPanel({
             className={cn(
               "h-8 w-8 shrink-0",
               PANEL_BUTTON_REDESIGN,
-              micShownOff && inVoice && !serverMuted && PANEL_BUTTON_OFF_REDESIGN,
+              micShownOff && inVoice && canSpeak && !serverMuted && PANEL_BUTTON_OFF_REDESIGN,
               // A moderator's mute is disabled, and must still read at full
               // strength: it is the one time "am I heard" matters most.
               serverMuted && "redesign:bg-warning-soft redesign:text-on-warning-soft redesign:[--button-disabled-opacity:1]",
               // Listen only: locked, not unavailable. A neutral fill and the
               // slashed mic at full strength.
-              listenOnly && "redesign:bg-transparent redesign:text-text-secondary redesign:ring-1 redesign:ring-inset redesign:ring-[color:var(--card-border)] redesign:[--button-disabled-opacity:1]",
+              listenOnly && "redesign:relative redesign:bg-transparent redesign:text-text-secondary redesign:ring-1 redesign:ring-inset redesign:ring-[color:var(--card-border)] redesign:[--button-disabled-opacity:1]",
             )}
             onClick={onToggleMute}
             disabled={!inVoice || !canSpeak || serverMuted}
-            aria-pressed={micShownOff}
+            aria-pressed={lockedName ? undefined : micShownOff}
             aria-label={
               serverMuted
                 ? t("voice.control.serverMuted")
-                : micShownOff
+                : lockedName
+                  ? t("voice.bar.listenOnly")
+                  : micShownOff
                   ? t("userPanel.unmuteMic")
                   : t("userPanel.muteMic")
             }
@@ -732,6 +751,15 @@ export function UserPanel({
               size="sm"
               className="hidden redesign:block"
             />
+            {/* The lock, visible without a hover: the mic is held, not off. */}
+            {listenOnly && (
+              <span
+                aria-hidden="true"
+                className="absolute -bottom-0.5 -right-0.5 hidden h-3.5 w-3.5 items-center justify-center rounded-full bg-[color:var(--footer-card-solid)] text-text-secondary redesign:flex"
+              >
+                <Icon icon={LockSimple} size="sm" className="h-3 w-3" />
+              </span>
+            )}
           </Button>
         </span>
       </Tooltip>
@@ -786,7 +814,9 @@ export function UserPanel({
           <Button
             variant="ghost"
             size="icon"
-            className={cn("h-8 w-8 shrink-0 text-danger", PANEL_BUTTON_REDESIGN, PANEL_BUTTON_OFF_REDESIGN)}
+            // Red alone means Não Perturbe, as its presence dot does; a coloured
+            // fill in this row always means voice is off.
+            className={cn("h-8 w-8 shrink-0 text-danger", PANEL_BUTTON_REDESIGN, "redesign:bg-transparent redesign:text-danger redesign:hover:bg-[color:var(--card-row-hover)] redesign:hover:text-danger")}
             onClick={() => onSetStatus("online")}
           >
             <BellOff className="h-4 w-4 redesign:hidden" />
