@@ -452,6 +452,21 @@ test("captures the design council screens", async ({ browser }) => {
         });
         await page.mouse.move(0, 0);
       }
+      // The open members tile with keyboard focus: the ring sits off the fill.
+      try {
+        const header = page.locator("[data-chat-header]");
+        await page.keyboard.press("Shift");
+        await header.locator("[data-member-sidebar-toggle]").focus();
+        await page.waitForTimeout(300);
+        const box = (await header.boundingBox())!;
+        await page.screenshot({
+          path: path.join(OUT!, `s-header-focus-${theme}.png`),
+          clip: { x: box.x + box.width - 260, y: box.y, width: 260, height: box.height + 8 },
+        });
+        await page.locator("body").focus();
+      } catch {
+        console.log("header focus shot skipped");
+      }
       // The channel list folded to icons, in place; then unfolded again.
       await page.locator("[data-channel-sidebar-toggle]").first().click();
       await expect(page.locator("[data-channel-rail]")).toBeVisible();

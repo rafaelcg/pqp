@@ -1,4 +1,5 @@
 import {
+  PANE_HEADER_ACTION_REDESIGN,
   PANE_HEADER_DETAIL_REDESIGN,
   PANE_HEADER_NAV_REDESIGN,
   PANE_HEADER_REDESIGN,
@@ -96,12 +97,14 @@ import { forumTagLabel } from "@/lib/forum-tag-icons";
 import { starterTagsFor } from "@/lib/forum-tag-draft";
 import { useTranslation } from "@/lib/i18n";
 import type { MentionCandidate } from "@/lib/mention-autocomplete";
+import { ChannelIcon } from "@/components/layout/channel-icon";
 import { cn } from "@/lib/utils";
 import { EmptyState } from "@/components/ui/empty-state";
 import {
   ChatsCircle as PhChatsCircle,
   Funnel as PhFunnel,
   MagnifyingGlass as PhMagnifyingGlass,
+  NotePencil as PhNotePencil,
   WifiSlash as PhWifiSlash,
   List as ListIcon,
 } from "@phosphor-icons/react";
@@ -1220,8 +1223,12 @@ export function ForumPane({
       <div className="flex min-w-0 flex-1 items-center gap-2 redesign:gap-3">
         {compactList ? (
           <>
-            <span className={cn("forum-display truncate text-lg font-bold text-text", PANE_HEADER_TITLE_REDESIGN)}>
-              {channel.name}
+            <span className={cn("forum-display flex min-w-0 items-center text-lg font-bold text-text", PANE_HEADER_TITLE_REDESIGN, "redesign:gap-2")}>
+              {/* The forum's glyph before its name, as `#` marks a text channel. */}
+              <span className="hidden text-text-tertiary redesign:inline-flex">
+                <ChannelIcon channel={channel} className="h-4 w-4" />
+              </span>
+              <span className="truncate">{channel.name}</span>
             </span>
             {countsLine && (
               <span className={cn("truncate text-xs tabular-nums text-text-secondary max-lg:hidden", PANE_HEADER_DETAIL_REDESIGN, "redesign:border-l redesign:border-[color:var(--pane-header-rule)] redesign:pl-3")}>
@@ -1244,9 +1251,9 @@ export function ForumPane({
             setPhoneSearchOpen(true);
             window.setTimeout(() => searchRef.current?.focus(), 0);
           }}
-          className="grid h-11 w-11 shrink-0 place-items-center rounded-[var(--radius-control)] text-text hover:bg-surface-2"
+          className={cn("grid h-11 w-11 shrink-0 place-items-center rounded-[var(--radius-control)] text-text hover:bg-surface-2", PANE_HEADER_ACTION_REDESIGN)}
         >
-          <Search className="h-5 w-5" aria-hidden />
+          <IconSwap off={Search} on={PhMagnifyingGlass} kind="symbol" offClassName="h-5 w-5" />
         </button>
       )}
       {rulesButton}
@@ -1256,9 +1263,9 @@ export function ForumPane({
           aria-label={t("forum.newPost")}
           onClick={() => openComposer()}
           data-forum-new-post=""
-          className="grid h-11 w-11 shrink-0 place-items-center rounded-[var(--radius-control)] text-accent hover:bg-surface-2"
+          className={cn("grid h-11 w-11 shrink-0 place-items-center rounded-[var(--radius-control)] text-accent hover:bg-surface-2", PANE_HEADER_ACTION_REDESIGN, "redesign:text-accent")}
         >
-          <SquarePen className="h-5 w-5" aria-hidden />
+          <IconSwap off={SquarePen} on={PhNotePencil} offClassName="h-5 w-5" />
         </button>
       )}
       {compactList && !isPhone && newPostButton}

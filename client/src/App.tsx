@@ -12081,7 +12081,7 @@ function MainAppContent({
               <span className="redesign:font-normal redesign:text-text-tertiary">#</span>
             ) : !selectedChannel.imageUrl &&
               selectedChannel.kind === "server" &&
-              selectedChannel.type === "voice" &&
+              isVoiceRoomChannelType(selectedChannel.type) &&
               !selectedChannel.isPrivate ? (
               // Under the redesign a voice room's chat carries the room's
               // glyph, as `#` marks a text channel.

@@ -17,6 +17,13 @@
 export const PANE_HEADER_REDESIGN =
   "redesign:h-14 redesign:gap-2 redesign:border-[color:var(--pane-header-rule)] redesign:px-[var(--pane-header-px)]";
 
+/**
+ * The bar's rule and inset alone, for a header that sets its own height
+ * (friends wraps its tabs to a second row on a narrow column).
+ */
+export const PANE_HEADER_RULE_REDESIGN =
+  "redesign:border-[color:var(--pane-header-rule)] redesign:px-[var(--pane-header-px)]";
+
 /** The title: the display face at 16px in the text colour. */
 export const PANE_HEADER_TITLE_REDESIGN =
   "redesign:text-[length:var(--pane-bar-title-size)] redesign:text-text";

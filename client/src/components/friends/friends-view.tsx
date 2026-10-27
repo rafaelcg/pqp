@@ -1,4 +1,8 @@
-import { PANE_HEADER_NAV_REDESIGN, PANE_HEADER_TITLE_REDESIGN } from "@/components/ui/pane-header";
+import {
+  PANE_HEADER_NAV_REDESIGN,
+  PANE_HEADER_RULE_REDESIGN,
+  PANE_HEADER_TITLE_REDESIGN,
+} from "@/components/ui/pane-header";
 import { List as ListBold, Users as UsersFill } from "@phosphor-icons/react";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
@@ -264,7 +268,7 @@ export function FriendsView({
     // the tabs drop to a second row that scrolls sideways instead of clipping,
     // so "Pendentes (3)" and "Adicionar amigo" stay on the screen.
     <div className="@container flex min-h-0 flex-1 flex-col">
-      <header className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-ink-4/60 px-4 py-2 @2xl:h-14 @2xl:flex-nowrap @2xl:py-0 redesign:border-[color:var(--pane-header-rule)] redesign:px-[var(--pane-header-px)]">
+      <header className={cn("flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-ink-4/60 px-4 py-2 @2xl:h-14 @2xl:flex-nowrap @2xl:py-0", PANE_HEADER_RULE_REDESIGN)}>
         {onOpenNav && (
           <button
             type="button"
