@@ -427,6 +427,34 @@ States are never told apart by colour alone:
 The mixes are `color-mix(in oklab, …)`. The bench and the sheet both read that
 form, so a derived role is measured like any other.
 
+### The server rail
+
+`layout/server-rail.tsx`, on the canvas with no edge (`RAIL_REDESIGN` in
+`ui/pane.ts`). Under the redesign:
+
+- Every tile is a 44px circle (`--rail-tile`) in the side pane's colour
+  (`--rail-tile-bg`). The monogram is 13px semibold in secondary text; the
+  Conversas caption under its tile is 11px semibold.
+- The selected tile is the accent's rounded square
+  (`--rail-tile-radius-selected`, 16px) with a short drop
+  (`--rail-tile-shadow`). A face (a pinned or waiting conversation) stays
+  round and takes an accent ring instead, because its photo fills the tile.
+- A hover lifts the fill (`--rail-tile-hover`) and rounds the tile toward the
+  selected square. It never turns lime: a lime tile fill only means "you
+  are here". Small lime marks (a friend request count, a Baú count, the
+  Novidades and update dots) mean "new for you", and they never fill a tile.
+- Every door, join included, sits on the same disc (`--rail-tile-bg`).
+- The pip on the left edge is the text colour: tall for selected, a dot for
+  unread.
+- The Baú's ring (new posts beside a mention) hugs the disc with no gap, like
+  a story ring. Keyboard focus is a ring with a gap in the text colour, so it
+  never reads as a chosen face or the Baú.
+- Counts are `CountBadge` with a ring cut from the canvas. The public globe
+  and the live dot sit on canvas discs at the lower corners; the live dot is
+  solid, never pulsing.
+- Every door is one 44px tile, the update tile included.
+- Glyphs are filled Phosphor objects; `+` is a bold symbol.
+
 ### Icons
 
 The redesign's icons are Phosphor (`@phosphor-icons/react`), drawn through

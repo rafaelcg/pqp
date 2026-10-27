@@ -36,6 +36,8 @@ export interface CountBadgeProps extends Omit<HTMLAttributes<HTMLSpanElement>, "
   size?: CountBadgeSize;
   /** The pop on arrival (`animate-badge-pop`). */
   pop?: boolean;
+  /** Drawn instead of the 99+ capped count (the Baú caps at "9+"). */
+  label?: string;
 }
 
 export function CountBadge({
@@ -43,6 +45,7 @@ export function CountBadge({
   tone = "danger",
   size = "md",
   pop = false,
+  label,
   className,
   ...rest
 }: CountBadgeProps) {
@@ -62,7 +65,7 @@ export function CountBadge({
       )}
       {...rest}
     >
-      {formatBadgeCount(count)}
+      {label ?? formatBadgeCount(count)}
     </span>
   );
 }

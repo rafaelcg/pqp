@@ -855,6 +855,16 @@
   --count-badge-text: 0.6875rem;
   --count-badge-sm-text: 0.625rem;
 
+  /* Server rail (layout/server-rail.tsx): round tiles on the canvas, in the
+     side pane's colour. The selected one turns into the accent's rounded
+     square; a hover only lifts the fill, so lime always means "here". */
+  --rail-tile: 2.75rem;
+  --rail-tile-radius-selected: 1rem;
+  /* A touch of text over the side pane, so an idle door reads on the dark canvas. */
+  --rail-tile-bg: color-mix(in oklab, var(--color-text) 4%, var(--color-pane-side));
+  --rail-tile-hover: color-mix(in oklab, var(--color-text) 9%, var(--color-pane-side));
+  --rail-tile-shadow: 0 2px 8px -2px oklch(0 0 0 / 0.45);
+  --rail-divider: var(--color-border);
   /* Empty states (ui/empty-state.tsx): a page empty state leads with its
      glyph on a soft disc of the raised fill, then a Gabarito title. */
   --empty-icon-disc: 3.5rem;
@@ -1234,6 +1244,12 @@
 
   /* Banners: the soft fills are pale in light; a lighter edge keeps them calm. */
   --banner-edge: 22%;
+  /* Rail: a softer drop under the accent tile on a light canvas, and a hover
+     that lifts to the brightest surface (a text tint lands on the canvas's
+     own grey and the tile disappears). */
+  --rail-tile-shadow: 0 2px 6px -2px oklch(0.4 0.02 262 / 0.3);
+  --rail-tile-hover: var(--color-surface-0);
+  --rail-tile-bg: var(--color-pane-side);
   --input-invalid-bg: color-mix(in oklab, var(--color-danger) 6%, var(--color-field));
   /* Tabs */
   /* 7 points over the 8% ghost hover, so a hovered pill never reads as selected. */

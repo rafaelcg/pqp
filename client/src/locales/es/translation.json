@@ -5184,6 +5184,8 @@
   "qaUi.shell.composer": "Escribir en #{channel}",
   "qaUi.shell.send": "Enviar",
   "qaUi.shell.legend": "Filas, de arriba abajo: seleccionada, sin leer, con el mouse encima, leída.",
+  "qaUi.section.shellParts": "Piezas de la estructura",
+  "qaUi.shellParts.note": "Las piezas de la estructura de la app, dibujadas por los componentes reales con datos inventados.",
   "qaUi.section.kit": "Kit de configuración",
   "qaUi.kit.note": "Los bloques de cada pestaña de configuración, sobre la superficie del panel. Cambia el brillo arriba para ver claro y oscuro.",
   "qaUi.kit.pane.title": "Pestaña de ejemplo",
