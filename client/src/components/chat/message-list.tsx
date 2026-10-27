@@ -4915,11 +4915,20 @@ function WebhookEmbedCard({ embed }: { embed: WebhookEmbed }) {
         embed.url && CONTENT_CARD_HOVER_REDESIGN,
         embed.url && CONTENT_CARD_FOCUS_REDESIGN,
         "redesign:p-[var(--content-card-pad)]",
-        // A sender that chose no colour gets the plain card edge, not a lime stripe.
-        !accent && "redesign:![border-left-width:1px] redesign:![border-left-color:var(--card-border)]",
+        // Under the redesign every webhook card keeps the plain card edge; the
+        // sender's colour, when it chose one, is an inner bar below, so it never
+        // thins into a crescent along the rounded corners.
+        "redesign:relative redesign:![border-left-width:1px] redesign:![border-left-color:var(--card-border)]",
       )}
       style={{ borderLeftWidth: "3px", borderLeftColor: accent ?? "var(--color-signal)" }}
     >
+      {accent && (
+        <span
+          aria-hidden
+          className="absolute bottom-[var(--content-card-pad)] left-1.5 top-[var(--content-card-pad)] hidden w-[3px] rounded-full redesign:block"
+          style={{ background: accent }}
+        />
+      )}
       {embed.title && (
         <p
           className={cn(

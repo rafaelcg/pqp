@@ -3132,7 +3132,7 @@ h2,
 
 /* Under the redesign the @you chip takes the chip tokens, measured against
    the mention row it sits on. */
-:root[data-redesign] .pqp-mention-self {
+:root[data-redesign] .pqp-mention.pqp-mention-self {
   background: var(--color-mention-chip);
   color: var(--color-on-mention-chip);
 }

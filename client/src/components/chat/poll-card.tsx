@@ -94,8 +94,10 @@ export function PollCard({ poll, canManage = false, onVote, onClose }: PollCardP
                   className={cn(
                     "absolute inset-y-0 left-0 transition-[width] duration-500 ease-out",
                     leading
-                      ? "bg-[color-mix(in_oklab,var(--color-signal)_36%,var(--color-surface-3))] redesign:bg-[color:color-mix(in_oklab,var(--color-accent)_34%,transparent)]"
+                      ? "bg-[color-mix(in_oklab,var(--color-signal)_36%,var(--color-surface-3))] redesign:bg-[color:color-mix(in_oklab,var(--color-accent)_26%,transparent)]"
                       : "bg-[color-mix(in_oklab,var(--color-signal)_20%,var(--color-surface-3))] redesign:bg-[color:color-mix(in_oklab,var(--color-accent)_16%,transparent)]",
+                    // Your own vote outweighs the leader's fill, so "mine" reads before "winning".
+                    !leading && option.voted && "redesign:bg-[color:color-mix(in_oklab,var(--color-accent)_22%,transparent)]",
                   )}
                   style={{ width: `${fill}%` }}
                 />
