@@ -1005,10 +1005,12 @@
 }
 
 /*
- * Gutters cost width a phone does not have: under 640px the panes meet, as
- * they do today. A council risk named for direction B in round D1.
+ * Gutters cost width a phone does not have: under `md` (768px) the panes
+ * meet, as they do today, and the frame classes in ui/pane.ts float from
+ * `md` up, so the token and the classes switch together. A council risk
+ * named for direction B in round D1.
  */
-@media (max-width: 639px) {
+@media (max-width: 767px) {
   :root[data-redesign] {
     --space-gutter: 0rem;
   }

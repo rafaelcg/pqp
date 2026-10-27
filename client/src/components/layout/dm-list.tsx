@@ -18,6 +18,7 @@ import { useChannelSidebarWidth } from "@/hooks/use-channel-sidebar-width";
 import { formatMessagePreview } from "@/lib/conversations";
 import { cn, formatFullTimestamp, formatRecency } from "@/lib/utils";
 import { CountBadge } from "@/components/ui/count-badge";
+import { PANE_SIDE_REDESIGN } from "@/components/ui/pane";
 
 const EMPTY_UNREAD: UnreadState = { count: 0, mentions: 0 };
 
@@ -152,7 +153,7 @@ function ClassicDmList({
       style={
         { "--channel-sidebar-width": `${sidebarWidth}px` } as CSSProperties
       }
-      className={`fixed inset-y-0 left-[72px] z-30 flex w-[min(100%-72px,16rem)] flex-col border-r border-border bg-surface-1 transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] md:relative md:left-auto md:z-auto md:w-[var(--channel-sidebar-width)] md:translate-x-0 ${
+      className={`fixed inset-y-0 left-[72px] z-30 flex w-[min(100%-72px,16rem)] flex-col border-r border-border bg-surface-1 ${PANE_SIDE_REDESIGN} transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] md:relative md:left-auto md:z-auto md:w-[var(--channel-sidebar-width)] md:translate-x-0 ${
         mobileOpen
           ? "translate-x-0"
           : "-translate-x-[calc(100%+72px)] md:translate-x-0"

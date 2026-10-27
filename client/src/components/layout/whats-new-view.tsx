@@ -17,6 +17,7 @@ import {
 import { subscribeEscapeUnlessOverlay } from "@/lib/escape-unless-overlay";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { PANE_MAIN_REDESIGN, PANE_SIDE_REDESIGN } from "@/components/ui/pane";
 
 const MARKDOWN_PLUGINS = [remarkGfm];
 
@@ -75,6 +76,7 @@ export function WhatsNewView({
       <aside
         className={cn(
           "fixed inset-y-0 left-[72px] z-30 flex w-[min(100%-72px,20rem)] flex-col border-r border-ink-4/50 bg-channel transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] md:static md:z-auto md:w-80 md:translate-x-0",
+          PANE_SIDE_REDESIGN,
           mobileOpen
             ? "translate-x-0"
             : "-translate-x-[calc(100%+72px)] md:translate-x-0",
@@ -158,7 +160,7 @@ export function WhatsNewView({
       </aside>
 
       <section
-        className="relative flex min-w-0 flex-1 flex-col bg-ink"
+        className={cn("relative flex min-w-0 flex-1 flex-col bg-ink", PANE_MAIN_REDESIGN)}
         aria-labelledby="whats-new-article-title"
       >
         <div

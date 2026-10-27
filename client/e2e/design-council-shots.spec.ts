@@ -460,6 +460,10 @@ test("captures the design council screens", async ({ browser }) => {
       await expect(page.getByText(DM.at(-1)![1]).first()).toBeVisible({ timeout: 30_000 });
       await hideDevBanner(page);
       await shoot(page, `03-home-${theme}`);
+      // Novidades: a pane of its own beside the rail.
+      await page.getByRole("button", { name: /^Novidades/ }).first().click();
+      await page.waitForTimeout(1200);
+      await shoot(page, `18-whats-new-${theme}`);
 
       await page.goto(chatUrl);
       await expect(page.getByRole("button", { name: "Enviar" })).toBeVisible({ timeout: 30_000 });
@@ -541,6 +545,14 @@ test("captures the design council screens", async ({ browser }) => {
     await expect(phonePage.getByText(PAPO.at(-1)![1])).toBeVisible({ timeout: 30_000 });
     await hideDevBanner(phonePage);
     await shoot(phonePage, "08-phone-chat-dark");
+    // The drawer open: the sidebar header with its close button.
+    await phonePage.getByRole("button", { name: "Abrir navegação" }).first().click();
+    await phonePage.waitForTimeout(800);
+    await shoot(phonePage, "08-phone-drawer-dark");
+    // Close the drawer: reload the conversation before the sheet.
+    await phonePage.goto(chatUrl);
+    await expect(phonePage.getByText(PAPO.at(-1)![1])).toBeVisible({ timeout: 30_000 });
+    await hideDevBanner(phonePage);
     // A sheet: below `sm` a dialog rises from the bottom edge.
     for (const theme of ["dark", "light"] as const) {
       if (theme === "light") {
