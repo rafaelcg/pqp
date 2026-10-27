@@ -115,6 +115,7 @@ import {
 } from "@/lib/watch-party-mic-warning";
 import { watchPartyPanelOwnsPane } from "@/lib/watch-party-pane";
 import { cn } from "@/lib/utils";
+import { SECTION_LABEL_REDESIGN } from "@/components/ui/section-header";
 
 /**
  * The watch party surface inside a `watch_party` channel: everything between
@@ -1805,15 +1806,15 @@ function ScheduledStage(props: WatchPartyPanelProps & { party: WatchParty }) {
           a row; and the host's one loud action has a row of its own with
           the honest sentence beside it (viewers are looking at this screen,
           so "nobody sees anything" was false). */}
-      <div className="flex w-full max-w-md flex-col items-center gap-4 rounded-2xl border border-border bg-surface-0 px-6 py-6 text-center">
+      <div className="flex w-full max-w-md flex-col items-center gap-4 rounded-2xl border border-border bg-surface-0 px-6 py-6 text-center redesign:rounded-[var(--radius-pane)] redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:px-8 redesign:py-7">
         <div>
           <p
-            className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary"
+            className={cn("text-[11px] font-semibold uppercase tracking-wider text-text-tertiary", SECTION_LABEL_REDESIGN, "redesign:text-text-secondary")}
           >
             {t("watchParty.scheduled.eyebrow")}
           </p>
           <p
-            className="mt-1 text-xl font-semibold text-paper"
+            className="mt-1 text-xl font-semibold text-paper redesign:font-[family-name:var(--font-display)] redesign:text-2xl redesign:font-bold redesign:text-text"
             data-testid="watch-party-scheduled-when"
           >
             {t("watchParty.scheduled.startsAt", { when })}
@@ -1848,10 +1849,10 @@ function ScheduledStage(props: WatchPartyPanelProps & { party: WatchParty }) {
           <WatchPartyShareButton party={party} />
         </div>
         {canGoLive ? (
-          <div className="flex w-full flex-col items-center gap-2 border-t border-border pt-4">
+          <div className="flex w-full flex-col items-center gap-2 border-t border-border pt-4 redesign:border-[color:var(--card-border)] redesign:pt-5">
             <Button
               type="button"
-              className="w-full bg-danger text-paper hover:bg-danger/85 sm:w-auto"
+              className="w-full bg-danger text-paper hover:bg-danger/85 sm:w-auto redesign:text-on-danger"
               onClick={() => void props.onGoLive(null, party.options.lowLatency)}
               data-watch-party-go-live
             >
@@ -2120,7 +2121,7 @@ function LiveSurface(
        `docs/plans/WATCH_PARTY_UI.md`): same minimum height, same ground
        and same gutters as the channel header it replaces, so the row does
        not read as a second header under an empty one. */
-    "flex min-h-14 shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-ink-4/60 bg-ink px-3 py-2 sm:px-4";
+    "flex min-h-14 shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-ink-4/60 bg-ink px-3 py-2 sm:px-4 redesign:border-[color:var(--card-border)] redesign:bg-transparent sm:redesign:px-5";
 
   const identity = (
     /* A REAL MINIMUM, so the wrap happens instead of the name vanishing.
@@ -2184,6 +2185,14 @@ function LiveSurface(
               ? "border-warning/40 bg-warning/10 text-warning"
               : "border-border bg-surface-0 font-normal text-text-tertiary",
           inCall && props.onToggleMute && "hover:bg-surface-2",
+          // A pill on the call's tints under the redesign, no edge.
+          "redesign:h-7 redesign:border-0 redesign:px-2.5 redesign:text-xs",
+          mic === "everyone"
+            ? "redesign:bg-[color:color-mix(in_oklab,var(--color-success)_18%,transparent)]"
+            : mic === "room" || micMutedWarning
+              ? "redesign:bg-[color:color-mix(in_oklab,var(--color-warning)_16%,transparent)]"
+              : "redesign:bg-[color:var(--call-control-bg)] redesign:text-text-secondary",
+          inCall && props.onToggleMute && "redesign:hover:bg-[color:var(--call-control-hover)]",
         );
         const warningAttrs = micMutedWarning
           ? {
