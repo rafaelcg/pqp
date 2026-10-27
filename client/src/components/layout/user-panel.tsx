@@ -1,3 +1,4 @@
+import { useRedesign } from "@/lib/redesign";
 import { BellOff, Bug, CircleHelp, Check, Download, HeadphoneOff, Headphones, Mic, MicOff, Pencil, Settings, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -307,6 +308,8 @@ export function UserPanel({
   // that they are "Offline" would leave them unable to tell whether the setting
   // took, which is the failure a privacy control cannot afford.
   const retro = useRetroLook();
+  // Under the redesign a locked mic is named for what it shows.
+  const lockedName = useRedesign() && listenOnly;
   const ownLabel =
     manualStatus === "invisible"
       ? t(retro ? retroStatusKey("invisible") : "status.invisible")
@@ -524,12 +527,16 @@ export function UserPanel({
                   setOpen(false);
                 }}
               >
-                <StatusDot
-                  status={choice.pip}
-                  size="md"
-                  className="mt-0.5"
-                  label=""
-                />
+                {/* A 16px slot under the redesign, so the label lines up with
+                    the action rows' labels above. */}
+                <span className="contents redesign:mt-0.5 redesign:flex redesign:h-4 redesign:w-4 redesign:shrink-0 redesign:items-center redesign:justify-center">
+                  <StatusDot
+                    status={choice.pip}
+                    size="md"
+                    className="mt-0.5 redesign:mt-0"
+                    label=""
+                  />
+                </span>
                 <span className="min-w-0 flex-1">
                   <span className="block text-sm text-paper redesign:text-text">
                     {t(retro ? retroStatusKey(choice.pip === "offline" ? "invisible" : choice.pip) : choice.labelKey)}
@@ -677,11 +684,19 @@ export function UserPanel({
         label={
           serverMuted
             ? t("voice.control.serverMuted")
-            : micShownOff
-              ? t("userPanel.unmute")
-              : t("userPanel.mute")
+            : lockedName
+              ? t("voice.bar.listenOnly")
+              : micShownOff
+                ? t("userPanel.unmute")
+                : t("userPanel.mute")
         }
-        name={micShownOff ? t("userPanel.unmuteMic") : t("userPanel.muteMic")}
+        name={
+          lockedName
+            ? t("voice.bar.listenOnly")
+            : micShownOff
+              ? t("userPanel.unmuteMic")
+              : t("userPanel.muteMic")
+        }
         detail={
           !inVoice
             ? t("userPanel.joinToUse")
@@ -713,11 +728,13 @@ export function UserPanel({
             )}
             onClick={onToggleMute}
             disabled={!inVoice || !canSpeak || serverMuted}
-            aria-pressed={micShownOff}
+            aria-pressed={lockedName ? undefined : micShownOff}
             aria-label={
               serverMuted
                 ? t("voice.control.serverMuted")
-                : micShownOff
+                : lockedName
+                  ? t("voice.bar.listenOnly")
+                  : micShownOff
                   ? t("userPanel.unmuteMic")
                   : t("userPanel.muteMic")
             }
@@ -738,9 +755,9 @@ export function UserPanel({
             {listenOnly && (
               <span
                 aria-hidden="true"
-                className="absolute -bottom-0.5 -right-0.5 hidden h-3.5 w-3.5 items-center justify-center rounded-full bg-[color:var(--footer-card-solid)] text-[color:var(--list-row-icon)] redesign:flex"
+                className="absolute -bottom-0.5 -right-0.5 hidden h-3.5 w-3.5 items-center justify-center rounded-full bg-[color:var(--footer-card-solid)] text-text-secondary redesign:flex"
               >
-                <Icon icon={LockSimple} size="sm" className="h-2.5 w-2.5" />
+                <Icon icon={LockSimple} size="sm" className="h-3 w-3" />
               </span>
             )}
           </Button>
@@ -797,7 +814,9 @@ export function UserPanel({
           <Button
             variant="ghost"
             size="icon"
-            className={cn("h-8 w-8 shrink-0 text-danger", PANEL_BUTTON_REDESIGN, PANEL_BUTTON_OFF_REDESIGN)}
+            // Red alone means Não Perturbe, as its presence dot does; a fill
+            // in this row always means voice is off.
+            className={cn("h-8 w-8 shrink-0 text-danger", PANEL_BUTTON_REDESIGN, "redesign:bg-[color:var(--card-row-hover)] redesign:text-danger")}
             onClick={() => onSetStatus("online")}
           >
             <BellOff className="h-4 w-4 redesign:hidden" />
