@@ -35,7 +35,9 @@ import {
   Volume2,
   type LucideIcon,
 } from "lucide-react";
+import { ArrowLeft as ArrowLeftGlyph, ArrowRight as ArrowRightGlyph, Shuffle as ShuffleGlyph } from "@phosphor-icons/react";
 import { BotFace } from "@/components/bots/bot-face";
+import { IconSwap } from "@/components/ui/icon";
 import { BotActionCard } from "@/components/chat/bot-action-card";
 import { ServerBotTags } from "@/components/bots/server-bot-tags";
 import { RadioChoices } from "@/components/bots/radio-choices";
@@ -308,7 +310,7 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
             )}
             {index > 0 ? (
               <Button type="button" variant="ghost" onClick={back}>
-                <ArrowLeft className="mr-1.5 h-4 w-4" aria-hidden />
+                <IconSwap off={ArrowLeft} on={ArrowLeftGlyph} kind="symbol" offClassName="mr-1.5 h-4 w-4" className="mr-1.5" />
                 {t("bots.wizard.back")}
               </Button>
             ) : null}
@@ -322,7 +324,7 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
               className="max-sm:ml-auto"
             >
               {step === lastStep ? t("bots.wizard.create", { name: shownName }) : t("bots.wizard.next")}
-              {step !== lastStep && <ArrowRight className="ml-1.5 h-4 w-4" aria-hidden />}
+              {step !== lastStep && <IconSwap off={ArrowRight} on={ArrowRightGlyph} kind="symbol" offClassName="ml-1.5 h-4 w-4" className="ml-1.5" />}
             </Button>
           </div>
         )
@@ -462,7 +464,7 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
                         update({ color, face }, true);
                       }}
                     >
-                      <Shuffle className="mr-1.5 h-4 w-4" aria-hidden />
+                      <IconSwap off={Shuffle} on={ShuffleGlyph} kind="symbol" offClassName="mr-1.5 h-4 w-4" className="mr-1.5" />
                       {t("bots.wizard.face.surprise")}
                     </Button>
                   </div>

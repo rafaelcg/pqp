@@ -15,6 +15,15 @@ import {
 import { CARD_SURFACE } from "@/components/ui/card";
 import { useEffect, useId, useRef, useState } from "react";
 import { AtSign, ListChecks, ShieldCheck, Sparkles, Trash2 } from "lucide-react";
+import {
+  At,
+  ListChecks as ListChecksGlyph,
+  ShieldCheck as ShieldCheckGlyph,
+  Sparkle,
+  Trash,
+  type Icon as PhosphorIcon,
+} from "@phosphor-icons/react";
+import { IconSwap } from "@/components/ui/icon";
 import { BotFace } from "@/components/bots/bot-face";
 import { RadioChoices } from "@/components/bots/radio-choices";
 import {
@@ -317,7 +326,7 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
             className="h-16 w-16"
           />
           {!off && (
-            <span className="absolute bottom-0 right-0 h-3.5 w-3.5 rounded-full bg-success ring-2 ring-[var(--color-surface-1)]" aria-hidden />
+            <span className="absolute bottom-0 right-0 h-3.5 w-3.5 rounded-full bg-success ring-2 ring-[var(--color-surface-1)] redesign:bottom-1 redesign:right-1 redesign:ring-[color:var(--settings-pane-bg)]" aria-hidden />
           )}
         </span>
         <div className="min-w-0 flex-1">
@@ -366,7 +375,7 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
 
       <BotTabs value={tab} onChange={setTab} />
 
-      {tab === "overview" && <BotOverviewPanel bot={bot} overview={overview} channels={channels} />}
+      {tab === "overview" && <BotOverviewPanel bot={bot} overview={overview} channels={channels} onOpenPowers={() => setTab("powers")} />}
 
       {tab === "voice" && (
         <>
@@ -617,7 +626,7 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
             {t("bots.settings.dangerBody", { name: bot.name })}
           </p>
           <Button type="button" variant="danger" onClick={() => setConfirmDelete(true)}>
-            <Trash2 className="mr-2 h-4 w-4" aria-hidden />
+            <IconSwap off={Trash2} on={Trash} offClassName="mr-2 h-4 w-4" />
             {t("serverSettings.bots.delete")}
           </Button>
         </div>
@@ -662,10 +671,10 @@ function BotInvite({ onCreate }: { onCreate: () => void }) {
     ["grape", "kkkk", "h-14 w-14"],
     ["sun", "focado", "h-12 w-12"],
   ];
-  const features: Array<[typeof AtSign, MessageKey, MessageKey]> = [
-    [AtSign, "bots.invite.answers", "bots.invite.answersBody"],
-    [ListChecks, "bots.invite.work", "bots.invite.workBody"],
-    [ShieldCheck, "bots.invite.asks", "bots.invite.asksBody"],
+  const features: Array<[typeof AtSign, PhosphorIcon, MessageKey, MessageKey]> = [
+    [AtSign, At, "bots.invite.answers", "bots.invite.answersBody"],
+    [ListChecks, ListChecksGlyph, "bots.invite.work", "bots.invite.workBody"],
+    [ShieldCheck, ShieldCheckGlyph, "bots.invite.asks", "bots.invite.asksBody"],
   ];
   return (
     <section
@@ -684,17 +693,17 @@ function BotInvite({ onCreate }: { onCreate: () => void }) {
       <h2 className="mt-6 font-display text-3xl font-extrabold text-text">{t("bots.invite.title")}</h2>
       <p className="mx-auto mt-2 max-w-md text-text-secondary">{t("bots.invite.description")}</p>
       <div className="mt-6 grid gap-3 text-left sm:grid-cols-3">
-        {features.map(([Icon, title, body]) => (
+        {features.map(([Icon, glyph, title, body]) => (
           <div
             key={title}
             className={cn(
               "rounded-[var(--radius-card)] border border-border bg-surface-2 p-3",
-              // A card in a card under the redesign: the tint stacks.
-              "redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-row-hover)]",
+              // The invite has no frame under the redesign, so these are plain cards on the pane.
+              "redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)]",
             )}
           >
             <p className="flex items-center gap-2 text-sm font-semibold text-text redesign:items-start">
-              <Icon className="h-4 w-4 shrink-0 text-accent redesign:mt-0.5" aria-hidden />
+              <IconSwap off={Icon} on={glyph} offClassName="h-4 w-4 shrink-0 text-accent" className="mt-0.5 text-accent-text" />
               {t(title)}
             </p>
             <p className="mt-1 text-xs text-text-secondary">{t(body)}</p>
@@ -702,7 +711,7 @@ function BotInvite({ onCreate }: { onCreate: () => void }) {
         ))}
       </div>
       <Button type="button" className="mt-6" onClick={onCreate}>
-        <Sparkles className="mr-2 h-4 w-4" aria-hidden />
+        <IconSwap off={Sparkles} on={Sparkle} offClassName="mr-2 h-4 w-4" />
         {t("bots.invite.create")}
       </Button>
       <p className="mt-3 text-xs text-text-tertiary">{t("bots.invite.cost")}</p>

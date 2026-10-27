@@ -4,9 +4,10 @@ import { IconSwap } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 
 /**
- * The bot pickers under the redesign, in the wizard and in the overview alike:
- * the settings kit's chosen card (`settings/kit/choice-grid.tsx`), so a face,
- * a colour and a persona are chosen the same way as any other setting.
+ * The bot pickers under the redesign: the settings kit's chosen card
+ * (`settings/kit/choice-grid.tsx`), so a face and a colour are chosen the same
+ * way as any other setting, in the wizard and in the overview. The overview's
+ * persona presets are compact chips with the selected pill instead.
  */
 
 /** A choice card at rest (its edge firms on hover), and chosen: the 2px accent edge (border plus inset ring), the row tint. */
@@ -26,7 +27,7 @@ export const BOT_RING_OFFSET_PANE_REDESIGN =
 
 /** Keyboard focus on a picker: an outer ring, apart from the chosen edge. */
 export const BOT_CHOICE_FOCUS_REDESIGN =
-  "redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--color-focus-ring)] redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-[color:var(--color-surface-1)]";
+  "redesign:focus-visible:ring-2 redesign:focus-visible:ring-text redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-[color:var(--color-surface-1)]";
 
 /** The check on a chosen card or swatch, drawn only under the redesign. */
 export function ChosenCheck({ corner = "top" }: { corner?: "top" | "bottom" }) {
