@@ -691,7 +691,8 @@ export function queueRowMenuItems(input: {
   canRemove: boolean;
   href: string;
   openLabel: string;
-  onPlayNext: () => void;
+  /** Left out under the redesign for the song that already plays next. */
+  onPlayNext?: () => void;
   onRemove: () => void;
   /**
    * One step up or down, for a phone where dragging does nothing. Passed
@@ -702,12 +703,14 @@ export function queueRowMenuItems(input: {
 }): ContextMenuItemDef[] {
   const items: ContextMenuItemDef[] = [];
   if (input.canManage) {
-    items.push({
-      id: "play-next",
-      label: input.t("music.playNext"),
-      icon: ListStart,
-      onSelect: input.onPlayNext,
-    });
+    if (input.onPlayNext) {
+      items.push({
+        id: "play-next",
+        label: input.t("music.playNext"),
+        icon: ListStart,
+        onSelect: input.onPlayNext,
+      });
+    }
     if (input.onMoveUp) {
       items.push({ id: "move-up", label: input.t("music.moveUp"), icon: ArrowUp, onSelect: input.onMoveUp });
     }

@@ -159,9 +159,11 @@ function QueueRow({
         canRemove,
         href,
         openLabel,
-        onPlayNext: () => moveTrackTo(track.id, 0),
+        // Under the redesign no item repeats another: the first song already
+        // plays next, and for the second "Subir" would be "Tocar a seguir".
+        onPlayNext: !redesign || index > 0 ? () => moveTrackTo(track.id, 0) : undefined,
         onRemove: () => removeFromQueue(track.id),
-        onMoveUp: redesign && index > 0 ? () => moveInQueue(track.id, -1) : undefined,
+        onMoveUp: redesign && index > 1 ? () => moveInQueue(track.id, -1) : undefined,
         onMoveDown: redesign && !last ? () => moveInQueue(track.id, 1) : undefined,
       }),
     [t, canManage, canRemove, href, openLabel, track.id, redesign, index, last],
@@ -221,7 +223,7 @@ function QueueRow({
           {canManage ? (
             <span
               className={cn(
-                "absolute inset-0 flex cursor-grab items-center justify-center opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 active:cursor-grabbing",
+                "absolute inset-0 flex cursor-grab items-center justify-center opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 active:cursor-grabbing redesign:[@media(hover:none)]:hidden",
                 composer ? "bg-surface/70 text-text" : "bg-ink/70 text-paper",
                 "redesign:bg-black/45 redesign:text-white",
               )}
@@ -245,8 +247,8 @@ function QueueRow({
               className="h-4 w-4"
               fallbackClassName={
                 composer
-                  ? "bg-surface-3 text-[8px] text-text redesign:bg-[color:var(--card-bg)] redesign:ring-1 redesign:ring-[color:var(--card-border)]"
-                  : "bg-ink-3 text-[8px] text-paper redesign:bg-[color:var(--card-bg)] redesign:text-text redesign:ring-1 redesign:ring-[color:var(--card-border)]"
+                  ? "bg-surface-3 text-[8px] text-text redesign:text-[9px] redesign:bg-[color:var(--card-bg)] redesign:ring-1 redesign:ring-[color:var(--card-border)]"
+                  : "bg-ink-3 text-[8px] text-paper redesign:text-[9px] redesign:bg-[color:var(--card-bg)] redesign:text-text redesign:ring-1 redesign:ring-[color:var(--card-border)]"
               }
               rounded="full"
             />
