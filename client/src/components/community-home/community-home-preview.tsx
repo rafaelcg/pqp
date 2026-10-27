@@ -181,7 +181,7 @@ export function CommunityHomePreview({
                 "flex w-full items-center gap-1.5 px-2.5 pb-2 pt-2.5 text-left text-xs font-bold text-text-secondary hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring",
                 // The section label's face, at the party cards' 12px inset.
                 SECTION_LABEL_REDESIGN,
-                "redesign:mb-0 redesign:px-3",
+                "redesign:mb-0 redesign:px-3 redesign:pb-2",
                 selected && "redesign:text-on-row-selected redesign:hover:text-on-row-selected",
               )}
             >
