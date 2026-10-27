@@ -240,6 +240,12 @@ function ChannelRowsBlock() {
             channel={textChannel("cine2", "cineclube", { type: "watch_party", topic: "Clássicos de domingo" })}
             liveState={{ live: false, presenterPeerId: null, viewerCount: 0, startedAt: null } as never}
           />
+          {/* The party you are watching from, not open: the success fill. */}
+          <SheetChannelRow
+            channel={textChannel("cine3", "sessão da tarde", { type: "watch_party", topic: "Com a turma" })}
+            liveState={{ live: true, presenterPeerId: "p2", viewerCount: 5, startedAt: null } as never}
+            connected
+          />
         </div>
       </SidePane>
     </div>

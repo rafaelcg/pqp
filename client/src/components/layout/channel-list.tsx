@@ -293,7 +293,7 @@ const CHANNEL_DETAIL_REDESIGN =
 
 /** The pin and settings tiles: round, a tint of the text on hover so it shows on a selected row too. */
 const CHANNEL_ACTION_REDESIGN =
-  "redesign:rounded-full redesign:text-[color:var(--list-row-icon)] redesign:hover:bg-[color:var(--card-row-hover)] redesign:hover:text-text redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent";
+  "redesign:rounded-full redesign:text-[color:var(--list-row-icon)] redesign:hover:bg-[color:var(--card-row-hover)] redesign:hover:text-text redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--list-row-ring)]";
 
 export { formatBadgeCount };
 
@@ -4121,7 +4121,7 @@ export function ChannelRow({
           <>
             <span
               aria-hidden="true"
-              className="h-1.5 w-1.5 rounded-full bg-signal"
+              className="h-1.5 w-1.5 rounded-full bg-signal redesign:mr-2 redesign:bg-on-success-soft"
             />
             <span className="sr-only">{t("chrome.connected")}</span>
           </>
@@ -4225,6 +4225,12 @@ export function ChannelRow({
           hasUnread && !muted && !selected && !connected && "redesign:text-text",
           muted && !selected && !connected && "redesign:opacity-[var(--list-row-muted-opacity)]",
           isDragOver && !occupantDragActive && "redesign:ring-accent",
+          // The room you are in, as a voice room says it: the success fill,
+          // no ring. The selected fill still wins on the open room.
+          connected &&
+            !selected &&
+            "redesign:bg-success-soft redesign:text-on-success-soft redesign:ring-0 redesign:hover:bg-success-soft redesign:hover:text-on-success-soft",
+          connected && selected && "redesign:ring-0",
           // The row's focus ring, on the whole pill: the button inside
           // drops its outline under the redesign.
           "redesign:has-[[data-channel-row-main]:focus-visible]:ring-2 redesign:has-[[data-channel-row-main]:focus-visible]:ring-inset redesign:has-[[data-channel-row-main]:focus-visible]:ring-[color:var(--list-row-ring)]",
@@ -4417,10 +4423,13 @@ export function SidebarThreadRow({
                 : "text-text-tertiary hover:text-text",
               // Under the redesign a thread is a smaller list row: a 32px
               // pill, the row's text roles, the end pip for unread.
-              "redesign:min-h-8 redesign:gap-[var(--list-row-gap-sm)] redesign:rounded-[inherit] redesign:pl-[var(--list-row-px)] redesign:text-[13px] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-inset redesign:focus-visible:ring-accent",
+              "redesign:min-h-8 redesign:gap-[var(--list-row-gap-sm)] redesign:rounded-[inherit] redesign:pl-[var(--list-row-px)] redesign:text-[13px] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-inset redesign:focus-visible:ring-[color:var(--list-row-ring)]",
               !unread && "redesign:text-[color:var(--list-row-text)]",
               // With a leave button the base right padding keeps its room.
               !onLeave && "redesign:pr-[var(--list-row-px)]",
+              // On a pointer the X only shows on hover, over the pip's slot
+              // (which fades then), so the pip keeps the channels' column.
+              onLeave && "redesign:[@media(hover:hover)]:pr-[var(--list-row-px)]",
             )}
           >
             <MessageSquareText
