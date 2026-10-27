@@ -1,6 +1,10 @@
-import type { DmSummary, PublicUser, Server } from "@pqp/shared";
+import type { DmSummary, PublicUser, Server, WatchParty } from "@pqp/shared";
 import { useEffect, type ReactNode } from "react";
+import { CommunityHomePreview } from "@/components/community-home/community-home-preview";
 import { ServerRail } from "@/components/layout/server-rail";
+import { LivePartyBlock } from "@/components/watch-party/live-party-block";
+import { ServerIcon } from "@/components/layout/server-identity";
+import type { LatestCard, LatestPreview } from "@/lib/community-home/latest";
 import { setUpdateWaiting } from "@/lib/update-prompt-state";
 
 /**
@@ -43,6 +47,63 @@ const SERVER_SERVERS = [
   server("praca", "Praça", { isCommunity: true }),
 ];
 
+/** A live party, as the server sends it; only what the block reads matters. */
+function party(id: string, name: string, host: string, state: WatchParty["state"] = "live"): WatchParty {
+  return {
+    id: `00000000-0000-4000-8000-0000000000${id}`,
+    channelId: `00000000-0000-4000-8000-0000000001${id}`,
+    serverId: null,
+    name,
+    description: null,
+    state,
+    startsAt: null,
+    wentLiveAt: state === "live" ? new Date(Date.now() - 47 * 60_000).toISOString() : null,
+    endedAt: null,
+    hostUserId: `00000000-0000-4000-8000-0000000002${id}`,
+    hostDisplayName: host,
+    hostAvatarUrl: null,
+    hostDisconnectedAt: null,
+  } as unknown as WatchParty;
+}
+
+function post(id: string, title: string, isNew: boolean, mediaKind: LatestCard["mediaKind"] = null): LatestCard {
+  return {
+    postId: `00000000-0000-4000-8000-0000000003${id}`,
+    serverId: "00000000-0000-4000-8000-000000000400",
+    serverName: "Turma do Fliperama",
+    title,
+    teaser: null,
+    author: { id: "00000000-0000-4000-8000-000000000500", displayName: "Bia", avatarUrl: null },
+    mediaKind,
+    mediaUrl: null,
+    posterUrl: null,
+    visibility: "free",
+    locked: false,
+    pinned: false,
+    likeCount: 12,
+    commentCount: 3,
+    publishedAt: new Date(Date.now() - 2 * 3600_000).toISOString(),
+    isNew,
+  };
+}
+
+const BAU_NEW: LatestPreview = {
+  unread: 2,
+  lastSeenAt: null,
+  posts: [post("01", "O mapa novo da caverna", true, "image"), post("02", "Fotos do encontro", true)],
+};
+const BAU_SEEN: LatestPreview = { unread: 0, lastSeenAt: null, posts: [post("03", "Regras do servidor", false)] };
+const BAU_EMPTY: LatestPreview = { unread: 0, lastSeenAt: null, posts: [] };
+
+/** A slice of the side pane, as wide as the sidebar. */
+function SidePane({ children }: { children: ReactNode }) {
+  return (
+    <div className="flex w-64 flex-col gap-2 rounded-lg bg-surface-1 p-3 redesign:rounded-[var(--radius-pane)] redesign:bg-pane-side">
+      {children}
+    </div>
+  );
+}
+
 function RailFrame({ children }: { children: ReactNode }) {
   // The canvas the rail sits on, and the edge of the side pane beside it.
   return (
@@ -73,6 +134,77 @@ export function ShellSheet() {
           mentions. Right: a server open; a photo icon, a Baú count, a Baú ring
           beside a mention, a live party, a public community, Novidades
           unread. Both: a new build waiting (the update tile). */}
+      {/* The blocks above the channels. Left: two live parties (one open)
+          and the Baú with new posts as a card. Middle: a party being set up,
+          the waitlist teaser, the Baú with nothing new (a row) and opened.
+          Right: "start a party" and an empty Baú for staff. */}
+      <div data-testid="qa-shell-sidebar-special" className="flex flex-wrap items-start gap-6">
+        <SidePane>
+          <LivePartyBlock
+            parties={[party("01", "Sessão de terror", "Rafa"), party("02", "Campeonato de Mario Kart", "Caio")]}
+            selectedChannelId="00000000-0000-4000-8000-000000000101"
+            audience={{ "00000000-0000-4000-8000-000000000101": 14, "00000000-0000-4000-8000-000000000102": 6 }}
+            onWatch={noop}
+            historyChannels={[{ id: "h1", name: "cinema" }]}
+            onOpenHistory={noop}
+          />
+          <CommunityHomePreview
+            latest={BAU_NEW}
+            serverName="Turma do Fliperama"
+            serverHueSeed="fliperama"
+            selected={false}
+            canPost={false}
+            face={<ServerIcon name="Turma do Fliperama" iconUrl={null} />}
+            onOpen={noop}
+            onOpenPost={noop}
+            onCompose={noop}
+          />
+        </SidePane>
+        <SidePane>
+          <LivePartyBlock parties={[]} selectedChannelId={null} pending={party("03", "Maratona de Zelda", "Lia", "scheduled")} onWatch={noop} />
+          <LivePartyBlock parties={[]} selectedChannelId={null} onWatch={noop} teaser={{ onList: true, onOpen: noop }} />
+          <CommunityHomePreview
+            latest={BAU_SEEN}
+            serverName="Turma do Fliperama"
+            serverHueSeed="fliperama"
+            selected
+            canPost={false}
+            face={<ServerIcon name="Turma do Fliperama" iconUrl={null} />}
+            onOpen={noop}
+            onOpenPost={noop}
+            onCompose={noop}
+          />
+        </SidePane>
+        <SidePane>
+          <LivePartyBlock parties={[]} selectedChannelId={null} canStart onCreate={noop} onWatch={noop} />
+          <CommunityHomePreview
+            latest={BAU_EMPTY}
+            serverName="Turma do Fliperama"
+            serverHueSeed="fliperama"
+            selected={false}
+            canPost
+            face={<ServerIcon name="Turma do Fliperama" iconUrl={null} />}
+            onOpen={noop}
+            onOpenPost={noop}
+            onCompose={noop}
+          />
+        </SidePane>
+        {/* The Baú open while a new post still shows as the card. */}
+        <SidePane>
+          <CommunityHomePreview
+            latest={BAU_NEW}
+            serverName="Turma do Fliperama"
+            serverHueSeed="fliperama"
+            selected
+            canPost={false}
+            face={<ServerIcon name="Turma do Fliperama" iconUrl={null} />}
+            onOpen={noop}
+            onOpenPost={noop}
+            onCompose={noop}
+          />
+        </SidePane>
+      </div>
+
       <div data-testid="qa-shell-rail" className="flex gap-6">
         <RailFrame>
           <ServerRail

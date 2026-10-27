@@ -473,6 +473,25 @@ redesign:
 - The banner (`ServerBannerStrip`) is an inset card with
   `--sidebar-banner-radius`.
 
+### The sidebar blocks
+
+The blocks above the channels: stories (`stories/story-strip.tsx`), a watch
+party (`watch-party/live-party-block.tsx`) and the Baú
+(`community-home/community-home-preview.tsx`). Under the redesign they share
+three strings from `ui/sidebar-block.ts`:
+
+- `SIDEBAR_CARD_REDESIGN`: something to look at (a live party, the Baú's
+  newest post). The card tint and edge, radius `--sidebar-card-radius`.
+- `SIDEBAR_INVITE_REDESIGN`: something to make (start a party, the first
+  story, the first Baú post). A dashed edge (`--sidebar-invite-border`), no
+  fill until hovered.
+- `SIDEBAR_ROW_REDESIGN` and `SIDEBAR_ROW_SELECTED_REDESIGN`: a one-line
+  entry, the list row's pill and fills.
+
+The open block takes `row-selected`, like any row. Red stays on the live
+badge alone. A party being set up is the one block on `warning-soft`. Section
+labels are `SectionLabel`; counts are `CountBadge`.
+
 ### Icons
 
 The redesign's icons are Phosphor (`@phosphor-icons/react`), drawn through

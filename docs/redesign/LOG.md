@@ -1088,6 +1088,22 @@ buttons, a search entry styled as a faint field, the banner strip in
    IconButton; search is a pill a step off the pane; the banner is an inset
    card. The search dialog itself is `f-search`.
 
+### s-sidebar-special
+
+Spec (audit: `story-strip.tsx`, `live-party-block.tsx` and
+`community-home-preview.tsx`, each with its own card, dashed invite and
+label; the pinned section is a category header and channel rows, so it
+moves with `s-category` and `s-channel-row`):
+
+1. Job: what is happening on this server before its channels: stories, a
+   live or pending watch party, the Baú's newest posts.
+2. States: party live (open, not open, audience), pending, waitlist teaser
+   (open, on the list), create, history links; Baú card (new posts), row
+   (nothing new, open), empty for staff and for members; stories with and
+   without new, first run, notice.
+3. Redesign: one family from `ui/sidebar-block.ts` (card, dashed invite,
+   row). The open block is `row-selected`; red stays on the live badge;
+   labels are `SectionLabel`, counts `CountBadge`.
 Rounds (Opus / Codex): r1 - / 8.3, r2 - / 8.6, r3 8.7 / -, r4 7.8 / -,
 r5 8.3 / - (no MUST, would approve). Last fixes: the trigger's hover is the
 ghost step (8%) above the search's 6%, open 10%, both tokens
