@@ -1288,6 +1288,11 @@ Rounds (Opus only): r1 7.6, r2 8.0, r3 7.8 (no MUST). r3 fixes: status
 labels on one edge, the room's microphone glyph. Decision: the 6px gap
 between the voice strip and the user panel is the footer stack's gap, and
 both cards keep the 8px side inset; not changed.
+r4 8.0, r5 8.1 (cap, no MUST). r5 fixes: the footer cards draw
+`--card-border` (the light card barely separated from the pane), and the
+72px room button takes the row's shape. Follow-ups: the composer dock's
+hang-up moves to `PhoneDisconnect` (`s-composer`); the music idle row needs
+the music store fixture (`m-sheets`) before it can be reviewed.
 
 ## Open questions for André
 
