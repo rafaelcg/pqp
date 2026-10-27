@@ -64,6 +64,11 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Explicit least privilege. The repository default is already read-only; this
+# keeps it that way if the default is ever widened.
+permissions:
+  contents: read
+
 jobs:
   # The old single `checks` job ran lint, typecheck, every test suite and the
   # builds one after the other (~12-15 min, 8.5-11 of them the Test step). It is
@@ -80,7 +85,7 @@ jobs:
     # No Postgres service here: nothing in this job reads a database.
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up workspace
         uses: ./.github/actions/setup-workspace
@@ -242,7 +247,7 @@ jobs:
       # old one. Bundling here costs seconds and turns that into a red PR.
       - name: Bundle Pages functions
         working-directory: client
-        run: npx wrangler pages functions build --outfile=/tmp/functions-bundle.js
+        run: npx --yes wrangler@4.149.0 pages functions build --outfile=/tmp/functions-bundle.js
 
   # The server suite (~5,200 tests in ~335 files) against a real database; it
   # was ~8.5 of the old job's 12 minutes. Sharded by file (`vitest --shard`):
@@ -289,7 +294,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up workspace
         uses: ./.github/actions/setup-workspace
@@ -316,7 +321,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up workspace
         uses: ./.github/actions/setup-workspace
@@ -466,14 +471,14 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up workspace
         uses: ./.github/actions/setup-workspace
 
       - name: Cache Playwright browsers
         id: playwright-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cache/ms-playwright
           key: playwright-chromium-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
@@ -494,7 +499,7 @@ jobs:
       - name: Cache Playwright Firefox
         if: matrix.stale || matrix.appframe
         id: playwright-firefox-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cache/ms-playwright/firefox-*
           key: playwright-firefox-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
@@ -562,7 +567,7 @@ jobs:
 
       - name: Upload E2E artifacts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           # upload-artifact@v4 hard-fails on duplicate names across matrix jobs.
           name: playwright-report-${{ matrix.suite }}-${{ matrix.total }}-${{ strategy.job-index }}
