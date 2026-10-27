@@ -254,7 +254,7 @@ function EmptyBlock({
       actions={children}
       className="px-6 py-16 animate-fade-in"
       iconClassName="text-text-secondary"
-      titleClassName="mt-4 forum-display text-xl font-bold text-text"
+      titleClassName="mt-4 forum-display text-xl font-bold text-text redesign:mt-0"
       bodyClassName="mt-1.5 max-w-sm text-sm leading-5 text-text-secondary"
       actionsClassName="mt-5"
     />
