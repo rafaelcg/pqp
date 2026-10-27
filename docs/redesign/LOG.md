@@ -1129,6 +1129,10 @@ dark, the rail build line in mono. Merged on the cap.
 4. Sidebar header: the members button duplicates the server menu's Membros
    and the chat header's members control. Hide it on desktop too, so a long
    server name fits? It is hidden in the phone drawer already.
+5. Invites: each invite card says "1 uso" under a "Usos" chip row, which
+   reads as "limited to one use". The council suggests "Usado 1 vez · sem
+   limite" and "{used} de {max} usos". That is a copy change in three
+   languages and shows with the toggle off too. Change it?
 
 ## Decisions
 
