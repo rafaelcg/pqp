@@ -434,6 +434,22 @@ test("captures the design council screens", async ({ browser }) => {
       await page.waitForTimeout(600);
       await shoot(page, `17-emoji-picker-${theme}`);
       await page.keyboard.press("Escape");
+      // Escape inside the picker's own search does not always reach the
+      // panel; a press outside closes it, so the menu shots show the menu alone.
+      if (await page.locator(".emoji-mart-shell").isVisible()) {
+        await page.getByText(PAPO[0]![1]).click();
+      }
+      await expect(page.locator(".emoji-mart-shell")).toBeHidden();
+      // Menus in place: the server header's, then a message's right-click
+      // menu with its quick-reaction strip.
+      await page.locator("[data-server-menu-trigger]").first().click();
+      await expect(page.locator("[data-server-menu]")).toBeVisible();
+      await shoot(page, `15-server-menu-${theme}`);
+      await page.keyboard.press("Escape");
+      await page.getByText(PAPO.at(-1)![1]).click({ button: "right" });
+      await expect(page.locator("[data-context-menu]")).toBeVisible();
+      await shoot(page, `16-message-menu-${theme}`);
+      await page.keyboard.press("Escape");
 
       await page.goto(`/app/dm/${conversation.channelId}?lang=pt-BR`);
       await expect(page.getByTestId("app-chat-column").getByText(DM.at(-1)![1])).toBeVisible({ timeout: 30_000 });
@@ -455,12 +471,24 @@ test("captures the design council screens", async ({ browser }) => {
       await page.getByRole("dialog").getByText("Notificações", { exact: true }).first().click();
       await expect(page.getByRole("dialog").getByRole("switch").first()).toBeVisible();
       await shoot(page, `11-settings-switches-${theme}`);
+      // The theme and density pickers, for RadioGroup in place.
+      await page.getByRole("dialog").getByText("Aparência e idioma", { exact: true }).first().click();
+      await expect(page.getByRole("dialog").getByRole("radiogroup").first()).toBeVisible();
+      await shoot(page, `12-settings-appearance-${theme}`);
+      // The volume sliders, for Slider in place.
+      await page.getByRole("dialog").getByText("Voz e vídeo", { exact: true }).first().click();
+      await expect(page.getByRole("dialog").getByRole("slider").first()).toBeVisible();
+      await shoot(page, `14-settings-voice-${theme}`);
       await page.keyboard.press("Escape");
 
       await page.locator("[data-server-menu-trigger]").first().click();
       await page.getByRole("menuitem", { name: "Configurações da comunidade" }).click();
       await expect(page.getByRole("dialog")).toBeVisible();
       await shoot(page, `05-server-settings-${theme}`);
+      // The role editor's tabs, for Tabs in place.
+      await page.getByRole("dialog").getByText("Cargos", { exact: true }).first().click();
+      await expect(page.getByRole("dialog").getByRole("tablist", { name: "Nome do cargo" })).toBeVisible();
+      await shoot(page, `13-server-roles-${theme}`);
       await page.keyboard.press("Escape");
 
       await context.close();
@@ -544,7 +572,12 @@ const PRIMITIVES: {
   hover?: string;
   focus?: string;
   /** The role the hover and focus targets have. Buttons by default. */
-  role?: "button" | "textbox" | "combobox" | "checkbox";
+  role?: "button" | "textbox" | "combobox" | "checkbox" | "radio" | "tab" | "slider";
+  /**
+   * A button that opens a menu: the shot opens it, moves the highlight
+   * `arrows` rows down with the keyboard, and frames the block and the menu.
+   */
+  open?: { button: string; menu: string; arrows: number };
 }[] = [
   {
     id: "p-button",
@@ -571,6 +604,21 @@ const PRIMITIVES: {
   },
   // Two panels in place: a note with actions, and a picker grid.
   { id: "p-popover", testId: "qa-primitive-popover" },
+  // A note that arrived and a session reminder; the close button focused.
+  { id: "p-toast", testId: "qa-primitive-toast", focus: "Fechar" },
+  // Focus the checked segment, hover an unchecked chip (the first of each
+  // name: the small groups repeat the labels).
+  { id: "p-radio", testId: "qa-primitive-radio", role: "radio", focus: "Escuro", hover: "Menções" },
+  // Focus the selected underline tab, hover an unselected pill.
+  { id: "p-tabs", testId: "qa-primitive-tabs", role: "tab", focus: "Visão geral", hover: "Todos" },
+  // Status words, the tags beside a name, and counts; no interaction.
+  { id: "p-badge", testId: "qa-primitive-badge" },
+  // Opened from the keyboard, the highlight on "Só menções" (its detail line).
+  { id: "p-menu", testId: "qa-primitive-menu", open: { button: "Abrir menu", menu: "[data-server-menu]", arrows: 1 } },
+  // Hovering the scrub shows its thumb; the volume is keyboard-focused.
+  { id: "p-slider", testId: "qa-primitive-slider", focus: "Volume", role: "slider", hover: "Scrub" },
+  // Focus the connection strip's main action, hover the error's dismiss.
+  { id: "p-banner", testId: "qa-primitive-banner", focus: "Tentar agora", hover: "Dispensar" },
 ];
 
 test("captures the primitives", async ({ browser }) => {
@@ -595,12 +643,35 @@ test("captures the primitives", async ({ browser }) => {
       await page.evaluate(() => document.fonts.ready);
       if (primitive.focus) {
         // A keyboard focus, so `focus-visible` draws the ring.
-        await block.getByRole(primitive.role ?? "button", { name: primitive.focus, exact: true }).focus();
+        await block.getByRole(primitive.role ?? "button", { name: primitive.focus, exact: true }).first().focus();
         await page.keyboard.press("Shift+Tab");
         await page.keyboard.press("Tab");
       }
       if (primitive.hover) {
-        await block.getByRole(primitive.role ?? "button", { name: primitive.hover, exact: true }).hover();
+        await block.getByRole(primitive.role ?? "button", { name: primitive.hover, exact: true }).first().hover();
+      }
+      if (primitive.open) {
+        await block.getByRole("button", { name: primitive.open.button, exact: true }).focus();
+        await page.keyboard.press("Enter");
+        const menu = page.locator(primitive.open.menu);
+        await expect(menu).toBeVisible();
+        for (let i = 0; i < primitive.open.arrows; i++) await page.keyboard.press("ArrowDown");
+        await page.waitForTimeout(300);
+        const a = (await block.boundingBox())!;
+        const b = (await menu.boundingBox())!;
+        const x = Math.min(a.x, b.x) - 16;
+        const y = Math.min(a.y, b.y) - 16;
+        await page.screenshot({
+          path: path.join(OUT!, `${primitive.id}-${theme}.png`),
+          clip: {
+            x,
+            y,
+            width: Math.max(a.x + a.width, b.x + b.width) + 16 - x,
+            height: Math.max(a.y + a.height, b.y + b.height) + 16 - y,
+          },
+        });
+        await page.keyboard.press("Escape");
+        continue;
       }
       await page.waitForTimeout(300);
       await block.screenshot({ path: path.join(OUT!, `${primitive.id}-${theme}.png`) });

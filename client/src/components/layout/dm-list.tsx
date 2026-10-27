@@ -6,7 +6,6 @@ import { useConversationRowMenu } from "@/components/conversations/use-conversat
 import { useHasDraft } from "@/lib/composer-drafts";
 import { DraftMark } from "@/components/layout/channel-list";
 import {
-  formatBadgeCount,
   type UnreadState,
 } from "@/components/layout/channel-list";
 import { ContextMenu } from "@/components/ui/context-menu";
@@ -18,6 +17,7 @@ import { SidebarResizeHandle } from "@/components/layout/sidebar-resize-handle";
 import { useChannelSidebarWidth } from "@/hooks/use-channel-sidebar-width";
 import { formatMessagePreview } from "@/lib/conversations";
 import { cn, formatFullTimestamp, formatRecency } from "@/lib/utils";
+import { CountBadge } from "@/components/ui/count-badge";
 
 const EMPTY_UNREAD: UnreadState = { count: 0, mentions: 0 };
 
@@ -454,18 +454,16 @@ function ConversationRow({
               </time>
             )}
             {badge > 0 ? (
-              <span
-                key={badge}
-                className="inline-flex h-[18px] min-w-[18px] animate-badge-pop items-center justify-center rounded-full bg-danger px-1 text-[10px] font-bold leading-none tabular-nums text-on-danger"
+              <CountBadge
+                count={badge}
+                pop
                 aria-label={
                   mentions > 0
                     ? t("chrome.unreadMentions", { count: mentions })
                     : t("notify.messages", { count: badge })
                 }
                 data-dm-unread
-              >
-                {formatBadgeCount(badge)}
-              </span>
+              />
             ) : muted ? (
               <BellOff className="h-3 w-3 text-text-tertiary" aria-hidden="true" />
             ) : null}

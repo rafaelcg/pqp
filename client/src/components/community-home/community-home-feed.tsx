@@ -108,6 +108,7 @@ import { toDisplayBody, toStoredBody } from "@/lib/community-home/channel-refs";
 import { gifMessageMedia } from "@/lib/gif-media";
 import { Checkbox } from "@/components/ui/checkbox";
 import { FileDropOverlay } from "@/components/ui/file-drop-overlay";
+import { MENU_HEADING_REDESIGN, MENU_SEPARATOR } from "@/components/ui/menu-items";
 import { useFileDropZone } from "@/hooks/use-file-drop-zone";
 import { useTranslation, type MessageKey, type MessageVars } from "@/lib/i18n";
 import { intlLocale, type Locale } from "@/lib/locale";
@@ -2366,10 +2367,10 @@ function StaffHomeTools({
           align="end"
           topContent={
             <>
-              <p className="px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-text-tertiary">
+              <p className={cn("px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-text-tertiary", MENU_HEADING_REDESIGN)}>
                 {t("communityHome.inspector.title")}
               </p>
-              <div className="my-1 h-px bg-border" />
+              <div className={MENU_SEPARATOR} />
             </>
           }
           items={[

@@ -808,7 +808,7 @@ describe("MusicNowPlaying", () => {
     expect(html).toContain("data-music-vote-skip");
     expect(html).not.toContain("data-music-stop-listening");
     expect(html).not.toContain("data-music-fila=\"\"");
-    expect(html).toContain("opacity-40");
+    expect(html).toContain("opacity-[var(--slider-disabled-opacity,0.4)]");
     expect(html).toContain("role=\"progressbar\"");
     expect(html).toContain("h-8 w-8");
     /* Art and title open Fila; the speaker is a mute toggle now. */

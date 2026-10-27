@@ -86,6 +86,7 @@ import { UserAvatar } from "@/components/user/user-avatar";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Tooltip } from "@/components/ui/tooltip";
+import { MENU_BUTTON_ICON, MENU_ICON_BOX, MENU_ROW_BUTTON, MENU_SURFACE } from "@/components/ui/menu-items";
 import {
   AttachmentAbortError,
   createPreviewUrl,
@@ -2149,7 +2150,7 @@ function ComposerInsertMenu({
     <div
       role="menu"
       aria-labelledby={labelledBy}
-      className="elevation-3 absolute bottom-full left-0 z-30 mb-2 min-w-48 rounded-[var(--radius-card)] p-1 animate-fade-in"
+      className={cn(MENU_SURFACE, "absolute bottom-full left-0 z-30 mb-2 min-w-48")}
     >
       {items.map((item) => {
         const Icon = item.icon;
@@ -2159,9 +2160,18 @@ function ComposerInsertMenu({
             type="button"
             role="menuitem"
             onClick={item.onSelect}
-            className="flex w-full items-center gap-2 rounded-[var(--radius-control)] px-2.5 py-1.5 text-left text-sm text-text hover:bg-surface-2 focus-visible:bg-surface-2 focus-visible:outline-none"
+            // Under the redesign the pointer takes focus as it moves, so a
+            // keyboard-focused row and a hovered one are never both filled.
+            onPointerMove={(event) => {
+              if (document.documentElement.hasAttribute("data-redesign")) {
+                event.currentTarget.focus({ preventScroll: true });
+              }
+            }}
+            className={MENU_ROW_BUTTON}
           >
-            <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden />
+            <span aria-hidden className={MENU_ICON_BOX}>
+              <Icon className={MENU_BUTTON_ICON} />
+            </span>
             {item.label}
           </button>
         );

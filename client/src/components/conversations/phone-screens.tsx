@@ -9,12 +9,13 @@ import {
   UserPen,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { formatBadgeCount, type UnreadState } from "@/components/layout/channel-list";
+import { type UnreadState } from "@/components/layout/channel-list";
 import { ServerIcon } from "@/components/layout/server-identity";
 import { UpdateIndicator } from "@/components/layout/update-indicator";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { CountBadge } from "@/components/ui/count-badge";
 
 /**
  * The phone shell's two full screens beside Conversas (the list itself is
@@ -120,9 +121,7 @@ export function PhoneServersScreen({
                 )}
               </span>
               {mentions > 0 ? (
-                <span className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-danger px-1 text-[10px] font-bold leading-none tabular-nums text-on-danger">
-                  {formatBadgeCount(mentions)}
-                </span>
+                <CountBadge count={mentions} />
               ) : (unread?.count ?? 0) > 0 ? (
                 <span className="h-2 w-2 rounded-full bg-text" aria-label={t("chrome.unreadMessagesSr")} />
               ) : null}
