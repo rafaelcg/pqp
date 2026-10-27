@@ -5200,7 +5200,7 @@
   "qaUi.kit.row.slider": "Volumen de entrada",
   "qaUi.kit.row.select": "Micrófono",
   "qaUi.kit.row.selectDefault": "Predeterminado del sistema",
-  "qaUi.kit.badge": "NUEVO",
+  "qaUi.kit.badge": "Nuevo",
   "qaUi.kit.row.status": "Estado al guardar",
   "qaUi.kit.row.statusDescription": "Aparece en la fila que hizo el cambio.",
   "qaUi.kit.row.statusRun": "Guardar",
