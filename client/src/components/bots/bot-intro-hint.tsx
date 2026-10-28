@@ -2,6 +2,7 @@ import { parseBotFaceAvatar } from "@pqp/shared";
 import { useMemo, useState } from "react";
 import { BotFace } from "@/components/bots/bot-face";
 import { CornerCard } from "@/components/layout/corner-card";
+import { BOT_BETA_TAG_REDESIGN } from "@/components/bots/server-bot-tags";
 import { BetaTag } from "@/components/ui/beta-tag";
 import { Button } from "@/components/ui/button";
 import type { ChatMessage } from "@/hooks/use-chat";
@@ -65,7 +66,7 @@ export function BotIntroHint({
             <span className="flex items-center gap-2">
               <BotFace color={bot.color} face="oi" className="h-7 w-7" />
               {t("bots.introHint.title", { name: bot.name })}
-              <BetaTag />
+              <BetaTag className={BOT_BETA_TAG_REDESIGN} />
             </span>
           }
           body={t("bots.introHint.body", { handle: `@${bot.username}` })}

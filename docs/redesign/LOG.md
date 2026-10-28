@@ -72,6 +72,7 @@ Read this file and the inventory at the start of every session.
 | 3 | `s-banners` | Merged, capped at round 5 (Opus 8.2 r5, MUST fixed after). Not done: a dark-only accent edge |
 | 3 | `s-message-row` | Merged, capped at round 5 (Opus 8.5 r5) |
 | 3 | `s-message-content` | Merged, capped at round 5 (Opus 8.6 r5). Open: the broken-image chip is English in every language (question in the spec) |
+| 3 | `s-message-chrome` | Merged, capped at round 5 (Opus 8.6 r3 and r5, Codex 8.6 r4) |
 | 4 | `f-onboarding` | Merged, capped at round 5 (Opus 8.3 r3 and r5) |
 | 5 | `m-sheets` | Merged, approved at round 5 (Opus 9.0, no MUST) |
 | 4 | `f-user-settings` | Merged, capped at round 5 (Opus 8.1 r5, 8.2 r4) |
@@ -80,6 +81,8 @@ Read this file and the inventory at the start of every session.
 | 4 | `f-server-settings` | Merged, capped at round 5 (Opus 7.8 r5, 7.9 r4) |
 | 4 | `f-invites` | Merged, capped at round 5 (Opus 7.8 r5, 8.1 r3 and r4) |
 | 4 | `f-communities` | Merged, capped at round 5 (Opus 7.6 r5, 8.1 r3). Not done: a balanced chip wrap |
+| 4 | `f-bots` | Merged, capped at round 5 (Opus 8.3 r5). Not done: a spinner on the wizard's final button while it saves |
+| 4 | `f-states` | Merged, capped at round 5 (Opus 8.1 r5, 8.3 r4). Open: question on the deploy notes' wording (Railway). Not done: the error page in the canvas frame |
 | 5 | `m-breakpoints` | Merged (code only, no council) |
 
 ## Phase 0: directions
@@ -1539,6 +1542,34 @@ r2 8.2, r3 7.9 (MUST fixed: the webhook edge thinned at the corners), r4
 poll's other options at 14% under the 26% leader, the roll comment on the
 kicker, named chips at medium weight. Not done: none.
 
+### s-message-chrome
+
+Spec (audit: the hover toolbar, its "Mais" panel and `MoreMenuItem`,
+`ReactionBar`, `ReactionChip` and its who-tip, `ReplyQuote`, `ThreadChip`;
+the right-click menu is the merged `ContextMenu`):
+
+1. Job: act on a message, and see what others did with it.
+2. States: toolbar (three quick reactions, yours filled; add; reply; start
+   or open a thread; edit; more), "Mais" open up or down with a danger
+   group; reactions (yours, others, many, the add button); reply (author,
+   excerpt, deleted parent); thread chip (unread dot, open, archived, faces).
+3. Redesign: the toolbar is a pill on the popover surface with 32px round
+   buttons and Phosphor glyphs; "Mais" is the menu's panel and rows, so it
+   matches the right-click menu; a reaction is a 28px pill on a text tint,
+   yours the accent's soft fill with an accent ring; the reply line reads
+   author in text and excerpt in secondary; the thread chip is a pill on a
+   text tint, open is the selected row's fill.
+4. Duplicate kept: "Mais" and the right-click menu list the same actions in
+   two components. Moving "Mais" onto `Menu` changes its keyboard behaviour
+   with the toggle off, so it waits (question below).
+5. Question: should "Mais" become the shared `Menu` (arrow keys, type to
+   find) for everybody, not only under the redesign?
+
+Rounds: r1 Opus 7.6, r2 Codex 8.4, r3 Opus 8.6, r4 Codex 8.6, r5 Opus 8.6
+(no MUST, cap). After r5: the open chip's meta in its own softened colour,
+legible initials on the faces, toolbar focus in the focus colour. Not done:
+raising the toolbar to `-top-5` (it would cover more of the row above).
+
 ### f-onboarding
 
 Spec (audit: `onboarding/` (11 files), the hints in `layout/*-hint.tsx`
@@ -1577,15 +1608,70 @@ composers, medals, depoimentos, connections, communities),
 4. Kept: every action, the moderation composers inline (the evidence stays
    in view), the contact-sheet strip.
 
+Rounds: r1 Codex 7.8 (MUST fixed: the action wells vanished in light), r2
+Codex 8.0, r3 Opus 8.1, r4 Codex 8.1, r5 Opus 8.2 (no MUST, cap). After r5:
+danger hover on the red rows, focus rings on the timeout pills and reason
+inputs, the timeout note in secondary text, menu row rhythm in the
+community card. Not done: a filled check for "already friends" (copy shows
+with the toggle off).
+
+### f-states
+
+Spec (audit: `app-loading-shell.tsx` (the boot shell and the cannot-reach-
+the-API page, from `main.tsx` and `App.tsx`), `ui/skeleton.tsx` and the
+spinner (merged as `p-loading`), `error-boundary.tsx`, `HistoryFailed`
+(merged as `p-empty`)):
+
+1. Job: what the app shows before it can show the app, and when it cannot.
+2. Redesign: the boot shell is the frame (canvas, rail on it, floating side
+   and main panes on the frame recipes) with its skeletons, the composer a
+   rounded well, the label sentence case, "pqp" in Gabarito; the API error
+   page takes Gabarito and sentence case.
+3. Not touched: `error-boundary.tsx`. AGENTS.md says to leave it alone, and
+   question 3 asks André first.
+4. Kept: the stored sidebar width on first paint, the retry and the docs
+   pointers on the error page.
+5. Question (copy, shows with the toggle off): the deploy notes on the
+   error page name "Railway/Docker", but production runs on Vultr. Under
+   the redesign they fold behind "Detalhes para quem hospeda"; the text
+   itself waits for a yes.
+
+Rounds: r1 Opus 7.8, r2 Opus 7.6 (MUST fixed: the rail skeleton was squares
+where the rail draws circles), r3 Codex 7.4 (its MUST was a misread: it took
+the dark shot for light; the file is the dark capture), r4 Opus 8.3, r5 Opus
+8.1 (no MUST, cap; best r4). After r5: the host summary in secondary text,
+the failure announced and focus on the retry under the redesign. Not done:
+the error page inside the canvas frame (it replaces the whole tree; a
+restructure), a lighter light skeleton (the loading council set 10% because
+8% vanished at the pulse's low point), the kicker as plain text (it is a
+link today).
+
+### f-bots
+
+Spec (audit: `bots-settings-section.tsx` in server settings, `bots/` (the
+wizard with its preview pane, the overview, the face, radio choices, tags,
+the intro hint); behind the per-server `custom_bots` flag):
+
+1. Job: give a server a helper bot: name, face, colour, what it may do, and
+   see what it did.
+2. Redesign: the server settings frame around it; eyebrows sentence case;
+   face and colour choices take the kit's chosen-card recipe and the accent
+   ring; icon tiles round.
+3. Merges: question kept: `radio-choices.tsx` duplicates the roving radio
+   group; folding it into `ui/RadioGroup` would change the toggle-off look.
+4. Kept: the wizard steps, the practice chat, the activity list.
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss
   themselves. Sharing one behaviour means adding `@radix-ui/react-popover`
   (a new dependency and lockfile change). Only the look is shared for now.
 
-1. Reviewers: André dropped Grok (too slow), so the council is Opus and
-   Codex. On 2026-10-27 Codex hit its usage limit (until November 25,
-   2026), and rounds since then are Opus only. Add a second provider?
+1. Reviewers (answered 2026-10-28): André dropped Grok (too slow), so the
+   council is Opus and Codex. Codex hit its usage limit on 2026-10-27 and
+   rounds on Oct 27-28 were Opus only. On 2026-10-28 André moved Codex to a
+   ChatGPT Plus plan and picked gpt-6-luna (high). Codex reviews the middle
+   rounds; Opus joins for the sign-off round.
 2. Four features live in two versions behind flags. The redesign should
    rebuild only the version that stays. Which one stays for each?
    - DM list: classic or Conversas home (`conversations_home`).
@@ -1630,3 +1716,10 @@ composers, medals, depoimentos, connections, communities),
 | 2026-10-26 | Tokens merged on André's sign-off at Codex 9.0, Opus 8.4 | Opus's last MUST was fixed after T3. The element rounds hold the 9.0 bar from here. |
 | 2026-10-26 | Phase 2 follows the inventory order: primitives first, then shell, surfaces, phone | Every later element is built from the primitives. |
 | 2026-10-26 | The toggle ships before the tokens | It is the same for every direction and changes nothing visible. Precedence: `?redesign=1|0`, then the person's Beta switch (`pqp-redesign`), then the `redesign` flag. |
+
+Rounds (Opus only): r1 7.4 (3 MUST fixed), r2 7.8 (MUST fixed: the chosen
+card's edge was 1px), r3 7.7, r4 7.9, r5 8.3 (no MUST, cap). After r5: no
+resize grip on the persona, the stat notes on one line, the no-channel note
+in the warning colour. Not done: a spinner on the wizard's final button
+while it saves (`ui/button.tsx` has no loading prop).
+
