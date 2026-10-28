@@ -24,7 +24,7 @@ import { ChannelIcon } from "@/components/layout/channel-icon";
 import { UserPanel } from "@/components/layout/user-panel";
 import { MessageList, type MessageAuthorInfo } from "@/components/chat/message-list";
 import { MessageComposer } from "@/components/chat/message-composer";
-import { clearDraft, writeDraft } from "@/lib/composer-drafts";
+import { clearDraft, setDraftsAccount, writeDraft } from "@/lib/composer-drafts";
 import { ComposerReadOnlyNotice } from "@/components/chat/composer-read-only-notice";
 import type { ChatMessage } from "@/hooks/use-chat";
 import { ConnectionBanner } from "@/components/layout/connection-banner";
@@ -1150,9 +1150,19 @@ const COMPOSER_SLOW_UNTIL = Date.now() + 5 * 60_000;
 const COMPOSER_TYPING_CHANNEL = "00000000-0000-4000-8000-000000000512";
 
 function ComposerBlock() {
-  // Seeded before the composer below reads its draft; cleared on the way out.
-  useState(() => writeDraft(COMPOSER_TYPING_CHANNEL, "bora jogar hoje à noite?"));
-  useEffect(() => () => clearDraft(COMPOSER_TYPING_CHANNEL), []);
+  // Seeded before the composer below reads its draft, under a sheet-only
+  // account (the store writes nothing signed out); undone on the way out.
+  useState(() => {
+    setDraftsAccount("qa-ui-sheet");
+    writeDraft(COMPOSER_TYPING_CHANNEL, "bora jogar hoje à noite?");
+  });
+  useEffect(
+    () => () => {
+      clearDraft(COMPOSER_TYPING_CHANNEL);
+      setDraftsAccount(null);
+    },
+    [],
+  );
   return (
     <div data-testid="qa-shell-composer" className="flex flex-col gap-6">
       {/* Resting; a draft typed (send enabled); replying to Rafa; slow mode
