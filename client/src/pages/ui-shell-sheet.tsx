@@ -52,6 +52,10 @@ import type { LatestCard, LatestPreview } from "@/lib/community-home/latest";
 import { CornerCard } from "@/components/layout/corner-card";
 import { FirstRunCard } from "@/components/onboarding/first-run-card";
 import { Button } from "@/components/ui/button";
+import { AppSessionCard } from "@/components/apps/app-session-card";
+import { AppSessionStrip } from "@/components/apps/app-session-strip";
+import type { CardPerson, EndedCardModel, LiveCardModel } from "@/lib/apps/card-model";
+import type { EndedStripModel, LiveStripModel } from "@/lib/apps/strip-model";
 import { setUpdateWaiting } from "@/lib/update-prompt-state";
 import { AppBootstrapError, AppLoadingShell } from "@/components/layout/app-loading-shell";
 import { MusicQueueSpecimen } from "@/pages/qa-music-queue";
@@ -1324,6 +1328,72 @@ function CommunityCardsBlock() {
     </div>
   );
 }
+const APP_PEOPLE: CardPerson[] = ["Bia", "Rafa", "Duda"].map((name) => ({
+  userId: `id-${name}`,
+  displayName: name,
+  avatarUrl: null,
+}));
+const APP = { id: "pqp-eco", name: "Sala de jogos", icon: "gamepad" } as const;
+const STRIP_LIVE: LiveStripModel = {
+  kind: "live",
+  sessionId: "s1",
+  app: APP,
+  phase: "participant",
+  tone: "normal",
+  line: { kind: "hostIs", name: "Bia" },
+  people: APP_PEOPLE,
+  more: 0,
+  count: { kind: "of", players: 3, max: 4, watching: 0 },
+  roster: [
+    { userId: "id-Bia", name: "Bia", avatarUrl: null, host: true, spectator: false, reconnecting: false },
+    { userId: "id-Rafa", name: "Rafa", avatarUrl: null, host: false, spectator: false, reconnecting: false },
+  ],
+  seated: true,
+  isHost: false,
+  spectating: false,
+  showPane: true,
+  actions: { leave: true, end: false, enter: null, takeHost: false, share: false },
+};
+const STRIP_HOST: LiveStripModel = {
+  ...STRIP_LIVE,
+  phase: "host",
+  line: { kind: "host" },
+  isHost: true,
+  actions: { leave: true, end: true, enter: null, takeHost: false, share: true },
+};
+const STRIP_ENDED: EndedStripModel = {
+  kind: "ended",
+  sessionId: "s1",
+  app: APP,
+  disabled: false,
+  cause: { kind: "host", name: "Bia", self: false },
+  summary: { participants: 4, durationSeconds: 23 * 60 },
+};
+const CARD_LIVE: LiveCardModel = {
+  kind: "live",
+  sessionId: "s1",
+  app: { ...APP, category: "game" },
+  phase: "open",
+  subtitle: { kind: "started", name: "Bia", minutes: 4 },
+  count: { kind: "of", players: 3, max: 4 },
+  people: APP_PEOPLE,
+  more: 0,
+  full: false,
+  canWatch: false,
+  join: { status: "idle" },
+};
+const CARD_ENDED: EndedCardModel = {
+  kind: "ended",
+  app: { ...APP, category: "game" },
+  gone: false,
+  disabled: false,
+  summary: { participants: 4, durationSeconds: 1380 },
+  resultText: null,
+  starterName: "Bia",
+  startedAt: "2026-10-19T19:40:00.000Z",
+  people: APP_PEOPLE.slice(0, 2),
+  more: 0,
+};
 
 export function ShellSheet() {
   useUpdateWaitingFixture();
@@ -1642,6 +1712,37 @@ export function ShellSheet() {
       </div>
       {/* The music queue in a call's composer: three waiting, one played. */}
       <MusicQueueSpecimen />
+      {/* Apps: the strip over an app as a participant, as the host with the
+          share switch, and after it ended; the card a session leaves in the
+          chat, live and ended. */}
+      <div data-testid="qa-apps" className="flex max-w-3xl flex-col gap-4 p-4">
+        <AppSessionStrip model={STRIP_LIVE} onLeave={noop} />
+        <AppSessionStrip
+          model={STRIP_HOST}
+          share={{ visible: true, on: true, pending: false, needsCall: false, viewers: 2, wholeTab: false }}
+          onShareChange={noop}
+          onEnd={noop}
+          onLeave={noop}
+        />
+        <AppSessionStrip model={STRIP_ENDED} onClose={noop} />
+        <div className="grid grid-cols-2 gap-4">
+          <AppSessionCard model={CARD_LIVE} onJoin={noop} />
+          <AppSessionCard model={CARD_ENDED} />
+          {/* Joining (the button waits) and a full room you may watch. */}
+          <AppSessionCard model={{ ...CARD_LIVE, sessionId: "s3", join: { status: "joining" } }} onJoin={noop} />
+          <AppSessionCard
+            model={{
+              ...CARD_LIVE,
+              sessionId: "s4",
+              phase: "full",
+              full: true,
+              canWatch: true,
+              count: { kind: "full", players: 4, max: 4, watching: 1 },
+            }}
+            onJoin={noop}
+          />
+        </div>
+      </div>
     </div>
   );
 }

@@ -12479,7 +12479,7 @@ function MainAppContent({
                     title={t("chrome.moreActions")}
                     data-channel-header-more=""
                   >
-                    <HeaderGlyph off={<MoreHorizontal className="h-4 w-4" aria-hidden />} on={HeaderMoreIcon} />
+                    <HeaderGlyph off={<MoreHorizontal className="h-4 w-4" aria-hidden />} on={HeaderMoreIcon} kind="symbol" />
                   </button>
                 </ActionMenu>
               ) : undefined
