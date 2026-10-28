@@ -973,6 +973,10 @@
   --list-row-hover: var(--color-row-hover);
   --list-row-selected: var(--color-row-selected);
   --list-row-selected-text: var(--color-on-row-selected);
+  /* A two-line row (a conversation): the selected role at 64%, so a row
+     half again as tall as a channel reads at the same weight, under the
+     names and the unread counts. */
+  --list-row-selected-tall: color-mix(in oklab, var(--list-row-selected) 64%, transparent);
   /* A row's second line (a tag, a status, a count): the tertiary text. */
   --list-row-detail: var(--color-text-tertiary);
   /* A read row's name and its icon: a step and two steps under the body,

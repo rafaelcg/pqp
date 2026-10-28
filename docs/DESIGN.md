@@ -543,6 +543,31 @@ the redesign they take `ui/list-row.tsx`'s tokens:
   the thread's X and "Assistir" use the same token.
 - `ChannelListSkeleton` draws the same 36px pills, 2px apart.
 
+### The conversation list
+
+The DM home has two lists behind `conversations_home`: the classic one
+(`layout/dm-list.tsx`) and Conversas (`conversations/conversation-home-list.tsx`).
+Under the redesign both are the server sidebar's twin:
+
+- The header has no rule. The title takes `--pane-bar-title-size`, and its
+  actions are the 36px round tiles (`PANE_HEADER_ACTION_REDESIGN`) with
+  `ring-offset-pane-side`.
+- A conversation is a two-line list-row pill. Selected, it takes
+  `--list-row-selected-tall`, the selected role at 64%, so a row half again
+  as tall as a channel reads at the same weight.
+- The unread count (the channel row's `--count-badge-h`) is the only unread
+  mark. There is no left bar, and an unread time only steps up to the text
+  colour at medium weight.
+- A muted row dims its name and preview, not its face, and ends with the
+  filled bell-slash.
+- A group shows two faces across the face square, the front one cut by
+  `ring-pane-side`. Its size beside the name is `GROUP_SIZE_REDESIGN` (the
+  badge tag on `--radius-tick`), so it never reads as a count.
+- The idle call tile floats over the time on hover or focus, above the
+  count; a live call keeps it in the row in `--call-speaking`.
+- Keyboard focus is the inset `--list-row-ring`. Section labels are the
+  shared label in sentence case.
+
 ### The voice row
 
 A voice channel is a channel row (`ChannelRow`). The room you are in takes

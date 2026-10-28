@@ -4196,7 +4196,7 @@
   "dm.messageSomeone": "Message someone",
   "dm.copyId": "Copy conversation ID",
   "dm.close": "Close conversation",
-  "dm.sectionLabel": "CONVERSATIONS",
+  "dm.sectionLabel": "Conversations",
   "dm.inCall": "In a call",
   "dm.preview.attachment": "Sent a file",
   "dm.preview.gif": "Sent a GIF",
