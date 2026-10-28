@@ -37,6 +37,7 @@ import { SoundboardAddDialog } from "@/components/voice/soundboard-add-dialog";
 import { IconSwap } from "@/components/ui/icon";
 import { CALL_CONTROL_REDESIGN } from "@/components/voice/call-control-classes";
 import { Confetti } from "@phosphor-icons/react";
+import { BELOW_SM_QUERY } from "@/lib/breakpoints";
 
 /**
  * Why the board is unavailable for now. The button stays, disabled, and says
@@ -62,7 +63,7 @@ const PANEL_HEIGHT = 304;
  * 750 wide and 342 tall, and the 280px popover showed 1.3 rows there). Both
  * halves matter: the width alone leaves landscape on the popover.
  */
-export const SOUNDBOARD_SHEET_QUERY = "(max-width: 639px), (max-height: 520px)";
+export const SOUNDBOARD_SHEET_QUERY = `${BELOW_SM_QUERY}, (max-height: 520px)`;
 
 /** The sheet spans the screen, up to this wide, and sits above the call bar. */
 const SHEET_MAX_WIDTH = 640;
