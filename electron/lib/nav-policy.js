@@ -15,20 +15,50 @@
  */
 
 /**
- * Host suffixes that are part of an auth flow.
+ * Clerk's hosts for the PRODUCTION instance, exact. `clerk.pqp.gg` is the
+ * frontend API (the publishable key `pk_live_Y2xlcmsucHFwLmdnJA` in
+ * `ios/project.yml` is base64 of `clerk.pqp.gg$`) and `accounts.pqp.gg` is the
+ * hosted account portal. Both are also derived from the app host in
+ * `isAuthUrl`, which is what a self-host's own production instance relies on.
+ */
+const CLERK_PRODUCTION_HOSTS = ["clerk.pqp.gg", "accounts.pqp.gg"];
+
+/**
+ * App hosts that are the production site. On these the shell talks to the
+ * production Clerk instance only, so the development-instance suffixes below
+ * are not consulted.
+ */
+const PRODUCTION_APP_HOSTS = ["pqp.gg"];
+
+/**
+ * Clerk DEVELOPMENT instances (`pk_test_`): `<slug>.accounts.dev` for the
+ * account portal and `<slug>.clerk.accounts.dev` for the frontend API. Anybody
+ * can create one for free and the slug is theirs to choose, so a suffix match
+ * hands the window to whoever registers an instance. That is acceptable for a
+ * developer shell pointed at Vite or staging, where the instance in use is a
+ * dev one whose exact slug is not written anywhere in this repository (it
+ * lives in a repository variable and an untracked `client/.env`), and it is not
+ * acceptable for a shell on the production site, which never signs in through
+ * one. `isAuthUrl` applies these only off the production app host.
  *
- * Clerk's own hosts are derived from the app host at runtime
- * (`clerk.<host>` / `accounts.<host>` for a production instance) plus the
- * development instance domains below.
+ * TO TIGHTEN: replace the wildcard with the exact dev-instance hosts, e.g.
+ * `["relaxed-cat-42.accounts.dev", "relaxed-cat-42.clerk.accounts.dev"]`. The
+ * owner of the staging Clerk instance has them (Clerk dashboard, Domains).
+ */
+const CLERK_DEV_INSTANCE_SUFFIXES = [".accounts.dev"];
+
+/**
+ * Host suffixes that are part of an auth flow, on every site.
+ *
+ * Clerk's production hosts are `CLERK_PRODUCTION_HOSTS` above, plus
+ * `clerk.<app host>` / `accounts.<app host>` derived at runtime.
  *
  * The identity providers are listed by hand. If a provider is enabled in the
  * Clerk dashboard and is not in this list, desktop sign-in with it will bounce
  * to the system browser instead of completing in-app — add the host here.
  */
 const AUTH_HOST_SUFFIXES = [
-  // Clerk
-  ".accounts.dev",
-  ".clerk.accounts.dev",
+  // Clerk's own domain (customers cannot register subdomains of it)
   ".clerk.com",
   // Identity providers Clerk can redirect to
   "accounts.google.com",
@@ -145,9 +175,15 @@ function isAuthUrl(url, appOrigin) {
     return false;
   }
 
+  if (CLERK_PRODUCTION_HOSTS.includes(host)) {
+    return true;
+  }
+
+  let onProductionSite = false;
   if (appOrigin) {
     try {
       const appHost = new URL(appOrigin).hostname.toLowerCase();
+      onProductionSite = PRODUCTION_APP_HOSTS.includes(appHost);
       // Clerk production instances live on subdomains of the app's own domain.
       if (host === `clerk.${appHost}` || host === `accounts.${appHost}`) {
         return true;
@@ -158,6 +194,15 @@ function isAuthUrl(url, appOrigin) {
   }
 
   if (AUTH_HOST_SUFFIXES.some((suffix) => hostMatches(host, suffix))) {
+    return true;
+  }
+
+  // A Clerk development instance, for a shell that is not on the production
+  // site only (see CLERK_DEV_INSTANCE_SUFFIXES).
+  if (
+    !onProductionSite &&
+    CLERK_DEV_INSTANCE_SUFFIXES.some((suffix) => hostMatches(host, suffix))
+  ) {
     return true;
   }
 
@@ -238,6 +283,9 @@ function classifyNavigation(url, appOrigin) {
 
 module.exports = {
   AUTH_HOST_SUFFIXES,
+  CLERK_DEV_INSTANCE_SUFFIXES,
+  CLERK_PRODUCTION_HOSTS,
+  PRODUCTION_APP_HOSTS,
   classifyNavigation,
   isAuthUrl,
 };

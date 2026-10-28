@@ -30,7 +30,7 @@ export function VoiceAvatar({
     <div
       className={`relative shrink-0 rounded-full transition-shadow duration-150 ${dim} ${
         isSpeaking
-          ? "ring-2 ring-accent ring-offset-1 ring-offset-surface-0 shadow-[var(--shadow-speaking)]"
+          ? "ring-2 ring-accent ring-offset-1 ring-offset-surface-0 shadow-[var(--shadow-speaking)] redesign:ring-offset-0"
           : "ring-1 ring-ink-4 redesign:ring-0"
       }`}
     >

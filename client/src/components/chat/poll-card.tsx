@@ -27,11 +27,12 @@ const SHELL = cn(
   "shadow-[var(--shadow-chance-card)]",
   // Under the redesign, the card every message carries (ui/content-card.ts).
   CONTENT_CARD_REDESIGN,
-  "redesign:px-4 redesign:py-3.5",
+  "redesign:p-[var(--content-card-pad)]",
 );
 
 /** The avatar cutout on the card: the pane under its faint tint. */
-const VOTER_RING_REDESIGN = "redesign:ring-[color:var(--color-pane-main)]";
+// A hairline in the card's own fill, so a disc on the leader's accent fill gets no dark halo.
+const VOTER_RING_REDESIGN = "redesign:ring-1 redesign:ring-[color:var(--card-bg)]";
 
 export function PollCard({ poll, canManage = false, onVote, onClose }: PollCardProps) {
   const { t } = useTranslation();
@@ -50,7 +51,7 @@ export function PollCard({ poll, canManage = false, onVote, onClose }: PollCardP
           </span>
         )}
       </div>
-      <p className="mt-2 font-display text-lg font-semibold leading-snug text-paper redesign:text-text">
+      <p className="mt-2 font-display text-lg font-semibold leading-snug text-paper redesign:text-base redesign:text-text">
         {poll.question}
       </p>
       <ul className="mt-3 space-y-1.5">
@@ -93,8 +94,9 @@ export function PollCard({ poll, canManage = false, onVote, onClose }: PollCardP
                   className={cn(
                     "absolute inset-y-0 left-0 transition-[width] duration-500 ease-out",
                     leading
-                      ? "bg-[color-mix(in_oklab,var(--color-signal)_36%,var(--color-surface-3))] redesign:bg-[color:color-mix(in_oklab,var(--color-accent)_34%,transparent)]"
-                      : "bg-[color-mix(in_oklab,var(--color-signal)_20%,var(--color-surface-3))] redesign:bg-[color:color-mix(in_oklab,var(--color-accent)_16%,transparent)]",
+                      ? "bg-[color-mix(in_oklab,var(--color-signal)_36%,var(--color-surface-3))] redesign:bg-[color:color-mix(in_oklab,var(--color-accent)_26%,transparent)]"
+                      : "bg-[color-mix(in_oklab,var(--color-signal)_20%,var(--color-surface-3))] redesign:bg-[color:color-mix(in_oklab,var(--color-accent)_14%,transparent)]",
+                    // Your own vote reads by its ring and check; every other fill sits a clear step under the leader's.
                   )}
                   style={{ width: `${fill}%` }}
                 />
@@ -166,13 +168,13 @@ function VoterStack({ voters, names }: { voters: PollVoter[]; names: string }) {
           key={voter.userId}
           name={voter.displayName}
           avatarUrl={voter.avatarUrl}
-          className={cn("h-5 w-5 ring-2 ring-surface-1", VOTER_RING_REDESIGN)}
-          fallbackClassName="bg-surface-3 text-[9px] text-paper"
+          className={cn("h-5 w-5 ring-2 ring-surface-1 redesign:h-[22px] redesign:w-[22px]", VOTER_RING_REDESIGN)}
+          fallbackClassName="bg-surface-3 text-[9px] text-paper redesign:text-[10px] redesign:text-text"
           rounded="full"
         />
       ))}
       {overflow > 0 && (
-        <span className={cn("relative flex h-5 min-w-5 items-center justify-center rounded-full bg-surface-3 px-1 text-[9px] font-semibold text-paper ring-2 ring-surface-1 redesign:text-text", VOTER_RING_REDESIGN)}>
+        <span className={cn("relative flex h-5 min-w-5 items-center justify-center rounded-full bg-surface-3 px-1 text-[9px] font-semibold text-paper ring-2 ring-surface-1 redesign:h-[22px] redesign:min-w-[22px] redesign:text-[10px] redesign:text-text", VOTER_RING_REDESIGN)}>
           +{overflow}
         </span>
       )}

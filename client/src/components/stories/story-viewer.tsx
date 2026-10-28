@@ -84,6 +84,7 @@ import { displayLayerFrom, type MentionTarget } from "./story-layers";
 import { StoryReportDialog } from "./story-report-dialog";
 import type { StoryViewerSelf } from "./story-strip";
 import { StoryViewersSheet } from "./story-viewers-sheet";
+import { SM_UP_QUERY } from "@/lib/breakpoints";
 
 /**
  * The story viewer: a modal over the app, never a route (design decision 32).
@@ -182,7 +183,7 @@ export function StoryViewer({
 }: StoryViewerProps) {
   const { t } = useTranslation();
   const openProfile = useProfilePopover();
-  const wide = useMediaQuery("(min-width: 640px)", true);
+  const wide = useMediaQuery(SM_UP_QUERY, true);
   const cardSize = useStoryCardSize();
   const [state, dispatch] = useReducer(viewerReducer, request, (req) =>
     createViewerState(req.people, { personIndex: req.startIndex }),

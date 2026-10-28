@@ -5,6 +5,13 @@ import {
   MoreHorizontal,
   Phone,
 } from "lucide-react";
+import {
+  ArrowUpRight as ArrowUpRightGlyph,
+  At,
+  ChatCircle,
+  DotsThree,
+  Phone as PhoneGlyph,
+} from "@phosphor-icons/react";
 import { CARD_SURFACE } from "@/components/ui/card";
 import {
   createContext,
@@ -114,6 +121,7 @@ import {
 } from "./profile-relations";
 import { Spinner } from "@/components/ui/spinner";
 import { SectionLabel } from "@/components/ui/section-header";
+import { IconSwap } from "@/components/ui/icon";
 
 /**
  * The profile card: who this person is, and everything you can do about them,
@@ -329,15 +337,15 @@ function ActionTile({ label, className, children, ...rest }: ActionTileProps) {
     <button
       type="button"
       className={cn(
-        "group flex w-full min-w-0 flex-col items-center gap-1.5 text-paper focus-visible:outline-none disabled:pointer-events-none disabled:opacity-40",
+        "group flex w-full min-w-0 flex-col items-center gap-1.5 redesign:gap-1 text-paper focus-visible:outline-none disabled:pointer-events-none disabled:opacity-40",
         className,
       )}
       {...rest}
     >
-      <span className="flex h-10 w-full items-center justify-center rounded-xl bg-ink-3/70 text-paper transition-colors group-hover:bg-ink-3 group-focus-visible:ring-2 group-focus-visible:ring-signal/60">
+      <span className="flex h-10 w-full items-center justify-center rounded-xl bg-ink-3/70 text-paper transition-colors group-hover:bg-ink-3 group-focus-visible:ring-2 group-focus-visible:ring-signal/60 redesign:rounded-full redesign:bg-[color:var(--card-bg)] redesign:[:root[data-theme=light]_&]:bg-[color:var(--content-glyph-bg)] redesign:text-text redesign:group-hover:bg-[color:var(--menu-row-hover)] redesign:[:root[data-theme=light]_&]:group-hover:bg-[color:var(--content-card-hover)] redesign:group-focus-visible:ring-[color:var(--color-focus-ring)] redesign:group-focus-visible:ring-offset-2 redesign:group-focus-visible:ring-offset-[color:var(--popover-surface)]">
         {children}
       </span>
-      <span className="max-w-full text-center text-[11px] font-medium leading-tight text-paper-muted">
+      <span className="max-w-full text-center text-[11px] font-medium leading-tight text-paper-muted redesign:text-text-secondary">
         {label}
       </span>
     </button>
@@ -370,7 +378,7 @@ function ProfileCardBanner({ bannerUrl, tint }: { bannerUrl: string | null; tint
     <div
       aria-hidden="true"
       data-profile-banner={showImage ? "image" : "generated"}
-      className="relative overflow-hidden rounded-t-2xl"
+      className="relative overflow-hidden rounded-t-2xl redesign:rounded-t-[calc(var(--popover-radius)-1px)]"
       style={{
         aspectRatio: `${USER_BANNER_WIDTH} / ${USER_BANNER_HEIGHT}`,
         background:
@@ -1184,7 +1192,7 @@ function UserProfileCard({
                 window.open(publicHref, "_blank", "noopener,noreferrer");
               }}
             >
-              <ArrowUpRight aria-hidden className="h-[18px] w-[18px]" />
+              <IconSwap off={ArrowUpRight} on={ArrowUpRightGlyph} kind="symbol" offClassName="h-[18px] w-[18px]" size="md" />
             </ActionTile>
           </div>
         )}
@@ -1196,7 +1204,7 @@ function UserProfileCard({
               data-profile-message=""
               onClick={handleMessage}
             >
-              <MessageCircle aria-hidden className="h-[18px] w-[18px]" />
+              <IconSwap off={MessageCircle} on={ChatCircle} offClassName="h-[18px] w-[18px]" size="md" />
             </ActionTile>
           </div>
         )}
@@ -1208,7 +1216,7 @@ function UserProfileCard({
               data-profile-call=""
               onClick={handleCall}
             >
-              <Phone aria-hidden className="h-[18px] w-[18px]" />
+              <IconSwap off={Phone} on={PhoneGlyph} offClassName="h-[18px] w-[18px]" size="md" />
             </ActionTile>
           </div>
         )}
@@ -1225,7 +1233,7 @@ function UserProfileCard({
                 onClose();
               }}
             >
-              <AtSign aria-hidden className="h-[18px] w-[18px]" />
+              <IconSwap off={AtSign} on={At} kind="symbol" offClassName="h-[18px] w-[18px]" size="md" />
             </ActionTile>
           </div>
         )}
@@ -1238,7 +1246,7 @@ function UserProfileCard({
               disabled={busy}
               onClick={() => setOverflowOpen((was) => !was)}
             >
-              <MoreHorizontal aria-hidden className="h-[18px] w-[18px]" />
+              <IconSwap off={MoreHorizontal} on={DotsThree} kind="symbol" offClassName="h-[18px] w-[18px]" size="md" />
             </ActionTile>
             {overflowOpen && (
               <div
@@ -1257,7 +1265,7 @@ function UserProfileCard({
                   ),
                   visibility: menuAt ? "visible" : "hidden",
                 }}
-                className="fixed z-10 w-48 overflow-y-auto rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)]"
+                className="fixed z-10 w-48 overflow-y-auto rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)] redesign:rounded-[var(--menu-radius)] redesign:border-[color:var(--popover-border)] redesign:bg-[color:var(--popover-surface)] redesign:p-[var(--menu-pad)] redesign:shadow-[var(--popover-shadow)]"
               >
                 {overflowItems.map((item) => (
                   <button
@@ -1268,6 +1276,11 @@ function UserProfileCard({
                     className={cn(
                       "flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-sm outline-none hover:bg-ink-3 focus-visible:bg-ink-3",
                       item.danger ? "text-danger" : "text-paper",
+                      // Under the redesign: the shared menu's rows.
+                      "redesign:rounded-[var(--menu-row-radius)] redesign:py-[var(--menu-row-py)]",
+                      item.danger
+                        ? "redesign:hover:bg-[color:var(--menu-danger-hover)] redesign:focus-visible:bg-[color:var(--menu-danger-hover)]"
+                        : "redesign:text-text redesign:hover:bg-[color:var(--menu-row-hover)] redesign:focus-visible:bg-[color:var(--menu-row-hover)]",
                     )}
                     onClick={item.onSelect}
                   >
@@ -1283,11 +1296,11 @@ function UserProfileCard({
 
   const manageSection =
     manageItems.length > 0 ? (
-      <div className="mt-3 overflow-hidden rounded-xl bg-ink-3/60">
+      <div className="mt-3 overflow-hidden rounded-xl bg-ink-3/60 redesign:rounded-[var(--radius-card)] redesign:border redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)]">
         <SectionLabel as="p" className="px-3 pb-1 pt-2.5 text-[11px] font-semibold uppercase tracking-wide text-paper-muted">
           {t("profile.mod.section")}
         </SectionLabel>
-        <div className="divide-y divide-ink-4/50">
+        <div className="divide-y divide-ink-4/50 redesign:divide-[color:var(--card-border)]">
           {manageItems.map((item) => (
             <button
               key={item.id}
@@ -1298,6 +1311,11 @@ function UserProfileCard({
               className={cn(
                 "flex w-full items-center px-3 py-2.5 text-left text-sm transition-colors hover:bg-ink-3 focus-visible:bg-ink-3 focus-visible:outline-none disabled:opacity-40",
                 item.danger ? "text-danger" : "text-paper",
+                "redesign:py-[var(--menu-row-py)]",
+                item.danger
+                  ? "redesign:hover:bg-[color:var(--menu-danger-hover)] redesign:focus-visible:bg-[color:var(--menu-danger-hover)]"
+                  : "redesign:hover:bg-[color:var(--card-row-hover)] redesign:focus-visible:bg-[color:var(--card-row-hover)]",
+                !item.danger && "redesign:text-text",
               )}
               onClick={item.onSelect}
             >
@@ -1310,7 +1328,7 @@ function UserProfileCard({
 
   const cargosSection =
     assignableCargos.length > 0 ? (
-      <div className="mt-3 overflow-hidden rounded-xl bg-ink-3/60">
+      <div className="mt-3 overflow-hidden rounded-xl bg-ink-3/60 redesign:rounded-[var(--radius-card)] redesign:border redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)]">
         <SectionLabel as="p" className="px-3 pb-1 pt-2.5 text-[11px] font-semibold uppercase tracking-wide text-paper-muted">
           {t("profile.cargos")}
         </SectionLabel>
@@ -1355,6 +1373,8 @@ function UserProfileCard({
           // Drop under the confirm Dialog (z-60) so the in-app confirm is on top.
           className={cn(
             "fixed max-h-[calc(100dvh-16px)] overflow-y-auto overscroll-contain rounded-2xl border border-ink-4 bg-ink-2 shadow-[var(--shadow-popover)] animate-fade-in",
+            // Under the redesign: the shared popover surface, edge and lift.
+            "redesign:rounded-[var(--popover-radius)] redesign:border-[color:var(--popover-border)] redesign:bg-[color:var(--popover-surface)] redesign:text-text redesign:shadow-[var(--popover-shadow)]",
             pendingConfirm ? "z-[50]" : "z-[110]",
           )}
         >
@@ -1385,7 +1405,7 @@ function UserProfileCard({
               `onError` fallback is what turns a dead URL into the monogram
               instead of a broken image. See `e2e/profile-popover-avatar.spec.ts`. */}
           {serverBot ? (
-            <span className="grid h-20 w-20 place-items-center rounded-full bg-surface-1 ring-4 ring-ink-2">
+            <span className="grid h-20 w-20 place-items-center rounded-full bg-surface-1 ring-4 ring-ink-2 redesign:ring-[color:var(--popover-surface)]">
               <UserAvatar name={subject.displayName} avatarUrl={subject.avatarUrl} className="h-14 w-14" />
             </span>
           ) : (
@@ -1393,7 +1413,7 @@ function UserProfileCard({
               name={subject.displayName}
               avatarUrl={subject.avatarUrl}
               rounded="full"
-              className="h-20 w-20 ring-4 ring-ink-2"
+              className="h-20 w-20 ring-4 ring-ink-2 redesign:ring-[color:var(--popover-surface)]"
               fallbackClassName="bg-ink-3 text-2xl text-paper"
             />
           )}
@@ -1401,13 +1421,13 @@ function UserProfileCard({
             <StatusDot
               status={presence}
               size="md"
-              className="absolute bottom-0 right-0"
-              ringClassName="rounded-full bg-ink-2 ring-4 ring-ink-2"
+              className="absolute bottom-0 right-0 redesign:bottom-1.5 redesign:right-1.5"
+              ringClassName="rounded-full bg-ink-2 ring-4 ring-ink-2 redesign:bg-[color:var(--popover-surface)] redesign:ring-[color:var(--popover-surface)]"
             />
           )}
         </div>
 
-        <p className="mt-2 flex items-center justify-center gap-1.5 font-display text-xl font-bold text-paper">
+        <p className="mt-2 flex items-center justify-center gap-1.5 font-display text-xl font-bold text-paper redesign:font-[family-name:var(--type-title-font)] redesign:text-text">
           <span className="truncate" data-profile-name="">
             {subject.displayName}
           </span>
@@ -1422,7 +1442,7 @@ function UserProfileCard({
           {serverBot && <ServerBotTags />}
         </p>
         {subject.tag && (
-          <p className="truncate text-center font-mono text-xs text-paper-muted">
+          <p className="truncate text-center font-mono text-xs text-paper-muted redesign:font-sans redesign:text-text-tertiary">
             {subject.tag}
           </p>
         )}
@@ -1463,7 +1483,7 @@ function UserProfileCard({
             href={publicHref}
             target="_blank"
             rel="noreferrer"
-            className="mt-0.5 block truncate text-center font-mono text-xs text-signal hover:underline"
+            className="mt-0.5 block truncate text-center font-mono text-xs text-signal hover:underline redesign:font-sans redesign:font-semibold redesign:text-accent-text"
             data-profile-public-url=""
           >
             {t("profile.publicUrl", { handle: subject.handle })}
@@ -1477,7 +1497,7 @@ function UserProfileCard({
             {paintedRoles.map((role) => (
               <li
                 key={role.id}
-                className="inline-flex items-center gap-1 rounded-md bg-ink-3 px-1.5 py-0.5 text-[11px] text-paper"
+                className="inline-flex items-center gap-1 rounded-md bg-ink-3 px-1.5 py-0.5 text-[11px] text-paper redesign:h-[var(--badge-h)] redesign:rounded-full redesign:border redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:px-2 redesign:py-0 redesign:font-semibold redesign:text-text"
               >
                 <span
                   className="h-2 w-2 shrink-0 rounded-full"
@@ -1648,7 +1668,7 @@ function UserProfileCard({
             spend that height on chevrons. One segment at a time, leftover
             height. Empty blocks stay omitted, including from the control. */}
         {((achievements ?? []).length > 0 || aboutTabs.length > 0) && (
-          <div className="mt-4 border-t border-ink-4/60 pt-3">
+          <div className="mt-4 border-t border-ink-4/60 pt-3 redesign:border-[color:var(--card-border)]">
             <Achievements
               achievements={achievements ?? []}
               variant="compact"
@@ -1672,7 +1692,7 @@ function UserProfileCard({
               <div
                 role={aboutSegmented ? "tabpanel" : undefined}
                 data-profile-about-pane={aboutActive ?? undefined}
-                className={aboutSegmented ? "mt-2 rounded-xl bg-ink-3/60" : undefined}
+                className={aboutSegmented ? "mt-2 rounded-xl bg-ink-3/60 redesign:rounded-[var(--radius-card)] redesign:border redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)]" : undefined}
               >
                 {(!aboutSegmented || aboutActive === "depoimentos") && (
                   <DepoimentosSection
@@ -1718,7 +1738,7 @@ function UserProfileCard({
         {timeoutMinutes !== null && (
           <div
             data-profile-timeout-composer=""
-            className="mt-3 rounded-md border border-ink-4 bg-ink-3/60 p-2"
+            className="mt-3 rounded-md border border-ink-4 bg-ink-3/60 p-2 redesign:rounded-[var(--radius-card)] redesign:border redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:p-3"
           >
             <p className="text-xs font-semibold text-paper">
               {t("profile.mod.timeout.title", { name: subject.displayName })}
@@ -1740,6 +1760,11 @@ function UserProfileCard({
                     timeoutMinutes === minutes
                       ? "bg-signal font-semibold text-ink"
                       : "bg-ink-4/60 text-paper hover:bg-ink-4",
+                    // Under the redesign: the shared pill choices.
+                    "redesign:rounded-full redesign:border redesign:py-1.5 redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--list-row-ring)]",
+                    timeoutMinutes === minutes
+                      ? "redesign:border-accent redesign:bg-[color:var(--list-row-selected)] redesign:text-[color:var(--list-row-selected-text)]"
+                      : "redesign:border-[color:var(--card-border)] redesign:bg-transparent redesign:text-text-secondary redesign:hover:bg-[color:var(--card-row-hover)] redesign:hover:text-text",
                   )}
                   onClick={() => setTimeoutMinutes(minutes)}
                 >
@@ -1753,10 +1778,10 @@ function UserProfileCard({
               maxLength={TIMEOUT_REASON_MAX_LENGTH}
               placeholder={t("profile.mod.reason.placeholder")}
               aria-label={t("profile.mod.reason")}
-              className="mt-2 w-full rounded-md border border-ink-4 bg-ink px-2 py-1 text-xs text-paper placeholder:text-paper-muted"
+              className="mt-2 w-full rounded-md border border-ink-4 bg-ink px-2 py-1 text-xs text-paper placeholder:text-paper-muted redesign:rounded-[var(--input-radius)] redesign:border-[color:var(--input-border)] redesign:bg-[color:var(--input-bg)] redesign:px-2.5 redesign:py-1.5 redesign:text-text redesign:placeholder:text-[color:var(--input-placeholder)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-[color:var(--popover-surface)] redesign:focus-visible:ring-[color:var(--input-ring,var(--color-focus-ring))]"
               onChange={(event) => setTimeoutReason(event.target.value)}
             />
-            <p className="mt-1.5 text-[11px] text-paper-muted">
+            <p className="mt-1.5 text-[11px] text-paper-muted redesign:text-xs redesign:text-text-secondary">
               {t("profile.mod.timeout.body")}
             </p>
             <div className="mt-2 flex gap-1.5">
@@ -1796,7 +1821,7 @@ function UserProfileCard({
               { name: subject.displayName },
             )}
             data-profile-mod-confirm={confirmingModeration}
-            className="mt-3 rounded-md border border-ink-4 bg-ink-3/60 p-2"
+            className="mt-3 rounded-md border border-ink-4 bg-ink-3/60 p-2 redesign:rounded-[var(--radius-card)] redesign:border redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:p-3"
           >
             <p className="text-xs font-semibold text-paper">
               {t(
@@ -1820,7 +1845,7 @@ function UserProfileCard({
                 maxLength={TIMEOUT_REASON_MAX_LENGTH}
                 placeholder={t("profile.mod.reason.placeholder")}
                 aria-label={t("profile.mod.reason")}
-                className="mt-2 w-full rounded-md border border-ink-4 bg-ink px-2 py-1 text-xs text-paper placeholder:text-paper-muted"
+                className="mt-2 w-full rounded-md border border-ink-4 bg-ink px-2 py-1 text-xs text-paper placeholder:text-paper-muted redesign:rounded-[var(--input-radius)] redesign:border-[color:var(--input-border)] redesign:bg-[color:var(--input-bg)] redesign:px-2.5 redesign:py-1.5 redesign:text-text redesign:placeholder:text-[color:var(--input-placeholder)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-[color:var(--popover-surface)] redesign:focus-visible:ring-[color:var(--input-ring,var(--color-focus-ring))]"
                 onChange={(event) => setBanReason(event.target.value)}
               />
             )}
@@ -1853,7 +1878,7 @@ function UserProfileCard({
         )}
 
         {confirming && (
-          <div className="mt-3 rounded-md border border-ink-4 bg-ink-3/60 p-2">
+          <div className="mt-3 rounded-md border border-ink-4 bg-ink-3/60 p-2 redesign:rounded-[var(--radius-card)] redesign:border redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:p-3">
             <p className="text-xs text-paper">
               {t("profile.cancelRequest.confirm", {
                 name: subject.displayName,

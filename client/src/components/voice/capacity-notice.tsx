@@ -110,7 +110,7 @@ export function CapacityNotice({
       footer={
         <Button
           size="sm"
-          className="cta-lift rounded-full px-4"
+          data-cta className="cta-lift rounded-full px-4"
           onClick={() => setDismissedChannel(voiceChannelId)}
         >
           {t("featureHint.gotIt")}

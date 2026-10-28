@@ -8,7 +8,7 @@ import type {
   VoiceParticipant,
   WatchParty,
 } from "@pqp/shared";
-import { useEffect, type ComponentProps, type ReactNode } from "react";
+import { useEffect, useState, type ComponentProps, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { CommunityHomePreview } from "@/components/community-home/community-home-preview";
 import {
@@ -24,6 +24,7 @@ import { ChannelIcon } from "@/components/layout/channel-icon";
 import { UserPanel } from "@/components/layout/user-panel";
 import { MessageList, type MessageAuthorInfo } from "@/components/chat/message-list";
 import { MessageComposer } from "@/components/chat/message-composer";
+import { clearDraft, setDraftsAccount, writeDraft } from "@/lib/composer-drafts";
 import { ComposerReadOnlyNotice } from "@/components/chat/composer-read-only-notice";
 import { MemberSidebar } from "@/components/layout/member-sidebar";
 import type { ServerMember, ServerRole } from "@/lib/api";
@@ -43,10 +44,17 @@ import {
   type CategoryHeaderDrag,
 } from "@/components/layout/channel-list-mixed";
 import { ServerRail } from "@/components/layout/server-rail";
+import { communitySummarySchema } from "@pqp/shared";
+import { CommunityCard, CommunityCardSkeleton } from "@/components/communities/community-card";
 import { LivePartyBlock } from "@/components/watch-party/live-party-block";
 import { ServerIcon } from "@/components/layout/server-identity";
 import type { LatestCard, LatestPreview } from "@/lib/community-home/latest";
+import { CornerCard } from "@/components/layout/corner-card";
+import { FirstRunCard } from "@/components/onboarding/first-run-card";
+import { Button } from "@/components/ui/button";
 import { setUpdateWaiting } from "@/lib/update-prompt-state";
+import { AppBootstrapError, AppLoadingShell } from "@/components/layout/app-loading-shell";
+import { MusicQueueSpecimen } from "@/pages/qa-music-queue";
 
 /**
  * The shell's pieces on `/qa/ui`, drawn by the real components with made-up
@@ -192,7 +200,7 @@ function SheetChannelRow({
       selected={selected}
       unread={{ count: 0, mentions: 0 }}
       canManage
-      icon={<ChannelIcon channel={channel} className={channelRowIconClass(channel, selected)} />}
+      icon={<ChannelIcon channel={channel} className={channelRowIconClass(channel, selected, rest.connected)} />}
       isDragging={false}
       isDragOver={false}
       onSelect={noop}
@@ -332,6 +340,19 @@ function ChannelRowsBlock() {
             channel={textChannel("cine2", "cineclube", { type: "watch_party", topic: "Clássicos de domingo" })}
             liveState={{ live: false, presenterPeerId: null, viewerCount: 0, startedAt: null } as never}
           />
+          {/* The party you are watching from, not open: the success fill. */}
+          <SheetChannelRow
+            channel={textChannel("cine3", "sessão da tarde", { type: "watch_party", topic: "Com a turma" })}
+            liveState={{ live: true, presenterPeerId: "p2", viewerCount: 5, startedAt: null } as never}
+            connected
+          />
+          {/* Connected with something unread: the pip takes the dot's place. */}
+          <SheetChannelRow
+            channel={textChannel("cine4", "maratona", { type: "watch_party", topic: "Trilogia inteira" })}
+            liveState={{ live: true, presenterPeerId: "p3", viewerCount: 3, startedAt: null } as never}
+            unread={{ count: 2, mentions: 0 }}
+            connected
+          />
         </div>
       </SidePane>
     </div>
@@ -341,7 +362,7 @@ function ChannelRowsBlock() {
 /** One icons-only sidebar: the side pane at the strip's 72px. */
 function StripPane({ children }: { children: ReactNode }) {
   return (
-    <div className="flex w-[72px] flex-col items-center gap-1 rounded-lg bg-surface-1 px-2 py-3 redesign:rounded-[var(--radius-pane)] redesign:bg-pane-side">
+    <div className="flex w-[72px] flex-col items-center gap-1 rounded-lg bg-surface-1 px-2 py-3 redesign:gap-1.5 redesign:rounded-[var(--radius-pane)] redesign:bg-pane-side">
       {children}
     </div>
   );
@@ -351,8 +372,10 @@ function StripGroup({ first = false, children }: { first?: boolean; children: Re
   return (
     <div
       className={cn(
-        "flex w-full flex-col items-center gap-1",
+        "flex w-full flex-col items-center gap-1 redesign:gap-1.5",
         !first && "mt-1 border-t border-ink-4/50 pt-2 redesign:border-[color:var(--card-border)]",
+        // Under a Baú the first group takes the rule too, as in the app.
+        first && "redesign:mt-1 redesign:border-t redesign:pt-2 redesign:border-[color:var(--card-border)]",
       )}
     >
       {children}
@@ -418,6 +441,10 @@ function SidebarStripBlock() {
           {tile(textChannel("ajuda", "ajuda", { type: "forum" }))}
           {tile(textChannel("clipes", "clipes"))}
         </StripGroup>
+        <StripGroup>
+          {/* In the call and viewing it: the solid green edge. */}
+          {tile(textChannel("lobby2", "Lobby", { type: "voice" }), { connected: true, selected: true, occupants: 3, onJoinVoice: noop })}
+        </StripGroup>
       </StripPane>
     </div>
   );
@@ -449,6 +476,10 @@ function VoiceStripBlock() {
           channel; the 72px strip. */}
       <FooterPane>
         <VoiceStatusBar {...base} status="connected" isCameraOn />
+      </FooterPane>
+      {/* Sharing the screen: the share pill pressed, its "on air" glyph. */}
+      <FooterPane>
+        <VoiceStatusBar {...base} status="connected" isSharingScreen />
       </FooterPane>
       <FooterPane>
         <VoiceStatusBar {...base} status="joining" />
@@ -521,6 +552,13 @@ function UserPanelBlock() {
       </FooterPane>
       <FooterPane>
         <UserPanel {...base} inVoice serverMuted />
+      </FooterPane>
+      {/* Listen only (audience mode): the mic locked, not unavailable. */}
+      <FooterPane>
+        <UserPanel {...base} inVoice canSpeak={false} />
+      </FooterPane>
+      <FooterPane>
+        <UserPanel {...base} inVoice canSpeak={false} isMuted />
       </FooterPane>
       <FooterPane>
         <UserPanel {...base} manualStatus="dnd" effectiveStatus="dnd" />
@@ -595,6 +633,40 @@ function BannersBlock() {
         />
         <ConnectionBanner status="reconnecting" refusedRepeatedly={false} onRetry={noop} onCheck={noop} onSignInAgain={noop} />
       </MainPane>
+      {/* The harder states: a watch-now join that failed, and a session
+          with no reminder set (the ghost "Lembrar"). */}
+      <MainPane>
+        <WatchNowBanner
+          now={NOW}
+          streams={[
+            { key: "c", channelId: "c3", kind: "voice", place: "Lobby", sharerUserId: "u1", sharerName: "Rafa", startedAt: NOW - 4 * 60_000, watching: 2, inRoom: false },
+          ]}
+          failure="A transmissão terminou."
+          onWatch={noop}
+          onDismiss={noop}
+        />
+        <UpcomingSessionCard
+          session={{
+            id: "00000000-0000-4000-8000-000000000211",
+            channelId: "00000000-0000-4000-8000-000000000212",
+            serverId: null,
+            title: "Noite do Mario Kart",
+            description: null,
+            coverImageUrl: null,
+            startsAt: new Date(NOW + 26 * 3_600_000).toISOString(),
+            status: "scheduled",
+            createdBy: "00000000-0000-4000-8000-000000000203",
+            createdAt: new Date(NOW).toISOString(),
+            updatedAt: new Date(NOW).toISOString(),
+            reminding: false,
+          }}
+          now={new Date(NOW)}
+          canManage={false}
+          onToggleReminder={asyncNoop}
+          onCancel={asyncNoop}
+          onEdit={noop}
+        />
+      </MainPane>
     </div>
   );
 }
@@ -625,7 +697,15 @@ const ROW_MESSAGES: ChatMessage[] = [
   rowMessage(1, ROW_RAFA, "Rafa", "alguém on hoje à noite pra fechar aquela campanha?"),
   rowMessage(2, ROW_RAFA, "Rafa", "trouxe o mapa novo, ficou insano", { editedAt: new Date(NOW - 15 * 60_000).toISOString() }),
   rowMessage(3, ROW_RAFA, "Rafa", "@lia cê vem?"),
+  // A second mention right under it, so the joined corners show.
+  rowMessage(9, ROW_RAFA, "Rafa", "@lia traz o controle extra", {
+    createdAt: new Date(NOW - 16.5 * 60_000).toISOString(),
+  }),
   rowMessage(4, ROW_ME, "Lia", "vou sim, levo o lanche dessa vez"),
+  // A mention that starts a group, so the avatar and its dot sit on the fill.
+  rowMessage(10, ROW_BIA, "Bia", "@lia guarda um lugar pra mim", {
+    createdAt: new Date(NOW - 15.5 * 60_000).toISOString(),
+  }),
   rowMessage(5, ROW_BIA, "Bia", "as regras do campeonato tão aqui", {
     pinnedAt: new Date(NOW - 5 * 60_000).toISOString(),
   }),
@@ -643,8 +723,8 @@ const ROW_AUTHORS = new Map<string, MessageAuthorInfo>([
 function MessageRowsBlock() {
   return (
     <div data-testid="qa-shell-message-rows" className="flex flex-col gap-6">
-      {/* Rafa: a group of three (one edited, the last names you). You. Bia
-          with a pinned line. A webhook. Then yours sending, and one that
+      {/* Rafa: a group of four (one edited, the last two name you). You. Bia
+          naming you, then a pinned line. A webhook. Then yours sending, and one that
           failed with Retry and Discard. */}
       <MainPane>
         <div className="flex h-[620px] min-h-0 flex-col">
@@ -689,18 +769,19 @@ const SHEET_WAVEFORM = btoa(
 
 const CONTENT_MARKDOWN = [
   "**bora** fechar hoje, o mapa novo tá em `maps/v2` e as regras em https://pqp.gg/regras",
-  "> quem perder paga o lanche",
   "@bia cê traz o controle? o @rafa já confirmou",
   "- 20h: aquecimento",
   "- 21h: final",
   "```",
   "/roll 2d6+1",
   "```",
+  // Last, so nothing after it is pulled into the quote.
+  "> quem perder paga o lanche",
 ].join("\n");
 
 const CONTENT_MESSAGES_A: ChatMessage[] = [
   contentMessage(1, ROW_RAFA, "Rafa", CONTENT_MARKDOWN),
-  contentMessage(2, ROW_BIA, "Bia", "@lia trago sim. print da última partida e o chaveamento:", {
+  contentMessage(2, ROW_BIA, "Bia", "@lia trago sim, e o @rafa leva o chaveamento:", {
     attachments: [
       {
         id: "00000000-0000-4000-8000-000000000601",
@@ -736,6 +817,22 @@ const CONTENT_MESSAGES_A: ChatMessage[] = [
       },
     ],
   }),
+  // Bia's note, not heard yet: the unheard dot and the quiet bars.
+  contentMessage(9, ROW_BIA, "Bia", "", {
+    createdAt: new Date(NOW - 26.5 * 60_000).toISOString(),
+    attachments: [
+      {
+        id: "00000000-0000-4000-8000-000000000604",
+        filename: "nota-da-bia.webm",
+        contentType: "audio/webm",
+        byteSize: 36_000,
+        width: null,
+        height: null,
+        url: `${SHEET_ORIGIN}/nota-da-bia.webm`,
+        voice: { durationMs: 9_000, waveform: SHEET_WAVEFORM, listenedByMe: false },
+      },
+    ],
+  }),
   contentMessage(4, ROW_RAFA, "Rafa", "olha isso que o Caio mandou no outro server", {
     forward: {
       v: 1,
@@ -758,6 +855,7 @@ const CONTENT_VOTERS = [
   { userId: ROW_RAFA, displayName: "Rafa", avatarUrl: null },
   { userId: ROW_BIA, displayName: "Bia", avatarUrl: null },
   { userId: ROW_ME, displayName: "Lia", avatarUrl: null },
+  { userId: "00000000-0000-4000-8000-0000000008a1", displayName: "Caio", avatarUrl: null },
 ];
 
 const CONTENT_MESSAGES_B: ChatMessage[] = [
@@ -770,8 +868,9 @@ const CONTENT_MESSAGES_B: ChatMessage[] = [
       totalVotes: 4,
       canClose: false,
       options: [
-        { id: "00000000-0000-4000-8000-000000000801", label: "20h", votes: 3, voted: true, voters: CONTENT_VOTERS },
-        { id: "00000000-0000-4000-8000-000000000802", label: "21h", votes: 1, voted: false, voters: [CONTENT_VOTERS[1]] },
+        // You voted 21h; 20h leads. So the ring and the leading fill show apart.
+        { id: "00000000-0000-4000-8000-000000000801", label: "20h", votes: 3, voted: false, voters: [CONTENT_VOTERS[0], CONTENT_VOTERS[1], CONTENT_VOTERS[3]] },
+        { id: "00000000-0000-4000-8000-000000000802", label: "21h", votes: 1, voted: true, voters: [CONTENT_VOTERS[2]] },
         { id: "00000000-0000-4000-8000-000000000803", label: "Amanhã", votes: 0, voted: false, voters: [] },
       ],
     },
@@ -820,7 +919,7 @@ function MessageContentBlock() {
           in; a dice roll; a link preview; a webhook's own embed. */}
       {[CONTENT_MESSAGES_A, CONTENT_MESSAGES_B].map((messages, index) => (
         <MainPane key={index}>
-          <div className="flex h-[900px] min-h-0 flex-col">
+          <div className={cn("flex min-h-0 flex-col", index === 0 ? "h-[1180px]" : "h-[900px]")}>
             <MessageList
               messages={messages}
               currentUserId={ROW_ME}
@@ -894,6 +993,51 @@ const CHROME_MESSAGES: ChatMessage[] = [
 ];
 
 const CHROME_UNREAD_THREADS = new Set([CHROME_THREAD]);
+
+/** A row with ten reactions (they wrap) above a thread chip, then a one-line continuation. */
+const CHROME_WRAP_MESSAGES: ChatMessage[] = [
+  contentMessage(16, ROW_RAFA, "Rafa", "chaveamento fechado, 16 duplas", {
+    reactions: [
+      { emoji: "👍", count: 4, me: false, users: [] },
+      { emoji: "🔥", count: 2, me: false, users: [] },
+      { emoji: "😂", count: 3, me: false, users: [] },
+      { emoji: "❤️", count: 1, me: false, users: [] },
+      { emoji: "🎮", count: 5, me: true, users: [] },
+      { emoji: "👀", count: 2, me: false, users: [] },
+      { emoji: "🍕", count: 1, me: false, users: [] },
+      { emoji: "🏆", count: 2, me: true, users: [] },
+      { emoji: "😭", count: 1, me: false, users: [] },
+      { emoji: "🙏", count: 3, me: false, users: [] },
+    ],
+    thread: chromeThread("00000000-0000-4000-8000-000000000904", "Chaveamento", 7, { participants: CHROME_FACES.slice(0, 2) }),
+  }),
+  contentMessage(17, ROW_RAFA, "Rafa", "quem chegar depois das 20h fica de fora"),
+];
+
+function MessageChromeWrapBlock() {
+  return (
+    <div data-testid="qa-shell-message-chrome-wrap" className="flex flex-col gap-6">
+      {/* The shot hovers the continuation, so its toolbar rises over the row above. */}
+      <MainPane>
+        <div className="flex h-[320px] min-h-0 flex-col">
+          <MessageList
+            messages={CHROME_WRAP_MESSAGES}
+            currentUserId={ROW_ME}
+            currentUsername="lia"
+            channelId={ROW_CHANNEL}
+            onToggleReaction={noop}
+            onRetryMessage={noop}
+            onReplyTo={noop}
+            onStartThread={noop}
+            onOpenThread={noop}
+            authors={ROW_AUTHORS}
+            authorsComplete
+          />
+        </div>
+      </MainPane>
+    </div>
+  );
+}
 
 function MessageChromeBlock() {
   return (
@@ -970,7 +1114,7 @@ function LogChromeBlock() {
           jump pill, the bot's note to you and two people typing. The empty
           and failed states are p-empty's (the primitives sheet). */}
       <MainPane>
-        <div className="flex h-[640px] min-h-0 flex-col">
+        <div className="flex h-[700px] min-h-0 flex-col">
           <MessageList
             messages={LOG_MESSAGES}
             currentUserId={ROW_ME}
@@ -1004,14 +1148,33 @@ function ComposerPane({ label, children }: { label: string; children: ReactNode 
 }
 
 const COMPOSER_SLOW_UNTIL = Date.now() + 5 * 60_000;
+/** A sheet-only channel whose draft is seeded, so the send is enabled. */
+const COMPOSER_TYPING_CHANNEL = "00000000-0000-4000-8000-000000000512";
 
 function ComposerBlock() {
+  // Seeded before the composer below reads its draft, under a sheet-only
+  // account (the store writes nothing signed out); undone on the way out.
+  useState(() => {
+    setDraftsAccount("qa-ui-sheet");
+    writeDraft(COMPOSER_TYPING_CHANNEL, "bora jogar hoje à noite?");
+  });
+  useEffect(
+    () => () => {
+      clearDraft(COMPOSER_TYPING_CHANNEL);
+      setDraftsAccount(null);
+    },
+    [],
+  );
   return (
-    <div data-testid="qa-shell-composer" className="flex flex-col gap-6">
-      {/* Resting; replying to Rafa; slow mode with a wait; read-only. The
+    <div data-testid="qa-shell-composer" className="grid grid-cols-2 items-start gap-6">
+      {/* Resting; a draft typed (send enabled); replying to Rafa; slow mode
+          with a wait; read-only. The
           shot opens the format bar on the first one. */}
       <ComposerPane label="Em repouso">
         <MessageComposer onSend={noop} placeholder="Mensagem em #geral" />
+      </ComposerPane>
+      <ComposerPane label="Escrevendo">
+        <MessageComposer onSend={noop} placeholder="Mensagem em #geral" channelId={COMPOSER_TYPING_CHANNEL} />
       </ComposerPane>
       <ComposerPane label="Respondendo">
         <MessageComposer
@@ -1107,10 +1270,75 @@ function useUpdateWaitingFixture() {
   }, []);
 }
 
+const NEW_USER = {
+  id: "u-new",
+  username: "lia",
+  discriminator: "0369",
+  tag: "lia#0369",
+  displayName: "Lia",
+  avatarUrl: null,
+} as unknown as Parameters<typeof FirstRunCard>[0]["user"];
+
+const community = (n: number, name: string, tagline: string, category: string, memberCount: number, extra: Record<string, unknown> = {}) =>
+  communitySummarySchema.parse({
+    id: `00000000-0000-4000-8000-0000000009${String(n).padStart(2, "0")}`,
+    name,
+    slug: name.toLowerCase().replace(/\s+/g, "-"),
+    tagline,
+    category,
+    memberCount,
+    joined: false,
+    createdAt: new Date(NOW - 30 * 86_400_000).toISOString(),
+    ...extra,
+  });
+
+/**
+ * Directory cards on the directory's own tone: one you are in ("Abrir"), one
+ * with a banner, one plain, and the loading skeleton in the same shape.
+ */
+function CommunityCardsBlock() {
+  return (
+    <div data-testid="qa-community-cards" className="max-w-5xl rounded-[var(--radius-card)] bg-surface-1 p-6 redesign:bg-[color:var(--communities-bg)]">
+      <ul className="grid grid-cols-3 gap-4">
+        <CommunityCard
+          community={community(1, "Turma do Fliperama", "Jogo velho, cartucho soprado e campeonato toda sexta.", "games", 1840, { joined: true })}
+          joining={false}
+          onEnter={noop}
+          onReport={noop}
+        />
+        <CommunityCard
+          community={community(2, "Sala de Som", "Tocando disco de vinil e discutindo encarte.", "musica", 312)}
+          joining={false}
+          bannerUrl="/media/bubbles-poster.jpg"
+          onEnter={noop}
+          onReport={noop}
+        />
+        <CommunityCard
+          community={community(3, "Bate-bola", "Resenha do jogo de domingo.", "futebol", 47)}
+          joining={false}
+          onEnter={noop}
+          onReport={noop}
+        />
+        <CommunityCardSkeleton />
+      </ul>
+    </div>
+  );
+}
+
 export function ShellSheet() {
   useUpdateWaitingFixture();
   return (
     <div className="flex flex-col gap-6">
+      {/* App states: the shell while the app boots, and the page when it
+          cannot reach the API. Each in a fixed desktop-sized frame. */}
+      <div data-testid="qa-shell-states" className="flex flex-col gap-6">
+        <div className="h-[560px] w-[1100px] overflow-hidden rounded-[var(--radius-card)] border border-border">
+          <AppLoadingShell />
+        </div>
+        <div className="h-[420px] w-[1100px] overflow-hidden rounded-[var(--radius-card)] border border-border bg-[color:var(--color-pane-main)]">
+          <AppBootstrapError message="Não deu pra falar com o servidor (502)." onRetry={noop} />
+        </div>
+      </div>
       {/* Server rail. Left: Conversas open, two friend requests, two people
           waiting and a pinned conversation; Oficina unread, Memes with three
           mentions. Right: a server open; a photo icon, a Baú count, a Baú ring
@@ -1171,6 +1399,20 @@ export function ShellSheet() {
             onCompose={noop}
           />
         </SidePane>
+        {/* The Baú open while a new post still shows as the card. */}
+        <SidePane>
+          <CommunityHomePreview
+            latest={BAU_NEW}
+            serverName="Turma do Fliperama"
+            serverHueSeed="fliperama"
+            selected
+            canPost={false}
+            face={<ServerIcon name="Turma do Fliperama" iconUrl={null} />}
+            onOpen={noop}
+            onOpenPost={noop}
+            onCompose={noop}
+          />
+        </SidePane>
       </div>
 
       {/* Category headers. Left, the classic list: Texto open with the
@@ -1186,7 +1428,10 @@ export function ShellSheet() {
           <ChannelSection label="Voz" fold={fold(true, 2, true)} canManage={false} onAdd={noop} onAddPrivate={noop}>
             {null}
           </ChannelSection>
-          <ChannelSection label="Texto" fold={fold(false, 3)} canManage={false} onAdd={noop} onAddPrivate={noop} isDragOver>
+          <ChannelSection label="Texto" fold={fold(false, 3)} canManage onAdd={noop} onAddPrivate={noop} isDragOver>
+            {null}
+          </ChannelSection>
+          <ChannelSection label="Voz" fold={fold(true, 2)} canManage onAdd={noop} onAddPrivate={noop} isDragOver>
             {null}
           </ChannelSection>
           <CategoryHeader
@@ -1215,6 +1460,19 @@ export function ShellSheet() {
             onDrop={noop}
             {...fold(true, 6, true)}
           />
+          <CategoryHeader
+            category={category("c3", "Campeonatos de fim de semana")}
+            controlsId="qa-category-3"
+            canManage
+            onRename={noop}
+            onDelete={noop}
+            isDragOver
+            onDragStart={noop}
+            onDragEnd={noop}
+            onDragOverRow={noop}
+            onDrop={noop}
+            {...fold(false, 2)}
+          />
         </SidePane>
         <SidePane>
           <MixedCategoryHeader
@@ -1237,6 +1495,13 @@ export function ShellSheet() {
             menuItems={[]}
             drag={drag("into")}
             {...fold(false, 2)}
+          />
+          <MixedCategoryHeader
+            category={category("m4", "Campeonatos de fim de semana")}
+            addItems={ADD_ITEMS}
+            menuItems={[]}
+            drag={drag("into")}
+            {...fold(false, 3)}
           />
         </SidePane>
       </div>
@@ -1267,9 +1532,12 @@ export function ShellSheet() {
       <MessageRowsBlock />
       <MessageContentBlock />
       <MessageChromeBlock />
+      <MessageChromeWrapBlock />
       <LogChromeBlock />
       <ComposerBlock />
       <MemberListBlock />
+
+      <CommunityCardsBlock />
 
       <div data-testid="qa-shell-rail" className="flex gap-6">
         <RailFrame>
@@ -1319,6 +1587,61 @@ export function ShellSheet() {
           />
         </RailFrame>
       </div>
+      {/* Onboarding: the one corner card shell, inline as it sits beside the
+          control it explains, plain and with a hero; and the first-run card
+          for a new account with nothing done yet. */}
+      <div data-testid="qa-onboarding" className="flex max-w-4xl items-start gap-6 p-4">
+        <div className="flex w-[17rem] flex-col gap-4">
+          <CornerCard
+            open
+            layout="inline"
+            onClose={noop}
+            label="Dica"
+            dismissLabel="Fechar"
+            title="Atalhos do teclado"
+            body="Aperta Ctrl K pra buscar qualquer mensagem, e Ctrl / pra ver todos os atalhos."
+            footer={<Button size="sm" data-cta className="cta-lift rounded-full px-4" onClick={noop}>Entendi</Button>}
+          />
+          <CornerCard
+            open
+            layout="inline"
+            onClose={noop}
+            label="Novidade"
+            dismissLabel="Fechar"
+            hero={<div className="h-24 bg-[linear-gradient(135deg,var(--color-accent-soft),var(--color-surface-2))]" />}
+            title="Watch party chegou"
+            body="Assiste filme junto, com a voz da galera por cima."
+            footer={<Button size="sm" variant="secondary" onClick={noop}>Ver como</Button>}
+          />
+        </div>
+        <div className="min-w-0 flex-1">
+          <FirstRunCard
+            user={NEW_USER}
+            serverCount={0}
+            friendCount={0}
+            onCreateServer={noop}
+            onJoinServer={noop}
+            onAddFriend={noop}
+            onPickAvatar={noop}
+            onDismiss={noop}
+          />
+          {/* Two steps done: ticked, dimmed and kept in place. */}
+          <div className="mt-4">
+            <FirstRunCard
+              user={{ ...NEW_USER, avatarUrl: "https://api.dicebear.com/9.x/shapes/png?seed=lia" }}
+              serverCount={1}
+              friendCount={0}
+              onCreateServer={noop}
+              onJoinServer={noop}
+              onAddFriend={noop}
+              onPickAvatar={noop}
+              onDismiss={noop}
+            />
+          </div>
+        </div>
+      </div>
+      {/* The music queue in a call's composer: three waiting, one played. */}
+      <MusicQueueSpecimen />
     </div>
   );
 }

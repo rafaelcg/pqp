@@ -34,6 +34,10 @@ import {
 } from "@/lib/soundboard";
 import { cn } from "@/lib/utils";
 import { SoundboardAddDialog } from "@/components/voice/soundboard-add-dialog";
+import { IconSwap } from "@/components/ui/icon";
+import { CALL_CONTROL_REDESIGN } from "@/components/voice/call-control-classes";
+import { Confetti } from "@phosphor-icons/react";
+import { BELOW_SM_QUERY } from "@/lib/breakpoints";
 
 /**
  * Why the board is unavailable for now. The button stays, disabled, and says
@@ -59,7 +63,7 @@ const PANEL_HEIGHT = 304;
  * 750 wide and 342 tall, and the 280px popover showed 1.3 rows there). Both
  * halves matter: the width alone leaves landscape on the popover.
  */
-export const SOUNDBOARD_SHEET_QUERY = "(max-width: 639px), (max-height: 520px)";
+export const SOUNDBOARD_SHEET_QUERY = `${BELOW_SM_QUERY}, (max-height: 520px)`;
 
 /** The sheet spans the screen, up to this wide, and sits above the call bar. */
 const SHEET_MAX_WIDTH = 640;
@@ -154,6 +158,7 @@ export function SoundboardControl({
   lock = null,
   size,
   iconSize,
+  idleClassName = CALL_CONTROL_REDESIGN.idle,
 }: {
   serverId: string | null;
   /** The seat's `USE_SOUNDBOARD`. */
@@ -163,6 +168,8 @@ export function SoundboardControl({
   lock?: SoundboardLock | null;
   size: string;
   iconSize: string;
+  /** The redesign's resting look: a well on the stage, a ghost in the dock. */
+  idleClassName?: string;
 }) {
   const { t } = useTranslation();
   // The seat's grant is the bit. The `soundboard` flag is read live here,
@@ -756,6 +763,8 @@ export function SoundboardControl({
               : open
                 ? "bg-signal/20 text-signal"
                 : "bg-ink-3 text-paper hover:bg-ink-4",
+            CALL_CONTROL_REDESIGN.base,
+            !lock && (open ? CALL_CONTROL_REDESIGN.on : idleClassName),
           )}
           onClick={() => {
             if (lock) {
@@ -767,7 +776,7 @@ export function SoundboardControl({
           }}
         >
           <span className="flex transition-transform duration-[var(--duration-fast)] ease-[var(--ease-standard)] group-hover:scale-110 motion-reduce:transition-none motion-reduce:transform-none">
-            <PartyPopper className={iconSize} />
+            <IconSwap off={PartyPopper} on={Confetti} offClassName={iconSize} className={iconSize} />
           </span>
           {lock && (
             <span

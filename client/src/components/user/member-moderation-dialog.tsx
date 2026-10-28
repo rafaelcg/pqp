@@ -168,6 +168,11 @@ export function MemberModerationDialog({
                   minutes === preset
                     ? "bg-signal font-semibold text-ink"
                     : "bg-ink-3 text-paper hover:bg-ink-4",
+                  // Under the redesign: the shared pill choices.
+                  "redesign:rounded-full redesign:border redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--list-row-ring)]",
+                  minutes === preset
+                    ? "redesign:border-accent redesign:bg-[color:var(--list-row-selected)] redesign:text-[color:var(--list-row-selected-text)]"
+                    : "redesign:border-[color:var(--card-border)] redesign:bg-transparent redesign:text-text-secondary redesign:hover:bg-[color:var(--card-row-hover)] redesign:hover:text-text",
                 )}
                 onClick={() => setMinutes(preset)}
               >
@@ -183,11 +188,11 @@ export function MemberModerationDialog({
             maxLength={TIMEOUT_REASON_MAX_LENGTH}
             placeholder={t("profile.mod.reason.placeholder")}
             aria-label={t("profile.mod.reason")}
-            className="mt-3 w-full rounded-md border border-ink-4 bg-ink px-2 py-2 text-base text-paper placeholder:text-paper-muted"
+            className="mt-3 w-full rounded-md border border-ink-4 bg-ink px-2 py-2 text-base text-paper placeholder:text-paper-muted redesign:h-[var(--input-h)] redesign:rounded-[var(--input-radius)] redesign:border-[color:var(--input-border)] redesign:bg-[color:var(--input-bg)] redesign:px-[var(--input-px)] redesign:py-0 redesign:text-sm redesign:text-text redesign:placeholder:text-[color:var(--input-placeholder)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-ring-offset redesign:focus-visible:ring-[color:var(--input-ring,var(--color-focus-ring))]"
             onChange={(event) => setReason(event.target.value)}
           />
         )}
-        <p className="mt-3 text-xs text-paper-muted">{body}</p>
+        <p className="mt-3 text-xs text-paper-muted redesign:text-text-secondary">{body}</p>
         {error && (
           <p role="alert" className="mt-2 text-xs text-danger">
             {error}

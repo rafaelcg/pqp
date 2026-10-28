@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { E2E_ADMIN_TOKEN } from "../playwright.config";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -428,6 +429,27 @@ test("captures the design council screens", async ({ browser }) => {
       await expect(page.getByText(PAPO.at(-1)![1])).toBeVisible();
       await hideDevBanner(page);
       await shoot(page, `01-chat-${theme}`);
+      // Message search: the prompt, then results with the arrows on one.
+      try {
+        await page.getByRole("button", { name: /Buscar mensagens/ }).first().click({ timeout: 5_000 });
+        await expect(page.getByRole("dialog")).toBeVisible();
+        await page.waitForTimeout(300);
+        await shoot(page, `33-search-empty-${theme}`);
+        // The pointer out of the way, so the first row keeps the highlight.
+        await page.mouse.move(0, 0);
+        await page.getByRole("dialog").getByRole("combobox").fill("zzqxv");
+        await expect(page.getByRole("dialog").getByText(/zzqxv/).last()).toBeVisible({ timeout: 10_000 });
+        await page.waitForTimeout(300);
+        await shoot(page, `35-search-none-${theme}`);
+        await page.getByRole("dialog").getByRole("combobox").fill("caverna");
+        await expect(page.getByRole("dialog").getByRole("option").first()).toBeVisible({ timeout: 10_000 });
+        await page.waitForTimeout(300);
+        await shoot(page, `34-search-results-${theme}`);
+        await page.keyboard.press("Escape");
+      } catch (error) {
+        console.log("search shots skipped", String(error).slice(0, 300));
+        await page.keyboard.press("Escape");
+      }
       // The sidebar header up close: the name hovered, the search entry.
       {
         const header = page.locator("[data-server-header]");
@@ -452,6 +474,21 @@ test("captures the design council screens", async ({ browser }) => {
         });
         await page.mouse.move(0, 0);
       }
+      // The open members tile with keyboard focus: the ring sits off the fill.
+      try {
+        const header = page.locator("[data-chat-header]");
+        await page.keyboard.press("Shift");
+        await header.locator("[data-member-sidebar-toggle]").focus();
+        await page.waitForTimeout(300);
+        const box = (await header.boundingBox())!;
+        await page.screenshot({
+          path: path.join(OUT!, `s-header-focus-${theme}.png`),
+          clip: { x: box.x + box.width - 260, y: box.y, width: 260, height: box.height + 8 },
+        });
+        await page.locator("body").focus();
+      } catch {
+        console.log("header focus shot skipped");
+      }
       // The channel list folded to icons, in place; then unfolded again.
       await page.locator("[data-channel-sidebar-toggle]").first().click();
       await expect(page.locator("[data-channel-rail]")).toBeVisible();
@@ -466,6 +503,56 @@ test("captures the design council screens", async ({ browser }) => {
       await shoot(page, `21-status-menu-${theme}`);
       await page.keyboard.press("Escape");
       await expect(page.getByRole("menu", { name: "Mudar o seu status" })).toBeHidden();
+      // A short name, so the caret's place after the name shows.
+      try {
+        await page.getByRole("button", { name: /Faculdade ADS/ }).first().click({ timeout: 5_000 });
+        await expect(page.locator("[data-server-name]").first()).toHaveText("Faculdade ADS", { timeout: 10_000 });
+        await page.locator("[data-server-menu-trigger]").hover();
+        await page.waitForTimeout(300);
+        const header = page.locator("[data-server-header]");
+        const box = (await header.boundingBox())!;
+        await page.screenshot({
+          path: path.join(OUT!, `s-sidebar-header-short-${theme}.png`),
+          clip: { x: Math.max(0, box.x - 8), y: Math.max(0, box.y - 8), width: box.width + 16, height: box.height + 72 },
+        });
+        await page.mouse.move(0, 0);
+        await page.goto(chatUrl);
+        await expect(page.getByRole("button", { name: "Enviar" })).toBeVisible({ timeout: 30_000 });
+        await hideDevBanner(page);
+      } catch {
+        console.log("short-name header shot skipped");
+      }
+      // A profile card, from a message author's name.
+      try {
+        // The newest author: the first one in the DOM may sit above the fold.
+        const author = page.locator("[data-author-trigger]").last();
+        await author.scrollIntoViewIfNeeded();
+        await author.click({ timeout: 5_000 });
+        await expect(page.locator("[data-profile-card]")).toBeVisible({ timeout: 5_000 });
+        await page.waitForTimeout(800);
+        await shoot(page, `36-profile-card-${theme}`);
+        // Its states: a role ticked, keyboard focus on Mensagem, the pointer on Silenciar.
+        try {
+          const card = page.locator("[data-profile-card]");
+          const mod = card.getByRole("checkbox", { name: /Mod/ }).first();
+          await mod.click({ timeout: 3_000 });
+          await page.waitForTimeout(600);
+          await page.keyboard.press("Shift");
+          await card.getByRole("button", { name: "Mensagem" }).first().focus();
+          await card.getByText("Silenciar", { exact: true }).first().hover();
+          await page.waitForTimeout(300);
+          await shoot(page, `36-profile-card-states-${theme}`);
+          await mod.click({ timeout: 3_000 });
+          await page.waitForTimeout(400);
+        } catch (error) {
+          console.log(`profile card states shot skipped (${String(error).slice(0, 160)})`);
+        }
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(300);
+      } catch (error) {
+        console.log(`profile card shot skipped (${String(error).slice(0, 160)})`);
+        await page.keyboard.press("Escape");
+      }
       // A popover in place: the composer's emoji picker.
       await page.getByRole("button", { name: "Adicionar emoji", exact: true }).first().click();
       await expect(page.locator(".emoji-mart-shell")).toBeVisible();
@@ -483,10 +570,37 @@ test("captures the design council screens", async ({ browser }) => {
       await page.locator("[data-server-menu-trigger]").first().click();
       await expect(page.locator("[data-server-menu]")).toBeVisible();
       await shoot(page, `15-server-menu-${theme}`);
+      // Invites: the panel with the active links, from the same menu.
+      await page.getByRole("menuitem", { name: "Convidar pessoas" }).click();
+      await expect(page.getByRole("dialog")).toBeVisible();
+      await page.waitForTimeout(600);
+      await shoot(page, `29-invite-create-${theme}`);
+      await page.keyboard.press("Escape");
+      // A new server: the name step, then the Discord path.
+      await page.getByRole("button", { name: "Criar comunidade" }).first().click();
+      await expect(page.getByRole("dialog")).toBeVisible();
+      await page.waitForTimeout(400);
+      await shoot(page, `30-create-server-${theme}`);
+      await page.getByRole("dialog").getByText("Copiar uma estrutura do Discord", { exact: true }).click();
+      await page.waitForTimeout(300);
+      await shoot(page, `31-create-server-paste-${theme}`);
+      await page.keyboard.press("Escape");
+      // Joining with a code.
+      await page.getByRole("button", { name: "Entrar com convite" }).first().click();
+      await expect(page.getByRole("dialog")).toBeVisible();
+      await page.waitForTimeout(400);
+      await shoot(page, `32-invite-join-${theme}`);
       await page.keyboard.press("Escape");
       await page.getByText(PAPO.at(-1)![1]).click({ button: "right" });
       await expect(page.locator("[data-context-menu]")).toBeVisible();
       await shoot(page, `16-message-menu-${theme}`);
+      await page.keyboard.press("Escape");
+      // A confirm dialog in place: deleting your own message.
+      await page.getByText(PAPO.find(([who]) => who === VIEWER)![1]).click({ button: "right" });
+      await page.getByRole("menuitem", { name: "Excluir mensagem" }).click();
+      await expect(page.getByRole("dialog")).toBeVisible();
+      await page.waitForTimeout(400);
+      await shoot(page, `18-confirm-dialog-${theme}`);
       await page.keyboard.press("Escape");
 
       await page.goto(`/app/dm/${conversation.channelId}?lang=pt-BR`);
@@ -498,6 +612,20 @@ test("captures the design council screens", async ({ browser }) => {
       await expect(page.getByText(DM.at(-1)![1]).first()).toBeVisible({ timeout: 30_000 });
       await hideDevBanner(page);
       await shoot(page, `03-home-${theme}`);
+      // The communities directory, a full page over the app.
+      try {
+        await page.getByRole("button", { name: "Comunidades" }).first().click({ timeout: 5_000 });
+        await page.waitForTimeout(1200);
+        await shoot(page, `35-communities-${theme}`);
+        // Every language: the unfiltered empty directory, with its one create button.
+        await page.getByRole("button", { name: "Todos", exact: true }).first().click({ timeout: 3_000 }).catch(() => {});
+        await page.waitForTimeout(800);
+        await shoot(page, `35-communities-all-${theme}`);
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(300);
+      } catch {
+        console.log("communities shot skipped");
+      }
       // Novidades: a pane of its own beside the rail.
       await page.getByRole("button", { name: /^Novidades/ }).first().click();
       await page.waitForTimeout(1200);
@@ -509,6 +637,45 @@ test("captures the design council screens", async ({ browser }) => {
       await page.getByRole("button", { name: "Abrir configurações" }).first().click();
       await expect(page.getByRole("dialog")).toBeVisible();
       await shoot(page, `04-settings-${theme}`);
+      // Game connections: the providers this host offers, or the note
+      // that it offers none.
+      await page.getByRole("dialog").getByText("Conexões", { exact: true }).first().click();
+      await page.waitForTimeout(600);
+      await shoot(page, `37-settings-connections-${theme}`);
+      // The linked state, with the host's providers mocked: Steam linked with
+      // a long name, Twitch and Battle.net offered.
+      try {
+        await page.route("**/api/connections/config", (route) =>
+          route.fulfill({ json: { steam: true, battlenet: true, twitch: true } }),
+        );
+        await page.route("**/api/me/connections", (route) =>
+          route.fulfill({
+            json: {
+              connections: [
+                {
+                  provider: "steam",
+                  providerUserId: "76561198000000000",
+                  displayName: "lia_joga_tudo_na_madrugada_de_domingo",
+                  avatarUrl: null,
+                  profileUrl: null,
+                  visibility: "shared",
+                  connectedAt: "2026-10-01T12:00:00.000Z",
+                },
+              ],
+            },
+          }),
+        );
+        await page.getByRole("dialog").getByText("Perfil", { exact: true }).first().click();
+        await page.waitForTimeout(300);
+        await page.getByRole("dialog").getByText("Conexões", { exact: true }).first().click();
+        await expect(page.getByRole("dialog").getByText("lia_joga_tudo", { exact: false }).first()).toBeVisible({ timeout: 5_000 });
+        await page.waitForTimeout(400);
+        await shoot(page, `38-settings-connections-linked-${theme}`);
+        await page.unroute("**/api/connections/config");
+        await page.unroute("**/api/me/connections");
+      } catch (error) {
+        console.log("linked connections shot skipped", String(error).slice(0, 200));
+      }
       // A section made of switches, for the choice controls.
       await page.getByRole("dialog").getByText("Notificações", { exact: true }).first().click();
       await expect(page.getByRole("dialog").getByRole("switch").first()).toBeVisible();
@@ -521,6 +688,15 @@ test("captures the design council screens", async ({ browser }) => {
       await page.getByRole("dialog").getByText("Voz e vídeo", { exact: true }).first().click();
       await expect(page.getByRole("dialog").getByRole("slider").first()).toBeVisible();
       await shoot(page, `14-settings-voice-${theme}`);
+      // An unsaved profile: the bar at the foot of the page and the dot on
+      // the Perfil tab, seen from the next tab. Discarded before closing.
+      await page.getByRole("dialog").getByText("Perfil", { exact: true }).first().click();
+      await page.getByRole("dialog").getByLabel("Nome de exibição").fill("Lia Fliperama");
+      await page.getByRole("dialog").getByText("Privacidade", { exact: true }).first().click();
+      await expect(page.getByRole("button", { name: "Salvar alterações" })).toBeVisible();
+      await page.waitForTimeout(400);
+      await shoot(page, `25-settings-unsaved-${theme}`);
+      await page.getByRole("button", { name: "Descartar" }).click();
       await page.keyboard.press("Escape");
 
       await page.locator("[data-server-menu-trigger]").first().click();
@@ -535,7 +711,117 @@ test("captures the design council screens", async ({ browser }) => {
       await page.getByRole("dialog").getByRole("tab", { name: "Permissões" }).click();
       await page.waitForTimeout(300);
       await shoot(page, `13-server-roles-perms-${theme}`);
+      // The audit log's entries and the danger zone's card.
+      await page.getByRole("dialog").getByText("Registro", { exact: true }).first().click();
+      await page.waitForTimeout(800);
+      await shoot(page, `26-server-audit-${theme}`);
+      await page.getByRole("dialog").getByText("Zona de risco", { exact: true }).first().click();
+      await page.waitForTimeout(300);
+      await shoot(page, `27-server-danger-${theme}`);
       await page.keyboard.press("Escape");
+      // Channel settings, from the open channel's gear. Best effort: a
+      // missing gear skips the shot instead of the screens after it.
+      try {
+        const gear = page.getByRole("button", { name: /Configurações do canal/ }).first();
+        await gear.hover({ force: true, timeout: 5_000 });
+        await gear.click({ force: true, timeout: 5_000 });
+        await expect(page.getByRole("dialog")).toBeVisible({ timeout: 5_000 });
+        await page.waitForTimeout(500);
+        await shoot(page, `28-channel-settings-${theme}`);
+        await page.keyboard.press("Escape");
+      } catch {
+        console.log("channel settings gear not found, shot 28 skipped");
+      }
+      // A voice room's header, not in the call: the "Entre na call" pill.
+      // Best effort, last in the context so a join cannot touch other shots.
+      try {
+        await page.getByRole("button", { name: /^Lobby/ }).first().click({ timeout: 5_000 });
+        const header = page.locator("[data-chat-header]");
+        await expect(header.getByRole("button", { name: /Entre na call/ })).toBeVisible({ timeout: 5_000 });
+        await page.waitForTimeout(400);
+        const box = (await header.boundingBox())!;
+        await page.screenshot({
+          path: path.join(OUT!, `s-header-voice-${theme}.png`),
+          clip: { x: box.x, y: box.y, width: box.width, height: box.height + 48 },
+        });
+      } catch {
+        console.log("voice room header pill not found, s-header-voice skipped");
+      }
+
+      // Server bots: the flag on for this one shot, then back to its default.
+      try {
+        await fetch(`${API}/api/admin/flags`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${E2E_ADMIN_TOKEN}` },
+          body: JSON.stringify({ key: "custom_bots", enabled: true }),
+        });
+        await page.reload();
+        await expect(page.getByRole("button", { name: "Enviar" })).toBeVisible({ timeout: 30_000 });
+        await hideDevBanner(page);
+        await page.locator("[data-server-menu-trigger]").first().click();
+        await page.getByRole("menuitem", { name: "Configurações da comunidade" }).click();
+        await expect(page.getByRole("dialog")).toBeVisible();
+        await page.getByRole("dialog").getByText("Bots", { exact: true }).first().click({ timeout: 5_000 });
+        await page.waitForTimeout(800);
+        await shoot(page, `38-server-bots-${theme}`);
+        // The wizard: a coral face chosen, keyboard focus on the faces; then a persona chosen.
+        try {
+          const dialog = page.getByRole("dialog");
+          await dialog.getByRole("button", { name: /Criar meu bot/ }).click({ timeout: 5_000 });
+          await dialog.getByRole("textbox").first().fill("Tico");
+          await dialog.getByRole("radiogroup", { name: "Cor" }).getByRole("radio", { name: "Coral" }).click();
+          const faces = dialog.getByRole("radiogroup", { name: "Cara" });
+          await faces.getByRole("radio").nth(1).click();
+          await page.keyboard.press("ArrowRight");
+          await page.keyboard.press("ArrowLeft");
+          await page.waitForTimeout(300);
+          await shoot(page, `38-server-bots-wizard-${theme}`);
+          await dialog.getByRole("button", { name: "Continuar" }).click({ timeout: 5_000 });
+          await dialog.getByRole("button", { name: /^Zoeiro/ }).click({ timeout: 5_000 });
+          await page.waitForTimeout(300);
+          await shoot(page, `38-server-bots-persona-${theme}`);
+        } catch (error) {
+          console.log("bots wizard shot skipped", String(error).slice(0, 300));
+        }
+        // The overview: a bot made through the API, shot, then removed so the
+        // next theme's intro shot still finds no bot.
+        let botId: string | null = null;
+        try {
+          const made = await fetch(`${API}/api/servers/${turma.id}/bots`, {
+            method: "POST",
+            headers: headers(VIEWER),
+            body: JSON.stringify({ name: "Tico", color: "coral", face: "curioso", tagline: "Pergunte qualquer coisa", answerToName: true }),
+          });
+          const body = (await made.json()) as { bot?: { id: string }; id?: string };
+          botId = body.bot?.id ?? body.id ?? null;
+          await page.keyboard.press("Escape");
+          await page.keyboard.press("Escape");
+          await page.reload();
+          await expect(page.getByRole("button", { name: "Enviar" })).toBeVisible({ timeout: 30_000 });
+          await hideDevBanner(page);
+          await page.locator("[data-server-menu-trigger]").first().click();
+          await page.getByRole("menuitem", { name: "Configurações da comunidade" }).click();
+          await page.getByRole("dialog").getByText("Bots", { exact: true }).first().click({ timeout: 5_000 });
+          await page.waitForTimeout(1200);
+          await shoot(page, `38-server-bots-overview-${theme}`);
+        } catch (error) {
+          console.log("bots overview shot skipped", String(error).slice(0, 300));
+        } finally {
+          if (botId) {
+            await fetch(`${API}/api/servers/${turma.id}/bots/${botId}`, { method: "DELETE", headers: headers(VIEWER) });
+          }
+        }
+        await page.keyboard.press("Escape");
+      } catch (error) {
+        console.log("bots shot skipped", String(error).slice(0, 300));
+        await page.keyboard.press("Escape");
+      } finally {
+        await fetch(`${API}/api/admin/flags`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${E2E_ADMIN_TOKEN}` },
+          body: JSON.stringify({ key: "custom_bots", enabled: null }),
+        });
+      }
 
       await context.close();
     }
@@ -566,6 +852,56 @@ test("captures the design council screens", async ({ browser }) => {
     });
     await page.waitForTimeout(2000);
     await shoot(page, "07-call-camera-dark");
+    // f-call: the dock alone, the stage open with a camera and with audio
+    // only, and the overflow menu, in both looks. The theme flips in place:
+    // a second join would cost the three socket friends their seats.
+    for (const theme of ["dark", "light"] as const) {
+      await page.evaluate((value) => {
+        document.documentElement.dataset.theme = value;
+      }, theme);
+      await page.waitForTimeout(500);
+      const dock = page.locator("[data-call-dock]").first();
+      if (await dock.isVisible().catch(() => false)) {
+        await page.mouse.move(0, 0);
+        await dock.screenshot({ path: path.join(OUT!, `f-call-dock-${theme}.png`) });
+      }
+      // With a camera on the stage is open: the menu over it, the stage
+      // itself, then fullscreen, where the bar floats on the picture.
+      await page.getByTestId("call-more").first().click();
+      await expect(page.getByRole("menu")).toBeVisible();
+      await shoot(page, `f-call-menu-${theme}`);
+      await page.keyboard.press("Escape");
+      await shoot(page, `f-call-stage-camera-${theme}`);
+      await page.getByTestId("call-more").first().click({ timeout: 5_000 }).catch(() => {});
+      const full = page.getByRole("menuitem", { name: "Tela cheia" });
+      if (await full.isVisible().catch(() => false)) {
+        await full.click();
+        await page.waitForTimeout(1000);
+        await page.mouse.move(700, 400);
+        await page.waitForTimeout(300);
+        await page.screenshot({ path: path.join(OUT!, `f-call-fullscreen-${theme}.png`) });
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(800);
+      } else {
+        console.log("f-call: fullscreen skipped");
+        await page.keyboard.press("Escape");
+      }
+      // Audio only: the camera off, then the stage opened by hand.
+      await page.getByRole("button", { name: "Desligar a câmera", exact: true }).first().click({ timeout: 5_000 }).catch(() => {});
+      await page.waitForTimeout(1200);
+      await page.getByTestId("call-more").first().click();
+      // The stage may stay open after the camera goes off; open it if not.
+      const expand = page.getByRole("menuitem", { name: "Expandir a call" });
+      if (await expand.isVisible().catch(() => false)) {
+        await expand.click();
+      } else {
+        await page.keyboard.press("Escape");
+      }
+      await page.waitForTimeout(800);
+      await shoot(page, `f-call-stage-audio-${theme}`);
+      await page.getByRole("button", { name: "Ligar a câmera", exact: true }).first().click({ timeout: 5_000 }).catch(() => {});
+      await page.waitForTimeout(1500);
+    }
     await page.getByRole("button", { name: "Sair da call" }).first().click().catch(() => {});
     await context.close();
 
@@ -587,6 +923,36 @@ test("captures the design council screens", async ({ browser }) => {
     await phonePage.getByRole("button", { name: "Abrir navegação" }).first().click();
     await phonePage.waitForTimeout(800);
     await shoot(phonePage, "08-phone-drawer-dark");
+    // Close the drawer: reload the conversation before the sheet.
+    await phonePage.goto(chatUrl);
+    await expect(phonePage.getByText(PAPO.at(-1)![1])).toBeVisible({ timeout: 30_000 });
+    await hideDevBanner(phonePage);
+    // A sheet: below `sm` a dialog rises from the bottom edge.
+    for (const theme of ["dark", "light"] as const) {
+      if (theme === "light") {
+        await as(phonePage, "light");
+        await phonePage.goto(chatUrl);
+        await expect(phonePage.getByText(PAPO.at(-1)![1])).toBeVisible({ timeout: 30_000 });
+        await hideDevBanner(phonePage);
+      }
+      await phonePage.getByText(PAPO.find(([who]) => who === VIEWER)![1]).click({ button: "right" });
+      await phonePage.getByRole("menuitem", { name: "Excluir mensagem" }).click();
+      await expect(phonePage.getByRole("dialog")).toBeVisible();
+      await phonePage.waitForTimeout(500);
+      await shoot(phonePage, `19-phone-sheet-${theme}`);
+      await phonePage.keyboard.press("Escape");
+    }
+    // Settings on a phone: the rail is a strip of tabs over the page.
+    await as(phonePage, "dark");
+    await phonePage.goto(chatUrl);
+    await expect(phonePage.getByText(PAPO.at(-1)![1])).toBeVisible({ timeout: 30_000 });
+    await hideDevBanner(phonePage);
+    await phonePage.getByRole("button", { name: "Abrir navegação" }).first().click();
+    await phonePage.waitForTimeout(500);
+    await phonePage.getByRole("button", { name: "Abrir configurações" }).first().click();
+    await expect(phonePage.getByRole("dialog")).toBeVisible();
+    await phonePage.waitForTimeout(500);
+    await shoot(phonePage, "24-phone-settings-dark");
     await phone.close();
   } finally {
     for (const socket of sockets.values()) {
@@ -605,6 +971,10 @@ const PRIMITIVES: {
   id: string;
   testId: string;
   hover?: string;
+  /** Hover the element holding this text (a row with no button role). */
+  hoverText?: string;
+  /** Click this button first (opens a disclosure), by its name's start. */
+  click?: string;
   focus?: string;
   /** The role the hover and focus targets have. Buttons by default. */
   role?: "button" | "textbox" | "combobox" | "checkbox" | "radio" | "tab" | "slider";
@@ -615,6 +985,8 @@ const PRIMITIVES: {
    * on hover (a message's toolbar).
    */
   open?: { button: string; menu: string; arrows: number; hoverText?: string };
+  /** A tall block, cut into shots this tall (`<id>-<n>-<theme>.png`). */
+  tiles?: number;
 }[] = [
   {
     id: "p-button",
@@ -654,6 +1026,8 @@ const PRIMITIVES: {
   { id: "p-avatar", testId: "qa-primitive-avatar" },
   // Status words, the tags beside a name, and counts; no interaction.
   { id: "p-badge", testId: "qa-primitive-badge" },
+  { id: "p-scroll", testId: "qa-primitive-scroll" },
+  { id: "p-empty", testId: "qa-primitive-empty", hover: "Copiar convite" },
   { id: "p-loading", testId: "qa-primitive-loading" },
   { id: "p-section-header", testId: "qa-primitive-section-header" },
   // Focus a person row, hover a plain channel.
@@ -667,26 +1041,41 @@ const PRIMITIVES: {
   // Two real rails: Conversas open with people waiting, and a server open
   // beside every server cue. Keyboard focus on "Praça", hover on "Oficina".
   { id: "s-rail", testId: "qa-shell-rail", focus: "Praça", hover: "Oficina" },
+  // The music queue open in a call's composer; hover a waiting song.
+  // The history open, a queue row hovered.
+  { id: "m-sheets", testId: "qa-music-queue", click: "Tocadas", hoverText: "Gal Costa - Vapor Barato" },
+  { id: "p-settings-kit", testId: "qa-settings-kit", tiles: 1300 },
+  { id: "p-settings-kit", testId: "qa-settings-kit", tiles: 1300 },
+  // Two real rails: Conversas open with people waiting, and a server open
+  // beside every server cue. Keyboard focus on "Praça", hover on "Oficina".
+  { id: "s-rail", testId: "qa-shell-rail", focus: "Praça", hover: "Oficina" },
   { id: "s-sidebar-special", testId: "qa-shell-sidebar-special" },
-  { id: "s-category", testId: "qa-shell-categories", hover: "Bate-papo" },
-  { id: "s-channel-row", testId: "qa-shell-channel-rows", hover: "clipes" },
+  { id: "s-category", testId: "qa-shell-categories", focus: "Jogos da semana", hover: "Bate-papo" },
+  { id: "s-channel-row", testId: "qa-shell-channel-rows", focus: "general", hover: "clipes" },
   { id: "s-voice-row", testId: "qa-shell-voice-rows" },
   // The icons-only sidebar: hover on "general".
-  { id: "s-sidebar-rail", testId: "qa-shell-sidebar-strip", hover: "general" },
+  { id: "s-sidebar-rail", testId: "qa-shell-sidebar-strip", focus: "clipes", hover: "general" },
   // The voice strip in its states.
-  { id: "s-voice-strip", testId: "qa-shell-voice-strip" },
+  { id: "s-voice-strip", testId: "qa-shell-voice-strip", focus: "Sair da call" },
   // The user panel: hover on the settings gear of the first.
   { id: "s-user-panel", testId: "qa-shell-user-panel", hover: "Abrir configurações" },
   { id: "s-banners", testId: "qa-shell-banners" },
+  // Directory cards: joined, with a banner, plain, and the skeleton.
+  { id: "f-communities", testId: "qa-community-cards" },
   // Message rows in their states.
-  { id: "s-message-row", testId: "qa-shell-message-rows" },
+  { id: "s-message-row", testId: "qa-shell-message-rows", hoverText: "@lia cê vem?" },
+  { id: "f-onboarding", testId: "qa-onboarding", focus: "Entendi" },
   { id: "s-message-content", testId: "qa-shell-message-content" },
+  // The boot shell and the cannot-reach-the-API page, in desktop frames.
+  { id: "f-states", testId: "qa-shell-states", focus: "Tentar de novo" },
   // Bia's reply hovered, its toolbar up and "Mais" open.
   {
     id: "s-message-chrome",
     testId: "qa-shell-message-chrome",
     open: { button: "Mais", menu: '[role="menu"][aria-label="Mais"]', arrows: 0, hoverText: "eu topo, levo o lanche" },
   },
+  // Ten reactions that wrap over a thread chip; the one-line continuation hovered.
+  { id: "s-message-chrome-wrap", testId: "qa-shell-message-chrome-wrap", hoverText: "quem chegar depois das 20h fica de fora" },
   { id: "s-log-chrome", testId: "qa-shell-log-chrome" },
   // The resting composer's format bar open (it is a toolbar, not a menu).
   {
@@ -723,8 +1112,14 @@ test("captures the primitives", async ({ browser }) => {
         await page.keyboard.press("Shift+Tab");
         await page.keyboard.press("Tab");
       }
+      if (primitive.click) {
+        await block.getByRole("button", { name: primitive.click }).first().click();
+      }
       if (primitive.hover) {
         await block.getByRole(primitive.role ?? "button", { name: primitive.hover, exact: true }).first().hover();
+      }
+      if (primitive.hoverText) {
+        await block.getByText(primitive.hoverText, { exact: true }).first().hover();
       }
       if (primitive.open) {
         if (primitive.open.hoverText) {
@@ -753,6 +1148,18 @@ test("captures the primitives", async ({ browser }) => {
         continue;
       }
       await page.waitForTimeout(300);
+      if (primitive.tiles) {
+        const box = (await block.boundingBox())!;
+        const top = box.y + (await page.evaluate(() => window.scrollY));
+        for (let n = 0, y = 0; y < box.height; n++, y += primitive.tiles) {
+          await page.screenshot({
+            path: path.join(OUT!, `${primitive.id}-${n + 1}-${theme}.png`),
+            fullPage: true,
+            clip: { x: box.x, y: top + y, width: box.width, height: Math.min(primitive.tiles, box.height - y) },
+          });
+        }
+        continue;
+      }
       await block.screenshot({ path: path.join(OUT!, `${primitive.id}-${theme}.png`) });
     }
     await context.close();
@@ -781,17 +1188,41 @@ test("captures the forum post", async ({ browser }) => {
       body: JSON.stringify({ name: "ajuda", type: "forum" }),
     }),
   );
-  await json(
-    await fetch(`${API}/api/channels/${forum.id}/posts`, {
-      method: "POST",
+  // f-forum: tags, and a few more posts from a second person, so the list,
+  // compact and gallery layouts have something to lay out.
+  await join(VIEWER, home.id, "rafa");
+  const { tags } = await json<{ tags: { id: string; name: string }[] }>(
+    await fetch(`${API}/api/channels/${forum.id}/forum-tags`, {
+      method: "PUT",
       headers: headers(VIEWER),
       body: JSON.stringify({
-        title: "O áudio some quando alguém compartilha a tela",
-        body: "Acontece no app do Windows. No navegador fica normal.",
-        nonce: "council-forum-post",
+        tags: [
+          { name: "Bug", emoji: "🐛", moderated: false },
+          { name: "Dúvida", emoji: null, moderated: false },
+          { name: "Ideia", emoji: "💡", moderated: false },
+        ],
       }),
     }),
   );
+  const tag = Object.fromEntries(tags.map((entry) => [entry.name, entry.id]));
+  for (const [who, title, body, tagName] of [
+    ["rafa", "Dá pra mudar o atalho do push-to-talk?", "Queria usar o botão lateral do mouse.", "Dúvida"],
+    ["rafa", "Modo escuro mais escuro, tipo OLED", "Preto puro no fundo economiza bateria no celular.", "Ideia"],
+    [VIEWER, "O áudio some quando alguém compartilha a tela", "Acontece no app do Windows. No navegador fica normal.", "Bug"],
+  ] as const) {
+    await json(
+      await fetch(`${API}/api/channels/${forum.id}/posts`, {
+        method: "POST",
+        headers: headers(who),
+        body: JSON.stringify({
+          title,
+          body,
+          tagIds: [tag[tagName]],
+          nonce: `council-forum-${title.length}`,
+        }),
+      }),
+    );
+  }
 
   for (const theme of ["dark", "light"] as const) {
     const context = await browser.newContext({ viewport: DESKTOP, locale: "pt-BR" });
@@ -805,6 +1236,48 @@ test("captures the forum post", async ({ browser }) => {
     const roster = page.locator("[data-member-sidebar-toggle]");
     if ((await roster.count()) && (await roster.first().getAttribute("aria-pressed")) === "true") {
       await roster.first().click();
+    }
+    // f-forum: the list in each layout, an empty filter and the composer.
+    const layouts = page.locator("[data-forum-layout-switch]");
+    for (const [label, name] of [["Cartões", "card"], ["Compacto", "compact"], ["Galeria", "gallery"]] as const) {
+      if (await layouts.isVisible().catch(() => false)) {
+        await layouts.getByRole("radio", { name: label }).click();
+        await page.waitForTimeout(400);
+        await shoot(page, `f-forum-${name}-${theme}`);
+      } else {
+        console.log("f-forum: layout switch skipped");
+      }
+    }
+    if (await layouts.isVisible().catch(() => false)) {
+      await layouts.getByRole("radio", { name: "Cartões" }).click();
+    }
+    const resolved = page.getByRole("radio", { name: "Resolvidos" }).or(page.getByRole("tab", { name: "Resolvidos" })).first();
+    if (await resolved.isVisible().catch(() => false)) {
+      await resolved.click();
+      await page.waitForTimeout(400);
+      await shoot(page, `f-forum-empty-${theme}`);
+      await page.getByRole("radio", { name: "Todos" }).or(page.getByRole("tab", { name: "Todos" })).first().click();
+    }
+    // States: the pointer on the first card, keyboard focus on a filter.
+    // `shoot` parks the mouse, so this one is a plain screenshot.
+    try {
+      await page.keyboard.press("Shift");
+      await page.getByRole("radio", { name: "Abertos" }).or(page.getByRole("tab", { name: "Abertos" })).first().focus();
+      await page.getByRole("link", { name: /Modo escuro/ }).first().hover();
+      await page.waitForTimeout(400);
+      await page.screenshot({ path: path.join(OUT!, `f-forum-states-${theme}.png`) });
+    } catch (error) {
+      console.log(`f-forum: states skipped (${String(error).slice(0, 120)})`);
+    }
+    try {
+      await page.getByRole("button", { name: "Novo post" }).first().click();
+      await expect(page.getByRole("dialog")).toBeVisible({ timeout: 5_000 });
+      await page.waitForTimeout(400);
+      await shoot(page, `f-forum-composer-${theme}`);
+      await page.keyboard.press("Escape");
+      await page.waitForTimeout(300);
+    } catch (error) {
+      console.log(`f-forum: composer skipped (${String(error).slice(0, 120)})`);
     }
     await page.getByRole("link", { name: /O áudio some/ }).click();
     const panel = page.locator("[data-forum-post-panel]");

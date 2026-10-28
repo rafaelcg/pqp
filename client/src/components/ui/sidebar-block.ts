@@ -30,8 +30,8 @@ export const SIDEBAR_ROW_SELECTED_REDESIGN = "redesign:bg-row-selected redesign:
  * the blocks above the channels do.
  */
 export const SIDEBAR_FOOTER_CARD_REDESIGN =
-  "redesign:mx-2 redesign:mb-1.5 redesign:rounded-[var(--sidebar-card-radius)] redesign:border-t-0 redesign:bg-[color:var(--card-bg)]";
+  "redesign:mx-2 redesign:mb-1.5 redesign:rounded-[var(--sidebar-card-radius)] redesign:border redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)]";
 
 /** The same card in the 72px strip, with its narrower margin. */
 export const SIDEBAR_FOOTER_CARD_COMPACT_REDESIGN =
-  "redesign:mx-1.5 redesign:mb-1.5 redesign:rounded-[var(--sidebar-card-radius)] redesign:border-t-0 redesign:bg-[color:var(--card-bg)]";
+  "redesign:mx-1.5 redesign:mb-1.5 redesign:rounded-[var(--sidebar-card-radius)] redesign:border redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)]";

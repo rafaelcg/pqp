@@ -72,6 +72,8 @@ import { findFirstUnreadMessageId } from "@/lib/unread-divider";
 import { cn } from "@/lib/utils";
 import { ForumTagList } from "./forum-post-card";
 import { ForumTagIcon } from "./forum-tag-icon";
+import { DotsThree, PencilSimple } from "@phosphor-icons/react";
+import { IconSwap } from "@/components/ui/icon";
 
 /**
  * One post, read and replied to (UX §2.4). The transcript, the composer and
@@ -283,6 +285,7 @@ export function EditTagsDialog({
                 on
                   ? "bg-text font-semibold text-surface-0"
                   : "text-text-secondary ring-1 ring-inset ring-border hover:bg-surface-3 hover:text-text",
+                !on && "redesign:bg-[color:var(--segmented-bg)] redesign:ring-0 redesign:hover:bg-[color:var(--segmented-thumb)]",
               )}
             >
               <ForumTagIcon tag={tag} className="h-3.5 w-3.5" />
@@ -334,7 +337,7 @@ function SolutionCard({
       aria-label={t("forum.solution.title")}
       data-forum-solution={answer.messageId}
       className={cn(
-        "animate-pop-in rounded-[var(--radius-panel)] bg-success-soft text-on-success-soft",
+        "animate-pop-in rounded-[var(--radius-panel)] bg-success-soft text-on-success-soft redesign:rounded-[var(--radius-card)] redesign:border redesign:border-[color:color-mix(in_oklab,var(--color-success)_var(--banner-edge),transparent)]",
         compact ? "mx-3 mb-2 mt-2 px-3.5 py-2.5 sm:mx-4" : "mx-3 my-3 px-4 py-3.5 sm:mx-5",
       )}
     >
@@ -995,6 +998,8 @@ export function ForumPostView({
           post.resolvedAt
             ? "bg-success-soft text-on-success-soft"
             : "bg-surface-1 text-text-secondary hover:bg-surface-2 hover:text-text",
+          "redesign:h-8 redesign:rounded-full redesign:pl-2.5 redesign:pr-2",
+          !post.resolvedAt && "redesign:bg-[color:var(--segmented-bg)] redesign:hover:bg-[color:var(--segmented-thumb)]",
         )}
       >
         {post.resolvedAt ? (
@@ -1007,7 +1012,7 @@ export function ForumPostView({
       </button>
     </Menu>
   ) : post.resolvedAt ? (
-    <span className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-[var(--radius-control)] bg-success-soft px-2 text-[13px] font-semibold text-on-success-soft">
+    <span className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-[var(--radius-control)] bg-success-soft px-2 text-[13px] font-semibold text-on-success-soft redesign:h-8 redesign:rounded-full redesign:px-2.5">
       <CheckCircle2 className="h-4 w-4" aria-hidden />
       {t("forum.badge.resolved")}
     </span>
@@ -1057,9 +1062,9 @@ export function ForumPostView({
                 type="button"
                 onClick={() => setEditTagsOpen(true)}
                 aria-label={t("forum.editTags")}
-                className="grid h-7 w-7 place-items-center rounded-[var(--radius-control)] text-text-secondary hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring max-sm:h-9 max-sm:w-9"
+                className="grid h-7 w-7 place-items-center rounded-[var(--radius-control)] text-text-secondary hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring max-sm:h-9 max-sm:w-9 redesign:rounded-full redesign:hover:bg-[color:var(--menu-row-hover)]"
               >
-                <Pencil className="h-3.5 w-3.5" aria-hidden />
+                <IconSwap off={Pencil} on={PencilSimple} offClassName="h-3.5 w-3.5" className="h-4 w-4" />
               </button>
             </Tooltip>
           )}
@@ -1138,9 +1143,9 @@ export function ForumPostView({
                 type="button"
                 aria-label={t("forum.post.menu")}
                 data-forum-post-menu=""
-                className="grid h-8 w-8 place-items-center rounded-full text-text-secondary hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+                className="grid h-8 w-8 place-items-center rounded-full text-text-secondary hover:bg-surface-2 hover:text-text redesign:hover:bg-[color:var(--menu-row-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
               >
-                <MoreHorizontal className="h-4 w-4" aria-hidden />
+                <IconSwap off={MoreHorizontal} on={DotsThree} kind="symbol" offClassName="h-4 w-4" />
               </button>
             </Menu>
           </span>
@@ -1149,7 +1154,7 @@ export function ForumPostView({
           <div
             role="status"
             data-forum-solution-nudge=""
-            className="mt-3 flex items-start gap-2.5 rounded-[var(--radius-card)] bg-surface-1 px-3.5 py-3 text-[13px] leading-[19px] text-text-secondary animate-door-reveal"
+            className="mt-3 flex items-start gap-2.5 rounded-[var(--radius-card)] bg-surface-1 px-3.5 py-3 text-[13px] leading-[19px] text-text-secondary animate-door-reveal redesign:border redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)]"
           >
             <CheckCircle2 className="mt-px h-4 w-4 shrink-0 text-success" aria-hidden />
             <span className="min-w-0 flex-1">{t("forum.solution.nudge")}</span>

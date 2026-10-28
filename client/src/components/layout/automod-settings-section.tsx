@@ -48,6 +48,8 @@ import {
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { displayRoleName } from "@/lib/role-labels";
 import { cn } from "@/lib/utils";
+import { SECTION_LABEL_REDESIGN } from "@/components/ui/section-header";
+import { badgeRedesignClasses } from "@/components/ui/badge";
 
 /**
  * AutoMod, its own section in Community settings.
@@ -174,7 +176,7 @@ function Field({
 function Group({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="space-y-4">
-      <h5 className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
+      <h5 className={cn("text-[11px] font-semibold uppercase tracking-wider text-text-tertiary", SECTION_LABEL_REDESIGN)}>
         {title}
       </h5>
       {children}
@@ -712,7 +714,7 @@ export function AutomodSettingsSection({
                       {t("automod.response.block.hint")}
                     </p>
                   </div>
-                  <span className="mt-0.5 inline-flex h-5 items-center rounded-full bg-accent-soft px-2 text-[11px] font-semibold uppercase tracking-wider text-on-accent-soft">
+                  <span className={cn("mt-0.5 inline-flex h-5 items-center rounded-full bg-accent-soft px-2 text-[11px] font-semibold uppercase tracking-wider text-on-accent-soft", badgeRedesignClasses("accent"))}>
                     {t("automod.response.always")}
                   </span>
                 </div>
