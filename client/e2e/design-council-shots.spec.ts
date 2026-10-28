@@ -522,6 +522,37 @@ test("captures the design council screens", async ({ browser }) => {
       } catch {
         console.log("short-name header shot skipped");
       }
+      // A profile card, from a message author's name.
+      try {
+        // The newest author: the first one in the DOM may sit above the fold.
+        const author = page.locator("[data-author-trigger]").last();
+        await author.scrollIntoViewIfNeeded();
+        await author.click({ timeout: 5_000 });
+        await expect(page.locator("[data-profile-card]")).toBeVisible({ timeout: 5_000 });
+        await page.waitForTimeout(800);
+        await shoot(page, `36-profile-card-${theme}`);
+        // Its states: a role ticked, keyboard focus on Mensagem, the pointer on Silenciar.
+        try {
+          const card = page.locator("[data-profile-card]");
+          const mod = card.getByRole("checkbox", { name: /Mod/ }).first();
+          await mod.click({ timeout: 3_000 });
+          await page.waitForTimeout(600);
+          await page.keyboard.press("Shift");
+          await card.getByRole("button", { name: "Mensagem" }).first().focus();
+          await card.getByText("Silenciar", { exact: true }).first().hover();
+          await page.waitForTimeout(300);
+          await shoot(page, `36-profile-card-states-${theme}`);
+          await mod.click({ timeout: 3_000 });
+          await page.waitForTimeout(400);
+        } catch (error) {
+          console.log(`profile card states shot skipped (${String(error).slice(0, 160)})`);
+        }
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(300);
+      } catch (error) {
+        console.log(`profile card shot skipped (${String(error).slice(0, 160)})`);
+        await page.keyboard.press("Escape");
+      }
       // A popover in place: the composer's emoji picker.
       await page.getByRole("button", { name: "Adicionar emoji", exact: true }).first().click();
       await expect(page.locator(".emoji-mart-shell")).toBeVisible();
@@ -821,6 +852,56 @@ test("captures the design council screens", async ({ browser }) => {
     });
     await page.waitForTimeout(2000);
     await shoot(page, "07-call-camera-dark");
+    // f-call: the dock alone, the stage open with a camera and with audio
+    // only, and the overflow menu, in both looks. The theme flips in place:
+    // a second join would cost the three socket friends their seats.
+    for (const theme of ["dark", "light"] as const) {
+      await page.evaluate((value) => {
+        document.documentElement.dataset.theme = value;
+      }, theme);
+      await page.waitForTimeout(500);
+      const dock = page.locator("[data-call-dock]").first();
+      if (await dock.isVisible().catch(() => false)) {
+        await page.mouse.move(0, 0);
+        await dock.screenshot({ path: path.join(OUT!, `f-call-dock-${theme}.png`) });
+      }
+      // With a camera on the stage is open: the menu over it, the stage
+      // itself, then fullscreen, where the bar floats on the picture.
+      await page.getByTestId("call-more").first().click();
+      await expect(page.getByRole("menu")).toBeVisible();
+      await shoot(page, `f-call-menu-${theme}`);
+      await page.keyboard.press("Escape");
+      await shoot(page, `f-call-stage-camera-${theme}`);
+      await page.getByTestId("call-more").first().click({ timeout: 5_000 }).catch(() => {});
+      const full = page.getByRole("menuitem", { name: "Tela cheia" });
+      if (await full.isVisible().catch(() => false)) {
+        await full.click();
+        await page.waitForTimeout(1000);
+        await page.mouse.move(700, 400);
+        await page.waitForTimeout(300);
+        await page.screenshot({ path: path.join(OUT!, `f-call-fullscreen-${theme}.png`) });
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(800);
+      } else {
+        console.log("f-call: fullscreen skipped");
+        await page.keyboard.press("Escape");
+      }
+      // Audio only: the camera off, then the stage opened by hand.
+      await page.getByRole("button", { name: "Desligar a câmera", exact: true }).first().click({ timeout: 5_000 }).catch(() => {});
+      await page.waitForTimeout(1200);
+      await page.getByTestId("call-more").first().click();
+      // The stage may stay open after the camera goes off; open it if not.
+      const expand = page.getByRole("menuitem", { name: "Expandir a call" });
+      if (await expand.isVisible().catch(() => false)) {
+        await expand.click();
+      } else {
+        await page.keyboard.press("Escape");
+      }
+      await page.waitForTimeout(800);
+      await shoot(page, `f-call-stage-audio-${theme}`);
+      await page.getByRole("button", { name: "Ligar a câmera", exact: true }).first().click({ timeout: 5_000 }).catch(() => {});
+      await page.waitForTimeout(1500);
+    }
     await page.getByRole("button", { name: "Sair da call" }).first().click().catch(() => {});
     await context.close();
 
@@ -1100,17 +1181,41 @@ test("captures the forum post", async ({ browser }) => {
       body: JSON.stringify({ name: "ajuda", type: "forum" }),
     }),
   );
-  await json(
-    await fetch(`${API}/api/channels/${forum.id}/posts`, {
-      method: "POST",
+  // f-forum: tags, and a few more posts from a second person, so the list,
+  // compact and gallery layouts have something to lay out.
+  await join(VIEWER, home.id, "rafa");
+  const { tags } = await json<{ tags: { id: string; name: string }[] }>(
+    await fetch(`${API}/api/channels/${forum.id}/forum-tags`, {
+      method: "PUT",
       headers: headers(VIEWER),
       body: JSON.stringify({
-        title: "O áudio some quando alguém compartilha a tela",
-        body: "Acontece no app do Windows. No navegador fica normal.",
-        nonce: "council-forum-post",
+        tags: [
+          { name: "Bug", emoji: "🐛", moderated: false },
+          { name: "Dúvida", emoji: null, moderated: false },
+          { name: "Ideia", emoji: "💡", moderated: false },
+        ],
       }),
     }),
   );
+  const tag = Object.fromEntries(tags.map((entry) => [entry.name, entry.id]));
+  for (const [who, title, body, tagName] of [
+    ["rafa", "Dá pra mudar o atalho do push-to-talk?", "Queria usar o botão lateral do mouse.", "Dúvida"],
+    ["rafa", "Modo escuro mais escuro, tipo OLED", "Preto puro no fundo economiza bateria no celular.", "Ideia"],
+    [VIEWER, "O áudio some quando alguém compartilha a tela", "Acontece no app do Windows. No navegador fica normal.", "Bug"],
+  ] as const) {
+    await json(
+      await fetch(`${API}/api/channels/${forum.id}/posts`, {
+        method: "POST",
+        headers: headers(who),
+        body: JSON.stringify({
+          title,
+          body,
+          tagIds: [tag[tagName]],
+          nonce: `council-forum-${title.length}`,
+        }),
+      }),
+    );
+  }
 
   for (const theme of ["dark", "light"] as const) {
     const context = await browser.newContext({ viewport: DESKTOP, locale: "pt-BR" });
@@ -1124,6 +1229,48 @@ test("captures the forum post", async ({ browser }) => {
     const roster = page.locator("[data-member-sidebar-toggle]");
     if ((await roster.count()) && (await roster.first().getAttribute("aria-pressed")) === "true") {
       await roster.first().click();
+    }
+    // f-forum: the list in each layout, an empty filter and the composer.
+    const layouts = page.locator("[data-forum-layout-switch]");
+    for (const [label, name] of [["Cartões", "card"], ["Compacto", "compact"], ["Galeria", "gallery"]] as const) {
+      if (await layouts.isVisible().catch(() => false)) {
+        await layouts.getByRole("radio", { name: label }).click();
+        await page.waitForTimeout(400);
+        await shoot(page, `f-forum-${name}-${theme}`);
+      } else {
+        console.log("f-forum: layout switch skipped");
+      }
+    }
+    if (await layouts.isVisible().catch(() => false)) {
+      await layouts.getByRole("radio", { name: "Cartões" }).click();
+    }
+    const resolved = page.getByRole("radio", { name: "Resolvidos" }).or(page.getByRole("tab", { name: "Resolvidos" })).first();
+    if (await resolved.isVisible().catch(() => false)) {
+      await resolved.click();
+      await page.waitForTimeout(400);
+      await shoot(page, `f-forum-empty-${theme}`);
+      await page.getByRole("radio", { name: "Todos" }).or(page.getByRole("tab", { name: "Todos" })).first().click();
+    }
+    // States: the pointer on the first card, keyboard focus on a filter.
+    // `shoot` parks the mouse, so this one is a plain screenshot.
+    try {
+      await page.keyboard.press("Shift");
+      await page.getByRole("radio", { name: "Abertos" }).or(page.getByRole("tab", { name: "Abertos" })).first().focus();
+      await page.getByRole("link", { name: /Modo escuro/ }).first().hover();
+      await page.waitForTimeout(400);
+      await page.screenshot({ path: path.join(OUT!, `f-forum-states-${theme}.png`) });
+    } catch (error) {
+      console.log(`f-forum: states skipped (${String(error).slice(0, 120)})`);
+    }
+    try {
+      await page.getByRole("button", { name: "Novo post" }).first().click();
+      await expect(page.getByRole("dialog")).toBeVisible({ timeout: 5_000 });
+      await page.waitForTimeout(400);
+      await shoot(page, `f-forum-composer-${theme}`);
+      await page.keyboard.press("Escape");
+      await page.waitForTimeout(300);
+    } catch (error) {
+      console.log(`f-forum: composer skipped (${String(error).slice(0, 120)})`);
     }
     await page.getByRole("link", { name: /O áudio some/ }).click();
     const panel = page.locator("[data-forum-post-panel]");

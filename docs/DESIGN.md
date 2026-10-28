@@ -579,6 +579,17 @@ yet. `--icon-stroke` is the stroke a Lucide icon takes when a primitive passes i
 replacement under the redesign, for a surface whose callers still pass Lucide.
 A filled glyph that turns into a blob (two copy squares) takes `symbol`.
 
+### Forum channels
+
+`components/forum/`. Under the redesign a card, a gallery tile and a pinned
+row sit on the card tokens; hover strengthens the edge
+(`--forum-card-hover-border`) and the open post's edge is stronger still
+(`--forum-card-open-border`). A compact row uses the row roles. Filters, tags
+and the status trigger are pills on the segmented track's tint
+(`--segmented-bg`), whose chosen status is the thumb; a chosen toggle ("Meus
+posts", a tag) is the inverse pill. The layout switch is
+segmented and the search is a round input well.
+
 ### Hints and first run
 
 Every hint renders through `layout/corner-card.tsx`. Under the redesign it
@@ -605,6 +616,33 @@ redesign it uses the merged primitives' tokens:
   stays a row.
 - A choice card is a card; the chosen one has a 2px accent edge (the accent border plus a 1px inset ring) and a check.
 - Icons are Phosphor through `IconSwap`.
+
+### The call
+
+`voice/call-stage.tsx` and its controls, with the recipes in
+`voice/call-control-classes.ts` and the `--call-*` tokens. Under the
+redesign:
+
+- The open stage sits on `--call-stage-bg`: the canvas grey in light, surface-0
+  in dark. Its floating bar is a
+  popover: `--call-bar-bg`, `--call-bar-border`, `--call-bar-shadow`.
+- A control on the open stage is a 44px round well (`--call-control-bg`,
+  hover `--call-control-hover`). Docked in the composer the controls rest as
+  ghosts beside the composer's own icons and fill on hover.
+- A control that is on (camera, share, music, a raised hand, a pinned video
+  size, audience mode) takes the soft accent (`--call-control-on-bg`). A
+  muted mic takes the soft danger (`--call-control-off-bg`); a moderator's
+  mute takes the soft warning. The hang-up is the one solid red, 64px wide.
+- The audience's raise-hand stays the solid accent: it is their one action.
+- A tile is `--call-tile-bg` on the card radius (`--call-tile-radius`).
+  Whoever is talking gets a 2px ring in `--call-speaking` with a 2px gap cut
+  from the stage. The one exception is the single tile that fills the stage:
+  there is no stage around it to cut a gap from, so its ring is drawn inset.
+- What floats on a picture (the name, "⋯", fullscreen) is dark glass
+  (`--call-badge-bg`), the same in both looks. Names are pills; the controls
+  are 32px.
+- Glyphs are filled Phosphor objects through `IconSwap`; "⋯" and the
+  fullscreen corners are bold symbols.
 
 ## Components
 
@@ -1022,9 +1060,10 @@ card of settings, the "what's new" note.
   is the surface only. Each popover keeps its own placement, portal and
   dismissal, because each measures a different anchor.
 - **Callers.** The emoji and GIF pickers, the update note, the soundboard,
-  the forum icon picker and the music speaker panel. The profile popover
-  and the peer audio card still draw an older `ink-2` panel; they move with
-  their surfaces.
+  the forum icon picker, the music speaker panel and the profile card
+  (`user/user-profile-popover.tsx`: round action wells with captions, roles
+  and community actions in cards, danger rows in red). The peer audio card
+  still draws an older `ink-2` panel; it moves with its surface.
 - **Under the redesign.** The pane radius (16px), its own fill
   (`surface-2` in dark, the brightest surface in light so the panel reads
   lifted rather than sunk), a 10% text edge in both themes, and a lift
