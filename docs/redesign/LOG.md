@@ -83,6 +83,7 @@ Read this file and the inventory at the start of every session.
 | 4 | `f-communities` | Merged, capped at round 5 (Opus 7.6 r5, 8.1 r3). Not done: a balanced chip wrap |
 | 4 | `f-bots` | Merged, capped at round 5 (Opus 8.3 r5). Not done: a spinner on the wizard's final button while it saves |
 | 4 | `f-states` | Merged, capped at round 5 (Opus 8.1 r5, 8.3 r4). Open: question on the deploy notes' wording (Railway). Not done: the error page in the canvas frame |
+| 4 | `f-profile` | Merged, capped at round 5 (Opus 8.2 r5, MUST in r1 fixed). Not done: a filled check for "already friends" |
 | 5 | `m-breakpoints` | Merged (code only, no council) |
 
 ## Phase 0: directions
@@ -1631,6 +1632,32 @@ a hero, from `--glass-bg` / `--glass-fg` / `--glass-border`), the shell
 sizes a footer's primary action (`data-cta`, 120px), done steps keep their
 place with a check and "Feito" and no strike. Rebuilt off `redesign`
 without the f-call work the first branch carried.
+
+### f-profile
+
+Spec (audit: `user-profile-popover.tsx` (self, other, bot, blocked; action
+strip, Mais menu, manage and cargos sections, inline timeout and ban
+composers, medals, depoimentos, connections, communities),
+`member-moderation-dialog.tsx`, `depoimentos-section.tsx`):
+
+1. Job: who this person is and what you can do about them, from any name.
+2. Redesign: the card is the shared popover (surface, edge, lift, radius);
+   the action wells are round on the card tint with filled glyphs; Mais is
+   the shared menu's rows; manage, cargos and the about pane are cards; the
+   name in Gabarito, the tag in sans; role chips and timeout presets are
+   pills; inline fields take the input tokens.
+3. Merges: Mais stays its own fixed menu (the card scrolls, a portal menu
+   must not clip). Question kept: native `prompt` and `confirm` for nickname
+   and kick still belong to the browser.
+4. Kept: every action, the moderation composers inline (the evidence stays
+   in view), the contact-sheet strip.
+
+Rounds: r1 Codex 7.8 (MUST fixed: the action wells vanished in light), r2
+Codex 8.0, r3 Opus 8.1, r4 Codex 8.1, r5 Opus 8.2 (no MUST, cap). After r5:
+danger hover on the red rows, focus rings on the timeout pills and reason
+inputs, the timeout note in secondary text, menu row rhythm in the
+community card. Not done: a filled check for "already friends" (copy shows
+with the toggle off).
 
 ### f-states
 
