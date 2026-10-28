@@ -1814,8 +1814,8 @@ viewers sheet, the report dialog, the quote and call cards in chat):
    cannot sit on it, and the kit already has round wells, pills and lime.
 4. Kept: everything; no copy changes.
 
-Rounds: r1 Codex 8.0, r2 Opus 7.8 (MUST fixed: a failed post's name stayed
-red), r3 Codex 8.1, r4 Opus 8.2, r5 Opus 8.3 (no MUST, cap). After r5: the
+Rounds: r1 Codex 8.0, r2 Opus 7.8 (MUST fixed: a failed post's name lost its
+red once seen), r3 Codex 8.1, r4 Opus 8.2, r5 Opus 8.3 (no MUST, cap). After r5: the
 swatch row 6px apart so the fade cuts a swatch; the states shot focuses a
 new ring beside a seen one. Not done: a brighter light-only unseen ring
 (the accent ladder has no step for it), the label's 2px offset.
