@@ -79,7 +79,7 @@ export function SettingsBuildLine({
           variant === "row" && "justify-end",
         )}
       >
-        <IconSwap off={CircleX} on={XCircle} offClassName="h-3.5 w-3.5 shrink-0" />
+        <IconSwap off={CircleX} on={XCircle} offClassName="h-3.5 w-3.5 shrink-0" className="h-3.5 w-3.5" />
         {t("settings.status.copyFailed")}
       </span>
     ) : null;
@@ -193,7 +193,7 @@ function BuildLineRail({
           type="button"
           onClick={copy}
           className={cn(
-            "inline-flex max-w-full items-center gap-1.5 rounded-[var(--radius-control)] px-2 py-0.5 text-left text-[11px] tabular-nums text-text-tertiary transition-colors duration-[var(--duration-fast)] hover:text-text",
+            "inline-flex max-w-full items-center gap-1.5 rounded-[var(--radius-control)] px-2 py-0.5 text-left text-[11px] tabular-nums text-text-tertiary redesign:font-mono transition-colors duration-[var(--duration-fast)] hover:text-text",
             SETTINGS_FOCUS,
           )}
         >

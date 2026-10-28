@@ -38,11 +38,11 @@ export function InviteChoiceRow<T extends string | number>({
 
   return (
     <div>
-      <p className="mb-1.5 text-xs font-medium text-text-secondary">{label}</p>
+      <p className="mb-1.5 text-xs font-medium text-text-secondary redesign:mb-2 redesign:text-[13px] redesign:font-semibold">{label}</p>
       <div
         role="radiogroup"
         aria-label={label}
-        className="flex flex-wrap gap-1"
+        className="flex flex-wrap gap-1 redesign:gap-1.5"
         onKeyDown={handleKeyDown}
       >
         {options.map((option) => {
@@ -63,6 +63,12 @@ export function InviteChoiceRow<T extends string | number>({
                 selected
                   ? "border-accent bg-accent-soft text-on-accent-soft"
                   : "border-border text-text-secondary hover:border-border-strong hover:text-text",
+                // Under the redesign a choice is a pill: the card's edge when
+                // idle, the selected row's fill with an accent edge when on.
+                "redesign:rounded-full redesign:px-3 redesign:focus-visible:ring-[color:var(--list-row-ring)]",
+                selected
+                  ? "redesign:border-accent redesign:bg-[color:var(--list-row-selected)] redesign:font-semibold redesign:text-[color:var(--list-row-selected-text)]"
+                  : "redesign:border-[color:var(--card-border)] redesign:hover:border-[color:var(--card-border)] redesign:hover:bg-[color:var(--card-row-hover)]",
               )}
             >
               {option.label}

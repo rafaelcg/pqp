@@ -29,6 +29,9 @@ import {
   ServerEmojiUploadError,
   uploadServerEmoji,
 } from "@/lib/server-emoji-upload";
+import { SETTINGS_CARD_REDESIGN, SETTINGS_FIELD_LABEL_REDESIGN } from "@/components/settings/kit/classes";
+import { SECTION_LABEL_REDESIGN } from "@/components/ui/section-header";
+import { cn } from "@/lib/utils";
 
 const ERROR_KEYS: Record<ServerEmojiErrorCode, MessageKey> = {
   emoji_name_taken: "serverEmoji.error.nameTaken",
@@ -193,7 +196,7 @@ export function ServerEmojiSection({ serverId }: { serverId: string }) {
     <div className="space-y-6" data-server-emoji>
       <section className="space-y-3">
         <div className="flex items-baseline justify-between gap-3">
-          <h4 className="font-display text-sm font-bold uppercase tracking-wider text-paper-muted">
+          <h4 className={cn("font-display text-sm font-bold uppercase tracking-wider text-paper-muted", SECTION_LABEL_REDESIGN)}>
             {t("serverEmoji.upload.title")}
           </h4>
           {list && (
@@ -210,7 +213,7 @@ export function ServerEmojiSection({ serverId }: { serverId: string }) {
         </p>
 
         {draft ? (
-          <div className="flex flex-wrap items-start gap-4 rounded-lg border border-ink-4 bg-ink-2 p-4">
+          <div className={cn("flex flex-wrap items-start gap-4 rounded-lg border border-ink-4 bg-ink-2 p-4", SETTINGS_CARD_REDESIGN)}>
             <div className="flex flex-col items-center gap-1.5">
               <img
                 src={draft.previewUrl}
@@ -223,7 +226,7 @@ export function ServerEmojiSection({ serverId }: { serverId: string }) {
               </span>
             </div>
             <div className="min-w-[14rem] flex-1 space-y-2">
-              <label className="block text-xs font-semibold uppercase tracking-wide text-paper-muted">
+              <label className={cn("block text-xs font-semibold uppercase tracking-wide text-paper-muted", SETTINGS_FIELD_LABEL_REDESIGN)}>
                 {t("serverEmoji.name.label")}
                 <div className="mt-1 flex items-center gap-1 font-mono text-sm normal-case tracking-normal text-paper">
                   <span aria-hidden className="text-paper-muted">:</span>
@@ -342,7 +345,7 @@ export function ServerEmojiSection({ serverId }: { serverId: string }) {
       </section>
 
       <section className="space-y-2 border-t border-ink-4 pt-5">
-        <h4 className="font-display text-sm font-bold uppercase tracking-wider text-paper-muted">
+        <h4 className={cn("font-display text-sm font-bold uppercase tracking-wider text-paper-muted", SECTION_LABEL_REDESIGN)}>
           {t("serverEmoji.list.title")}
         </h4>
         {loadFailed ? (
