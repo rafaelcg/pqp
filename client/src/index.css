@@ -989,12 +989,48 @@
   /* The solid accent, as IconButton's and Slider's rings: the 60% focus
      ring all but vanishes on the light selected fill. */
   --list-row-ring: var(--color-accent);
+  /* Forum cards (forum/forum-post-card.tsx): the card tokens; a hover
+     strengthens the edge, the open post's edge is a step stronger still. */
+  --forum-card-hover-border: color-mix(in oklab, var(--color-text) 18%, transparent);
+  --forum-card-open-border: color-mix(in oklab, var(--color-text) 32%, transparent);
+  /* The compact row open beside the list: a faint accent tint, so the open post leads (light uses the accent's soft fill). */
+  --forum-row-open-bg: color-mix(in oklab, var(--color-accent) 14%, transparent);
   /* Settings dialogs: a small frame. The band and the rail sit on the side
      pane's tone, the page is an inset pane in the conversation's tone. */
   --settings-surface: var(--color-pane-side);
   --settings-pane-bg: var(--color-pane-main);
   --settings-pane-inset: 0.5rem;
   --settings-rule: color-mix(in oklab, var(--color-border) 70%, transparent);
+
+  /* The call (voice/call-stage.tsx). The bar's controls are round wells on
+     a text tint; a control that is on (camera, share, a raised hand) takes
+     the soft accent, a muted mic the soft danger, and the hang-up is the one
+     solid red. Tiles take the card radius on a raised surface, and whoever
+     is talking gets a ring with a gap, so it reads on a dark picture too. */
+  --call-control-bg: color-mix(in oklab, var(--color-text) 10%, transparent);
+  --call-control-hover: color-mix(in oklab, var(--color-text) 16%, transparent);
+  --call-control-on-bg: var(--color-accent-soft);
+  --call-control-on-text: var(--color-on-accent-soft);
+  /* A hover step on the soft accent, toward the accent itself. */
+  --call-control-on-hover: color-mix(in oklab, var(--color-accent) 18%, var(--color-accent-soft));
+  --call-control-off-bg: color-mix(in oklab, var(--color-danger) 20%, transparent);
+  --call-control-off-hover: color-mix(in oklab, var(--color-danger) 28%, transparent);
+  --call-leave-hover: color-mix(in oklab, var(--color-danger) 85%, var(--color-text));
+  --call-bar-bg: var(--popover-surface);
+  --call-bar-border: var(--popover-border);
+  --call-bar-shadow: var(--popover-shadow);
+  --call-stage-bg: var(--color-surface-0);
+  --call-tile-bg: var(--color-surface-2);
+  /* Muted by a moderator: the soft warning, with a hover step. */
+  --call-control-warn-bg: color-mix(in oklab, var(--color-warning) 18%, transparent);
+  /* A dot on a docked control is ringed in the composer's own fill, made solid. */
+  --call-dock-pip-ring: color-mix(in oklab, var(--color-text) 5%, var(--color-pane-main));
+  --call-control-warn-hover: color-mix(in oklab, var(--color-warning) 26%, transparent);
+  --call-tile-radius: var(--radius-card);
+  --call-speaking: var(--color-success);
+  --call-badge-bg: oklch(0.12 0.01 262 / 0.62);
+  --call-badge-text: oklch(0.98 0 0);
+  --call-badge-hover: oklch(0.12 0.01 262 / 0.82);
 
   /* Dialogs: a deeper scrim with more blur, so the app behind recedes; the
      panel takes a text edge and the deepest lift. The header loses its rule
@@ -1346,6 +1382,7 @@
 
 /* The redesign's shadows on a light page: tinted, never black. Every look. */
 :root[data-redesign][data-theme="light"] {
+  --forum-row-open-bg: color-mix(in oklab, var(--color-accent) 22%, transparent);
   /* 3% reads in light; dark needs 4.5%. */
   --message-hover: color-mix(in oklab, var(--color-text) 3%, transparent);
   --message-hover-solid: color-mix(in oklab, var(--color-text) 3%, var(--color-pane-main));
@@ -1456,6 +1493,19 @@
   /* 10% as in dark: a pale panel over a pale scrim needs the edge. */
   --dialog-border: color-mix(in oklab, var(--color-text) 10%, transparent);
   --dialog-shadow: 0 1px 2px oklch(0.4 0.02 262 / 0.1), var(--shadow-3);
+  /* Light: a 7% well reads as clearly as 10% on dark; the stage is the
+     canvas grey so the white tiles lift off it. */
+  --call-control-bg: color-mix(in oklab, var(--color-text) 7%, transparent);
+  --call-control-hover: color-mix(in oklab, var(--color-text) 12%, transparent);
+  --call-control-off-bg: color-mix(in oklab, var(--color-danger) 14%, transparent);
+  --call-control-off-hover: color-mix(in oklab, var(--color-danger) 20%, transparent);
+  --call-leave-hover: color-mix(in oklab, var(--color-danger) 88%, black);
+  --call-tile-bg: var(--color-surface-0);
+  /* The stage is the canvas grey, so a white tile has an edge and the speaking ring's gap cuts. */
+  --call-stage-bg: var(--color-canvas);
+  --call-control-warn-bg: color-mix(in oklab, var(--color-warning) 22%, transparent);
+  --call-dock-pip-ring: color-mix(in oklab, var(--color-text) 3%, var(--color-pane-main));
+  --call-control-warn-hover: color-mix(in oklab, var(--color-warning) 30%, transparent);
 }
 
 /*

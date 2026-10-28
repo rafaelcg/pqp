@@ -73,6 +73,7 @@ Read this file and the inventory at the start of every session.
 | 3 | `s-message-row` | Merged, capped at round 5 (Opus 8.5 r5) |
 | 3 | `s-message-content` | Merged, capped at round 5 (Opus 8.6 r5). Open: the broken-image chip is English in every language (question in the spec) |
 | 3 | `s-message-chrome` | Merged, capped at round 5 (Opus 8.6 r3 and r5, Codex 8.6 r4) |
+| 3 | `s-log-chrome` | Merged, capped at round 5 (Codex 8.6 r5, Opus 8.5 r4). Open: "Load older messages" is English in every language |
 | 4 | `f-onboarding` | Merged, capped at round 5 (Opus 8.3 r3 and r5) |
 | 5 | `m-sheets` | Merged, approved at round 5 (Opus 9.0, no MUST) |
 | 4 | `f-user-settings` | Merged, capped at round 5 (Opus 8.1 r5, 8.2 r4) |
@@ -84,6 +85,8 @@ Read this file and the inventory at the start of every session.
 | 4 | `f-bots` | Merged, capped at round 5 (Opus 8.3 r5). Not done: a spinner on the wizard's final button while it saves |
 | 4 | `f-states` | Merged, capped at round 5 (Opus 8.1 r5, 8.3 r4). Open: question on the deploy notes' wording (Railway). Not done: the error page in the canvas frame |
 | 4 | `f-profile` | Merged, capped at round 5 (Opus 8.2 r5, MUST in r1 fixed). Not done: a filled check for "already friends" |
+| 4 | `f-forum` | Merged, capped at round 5 (Opus 8.4 r5, no MUST). Not done: an unread post in the light shots |
+| 4 | `f-call` | Merged, capped at round 5 (Opus 8.5 r5, approved). Not done: "Lia (você)" on the self tile (copy), muted and moderator-muted captures |
 | 5 | `m-breakpoints` | Merged (code only, no council) |
 
 ## Phase 0: directions
@@ -1590,6 +1593,12 @@ failed states are `p-empty`'s, already merged):
    English in every language. Translating them changes the toggle-off app.
 5. Not on the sheet: the bulk bar and the gone note need a live list state.
 
+Rounds: r1 Codex 8.0, r2 Opus 8.0, r3 Codex 8.5, r4 Opus 8.5, r5 Codex 8.6
+(no MUST, cap). Fixed along the way: the jump pill rises over the bot's
+note and follows it down, one left edge for the footer, the day label
+outlined so it stops reading as a button, room under the newer button, the
+weekday in sentence case. Open: the "Load older messages" copy question.
+
 ### s-composer
 
 Spec (audit: `MessageComposer` (the well, reply chip, attachment chips,
@@ -1613,6 +1622,13 @@ channel, the thread panel and the forum dialog):
 4. Kept: the music bar and call dock inside the well move with `f-call`; the
    poll composer's hand-made switch stays (question: swap it for `Switch`).
 5. Not on the sheet: the "+" menu (needs attachments or slash commands).
+
+Rounds: r1 Codex 8.0, r2 Opus 8.2, r3 Codex 8.2, r4 Opus 8.3, r5 Codex 8.8
+(no MUST, cap). Fixed along the way: slow mode's countdown on the soft
+accent, a firmer typing edge, the text 16px in, an open tool held a step
+firmer than a hover, line-weight smiley and GIF, the read-only edge on its
+own token, a typed draft on the sheet. Not on the sheet: an attachment chip
+and the autocomplete (they need a live upload and a member list).
 
 ### f-onboarding
 
@@ -1704,6 +1720,52 @@ the intro hint); behind the per-server `custom_bots` flag):
 3. Merges: question kept: `radio-choices.tsx` duplicates the roving radio
    group; folding it into `ui/RadioGroup` would change the toggle-off look.
 4. Kept: the wizard steps, the practice chat, the activity list.
+
+### f-call
+
+Spec (audit: `voice/call-stage.tsx`, 5,900 lines: the controls in three homes
+(the open stage's floating bar, the composer's dock, the column beside an
+app), camera and primary tiles, the room view, the listener ring, badges,
+tile and share overlays; soundboard, audience, video quality as their own
+files):
+
+1. Job: be in a call: see who talks, mute, camera, share, hand, music, leave.
+2. Redesign: one recipe for every control (`call-control-classes.ts`): wells
+   on the stage, ghosts in the dock, on is the soft accent, muted the soft
+   danger, hang-up solid red; tiles on the card radius with a gapped speaking
+   ring; dark glass on pictures; filled Phosphor glyphs.
+3. Merges: the four look-alike control strings into one recipe.
+4. Kept: every control, the folding rules, the idle fade, all three homes.
+
+Rounds: r1 Codex 8.1, r2 Opus 8.2 (kept the live mic neutral, agreed), r3
+Codex 8.3, r4 Opus 8.4, r5 Opus 8.5 (no MUST, approved, cap). After r5: an
+even gap beside an app, docked dots ringed in the composer's fill. Not done:
+"Lia (você)" on the self tile (copy, shows with the toggle off), a ring on
+stacked initials (the avatar's), muted and moderator-muted captures.
+
+### f-forum
+
+Spec (audit: `forum/` (8 files): the pane with its search, filter bar and
+layout switch, three post layouts (card, compact row, gallery tile) and the
+pinned row, the post view with status, tags, follow and the solution, the
+composer dialog with similar posts and tags):
+
+1. Job: browse, filter and open posts; start one; mark one resolved.
+2. Redesign: cards, tiles and pinned rows on the card tokens with a stronger
+   edge on hover and when open; compact rows on the row roles (the selected
+   fill replaces the side bar); filters, tags and the status trigger are
+   pills on the segmented track's tint; the layout switch is segmented; the
+   search is a round input well; filled glyphs.
+3. Merges: the three tag pill looks share one resting tint.
+4. Kept: every layout, filter, sort and badge; the 767px breakpoint and the
+   forum's own empty block (logged, not merged: the shared EmptyState already
+   draws it).
+
+Rounds: r1 Codex 7.6, r2 Codex 8.2, r3 Opus 8.3, r4 Codex 8.3, r5 Opus 8.4
+(no MUST, no SHOULD, cap). After r5: the composer title on the card edge,
+the light open row a step under the selected channel, the segmented status
+and the inverse toggles written down in DESIGN.md. Not done: an unread post
+in the light shots (the dark pass marks the fixture read first).
 
 ## Open questions for André
 

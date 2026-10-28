@@ -746,7 +746,7 @@ export function BotNoticeRow({ notice, onDismiss }: { notice: BotNotice; onDismi
       className={cn(
         "mx-4 mb-1 flex shrink-0 items-start gap-2 rounded-md border border-border bg-surface-2/60 px-3 py-2 text-xs text-paper/90",
         CONTENT_CARD_REDESIGN,
-        "redesign:mx-3 redesign:mb-2 redesign:items-center redesign:gap-3 redesign:py-2.5 redesign:pl-3 redesign:pr-2 redesign:text-[0.8125rem] redesign:text-text",
+        "redesign:mx-4 redesign:mb-2 redesign:items-center redesign:gap-3 redesign:py-2.5 redesign:pl-3 redesign:pr-2 redesign:text-[0.8125rem] redesign:text-text",
       )}
     >
       <Clock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-paper-muted redesign:mt-0 redesign:h-4 redesign:w-4 redesign:text-text-secondary" aria-hidden />

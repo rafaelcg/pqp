@@ -1112,7 +1112,7 @@ function LogChromeBlock() {
           jump pill, the bot's note to you and two people typing. The empty
           and failed states are p-empty's (the primitives sheet). */}
       <MainPane>
-        <div className="flex h-[640px] min-h-0 flex-col">
+        <div className="flex h-[700px] min-h-0 flex-col">
           <MessageList
             messages={LOG_MESSAGES}
             currentUserId={ROW_ME}
