@@ -911,6 +911,9 @@
   /* Every message card pads its content the same. */
   --content-card-pad: 0.875rem;
   --content-glyph-bg: color-mix(in oklab, var(--color-text) 7%, transparent);
+  /* The thread chip open in the panel: the selected row's fill (light steps down to the accent's soft fill). */
+  --thread-chip-open-bg: var(--color-row-selected);
+  --thread-chip-open-fg: var(--color-on-row-selected);
   --content-quote-bar: color-mix(in oklab, var(--color-text) 22%, transparent);
   --content-link-line: color-mix(in oklab, var(--color-accent-text) 45%, transparent);
 
@@ -978,6 +981,12 @@
   /* The solid accent, as IconButton's and Slider's rings: the 60% focus
      ring all but vanishes on the light selected fill. */
   --list-row-ring: var(--color-accent);
+  /* Forum cards (forum/forum-post-card.tsx): the card tokens; a hover
+     strengthens the edge, the open post's edge is a step stronger still. */
+  --forum-card-hover-border: color-mix(in oklab, var(--color-text) 18%, transparent);
+  --forum-card-open-border: color-mix(in oklab, var(--color-text) 32%, transparent);
+  /* The compact row open beside the list: a faint accent tint, so the open post leads (light uses the accent's soft fill). */
+  --forum-row-open-bg: color-mix(in oklab, var(--color-accent) 14%, transparent);
   /* Settings dialogs: a small frame. The band and the rail sit on the side
      pane's tone, the page is an inset pane in the conversation's tone. */
   --settings-surface: var(--color-pane-side);
@@ -1365,6 +1374,7 @@
 
 /* The redesign's shadows on a light page: tinted, never black. Every look. */
 :root[data-redesign][data-theme="light"] {
+  --forum-row-open-bg: color-mix(in oklab, var(--color-accent) 22%, transparent);
   /* 3% reads in light; dark needs 4.5%. */
   --message-hover: color-mix(in oklab, var(--color-text) 3%, transparent);
   --message-hover-solid: color-mix(in oklab, var(--color-text) 3%, var(--color-pane-main));
@@ -1417,6 +1427,8 @@
   --sidebar-search-hover: var(--color-surface-0);
   --sidebar-search-border: var(--color-border);
   --rail-tile-bg: var(--color-pane-side);
+  --thread-chip-open-bg: var(--color-accent-soft);
+  --thread-chip-open-fg: var(--color-on-accent-soft);
   --input-invalid-bg: color-mix(in oklab, var(--color-danger) 6%, var(--color-field));
   /* Tabs */
   /* 7 points over the 8% ghost hover, so a hovered pill never reads as selected. */

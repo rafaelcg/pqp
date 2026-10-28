@@ -579,6 +579,17 @@ yet. `--icon-stroke` is the stroke a Lucide icon takes when a primitive passes i
 replacement under the redesign, for a surface whose callers still pass Lucide.
 A filled glyph that turns into a blob (two copy squares) takes `symbol`.
 
+### Forum channels
+
+`components/forum/`. Under the redesign a card, a gallery tile and a pinned
+row sit on the card tokens; hover strengthens the edge
+(`--forum-card-hover-border`) and the open post's edge is stronger still
+(`--forum-card-open-border`). A compact row uses the row roles. Filters, tags
+and the status trigger are pills on the segmented track's tint
+(`--segmented-bg`), whose chosen status is the thumb; a chosen toggle ("Meus
+posts", a tag) is the inverse pill. The layout switch is
+segmented and the search is a round input well.
+
 ### Hints and first run
 
 Every hint renders through `layout/corner-card.tsx`. Under the redesign it
@@ -1049,9 +1060,10 @@ card of settings, the "what's new" note.
   is the surface only. Each popover keeps its own placement, portal and
   dismissal, because each measures a different anchor.
 - **Callers.** The emoji and GIF pickers, the update note, the soundboard,
-  the forum icon picker and the music speaker panel. The profile popover
-  and the peer audio card still draw an older `ink-2` panel; they move with
-  their surfaces.
+  the forum icon picker, the music speaker panel and the profile card
+  (`user/user-profile-popover.tsx`: round action wells with captions, roles
+  and community actions in cards, danger rows in red). The peer audio card
+  still draws an older `ink-2` panel; it moves with its surface.
 - **Under the redesign.** The pane radius (16px), its own fill
   (`surface-2` in dark, the brightest surface in light so the panel reads
   lifted rather than sunk), a 10% text edge in both themes, and a lift

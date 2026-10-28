@@ -932,6 +932,145 @@ function MessageContentBlock() {
   );
 }
 
+const CHROME_THREAD = "00000000-0000-4000-8000-000000000901";
+const CHROME_THREAD_OPEN = "00000000-0000-4000-8000-000000000902";
+const CHROME_FACES = [
+  { id: ROW_RAFA, displayName: "Rafa", avatarUrl: null },
+  { id: ROW_BIA, displayName: "Bia", avatarUrl: null },
+  { id: ROW_ME, displayName: "Lia", avatarUrl: null },
+];
+
+function chromeThread(channelId: string, name: string, replyCount: number, extra: Record<string, unknown> = {}) {
+  return {
+    channelId,
+    parentChannelId: ROW_CHANNEL,
+    rootMessageId: null,
+    name,
+    replyCount,
+    lastActivityAt: new Date(NOW - 12 * 60_000).toISOString(),
+    archived: false,
+    participants: CHROME_FACES,
+    ...extra,
+  };
+}
+
+const CHROME_MESSAGES: ChatMessage[] = [
+  contentMessage(11, ROW_RAFA, "Rafa", "fechamos a campanha sábado então?", {
+    reactions: [
+      { emoji: "👍", count: 3, me: true, users: CHROME_FACES.map(({ id, displayName }) => ({ id, displayName })) },
+      { emoji: "🔥", count: 1, me: false, users: [{ id: ROW_BIA, displayName: "Bia" }] },
+      { emoji: "😂", count: 2, me: false, users: [] },
+    ],
+    thread: chromeThread(CHROME_THREAD, "Campanha de sábado", 12),
+  }),
+  contentMessage(12, ROW_BIA, "Bia", "eu topo, levo o lanche", {
+    replyTo: {
+      id: "00000000-0000-4000-8000-000000000511",
+      authorId: ROW_RAFA,
+      authorName: "Rafa",
+      excerpt: "fechamos a campanha sábado então?",
+      deleted: false,
+    },
+    reactions: [{ emoji: "❤️", count: 1, me: true, users: [{ id: ROW_ME, displayName: "Lia" }] }],
+  }),
+  contentMessage(13, ROW_ME, "Lia", "respondendo aquela que sumiu", {
+    replyTo: { id: "00000000-0000-4000-8000-000000000599", authorId: null, authorName: null, excerpt: "", deleted: true },
+  }),
+  contentMessage(14, ROW_RAFA, "Rafa", "as regras ficam na thread", {
+    thread: chromeThread(CHROME_THREAD_OPEN, "Regras", 4),
+  }),
+  contentMessage(15, ROW_BIA, "Bia", "lembra do torneio de julho?", {
+    thread: chromeThread("00000000-0000-4000-8000-000000000903", "Torneio de julho", 31, {
+      archived: true,
+      lastActivityAt: new Date(NOW - 40 * 86_400_000).toISOString(),
+    }),
+  }),
+];
+
+const CHROME_UNREAD_THREADS = new Set([CHROME_THREAD]);
+
+/** A row with ten reactions (they wrap) above a thread chip, then a one-line continuation. */
+const CHROME_WRAP_MESSAGES: ChatMessage[] = [
+  contentMessage(16, ROW_RAFA, "Rafa", "chaveamento fechado, 16 duplas", {
+    reactions: [
+      { emoji: "👍", count: 4, me: false, users: [] },
+      { emoji: "🔥", count: 2, me: false, users: [] },
+      { emoji: "😂", count: 3, me: false, users: [] },
+      { emoji: "❤️", count: 1, me: false, users: [] },
+      { emoji: "🎮", count: 5, me: true, users: [] },
+      { emoji: "👀", count: 2, me: false, users: [] },
+      { emoji: "🍕", count: 1, me: false, users: [] },
+      { emoji: "🏆", count: 2, me: true, users: [] },
+      { emoji: "😭", count: 1, me: false, users: [] },
+      { emoji: "🙏", count: 3, me: false, users: [] },
+    ],
+    thread: chromeThread("00000000-0000-4000-8000-000000000904", "Chaveamento", 7, { participants: CHROME_FACES.slice(0, 2) }),
+  }),
+  contentMessage(17, ROW_RAFA, "Rafa", "quem chegar depois das 20h fica de fora"),
+];
+
+function MessageChromeWrapBlock() {
+  return (
+    <div data-testid="qa-shell-message-chrome-wrap" className="flex flex-col gap-6">
+      {/* The shot hovers the continuation, so its toolbar rises over the row above. */}
+      <MainPane>
+        <div className="flex h-[320px] min-h-0 flex-col">
+          <MessageList
+            messages={CHROME_WRAP_MESSAGES}
+            currentUserId={ROW_ME}
+            currentUsername="lia"
+            channelId={ROW_CHANNEL}
+            onToggleReaction={noop}
+            onRetryMessage={noop}
+            onReplyTo={noop}
+            onStartThread={noop}
+            onOpenThread={noop}
+            authors={ROW_AUTHORS}
+            authorsComplete
+          />
+        </div>
+      </MainPane>
+    </div>
+  );
+}
+
+function MessageChromeBlock() {
+  return (
+    <div data-testid="qa-shell-message-chrome" className="flex flex-col gap-6">
+      {/* Rafa: three reactions (one yours) and a thread with new replies.
+          Bia answers him (a reply line; your heart). You answer a message
+          that was deleted. Rafa's thread is the one open in the panel; Bia's
+          is archived. The shot hovers Bia's reply and opens "Mais". */}
+      <MainPane>
+        <div className="flex h-[620px] min-h-0 flex-col">
+          <MessageList
+            messages={CHROME_MESSAGES}
+            currentUserId={ROW_ME}
+            currentUsername="lia"
+            channelId={ROW_CHANNEL}
+            onToggleReaction={noop}
+            onRetryMessage={noop}
+            onReplyTo={noop}
+            onStartThread={noop}
+            onOpenThread={noop}
+            canModerate
+            onPinMessage={asyncNoop}
+            onUnpinMessage={asyncNoop}
+            onDeleteMessage={asyncNoop}
+            onReportMessage={noop}
+            onForward={noop}
+            onMarkUnread={noop}
+            unreadThreadIds={CHROME_UNREAD_THREADS}
+            activeThreadId={CHROME_THREAD_OPEN}
+            authors={ROW_AUTHORS}
+            authorsComplete
+          />
+        </div>
+      </MainPane>
+    </div>
+  );
+}
+
 /**
  * A new build waiting, so both rails draw the update tile. The store is
  * this page's own; it goes back to nothing waiting when the sheet unmounts.
@@ -1204,6 +1343,8 @@ export function ShellSheet() {
       {/* Message rows. */}
       <MessageRowsBlock />
       <MessageContentBlock />
+      <MessageChromeBlock />
+      <MessageChromeWrapBlock />
 
       <CommunityCardsBlock />
 
