@@ -31,7 +31,14 @@ const DEV_TOKEN = "dev-local-token";
 const ADMIN_TOKEN = "e2e-admin-token-0123456789abcdef";
 /** `DESIGN_COUNCIL_REDESIGN=1`: photograph the redesign (`lib/redesign.ts`). */
 const REDESIGN = process.env.DESIGN_COUNCIL_REDESIGN === "1";
-const DESKTOP = { width: 1440, height: 900 };
+/**
+ * Verification passes, all optional: `DESIGN_COUNCIL_LOOK` (`retro`,
+ * `halloween`), `DESIGN_COUNCIL_CONTRAST=more`, and `DESIGN_COUNCIL_WIDTH`
+ * (390 for the phone pass) run the same scenes in another look.
+ */
+const LOOK = process.env.DESIGN_COUNCIL_LOOK ?? "";
+const CONTRAST = process.env.DESIGN_COUNCIL_CONTRAST ?? "";
+const DESKTOP = { width: Number(process.env.DESIGN_COUNCIL_WIDTH ?? 1440), height: 900 };
 const PHONE = { width: 390, height: 844 };
 
 test.skip(!OUT, "Set DESIGN_COUNCIL_DIR to capture the design council screenshots");
@@ -320,18 +327,27 @@ class Socket {
 /** Who the page is, and a returning person's furniture already put away. */
 async function as(page: Page, theme: "dark" | "light"): Promise<void> {
   await page.addInitScript(
-    ([suffix, value, redesign]) => {
+    ([suffix, value, redesign, look, contrast]) => {
       localStorage.setItem("pqp:dev-user-suffix", suffix);
       localStorage.setItem("pqp-theme", value);
+      if (look) localStorage.setItem("pqp-appearance", look);
+      if (look === "retro") localStorage.setItem("pqp-appearance-retro", "1");
+      if (contrast) localStorage.setItem("pqp-contrast", contrast);
       localStorage.setItem("pqp:download-hint-dismissed", "1");
       localStorage.setItem("pqp-redesign", redesign ? "on" : "off");
     },
-    [VIEWER, theme, REDESIGN] as const,
+    [VIEWER, theme, REDESIGN, LOOK, CONTRAST] as const,
   );
   await fetch(`${API}/api/me/preferences`, {
     method: "PATCH",
     headers: headers(VIEWER),
-    body: JSON.stringify({ theme }),
+    // The account's look wins over the browser's, so a verification pass
+    // sets it there too.
+    body: JSON.stringify({
+      theme,
+      ...(LOOK ? { appearance: LOOK } : {}),
+      ...(CONTRAST ? { contrast: CONTRAST } : {}),
+    }),
   });
 }
 
