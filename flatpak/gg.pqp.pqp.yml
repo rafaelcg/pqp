@@ -55,8 +55,8 @@ modules:
     buildsystem: simple
     sources:
       - type: file
-        url: https://github.com/rafaelcg/pqp/releases/download/v0.2.5/pqp-0.2.5-amd64.deb
-        sha256: 98fa98a36d529095f73489409719a94395c183213ef544cc46ba2daa3cd75f96
+        url: https://github.com/rafaelcg/pqp/releases/download/v0.2.9/pqp-0.2.9-amd64.deb
+        sha256: 1e3b69766bdce8ea20a444e56d69b46c9ff014bd2a8e423abea08f3026a1a269
         dest-filename: pqp.deb
         only-arches: [x86_64]
         x-checker-data:
@@ -71,7 +71,7 @@ modules:
       # Chromium's but not ours; flatpak-builder installs a LICENSE it finds in
       # the build directory to share/licenses/gg.pqp.pqp.
       - type: file
-        url: https://raw.githubusercontent.com/rafaelcg/pqp/v0.2.5/LICENSE
+        url: https://raw.githubusercontent.com/rafaelcg/pqp/v0.2.9/LICENSE
         sha256: 0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0
       - type: file
         path: pqp.sh
