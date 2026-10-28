@@ -57,7 +57,7 @@ export function IncomingCallOverlay({
     return null;
   }
   return (
-    <div className="pointer-events-none fixed inset-x-0 top-[max(0.5rem,env(safe-area-inset-top))] z-50 flex flex-col items-center gap-2 px-2 sm:inset-x-auto sm:right-4 sm:top-[max(1rem,env(safe-area-inset-top))] sm:items-end redesign:sm:inset-x-0 redesign:sm:right-auto redesign:sm:items-center">
+    <div className="pointer-events-none fixed inset-x-0 top-[max(0.5rem,env(safe-area-inset-top))] z-50 flex flex-col items-center gap-2 px-2 sm:inset-x-auto sm:right-4 sm:top-[max(1rem,env(safe-area-inset-top))] sm:items-end redesign:sm:inset-x-0 redesign:sm:items-center">
       {calls.map((call) => (
         <div
           key={call.conversationId}
