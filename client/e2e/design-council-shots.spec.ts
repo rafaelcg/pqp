@@ -1222,11 +1222,15 @@ test("captures the stories", async ({ browser }) => {
       // States, after the viewer closed so Rafa is seen in both themes:
       // keyboard focus on Rafa's ring, the pointer on "Ver todos".
       await page.waitForTimeout(600);
-      await page.keyboard.press("Shift");
+      // Tab out and back so focus-visible matches, and shoot here because
+      // shoot() parks the pointer, which would drop the hover.
       await ring.focus();
-      await page.getByRole("button", { name: /Ver todos/ }).first().hover();
-      await page.waitForTimeout(300);
-      await shoot(page, `f-stories-states-${theme}`);
+      await page.keyboard.press("Tab");
+      await page.keyboard.press("Shift+Tab");
+      await page.evaluate(() => document.fonts.ready);
+      await page.locator("[data-story-see-all]").first().hover();
+      await page.waitForTimeout(800);
+      await page.screenshot({ path: path.join(OUT!, `f-stories-states-${theme}.png`) });
       await page.mouse.move(0, 0);
       await page.waitForTimeout(500);
       await page.locator("[data-server-menu-trigger]").first().click();
