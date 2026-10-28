@@ -71,7 +71,7 @@ export function ColorSwatches({
   const row = useRef<HTMLDivElement>(null);
   useWheelScrollX(row);
   return (
-    <div ref={row} role="radiogroup" aria-label={label} className="flex items-center gap-2 overflow-x-auto px-3 py-2 [scrollbar-width:none] redesign:scroll-px-4 redesign:px-4 redesign:[mask-image:linear-gradient(to_right,#000_calc(100%-16px),transparent)]">
+    <div ref={row} role="radiogroup" aria-label={label} className="flex items-center gap-2 overflow-x-auto px-3 py-2 [scrollbar-width:none] redesign:gap-1.5 redesign:scroll-px-4 redesign:px-4 redesign:[mask-image:linear-gradient(to_right,#000_calc(100%-16px),transparent)]">
       {STORY_LAYER_COLORS.map((color) => {
         const selected = value === color;
         return (

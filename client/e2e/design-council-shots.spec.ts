@@ -1233,11 +1233,13 @@ test("captures the stories", async ({ browser }) => {
       await shoot(page, `f-stories-viewer-${theme}`);
       await page.keyboard.press("Escape");
       // States, after the viewer closed so Rafa is seen in both themes:
-      // keyboard focus on Rafa's ring, the pointer on "Ver todos".
+      // keyboard focus on Bia's ring (new), Rafa's seen ring at rest beside
+      // it, the pointer on "Ver todos".
       await page.waitForTimeout(600);
       // Tab out and back so focus-visible matches, and shoot here because
       // shoot() parks the pointer, which would drop the hover.
-      await ring.focus();
+      const bia = page.getByRole("button", { name: /^Story de Bia/ });
+      await bia.focus();
       await page.keyboard.press("Tab");
       await page.keyboard.press("Shift+Tab");
       await page.evaluate(() => document.fonts.ready);
