@@ -8,7 +8,7 @@ import type {
   VoiceParticipant,
   WatchParty,
 } from "@pqp/shared";
-import { useEffect, type ComponentProps, type ReactNode } from "react";
+import { useEffect, useState, type ComponentProps, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { CommunityHomePreview } from "@/components/community-home/community-home-preview";
 import {
@@ -24,6 +24,7 @@ import { ChannelIcon } from "@/components/layout/channel-icon";
 import { UserPanel } from "@/components/layout/user-panel";
 import { MessageList, type MessageAuthorInfo } from "@/components/chat/message-list";
 import { MessageComposer } from "@/components/chat/message-composer";
+import { clearDraft, writeDraft } from "@/lib/composer-drafts";
 import { ComposerReadOnlyNotice } from "@/components/chat/composer-read-only-notice";
 import type { ChatMessage } from "@/hooks/use-chat";
 import { ConnectionBanner } from "@/components/layout/connection-banner";
@@ -1145,14 +1146,23 @@ function ComposerPane({ label, children }: { label: string; children: ReactNode 
 }
 
 const COMPOSER_SLOW_UNTIL = Date.now() + 5 * 60_000;
+/** A sheet-only channel whose draft is seeded, so the send is enabled. */
+const COMPOSER_TYPING_CHANNEL = "00000000-0000-4000-8000-000000000512";
 
 function ComposerBlock() {
+  // Seeded before the composer below reads its draft; cleared on the way out.
+  useState(() => writeDraft(COMPOSER_TYPING_CHANNEL, "bora jogar hoje à noite?"));
+  useEffect(() => () => clearDraft(COMPOSER_TYPING_CHANNEL), []);
   return (
     <div data-testid="qa-shell-composer" className="flex flex-col gap-6">
-      {/* Resting; replying to Rafa; slow mode with a wait; read-only. The
+      {/* Resting; a draft typed (send enabled); replying to Rafa; slow mode
+          with a wait; read-only. The
           shot opens the format bar on the first one. */}
       <ComposerPane label="Em repouso">
         <MessageComposer onSend={noop} placeholder="Mensagem em #geral" />
+      </ComposerPane>
+      <ComposerPane label="Escrevendo">
+        <MessageComposer onSend={noop} placeholder="Mensagem em #geral" channelId={COMPOSER_TYPING_CHANNEL} />
       </ComposerPane>
       <ComposerPane label="Respondendo">
         <MessageComposer
