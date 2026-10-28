@@ -118,10 +118,9 @@ describe("share silent retry (PQP-31)", () => {
       main,
       /if \(response\?\.audio === "loopback"\) \{\s*shareSilentRetry\.rememberLoopback\(source, requester\);/,
     );
-    const at = main.indexOf('ipcMain.handle("pqp:share-silent-retry-arm"');
-    assert.ok(at > 0, "arm handler registered");
+    const at = main.indexOf('ipcGuard.handle(\n    "pqp:share-silent-retry-arm"');
+    assert.ok(at > 0, "arm handler registered through the origin-checking guard");
     const handler = main.slice(at, at + 300);
-    assert.match(handler, /senderMatchesAppOrigin\(event, sessionAppOrigin\)/);
     assert.match(handler, /shareSilentRetry\.arm\(requesterKey\(event\.senderFrame\)\)/);
   });
 

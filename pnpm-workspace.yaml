@@ -9,6 +9,34 @@ packages:
   - docs-apps
   - apps/*
 
+# Supply-chain policy for RESOLVING dependencies (`pnpm add`, `pnpm update`, a
+# lockfile regeneration). `pnpm install --frozen-lockfile`, which CI and the
+# Dockerfile use, never resolves, so neither setting changes what they install.
+#
+# minimumReleaseAge is in MINUTES: a version published less than 3 days ago is
+# not picked. Every 2025-2026 npm worm was caught and yanked within days, and
+# the lockfile history shows versions locked the day they were published. An
+# urgent security fix that is younger than that goes in
+# `minimumReleaseAgeExclude` (name or name@version), on purpose and with a
+# comment, and comes out again once it is old enough.
+minimumReleaseAge: 4320
+# Refuse a version whose trust evidence (npm provenance or a trusted publisher)
+# is weaker than an earlier release of the same package, the shape of a
+# hijacked publish token.
+trustPolicy: no-downgrade
+# ...but only for versions published in the last 30 days (minutes). The check
+# compares publish dates, so an old backport on an older major line (`semver`
+# 6.3.1 came after 7.x gained provenance) reads as a downgrade forever, and
+# with no cutoff every lockfile-changing command (Dependabot included) failed
+# with ERR_PNPM_TRUST_DOWNGRADE on packages nobody just published. A hijacked
+# publish is caught inside days, which is the window that needs the check.
+trustPolicyIgnoreAfter: 43200
+# A dependency that gains an install script the list below does not name fails
+# the install instead of being skipped with a warning nobody reads. As of
+# pnpm 10.33.0 nothing is ignored (`pnpm ignored-builds` prints "None"), so
+# this changes no current install; it only makes a new script a decision.
+strictDepBuilds: true
+
 allowBuilds:
   "@clerk/shared": true
   esbuild: true

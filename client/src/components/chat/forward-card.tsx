@@ -81,7 +81,7 @@ export function ForwardCardView({
   return (
     <div
       className={cn(
-        "group/fwd mt-1.5 w-full max-w-[26rem] overflow-hidden rounded-[var(--radius-card)] border border-border border-l-[3px] border-l-accent bg-surface-1 text-left transition-[border-color,background-color] duration-[var(--duration-fast)] hover:border-accent/50 hover:bg-surface-2",
+        "group/fwd mt-1.5 w-full max-w-[26rem] redesign:max-w-md overflow-hidden rounded-[var(--radius-card)] border border-border border-l-[3px] border-l-accent bg-surface-1 text-left transition-[border-color,background-color] duration-[var(--duration-fast)] hover:border-accent/50 hover:bg-surface-2",
         CONTENT_CARD_REDESIGN,
         CONTENT_CARD_HOVER_REDESIGN,
       )}
@@ -96,7 +96,7 @@ export function ForwardCardView({
         data-forward-kind={forward.kind}
         className="block w-full text-left no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring redesign:rounded-[var(--radius-card)] redesign:focus-visible:ring-accent"
       >
-        <div className="flex items-center gap-1.5 px-3 pt-2.5 text-xs text-text-tertiary redesign:px-3.5 redesign:pt-3">
+        <div className="flex items-center gap-1.5 px-3 pt-2.5 text-xs text-text-tertiary redesign:px-[var(--content-card-pad)] redesign:pt-[var(--content-card-pad)]">
           <Forward className="h-3.5 w-3.5 shrink-0 redesign:hidden" aria-hidden />
           <Icon icon={ArrowBendUpRight} kind="symbol" size="sm" className="hidden redesign:block" />
           <span className="shrink-0">{t("forwardCard.from")}</span>
@@ -128,7 +128,7 @@ export function ForwardCardView({
           )}
         </div>
 
-        <div className="flex gap-3 px-3 pb-3 pt-1.5 max-sm:flex-col redesign:px-3.5 redesign:pb-3.5">
+        <div className="flex gap-3 px-3 pb-3 pt-1.5 max-sm:flex-col redesign:px-[var(--content-card-pad)] redesign:pb-[var(--content-card-pad)]">
           <div className="min-w-0 flex-1 space-y-1">
             {title && (
               <p

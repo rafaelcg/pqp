@@ -24,6 +24,9 @@ import { cn, formatFullTimestamp, formatRelativeShort } from "@/lib/utils";
  */
 
 /** The chip's one-line label, exported for tests. */
+/** On the open chip's fill, the meta is its own text colour, softened, not the page's tertiary. */
+const OPEN_META_REDESIGN = "redesign:text-[color:color-mix(in_oklab,var(--thread-chip-open-fg)_65%,transparent)]";
+
 export function threadChipLabel(t: Translator["t"], replyCount: number): string {
   if (replyCount === 0) {
     return t("thread.noReplies");
@@ -84,10 +87,12 @@ export function ThreadChip({
         // Under the redesign a pill on a text tint, like a reaction: the
         // thread hangs off the message without a stripe. Open is the
         // selected row's fill.
+        // In light the open chip is the accent's soft fill, quieter than the selected row.
+        // `--thread-chip-fill` is the fill the faces are cut from.
         "redesign:min-h-7 redesign:gap-2 redesign:rounded-full redesign:border-l-0 redesign:py-1 redesign:pl-1.5 redesign:pr-3 redesign:focus-visible:ring-accent",
         isOpen
-          ? "redesign:bg-row-selected redesign:text-on-row-selected"
-          : "redesign:bg-[color:var(--content-glyph-bg)] redesign:text-text-secondary redesign:hover:bg-[color:var(--content-card-hover)] redesign:hover:text-text",
+          ? "redesign:bg-[color:var(--thread-chip-open-bg)] redesign:text-[color:var(--thread-chip-open-fg)] redesign:[--thread-chip-fill:var(--thread-chip-open-bg)]"
+          : "redesign:bg-[color:var(--content-glyph-bg)] redesign:text-text-secondary redesign:hover:bg-[color:var(--content-card-hover)] redesign:hover:text-text redesign:[--thread-chip-fill:color-mix(in_oklab,var(--color-text)_7%,var(--color-pane-main))] redesign:hover:[--thread-chip-fill:var(--content-card-hover)]",
       )}
     >
       {thread.archived ? (
@@ -108,10 +113,10 @@ export function ThreadChip({
               avatarUrl={person.avatarUrl}
               rounded="full"
               className={cn(
-                "h-4 w-4 ring-2 ring-surface-0 redesign:h-5 redesign:w-5 redesign:ring-[color:var(--color-pane-main)]",
+                "h-4 w-4 ring-2 ring-surface-0 redesign:h-5 redesign:w-5 redesign:ring-[1.5px] redesign:ring-[color:var(--thread-chip-fill)]",
                 index > 0 && "-ml-1.5",
               )}
-              fallbackClassName="bg-surface-3 text-[8px] text-text-secondary"
+              fallbackClassName="bg-surface-3 text-[8px] text-text-secondary redesign:text-[10px] redesign:font-semibold"
             />
           ))}
         </span>
@@ -129,12 +134,18 @@ export function ThreadChip({
           {thread.name}
         </span>
       )}
-      <span className="shrink-0 font-medium tabular-nums text-accent redesign:font-semibold redesign:text-accent-text">
+      <span
+        className={cn(
+          "shrink-0 font-medium tabular-nums text-accent redesign:font-semibold",
+          // The accent ink says "new replies"; a read or archived thread's count is secondary.
+          unread && !isOpen && !thread.archived ? "redesign:text-accent-text" : "redesign:text-text-secondary",
+        )}
+      >
         {replies}
       </span>
       {thread.archived ? (
         <span
-          className="shrink-0 text-text-tertiary"
+          className={cn("shrink-0 text-text-tertiary", isOpen && OPEN_META_REDESIGN)}
           title={t("thread.archivedHint", { days: THREAD_AUTO_ARCHIVE_DAYS })}
         >
           · {t("thread.archived")}
@@ -142,7 +153,7 @@ export function ThreadChip({
       ) : (
         thread.replyCount > 0 && (
           <time
-            className="shrink-0 text-text-tertiary"
+            className={cn("shrink-0 text-text-tertiary", isOpen && OPEN_META_REDESIGN)}
             dateTime={thread.lastActivityAt}
             title={formatFullTimestamp(thread.lastActivityAt)}
           >

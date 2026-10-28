@@ -106,7 +106,7 @@ export function BringCrewAnnouncement({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3
           id="bring-crew-announcement-title"
-          className="text-[11px] font-semibold uppercase tracking-[0.14em] text-text-tertiary"
+          className="text-[11px] font-semibold uppercase tracking-[0.14em] text-text-tertiary redesign:text-[13px] redesign:normal-case redesign:tracking-normal redesign:text-text-secondary"
         >
           {t("bringCrew.announcement.title")}
         </h3>

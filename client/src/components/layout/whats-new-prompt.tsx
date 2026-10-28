@@ -66,7 +66,7 @@ export function WhatsNewPrompt({
       footer={
         <Button
           size="sm"
-          className="cta-lift rounded-full px-4"
+          data-cta className="cta-lift rounded-full px-4"
           onClick={() => {
             close();
             onOpen();

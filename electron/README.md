@@ -27,7 +27,8 @@ The main process polls Vite at `http://localhost:5173` until it responds, then l
 
 | Variable | Purpose |
 |---|---|
-| `VITE_APP_URL` / `PQP_APP_URL` | Remote or local URL to load (takes precedence over static). Root paths (`/`) are rewritten to `/app`. |
+| `VITE_APP_URL` / `PQP_APP_URL` | Remote or local URL to load (takes precedence over static). Root paths (`/`) are rewritten to `/app`. **Dev shell only**: a packaged build ignores them unless `PQP_ALLOW_APP_URL_OVERRIDE=1` is also set. |
+| `PQP_ALLOW_APP_URL_OVERRIDE=1` | Lets an installed build honour `PQP_APP_URL` (testing it against staging). Off by default. |
 | `PQP_LOAD_STATIC=1` | Serve a built client from disk over a local loopback server (opens `/app`). Opt-in only — see below. |
 | `PQP_DISABLE_AUTO_UPDATE=1` | Turn off the shell's update check in a packaged build |
 
