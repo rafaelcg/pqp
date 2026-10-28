@@ -423,7 +423,7 @@ export function AppSessionStrip(props: AppSessionStripProps) {
 
 function stripShell(model: LiveStripModel): string {
   return model.tone === "warn"
-    ? "bg-warning-soft text-on-warning-soft border-transparent"
+    ? "bg-warning-soft text-on-warning-soft border-transparent redesign:[--app-face-cut:var(--color-warning-soft)]"
     : "bg-surface-1 border-border text-text redesign:border-[color:var(--card-border)] redesign:bg-transparent";
 }
 

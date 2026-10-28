@@ -91,7 +91,7 @@ export const AppSessionCard = memo(function AppSessionCard({
             : "border-border bg-surface-1",
         // The card tokens under the redesign; ended keeps its dashed edge.
         "redesign:p-4",
-        !ended && "redesign:[--app-face-cut:var(--card-bg)]",
+        !ended && "redesign:[--app-face-cut:var(--card-bg-solid)]",
         ended
           ? "redesign:border-[color:color-mix(in_oklab,var(--color-text)_18%,transparent)]"
           : inside
@@ -230,7 +230,7 @@ function CardHead({ model }: { model: CardModel }) {
         <p
           className={cn(
             "text-xs leading-4 text-text-tertiary",
-            ended ? "line-clamp-2" : "truncate",
+            ended ? "line-clamp-2" : "truncate redesign:text-text-secondary",
           )}
           data-testid="app-card-subtitle"
         >

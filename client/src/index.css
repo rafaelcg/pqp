@@ -829,6 +829,9 @@
   /* Cards (ui/card.tsx): tints of the text, so a card reads on a pane and
      on a dialog alike. */
   --card-bg: color-mix(in oklab, var(--color-text) 4%, transparent);
+  /* The same card fill made solid on the main pane, for a ring that has to
+     cut (stacked faces on a card in chat). */
+  --card-bg-solid: color-mix(in oklab, var(--color-text) 4%, var(--color-pane-main));
   --card-border: color-mix(in oklab, var(--color-text) 8%, transparent);
   --card-row-hover: color-mix(in oklab, var(--color-text) 6%, transparent);
   /* A whole card under the pointer: one step over the card's own fill. */
@@ -1415,6 +1418,7 @@
   /* Cards. In light a text tint darkens into a grey tray; a white wash lifts
      the card on a grey dialog and leaves the edge alone on the white pane. */
   --card-bg: color-mix(in oklab, var(--color-surface-0) 60%, transparent);
+  --card-bg-solid: color-mix(in oklab, var(--color-surface-0) 60%, var(--color-pane-main));
   /* Lighter than dark's: over the white wash on a grey dialog, 6% lands at
      the dialog's own grey and the row reads as a hole. */
   --card-row-hover: color-mix(in oklab, var(--color-text) 4%, transparent);
