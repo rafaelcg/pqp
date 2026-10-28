@@ -522,6 +522,37 @@ test("captures the design council screens", async ({ browser }) => {
       } catch {
         console.log("short-name header shot skipped");
       }
+      // A profile card, from a message author's name.
+      try {
+        // The newest author: the first one in the DOM may sit above the fold.
+        const author = page.locator("[data-author-trigger]").last();
+        await author.scrollIntoViewIfNeeded();
+        await author.click({ timeout: 5_000 });
+        await expect(page.locator("[data-profile-card]")).toBeVisible({ timeout: 5_000 });
+        await page.waitForTimeout(800);
+        await shoot(page, `36-profile-card-${theme}`);
+        // Its states: a role ticked, keyboard focus on Mensagem, the pointer on Silenciar.
+        try {
+          const card = page.locator("[data-profile-card]");
+          const mod = card.getByRole("checkbox", { name: /Mod/ }).first();
+          await mod.click({ timeout: 3_000 });
+          await page.waitForTimeout(600);
+          await page.keyboard.press("Shift");
+          await card.getByRole("button", { name: "Mensagem" }).first().focus();
+          await card.getByText("Silenciar", { exact: true }).first().hover();
+          await page.waitForTimeout(300);
+          await shoot(page, `36-profile-card-states-${theme}`);
+          await mod.click({ timeout: 3_000 });
+          await page.waitForTimeout(400);
+        } catch (error) {
+          console.log(`profile card states shot skipped (${String(error).slice(0, 160)})`);
+        }
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(300);
+      } catch (error) {
+        console.log(`profile card shot skipped (${String(error).slice(0, 160)})`);
+        await page.keyboard.press("Escape");
+      }
       // A popover in place: the composer's emoji picker.
       await page.getByRole("button", { name: "Adicionar emoji", exact: true }).first().click();
       await expect(page.locator(".emoji-mart-shell")).toBeVisible();
