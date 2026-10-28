@@ -94,7 +94,7 @@ jobs:
       # Dependency-free Node built-ins on purpose: no `pnpm install` step means
       # nothing between the checkout and the probe can fail and turn the
       # monitor into a false alarm about itself.
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
 
