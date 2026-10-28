@@ -1,3 +1,5 @@
+import { cn } from "@/lib/utils";
+import { SECTION_LABEL_REDESIGN } from "@/components/ui/section-header";
 import { Trash2 } from "lucide-react";
 import type { Depoimento, ProfileCommunityList } from "@pqp/shared";
 import { useTranslation } from "@/lib/i18n";
@@ -53,7 +55,7 @@ export function DepoimentosSection({
       }
     >
       {!plain && (
-        <h3 className="px-3 pb-1 pt-2.5 text-[11px] font-semibold uppercase tracking-wide text-paper-muted redesign:text-[13px] redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">
+        <h3 className={cn("px-3 pb-1 pt-2.5 text-[11px] font-semibold uppercase tracking-wide text-paper-muted", SECTION_LABEL_REDESIGN, "redesign:mb-0 redesign:pb-1")}>
           {t("depoimentos.section")}
         </h3>
       )}
@@ -144,7 +146,7 @@ export function CommunityBadges({
       }
     >
       {!plain && (
-        <h3 className="px-3 pb-1 pt-2.5 text-[11px] font-semibold uppercase tracking-wide text-paper-muted redesign:text-[13px] redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">
+        <h3 className={cn("px-3 pb-1 pt-2.5 text-[11px] font-semibold uppercase tracking-wide text-paper-muted", SECTION_LABEL_REDESIGN, "redesign:mb-0 redesign:pb-1")}>
           {t("depoimentos.communities")}
         </h3>
       )}

@@ -342,7 +342,7 @@ function ActionTile({ label, className, children, ...rest }: ActionTileProps) {
       )}
       {...rest}
     >
-      <span className="flex h-10 w-full items-center justify-center rounded-xl bg-ink-3/70 text-paper transition-colors group-hover:bg-ink-3 group-focus-visible:ring-2 group-focus-visible:ring-signal/60 redesign:rounded-full redesign:bg-[color:var(--card-bg)] redesign:[:root[data-theme=light]_&]:bg-[color:var(--content-glyph-bg)] redesign:text-text redesign:group-hover:bg-[color:var(--menu-row-hover)] redesign:[:root[data-theme=light]_&]:group-hover:bg-[color:var(--content-card-hover)] redesign:group-focus-visible:ring-[color:var(--list-row-ring)] redesign:group-focus-visible:ring-offset-2 redesign:group-focus-visible:ring-offset-[color:var(--popover-surface)]">
+      <span className="flex h-10 w-full items-center justify-center rounded-xl bg-ink-3/70 text-paper transition-colors group-hover:bg-ink-3 group-focus-visible:ring-2 group-focus-visible:ring-signal/60 redesign:rounded-full redesign:bg-[color:var(--card-bg)] redesign:[:root[data-theme=light]_&]:bg-[color:var(--content-glyph-bg)] redesign:text-text redesign:group-hover:bg-[color:var(--menu-row-hover)] redesign:[:root[data-theme=light]_&]:group-hover:bg-[color:var(--content-card-hover)] redesign:group-focus-visible:ring-[color:var(--color-focus-ring)] redesign:group-focus-visible:ring-offset-2 redesign:group-focus-visible:ring-offset-[color:var(--popover-surface)]">
         {children}
       </span>
       <span className="max-w-full text-center text-[11px] font-medium leading-tight text-paper-muted redesign:text-text-secondary">
