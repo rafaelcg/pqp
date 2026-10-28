@@ -1888,6 +1888,10 @@ add panel and `UserSearch`, notices, `FriendRows`, the remove confirm,
 4. Kept: "Remover" stays a ghost X beside "Mensagem" (question: move it into
    a row menu, as the member list does?).
 
+Rounds (Opus only): r1 7.2, r2 7.9, r3 7.7 (fixed), r4 7.8 (MUST fixed: the
+pending depoimentos card on the round's rules), r5 8.3 (cap). Merged after
+the shell chain it was stacked on, its own commits moved onto `redesign`.
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss
