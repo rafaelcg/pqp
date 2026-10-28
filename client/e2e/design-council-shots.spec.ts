@@ -1044,6 +1044,7 @@ const PRIMITIVES: {
   // The music queue open in a call's composer; hover a waiting song.
   // The history open, a queue row hovered.
   { id: "m-sheets", testId: "qa-music-queue", click: "Tocadas", hoverText: "Gal Costa - Vapor Barato" },
+  { id: "f-apps", testId: "qa-apps" },
   { id: "p-settings-kit", testId: "qa-settings-kit", tiles: 1300 },
   { id: "p-settings-kit", testId: "qa-settings-kit", tiles: 1300 },
   // Two real rails: Conversas open with people waiting, and a server open

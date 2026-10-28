@@ -89,6 +89,14 @@ export const AppSessionCard = memo(function AppSessionCard({
           : inside
             ? "border-accent bg-surface-1"
             : "border-border bg-surface-1",
+        // The card tokens under the redesign; ended keeps its dashed edge.
+        "redesign:p-4",
+        !ended && "redesign:[--app-face-cut:var(--card-bg-solid)]",
+        ended
+          ? "redesign:border-[color:color-mix(in_oklab,var(--color-text)_18%,transparent)]"
+          : inside
+            ? "redesign:bg-[color:var(--card-bg)]"
+            : "redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)]",
         fresh && "app-card-in",
         settling && "app-card-settle",
       )}
@@ -212,7 +220,7 @@ function CardHead({ model }: { model: CardModel }) {
       <AppIconTile icon={model.app.icon} dimmed={ended} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <p className="min-w-0 truncate font-display text-sm font-bold leading-5 text-text">
+          <p className={cn("min-w-0 truncate font-display text-sm font-bold leading-5 text-text", ended && "redesign:text-text-secondary")}>
             {cardTitle(model, t)}
           </p>
           {ended && model.disabled ? (
@@ -222,7 +230,7 @@ function CardHead({ model }: { model: CardModel }) {
         <p
           className={cn(
             "text-xs leading-4 text-text-tertiary",
-            ended ? "line-clamp-2" : "truncate",
+            ended ? "line-clamp-2" : "truncate redesign:text-text-secondary",
           )}
           data-testid="app-card-subtitle"
         >
@@ -290,6 +298,7 @@ export function Avatars({
           className={cn(
             "h-6 w-6 ring-2",
             ended ? "ring-surface-0" : "ring-surface-1",
+            "redesign:ring-[color:var(--app-face-cut)]",
             known && !known.has(person.userId) && "app-avatar-in",
           )}
           fallbackClassName="bg-surface-3 text-[10px] font-semibold text-text"
@@ -301,7 +310,7 @@ export function Avatars({
           name={person.displayName}
           avatarUrl={person.avatarUrl}
           rounded="full"
-          className="app-avatar-out h-6 w-6 ring-2 ring-surface-1"
+          className="app-avatar-out h-6 w-6 ring-2 ring-surface-1 redesign:ring-[color:var(--app-face-cut)]"
           fallbackClassName="bg-surface-3 text-[10px] font-semibold text-text"
         />
       ))}
@@ -310,6 +319,7 @@ export function Avatars({
           className={cn(
             "z-[1] flex h-6 min-w-6 items-center justify-center rounded-full px-1 text-[10px] font-semibold text-text-secondary ring-2",
             ended ? "bg-surface-2 ring-surface-0" : "bg-surface-2 ring-surface-1",
+            "redesign:ring-[color:var(--app-face-cut)]",
           )}
         >
           +{more}
@@ -423,7 +433,16 @@ function LiveBody({
         ) : model.full && !model.canWatch ? null : (
           <Button
             variant={model.full || failed ? "secondary" : "default"}
-            className={cn("h-11 w-full sm:h-9 sm:w-auto", BUSY_LOOK)}
+            className={cn(
+              "h-11 w-full sm:h-9 sm:w-auto",
+              BUSY_LOOK,
+              // A wrapped button keeps the right edge; while joining the
+              // label stays legible and only the fill dims.
+              "redesign:sm:ml-auto",
+              !model.full &&
+                !failed &&
+                "redesign:aria-disabled:opacity-100 redesign:aria-disabled:bg-accent redesign:aria-disabled:cursor-progress",
+            )}
             aria-busy={joining || undefined}
             aria-disabled={joining || undefined}
             onClick={() => {
