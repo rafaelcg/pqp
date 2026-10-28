@@ -911,6 +911,9 @@
   /* Every message card pads its content the same. */
   --content-card-pad: 0.875rem;
   --content-glyph-bg: color-mix(in oklab, var(--color-text) 7%, transparent);
+  /* The thread chip open in the panel: the selected row's fill (light steps down to the accent's soft fill). */
+  --thread-chip-open-bg: var(--color-row-selected);
+  --thread-chip-open-fg: var(--color-on-row-selected);
   --content-quote-bar: color-mix(in oklab, var(--color-text) 22%, transparent);
   --content-link-line: color-mix(in oklab, var(--color-accent-text) 45%, transparent);
 
@@ -1387,6 +1390,8 @@
   --sidebar-search-hover: var(--color-surface-0);
   --sidebar-search-border: var(--color-border);
   --rail-tile-bg: var(--color-pane-side);
+  --thread-chip-open-bg: var(--color-accent-soft);
+  --thread-chip-open-fg: var(--color-on-accent-soft);
   --input-invalid-bg: color-mix(in oklab, var(--color-danger) 6%, var(--color-field));
   /* Tabs */
   /* 7 points over the 8% ghost hover, so a hovered pill never reads as selected. */

@@ -900,8 +900,10 @@ const PRIMITIVES: {
   /**
    * A button that opens a menu: the shot opens it, moves the highlight
    * `arrows` rows down with the keyboard, and frames the block and the menu.
+   * `hoverText` first hovers the text it names, for a button that only shows
+   * on hover (a message's toolbar).
    */
-  open?: { button: string; menu: string; arrows: number };
+  open?: { button: string; menu: string; arrows: number; hoverText?: string };
   /** A tall block, cut into shots this tall (`<id>-<n>-<theme>.png`). */
   tiles?: number;
 }[] = [
@@ -985,6 +987,14 @@ const PRIMITIVES: {
   { id: "s-message-content", testId: "qa-shell-message-content" },
   // The boot shell and the cannot-reach-the-API page, in desktop frames.
   { id: "f-states", testId: "qa-shell-states", focus: "Tentar de novo" },
+  // Bia's reply hovered, its toolbar up and "Mais" open.
+  {
+    id: "s-message-chrome",
+    testId: "qa-shell-message-chrome",
+    open: { button: "Mais", menu: '[role="menu"][aria-label="Mais"]', arrows: 0, hoverText: "eu topo, levo o lanche" },
+  },
+  // Ten reactions that wrap over a thread chip; the one-line continuation hovered.
+  { id: "s-message-chrome-wrap", testId: "qa-shell-message-chrome-wrap", hoverText: "quem chegar depois das 20h fica de fora" },
 ];
 
 test("captures the primitives", async ({ browser }) => {
@@ -1023,6 +1033,9 @@ test("captures the primitives", async ({ browser }) => {
         await block.getByText(primitive.hoverText, { exact: true }).first().hover();
       }
       if (primitive.open) {
+        if (primitive.open.hoverText) {
+          await block.getByText(primitive.open.hoverText, { exact: true }).hover();
+        }
         await block.getByRole("button", { name: primitive.open.button, exact: true }).focus();
         await page.keyboard.press("Enter");
         const menu = page.locator(primitive.open.menu);

@@ -1541,6 +1541,34 @@ r2 8.2, r3 7.9 (MUST fixed: the webhook edge thinned at the corners), r4
 poll's other options at 14% under the 26% leader, the roll comment on the
 kicker, named chips at medium weight. Not done: none.
 
+### s-message-chrome
+
+Spec (audit: the hover toolbar, its "Mais" panel and `MoreMenuItem`,
+`ReactionBar`, `ReactionChip` and its who-tip, `ReplyQuote`, `ThreadChip`;
+the right-click menu is the merged `ContextMenu`):
+
+1. Job: act on a message, and see what others did with it.
+2. States: toolbar (three quick reactions, yours filled; add; reply; start
+   or open a thread; edit; more), "Mais" open up or down with a danger
+   group; reactions (yours, others, many, the add button); reply (author,
+   excerpt, deleted parent); thread chip (unread dot, open, archived, faces).
+3. Redesign: the toolbar is a pill on the popover surface with 32px round
+   buttons and Phosphor glyphs; "Mais" is the menu's panel and rows, so it
+   matches the right-click menu; a reaction is a 28px pill on a text tint,
+   yours the accent's soft fill with an accent ring; the reply line reads
+   author in text and excerpt in secondary; the thread chip is a pill on a
+   text tint, open is the selected row's fill.
+4. Duplicate kept: "Mais" and the right-click menu list the same actions in
+   two components. Moving "Mais" onto `Menu` changes its keyboard behaviour
+   with the toggle off, so it waits (question below).
+5. Question: should "Mais" become the shared `Menu` (arrow keys, type to
+   find) for everybody, not only under the redesign?
+
+Rounds: r1 Opus 7.6, r2 Codex 8.4, r3 Opus 8.6, r4 Codex 8.6, r5 Opus 8.6
+(no MUST, cap). After r5: the open chip's meta in its own softened colour,
+legible initials on the faces, toolbar focus in the focus colour. Not done:
+raising the toolbar to `-top-5` (it would cover more of the row above).
+
 ### f-onboarding
 
 Spec (audit: `onboarding/` (11 files), the hints in `layout/*-hint.tsx`
