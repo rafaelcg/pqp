@@ -1554,9 +1554,11 @@ function configureSessionSecurity(appOrigin) {
       }
       chooseDisplaySource(request?.audioRequested === true, requesterKey(request?.frame))
         .then((response) => {
-          // `null` cancels. Chromium turns that into a NotAllowedError, which
-          // the client already words as "blocked or cancelled" rather than as
-          // a failure, so backing out of the picker reads as backing out.
+          // `null` cancels. Measured on Electron 44.0.0 and 44.9.1: the page
+          // gets `AbortError: Invalid capture constraints`, NOT a
+          // NotAllowedError, for a Cancel and for every refusal above alike.
+          // So that string from the desktop app means "the shell said no"
+          // (see docs/DESKTOP.md 3.6b for the 0.2.8 picker that never loaded).
           callback(response);
         })
         .catch((err) => {

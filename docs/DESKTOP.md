@@ -953,11 +953,30 @@ signing: `RunAsNode`, `EnableNodeOptionsEnvironmentVariable` and
 `EnableNodeCliInspectArguments` off (no `ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS` or
 `--inspect` against the installed binary; the shell has no use for any of them,
 the Windows share-audio helper is a `utilityProcess`, which does not need
-`RunAsNode`), and `GrantFileProtocolExtraPrivileges` off (the only `file://` page
-is the share picker, plain scripts with no `fetch`). `resetAdHocDarwinSignature`
+`RunAsNode`). `resetAdHocDarwinSignature`
 is on because an unsigned arm64 pack is otherwise killed at launch by the broken
 ad-hoc signature a fuse flip leaves behind; a signed build is signed after the
 flip, so it changes nothing there.
+
+`GrantFileProtocolExtraPrivileges` stays ON, and is written out as `true` so
+nobody flips it by reading the list above as "the rest". 0.2.8 turned it off on
+the reasoning that the only `file://` page is the share picker and it uses no
+`fetch`. The picker lives inside `app.asar`, though, and reading a `file://`
+URL out of an asar archive is one of the privileges that fuse grants. With it
+off the picker window fails with `ERR_FILE_NOT_FOUND`, `showSourcePicker`
+resolves null, the display-media handler calls `callback(null)`, and Electron
+turns that into `AbortError: Invalid capture constraints` before any picker is
+on screen: no share started on any packaged 0.2.8 (27 Oct 2026). Unpackaged
+runs and the smoke specs load the picker from a real folder, where the fuse
+changes nothing, so only a packaged build shows it. `lib/fuses.test.mjs` pins
+it. Turning the fuse off again means serving the picker from a custom protocol
+first (`protocol.handle` reading through the asar-aware `fs`), then proving it
+on a packaged build of every OS.
+
+Note also that `callback(null)` from the handler is NOT a `NotAllowedError` in
+Electron 44: it is `AbortError: Invalid capture constraints`, the same string a
+Cancel in the picker produces. That string from the desktop app means "the
+shell answered no", never a bad constraint from the page.
 
 Not flipped, with the reason: `EnableEmbeddedAsarIntegrityValidation` and
 `OnlyLoadAppFromAsar` (the pair is what makes tampering with `app.asar` detectable,
