@@ -71,6 +71,7 @@ Read this file and the inventory at the start of every session.
 | 3 | `s-header` | Merged, capped at round 5 (Opus 8.3 r4 and r5). Follow-up: rename `--pane-header-rule` / `--pane-header-px` to `--pane-bar-*` after the chain |
 | 3 | `s-banners` | Merged, capped at round 5 (Opus 8.2 r5, MUST fixed after). Not done: a dark-only accent edge |
 | 3 | `s-message-row` | Merged, capped at round 5 (Opus 8.5 r5) |
+| 3 | `s-message-content` | Merged, capped at round 5 (Opus 8.6 r5). Open: the broken-image chip is English in every language (question in the spec) |
 | 4 | `f-onboarding` | Merged, capped at round 5 (Opus 8.3 r3 and r5) |
 | 5 | `m-sheets` | Merged, approved at round 5 (Opus 9.0, no MUST) |
 | 4 | `f-user-settings` | Merged, capped at round 5 (Opus 8.1 r5, 8.2 r4) |
@@ -78,6 +79,8 @@ Read this file and the inventory at the start of every session.
 | 4 | `f-search` | Merged, capped at round 5 (Opus 8.5 r5). Not done: `<li role="none">` inside the listbox (it changes the toggle-off tree too) |
 | 4 | `f-server-settings` | Merged, capped at round 5 (Opus 7.8 r5, 7.9 r4) |
 | 4 | `f-invites` | Merged, capped at round 5 (Opus 7.8 r5, 8.1 r3 and r4) |
+| 4 | `f-communities` | Merged, capped at round 5 (Opus 7.6 r5, 8.1 r3). Not done: a balanced chip wrap |
+| 4 | `f-bots` | Merged, capped at round 5 (Opus 8.3 r5). Not done: a spinner on the wizard's final button while it saves |
 | 5 | `m-breakpoints` | Merged (code only, no council) |
 
 ## Phase 0: directions
@@ -1165,6 +1168,30 @@ Rounds: Codex 8.2 (r1); Opus 8.5 (r2), 8.0 (r3), 8.5 (r5), no MUST left.
 Round 5 fixes: the copy failure glyph at 14px, the info tint at 7% in
 dark, the rail build line in mono. Merged on the cap.
 
+### f-communities
+
+Spec (audit: `communities-view.tsx`, a full-screen overlay from the rail's
+Comunidades door; `community-card.tsx` with its skeleton; states: loading,
+error, empty per filter, results, load more):
+
+1. Job: browse and join public communities by search, category and language,
+   and start one.
+2. Redesign: the page on the conversation's tone (`--communities-bg`), cards
+   one solid step above (`--community-card-bg`) with card corners and a
+   round icon; category chips are the shared pill choices; the language
+   filter is the segmented control; search on the input tokens; Gabarito
+   titles; filled Compass and Sparkle; a round close.
+3. Merges: nothing. The emoji in empty states and chips stay (character).
+4. Kept: the hover lift and glow, share and report on every card, the
+   create call to action above the grid.
+
+Rounds (Opus only): r1 7.4 (MUST fixed), r2 7.8 (MUST fixed), r3 8.1, r4
+8.0 (MUST fixed: the language filter hid every community while the page
+said none existed), r5 7.6 (no MUST, cap; best r3). After r5: the
+language-only empty result names the language, the language control has a
+visible label, a louder cricket, no lift on card hover. Not done: a balanced
+chip wrap (11 chips leave "Geral" alone at 1440px).
+
 ### m-sheets
 
 Spec (audit: the four phone sheets in the inventory. The app launcher, the
@@ -1482,6 +1509,37 @@ a pinned continuation line carries its pin in the gutter, "(editada)"
 ends the paragraph right before it. For `s-member-list`: the same role
 lightness clamp on member rows and role chips.
 
+### s-message-content
+
+Spec (audit: `MessageBody` and the `.markdown-body` rules, `AttachmentGrid`
+and its four tiles, `VoiceNoteCard`, `ForwardCard`, `PollCard`, `ChanceCard`,
+`BotActionCard`, `BauPostCard`, `StoryQuoteCard`, `GifAttachment`,
+`EmbedCard`, `WebhookEmbedCard`; custom emoji draw an image only):
+
+1. Job: what a message carries, readable and one family.
+2. States: markdown (bold, code, link, quote, list, code block, mentions:
+   you, someone, everyone), picture (loading box, broken falls to the chip),
+   video, audio, file, voice note (playing, unheard, broken, receipts),
+   forward (restricted, media chip, thumbnail), poll (voted, leading,
+   closed), dice, bot plan and ask, Baú post (locked, pinned, video), story
+   quote (live, expired), GIF (reduced motion), link preview, webhook embed.
+3. Redesign: one card (`ui/content-card.ts`): the card's text tint and edge
+   at the card radius, no stripe and no shadow; pictures on a 12px media
+   radius; file and media glyphs are Phosphor on a 36px tile; links in the
+   accent ink with a soft underline; mentions a rounded accent tint; the
+   voice note a pill. A webhook keeps the sender's colour on its left edge.
+4. Kept as is: the lightbox (already the IconButton primitives; its chrome
+   moves with the overlays), the bot notice (`s-log-chrome`).
+5. Question: the broken-image chip says "Image unavailable" in English for
+   every language (`attachment-grid.tsx`). Translating it changes the
+   toggle-off app, so it waits for a yes.
+
+Rounds (Opus only): r1 7.8 (MUST fixed: your own mention lost the cascade),
+r2 8.2, r3 7.9 (MUST fixed: the webhook edge thinned at the corners), r4
+8.2, r5 8.6 (no MUST, cap). After r5: one title scale (poll 16px), the
+poll's other options at 14% under the 26% leader, the roll comment on the
+kicker, named chips at medium weight. Not done: none.
+
 ### f-onboarding
 
 Spec (audit: `onboarding/` (11 files), the hints in `layout/*-hint.tsx`
@@ -1532,6 +1590,20 @@ restructure), a lighter light skeleton (the loading council set 10% because
 8% vanished at the pulse's low point), the kicker as plain text (it is a
 link today).
 
+### f-bots
+
+Spec (audit: `bots-settings-section.tsx` in server settings, `bots/` (the
+wizard with its preview pane, the overview, the face, radio choices, tags,
+the intro hint); behind the per-server `custom_bots` flag):
+
+1. Job: give a server a helper bot: name, face, colour, what it may do, and
+   see what it did.
+2. Redesign: the server settings frame around it; eyebrows sentence case;
+   face and colour choices take the kit's chosen-card recipe and the accent
+   ring; icon tiles round.
+3. Merges: question kept: `radio-choices.tsx` duplicates the roving radio
+   group; folding it into `ui/RadioGroup` would change the toggle-off look.
+4. Kept: the wizard steps, the practice chat, the activity list.
 
 ## Open questions for André
 
@@ -1539,9 +1611,11 @@ link today).
   themselves. Sharing one behaviour means adding `@radix-ui/react-popover`
   (a new dependency and lockfile change). Only the look is shared for now.
 
-1. Reviewers: André dropped Grok (too slow), so the council is Opus and
-   Codex. On 2026-10-27 Codex hit its usage limit (until November 25,
-   2026), and rounds since then are Opus only. Add a second provider?
+1. Reviewers (answered 2026-10-28): André dropped Grok (too slow), so the
+   council is Opus and Codex. Codex hit its usage limit on 2026-10-27 and
+   rounds on Oct 27-28 were Opus only. On 2026-10-28 André moved Codex to a
+   ChatGPT Plus plan and picked gpt-6-luna (high). Codex reviews the middle
+   rounds; Opus joins for the sign-off round.
 2. Four features live in two versions behind flags. The redesign should
    rebuild only the version that stays. Which one stays for each?
    - DM list: classic or Conversas home (`conversations_home`).
@@ -1586,3 +1660,10 @@ link today).
 | 2026-10-26 | Tokens merged on André's sign-off at Codex 9.0, Opus 8.4 | Opus's last MUST was fixed after T3. The element rounds hold the 9.0 bar from here. |
 | 2026-10-26 | Phase 2 follows the inventory order: primitives first, then shell, surfaces, phone | Every later element is built from the primitives. |
 | 2026-10-26 | The toggle ships before the tokens | It is the same for every direction and changes nothing visible. Precedence: `?redesign=1|0`, then the person's Beta switch (`pqp-redesign`), then the `redesign` flag. |
+
+Rounds (Opus only): r1 7.4 (3 MUST fixed), r2 7.8 (MUST fixed: the chosen
+card's edge was 1px), r3 7.7, r4 7.9, r5 8.3 (no MUST, cap). After r5: no
+resize grip on the persona, the stat notes on one line, the no-channel note
+in the warning colour. Not done: a spinner on the wizard's final button
+while it saves (`ui/button.tsx` has no loading prop).
+

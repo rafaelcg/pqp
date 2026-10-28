@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { E2E_ADMIN_TOKEN } from "../playwright.config";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -580,6 +581,20 @@ test("captures the design council screens", async ({ browser }) => {
       await expect(page.getByText(DM.at(-1)![1]).first()).toBeVisible({ timeout: 30_000 });
       await hideDevBanner(page);
       await shoot(page, `03-home-${theme}`);
+      // The communities directory, a full page over the app.
+      try {
+        await page.getByRole("button", { name: "Comunidades" }).first().click({ timeout: 5_000 });
+        await page.waitForTimeout(1200);
+        await shoot(page, `35-communities-${theme}`);
+        // Every language: the unfiltered empty directory, with its one create button.
+        await page.getByRole("button", { name: "Todos", exact: true }).first().click({ timeout: 3_000 }).catch(() => {});
+        await page.waitForTimeout(800);
+        await shoot(page, `35-communities-all-${theme}`);
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(300);
+      } catch {
+        console.log("communities shot skipped");
+      }
       // Novidades: a pane of its own beside the rail.
       await page.getByRole("button", { name: /^Novidades/ }).first().click();
       await page.waitForTimeout(1200);
@@ -700,6 +715,81 @@ test("captures the design council screens", async ({ browser }) => {
         });
       } catch {
         console.log("voice room header pill not found, s-header-voice skipped");
+      }
+
+      // Server bots: the flag on for this one shot, then back to its default.
+      try {
+        await fetch(`${API}/api/admin/flags`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${E2E_ADMIN_TOKEN}` },
+          body: JSON.stringify({ key: "custom_bots", enabled: true }),
+        });
+        await page.reload();
+        await expect(page.getByRole("button", { name: "Enviar" })).toBeVisible({ timeout: 30_000 });
+        await hideDevBanner(page);
+        await page.locator("[data-server-menu-trigger]").first().click();
+        await page.getByRole("menuitem", { name: "Configurações da comunidade" }).click();
+        await expect(page.getByRole("dialog")).toBeVisible();
+        await page.getByRole("dialog").getByText("Bots", { exact: true }).first().click({ timeout: 5_000 });
+        await page.waitForTimeout(800);
+        await shoot(page, `38-server-bots-${theme}`);
+        // The wizard: a coral face chosen, keyboard focus on the faces; then a persona chosen.
+        try {
+          const dialog = page.getByRole("dialog");
+          await dialog.getByRole("button", { name: /Criar meu bot/ }).click({ timeout: 5_000 });
+          await dialog.getByRole("textbox").first().fill("Tico");
+          await dialog.getByRole("radiogroup", { name: "Cor" }).getByRole("radio", { name: "Coral" }).click();
+          const faces = dialog.getByRole("radiogroup", { name: "Cara" });
+          await faces.getByRole("radio").nth(1).click();
+          await page.keyboard.press("ArrowRight");
+          await page.keyboard.press("ArrowLeft");
+          await page.waitForTimeout(300);
+          await shoot(page, `38-server-bots-wizard-${theme}`);
+          await dialog.getByRole("button", { name: "Continuar" }).click({ timeout: 5_000 });
+          await dialog.getByRole("button", { name: /^Zoeiro/ }).click({ timeout: 5_000 });
+          await page.waitForTimeout(300);
+          await shoot(page, `38-server-bots-persona-${theme}`);
+        } catch (error) {
+          console.log("bots wizard shot skipped", String(error).slice(0, 300));
+        }
+        // The overview: a bot made through the API, shot, then removed so the
+        // next theme's intro shot still finds no bot.
+        let botId: string | null = null;
+        try {
+          const made = await fetch(`${API}/api/servers/${turma.id}/bots`, {
+            method: "POST",
+            headers: headers(VIEWER),
+            body: JSON.stringify({ name: "Tico", color: "coral", face: "curioso", tagline: "Pergunte qualquer coisa", answerToName: true }),
+          });
+          const body = (await made.json()) as { bot?: { id: string }; id?: string };
+          botId = body.bot?.id ?? body.id ?? null;
+          await page.keyboard.press("Escape");
+          await page.keyboard.press("Escape");
+          await page.reload();
+          await expect(page.getByRole("button", { name: "Enviar" })).toBeVisible({ timeout: 30_000 });
+          await hideDevBanner(page);
+          await page.locator("[data-server-menu-trigger]").first().click();
+          await page.getByRole("menuitem", { name: "Configurações da comunidade" }).click();
+          await page.getByRole("dialog").getByText("Bots", { exact: true }).first().click({ timeout: 5_000 });
+          await page.waitForTimeout(1200);
+          await shoot(page, `38-server-bots-overview-${theme}`);
+        } catch (error) {
+          console.log("bots overview shot skipped", String(error).slice(0, 300));
+        } finally {
+          if (botId) {
+            await fetch(`${API}/api/servers/${turma.id}/bots/${botId}`, { method: "DELETE", headers: headers(VIEWER) });
+          }
+        }
+        await page.keyboard.press("Escape");
+      } catch (error) {
+        console.log("bots shot skipped", String(error).slice(0, 300));
+        await page.keyboard.press("Escape");
+      } finally {
+        await fetch(`${API}/api/admin/flags`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${E2E_ADMIN_TOKEN}` },
+          body: JSON.stringify({ key: "custom_bots", enabled: null }),
+        });
       }
 
       await context.close();
@@ -887,9 +977,12 @@ const PRIMITIVES: {
   // The user panel: hover on the settings gear of the first.
   { id: "s-user-panel", testId: "qa-shell-user-panel", hover: "Abrir configurações" },
   { id: "s-banners", testId: "qa-shell-banners" },
+  // Directory cards: joined, with a banner, plain, and the skeleton.
+  { id: "f-communities", testId: "qa-community-cards" },
   // Message rows in their states.
   { id: "s-message-row", testId: "qa-shell-message-rows", hoverText: "@lia cê vem?" },
   { id: "f-onboarding", testId: "qa-onboarding", focus: "Entendi" },
+  { id: "s-message-content", testId: "qa-shell-message-content" },
   // The boot shell and the cannot-reach-the-API page, in desktop frames.
   { id: "f-states", testId: "qa-shell-states", focus: "Tentar de novo" },
 ];
