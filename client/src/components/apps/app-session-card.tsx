@@ -93,7 +93,7 @@ export const AppSessionCard = memo(function AppSessionCard({
         "redesign:p-4",
         !ended && "redesign:[--app-face-cut:var(--card-bg)]",
         ended
-          ? "redesign:border-[color:var(--card-border)]"
+          ? "redesign:border-[color:color-mix(in_oklab,var(--color-text)_14%,transparent)]"
           : inside
             ? "redesign:bg-[color:var(--card-bg)]"
             : "redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)]",
@@ -433,7 +433,16 @@ function LiveBody({
         ) : model.full && !model.canWatch ? null : (
           <Button
             variant={model.full || failed ? "secondary" : "default"}
-            className={cn("h-11 w-full sm:h-9 sm:w-auto", BUSY_LOOK)}
+            className={cn(
+              "h-11 w-full sm:h-9 sm:w-auto",
+              BUSY_LOOK,
+              // A wrapped button keeps the right edge; while joining the
+              // label stays legible and only the fill dims.
+              "redesign:sm:ml-auto",
+              !model.full &&
+                !failed &&
+                "redesign:aria-disabled:opacity-100 redesign:aria-disabled:bg-[color:color-mix(in_oklab,var(--color-accent)_60%,transparent)]",
+            )}
             aria-busy={joining || undefined}
             aria-disabled={joining || undefined}
             onClick={() => {

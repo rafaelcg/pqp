@@ -521,7 +521,7 @@ function LiveStrip(props: AppSessionStripProps & { model: LiveStripModel }) {
           <ShareControl share={share} onChange={onShareChange} />
         ) : null}
         {share?.visible || (props.joinCall && model.seated) ? (
-          <span aria-hidden className="h-5 w-px bg-border" />
+          <span aria-hidden className="h-5 w-px bg-border redesign:bg-[color:var(--card-border)]" />
         ) : null}
         {model.actions.enter ? (
           <Button
@@ -587,7 +587,7 @@ function LiveStrip(props: AppSessionStripProps & { model: LiveStripModel }) {
         ) : null}
         {props.chat ? (
           <>
-            <span aria-hidden className="h-5 w-px bg-border" />
+            <span aria-hidden className="h-5 w-px bg-border redesign:bg-[color:var(--card-border)]" />
             <ChatToggle chat={props.chat} />
           </>
         ) : null}
