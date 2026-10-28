@@ -3,7 +3,6 @@ import {
   PANE_HEADER_RULE_REDESIGN,
   PANE_HEADER_TITLE_REDESIGN,
 } from "@/components/ui/pane-header";
-import { List as ListBold, Users as UsersFill } from "@phosphor-icons/react";
 import { Icon } from "@/components/ui/icon";
 import { SECTION_LABEL_REDESIGN } from "@/components/ui/section-header";
 import {
