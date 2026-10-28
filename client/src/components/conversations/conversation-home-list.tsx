@@ -43,6 +43,7 @@ import { formatMessagePreview } from "@/lib/conversations";
 import { useHasDraft } from "@/lib/composer-drafts";
 import { useTranslation } from "@/lib/i18n";
 import { resolveNotificationLevel } from "@/lib/notifications";
+import { useRedesign } from "@/lib/redesign";
 import { cn, formatFullTimestamp, formatRecency } from "@/lib/utils";
 import { CountBadge } from "@/components/ui/count-badge";
 import { GROUP_SIZE_REDESIGN } from "@/components/ui/badge";
@@ -155,6 +156,7 @@ export function ConversationHomeList({
   storiesSlot = null,
 }: ConversationHomeListProps) {
   const { t } = useTranslation();
+  const redesign = useRedesign();
   const {
     width: sidebarWidth,
     maxWidth: sidebarMaxWidth,
@@ -292,7 +294,7 @@ export function ConversationHomeList({
               <button
                 type="button"
                 data-conversations-friends=""
-                aria-current={friendsSelected ? "page" : undefined}
+                aria-current={friendsSelected && !(phoneShell && redesign) ? "page" : undefined}
                 className={cn(iconButton, friendsSelected && "bg-surface-2 text-text", PANE_HEADER_ACTION_REDESIGN, "redesign:focus-visible:ring-offset-pane-side", friendsSelected && (phoneShell ? "redesign:bg-transparent redesign:text-[color:var(--list-row-icon)]" : PANE_HEADER_ACTION_ON_REDESIGN))}
                 onClick={() => {
                   onOpenFriends();

@@ -594,17 +594,23 @@ The phone tab bar (`conversations/phone-tab-bar.tsx`) and its three screens
 
 - Every screen sits on `pane-side`. The bar is `pane-side` above the
   `--pane-header-rule` hairline.
-- Tab glyphs are 24px Phosphor. The active tab fills; the others are the
-  bold outline. Labels are 12px, secondary when not active.
+- Tab glyphs are 24px Phosphor fill. The active tab sits on the
+  `accent-soft` pill in `on-accent-soft`. An inactive glyph is
+  `--list-row-icon` and its label is secondary. Labels are 12px.
 - A tab's count is the list-row count, cut by `ring-pane-side`.
-- Screen titles are 20px on a phone. Header actions are the shared pane
+- Screen titles are 20px on a phone (`--pane-bar-title-size` is the
+  desktop bar's 16px). Header actions are the shared pane
   header action at 20px. On the phone, Conversas' friends button is a
   plain door and never shows as selected.
 - A server row is a list row. Its 44px round tile has its own tint
   (`--phone-server-tile`, text 8% over the pane, 12% while hovered), so it
   never melts into the row hover. Its pip is `indicator`.
-- Tu's rows take Phosphor icons and a bold caret. Keyboard focus is the
-  inset `--list-row-ring`.
+- Leading tiles share one column: the conversation avatar, the server tile
+  and the Tu avatar start at 20px. The Tu card and its dock sit 12px in,
+  like the Conversas search field.
+- Tu's rows take Phosphor icons and a bold caret; the Novidades pip is
+  `--list-row-pip` in `accent`. Keyboard focus is the inset
+  `--list-row-ring`.
 
 ### The voice row
 

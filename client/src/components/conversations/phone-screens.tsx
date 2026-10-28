@@ -62,7 +62,7 @@ const ICON_BUTTON = cn(
  * after the old ones, so the toggle off changes nothing.
  */
 const SERVER_ROW_REDESIGN =
-  "redesign:min-h-14 redesign:rounded-[var(--list-row-radius)] redesign:py-1.5 redesign:pl-1.5 redesign:pr-[var(--list-row-px)] redesign:hover:bg-[color:var(--list-row-hover)] redesign:focus-visible:ring-[color:var(--list-row-ring)]";
+  "redesign:min-h-14 redesign:rounded-[var(--list-row-radius)] redesign:py-1.5 redesign:pl-2 redesign:pr-[var(--list-row-px)] redesign:hover:bg-[color:var(--list-row-hover)] redesign:focus-visible:ring-[color:var(--list-row-ring)]";
 /** The rail's server tile: round, on the tile tint. */
 const SERVER_TILE_REDESIGN =
   "redesign:h-11 redesign:w-11 redesign:rounded-full redesign:bg-[color:var(--phone-server-tile)] redesign:group-hover:bg-[color:var(--phone-server-tile-hover)]";
@@ -102,7 +102,7 @@ export function PhoneServersScreen({
                 aria-label={t("communities.title")}
                 onClick={onOpenCommunities}
               >
-                <IconSwap off={Compass} on={CompassFill} size="md" offClassName="h-5 w-5" />
+                <IconSwap off={Compass} on={CompassFill} kind="symbol" size="md" offClassName="h-5 w-5" />
               </button>
             )}
             <button
@@ -205,11 +205,11 @@ export function PhoneYouScreen({
         title={t("phoneTabs.tu")}
         actions={<UpdateIndicator variant="row" onOpenWhatsNew={onOpenWhatsNew} className="mr-1" />}
       />
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5">
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 redesign:px-3">
         <button
           type="button"
           onClick={onOpenProfile}
-          className="flex w-full items-center gap-4 rounded-[var(--radius-card)] text-left redesign:rounded-full redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-offset-4 redesign:focus-visible:ring-offset-pane-side redesign:focus-visible:ring-[color:var(--list-row-ring)]"
+          className="flex w-full items-center gap-4 rounded-[var(--radius-card)] text-left redesign:rounded-full redesign:pl-2 redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-offset-4 redesign:focus-visible:ring-offset-pane-side redesign:focus-visible:ring-[color:var(--list-row-ring)]"
         >
           <UserAvatar
             name={me.displayName}
@@ -241,7 +241,7 @@ export function PhoneYouScreen({
           <YouRow icon={<IconSwap off={CircleHelp} on={QuestionFill} size="md" offClassName="h-5 w-5" />} label={t("phoneTabs.help")} onClick={onOpenHelp} />
         </div>
       </div>
-      <div className="shrink-0">{footer}</div>
+      <div className="shrink-0 redesign:px-1 redesign:pb-1.5">{footer}</div>
     </section>
   );
 }
@@ -265,7 +265,7 @@ function YouRow({
     >
       <span className="text-text-tertiary redesign:text-[color:var(--list-row-icon)]">{icon}</span>
       <span className="min-w-0 flex-1 text-[15px] text-text">{label}</span>
-      {pip && <span className="h-2 w-2 rounded-full bg-accent" aria-hidden="true" />}
+      {pip && <span className="h-2 w-2 rounded-full bg-accent redesign:h-[var(--list-row-pip)] redesign:w-[var(--list-row-pip)]" aria-hidden="true" />}
       <IconSwap off={ChevronRight} on={CaretRightBold} kind="symbol" offClassName="h-4 w-4 text-text-tertiary" className="text-text-tertiary" />
     </button>
   );
