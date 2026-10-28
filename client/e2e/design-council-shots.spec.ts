@@ -1211,6 +1211,12 @@ test("captures the bau", async ({ browser }) => {
     headers: headers("rafa"),
     body: JSON.stringify({ body: "tô dentro, levo pipoca" }),
   });
+  // States on screen: a post Lia liked and a draft only she sees.
+  await fetch(`${API}/api/servers/${home.id}/home/posts/${night}/likes`, {
+    method: "POST",
+    headers: headers(VIEWER),
+  });
+  await post({ status: "draft", title: "Regras do campeonato", body: "Rascunho: chaves, horários e o que vale." });
 
   for (const theme of ["dark", "light"] as const) {
     const context = await browser.newContext({ viewport: DESKTOP, locale: "pt-BR" });
@@ -1228,6 +1234,13 @@ test("captures the bau", async ({ browser }) => {
       await feed.locator("[data-home-post] h2").nth(1).click();
       await page.waitForTimeout(800);
       await shoot(page, `f-bau-post-${theme}`);
+      // The comment field with keyboard focus.
+      const field = page.locator("[data-community-home-feed] textarea, [data-community-home-feed] input[type=text]").first();
+      if (await field.count()) {
+        await field.focus();
+        await page.waitForTimeout(300);
+        await shoot(page, `f-bau-states-${theme}`);
+      }
     } catch (error) {
       console.log(`f-bau: skipped (${String(error).slice(0, 200)})`);
     }

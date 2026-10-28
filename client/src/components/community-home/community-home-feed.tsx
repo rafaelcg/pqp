@@ -422,7 +422,7 @@ function CommentRow({
         fallbackClassName="bg-ink-4 text-[10px] text-paper"
         rounded="full"
       />
-      <div className="min-w-0 flex-1 rounded-lg bg-ink/60 px-3 py-2 text-sm redesign:rounded-[var(--radius-card)] redesign:bg-[color:var(--call-control-bg)]">
+      <div className="min-w-0 flex-1 rounded-lg bg-ink/60 px-3 py-2 text-sm redesign:rounded-[var(--radius-card)] redesign:bg-[color:var(--call-control-bg)] redesign:text-[0.8125rem]">
         <div className="mb-0.5 flex items-center gap-2">
           <span className="truncate font-semibold">
             {comment.author.displayName}
@@ -590,7 +590,7 @@ function CommentsBlock({
           {teasers.map((comment) => (
             <li
               key={comment.id}
-              className="rounded-lg bg-ink/60 px-3 py-2 text-sm redesign:rounded-[var(--radius-card)] redesign:bg-[color:var(--call-control-bg)]"
+              className="rounded-lg bg-ink/60 px-3 py-2 text-sm redesign:rounded-[var(--radius-card)] redesign:bg-[color:var(--call-control-bg)] redesign:text-[0.8125rem]"
             >
               <p className="font-semibold text-paper">
                 {comment.author.displayName}
