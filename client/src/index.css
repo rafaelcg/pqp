@@ -829,6 +829,9 @@
   /* Cards (ui/card.tsx): tints of the text, so a card reads on a pane and
      on a dialog alike. */
   --card-bg: color-mix(in oklab, var(--color-text) 4%, transparent);
+  /* The same card fill made solid on the main pane, for a ring that has to
+     cut (stacked faces on a card in chat). */
+  --card-bg-solid: color-mix(in oklab, var(--color-text) 4%, var(--color-pane-main));
   --card-border: color-mix(in oklab, var(--color-text) 8%, transparent);
   --card-row-hover: color-mix(in oklab, var(--color-text) 6%, transparent);
   /* A whole card under the pointer: one step over the card's own fill. */
@@ -916,6 +919,14 @@
   --thread-chip-open-fg: var(--color-on-row-selected);
   --content-quote-bar: color-mix(in oklab, var(--color-text) 22%, transparent);
   --content-link-line: color-mix(in oklab, var(--color-accent-text) 45%, transparent);
+  /* The composer (s-composer): one rounded well on a faint text tint, whose
+     edge comes up a step while you type in it. */
+  --composer-radius: 1.25rem;
+  --composer-bg: color-mix(in oklab, var(--color-text) 5%, transparent);
+  --composer-border: color-mix(in oklab, var(--color-text) 9%, transparent);
+  --composer-border-focus: color-mix(in oklab, var(--color-text) 28%, transparent);
+  /* A field you cannot type into: a dashed edge of its own. */
+  --composer-border-readonly: color-mix(in oklab, var(--color-text) 18%, transparent);
 
   /* Glass: a close or control laid over a picture (corner-card heroes). */
   --glass-bg: oklch(0.12 0.01 262 / 0.62);
@@ -993,6 +1004,9 @@
   --settings-pane-bg: var(--color-pane-main);
   --settings-pane-inset: 0.5rem;
   --settings-rule: color-mix(in oklab, var(--color-border) 70%, transparent);
+  /* Faces stacked in an app strip or card cut their rings from the ground
+     they sit on: the pane for the strip, the card for a card. */
+  --app-face-cut: var(--color-pane-main, var(--color-surface-1));
 
   /* The call (voice/call-stage.tsx). The bar's controls are round wells on
      a text tint; a control that is on (camera, share, a raised hand) takes
@@ -1008,6 +1022,8 @@
   --call-control-off-bg: color-mix(in oklab, var(--color-danger) 20%, transparent);
   --call-control-off-hover: color-mix(in oklab, var(--color-danger) 28%, transparent);
   --call-leave-hover: color-mix(in oklab, var(--color-danger) 85%, var(--color-text));
+  /* Answer and join: the success fill one step toward the text. */
+  --call-answer-hover: color-mix(in oklab, var(--color-success) 80%, var(--color-text));
   --call-bar-bg: var(--popover-surface);
   --call-bar-border: var(--popover-border);
   --call-bar-shadow: var(--popover-shadow);
@@ -1404,6 +1420,7 @@
   /* Cards. In light a text tint darkens into a grey tray; a white wash lifts
      the card on a grey dialog and leaves the edge alone on the white pane. */
   --card-bg: color-mix(in oklab, var(--color-surface-0) 60%, transparent);
+  --card-bg-solid: color-mix(in oklab, var(--color-surface-0) 60%, var(--color-pane-main));
   /* Lighter than dark's: over the white wash on a grey dialog, 6% lands at
      the dialog's own grey and the row reads as a hole. */
   --card-row-hover: color-mix(in oklab, var(--color-text) 4%, transparent);
@@ -1411,6 +1428,9 @@
   --footer-card-solid: color-mix(in oklab, var(--color-surface-0) 60%, var(--color-pane-side));
   --footer-card-solid-hover: color-mix(in oklab, var(--color-text) 4%, var(--footer-card-solid));
   --card-border: color-mix(in oklab, var(--color-text) 10%, transparent);
+  /* The composer on the white pane: a light grey well with a firmer edge. */
+  --composer-bg: color-mix(in oklab, var(--color-text) 3%, transparent);
+  --composer-border: color-mix(in oklab, var(--color-text) 13%, transparent);
 
   /* Avatars: a hairline keeps the monogram disc a disc on the white pane. */
   --avatar-edge: var(--color-border);
@@ -3611,6 +3631,17 @@ html[data-pre] [data-home-hero] .animate-rise {
 
 .animate-badge-pop {
   animation: badge-pop 0.32s var(--ease-emphasized) both;
+}
+
+/* The ring around an incoming caller: only the ring breathes. */
+@keyframes call-ring {
+  0%,
+  100% {
+    opacity: 0.7;
+  }
+  50% {
+    opacity: 0.3;
+  }
 }
 
 /* A soundboard tile that just played: the icon kicks once from full size. */

@@ -4,6 +4,25 @@ import type { IncomingCall } from "@/hooks/use-voice";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useTranslation } from "@/lib/i18n";
 import { startSoundLoop, stopSoundLoop } from "@/lib/sounds";
+import {
+  Phone as PhoneFill,
+  PhoneDisconnect,
+  X as XBold,
+} from "@phosphor-icons/react";
+import { IconSwap } from "@/components/ui/icon";
+import { CALL_CONTROL_REDESIGN } from "@/components/voice/call-control-classes";
+import { cn } from "@/lib/utils";
+
+/**
+ * Under the redesign: answer and decline are the call bar's 44px circles.
+ * On hover they also grow a little, so the pointer gets feedback beyond the
+ * colour step; pressed, they settle back.
+ */
+const CALL_CIRCLE = cn(
+  CALL_CONTROL_REDESIGN.base,
+  "redesign:flex redesign:h-11 redesign:w-11 redesign:items-center redesign:justify-center redesign:p-0",
+  "redesign:transition-[background-color,color,transform] redesign:motion-safe:hover:scale-[1.08] redesign:motion-safe:active:scale-95",
+);
 
 /**
  * The ringing surface: one card per conversation currently calling this
@@ -43,7 +62,7 @@ export function IncomingCallOverlay({
     return null;
   }
   return (
-    <div className="pointer-events-none fixed inset-x-0 top-[max(0.5rem,env(safe-area-inset-top))] z-50 flex flex-col items-center gap-2 px-2 sm:inset-x-auto sm:right-4 sm:top-[max(1rem,env(safe-area-inset-top))] sm:items-end">
+    <div className="pointer-events-none fixed inset-x-0 top-[max(0.5rem,env(safe-area-inset-top))] z-50 flex flex-col items-center gap-2 px-2 sm:inset-x-auto sm:right-4 sm:top-[max(1rem,env(safe-area-inset-top))] sm:items-end redesign:sm:inset-x-0 redesign:sm:items-center">
       {calls.map((call) => (
         <div
           key={call.conversationId}
@@ -53,52 +72,60 @@ export function IncomingCallOverlay({
               ? t("call.incoming.groupTitle")
               : t("call.incoming.title")
           }`}
-          className="pointer-events-auto flex w-full max-w-sm items-center gap-3 rounded-[var(--radius-card)] border border-border/60 bg-surface-1 p-3 shadow-[var(--shadow-2)]"
+          className="pointer-events-auto flex w-full max-w-sm items-center gap-3 rounded-[var(--radius-card)] border border-border/60 bg-surface-1 p-3 shadow-[var(--shadow-2)] redesign:rounded-[var(--popover-radius)] redesign:border-[color:var(--popover-border)] redesign:bg-[color:var(--popover-surface)] redesign:py-3 redesign:pl-3 redesign:pr-2 redesign:shadow-[var(--popover-shadow)]"
         >
-          <UserAvatar
-            name={call.caller.displayName}
-            avatarUrl={call.caller.avatarUrl}
-            rounded="full"
-            className="h-10 w-10"
-            fallbackClassName="bg-border text-sm text-text"
-          />
+          {/* Under the redesign a ring breathes around the caller; the face
+              itself never fades. */}
+          <span className="contents redesign:relative redesign:block redesign:shrink-0 redesign:rounded-full">
+            <UserAvatar
+              name={call.caller.displayName}
+              avatarUrl={call.caller.avatarUrl}
+              rounded="full"
+              className="h-10 w-10 redesign:h-11 redesign:w-11"
+              fallbackClassName="bg-border text-sm text-text"
+            />
+            <span
+              aria-hidden
+              className="hidden redesign:block redesign:pointer-events-none redesign:absolute redesign:-inset-[3px] redesign:rounded-full redesign:opacity-70 redesign:ring-2 redesign:ring-[color:var(--call-speaking)] redesign:motion-safe:animate-[call-ring_1.6s_ease-in-out_infinite]"
+            />
+          </span>
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-semibold text-text">
               {call.caller.displayName}
             </p>
-            <p className="animate-pulse truncate text-xs text-text-tertiary">
+            <p className="animate-pulse truncate text-xs text-text-tertiary redesign:animate-none redesign:text-text-secondary">
               {call.kind === "group"
                 ? t("call.incoming.groupTitle")
                 : t("call.incoming.title")}
             </p>
           </div>
-          <div className="flex shrink-0 items-center gap-1.5">
+          <div className="flex shrink-0 items-center gap-1.5 redesign:gap-2">
             <button
               type="button"
               title={t("call.incoming.accept")}
               aria-label={t("call.incoming.accept")}
-              className="rounded-full bg-success/90 p-2 text-surface-0 hover:bg-success"
+              className={cn("rounded-full bg-success/90 p-2 text-surface-0 hover:bg-success", CALL_CIRCLE, "redesign:bg-success redesign:text-surface-0 redesign:hover:bg-[color:var(--call-answer-hover)]")}
               onClick={() => onAccept(call.conversationId)}
             >
-              <Phone className="h-4 w-4" />
+              <IconSwap off={Phone} on={PhoneFill} offClassName="h-4 w-4" className="h-5 w-5" />
             </button>
             <button
               type="button"
               title={t("call.incoming.decline")}
               aria-label={t("call.incoming.decline")}
-              className="rounded-full bg-danger/90 p-2 text-text hover:bg-danger"
+              className={cn("rounded-full bg-danger/90 p-2 text-text hover:bg-danger", CALL_CIRCLE, CALL_CONTROL_REDESIGN.leave)}
               onClick={() => onDecline(call.conversationId)}
             >
-              <PhoneOff className="h-4 w-4" />
+              <IconSwap off={PhoneOff} on={PhoneDisconnect} offClassName="h-4 w-4" className="h-5 w-5" />
             </button>
             <button
               type="button"
               title={t("call.incoming.ignore")}
               aria-label={t("call.incoming.ignore")}
-              className="rounded-md p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-text"
+              className="rounded-md p-1.5 text-text-tertiary hover:bg-surface-2 hover:text-text redesign:flex redesign:h-8 redesign:w-8 redesign:items-center redesign:justify-center redesign:rounded-full redesign:p-0 redesign:hover:bg-[color:var(--menu-row-hover)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--color-focus-ring)]"
               onClick={() => onDismiss(call.conversationId)}
             >
-              <X className="h-4 w-4" />
+              <IconSwap off={X} on={XBold} kind="symbol" offClassName="h-4 w-4" />
             </button>
           </div>
         </div>

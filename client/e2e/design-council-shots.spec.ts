@@ -905,6 +905,40 @@ test("captures the design council screens", async ({ browser }) => {
     await page.getByRole("button", { name: "Sair da call" }).first().click().catch(() => {});
     await context.close();
 
+    // f-dm-call: Rafa calls the viewer in their conversation. The ring card
+    // at the top right and the join strip over the conversation, both looks.
+    {
+      const ringContext = await browser.newContext({ viewport: DESKTOP, locale: "pt-BR" });
+      const ringPage = await ringContext.newPage();
+      await as(ringPage, "dark");
+      await ringPage.goto(`/app/dm/${conversation.channelId}?lang=pt-BR`);
+      await expect(ringPage.getByRole("button", { name: "Enviar" })).toBeVisible({ timeout: 30_000 });
+      await hideDevBanner(ringPage);
+      const caller = sockets.get("rafa")!;
+      await caller.joinVoice(conversation.channelId);
+      caller.send({ type: "call-ring", conversationId: conversation.channelId });
+      const ring = ringPage.getByRole("dialog", { name: /Rafa/ });
+      try {
+        await expect(ring).toBeVisible({ timeout: 15_000 });
+        for (const theme of ["dark", "light"] as const) {
+          await ringPage.evaluate((value) => {
+            document.documentElement.dataset.theme = value;
+          }, theme);
+          await ringPage.waitForTimeout(500);
+          await shoot(ringPage, `f-dm-call-ring-${theme}`);
+          await ring.screenshot({ path: path.join(OUT!, `f-dm-call-ring-card-${theme}.png`) });
+          // The pointer on answer, held through the shot (shoot() parks it).
+          await ring.getByRole("button", { name: "Atender" }).hover();
+          await ringPage.waitForTimeout(400);
+          await ring.screenshot({ path: path.join(OUT!, `f-dm-call-ring-hover-${theme}.png`) });
+          await ringPage.mouse.move(0, 0);
+        }
+      } catch (error) {
+        console.log(`f-dm-call: ring skipped (${String(error).slice(0, 120)})`);
+      }
+      await ringContext.close();
+    }
+
     // A phone, the same conversation.
     const phone = await browser.newContext({
       viewport: PHONE,
@@ -1044,6 +1078,7 @@ const PRIMITIVES: {
   // The music queue open in a call's composer; hover a waiting song.
   // The history open, a queue row hovered.
   { id: "m-sheets", testId: "qa-music-queue", click: "Tocadas", hoverText: "Gal Costa - Vapor Barato" },
+  { id: "f-apps", testId: "qa-apps" },
   { id: "p-settings-kit", testId: "qa-settings-kit", tiles: 1300 },
   { id: "p-settings-kit", testId: "qa-settings-kit", tiles: 1300 },
   // Two real rails: Conversas open with people waiting, and a server open
@@ -1076,6 +1111,15 @@ const PRIMITIVES: {
   },
   // Ten reactions that wrap over a thread chip; the one-line continuation hovered.
   { id: "s-message-chrome-wrap", testId: "qa-shell-message-chrome-wrap", hoverText: "quem chegar depois das 20h fica de fora" },
+  { id: "f-dm-call-rating", testId: "qa-call-rating", focus: "Dar nota 4 de 5" },
+  { id: "s-log-chrome", testId: "qa-shell-log-chrome" },
+  // The resting composer's format bar open (it is a toolbar, not a menu).
+  {
+    id: "s-composer",
+    testId: "qa-shell-composer",
+    open: { button: "Formatação", menu: '[data-testid="qa-shell-composer"] [role="toolbar"]', arrows: 0 },
+  },
+  { id: "s-member-list", testId: "qa-shell-member-list", hover: "Mensagem: Duda" },
 ];
 
 test("captures the primitives", async ({ browser }) => {
@@ -1117,7 +1161,7 @@ test("captures the primitives", async ({ browser }) => {
         if (primitive.open.hoverText) {
           await block.getByText(primitive.open.hoverText, { exact: true }).hover();
         }
-        await block.getByRole("button", { name: primitive.open.button, exact: true }).focus();
+        await block.getByRole("button", { name: primitive.open.button, exact: true }).first().focus();
         await page.keyboard.press("Enter");
         const menu = page.locator(primitive.open.menu);
         await expect(menu).toBeVisible();
@@ -1162,6 +1206,182 @@ test("captures the primitives", async ({ browser }) => {
  * A forum post open beside its list: the header's icon buttons (expand,
  * close) in context. Last, so its server is not in the other scenes' rail.
  */
+/**
+ * f-stories: the stories flag on for one server, two friends with a text
+ * story each. The strip in the sidebar, a story open, and the composer.
+ * The viewer and the composer are dark in every theme by design.
+ */
+test("captures the stories", async ({ browser }) => {
+  fs.mkdirSync(OUT!, { recursive: true });
+  await person(VIEWER, "Lia", PRESET(4));
+  await person("rafa", "Rafa", PRESET(1));
+  await person("bia", "Bia", null);
+  const home = await server(VIEWER, "Turma dos stories");
+  await join(VIEWER, home.id, "rafa");
+  await join(VIEWER, home.id, "bia");
+  const flag = await fetch(`${API}/api/admin/flag-overrides`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${ADMIN_TOKEN}` },
+    body: JSON.stringify({ key: "stories", serverId: home.id, enabled: true }),
+  });
+  expect(flag.status).toBe(200);
+  for (const [who, text, background] of [
+    ["rafa", "bora de cs hoje?", "grape"],
+    ["bia", "alguém viu meu fone?", "ocean"],
+  ] as const) {
+    const res = await fetch(`${API}/api/stories`, {
+      method: "POST",
+      headers: headers(who),
+      body: JSON.stringify({
+        kind: "text",
+        text,
+        background,
+        audiences: { serverIds: [home.id] },
+        publish: true,
+      }),
+    });
+    if (!res.ok) {
+      console.log(`f-stories: story refused ${res.status} ${await res.text()}`);
+    }
+  }
+  const text = home.channels.find((channel) => channel.type === "text")!;
+
+  // The strip in both themes first, so Rafa is unseen in both.
+  for (const theme of ["dark", "light"] as const) {
+    const context = await browser.newContext({ viewport: DESKTOP, locale: "pt-BR" });
+    const page = await context.newPage();
+    await as(page, theme);
+    await page.goto(`/app/server/${home.id}/channel/${text.id}?lang=pt-BR`);
+    await expect(page.getByRole("button", { name: "Enviar" })).toBeVisible({ timeout: 30_000 });
+    await hideDevBanner(page);
+    await expect(page.getByRole("button", { name: /^Story de Rafa/ })).toBeVisible({ timeout: 20_000 });
+    await page.waitForTimeout(600);
+    await shoot(page, `f-stories-strip-${theme}`);
+    await context.close();
+  }
+
+  for (const theme of ["dark", "light"] as const) {
+    const context = await browser.newContext({ viewport: DESKTOP, locale: "pt-BR" });
+    const page = await context.newPage();
+    await as(page, theme);
+    await page.goto(`/app/server/${home.id}/channel/${text.id}?lang=pt-BR`);
+    await expect(page.getByRole("button", { name: "Enviar" })).toBeVisible({ timeout: 30_000 });
+    await hideDevBanner(page);
+    try {
+      const ring = page.getByRole("button", { name: /^Story de Rafa/ });
+      await expect(ring).toBeVisible({ timeout: 20_000 });
+      await page.waitForTimeout(600);
+      await ring.click();
+      await expect(page.locator("[data-story-viewer]")).toBeVisible({ timeout: 10_000 });
+      await page.waitForTimeout(900);
+      await shoot(page, `f-stories-viewer-${theme}`);
+      await page.keyboard.press("Escape");
+      // States, after the viewer closed so Rafa is seen in both themes:
+      // keyboard focus on Bia's ring (new), Rafa's seen ring at rest beside
+      // it, the pointer on "Ver todos".
+      await page.waitForTimeout(600);
+      // Tab out and back so focus-visible matches, and shoot here because
+      // shoot() parks the pointer, which would drop the hover.
+      const bia = page.getByRole("button", { name: /^Story de Bia/ });
+      await bia.focus();
+      await page.keyboard.press("Tab");
+      await page.keyboard.press("Shift+Tab");
+      await page.evaluate(() => document.fonts.ready);
+      await page.locator("[data-story-see-all]").first().hover();
+      await page.waitForTimeout(800);
+      await page.screenshot({ path: path.join(OUT!, `f-stories-states-${theme}.png`) });
+      await page.mouse.move(0, 0);
+      await page.waitForTimeout(500);
+      await page.locator("[data-server-menu-trigger]").first().click();
+      await page.getByRole("menuitem", { name: "Postar story" }).click();
+      await page.waitForTimeout(900);
+      await shoot(page, `f-stories-composer-${theme}`);
+      await page.keyboard.press("Escape");
+    } catch (error) {
+      console.log(`f-stories: skipped (${String(error).slice(0, 200)})`);
+    }
+    await context.close();
+  }
+});
+
+/**
+ * f-watch-party: a host makes a party, schedules it, goes live; a member sees
+ * the sidebar's live block. One server per look, since a server holds one
+ * party at a time. CI has no egress, so live HLS is answered on for this
+ * page (the same substitution `watch-party.spec.ts` makes) and the build flag
+ * comes from `?watchParty=1`.
+ */
+test("captures the watch party", async ({ browser }) => {
+  fs.mkdirSync(OUT!, { recursive: true });
+  await person(VIEWER, "Lia", PRESET(4));
+  await person("rafa", "Rafa", PRESET(1));
+  for (const theme of ["dark", "light"] as const) {
+    const home = await server(VIEWER, theme === "dark" ? "Cineclube" : "Cineclube claro");
+    await join(VIEWER, home.id, "rafa");
+    const text = home.channels.find((channel) => channel.type === "text")!;
+    const url = `/app/server/${home.id}/channel/${text.id}?lang=pt-BR&watchParty=1`;
+    const hlsOn = async (page: Page) => {
+      await page.route("**/api/live-hls/config*", async (route) => {
+        const response = await route.fetch();
+        const body = (await response.json()) as Record<string, unknown>;
+        await route.fulfill({ response, json: { ...body, enabled: true } });
+      });
+    };
+
+    const context = await browser.newContext({ viewport: DESKTOP, locale: "pt-BR" });
+    const page = await context.newPage();
+    await as(page, theme);
+    await hlsOn(page);
+    await page.goto(url);
+    await expect(page.getByRole("button", { name: "Enviar" })).toBeVisible({ timeout: 30_000 });
+    await hideDevBanner(page);
+    try {
+      await page.locator("[data-live-party-create]").click({ timeout: 10_000 });
+      await page.locator("[data-create-watch-party-name]").fill("Sessão coruja");
+      await shoot(page, `f-watch-party-create-${theme}`);
+      await page.locator("[data-create-watch-party-schedule]").click();
+      await page.waitForTimeout(300);
+      await shoot(page, `f-watch-party-create-scheduled-${theme}`);
+      await page.locator("[data-create-watch-party-submit]").click();
+      await expect(page.getByTestId("watch-party-scheduled")).toBeVisible({ timeout: 20_000 });
+      await shoot(page, `f-watch-party-scheduled-${theme}`);
+      await page.locator("[data-watch-party-go-live]").first().click();
+      await expect(page.getByTestId("watch-party-bar")).toBeVisible({ timeout: 20_000 });
+      await page.waitForTimeout(800);
+      await shoot(page, `f-watch-party-host-${theme}`);
+
+      const member = await browser.newContext({ viewport: DESKTOP, locale: "pt-BR" });
+      const memberPage = await member.newPage();
+      await memberPage.addInitScript(
+        ([value, redesign]) => {
+          localStorage.setItem("pqp:dev-user-suffix", "rafa");
+          localStorage.setItem("pqp-theme", value);
+          localStorage.setItem("pqp:download-hint-dismissed", "1");
+          localStorage.setItem("pqp-redesign", redesign ? "on" : "off");
+        },
+        [theme, REDESIGN] as const,
+      );
+      await fetch(`${API}/api/me/preferences`, {
+        method: "PATCH",
+        headers: headers("rafa"),
+        body: JSON.stringify({ theme }),
+      });
+      await hlsOn(memberPage);
+      await memberPage.goto(url);
+      await expect(memberPage.getByRole("button", { name: "Enviar" })).toBeVisible({ timeout: 30_000 });
+      await hideDevBanner(memberPage);
+      const block = memberPage.getByTestId("live-party-block");
+      await expect(block).toBeVisible({ timeout: 20_000 });
+      await shoot(memberPage, `f-watch-party-member-${theme}`);
+      await block.screenshot({ path: path.join(OUT!, `f-watch-party-block-${theme}.png`) });
+      await member.close();
+    } catch (error) {
+      console.log(`f-watch-party: skipped (${String(error).slice(0, 200)})`);
+    }
+    await context.close();
+  }
+});
+
 /**
  * f-bau: a hall with Baú on, three posts (one pinned, one for members with a
  * teaser) and a comment from a member. The feed in both looks, then a post.

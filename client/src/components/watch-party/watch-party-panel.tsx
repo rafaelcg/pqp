@@ -1,3 +1,10 @@
+import { IconSwap } from "@/components/ui/icon";
+import {
+  Microphone as MicrophoneFill,
+  MicrophoneSlash as MicrophoneSlashFill,
+  ShareNetwork as ShareNetworkFill,
+  SlidersHorizontal as SlidersHorizontalFill,
+} from "@phosphor-icons/react";
 import {
   useEffect,
   useMemo,
@@ -115,6 +122,7 @@ import {
 } from "@/lib/watch-party-mic-warning";
 import { watchPartyPanelOwnsPane } from "@/lib/watch-party-pane";
 import { cn } from "@/lib/utils";
+import { SECTION_LABEL_REDESIGN } from "@/components/ui/section-header";
 
 /**
  * The watch party surface inside a `watch_party` channel: everything between
@@ -594,7 +602,7 @@ function WatchPartyShareButton({
       {outcome === "copied" ? (
         <Check className={cn("h-3.5 w-3.5", !iconOnly && "mr-1.5")} aria-hidden />
       ) : (
-        <Share2 className={cn("h-3.5 w-3.5", !iconOnly && "mr-1.5")} aria-hidden />
+        <IconSwap off={Share2} on={ShareNetworkFill} offClassName={cn("h-3.5 w-3.5", !iconOnly && "mr-1.5")} className={cn("h-[1.125rem] w-[1.125rem]", !iconOnly && "mr-1.5")} />
       )}
       {!iconOnly && label}
     </Button>
@@ -1805,15 +1813,15 @@ function ScheduledStage(props: WatchPartyPanelProps & { party: WatchParty }) {
           a row; and the host's one loud action has a row of its own with
           the honest sentence beside it (viewers are looking at this screen,
           so "nobody sees anything" was false). */}
-      <div className="flex w-full max-w-md flex-col items-center gap-4 rounded-2xl border border-border bg-surface-0 px-6 py-6 text-center">
+      <div className="flex w-full max-w-md flex-col items-center gap-4 rounded-2xl border border-border bg-surface-0 px-6 py-6 text-center redesign:rounded-[var(--radius-pane)] redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:px-8 redesign:py-7">
         <div>
           <p
-            className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary"
+            className={cn("text-[11px] font-semibold uppercase tracking-wider text-text-tertiary", SECTION_LABEL_REDESIGN, "redesign:text-text-secondary")}
           >
             {t("watchParty.scheduled.eyebrow")}
           </p>
           <p
-            className="mt-1 text-xl font-semibold text-paper"
+            className="mt-1 text-xl font-semibold text-paper redesign:font-[family-name:var(--font-display)] redesign:text-2xl redesign:font-bold redesign:text-text"
             data-testid="watch-party-scheduled-when"
           >
             {t("watchParty.scheduled.startsAt", { when })}
@@ -1848,22 +1856,22 @@ function ScheduledStage(props: WatchPartyPanelProps & { party: WatchParty }) {
           <WatchPartyShareButton party={party} />
         </div>
         {canGoLive ? (
-          <div className="flex w-full flex-col items-center gap-2 border-t border-border pt-4">
+          <div className="flex w-full flex-col items-center gap-2 border-t border-border pt-4 redesign:border-[color:var(--card-border)] redesign:pt-5">
             <Button
               type="button"
-              className="w-full bg-danger text-paper hover:bg-danger/85 sm:w-auto"
+              className="w-full bg-danger text-paper hover:bg-danger/85 sm:w-auto redesign:bg-[color:var(--live-badge-bg)] redesign:text-on-danger redesign:hover:bg-[color:color-mix(in_oklab,var(--live-badge-bg)_88%,black)]"
               onClick={() => void props.onGoLive(null, party.options.lowLatency)}
               data-watch-party-go-live
             >
               <Radio className="mr-1.5 h-3.5 w-3.5" aria-hidden />
               {t("watchParty.scheduled.goLiveNow")}
             </Button>
-            <p className="text-xs text-text-tertiary">
+            <p className="text-xs text-text-tertiary redesign:text-balance">
               {t("watchParty.scheduled.hostNote")}
             </p>
           </div>
         ) : (
-          <p className="text-xs text-text-tertiary">
+          <p className="text-xs text-text-tertiary redesign:text-balance">
             {t("watchParty.scheduled.viewerNote")}
           </p>
         )}
@@ -2120,7 +2128,7 @@ function LiveSurface(
        `docs/plans/WATCH_PARTY_UI.md`): same minimum height, same ground
        and same gutters as the channel header it replaces, so the row does
        not read as a second header under an empty one. */
-    "flex min-h-14 shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-ink-4/60 bg-ink px-3 py-2 sm:px-4";
+    "flex min-h-14 shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-ink-4/60 bg-ink px-3 py-2 sm:px-4 redesign:border-[color:var(--card-border)] redesign:bg-transparent sm:redesign:px-5";
 
   const identity = (
     /* A REAL MINIMUM, so the wrap happens instead of the name vanishing.
@@ -2184,6 +2192,26 @@ function LiveSurface(
               ? "border-warning/40 bg-warning/10 text-warning"
               : "border-border bg-surface-0 font-normal text-text-tertiary",
           inCall && props.onToggleMute && "hover:bg-surface-2",
+          // A pill on the call's tints under the redesign, no edge.
+          "redesign:h-8 redesign:border-0 redesign:px-3 redesign:text-[13px]",
+          mic === "everyone"
+            ? "redesign:bg-[color:color-mix(in_oklab,var(--color-success)_18%,transparent)]"
+            : mic === "room" || micMutedWarning
+              ? "redesign:bg-[color:color-mix(in_oklab,var(--color-warning)_16%,transparent)]"
+              : mic === "muted"
+                ? "redesign:bg-[color:var(--call-control-off-bg)] redesign:text-danger"
+                : "redesign:bg-[color:var(--call-control-bg)] redesign:text-text-secondary",
+          // Each state keeps its own colour on hover, one step stronger.
+          inCall &&
+            props.onToggleMute &&
+            (mic === "everyone"
+              ? "redesign:hover:bg-[color:color-mix(in_oklab,var(--color-success)_26%,transparent)]"
+              : mic === "room" || micMutedWarning
+                ? "redesign:hover:bg-[color:color-mix(in_oklab,var(--color-warning)_24%,transparent)]"
+                : mic === "muted"
+                  ? "redesign:hover:bg-[color:var(--call-control-off-hover)]"
+                  : "redesign:hover:bg-[color:var(--call-control-hover)]"),
+          "redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-[color:var(--color-pane-main)] redesign:focus-visible:ring-[color:var(--color-focus-ring)]",
         );
         const warningAttrs = micMutedWarning
           ? {
@@ -2193,9 +2221,9 @@ function LiveSurface(
           : {};
         const icon =
           mic === "everyone" || mic === "room" ? (
-            <Mic className="h-3 w-3" aria-hidden />
+            <IconSwap off={Mic} on={MicrophoneFill} offClassName="h-3 w-3" className="h-3.5 w-3.5" />
           ) : (
-            <MicOff className="h-3 w-3" aria-hidden />
+            <IconSwap off={MicOff} on={MicrophoneSlashFill} offClassName="h-3 w-3" className="h-3.5 w-3.5" />
           );
         // THE PILL IS THE MUTE BUTTON. It used to be a label beside a mute
         // control three panes away; the thing that says whether you are
@@ -2505,7 +2533,7 @@ function LiveSurface(
           onClick={() => setOptionsOpen((open) => !open)}
           data-watch-party-options-toggle
         >
-          <Settings2 className="h-3.5 w-3.5" aria-hidden />
+          <IconSwap off={Settings2} on={SlidersHorizontalFill} offClassName="h-3.5 w-3.5" className="h-[1.125rem] w-[1.125rem]" />
         </Button>
         {canClaim && (
           <Button
