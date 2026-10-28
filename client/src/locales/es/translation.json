@@ -894,6 +894,7 @@
   "bootstrapError.title": "No se puede conectar con la API",
   "bootstrapError.fallback": "No se pudieron cargar las comunidades desde la API",
   "bootstrapError.deploy.1": "El sitio de presentación en Cloudflare Pages es estático. El inicio de sesión funciona con Clerk, pero los servidores necesitan una API alojada (Railway/Docker) con",
+  "bootstrapError.deploy.details": "Detalles para quien hospeda",
   "bootstrapError.deploy.2": "y",
   "bootstrapError.deploy.3": "definidos al compilar. Consulta",
   "bootstrapError.retry": "Reintentar",

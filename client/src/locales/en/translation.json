@@ -894,6 +894,7 @@
   "bootstrapError.title": "Can't reach the API",
   "bootstrapError.fallback": "Failed to load communities from the API",
   "bootstrapError.deploy.1": "The marketing site on Cloudflare Pages is static. Sign-in works via Clerk, but servers need a hosted API (Railway/Docker) with",
+  "bootstrapError.deploy.details": "Details for self-hosters",
   "bootstrapError.deploy.2": "and",
   "bootstrapError.deploy.3": "set at build time. See",
   "bootstrapError.retry": "Try again",

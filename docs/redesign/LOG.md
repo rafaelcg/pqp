@@ -72,6 +72,7 @@ Read this file and the inventory at the start of every session.
 | 3 | `s-banners` | Merged, capped at round 5 (Opus 8.2 r5, MUST fixed after). Not done: a dark-only accent edge |
 | 3 | `s-message-row` | Merged, capped at round 5 (Opus 8.5 r5) |
 | 3 | `s-message-content` | Merged, capped at round 5 (Opus 8.6 r5). Open: the broken-image chip is English in every language (question in the spec) |
+| 3 | `s-message-chrome` | Merged, capped at round 5 (Opus 8.6 r3 and r5, Codex 8.6 r4) |
 | 4 | `f-onboarding` | Merged, capped at round 5 (Opus 8.3 r3 and r5) |
 | 5 | `m-sheets` | Merged, approved at round 5 (Opus 9.0, no MUST) |
 | 4 | `f-user-settings` | Merged, capped at round 5 (Opus 8.1 r5, 8.2 r4) |
@@ -81,6 +82,8 @@ Read this file and the inventory at the start of every session.
 | 4 | `f-invites` | Merged, capped at round 5 (Opus 7.8 r5, 8.1 r3 and r4) |
 | 4 | `f-communities` | Merged, capped at round 5 (Opus 7.6 r5, 8.1 r3). Not done: a balanced chip wrap |
 | 4 | `f-bots` | Merged, capped at round 5 (Opus 8.3 r5). Not done: a spinner on the wizard's final button while it saves |
+| 4 | `f-states` | Merged, capped at round 5 (Opus 8.1 r5, 8.3 r4). Open: question on the deploy notes' wording (Railway). Not done: the error page in the canvas frame |
+| 4 | `f-profile` | Merged, capped at round 5 (Opus 8.2 r5, MUST in r1 fixed). Not done: a filled check for "already friends" |
 | 5 | `m-breakpoints` | Merged (code only, no council) |
 
 ## Phase 0: directions
@@ -1540,6 +1543,34 @@ r2 8.2, r3 7.9 (MUST fixed: the webhook edge thinned at the corners), r4
 poll's other options at 14% under the 26% leader, the roll comment on the
 kicker, named chips at medium weight. Not done: none.
 
+### s-message-chrome
+
+Spec (audit: the hover toolbar, its "Mais" panel and `MoreMenuItem`,
+`ReactionBar`, `ReactionChip` and its who-tip, `ReplyQuote`, `ThreadChip`;
+the right-click menu is the merged `ContextMenu`):
+
+1. Job: act on a message, and see what others did with it.
+2. States: toolbar (three quick reactions, yours filled; add; reply; start
+   or open a thread; edit; more), "Mais" open up or down with a danger
+   group; reactions (yours, others, many, the add button); reply (author,
+   excerpt, deleted parent); thread chip (unread dot, open, archived, faces).
+3. Redesign: the toolbar is a pill on the popover surface with 32px round
+   buttons and Phosphor glyphs; "Mais" is the menu's panel and rows, so it
+   matches the right-click menu; a reaction is a 28px pill on a text tint,
+   yours the accent's soft fill with an accent ring; the reply line reads
+   author in text and excerpt in secondary; the thread chip is a pill on a
+   text tint, open is the selected row's fill.
+4. Duplicate kept: "Mais" and the right-click menu list the same actions in
+   two components. Moving "Mais" onto `Menu` changes its keyboard behaviour
+   with the toggle off, so it waits (question below).
+5. Question: should "Mais" become the shared `Menu` (arrow keys, type to
+   find) for everybody, not only under the redesign?
+
+Rounds: r1 Opus 7.6, r2 Codex 8.4, r3 Opus 8.6, r4 Codex 8.6, r5 Opus 8.6
+(no MUST, cap). After r5: the open chip's meta in its own softened colour,
+legible initials on the faces, toolbar focus in the focus colour. Not done:
+raising the toolbar to `-top-5` (it would cover more of the row above).
+
 ### f-onboarding
 
 Spec (audit: `onboarding/` (11 files), the hints in `layout/*-hint.tsx`
@@ -1558,6 +1589,63 @@ a hero, from `--glass-bg` / `--glass-fg` / `--glass-border`), the shell
 sizes a footer's primary action (`data-cta`, 120px), done steps keep their
 place with a check and "Feito" and no strike. Rebuilt off `redesign`
 without the f-call work the first branch carried.
+
+### f-profile
+
+Spec (audit: `user-profile-popover.tsx` (self, other, bot, blocked; action
+strip, Mais menu, manage and cargos sections, inline timeout and ban
+composers, medals, depoimentos, connections, communities),
+`member-moderation-dialog.tsx`, `depoimentos-section.tsx`):
+
+1. Job: who this person is and what you can do about them, from any name.
+2. Redesign: the card is the shared popover (surface, edge, lift, radius);
+   the action wells are round on the card tint with filled glyphs; Mais is
+   the shared menu's rows; manage, cargos and the about pane are cards; the
+   name in Gabarito, the tag in sans; role chips and timeout presets are
+   pills; inline fields take the input tokens.
+3. Merges: Mais stays its own fixed menu (the card scrolls, a portal menu
+   must not clip). Question kept: native `prompt` and `confirm` for nickname
+   and kick still belong to the browser.
+4. Kept: every action, the moderation composers inline (the evidence stays
+   in view), the contact-sheet strip.
+
+Rounds: r1 Codex 7.8 (MUST fixed: the action wells vanished in light), r2
+Codex 8.0, r3 Opus 8.1, r4 Codex 8.1, r5 Opus 8.2 (no MUST, cap). After r5:
+danger hover on the red rows, focus rings on the timeout pills and reason
+inputs, the timeout note in secondary text, menu row rhythm in the
+community card. Not done: a filled check for "already friends" (copy shows
+with the toggle off).
+
+### f-states
+
+Spec (audit: `app-loading-shell.tsx` (the boot shell and the cannot-reach-
+the-API page, from `main.tsx` and `App.tsx`), `ui/skeleton.tsx` and the
+spinner (merged as `p-loading`), `error-boundary.tsx`, `HistoryFailed`
+(merged as `p-empty`)):
+
+1. Job: what the app shows before it can show the app, and when it cannot.
+2. Redesign: the boot shell is the frame (canvas, rail on it, floating side
+   and main panes on the frame recipes) with its skeletons, the composer a
+   rounded well, the label sentence case, "pqp" in Gabarito; the API error
+   page takes Gabarito and sentence case.
+3. Not touched: `error-boundary.tsx`. AGENTS.md says to leave it alone, and
+   question 3 asks André first.
+4. Kept: the stored sidebar width on first paint, the retry and the docs
+   pointers on the error page.
+5. Question (copy, shows with the toggle off): the deploy notes on the
+   error page name "Railway/Docker", but production runs on Vultr. Under
+   the redesign they fold behind "Detalhes para quem hospeda"; the text
+   itself waits for a yes.
+
+Rounds: r1 Opus 7.8, r2 Opus 7.6 (MUST fixed: the rail skeleton was squares
+where the rail draws circles), r3 Codex 7.4 (its MUST was a misread: it took
+the dark shot for light; the file is the dark capture), r4 Opus 8.3, r5 Opus
+8.1 (no MUST, cap; best r4). After r5: the host summary in secondary text,
+the failure announced and focus on the retry under the redesign. Not done:
+the error page inside the canvas frame (it replaces the whole tree; a
+restructure), a lighter light skeleton (the loading council set 10% because
+8% vanished at the pulse's low point), the kicker as plain text (it is a
+link today).
 
 ### f-bots
 
