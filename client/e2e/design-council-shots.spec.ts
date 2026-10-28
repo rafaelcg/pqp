@@ -1077,6 +1077,12 @@ const PRIMITIVES: {
   // Ten reactions that wrap over a thread chip; the one-line continuation hovered.
   { id: "s-message-chrome-wrap", testId: "qa-shell-message-chrome-wrap", hoverText: "quem chegar depois das 20h fica de fora" },
   { id: "s-log-chrome", testId: "qa-shell-log-chrome" },
+  // The resting composer's format bar open (it is a toolbar, not a menu).
+  {
+    id: "s-composer",
+    testId: "qa-shell-composer",
+    open: { button: "Formatação", menu: '[data-testid="qa-shell-composer"] [role="toolbar"]', arrows: 0 },
+  },
 ];
 
 test("captures the primitives", async ({ browser }) => {
@@ -1118,7 +1124,7 @@ test("captures the primitives", async ({ browser }) => {
         if (primitive.open.hoverText) {
           await block.getByText(primitive.open.hoverText, { exact: true }).hover();
         }
-        await block.getByRole("button", { name: primitive.open.button, exact: true }).focus();
+        await block.getByRole("button", { name: primitive.open.button, exact: true }).first().focus();
         await page.keyboard.press("Enter");
         const menu = page.locator(primitive.open.menu);
         await expect(menu).toBeVisible();

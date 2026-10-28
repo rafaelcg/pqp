@@ -46,7 +46,30 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
+import {
+  ArrowBendUpLeft,
+  ArrowUp as ArrowUpGlyph,
+  CheckCircle as CheckCircleGlyph,
+  Code as CodeGlyph,
+  CodeBlock,
+  File as FileGlyph,
+  Gif as GifGlyph,
+  Hourglass as HourglassGlyph,
+  Info as InfoGlyph,
+  ListBullets,
+  Plus as PlusGlyph,
+  Quotes,
+  Smiley,
+  TextAa,
+  TextB,
+  TextItalic,
+  TextStrikethrough,
+  WarningCircle,
+  X as XGlyph,
+  type Icon as PhosphorGlyph,
+} from "@phosphor-icons/react";
 import { ComposerFormatPreview } from "@/components/chat/composer-format-preview";
+import { Icon as Glyph } from "@/components/ui/icon";
 import { MusicHintHostProvider } from "@/components/voice/call-dock";
 import { FeatureHint, useFeatureHintEnabled } from "@/components/layout/feature-hint";
 import { rememberFeatureHint } from "@/lib/feature-hints";
@@ -262,7 +285,40 @@ interface MessageComposerProps {
  */
 const COMPOSER_CONTROL_PX = 40;
 const COMPOSER_ICON_BUTTON =
-  "h-8 w-8 shrink-0 rounded-[var(--radius-control)] text-text-tertiary hover:bg-surface-3 hover:text-text";
+  "h-8 w-8 shrink-0 rounded-[var(--radius-control)] text-text-tertiary hover:bg-surface-3 hover:text-text redesign:h-9 redesign:w-9 redesign:rounded-full redesign:text-text-secondary redesign:hover:bg-[color:var(--button-ghost-hover)] redesign:hover:text-text";
+/** A tool whose panel is open: the ghost hover's fill, held. */
+// Held one step firmer than a hover, so an open tool and a hovered one never look alike.
+const COMPOSER_ICON_ON = "bg-surface-3 text-text redesign:bg-[color:color-mix(in_oklab,var(--color-text)_12%,transparent)] redesign:text-text";
+
+/*
+ * The composer under the redesign (s-composer): one rounded well on a faint
+ * text tint, round tools and a round accent send, Phosphor glyphs. What
+ * stacks inside the well (reply, chips, format bar) sits on the same tint.
+ */
+const COMPOSER_WELL_REDESIGN =
+  "redesign:rounded-[var(--composer-radius)] redesign:border-[color:var(--composer-border)] redesign:bg-[color:var(--composer-bg)] redesign:focus-within:border-[color:var(--composer-border-focus)]";
+
+/** Both glyphs of a composer tool: the old one, and the redesign's. */
+function ComposerGlyph({
+  old: Old,
+  glyph,
+  kind = "object",
+  size = "md",
+  className,
+}: {
+  old: LucideIcon;
+  glyph: PhosphorGlyph;
+  kind?: "object" | "symbol";
+  size?: "sm" | "md";
+  className?: string;
+}) {
+  return (
+    <>
+      <Old className={cn(size === "sm" ? "h-3.5 w-3.5" : "h-4.5 w-4.5", "redesign:hidden", className)} aria-hidden />
+      <Glyph icon={glyph} kind={kind} size={size} className="hidden redesign:block" />
+    </>
+  );
+}
 
 /** Grow with the content, but never take over the whole pane. */
 const MAX_COMPOSER_HEIGHT_PX = 200;
@@ -285,16 +341,18 @@ type FormatAction = {
     | "composer.formatQuote"
     | "composer.formatList";
   icon: LucideIcon;
+  /** The redesign's glyph. */
+  glyph: PhosphorGlyph;
 };
 
 const FORMAT_ACTIONS: FormatAction[] = [
-  { id: "bold", kind: "**", labelKey: "composer.formatBold", icon: Bold },
-  { id: "italic", kind: "*", labelKey: "composer.formatItalic", icon: Italic },
-  { id: "strike", kind: "~~", labelKey: "composer.formatStrike", icon: Strikethrough },
-  { id: "code", kind: "`", labelKey: "composer.formatCode", icon: Code },
-  { id: "fence", kind: "fence", labelKey: "composer.formatFence", icon: SquareCode },
-  { id: "quote", kind: "quote", labelKey: "composer.formatQuote", icon: TextQuote },
-  { id: "list", kind: "list", labelKey: "composer.formatList", icon: List },
+  { id: "bold", kind: "**", labelKey: "composer.formatBold", icon: Bold, glyph: TextB },
+  { id: "italic", kind: "*", labelKey: "composer.formatItalic", icon: Italic, glyph: TextItalic },
+  { id: "strike", kind: "~~", labelKey: "composer.formatStrike", icon: Strikethrough, glyph: TextStrikethrough },
+  { id: "code", kind: "`", labelKey: "composer.formatCode", icon: Code, glyph: CodeGlyph },
+  { id: "fence", kind: "fence", labelKey: "composer.formatFence", icon: SquareCode, glyph: CodeBlock },
+  { id: "quote", kind: "quote", labelKey: "composer.formatQuote", icon: TextQuote, glyph: Quotes },
+  { id: "list", kind: "list", labelKey: "composer.formatList", icon: List, glyph: ListBullets },
 ];
 
 function isBlockFormat(kind: FormattingMarker | BlockFormat): kind is BlockFormat {
@@ -328,6 +386,11 @@ const FEEDBACK_ICONS = {
   error: AlertCircle,
   success: CheckCircle2,
   info: Info,
+} as const;
+const FEEDBACK_GLYPHS = {
+  error: WarningCircle,
+  success: CheckCircleGlyph,
+  info: InfoGlyph,
 } as const;
 
 /** Pip cells for a 6 on a 3×3 face. Same layout the roll card uses. */
@@ -1668,10 +1731,23 @@ export function MessageComposer({
               "border-signal/40 bg-ink-2 text-signal",
             feedback.tone === "info" &&
               "border-ink-4 bg-ink-2 text-paper-muted",
+            // Under the redesign it floats on the popover surface; the tone
+            // is the glyph's colour, the words stay readable text.
+            "redesign:items-center redesign:gap-2.5 redesign:rounded-[var(--radius-card)] redesign:border-[color:var(--popover-border)] redesign:bg-[color:var(--popover-surface)] redesign:px-3.5 redesign:py-2.5 redesign:text-[0.8125rem] redesign:text-text redesign:shadow-[var(--popover-shadow)]",
           )}
           role="status"
         >
-          <FeedbackIcon className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden />
+          <FeedbackIcon className="mt-px h-3.5 w-3.5 shrink-0 redesign:hidden" aria-hidden />
+          <Glyph
+            icon={FEEDBACK_GLYPHS[feedback.tone]}
+            size="sm"
+            className={cn(
+              "hidden redesign:block",
+              feedback.tone === "error" && "text-danger",
+              feedback.tone === "success" && "text-success",
+              feedback.tone === "info" && "text-text-secondary",
+            )}
+          />
           <span className="min-w-0 flex-1 whitespace-pre-wrap">
             {feedback.message}
           </span>
@@ -1707,6 +1783,7 @@ export function MessageComposer({
       <div
         className={cn(
           "rounded-[var(--radius-card)] border border-border bg-surface-2 transition-colors focus-within:border-border-strong",
+          COMPOSER_WELL_REDESIGN,
         )}
       >
         {/*
@@ -1723,10 +1800,11 @@ export function MessageComposer({
           isPollComposerOpen ||
           pending.length > 0 ||
           isFormatBarOpen) && (
-          <div className="max-h-[min(40dvh,100%)] overflow-y-auto px-2 pt-2">
+          <div className="max-h-[min(40dvh,100%)] overflow-y-auto px-2 pt-2 redesign:px-2.5 redesign:pt-2.5">
         {replyTarget && (
-          <div className="chat-msg-in mb-2 flex items-center gap-2 rounded-[var(--radius-control)] bg-surface-3/60 px-2.5 py-1.5 text-xs text-text-secondary">
-            <CornerUpLeft className="h-3.5 w-3.5 shrink-0 text-accent" />
+          <div className="chat-msg-in mb-2 flex items-center gap-2 rounded-[var(--radius-control)] bg-surface-3/60 px-2.5 py-1.5 text-xs text-text-secondary redesign:rounded-full redesign:bg-[color:var(--content-glyph-bg)] redesign:py-1 redesign:pl-3 redesign:pr-1 redesign:text-[0.8125rem]">
+            <CornerUpLeft className="h-3.5 w-3.5 shrink-0 text-accent redesign:hidden" />
+            <Glyph icon={ArrowBendUpLeft} kind="symbol" size="sm" className="hidden text-accent-text redesign:block" />
             <span className="min-w-0 flex-1 truncate">
               {t("composer.replying", { name: replyTarget.authorName })}
             </span>
@@ -1734,9 +1812,9 @@ export function MessageComposer({
               type="button"
               aria-label={t("composer.cancelReply")}
               onClick={() => onCancelReply?.()}
-              className="shrink-0 rounded p-0.5 hover:text-text"
+              className="shrink-0 rounded p-0.5 hover:text-text redesign:flex redesign:h-7 redesign:w-7 redesign:items-center redesign:justify-center redesign:rounded-full redesign:p-0 redesign:hover:bg-[color:var(--button-ghost-hover)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent"
             >
-              <X className="h-3.5 w-3.5" />
+              <ComposerGlyph old={X} glyph={XGlyph} kind="symbol" size="sm" />
             </button>
           </div>
         )}
@@ -1768,10 +1846,9 @@ export function MessageComposer({
             id={FORMAT_BAR_ID}
             role="toolbar"
             aria-label={t("composer.format")}
-            className="mb-1 flex gap-0.5 border-b border-border/60 pb-1"
+            className="mb-1 flex gap-0.5 border-b border-border/60 pb-1 redesign:border-[color:var(--pane-header-rule)] redesign:pb-1.5"
           >
             {FORMAT_ACTIONS.map((action) => {
-              const Icon = action.icon;
               return (
                 <Tooltip key={action.id} label={t(action.labelKey)}>
                   <Button
@@ -1795,9 +1872,9 @@ export function MessageComposer({
                     }
                     applyComposerFormat(action.kind);
                   }}
-                    className="h-7 min-w-7 flex-1 text-text-tertiary hover:text-text sm:w-7 sm:flex-none"
+                    className="h-7 min-w-7 flex-1 text-text-tertiary hover:text-text sm:w-7 sm:flex-none redesign:h-8 redesign:min-w-8 redesign:rounded-full redesign:text-text-secondary sm:redesign:w-8"
                   >
-                    <Icon className="h-4 w-4" />
+                    <ComposerGlyph old={action.icon} glyph={action.glyph} kind="symbol" size="sm" className="h-4 w-4" />
                   </Button>
                 </Tooltip>
               );
@@ -1819,7 +1896,7 @@ export function MessageComposer({
             <span
               aria-hidden
               className={cn(
-                "pointer-events-none absolute inset-0 z-[1] flex overflow-hidden px-3 text-base leading-10 text-text-tertiary sm:text-sm",
+                "pointer-events-none absolute inset-0 z-[1] flex overflow-hidden px-3 text-base leading-10 text-text-tertiary sm:text-sm redesign:px-4",
                 embedded ? "items-start" : "items-center",
                 (disabled || isRunningSlash) && "opacity-50",
               )}
@@ -1866,7 +1943,7 @@ export function MessageComposer({
               paddingBottom: composerBox.paddingY,
               overflowY: composerBox.overflowY,
             }}
-            className="block h-10 min-h-10 w-full resize-none overflow-hidden bg-transparent px-3 py-0 text-sm text-text placeholder:text-transparent focus-visible:outline-none disabled:opacity-50"
+            className="block h-10 min-h-10 w-full resize-none overflow-hidden bg-transparent px-3 py-0 redesign:px-4 text-sm text-text placeholder:text-transparent focus-visible:outline-none disabled:opacity-50"
             role="combobox"
             aria-expanded={Boolean(menuKind)}
             aria-controls={menuKind ? MENU_ID : undefined}
@@ -1878,7 +1955,7 @@ export function MessageComposer({
         </div>
         <div
           className={cn(
-            "flex items-center gap-0.5 px-1.5 pb-1.5",
+            "flex items-center gap-0.5 px-1.5 pb-1.5 redesign:gap-1 redesign:px-2 redesign:pb-2",
             voiceNoteActive && !voiceNoteHolding && "hidden",
           )}
         >
@@ -1906,10 +1983,10 @@ export function MessageComposer({
                 onMouseDown={keepComposerFocused}
                 className={cn(
                   iconButtonClass,
-                  isInsertMenuOpen && "bg-surface-3 text-text",
+                  isInsertMenuOpen && COMPOSER_ICON_ON,
                 )}
               >
-                <Plus className="h-4.5 w-4.5" />
+                <ComposerGlyph old={Plus} glyph={PlusGlyph} kind="symbol" />
               </Button>
             </Tooltip>
             {isInsertMenuOpen && (
@@ -1938,10 +2015,10 @@ export function MessageComposer({
               onMouseDown={(event) => event.preventDefault()}
               className={cn(
                 iconButtonClass,
-                isFormatBarOpen && "bg-surface-3 text-text",
+                isFormatBarOpen && COMPOSER_ICON_ON,
               )}
             >
-              <ALargeSmall className="h-4.5 w-4.5" />
+              <ComposerGlyph old={ALargeSmall} glyph={TextAa} kind="symbol" />
             </Button>
           </Tooltip>
           )}
@@ -1960,10 +2037,10 @@ export function MessageComposer({
               onMouseDown={keepComposerFocused}
               className={cn(
                 iconButtonClass,
-                isPickerOpen && "bg-surface-3 text-text",
+                isPickerOpen && COMPOSER_ICON_ON,
               )}
             >
-              <Smile className="h-4.5 w-4.5" />
+              <ComposerGlyph old={Smile} glyph={Smiley} kind="symbol" />
             </Button>
           </Tooltip>
           {isGifSearchEnabled && (
@@ -1985,10 +2062,10 @@ export function MessageComposer({
                 onMouseDown={keepComposerFocused}
                 className={cn(
                   iconButtonClass,
-                  isGifPickerOpen && "bg-surface-3 text-text",
+                  isGifPickerOpen && COMPOSER_ICON_ON,
                 )}
               >
-                <ImagePlay className="h-4.5 w-4.5" />
+                <ComposerGlyph old={ImagePlay} glyph={GifGlyph} kind="symbol" />
               </Button>
             </Tooltip>
           )}
@@ -2012,6 +2089,12 @@ export function MessageComposer({
           className={cn(
             "h-8 shrink-0 rounded-full tabular-nums",
             slowModeRemaining > 0 ? "w-auto gap-1 px-2.5 text-xs" : "w-8",
+            "redesign:h-9",
+            // Slow mode's countdown is a wait, not a dead button: the soft
+            // accent keeps the seconds legible while it stays disabled.
+            slowModeRemaining > 0
+              ? "redesign:px-3.5 redesign:text-[0.8125rem] redesign:disabled:border-transparent redesign:disabled:bg-[color:var(--color-accent-soft)] redesign:disabled:font-semibold redesign:disabled:text-[color:var(--color-on-accent-soft)]"
+              : "redesign:w-9 redesign:px-0",
           )}
           // An attachment is a message on its own, so an empty body is only a
           // reason to stay disabled when nothing is attached either.
@@ -2030,12 +2113,12 @@ export function MessageComposer({
         >
           {slowModeRemaining > 0 ? (
             <>
-              <Hourglass className="h-3.5 w-3.5" aria-hidden />
+              <ComposerGlyph old={Hourglass} glyph={HourglassGlyph} size="sm" />
               {t("composer.sendWait", { seconds: slowModeRemaining })}
             </>
           ) : (
             <>
-              <ArrowUp className="h-4 w-4" aria-hidden />
+              <ComposerGlyph old={ArrowUp} glyph={ArrowUpGlyph} kind="symbol" className="h-4 w-4" />
               <span className="sr-only">{t("composer.send")}</span>
             </>
           )}
@@ -2071,8 +2154,8 @@ function AttachmentChip({
   const percent = Math.round(attachment.progress * 100);
 
   return (
-    <li className="chat-msg-in relative flex w-44 items-center gap-2 rounded-md border border-ink-4 bg-ink-3/60 p-1.5">
-      <span className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded bg-ink-4/60">
+    <li className="chat-msg-in relative flex w-44 items-center gap-2 rounded-md border border-ink-4 bg-ink-3/60 p-1.5 redesign:w-52 redesign:gap-2.5 redesign:rounded-[var(--radius-card)] redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:p-2">
+      <span className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded bg-ink-4/60 redesign:rounded-[var(--radius-control)] redesign:bg-[color:var(--content-glyph-bg)]">
         {isImage ? (
           <img
             src={attachment.previewUrl}
@@ -2080,12 +2163,12 @@ function AttachmentChip({
             className="h-full w-full object-cover"
           />
         ) : (
-          <Paperclip className="h-4 w-4 text-paper-muted" />
+          <ComposerGlyph old={Paperclip} glyph={FileGlyph} className="h-4 w-4 text-paper-muted" />
         )}
       </span>
 
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-xs text-paper" title={attachment.filename}>
+        <span className="block truncate text-xs text-paper redesign:text-[0.8125rem] redesign:font-medium redesign:text-text" title={attachment.filename}>
           {attachment.filename}
         </span>
         {attachment.status === "failed" ? (
@@ -2094,7 +2177,7 @@ function AttachmentChip({
             <span className="truncate">{attachment.error ?? t("common.failed")}</span>
           </span>
         ) : (
-          <span className="block text-[11px] text-paper-muted">
+          <span className="block text-[11px] text-paper-muted redesign:text-xs redesign:text-text-tertiary">
             {/* A GIF's bytes are the provider's, never measured here, so the
                 row would read "0 B" — the dimensions are the honest thing to
                 show for one. */}
@@ -2112,7 +2195,7 @@ function AttachmentChip({
             aria-valuenow={percent}
             aria-valuemin={0}
             aria-valuemax={100}
-            className="mt-1 block h-1 w-full overflow-hidden rounded-full bg-ink-4"
+            className="mt-1 block h-1 w-full overflow-hidden rounded-full bg-ink-4 redesign:bg-[color:var(--content-glyph-bg)]"
           >
             <span
               className="block h-full rounded-full bg-signal transition-[width] duration-150"
@@ -2126,9 +2209,9 @@ function AttachmentChip({
         type="button"
         onClick={onRemove}
         aria-label={t("composer.remove", { name: attachment.filename })}
-        className="shrink-0 self-start rounded p-0.5 text-paper-muted hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+        className="shrink-0 self-start rounded p-0.5 text-paper-muted hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60 redesign:flex redesign:h-6 redesign:w-6 redesign:items-center redesign:justify-center redesign:rounded-full redesign:p-0 redesign:text-text-secondary redesign:hover:bg-[color:var(--button-ghost-hover)] redesign:hover:text-text redesign:focus-visible:ring-accent"
       >
-        <X className="h-3.5 w-3.5" />
+        <ComposerGlyph old={X} glyph={XGlyph} kind="symbol" size="sm" />
       </button>
     </li>
   );

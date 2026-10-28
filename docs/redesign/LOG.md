@@ -1599,6 +1599,37 @@ note and follows it down, one left edge for the footer, the day label
 outlined so it stops reading as a button, room under the newer button, the
 weekday in sentence case. Open: the "Load older messages" copy question.
 
+### s-composer
+
+Spec (audit: `MessageComposer` (the well, reply chip, attachment chips,
+format bar and preview, feedback strip, tools, send, slow mode), the "+"
+menu (already `MENU_SURFACE`), `AutocompleteMenu`, the emoji and GIF panels
+(already `POPOVER_SURFACE`), `PollComposer`, the voice note mic and panel,
+`ComposerReadOnlyNotice`, the inline `EditComposer`; one composer serves the
+channel, the thread panel and the forum dialog):
+
+1. Job: write and send, with everything a message can carry.
+2. States: resting, typing, replying, attachments (uploading, failed),
+   format bar open, a panel open (+, emoji, GIF, autocomplete row and grid),
+   poll, voice note (hold, locked, review), slow mode, read-only, stream
+   variant, embedded, editing a message, feedback (error, success, info).
+3. Redesign: one 20px well on a faint text tint whose edge comes up while
+   typing; 36px round tools with Phosphor glyphs, a held fill when a panel
+   is open; a round accent send; the reply chip a pill; chips are cards;
+   autocomplete is the menu's panel and rows; the poll composer a card with
+   the input's fields and accent-ringed chips; feedback floats on the
+   popover surface with a toned glyph.
+4. Kept: the music bar and call dock inside the well move with `f-call`; the
+   poll composer's hand-made switch stays (question: swap it for `Switch`).
+5. Not on the sheet: the "+" menu (needs attachments or slash commands).
+
+Rounds: r1 Codex 8.0, r2 Opus 8.2, r3 Codex 8.2, r4 Opus 8.3, r5 Codex 8.8
+(no MUST, cap). Fixed along the way: slow mode's countdown on the soft
+accent, a firmer typing edge, the text 16px in, an open tool held a step
+firmer than a hover, line-weight smiley and GIF, the read-only edge on its
+own token, a typed draft on the sheet. Not on the sheet: an attachment chip
+and the autocomplete (they need a live upload and a member list).
+
 ### f-onboarding
 
 Spec (audit: `onboarding/` (11 files), the hints in `layout/*-hint.tsx`

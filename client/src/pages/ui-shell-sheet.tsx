@@ -8,7 +8,7 @@ import type {
   VoiceParticipant,
   WatchParty,
 } from "@pqp/shared";
-import { useEffect, type ComponentProps, type ReactNode } from "react";
+import { useEffect, useState, type ComponentProps, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { CommunityHomePreview } from "@/components/community-home/community-home-preview";
 import {
@@ -23,6 +23,9 @@ import {
 import { ChannelIcon } from "@/components/layout/channel-icon";
 import { UserPanel } from "@/components/layout/user-panel";
 import { MessageList, type MessageAuthorInfo } from "@/components/chat/message-list";
+import { MessageComposer } from "@/components/chat/message-composer";
+import { clearDraft, setDraftsAccount, writeDraft } from "@/lib/composer-drafts";
+import { ComposerReadOnlyNotice } from "@/components/chat/composer-read-only-notice";
 import type { ChatMessage } from "@/hooks/use-chat";
 import { ConnectionBanner } from "@/components/layout/connection-banner";
 import { ArrivalBanner } from "@/components/onboarding/arrival-banner";
@@ -1132,6 +1135,63 @@ function LogChromeBlock() {
   );
 }
 
+/** A composer at the foot of a pane, as the conversation draws it. */
+function ComposerPane({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <MainPane>
+      <p className="px-4 pb-2 pt-3 text-xs text-text-tertiary">{label}</p>
+      {children}
+    </MainPane>
+  );
+}
+
+const COMPOSER_SLOW_UNTIL = Date.now() + 5 * 60_000;
+/** A sheet-only channel whose draft is seeded, so the send is enabled. */
+const COMPOSER_TYPING_CHANNEL = "00000000-0000-4000-8000-000000000512";
+
+function ComposerBlock() {
+  // Seeded before the composer below reads its draft, under a sheet-only
+  // account (the store writes nothing signed out); undone on the way out.
+  useState(() => {
+    setDraftsAccount("qa-ui-sheet");
+    writeDraft(COMPOSER_TYPING_CHANNEL, "bora jogar hoje à noite?");
+  });
+  useEffect(
+    () => () => {
+      clearDraft(COMPOSER_TYPING_CHANNEL);
+      setDraftsAccount(null);
+    },
+    [],
+  );
+  return (
+    <div data-testid="qa-shell-composer" className="grid grid-cols-2 items-start gap-6">
+      {/* Resting; a draft typed (send enabled); replying to Rafa; slow mode
+          with a wait; read-only. The
+          shot opens the format bar on the first one. */}
+      <ComposerPane label="Em repouso">
+        <MessageComposer onSend={noop} placeholder="Mensagem em #geral" />
+      </ComposerPane>
+      <ComposerPane label="Escrevendo">
+        <MessageComposer onSend={noop} placeholder="Mensagem em #geral" channelId={COMPOSER_TYPING_CHANNEL} />
+      </ComposerPane>
+      <ComposerPane label="Respondendo">
+        <MessageComposer
+          onSend={noop}
+          placeholder="Mensagem em #geral"
+          replyTarget={{ id: "00000000-0000-4000-8000-000000000511", authorName: "Rafa" }}
+          onCancelReply={noop}
+        />
+      </ComposerPane>
+      <ComposerPane label="Modo lento">
+        <MessageComposer onSend={noop} placeholder="Mensagem em #geral" slowModeUntil={COMPOSER_SLOW_UNTIL} />
+      </ComposerPane>
+      <ComposerPane label="Só leitura">
+        <ComposerReadOnlyNotice />
+      </ComposerPane>
+    </div>
+  );
+}
+
 /**
  * A new build waiting, so both rails draw the update tile. The store is
  * this page's own; it goes back to nothing waiting when the sheet unmounts.
@@ -1407,6 +1467,7 @@ export function ShellSheet() {
       <MessageChromeBlock />
       <MessageChromeWrapBlock />
       <LogChromeBlock />
+      <ComposerBlock />
 
       <CommunityCardsBlock />
 
