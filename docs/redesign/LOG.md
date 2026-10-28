@@ -1660,6 +1660,11 @@ fold, "show more", the search, `BotInviteRow`, `RightColumnTabs`;
 4. Duplicate kept: `members-panel.tsx` redraws these rows in a modal; it
    moves with `f-server-settings`.
 
+Rounds: r1 Codex 8.0, r2 Opus 8.1, r3 Codex 8.2 (COULD only). Stopped at
+r3: both open notes are outside this element (an edge on the shared
+tooltip primitive, and the light role colour's contrast, shared with the
+message row's author name). Follow-ups for those two, not this list.
+
 ### f-onboarding
 
 Spec (audit: `onboarding/` (11 files), the hints in `layout/*-hint.tsx`
