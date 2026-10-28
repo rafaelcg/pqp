@@ -85,6 +85,7 @@ Read this file and the inventory at the start of every session.
 | 4 | `f-states` | Merged, capped at round 5 (Opus 8.1 r5, 8.3 r4). Open: question on the deploy notes' wording (Railway). Not done: the error page in the canvas frame |
 | 4 | `f-profile` | Merged, capped at round 5 (Opus 8.2 r5, MUST in r1 fixed). Not done: a filled check for "already friends" |
 | 4 | `f-forum` | Merged, capped at round 5 (Opus 8.4 r5, no MUST). Not done: an unread post in the light shots |
+| 4 | `f-call` | Merged, capped at round 5 (Opus 8.5 r5, approved). Not done: "Lia (você)" on the self tile (copy), muted and moderator-muted captures |
 | 5 | `m-breakpoints` | Merged (code only, no council) |
 
 ## Phase 0: directions
