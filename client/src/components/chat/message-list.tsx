@@ -5354,7 +5354,12 @@ function ReactionBar({
         tabIndex={tabIndex}
         aria-label={t("chat.addReaction")}
         onClick={onOpenPicker}
-        className="group/add inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-dashed border-ink-4 text-paper-muted hover:border-signal/50 hover:text-signal focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60 redesign:h-7 redesign:w-7 redesign:border-transparent redesign:text-text-tertiary redesign:hover:border-transparent redesign:hover:bg-[color:var(--content-glyph-bg)] redesign:hover:text-text redesign:focus-visible:ring-accent"
+        className={cn(
+          "group/add inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-dashed border-ink-4 text-paper-muted hover:border-signal/50 hover:text-signal focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60 redesign:h-7 redesign:w-7 redesign:border-transparent redesign:text-text-tertiary redesign:hover:border-transparent redesign:hover:bg-[color:var(--content-glyph-bg)] redesign:hover:text-text redesign:focus-visible:ring-accent",
+          // Under the redesign, with a mouse, it shows while the row is hovered or
+          // holds focus, so a wrapped row never ends in a lone smiley. Touch keeps it.
+          !isPickerOpen && "redesign:[@media(hover:hover)]:[.group:not(:hover):not(:focus-within)_&]:hidden",
+        )}
       >
         <SmilePlus className="h-3 w-3 redesign:hidden" />
         {/* Under the redesign a quiet outline at rest that fills on hover and focus. */}
