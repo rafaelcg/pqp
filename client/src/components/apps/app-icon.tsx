@@ -12,6 +12,20 @@ import {
   Trophy,
   type LucideIcon,
 } from "lucide-react";
+import {
+  Cards,
+  ChartBar,
+  DiceFive,
+  Flask,
+  GameController,
+  MusicNotes,
+  PencilSimple,
+  PuzzlePiece,
+  Sparkle,
+  Trophy as TrophyFill,
+  type Icon as PhosphorIcon,
+} from "@phosphor-icons/react";
+import { IconSwap } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 
 type AppIconId = (typeof APP_ICON_IDS)[number];
@@ -34,6 +48,20 @@ const ICONS: Record<AppIconId, LucideIcon> = {
   flask: FlaskConical,
 };
 
+/** The same set as filled Phosphor glyphs, for the redesign. */
+const ICONS_REDESIGN: Record<AppIconId, PhosphorIcon> = {
+  gamepad: GameController,
+  poll: ChartBar,
+  pencil: PencilSimple,
+  music: MusicNotes,
+  dice: DiceFive,
+  cards: Cards,
+  puzzle: PuzzlePiece,
+  trophy: TrophyFill,
+  sparkles: Sparkle,
+  flask: Flask,
+};
+
 export function appIconFor(id: string): LucideIcon {
   return (ICONS as Record<string, LucideIcon>)[id] ?? Sparkles;
 }
@@ -49,6 +77,7 @@ export function AppIconTile({
   dimmed?: boolean;
 }) {
   const Icon = appIconFor(icon);
+  const IconOn = (ICONS_REDESIGN as Record<string, PhosphorIcon>)[icon] ?? Sparkle;
   return (
     <span
       aria-hidden
@@ -58,7 +87,7 @@ export function AppIconTile({
         className,
       )}
     >
-      <Icon className="h-5 w-5" />
+      <IconSwap off={Icon} on={IconOn} offClassName="h-5 w-5" className="h-5 w-5" />
     </span>
   );
 }

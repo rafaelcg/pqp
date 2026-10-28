@@ -220,7 +220,7 @@ function CardHead({ model }: { model: CardModel }) {
       <AppIconTile icon={model.app.icon} dimmed={ended} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <p className="min-w-0 truncate font-display text-sm font-bold leading-5 text-text">
+          <p className={cn("min-w-0 truncate font-display text-sm font-bold leading-5 text-text", ended && "redesign:text-text-secondary")}>
             {cardTitle(model, t)}
           </p>
           {ended && model.disabled ? (
@@ -441,7 +441,7 @@ function LiveBody({
               "redesign:sm:ml-auto",
               !model.full &&
                 !failed &&
-                "redesign:aria-disabled:opacity-100 redesign:aria-disabled:bg-[color:color-mix(in_oklab,var(--color-accent)_60%,transparent)]",
+                "redesign:aria-disabled:opacity-100 redesign:aria-disabled:bg-accent redesign:aria-disabled:cursor-progress",
             )}
             aria-busy={joining || undefined}
             aria-disabled={joining || undefined}
