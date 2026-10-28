@@ -1022,9 +1022,10 @@ card of settings, the "what's new" note.
   is the surface only. Each popover keeps its own placement, portal and
   dismissal, because each measures a different anchor.
 - **Callers.** The emoji and GIF pickers, the update note, the soundboard,
-  the forum icon picker and the music speaker panel. The profile popover
-  and the peer audio card still draw an older `ink-2` panel; they move with
-  their surfaces.
+  the forum icon picker, the music speaker panel and the profile card
+  (`user/user-profile-popover.tsx`: round action wells with captions, roles
+  and community actions in cards, danger rows in red). The peer audio card
+  still draws an older `ink-2` panel; it moves with its surface.
 - **Under the redesign.** The pane radius (16px), its own fill
   (`surface-2` in dark, the brightest surface in light so the panel reads
   lifted rather than sunk), a 10% text edge in both themes, and a lift
