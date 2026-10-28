@@ -922,6 +922,8 @@
   --composer-bg: color-mix(in oklab, var(--color-text) 5%, transparent);
   --composer-border: color-mix(in oklab, var(--color-text) 9%, transparent);
   --composer-border-focus: color-mix(in oklab, var(--color-text) 28%, transparent);
+  /* A field you cannot type into: a dashed edge of its own. */
+  --composer-border-readonly: color-mix(in oklab, var(--color-text) 18%, transparent);
 
   /* Glass: a close or control laid over a picture (corner-card heroes). */
   --glass-bg: oklch(0.12 0.01 262 / 0.62);

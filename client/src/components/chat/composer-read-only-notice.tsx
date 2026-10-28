@@ -19,8 +19,9 @@ export function ComposerReadOnlyNotice({ className }: { className?: string }) {
       data-composer-readonly=""
       className={cn(
         "mx-3 mb-3 flex items-center gap-2 rounded-[var(--radius-card)] border border-dashed border-border-strong px-3 py-2.5 text-sm text-text-secondary sm:mx-4",
-        // Where the composer's well would be, at its radius and height.
-        "redesign:min-h-[3.25rem] redesign:gap-2.5 redesign:rounded-[var(--composer-radius)] redesign:border-[color:var(--composer-border-focus)] redesign:px-4",
+        // Where the composer's well would be, at its radius; shorter on
+        // purpose, since there are no tools to make room for.
+        "redesign:min-h-[3.25rem] redesign:gap-2.5 redesign:rounded-[var(--composer-radius)] redesign:border-[color:var(--composer-border-readonly)] redesign:px-4",
         className,
       )}
     >

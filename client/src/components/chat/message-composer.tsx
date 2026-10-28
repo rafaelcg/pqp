@@ -287,7 +287,8 @@ const COMPOSER_CONTROL_PX = 40;
 const COMPOSER_ICON_BUTTON =
   "h-8 w-8 shrink-0 rounded-[var(--radius-control)] text-text-tertiary hover:bg-surface-3 hover:text-text redesign:h-9 redesign:w-9 redesign:rounded-full redesign:text-text-secondary redesign:hover:bg-[color:var(--button-ghost-hover)] redesign:hover:text-text";
 /** A tool whose panel is open: the ghost hover's fill, held. */
-const COMPOSER_ICON_ON = "bg-surface-3 text-text redesign:bg-[color:var(--button-ghost-hover)]";
+// Held one step firmer than a hover, so an open tool and a hovered one never look alike.
+const COMPOSER_ICON_ON = "bg-surface-3 text-text redesign:bg-[color:color-mix(in_oklab,var(--color-text)_12%,transparent)] redesign:text-text";
 
 /*
  * The composer under the redesign (s-composer): one rounded well on a faint
@@ -1895,7 +1896,7 @@ export function MessageComposer({
             <span
               aria-hidden
               className={cn(
-                "pointer-events-none absolute inset-0 z-[1] flex overflow-hidden px-3 text-base leading-10 text-text-tertiary sm:text-sm",
+                "pointer-events-none absolute inset-0 z-[1] flex overflow-hidden px-3 text-base leading-10 text-text-tertiary sm:text-sm redesign:px-4",
                 embedded ? "items-start" : "items-center",
                 (disabled || isRunningSlash) && "opacity-50",
               )}
@@ -1942,7 +1943,7 @@ export function MessageComposer({
               paddingBottom: composerBox.paddingY,
               overflowY: composerBox.overflowY,
             }}
-            className="block h-10 min-h-10 w-full resize-none overflow-hidden bg-transparent px-3 py-0 text-sm text-text placeholder:text-transparent focus-visible:outline-none disabled:opacity-50"
+            className="block h-10 min-h-10 w-full resize-none overflow-hidden bg-transparent px-3 py-0 redesign:px-4 text-sm text-text placeholder:text-transparent focus-visible:outline-none disabled:opacity-50"
             role="combobox"
             aria-expanded={Boolean(menuKind)}
             aria-controls={menuKind ? MENU_ID : undefined}
@@ -2039,7 +2040,7 @@ export function MessageComposer({
                 isPickerOpen && COMPOSER_ICON_ON,
               )}
             >
-              <ComposerGlyph old={Smile} glyph={Smiley} />
+              <ComposerGlyph old={Smile} glyph={Smiley} kind="symbol" />
             </Button>
           </Tooltip>
           {isGifSearchEnabled && (
@@ -2064,7 +2065,7 @@ export function MessageComposer({
                   isGifPickerOpen && COMPOSER_ICON_ON,
                 )}
               >
-                <ComposerGlyph old={ImagePlay} glyph={GifGlyph} />
+                <ComposerGlyph old={ImagePlay} glyph={GifGlyph} kind="symbol" />
               </Button>
             </Tooltip>
           )}
