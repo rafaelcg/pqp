@@ -1626,3 +1626,10 @@ the intro hint); behind the per-server `custom_bots` flag):
 | 2026-10-26 | Tokens merged on André's sign-off at Codex 9.0, Opus 8.4 | Opus's last MUST was fixed after T3. The element rounds hold the 9.0 bar from here. |
 | 2026-10-26 | Phase 2 follows the inventory order: primitives first, then shell, surfaces, phone | Every later element is built from the primitives. |
 | 2026-10-26 | The toggle ships before the tokens | It is the same for every direction and changes nothing visible. Precedence: `?redesign=1|0`, then the person's Beta switch (`pqp-redesign`), then the `redesign` flag. |
+
+Rounds (Opus only): r1 7.4 (3 MUST fixed), r2 7.8 (MUST fixed: the chosen
+card's edge was 1px), r3 7.7, r4 7.9, r5 8.3 (no MUST, cap). After r5: no
+resize grip on the persona, the stat notes on one line, the no-channel note
+in the warning colour. Not done: a spinner on the wizard's final button
+while it saves (`ui/button.tsx` has no loading prop).
+
