@@ -33,6 +33,7 @@ mkdir -p "$out"
 
 export PQP_SHARE_SMOKE_APP="$app"
 export PQP_SHARE_SMOKE_REQUIRE_PACKAGED=1
+export PQP_SHARE_SMOKE_REQUIRE_PICKER=1
 export PQP_SHARE_SMOKE_OUT="$out"
 export CI="${CI:-true}"
 
@@ -43,7 +44,24 @@ case "$(uname -s)" in
     if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
       sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 >/dev/null
     fi
-    runner=(xvfb-run --auto-servernum --server-args="-screen 0 1280x800x24" "${runner[@]}")
+    # Two monitors on one X screen (RandR 1.5 `--setmonitor`), so the shell
+    # lists two screens and opens its picker. With one screen and no window
+    # manager (so no windows either) it auto-picks the only source, and the
+    # picker, the path every desktop user takes, would never run here.
+    cat > "$out/xvfb-session.sh" <<'SESSION'
+#!/usr/bin/env bash
+set -e
+if command -v xrandr >/dev/null; then
+  xrandr --setmonitor pqp-left 640/169x800/211+0+0 none
+  xrandr --setmonitor pqp-right 640/169x800/211+640+0 none
+  xrandr --listmonitors
+else
+  echo "::warning::xrandr is not installed: one monitor, so no picker on this runner"
+fi
+exec "$@"
+SESSION
+    chmod +x "$out/xvfb-session.sh"
+    runner=(xvfb-run --auto-servernum --server-args="-screen 0 1280x800x24" "$out/xvfb-session.sh" "${runner[@]}")
     ;;
   Darwin)
     plist="$app/Contents/Info.plist"

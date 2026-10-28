@@ -103,15 +103,24 @@ test.beforeAll(async () => {
     timeout: 30_000,
   });
   run.userAgent = await page.evaluate(() => navigator.userAgent);
-  // Only a packaged build (`app.isPackaged`) logs this, so it is the binary
-  // itself saying it is the shipped kind and not the repo's own Electron.
-  run.packagedSaysSo = app.lines.some((l) => l.includes("PQP_ALLOW_APP_URL_OVERRIDE is set"));
+  // The binary saying which kind it is. Only a packaged build
+  // (`app.isPackaged`) logs the first two (the override line exists from
+  // 0.2.8, the updater line from long before); only the repo's own Electron
+  // logs the third. The updater decides a moment after the window opens.
+  const packagedLine = /PQP_ALLOW_APP_URL_OVERRIDE is set|\[pqp\/updater\] skipped: PQP_DISABLE_AUTO_UPDATE/;
+  const deadline = Date.now() + 15_000;
+  while (!app.lines.some((l) => packagedLine.test(l)) && Date.now() < deadline) {
+    await sleep(250);
+  }
+  run.packagedSaysSo =
+    app.lines.some((l) => packagedLine.test(l)) &&
+    !app.lines.some((l) => l.includes("not a packaged build"));
+  writeFileSync(path.join(OUT_DIR, "run.json"), `${JSON.stringify(run, null, 2)}\n`);
   if (process.env.PQP_SHARE_SMOKE_REQUIRE_PACKAGED === "1" && !run.packagedSaysSo) {
     throw new Error(
       `the app under test did not report itself as a packaged build. Output:\n${app.lines.slice(-30).join("\n")}`,
     );
   }
-  writeFileSync(path.join(OUT_DIR, "run.json"), `${JSON.stringify(run, null, 2)}\n`);
 });
 
 test.afterAll(async () => {
@@ -202,6 +211,7 @@ async function share(scenario) {
     nativeShareAudio: scenario.nativeShareAudio,
     breakVideo: BREAKS[scenario.breakConstraints ?? BREAK_ALL] ?? null,
   };
+  const logFrom = app.lines.length;
   await page.evaluate((s) => window.pqpShareSmoke.start(s), harnessScenario);
   const deadline = Date.now() + SHARE_DEADLINE_MS;
   let picker = null;
@@ -223,8 +233,22 @@ async function share(scenario) {
     }
     await sleep(200);
   }
-  return { result, picker };
+  // What the main process said about this share: the one window into it.
+  // "share picker failed to load" is how a packaged-only break shows up.
+  const shell = app.lines
+    .slice(logFrom)
+    .filter((l) => /share|picker|capture|screen|loopback|ERR_/i.test(l))
+    .slice(-20);
+  return { result, picker, shell };
 }
+
+/**
+ * `PQP_SHARE_SMOKE_REQUIRE_PICKER=1` (set on CI): the shell's own picker must
+ * have opened. With a single source the shell skips it, and the picker is the
+ * path nearly every user takes (a desktop always has windows), so a run that
+ * never opened it has not tested what ships.
+ */
+const REQUIRE_PICKER = process.env.PQP_SHARE_SMOKE_REQUIRE_PICKER === "1";
 
 function record(name, outcome, extra = {}) {
   const entry = { name, platform: process.platform, ...outcome, ...extra };
@@ -293,14 +317,25 @@ for (const scenario of SCENARIOS) {
       );
     }
     const started = Date.now();
-    const { result, picker } = await share(scenario);
+    const { result, picker, shell } = await share(scenario);
     const elapsed = Date.now() - started;
     if (!result || result.pending) {
-      record(scenario.name, { ok: false, elapsed, picker, problems: ["stuck"] });
+      record(scenario.name, { ok: false, elapsed, picker, shell, problems: ["stuck"] });
       throw new Error(stuckMessage(picker));
     }
     const audio = expectedAudio(result, picker);
     let problems = judgeShare(result, { audio });
+    if (REQUIRE_PICKER && !picker && !result.error) {
+      problems.push(
+        "the shell's picker never opened (one source, auto-picked): the path users take was not exercised",
+      );
+    }
+    if (picker?.error) {
+      problems.push(`could not answer the picker: ${picker.error}`);
+    }
+    if (problems.length > 0 && shell.length > 0) {
+      problems.push(`shell log: ${shell.join(" / ")}`);
+    }
     let notVerified = [];
     if (macWithoutScreenGrant(picker) && ACCEPT_MAC_WITHOUT_GRANT) {
       notVerified = problems.filter((p) => FRAME_PROBLEMS.some((re) => re.test(p)));
@@ -310,6 +345,7 @@ for (const scenario of SCENARIOS) {
       ok: problems.length === 0,
       elapsed,
       picker,
+      shell,
       expectedAudio: audio,
       problems,
       notVerified,
