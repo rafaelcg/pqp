@@ -21,6 +21,11 @@ export function classifyRejection(error) {
       return "Chromium refused the SHAPE of the request before the shell's handler ran";
     case "OverconstrainedError":
       return "Chromium refused a constraint it cannot meet (the 0.2.8 class)";
+    case "AbortError":
+      // Desktop 0.2.8 on every platform: the shell's picker page could not
+      // load from the packaged app, the handler gave up, and Chromium words
+      // that "Invalid capture constraints". The shell log says which.
+      return "the capture was aborted after the shell's handler was asked (Chromium words it \"Invalid capture constraints\"; on 0.2.8 the shell's picker page failed to load, see the shell log)";
     case "NotAllowedError":
       return "the shell answered no: picker cancelled, macOS Screen Recording not granted, or no source";
     case "NotReadableError":

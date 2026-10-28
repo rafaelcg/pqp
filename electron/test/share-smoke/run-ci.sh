@@ -8,20 +8,25 @@
 # Results land in electron/test-results/share-smoke/ (report files, the app's
 # own log) and a table goes to the job summary.
 #
-# What each runner can and cannot do is decided HERE, out loud, rather than
-# discovered by a flaky test:
+# Every runner must open the shell's own picker and capture real frames
+# (PQP_SHARE_SMOKE_REQUIRE_PICKER). What each needs for that is set up HERE,
+# out loud, rather than discovered by a flaky test:
 #
-# - Linux has no display: xvfb-run gives it one, an X11 screen the shell's
-#   picker lists as "screen:...". Ubuntu 24.04 also refuses unprivileged user
-#   namespaces to binaries with no AppArmor profile, which is how an AppImage's
-#   Chromium sandbox starts; this lifts that for the runner rather than
-#   starting the app with --no-sandbox, so the binary runs as shipped.
+# - Linux has no display: xvfb-run gives it one. One X screen and no window
+#   manager is ONE source, which the shell auto-picks without its picker, so
+#   the screen is split into two RandR monitors (`xrandr --setmonitor`, from
+#   Ubuntu's x11-xserver-utils, installed here when the image lacks it).
+#   Ubuntu 24.04 also refuses unprivileged user namespaces to binaries with no
+#   AppArmor profile, which is how an AppImage's Chromium sandbox starts; that
+#   is lifted for the runner rather than starting the app with --no-sandbox, so
+#   the binary runs as shipped.
 # - macOS gates capture behind Screen Recording, which a fresh runner has not
-#   granted to this bundle. The grant is written into the TCC database (the
-#   runners allow that); whether it took is then read off the picker itself,
-#   and a run without it checks everything short of frames
-#   (PQP_SHARE_SMOKE_MAC_WITHOUT_GRANT=accept, see share.smoke.mjs).
-# - Windows needs nothing: hosted runners have a desktop session to capture.
+#   granted to this bundle. The grant is written into the TCC database (hosted
+#   runners allow it; measured 2026-10-28: the picker then lists the display
+#   with previews and frames arrive). If it ever stops taking, the test fails
+#   rather than passing on less.
+# - Windows needs nothing: hosted runners have a desktop session to capture
+#   and an audio endpoint for loopback.
 set -euo pipefail
 
 app="${1:?usage: run-ci.sh <app>}"
@@ -44,20 +49,17 @@ case "$(uname -s)" in
     if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
       sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 >/dev/null
     fi
-    # Two monitors on one X screen (RandR 1.5 `--setmonitor`), so the shell
-    # lists two screens and opens its picker. With one screen and no window
-    # manager (so no windows either) it auto-picks the only source, and the
-    # picker, the path every desktop user takes, would never run here.
+    if ! command -v xrandr >/dev/null; then
+      sudo apt-get install -y --no-install-recommends x11-xserver-utils >/dev/null 2>&1 || {
+        sudo apt-get update -qq >/dev/null && sudo apt-get install -y --no-install-recommends x11-xserver-utils >/dev/null
+      }
+    fi
     cat > "$out/xvfb-session.sh" <<'SESSION'
 #!/usr/bin/env bash
 set -e
-if command -v xrandr >/dev/null; then
-  xrandr --setmonitor pqp-left 640/169x800/211+0+0 none
-  xrandr --setmonitor pqp-right 640/169x800/211+640+0 none
-  xrandr --listmonitors
-else
-  echo "::warning::xrandr is not installed: one monitor, so no picker on this runner"
-fi
+xrandr --setmonitor pqp-left 640/169x800/211+0+0 none
+xrandr --setmonitor pqp-right 640/169x800/211+640+0 none
+xrandr --listmonitors
 exec "$@"
 SESSION
     chmod +x "$out/xvfb-session.sh"
@@ -74,7 +76,6 @@ SESSION
         echo "::warning::could not write Screen Recording for $bundle_id in $db: $(cat "$out/tcc-error.txt")"
       fi
     done
-    export PQP_SHARE_SMOKE_MAC_WITHOUT_GRANT=accept
     ;;
 esac
 
