@@ -859,22 +859,23 @@ export const MessageList = memo(function MessageList({
   const scrollRef = useRef<HTMLDivElement>(null);
   const redesign = useRedesign();
   // Under the redesign the jump pill clears the bot's note: it rises over
-  // the footer (the note and the typing line) while a note is showing.
+  // the footer (the note and the typing line) while it is taller than the
+  // typing line alone, and follows the note down as it collapses.
   const logFooterRef = useRef<HTMLDivElement>(null);
   const [logFooterHeight, setLogFooterHeight] = useState(0);
   useLayoutEffect(() => {
     const el = logFooterRef.current;
-    if (!redesign || !botNotice || !el) {
+    if (!redesign || !el) {
       setLogFooterHeight(0);
       return;
     }
-    const measure = () => setLogFooterHeight(el.offsetHeight);
+    const measure = () => setLogFooterHeight(el.offsetHeight > 32 ? el.offsetHeight : 0);
     measure();
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(measure);
     observer.observe(el);
     return () => observer.disconnect();
-  }, [redesign, botNotice]);
+  }, [redesign]);
   const [pickerMessageId, setPickerMessageId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isPinned, setIsPinned] = useState(true);
@@ -2589,7 +2590,7 @@ export const MessageList = memo(function MessageList({
         ) : null}
 
         {hasNewer && (
-          <div className="flex justify-center pt-3">
+          <div className="flex justify-center pt-3 redesign:pb-12">
             {isLoadingNewer ? (
               <span className="flex items-center gap-2 text-xs text-paper-muted redesign:text-text-secondary">
                 <Spinner className="h-3 w-3 animate-spin" />
@@ -3033,7 +3034,7 @@ function TypingIndicator({
     <>
     <Reveal show={people.length > 0}>
     <p
-      className="px-4 pb-1 text-xs text-paper-muted redesign:px-5 redesign:pb-1.5 redesign:text-text-secondary"
+      className="px-4 pb-1 text-xs text-paper-muted redesign:px-7 redesign:pb-1.5 redesign:text-text-secondary"
       aria-live="polite"
     >
       <span className="inline-flex items-center gap-1.5">
@@ -4723,7 +4724,7 @@ function DaySeparator({ label }: { label: string }) {
     <div className="my-4 flex items-center gap-3 px-5 redesign:gap-2" role="separator">
       <span className="h-px flex-1 bg-ink-4/60 redesign:bg-[color:var(--pane-header-rule)]" />
       {/* Under the redesign a pill in sentence case, as the mockup's. */}
-      <span className="text-[11px] font-medium uppercase tracking-wider text-paper-muted redesign:rounded-full redesign:bg-[color:var(--content-glyph-bg)] redesign:px-2.5 redesign:py-0.5 redesign:text-xs redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">
+      <span className="text-[11px] font-medium uppercase tracking-wider text-paper-muted redesign:rounded-full redesign:bg-transparent redesign:shadow-[inset_0_0_0_1px_var(--pane-header-rule)] redesign:px-2.5 redesign:py-0.5 redesign:text-xs redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">
         {label}
       </span>
       <span className="h-px flex-1 bg-ink-4/60 redesign:bg-[color:var(--pane-header-rule)]" />
