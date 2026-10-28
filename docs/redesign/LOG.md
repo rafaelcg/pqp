@@ -90,6 +90,7 @@ Read this file and the inventory at the start of every session.
 | 4 | `f-call` | Merged, capped at round 5 (Opus 8.5 r5, approved). Not done: "Lia (você)" on the self tile (copy), muted and moderator-muted captures |
 | 4 | `f-watch-party` | Merged, capped at round 5 (Opus 8.6 r5, approved). Not done: "Copiar link" as a pill (every share button is a ghost) |
 | 4 | `f-apps` | Merged, capped at round 5 (Opus 8.7 r5, no MUST). Not done: the narrow strip's screen icon stays lucide; the full card's count copy |
+| 4 | `f-stories` | Merged, capped at round 5 (Opus 8.3 r5, MUST in r2 fixed). Not done: a brighter light-only unseen ring |
 | 5 | `m-breakpoints` | Merged (code only, no council) |
 
 ## Phase 0: directions
