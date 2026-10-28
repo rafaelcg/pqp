@@ -1,5 +1,10 @@
 import { IconSwap } from "@/components/ui/icon";
-import { ShareNetwork as ShareNetworkFill, SlidersHorizontal as SlidersHorizontalFill } from "@phosphor-icons/react";
+import {
+  Microphone as MicrophoneFill,
+  MicrophoneSlash as MicrophoneSlashFill,
+  ShareNetwork as ShareNetworkFill,
+  SlidersHorizontal as SlidersHorizontalFill,
+} from "@phosphor-icons/react";
 import {
   useEffect,
   useMemo,
@@ -597,7 +602,7 @@ function WatchPartyShareButton({
       {outcome === "copied" ? (
         <Check className={cn("h-3.5 w-3.5", !iconOnly && "mr-1.5")} aria-hidden />
       ) : (
-        <IconSwap off={Share2} on={ShareNetworkFill} offClassName={cn("h-3.5 w-3.5", !iconOnly && "mr-1.5")} className={cn("h-4 w-4", !iconOnly && "mr-1.5")} />
+        <IconSwap off={Share2} on={ShareNetworkFill} offClassName={cn("h-3.5 w-3.5", !iconOnly && "mr-1.5")} className={cn("h-[1.125rem] w-[1.125rem]", !iconOnly && "mr-1.5")} />
       )}
       {!iconOnly && label}
     </Button>
@@ -2188,7 +2193,7 @@ function LiveSurface(
               : "border-border bg-surface-0 font-normal text-text-tertiary",
           inCall && props.onToggleMute && "hover:bg-surface-2",
           // A pill on the call's tints under the redesign, no edge.
-          "redesign:h-7 redesign:border-0 redesign:px-2.5 redesign:text-xs",
+          "redesign:h-8 redesign:border-0 redesign:px-3 redesign:text-[13px]",
           mic === "everyone"
             ? "redesign:bg-[color:color-mix(in_oklab,var(--color-success)_18%,transparent)]"
             : mic === "room" || micMutedWarning
@@ -2196,8 +2201,16 @@ function LiveSurface(
               : mic === "muted"
                 ? "redesign:bg-[color:var(--call-control-off-bg)] redesign:text-danger"
                 : "redesign:bg-[color:var(--call-control-bg)] redesign:text-text-secondary",
-          inCall && props.onToggleMute && "redesign:hover:bg-[color:var(--call-control-hover)]",
-          inCall && props.onToggleMute && mic === "muted" && !micMutedWarning && "redesign:hover:bg-[color:var(--call-control-off-hover)]",
+          // Each state keeps its own colour on hover, one step stronger.
+          inCall &&
+            props.onToggleMute &&
+            (mic === "everyone"
+              ? "redesign:hover:bg-[color:color-mix(in_oklab,var(--color-success)_26%,transparent)]"
+              : mic === "room" || micMutedWarning
+                ? "redesign:hover:bg-[color:color-mix(in_oklab,var(--color-warning)_24%,transparent)]"
+                : mic === "muted"
+                  ? "redesign:hover:bg-[color:var(--call-control-off-hover)]"
+                  : "redesign:hover:bg-[color:var(--call-control-hover)]"),
           "redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-[color:var(--color-pane-main)] redesign:focus-visible:ring-[color:var(--color-focus-ring)]",
         );
         const warningAttrs = micMutedWarning
@@ -2208,9 +2221,9 @@ function LiveSurface(
           : {};
         const icon =
           mic === "everyone" || mic === "room" ? (
-            <Mic className="h-3 w-3" aria-hidden />
+            <IconSwap off={Mic} on={MicrophoneFill} offClassName="h-3 w-3" className="h-3.5 w-3.5" />
           ) : (
-            <MicOff className="h-3 w-3" aria-hidden />
+            <IconSwap off={MicOff} on={MicrophoneSlashFill} offClassName="h-3 w-3" className="h-3.5 w-3.5" />
           );
         // THE PILL IS THE MUTE BUTTON. It used to be a label beside a mute
         // control three panes away; the thing that says whether you are
@@ -2520,7 +2533,7 @@ function LiveSurface(
           onClick={() => setOptionsOpen((open) => !open)}
           data-watch-party-options-toggle
         >
-          <IconSwap off={Settings2} on={SlidersHorizontalFill} offClassName="h-3.5 w-3.5" className="h-4 w-4" />
+          <IconSwap off={Settings2} on={SlidersHorizontalFill} offClassName="h-3.5 w-3.5" className="h-[1.125rem] w-[1.125rem]" />
         </Button>
         {canClaim && (
           <Button
