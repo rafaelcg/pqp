@@ -1231,16 +1231,17 @@ test("captures the bau", async ({ browser }) => {
       await shoot(page, `f-bau-feed-${theme}`);
       const card = feed.locator("[data-home-post]").nth(1);
       await card.screenshot({ path: path.join(OUT!, `f-bau-card-${theme}.png`) });
-      await feed.locator("[data-home-post] h2").nth(1).click();
-      await page.waitForTimeout(800);
+      // The like pill with keyboard focus.
+      await page.keyboard.press("Shift");
+      await feed.locator("[data-home-post]").nth(2).locator("button").filter({ hasText: /^\s*1\s*$/ }).first().focus().catch(() => {});
+      await page.waitForTimeout(300);
+      await shoot(page, `f-bau-states-${theme}`);
+      // A post opened from its link: scrolled to and highlighted, comments open.
+      await page.goto(`/app/server/${home.id}/bau/${night}?lang=pt-BR`);
+      await hideDevBanner(page);
+      await expect(page.locator("[data-community-home-feed] [data-home-post]").first()).toBeVisible({ timeout: 30_000 });
+      await page.waitForTimeout(1200);
       await shoot(page, `f-bau-post-${theme}`);
-      // The comment field with keyboard focus.
-      const field = page.locator("[data-community-home-feed] textarea, [data-community-home-feed] input[type=text]").first();
-      if (await field.count()) {
-        await field.focus();
-        await page.waitForTimeout(300);
-        await shoot(page, `f-bau-states-${theme}`);
-      }
     } catch (error) {
       console.log(`f-bau: skipped (${String(error).slice(0, 200)})`);
     }

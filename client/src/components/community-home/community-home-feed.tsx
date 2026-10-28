@@ -422,7 +422,7 @@ function CommentRow({
         fallbackClassName="bg-ink-4 text-[10px] text-paper"
         rounded="full"
       />
-      <div className="min-w-0 flex-1 rounded-lg bg-ink/60 px-3 py-2 text-sm redesign:rounded-[var(--radius-card)] redesign:bg-[color:var(--call-control-bg)] redesign:text-[0.8125rem]">
+      <div className="min-w-0 flex-1 rounded-lg bg-ink/60 px-3 py-2 text-sm redesign:rounded-[var(--radius-card)] redesign:bg-[color:var(--card-row-hover)] redesign:text-[0.8125rem]">
         <div className="mb-0.5 flex items-center gap-2">
           <span className="truncate font-semibold">
             {comment.author.displayName}
@@ -590,7 +590,7 @@ function CommentsBlock({
           {teasers.map((comment) => (
             <li
               key={comment.id}
-              className="rounded-lg bg-ink/60 px-3 py-2 text-sm redesign:rounded-[var(--radius-card)] redesign:bg-[color:var(--call-control-bg)] redesign:text-[0.8125rem]"
+              className="rounded-lg bg-ink/60 px-3 py-2 text-sm redesign:rounded-[var(--radius-card)] redesign:bg-[color:var(--card-row-hover)] redesign:text-[0.8125rem]"
             >
               <p className="font-semibold text-paper">
                 {comment.author.displayName}
@@ -621,7 +621,7 @@ function CommentsBlock({
       {(hiddenCount > 0 || expanded) && (
         <button
           type="button"
-          className="mt-2 text-xs text-paper-muted hover:text-paper"
+          className="mt-2 text-xs text-paper-muted hover:text-paper redesign:text-[13px] redesign:text-text-secondary redesign:hover:text-text"
           onClick={() => void expand()}
           disabled={loading}
           data-home-comments-toggle
@@ -634,7 +634,7 @@ function CommentsBlock({
       )}
 
       {!post.commentsEnabled ? (
-        <p className="mt-2 text-xs text-paper-muted" data-home-comments-off>
+        <p className="mt-2 text-xs text-paper-muted redesign:text-[13px] redesign:text-text-secondary" data-home-comments-off>
           {t("communityHome.comments.off")}
         </p>
       ) : (
@@ -659,7 +659,7 @@ function CommentsBlock({
               type="button"
               aria-label={t("composer.addEmoji")}
               title={t("composer.addEmoji")}
-              className="rounded-md p-1.5 text-paper-muted hover:bg-ink-4 hover:text-paper redesign:rounded-full redesign:p-2 redesign:text-text-secondary redesign:hover:bg-[color:var(--call-control-hover)] redesign:hover:text-text"
+              className="rounded-md p-1.5 text-paper-muted hover:bg-ink-4 hover:text-paper redesign:rounded-full redesign:p-2 redesign:text-text-secondary redesign:h-9 redesign:w-9 redesign:inline-flex redesign:items-center redesign:justify-center redesign:p-0 redesign:hover:bg-[color:var(--call-control-hover)] redesign:hover:text-text"
               onClick={() => {
                 setGifOpen(false);
                 setEmojiOpen((open) => !open);
@@ -672,7 +672,7 @@ function CommentsBlock({
               type="button"
               aria-label={t("composer.addGif")}
               title={t("composer.addGif")}
-              className="rounded-md p-1.5 text-paper-muted hover:bg-ink-4 hover:text-paper redesign:rounded-full redesign:p-2 redesign:text-text-secondary redesign:hover:bg-[color:var(--call-control-hover)] redesign:hover:text-text"
+              className="rounded-md p-1.5 text-paper-muted hover:bg-ink-4 hover:text-paper redesign:rounded-full redesign:p-2 redesign:text-text-secondary redesign:h-9 redesign:w-9 redesign:inline-flex redesign:items-center redesign:justify-center redesign:p-0 redesign:hover:bg-[color:var(--call-control-hover)] redesign:hover:text-text"
               onClick={() => {
                 setEmojiOpen(false);
                 const rect = pickerAnchorRef.current?.getBoundingClientRect();
@@ -715,6 +715,7 @@ function CommentsBlock({
             size="sm"
             variant="secondary"
             disabled={!draft.trim() || sending}
+            className="redesign:h-[var(--control-md)]"
           >
             {t("communityHome.comments.submit")}
           </Button>
@@ -896,6 +897,11 @@ export function PostCard({
               showLockPlate || (showMedia && !fileRow)
                 ? "bg-ink/65 text-paper hover:bg-ink/85"
                 : "text-paper-muted hover:bg-ink-4 hover:text-paper",
+              // A round ghost under the redesign; glass on a picture.
+              "redesign:rounded-full redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--color-focus-ring)]",
+              showLockPlate || (showMedia && !fileRow)
+                ? "redesign:bg-[color:var(--call-badge-bg)] redesign:text-[color:var(--call-badge-text)]"
+                : "redesign:text-text-secondary redesign:hover:bg-[color:var(--call-control-hover)] redesign:hover:text-text",
             )}
             aria-label={t("communityHome.cardMenu")}
             aria-expanded={menuOpen}
@@ -907,6 +913,8 @@ export function PostCard({
           <div
             className={cn(
               "absolute right-0 z-20 mt-1 w-48 rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-xl",
+              // The popover's panel under the redesign.
+              "redesign:w-52 redesign:rounded-[var(--popover-radius)] redesign:border-[color:var(--popover-border)] redesign:bg-[color:var(--popover-surface)] redesign:p-[var(--menu-pad,0.25rem)] redesign:shadow-[var(--popover-shadow)]",
               !menuOpen && "hidden",
             )}
             data-home-card-menu-panel
@@ -914,7 +922,7 @@ export function PostCard({
             {mode === "drafts" && post.status === "draft" && onPublishNow && (
               <button
                 type="button"
-                className="w-full rounded-md px-2 py-1.5 text-left text-xs text-paper hover:bg-ink-3"
+                className="w-full rounded-md px-2 py-1.5 text-left text-xs redesign:rounded-[var(--menu-row-radius,0.5rem)] redesign:px-2.5 redesign:py-[var(--menu-row-py,0.375rem)] redesign:text-[0.8125rem] redesign:text-text redesign:hover:bg-[color:var(--menu-row-hover)] redesign:hover:text-text text-paper hover:bg-ink-3"
                 onClick={() => onPublishNow(post)}
                 data-home-publish-now
               >
@@ -924,7 +932,7 @@ export function PostCard({
             {mode === "drafts" && post.status === "scheduled" && onUnpublish && (
               <button
                 type="button"
-                className="w-full rounded-md px-2 py-1.5 text-left text-xs text-paper-muted hover:bg-ink-3 hover:text-paper"
+                className="w-full rounded-md px-2 py-1.5 text-left text-xs redesign:rounded-[var(--menu-row-radius,0.5rem)] redesign:px-2.5 redesign:py-[var(--menu-row-py,0.375rem)] redesign:text-[0.8125rem] redesign:text-text redesign:hover:bg-[color:var(--menu-row-hover)] redesign:hover:text-text text-paper-muted hover:bg-ink-3 hover:text-paper"
                 onClick={() => onUnpublish(post)}
                 title={t("communityHome.drafts.unscheduleHint")}
               >
@@ -934,7 +942,7 @@ export function PostCard({
             {onForward && post.status === "published" && (
               <button
                 type="button"
-                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-paper-muted hover:bg-ink-3 hover:text-paper"
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs redesign:rounded-[var(--menu-row-radius,0.5rem)] redesign:px-2.5 redesign:py-[var(--menu-row-py,0.375rem)] redesign:text-[0.8125rem] redesign:text-text redesign:hover:bg-[color:var(--menu-row-hover)] redesign:hover:text-text text-paper-muted hover:bg-ink-3 hover:text-paper"
                 onClick={() => {
                   setMenuOpen(false);
                   onForward(post);
@@ -948,7 +956,7 @@ export function PostCard({
             {onShare && post.status === "published" && (
               <button
                 type="button"
-                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-paper-muted hover:bg-ink-3 hover:text-paper"
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs redesign:rounded-[var(--menu-row-radius,0.5rem)] redesign:px-2.5 redesign:py-[var(--menu-row-py,0.375rem)] redesign:text-[0.8125rem] redesign:text-text redesign:hover:bg-[color:var(--menu-row-hover)] redesign:hover:text-text text-paper-muted hover:bg-ink-3 hover:text-paper"
                 onClick={() => {
                   setMenuOpen(false);
                   onShare(post);
@@ -962,7 +970,7 @@ export function PostCard({
             {onCopyLink && post.status === "published" && (
               <button
                 type="button"
-                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-paper-muted hover:bg-ink-3 hover:text-paper"
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs redesign:rounded-[var(--menu-row-radius,0.5rem)] redesign:px-2.5 redesign:py-[var(--menu-row-py,0.375rem)] redesign:text-[0.8125rem] redesign:text-text redesign:hover:bg-[color:var(--menu-row-hover)] redesign:hover:text-text text-paper-muted hover:bg-ink-3 hover:text-paper"
                 onClick={() => {
                   setMenuOpen(false);
                   onCopyLink(post);
@@ -977,7 +985,7 @@ export function PostCard({
               <button
                 type="button"
                 className={cn(
-                  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-ink-3",
+                  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs redesign:rounded-[var(--menu-row-radius,0.5rem)] redesign:px-2.5 redesign:py-[var(--menu-row-py,0.375rem)] redesign:text-[0.8125rem] redesign:text-text redesign:hover:bg-[color:var(--menu-row-hover)] redesign:hover:text-text hover:bg-ink-3",
                   post.pinned ? "text-signal" : "text-paper-muted hover:text-paper",
                 )}
                 aria-label={t(
@@ -997,7 +1005,7 @@ export function PostCard({
             {vipEnabled && onToggleLock && (
               <button
                 type="button"
-                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-paper-muted hover:bg-ink-3 hover:text-paper"
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs redesign:rounded-[var(--menu-row-radius,0.5rem)] redesign:px-2.5 redesign:py-[var(--menu-row-py,0.375rem)] redesign:text-[0.8125rem] redesign:text-text redesign:hover:bg-[color:var(--menu-row-hover)] redesign:hover:text-text text-paper-muted hover:bg-ink-3 hover:text-paper"
                 aria-label={t(
                   post.visibility === "members"
                     ? "communityHome.unlockPost"
@@ -1026,7 +1034,7 @@ export function PostCard({
             {onEdit && (
               <button
                 type="button"
-                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-paper-muted hover:bg-ink-3 hover:text-paper"
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs redesign:rounded-[var(--menu-row-radius,0.5rem)] redesign:px-2.5 redesign:py-[var(--menu-row-py,0.375rem)] redesign:text-[0.8125rem] redesign:text-text redesign:hover:bg-[color:var(--menu-row-hover)] redesign:hover:text-text text-paper-muted hover:bg-ink-3 hover:text-paper"
                 aria-label={t("communityHome.compose.edit")}
                 onClick={() => onEdit(post)}
                 data-home-edit
@@ -1039,7 +1047,7 @@ export function PostCard({
               (confirmDelete ? (
                 <button
                   type="button"
-                  className="w-full rounded-md bg-danger/20 px-2 py-1.5 text-left text-xs font-semibold text-danger"
+                  className="w-full rounded-md bg-danger/20 px-2 py-1.5 text-left text-xs font-semibold text-danger redesign:rounded-[var(--menu-row-radius,0.5rem)] redesign:px-2.5 redesign:py-[var(--menu-row-py,0.375rem)] redesign:text-[0.8125rem] redesign:bg-[color:var(--menu-danger-hover)]"
                   onClick={() => onDelete(post)}
                   data-home-delete-confirm
                 >
@@ -1048,7 +1056,7 @@ export function PostCard({
               ) : (
                 <button
                   type="button"
-                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-paper-muted hover:bg-ink-3 hover:text-danger"
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs redesign:rounded-[var(--menu-row-radius,0.5rem)] redesign:px-2.5 redesign:py-[var(--menu-row-py,0.375rem)] redesign:text-[0.8125rem] redesign:text-danger redesign:hover:bg-[color:var(--menu-danger-hover)] redesign:hover:text-danger text-paper-muted hover:bg-ink-3 hover:text-danger"
                   aria-label={t("communityHome.compose.delete")}
                   onClick={() => setConfirmDelete(true)}
                   data-home-delete
@@ -1075,10 +1083,10 @@ export function PostCard({
           </span>
           {locked && !showLockPlate && (
             <span
-              className="inline-flex items-center gap-1 rounded-full bg-ink/70 px-2 py-px text-[10px] font-semibold uppercase tracking-wider text-paper redesign:py-0.5 redesign:text-[11px] redesign:normal-case redesign:tracking-normal"
+              className={cn("inline-flex items-center gap-1 rounded-full bg-ink/70 px-2 py-px text-[10px] font-semibold uppercase tracking-wider text-paper", badgeRedesignClasses("neutral", "tag"))}
               data-home-locked-badge
             >
-              <Lock className="h-2.5 w-2.5" aria-hidden />
+              <Lock className="h-2.5 w-2.5 redesign:h-3 redesign:w-3" aria-hidden />
               {t("communityHome.lockedBadge")}
             </span>
           )}
@@ -1160,7 +1168,7 @@ export function PostCard({
               className={cn(
                 "inline-flex items-center gap-1.5 rounded-md px-2 py-1 transition-colors hover:bg-ink-4 hover:text-paper",
                 post.likedByMe && "text-signal",
-                "redesign:h-8 redesign:rounded-full redesign:bg-[color:var(--call-control-bg)] redesign:px-3 redesign:text-text-secondary redesign:hover:bg-[color:var(--call-control-hover)] redesign:hover:text-text",
+                "redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--color-focus-ring)] redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-[color:var(--card-bg)] redesign:h-8 redesign:rounded-full redesign:bg-[color:var(--call-control-bg)] redesign:px-3 redesign:text-text-secondary redesign:hover:bg-[color:var(--call-control-hover)] redesign:hover:text-text",
                 post.likedByMe &&
                   "redesign:bg-[color:color-mix(in_oklab,var(--color-danger)_16%,transparent)] redesign:text-danger redesign:hover:bg-[color:color-mix(in_oklab,var(--color-danger)_22%,transparent)] redesign:hover:text-danger",
               )}
@@ -1193,7 +1201,7 @@ export function PostCard({
                 {onForward && post.status === "published" && (
                   <button
                     type="button"
-                    className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 transition-colors hover:bg-ink-4 hover:text-paper redesign:h-8 redesign:rounded-full redesign:bg-[color:var(--call-control-bg)] redesign:px-3 redesign:text-text-secondary redesign:hover:bg-[color:var(--call-control-hover)] redesign:hover:text-text"
+                    className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 transition-colors hover:bg-ink-4 hover:text-paper redesign:h-8 redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--color-focus-ring)] redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-[color:var(--card-bg)] redesign:rounded-full redesign:bg-[color:var(--call-control-bg)] redesign:px-3 redesign:text-text-secondary redesign:hover:bg-[color:var(--call-control-hover)] redesign:hover:text-text"
                     onClick={() => onForward(post)}
                     data-home-forward
                   >
@@ -1884,7 +1892,7 @@ function ComposeCard({
             type="button"
             aria-label={t("composer.addEmoji")}
             title={t("composer.addEmoji")}
-            className="rounded-md p-1.5 text-paper-muted hover:bg-ink-4 hover:text-paper redesign:rounded-full redesign:p-2 redesign:text-text-secondary redesign:hover:bg-[color:var(--call-control-hover)] redesign:hover:text-text"
+            className="rounded-md p-1.5 text-paper-muted hover:bg-ink-4 hover:text-paper redesign:rounded-full redesign:p-2 redesign:text-text-secondary redesign:h-9 redesign:w-9 redesign:inline-flex redesign:items-center redesign:justify-center redesign:p-0 redesign:hover:bg-[color:var(--call-control-hover)] redesign:hover:text-text"
             onClick={() => setEmojiOpen((open) => !open)}
             data-home-compose-emoji
           >
