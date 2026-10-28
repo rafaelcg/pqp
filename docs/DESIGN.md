@@ -586,6 +586,32 @@ The classic new conversation dialog (`user/new-dm-dialog.tsx`), Nova conversa
   row radius and one highlight (`--menu-row-hover`) that the keys and the
   pointer both move, and its footer drops the keys that do nothing.
 
+### The phone shell
+
+The phone tab bar (`conversations/phone-tab-bar.tsx`) and its three screens
+(`conversations/phone-screens.tsx`, plus Conversas from
+`conversation-home-list.tsx`) read as one pane:
+
+- Every screen sits on `pane-side`. The bar is `pane-side` above the
+  `--pane-header-rule` hairline.
+- Tab glyphs are 24px Phosphor fill. The active tab sits on the
+  `accent-soft` pill in `on-accent-soft`. An inactive glyph is
+  `--list-row-icon` and its label is secondary. Labels are 12px.
+- A tab's count is the list-row count, cut by `ring-pane-side`.
+- Screen titles are 20px on a phone (`--pane-bar-title-size` is the
+  desktop bar's 16px). Header actions are the shared pane
+  header action at 20px. On the phone, Conversas' friends button is a
+  plain door and never shows as selected.
+- A server row is a list row. Its 44px round tile has its own tint
+  (`--phone-server-tile`, text 8% over the pane, 12% while hovered), so it
+  never melts into the row hover. Its pip is `indicator`.
+- Leading tiles share one column: the conversation avatar, the server tile
+  and the Tu avatar start at 20px. The Tu card and its dock sit 12px in,
+  like the Conversas search field.
+- Tu's rows take Phosphor icons and a bold caret; the Novidades pip is
+  `--list-row-pip` in `accent`. Keyboard focus is the inset
+  `--list-row-ring`.
+
 ### The voice row
 
 A voice channel is a channel row (`ChannelRow`). The room you are in takes

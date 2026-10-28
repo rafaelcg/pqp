@@ -98,10 +98,11 @@ Read this file and the inventory at the start of every session.
 | 5 | `m-breakpoints` | Merged (code only, no council) |
 | 4 | `f-dm-home` | Merged, capped at round 5 (Opus 8.3 r4, no MUST; r5 MUST fixed after). Both versions rebuilt while open question 2 waits |
 | 4 | `f-new-dm` | Merged, capped at round 5 (Opus 8.3 r5, no MUST). Both versions rebuilt while open question 2 waits |
-| 5 | `m-shell` | Blocked on André: phone bottom tabs or the drawer (open question 2) |
+| 5 | `m-shell` | Merged, capped at round 5 (Opus 8.5 r5, no MUST). Both versions rebuilt while open question 2 waits |
 
 Phase 2 end (2026-10-28): every inventory element is merged into
-`redesign` except the three above, which wait on open question 2.
+`redesign`. `f-dm-home`, `f-new-dm` and `m-shell` carry both flag versions
+until open question 2 is answered.
 `redesign` contains `main` at 506969455. On the merged branch: typecheck,
 bench:tokens, i18n:check and 10,464 unit tests pass.
 
@@ -2041,6 +2042,33 @@ ticked fill in light; the classic Cancelar is ghost and Nova conversa's is
 secondary with the toggle off (the redesign draws both ghost). Copy
 question: the no-match line says "tente nome#0000" (você) inside dialogs
 that say tu.
+
+### m-shell
+
+Spec (audit: `conversations/phone-tab-bar.tsx` (the bottom tabs, behind
+`conversations_home_phone_tabs`), `conversations/phone-screens.tsx`
+(Servidores and Tu), Conversas from `conversation-home-list.tsx` with
+`phoneShell`; the drawer version is the merged sidebar and rail):
+
+1. Job: on a phone, three tabs (Conversas, Servidores, Tu) that say where
+   you are and what is waiting. Both versions are kept while open question
+   2 waits; the drawer was rebuilt with the sidebar and rail.
+2. Redesign: every screen and the bar on `pane-side`; Phosphor tab glyphs
+   with the list-row count; server rows as list rows with their own round
+   tile tint; Tu's rows with Phosphor icons and the inset focus ring.
+3. Kept: every tab, count, pip, row and action; toggle off is unchanged.
+
+Rounds: r1 Codex 7.9, r2 Opus 7.9, r3 Opus 8.1, r4 Codex 8.3, r5 Opus 8.5
+(no MUST in any round, cap, best). After r5: the Tu dock sits 6px off the
+bar. Not done: the server name starts 4px right of a conversation name
+(the 44px rail tile); screen-reader text beside the unread pips (it would
+change the toggle-off path); a brighter dashed invite ring in dark (shared
+with the desktop sidebar); a header rule that appears on scroll. Verified:
+typecheck, 10,464 unit tests, bench:tokens, i18n:check, the
+conversations-home, theme-switching and app-shell-scroll e2e (31 passed);
+retro, Halloween and high contrast; 390px is the native width; keyboard
+focus shot. Toggle off: the only pixels that differ are timestamps and the
+test user's random tag. No new copy.
 
 ## Open questions for André
 
