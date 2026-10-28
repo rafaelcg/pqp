@@ -13,10 +13,15 @@ import { IconSwap } from "@/components/ui/icon";
 import { CALL_CONTROL_REDESIGN } from "@/components/voice/call-control-classes";
 import { cn } from "@/lib/utils";
 
-/** Under the redesign: answer and decline are the call bar's 44px circles. */
+/**
+ * Under the redesign: answer and decline are the call bar's 44px circles.
+ * On hover they also grow a little, so the pointer gets feedback beyond the
+ * colour step; pressed, they settle back.
+ */
 const ANSWER = cn(
   CALL_CONTROL_REDESIGN.base,
   "redesign:flex redesign:h-11 redesign:w-11 redesign:items-center redesign:justify-center redesign:p-0 redesign:text-on-danger",
+  "redesign:transition-[background-color,color,transform] redesign:motion-safe:hover:scale-[1.08] redesign:motion-safe:active:scale-95",
 );
 
 /**
@@ -99,7 +104,7 @@ export function IncomingCallOverlay({
               type="button"
               title={t("call.incoming.accept")}
               aria-label={t("call.incoming.accept")}
-              className={cn("rounded-full bg-success/90 p-2 text-surface-0 hover:bg-success", ANSWER, "redesign:bg-success redesign:text-surface-0 redesign:hover:bg-[color:color-mix(in_oklab,var(--color-success)_85%,var(--color-text))]")}
+              className={cn("rounded-full bg-success/90 p-2 text-surface-0 hover:bg-success", ANSWER, "redesign:bg-success redesign:text-surface-0 redesign:hover:bg-[color:color-mix(in_oklab,var(--color-success)_80%,var(--color-text))]")}
               onClick={() => onAccept(call.conversationId)}
             >
               <IconSwap off={Phone} on={PhoneFill} offClassName="h-4 w-4" className="h-5 w-5" />
