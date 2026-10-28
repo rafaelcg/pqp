@@ -857,6 +857,24 @@ export const MessageList = memo(function MessageList({
     }
   }, [missingAuthorKey, reportMissingAuthors]);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const redesign = useRedesign();
+  // Under the redesign the jump pill clears the bot's note: it rises over
+  // the footer (the note and the typing line) while a note is showing.
+  const logFooterRef = useRef<HTMLDivElement>(null);
+  const [logFooterHeight, setLogFooterHeight] = useState(0);
+  useLayoutEffect(() => {
+    const el = logFooterRef.current;
+    if (!redesign || !botNotice || !el) {
+      setLogFooterHeight(0);
+      return;
+    }
+    const measure = () => setLogFooterHeight(el.offsetHeight);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [redesign, botNotice]);
   const [pickerMessageId, setPickerMessageId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isPinned, setIsPinned] = useState(true);
@@ -2647,14 +2665,17 @@ export const MessageList = memo(function MessageList({
         onClose={() => setBulkConfirmOpen(false)}
       />
 
-      <Reveal show={!!botNotice}>
-        {botNotice && <BotNoticeRow notice={botNotice} onDismiss={() => onDismissBotNotice?.()} />}
-      </Reveal>
-      <TypingIndicator users={typingUsers} authors={authors} />
+      <div ref={logFooterRef} className="contents redesign:block">
+        <Reveal show={!!botNotice}>
+          {botNotice && <BotNoticeRow notice={botNotice} onDismiss={() => onDismissBotNotice?.()} />}
+        </Reveal>
+        <TypingIndicator users={typingUsers} authors={authors} />
+      </div>
 
       {jumpNotice && (
         <p
           role="status"
+          style={logFooterHeight > 0 ? { bottom: logFooterHeight + 56 } : undefined}
           className={cn(
             "animate-rise absolute bottom-16 right-4 z-10 max-w-[16rem] rounded-md border border-border bg-surface-2 px-3 py-2 text-xs text-text-muted shadow-lg",
             "redesign:rounded-[var(--radius-card)] redesign:px-3.5 redesign:py-2.5 redesign:text-[0.8125rem] redesign:text-text-secondary",
@@ -2669,6 +2690,7 @@ export const MessageList = memo(function MessageList({
         <button
           type="button"
           onClick={jumpToPresentFromPill}
+          style={logFooterHeight > 0 ? { bottom: logFooterHeight + 8 } : undefined}
           className={cn(
             "absolute bottom-4 right-4 z-10 flex items-center gap-1.5 rounded-full border border-ink-4 bg-ink-2/95 px-3 py-1.5 text-xs font-medium text-paper shadow-lg backdrop-blur transition-colors hover:border-signal/60 hover:text-signal",
             "redesign:h-9 redesign:gap-2 redesign:pl-3 redesign:pr-4 redesign:text-[0.8125rem] redesign:font-semibold redesign:text-text redesign:hover:border-[color:var(--popover-border)] redesign:hover:bg-[color:var(--popover-surface)] redesign:hover:text-accent-text redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent",
