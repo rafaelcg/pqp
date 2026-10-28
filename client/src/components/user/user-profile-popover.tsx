@@ -1311,7 +1311,10 @@ function UserProfileCard({
               className={cn(
                 "flex w-full items-center px-3 py-2.5 text-left text-sm transition-colors hover:bg-ink-3 focus-visible:bg-ink-3 focus-visible:outline-none disabled:opacity-40",
                 item.danger ? "text-danger" : "text-paper",
-                "redesign:hover:bg-[color:var(--card-row-hover)] redesign:focus-visible:bg-[color:var(--card-row-hover)]",
+                "redesign:py-[var(--menu-row-py)]",
+                item.danger
+                  ? "redesign:hover:bg-[color:var(--menu-danger-hover)] redesign:focus-visible:bg-[color:var(--menu-danger-hover)]"
+                  : "redesign:hover:bg-[color:var(--card-row-hover)] redesign:focus-visible:bg-[color:var(--card-row-hover)]",
                 !item.danger && "redesign:text-text",
               )}
               onClick={item.onSelect}
@@ -1758,7 +1761,7 @@ function UserProfileCard({
                       ? "bg-signal font-semibold text-ink"
                       : "bg-ink-4/60 text-paper hover:bg-ink-4",
                     // Under the redesign: the shared pill choices.
-                    "redesign:rounded-full redesign:border redesign:py-1.5",
+                    "redesign:rounded-full redesign:border redesign:py-1.5 redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--list-row-ring)]",
                     timeoutMinutes === minutes
                       ? "redesign:border-accent redesign:bg-[color:var(--list-row-selected)] redesign:text-[color:var(--list-row-selected-text)]"
                       : "redesign:border-[color:var(--card-border)] redesign:bg-transparent redesign:text-text-secondary redesign:hover:bg-[color:var(--card-row-hover)] redesign:hover:text-text",
@@ -1775,10 +1778,10 @@ function UserProfileCard({
               maxLength={TIMEOUT_REASON_MAX_LENGTH}
               placeholder={t("profile.mod.reason.placeholder")}
               aria-label={t("profile.mod.reason")}
-              className="mt-2 w-full rounded-md border border-ink-4 bg-ink px-2 py-1 text-xs text-paper placeholder:text-paper-muted redesign:rounded-[var(--input-radius)] redesign:border-[color:var(--input-border)] redesign:bg-[color:var(--input-bg)] redesign:px-2.5 redesign:py-1.5 redesign:text-text redesign:placeholder:text-[color:var(--input-placeholder)]"
+              className="mt-2 w-full rounded-md border border-ink-4 bg-ink px-2 py-1 text-xs text-paper placeholder:text-paper-muted redesign:rounded-[var(--input-radius)] redesign:border-[color:var(--input-border)] redesign:bg-[color:var(--input-bg)] redesign:px-2.5 redesign:py-1.5 redesign:text-text redesign:placeholder:text-[color:var(--input-placeholder)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-[color:var(--popover-surface)] redesign:focus-visible:ring-[color:var(--input-ring,var(--color-focus-ring))]"
               onChange={(event) => setTimeoutReason(event.target.value)}
             />
-            <p className="mt-1.5 text-[11px] text-paper-muted">
+            <p className="mt-1.5 text-[11px] text-paper-muted redesign:text-xs redesign:text-text-secondary">
               {t("profile.mod.timeout.body")}
             </p>
             <div className="mt-2 flex gap-1.5">
@@ -1842,7 +1845,7 @@ function UserProfileCard({
                 maxLength={TIMEOUT_REASON_MAX_LENGTH}
                 placeholder={t("profile.mod.reason.placeholder")}
                 aria-label={t("profile.mod.reason")}
-                className="mt-2 w-full rounded-md border border-ink-4 bg-ink px-2 py-1 text-xs text-paper placeholder:text-paper-muted redesign:rounded-[var(--input-radius)] redesign:border-[color:var(--input-border)] redesign:bg-[color:var(--input-bg)] redesign:px-2.5 redesign:py-1.5 redesign:text-text redesign:placeholder:text-[color:var(--input-placeholder)]"
+                className="mt-2 w-full rounded-md border border-ink-4 bg-ink px-2 py-1 text-xs text-paper placeholder:text-paper-muted redesign:rounded-[var(--input-radius)] redesign:border-[color:var(--input-border)] redesign:bg-[color:var(--input-bg)] redesign:px-2.5 redesign:py-1.5 redesign:text-text redesign:placeholder:text-[color:var(--input-placeholder)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-[color:var(--popover-surface)] redesign:focus-visible:ring-[color:var(--input-ring,var(--color-focus-ring))]"
                 onChange={(event) => setBanReason(event.target.value)}
               />
             )}
