@@ -780,8 +780,8 @@ export const MemberSidebar = memo(function MemberSidebar({
                 className={cn(
                   "h-9 w-full appearance-none rounded-xl bg-ink-2 pl-9 text-sm text-paper placeholder:text-paper-muted",
                   "focus:outline-none focus:ring-2 focus:ring-signal/60",
-                  // The input's field, as a round search.
-                  "redesign:rounded-full redesign:border redesign:border-[color:var(--input-border)] redesign:bg-[color:var(--input-bg)] redesign:pl-10 redesign:text-text redesign:placeholder:text-[color:var(--input-placeholder)] redesign:hover:border-[color:var(--input-hover-border)] redesign:focus:ring-accent",
+                  // The sidebar search's pill, like "Buscar mensagens" across the shell.
+                  "redesign:h-[var(--sidebar-search-h)] redesign:rounded-full redesign:border redesign:border-[color:var(--sidebar-search-border)] redesign:bg-[color:var(--sidebar-search-bg)] redesign:pl-10 redesign:text-text redesign:placeholder:text-[color:var(--input-placeholder)] redesign:hover:bg-[color:var(--sidebar-search-hover)] redesign:focus:ring-accent",
                   "[&::-webkit-search-cancel-button]:hidden",
                   searching ? "pr-9" : "pr-3",
                 )}
@@ -817,7 +817,7 @@ export const MemberSidebar = memo(function MemberSidebar({
             on every rank mark escaped this clip, sat below the window for a
             long roster, and gave the app shell height to scroll into
             (e2e/app-shell-scroll.spec.ts). */}
-        <div className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-3 redesign:px-2 redesign:py-2">
+        <div className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-3 redesign:px-3 redesign:py-2">
           {error && (
             <p role="alert" className="px-1 pb-2 text-xs text-danger">
               {error}
