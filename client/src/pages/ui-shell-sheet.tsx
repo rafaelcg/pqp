@@ -1537,6 +1537,19 @@ export function ShellSheet() {
         <div className="grid grid-cols-2 gap-4">
           <AppSessionCard model={CARD_LIVE} onJoin={noop} />
           <AppSessionCard model={CARD_ENDED} />
+          {/* Joining (the button waits) and a full room you may watch. */}
+          <AppSessionCard model={{ ...CARD_LIVE, sessionId: "s3", join: { status: "joining" } }} onJoin={noop} />
+          <AppSessionCard
+            model={{
+              ...CARD_LIVE,
+              sessionId: "s4",
+              phase: "full",
+              full: true,
+              canWatch: true,
+              count: { kind: "full", players: 4, max: 4, watching: 1 },
+            }}
+            onJoin={noop}
+          />
         </div>
       </div>
     </div>
