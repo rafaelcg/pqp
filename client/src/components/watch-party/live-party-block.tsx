@@ -417,8 +417,7 @@ export function LivePartyBlock({
                       "mt-0.5",
                       // Solid under the redesign, so it reads the same on the
                       // card tint and on the open party's selection fill.
-                      !recovering &&
-                        "redesign:bg-[color:var(--live-badge-bg)] redesign:text-[10px] redesign:text-on-danger redesign:[&>span]:bg-on-danger",
+                      !recovering && "redesign:text-[10px] redesign:[&>span]:bg-on-danger",
                     )}
                     variant={recovering ? "recovering" : "live"}
                   />

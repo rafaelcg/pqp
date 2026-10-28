@@ -602,6 +602,7 @@ is a pane-radius card; its steps sit in accent-soft wells.
 `voice/music-classes.ts` holds the queue's recipe: rows, covers, the search
 highlight, icon buttons and headings. The composer's sheet and the drawer
 share it, so the two homes look the same under the redesign.
+
 ### Watch parties
 
 `components/watch-party/`. Under the redesign the sidebar's live card, its

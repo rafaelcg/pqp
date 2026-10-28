@@ -48,10 +48,11 @@ export function LivePill({
         recovering
           ? "bg-warning/15 text-warning"
           : "bg-danger/15 text-danger",
-        // Under the redesign: sentence case on the badge's metrics; live is
-        // the one solid red, recovering keeps its soft warning.
+        // Under the redesign: the badge's metrics (the copy stays the live
+        // convention's capitals); live is the one solid red, deep enough for
+        // white text in dark, and recovering keeps its soft warning.
         "redesign:px-2 redesign:py-0.5 redesign:text-[11px] redesign:font-semibold redesign:normal-case redesign:tracking-normal",
-        !recovering && "redesign:bg-danger redesign:text-on-danger",
+        !recovering && "redesign:bg-[color:var(--live-badge-bg)] redesign:text-on-danger",
         className,
       )}
     >

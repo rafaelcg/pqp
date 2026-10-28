@@ -1852,19 +1852,19 @@ function ScheduledStage(props: WatchPartyPanelProps & { party: WatchParty }) {
           <div className="flex w-full flex-col items-center gap-2 border-t border-border pt-4 redesign:border-[color:var(--card-border)] redesign:pt-5">
             <Button
               type="button"
-              className="w-full bg-danger text-paper hover:bg-danger/85 sm:w-auto redesign:text-on-danger"
+              className="w-full bg-danger text-paper hover:bg-danger/85 sm:w-auto redesign:bg-[color:var(--live-badge-bg)] redesign:text-on-danger redesign:hover:bg-[color:color-mix(in_oklab,var(--live-badge-bg)_88%,black)]"
               onClick={() => void props.onGoLive(null, party.options.lowLatency)}
               data-watch-party-go-live
             >
               <Radio className="mr-1.5 h-3.5 w-3.5" aria-hidden />
               {t("watchParty.scheduled.goLiveNow")}
             </Button>
-            <p className="text-xs text-text-tertiary">
+            <p className="text-xs text-text-tertiary redesign:text-balance">
               {t("watchParty.scheduled.hostNote")}
             </p>
           </div>
         ) : (
-          <p className="text-xs text-text-tertiary">
+          <p className="text-xs text-text-tertiary redesign:text-balance">
             {t("watchParty.scheduled.viewerNote")}
           </p>
         )}
@@ -2191,8 +2191,12 @@ function LiveSurface(
             ? "redesign:bg-[color:color-mix(in_oklab,var(--color-success)_18%,transparent)]"
             : mic === "room" || micMutedWarning
               ? "redesign:bg-[color:color-mix(in_oklab,var(--color-warning)_16%,transparent)]"
-              : "redesign:bg-[color:var(--call-control-bg)] redesign:text-text-secondary",
+              : mic === "muted"
+                ? "redesign:bg-[color:var(--call-control-off-bg)] redesign:text-danger"
+                : "redesign:bg-[color:var(--call-control-bg)] redesign:text-text-secondary",
           inCall && props.onToggleMute && "redesign:hover:bg-[color:var(--call-control-hover)]",
+          inCall && props.onToggleMute && mic === "muted" && !micMutedWarning && "redesign:hover:bg-[color:var(--call-control-off-hover)]",
+          "redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-[color:var(--color-pane-main)] redesign:focus-visible:ring-[color:var(--color-focus-ring)]",
         );
         const warningAttrs = micMutedWarning
           ? {
