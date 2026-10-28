@@ -26,6 +26,8 @@ import { MessageList, type MessageAuthorInfo } from "@/components/chat/message-l
 import { MessageComposer } from "@/components/chat/message-composer";
 import { clearDraft, setDraftsAccount, writeDraft } from "@/lib/composer-drafts";
 import { ComposerReadOnlyNotice } from "@/components/chat/composer-read-only-notice";
+import { MemberSidebar } from "@/components/layout/member-sidebar";
+import type { ServerMember, ServerRole } from "@/lib/api";
 import type { ChatMessage } from "@/hooks/use-chat";
 import { ConnectionBanner } from "@/components/layout/connection-banner";
 import { ArrivalBanner } from "@/components/onboarding/arrival-banner";
@@ -1196,6 +1198,71 @@ function ComposerBlock() {
   );
 }
 
+const MEMBER_SERVER = "00000000-0000-4000-8000-000000000a01";
+const MEMBER_VOICE = "00000000-0000-4000-8000-000000000a02";
+const MEMBER_ROLE: ServerRole = {
+  id: "00000000-0000-4000-8000-000000000a03",
+  serverId: MEMBER_SERVER,
+  name: "Moderação",
+  color: "#f2a65a",
+  hoist: true,
+  mentionable: true,
+  permissions: "0",
+  position: 2,
+  isEveryone: false,
+  systemKey: null,
+  showBadge: false,
+};
+
+function sheetMember(id: string, displayName: string, extra: Partial<ServerMember> = {}): ServerMember {
+  return { id, displayName, username: displayName.toLowerCase(), tag: null, role: "member", avatarUrl: null, status: "online", ...extra };
+}
+
+const SHEET_MEMBERS: ServerMember[] = [
+  sheetMember(ROW_RAFA, "Rafa", { role: "owner", roleIds: [MEMBER_ROLE.id] }),
+  sheetMember(ROW_ME, "Lia"),
+  sheetMember(ROW_BIA, "Bia", { status: "idle", customStatus: "fechando a campanha" }),
+  sheetMember("00000000-0000-4000-8000-000000000a11", "Duda", { status: "dnd" }),
+  sheetMember("00000000-0000-4000-8000-000000000a12", "Caio", { status: "offline" }),
+  sheetMember("00000000-0000-4000-8000-000000000a13", "Teo", { status: "offline", customStatus: "volto sábado" }),
+];
+
+const SHEET_OCCUPANCY = {
+  [MEMBER_VOICE]: [
+    { peerId: "p-lia", userId: ROW_ME, displayName: "Lia", avatarUrl: null, sharingScreen: false },
+  ],
+} as unknown as Record<string, VoiceParticipant[]>;
+
+function MemberListBlock() {
+  return (
+    <div data-testid="qa-shell-member-list" className="flex flex-wrap items-start gap-6">
+      {/* A server's list in its column: Moderação (Rafa, in its colour),
+          online (you, in a call; Bia with a status line), Duda busy, and
+          offline faded. Duda is hovered in the shot (the message button shows). */}
+      <div className="flex h-[560px] overflow-hidden rounded-lg redesign:rounded-[var(--radius-pane)]">
+        <MemberSidebar
+          open
+          wide
+          onClose={noop}
+          serverId={MEMBER_SERVER}
+          participants={null}
+          self={null}
+          currentUserId={ROW_ME}
+          role="member"
+          blockedUserIds={new Set()}
+          members={SHEET_MEMBERS}
+          roles={[MEMBER_ROLE]}
+          voiceOccupancy={SHEET_OCCUPANCY}
+          voiceChannels={[{ id: MEMBER_VOICE, name: "Sala" }]}
+          onMessageMember={noop}
+          onBlockUser={noop}
+          onUnblockUser={noop}
+        />
+      </div>
+    </div>
+  );
+}
+
 /**
  * A new build waiting, so both rails draw the update tile. The store is
  * this page's own; it goes back to nothing waiting when the sheet unmounts.
@@ -1538,6 +1605,7 @@ export function ShellSheet() {
       <MessageChromeWrapBlock />
       <LogChromeBlock />
       <ComposerBlock />
+      <MemberListBlock />
 
       <CommunityCardsBlock />
 

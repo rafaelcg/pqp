@@ -1642,6 +1642,30 @@ firmer than a hover, line-weight smiley and GIF, the read-only edge on its
 own token, a typed draft on the sheet. Not on the sheet: an attachment chip
 and the autocomplete (they need a live upload and a member list).
 
+### s-member-list
+
+Spec (audit: `MemberSidebar` (column and drawer), `MemberRow`, the section
+fold, "show more", the search, `BotInviteRow`, `RightColumnTabs`;
+`lib/member-groups.ts` decides the sections and is untouched):
+
+1. Job: who is here, who is around, and a way to reach them.
+2. States: sections (hoisted roles, bots, friends, online, offline), folded,
+   paged ("show more"), search (matches, none), loading, error; row with a
+   role colour, rank marks, bot tags, a status line or an app line, "Na
+   call", offline faded, hover message button, context menu; drawer with a
+   scrim; the members or thread switch.
+3. Redesign: the channel list's grammar on the right. Headers are the
+   category rows (sentence case, bold caret); a person is the list row's
+   `md` pill; the header is the pane header with a round close; the search
+   is a round field; "Na call" is the success tone; the switch is a pill.
+4. Duplicate kept: `members-panel.tsx` redraws these rows in a modal; it
+   moves with `f-server-settings`.
+
+Rounds: r1 Codex 8.0, r2 Opus 8.1, r3 Codex 8.2 (COULD only). Stopped at
+r3: both open notes are outside this element (an edge on the shared
+tooltip primitive, and the light role colour's contrast, shared with the
+message row's author name). Follow-ups for those two, not this list.
+
 ### f-onboarding
 
 Spec (audit: `onboarding/` (11 files), the hints in `layout/*-hint.tsx`

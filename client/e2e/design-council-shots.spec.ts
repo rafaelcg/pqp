@@ -1084,6 +1084,7 @@ const PRIMITIVES: {
     testId: "qa-shell-composer",
     open: { button: "Formatação", menu: '[data-testid="qa-shell-composer"] [role="toolbar"]', arrows: 0 },
   },
+  { id: "s-member-list", testId: "qa-shell-member-list", hover: "Mensagem: Duda" },
 ];
 
 test("captures the primitives", async ({ browser }) => {
