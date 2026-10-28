@@ -982,6 +982,8 @@
      strengthens the edge, the open post's edge is a step stronger still. */
   --forum-card-hover-border: color-mix(in oklab, var(--color-text) 18%, transparent);
   --forum-card-open-border: color-mix(in oklab, var(--color-text) 32%, transparent);
+  /* The compact row open beside the list: the selected row; light steps down to the accent's soft fill. */
+  --forum-row-open-bg: var(--list-row-selected);
   /* Settings dialogs: a small frame. The band and the rail sit on the side
      pane's tone, the page is an inset pane in the conversation's tone. */
   --settings-surface: var(--color-pane-side);
@@ -1339,6 +1341,7 @@
 
 /* The redesign's shadows on a light page: tinted, never black. Every look. */
 :root[data-redesign][data-theme="light"] {
+  --forum-row-open-bg: var(--color-accent-soft);
   /* 3% reads in light; dark needs 4.5%. */
   --message-hover: color-mix(in oklab, var(--color-text) 3%, transparent);
   --message-hover-solid: color-mix(in oklab, var(--color-text) 3%, var(--color-pane-main));

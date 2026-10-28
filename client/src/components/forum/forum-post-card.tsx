@@ -568,7 +568,7 @@ export const ForumPostCard = memo(function ForumPostCard({
           open && "bg-surface-2 hover:bg-surface-2",
           // A list row: the row roles, the selected fill says which is open.
           "redesign:hover:bg-[color:var(--list-row-hover)]",
-          open && "redesign:bg-[color:var(--list-row-selected)] redesign:hover:bg-[color:var(--list-row-selected)]",
+          open && "redesign:bg-[color:var(--forum-row-open-bg)] redesign:hover:bg-[color:var(--forum-row-open-bg)]",
         )}
       >
         {open && (
@@ -647,7 +647,7 @@ export const ForumPostCard = memo(function ForumPostCard({
             {/* Under the redesign a tile's title runs to two lines before it clips. */}
             {titleLink("forum-display block truncate text-[15px] font-semibold leading-5 redesign:whitespace-normal redesign:line-clamp-2")}
           </div>
-          <div className="mt-1.5 flex min-w-0 items-center gap-1.5 text-xs text-text-secondary">
+          <div className="mt-1.5 flex min-w-0 items-center gap-1.5 text-xs text-text-secondary redesign:mt-2">
             <ForumTagList tagIds={post.tagIds.slice(0, 1)} tagsById={tagsById} max={1} size="sm" />
             <StatusMarks post={post} />
           </div>
