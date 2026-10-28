@@ -1,5 +1,7 @@
 import type { DmSummary, UnreadCounts } from "@pqp/shared";
 import { LayoutGrid, MessageCircle } from "lucide-react";
+import { ChatCircle as ChatCircleFill, SquaresFour as SquaresFourFill } from "@phosphor-icons/react";
+import { IconSwap } from "@/components/ui/icon";
 import type { ReactNode } from "react";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useNotificationState } from "@/hooks/use-notifications";
@@ -22,6 +24,15 @@ interface PhoneTabBarProps {
   serversWaiting: number;
   me: { displayName: string; avatarUrl: string | null };
 }
+
+/*
+ * THE REDESIGN (docs/redesign/LOG.md, `m-shell`): the bar sits on the side
+ * pane's colour under the pane rule, its glyphs are Phosphor fill and the
+ * counts are the channel row's. Every `redesign:` class goes after what the
+ * bar always drew, so the toggle off changes nothing.
+ */
+/** The counts and the pip on the bar: cut by the bar's own colour. */
+const TAB_CUT_REDESIGN = "redesign:ring-pane-side";
 
 /**
  * CONVERSAS ON A PHONE: Conversas / Servidores / Tu, at the thumb. Drawn only
@@ -53,7 +64,7 @@ export function PhoneTabBar({
     <nav
       data-phone-tab-bar=""
       aria-label={t("phoneTabs.label")}
-      className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-surface-1 pb-[env(safe-area-inset-bottom)] md:hidden"
+      className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-surface-1 pb-[env(safe-area-inset-bottom)] md:hidden redesign:border-[color:var(--pane-header-rule)] redesign:bg-pane-side"
     >
       <div role="tablist" aria-label={t("phoneTabs.label")} className="relative grid h-16 grid-cols-3">
         {/* The sliding pill behind the active icon. */}
@@ -71,7 +82,7 @@ export function PhoneTabBar({
           badge={conversationsWaiting}
           onSelect={onSelect}
         >
-          <MessageCircle className="h-5 w-5" aria-hidden="true" />
+          <IconSwap off={MessageCircle} on={ChatCircleFill} size="lg" offClassName="h-5 w-5" />
         </TabButton>
         <TabButton
           id="servidores"
@@ -80,7 +91,7 @@ export function PhoneTabBar({
           badge={serversWaiting}
           onSelect={onSelect}
         >
-          <LayoutGrid className="h-5 w-5" aria-hidden="true" />
+          <IconSwap off={LayoutGrid} on={SquaresFourFill} size="lg" offClassName="h-5 w-5" />
         </TabButton>
         <TabButton
           id="tu"
@@ -131,6 +142,8 @@ function TabButton({
       className={cn(
         "relative flex flex-col items-center justify-start gap-1 pt-2.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring",
         active ? "text-on-accent-soft" : "text-text-tertiary",
+        "redesign:gap-1.5 redesign:focus-visible:ring-[color:var(--list-row-ring)]",
+        !active && "redesign:text-[color:var(--list-row-icon)]",
       )}
     >
       <span className="relative flex h-6 items-center justify-center">
@@ -139,7 +152,7 @@ function TabButton({
           <span
             data-phone-tab-pip=""
             aria-hidden="true"
-            className="absolute -right-1.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-accent ring-2 ring-surface-1"
+            className={cn("absolute -right-1.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-accent ring-2 ring-surface-1", TAB_CUT_REDESIGN)}
           />
         )}
         {badge > 0 && (
@@ -147,11 +160,17 @@ function TabButton({
             count={badge}
             pop
             data-phone-tab-badge={badge}
-            className="absolute -right-3 -top-1.5 ring-2 ring-surface-1"
+            className={cn(
+              "absolute -right-3 -top-1.5 ring-2 ring-surface-1",
+              TAB_CUT_REDESIGN,
+              // Off the glyph's corner, so the icon keeps its shape.
+              "redesign:-right-4 redesign:-top-2",
+              "redesign:h-[var(--count-badge-h)] redesign:min-w-[var(--count-badge-h)] redesign:py-0 redesign:text-[length:var(--count-badge-text)] redesign:tabular-nums",
+            )}
           />
         )}
       </span>
-      <span className={cn("text-[11px] leading-none", active ? "font-semibold text-text" : "font-medium")}>
+      <span className={cn("text-[11px] leading-none", active ? "font-semibold text-text" : "font-medium", "redesign:text-xs", !active && "redesign:text-text-secondary")}>
         {label}
       </span>
       {badge > 0 && <span className="sr-only">{t("phoneTabs.waitingSr", { count: badge })}</span>}

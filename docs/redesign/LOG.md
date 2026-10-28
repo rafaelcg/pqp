@@ -98,7 +98,7 @@ Read this file and the inventory at the start of every session.
 | 5 | `m-breakpoints` | Merged (code only, no council) |
 | 4 | `f-dm-home` | Merged, capped at round 5 (Opus 8.3 r4, no MUST; r5 MUST fixed after). Both versions rebuilt while open question 2 waits |
 | 4 | `f-new-dm` | Merged, capped at round 5 (Opus 8.3 r5, no MUST). Both versions rebuilt while open question 2 waits |
-| 5 | `m-shell` | Blocked on André: phone bottom tabs or the drawer (open question 2) |
+| 5 | `m-shell` | In council (r3). Both versions rebuilt while open question 2 waits |
 
 Phase 2 end (2026-10-28): every inventory element is merged into
 `redesign` except the three above, which wait on open question 2.
@@ -2041,6 +2041,23 @@ ticked fill in light; the classic Cancelar is ghost and Nova conversa's is
 secondary with the toggle off (the redesign draws both ghost). Copy
 question: the no-match line says "tente nome#0000" (você) inside dialogs
 that say tu.
+
+### m-shell
+
+Spec (audit: `conversations/phone-tab-bar.tsx` (the bottom tabs, behind
+`conversations_home_phone_tabs`), `conversations/phone-screens.tsx`
+(Servidores and Tu), Conversas from `conversation-home-list.tsx` with
+`phoneShell`; the drawer version is the merged sidebar and rail):
+
+1. Job: on a phone, three tabs (Conversas, Servidores, Tu) that say where
+   you are and what is waiting. Both versions are kept while open question
+   2 waits; the drawer was rebuilt with the sidebar and rail.
+2. Redesign: every screen and the bar on `pane-side`; Phosphor tab glyphs
+   with the list-row count; server rows as list rows with their own round
+   tile tint; Tu's rows with Phosphor icons and the inset focus ring.
+3. Kept: every tab, count, pip, row and action; toggle off is unchanged.
+
+Rounds: r1 Codex 7.9, r2 Opus 7.9 (no MUST in either).
 
 ## Open questions for André
 

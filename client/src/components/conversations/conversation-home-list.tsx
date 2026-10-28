@@ -283,7 +283,7 @@ export function ConversationHomeList({
         data-conversations-header=""
         className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-border pl-4 pr-2 redesign:border-b-0 redesign:pl-[calc(var(--list-row-px)+0.75rem)] redesign:pr-3"
       >
-        <h2 className="truncate font-display text-lg font-semibold text-text redesign:text-[length:var(--pane-bar-title-size)] redesign:tracking-[-0.012em]">
+        <h2 className="truncate font-display text-lg font-semibold text-text redesign:text-[length:var(--pane-bar-title-size)] redesign:tracking-[-0.012em] redesign:max-sm:text-xl">
           {t("conversations.title")}
         </h2>
         <div className="flex items-center gap-0.5">
@@ -293,13 +293,13 @@ export function ConversationHomeList({
                 type="button"
                 data-conversations-friends=""
                 aria-current={friendsSelected ? "page" : undefined}
-                className={cn(iconButton, friendsSelected && "bg-surface-2 text-text", PANE_HEADER_ACTION_REDESIGN, "redesign:focus-visible:ring-offset-pane-side", friendsSelected && PANE_HEADER_ACTION_ON_REDESIGN)}
+                className={cn(iconButton, friendsSelected && "bg-surface-2 text-text", PANE_HEADER_ACTION_REDESIGN, "redesign:focus-visible:ring-offset-pane-side", friendsSelected && (phoneShell ? "redesign:bg-transparent redesign:text-[color:var(--list-row-icon)]" : PANE_HEADER_ACTION_ON_REDESIGN))}
                 onClick={() => {
                   onOpenFriends();
                   onMobileClose?.();
                 }}
               >
-                <IconSwap off={Users} on={UsersFill} offClassName="h-[18px] w-[18px]" />
+                <IconSwap off={Users} on={UsersFill} size="md" offClassName="h-[18px] w-[18px]" />
                 {friendRequestCount > 0 && (
                   <>
                     <CountBadge
@@ -326,7 +326,7 @@ export function ConversationHomeList({
               className={cn(iconButton, PANE_HEADER_ACTION_REDESIGN, "redesign:focus-visible:ring-offset-pane-side")}
               onClick={onStartConversation}
             >
-              <IconSwap off={SquarePen} on={NotePencilFill} offClassName="h-[18px] w-[18px]" />
+              <IconSwap off={SquarePen} on={NotePencilFill} size="md" offClassName="h-[18px] w-[18px]" />
             </button>
           </Tooltip>
           )}

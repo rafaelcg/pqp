@@ -1927,6 +1927,82 @@ test("captures the new conversation dialogs", async ({ browser }) => {
   }
 });
 
+test("captures the phone shell", async ({ browser }) => {
+  fs.mkdirSync(OUT!, { recursive: true });
+  const ids: Record<string, string> = {};
+  for (const [suffix, name, avatar] of PEOPLE.slice(0, 6)) {
+    ids[suffix] = await person(suffix, name, avatar);
+  }
+  const hub = await server(VIEWER, "Turma do Fliperama");
+  for (const suffix of ["rafa", "bia", "caio", "duda", "gui"]) {
+    await join(VIEWER, hub.id, suffix);
+  }
+  const rpg = await server("rafa", "Mesa de RPG");
+  await join("rafa", rpg.id, VIEWER);
+  await server(VIEWER, "Faculdade ADS");
+  for (const friend of ["rafa", "bia"]) {
+    await befriend(friend, VIEWER, ids[VIEWER]!, ids[friend]!);
+  }
+  const { conversation } = await json<{ conversation: { channelId: string } }>(
+    await fetch(`${API}/api/dms`, {
+      method: "POST",
+      headers: headers("rafa"),
+      body: JSON.stringify({ userIds: [ids[VIEWER]] }),
+    }),
+  );
+  const sockets = new Map<string, Socket>();
+  for (const suffix of [VIEWER, "rafa", "bia"]) {
+    const socket = new Socket(suffix);
+    await socket.connect();
+    sockets.set(suffix, socket);
+  }
+  await sockets.get("rafa")!.say(conversation.channelId, "bora de cs hoje?");
+  // A mention in one server (a count) and a plain line in another (the pip).
+  const general = hub.channels.find((c) => c.type === "text")!;
+  await sockets.get("bia")!.say(general.id, "@lia cê vem no sábado?");
+  const rpgText = rpg.channels.find((c) => c.type === "text")!;
+  await sockets.get("rafa")!.say(rpgText.id, "sessão confirmada pra sexta");
+
+  const flags = async (enabled: boolean | null) => {
+    for (const key of ["conversations_home", "conversations_home_phone_tabs"]) {
+      await fetch(`${API}/api/admin/flags`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${ADMIN_TOKEN}` },
+        body: JSON.stringify({ key, enabled }),
+      });
+    }
+  };
+  await flags(true);
+  try {
+    for (const theme of ["dark", "light"] as const) {
+      const context = await browser.newContext({ viewport: PHONE, colorScheme: theme, hasTouch: true });
+      const page = await context.newPage();
+      await as(page, theme);
+      await page.goto(`/app/dm?lang=pt-BR`);
+      await expect(page.locator("[data-phone-tab-bar]")).toBeVisible({ timeout: 30_000 });
+      await hideDevBanner(page);
+      for (const tab of ["conversas", "servidores", "tu"] as const) {
+        await page.locator(`[data-phone-tab="${tab}"]`).click();
+        await page.waitForTimeout(500);
+        await shoot(page, `m-shell-${tab}-${theme}`);
+      }
+      // Keyboard focus on a tab and on a server row.
+      await page.locator(`[data-phone-tab="servidores"]`).click();
+      await page.waitForTimeout(300);
+      await page.keyboard.press("Shift");
+      await page.locator("[data-phone-server]").first().focus();
+      await page.waitForTimeout(300);
+      await shoot(page, `m-shell-focus-${theme}`);
+      await context.close();
+    }
+  } finally {
+    await flags(null);
+    for (const socket of sockets.values()) {
+      socket.close();
+    }
+  }
+});
+
 test("captures the forum post", async ({ browser }) => {
   fs.mkdirSync(OUT!, { recursive: true });
   await person(VIEWER, "Lia", PRESET(4));
