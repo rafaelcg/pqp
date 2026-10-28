@@ -1592,6 +1592,12 @@ failed states are `p-empty`'s, already merged):
    English in every language. Translating them changes the toggle-off app.
 5. Not on the sheet: the bulk bar and the gone note need a live list state.
 
+Rounds: r1 Codex 8.0, r2 Opus 8.0, r3 Codex 8.5, r4 Opus 8.5, r5 Codex 8.6
+(no MUST, cap). Fixed along the way: the jump pill rises over the bot's
+note and follows it down, one left edge for the footer, the day label
+outlined so it stops reading as a button, room under the newer button, the
+weekday in sentence case. Open: the "Load older messages" copy question.
+
 ### f-onboarding
 
 Spec (audit: `onboarding/` (11 files), the hints in `layout/*-hint.tsx`
