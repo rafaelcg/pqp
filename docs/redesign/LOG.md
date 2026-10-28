@@ -73,6 +73,8 @@ Read this file and the inventory at the start of every session.
 | 3 | `s-message-row` | Merged, capped at round 5 (Opus 8.5 r5) |
 | 3 | `s-message-content` | Merged, capped at round 5 (Opus 8.6 r5). Open: the broken-image chip is English in every language (question in the spec) |
 | 3 | `s-message-chrome` | Merged, capped at round 5 (Opus 8.6 r3 and r5, Codex 8.6 r4) |
+| 3 | `s-log-chrome` | Merged, capped at round 5 (Codex 8.6 r5, Opus 8.5 r4). Open: "Load older messages" is English in every language |
+| 3 | `s-composer` | Merged, capped at round 5 (Codex 8.8 r5, Opus 8.3 r4). Not on the sheet: an attachment chip and the autocomplete |
 | 4 | `f-onboarding` | Merged, capped at round 5 (Opus 8.3 r3 and r5) |
 | 5 | `m-sheets` | Merged, approved at round 5 (Opus 9.0, no MUST) |
 | 4 | `f-user-settings` | Merged, capped at round 5 (Opus 8.1 r5, 8.2 r4) |
@@ -86,6 +88,7 @@ Read this file and the inventory at the start of every session.
 | 4 | `f-profile` | Merged, capped at round 5 (Opus 8.2 r5, MUST in r1 fixed). Not done: a filled check for "already friends" |
 | 4 | `f-forum` | Merged, capped at round 5 (Opus 8.4 r5, no MUST). Not done: an unread post in the light shots |
 | 4 | `f-call` | Merged, capped at round 5 (Opus 8.5 r5, approved). Not done: "Lia (você)" on the self tile (copy), muted and moderator-muted captures |
+| 4 | `f-watch-party` | Merged, capped at round 5 (Opus 8.6 r5, approved). Not done: "Copiar link" as a pill (every share button is a ghost) |
 | 5 | `m-breakpoints` | Merged (code only, no council) |
 
 ## Phase 0: directions
@@ -1581,6 +1584,62 @@ Rounds: r1 Opus 7.6, r2 Codex 8.4, r3 Opus 8.6, r4 Codex 8.6, r5 Opus 8.6
 legible initials on the faces, toolbar focus in the focus colour. Not done:
 raising the toolbar to `-top-5` (it would cover more of the row above).
 
+### s-log-chrome
+
+Spec (audit: `DaySeparator`, `UnreadSeparator`, the load older and newer
+buttons, `TypingIndicator` and `BotActivityRows`, `BotNoticeRow`, the jump
+pill and the "message is gone" note, the bulk delete bar; the empty and
+failed states are `p-empty`'s, already merged):
+
+1. Job: where I am in the log, and what is happening around it.
+2. States: day rule, NEW rule, older or newer history to load (loading),
+   typing (one, two, many; bots at work), the bot's note to me, jump to the
+   present (missed count, stream "paused"), jump target gone, bulk select.
+3. Redesign: the day is a pill in sentence case on faint rules; NEW is the
+   danger fill's pill; load buttons are the secondary pill; the jump pill,
+   the gone note and the bulk bar float on the popover surface; the bot's
+   note is a message card with a round dismiss.
+4. Question: "Load older messages" and "Loading older messages…" are
+   English in every language. Translating them changes the toggle-off app.
+5. Not on the sheet: the bulk bar and the gone note need a live list state.
+
+Rounds: r1 Codex 8.0, r2 Opus 8.0, r3 Codex 8.5, r4 Opus 8.5, r5 Codex 8.6
+(no MUST, cap). Fixed along the way: the jump pill rises over the bot's
+note and follows it down, one left edge for the footer, the day label
+outlined so it stops reading as a button, room under the newer button, the
+weekday in sentence case. Open: the "Load older messages" copy question.
+
+### s-composer
+
+Spec (audit: `MessageComposer` (the well, reply chip, attachment chips,
+format bar and preview, feedback strip, tools, send, slow mode), the "+"
+menu (already `MENU_SURFACE`), `AutocompleteMenu`, the emoji and GIF panels
+(already `POPOVER_SURFACE`), `PollComposer`, the voice note mic and panel,
+`ComposerReadOnlyNotice`, the inline `EditComposer`; one composer serves the
+channel, the thread panel and the forum dialog):
+
+1. Job: write and send, with everything a message can carry.
+2. States: resting, typing, replying, attachments (uploading, failed),
+   format bar open, a panel open (+, emoji, GIF, autocomplete row and grid),
+   poll, voice note (hold, locked, review), slow mode, read-only, stream
+   variant, embedded, editing a message, feedback (error, success, info).
+3. Redesign: one 20px well on a faint text tint whose edge comes up while
+   typing; 36px round tools with Phosphor glyphs, a held fill when a panel
+   is open; a round accent send; the reply chip a pill; chips are cards;
+   autocomplete is the menu's panel and rows; the poll composer a card with
+   the input's fields and accent-ringed chips; feedback floats on the
+   popover surface with a toned glyph.
+4. Kept: the music bar and call dock inside the well move with `f-call`; the
+   poll composer's hand-made switch stays (question: swap it for `Switch`).
+5. Not on the sheet: the "+" menu (needs attachments or slash commands).
+
+Rounds: r1 Codex 8.0, r2 Opus 8.2, r3 Codex 8.2, r4 Opus 8.3, r5 Codex 8.8
+(no MUST, cap). Fixed along the way: slow mode's countdown on the soft
+accent, a firmer typing edge, the text 16px in, an open tool held a step
+firmer than a hover, line-weight smiley and GIF, the read-only edge on its
+own token, a typed draft on the sheet. Not on the sheet: an attachment chip
+and the autocomplete (they need a live upload and a member list).
+
 ### f-onboarding
 
 Spec (audit: `onboarding/` (11 files), the hints in `layout/*-hint.tsx`
@@ -1717,6 +1776,29 @@ Rounds: r1 Codex 7.6, r2 Codex 8.2, r3 Opus 8.3, r4 Codex 8.3, r5 Opus 8.4
 the light open row a step under the selected channel, the segmented status
 and the inverse toggles written down in DESIGN.md. Not done: an unread post
 in the light shots (the dark pass marks the fixture read first).
+
+### f-watch-party
+
+Spec (audit: `watch-party/` (24 files): the sidebar block with its live
+card, create, teaser, scheduled and history rows; the create dialog; the
+host's pane (setup, scheduled card, live bar, dock, transmission strip,
+activity feed, options, people, co-hosts); history; waitlist; guests):
+
+1. Job: make, announce, run and watch a party; tell everyone it is live.
+2. Redesign, this pass: the sidebar rows are cards (the open live card a
+   soft red), the live badge solid red, the scheduled card a pane card with
+   a sentence-case label, the host bar on the pane like a header, the mic
+   chip a pill on the call's tints, the transmission strip on card tokens.
+   Dialogs, the dock and the options use the merged primitives already.
+3. Merges: none yet; the five dialog shells stay (each is `ui/Dialog`).
+4. Kept: every state, the copy (the live badge stays uppercase).
+
+Rounds: r1 Codex 8.5, r2 Opus 8.2, r3 Codex 8.5, r4 Opus 8.5 (approved),
+r5 Opus 8.6 (approved, cap). After r5: the header's "more" button on the
+symbol weight (a shared shell line), the host bar's glyphs at the header's
+18px, the mic chip at 32px with Phosphor glyphs and its colour kept on
+hover, and the live red named in DESIGN.md. Left: "Copiar link" stays a
+ghost like every share button.
 
 ### f-stories
 

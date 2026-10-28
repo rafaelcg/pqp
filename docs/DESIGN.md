@@ -610,6 +610,18 @@ with a sentence-case label and a pill "Ver todos"; ring badges are cut from
 the pane (`--story-ring-bg` set to `--color-pane-side`). The viewer and composer keep their own dark
 kit (`--story-*`, `composer-ui.tsx`) in every theme.
 
+### Watch parties
+
+`components/watch-party/`. Under the redesign the sidebar's live card, its
+create row and its scheduled row follow the sidebar blocks (`SIDEBAR_CARD_REDESIGN`,
+`SIDEBAR_INVITE_REDESIGN`). Live is one solid red, the `--live-badge-bg`
+token: danger mixed 78% with black in dark, plain danger in light, with white
+text. The live badge, the header pill and the host's "Ir ao vivo" button all
+use it. Do not use plain `bg-danger` for live. Recovering stays the soft
+warning. The host's scheduled card is a pane-radius card. The live bar sits
+on the pane like a header. The mic chip is a pill on the call's tints, and
+each state keeps its colour on hover.
+
 ### The settings kit
 
 `components/settings/kit/` builds every tab of user settings. Under the

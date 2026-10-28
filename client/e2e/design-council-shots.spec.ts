@@ -1076,6 +1076,13 @@ const PRIMITIVES: {
   },
   // Ten reactions that wrap over a thread chip; the one-line continuation hovered.
   { id: "s-message-chrome-wrap", testId: "qa-shell-message-chrome-wrap", hoverText: "quem chegar depois das 20h fica de fora" },
+  { id: "s-log-chrome", testId: "qa-shell-log-chrome" },
+  // The resting composer's format bar open (it is a toolbar, not a menu).
+  {
+    id: "s-composer",
+    testId: "qa-shell-composer",
+    open: { button: "Formatação", menu: '[data-testid="qa-shell-composer"] [role="toolbar"]', arrows: 0 },
+  },
 ];
 
 test("captures the primitives", async ({ browser }) => {
@@ -1117,7 +1124,7 @@ test("captures the primitives", async ({ browser }) => {
         if (primitive.open.hoverText) {
           await block.getByText(primitive.open.hoverText, { exact: true }).hover();
         }
-        await block.getByRole("button", { name: primitive.open.button, exact: true }).focus();
+        await block.getByRole("button", { name: primitive.open.button, exact: true }).first().focus();
         await page.keyboard.press("Enter");
         const menu = page.locator(primitive.open.menu);
         await expect(menu).toBeVisible();
@@ -1255,6 +1262,84 @@ test("captures the stories", async ({ browser }) => {
       await page.keyboard.press("Escape");
     } catch (error) {
       console.log(`f-stories: skipped (${String(error).slice(0, 200)})`);
+    }
+    await context.close();
+  }
+});
+
+/**
+ * f-watch-party: a host makes a party, schedules it, goes live; a member sees
+ * the sidebar's live block. One server per look, since a server holds one
+ * party at a time. CI has no egress, so live HLS is answered on for this
+ * page (the same substitution `watch-party.spec.ts` makes) and the build flag
+ * comes from `?watchParty=1`.
+ */
+test("captures the watch party", async ({ browser }) => {
+  fs.mkdirSync(OUT!, { recursive: true });
+  await person(VIEWER, "Lia", PRESET(4));
+  await person("rafa", "Rafa", PRESET(1));
+  for (const theme of ["dark", "light"] as const) {
+    const home = await server(VIEWER, theme === "dark" ? "Cineclube" : "Cineclube claro");
+    await join(VIEWER, home.id, "rafa");
+    const text = home.channels.find((channel) => channel.type === "text")!;
+    const url = `/app/server/${home.id}/channel/${text.id}?lang=pt-BR&watchParty=1`;
+    const hlsOn = async (page: Page) => {
+      await page.route("**/api/live-hls/config*", async (route) => {
+        const response = await route.fetch();
+        const body = (await response.json()) as Record<string, unknown>;
+        await route.fulfill({ response, json: { ...body, enabled: true } });
+      });
+    };
+
+    const context = await browser.newContext({ viewport: DESKTOP, locale: "pt-BR" });
+    const page = await context.newPage();
+    await as(page, theme);
+    await hlsOn(page);
+    await page.goto(url);
+    await expect(page.getByRole("button", { name: "Enviar" })).toBeVisible({ timeout: 30_000 });
+    await hideDevBanner(page);
+    try {
+      await page.locator("[data-live-party-create]").click({ timeout: 10_000 });
+      await page.locator("[data-create-watch-party-name]").fill("Sessão coruja");
+      await shoot(page, `f-watch-party-create-${theme}`);
+      await page.locator("[data-create-watch-party-schedule]").click();
+      await page.waitForTimeout(300);
+      await shoot(page, `f-watch-party-create-scheduled-${theme}`);
+      await page.locator("[data-create-watch-party-submit]").click();
+      await expect(page.getByTestId("watch-party-scheduled")).toBeVisible({ timeout: 20_000 });
+      await shoot(page, `f-watch-party-scheduled-${theme}`);
+      await page.locator("[data-watch-party-go-live]").first().click();
+      await expect(page.getByTestId("watch-party-bar")).toBeVisible({ timeout: 20_000 });
+      await page.waitForTimeout(800);
+      await shoot(page, `f-watch-party-host-${theme}`);
+
+      const member = await browser.newContext({ viewport: DESKTOP, locale: "pt-BR" });
+      const memberPage = await member.newPage();
+      await memberPage.addInitScript(
+        ([value, redesign]) => {
+          localStorage.setItem("pqp:dev-user-suffix", "rafa");
+          localStorage.setItem("pqp-theme", value);
+          localStorage.setItem("pqp:download-hint-dismissed", "1");
+          localStorage.setItem("pqp-redesign", redesign ? "on" : "off");
+        },
+        [theme, REDESIGN] as const,
+      );
+      await fetch(`${API}/api/me/preferences`, {
+        method: "PATCH",
+        headers: headers("rafa"),
+        body: JSON.stringify({ theme }),
+      });
+      await hlsOn(memberPage);
+      await memberPage.goto(url);
+      await expect(memberPage.getByRole("button", { name: "Enviar" })).toBeVisible({ timeout: 30_000 });
+      await hideDevBanner(memberPage);
+      const block = memberPage.getByTestId("live-party-block");
+      await expect(block).toBeVisible({ timeout: 20_000 });
+      await shoot(memberPage, `f-watch-party-member-${theme}`);
+      await block.screenshot({ path: path.join(OUT!, `f-watch-party-block-${theme}.png`) });
+      await member.close();
+    } catch (error) {
+      console.log(`f-watch-party: skipped (${String(error).slice(0, 200)})`);
     }
     await context.close();
   }

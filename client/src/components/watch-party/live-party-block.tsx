@@ -20,6 +20,10 @@ import {
 } from "@/components/ui/sidebar-block";
 import { cn } from "@/lib/utils";
 
+/** Keyboard focus on a sidebar party row: the redesign's ring, cut from the side pane. */
+const PARTY_FOCUS_REDESIGN =
+  "redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-[color:var(--color-pane-side)] redesign:focus-visible:ring-[color:var(--color-focus-ring)]";
+
 /** The clapperboard: Lucide with the toggle off, filled under the redesign. */
 function PartyGlyph({ className }: { className?: string }) {
   return (
@@ -217,7 +221,7 @@ export function LivePartyBlock({
           <button
             type="button"
             data-live-party-pending={pending.state}
-            className="flex w-full items-center gap-2 rounded-lg border border-warning/40 bg-warning/10 px-2.5 py-2 text-left transition-colors hover:bg-warning/15 redesign:gap-2.5 redesign:rounded-[var(--sidebar-card-radius)] redesign:border-transparent redesign:bg-warning-soft redesign:px-3 redesign:hover:bg-[color:color-mix(in_oklab,var(--color-warning-soft)_85%,var(--color-text))]"
+            className={`${PARTY_FOCUS_REDESIGN} flex w-full items-center gap-2 rounded-lg border border-warning/40 bg-warning/10 px-2.5 py-2 text-left transition-colors hover:bg-warning/15 redesign:gap-2.5 redesign:rounded-[var(--sidebar-card-radius)] redesign:border-transparent redesign:bg-warning-soft redesign:px-3 redesign:hover:bg-[color:color-mix(in_oklab,var(--color-warning-soft)_85%,var(--color-text))]`}
             onClick={() => onWatch(pending.channelId)}
           >
             <PartyGlyph className="text-warning redesign:text-on-warning-soft" />
@@ -245,6 +249,7 @@ export function LivePartyBlock({
               data-live-party-teaser={teaser.onList ? "on-list" : "open"}
               aria-label={t("watchParty.waitlist.teaser.aria")}
               className={cn(
+                PARTY_FOCUS_REDESIGN,
                 "flex w-full items-center gap-2 rounded-lg border border-dashed border-ink-4/70 px-2.5 py-2 text-left text-paper-muted transition-colors hover:border-accent/50 hover:bg-ink-3 hover:text-paper",
                 // On the list it is settled, and settled is a card; until then
                 // it is a dashed invitation.
@@ -303,6 +308,7 @@ export function LivePartyBlock({
           type="button"
           data-live-party-create
           className={cn(
+            PARTY_FOCUS_REDESIGN,
             "flex w-full items-center gap-2 rounded-lg border border-dashed border-ink-4/70 px-2.5 py-2 text-left text-paper-muted transition-colors hover:border-danger/40 hover:bg-ink-3 hover:text-paper",
             SIDEBAR_INVITE_REDESIGN,
             "redesign:gap-2.5 redesign:px-3",
@@ -377,6 +383,7 @@ export function LivePartyBlock({
                 aria-label={`${party.name}: ${t("watchParty.live.watch")}`}
                 onClick={() => onWatch(party.channelId)}
                 className={cn(
+                  PARTY_FOCUS_REDESIGN,
                   "flex w-full flex-col gap-1 rounded-lg border px-2.5 py-2 text-left transition-colors",
                   selected
                     ? "border-danger/50 bg-danger/10"
@@ -410,8 +417,7 @@ export function LivePartyBlock({
                       "mt-0.5",
                       // Solid under the redesign, so it reads the same on the
                       // card tint and on the open party's selection fill.
-                      !recovering &&
-                        "redesign:bg-[color:var(--live-badge-bg)] redesign:text-[10px] redesign:text-on-danger redesign:[&>span]:bg-on-danger",
+                      !recovering && "redesign:text-[10px] redesign:[&>span]:bg-on-danger",
                     )}
                     variant={recovering ? "recovering" : "live"}
                   />

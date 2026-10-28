@@ -538,6 +538,8 @@ export function WatchPartyTransmission({
           : detailsInDialog
             ? "shrink-0 border-b border-ink-4/60 bg-ink-2 px-3 py-1"
             : "shrink-0 border-b border-ink-4/60 bg-ink-2/60 px-3 py-1.5",
+        !overlay &&
+          "redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] sm:redesign:px-5",
         className,
       )}
     >
@@ -574,7 +576,7 @@ export function WatchPartyTransmission({
           <ChevronRight className="h-3 w-3 shrink-0" aria-hidden />
         )}
         {!detailsInDialog && (
-          <span className="shrink-0 font-semibold uppercase tracking-wider">
+          <span className="shrink-0 font-semibold uppercase tracking-wider redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">
             {t("watchParty.tx.title")}
           </span>
         )}
@@ -706,7 +708,7 @@ export function StreamQualityControl({
           className={
             stacked
               ? "text-text"
-              : "font-semibold uppercase tracking-wider text-text-tertiary"
+              : "font-semibold uppercase tracking-wider text-text-tertiary redesign:normal-case redesign:tracking-normal redesign:text-text-secondary"
           }
         >
           {t("watchParty.tx.streamQuality")}
@@ -754,10 +756,10 @@ export function StreamMixSummary({ onOpen }: { onOpen: () => void }) {
   return (
     <div
       data-testid="watch-party-tx-mixer-summary"
-      className="flex items-center justify-between gap-2 rounded-lg border border-border bg-surface-0 px-2.5 py-2 text-[11px]"
+      className="flex items-center justify-between gap-2 rounded-lg border border-border bg-surface-0 px-2.5 py-2 text-[11px] redesign:rounded-[var(--radius-card)] redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:px-3"
     >
       <span className="min-w-0 truncate text-paper-muted">
-        <span className="font-semibold uppercase tracking-wider text-text-tertiary">
+        <span className="font-semibold uppercase tracking-wider text-text-tertiary redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">
           {t("watchParty.tx.mixer")}
         </span>{" "}
         {t("watchParty.tx.mixerSummary", {
@@ -853,10 +855,10 @@ export function StreamMixControl({
   return (
     <div
       data-testid="watch-party-tx-mixer"
-      className="flex flex-col gap-2.5 rounded-lg border border-border bg-surface-0 px-2.5 py-2"
+      className="flex flex-col gap-2.5 rounded-lg border border-border bg-surface-0 px-2.5 py-2 redesign:rounded-[var(--radius-card)] redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:px-3 redesign:py-2.5"
     >
       <div className="flex items-center justify-between gap-2">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">
           {t("watchParty.tx.mixer")}
         </span>
         <button
@@ -1061,7 +1063,7 @@ function TxTile({
 }) {
   return (
     <div className="min-w-0 rounded-lg border border-border bg-surface-0 px-2.5 py-1.5">
-      <dt className="truncate text-[10px] font-semibold uppercase tracking-wider text-text-tertiary">
+      <dt className="truncate text-[10px] font-semibold uppercase tracking-wider text-text-tertiary redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">
         {label}
       </dt>
       <dd
