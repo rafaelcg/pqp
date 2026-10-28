@@ -477,11 +477,9 @@ let loopCapFallbackLastLoggedAt = 0;
  */
 
 /**
- * @typedef {
- *   { kind: "none" } |
+ * @typedef {{ kind: "none" } |
  *   { kind: "directives", value: BlockingReloadDirectives } |
- *   { kind: "invalid", reason: string }
- * } ParsedBlockingReloadParams
+ *   { kind: "invalid", reason: string }} ParsedBlockingReloadParams
  */
 
 /**
@@ -640,8 +638,7 @@ export function isMsnTooFarAhead(edge, requested) {
  */
 
 /**
- * @typedef {
- *   { kind: "available", playlist: FetchedPlaylist } |
+ * @typedef {{ kind: "available", playlist: FetchedPlaylist } |
  *   { kind: "timeout", playlist: FetchedPlaylist } |
  *   { kind: "cold-timeout" } |
  *   { kind: "too-far-ahead" } |
@@ -649,8 +646,7 @@ export function isMsnTooFarAhead(edge, requested) {
  *   { kind: "aborted" } |
  *   { kind: "capacity-fallback" } |
  *   { kind: "waiter-cap-fallback" } |
- *   { kind: "loop-cap-fallback" }
- * } BlockingReloadOutcome
+ *   { kind: "loop-cap-fallback" }} BlockingReloadOutcome
  */
 
 /**
