@@ -96,6 +96,14 @@ Read this file and the inventory at the start of every session.
 | 4 | `f-friends` | Merged, capped at round 5 (Opus 8.3 r5, MUST in r4 fixed). Open: move "Remover" into a row menu? |
 | 4 | `f-bau` | Merged, capped at round 5 (Opus 8.2 r5, no MUST). Not done: a teaser avatar and time; a scheduled post still shows its creation day |
 | 5 | `m-breakpoints` | Merged (code only, no council) |
+| 4 | `f-dm-home` | Blocked on André: classic DM list or the Conversas home (open question 2) |
+| 4 | `f-new-dm` | Blocked on André: classic or new "new conversation" dialog (open question 2) |
+| 5 | `m-shell` | Blocked on André: phone bottom tabs or the drawer (open question 2) |
+
+Phase 2 end (2026-10-28): every inventory element is merged into
+`redesign` except the three above, which wait on open question 2.
+`redesign` contains `main` at 506969455. On the merged branch: typecheck,
+bench:tokens, i18n:check and 10,464 unit tests pass.
 
 ## Phase 0: directions
 
