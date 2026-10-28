@@ -990,7 +990,9 @@ function MemberRow({
               />
             )}
           </span>
-          <span className="min-w-0 flex-1">
+          {/* Where the message button floats over the row, the text fades under it
+              while the row is hovered or focused, so nothing reflows. */}
+          <span className="min-w-0 flex-1 redesign:[@media(hover:hover)]:group-hover:[mask-image:linear-gradient(to_left,transparent_2.75rem,#000_3.75rem)] redesign:[@media(hover:hover)]:group-focus-within:[mask-image:linear-gradient(to_left,transparent_2.75rem,#000_3.75rem)]">
             {/* `text-paper` explicitly: role colours are the next thing to land
                 here, and a name that inherits its colour has nowhere to put
                 one. */}
