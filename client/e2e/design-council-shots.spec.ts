@@ -983,6 +983,8 @@ const PRIMITIVES: {
   { id: "s-message-row", testId: "qa-shell-message-rows", hoverText: "@lia cê vem?" },
   { id: "f-onboarding", testId: "qa-onboarding", focus: "Entendi" },
   { id: "s-message-content", testId: "qa-shell-message-content" },
+  // The boot shell and the cannot-reach-the-API page, in desktop frames.
+  { id: "f-states", testId: "qa-shell-states", focus: "Tentar de novo" },
 ];
 
 test("captures the primitives", async ({ browser }) => {

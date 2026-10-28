@@ -1559,6 +1559,37 @@ sizes a footer's primary action (`data-cta`, 120px), done steps keep their
 place with a check and "Feito" and no strike. Rebuilt off `redesign`
 without the f-call work the first branch carried.
 
+### f-states
+
+Spec (audit: `app-loading-shell.tsx` (the boot shell and the cannot-reach-
+the-API page, from `main.tsx` and `App.tsx`), `ui/skeleton.tsx` and the
+spinner (merged as `p-loading`), `error-boundary.tsx`, `HistoryFailed`
+(merged as `p-empty`)):
+
+1. Job: what the app shows before it can show the app, and when it cannot.
+2. Redesign: the boot shell is the frame (canvas, rail on it, floating side
+   and main panes on the frame recipes) with its skeletons, the composer a
+   rounded well, the label sentence case, "pqp" in Gabarito; the API error
+   page takes Gabarito and sentence case.
+3. Not touched: `error-boundary.tsx`. AGENTS.md says to leave it alone, and
+   question 3 asks André first.
+4. Kept: the stored sidebar width on first paint, the retry and the docs
+   pointers on the error page.
+5. Question (copy, shows with the toggle off): the deploy notes on the
+   error page name "Railway/Docker", but production runs on Vultr. Under
+   the redesign they fold behind "Detalhes para quem hospeda"; the text
+   itself waits for a yes.
+
+Rounds: r1 Opus 7.8, r2 Opus 7.6 (MUST fixed: the rail skeleton was squares
+where the rail draws circles), r3 Codex 7.4 (its MUST was a misread: it took
+the dark shot for light; the file is the dark capture), r4 Opus 8.3, r5 Opus
+8.1 (no MUST, cap; best r4). After r5: the host summary in secondary text,
+the failure announced and focus on the retry under the redesign. Not done:
+the error page inside the canvas frame (it replaces the whole tree; a
+restructure), a lighter light skeleton (the loading council set 10% because
+8% vanished at the pulse's low point), the kicker as plain text (it is a
+link today).
+
 ### f-bots
 
 Spec (audit: `bots-settings-section.tsx` in server settings, `bots/` (the
