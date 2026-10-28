@@ -592,13 +592,13 @@ function CommentsBlock({
               key={comment.id}
               className="rounded-lg bg-ink/60 px-3 py-2 text-sm redesign:rounded-[var(--radius-card)] redesign:bg-[color:var(--card-row-hover)] redesign:text-[0.8125rem]"
             >
-              <p className="font-semibold text-paper">
+              <p className="font-semibold text-paper redesign:text-text">
                 {comment.author.displayName}
               </p>
               {gifMessageMedia(comment.body) ? (
                 <GifAttachment media={gifMessageMedia(comment.body)!} />
               ) : (
-                <p className="line-clamp-2 text-paper-muted">{comment.body}</p>
+                <p className="line-clamp-2 text-paper-muted redesign:text-text-secondary">{comment.body}</p>
               )}
             </li>
           ))}
@@ -1069,9 +1069,11 @@ export function PostCard({
         </div>
       )}
 
-      <div className={cn("p-5", showStaffMenu && "pr-12")}>
+      {/* Under the redesign only the title makes room for the menu, so the
+          footer and the comment row run to the card's own edge. */}
+      <div className={cn("p-5", showStaffMenu && "pr-12 redesign:pr-5")}>
         {view.title && (
-          <h2 className="break-words font-display text-2xl font-bold leading-snug tracking-tight text-text">
+          <h2 className={cn("break-words font-display text-2xl font-bold leading-snug tracking-tight text-text", showStaffMenu && "redesign:pr-8")}>
             {view.title}
           </h2>
         )}
@@ -1088,6 +1090,17 @@ export function PostCard({
             >
               <Lock className="h-2.5 w-2.5 redesign:h-3 redesign:w-3" aria-hidden />
               {t("communityHome.lockedBadge")}
+            </span>
+          )}
+          {/* The owner's sign that a post is members-only; the old look
+              shows it only in the menu. */}
+          {post.visibility === "members" && !locked && (
+            <span
+              className={cn("hidden", badgeRedesignClasses("neutral", "tag"))}
+              data-home-members-chip
+            >
+              <Lock className="h-3 w-3" aria-hidden />
+              {t("communityHome.visibility.members")}
             </span>
           )}
           {post.pinned && (
