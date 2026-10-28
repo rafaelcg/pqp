@@ -1784,6 +1784,13 @@ activity feed, options, people, co-hosts); history; waitlist; guests):
 3. Merges: none yet; the five dialog shells stay (each is `ui/Dialog`).
 4. Kept: every state, the copy (the live badge stays uppercase).
 
+Rounds: r1 Codex 8.5, r2 Opus 8.2, r3 Codex 8.5, r4 Opus 8.5 (approved),
+r5 Opus 8.6 (approved, cap). After r5: the header's "more" button on the
+symbol weight (a shared shell line), the host bar's glyphs at the header's
+18px, the mic chip at 32px with Phosphor glyphs and its colour kept on
+hover, and the live red named in DESIGN.md. Left: "Copiar link" stays a
+ghost like every share button.
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss
