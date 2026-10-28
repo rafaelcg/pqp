@@ -73,6 +73,7 @@ Read this file and the inventory at the start of every session.
 | 3 | `s-message-row` | Merged, capped at round 5 (Opus 8.5 r5) |
 | 3 | `s-message-content` | Merged, capped at round 5 (Opus 8.6 r5). Open: the broken-image chip is English in every language (question in the spec) |
 | 3 | `s-message-chrome` | Merged, capped at round 5 (Opus 8.6 r3 and r5, Codex 8.6 r4) |
+| 3 | `s-log-chrome` | Merged, capped at round 5 (Codex 8.6 r5, Opus 8.5 r4). Open: "Load older messages" is English in every language |
 | 4 | `f-onboarding` | Merged, capped at round 5 (Opus 8.3 r3 and r5) |
 | 5 | `m-sheets` | Merged, approved at round 5 (Opus 9.0, no MUST) |
 | 4 | `f-user-settings` | Merged, capped at round 5 (Opus 8.1 r5, 8.2 r4) |
