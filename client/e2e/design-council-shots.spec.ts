@@ -1701,6 +1701,9 @@ test("captures the forum post", async ({ browser }) => {
   for (const theme of ["dark", "light"] as const) {
     const context = await browser.newContext({ viewport: DESKTOP, locale: "pt-BR" });
     const page = await context.newPage();
+    // On a phone some desktop steps are not on screen: fail them fast so
+    // their own catch skips them.
+    if (DESKTOP.width < 768) page.setDefaultTimeout(8_000);
     await as(page, theme);
     await page.goto(`/app/server/${home.id}/channel/${forum.id}?lang=pt-BR`);
     await hideDevBanner(page);
@@ -1759,12 +1762,16 @@ test("captures the forum post", async ({ browser }) => {
     await shoot(page, `09-forum-post-${theme}`);
     // Tooltips in context: an icon button's bubble over the post, then the
     // rail's larger bubble. `shoot` parks the mouse, so hover after it.
-    await page.getByRole("button", { name: "Abrir em tela cheia", exact: true }).hover();
-    await page.waitForTimeout(600);
-    await page.screenshot({ path: path.join(OUT!, `10-tooltip-post-${theme}.png`) });
-    await page.getByRole("button", { name: "Criar comunidade", exact: true }).first().hover();
-    await page.waitForTimeout(600);
-    await page.screenshot({ path: path.join(OUT!, `10-tooltip-rail-${theme}.png`) });
+    // A phone has no fullscreen button (the post already fills the screen)
+    // and no rail tooltip, so these two are desktop shots.
+    if (DESKTOP.width >= 768) {
+      await page.getByRole("button", { name: "Abrir em tela cheia", exact: true }).hover();
+      await page.waitForTimeout(600);
+      await page.screenshot({ path: path.join(OUT!, `10-tooltip-post-${theme}.png`) });
+      await page.getByRole("button", { name: "Criar comunidade", exact: true }).first().hover();
+      await page.waitForTimeout(600);
+      await page.screenshot({ path: path.join(OUT!, `10-tooltip-rail-${theme}.png`) });
+    }
     await context.close();
   }
 });
