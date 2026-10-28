@@ -1662,6 +1662,30 @@ the intro hint); behind the per-server `custom_bots` flag):
    group; folding it into `ui/RadioGroup` would change the toggle-off look.
 4. Kept: the wizard steps, the practice chat, the activity list.
 
+### f-forum
+
+Spec (audit: `forum/` (8 files): the pane with its search, filter bar and
+layout switch, three post layouts (card, compact row, gallery tile) and the
+pinned row, the post view with status, tags, follow and the solution, the
+composer dialog with similar posts and tags):
+
+1. Job: browse, filter and open posts; start one; mark one resolved.
+2. Redesign: cards, tiles and pinned rows on the card tokens with a stronger
+   edge on hover and when open; compact rows on the row roles (the selected
+   fill replaces the side bar); filters, tags and the status trigger are
+   pills on the segmented track's tint; the layout switch is segmented; the
+   search is a round input well; filled glyphs.
+3. Merges: the three tag pill looks share one resting tint.
+4. Kept: every layout, filter, sort and badge; the 767px breakpoint and the
+   forum's own empty block (logged, not merged: the shared EmptyState already
+   draws it).
+
+Rounds: r1 Codex 7.6, r2 Codex 8.2, r3 Opus 8.3, r4 Codex 8.3, r5 Opus 8.4
+(no MUST, no SHOULD, cap). After r5: the composer title on the card edge,
+the light open row a step under the selected channel, the segmented status
+and the inverse toggles written down in DESIGN.md. Not done: an unread post
+in the light shots (the dark pass marks the fixture read first).
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss

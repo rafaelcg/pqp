@@ -981,6 +981,12 @@
   /* The solid accent, as IconButton's and Slider's rings: the 60% focus
      ring all but vanishes on the light selected fill. */
   --list-row-ring: var(--color-accent);
+  /* Forum cards (forum/forum-post-card.tsx): the card tokens; a hover
+     strengthens the edge, the open post's edge is a step stronger still. */
+  --forum-card-hover-border: color-mix(in oklab, var(--color-text) 18%, transparent);
+  --forum-card-open-border: color-mix(in oklab, var(--color-text) 32%, transparent);
+  /* The compact row open beside the list: a faint accent tint, so the open post leads (light uses the accent's soft fill). */
+  --forum-row-open-bg: color-mix(in oklab, var(--color-accent) 14%, transparent);
   /* Settings dialogs: a small frame. The band and the rail sit on the side
      pane's tone, the page is an inset pane in the conversation's tone. */
   --settings-surface: var(--color-pane-side);
@@ -1338,6 +1344,7 @@
 
 /* The redesign's shadows on a light page: tinted, never black. Every look. */
 :root[data-redesign][data-theme="light"] {
+  --forum-row-open-bg: color-mix(in oklab, var(--color-accent) 22%, transparent);
   /* 3% reads in light; dark needs 4.5%. */
   --message-hover: color-mix(in oklab, var(--color-text) 3%, transparent);
   --message-hover-solid: color-mix(in oklab, var(--color-text) 3%, var(--color-pane-main));

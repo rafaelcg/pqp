@@ -579,6 +579,17 @@ yet. `--icon-stroke` is the stroke a Lucide icon takes when a primitive passes i
 replacement under the redesign, for a surface whose callers still pass Lucide.
 A filled glyph that turns into a blob (two copy squares) takes `symbol`.
 
+### Forum channels
+
+`components/forum/`. Under the redesign a card, a gallery tile and a pinned
+row sit on the card tokens; hover strengthens the edge
+(`--forum-card-hover-border`) and the open post's edge is stronger still
+(`--forum-card-open-border`). A compact row uses the row roles. Filters, tags
+and the status trigger are pills on the segmented track's tint
+(`--segmented-bg`), whose chosen status is the thumb; a chosen toggle ("Meus
+posts", a tag) is the inverse pill. The layout switch is
+segmented and the search is a round input well.
+
 ### Hints and first run
 
 Every hint renders through `layout/corner-card.tsx`. Under the redesign it
