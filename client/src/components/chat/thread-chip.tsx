@@ -24,6 +24,9 @@ import { cn, formatFullTimestamp, formatRelativeShort } from "@/lib/utils";
  */
 
 /** The chip's one-line label, exported for tests. */
+/** On the open chip's fill, the meta is its own text colour, softened, not the page's tertiary. */
+const OPEN_META_REDESIGN = "redesign:text-[color:color-mix(in_oklab,var(--thread-chip-open-fg)_65%,transparent)]";
+
 export function threadChipLabel(t: Translator["t"], replyCount: number): string {
   if (replyCount === 0) {
     return t("thread.noReplies");
@@ -113,7 +116,7 @@ export function ThreadChip({
                 "h-4 w-4 ring-2 ring-surface-0 redesign:h-5 redesign:w-5 redesign:ring-[1.5px] redesign:ring-[color:var(--thread-chip-fill)]",
                 index > 0 && "-ml-1.5",
               )}
-              fallbackClassName="bg-surface-3 text-[8px] text-text-secondary"
+              fallbackClassName="bg-surface-3 text-[8px] text-text-secondary redesign:text-[10px] redesign:font-semibold"
             />
           ))}
         </span>
@@ -142,7 +145,7 @@ export function ThreadChip({
       </span>
       {thread.archived ? (
         <span
-          className="shrink-0 text-text-tertiary"
+          className={cn("shrink-0 text-text-tertiary", isOpen && OPEN_META_REDESIGN)}
           title={t("thread.archivedHint", { days: THREAD_AUTO_ARCHIVE_DAYS })}
         >
           · {t("thread.archived")}
@@ -150,7 +153,7 @@ export function ThreadChip({
       ) : (
         thread.replyCount > 0 && (
           <time
-            className="shrink-0 text-text-tertiary"
+            className={cn("shrink-0 text-text-tertiary", isOpen && OPEN_META_REDESIGN)}
             dateTime={thread.lastActivityAt}
             title={formatFullTimestamp(thread.lastActivityAt)}
           >

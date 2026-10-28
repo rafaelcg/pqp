@@ -673,7 +673,7 @@ const MESSAGE_TIME_REDESIGN = "redesign:text-xs redesign:text-text-tertiary";
 const TOOLBAR_REDESIGN =
   "redesign:-top-4 redesign:right-3 redesign:gap-0.5 redesign:rounded-full redesign:border-[color:var(--popover-border)] redesign:bg-[color:var(--popover-surface)] redesign:p-1 redesign:shadow-[var(--popover-shadow)]";
 const TOOLBAR_BUTTON_REDESIGN =
-  "redesign:h-8 redesign:w-8 redesign:rounded-full redesign:text-text-secondary redesign:hover:bg-[color:var(--menu-row-hover)] redesign:hover:text-text redesign:focus-visible:ring-offset-[color:var(--popover-surface)]";
+  "redesign:h-8 redesign:w-8 redesign:rounded-full redesign:text-text-secondary redesign:hover:bg-[color:var(--menu-row-hover)] redesign:hover:text-text redesign:focus-visible:ring-[color:var(--color-focus-ring)] redesign:focus-visible:ring-offset-[color:var(--popover-surface)]";
 /** A quick reaction you already gave: the accent's soft fill. */
 const TOOLBAR_BUTTON_ON_REDESIGN =
   "redesign:bg-accent-soft redesign:hover:bg-accent-soft redesign:shadow-[inset_0_0_0_1.5px_var(--color-accent)]";
