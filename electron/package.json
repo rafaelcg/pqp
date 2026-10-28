@@ -1,6 +1,6 @@
 {
   "name": "@pqp/electron",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "private": true,
   "license": "AGPL-3.0-only",
   "description": "Desktop shell for pqp",
@@ -67,7 +67,7 @@
       "runAsNode": false,
       "enableNodeOptionsEnvironmentVariable": false,
       "enableNodeCliInspectArguments": false,
-      "grantFileProtocolExtraPrivileges": false,
+      "grantFileProtocolExtraPrivileges": true,
       "resetAdHocDarwinSignature": true
     },
     "publish": [
