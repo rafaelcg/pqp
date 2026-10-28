@@ -10,7 +10,9 @@ import { Icon } from "@/components/ui/icon";
 
 /** Under the redesign the prompt is a card, on the card tokens. */
 const CARD =
-  "redesign:rounded-[var(--radius-card)] redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:px-5 redesign:py-4";
+  // It floats over the user panel and the rail, so it is a popover: a solid
+  // surface with a lift, never the see-through card tint.
+  "redesign:rounded-[var(--popover-radius)] redesign:border-[color:var(--popover-border)] redesign:bg-[color:var(--popover-surface)] redesign:px-5 redesign:py-4 redesign:shadow-[var(--popover-shadow)]";
 
 /**
  * "How was that call?", once, after a call that was long enough to have an
@@ -117,6 +119,8 @@ export function CallRatingPrompt({
         </button>
       </div>
 
+      {/* Under the redesign the end labels span exactly the five scores. */}
+      <div className="contents redesign:block redesign:w-fit">
       <div className="mt-3 flex items-center gap-1.5 redesign:gap-2">
         {[1, 2, 3, 4, 5].map((score) => (
           <button
@@ -131,7 +135,7 @@ export function CallRatingPrompt({
               rating === score
                 ? "border-signal bg-signal text-ink"
                 : "border-paper/15 text-paper-muted hover:border-paper/40 hover:text-paper",
-              "redesign:rounded-full redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-ring-offset redesign:focus-visible:ring-[color:var(--color-focus-ring)]",
+              "redesign:rounded-full redesign:disabled:cursor-default redesign:disabled:opacity-60 redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-ring-offset redesign:focus-visible:ring-[color:var(--color-focus-ring)]",
               rating === score
                 ? "redesign:border-accent redesign:bg-accent redesign:text-on-accent"
                 : "redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--call-control-bg)] redesign:text-text-secondary redesign:hover:border-[color:var(--card-border)] redesign:hover:bg-[color:var(--call-control-hover)] redesign:hover:text-text",
@@ -142,9 +146,10 @@ export function CallRatingPrompt({
         ))}
       </div>
 
-      <div className="mt-2 flex justify-between text-[11px] text-paper-muted/70 redesign:text-text-tertiary">
+      <div className="mt-2 flex justify-between text-[11px] text-paper-muted/70 redesign:text-xs redesign:text-text-tertiary">
         <span>{t("call.rating.low")}</span>
         <span>{t("call.rating.high")}</span>
+      </div>
       </div>
 
       {wantsNote && (

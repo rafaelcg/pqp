@@ -69,13 +69,21 @@ export function IncomingCallOverlay({
           }`}
           className="pointer-events-auto flex w-full max-w-sm items-center gap-3 rounded-[var(--radius-card)] border border-border/60 bg-surface-1 p-3 shadow-[var(--shadow-2)] redesign:rounded-[var(--popover-radius)] redesign:border-[color:var(--popover-border)] redesign:bg-[color:var(--popover-surface)] redesign:py-3 redesign:pl-3 redesign:pr-2 redesign:shadow-[var(--popover-shadow)]"
         >
-          <UserAvatar
-            name={call.caller.displayName}
-            avatarUrl={call.caller.avatarUrl}
-            rounded="full"
-            className="h-10 w-10 redesign:h-11 redesign:w-11 redesign:ring-2 redesign:ring-[color:color-mix(in_oklab,var(--call-speaking)_70%,transparent)] redesign:ring-offset-1 redesign:ring-offset-[color:var(--popover-surface)] redesign:motion-safe:animate-pulse"
-            fallbackClassName="bg-border text-sm text-text"
-          />
+          {/* Under the redesign a ring breathes around the caller; the face
+              itself never fades. */}
+          <span className="contents redesign:relative redesign:block redesign:shrink-0 redesign:rounded-full">
+            <UserAvatar
+              name={call.caller.displayName}
+              avatarUrl={call.caller.avatarUrl}
+              rounded="full"
+              className="h-10 w-10 redesign:h-11 redesign:w-11"
+              fallbackClassName="bg-border text-sm text-text"
+            />
+            <span
+              aria-hidden
+              className="hidden redesign:block redesign:pointer-events-none redesign:absolute redesign:-inset-[3px] redesign:rounded-full redesign:opacity-70 redesign:ring-2 redesign:ring-[color:var(--call-speaking)] redesign:motion-safe:animate-[call-ring_1.6s_ease-in-out_infinite]"
+            />
+          </span>
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-semibold text-text">
               {call.caller.displayName}

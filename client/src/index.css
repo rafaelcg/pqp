@@ -3614,6 +3614,17 @@ html[data-pre] [data-home-hero] .animate-rise {
 }
 
 /* A soundboard tile that just played: the icon kicks once from full size. */
+/* The ring around an incoming caller: only the ring breathes. */
+@keyframes call-ring {
+  0%,
+  100% {
+    opacity: 0.7;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
 @keyframes sound-pulse {
   0% {
     transform: scale(1);
