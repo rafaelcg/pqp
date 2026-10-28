@@ -5,7 +5,7 @@ import { apiFetch } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import type { RatableCall } from "@/hooks/use-call-rating";
-import { X } from "@phosphor-icons/react";
+import { CheckCircle, X } from "@phosphor-icons/react";
 import { Icon } from "@/components/ui/icon";
 
 /** Under the redesign the prompt is a card, on the card tokens. */
@@ -100,8 +100,9 @@ export function CallRatingPrompt({
     return (
       <div
         role="status"
-        className={cn("rounded-lg border border-paper/10 bg-surface-2 px-4 py-3 text-sm text-paper-muted", CARD, "redesign:text-text-secondary")}
+        className={cn("rounded-lg border border-paper/10 bg-surface-2 px-4 py-3 text-sm text-paper-muted", CARD, "redesign:flex redesign:items-center redesign:gap-2 redesign:text-text-secondary")}
       >
+        <Icon icon={CheckCircle} size="sm" className="hidden h-4 w-4 shrink-0 text-[color:var(--call-speaking)] redesign:block" />
         {t("call.rating.thanks")}
       </div>
     );
@@ -138,7 +139,7 @@ export function CallRatingPrompt({
               rating === score
                 ? "border-signal bg-signal text-ink"
                 : "border-paper/15 text-paper-muted hover:border-paper/40 hover:text-paper",
-              "redesign:rounded-full redesign:disabled:cursor-default redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-ring-offset redesign:focus-visible:ring-[color:var(--color-focus-ring)]",
+              "redesign:rounded-full redesign:disabled:cursor-default redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-[color:var(--popover-surface)] redesign:focus-visible:ring-[color:var(--color-focus-ring)]",
               rating === score
                 ? "redesign:border-accent redesign:bg-accent redesign:text-on-accent"
                 : // While a score sends, only the others step back.
@@ -167,7 +168,7 @@ export function CallRatingPrompt({
             onChange={(event) => setNote(event.target.value)}
             maxLength={CALL_RATING_NOTE_MAX_LENGTH}
             placeholder={t("call.rating.notePlaceholder")}
-            className="w-full rounded-md border border-paper/15 bg-surface-1 px-3 py-2 text-sm text-paper placeholder:text-paper-muted/60 focus:border-signal focus:outline-none redesign:h-[var(--input-h)] redesign:rounded-[var(--input-radius,var(--radius-control))] redesign:border-[color:var(--input-border)] redesign:bg-[color:var(--input-bg)] redesign:px-[var(--input-px)] redesign:text-text redesign:placeholder:text-text-tertiary redesign:focus:border-[color:var(--input-border)] redesign:focus-visible:ring-2 redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-ring-offset redesign:focus-visible:ring-[color:var(--input-ring,var(--color-focus-ring))]"
+            className="w-full rounded-md border border-paper/15 bg-surface-1 px-3 py-2 text-sm text-paper placeholder:text-paper-muted/60 focus:border-signal focus:outline-none redesign:h-[var(--input-h)] redesign:rounded-[var(--input-radius,var(--radius-control))] redesign:border-[color:var(--input-border)] redesign:bg-[color:var(--input-bg)] redesign:px-[var(--input-px)] redesign:text-text redesign:placeholder:text-text-tertiary redesign:focus:border-[color:var(--input-border)] redesign:focus-visible:ring-2 redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-[color:var(--popover-surface)] redesign:focus-visible:ring-[color:var(--input-ring,var(--color-focus-ring))]"
           />
           <Button
             size="sm"

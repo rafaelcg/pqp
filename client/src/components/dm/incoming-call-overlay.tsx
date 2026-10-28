@@ -18,9 +18,9 @@ import { cn } from "@/lib/utils";
  * On hover they also grow a little, so the pointer gets feedback beyond the
  * colour step; pressed, they settle back.
  */
-const ANSWER = cn(
+const CALL_CIRCLE = cn(
   CALL_CONTROL_REDESIGN.base,
-  "redesign:flex redesign:h-11 redesign:w-11 redesign:items-center redesign:justify-center redesign:p-0 redesign:text-on-danger",
+  "redesign:flex redesign:h-11 redesign:w-11 redesign:items-center redesign:justify-center redesign:p-0",
   "redesign:transition-[background-color,color,transform] redesign:motion-safe:hover:scale-[1.08] redesign:motion-safe:active:scale-95",
 );
 
@@ -104,7 +104,7 @@ export function IncomingCallOverlay({
               type="button"
               title={t("call.incoming.accept")}
               aria-label={t("call.incoming.accept")}
-              className={cn("rounded-full bg-success/90 p-2 text-surface-0 hover:bg-success", ANSWER, "redesign:bg-success redesign:text-surface-0 redesign:hover:bg-[color:var(--call-answer-hover)]")}
+              className={cn("rounded-full bg-success/90 p-2 text-surface-0 hover:bg-success", CALL_CIRCLE, "redesign:bg-success redesign:text-surface-0 redesign:hover:bg-[color:var(--call-answer-hover)]")}
               onClick={() => onAccept(call.conversationId)}
             >
               <IconSwap off={Phone} on={PhoneFill} offClassName="h-4 w-4" className="h-5 w-5" />
@@ -113,7 +113,7 @@ export function IncomingCallOverlay({
               type="button"
               title={t("call.incoming.decline")}
               aria-label={t("call.incoming.decline")}
-              className={cn("rounded-full bg-danger/90 p-2 text-text hover:bg-danger", ANSWER, CALL_CONTROL_REDESIGN.leave)}
+              className={cn("rounded-full bg-danger/90 p-2 text-text hover:bg-danger", CALL_CIRCLE, CALL_CONTROL_REDESIGN.leave)}
               onClick={() => onDecline(call.conversationId)}
             >
               <IconSwap off={PhoneOff} on={PhoneDisconnect} offClassName="h-4 w-4" className="h-5 w-5" />

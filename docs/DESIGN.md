@@ -644,7 +644,7 @@ redesign:
 - Glyphs are filled Phosphor objects through `IconSwap`; "⋯" and the
   fullscreen corners are bold symbols.
 - A conversation call rings in a popover card at the top centre of the
-  window, so it never covers the join strip or the header. Answer (green,
+  window, so it never covers the join button or the header's controls. Answer (green,
   hover `--call-answer-hover`) and decline (the hang-up) are the bar's 44px
   circles. On hover they grow to 108% and settle to 95% when pressed
   (motion-safe only). The caller's ring breathes in `--call-speaking` with
