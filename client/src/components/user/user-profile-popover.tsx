@@ -337,12 +337,12 @@ function ActionTile({ label, className, children, ...rest }: ActionTileProps) {
     <button
       type="button"
       className={cn(
-        "group flex w-full min-w-0 flex-col items-center gap-1.5 text-paper focus-visible:outline-none disabled:pointer-events-none disabled:opacity-40",
+        "group flex w-full min-w-0 flex-col items-center gap-1.5 redesign:gap-1 text-paper focus-visible:outline-none disabled:pointer-events-none disabled:opacity-40",
         className,
       )}
       {...rest}
     >
-      <span className="flex h-10 w-full items-center justify-center rounded-xl bg-ink-3/70 text-paper transition-colors group-hover:bg-ink-3 group-focus-visible:ring-2 group-focus-visible:ring-signal/60 redesign:rounded-full redesign:bg-[color:var(--card-bg)] redesign:text-text redesign:group-hover:bg-[color:var(--menu-row-hover)] redesign:group-focus-visible:ring-[color:var(--list-row-ring)]">
+      <span className="flex h-10 w-full items-center justify-center rounded-xl bg-ink-3/70 text-paper transition-colors group-hover:bg-ink-3 group-focus-visible:ring-2 group-focus-visible:ring-signal/60 redesign:rounded-full redesign:bg-[color:var(--card-bg)] redesign:[:root[data-theme=light]_&]:bg-[color:var(--content-glyph-bg)] redesign:text-text redesign:group-hover:bg-[color:var(--menu-row-hover)] redesign:[:root[data-theme=light]_&]:group-hover:bg-[color:var(--content-card-hover)] redesign:group-focus-visible:ring-[color:var(--list-row-ring)]">
         {children}
       </span>
       <span className="max-w-full text-center text-[11px] font-medium leading-tight text-paper-muted redesign:text-text-secondary">
