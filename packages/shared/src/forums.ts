@@ -816,6 +816,13 @@ export const forumConfigSchema = z.object({
    * "Novos posts estão pausados neste fórum." instead of "Novo post".
    */
   enabled: z.boolean(),
+  /**
+   * Show the members of this server the one-time "O fórum abriu" corner card
+   * (`forum_announcement`, per server, default off). Only ever true where
+   * `enabled` is. Optional so a client reading an older API sees it absent,
+   * which is off.
+   */
+  announce: z.boolean().optional(),
 });
 export type ForumConfig = z.infer<typeof forumConfigSchema>;
 

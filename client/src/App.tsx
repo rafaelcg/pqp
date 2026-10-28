@@ -254,6 +254,12 @@ import { useAppsSessionsSync } from "@/hooks/use-apps-sessions-sync";
 import { AppLauncher } from "@/components/apps/app-launcher";
 import { AppsHint } from "@/components/layout/apps-hint";
 import { isAppsHintSeen } from "@/lib/apps/apps-hint";
+import { ForumAnnouncementHint } from "@/components/layout/forum-announcement-hint";
+import {
+  forumAnnouncementTarget,
+  isForumAnnouncementSeen,
+  rememberForumAnnouncement,
+} from "@/lib/forum-announcement";
 import { useAppsConfig } from "@/hooks/use-apps-config";
 import { AppJoinHost } from "@/components/apps/app-join-host";
 import { toggleAppChat } from "@/components/apps/app-column";
@@ -1835,6 +1841,11 @@ function MainAppContent({
   const [wantsCargosHint, setWantsCargosHint] = useState(
     () => !isAutomatedBrowser() && !isCargosHintSeen(),
   );
+  // "O fórum abriu" (`lib/forum-announcement.ts`): whether the card is on
+  // screen (typing holds only its entrance), and a tick that re-reads the
+  // per-server stamp after one is written.
+  const [forumNewsShowing, setForumNewsShowing] = useState(false);
+  const [, setForumNewsStamps] = useState(0);
   // The seasonal look invite (Halloween, Christmas): which look it is for, or
   // null out of season, once seen this season, or once dismissed this load.
   const [seasonalLookOffer, setSeasonalLookOffer] = useState(seasonalLookToOffer);
@@ -8545,6 +8556,22 @@ function MainAppContent({
   // `forum_channels` for this server: the "+" menu's Fórum, and whether an
   // open forum takes new posts. Asked here, once, for every surface.
   const forumConfig = useForumConfig(selectedServerId);
+  // Opening a forum by any route (the list, a link, the card) is the "O fórum
+  // abriu" card done for that server: nobody needs to be told about a forum
+  // they are reading. Only while the card is live: with the flag off nothing
+  // is stored at all.
+  const openForumServerId =
+    selection.kind === "server" &&
+    forumConfig.announce &&
+    channels.find((c) => c.id === selectedChannelId)?.type === "forum"
+      ? selection.serverId
+      : null;
+  useEffect(() => {
+    if (openForumServerId && !isForumAnnouncementSeen(openForumServerId)) {
+      rememberForumAnnouncement(openForumServerId);
+      setForumNewsStamps((n) => n + 1);
+    }
+  }, [openForumServerId]);
   // Apps: who this tab is, the live sessions of the open server, and how a
   // join leaves the page (`app-join` over the socket until the join sheet and
   // the pane take it over).
@@ -11522,6 +11549,41 @@ function MainAppContent({
       dialogOpen: hintQuietSources.dialogOpen,
     },
   });
+  /**
+   * "O fórum abriu" (`lib/forum-announcement.ts`): the forum channel to offer
+   * a member of the open server, or null. Its own gate holds it in a call, a
+   * share, an app and over a party whatever `hint_budget` says; the queue
+   * below still decides whether it gets the corner.
+   */
+  const forumNewsServerId =
+    selection.kind === "server" && forumConfig.announce ? selection.serverId : null;
+  const forumNewsChannelId = forumNewsServerId
+    ? forumAnnouncementTarget({
+        announce: forumConfig.announce,
+        member: servers.some((s) => s.id === forumNewsServerId),
+        forumChannelId: channels.find((c) => c.type === "forum")?.id ?? null,
+        viewingForum: selectedChannel?.type === "forum",
+        seen: isForumAnnouncementSeen(forumNewsServerId),
+        automated: isAutomatedBrowser(),
+        inCall: voiceState.status !== "idle",
+        sharing: voiceState.isSharingScreen || watchingAShare,
+        appRunning: hintQuietSources.appRunning,
+        campaignsYield,
+        arriving: arrivalServerId === forumNewsServerId,
+        typing: hintQuietSources.composerBusy,
+        showing: forumNewsShowing,
+      })
+    : null;
+  const closeForumNews = (open: boolean) => {
+    if (!forumNewsServerId) {
+      return;
+    }
+    rememberForumAnnouncement(forumNewsServerId);
+    setForumNewsStamps((n) => n + 1);
+    if (open && forumNewsChannelId) {
+      void selectChannel(forumNewsChannelId);
+    }
+  };
   const cornerHint = winningCornerHint(
     {
       communityHomePost: Boolean(
@@ -11550,6 +11612,7 @@ function MainAppContent({
         closed: listingNudgeClosed,
         campaignsYield,
       }),
+      forumNews: forumNewsChannelId !== null && qgHintReady,
       voiceClean: wantsVoiceCleanHint,
       seasonalLook:
         seasonalLookOffer !== null && qgHintReady && !campaignsYield,
@@ -15045,6 +15108,12 @@ function MainAppContent({
         look={seasonalLookOffer}
         enabled={effectiveCornerHint === "seasonalLook"}
         onDismiss={dismissSeasonalLook}
+      />
+      <ForumAnnouncementHint
+        enabled={effectiveCornerHint === "forumNews"}
+        onShowingChange={setForumNewsShowing}
+        onOpen={() => closeForumNews(true)}
+        onDismiss={() => closeForumNews(false)}
       />
       <AppsHint
         enabled={effectiveCornerHint === "appsNews"}

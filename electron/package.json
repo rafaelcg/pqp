@@ -1,6 +1,6 @@
 {
   "name": "@pqp/electron",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "private": true,
   "license": "AGPL-3.0-only",
   "description": "Desktop shell for pqp",
@@ -21,9 +21,10 @@
     "dist:mac": "node scripts/ensure-client-dist.js && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac",
     "dist:win": "node scripts/ensure-client-dist.js && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win",
     "dist:linux": "node scripts/ensure-client-dist.js && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --linux",
-    "test": "node --test lib/*.test.mjs",
+    "test": "node --test lib/*.test.mjs scripts/*.test.mjs",
     "build:share-audio": "node native/win-share-audio/build.mjs",
-    "test:smoke": "playwright test --config=playwright.config.mjs"
+    "test:smoke": "playwright test --config=playwright.config.mjs",
+    "smoke:share": "playwright test --config=playwright.share-smoke.config.mjs"
   },
   "dependencies": {
     "electron-updater": "^6.3.9",
@@ -66,7 +67,7 @@
       "runAsNode": false,
       "enableNodeOptionsEnvironmentVariable": false,
       "enableNodeCliInspectArguments": false,
-      "grantFileProtocolExtraPrivileges": false,
+      "grantFileProtocolExtraPrivileges": true,
       "resetAdHocDarwinSignature": true
     },
     "publish": [
