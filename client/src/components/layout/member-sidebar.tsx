@@ -22,6 +22,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type ReactNode,
 } from "react";
 import { parseBotFaceAvatar, type PublicUser, type VoiceParticipant } from "@pqp/shared";
@@ -754,7 +755,7 @@ export const MemberSidebar = memo(function MemberSidebar({
         </div>
 
         {rows.length > 0 && (
-          <div role="search" className="shrink-0 px-2 pb-1 pt-2 redesign:px-3 redesign:pt-3">
+          <div role="search" className="shrink-0 px-2 pb-1 pt-2 redesign:px-3 redesign:pt-2">
             <div className="relative">
               <Search
                 aria-hidden="true"
@@ -957,6 +958,7 @@ function MemberRow({
           "group flex items-center gap-2 rounded-md px-1 py-1 hover:bg-ink-3",
           dim && "opacity-60 hover:opacity-100",
           MEMBER_ROW_REDESIGN,
+          "redesign:relative",
           dim && "redesign:opacity-[var(--list-row-muted-opacity)]",
         )}
       >
@@ -988,7 +990,9 @@ function MemberRow({
               />
             )}
           </span>
-          <span className="min-w-0 flex-1">
+          {/* Where the message button floats over the row, the text fades under it
+              while the row is hovered or focused, so nothing reflows. */}
+          <span className="min-w-0 flex-1 redesign:[@media(hover:hover)]:group-hover:[mask-image:linear-gradient(to_left,transparent_2.75rem,#000_3.75rem)] redesign:[@media(hover:hover)]:group-focus-within:[mask-image:linear-gradient(to_left,transparent_2.75rem,#000_3.75rem)]">
             {/* `text-paper` explicitly: role colours are the next thing to land
                 here, and a name that inherits its colour has nowhere to put
                 one. */}
@@ -997,8 +1001,12 @@ function MemberRow({
                 className={cn(
                   "truncate text-sm font-medium",
                   !nameColor && "text-paper",
+                  // The message row's clamp, so a role colour reads on both
+                  // themes and a name is the same colour in both places.
+                  nameColor &&
+                    "redesign:text-[color:oklch(from_var(--role-color)_max(l,0.72)_c_h)]! redesign:[:root[data-theme=light]_&]:text-[color:oklch(from_var(--role-color)_min(l,0.52)_c_h)]!",
                 )}
-                style={nameColor ? { color: nameColor } : undefined}
+                style={nameColor ? ({ color: nameColor, "--role-color": nameColor } as CSSProperties) : undefined}
               >
                 {shown}
               </span>
@@ -1040,7 +1048,9 @@ function MemberRow({
             <button
               type="button"
               data-member-message={member.id}
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-text-tertiary opacity-0 transition-opacity duration-[var(--duration-fast)] hover:bg-surface-3 hover:text-text focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100 redesign:rounded-full redesign:text-text-secondary redesign:hover:bg-[color:var(--button-ghost-hover)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent"
+              // Out of the flow where a pointer can hover, so a status line
+              // keeps its full width until the row is hovered.
+              className="redesign:[@media(hover:hover)]:absolute redesign:[@media(hover:hover)]:right-1.5 redesign:[@media(hover:hover)]:top-1/2 redesign:[@media(hover:hover)]:-translate-y-1/2 flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-text-tertiary opacity-0 transition-opacity duration-[var(--duration-fast)] hover:bg-surface-3 hover:text-text focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100 redesign:rounded-full redesign:text-text-secondary redesign:hover:bg-[color:var(--button-ghost-hover)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent"
               onClick={onMessage}
             >
               <MessageCircle className="h-4 w-4 redesign:hidden" aria-hidden="true" />
