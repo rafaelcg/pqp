@@ -1202,6 +1202,20 @@ test("captures the stories", async ({ browser }) => {
   }
   const text = home.channels.find((channel) => channel.type === "text")!;
 
+  // The strip in both themes first, so Rafa is unseen in both.
+  for (const theme of ["dark", "light"] as const) {
+    const context = await browser.newContext({ viewport: DESKTOP, locale: "pt-BR" });
+    const page = await context.newPage();
+    await as(page, theme);
+    await page.goto(`/app/server/${home.id}/channel/${text.id}?lang=pt-BR`);
+    await expect(page.getByRole("button", { name: "Enviar" })).toBeVisible({ timeout: 30_000 });
+    await hideDevBanner(page);
+    await expect(page.getByRole("button", { name: /^Story de Rafa/ })).toBeVisible({ timeout: 20_000 });
+    await page.waitForTimeout(600);
+    await shoot(page, `f-stories-strip-${theme}`);
+    await context.close();
+  }
+
   for (const theme of ["dark", "light"] as const) {
     const context = await browser.newContext({ viewport: DESKTOP, locale: "pt-BR" });
     const page = await context.newPage();
@@ -1213,7 +1227,6 @@ test("captures the stories", async ({ browser }) => {
       const ring = page.getByRole("button", { name: /^Story de Rafa/ });
       await expect(ring).toBeVisible({ timeout: 20_000 });
       await page.waitForTimeout(600);
-      await shoot(page, `f-stories-strip-${theme}`);
       await ring.click();
       await expect(page.locator("[data-story-viewer]")).toBeVisible({ timeout: 10_000 });
       await page.waitForTimeout(900);
