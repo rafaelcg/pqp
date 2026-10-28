@@ -905,6 +905,40 @@ test("captures the design council screens", async ({ browser }) => {
     await page.getByRole("button", { name: "Sair da call" }).first().click().catch(() => {});
     await context.close();
 
+    // f-dm-call: Rafa calls the viewer in their conversation. The ring card
+    // at the top right and the join strip over the conversation, both looks.
+    {
+      const ringContext = await browser.newContext({ viewport: DESKTOP, locale: "pt-BR" });
+      const ringPage = await ringContext.newPage();
+      await as(ringPage, "dark");
+      await ringPage.goto(`/app/dm/${conversation.channelId}?lang=pt-BR`);
+      await expect(ringPage.getByRole("button", { name: "Enviar" })).toBeVisible({ timeout: 30_000 });
+      await hideDevBanner(ringPage);
+      const caller = sockets.get("rafa")!;
+      await caller.joinVoice(conversation.channelId);
+      caller.send({ type: "call-ring", conversationId: conversation.channelId });
+      const ring = ringPage.getByRole("dialog", { name: /Rafa/ });
+      try {
+        await expect(ring).toBeVisible({ timeout: 15_000 });
+        for (const theme of ["dark", "light"] as const) {
+          await ringPage.evaluate((value) => {
+            document.documentElement.dataset.theme = value;
+          }, theme);
+          await ringPage.waitForTimeout(500);
+          await shoot(ringPage, `f-dm-call-ring-${theme}`);
+          await ring.screenshot({ path: path.join(OUT!, `f-dm-call-ring-card-${theme}.png`) });
+          // The pointer on answer, held through the shot (shoot() parks it).
+          await ring.getByRole("button", { name: "Atender" }).hover();
+          await ringPage.waitForTimeout(400);
+          await ring.screenshot({ path: path.join(OUT!, `f-dm-call-ring-hover-${theme}.png`) });
+          await ringPage.mouse.move(0, 0);
+        }
+      } catch (error) {
+        console.log(`f-dm-call: ring skipped (${String(error).slice(0, 120)})`);
+      }
+      await ringContext.close();
+    }
+
     // A phone, the same conversation.
     const phone = await browser.newContext({
       viewport: PHONE,
@@ -1077,6 +1111,7 @@ const PRIMITIVES: {
   },
   // Ten reactions that wrap over a thread chip; the one-line continuation hovered.
   { id: "s-message-chrome-wrap", testId: "qa-shell-message-chrome-wrap", hoverText: "quem chegar depois das 20h fica de fora" },
+  { id: "f-dm-call-rating", testId: "qa-call-rating", focus: "Dar nota 4 de 5" },
   { id: "s-log-chrome", testId: "qa-shell-log-chrome" },
   // The resting composer's format bar open (it is a toolbar, not a menu).
   {

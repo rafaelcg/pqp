@@ -663,6 +663,15 @@ redesign:
   are 32px.
 - Glyphs are filled Phosphor objects through `IconSwap`; "⋯" and the
   fullscreen corners are bold symbols.
+- A conversation call rings in a popover card at the top centre of the
+  window, so it never covers the join button or the header's controls. Answer (green,
+  hover `--call-answer-hover`) and decline (the hang-up) are the bar's 44px
+  circles. On hover they grow to 108% and settle to 95% when pressed
+  (motion-safe only). The caller's ring breathes in `--call-speaking` with
+  a 3px gap; the face never fades. The join strip over a conversation is a
+  pill card and its join button shares `--call-answer-hover`.
+- The rating prompt after a call is a popover card with round scores. While
+  a score sends, the chosen one stays solid and only the others dim.
 
 ## Components
 

@@ -52,6 +52,8 @@ import type { LatestCard, LatestPreview } from "@/lib/community-home/latest";
 import { CornerCard } from "@/components/layout/corner-card";
 import { FirstRunCard } from "@/components/onboarding/first-run-card";
 import { Button } from "@/components/ui/button";
+import { CallRatingPrompt } from "@/components/voice/call-rating-prompt";
+import type { RatableCall } from "@/lib/call-rating";
 import { AppSessionCard } from "@/components/apps/app-session-card";
 import { AppSessionStrip } from "@/components/apps/app-session-strip";
 import type { CardPerson, EndedCardModel, LiveCardModel } from "@/lib/apps/card-model";
@@ -1328,6 +1330,13 @@ function CommunityCardsBlock() {
     </div>
   );
 }
+const RATED_CALL: RatableCall = {
+  durationSeconds: 1260,
+  peerCount: 3,
+  transport: "mesh",
+  hadScreenShare: false,
+  channelId: null,
+};
 const APP_PEOPLE: CardPerson[] = ["Bia", "Rafa", "Duda"].map((name) => ({
   userId: `id-${name}`,
   displayName: name,
@@ -1712,6 +1721,14 @@ export function ShellSheet() {
       </div>
       {/* The music queue in a call's composer: three waiting, one played. */}
       <MusicQueueSpecimen />
+      {/* After a call: the rating prompt fresh, with a low score picked
+          (which opens the note), while a 4 sends, and the thanks. */}
+      <div data-testid="qa-call-rating" className="grid max-w-3xl grid-cols-2 items-start gap-6 p-4">
+        <CallRatingPrompt call={RATED_CALL} onDone={noop} />
+        <CallRatingPrompt call={RATED_CALL} onDone={noop} initialRating={2} />
+        <CallRatingPrompt call={RATED_CALL} onDone={noop} initialRating={4} initialStage="sending" />
+        <CallRatingPrompt call={RATED_CALL} onDone={noop} initialStage="sent" />
+      </div>
       {/* Apps: the strip over an app as a participant, as the host with the
           share switch, and after it ended; the card a session leaves in the
           chat, live and ended. */}

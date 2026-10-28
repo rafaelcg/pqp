@@ -1870,6 +1870,28 @@ swatch row 6px apart so the fade cuts a swatch; the states shot focuses a
 new ring beside a seen one. Not done: a brighter light-only unseen ring
 (the accent ladder has no step for it), the label's 2px offset.
 
+### f-dm-call
+
+Spec (audit: `dm/dm-call-stage.tsx` (the join strip, then the shared
+`CallStage`), `dm/incoming-call-overlay.tsx`, `voice/call-rating-prompt.tsx`):
+
+1. Job: ring, answer or decline a conversation call, join one in progress,
+   and rate a call after it ends.
+2. Redesign: the ring card is a popover with the caller's face ringed in the
+   speaking colour; answer and decline are the call bar's 44px circles. The
+   join strip is a pill card with a round green button. The rating prompt is
+   a card with round scores (the chosen one solid accent) and an input well.
+3. Merges: decline uses the call bar's hang-up recipe.
+4. Kept: ignore, the ringtone, the note under a low score, the auto-close.
+
+Rounds: r1 Codex 7.6 (MUST fixed: the ring card covered the join strip),
+r2 Opus 7.6 (two MUST fixed: the card not truly centred, the rating card on
+the see-through card fill), r3 Codex 8.4, r4 Opus 8.5, r5 Opus 8.6 (no
+MUST, cap). After r5: focus rings cut from the popover, a check on the
+thanks, one circle recipe for answer and decline, the doc's line on the
+card made true. Open for André: "Entrar na call" (header) and "Entrar na
+chamada" (strip) say the same thing two ways.
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss
@@ -1904,6 +1926,10 @@ new ring beside a seen one. Not done: a brighter light-only unseen ring
    and `settings.profile.media.unconfigured`. It shows with the toggle off
    too. Change it? Same tab: the visibility hint says "Para usar" while
    the rest of the tab says "pra"; the council suggests "Pra usar".
+7. DM call: the header pill says "Entrar na call" and the join strip says
+   "Entrar na chamada", 60px apart. Pick one wording (`call.panel.join`
+   and the header key), or hide the header pill while the strip shows?
+   Either changes the app with the toggle off, so it waits for you.
 
 ## Decisions
 

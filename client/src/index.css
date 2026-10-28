@@ -1022,6 +1022,8 @@
   --call-control-off-bg: color-mix(in oklab, var(--color-danger) 20%, transparent);
   --call-control-off-hover: color-mix(in oklab, var(--color-danger) 28%, transparent);
   --call-leave-hover: color-mix(in oklab, var(--color-danger) 85%, var(--color-text));
+  /* Answer and join: the success fill one step toward the text. */
+  --call-answer-hover: color-mix(in oklab, var(--color-success) 80%, var(--color-text));
   --call-bar-bg: var(--popover-surface);
   --call-bar-border: var(--popover-border);
   --call-bar-shadow: var(--popover-shadow);
@@ -3629,6 +3631,17 @@ html[data-pre] [data-home-hero] .animate-rise {
 
 .animate-badge-pop {
   animation: badge-pop 0.32s var(--ease-emphasized) both;
+}
+
+/* The ring around an incoming caller: only the ring breathes. */
+@keyframes call-ring {
+  0%,
+  100% {
+    opacity: 0.7;
+  }
+  50% {
+    opacity: 0.3;
+  }
 }
 
 /* A soundboard tile that just played: the icon kicks once from full size. */
