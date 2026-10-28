@@ -56,12 +56,17 @@ case "$(uname -s)" in
         sudo apt-get update -qq >/dev/null && sudo apt-get install -y --no-install-recommends twm >/dev/null
       }
     fi
-    cat > "$out/xvfb-session.sh" <<'SESSION'
+    command -v twm >/dev/null || { echo "::error::twm is not installed, so the shell will auto-pick and never open its picker"; exit 1; }
+    # twm's default asks a person to click where each new window goes and
+    # leaves it unmapped until then; these place it where it asked to be.
+    printf 'RandomPlacement\nUsePPosition "on"\nNoTitle\n' > "$out/twmrc"
+    cat > "$out/xvfb-session.sh" <<SESSION
 #!/usr/bin/env bash
 set -e
-twm >/dev/null 2>&1 &
+twm -f "$out/twmrc" >"$out/twm.log" 2>&1 &
 sleep 1
-exec "$@"
+pgrep -a twm || { echo "::error::twm did not start: \$(cat "$out/twm.log")"; exit 1; }
+exec "\$@"
 SESSION
     chmod +x "$out/xvfb-session.sh"
     runner=(xvfb-run --auto-servernum --server-args="-screen 0 1280x800x24" "$out/xvfb-session.sh" "${runner[@]}")
