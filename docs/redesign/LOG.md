@@ -1663,6 +1663,28 @@ the intro hint); behind the per-server `custom_bots` flag):
    group; folding it into `ui/RadioGroup` would change the toggle-off look.
 4. Kept: the wizard steps, the practice chat, the activity list.
 
+### f-call
+
+Spec (audit: `voice/call-stage.tsx`, 5,900 lines: the controls in three homes
+(the open stage's floating bar, the composer's dock, the column beside an
+app), camera and primary tiles, the room view, the listener ring, badges,
+tile and share overlays; soundboard, audience, video quality as their own
+files):
+
+1. Job: be in a call: see who talks, mute, camera, share, hand, music, leave.
+2. Redesign: one recipe for every control (`call-control-classes.ts`): wells
+   on the stage, ghosts in the dock, on is the soft accent, muted the soft
+   danger, hang-up solid red; tiles on the card radius with a gapped speaking
+   ring; dark glass on pictures; filled Phosphor glyphs.
+3. Merges: the four look-alike control strings into one recipe.
+4. Kept: every control, the folding rules, the idle fade, all three homes.
+
+Rounds: r1 Codex 8.1, r2 Opus 8.2 (kept the live mic neutral, agreed), r3
+Codex 8.3, r4 Opus 8.4, r5 Opus 8.5 (no MUST, approved, cap). After r5: an
+even gap beside an app, docked dots ringed in the composer's fill. Not done:
+"Lia (você)" on the self tile (copy, shows with the toggle off), a ring on
+stacked initials (the avatar's), muted and moderator-muted captures.
+
 ### f-forum
 
 Spec (audit: `forum/` (8 files): the pane with its search, filter bar and

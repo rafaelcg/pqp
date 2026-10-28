@@ -852,6 +852,56 @@ test("captures the design council screens", async ({ browser }) => {
     });
     await page.waitForTimeout(2000);
     await shoot(page, "07-call-camera-dark");
+    // f-call: the dock alone, the stage open with a camera and with audio
+    // only, and the overflow menu, in both looks. The theme flips in place:
+    // a second join would cost the three socket friends their seats.
+    for (const theme of ["dark", "light"] as const) {
+      await page.evaluate((value) => {
+        document.documentElement.dataset.theme = value;
+      }, theme);
+      await page.waitForTimeout(500);
+      const dock = page.locator("[data-call-dock]").first();
+      if (await dock.isVisible().catch(() => false)) {
+        await page.mouse.move(0, 0);
+        await dock.screenshot({ path: path.join(OUT!, `f-call-dock-${theme}.png`) });
+      }
+      // With a camera on the stage is open: the menu over it, the stage
+      // itself, then fullscreen, where the bar floats on the picture.
+      await page.getByTestId("call-more").first().click();
+      await expect(page.getByRole("menu")).toBeVisible();
+      await shoot(page, `f-call-menu-${theme}`);
+      await page.keyboard.press("Escape");
+      await shoot(page, `f-call-stage-camera-${theme}`);
+      await page.getByTestId("call-more").first().click({ timeout: 5_000 }).catch(() => {});
+      const full = page.getByRole("menuitem", { name: "Tela cheia" });
+      if (await full.isVisible().catch(() => false)) {
+        await full.click();
+        await page.waitForTimeout(1000);
+        await page.mouse.move(700, 400);
+        await page.waitForTimeout(300);
+        await page.screenshot({ path: path.join(OUT!, `f-call-fullscreen-${theme}.png`) });
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(800);
+      } else {
+        console.log("f-call: fullscreen skipped");
+        await page.keyboard.press("Escape");
+      }
+      // Audio only: the camera off, then the stage opened by hand.
+      await page.getByRole("button", { name: "Desligar a câmera", exact: true }).first().click({ timeout: 5_000 }).catch(() => {});
+      await page.waitForTimeout(1200);
+      await page.getByTestId("call-more").first().click();
+      // The stage may stay open after the camera goes off; open it if not.
+      const expand = page.getByRole("menuitem", { name: "Expandir a call" });
+      if (await expand.isVisible().catch(() => false)) {
+        await expand.click();
+      } else {
+        await page.keyboard.press("Escape");
+      }
+      await page.waitForTimeout(800);
+      await shoot(page, `f-call-stage-audio-${theme}`);
+      await page.getByRole("button", { name: "Ligar a câmera", exact: true }).first().click({ timeout: 5_000 }).catch(() => {});
+      await page.waitForTimeout(1500);
+    }
     await page.getByRole("button", { name: "Sair da call" }).first().click().catch(() => {});
     await context.close();
 
