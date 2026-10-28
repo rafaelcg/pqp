@@ -1096,7 +1096,7 @@ export function PostCard({
               shows it only in the menu. */}
           {post.visibility === "members" && !locked && (
             <span
-              className={cn("hidden", badgeRedesignClasses("neutral", "tag"))}
+              className={cn("hidden", badgeRedesignClasses("neutral", "tag"), "redesign:gap-1")}
               data-home-members-chip
             >
               <Lock className="h-3 w-3" aria-hidden />
