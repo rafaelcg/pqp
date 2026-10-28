@@ -5340,7 +5340,7 @@ function ReactionBar({
 
   return (
     <div className="relative mt-1.5 flex w-fit max-w-full flex-wrap items-center gap-1 redesign:gap-1.5">
-      {reactions.map((reaction) => (
+      {reactions.slice(0, -1).map((reaction) => (
         <ReactionChip
           key={reaction.emoji}
           reaction={reaction}
@@ -5349,18 +5349,32 @@ function ReactionBar({
           tabIndex={tabIndex}
         />
       ))}
-      <button
-        type="button"
-        tabIndex={tabIndex}
-        aria-label={t("chat.addReaction")}
-        onClick={onOpenPicker}
-        className="group/add inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-dashed border-ink-4 text-paper-muted hover:border-signal/50 hover:text-signal focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60 redesign:h-7 redesign:w-7 redesign:border-transparent redesign:text-text-tertiary redesign:hover:border-transparent redesign:hover:bg-[color:var(--content-glyph-bg)] redesign:hover:text-text redesign:focus-visible:ring-accent"
-      >
-        <SmilePlus className="h-3 w-3 redesign:hidden" />
-        {/* Under the redesign a quiet outline at rest that fills on hover and focus. */}
-        <Glyph icon={Smiley} kind="symbol" size="sm" className="hidden redesign:block redesign:group-hover/add:hidden redesign:group-focus-visible/add:hidden" />
-        <Glyph icon={Smiley} size="sm" className="hidden redesign:group-hover/add:block redesign:group-focus-visible/add:block" />
-      </button>
+      {/* The last reaction and the add button wrap together under the
+          redesign, so a wrapped row never ends in a lone smiley. Off the
+          redesign the wrapper is `contents`, so the row is what it was. */}
+      <span className="contents redesign:inline-flex redesign:items-center redesign:gap-1.5">
+        {reactions.slice(-1).map((reaction) => (
+          <ReactionChip
+            key={reaction.emoji}
+            reaction={reaction}
+            currentUserId={currentUserId}
+            onToggle={onToggle}
+            tabIndex={tabIndex}
+          />
+        ))}
+        <button
+          type="button"
+          tabIndex={tabIndex}
+          aria-label={t("chat.addReaction")}
+          onClick={onOpenPicker}
+          className="group/add inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-dashed border-ink-4 text-paper-muted hover:border-signal/50 hover:text-signal focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60 redesign:h-7 redesign:w-7 redesign:border-transparent redesign:text-text-tertiary redesign:hover:border-transparent redesign:hover:bg-[color:var(--content-glyph-bg)] redesign:hover:text-text redesign:focus-visible:ring-accent"
+        >
+          <SmilePlus className="h-3 w-3 redesign:hidden" />
+          {/* Under the redesign a quiet outline at rest that fills on hover and focus. */}
+          <Glyph icon={Smiley} kind="symbol" size="sm" className="hidden redesign:block redesign:group-hover/add:hidden redesign:group-focus-visible/add:hidden" />
+          <Glyph icon={Smiley} size="sm" className="hidden redesign:group-hover/add:block redesign:group-focus-visible/add:block" />
+        </button>
+      </span>
       {isPickerOpen && (
         <EmojiPickerPanel
           onSelect={(emoji) => {
