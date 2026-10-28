@@ -104,7 +104,7 @@ export function IncomingCallOverlay({
               type="button"
               title={t("call.incoming.accept")}
               aria-label={t("call.incoming.accept")}
-              className={cn("rounded-full bg-success/90 p-2 text-surface-0 hover:bg-success", ANSWER, "redesign:bg-success redesign:text-surface-0 redesign:hover:bg-[color:color-mix(in_oklab,var(--color-success)_80%,var(--color-text))]")}
+              className={cn("rounded-full bg-success/90 p-2 text-surface-0 hover:bg-success", ANSWER, "redesign:bg-success redesign:text-surface-0 redesign:hover:bg-[color:var(--call-answer-hover)]")}
               onClick={() => onAccept(call.conversationId)}
             >
               <IconSwap off={Phone} on={PhoneFill} offClassName="h-4 w-4" className="h-5 w-5" />

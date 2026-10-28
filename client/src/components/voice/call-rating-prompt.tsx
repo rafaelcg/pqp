@@ -138,10 +138,11 @@ export function CallRatingPrompt({
               rating === score
                 ? "border-signal bg-signal text-ink"
                 : "border-paper/15 text-paper-muted hover:border-paper/40 hover:text-paper",
-              "redesign:rounded-full redesign:disabled:cursor-default redesign:disabled:opacity-60 redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-ring-offset redesign:focus-visible:ring-[color:var(--color-focus-ring)]",
+              "redesign:rounded-full redesign:disabled:cursor-default redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-ring-offset redesign:focus-visible:ring-[color:var(--color-focus-ring)]",
               rating === score
                 ? "redesign:border-accent redesign:bg-accent redesign:text-on-accent"
-                : "redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--call-control-bg)] redesign:text-text-secondary redesign:hover:border-[color:var(--card-border)] redesign:hover:bg-[color:var(--call-control-hover)] redesign:hover:text-text",
+                : // While a score sends, only the others step back.
+                  "redesign:disabled:opacity-60 redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--call-control-bg)] redesign:text-text-secondary redesign:hover:border-[color:var(--card-border)] redesign:hover:bg-[color:var(--call-control-hover)] redesign:hover:text-text",
             )}
           >
             {score}

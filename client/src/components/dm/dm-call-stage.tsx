@@ -119,7 +119,7 @@ export function DmCallStage({
         </p>
         <button
           type="button"
-          className="flex items-center gap-1.5 rounded-md bg-success/90 px-3 py-1.5 text-xs font-semibold text-surface-0 hover:bg-success redesign:h-[var(--control-sm)] redesign:rounded-full redesign:bg-success redesign:px-4 redesign:text-sm redesign:hover:bg-[color:color-mix(in_oklab,var(--color-success)_85%,var(--color-text))] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-[color:var(--card-bg)] redesign:focus-visible:ring-[color:var(--color-focus-ring)]"
+          className="flex items-center gap-1.5 rounded-md bg-success/90 px-3 py-1.5 text-xs font-semibold text-surface-0 hover:bg-success redesign:h-[var(--control-sm)] redesign:rounded-full redesign:bg-success redesign:px-4 redesign:text-sm redesign:hover:bg-[color:var(--call-answer-hover)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-[color:var(--card-bg)] redesign:focus-visible:ring-[color:var(--color-focus-ring)]"
           onClick={onJoinCall}
         >
           <IconSwap off={Phone} on={PhoneFill} offClassName="h-3.5 w-3.5" />
