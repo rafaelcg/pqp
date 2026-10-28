@@ -114,7 +114,8 @@ export function AppBootstrapError({ message, onRetry }: AppBootstrapErrorProps) 
   return (
     <div className="relative flex h-full flex-col items-start justify-end overflow-hidden p-8 sm:p-12 redesign:justify-center redesign:bg-pane-main">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_80%_10%,var(--glow-danger),transparent_45%)] redesign:bg-[radial-gradient(circle_at_85%_0%,var(--glow-danger),transparent_35%)]" />
-      <div className="relative z-10 max-w-lg">
+      {/* Under the redesign the failure is announced, and focus lands on the retry. */}
+      <div className="relative z-10 max-w-lg" role={redesign ? "alert" : undefined}>
         <Link
           to="/"
           className="mb-3 inline-block text-xs uppercase tracking-[0.28em] text-signal redesign:text-sm redesign:font-bold redesign:normal-case redesign:tracking-normal redesign:text-accent-text"
@@ -129,7 +130,7 @@ export function AppBootstrapError({ message, onRetry }: AppBootstrapErrorProps) 
           // The deploy notes are for whoever hosts pqp, so under the redesign
           // they fold behind a disclosure instead of greeting every reader.
           <details className="group mt-3 text-sm text-text-secondary">
-            <summary className="inline-flex cursor-pointer list-none select-none items-center gap-1.5 rounded-[var(--radius-control)] font-medium text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--color-focus-ring)] [&::-webkit-details-marker]:hidden">
+            <summary className="inline-flex cursor-pointer list-none select-none items-center gap-1.5 rounded-[var(--radius-control)] font-medium text-text-secondary hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--color-focus-ring)] [&::-webkit-details-marker]:hidden">
               <Icon icon={CaretRight} kind="symbol" size="sm" className="text-text-tertiary transition-transform duration-[var(--duration-fast)] group-open:rotate-90 motion-reduce:transition-none" />
               {t("bootstrapError.deploy.details")}
             </summary>
@@ -139,7 +140,9 @@ export function AppBootstrapError({ message, onRetry }: AppBootstrapErrorProps) 
           <p className="mt-3 text-sm text-paper-muted">{deploy}</p>
         )}
         <div className="mt-8 flex flex-wrap gap-3">
-          <Button onClick={onRetry}>{t("bootstrapError.retry")}</Button>
+          <Button onClick={onRetry} autoFocus={redesign}>
+            {t("bootstrapError.retry")}
+          </Button>
           <Button variant="secondary" asChild>
             <Link to="/">{t("bootstrapError.home")}</Link>
           </Button>

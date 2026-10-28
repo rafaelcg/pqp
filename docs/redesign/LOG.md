@@ -1522,6 +1522,17 @@ spinner (merged as `p-loading`), `error-boundary.tsx`, `HistoryFailed`
    the redesign they fold behind "Detalhes para quem hospeda"; the text
    itself waits for a yes.
 
+Rounds: r1 Opus 7.8, r2 Opus 7.6 (MUST fixed: the rail skeleton was squares
+where the rail draws circles), r3 Codex 7.4 (its MUST was a misread: it took
+the dark shot for light; the file is the dark capture), r4 Opus 8.3, r5 Opus
+8.1 (no MUST, cap; best r4). After r5: the host summary in secondary text,
+the failure announced and focus on the retry under the redesign. Not done:
+the error page inside the canvas frame (it replaces the whole tree; a
+restructure), a lighter light skeleton (the loading council set 10% because
+8% vanished at the pulse's low point), the kicker as plain text (it is a
+link today).
+
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss
