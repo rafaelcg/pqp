@@ -2876,7 +2876,7 @@ function ActiveCall({
                       key={tile.id}
                       className={cn(
                         "relative min-h-0 overflow-hidden bg-black",
-                        staged.tiles.length > 1 && "rounded-xl",
+                        staged.tiles.length > 1 && cn("rounded-xl", CALL_TILE_REDESIGN.rounded),
                         wideRow && "col-span-full",
                       )}
                     >
@@ -3729,7 +3729,11 @@ export function CallControls({
   // mute alone on a line and pushed hang-up off a phone's screen.
   const stageGroup = collapsed
     ? "@max-[35rem]:contents"
-    : "@max-[40rem]:contents";
+    : cn(
+        "@max-[40rem]:contents",
+        // The open stage's wells sit on the bar's own 8px rhythm.
+        !appColumn.active && "redesign:gap-2",
+      );
   // SPEAK denied locks mute. STREAM denied hides camera and share. The two
   // bits are independent: a stage can let someone present without talking.
   // In a watch_party channel the server answers `canStream` from

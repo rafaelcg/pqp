@@ -612,7 +612,8 @@ redesign it uses the merged primitives' tokens:
 `voice/call-control-classes.ts` and the `--call-*` tokens. Under the
 redesign:
 
-- The open stage sits on the canvas (`--call-stage-bg`). Its floating bar is a
+- The open stage sits on `--call-stage-bg`: the canvas grey in light, surface-0
+  in dark. Its floating bar is a
   popover: `--call-bar-bg`, `--call-bar-border`, `--call-bar-shadow`.
 - A control on the open stage is a 44px round well (`--call-control-bg`,
   hover `--call-control-hover`). Docked in the composer the controls rest as
@@ -624,7 +625,8 @@ redesign:
 - The audience's raise-hand stays the solid accent: it is their one action.
 - A tile is `--call-tile-bg` on the card radius (`--call-tile-radius`).
   Whoever is talking gets a 2px ring in `--call-speaking` with a 2px gap cut
-  from the stage.
+  from the stage. The one exception is the single tile that fills the stage:
+  there is no stage around it to cut a gap from, so its ring is drawn inset.
 - What floats on a picture (the name, "⋯", fullscreen) is dark glass
   (`--call-badge-bg`), the same in both looks. Names are pills; the controls
   are 32px.

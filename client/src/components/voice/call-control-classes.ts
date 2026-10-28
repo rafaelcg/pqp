@@ -5,11 +5,11 @@
  */
 export const CALL_CONTROL_REDESIGN = {
   /** Every control: the keyboard ring, offset from the well. */
-  base: "redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-[color:var(--call-bar-bg)] redesign:focus-visible:ring-[color:var(--color-focus-ring)]",
+  base: "redesign:transition-colors redesign:duration-[var(--duration-fast)] redesign:ease-[var(--ease-standard)] motion-reduce:redesign:transition-none redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-[color:var(--call-bar-bg)] redesign:focus-visible:ring-[color:var(--color-focus-ring)]",
   /** At rest: a quiet well on a text tint. */
   idle: "redesign:bg-[color:var(--call-control-bg)] redesign:text-text redesign:hover:bg-[color:var(--call-control-hover)] redesign:data-[state=open]:bg-[color:var(--call-control-hover)]",
   /** At rest in the composer's dock: a ghost beside the composer's icons. */
-  dock: "redesign:bg-transparent redesign:text-text-secondary redesign:hover:bg-[color:var(--call-control-hover)] redesign:hover:text-text redesign:focus-visible:bg-[color:var(--call-control-hover)] redesign:data-[state=open]:bg-[color:var(--call-control-hover)] redesign:data-[state=open]:text-text",
+  dock: "redesign:bg-transparent redesign:text-text-secondary redesign:hover:bg-[color:var(--call-control-hover)] redesign:hover:text-text redesign:focus-visible:bg-[color:var(--call-control-hover)] redesign:focus-visible:ring-offset-0 redesign:data-[state=open]:bg-[color:var(--call-control-hover)] redesign:data-[state=open]:text-text",
   /** On (camera, share, music open, a raised hand): the soft accent. */
   on: "redesign:bg-[color:var(--call-control-on-bg)] redesign:text-[color:var(--call-control-on-text)] redesign:hover:bg-[color:var(--call-control-on-hover)]",
   /** A muted mic: the soft danger. */
