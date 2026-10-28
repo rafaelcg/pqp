@@ -18,7 +18,7 @@ export function DownloadHint({
 
   return (
     // Under the redesign, the top line of the user panel's card.
-    <div className="flex items-center gap-0.5 border-b border-ink-4/40 px-1.5 py-1 redesign:border-[color:var(--card-border)] redesign:p-1">
+    <div className="flex items-center gap-0.5 border-b border-ink-4/40 px-1.5 py-1 redesign:mb-0.5 redesign:border-b-0 redesign:p-1">
       <button
         type="button"
         onClick={onOpen}

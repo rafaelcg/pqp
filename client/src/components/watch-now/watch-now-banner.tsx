@@ -6,7 +6,7 @@ import {
 } from "@/components/layout/feature-hint";
 import { CaretDown, CaretUp, MonitorPlay as MonitorPlayFill } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
-import { bannerSurfaceRedesign } from "@/components/ui/banner";
+import { BANNER_DISC_REDESIGN, BANNER_QUIET_REDESIGN, bannerSurfaceRedesign } from "@/components/ui/banner";
 import { Icon } from "@/components/ui/icon";
 import { useTranslation } from "@/lib/i18n";
 import {
@@ -199,7 +199,7 @@ export function WatchNowBanner({
               aria-expanded={open}
               aria-controls="watch-now-list"
               onClick={() => setOpen((value) => !value)}
-              className="relative inline-flex min-h-8 items-center gap-1 rounded-[var(--radius-control)] px-1 text-xs font-medium text-on-accent-soft/80 hover:text-on-accent-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring redesign:min-h-7 redesign:rounded-full redesign:px-2 redesign:font-semibold redesign:text-[color:var(--banner-ink)] redesign:hover:bg-[color:color-mix(in_oklab,var(--banner-ink)_16%,transparent)] redesign:hover:text-[color:var(--banner-ink)]"
+              className="relative inline-flex min-h-8 items-center gap-1 rounded-[var(--radius-control)] px-1 text-xs font-medium text-on-accent-soft/80 hover:text-on-accent-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring redesign:min-h-7 redesign:rounded-full redesign:px-2 redesign:text-[13px] redesign:font-semibold redesign:text-[color:var(--banner-ink)] redesign:hover:bg-[color:color-mix(in_oklab,var(--banner-ink)_16%,transparent)] redesign:hover:text-[color:var(--banner-ink)]"
             >
               {t("watchNow.more", { count: rest.length })}
               {open ? (
@@ -315,6 +315,7 @@ function Row({
         className={cn(
           "flex shrink-0 items-center justify-center rounded-full bg-accent text-on-accent",
           compact ? "h-6 w-6" : "h-8 w-8",
+          BANNER_DISC_REDESIGN,
         )}
       >
         <MonitorPlay className={cn(compact ? "h-3.5 w-3.5" : "h-4 w-4", "redesign:hidden")} />
@@ -332,7 +333,7 @@ function Row({
         {meta.length > 0 && (
           <p
             aria-hidden="true"
-            className="mt-0.5 text-xs text-on-accent-soft/80 redesign:text-text-secondary"
+            className="mt-0.5 text-xs text-on-accent-soft/80 redesign:text-[13px] redesign:text-text-secondary"
           >
             {meta.join(" · ")}
           </p>
@@ -360,7 +361,7 @@ function Row({
             size="sm"
             variant="ghost"
             data-watch-now-dismiss=""
-            className="min-h-11 sm:min-h-0"
+            className={cn("min-h-11 sm:min-h-0", BANNER_QUIET_REDESIGN)}
             onClick={() => onDismiss(stream)}
           >
             {t("watchNow.dismiss")}

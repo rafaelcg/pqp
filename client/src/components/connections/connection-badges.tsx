@@ -1,4 +1,6 @@
+import { ArrowUpRight as ArrowUpRightGlyph } from "@phosphor-icons/react";
 import { ArrowUpRight } from "lucide-react";
+import { IconSwap } from "@/components/ui/icon";
 import type { ConnectionProvider, VisibleConnection } from "@pqp/shared";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -42,6 +44,8 @@ const PROVIDER_PATH: Record<ConnectionGlyphProvider, string> = {
     "M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12",
 };
 
+const DARK_TILE = new Set<ConnectionGlyphProvider>(["steam", "roblox", "github"]);
+
 const PROVIDER_CHROME: Record<ConnectionGlyphProvider, string> = {
   steam: "bg-connection-steam text-connection-steam-mark",
   battlenet: "bg-connection-battlenet text-white",
@@ -65,6 +69,8 @@ export function ConnectionGlyph({
       className={cn(
         "inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-sm p-0.5",
         PROVIDER_CHROME[provider],
+        // The near-black marks keep an edge on a dark pane.
+        DARK_TILE.has(provider) && "redesign:ring-1 redesign:ring-inset redesign:ring-[color:color-mix(in_oklab,var(--color-text)_14%,transparent)]",
         className,
       )}
     >
@@ -108,15 +114,15 @@ export function ConnectionBadges({
       <section
         aria-label={t("connections.listLabel")}
         className={
-          plain ? undefined : "mt-3 overflow-hidden rounded-xl bg-ink-3/60"
+          plain ? undefined : "mt-3 overflow-hidden rounded-xl bg-ink-3/60 redesign:rounded-[var(--radius-card)] redesign:border redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)]"
         }
       >
         {!plain && (
-          <h3 className="px-3 pb-1 pt-2.5 text-[11px] font-semibold uppercase tracking-wide text-paper-muted">
+          <h3 className="px-3 pb-1 pt-2.5 text-[11px] font-semibold uppercase tracking-wide text-paper-muted redesign:text-[13px] redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">
             {t("connections.listLabel")}
           </h3>
         )}
-        <ul className="divide-y divide-ink-4/50">
+        <ul className="divide-y divide-ink-4/50 redesign:divide-[color:var(--card-border)]">
           {connections.map((connection) => {
             const row = (
               <>
@@ -124,10 +130,10 @@ export function ConnectionBadges({
                   provider={connection.provider}
                   className="h-6 w-6 rounded-md p-1"
                 />
-                <span className="min-w-0 flex-1 truncate text-[13px] text-paper">
+                <span className="min-w-0 flex-1 truncate text-[13px] text-paper redesign:font-semibold redesign:text-text">
                   {connection.displayName}
                 </span>
-                <span className="shrink-0 text-[11px] text-paper-muted">
+                <span className="shrink-0 text-[11px] text-paper-muted redesign:text-xs redesign:text-[color:var(--list-row-detail)]">
                   {t(PROVIDER_LABEL[connection.provider])}
                 </span>
               </>
@@ -139,12 +145,15 @@ export function ConnectionBadges({
                     href={connection.profileUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="flex items-center gap-2.5 px-3 py-2 transition-colors hover:bg-ink-3 focus-visible:bg-ink-3 focus-visible:outline-none"
+                    className="flex items-center gap-2.5 px-3 py-2 transition-colors hover:bg-ink-3 focus-visible:bg-ink-3 focus-visible:outline-none redesign:hover:bg-[color:var(--card-row-hover)] redesign:focus-visible:bg-[color:var(--card-row-hover)]"
                   >
                     {row}
-                    <ArrowUpRight
-                      aria-hidden
-                      className="h-3.5 w-3.5 shrink-0 text-paper-muted"
+                    <IconSwap
+                      off={ArrowUpRight}
+                      on={ArrowUpRightGlyph}
+                      kind="symbol"
+                      offClassName="h-3.5 w-3.5 shrink-0 text-paper-muted"
+                      className="h-3.5 w-3.5 shrink-0 text-text-tertiary"
                     />
                   </a>
                 ) : (

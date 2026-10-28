@@ -1,3 +1,4 @@
+import { Bug as BugGlyph, Prohibit } from "@phosphor-icons/react";
 import { Ban, Bug } from "lucide-react";
 import { Select } from "@/components/ui/select";
 import { useId, useState, type ReactNode } from "react";
@@ -108,7 +109,7 @@ export function SettingsKitSheet() {
   );
 
   return (
-    <div className="flex flex-col gap-6">
+    <div data-testid="qa-settings-kit" className="flex flex-col gap-6">
       <div className="@container rounded-[var(--radius-panel)] border border-border bg-surface-1">
         <div className="mx-auto w-full max-w-[40rem] px-4 py-5 sm:px-8 sm:py-8">
           <SettingsPaneHeader
@@ -517,7 +518,7 @@ export function SettingsKitSheet() {
               </SettingsNotice>
               <SettingsNotice tone="danger">{t("qaUi.kit.notice.danger")}</SettingsNotice>
               <SettingsNotice tone="success">{t("qaUi.kit.notice.success")}</SettingsNotice>
-              <SettingsNotice tone="info" icon={Bug} role="note">
+              <SettingsNotice tone="info" icon={Bug} glyph={BugGlyph} role="note">
                 {t("qaUi.kit.notice.icon")}
               </SettingsNotice>
             </SettingsGroup>
@@ -541,6 +542,7 @@ export function SettingsKitSheet() {
             <SettingsGroup title={t("qaUi.kit.group.empty")}>
               <SettingsEmpty
                 icon={Ban}
+                glyph={Prohibit}
                 title={t("qaUi.kit.empty.title")}
                 description={t("qaUi.kit.empty.description")}
               />

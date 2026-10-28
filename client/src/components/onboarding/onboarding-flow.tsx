@@ -61,6 +61,7 @@ import {
   trackOnboardingStart,
 } from "@/lib/track";
 import { cn } from "@/lib/utils";
+import { BELOW_SM_QUERY } from "@/lib/breakpoints";
 
 /**
  * First run, after the age gate. One panel, up to three steps.
@@ -190,7 +191,7 @@ export function OnboardingFlow({
     // gate (answered in another tab) starts the funnel here instead.
     trackOnboardingStart({
       path,
-      device: window.matchMedia?.("(max-width: 639px)").matches
+      device: window.matchMedia?.(BELOW_SM_QUERY).matches
         ? "phone"
         : "desktop",
       locale,

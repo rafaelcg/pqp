@@ -73,7 +73,8 @@ export function ServerRailSkeleton() {
   return (
     <div className="flex flex-col items-center gap-2 py-3" aria-hidden>
       {Array.from({ length: 4 }).map((_, i) => (
-        <Skeleton key={i} className="h-12 w-12 rounded-[var(--radius-panel)]" />
+        // Under the redesign, the rail's own round tile, so the first paint does not jump.
+        <Skeleton key={i} className="h-12 w-12 rounded-[var(--radius-panel)] redesign:h-[var(--rail-tile)] redesign:w-[var(--rail-tile)] redesign:rounded-full" />
       ))}
     </div>
   );
