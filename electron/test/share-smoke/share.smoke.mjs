@@ -108,8 +108,8 @@ test.beforeAll(async () => {
   // 0.2.8, the updater line from long before); only the repo's own Electron
   // logs the third. The updater decides a moment after the window opens.
   const packagedLine = /PQP_ALLOW_APP_URL_OVERRIDE is set|\[pqp\/updater\] skipped: PQP_DISABLE_AUTO_UPDATE/;
-  const deadline = Date.now() + 15_000;
-  while (!app.lines.some((l) => packagedLine.test(l)) && Date.now() < deadline) {
+  const packagedDeadline = Date.now() + 15_000;
+  while (!app.lines.some((l) => packagedLine.test(l)) && Date.now() < packagedDeadline) {
     await sleep(250);
   }
   run.packagedSaysSo =
