@@ -75,7 +75,7 @@ Read this file and the inventory at the start of every session.
 | 3 | `s-message-chrome` | Merged, capped at round 5 (Opus 8.6 r3 and r5, Codex 8.6 r4) |
 | 3 | `s-log-chrome` | Merged, capped at round 5 (Codex 8.6 r5, Opus 8.5 r4). Open: "Load older messages" is English in every language |
 | 3 | `s-composer` | Merged, capped at round 5 (Codex 8.8 r5, Opus 8.3 r4). Not on the sheet: an attachment chip and the autocomplete |
-| 3 | `s-member-list` | Merged at round 3 (Codex 8.2 r3, Opus 8.1 r2). Stopped: the open notes are shared (tooltip edge, light role colour contrast) |
+| 3 | `s-member-list` | Merged, capped at round 5 (Opus 8.8 r5, no MUST). Left: the shared tooltip's light fill |
 | 4 | `f-onboarding` | Merged, capped at round 5 (Opus 8.3 r3 and r5) |
 | 5 | `m-sheets` | Merged, approved at round 5 (Opus 9.0, no MUST) |
 | 4 | `f-user-settings` | Merged, capped at round 5 (Opus 8.1 r5, 8.2 r4) |
@@ -1694,10 +1694,13 @@ fold, "show more", the search, `BotInviteRow`, `RightColumnTabs`;
 4. Duplicate kept: `members-panel.tsx` redraws these rows in a modal; it
    moves with `f-server-settings`.
 
-Rounds: r1 Codex 8.0, r2 Opus 8.1, r3 Codex 8.2 (COULD only). Stopped at
-r3: both open notes are outside this element (an edge on the shared
-tooltip primitive, and the light role colour's contrast, shared with the
-message row's author name). Follow-ups for those two, not this list.
+Rounds: r1 Codex 8.0, r2 Opus 8.1, r3 Codex 8.2, r4 Opus 8.6, r5 Opus 8.8
+(no MUST, cap). Merged first after r3; rounds 4 and 5 ran on
+`rd/s-member-list-2`: role colours on the message row's clamp, the message
+button out of the flow where a pointer hovers (the text fades under it on
+hover), the search on the sidebar's line. Left: the tooltip's light fill
+(shared primitive) and the tight dot in "Online·3" (the shared category
+label).
 
 ### f-onboarding
 
