@@ -1214,6 +1214,13 @@ test("captures the stories", async ({ browser }) => {
       await expect(ring).toBeVisible({ timeout: 20_000 });
       await page.waitForTimeout(600);
       await shoot(page, `f-stories-strip-${theme}`);
+      // States: keyboard focus on Rafa's ring, the pointer on "Ver todos".
+      await page.keyboard.press("Shift");
+      await ring.focus();
+      await page.getByRole("button", { name: /Ver todos/ }).first().hover().catch(() => {});
+      await page.waitForTimeout(300);
+      await shoot(page, `f-stories-states-${theme}`);
+      await page.mouse.move(0, 0);
       await ring.click();
       await expect(page.locator("[data-story-viewer]")).toBeVisible({ timeout: 10_000 });
       await page.waitForTimeout(900);
