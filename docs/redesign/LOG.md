@@ -1916,6 +1916,27 @@ Rounds (Opus only): r1 7.2, r2 7.9, r3 7.7 (fixed), r4 7.8 (MUST fixed: the
 pending depoimentos card on the round's rules), r5 8.3 (cap). Merged after
 the shell chain it was stacked on, its own commits moved onto `redesign`.
 
+### f-bau
+
+Spec (audit: `community-home/` (15 files): the feed, the post card in three
+versions (feed, preview, the public share), compose (desktop, mobile,
+cover, embed), follow, onboarding, translation, settings):
+
+1. Job: keep a server's posts that should not scroll away; like, comment.
+2. Redesign, this pass: the post card on card tokens at the pane radius,
+   pill reactions on the call's tint (liked is soft red), badge-recipe chips
+   in sentence case, comment bubbles on the tint, a round comment field.
+3. Merges: the three card versions share the one card root, so the preview
+   gets the same look; the public share page is out of scope (public).
+4. Kept: every control and state, VIP lock, translation, pinning.
+
+Rounds: r1 Codex 7.6, r2 Opus 7.6, r3 Codex 8.0, r4 Opus 8.1, r5 Opus 8.2
+(no MUST, cap). After r5: comment teasers on the comment rules, only the
+title makes room for the "⋯" menu, a VIP chip on the owner's members-only
+post (redesign only). Not done: a teaser avatar and time like the full
+comment row; a scheduled post still shows its creation day beside the
+schedule chip (a behaviour change).
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss

@@ -603,6 +603,17 @@ is a pane-radius card; its steps sit in accent-soft wells.
 highlight, icon buttons and headings. The composer's sheet and the drawer
 share it, so the two homes look the same under the redesign.
 
+### Baú
+
+`components/community-home/`. Under the redesign a post is a card on the
+card tokens at the pane radius. Like and share are pills on the call's
+text tint (`--call-control-bg`). A liked post's pill is a soft red. The
+comment count is a bare icon and number, because it is not a control. Every
+chip uses the badge recipe in sentence case: pinned is `accent`, draft,
+scheduled and members-only are `neutral`. The lock on a picture keeps its
+dark glass. Comments are bubbles on the row-hover tint, with the body in
+secondary text. The comment field is a round input well.
+
 ### Stories
 
 `components/stories/`. Under the redesign the strip sits on the side pane

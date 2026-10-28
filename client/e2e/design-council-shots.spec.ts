@@ -1412,6 +1412,127 @@ test("captures the watch party", async ({ browser }) => {
   }
 });
 
+/**
+ * f-bau: a hall with Baú on, three posts (one pinned, one for members with a
+ * teaser) and a comment from a member. The feed in both looks, then a post.
+ */
+test("captures the bau", async ({ browser }) => {
+  fs.mkdirSync(OUT!, { recursive: true });
+  await person(VIEWER, "Lia", PRESET(4));
+  await person("rafa", "Rafa", PRESET(1));
+  const home = await server(VIEWER, "Baú da Lia");
+  await join(VIEWER, home.id, "rafa");
+  await fetch(`${API}/api/servers/${home.id}/home/config`, {
+    method: "PATCH",
+    headers: headers(VIEWER),
+    body: JSON.stringify({ enabled: true }),
+  });
+  const post = async (body: Record<string, unknown>) =>
+    (
+      await json<{ post: { id: string } }>(
+        await fetch(`${API}/api/servers/${home.id}/home/posts`, {
+          method: "POST",
+          headers: headers(VIEWER),
+          body: JSON.stringify({ status: "published", ...body }),
+        }),
+      )
+    ).post.id;
+  const welcome = await post({
+    title: "Bem-vindo ao Baú",
+    body: "Aqui ficam os avisos, os clipes e as fotos que não podem sumir no chat.",
+  });
+  await fetch(`${API}/api/servers/${home.id}/home/posts/${welcome}/pin`, {
+    method: "POST",
+    headers: headers(VIEWER),
+    body: JSON.stringify({ pinned: true }),
+  });
+  const night = await post({
+    title: "Noite do quiz na sexta",
+    body: "Sexta às 21h no Lobby. Traz a sua pergunta mais difícil.",
+  });
+  await post({
+    title: "Bastidores do torneio",
+    body: "O vídeo inteiro com os erros de gravação.",
+    visibility: "members",
+    teaser: "Os erros de gravação ficaram melhores que o torneio.",
+  });
+  await fetch(`${API}/api/servers/${home.id}/home/posts/${night}/comments`, {
+    method: "POST",
+    headers: headers("rafa"),
+    body: JSON.stringify({ body: "tô dentro, levo pipoca" }),
+  });
+  // States on screen: a post Lia liked and a draft only she sees.
+  await fetch(`${API}/api/servers/${home.id}/home/posts/${night}/likes`, {
+    method: "POST",
+    headers: headers(VIEWER),
+  });
+  await post({ status: "draft", title: "Regras do campeonato", body: "Rascunho: chaves, horários e o que vale." });
+  await post({
+    status: "scheduled",
+    title: "Resultado do quiz",
+    body: "Sai no sábado de manhã.",
+    scheduledAt: new Date(Date.now() + 3 * 24 * 3600 * 1000).toISOString(),
+    scheduleTimezone: "America/Sao_Paulo",
+  });
+
+  for (const theme of ["dark", "light"] as const) {
+    const context = await browser.newContext({ viewport: DESKTOP, locale: "pt-BR" });
+    const page = await context.newPage();
+    await as(page, theme);
+    await page.goto(`/app/server/${home.id}?lang=pt-BR&communityHome=1`);
+    await hideDevBanner(page);
+    try {
+      const feed = page.locator("[data-community-home-feed]");
+      await expect(feed.locator("[data-home-post]").first()).toBeVisible({ timeout: 30_000 });
+      await page.waitForTimeout(600);
+      await shoot(page, `f-bau-feed-${theme}`);
+      const card = feed.locator("[data-home-post]").nth(1);
+      await card.screenshot({ path: path.join(OUT!, `f-bau-card-${theme}.png`) });
+      // The like pill with keyboard focus.
+      await page.keyboard.press("Shift");
+      await feed.locator("[data-home-post]").nth(2).locator("button").filter({ hasText: /^\s*1\s*$/ }).first().focus().catch(() => {});
+      await page.waitForTimeout(300);
+      await shoot(page, `f-bau-states-${theme}`);
+      // A post opened from its link: scrolled to and highlighted, comments open.
+      await page.goto(`/app/server/${home.id}/bau/${night}?lang=pt-BR`);
+      await hideDevBanner(page);
+      await expect(page.locator("[data-community-home-feed] [data-home-post]").first()).toBeVisible({ timeout: 30_000 });
+      await page.waitForTimeout(1200);
+      await shoot(page, `f-bau-post-${theme}`);
+      // The scheduled chip on its post.
+      await page.goto(`/app/server/${home.id}?lang=pt-BR&communityHome=1`);
+      await hideDevBanner(page);
+      // Scheduled posts sit behind the banner's "Ver agendados".
+      await page.getByRole("button", { name: "Ver agendados" }).click({ timeout: 30_000 });
+      const chips = page.locator("[data-home-post]").filter({ hasText: "Resultado do quiz" });
+      await chips.scrollIntoViewIfNeeded({ timeout: 30_000 });
+      await page.waitForTimeout(600);
+      await chips.screenshot({ path: path.join(OUT!, `f-bau-scheduled-${theme}.png`) });
+    } catch (error) {
+      console.log(`f-bau: skipped (${String(error).slice(0, 200)})`);
+    }
+    // Rafa's view: a member, so the members-only post is his to read or locked.
+    try {
+      await fetch(`${API}/api/me/preferences`, {
+        method: "PATCH",
+        headers: headers("rafa"),
+        body: JSON.stringify({ theme }),
+      });
+      const rafa = await context.newPage();
+      await rafa.addInitScript(() => localStorage.setItem("pqp:dev-user-suffix", "rafa"));
+      await rafa.goto(`/app/server/${home.id}?lang=pt-BR&communityHome=1`);
+      await hideDevBanner(rafa);
+      const members = rafa.locator("[data-community-home-feed] [data-home-post]").filter({ hasText: "Bastidores do torneio" });
+      await members.scrollIntoViewIfNeeded({ timeout: 30_000 });
+      await rafa.waitForTimeout(600);
+      await members.screenshot({ path: path.join(OUT!, `f-bau-member-${theme}.png`) });
+    } catch (error) {
+      console.log(`f-bau: member view skipped (${String(error).slice(0, 200)})`);
+    }
+    await context.close();
+  }
+});
+
 test("captures the forum post", async ({ browser }) => {
   fs.mkdirSync(OUT!, { recursive: true });
   await person(VIEWER, "Lia", PRESET(4));
