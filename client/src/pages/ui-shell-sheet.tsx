@@ -1462,7 +1462,7 @@ export function ShellSheet() {
       <MusicQueueSpecimen />
       {/* After a call: the rating prompt fresh, and with a low score picked,
           which opens the note. */}
-      <div data-testid="qa-call-rating" className="grid max-w-3xl grid-cols-2 gap-6 p-4">
+      <div data-testid="qa-call-rating" className="grid max-w-3xl grid-cols-2 items-start gap-6 p-4">
         <CallRatingPrompt call={RATED_CALL} onDone={noop} />
         <CallRatingPrompt call={RATED_CALL} onDone={noop} initialRating={2} />
       </div>

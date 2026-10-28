@@ -57,7 +57,7 @@ export function IncomingCallOverlay({
     return null;
   }
   return (
-    <div className="pointer-events-none fixed inset-x-0 top-[max(0.5rem,env(safe-area-inset-top))] z-50 flex flex-col items-center gap-2 px-2 sm:inset-x-auto sm:right-4 sm:top-[max(1rem,env(safe-area-inset-top))] sm:items-end">
+    <div className="pointer-events-none fixed inset-x-0 top-[max(0.5rem,env(safe-area-inset-top))] z-50 flex flex-col items-center gap-2 px-2 sm:inset-x-auto sm:right-4 sm:top-[max(1rem,env(safe-area-inset-top))] sm:items-end redesign:sm:inset-x-0 redesign:sm:right-auto redesign:sm:items-center">
       {calls.map((call) => (
         <div
           key={call.conversationId}
@@ -73,7 +73,7 @@ export function IncomingCallOverlay({
             name={call.caller.displayName}
             avatarUrl={call.caller.avatarUrl}
             rounded="full"
-            className="h-10 w-10 redesign:h-11 redesign:w-11 redesign:ring-2 redesign:ring-[color:var(--call-speaking)] redesign:ring-offset-2 redesign:ring-offset-[color:var(--popover-surface)] redesign:motion-safe:animate-pulse"
+            className="h-10 w-10 redesign:h-11 redesign:w-11 redesign:ring-2 redesign:ring-[color:color-mix(in_oklab,var(--call-speaking)_70%,transparent)] redesign:ring-offset-1 redesign:ring-offset-[color:var(--popover-surface)] redesign:motion-safe:animate-pulse"
             fallbackClassName="bg-border text-sm text-text"
           />
           <div className="min-w-0 flex-1">
