@@ -60,7 +60,10 @@ case "$(uname -s)" in
     command -v twm >/dev/null || { echo "::error::twm is not installed, so the shell will auto-pick and never open its picker"; exit 1; }
     # twm's default asks a person to click where each new window goes and
     # leaves it unmapped until then; these place it where it asked to be.
-    printf 'RandomPlacement\nUsePPosition "on"\nNoTitle\n' > "$out/twmrc"
+    # Every font named, as `fixed`: its default "variable" is not on a runner.
+    printf '%s\n' 'RandomPlacement' 'UsePPosition "on"' 'NoTitle' \
+      'TitleFont "fixed"' 'ResizeFont "fixed"' 'MenuFont "fixed"' \
+      'IconFont "fixed"' 'IconManagerFont "fixed"' > "$out/twmrc"
     cat > "$out/xvfb-session.sh" <<SESSION
 #!/usr/bin/env bash
 set -e
