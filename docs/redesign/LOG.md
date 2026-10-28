@@ -1680,6 +1680,12 @@ composer dialog with similar posts and tags):
    forum's own empty block (logged, not merged: the shared EmptyState already
    draws it).
 
+Rounds: r1 Codex 7.6, r2 Codex 8.2, r3 Opus 8.3, r4 Codex 8.3, r5 Opus 8.4
+(no MUST, no SHOULD, cap). After r5: the composer title on the card edge,
+the light open row a step under the selected channel, the segmented status
+and the inverse toggles written down in DESIGN.md. Not done: an unread post
+in the light shots (the dark pass marks the fixture read first).
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss
