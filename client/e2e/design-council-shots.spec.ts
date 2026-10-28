@@ -1214,18 +1214,20 @@ test("captures the stories", async ({ browser }) => {
       await expect(ring).toBeVisible({ timeout: 20_000 });
       await page.waitForTimeout(600);
       await shoot(page, `f-stories-strip-${theme}`);
-      // States: keyboard focus on Rafa's ring, the pointer on "Ver todos".
-      await page.keyboard.press("Shift");
-      await ring.focus();
-      await page.getByRole("button", { name: /Ver todos/ }).first().hover().catch(() => {});
-      await page.waitForTimeout(300);
-      await shoot(page, `f-stories-states-${theme}`);
-      await page.mouse.move(0, 0);
       await ring.click();
       await expect(page.locator("[data-story-viewer]")).toBeVisible({ timeout: 10_000 });
       await page.waitForTimeout(900);
       await shoot(page, `f-stories-viewer-${theme}`);
       await page.keyboard.press("Escape");
+      // States, after the viewer closed so Rafa is seen in both themes:
+      // keyboard focus on Rafa's ring, the pointer on "Ver todos".
+      await page.waitForTimeout(600);
+      await page.keyboard.press("Shift");
+      await ring.focus();
+      await page.getByRole("button", { name: /Ver todos/ }).first().hover();
+      await page.waitForTimeout(300);
+      await shoot(page, `f-stories-states-${theme}`);
+      await page.mouse.move(0, 0);
       await page.waitForTimeout(500);
       await page.locator("[data-server-menu-trigger]").first().click();
       await page.getByRole("menuitem", { name: "Postar story" }).click();

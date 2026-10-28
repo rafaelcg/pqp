@@ -1855,7 +1855,7 @@ function ArrowButton({
       type="button"
       aria-label={label}
       onClick={onClick}
-      className="z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-text text-surface-0 opacity-90 hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+      className="z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-text text-surface-0 redesign:bg-[color:var(--story-on-media)] redesign:text-[color:var(--story-on-accent)] opacity-90 hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
     >
       {children}
     </button>
