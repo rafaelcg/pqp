@@ -1416,20 +1416,29 @@ go. Finally it merges an impossible constraint (`width: {max: 0}`, and a
 `min`) over what the app built and requires the same judgement to call that a
 failure: a green run is evidence that red was possible.
 
+On CI every runner must open the shell's picker and capture real frames
+(measured 2026-10-28, all three green on v0.2.7, all three red on v0.2.8):
+
+- **Windows** (`windows-latest`, Server 2025): a 1024x768 screen among three
+  sources, the picker's sound switch, Chromium's loopback ("System audio") and
+  the native per-process capture both arrive as live tracks.
+- **macOS** (`macos-latest`, arm64): a fresh runner has not granted the bundle
+  Screen Recording, so `run-ci.sh` writes the grant into TCC (hosted runners
+  allow it); the picker then lists the display with previews and frames
+  arrive. If the grant ever stops taking, the test fails, it does not pass on
+  less. (A developer Mac where only the terminal holds the grant gets a live
+  track with no frames; `pnpm electron:smoke-share` then reports frames as
+  "not verified" instead of failing.)
+- **Linux** (`ubuntu-latest`): Xvfb plus the smallest window manager there is
+  (`twm`), so the app's own window is a second source and the shell opens its
+  picker; with one source it auto-picks and the picker never runs.
+
 What it does **not** prove, and why:
 
-- **That anybody hears the sound.** Windows runners have an audio service and
-  output endpoints but nothing plays: a live loopback or native track is
-  proven, its content is not. The call itself, LiveKit, the encoder and the
+- **That anybody hears the sound.** On Windows the loopback and native tracks
+  are proven live, not that they carry the machine's sound without the call:
+  nothing plays on a runner. The call itself, LiveKit, the encoder and the
   viewers are not in this test at all.
-- **macOS frames.** A fresh runner has not granted this bundle Screen
-  Recording. The test writes the grant into TCC and then reads the outcome off
-  the picker: when the shell still lists no screen and no previews, the run
-  checks everything up to the permission wall (Chromium accepted the
-  constraints, the shell answered with a source, the track is live and stops
-  cleanly) and reports frames as "not verified" in the summary instead of
-  failing. A constraint Chromium refuses still fails, because it refuses before
-  the shell is ever asked; that is the 0.2.8 shape.
 - **Real Windows 11 desktops.** The runner is Windows Server 2025 (build
   26100), which the shell treats as Windows 11. GPU, drivers, multiple
   monitors, HDR, a game in exclusive fullscreen: none of that is on a runner.

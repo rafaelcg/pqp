@@ -13,9 +13,11 @@
 # out loud, rather than discovered by a flaky test:
 #
 # - Linux has no display: xvfb-run gives it one. One X screen and no window
-#   manager is ONE source, which the shell auto-picks without its picker, so
-#   the screen is split into two RandR monitors (`xrandr --setmonitor`, from
-#   Ubuntu's x11-xserver-utils, installed here when the image lacks it).
+#   manager is ONE source (Chromium lists only windows a manager has mapped),
+#   which the shell auto-picks without its picker. So a window manager runs
+#   too, the smallest there is (Ubuntu's `twm`, installed here when the image
+#   lacks it), and the app's own window becomes the second source. Splitting
+#   the screen with `xrandr --setmonitor` was tried first: Xvfb ignores it.
 #   Ubuntu 24.04 also refuses unprivileged user namespaces to binaries with no
 #   AppArmor profile, which is how an AppImage's Chromium sandbox starts; that
 #   is lifted for the runner rather than starting the app with --no-sandbox, so
@@ -49,17 +51,16 @@ case "$(uname -s)" in
     if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
       sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 >/dev/null
     fi
-    if ! command -v xrandr >/dev/null; then
-      sudo apt-get install -y --no-install-recommends x11-xserver-utils >/dev/null 2>&1 || {
-        sudo apt-get update -qq >/dev/null && sudo apt-get install -y --no-install-recommends x11-xserver-utils >/dev/null
+    if ! command -v twm >/dev/null; then
+      sudo apt-get install -y --no-install-recommends twm >/dev/null 2>&1 || {
+        sudo apt-get update -qq >/dev/null && sudo apt-get install -y --no-install-recommends twm >/dev/null
       }
     fi
     cat > "$out/xvfb-session.sh" <<'SESSION'
 #!/usr/bin/env bash
 set -e
-xrandr --setmonitor pqp-left 640/169x800/211+0+0 none
-xrandr --setmonitor pqp-right 640/169x800/211+640+0 none
-xrandr --listmonitors
+twm >/dev/null 2>&1 &
+sleep 1
 exec "$@"
 SESSION
     chmod +x "$out/xvfb-session.sh"
