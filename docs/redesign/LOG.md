@@ -126,6 +126,23 @@ council shots take `DESIGN_COUNCIL_LOOK`, `DESIGN_COUNCIL_CONTRAST` and
   focus is in each element's states shots. After the fixes: friends and
   Baú unit tests and e2e (18 passed).
 
+Toggle-off proof (2026-10-28). The council shots ran with the toggle off on
+`main` (506969455, in a detached worktree) and on `redesign`: 163 shots each,
+compared pixel by pixel (`~/pqp-redesign/verify-2026-10-28/toggle-off/`). The
+`main` copy of the spec swaps two hooks that only exist on `redesign`
+(`data-chat-header`, `data-user-panel-trigger`) for selectors `main` has.
+
+- Three leaks found and fixed (`rd/toggle-off-fixes`, merged): the conversation title
+  split `#` from the name, so the row's gap opened between them (now one text
+  run with the toggle off, as on `main`); the name truncated with an ellipsis
+  where `main` clips; the server rail's tooltip sat 2px further out (offset 14
+  for everyone, now 14 only under the redesign).
+- Intended: Settings shows the Beta tab, where the "Novo visual" switch lives.
+- Noise, not leaks: timestamps, random `#0000` tags and invite codes, the
+  watch party countdown, the fake camera's moving pattern and speaking rings
+  in the call scenes, and a button caught at a different point of its
+  hover-out fade.
+
 ## Phase 0: directions
 
 The mockups live on branch `rd/directions` (not merged). Open
