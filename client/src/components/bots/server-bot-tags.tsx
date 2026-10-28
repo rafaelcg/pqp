@@ -2,11 +2,11 @@ import { Badge } from "@/components/ui/badge";
 import { BetaTag } from "@/components/ui/beta-tag";
 import { useTranslation } from "@/lib/i18n";
 
-/** BOT and BETA beside a server bot's name; "removido" once it left the server. */
 /** "beta" on every bot surface under the redesign: the sentence-case tag shape, as BOT. */
 export const BOT_BETA_TAG_REDESIGN =
   "redesign:h-[var(--badge-tag-h)] redesign:rounded-[var(--badge-radius)] redesign:px-[var(--badge-tag-px)] redesign:py-0 redesign:text-[length:var(--badge-text)] redesign:normal-case redesign:tracking-normal redesign:bg-transparent";
 
+/** BOT and BETA beside a server bot's name; "removido" once it left the server. */
 export function ServerBotTags({ gone = false }: { gone?: boolean }) {
   const { t } = useTranslation();
   return (

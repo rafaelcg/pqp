@@ -535,6 +535,7 @@ export function BotWizard({ open, serverId, serverName, onClose, onAdjust }: Bot
                     maxLength={SERVER_BOT_PERSONA_MAX}
                     placeholder={t("serverSettings.bots.personaPlaceholder")}
                     onChange={(e) => update({ persona: e.target.value })}
+                    className="redesign:resize-none"
                   />
                   <Counter value={draft.persona.length} max={SERVER_BOT_PERSONA_MAX} />
                 </div>

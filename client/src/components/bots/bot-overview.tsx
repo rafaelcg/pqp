@@ -148,13 +148,13 @@ export function BotOverviewPanel({
           </p>
         </Stat>
         <Stat label={t("bots.overview.lives")}>
-          <p className={cn("font-display text-3xl font-extrabold text-text", nowhere && "redesign:text-xl redesign:font-bold")}>
+          <p className={cn("font-display text-3xl font-extrabold text-text", nowhere && "redesign:text-xl redesign:font-bold redesign:leading-9")}>
             {nowhere ? t("bots.overview.channelsNone") : t("bots.overview.channels", { count: homes.length })}
           </p>
           {nowhere ? (
             // Awake but in no channel: say so, and a button to the tab that marks them.
             <>
-              {bot.enabled && <p className="mt-2 text-xs text-text-secondary">{t("bots.overview.nowhere")}</p>}
+              {bot.enabled && <p className="mt-2 text-xs text-warning">{t("bots.overview.nowhere")}</p>}
               {onOpenPowers && (
                 <Button type="button" size="sm" variant="secondary" className="mt-3" onClick={onOpenPowers}>
                   {t("bots.overview.pickChannels")}
