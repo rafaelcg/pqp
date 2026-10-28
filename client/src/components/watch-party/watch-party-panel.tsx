@@ -1,3 +1,5 @@
+import { IconSwap } from "@/components/ui/icon";
+import { ShareNetwork as ShareNetworkFill, SlidersHorizontal as SlidersHorizontalFill } from "@phosphor-icons/react";
 import {
   useEffect,
   useMemo,
@@ -595,7 +597,7 @@ function WatchPartyShareButton({
       {outcome === "copied" ? (
         <Check className={cn("h-3.5 w-3.5", !iconOnly && "mr-1.5")} aria-hidden />
       ) : (
-        <Share2 className={cn("h-3.5 w-3.5", !iconOnly && "mr-1.5")} aria-hidden />
+        <IconSwap off={Share2} on={ShareNetworkFill} offClassName={cn("h-3.5 w-3.5", !iconOnly && "mr-1.5")} className={cn("h-4 w-4", !iconOnly && "mr-1.5")} />
       )}
       {!iconOnly && label}
     </Button>
@@ -2518,7 +2520,7 @@ function LiveSurface(
           onClick={() => setOptionsOpen((open) => !open)}
           data-watch-party-options-toggle
         >
-          <Settings2 className="h-3.5 w-3.5" aria-hidden />
+          <IconSwap off={Settings2} on={SlidersHorizontalFill} offClassName="h-3.5 w-3.5" className="h-4 w-4" />
         </Button>
         {canClaim && (
           <Button
