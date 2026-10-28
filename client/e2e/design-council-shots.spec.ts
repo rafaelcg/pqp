@@ -1249,10 +1249,12 @@ test("captures the bau", async ({ browser }) => {
       await expect(page.locator("[data-community-home-feed] [data-home-post]").first()).toBeVisible({ timeout: 30_000 });
       await page.waitForTimeout(1200);
       await shoot(page, `f-bau-post-${theme}`);
-      // The draft and scheduled chips, further down Lia's feed.
+      // The scheduled chip on its post.
       await page.goto(`/app/server/${home.id}?lang=pt-BR&communityHome=1`);
       await hideDevBanner(page);
-      const chips = page.locator("[data-community-home-feed] [data-home-post]").filter({ hasText: "Resultado do quiz" });
+      // Scheduled posts sit behind the banner's "Ver agendados".
+      await page.getByRole("button", { name: "Ver agendados" }).click({ timeout: 30_000 });
+      const chips = page.locator("[data-home-post]").filter({ hasText: "Resultado do quiz" });
       await chips.scrollIntoViewIfNeeded({ timeout: 30_000 });
       await page.waitForTimeout(600);
       await chips.screenshot({ path: path.join(OUT!, `f-bau-scheduled-${theme}.png`) });
