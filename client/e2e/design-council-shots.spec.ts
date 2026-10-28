@@ -927,6 +927,11 @@ test("captures the design council screens", async ({ browser }) => {
           await ringPage.waitForTimeout(500);
           await shoot(ringPage, `f-dm-call-ring-${theme}`);
           await ring.screenshot({ path: path.join(OUT!, `f-dm-call-ring-card-${theme}.png`) });
+          // The pointer on answer, held through the shot (shoot() parks it).
+          await ring.getByRole("button", { name: "Atender" }).hover();
+          await ringPage.waitForTimeout(400);
+          await ring.screenshot({ path: path.join(OUT!, `f-dm-call-ring-hover-${theme}.png`) });
+          await ringPage.mouse.move(0, 0);
         }
       } catch (error) {
         console.log(`f-dm-call: ring skipped (${String(error).slice(0, 120)})`);

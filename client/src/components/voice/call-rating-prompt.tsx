@@ -38,17 +38,20 @@ export function CallRatingPrompt({
   call,
   onDone,
   initialRating = null,
+  initialStage = null,
 }: {
   call: RatableCall;
   onDone: () => void;
   /** The QA sheet's way to show the note step; the app never passes it. */
   initialRating?: number | null;
+  /** The QA sheet's way to show sending and thanks; the app never passes it. */
+  initialStage?: "sending" | "sent" | null;
 }) {
   const { t } = useTranslation();
   const [rating, setRating] = useState<number | null>(initialRating);
   const [note, setNote] = useState("");
-  const [sending, setSending] = useState(false);
-  const [sent, setSent] = useState(false);
+  const [sending, setSending] = useState(initialStage === "sending");
+  const [sent, setSent] = useState(initialStage === "sent");
 
   const wantsNote = rating !== null && rating <= 3;
 

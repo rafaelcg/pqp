@@ -1460,11 +1460,13 @@ export function ShellSheet() {
       </div>
       {/* The music queue in a call's composer: three waiting, one played. */}
       <MusicQueueSpecimen />
-      {/* After a call: the rating prompt fresh, and with a low score picked,
-          which opens the note. */}
+      {/* After a call: the rating prompt fresh, with a low score picked
+          (which opens the note), while a 4 sends, and the thanks. */}
       <div data-testid="qa-call-rating" className="grid max-w-3xl grid-cols-2 items-start gap-6 p-4">
         <CallRatingPrompt call={RATED_CALL} onDone={noop} />
         <CallRatingPrompt call={RATED_CALL} onDone={noop} initialRating={2} />
+        <CallRatingPrompt call={RATED_CALL} onDone={noop} initialRating={4} initialStage="sending" />
+        <CallRatingPrompt call={RATED_CALL} onDone={noop} initialStage="sent" />
       </div>
     </div>
   );
