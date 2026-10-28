@@ -1815,6 +1815,14 @@ host, the app column beside a call):
 4. Kept: everything; the three frame chromes stay (each is a different
    host for the same iframe).
 
+Rounds: r1 Codex 8.4, r2 Opus 8.5 (approved), r3 Codex 8.6, r4 Opus 8.7,
+r5 Opus 8.7 (no MUST, cap). After r5: faces on a live card cut from a solid
+card fill (`--card-bg-solid`), live subtitles in secondary text, faces on
+the warning strip cut from its yellow. Not done: the narrow strip's screen
+icon stays lucide; the full card's count copy is unchanged (copy would
+change with the toggle off); the narrow strip keeps its sharing pill (its
+hidden label is what a screen reader hears).
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss
