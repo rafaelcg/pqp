@@ -638,10 +638,12 @@ function CommentsBlock({
           {t("communityHome.comments.off")}
         </p>
       ) : (
-        <form className="mt-2 flex items-center gap-2" onSubmit={submit}>
+        <form className="mt-2 flex items-center gap-2 redesign:max-sm:flex-wrap" onSubmit={submit}>
+          {/* On a phone the field takes its own row under the redesign, so
+              it stays wide enough to read; the tools and send sit under it. */}
           <input
             ref={inputRef}
-            className="min-w-0 flex-1 rounded-lg border border-ink-4 bg-ink px-3 py-1.5 text-sm placeholder:text-paper-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60 redesign:h-[var(--control-md)] redesign:rounded-full redesign:border-[color:var(--input-border)] redesign:bg-[color:var(--input-bg)] redesign:px-[var(--input-px)] redesign:placeholder:text-text-tertiary redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-ring-offset redesign:focus-visible:ring-[color:var(--input-ring,var(--color-focus-ring))]"
+            className="min-w-0 flex-1 redesign:max-sm:basis-full rounded-lg border border-ink-4 bg-ink px-3 py-1.5 text-sm placeholder:text-paper-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60 redesign:h-[var(--control-md)] redesign:rounded-full redesign:border-[color:var(--input-border)] redesign:bg-[color:var(--input-bg)] redesign:px-[var(--input-px)] redesign:placeholder:text-text-tertiary redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-ring-offset redesign:focus-visible:ring-[color:var(--input-ring,var(--color-focus-ring))]"
             value={draft}
             maxLength={COMMUNITY_HOME_COMMENT_MAX}
             onChange={(event) => setDraft(event.target.value)}
@@ -653,7 +655,7 @@ function CommentsBlock({
               bottom of the feed. */}
           <div
             ref={pickerAnchorRef}
-            className="relative flex shrink-0 items-center gap-0.5"
+            className="relative flex shrink-0 items-center gap-0.5 redesign:max-sm:ml-auto"
           >
             <button
               type="button"
