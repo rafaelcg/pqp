@@ -568,6 +568,24 @@ Under the redesign both are the server sidebar's twin:
 - Keyboard focus is the inset `--list-row-ring`. Section labels are the
   shared label in sentence case.
 
+### The people pickers
+
+The classic new conversation dialog (`user/new-dm-dialog.tsx`), Nova conversa
+(`conversations/new-conversation-dialog.tsx`) and the quick switcher
+(`conversations/quick-switcher.tsx`) share `conversations/picker-redesign.ts`:
+
+- A picked person is `PICKED_CHIP_REDESIGN`: a 28px accent-soft pill with
+  their 20px face and a 14px bold X, in both dialogs.
+- Nova conversa's people are two-line list-row pills 6px apart. Inside the
+  dialog `--list-row-hover` is scoped to `--menu-row-hover`, since the
+  sidebar's opaque hover vanishes on the dialog in dark. Ticked takes
+  `--list-row-selected-tall`; keyboard focus rings the whole pill.
+- A presence dot or a group face is cut by the dialog's own surface
+  (`DIALOG_CUT_REDESIGN`, `--elevation-3-surface`).
+- The switcher's field is the input's round well. Its rows take the menu's
+  row radius and one highlight (`--menu-row-hover`) that the keys and the
+  pointer both move, and its footer drops the keys that do nothing.
+
 ### The voice row
 
 A voice channel is a channel row (`ChannelRow`). The room you are in takes

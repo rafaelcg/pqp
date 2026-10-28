@@ -1803,6 +1803,130 @@ test("captures the dm home", async ({ browser }) => {
   }
 });
 
+test("captures the new conversation dialogs", async ({ browser }) => {
+  fs.mkdirSync(OUT!, { recursive: true });
+  const ids: Record<string, string> = {};
+  for (const [suffix, name, avatar] of PEOPLE.slice(0, 6)) {
+    ids[suffix] = await person(suffix, name, avatar);
+  }
+  const hub = await server(VIEWER, "Turma do Fliperama");
+  for (const suffix of ["rafa", "bia", "caio", "duda", "gui"]) {
+    await join(VIEWER, hub.id, suffix);
+  }
+  for (const friend of ["rafa", "bia", "caio"]) {
+    await befriend(friend, VIEWER, ids[VIEWER]!, ids[friend]!);
+  }
+  const { conversation } = await json<{ conversation: { channelId: string } }>(
+    await fetch(`${API}/api/dms`, {
+      method: "POST",
+      headers: headers("gui"),
+      body: JSON.stringify({ userIds: [ids[VIEWER]] }),
+    }),
+  );
+  const sockets = new Map<string, Socket>();
+  for (const suffix of [VIEWER, "rafa", "bia", "gui"]) {
+    const socket = new Socket(suffix);
+    await socket.connect();
+    sockets.set(suffix, socket);
+  }
+  await sockets.get("gui")!.say(conversation.channelId, "bora x1 hoje?");
+
+  const crop = async (page: Page, name: string) => {
+    const box = (await page.getByRole("dialog").first().boundingBox())!;
+    await page.screenshot({
+      path: path.join(OUT!, `${name}.png`),
+      clip: { x: Math.max(0, box.x - 16), y: Math.max(0, box.y - 16), width: box.width + 32, height: box.height + 32 },
+    });
+  };
+
+  const shots = async (conversas: boolean) => {
+    for (const theme of ["dark", "light"] as const) {
+      const context = await browser.newContext({ viewport: DESKTOP, colorScheme: theme });
+      const page = await context.newPage();
+      await as(page, theme);
+      await page.goto(`/app/dm?lang=pt-BR`);
+      // Modo 2005's contact list shows no last message.
+      await expect(
+        LOOK === "retro" ? page.getByText("Contatos").first() : page.getByText("bora x1 hoje?").first(),
+      ).toBeVisible({ timeout: 30_000 });
+      await hideDevBanner(page);
+      await openPhoneNav(page);
+      if (!conversas) {
+        // Classic: the dialog as it opens, then a group being built.
+        await page.getByRole("button", { name: "Nova mensagem" }).first().click();
+        await expect(page.getByRole("dialog").getByText("Comece uma conversa")).toBeVisible();
+        await page.waitForTimeout(400);
+        await shoot(page, `f-new-dm-${theme}`);
+        const field = page.getByRole("combobox", { name: "Achar pessoas" });
+        await field.fill("ca");
+        await page.getByRole("option", { name: /Caio/ }).first().click();
+        await field.fill("ra");
+        await expect(page.getByRole("option", { name: /Rafa/ }).first()).toBeVisible({ timeout: 10_000 });
+        await page.waitForTimeout(400);
+        await crop(page, `f-new-dm-group-${theme}`);
+        await page.keyboard.press("Escape");
+      } else {
+        // Nova conversa: friends listed before typing; then two ticked.
+        await (LOOK === "retro"
+          ? page.getByRole("button", { name: /Nova (conversa|mensagem)/ }).first()
+          : page.locator("[data-conversations-new]").first()
+        ).click();
+        await expect(page.locator("[data-new-conversation]")).toBeVisible();
+        await page.waitForTimeout(400);
+        await shoot(page, `f-new-dm-conversas-${theme}`);
+        await page.getByRole("checkbox", { name: /Rafa/ }).first().click();
+        await page.getByRole("checkbox", { name: /Bia/ }).first().click();
+        await page.locator("[data-new-conversation-person]").filter({ hasText: "Caio" }).first().hover();
+        await page.waitForTimeout(400);
+        await crop(page, `f-new-dm-conversas-group-${theme}`);
+        // Keyboard focus on a person.
+        await page.keyboard.press("Shift");
+        await page.locator("[data-new-conversation-person]").filter({ hasText: "Caio" }).locator("button").first().focus();
+        await page.mouse.move(0, 0);
+        await page.waitForTimeout(300);
+        await crop(page, `f-new-dm-conversas-focus-${theme}`);
+        // Nobody in the lists matches: the local empty line.
+        await page.getByRole("combobox", { name: "Achar pessoas" }).fill("zzzz");
+        await page.waitForTimeout(600);
+        await crop(page, `f-new-dm-conversas-empty-${theme}`);
+        await page.keyboard.press("Escape");
+        // The quick switcher: as it opens, then a query.
+        await page.keyboard.press("Control+k");
+        await expect(page.locator("[data-quick-switcher]")).toBeVisible();
+        await page.waitForTimeout(400);
+        await crop(page, `f-new-dm-switcher-${theme}`);
+        await page.locator("[data-quick-switcher-input]").fill("ra");
+        await page.waitForTimeout(500);
+        await crop(page, `f-new-dm-switcher-query-${theme}`);
+        await page.locator("[data-quick-switcher-input]").fill("zzzz");
+        await page.waitForTimeout(400);
+        await crop(page, `f-new-dm-switcher-empty-${theme}`);
+      }
+      await context.close();
+    }
+  };
+
+  await shots(false);
+  const on = await fetch(`${API}/api/admin/flags`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${ADMIN_TOKEN}` },
+    body: JSON.stringify({ key: "conversations_home", enabled: true }),
+  });
+  expect(on.status).toBe(200);
+  try {
+    await shots(true);
+  } finally {
+    await fetch(`${API}/api/admin/flags`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${ADMIN_TOKEN}` },
+      body: JSON.stringify({ key: "conversations_home", enabled: null }),
+    });
+    for (const socket of sockets.values()) {
+      socket.close();
+    }
+  }
+});
+
 test("captures the forum post", async ({ browser }) => {
   fs.mkdirSync(OUT!, { recursive: true });
   await person(VIEWER, "Lia", PRESET(4));
