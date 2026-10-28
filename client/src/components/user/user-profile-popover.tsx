@@ -342,7 +342,7 @@ function ActionTile({ label, className, children, ...rest }: ActionTileProps) {
       )}
       {...rest}
     >
-      <span className="flex h-10 w-full items-center justify-center rounded-xl bg-ink-3/70 text-paper transition-colors group-hover:bg-ink-3 group-focus-visible:ring-2 group-focus-visible:ring-signal/60 redesign:rounded-full redesign:bg-[color:var(--card-bg)] redesign:[:root[data-theme=light]_&]:bg-[color:var(--content-glyph-bg)] redesign:text-text redesign:group-hover:bg-[color:var(--menu-row-hover)] redesign:[:root[data-theme=light]_&]:group-hover:bg-[color:var(--content-card-hover)] redesign:group-focus-visible:ring-[color:var(--list-row-ring)]">
+      <span className="flex h-10 w-full items-center justify-center rounded-xl bg-ink-3/70 text-paper transition-colors group-hover:bg-ink-3 group-focus-visible:ring-2 group-focus-visible:ring-signal/60 redesign:rounded-full redesign:bg-[color:var(--card-bg)] redesign:[:root[data-theme=light]_&]:bg-[color:var(--content-glyph-bg)] redesign:text-text redesign:group-hover:bg-[color:var(--menu-row-hover)] redesign:[:root[data-theme=light]_&]:group-hover:bg-[color:var(--content-card-hover)] redesign:group-focus-visible:ring-[color:var(--list-row-ring)] redesign:group-focus-visible:ring-offset-2 redesign:group-focus-visible:ring-offset-[color:var(--popover-surface)]">
         {children}
       </span>
       <span className="max-w-full text-center text-[11px] font-medium leading-tight text-paper-muted redesign:text-text-secondary">
@@ -1192,7 +1192,7 @@ function UserProfileCard({
                 window.open(publicHref, "_blank", "noopener,noreferrer");
               }}
             >
-              <IconSwap off={ArrowUpRight} on={ArrowUpRightGlyph} kind="symbol" offClassName="h-[18px] w-[18px]" />
+              <IconSwap off={ArrowUpRight} on={ArrowUpRightGlyph} kind="symbol" offClassName="h-[18px] w-[18px]" size="md" />
             </ActionTile>
           </div>
         )}
@@ -1204,7 +1204,7 @@ function UserProfileCard({
               data-profile-message=""
               onClick={handleMessage}
             >
-              <IconSwap off={MessageCircle} on={ChatCircle} offClassName="h-[18px] w-[18px]" />
+              <IconSwap off={MessageCircle} on={ChatCircle} offClassName="h-[18px] w-[18px]" size="md" />
             </ActionTile>
           </div>
         )}
@@ -1216,7 +1216,7 @@ function UserProfileCard({
               data-profile-call=""
               onClick={handleCall}
             >
-              <IconSwap off={Phone} on={PhoneGlyph} offClassName="h-[18px] w-[18px]" />
+              <IconSwap off={Phone} on={PhoneGlyph} offClassName="h-[18px] w-[18px]" size="md" />
             </ActionTile>
           </div>
         )}
@@ -1233,7 +1233,7 @@ function UserProfileCard({
                 onClose();
               }}
             >
-              <IconSwap off={AtSign} on={At} kind="symbol" offClassName="h-[18px] w-[18px]" />
+              <IconSwap off={AtSign} on={At} kind="symbol" offClassName="h-[18px] w-[18px]" size="md" />
             </ActionTile>
           </div>
         )}
@@ -1246,7 +1246,7 @@ function UserProfileCard({
               disabled={busy}
               onClick={() => setOverflowOpen((was) => !was)}
             >
-              <IconSwap off={MoreHorizontal} on={DotsThree} kind="symbol" offClassName="h-[18px] w-[18px]" />
+              <IconSwap off={MoreHorizontal} on={DotsThree} kind="symbol" offClassName="h-[18px] w-[18px]" size="md" />
             </ActionTile>
             {overflowOpen && (
               <div
@@ -1418,8 +1418,8 @@ function UserProfileCard({
             <StatusDot
               status={presence}
               size="md"
-              className="absolute bottom-0 right-0"
-              ringClassName="rounded-full bg-ink-2 ring-4 ring-ink-2"
+              className="absolute bottom-0 right-0 redesign:bottom-1.5 redesign:right-1.5"
+              ringClassName="rounded-full bg-ink-2 ring-4 ring-ink-2 redesign:bg-[color:var(--popover-surface)] redesign:ring-[color:var(--popover-surface)]"
             />
           )}
         </div>
