@@ -1,10 +1,15 @@
+import { Check as CheckGlyph, X as XGlyph } from "@phosphor-icons/react";
 import { Check, X } from "lucide-react";
+import { Icon } from "@/components/ui/icon";
+import { useRedesign } from "@/lib/redesign";
 import { useState } from "react";
 import type { Depoimento } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useTranslation } from "@/lib/i18n";
 import { depoimentoDate } from "./depoimentos-model";
+import { SECTION_LABEL_REDESIGN } from "@/components/ui/section-header";
+import { cn } from "@/lib/utils";
 
 /**
  * The queue: depoimentos friends have written about you that nobody — not even
@@ -41,6 +46,7 @@ export function PendingDepoimentos({
   onApprove,
   onReject,
 }: PendingDepoimentosProps) {
+  const redesign = useRedesign();
   const { t, locale } = useTranslation();
   /** The one being published, held for its second tap. */
   const [confirming, setConfirming] = useState<string | null>(null);
@@ -55,20 +61,22 @@ export function PendingDepoimentos({
       data-depoimentos-pending={depoimentos.length}
       className="mb-4"
     >
-      <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-paper-muted">
-        {t("depoimentos.pending")}
+      <h2 className={cn("mb-2 text-xs font-semibold uppercase tracking-wider text-paper-muted", SECTION_LABEL_REDESIGN, "redesign:px-2")}>
+        {redesign
+          ? t("memberList.sectionHeading", { label: t("depoimentos.pendingLabel"), count: depoimentos.length })
+          : t("depoimentos.pending")}
       </h2>
-      <p className="mb-2 text-xs text-paper-muted">
+      <p className="mb-2 text-xs text-paper-muted redesign:px-2 redesign:text-[0.8125rem] redesign:text-text-secondary">
         {t("depoimentos.pending.hint")}
       </p>
-      <ul className="max-w-2xl space-y-1.5">
+      <ul className="max-w-2xl space-y-1.5 redesign:max-w-none">
         {depoimentos.map((one) => {
           const busy = busyId === one.id;
           return (
             <li
               key={one.id}
               data-depoimento-pending={one.id}
-              className="rounded-md border border-ink-4/60 bg-ink-2/60 p-2.5"
+              className="rounded-md border border-ink-4/60 bg-ink-2/60 p-2.5 redesign:rounded-[var(--radius-card)] redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:p-3.5"
             >
               {/* Name first. See the module note. */}
               <div className="flex items-center gap-2">
@@ -79,18 +87,18 @@ export function PendingDepoimentos({
                   className="h-6 w-6"
                   fallbackClassName="bg-ink-3 text-[10px] text-paper"
                 />
-                <span className="truncate text-sm font-medium text-paper">
+                <span className="truncate text-sm font-medium text-paper redesign:font-semibold redesign:text-text">
                   {one.author.displayName}
                 </span>
-                <span className="truncate text-[11px] text-paper-muted">
+                <span className="truncate text-[11px] text-paper-muted redesign:text-xs redesign:text-text-tertiary">
                   {one.author.tag}
                 </span>
-                <span className="ml-auto shrink-0 text-[11px] text-paper-muted">
+                <span className="ml-auto shrink-0 text-[11px] text-paper-muted redesign:text-xs redesign:text-text-tertiary">
                   {depoimentoDate(one, locale)}
                 </span>
               </div>
 
-              <p className="mt-1.5 whitespace-pre-wrap break-words text-sm text-paper">
+              <p className="mt-1.5 whitespace-pre-wrap break-words text-sm text-paper redesign:text-text">
                 {one.body}
               </p>
 
@@ -102,12 +110,12 @@ export function PendingDepoimentos({
                   role="alertdialog"
                   aria-label={t("depoimentos.approve.confirm.title")}
                   data-depoimento-confirm={one.id}
-                  className="mt-2 rounded-md border border-ink-4 bg-ink-3/60 p-2"
+                  className="mt-2 rounded-md border border-ink-4 bg-ink-3/60 p-2 redesign:mt-3 redesign:rounded-[var(--radius-control)] redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--content-glyph-bg)] redesign:p-3"
                 >
                   <p className="text-xs font-semibold text-paper">
                     {t("depoimentos.approve.confirm.title")}
                   </p>
-                  <p className="mt-1 text-[11px] text-paper-muted">
+                  <p className="mt-1 text-[11px] text-paper-muted redesign:text-xs redesign:text-text-secondary">
                     {t("depoimentos.approve.confirm.body", {
                       name: one.author.displayName,
                     })}
@@ -142,19 +150,21 @@ export function PendingDepoimentos({
                     data-depoimento-publish={one.id}
                     onClick={() => setConfirming(one.id)}
                   >
-                    <Check aria-hidden className="h-3.5 w-3.5" />
+                    <Check aria-hidden className="h-3.5 w-3.5 redesign:hidden" />
+                    <Icon icon={CheckGlyph} kind="symbol" size="sm" className="hidden redesign:block" />
                     {t("depoimentos.approve")}
                   </Button>
                   {/* One tap, no confirmation, and silent to the author — the
                       row simply stops existing. */}
                   <Button
                     size="sm"
-                    variant="ghost"
+                    variant={redesign ? "secondary" : "ghost"}
                     disabled={busy}
                     data-depoimento-reject={one.id}
                     onClick={() => onReject(one.id)}
                   >
-                    <X aria-hidden className="h-3.5 w-3.5" />
+                    <X aria-hidden className="h-3.5 w-3.5 redesign:hidden" />
+                    <Icon icon={XGlyph} kind="symbol" size="sm" className="hidden redesign:block" />
                     {t("depoimentos.reject")}
                   </Button>
                 </div>

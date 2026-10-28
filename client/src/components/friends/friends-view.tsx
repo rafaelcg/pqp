@@ -3,8 +3,16 @@ import {
   PANE_HEADER_RULE_REDESIGN,
   PANE_HEADER_TITLE_REDESIGN,
 } from "@/components/ui/pane-header";
-import { List as ListBold, Users as UsersFill } from "@phosphor-icons/react";
 import { Icon } from "@/components/ui/icon";
+import { SECTION_LABEL_REDESIGN } from "@/components/ui/section-header";
+import {
+  Check as CheckGlyph,
+  List as ListBold,
+  UserPlus as UserPlusGlyph,
+  Users as UsersFill,
+  X as XGlyph,
+} from "@phosphor-icons/react";
+
 import { cn } from "@/lib/utils";
 import type {
   Depoimento,
@@ -36,6 +44,19 @@ import {
   type FriendsTab,
 } from "./friends-model";
 import { useFriends } from "./use-friends";
+import { useRedesign } from "@/lib/redesign";
+
+/*
+ * Friends under the redesign (f-friends): a person is the list row's `lg`
+ * pill (two lines), section labels are the section label, the confirm is a
+ * card, the add panel sits on the pane under the header's rule.
+ */
+const FRIEND_ROW_REDESIGN =
+  "redesign:mb-0.5 redesign:min-h-[var(--list-row-h-lg)] redesign:gap-[var(--list-row-gap)] redesign:rounded-[var(--list-row-radius)] redesign:py-1.5 redesign:pl-2 redesign:pr-2 redesign:hover:bg-[color:var(--list-row-hover)]";
+const FRIEND_NAME_REDESIGN = "redesign:font-semibold redesign:text-text";
+const FRIEND_TAG_REDESIGN =
+  "redesign:font-sans redesign:text-xs redesign:text-[color:var(--list-row-detail)]";
+const FRIEND_SECTION_REDESIGN = cn(SECTION_LABEL_REDESIGN, "redesign:px-2");
 
 /**
  * The Friends view: what the app shows when you are "home" — no server, no
@@ -101,6 +122,7 @@ export function FriendsView({
   firstRun,
 }: FriendsViewProps) {
   const { t } = useTranslation();
+  const redesign = useRedesign();
   const {
     data,
     pendingDepoimentos,
@@ -261,6 +283,51 @@ export function FriendsView({
     },
   ];
 
+  // One remove confirm, drawn in one of two places: above the section label
+  // under the redesign, after it with the toggle off, where it always was.
+  const removeConfirm = confirmingRemoval ? (
+    <div
+      role="alertdialog"
+      aria-label={t("friends.remove.confirm.title", {
+        name: confirmingRemoval.displayName,
+      })}
+      data-remove-confirm=""
+      className="mb-3 max-w-2xl redesign:max-w-none rounded-md border border-ink-4 bg-ink-3/60 p-3 redesign:rounded-[var(--radius-card)] redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:mb-4 redesign:p-4"
+    >
+      <p className="text-sm font-semibold text-paper redesign:text-text">
+        {t("friends.remove.confirm.title", {
+          name: confirmingRemoval.displayName,
+        })}
+      </p>
+      {/* States the surprising part rather than asking "are you
+          sure?": what makes this worth confirming is that it is
+          silent and that it is undoable only by asking again. */}
+      <p className="mt-1 text-xs text-paper-muted redesign:text-[0.8125rem] redesign:text-text-secondary">
+        {t("friends.remove.confirm.body")}
+      </p>
+      <div className="mt-2.5 flex gap-1.5 redesign:mt-3 redesign:gap-2">
+        <Button
+          size="sm"
+          variant="danger"
+          onClick={() => {
+            const person = confirmingRemoval;
+            setConfirmingRemoval(null);
+            void run(person.id, () => remove(person.id));
+          }}
+        >
+          {t("friends.remove")}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => setConfirmingRemoval(null)}
+        >
+          {t("friends.remove.keep")}
+        </Button>
+      </div>
+    </div>
+  ) : null;
+
   return (
     // `@container`: the header breaks on its OWN width, not the window's. One
     // row needs about 580px; at 390px the column is 318px, and at 768px the
@@ -284,7 +351,7 @@ export function FriendsView({
           aria-hidden="true"
           className="hidden h-5 w-5 shrink-0 text-paper-muted @sm:block redesign:!hidden"
         />
-        <Icon icon={UsersFill} size="sm" className="hidden shrink-0 text-text-tertiary redesign:@sm:block" />
+        <Icon icon={UsersFill} size="md" className="hidden shrink-0 text-text-tertiary redesign:@sm:block" />
         <h1 className={cn("min-w-0 truncate font-display text-base font-bold", PANE_HEADER_TITLE_REDESIGN)}>
           {t("friends.title")}
         </h1>
@@ -302,7 +369,13 @@ export function FriendsView({
 
         <Button
           size="sm"
-          className="ml-auto shrink-0"
+          className={cn(
+            "ml-auto shrink-0",
+            // Open, the button steps down to secondary under the redesign so
+            // it is not a second lime shape beside the field's lime ring.
+            adding &&
+              "redesign:bg-[color:var(--button-secondary-bg)] redesign:text-text redesign:hover:bg-[color:var(--button-secondary-hover)]",
+          )}
           aria-expanded={adding}
           onClick={() => {
             setAdding((open) => !open);
@@ -310,13 +383,14 @@ export function FriendsView({
             setActionError(null);
           }}
         >
-          <UserPlus aria-hidden="true" className="h-4 w-4" />
+          <UserPlus aria-hidden="true" className="h-4 w-4 redesign:hidden" />
+          <Icon icon={UserPlusGlyph} size="sm" className="hidden redesign:block" />
           {t("friends.addFriend")}
         </Button>
       </header>
 
       {adding && (
-        <div className="border-b border-ink-4/60 bg-ink-2/50 px-4 py-3">
+        <div className="border-b border-ink-4/60 bg-ink-2/50 px-4 py-3 redesign:border-[color:var(--pane-header-rule)] redesign:bg-transparent redesign:px-4 redesign:py-4">
           <div className="max-w-md">
             <UserSearch
               label={t("friends.addFriend.label")}
@@ -330,7 +404,7 @@ export function FriendsView({
               ]}
               onSelect={(person) => void handleAdd(person)}
             />
-            <p className="mt-1.5 text-xs text-paper-muted">
+            <p className="mt-1.5 text-xs text-paper-muted redesign:mt-2 redesign:px-3.5 redesign:text-[0.8125rem] redesign:text-text-secondary">
               {t("friends.addFriend.hint")}
             </p>
           </div>
@@ -351,7 +425,7 @@ export function FriendsView({
       <div
         id={panelId}
         role="tabpanel"
-        className="flex-1 overflow-y-auto p-4"
+        className="flex-1 overflow-y-auto p-4 redesign:px-2"
       >
         {/* Above the tab content, because it is the reason this screen is not
             empty. It stays put while they switch tabs — the three errands do not
@@ -392,53 +466,18 @@ export function FriendsView({
           />
         ) : (
           <>
+            {/* Under the redesign the confirm sits above the section's label,
+                so it never splits the label from its rows. With the toggle off it
+                stays after the label, where it always was. */}
+            {redesign && removeConfirm}
             {tab === "online" && online.length > 0 && (
-              <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-paper-muted">
-                {t("friends.onlineCount", { count: online.length })}
+              <h2 className={cn("mb-2 text-xs font-semibold uppercase tracking-wider text-paper-muted", FRIEND_SECTION_REDESIGN)}>
+                {redesign
+                  ? t("memberList.sectionHeading", { label: t("friends.onlineLabel"), count: online.length })
+                  : t("friends.onlineCount", { count: online.length })}
               </h2>
             )}
-            {confirmingRemoval && (
-              <div
-                role="alertdialog"
-                aria-label={t("friends.remove.confirm.title", {
-                  name: confirmingRemoval.displayName,
-                })}
-                data-remove-confirm=""
-                className="mb-3 max-w-2xl rounded-md border border-ink-4 bg-ink-3/60 p-3"
-              >
-                <p className="text-sm font-semibold text-paper">
-                  {t("friends.remove.confirm.title", {
-                    name: confirmingRemoval.displayName,
-                  })}
-                </p>
-                {/* States the surprising part rather than asking "are you
-                    sure?": what makes this worth confirming is that it is
-                    silent and that it is undoable only by asking again. */}
-                <p className="mt-1 text-xs text-paper-muted">
-                  {t("friends.remove.confirm.body")}
-                </p>
-                <div className="mt-2.5 flex gap-1.5">
-                  <Button
-                    size="sm"
-                    variant="danger"
-                    onClick={() => {
-                      const person = confirmingRemoval;
-                      setConfirmingRemoval(null);
-                      void run(person.id, () => remove(person.id));
-                    }}
-                  >
-                    {t("friends.remove")}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => setConfirmingRemoval(null)}
-                  >
-                    {t("friends.remove.keep")}
-                  </Button>
-                </div>
-              </div>
-            )}
+            {!redesign && removeConfirm}
             <FriendRows
               friends={tab === "online" ? online : sortOnlineFirst(data.friends)}
               emptyState={
@@ -446,7 +485,7 @@ export function FriendsView({
                   data.friends.length === 0 ? (
                     <NoFriendsYet onAdd={() => setAdding(true)} />
                   ) : (
-                    <p className="text-sm text-paper-muted">
+                    <p className="text-sm text-paper-muted redesign:px-2 redesign:text-text-secondary">
                       {t("friends.empty.online")}
                     </p>
                   )
@@ -461,7 +500,7 @@ export function FriendsView({
           </>
         )}
 
-        {extras && <div className="mt-6 max-w-md">{extras}</div>}
+        {extras && <div className="mt-6 max-w-md redesign:px-2">{extras}</div>}
       </div>
     </div>
   );
@@ -478,15 +517,16 @@ export function FriendsView({
       return null;
     }
     return (
-      <div className="max-w-sm">
-        <p className="font-display text-xl font-bold">
+      <div className="max-w-sm redesign:px-2">
+        <p className="font-display text-xl font-bold redesign:text-text">
           {t("friends.empty.all.title")}
         </p>
-        <p className="mt-2 text-sm text-paper-muted">
+        <p className="mt-2 text-sm text-paper-muted redesign:text-text-secondary">
           {t("friends.empty.all.body")}
         </p>
         <Button size="sm" className="mt-4" onClick={onAdd}>
-          <UserPlus aria-hidden="true" className="h-4 w-4" />
+          <UserPlus aria-hidden="true" className="h-4 w-4 redesign:hidden" />
+          <Icon icon={UserPlusGlyph} size="sm" className="hidden redesign:block" />
           {t("friends.addFriend")}
         </Button>
       </div>
@@ -513,19 +553,19 @@ function FriendRows({
     return <>{emptyState}</>;
   }
   return (
-    <ul className="max-w-2xl">
+    <ul className="max-w-2xl redesign:max-w-none">
       {friends.map((friend) => (
         <li
           key={friend.id}
-          className="group mb-1 flex items-center gap-3 rounded-md px-2 py-2 hover:bg-ink-3"
+          className={cn("group mb-1 flex items-center gap-3 rounded-md px-2 py-2 hover:bg-ink-3", FRIEND_ROW_REDESIGN)}
         >
           <FriendFace person={friend} status={friend.status} />
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-semibold">
+            <p className={cn("truncate text-sm font-semibold", FRIEND_NAME_REDESIGN)}>
               {friend.displayName}
             </p>
             {friend.tag && (
-              <p className="truncate font-mono text-[11px] text-paper-muted">
+              <p className={cn("truncate font-mono text-[11px] text-paper-muted", FRIEND_TAG_REDESIGN)}>
                 {friend.tag}
               </p>
             )}
@@ -547,8 +587,10 @@ function FriendRows({
               title={t("friends.remove")}
               data-remove-friend={friend.id}
               onClick={() => onRemove(friend)}
+              className="redesign:w-[var(--control-sm)] redesign:px-0"
             >
-              <X aria-hidden="true" className="h-4 w-4" />
+              <X aria-hidden="true" className="h-4 w-4 redesign:hidden" />
+              <Icon icon={XGlyph} kind="symbol" size="sm" className="hidden redesign:block" />
             </Button>
           </div>
         </li>
@@ -576,6 +618,7 @@ function PendingLists({
   onApproveDepoimento: (id: string) => void;
   onRejectDepoimento: (id: string) => void;
 }) {
+  const redesign = useRedesign();
   const { t } = useTranslation();
   if (
     incoming.length === 0 &&
@@ -583,11 +626,11 @@ function PendingLists({
     depoimentos.length === 0
   ) {
     return (
-      <p className="text-sm text-paper-muted">{t("friends.empty.pending")}</p>
+      <p className="text-sm text-paper-muted redesign:px-2 redesign:text-text-secondary">{t("friends.empty.pending")}</p>
     );
   }
   return (
-    <div className="max-w-2xl space-y-6">
+    <div className="max-w-2xl space-y-6 redesign:max-w-none">
       {/* First, and above the friend requests, because it is the one errand
           here with a warm payload — somebody wrote something about you and is
           waiting to see whether you will show it. */}
@@ -599,8 +642,10 @@ function PendingLists({
       />
       {incoming.length > 0 && (
         <section aria-label={t("friends.incoming")}>
-          <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-paper-muted">
-            {t("friends.incoming")}
+          <h2 className={cn("mb-2 text-xs font-semibold uppercase tracking-wider text-paper-muted", FRIEND_SECTION_REDESIGN)}>
+            {redesign
+              ? t("memberList.sectionHeading", { label: t("friends.incomingLabel"), count: incoming.length })
+              : t("friends.incoming")}
           </h2>
           <ul>
             {incoming.map((person) => (
@@ -610,15 +655,17 @@ function PendingLists({
                   disabled={busyId === person.id}
                   onClick={() => onAccept(person.id)}
                 >
-                  <Check aria-hidden="true" className="h-4 w-4" />
+                  <Check aria-hidden="true" className="h-4 w-4 redesign:hidden" />
+                  <Icon icon={CheckGlyph} kind="symbol" size="sm" className="hidden redesign:block" />
                   {t("friends.accept")}
                 </Button>
                 <Button
                   size="sm"
-                  variant="ghost"
+                  variant={redesign ? "secondary" : "ghost"}
                   disabled={busyId === person.id}
                   onClick={() => onRemove(person.id)}
                 >
+                  <Icon icon={XGlyph} kind="symbol" size="sm" className="hidden redesign:block" />
                   {t("friends.decline")}
                 </Button>
               </RequestRow>
@@ -628,15 +675,17 @@ function PendingLists({
       )}
       {outgoing.length > 0 && (
         <section aria-label={t("friends.outgoing")}>
-          <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-paper-muted">
-            {t("friends.outgoing")}
+          <h2 className={cn("mb-2 text-xs font-semibold uppercase tracking-wider text-paper-muted", FRIEND_SECTION_REDESIGN)}>
+            {redesign
+              ? t("memberList.sectionHeading", { label: t("friends.outgoingLabel"), count: outgoing.length })
+              : t("friends.outgoing")}
           </h2>
           <ul>
             {outgoing.map((person) => (
               <RequestRow key={person.id} person={person} busy={busyId === person.id}>
                 <Button
                   size="sm"
-                  variant="ghost"
+                  variant={redesign ? "secondary" : "ghost"}
                   disabled={busyId === person.id}
                   onClick={() => onRemove(person.id)}
                 >
@@ -665,15 +714,16 @@ function RequestRow({
       className={cn(
         "mb-1 flex items-center gap-3 rounded-md px-2 py-2 hover:bg-ink-3",
         busy && "opacity-60",
+        FRIEND_ROW_REDESIGN,
       )}
     >
       {/* No status pip on purpose: a request is from/to a stranger, and the
           server does not send one — see friendRequestEntrySchema. */}
       <FriendFace person={person} status={null} />
       <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-semibold">{person.displayName}</p>
+        <p className={cn("truncate text-sm font-semibold", FRIEND_NAME_REDESIGN)}>{person.displayName}</p>
         {person.tag && (
-          <p className="truncate font-mono text-[11px] text-paper-muted">
+          <p className={cn("truncate font-mono text-[11px] text-paper-muted", FRIEND_TAG_REDESIGN)}>
             {person.tag}
           </p>
         )}
@@ -700,14 +750,14 @@ function FriendFace({
         name={person.displayName}
         avatarUrl={person.avatarUrl}
         rounded="md"
-        className="h-9 w-9"
+        className="h-9 w-9 redesign:h-10 redesign:w-10"
         fallbackClassName="bg-ink-3 text-sm text-paper"
       />
       {status && (
         <StatusDot
           status={status}
-          className="absolute -bottom-0.5 -right-0.5"
-          ringClassName="rounded-full bg-ink ring-2 ring-ink"
+          className="absolute -bottom-0.5 -right-0.5 redesign:bottom-0 redesign:right-0"
+          ringClassName="rounded-full bg-ink ring-2 ring-ink redesign:bg-[color:var(--avatar-dot-ring)] redesign:ring-[color:var(--avatar-dot-ring)]"
         />
       )}
     </div>
@@ -716,13 +766,13 @@ function FriendFace({
 
 function FriendsSkeleton() {
   return (
-    <div className="max-w-2xl" aria-hidden="true">
+    <div className="max-w-2xl redesign:max-w-none" aria-hidden="true">
       {[0, 1, 2, 3].map((row) => (
-        <div key={row} className="mb-1 flex items-center gap-3 px-2 py-2">
-          <div className="h-9 w-9 animate-pulse rounded-md bg-ink-3/70" />
+        <div key={row} className="mb-1 flex items-center gap-3 px-2 py-2 redesign:min-h-[var(--list-row-h-lg)] redesign:gap-[var(--list-row-gap)]">
+          <div className="h-9 w-9 animate-pulse rounded-md bg-ink-3/70 redesign:h-10 redesign:w-10 redesign:rounded-full redesign:bg-[color:var(--skeleton-bg)]" />
           <div className="flex-1">
-            <div className="h-3.5 w-32 animate-pulse rounded bg-ink-3/70" />
-            <div className="mt-1.5 h-2.5 w-20 animate-pulse rounded bg-ink-3/50" />
+            <div className="h-3.5 w-32 animate-pulse rounded bg-ink-3/70 redesign:rounded-full redesign:bg-[color:var(--skeleton-bg)]" />
+            <div className="mt-1.5 h-2.5 w-20 animate-pulse rounded bg-ink-3/50 redesign:rounded-full redesign:bg-[color:var(--skeleton-bg)]" />
           </div>
         </div>
       ))}

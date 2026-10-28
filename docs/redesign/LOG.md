@@ -1893,6 +1893,28 @@ thanks, one circle recipe for answer and decline, the doc's line on the
 card made true. Open for André: "Entrar na call" (header) and "Entrar na
 chamada" (strip) say the same thing two ways.
 
+### f-friends
+
+Spec (audit: `FriendsView` (header from `s-header`, tabs from `p-tabs`), the
+add panel and `UserSearch`, notices, `FriendRows`, the remove confirm,
+`PendingLists` and `RequestRow`, `PendingDepoimentos`, the empty line and
+`NoFriendsYet`, `FriendsSkeleton`; the first-run card is `f-onboarding`):
+
+1. Job: your people, who is around, and the requests waiting on you.
+2. States: Online, Todos, Pendentes (incoming, outgoing, depoimentos with
+   their confirm), add panel open (search, results, none), remove confirm,
+   busy row, notice and error, loading, empty, first run.
+3. Redesign: a person is the list row's `lg` pill (two lines, the tag in the
+   row's detail, the presence dot cut from the pane); section labels are the
+   section label; the confirm and a depoimento are cards; the add panel
+   sits on the pane under the header's rule; the search is a round field.
+4. Kept: "Remover" stays a ghost X beside "Mensagem" (question: move it into
+   a row menu, as the member list does?).
+
+Rounds (Opus only): r1 7.2, r2 7.9, r3 7.7 (fixed), r4 7.8 (MUST fixed: the
+pending depoimentos card on the round's rules), r5 8.3 (cap). Merged after
+the shell chain it was stacked on, its own commits moved onto `redesign`.
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss
