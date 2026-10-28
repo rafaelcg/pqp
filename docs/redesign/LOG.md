@@ -1808,11 +1808,17 @@ viewers sheet, the report dialog, the quote and call cards in chat):
 
 1. Job: see who posted, watch, react, reply; post a story.
 2. Redesign: the strip on the side pane, sentence-case label, pill see-all,
-   ring badges cut from the pane (`--story-strip-cut`), cards on card tokens.
+   ring badges cut from the pane (`--story-ring-bg`), cards on card tokens.
 3. Decision: the viewer and composer keep their own dark kit (`--story-*`,
    `composer-ui.tsx`). A story is dark in every theme, the themed primitives
    cannot sit on it, and the kit already has round wells, pills and lime.
 4. Kept: everything; no copy changes.
+
+Rounds: r1 Codex 8.0, r2 Opus 7.8 (MUST fixed: a failed post's name stayed
+red), r3 Codex 8.1, r4 Opus 8.2, r5 Opus 8.3 (no MUST, cap). After r5: the
+swatch row 6px apart so the fade cuts a swatch; the states shot focuses a
+new ring beside a seen one. Not done: a brighter light-only unseen ring
+(the accent ladder has no step for it), the label's 2px offset.
 
 ## Open questions for André
 
