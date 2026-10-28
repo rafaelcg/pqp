@@ -921,7 +921,7 @@
   --composer-radius: 1.25rem;
   --composer-bg: color-mix(in oklab, var(--color-text) 5%, transparent);
   --composer-border: color-mix(in oklab, var(--color-text) 9%, transparent);
-  --composer-border-focus: color-mix(in oklab, var(--color-text) 22%, transparent);
+  --composer-border-focus: color-mix(in oklab, var(--color-text) 28%, transparent);
 
   /* Glass: a close or control laid over a picture (corner-card heroes). */
   --glass-bg: oklch(0.12 0.01 262 / 0.62);

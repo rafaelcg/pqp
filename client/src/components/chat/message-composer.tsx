@@ -2089,7 +2089,11 @@ export function MessageComposer({
             "h-8 shrink-0 rounded-full tabular-nums",
             slowModeRemaining > 0 ? "w-auto gap-1 px-2.5 text-xs" : "w-8",
             "redesign:h-9",
-            slowModeRemaining > 0 ? "redesign:px-3.5 redesign:text-[0.8125rem]" : "redesign:w-9 redesign:px-0",
+            // Slow mode's countdown is a wait, not a dead button: the soft
+            // accent keeps the seconds legible while it stays disabled.
+            slowModeRemaining > 0
+              ? "redesign:px-3.5 redesign:text-[0.8125rem] redesign:disabled:border-transparent redesign:disabled:bg-[color:var(--color-accent-soft)] redesign:disabled:font-semibold redesign:disabled:text-[color:var(--color-on-accent-soft)]"
+              : "redesign:w-9 redesign:px-0",
           )}
           // An attachment is a message on its own, so an empty body is only a
           // reason to stay disabled when nothing is attached either.
