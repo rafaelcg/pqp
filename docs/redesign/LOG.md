@@ -96,7 +96,7 @@ Read this file and the inventory at the start of every session.
 | 4 | `f-friends` | Merged, capped at round 5 (Opus 8.3 r5, MUST in r4 fixed). Open: move "Remover" into a row menu? |
 | 4 | `f-bau` | Merged, capped at round 5 (Opus 8.2 r5, no MUST). Not done: a teaser avatar and time; a scheduled post still shows its creation day |
 | 5 | `m-breakpoints` | Merged (code only, no council) |
-| 4 | `f-dm-home` | Blocked on André: classic DM list or the Conversas home (open question 2) |
+| 4 | `f-dm-home` | Merged, capped at round 5 (Opus 8.3 r4, no MUST; r5 MUST fixed after). Both versions rebuilt while open question 2 waits |
 | 4 | `f-new-dm` | Blocked on André: classic or new "new conversation" dialog (open question 2) |
 | 5 | `m-shell` | Blocked on André: phone bottom tabs or the drawer (open question 2) |
 
@@ -1987,6 +1987,35 @@ post (redesign only). Not done: a teaser avatar and time like the full
 comment row; a scheduled post still shows its creation day beside the
 schedule chip (a behaviour change).
 
+### f-dm-home
+
+Spec (audit: `layout/dm-list.tsx` (the classic list and its row),
+`conversations/conversation-home-list.tsx` (Conversas, behind
+`conversations_home`), `conversations-empty.tsx` (the Conversas hero),
+`onboarding/first-run-card.tsx` (done in `f-onboarding`); Modo 2005 draws
+its own contact list and keeps it):
+
+1. Job: the list beside the rail when no server is open. Both versions are
+   rebuilt, because open question 2 is not answered; the one André drops is
+   deleted later, as `rd/directions` will be.
+2. Redesign: the server sidebar's twin. A ruleless header with 36px round
+   tiles, two-line list-row pills, `--list-row-selected-tall` (the selected
+   role at 64%), the shared section label, Phosphor fill icons, the count as
+   the only unread mark, a group as two faces with a tick-radius size tag,
+   a muted row that dims its words, the call tile over the time.
+3. Copy: `dm.sectionLabel` is sentence case in pt-BR, en and es; the old
+   look still uppercases it, so the toggle off draws the same.
+4. Kept: every row action, the context menu, drafts, pins, filters, search.
+
+Rounds: r1 Codex 7.8 (MUST fixed: the selected fill), r2 Codex 8.2, r3 Opus
+8.2, r4 Opus 8.3 (no MUST, best), r5 Opus 8.1 (cap; its MUST fixed after: the
+idle call tile covered the top of the count, now 24px above it with the
+count on top). After r5 also: a Conversas muted face no longer dims, and the
+pin hangs in the gutter so "Fixadas" lines up with "Recentes". Not done: a
+two-line row skeleton (the loading shot is the app-wide one); the search
+field's resting edge in dark belongs to `p-input`; the classic empty link
+still says "Mandar mensagem" when it opens Amigos (copy).
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss
@@ -2035,6 +2064,7 @@ schedule chip (a behaviour change).
 
 | Date | Decision | Why |
 |---|---|---|
+| 2026-10-28 | `f-dm-home`, `f-new-dm` and `m-shell` rebuild both versions behind their flags | Open question 2 is not answered. Rebuilding both decides nothing for André and removes nothing; the version he drops is deleted later. |
 | 2026-10-27 | `f-friends` merges after the shell chain | Its branch sits on top of `s-sidebar-special` through `s-member-list`; merging it first would bring unreviewed shell work into `redesign`. |
 | 2026-10-26 | Element branches use `rd/<id>` | Git ref conflict with `redesign`. |
 | 2026-10-26 | Direction mockups are a dev-only page on an unmerged branch | Real pixels for the pick, no change to production components, nothing to clean up on `redesign`. |

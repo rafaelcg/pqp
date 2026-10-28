@@ -105,6 +105,15 @@ export function badgeRedesignClasses(
   return cn(BADGE_REDESIGN, SIZE_REDESIGN[size], VARIANT_REDESIGN[variant], "redesign:inline-flex redesign:items-center");
 }
 
+/**
+ * A group conversation's size beside its name (the DM lists): the tag on the
+ * tick radius, so it never reads as a second, grey unread count.
+ */
+export const GROUP_SIZE_REDESIGN = cn(
+  badgeRedesignClasses("neutral", "tag"),
+  "redesign:rounded-[var(--radius-tick)] redesign:tabular-nums",
+);
+
 export function Badge({
   variant = "neutral",
   size = "md",

@@ -1644,6 +1644,165 @@ test("captures friends and the call ring on a phone", async ({ browser }) => {
   caller.close();
 });
 
+test("captures the dm home", async ({ browser }) => {
+  fs.mkdirSync(OUT!, { recursive: true });
+  const ids: Record<string, string> = {};
+  for (const [suffix, name, avatar] of PEOPLE.slice(0, 6)) {
+    ids[suffix] = await person(suffix, name, avatar);
+  }
+  ids.ze = await person("ze", "Zé", null);
+  // A server in common, so anybody may start a conversation with anybody.
+  const hub = await server(VIEWER, "Turma do Fliperama");
+  for (const suffix of ["rafa", "bia", "caio", "duda", "gui"]) {
+    await join(VIEWER, hub.id, suffix);
+  }
+  for (const friend of ["rafa", "bia", "caio"]) {
+    await befriend(friend, VIEWER, ids[VIEWER]!, ids[friend]!);
+  }
+  // One request waiting on Lia, so the friends entry carries a count.
+  await fetch(`${API}/api/friends`, {
+    method: "POST",
+    headers: headers("duda"),
+    body: JSON.stringify({ userId: ids[VIEWER] }),
+  });
+  const dm = async (from: string, to: string[]) =>
+    (
+      await json<{ conversation: { channelId: string } }>(
+        await fetch(`${API}/api/dms`, {
+          method: "POST",
+          headers: headers(from),
+          body: JSON.stringify({ userIds: to.map((one) => ids[one]) }),
+        }),
+      )
+    ).conversation.channelId;
+  const withCaio = await dm(VIEWER, ["caio"]);
+  const withBia = await dm(VIEWER, ["bia"]);
+  const group = await dm(VIEWER, ["caio", "gui", "duda"]);
+  const withRafa = await dm("rafa", [VIEWER]);
+  const sockets = new Map<string, Socket>();
+  for (const suffix of [VIEWER, "rafa", "bia", "caio", "gui"]) {
+    const socket = new Socket(suffix);
+    await socket.connect();
+    sockets.set(suffix, socket);
+  }
+  // Oldest first, so the list reads Rafa, the group, Bia, Caio.
+  await sockets.get("caio")!.say(withCaio, "depois te mando o link do mapa");
+  await sockets.get(VIEWER)!.say(withCaio, "valeu!");
+  await sockets.get(VIEWER)!.say(withBia, "amanhã eu levo o controle");
+  await sockets.get("bia")!.say(withBia, "fechou, até lá");
+  await sockets.get("caio")!.say(group, "quem topa um x1 hoje?");
+  await sockets.get("gui")!.say(group, "eu! 21h?");
+  await sockets.get("rafa")!.say(withRafa, "ei, cê tem aquele print do boss de ontem?");
+  await sockets.get("rafa")!.say(withRafa, "manda assim mesmo, quero zoar o Caio");
+  // Lia read Bia's line; Caio's conversation is muted; the group is pinned.
+  await fetch(`${API}/api/me/preferences`, {
+    method: "PATCH",
+    headers: headers(VIEWER),
+    body: JSON.stringify({
+      notifications: { channels: { [withCaio]: "none" } },
+      pinnedConversations: [group],
+    }),
+  });
+  const [draftAccount, draftChannel] = [ids[VIEWER]!, withCaio];
+
+  const shots = async (conversas: boolean) => {
+    const tag = conversas ? "f-dm-home-conversas" : "f-dm-home";
+    for (const theme of ["dark", "light"] as const) {
+      const context = await browser.newContext({ viewport: DESKTOP, colorScheme: theme });
+      const page = await context.newPage();
+      await as(page, theme);
+      await page.addInitScript(
+        ([account, channelId]) => {
+          localStorage.setItem(
+            `pqp:composer-drafts:${account}`,
+            JSON.stringify({ [channelId]: { body: "vou ver se", updatedAt: Date.now() } }),
+          );
+        },
+        [draftAccount, draftChannel] as const,
+      );
+      // Context: the home with Bia's conversation open.
+      await page.goto(`/app/dm/${withBia}?lang=pt-BR`);
+      await expect(page.getByTestId("app-chat-column").getByText("fechou, até lá")).toBeVisible({ timeout: 30_000 });
+      // The flag's config lands after the first paint: wait for the list it picks.
+      if (LOOK !== "retro") {
+        await expect(page.locator(conversas ? "aside[data-conversations]" : "aside[data-immersive-hide]:not([data-conversations])").first()).toBeVisible({ timeout: 30_000 });
+      }
+      await hideDevBanner(page);
+      await openPhoneNav(page);
+      await shoot(page, `${tag}-${theme}`);
+      // Modo 2005 swaps both lists for its own contact list: the context
+      // shot covers it; the row states are the lists'.
+      if (LOOK !== "retro") {
+        // Focused: the list alone, the pointer on Rafa's row (the call tile).
+        const list = page.locator("aside[data-immersive-hide]").filter({ hasText: "Rafa" }).first();
+        const box = (await list.boundingBox())!;
+        const rafa = list.locator("[data-conversation-row], [data-dm-row-open]").filter({ hasText: "Rafa" }).first();
+        await rafa.hover();
+        await page.waitForTimeout(400);
+        await page.screenshot({ path: path.join(OUT!, `${tag}-list-${theme}.png`), clip: box });
+        // Keyboard focus on a row.
+        await page.mouse.move(0, 0);
+        await page.keyboard.press("Shift");
+        await list.locator("[data-dm-row-open], [data-conversation-row] button").filter({ hasText: "Gui" }).first().focus();
+        await page.waitForTimeout(300);
+        await page.screenshot({ path: path.join(OUT!, `${tag}-focus-${theme}.png`), clip: box });
+        // Loading: the list's request held back.
+        await page.route("**/api/dms**", async (route) => {
+          await new Promise((resolve) => setTimeout(resolve, 6_000));
+          await route.continue().catch(() => {});
+        });
+        await page.goto(`/app/dm?lang=pt-BR`);
+        await page.waitForTimeout(1_500);
+        await page.screenshot({ path: path.join(OUT!, `${tag}-loading-${theme}.png`), clip: box });
+        await page.unrouteAll({ behavior: "ignoreErrors" });
+      }
+      await context.close();
+
+      // Empty: an account with no conversations and no friends.
+      const fresh = await browser.newContext({ viewport: DESKTOP, colorScheme: theme });
+      const empty = await fresh.newPage();
+      await empty.addInitScript(
+        ([value, redesign]) => {
+          localStorage.setItem("pqp:dev-user-suffix", "ze");
+          localStorage.setItem("pqp-theme", value);
+          localStorage.setItem("pqp:download-hint-dismissed", "1");
+          localStorage.setItem("pqp-redesign", redesign ? "on" : "off");
+        },
+        [theme, REDESIGN] as const,
+      );
+      await empty.goto(`/app/dm?lang=pt-BR`);
+      await expect(empty.getByRole("button", { name: "Adicionar amigo" }).first()).toBeVisible({ timeout: 30_000 });
+      if (LOOK !== "retro") {
+        await expect(empty.locator(conversas ? "aside[data-conversations]" : "aside[data-immersive-hide]:not([data-conversations])").first()).toBeVisible({ timeout: 30_000 });
+      }
+      await hideDevBanner(empty);
+      await openPhoneNav(empty);
+      await shoot(empty, `${tag}-empty-${theme}`);
+      await fresh.close();
+    }
+  };
+
+  await shots(false);
+  const on = await fetch(`${API}/api/admin/flags`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${ADMIN_TOKEN}` },
+    body: JSON.stringify({ key: "conversations_home", enabled: true }),
+  });
+  expect(on.status).toBe(200);
+  try {
+    await shots(true);
+  } finally {
+    await fetch(`${API}/api/admin/flags`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${ADMIN_TOKEN}` },
+      body: JSON.stringify({ key: "conversations_home", enabled: null }),
+    });
+    for (const socket of sockets.values()) {
+      socket.close();
+    }
+  }
+});
+
 test("captures the forum post", async ({ browser }) => {
   fs.mkdirSync(OUT!, { recursive: true });
   await person(VIEWER, "Lia", PRESET(4));
