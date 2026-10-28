@@ -94,6 +94,7 @@ Read this file and the inventory at the start of every session.
 | 4 | `f-stories` | Merged, capped at round 5 (Opus 8.3 r5, MUST in r2 fixed). Not done: a brighter light-only unseen ring |
 | 4 | `f-dm-call` | Merged, capped at round 5 (Opus 8.6 r5, three MUST in r1 and r2 fixed). Open for André: two wordings for joining the call |
 | 4 | `f-friends` | Merged, capped at round 5 (Opus 8.3 r5, MUST in r4 fixed). Open: move "Remover" into a row menu? |
+| 4 | `f-bau` | Merged, capped at round 5 (Opus 8.2 r5, no MUST). Not done: a teaser avatar and time; a scheduled post still shows its creation day |
 | 5 | `m-breakpoints` | Merged (code only, no council) |
 
 ## Phase 0: directions
