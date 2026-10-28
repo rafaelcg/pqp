@@ -33,6 +33,8 @@ import {
 } from "@/lib/apps/strip-model";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { DotsThree } from "@phosphor-icons/react";
+import { IconSwap } from "@/components/ui/icon";
 
 /**
  * The strip above an app (mock 03): who is running it, how many are in, and the
@@ -283,14 +285,14 @@ function AvatarStack({ model }: { model: LiveStripModel }) {
           avatarUrl={person.avatarUrl}
           rounded="full"
           className={cn(
-            "h-6 w-6 ring-2 ring-surface-1",
+            "h-6 w-6 ring-2 ring-surface-1 redesign:ring-[color:var(--app-face-cut)]",
             index > 0 && "-ml-1.5",
           )}
           fallbackClassName="bg-surface-3 text-[10px] text-text-secondary"
         />
       ))}
       {model.more > 0 ? (
-        <span className="-ml-1.5 grid h-6 min-w-6 place-items-center rounded-full bg-surface-3 px-1 text-[10px] text-text-secondary ring-2 ring-surface-1">
+        <span className="-ml-1.5 grid h-6 min-w-6 place-items-center rounded-full bg-surface-3 px-1 text-[10px] text-text-secondary ring-2 ring-surface-1 redesign:ring-[color:var(--app-face-cut)]">
           +{model.more}
         </span>
       ) : null}
@@ -421,8 +423,8 @@ export function AppSessionStrip(props: AppSessionStripProps) {
 
 function stripShell(model: LiveStripModel): string {
   return model.tone === "warn"
-    ? "bg-warning-soft text-on-warning-soft border-transparent"
-    : "bg-surface-1 border-border text-text";
+    ? "bg-warning-soft text-on-warning-soft border-transparent redesign:[--app-face-cut:var(--color-warning-soft)]"
+    : "bg-surface-1 border-border text-text redesign:border-[color:var(--card-border)] redesign:bg-transparent";
 }
 
 // ---------------------------------------------------------------------------
@@ -519,7 +521,7 @@ function LiveStrip(props: AppSessionStripProps & { model: LiveStripModel }) {
           <ShareControl share={share} onChange={onShareChange} />
         ) : null}
         {share?.visible || (props.joinCall && model.seated) ? (
-          <span aria-hidden className="h-5 w-px bg-border" />
+          <span aria-hidden className="h-5 w-px bg-border redesign:bg-[color:var(--card-border)]" />
         ) : null}
         {model.actions.enter ? (
           <Button
@@ -577,15 +579,15 @@ function LiveStrip(props: AppSessionStripProps & { model: LiveStripModel }) {
             <button
               type="button"
               aria-label={t("apps.strip.more")}
-              className="grid h-8 w-8 place-items-center rounded-[var(--radius-control)] text-text-secondary transition-colors hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+              className="grid h-8 w-8 place-items-center rounded-[var(--radius-control)] text-text-secondary transition-colors hover:bg-surface-2 hover:text-text redesign:rounded-full redesign:hover:bg-[color:var(--call-control-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
             >
-              <MoreHorizontal aria-hidden className="h-4 w-4" />
+              <IconSwap off={MoreHorizontal} on={DotsThree} kind="symbol" offClassName="h-4 w-4" />
             </button>
           </Menu>
         ) : null}
         {props.chat ? (
           <>
-            <span aria-hidden className="h-5 w-px bg-border" />
+            <span aria-hidden className="h-5 w-px bg-border redesign:bg-[color:var(--card-border)]" />
             <ChatToggle chat={props.chat} />
           </>
         ) : null}
@@ -791,7 +793,7 @@ function EndedStrip(props: AppSessionStripProps & { model: EndedStripModel }) {
       data-testid="app-session-strip"
       data-state="ended"
       className={cn(
-        "flex shrink-0 items-center gap-3 border-b border-border bg-surface-1 py-1.5 pl-4 pr-3",
+        "flex shrink-0 items-center gap-3 border-b border-border bg-surface-1 py-1.5 pl-4 pr-3 redesign:border-[color:var(--card-border)] redesign:bg-transparent",
         compact ? "min-h-14" : "min-h-[52px]",
         entering && "app-strip-in",
         collapsing && "app-strip-out",

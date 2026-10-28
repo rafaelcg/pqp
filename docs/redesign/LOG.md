@@ -73,6 +73,9 @@ Read this file and the inventory at the start of every session.
 | 3 | `s-message-row` | Merged, capped at round 5 (Opus 8.5 r5) |
 | 3 | `s-message-content` | Merged, capped at round 5 (Opus 8.6 r5). Open: the broken-image chip is English in every language (question in the spec) |
 | 3 | `s-message-chrome` | Merged, capped at round 5 (Opus 8.6 r3 and r5, Codex 8.6 r4) |
+| 3 | `s-log-chrome` | Merged, capped at round 5 (Codex 8.6 r5, Opus 8.5 r4). Open: "Load older messages" is English in every language |
+| 3 | `s-composer` | Merged, capped at round 5 (Codex 8.8 r5, Opus 8.3 r4). Not on the sheet: an attachment chip and the autocomplete |
+| 3 | `s-member-list` | Merged at round 3 (Codex 8.2 r3, Opus 8.1 r2). Stopped: the open notes are shared (tooltip edge, light role colour contrast) |
 | 4 | `f-onboarding` | Merged, capped at round 5 (Opus 8.3 r3 and r5) |
 | 5 | `m-sheets` | Merged, approved at round 5 (Opus 9.0, no MUST) |
 | 4 | `f-user-settings` | Merged, capped at round 5 (Opus 8.1 r5, 8.2 r4) |
@@ -86,6 +89,9 @@ Read this file and the inventory at the start of every session.
 | 4 | `f-profile` | Merged, capped at round 5 (Opus 8.2 r5, MUST in r1 fixed). Not done: a filled check for "already friends" |
 | 4 | `f-forum` | Merged, capped at round 5 (Opus 8.4 r5, no MUST). Not done: an unread post in the light shots |
 | 4 | `f-call` | Merged, capped at round 5 (Opus 8.5 r5, approved). Not done: "Lia (você)" on the self tile (copy), muted and moderator-muted captures |
+| 4 | `f-watch-party` | Merged, capped at round 5 (Opus 8.6 r5, approved). Not done: "Copiar link" as a pill (every share button is a ghost) |
+| 4 | `f-apps` | Merged, capped at round 5 (Opus 8.7 r5, no MUST). Not done: the narrow strip's screen icon stays lucide; the full card's count copy |
+| 4 | `f-stories` | Merged, capped at round 5 (Opus 8.3 r5, MUST in r2 fixed). Not done: a brighter light-only unseen ring |
 | 5 | `m-breakpoints` | Merged (code only, no council) |
 
 ## Phase 0: directions
@@ -272,6 +278,7 @@ Verified: typecheck; 10,315 unit tests; `bench:tokens` (3,062 pairs);
 `settings-sections` and `settings-keyboard` e2e (14 passed); i18n check;
 retro dark and light, Halloween, high contrast light, 390px; toggle off
 matches the original sheet and settings screens.
+
 ### p-icon-button
 
 Spec (audit: about 180 raw icon-only `<button>`s, six heights, three hover
@@ -312,6 +319,7 @@ Decisions:
 Deferred:
 - `touch` grows the drawn circle on a phone, not only the hit area: `m-*`.
 - The forum header's Lucide glyphs: `f-forum`.
+
 ### p-tooltip
 
 Spec (audit: 153 files import `Tooltip`, 7 use the rail tone; two
@@ -354,6 +362,7 @@ Decisions:
 Deferred:
 - Native `title=` on icon-only buttons goes as each element folds onto
   `IconButton`.
+
 ### p-input
 
 Spec (audit: 37 files import `Input`, 8 `Textarea`; 87 raw text fields):
@@ -403,6 +412,7 @@ Deferred:
 Verified: typecheck; 10,331 unit tests; `bench:tokens`; `settings-sections`,
 `server-settings-sections`, `profile-section` and `theme-switching` e2e (39
 passed); i18n check.
+
 ### p-select
 
 Spec (audit: `SettingsSelect` in 9 places, 19 raw `<select>`s in 4 recipes):
@@ -540,6 +550,7 @@ reviewer, at André's request to spend less on agents:
 Round 4's MUST (the gap under the emoji category bar had no effect) was
 fixed in round 5. Stopped at the five-round cap with no MUST. Best round: 5.
 Screenshots: `~/pqp-redesign/p-popover/`.
+
 ### p-sheet
 
 Spec (audit: no sheet primitive; Dialog is a sheet below `sm`, plus the app
@@ -666,6 +677,7 @@ Round 4's MUST (the voice settings' 100% label collided with the hint under
 it) was fixed; round 5 found nothing left. The slider group naming and the
 unity tick are logged for `f-music` and `f-call`. Stopped at the five-round
 cap with no MUST. Screenshots: `~/pqp-redesign/p-slider/`.
+
 ### p-banner
 
 Spec (audit: six hand-built strips in `App.tsx`, `connection-banner.tsx` and
@@ -790,6 +802,7 @@ few sideways strips hide their bar):
    - Linux (GTK): rest, hover, drag.
    Values to confirm: `scrollbar-width: auto`, thumb at 65% (dark) and 80%
    (light) of tertiary text.
+
 ### p-avatar
 
 Spec (audit: every person avatar already renders through `UserAvatar`, 65
@@ -1016,6 +1029,7 @@ secondary fill (`f-forum`); `SettingsEmpty` takes a filled Phosphor glyph in
 suite timed out under load once and passed alone); `bench:tokens`; i18n
 check; `forum-pane` and `forum-shell` e2e (6 passed); retro, Halloween, high
 contrast, 390px and toggle off. Screenshots: `~/pqp-redesign/p-empty/`.
+
 ### s-frame
 
 Spec (audit: the root, the rail, five side panes and Novidades each drew
@@ -1573,6 +1587,86 @@ Rounds: r1 Opus 7.6, r2 Codex 8.4, r3 Opus 8.6, r4 Codex 8.6, r5 Opus 8.6
 legible initials on the faces, toolbar focus in the focus colour. Not done:
 raising the toolbar to `-top-5` (it would cover more of the row above).
 
+### s-log-chrome
+
+Spec (audit: `DaySeparator`, `UnreadSeparator`, the load older and newer
+buttons, `TypingIndicator` and `BotActivityRows`, `BotNoticeRow`, the jump
+pill and the "message is gone" note, the bulk delete bar; the empty and
+failed states are `p-empty`'s, already merged):
+
+1. Job: where I am in the log, and what is happening around it.
+2. States: day rule, NEW rule, older or newer history to load (loading),
+   typing (one, two, many; bots at work), the bot's note to me, jump to the
+   present (missed count, stream "paused"), jump target gone, bulk select.
+3. Redesign: the day is a pill in sentence case on faint rules; NEW is the
+   danger fill's pill; load buttons are the secondary pill; the jump pill,
+   the gone note and the bulk bar float on the popover surface; the bot's
+   note is a message card with a round dismiss.
+4. Question: "Load older messages" and "Loading older messages…" are
+   English in every language. Translating them changes the toggle-off app.
+5. Not on the sheet: the bulk bar and the gone note need a live list state.
+
+Rounds: r1 Codex 8.0, r2 Opus 8.0, r3 Codex 8.5, r4 Opus 8.5, r5 Codex 8.6
+(no MUST, cap). Fixed along the way: the jump pill rises over the bot's
+note and follows it down, one left edge for the footer, the day label
+outlined so it stops reading as a button, room under the newer button, the
+weekday in sentence case. Open: the "Load older messages" copy question.
+
+### s-composer
+
+Spec (audit: `MessageComposer` (the well, reply chip, attachment chips,
+format bar and preview, feedback strip, tools, send, slow mode), the "+"
+menu (already `MENU_SURFACE`), `AutocompleteMenu`, the emoji and GIF panels
+(already `POPOVER_SURFACE`), `PollComposer`, the voice note mic and panel,
+`ComposerReadOnlyNotice`, the inline `EditComposer`; one composer serves the
+channel, the thread panel and the forum dialog):
+
+1. Job: write and send, with everything a message can carry.
+2. States: resting, typing, replying, attachments (uploading, failed),
+   format bar open, a panel open (+, emoji, GIF, autocomplete row and grid),
+   poll, voice note (hold, locked, review), slow mode, read-only, stream
+   variant, embedded, editing a message, feedback (error, success, info).
+3. Redesign: one 20px well on a faint text tint whose edge comes up while
+   typing; 36px round tools with Phosphor glyphs, a held fill when a panel
+   is open; a round accent send; the reply chip a pill; chips are cards;
+   autocomplete is the menu's panel and rows; the poll composer a card with
+   the input's fields and accent-ringed chips; feedback floats on the
+   popover surface with a toned glyph.
+4. Kept: the music bar and call dock inside the well move with `f-call`; the
+   poll composer's hand-made switch stays (question: swap it for `Switch`).
+5. Not on the sheet: the "+" menu (needs attachments or slash commands).
+
+Rounds: r1 Codex 8.0, r2 Opus 8.2, r3 Codex 8.2, r4 Opus 8.3, r5 Codex 8.8
+(no MUST, cap). Fixed along the way: slow mode's countdown on the soft
+accent, a firmer typing edge, the text 16px in, an open tool held a step
+firmer than a hover, line-weight smiley and GIF, the read-only edge on its
+own token, a typed draft on the sheet. Not on the sheet: an attachment chip
+and the autocomplete (they need a live upload and a member list).
+
+### s-member-list
+
+Spec (audit: `MemberSidebar` (column and drawer), `MemberRow`, the section
+fold, "show more", the search, `BotInviteRow`, `RightColumnTabs`;
+`lib/member-groups.ts` decides the sections and is untouched):
+
+1. Job: who is here, who is around, and a way to reach them.
+2. States: sections (hoisted roles, bots, friends, online, offline), folded,
+   paged ("show more"), search (matches, none), loading, error; row with a
+   role colour, rank marks, bot tags, a status line or an app line, "Na
+   call", offline faded, hover message button, context menu; drawer with a
+   scrim; the members or thread switch.
+3. Redesign: the channel list's grammar on the right. Headers are the
+   category rows (sentence case, bold caret); a person is the list row's
+   `md` pill; the header is the pane header with a round close; the search
+   is a round field; "Na call" is the success tone; the switch is a pill.
+4. Duplicate kept: `members-panel.tsx` redraws these rows in a modal; it
+   moves with `f-server-settings`.
+
+Rounds: r1 Codex 8.0, r2 Opus 8.1, r3 Codex 8.2 (COULD only). Stopped at
+r3: both open notes are outside this element (an edge on the shared
+tooltip primitive, and the light role colour's contrast, shared with the
+message row's author name). Follow-ups for those two, not this list.
+
 ### f-onboarding
 
 Spec (audit: `onboarding/` (11 files), the hints in `layout/*-hint.tsx`
@@ -1710,6 +1804,72 @@ the light open row a step under the selected channel, the segmented status
 and the inverse toggles written down in DESIGN.md. Not done: an unread post
 in the light shots (the dark pass marks the fixture read first).
 
+### f-watch-party
+
+Spec (audit: `watch-party/` (24 files): the sidebar block with its live
+card, create, teaser, scheduled and history rows; the create dialog; the
+host's pane (setup, scheduled card, live bar, dock, transmission strip,
+activity feed, options, people, co-hosts); history; waitlist; guests):
+
+1. Job: make, announce, run and watch a party; tell everyone it is live.
+2. Redesign, this pass: the sidebar rows are cards (the open live card a
+   soft red), the live badge solid red, the scheduled card a pane card with
+   a sentence-case label, the host bar on the pane like a header, the mic
+   chip a pill on the call's tints, the transmission strip on card tokens.
+   Dialogs, the dock and the options use the merged primitives already.
+3. Merges: none yet; the five dialog shells stay (each is `ui/Dialog`).
+4. Kept: every state, the copy (the live badge stays uppercase).
+
+Rounds: r1 Codex 8.5, r2 Opus 8.2, r3 Codex 8.5, r4 Opus 8.5 (approved),
+r5 Opus 8.6 (approved, cap). After r5: the header's "more" button on the
+symbol weight (a shared shell line), the host bar's glyphs at the header's
+18px, the mic chip at 32px with Phosphor glyphs and its colour kept on
+hover, and the live red named in DESIGN.md. Left: "Copiar link" stays a
+ghost like every share button.
+
+### f-apps
+
+Spec (audit: `apps/` (13 files) and `emulator/`: the launcher, the app pane
+and frame, the session strip, the session card in chat, the join sheet and
+host, the app column beside a call):
+
+1. Job: start, join, watch, share and end an app session.
+2. Redesign, this pass: the strip on the pane with the card edge, faces cut
+   from their ground (`--app-face-cut`), cards on card tokens (ended keeps
+   its dashed edge), round menu, icon tiles on the card radius.
+3. Shots: a QA sheet block (`qa-apps`) with the unit tests' fixtures, since
+   an app needs `APPS_ORIGIN` and a live catalog to run in e2e.
+4. Kept: everything; the three frame chromes stay (each is a different
+   host for the same iframe).
+
+Rounds: r1 Codex 8.4, r2 Opus 8.5 (approved), r3 Codex 8.6, r4 Opus 8.7,
+r5 Opus 8.7 (no MUST, cap). After r5: faces on a live card cut from a solid
+card fill (`--card-bg-solid`), live subtitles in secondary text, faces on
+the warning strip cut from its yellow. Not done: the narrow strip's screen
+icon stays lucide; the full card's count copy is unchanged (copy would
+change with the toggle off); the narrow strip keeps its sharing pill (its
+hidden label is what a screen reader hears).
+
+### f-stories
+
+Spec (audit: `stories/` (19 files): the strip and rings in the sidebar, the
+viewer, the composer with camera, text, draw, stickers and audience, the
+viewers sheet, the report dialog, the quote and call cards in chat):
+
+1. Job: see who posted, watch, react, reply; post a story.
+2. Redesign: the strip on the side pane, sentence-case label, pill see-all,
+   ring badges cut from the pane (`--story-ring-bg`), cards on card tokens.
+3. Decision: the viewer and composer keep their own dark kit (`--story-*`,
+   `composer-ui.tsx`). A story is dark in every theme, the themed primitives
+   cannot sit on it, and the kit already has round wells, pills and lime.
+4. Kept: everything; no copy changes.
+
+Rounds: r1 Codex 8.0, r2 Opus 7.8 (MUST fixed: a failed post's name lost its
+red once seen), r3 Codex 8.1, r4 Opus 8.2, r5 Opus 8.3 (no MUST, cap). After r5: the
+swatch row 6px apart so the fade cuts a swatch; the states shot focuses a
+new ring beside a seen one. Not done: a brighter light-only unseen ring
+(the accent ladder has no step for it), the label's 2px offset.
+
 ### f-dm-call
 
 Spec (audit: `dm/dm-call-stage.tsx` (the join strip, then the shared
@@ -1723,6 +1883,14 @@ Spec (audit: `dm/dm-call-stage.tsx` (the join strip, then the shared
    a card with round scores (the chosen one solid accent) and an input well.
 3. Merges: decline uses the call bar's hang-up recipe.
 4. Kept: ignore, the ringtone, the note under a low score, the auto-close.
+
+Rounds: r1 Codex 7.6 (MUST fixed: the ring card covered the join strip),
+r2 Opus 7.6 (two MUST fixed: the card not truly centred, the rating card on
+the see-through card fill), r3 Codex 8.4, r4 Opus 8.5, r5 Opus 8.6 (no
+MUST, cap). After r5: focus rings cut from the popover, a check on the
+thanks, one circle recipe for answer and decline, the doc's line on the
+card made true. Open for André: "Entrar na call" (header) and "Entrar na
+chamada" (strip) say the same thing two ways.
 
 ## Open questions for André
 
@@ -1758,6 +1926,10 @@ Spec (audit: `dm/dm-call-stage.tsx` (the join strip, then the shared
    and `settings.profile.media.unconfigured`. It shows with the toggle off
    too. Change it? Same tab: the visibility hint says "Para usar" while
    the rest of the tab says "pra"; the council suggests "Pra usar".
+7. DM call: the header pill says "Entrar na call" and the join strip says
+   "Entrar na chamada", 60px apart. Pick one wording (`call.panel.join`
+   and the header key), or hide the header pill while the strip shows?
+   Either changes the app with the toggle off, so it waits for you.
 
 ## Decisions
 

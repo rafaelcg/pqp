@@ -8,7 +8,7 @@ import type {
   VoiceParticipant,
   WatchParty,
 } from "@pqp/shared";
-import { useEffect, type ComponentProps, type ReactNode } from "react";
+import { useEffect, useState, type ComponentProps, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { CommunityHomePreview } from "@/components/community-home/community-home-preview";
 import {
@@ -23,6 +23,11 @@ import {
 import { ChannelIcon } from "@/components/layout/channel-icon";
 import { UserPanel } from "@/components/layout/user-panel";
 import { MessageList, type MessageAuthorInfo } from "@/components/chat/message-list";
+import { MessageComposer } from "@/components/chat/message-composer";
+import { clearDraft, setDraftsAccount, writeDraft } from "@/lib/composer-drafts";
+import { ComposerReadOnlyNotice } from "@/components/chat/composer-read-only-notice";
+import { MemberSidebar } from "@/components/layout/member-sidebar";
+import type { ServerMember, ServerRole } from "@/lib/api";
 import type { ChatMessage } from "@/hooks/use-chat";
 import { ConnectionBanner } from "@/components/layout/connection-banner";
 import { ArrivalBanner } from "@/components/onboarding/arrival-banner";
@@ -49,6 +54,10 @@ import { FirstRunCard } from "@/components/onboarding/first-run-card";
 import { Button } from "@/components/ui/button";
 import { CallRatingPrompt } from "@/components/voice/call-rating-prompt";
 import type { RatableCall } from "@/lib/call-rating";
+import { AppSessionCard } from "@/components/apps/app-session-card";
+import { AppSessionStrip } from "@/components/apps/app-session-strip";
+import type { CardPerson, EndedCardModel, LiveCardModel } from "@/lib/apps/card-model";
+import type { EndedStripModel, LiveStripModel } from "@/lib/apps/strip-model";
 import { setUpdateWaiting } from "@/lib/update-prompt-state";
 import { AppBootstrapError, AppLoadingShell } from "@/components/layout/app-loading-shell";
 import { MusicQueueSpecimen } from "@/pages/qa-music-queue";
@@ -1073,6 +1082,189 @@ function MessageChromeBlock() {
   );
 }
 
+/** Two days of messages, for the list's chrome (s-log-chrome). */
+function logMessage(n: number, minutesAgo: number, authorId: string, authorName: string, body: string): ChatMessage {
+  return contentMessage(n, authorId, authorName, body, {
+    createdAt: new Date(NOW - minutesAgo * 60_000).toISOString(),
+  });
+}
+
+const LOG_MESSAGES: ChatMessage[] = [
+  logMessage(41, 26 * 60, ROW_BIA, "Bia", "amanhã tem final, hein"),
+  logMessage(42, 25 * 60, ROW_RAFA, "Rafa", "tô dentro"),
+  logMessage(43, 40, ROW_ME, "Lia", "chegando em meia hora"),
+  logMessage(44, 12, ROW_RAFA, "Rafa", "já tô na call"),
+  logMessage(45, 8, ROW_BIA, "Bia", "abri a sala de espera"),
+];
+
+const LOG_TYPING = [
+  { userId: ROW_RAFA, displayName: "Rafa" },
+  { userId: ROW_BIA, displayName: "Bia" },
+];
+
+const LOG_BOT_NOTICE = {
+  type: "bot-notice" as const,
+  channelId: ROW_CHANNEL,
+  botUserId: ROW_HOOK,
+  botName: "Breu",
+  reason: "member-hour" as const,
+  limit: 20,
+  retryAt: new Date(NOW + 25 * 60_000).toISOString(),
+};
+
+function LogChromeBlock() {
+  return (
+    <div data-testid="qa-shell-log-chrome" className="flex flex-wrap items-start gap-6">
+      {/* First: older history to load, two days ("Ontem", "Hoje"), the NEW
+          rule over what came in since you left, newer history below, the
+          jump pill, the bot's note to you and two people typing. The empty
+          and failed states are p-empty's (the primitives sheet). */}
+      <MainPane>
+        <div className="flex h-[700px] min-h-0 flex-col">
+          <MessageList
+            messages={LOG_MESSAGES}
+            currentUserId={ROW_ME}
+            currentUsername="lia"
+            channelId={ROW_CHANNEL}
+            onToggleReaction={noop}
+            onRetryMessage={noop}
+            authors={ROW_AUTHORS}
+            authorsComplete
+            hasMore
+            hasNewer
+            unreadSince={LOG_MESSAGES[2].createdAt}
+            typingUsers={LOG_TYPING}
+            botNotice={LOG_BOT_NOTICE}
+            onDismissBotNotice={noop}
+          />
+        </div>
+      </MainPane>
+    </div>
+  );
+}
+
+/** A composer at the foot of a pane, as the conversation draws it. */
+function ComposerPane({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <MainPane>
+      <p className="px-4 pb-2 pt-3 text-xs text-text-tertiary">{label}</p>
+      {children}
+    </MainPane>
+  );
+}
+
+const COMPOSER_SLOW_UNTIL = Date.now() + 5 * 60_000;
+/** A sheet-only channel whose draft is seeded, so the send is enabled. */
+const COMPOSER_TYPING_CHANNEL = "00000000-0000-4000-8000-000000000512";
+
+function ComposerBlock() {
+  // Seeded before the composer below reads its draft, under a sheet-only
+  // account (the store writes nothing signed out); undone on the way out.
+  useState(() => {
+    setDraftsAccount("qa-ui-sheet");
+    writeDraft(COMPOSER_TYPING_CHANNEL, "bora jogar hoje à noite?");
+  });
+  useEffect(
+    () => () => {
+      clearDraft(COMPOSER_TYPING_CHANNEL);
+      setDraftsAccount(null);
+    },
+    [],
+  );
+  return (
+    <div data-testid="qa-shell-composer" className="grid grid-cols-2 items-start gap-6">
+      {/* Resting; a draft typed (send enabled); replying to Rafa; slow mode
+          with a wait; read-only. The
+          shot opens the format bar on the first one. */}
+      <ComposerPane label="Em repouso">
+        <MessageComposer onSend={noop} placeholder="Mensagem em #geral" />
+      </ComposerPane>
+      <ComposerPane label="Escrevendo">
+        <MessageComposer onSend={noop} placeholder="Mensagem em #geral" channelId={COMPOSER_TYPING_CHANNEL} />
+      </ComposerPane>
+      <ComposerPane label="Respondendo">
+        <MessageComposer
+          onSend={noop}
+          placeholder="Mensagem em #geral"
+          replyTarget={{ id: "00000000-0000-4000-8000-000000000511", authorName: "Rafa" }}
+          onCancelReply={noop}
+        />
+      </ComposerPane>
+      <ComposerPane label="Modo lento">
+        <MessageComposer onSend={noop} placeholder="Mensagem em #geral" slowModeUntil={COMPOSER_SLOW_UNTIL} />
+      </ComposerPane>
+      <ComposerPane label="Só leitura">
+        <ComposerReadOnlyNotice />
+      </ComposerPane>
+    </div>
+  );
+}
+
+const MEMBER_SERVER = "00000000-0000-4000-8000-000000000a01";
+const MEMBER_VOICE = "00000000-0000-4000-8000-000000000a02";
+const MEMBER_ROLE: ServerRole = {
+  id: "00000000-0000-4000-8000-000000000a03",
+  serverId: MEMBER_SERVER,
+  name: "Moderação",
+  color: "#f2a65a",
+  hoist: true,
+  mentionable: true,
+  permissions: "0",
+  position: 2,
+  isEveryone: false,
+  systemKey: null,
+  showBadge: false,
+};
+
+function sheetMember(id: string, displayName: string, extra: Partial<ServerMember> = {}): ServerMember {
+  return { id, displayName, username: displayName.toLowerCase(), tag: null, role: "member", avatarUrl: null, status: "online", ...extra };
+}
+
+const SHEET_MEMBERS: ServerMember[] = [
+  sheetMember(ROW_RAFA, "Rafa", { role: "owner", roleIds: [MEMBER_ROLE.id] }),
+  sheetMember(ROW_ME, "Lia"),
+  sheetMember(ROW_BIA, "Bia", { status: "idle", customStatus: "fechando a campanha" }),
+  sheetMember("00000000-0000-4000-8000-000000000a11", "Duda", { status: "dnd" }),
+  sheetMember("00000000-0000-4000-8000-000000000a12", "Caio", { status: "offline" }),
+  sheetMember("00000000-0000-4000-8000-000000000a13", "Teo", { status: "offline", customStatus: "volto sábado" }),
+];
+
+const SHEET_OCCUPANCY = {
+  [MEMBER_VOICE]: [
+    { peerId: "p-lia", userId: ROW_ME, displayName: "Lia", avatarUrl: null, sharingScreen: false },
+  ],
+} as unknown as Record<string, VoiceParticipant[]>;
+
+function MemberListBlock() {
+  return (
+    <div data-testid="qa-shell-member-list" className="flex flex-wrap items-start gap-6">
+      {/* A server's list in its column: Moderação (Rafa, in its colour),
+          online (you, in a call; Bia with a status line), Duda busy, and
+          offline faded. Duda is hovered in the shot (the message button shows). */}
+      <div className="flex h-[560px] overflow-hidden rounded-lg redesign:rounded-[var(--radius-pane)]">
+        <MemberSidebar
+          open
+          wide
+          onClose={noop}
+          serverId={MEMBER_SERVER}
+          participants={null}
+          self={null}
+          currentUserId={ROW_ME}
+          role="member"
+          blockedUserIds={new Set()}
+          members={SHEET_MEMBERS}
+          roles={[MEMBER_ROLE]}
+          voiceOccupancy={SHEET_OCCUPANCY}
+          voiceChannels={[{ id: MEMBER_VOICE, name: "Sala" }]}
+          onMessageMember={noop}
+          onBlockUser={noop}
+          onUnblockUser={noop}
+        />
+      </div>
+    </div>
+  );
+}
+
 /**
  * A new build waiting, so both rails draw the update tile. The store is
  * this page's own; it goes back to nothing waiting when the sheet unmounts.
@@ -1144,6 +1336,72 @@ const RATED_CALL: RatableCall = {
   transport: "mesh",
   hadScreenShare: false,
   channelId: null,
+};
+const APP_PEOPLE: CardPerson[] = ["Bia", "Rafa", "Duda"].map((name) => ({
+  userId: `id-${name}`,
+  displayName: name,
+  avatarUrl: null,
+}));
+const APP = { id: "pqp-eco", name: "Sala de jogos", icon: "gamepad" } as const;
+const STRIP_LIVE: LiveStripModel = {
+  kind: "live",
+  sessionId: "s1",
+  app: APP,
+  phase: "participant",
+  tone: "normal",
+  line: { kind: "hostIs", name: "Bia" },
+  people: APP_PEOPLE,
+  more: 0,
+  count: { kind: "of", players: 3, max: 4, watching: 0 },
+  roster: [
+    { userId: "id-Bia", name: "Bia", avatarUrl: null, host: true, spectator: false, reconnecting: false },
+    { userId: "id-Rafa", name: "Rafa", avatarUrl: null, host: false, spectator: false, reconnecting: false },
+  ],
+  seated: true,
+  isHost: false,
+  spectating: false,
+  showPane: true,
+  actions: { leave: true, end: false, enter: null, takeHost: false, share: false },
+};
+const STRIP_HOST: LiveStripModel = {
+  ...STRIP_LIVE,
+  phase: "host",
+  line: { kind: "host" },
+  isHost: true,
+  actions: { leave: true, end: true, enter: null, takeHost: false, share: true },
+};
+const STRIP_ENDED: EndedStripModel = {
+  kind: "ended",
+  sessionId: "s1",
+  app: APP,
+  disabled: false,
+  cause: { kind: "host", name: "Bia", self: false },
+  summary: { participants: 4, durationSeconds: 23 * 60 },
+};
+const CARD_LIVE: LiveCardModel = {
+  kind: "live",
+  sessionId: "s1",
+  app: { ...APP, category: "game" },
+  phase: "open",
+  subtitle: { kind: "started", name: "Bia", minutes: 4 },
+  count: { kind: "of", players: 3, max: 4 },
+  people: APP_PEOPLE,
+  more: 0,
+  full: false,
+  canWatch: false,
+  join: { status: "idle" },
+};
+const CARD_ENDED: EndedCardModel = {
+  kind: "ended",
+  app: { ...APP, category: "game" },
+  gone: false,
+  disabled: false,
+  summary: { participants: 4, durationSeconds: 1380 },
+  resultText: null,
+  starterName: "Bia",
+  startedAt: "2026-10-19T19:40:00.000Z",
+  people: APP_PEOPLE.slice(0, 2),
+  more: 0,
 };
 
 export function ShellSheet() {
@@ -1354,6 +1612,9 @@ export function ShellSheet() {
       <MessageContentBlock />
       <MessageChromeBlock />
       <MessageChromeWrapBlock />
+      <LogChromeBlock />
+      <ComposerBlock />
+      <MemberListBlock />
 
       <CommunityCardsBlock />
 
@@ -1467,6 +1728,37 @@ export function ShellSheet() {
         <CallRatingPrompt call={RATED_CALL} onDone={noop} initialRating={2} />
         <CallRatingPrompt call={RATED_CALL} onDone={noop} initialRating={4} initialStage="sending" />
         <CallRatingPrompt call={RATED_CALL} onDone={noop} initialStage="sent" />
+      </div>
+      {/* Apps: the strip over an app as a participant, as the host with the
+          share switch, and after it ended; the card a session leaves in the
+          chat, live and ended. */}
+      <div data-testid="qa-apps" className="flex max-w-3xl flex-col gap-4 p-4">
+        <AppSessionStrip model={STRIP_LIVE} onLeave={noop} />
+        <AppSessionStrip
+          model={STRIP_HOST}
+          share={{ visible: true, on: true, pending: false, needsCall: false, viewers: 2, wholeTab: false }}
+          onShareChange={noop}
+          onEnd={noop}
+          onLeave={noop}
+        />
+        <AppSessionStrip model={STRIP_ENDED} onClose={noop} />
+        <div className="grid grid-cols-2 gap-4">
+          <AppSessionCard model={CARD_LIVE} onJoin={noop} />
+          <AppSessionCard model={CARD_ENDED} />
+          {/* Joining (the button waits) and a full room you may watch. */}
+          <AppSessionCard model={{ ...CARD_LIVE, sessionId: "s3", join: { status: "joining" } }} onJoin={noop} />
+          <AppSessionCard
+            model={{
+              ...CARD_LIVE,
+              sessionId: "s4",
+              phase: "full",
+              full: true,
+              canWatch: true,
+              count: { kind: "full", players: 4, max: 4, watching: 1 },
+            }}
+            onJoin={noop}
+          />
+        </div>
       </div>
     </div>
   );
