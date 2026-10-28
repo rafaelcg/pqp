@@ -73,6 +73,8 @@ Read this file and the inventory at the start of every session.
 | 3 | `s-message-row` | Merged, capped at round 5 (Opus 8.5 r5) |
 | 3 | `s-message-content` | Merged, capped at round 5 (Opus 8.6 r5). Open: the broken-image chip is English in every language (question in the spec) |
 | 3 | `s-message-chrome` | Merged, capped at round 5 (Opus 8.6 r3 and r5, Codex 8.6 r4) |
+| 3 | `s-log-chrome` | Merged, capped at round 5 (Codex 8.6 r5, Opus 8.5 r4). Open: "Load older messages" is English in every language |
+| 3 | `s-composer` | Merged, capped at round 5 (Codex 8.8 r5, Opus 8.3 r4). Not on the sheet: an attachment chip and the autocomplete |
 | 4 | `f-onboarding` | Merged, capped at round 5 (Opus 8.3 r3 and r5) |
 | 5 | `m-sheets` | Merged, approved at round 5 (Opus 9.0, no MUST) |
 | 4 | `f-user-settings` | Merged, capped at round 5 (Opus 8.1 r5, 8.2 r4) |
@@ -1572,6 +1574,62 @@ Rounds: r1 Opus 7.6, r2 Codex 8.4, r3 Opus 8.6, r4 Codex 8.6, r5 Opus 8.6
 (no MUST, cap). After r5: the open chip's meta in its own softened colour,
 legible initials on the faces, toolbar focus in the focus colour. Not done:
 raising the toolbar to `-top-5` (it would cover more of the row above).
+
+### s-log-chrome
+
+Spec (audit: `DaySeparator`, `UnreadSeparator`, the load older and newer
+buttons, `TypingIndicator` and `BotActivityRows`, `BotNoticeRow`, the jump
+pill and the "message is gone" note, the bulk delete bar; the empty and
+failed states are `p-empty`'s, already merged):
+
+1. Job: where I am in the log, and what is happening around it.
+2. States: day rule, NEW rule, older or newer history to load (loading),
+   typing (one, two, many; bots at work), the bot's note to me, jump to the
+   present (missed count, stream "paused"), jump target gone, bulk select.
+3. Redesign: the day is a pill in sentence case on faint rules; NEW is the
+   danger fill's pill; load buttons are the secondary pill; the jump pill,
+   the gone note and the bulk bar float on the popover surface; the bot's
+   note is a message card with a round dismiss.
+4. Question: "Load older messages" and "Loading older messages…" are
+   English in every language. Translating them changes the toggle-off app.
+5. Not on the sheet: the bulk bar and the gone note need a live list state.
+
+Rounds: r1 Codex 8.0, r2 Opus 8.0, r3 Codex 8.5, r4 Opus 8.5, r5 Codex 8.6
+(no MUST, cap). Fixed along the way: the jump pill rises over the bot's
+note and follows it down, one left edge for the footer, the day label
+outlined so it stops reading as a button, room under the newer button, the
+weekday in sentence case. Open: the "Load older messages" copy question.
+
+### s-composer
+
+Spec (audit: `MessageComposer` (the well, reply chip, attachment chips,
+format bar and preview, feedback strip, tools, send, slow mode), the "+"
+menu (already `MENU_SURFACE`), `AutocompleteMenu`, the emoji and GIF panels
+(already `POPOVER_SURFACE`), `PollComposer`, the voice note mic and panel,
+`ComposerReadOnlyNotice`, the inline `EditComposer`; one composer serves the
+channel, the thread panel and the forum dialog):
+
+1. Job: write and send, with everything a message can carry.
+2. States: resting, typing, replying, attachments (uploading, failed),
+   format bar open, a panel open (+, emoji, GIF, autocomplete row and grid),
+   poll, voice note (hold, locked, review), slow mode, read-only, stream
+   variant, embedded, editing a message, feedback (error, success, info).
+3. Redesign: one 20px well on a faint text tint whose edge comes up while
+   typing; 36px round tools with Phosphor glyphs, a held fill when a panel
+   is open; a round accent send; the reply chip a pill; chips are cards;
+   autocomplete is the menu's panel and rows; the poll composer a card with
+   the input's fields and accent-ringed chips; feedback floats on the
+   popover surface with a toned glyph.
+4. Kept: the music bar and call dock inside the well move with `f-call`; the
+   poll composer's hand-made switch stays (question: swap it for `Switch`).
+5. Not on the sheet: the "+" menu (needs attachments or slash commands).
+
+Rounds: r1 Codex 8.0, r2 Opus 8.2, r3 Codex 8.2, r4 Opus 8.3, r5 Codex 8.8
+(no MUST, cap). Fixed along the way: slow mode's countdown on the soft
+accent, a firmer typing edge, the text 16px in, an open tool held a step
+firmer than a hover, line-weight smiley and GIF, the read-only edge on its
+own token, a typed draft on the sheet. Not on the sheet: an attachment chip
+and the autocomplete (they need a live upload and a member list).
 
 ### f-onboarding
 

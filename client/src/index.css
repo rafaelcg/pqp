@@ -916,6 +916,14 @@
   --thread-chip-open-fg: var(--color-on-row-selected);
   --content-quote-bar: color-mix(in oklab, var(--color-text) 22%, transparent);
   --content-link-line: color-mix(in oklab, var(--color-accent-text) 45%, transparent);
+  /* The composer (s-composer): one rounded well on a faint text tint, whose
+     edge comes up a step while you type in it. */
+  --composer-radius: 1.25rem;
+  --composer-bg: color-mix(in oklab, var(--color-text) 5%, transparent);
+  --composer-border: color-mix(in oklab, var(--color-text) 9%, transparent);
+  --composer-border-focus: color-mix(in oklab, var(--color-text) 28%, transparent);
+  /* A field you cannot type into: a dashed edge of its own. */
+  --composer-border-readonly: color-mix(in oklab, var(--color-text) 18%, transparent);
 
   /* Glass: a close or control laid over a picture (corner-card heroes). */
   --glass-bg: oklch(0.12 0.01 262 / 0.62);
@@ -1411,6 +1419,9 @@
   --footer-card-solid: color-mix(in oklab, var(--color-surface-0) 60%, var(--color-pane-side));
   --footer-card-solid-hover: color-mix(in oklab, var(--color-text) 4%, var(--footer-card-solid));
   --card-border: color-mix(in oklab, var(--color-text) 10%, transparent);
+  /* The composer on the white pane: a light grey well with a firmer edge. */
+  --composer-bg: color-mix(in oklab, var(--color-text) 3%, transparent);
+  --composer-border: color-mix(in oklab, var(--color-text) 13%, transparent);
 
   /* Avatars: a hairline keeps the monogram disc a disc on the white pane. */
   --avatar-edge: var(--color-border);

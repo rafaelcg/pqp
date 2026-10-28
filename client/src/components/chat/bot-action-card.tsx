@@ -743,12 +743,16 @@ export function BotNoticeRow({ notice, onDismiss }: { notice: BotNotice; onDismi
     <div
       role="status"
       data-bot-notice={notice.reason}
-      className="mx-4 mb-1 flex shrink-0 items-start gap-2 rounded-md border border-border bg-surface-2/60 px-3 py-2 text-xs text-paper/90"
+      className={cn(
+        "mx-4 mb-1 flex shrink-0 items-start gap-2 rounded-md border border-border bg-surface-2/60 px-3 py-2 text-xs text-paper/90",
+        CONTENT_CARD_REDESIGN,
+        "redesign:mx-4 redesign:mb-2 redesign:items-center redesign:gap-3 redesign:py-2.5 redesign:pl-3 redesign:pr-2 redesign:text-[0.8125rem] redesign:text-text",
+      )}
     >
-      <Clock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-paper-muted" aria-hidden />
+      <Clock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-paper-muted redesign:mt-0 redesign:h-4 redesign:w-4 redesign:text-text-secondary" aria-hidden />
       <div className="min-w-0 flex-1">
         <p>{text}</p>
-        <p className="mt-0.5 inline-flex items-center gap-1 text-[11px] text-paper-muted">
+        <p className="mt-0.5 inline-flex items-center gap-1 text-[11px] text-paper-muted redesign:text-xs redesign:text-text-tertiary">
           <EyeOff className="h-3 w-3" aria-hidden />
           {t("chat.botNotice.onlyYou")}
         </p>
@@ -756,7 +760,7 @@ export function BotNoticeRow({ notice, onDismiss }: { notice: BotNotice; onDismi
       <button
         type="button"
         onClick={onDismiss}
-        className="shrink-0 rounded p-0.5 text-paper-muted hover:bg-surface-3 hover:text-paper"
+        className="shrink-0 rounded p-0.5 text-paper-muted hover:bg-surface-3 hover:text-paper redesign:flex redesign:h-8 redesign:w-8 redesign:items-center redesign:justify-center redesign:rounded-full redesign:p-0 redesign:text-text-secondary redesign:hover:bg-[color:var(--button-ghost-hover)] redesign:hover:text-text redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent"
         aria-label={t("chat.botNotice.dismiss")}
       >
         <X className="h-3.5 w-3.5" aria-hidden />
