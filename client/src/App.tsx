@@ -775,6 +775,7 @@ import { adoptThemePreference, themeToAdopt } from "@/lib/theme";
 import { isMeshForced } from "@/lib/voice-backend";
 import type { VideoQuality } from "@/lib/video-quality";
 import { cn } from "@/lib/utils";
+import { useRedesign } from "@/lib/redesign";
 import { shouldJoinMuted } from "@/lib/join-muted";
 import { setInCall, setWatchingParty } from "@/lib/in-call-state";
 import { useUpdateOffered } from "@/lib/update-prompt-state";
@@ -1513,6 +1514,7 @@ function MainAppContent({
   clerkAccount = null,
 }: MainAppContentProps) {
   const { t, locale } = useTranslation();
+  const redesign = useRedesign();
   const [user, setUser] = useState<User | null>(null);
   // The voice note player remembers its speed per account.
   useEffect(() => {
@@ -12074,24 +12076,37 @@ function MainAppContent({
                 person, and hashing it renames them. Skipped once the channel
                 has its own image/emoji — `ChannelIcon` above already carries
                 that identity, and stacking `#` in front of it doubles up. */}
-            {!selectedChannel.imageUrl &&
-            selectedChannel.kind === "server" &&
-            selectedChannel.type === "text" &&
-            !selectedChannel.isPrivate ? (
-              <span className="redesign:text-[18px] redesign:leading-none redesign:font-normal redesign:text-text-tertiary">#</span>
-            ) : !selectedChannel.imageUrl &&
-              selectedChannel.kind === "server" &&
-              isVoiceRoomChannelType(selectedChannel.type) &&
-              !selectedChannel.isPrivate ? (
-              // Under the redesign a voice room's chat carries the room's
-              // glyph, as `#` marks a text channel.
-              <span className="hidden text-text-tertiary redesign:inline-flex">
-                <ChannelIcon channel={selectedChannel} className="h-4 w-4" />
-              </span>
+            {redesign ? (
+              <>
+                {!selectedChannel.imageUrl &&
+                selectedChannel.kind === "server" &&
+                selectedChannel.type === "text" &&
+                !selectedChannel.isPrivate ? (
+                  <span className="text-[18px] leading-none font-normal text-text-tertiary">#</span>
+                ) : !selectedChannel.imageUrl &&
+                  selectedChannel.kind === "server" &&
+                  isVoiceRoomChannelType(selectedChannel.type) &&
+                  !selectedChannel.isPrivate ? (
+                  // A voice room's chat carries the room's glyph, as `#`
+                  // marks a text channel.
+                  <span className="inline-flex text-text-tertiary">
+                    <ChannelIcon channel={selectedChannel} className="h-4 w-4" />
+                  </span>
+                ) : null}
+                <span className="truncate">{selectedChannel.name}</span>
+              </>
             ) : (
-              ""
+              // With the toggle off, `#` and the name stay one text run.
+              <>
+                {!selectedChannel.imageUrl &&
+                selectedChannel.kind === "server" &&
+                selectedChannel.type === "text" &&
+                !selectedChannel.isPrivate
+                  ? "#"
+                  : ""}
+                {selectedChannel.name}
+              </>
             )}
-            <span className="truncate">{selectedChannel.name}</span>
           </p>
           {/* A watch party channel with a party on it has its own count on
               the bar ("N assistindo"); a second one here, of the seated

@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { cn } from "@/lib/utils";
+import { useRedesign } from "@/lib/redesign";
 
 /**
  * The hover/focus helper for a control whose whole visible content is an icon.
@@ -305,6 +306,7 @@ export function Tooltip({
   const a11y = tooltipA11y({ label, detail, name });
   const container = useContext(TooltipContainerContext);
   const rail = tone === "rail";
+  const redesign = useRedesign();
 
   return (
     <TooltipPrimitive.Root>
@@ -324,7 +326,7 @@ export function Tooltip({
         <TooltipPrimitive.Content
           side={side}
           align={align}
-          sideOffset={rail ? 14 : 6}
+          sideOffset={rail ? (redesign ? 14 : 12) : 6}
           collisionPadding={COLLISION_PADDING}
           aria-label={a11y.description}
           className={cn(
