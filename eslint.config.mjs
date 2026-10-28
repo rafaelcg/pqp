@@ -24,6 +24,10 @@ export default tseslint.config(
       "**/.wrangler/**",
       // VitePress's dependency-optimizer cache, git-ignored and generated.
       "**/.vitepress/cache/**",
+      // The desktop share smoke test's built page and its results, both
+      // generated and git-ignored (electron/test/share-smoke/).
+      "electron/test/share-smoke/.page/**",
+      "electron/test-results/**",
     ],
   },
 
@@ -108,6 +112,7 @@ export default tseslint.config(
       "client/e2e/share-audio-echo/**/*.mjs",
       "client/e2e/camera-sync/**/*.mjs",
       "client/e2e/share-fast-start/**/*.mjs",
+      "client/e2e/desktop-share/**/*.mjs",
       "electron/**/*.mjs",
       "flatpak/**/*.mjs",
       "tools/**/*.{js,mjs}",
