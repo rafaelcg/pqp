@@ -39,6 +39,8 @@ import {
   type CategoryHeaderDrag,
 } from "@/components/layout/channel-list-mixed";
 import { ServerRail } from "@/components/layout/server-rail";
+import { communitySummarySchema } from "@pqp/shared";
+import { CommunityCard, CommunityCardSkeleton } from "@/components/communities/community-card";
 import { LivePartyBlock } from "@/components/watch-party/live-party-block";
 import { ServerIcon } from "@/components/layout/server-identity";
 import type { LatestCard, LatestPreview } from "@/lib/community-home/latest";
@@ -46,6 +48,7 @@ import { CornerCard } from "@/components/layout/corner-card";
 import { FirstRunCard } from "@/components/onboarding/first-run-card";
 import { Button } from "@/components/ui/button";
 import { setUpdateWaiting } from "@/lib/update-prompt-state";
+import { AppBootstrapError, AppLoadingShell } from "@/components/layout/app-loading-shell";
 import { MusicQueueSpecimen } from "@/pages/qa-music-queue";
 
 /**
@@ -1088,10 +1091,66 @@ const NEW_USER = {
   avatarUrl: null,
 } as unknown as Parameters<typeof FirstRunCard>[0]["user"];
 
+const community = (n: number, name: string, tagline: string, category: string, memberCount: number, extra: Record<string, unknown> = {}) =>
+  communitySummarySchema.parse({
+    id: `00000000-0000-4000-8000-0000000009${String(n).padStart(2, "0")}`,
+    name,
+    slug: name.toLowerCase().replace(/\s+/g, "-"),
+    tagline,
+    category,
+    memberCount,
+    joined: false,
+    createdAt: new Date(NOW - 30 * 86_400_000).toISOString(),
+    ...extra,
+  });
+
+/**
+ * Directory cards on the directory's own tone: one you are in ("Abrir"), one
+ * with a banner, one plain, and the loading skeleton in the same shape.
+ */
+function CommunityCardsBlock() {
+  return (
+    <div data-testid="qa-community-cards" className="max-w-5xl rounded-[var(--radius-card)] bg-surface-1 p-6 redesign:bg-[color:var(--communities-bg)]">
+      <ul className="grid grid-cols-3 gap-4">
+        <CommunityCard
+          community={community(1, "Turma do Fliperama", "Jogo velho, cartucho soprado e campeonato toda sexta.", "games", 1840, { joined: true })}
+          joining={false}
+          onEnter={noop}
+          onReport={noop}
+        />
+        <CommunityCard
+          community={community(2, "Sala de Som", "Tocando disco de vinil e discutindo encarte.", "musica", 312)}
+          joining={false}
+          bannerUrl="/media/bubbles-poster.jpg"
+          onEnter={noop}
+          onReport={noop}
+        />
+        <CommunityCard
+          community={community(3, "Bate-bola", "Resenha do jogo de domingo.", "futebol", 47)}
+          joining={false}
+          onEnter={noop}
+          onReport={noop}
+        />
+        <CommunityCardSkeleton />
+      </ul>
+    </div>
+  );
+}
+
 export function ShellSheet() {
   useUpdateWaitingFixture();
   return (
     <div className="flex flex-col gap-6">
+      {/* App states: the shell while the app boots, and the page when it
+          cannot reach the API. Each in a fixed desktop-sized frame. */}
+      <div data-testid="qa-shell-states" className="flex flex-col gap-6">
+        <div className="h-[560px] w-[1100px] overflow-hidden rounded-[var(--radius-card)] border border-border">
+          <AppLoadingShell />
+        </div>
+        <div className="h-[420px] w-[1100px] overflow-hidden rounded-[var(--radius-card)] border border-border bg-[color:var(--color-pane-main)]">
+          <AppBootstrapError message="Não deu pra falar com o servidor (502)." onRetry={noop} />
+        </div>
+      </div>
       {/* Server rail. Left: Conversas open, two friend requests, two people
           waiting and a pinned conversation; Oficina unread, Memes with three
           mentions. Right: a server open; a photo icon, a Baú count, a Baú ring
@@ -1286,6 +1345,8 @@ export function ShellSheet() {
       <MessageContentBlock />
       <MessageChromeBlock />
       <MessageChromeWrapBlock />
+
+      <CommunityCardsBlock />
 
       <div data-testid="qa-shell-rail" className="flex gap-6">
         <RailFrame>

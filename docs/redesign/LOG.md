@@ -79,6 +79,9 @@ Read this file and the inventory at the start of every session.
 | 4 | `f-search` | Merged, capped at round 5 (Opus 8.5 r5). Not done: `<li role="none">` inside the listbox (it changes the toggle-off tree too) |
 | 4 | `f-server-settings` | Merged, capped at round 5 (Opus 7.8 r5, 7.9 r4) |
 | 4 | `f-invites` | Merged, capped at round 5 (Opus 7.8 r5, 8.1 r3 and r4) |
+| 4 | `f-communities` | Merged, capped at round 5 (Opus 7.6 r5, 8.1 r3). Not done: a balanced chip wrap |
+| 4 | `f-bots` | Merged, capped at round 5 (Opus 8.3 r5). Not done: a spinner on the wizard's final button while it saves |
+| 4 | `f-states` | Merged, capped at round 5 (Opus 8.1 r5, 8.3 r4). Open: question on the deploy notes' wording (Railway). Not done: the error page in the canvas frame |
 | 5 | `m-breakpoints` | Merged (code only, no council) |
 
 ## Phase 0: directions
@@ -1166,6 +1169,30 @@ Rounds: Codex 8.2 (r1); Opus 8.5 (r2), 8.0 (r3), 8.5 (r5), no MUST left.
 Round 5 fixes: the copy failure glyph at 14px, the info tint at 7% in
 dark, the rail build line in mono. Merged on the cap.
 
+### f-communities
+
+Spec (audit: `communities-view.tsx`, a full-screen overlay from the rail's
+Comunidades door; `community-card.tsx` with its skeleton; states: loading,
+error, empty per filter, results, load more):
+
+1. Job: browse and join public communities by search, category and language,
+   and start one.
+2. Redesign: the page on the conversation's tone (`--communities-bg`), cards
+   one solid step above (`--community-card-bg`) with card corners and a
+   round icon; category chips are the shared pill choices; the language
+   filter is the segmented control; search on the input tokens; Gabarito
+   titles; filled Compass and Sparkle; a round close.
+3. Merges: nothing. The emoji in empty states and chips stay (character).
+4. Kept: the hover lift and glow, share and report on every card, the
+   create call to action above the grid.
+
+Rounds (Opus only): r1 7.4 (MUST fixed), r2 7.8 (MUST fixed), r3 8.1, r4
+8.0 (MUST fixed: the language filter hid every community while the page
+said none existed), r5 7.6 (no MUST, cap; best r3). After r5: the
+language-only empty result names the language, the language control has a
+visible label, a louder cricket, no lift on card hover. Not done: a balanced
+chip wrap (11 chips leave "Geral" alone at 1440px).
+
 ### m-sheets
 
 Spec (audit: the four phone sheets in the inventory. The app launcher, the
@@ -1537,6 +1564,11 @@ the right-click menu is the merged `ContextMenu`):
 5. Question: should "Mais" become the shared `Menu` (arrow keys, type to
    find) for everybody, not only under the redesign?
 
+Rounds: r1 Opus 7.6, r2 Codex 8.4, r3 Opus 8.6, r4 Codex 8.6, r5 Opus 8.6
+(no MUST, cap). After r5: the open chip's meta in its own softened colour,
+legible initials on the faces, toolbar focus in the focus colour. Not done:
+raising the toolbar to `-top-5` (it would cover more of the row above).
+
 ### f-onboarding
 
 Spec (audit: `onboarding/` (11 files), the hints in `layout/*-hint.tsx`
@@ -1556,15 +1588,63 @@ sizes a footer's primary action (`data-cta`, 120px), done steps keep their
 place with a check and "Feito" and no strike. Rebuilt off `redesign`
 without the f-call work the first branch carried.
 
+### f-states
+
+Spec (audit: `app-loading-shell.tsx` (the boot shell and the cannot-reach-
+the-API page, from `main.tsx` and `App.tsx`), `ui/skeleton.tsx` and the
+spinner (merged as `p-loading`), `error-boundary.tsx`, `HistoryFailed`
+(merged as `p-empty`)):
+
+1. Job: what the app shows before it can show the app, and when it cannot.
+2. Redesign: the boot shell is the frame (canvas, rail on it, floating side
+   and main panes on the frame recipes) with its skeletons, the composer a
+   rounded well, the label sentence case, "pqp" in Gabarito; the API error
+   page takes Gabarito and sentence case.
+3. Not touched: `error-boundary.tsx`. AGENTS.md says to leave it alone, and
+   question 3 asks André first.
+4. Kept: the stored sidebar width on first paint, the retry and the docs
+   pointers on the error page.
+5. Question (copy, shows with the toggle off): the deploy notes on the
+   error page name "Railway/Docker", but production runs on Vultr. Under
+   the redesign they fold behind "Detalhes para quem hospeda"; the text
+   itself waits for a yes.
+
+Rounds: r1 Opus 7.8, r2 Opus 7.6 (MUST fixed: the rail skeleton was squares
+where the rail draws circles), r3 Codex 7.4 (its MUST was a misread: it took
+the dark shot for light; the file is the dark capture), r4 Opus 8.3, r5 Opus
+8.1 (no MUST, cap; best r4). After r5: the host summary in secondary text,
+the failure announced and focus on the retry under the redesign. Not done:
+the error page inside the canvas frame (it replaces the whole tree; a
+restructure), a lighter light skeleton (the loading council set 10% because
+8% vanished at the pulse's low point), the kicker as plain text (it is a
+link today).
+
+### f-bots
+
+Spec (audit: `bots-settings-section.tsx` in server settings, `bots/` (the
+wizard with its preview pane, the overview, the face, radio choices, tags,
+the intro hint); behind the per-server `custom_bots` flag):
+
+1. Job: give a server a helper bot: name, face, colour, what it may do, and
+   see what it did.
+2. Redesign: the server settings frame around it; eyebrows sentence case;
+   face and colour choices take the kit's chosen-card recipe and the accent
+   ring; icon tiles round.
+3. Merges: question kept: `radio-choices.tsx` duplicates the roving radio
+   group; folding it into `ui/RadioGroup` would change the toggle-off look.
+4. Kept: the wizard steps, the practice chat, the activity list.
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss
   themselves. Sharing one behaviour means adding `@radix-ui/react-popover`
   (a new dependency and lockfile change). Only the look is shared for now.
 
-1. Reviewers: André dropped Grok (too slow), so the council is Opus and
-   Codex. On 2026-10-27 Codex hit its usage limit (until November 25,
-   2026), and rounds since then are Opus only. Add a second provider?
+1. Reviewers (answered 2026-10-28): André dropped Grok (too slow), so the
+   council is Opus and Codex. Codex hit its usage limit on 2026-10-27 and
+   rounds on Oct 27-28 were Opus only. On 2026-10-28 André moved Codex to a
+   ChatGPT Plus plan and picked gpt-6-luna (high). Codex reviews the middle
+   rounds; Opus joins for the sign-off round.
 2. Four features live in two versions behind flags. The redesign should
    rebuild only the version that stays. Which one stays for each?
    - DM list: classic or Conversas home (`conversations_home`).
@@ -1609,3 +1689,10 @@ without the f-call work the first branch carried.
 | 2026-10-26 | Tokens merged on André's sign-off at Codex 9.0, Opus 8.4 | Opus's last MUST was fixed after T3. The element rounds hold the 9.0 bar from here. |
 | 2026-10-26 | Phase 2 follows the inventory order: primitives first, then shell, surfaces, phone | Every later element is built from the primitives. |
 | 2026-10-26 | The toggle ships before the tokens | It is the same for every direction and changes nothing visible. Precedence: `?redesign=1|0`, then the person's Beta switch (`pqp-redesign`), then the `redesign` flag. |
+
+Rounds (Opus only): r1 7.4 (3 MUST fixed), r2 7.8 (MUST fixed: the chosen
+card's edge was 1px), r3 7.7, r4 7.9, r5 8.3 (no MUST, cap). After r5: no
+resize grip on the persona, the stat notes on one line, the no-channel note
+in the warning colour. Not done: a spinner on the wizard's final button
+while it saves (`ui/button.tsx` has no loading prop).
+
