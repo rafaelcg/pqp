@@ -994,6 +994,8 @@
   --call-control-hover: color-mix(in oklab, var(--color-text) 16%, transparent);
   --call-control-on-bg: var(--color-accent-soft);
   --call-control-on-text: var(--color-on-accent-soft);
+  /* A hover step on the soft accent, toward the accent itself. */
+  --call-control-on-hover: color-mix(in oklab, var(--color-accent) 18%, var(--color-accent-soft));
   --call-control-off-bg: color-mix(in oklab, var(--color-danger) 20%, transparent);
   --call-control-off-hover: color-mix(in oklab, var(--color-danger) 28%, transparent);
   --call-leave-hover: color-mix(in oklab, var(--color-danger) 85%, var(--color-text));

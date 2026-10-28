@@ -11,7 +11,7 @@ export const CALL_CONTROL_REDESIGN = {
   /** At rest in the composer's dock: a ghost beside the composer's icons. */
   dock: "redesign:bg-transparent redesign:text-text-secondary redesign:hover:bg-[color:var(--call-control-hover)] redesign:hover:text-text redesign:focus-visible:bg-[color:var(--call-control-hover)] redesign:data-[state=open]:bg-[color:var(--call-control-hover)] redesign:data-[state=open]:text-text",
   /** On (camera, share, music open, a raised hand): the soft accent. */
-  on: "redesign:bg-[color:var(--call-control-on-bg)] redesign:text-[color:var(--call-control-on-text)] redesign:hover:bg-[color:var(--call-control-on-bg)]",
+  on: "redesign:bg-[color:var(--call-control-on-bg)] redesign:text-[color:var(--call-control-on-text)] redesign:hover:bg-[color:var(--call-control-on-hover)]",
   /** A muted mic: the soft danger. */
   off: "redesign:bg-[color:var(--call-control-off-bg)] redesign:text-danger redesign:hover:bg-[color:var(--call-control-off-hover)]",
   /** Muted by a moderator: the soft warning, not the person's to lift. */
