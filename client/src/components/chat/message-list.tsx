@@ -4724,7 +4724,7 @@ function DaySeparator({ label }: { label: string }) {
     <div className="my-4 flex items-center gap-3 px-5 redesign:gap-2" role="separator">
       <span className="h-px flex-1 bg-ink-4/60 redesign:bg-[color:var(--pane-header-rule)]" />
       {/* Under the redesign a pill in sentence case, as the mockup's. */}
-      <span className="text-[11px] font-medium uppercase tracking-wider text-paper-muted redesign:rounded-full redesign:bg-transparent redesign:shadow-[inset_0_0_0_1px_var(--pane-header-rule)] redesign:px-2.5 redesign:py-0.5 redesign:text-xs redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">
+      <span className="text-[11px] font-medium uppercase tracking-wider text-paper-muted redesign:inline-block redesign:first-letter:uppercase redesign:rounded-full redesign:bg-transparent redesign:shadow-[inset_0_0_0_1px_var(--pane-header-rule)] redesign:px-2.5 redesign:py-0.5 redesign:text-xs redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">
         {label}
       </span>
       <span className="h-px flex-1 bg-ink-4/60 redesign:bg-[color:var(--pane-header-rule)]" />
@@ -4749,7 +4749,7 @@ function UnreadSeparator({
     >
       <span className="h-px flex-1 bg-danger" />
       {/* Under the redesign the danger fill's pill, in sentence case. */}
-      <span className="text-[11px] font-semibold uppercase tracking-wider text-danger redesign:rounded-full redesign:bg-danger redesign:px-2 redesign:py-0.5 redesign:text-xs redesign:normal-case redesign:tracking-normal redesign:text-on-danger">
+      <span className="text-[11px] font-semibold uppercase tracking-wider text-danger redesign:rounded-full redesign:bg-danger redesign:px-2.5 redesign:py-0.5 redesign:text-xs redesign:normal-case redesign:tracking-normal redesign:text-on-danger">
         {label}
       </span>
     </div>
