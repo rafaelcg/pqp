@@ -1344,7 +1344,7 @@
 
 /* The redesign's shadows on a light page: tinted, never black. Every look. */
 :root[data-redesign][data-theme="light"] {
-  --forum-row-open-bg: var(--color-accent-soft);
+  --forum-row-open-bg: color-mix(in oklab, var(--color-accent) 22%, transparent);
   /* 3% reads in light; dark needs 4.5%. */
   --message-hover: color-mix(in oklab, var(--color-text) 3%, transparent);
   --message-hover-solid: color-mix(in oklab, var(--color-text) 3%, var(--color-pane-main));

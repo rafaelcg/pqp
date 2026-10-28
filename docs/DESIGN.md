@@ -586,7 +586,8 @@ row sit on the card tokens; hover strengthens the edge
 (`--forum-card-hover-border`) and the open post's edge is stronger still
 (`--forum-card-open-border`). A compact row uses the row roles. Filters, tags
 and the status trigger are pills on the segmented track's tint
-(`--segmented-bg`); a chosen filter is the inverse pill. The layout switch is
+(`--segmented-bg`), whose chosen status is the thumb; a chosen toggle ("Meus
+posts", a tag) is the inverse pill. The layout switch is
 segmented and the search is a round input well.
 
 ### Hints and first run

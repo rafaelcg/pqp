@@ -840,8 +840,8 @@ export function ForumComposerDialog({
             aria-invalid={showErrors && titleMissing ? true : undefined}
             aria-describedby={showErrors && titleMissing ? titleErrorId : undefined}
             className={cn(
-              "h-auto border-0 border-b border-border/60 bg-transparent px-0 py-2 forum-display text-2xl font-bold text-text shadow-none placeholder:font-medium placeholder:text-text-secondary rounded-none focus-visible:border-text focus-visible:ring-0 focus-visible:ring-offset-0",
-              showErrors && titleMissing && "border-danger",
+              "h-auto border-0 border-b border-border/60 bg-transparent px-0 py-2 forum-display text-2xl font-bold text-text shadow-none placeholder:font-medium placeholder:text-text-secondary rounded-none focus-visible:border-text focus-visible:ring-0 focus-visible:ring-offset-0 redesign:border-[color:var(--card-border)] redesign:focus-visible:border-[color:var(--forum-card-open-border)]",
+              showErrors && titleMissing && "border-danger redesign:border-danger",
             )}
           />
           {showErrors && titleMissing && (
