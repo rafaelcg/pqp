@@ -105,6 +105,23 @@ Phase 2 end (2026-10-28): every inventory element is merged into
 `redesign` contains `main` at 506969455. On the merged branch: typecheck,
 bench:tokens, i18n:check and 10,464 unit tests pass.
 
+Look pass for the elements merged on 2026-10-28 (`f-watch-party`, `f-apps`,
+`f-dm-call`, `f-stories`, `f-bau`, `f-friends`, `s-member-list`). The
+council shots take `DESIGN_COUNCIL_LOOK`, `DESIGN_COUNCIL_CONTRAST` and
+`DESIGN_COUNCIL_WIDTH`; screenshots in `~/pqp-redesign/verify-2026-10-28/`.
+
+- Halloween and high contrast: every scene captured and reads correctly.
+- Retro: every scene captured. The screens set stops at the DM home,
+  because Modo 2005 swaps it for its contact list (a test assumption).
+- 390px: Baú, the stories strip and the rating captured. The comment field
+  shrank to a few letters; fixed (the field takes its own row on a phone).
+  The watch party, story viewer and friends scenes are desktop-only in the
+  spec and skip at this width; the sheet is fixed at 1280px.
+- Found and left: in retro, "Teu story" truncates under its ring. Tahoma is
+  wider, and the old look truncates it the same way.
+- No new copy this session, so pt-BR, en and es are unchanged. Keyboard
+  focus is in each element's states shots.
+
 ## Phase 0: directions
 
 The mockups live on branch `rd/directions` (not merged). Open
