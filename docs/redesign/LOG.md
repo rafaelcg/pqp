@@ -71,6 +71,7 @@ Read this file and the inventory at the start of every session.
 | 3 | `s-header` | Merged, capped at round 5 (Opus 8.3 r4 and r5). Follow-up: rename `--pane-header-rule` / `--pane-header-px` to `--pane-bar-*` after the chain |
 | 3 | `s-banners` | Merged, capped at round 5 (Opus 8.2 r5, MUST fixed after). Not done: a dark-only accent edge |
 | 3 | `s-message-row` | Merged, capped at round 5 (Opus 8.5 r5) |
+| 3 | `s-message-content` | Merged, capped at round 5 (Opus 8.6 r5). Open: the broken-image chip is English in every language (question in the spec) |
 | 4 | `f-onboarding` | Merged, capped at round 5 (Opus 8.3 r3 and r5) |
 | 5 | `m-sheets` | Merged, approved at round 5 (Opus 9.0, no MUST) |
 | 4 | `f-user-settings` | Merged, capped at round 5 (Opus 8.1 r5, 8.2 r4) |
@@ -78,6 +79,7 @@ Read this file and the inventory at the start of every session.
 | 4 | `f-search` | Merged, capped at round 5 (Opus 8.5 r5). Not done: `<li role="none">` inside the listbox (it changes the toggle-off tree too) |
 | 4 | `f-server-settings` | Merged, capped at round 5 (Opus 7.8 r5, 7.9 r4) |
 | 4 | `f-invites` | Merged, capped at round 5 (Opus 7.8 r5, 8.1 r3 and r4) |
+| 4 | `f-communities` | Merged, capped at round 5 (Opus 7.6 r5, 8.1 r3). Not done: a balanced chip wrap |
 | 5 | `m-breakpoints` | Merged (code only, no council) |
 
 ## Phase 0: directions
@@ -1165,6 +1167,30 @@ Rounds: Codex 8.2 (r1); Opus 8.5 (r2), 8.0 (r3), 8.5 (r5), no MUST left.
 Round 5 fixes: the copy failure glyph at 14px, the info tint at 7% in
 dark, the rail build line in mono. Merged on the cap.
 
+### f-communities
+
+Spec (audit: `communities-view.tsx`, a full-screen overlay from the rail's
+Comunidades door; `community-card.tsx` with its skeleton; states: loading,
+error, empty per filter, results, load more):
+
+1. Job: browse and join public communities by search, category and language,
+   and start one.
+2. Redesign: the page on the conversation's tone (`--communities-bg`), cards
+   one solid step above (`--community-card-bg`) with card corners and a
+   round icon; category chips are the shared pill choices; the language
+   filter is the segmented control; search on the input tokens; Gabarito
+   titles; filled Compass and Sparkle; a round close.
+3. Merges: nothing. The emoji in empty states and chips stay (character).
+4. Kept: the hover lift and glow, share and report on every card, the
+   create call to action above the grid.
+
+Rounds (Opus only): r1 7.4 (MUST fixed), r2 7.8 (MUST fixed), r3 8.1, r4
+8.0 (MUST fixed: the language filter hid every community while the page
+said none existed), r5 7.6 (no MUST, cap; best r3). After r5: the
+language-only empty result names the language, the language control has a
+visible label, a louder cricket, no lift on card hover. Not done: a balanced
+chip wrap (11 chips leave "Geral" alone at 1440px).
+
 ### m-sheets
 
 Spec (audit: the four phone sheets in the inventory. The app launcher, the
@@ -1481,6 +1507,37 @@ r4 7.6 (MUST fixed: a pinned continuation line showed no pin), r5 8.5
 a pinned continuation line carries its pin in the gutter, "(editada)"
 ends the paragraph right before it. For `s-member-list`: the same role
 lightness clamp on member rows and role chips.
+
+### s-message-content
+
+Spec (audit: `MessageBody` and the `.markdown-body` rules, `AttachmentGrid`
+and its four tiles, `VoiceNoteCard`, `ForwardCard`, `PollCard`, `ChanceCard`,
+`BotActionCard`, `BauPostCard`, `StoryQuoteCard`, `GifAttachment`,
+`EmbedCard`, `WebhookEmbedCard`; custom emoji draw an image only):
+
+1. Job: what a message carries, readable and one family.
+2. States: markdown (bold, code, link, quote, list, code block, mentions:
+   you, someone, everyone), picture (loading box, broken falls to the chip),
+   video, audio, file, voice note (playing, unheard, broken, receipts),
+   forward (restricted, media chip, thumbnail), poll (voted, leading,
+   closed), dice, bot plan and ask, Baú post (locked, pinned, video), story
+   quote (live, expired), GIF (reduced motion), link preview, webhook embed.
+3. Redesign: one card (`ui/content-card.ts`): the card's text tint and edge
+   at the card radius, no stripe and no shadow; pictures on a 12px media
+   radius; file and media glyphs are Phosphor on a 36px tile; links in the
+   accent ink with a soft underline; mentions a rounded accent tint; the
+   voice note a pill. A webhook keeps the sender's colour on its left edge.
+4. Kept as is: the lightbox (already the IconButton primitives; its chrome
+   moves with the overlays), the bot notice (`s-log-chrome`).
+5. Question: the broken-image chip says "Image unavailable" in English for
+   every language (`attachment-grid.tsx`). Translating it changes the
+   toggle-off app, so it waits for a yes.
+
+Rounds (Opus only): r1 7.8 (MUST fixed: your own mention lost the cascade),
+r2 8.2, r3 7.9 (MUST fixed: the webhook edge thinned at the corners), r4
+8.2, r5 8.6 (no MUST, cap). After r5: one title scale (poll 16px), the
+poll's other options at 14% under the 26% leader, the roll comment on the
+kicker, named chips at medium weight. Not done: none.
 
 ### f-onboarding
 

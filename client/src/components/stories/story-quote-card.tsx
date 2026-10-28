@@ -1,6 +1,10 @@
 import { useContext, useEffect, useState } from "react";
 import { VoiceNoteNamesContext } from "@/components/chat/voice-note-card";
 import type { StoryCard } from "@pqp/shared";
+import {
+  CONTENT_CARD_REDESIGN,
+  CONTENT_KICKER_REDESIGN,
+} from "@/components/ui/content-card";
 import { useTranslation } from "@/lib/i18n";
 import { fetchStoryCard } from "@/lib/stories/api";
 import { onStoriesSignal } from "@/lib/stories/events";
@@ -170,12 +174,16 @@ export function StoryQuoteCard({ storyId, currentUserId }: StoryQuoteCardProps) 
   return (
     <div
       data-story-quote={expired ? "expired" : "live"}
-      className="mb-1 mt-1 flex max-w-[280px] items-stretch gap-2.5 rounded-[12px] border border-border bg-surface-1 p-2"
+      className={cn(
+        "mb-1 mt-1 flex max-w-[280px] items-stretch gap-2.5 rounded-[12px] border border-border bg-surface-1 p-2",
+        CONTENT_CARD_REDESIGN,
+        "redesign:gap-3 redesign:p-2 redesign:pr-3",
+      )}
     >
       <div
         aria-hidden
         className={cn(
-          "relative h-[72px] w-[44px] shrink-0 overflow-hidden rounded-[7px]",
+          "relative h-[72px] w-[44px] shrink-0 overflow-hidden rounded-[7px] redesign:rounded-[var(--radius-control)]",
           !expired && card.kind === "text" && "story-text-card",
         )}
         data-bg={card.background ?? "night"}
@@ -186,7 +194,7 @@ export function StoryQuoteCard({ storyId, currentUserId }: StoryQuoteCardProps) 
         )}
       </div>
       <div className="flex min-w-0 flex-col justify-center gap-1">
-        <span className="text-[10.5px] font-bold uppercase tracking-[0.08em] text-text-tertiary">
+        <span className={cn("text-[10.5px] font-bold uppercase tracking-[0.08em] text-text-tertiary", CONTENT_KICKER_REDESIGN, "redesign:font-medium")}>
           {heading}
         </span>
         <span className="line-clamp-2 text-[13.5px] font-semibold leading-snug text-text">{title}</span>

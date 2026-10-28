@@ -581,6 +581,20 @@ test("captures the design council screens", async ({ browser }) => {
       await expect(page.getByText(DM.at(-1)![1]).first()).toBeVisible({ timeout: 30_000 });
       await hideDevBanner(page);
       await shoot(page, `03-home-${theme}`);
+      // The communities directory, a full page over the app.
+      try {
+        await page.getByRole("button", { name: "Comunidades" }).first().click({ timeout: 5_000 });
+        await page.waitForTimeout(1200);
+        await shoot(page, `35-communities-${theme}`);
+        // Every language: the unfiltered empty directory, with its one create button.
+        await page.getByRole("button", { name: "Todos", exact: true }).first().click({ timeout: 3_000 }).catch(() => {});
+        await page.waitForTimeout(800);
+        await shoot(page, `35-communities-all-${theme}`);
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(300);
+      } catch {
+        console.log("communities shot skipped");
+      }
       // Novidades: a pane of its own beside the rail.
       await page.getByRole("button", { name: /^Novidades/ }).first().click();
       await page.waitForTimeout(1200);
@@ -963,9 +977,12 @@ const PRIMITIVES: {
   // The user panel: hover on the settings gear of the first.
   { id: "s-user-panel", testId: "qa-shell-user-panel", hover: "Abrir configurações" },
   { id: "s-banners", testId: "qa-shell-banners" },
+  // Directory cards: joined, with a banner, plain, and the skeleton.
+  { id: "f-communities", testId: "qa-community-cards" },
   // Message rows in their states.
   { id: "s-message-row", testId: "qa-shell-message-rows", hoverText: "@lia cê vem?" },
   { id: "f-onboarding", testId: "qa-onboarding", focus: "Entendi" },
+  { id: "s-message-content", testId: "qa-shell-message-content" },
 ];
 
 test("captures the primitives", async ({ browser }) => {
