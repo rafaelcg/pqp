@@ -9,13 +9,13 @@ export const CALL_CONTROL_REDESIGN = {
   /** At rest: a quiet well on a text tint. */
   idle: "redesign:bg-[color:var(--call-control-bg)] redesign:text-text redesign:hover:bg-[color:var(--call-control-hover)] redesign:data-[state=open]:bg-[color:var(--call-control-hover)]",
   /** At rest in the composer's dock: a ghost beside the composer's icons. */
-  dock: "redesign:bg-transparent redesign:text-text-secondary redesign:hover:bg-[color:var(--call-control-hover)] redesign:hover:text-text redesign:data-[state=open]:bg-[color:var(--call-control-hover)] redesign:data-[state=open]:text-text",
+  dock: "redesign:bg-transparent redesign:text-text-secondary redesign:hover:bg-[color:var(--call-control-hover)] redesign:hover:text-text redesign:focus-visible:bg-[color:var(--call-control-hover)] redesign:data-[state=open]:bg-[color:var(--call-control-hover)] redesign:data-[state=open]:text-text",
   /** On (camera, share, music open, a raised hand): the soft accent. */
   on: "redesign:bg-[color:var(--call-control-on-bg)] redesign:text-[color:var(--call-control-on-text)] redesign:hover:bg-[color:var(--call-control-on-bg)]",
   /** A muted mic: the soft danger. */
   off: "redesign:bg-[color:var(--call-control-off-bg)] redesign:text-danger redesign:hover:bg-[color:var(--call-control-off-hover)]",
   /** Muted by a moderator: the soft warning, not the person's to lift. */
-  warn: "redesign:bg-[color:color-mix(in_oklab,var(--color-warning)_18%,transparent)] redesign:text-warning",
+  warn: "redesign:bg-[color:var(--call-control-warn-bg)] redesign:hover:bg-[color:var(--call-control-warn-hover)] redesign:text-warning",
   /** The hang-up: the one solid red on the bar. */
   leave: "redesign:bg-danger redesign:text-on-danger redesign:hover:bg-[color:var(--call-leave-hover)]",
   /** The dot on a control (music playing unheard, NOVO): ringed in the bar's own fill. */

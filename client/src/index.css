@@ -1002,6 +1002,9 @@
   --call-bar-shadow: var(--popover-shadow);
   --call-stage-bg: var(--color-surface-0);
   --call-tile-bg: var(--color-surface-2);
+  /* Muted by a moderator: the soft warning, with a hover step. */
+  --call-control-warn-bg: color-mix(in oklab, var(--color-warning) 18%, transparent);
+  --call-control-warn-hover: color-mix(in oklab, var(--color-warning) 26%, transparent);
   --call-tile-radius: var(--radius-card);
   --call-speaking: var(--color-success);
   --call-badge-bg: oklch(0.12 0.01 262 / 0.62);
@@ -1471,6 +1474,10 @@
   --call-control-off-hover: color-mix(in oklab, var(--color-danger) 20%, transparent);
   --call-leave-hover: color-mix(in oklab, var(--color-danger) 88%, black);
   --call-tile-bg: var(--color-surface-0);
+  /* The stage is the canvas grey, so a white tile has an edge and the speaking ring's gap cuts. */
+  --call-stage-bg: var(--color-canvas);
+  --call-control-warn-bg: color-mix(in oklab, var(--color-warning) 22%, transparent);
+  --call-control-warn-hover: color-mix(in oklab, var(--color-warning) 30%, transparent);
 }
 
 /*

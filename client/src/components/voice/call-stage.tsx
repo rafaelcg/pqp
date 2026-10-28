@@ -409,7 +409,7 @@ export function personAudioTracks(person: StagePerson): {
  * roles inside it come from `.on-media-scope`.
  */
 const STAGE_OVERLAY_PILL =
-  "inline-flex min-w-0 max-w-full flex-wrap items-center gap-x-1 rounded-full bg-black/70 px-2 py-0.5";
+  `inline-flex min-w-0 max-w-full flex-wrap items-center gap-x-1 rounded-full bg-black/70 px-2 py-0.5 ${TILE_GLASS_REDESIGN}`;
 
 const PIP_CORNER_CLASS: Record<PipCorner, string> = {
   tl: "left-3 top-3",
@@ -3283,7 +3283,7 @@ function ActiveCall({
             <CallDuration
               running={timerRunning}
               startedAt={startedAt}
-              className="rounded bg-black/60 px-1.5 py-0.5 text-xs tabular-nums text-paper-muted"
+              className={cn("rounded bg-black/60 px-1.5 py-0.5 text-xs tabular-nums text-paper-muted redesign:rounded-full redesign:px-2", TILE_GLASS_REDESIGN)}
             />
           )}
           {/* The way back from the landscape takeover, and the way into it
@@ -5284,7 +5284,8 @@ function TileBadge({
                 !serverMuted &&
                 !connecting &&
                 handPosition === null &&
-                "@max-[12rem]/picture:hidden",
+                // A badge with only the name hugs it under the redesign, no empty tail.
+                "@max-[12rem]/picture:hidden redesign:min-w-0",
             )
           : cn("absolute bottom-0 left-0 rounded-tr-md redesign:bottom-2 redesign:left-2 redesign:rounded-full", STAGE_LAYER.labels),
         prominent ? "px-2 py-1 text-xs redesign:px-2.5" : "px-1.5 py-0.5 text-[10px] redesign:px-2 redesign:text-[11px]",
