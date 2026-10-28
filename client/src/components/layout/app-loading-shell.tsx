@@ -1,4 +1,5 @@
 import { PANE_HEADER_REDESIGN } from "@/components/ui/pane-header";
+import { SIDEBAR_FOOTER_CARD_REDESIGN } from "@/components/ui/sidebar-block";
 import { type CSSProperties } from "react";
 import { Link } from "react-router-dom";
 import {
@@ -55,7 +56,7 @@ export function AppLoadingShell({ label }: AppLoadingShellProps) {
           <Skeleton className="h-5 w-28" />
         </div>
         <ChannelListSkeleton />
-        <div className="mt-auto border-t border-ink-4/60 p-3 redesign:border-t-0">
+        <div className={cn("mt-auto border-t border-ink-4/60 p-3 redesign:border-t-0 redesign:p-1.5", SIDEBAR_FOOTER_CARD_REDESIGN)}>
           <div className="flex items-center gap-2">
             <Skeleton className="h-8 w-8 rounded-full" />
             <Skeleton className="h-3 w-20" />
@@ -111,12 +112,12 @@ export function AppBootstrapError({ message, onRetry }: AppBootstrapErrorProps) 
     </>
   );
   return (
-    <div className="relative flex h-full flex-col items-start justify-end overflow-hidden p-8 sm:p-12 redesign:bg-pane-main">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_80%_10%,var(--glow-danger),transparent_45%)]" />
+    <div className="relative flex h-full flex-col items-start justify-end overflow-hidden p-8 sm:p-12 redesign:justify-center redesign:bg-pane-main">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_80%_10%,var(--glow-danger),transparent_45%)] redesign:bg-[radial-gradient(circle_at_85%_0%,var(--glow-danger),transparent_35%)]" />
       <div className="relative z-10 max-w-lg">
         <Link
           to="/"
-          className="mb-3 inline-block text-xs uppercase tracking-[0.28em] text-signal redesign:text-[13px] redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-accent-text"
+          className="mb-3 inline-block text-xs uppercase tracking-[0.28em] text-signal redesign:text-sm redesign:font-bold redesign:normal-case redesign:tracking-normal redesign:text-accent-text"
         >
           pqp.gg
         </Link>
