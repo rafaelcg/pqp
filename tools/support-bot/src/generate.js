@@ -126,9 +126,10 @@ export async function generateAnswer({
   const message = await client.messages.create({
     model: DEFAULT_MODEL,
     max_tokens: 400,
-    // Deterministic-ish. This is a lookup, not a creative task, and two people
-    // asking the same question a week apart should get the same answer.
-    temperature: 0,
+    // No `temperature`: @anthropic-ai/sdk 1.x dropped it from the request
+    // params, so the model samples at its default. Correctness does not depend
+    // on it, `screenAnswer` grounds every answer against the fact file whatever
+    // the model produced.
     system,
     messages: [{ role: "user", content: user }],
   });
