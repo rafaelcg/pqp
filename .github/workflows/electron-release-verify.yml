@@ -125,7 +125,7 @@ jobs:
   # the release's state and file list, which `promote` compares against so a
   # file swapped after verification cannot be promoted.
   feed:
-    name: Feed and assets (${{ matrix.target.tag }})
+    name: Feed and assets (${{ matrix.target.tag }}${{ matrix.target.evidence && ', evidence' || '' }})
     needs: plan
     if: needs.plan.outputs.targets != '[]'
     runs-on: ubuntu-latest
@@ -184,7 +184,7 @@ jobs:
         run: node scripts/verify-release-feed.mjs "$RUNNER_TEMP/assets" "$VERSION"
 
   verify:
-    name: Share smoke (${{ matrix.os }}, ${{ matrix.target.tag }})
+    name: Share smoke (${{ matrix.os }}, ${{ matrix.target.tag }}${{ matrix.target.evidence && ', evidence, expected red' || '' }})
     needs: plan
     if: needs.plan.outputs.targets != '[]'
     runs-on: ${{ matrix.os }}
