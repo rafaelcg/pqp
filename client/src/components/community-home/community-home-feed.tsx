@@ -381,7 +381,7 @@ function LockedMedia({ posterUrl }: { posterUrl: string | null }) {
       ) : null}
       <div className="absolute inset-0 bg-ink/45" aria-hidden />
       <span
-        className="absolute bottom-3 left-3 inline-flex items-center gap-1.5 rounded-full bg-ink/85 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-paper"
+        className="absolute bottom-3 left-3 inline-flex items-center gap-1.5 rounded-full bg-ink/85 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-paper redesign:normal-case redesign:tracking-normal redesign:text-[length:var(--badge-text)]"
         data-home-locked-badge
       >
         <Lock className="h-3 w-3" aria-hidden />
@@ -433,7 +433,7 @@ function CommentRow({
           {canDelete && (
             <button
               type="button"
-              className="ml-auto shrink-0 rounded p-0.5 text-paper-muted hover:text-danger"
+              className="ml-auto shrink-0 rounded p-0.5 text-paper-muted hover:text-danger redesign:rounded-full redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--color-focus-ring)]"
               aria-label={t("communityHome.comments.delete")}
               title={t("communityHome.comments.delete")}
               onClick={onDelete}
@@ -447,7 +447,7 @@ function CommentRow({
         {gifMessageMedia(comment.body) ? (
           <GifAttachment media={gifMessageMedia(comment.body)!} />
         ) : (
-          <p className="whitespace-pre-wrap break-words text-paper-muted">
+          <p className="whitespace-pre-wrap break-words text-paper-muted redesign:text-text-secondary">
             {comment.body}
           </p>
         )}
@@ -1092,10 +1092,10 @@ export function PostCard({
           )}
           {post.pinned && (
             <span
-              className={cn("inline-flex items-center gap-1 rounded bg-signal/15 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-signal", badgeRedesignClasses("new", "tag"))}
+              className={cn("inline-flex items-center gap-1 rounded bg-signal/15 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-signal", badgeRedesignClasses("accent", "tag"))}
               data-home-pinned-chip
             >
-              <Pin className="h-2.5 w-2.5" aria-hidden />
+              <Pin className="h-2.5 w-2.5 redesign:h-3 redesign:w-3" aria-hidden />
               {t("communityHome.pinned")}
             </span>
           )}
@@ -1105,8 +1105,8 @@ export function PostCard({
             </span>
           )}
           {post.status === "scheduled" && post.scheduledAt && (
-            <span className="inline-flex items-center gap-1 rounded border border-ink-4 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-paper-muted">
-              <CalendarClock className="h-2.5 w-2.5" aria-hidden />
+            <span className={cn("inline-flex items-center gap-1 rounded border border-ink-4 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-paper-muted", badgeRedesignClasses("neutral", "tag"), "redesign:border-0")}>
+              <CalendarClock className="h-2.5 w-2.5 redesign:h-3 redesign:w-3" aria-hidden />
               {t("communityHome.status.scheduledFor", {
                 when: scheduledLabel(post.scheduledAt, post.scheduleTimezone, locale),
               })}

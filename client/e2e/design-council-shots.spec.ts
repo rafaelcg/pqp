@@ -1217,6 +1217,13 @@ test("captures the bau", async ({ browser }) => {
     headers: headers(VIEWER),
   });
   await post({ status: "draft", title: "Regras do campeonato", body: "Rascunho: chaves, horários e o que vale." });
+  await post({
+    status: "scheduled",
+    title: "Resultado do quiz",
+    body: "Sai no sábado de manhã.",
+    scheduledAt: new Date(Date.now() + 3 * 24 * 3600 * 1000).toISOString(),
+    scheduleTimezone: "America/Sao_Paulo",
+  });
 
   for (const theme of ["dark", "light"] as const) {
     const context = await browser.newContext({ viewport: DESKTOP, locale: "pt-BR" });
@@ -1242,8 +1249,33 @@ test("captures the bau", async ({ browser }) => {
       await expect(page.locator("[data-community-home-feed] [data-home-post]").first()).toBeVisible({ timeout: 30_000 });
       await page.waitForTimeout(1200);
       await shoot(page, `f-bau-post-${theme}`);
+      // The draft and scheduled chips, further down Lia's feed.
+      await page.goto(`/app/server/${home.id}?lang=pt-BR&communityHome=1`);
+      await hideDevBanner(page);
+      const chips = page.locator("[data-community-home-feed] [data-home-post]").filter({ hasText: "Resultado do quiz" });
+      await chips.scrollIntoViewIfNeeded({ timeout: 30_000 });
+      await page.waitForTimeout(600);
+      await chips.screenshot({ path: path.join(OUT!, `f-bau-scheduled-${theme}.png`) });
     } catch (error) {
       console.log(`f-bau: skipped (${String(error).slice(0, 200)})`);
+    }
+    // Rafa's view: a member, so the members-only post is his to read or locked.
+    try {
+      await fetch(`${API}/api/me/preferences`, {
+        method: "PATCH",
+        headers: headers("rafa"),
+        body: JSON.stringify({ theme }),
+      });
+      const rafa = await context.newPage();
+      await rafa.addInitScript(() => localStorage.setItem("pqp:dev-user-suffix", "rafa"));
+      await rafa.goto(`/app/server/${home.id}?lang=pt-BR&communityHome=1`);
+      await hideDevBanner(rafa);
+      const members = rafa.locator("[data-community-home-feed] [data-home-post]").filter({ hasText: "Bastidores do torneio" });
+      await members.scrollIntoViewIfNeeded({ timeout: 30_000 });
+      await rafa.waitForTimeout(600);
+      await members.screenshot({ path: path.join(OUT!, `f-bau-member-${theme}.png`) });
+    } catch (error) {
+      console.log(`f-bau: member view skipped (${String(error).slice(0, 200)})`);
     }
     await context.close();
   }
