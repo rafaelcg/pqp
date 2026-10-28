@@ -10,6 +10,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { useTranslation } from "@/lib/i18n";
 import { useRedesign } from "@/lib/redesign";
+import { CaretRight } from "@phosphor-icons/react";
+import { Icon } from "@/components/ui/icon";
 import {
   loadChannelSidebarWidth,
 } from "@/lib/channel-sidebar-width";
@@ -73,10 +75,10 @@ export function AppLoadingShell({ label }: AppLoadingShellProps) {
 
       <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-ink/40 backdrop-blur-[1px] redesign:bg-[color:color-mix(in_oklab,var(--color-canvas)_40%,transparent)] redesign:[:root[data-theme=light]_&]:bg-[color:color-mix(in_oklab,var(--color-canvas)_25%,transparent)]">
         {/* Under the redesign the spinner and its label sit on their own card, off the skeleton bars. */}
-        <div className="flex flex-col items-center gap-3 redesign:rounded-[var(--radius-card)] redesign:bg-pane-main/90 redesign:px-5 redesign:py-4">
+        <div className="flex flex-col items-center gap-3 redesign:rounded-[var(--radius-card)] redesign:bg-pane-main redesign:px-5 redesign:py-4 redesign:ring-1 redesign:ring-inset redesign:ring-[color:var(--color-border)]">
           <div className="relative flex h-12 w-12 items-center justify-center">
             <span className="absolute inset-0 rounded-full border-2 border-signal/20 redesign:border-[color:color-mix(in_oklab,var(--color-accent)_25%,transparent)]" />
-            <span className="absolute inset-0 animate-spin rounded-full border-2 border-transparent border-t-signal motion-reduce:animate-none" />
+            <span className="absolute inset-0 animate-spin rounded-full border-2 border-transparent border-t-signal motion-reduce:animate-none redesign:border-t-accent" />
             <span className="font-display text-sm font-bold text-signal redesign:font-[family-name:var(--type-title-font)] redesign:text-accent-text">
               pqp
             </span>
@@ -109,7 +111,7 @@ export function AppBootstrapError({ message, onRetry }: AppBootstrapErrorProps) 
     </>
   );
   return (
-    <div className="relative flex h-full flex-col items-start justify-end overflow-hidden p-8 sm:p-12">
+    <div className="relative flex h-full flex-col items-start justify-end overflow-hidden p-8 sm:p-12 redesign:bg-pane-main">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_80%_10%,var(--glow-danger),transparent_45%)]" />
       <div className="relative z-10 max-w-lg">
         <Link
@@ -126,7 +128,8 @@ export function AppBootstrapError({ message, onRetry }: AppBootstrapErrorProps) 
           // The deploy notes are for whoever hosts pqp, so under the redesign
           // they fold behind a disclosure instead of greeting every reader.
           <details className="group mt-3 text-sm text-text-secondary">
-            <summary className="cursor-pointer select-none rounded-[var(--radius-control)] font-medium text-text marker:text-text-tertiary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--color-focus-ring)]">
+            <summary className="inline-flex cursor-pointer list-none select-none items-center gap-1.5 rounded-[var(--radius-control)] font-medium text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--color-focus-ring)] [&::-webkit-details-marker]:hidden">
+              <Icon icon={CaretRight} kind="symbol" size="sm" className="text-text-tertiary transition-transform duration-[var(--duration-fast)] group-open:rotate-90 motion-reduce:transition-none" />
               {t("bootstrapError.deploy.details")}
             </summary>
             <p className="mt-2">{deploy}</p>
