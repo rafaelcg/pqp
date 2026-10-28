@@ -715,6 +715,8 @@ function RequestRow({
         "mb-1 flex items-center gap-3 rounded-md px-2 py-2 hover:bg-ink-3",
         busy && "opacity-60",
         FRIEND_ROW_REDESIGN,
+        // On a phone the actions take their own line, so the name stays readable.
+        "redesign:max-sm:flex-wrap",
       )}
     >
       {/* No status pip on purpose: a request is from/to a stranger, and the
@@ -728,7 +730,7 @@ function RequestRow({
           </p>
         )}
       </div>
-      <div className="flex shrink-0 items-center gap-1.5">{children}</div>
+      <div className="flex shrink-0 items-center gap-1.5 redesign:max-sm:basis-full redesign:max-sm:pl-[3.25rem]">{children}</div>
     </li>
   );
 }

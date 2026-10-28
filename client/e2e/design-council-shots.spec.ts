@@ -359,6 +359,17 @@ async function hideDevBanner(page: Page): Promise<void> {
 }
 
 /** Settled: fonts in, no spinner mid-turn, no caret blinking in a shot. */
+/** At phone width the channel list is a drawer: open it before a sidebar step. */
+async function openPhoneNav(page: Page): Promise<void> {
+  if (DESKTOP.width >= 768) return;
+  const button = page.getByRole("button", { name: "Abrir navegação" }).first();
+  if (await button.isVisible().catch(() => false)) {
+    // Already open: the drawer covers the button, so a click would wait forever.
+    await button.click({ timeout: 3_000 }).catch(() => {});
+    await page.waitForTimeout(500);
+  }
+}
+
 async function shoot(page: Page, name: string): Promise<void> {
   await page.evaluate(() => document.fonts.ready);
   await page.addStyleTag({ content: `* { caret-color: transparent !important; }` });
@@ -625,7 +636,11 @@ test("captures the design council screens", async ({ browser }) => {
       await shoot(page, `02-dm-${theme}`);
 
       await page.goto(`/app/dm?lang=pt-BR`);
-      await expect(page.getByText(DM.at(-1)![1]).first()).toBeVisible({ timeout: 30_000 });
+      // Modo 2005 swaps the conversation list for its contact list, which
+      // shows no last message.
+      await expect(
+        LOOK === "retro" ? page.getByText("Contatos").first() : page.getByText(DM.at(-1)![1]).first(),
+      ).toBeVisible({ timeout: 30_000 });
       await hideDevBanner(page);
       await shoot(page, `03-home-${theme}`);
       // The communities directory, a full page over the app.
@@ -1303,6 +1318,7 @@ test("captures the stories", async ({ browser }) => {
     await page.goto(`/app/server/${home.id}/channel/${text.id}?lang=pt-BR`);
     await expect(page.getByRole("button", { name: "Enviar" })).toBeVisible({ timeout: 30_000 });
     await hideDevBanner(page);
+    await openPhoneNav(page);
     await expect(page.getByRole("button", { name: /^Story de Rafa/ })).toBeVisible({ timeout: 20_000 });
     await page.waitForTimeout(600);
     await shoot(page, `f-stories-strip-${theme}`);
@@ -1317,6 +1333,7 @@ test("captures the stories", async ({ browser }) => {
     await expect(page.getByRole("button", { name: "Enviar" })).toBeVisible({ timeout: 30_000 });
     await hideDevBanner(page);
     try {
+      await openPhoneNav(page);
       const ring = page.getByRole("button", { name: /^Story de Rafa/ });
       await expect(ring).toBeVisible({ timeout: 20_000 });
       await page.waitForTimeout(600);
@@ -1331,18 +1348,19 @@ test("captures the stories", async ({ browser }) => {
       await page.waitForTimeout(600);
       // Tab out and back so focus-visible matches, and shoot here because
       // shoot() parks the pointer, which would drop the hover.
+      await openPhoneNav(page);
       const bia = page.getByRole("button", { name: /^Story de Bia/ });
-      await bia.focus();
+      await bia.focus({ timeout: 5_000 }).catch((error) => console.log(`f-stories: focus ${String(error).slice(0, 160)}`));
       await page.keyboard.press("Tab");
       await page.keyboard.press("Shift+Tab");
       await page.evaluate(() => document.fonts.ready);
-      await page.locator("[data-story-see-all]").first().hover();
+      await page.locator("[data-story-see-all]").first().hover({ timeout: 5_000 }).catch(() => {});
       await page.waitForTimeout(800);
       await page.screenshot({ path: path.join(OUT!, `f-stories-states-${theme}.png`) });
       await page.mouse.move(0, 0);
       await page.waitForTimeout(500);
-      await page.locator("[data-server-menu-trigger]").first().click();
-      await page.getByRole("menuitem", { name: "Postar story" }).click();
+      await page.locator("[data-server-menu-trigger]").first().click({ timeout: 10_000 });
+      await page.getByRole("menuitem", { name: "Postar story" }).click({ timeout: 10_000 });
       await page.waitForTimeout(900);
       await shoot(page, `f-stories-composer-${theme}`);
       await page.keyboard.press("Escape");
@@ -1385,6 +1403,7 @@ test("captures the watch party", async ({ browser }) => {
     await expect(page.getByRole("button", { name: "Enviar" })).toBeVisible({ timeout: 30_000 });
     await hideDevBanner(page);
     try {
+      await openPhoneNav(page);
       await page.locator("[data-live-party-create]").click({ timeout: 10_000 });
       await page.locator("[data-create-watch-party-name]").fill("Sessão coruja");
       await shoot(page, `f-watch-party-create-${theme}`);
@@ -1420,6 +1439,7 @@ test("captures the watch party", async ({ browser }) => {
       await expect(memberPage.getByRole("button", { name: "Enviar" })).toBeVisible({ timeout: 30_000 });
       await hideDevBanner(memberPage);
       const block = memberPage.getByTestId("live-party-block");
+      await openPhoneNav(memberPage);
       await expect(block).toBeVisible({ timeout: 20_000 });
       await shoot(memberPage, `f-watch-party-member-${theme}`);
       await block.screenshot({ path: path.join(OUT!, `f-watch-party-block-${theme}.png`) });
@@ -1550,6 +1570,78 @@ test("captures the bau", async ({ browser }) => {
     }
     await context.close();
   }
+});
+
+/**
+ * The phone pass for friends and the conversation call: Pendentes with a
+ * request and a depoimento waiting, then the ring card over the
+ * conversation, at 390px in both looks.
+ */
+test("captures friends and the call ring on a phone", async ({ browser }) => {
+  fs.mkdirSync(OUT!, { recursive: true });
+  const ids: Record<string, string> = {};
+  for (const [suffix, name, avatar] of PEOPLE.slice(0, 4)) {
+    ids[suffix] = await person(suffix, name, avatar);
+  }
+  await befriend("rafa", VIEWER, ids[VIEWER]!, ids.rafa!);
+  const { conversation } = await json<{ conversation: { channelId: string } }>(
+    await fetch(`${API}/api/dms`, {
+      method: "POST",
+      headers: headers("rafa"),
+      body: JSON.stringify({ userIds: [ids[VIEWER]] }),
+    }),
+  );
+  const other = PEOPLE.slice(1, 4).map(([suffix]) => suffix).find((suffix) => suffix !== "rafa")!;
+  await fetch(`${API}/api/friends`, {
+    method: "POST",
+    headers: headers(other),
+    body: JSON.stringify({ userId: ids[VIEWER]! }),
+  });
+  await fetch(`${API}/api/users/${ids[VIEWER]!}/depoimentos`, {
+    method: "POST",
+    headers: headers("rafa"),
+    body: JSON.stringify({ body: "A Lia salva qualquer call. Melhor parceira de fliperama!" }),
+  });
+  const caller = new Socket("rafa");
+  await caller.connect();
+  for (const theme of ["dark", "light"] as const) {
+    const context = await browser.newContext({ viewport: PHONE, locale: "pt-BR" });
+    const page = await context.newPage();
+    await as(page, theme);
+    try {
+      await page.goto(`/app/friends?lang=pt-BR`);
+      await hideDevBanner(page);
+      await page.getByRole("tab", { name: /^Pendentes/ }).click({ timeout: 30_000 });
+      await page.waitForTimeout(600);
+      await shoot(page, `phone-friends-pending-${theme}`);
+    } catch (error) {
+      console.log(`phone pass: friends skipped (${String(error).slice(0, 200)})`);
+    }
+    await context.close();
+  }
+  // One ring, both looks: a second ring to the same call does not show again.
+  const context = await browser.newContext({ viewport: PHONE, locale: "pt-BR" });
+  const page = await context.newPage();
+  await as(page, "dark");
+  try {
+    await page.goto(`/app/dm/${conversation.channelId}?lang=pt-BR`);
+    await expect(page.getByRole("button", { name: "Enviar" })).toBeVisible({ timeout: 30_000 });
+    await hideDevBanner(page);
+    await caller.joinVoice(conversation.channelId);
+    caller.send({ type: "call-ring", conversationId: conversation.channelId });
+    await expect(page.getByRole("dialog", { name: /Rafa/ })).toBeVisible({ timeout: 15_000 });
+    for (const theme of ["dark", "light"] as const) {
+      await page.evaluate((value) => {
+        document.documentElement.dataset.theme = value;
+      }, theme);
+      await page.waitForTimeout(500);
+      await shoot(page, `phone-dm-call-ring-${theme}`);
+    }
+  } catch (error) {
+    console.log(`phone pass: ring skipped (${String(error).slice(0, 200)})`);
+  }
+  await context.close();
+  caller.close();
 });
 
 test("captures the forum post", async ({ browser }) => {
