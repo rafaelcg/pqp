@@ -88,8 +88,8 @@ export function ThreadChip({
         // `--thread-chip-fill` is the fill the faces are cut from.
         "redesign:min-h-7 redesign:gap-2 redesign:rounded-full redesign:border-l-0 redesign:py-1 redesign:pl-1.5 redesign:pr-3 redesign:focus-visible:ring-accent",
         isOpen
-          ? "redesign:bg-row-selected redesign:text-on-row-selected redesign:[--thread-chip-fill:var(--color-row-selected)] redesign:[:root[data-theme=light]_&]:bg-accent-soft redesign:[:root[data-theme=light]_&]:text-on-accent-soft redesign:[:root[data-theme=light]_&]:[--thread-chip-fill:var(--color-accent-soft)]"
-          : "redesign:bg-[color:var(--content-glyph-bg)] redesign:text-text-secondary redesign:hover:bg-[color:var(--content-card-hover)] redesign:hover:text-text redesign:[--thread-chip-fill:color-mix(in_oklab,var(--color-text)_7%,var(--color-pane-main))]",
+          ? "redesign:bg-[color:var(--thread-chip-open-bg)] redesign:text-[color:var(--thread-chip-open-fg)] redesign:[--thread-chip-fill:var(--thread-chip-open-bg)]"
+          : "redesign:bg-[color:var(--content-glyph-bg)] redesign:text-text-secondary redesign:hover:bg-[color:var(--content-card-hover)] redesign:hover:text-text redesign:[--thread-chip-fill:color-mix(in_oklab,var(--color-text)_7%,var(--color-pane-main))] redesign:hover:[--thread-chip-fill:var(--content-card-hover)]",
       )}
     >
       {thread.archived ? (

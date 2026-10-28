@@ -673,7 +673,7 @@ const MESSAGE_TIME_REDESIGN = "redesign:text-xs redesign:text-text-tertiary";
 const TOOLBAR_REDESIGN =
   "redesign:-top-4 redesign:right-3 redesign:gap-0.5 redesign:rounded-full redesign:border-[color:var(--popover-border)] redesign:bg-[color:var(--popover-surface)] redesign:p-1 redesign:shadow-[var(--popover-shadow)]";
 const TOOLBAR_BUTTON_REDESIGN =
-  "redesign:h-8 redesign:w-8 redesign:rounded-full redesign:text-text-secondary redesign:hover:bg-[color:var(--menu-row-hover)] redesign:hover:text-text";
+  "redesign:h-8 redesign:w-8 redesign:rounded-full redesign:text-text-secondary redesign:hover:bg-[color:var(--menu-row-hover)] redesign:hover:text-text redesign:focus-visible:ring-offset-[color:var(--popover-surface)]";
 /** A quick reaction you already gave: the accent's soft fill. */
 const TOOLBAR_BUTTON_ON_REDESIGN =
   "redesign:bg-accent-soft redesign:hover:bg-accent-soft redesign:shadow-[inset_0_0_0_1.5px_var(--color-accent)]";
@@ -4370,10 +4370,13 @@ const MessageRow = memo(function MessageRow({
                     variant="ghost"
                     size="icon"
                     tabIndex={-1}
-                    className={cn("h-6 w-6", TOOLBAR_BUTTON_REDESIGN)}
+                    className={cn("group/addtb h-6 w-6", TOOLBAR_BUTTON_REDESIGN)}
                     onClick={onOpenPicker}
                   >
-                    <ToolbarGlyph old={SmilePlus} glyph={Smiley} />
+                    {/* "Add", not a fourth emoji: the bold outline at rest, filled on hover, as on the bar. */}
+                    <SmilePlus className="h-3.5 w-3.5 redesign:hidden" />
+                    <Glyph icon={Smiley} kind="symbol" size="sm" className="hidden redesign:block redesign:group-hover/addtb:hidden redesign:group-focus-visible/addtb:hidden" />
+                    <Glyph icon={Smiley} size="sm" className="hidden redesign:group-hover/addtb:block redesign:group-focus-visible/addtb:block" />
                   </Button>
                 </Tooltip>
               )}
