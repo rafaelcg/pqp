@@ -110,17 +110,21 @@ Look pass for the elements merged on 2026-10-28 (`f-watch-party`, `f-apps`,
 council shots take `DESIGN_COUNCIL_LOOK`, `DESIGN_COUNCIL_CONTRAST` and
 `DESIGN_COUNCIL_WIDTH`; screenshots in `~/pqp-redesign/verify-2026-10-28/`.
 
-- Halloween and high contrast: every scene captured and reads correctly.
-- Retro: every scene captured. The screens set stops at the DM home,
-  because Modo 2005 swaps it for its contact list (a test assumption).
-- 390px: Baú, the stories strip and the rating captured. The comment field
-  shrank to a few letters; fixed (the field takes its own row on a phone).
-  The watch party, story viewer and friends scenes are desktop-only in the
-  spec and skip at this width; the sheet is fixed at 1280px.
+- Halloween and high contrast: every scene captured and reads correctly,
+  the QA sheet included (it now takes the look too).
+- Retro: every scene captured, the screens set included (its DM home step
+  now waits for Modo 2005's contact list, which has no last message).
+- 390px: every element captured. The watch party and stories scenes open
+  the phone drawer first, and a phone pass covers friends and the call
+  ring. Two fixes: Baú's comment field took its own row (it had shrunk to
+  a few letters), and a friend request's actions take their own line (the
+  name had shrunk to one letter). Left as is: the watch party host bar
+  wraps its tools onto three rows. The QA sheet is fixed at 1280px.
 - Found and left: in retro, "Teu story" truncates under its ring. Tahoma is
   wider, and the old look truncates it the same way.
 - No new copy this session, so pt-BR, en and es are unchanged. Keyboard
-  focus is in each element's states shots.
+  focus is in each element's states shots. After the fixes: friends and
+  Baú unit tests and e2e (18 passed).
 
 ## Phase 0: directions
 
