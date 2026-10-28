@@ -1177,11 +1177,14 @@ test("captures the primitives", async ({ browser }) => {
     });
     const page = await context.newPage();
     await page.addInitScript(
-      ([value, redesign]) => {
+      ([value, redesign, look, contrast]) => {
         localStorage.setItem("pqp-theme", value);
         localStorage.setItem("pqp-redesign", redesign ? "on" : "off");
+        if (look) localStorage.setItem("pqp-appearance", look);
+        if (look === "retro") localStorage.setItem("pqp-appearance-retro", "1");
+        if (contrast) localStorage.setItem("pqp-contrast", contrast);
       },
-      [theme, REDESIGN] as const,
+      [theme, REDESIGN, LOOK, CONTRAST] as const,
     );
     await page.goto("/qa/ui?lang=pt-BR");
     for (const primitive of PRIMITIVES) {
