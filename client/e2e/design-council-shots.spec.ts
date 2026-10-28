@@ -1154,6 +1154,17 @@ test("captures the forum post", async ({ browser }) => {
       await shoot(page, `f-forum-empty-${theme}`);
       await page.getByRole("radio", { name: "Todos" }).or(page.getByRole("tab", { name: "Todos" })).first().click();
     }
+    // States: the pointer on the first card, keyboard focus on a filter.
+    // `shoot` parks the mouse, so this one is a plain screenshot.
+    try {
+      await page.keyboard.press("Shift");
+      await page.getByRole("radio", { name: "Abertos" }).or(page.getByRole("tab", { name: "Abertos" })).first().focus();
+      await page.getByRole("link", { name: /Modo escuro/ }).first().hover();
+      await page.waitForTimeout(400);
+      await page.screenshot({ path: path.join(OUT!, `f-forum-states-${theme}.png`) });
+    } catch (error) {
+      console.log(`f-forum: states skipped (${String(error).slice(0, 120)})`);
+    }
     try {
       await page.getByRole("button", { name: "Novo post" }).first().click();
       await expect(page.getByRole("dialog")).toBeVisible({ timeout: 5_000 });

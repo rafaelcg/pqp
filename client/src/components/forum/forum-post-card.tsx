@@ -644,7 +644,8 @@ export const ForumPostCard = memo(function ForumPostCard({
         <div className="px-1 pb-1 pt-2.5">
           <div className="flex min-w-0 items-center gap-2">
             {isUnread && <UnreadDot />}
-            {titleLink("forum-display block truncate text-[15px] font-semibold leading-5")}
+            {/* Under the redesign a tile's title runs to two lines before it clips. */}
+            {titleLink("forum-display block truncate text-[15px] font-semibold leading-5 redesign:whitespace-normal redesign:line-clamp-2")}
           </div>
           <div className="mt-1.5 flex min-w-0 items-center gap-1.5 text-xs text-text-secondary">
             <ForumTagList tagIds={post.tagIds.slice(0, 1)} tagsById={tagsById} max={1} size="sm" />
