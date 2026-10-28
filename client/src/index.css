@@ -983,7 +983,7 @@
   --forum-card-hover-border: color-mix(in oklab, var(--color-text) 18%, transparent);
   --forum-card-open-border: color-mix(in oklab, var(--color-text) 32%, transparent);
   /* The compact row open beside the list: the selected row; light steps down to the accent's soft fill. */
-  --forum-row-open-bg: var(--list-row-selected);
+  --forum-row-open-bg: color-mix(in oklab, var(--color-accent) 14%, transparent);
   /* Settings dialogs: a small frame. The band and the rail sit on the side
      pane's tone, the page is an inset pane in the conversation's tone. */
   --settings-surface: var(--color-pane-side);
