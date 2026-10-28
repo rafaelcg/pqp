@@ -1628,6 +1628,12 @@ files):
 3. Merges: the four look-alike control strings into one recipe.
 4. Kept: every control, the folding rules, the idle fade, all three homes.
 
+Rounds: r1 Codex 8.1, r2 Opus 8.2 (kept the live mic neutral, agreed), r3
+Codex 8.3, r4 Opus 8.4, r5 Opus 8.5 (no MUST, approved, cap). After r5: an
+even gap beside an app, docked dots ringed in the composer's fill. Not done:
+"Lia (você)" on the self tile (copy, shows with the toggle off), a ring on
+stacked initials (the avatar's), muted and moderator-muted captures.
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss
