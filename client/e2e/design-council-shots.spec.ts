@@ -1076,6 +1076,7 @@ const PRIMITIVES: {
   },
   // Ten reactions that wrap over a thread chip; the one-line continuation hovered.
   { id: "s-message-chrome-wrap", testId: "qa-shell-message-chrome-wrap", hoverText: "quem chegar depois das 20h fica de fora" },
+  { id: "s-log-chrome", testId: "qa-shell-log-chrome" },
 ];
 
 test("captures the primitives", async ({ browser }) => {

@@ -13,6 +13,7 @@ import {
   UsersThree,
   WarningCircle as WarningCircleFill,
   WifiSlash,
+  ArrowDown as ArrowDownGlyph,
   type Icon as PhosphorGlyph,
 } from "@phosphor-icons/react";
 import { Icon, Icon as Glyph } from "@/components/ui/icon";
@@ -687,6 +688,16 @@ const REACTION_OFF_REDESIGN =
 const REACTION_ON_REDESIGN =
   "redesign:bg-accent-soft redesign:text-on-accent-soft redesign:shadow-[inset_0_0_0_1.5px_var(--color-accent)]";
 
+/*
+ * The list's own chrome (s-log-chrome), under the redesign: the load buttons
+ * are the secondary pill; what floats over the log (the jump pill, the "that
+ * message is gone" note, the bulk bar) sits on the popover surface.
+ */
+const LOG_LOAD_REDESIGN =
+  "redesign:border-0 redesign:bg-[color:var(--button-secondary-bg)] redesign:px-3.5 redesign:py-1.5 redesign:font-semibold redesign:text-text redesign:hover:bg-[color:var(--button-secondary-hover)] redesign:hover:text-text redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent";
+const LOG_FLOAT_REDESIGN =
+  "redesign:border-[color:var(--popover-border)] redesign:bg-[color:var(--popover-surface)] redesign:shadow-[var(--popover-shadow)] redesign:backdrop-blur-none";
+
 /** Both glyphs of a toolbar button: the old one, and the redesign's. */
 function ToolbarGlyph({
   old: Old,
@@ -846,6 +857,25 @@ export const MessageList = memo(function MessageList({
     }
   }, [missingAuthorKey, reportMissingAuthors]);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const redesign = useRedesign();
+  // Under the redesign the jump pill clears the bot's note: it rises over
+  // the footer (the note and the typing line) while it is taller than the
+  // typing line alone, and follows the note down as it collapses.
+  const logFooterRef = useRef<HTMLDivElement>(null);
+  const [logFooterHeight, setLogFooterHeight] = useState(0);
+  useLayoutEffect(() => {
+    const el = logFooterRef.current;
+    if (!redesign || !el) {
+      setLogFooterHeight(0);
+      return;
+    }
+    const measure = () => setLogFooterHeight(el.offsetHeight > 32 ? el.offsetHeight : 0);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [redesign]);
   const [pickerMessageId, setPickerMessageId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isPinned, setIsPinned] = useState(true);
@@ -2158,7 +2188,7 @@ export const MessageList = memo(function MessageList({
         {hasMore && (
           <div className="flex justify-center pb-3">
             {isLoadingOlder ? (
-              <span className="flex items-center gap-2 text-xs text-paper-muted">
+              <span className="flex items-center gap-2 text-xs text-paper-muted redesign:text-text-secondary">
                 <Spinner className="h-3 w-3 animate-spin" />
                 Loading older messages…
               </span>
@@ -2166,7 +2196,7 @@ export const MessageList = memo(function MessageList({
               <button
                 type="button"
                 onClick={loadOlder}
-                className="rounded-full border border-ink-4 px-3 py-1 text-xs text-paper-muted hover:text-paper"
+                className={cn("rounded-full border border-ink-4 px-3 py-1 text-xs text-paper-muted hover:text-paper", LOG_LOAD_REDESIGN)}
               >
                 Load older messages
               </button>
@@ -2560,9 +2590,9 @@ export const MessageList = memo(function MessageList({
         ) : null}
 
         {hasNewer && (
-          <div className="flex justify-center pt-3">
+          <div className="flex justify-center pt-3 redesign:pb-12">
             {isLoadingNewer ? (
-              <span className="flex items-center gap-2 text-xs text-paper-muted">
+              <span className="flex items-center gap-2 text-xs text-paper-muted redesign:text-text-secondary">
                 <Spinner className="h-3 w-3 animate-spin" />
                 {t("chat.loadingNewer")}
               </span>
@@ -2570,7 +2600,7 @@ export const MessageList = memo(function MessageList({
               <button
                 type="button"
                 onClick={loadNewer}
-                className="rounded-full border border-ink-4 px-3 py-1 text-xs text-paper-muted hover:text-paper"
+                className={cn("rounded-full border border-ink-4 px-3 py-1 text-xs text-paper-muted hover:text-paper", LOG_LOAD_REDESIGN)}
               >
                 {t("chat.loadNewer")}
               </button>
@@ -2594,14 +2624,19 @@ export const MessageList = memo(function MessageList({
           // Above the corner card's z-30. Those cards are hints and they park
           // in the same bottom-right corner as this bar's buttons; a hint must
           // not sit on top of the button that ends a destructive flow.
-          className="relative z-40 flex flex-wrap items-center justify-between gap-2 border-t border-ink-4 bg-ink-2 px-4 py-2"
+          className={cn(
+            "relative z-40 flex flex-wrap items-center justify-between gap-2 border-t border-ink-4 bg-ink-2 px-4 py-2",
+            // A floating bar on the popover surface, inset from the pane.
+            "redesign:mx-3 redesign:mb-3 redesign:rounded-[var(--radius-card)] redesign:border redesign:py-2.5 redesign:pl-4 redesign:pr-2.5",
+            LOG_FLOAT_REDESIGN,
+          )}
         >
-          <p className="min-w-0 text-xs text-paper-muted">
+          <p className="min-w-0 text-xs text-paper-muted redesign:text-[0.8125rem] redesign:font-medium redesign:text-text">
             {selectedIds.size === 0
               ? t("chat.bulk.pick")
               : t("chat.bulk.selected", { count: selectedIds.size })}
             {selectedIds.size >= MESSAGE_BULK_DELETE_MAX && (
-              <span className="ml-2 text-paper-muted">
+              <span className="ml-2 text-paper-muted redesign:font-normal redesign:text-text-tertiary">
                 {t("chat.bulk.cap", { count: MESSAGE_BULK_DELETE_MAX })}
               </span>
             )}
@@ -2631,15 +2666,22 @@ export const MessageList = memo(function MessageList({
         onClose={() => setBulkConfirmOpen(false)}
       />
 
-      <Reveal show={!!botNotice}>
-        {botNotice && <BotNoticeRow notice={botNotice} onDismiss={() => onDismissBotNotice?.()} />}
-      </Reveal>
-      <TypingIndicator users={typingUsers} authors={authors} />
+      <div ref={logFooterRef} className="contents redesign:block">
+        <Reveal show={!!botNotice}>
+          {botNotice && <BotNoticeRow notice={botNotice} onDismiss={() => onDismissBotNotice?.()} />}
+        </Reveal>
+        <TypingIndicator users={typingUsers} authors={authors} />
+      </div>
 
       {jumpNotice && (
         <p
           role="status"
-          className="animate-rise absolute bottom-16 right-4 z-10 max-w-[16rem] rounded-md border border-border bg-surface-2 px-3 py-2 text-xs text-text-muted shadow-lg"
+          style={logFooterHeight > 0 ? { bottom: logFooterHeight + 56 } : undefined}
+          className={cn(
+            "animate-rise absolute bottom-16 right-4 z-10 max-w-[16rem] rounded-md border border-border bg-surface-2 px-3 py-2 text-xs text-text-muted shadow-lg",
+            "redesign:rounded-[var(--radius-card)] redesign:px-3.5 redesign:py-2.5 redesign:text-[0.8125rem] redesign:text-text-secondary",
+            LOG_FLOAT_REDESIGN,
+          )}
         >
           {t("chat.jump.gone")}
         </p>
@@ -2649,9 +2691,15 @@ export const MessageList = memo(function MessageList({
         <button
           type="button"
           onClick={jumpToPresentFromPill}
-          className="absolute bottom-4 right-4 z-10 flex items-center gap-1.5 rounded-full border border-ink-4 bg-ink-2/95 px-3 py-1.5 text-xs font-medium text-paper shadow-lg backdrop-blur transition-colors hover:border-signal/60 hover:text-signal"
+          style={logFooterHeight > 0 ? { bottom: logFooterHeight + 8 } : undefined}
+          className={cn(
+            "absolute bottom-4 right-4 z-10 flex items-center gap-1.5 rounded-full border border-ink-4 bg-ink-2/95 px-3 py-1.5 text-xs font-medium text-paper shadow-lg backdrop-blur transition-colors hover:border-signal/60 hover:text-signal",
+            "redesign:h-9 redesign:gap-2 redesign:pl-3 redesign:pr-4 redesign:text-[0.8125rem] redesign:font-semibold redesign:text-text redesign:hover:border-[color:var(--popover-border)] redesign:hover:bg-[color:var(--popover-surface)] redesign:hover:text-accent-text redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent",
+            LOG_FLOAT_REDESIGN,
+          )}
         >
-          <ArrowDown className="h-3.5 w-3.5" />
+          <ArrowDown className="h-3.5 w-3.5 redesign:hidden" />
+          <Glyph icon={ArrowDownGlyph} kind="symbol" size="sm" className="hidden redesign:block" />
           {/* In stream chat the pill says what Twitch's says: the chat is
               paused because you scrolled, and how much has come in since. */}
           {missedCount > 0 && !hasNewer
@@ -2986,7 +3034,7 @@ function TypingIndicator({
     <>
     <Reveal show={people.length > 0}>
     <p
-      className="px-4 pb-1 text-xs text-paper-muted"
+      className="px-4 pb-1 text-xs text-paper-muted redesign:px-7 redesign:pb-1.5 redesign:text-text-secondary"
       aria-live="polite"
     >
       <span className="inline-flex items-center gap-1.5">
@@ -2994,7 +3042,7 @@ function TypingIndicator({
           {[0, 1, 2].map((index) => (
             <span
               key={index}
-              className="h-1 w-1 animate-bounce rounded-full bg-paper-muted"
+              className="h-1 w-1 animate-bounce rounded-full bg-paper-muted redesign:h-1.5 redesign:w-1.5 redesign:bg-text-tertiary"
               style={{ animationDelay: `${index * 120}ms` }}
             />
           ))}
@@ -4673,12 +4721,13 @@ function AuthorButton({
 /** The date rule between two days of messages. */
 function DaySeparator({ label }: { label: string }) {
   return (
-    <div className="my-4 flex items-center gap-3 px-5" role="separator">
-      <span className="h-px flex-1 bg-ink-4/60" />
-      <span className="text-[11px] font-medium uppercase tracking-wider text-paper-muted">
+    <div className="my-4 flex items-center gap-3 px-5 redesign:gap-2" role="separator">
+      <span className="h-px flex-1 bg-ink-4/60 redesign:bg-[color:var(--pane-header-rule)]" />
+      {/* Under the redesign a pill in sentence case, as the mockup's. */}
+      <span className="text-[11px] font-medium uppercase tracking-wider text-paper-muted redesign:inline-block redesign:first-letter:uppercase redesign:rounded-full redesign:bg-transparent redesign:shadow-[inset_0_0_0_1px_var(--pane-header-rule)] redesign:px-2.5 redesign:py-0.5 redesign:text-xs redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">
         {label}
       </span>
-      <span className="h-px flex-1 bg-ink-4/60" />
+      <span className="h-px flex-1 bg-ink-4/60 redesign:bg-[color:var(--pane-header-rule)]" />
     </div>
   );
 }
@@ -4699,7 +4748,8 @@ function UnreadSeparator({
       aria-label={label}
     >
       <span className="h-px flex-1 bg-danger" />
-      <span className="text-[11px] font-semibold uppercase tracking-wider text-danger">
+      {/* Under the redesign the danger fill's pill, in sentence case. */}
+      <span className="text-[11px] font-semibold uppercase tracking-wider text-danger redesign:rounded-full redesign:bg-danger redesign:px-2.5 redesign:py-0.5 redesign:text-xs redesign:normal-case redesign:tracking-normal redesign:text-on-danger">
         {label}
       </span>
     </div>

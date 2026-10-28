@@ -1573,6 +1573,31 @@ Rounds: r1 Opus 7.6, r2 Codex 8.4, r3 Opus 8.6, r4 Codex 8.6, r5 Opus 8.6
 legible initials on the faces, toolbar focus in the focus colour. Not done:
 raising the toolbar to `-top-5` (it would cover more of the row above).
 
+### s-log-chrome
+
+Spec (audit: `DaySeparator`, `UnreadSeparator`, the load older and newer
+buttons, `TypingIndicator` and `BotActivityRows`, `BotNoticeRow`, the jump
+pill and the "message is gone" note, the bulk delete bar; the empty and
+failed states are `p-empty`'s, already merged):
+
+1. Job: where I am in the log, and what is happening around it.
+2. States: day rule, NEW rule, older or newer history to load (loading),
+   typing (one, two, many; bots at work), the bot's note to me, jump to the
+   present (missed count, stream "paused"), jump target gone, bulk select.
+3. Redesign: the day is a pill in sentence case on faint rules; NEW is the
+   danger fill's pill; load buttons are the secondary pill; the jump pill,
+   the gone note and the bulk bar float on the popover surface; the bot's
+   note is a message card with a round dismiss.
+4. Question: "Load older messages" and "Loading older messages…" are
+   English in every language. Translating them changes the toggle-off app.
+5. Not on the sheet: the bulk bar and the gone note need a live list state.
+
+Rounds: r1 Codex 8.0, r2 Opus 8.0, r3 Codex 8.5, r4 Opus 8.5, r5 Codex 8.6
+(no MUST, cap). Fixed along the way: the jump pill rises over the bot's
+note and follows it down, one left edge for the footer, the day label
+outlined so it stops reading as a button, room under the newer button, the
+weekday in sentence case. Open: the "Load older messages" copy question.
+
 ### f-onboarding
 
 Spec (audit: `onboarding/` (11 files), the hints in `layout/*-hint.tsx`
