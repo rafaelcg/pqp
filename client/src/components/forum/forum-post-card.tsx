@@ -636,14 +636,19 @@ export const ForumPostCard = memo(function ForumPostCard({
         ) : (
           <span
             aria-hidden
-            className="block aspect-[4/3] w-full overflow-hidden rounded-[var(--radius-card)] bg-surface-1 p-4 text-sm leading-5 text-text-secondary"
+            className="block aspect-[4/3] w-full overflow-hidden rounded-[var(--radius-card)] bg-surface-1 p-4 text-sm leading-5 text-text-secondary redesign:rounded-[calc(var(--radius-card)-0.5rem)] redesign:bg-[color:var(--card-row-hover)]"
           >
             <span className="line-clamp-6">{preview}</span>
           </span>
         )}
         <div className="px-1 pb-1 pt-2.5">
-          <div className="flex min-w-0 items-center gap-2">
-            {isUnread && <UnreadDot />}
+          <div className="flex min-w-0 items-center gap-2 redesign:items-start">
+            {/* Under the redesign the dot centres on the title's first line. */}
+            {isUnread && (
+              <span className="contents redesign:block redesign:mt-1.5 redesign:shrink-0">
+                <UnreadDot />
+              </span>
+            )}
             {/* Under the redesign a tile's title runs to two lines before it clips. */}
             {titleLink("forum-display block truncate text-[15px] font-semibold leading-5 redesign:whitespace-normal redesign:line-clamp-2")}
           </div>

@@ -314,7 +314,8 @@ export function ForumFilterBar({
       </div>
       {mineChip}
       {tags.length > 0 && (
-        <span aria-hidden className="mx-1 h-5 w-px shrink-0 bg-border" />
+        // Under the redesign the rule only stands before tag pills, never alone at a line's end.
+        <span aria-hidden className={cn("mx-1 h-5 w-px shrink-0 bg-border", inline.length === 0 && "redesign:hidden")} />
       )}
       {inline.map((tag) => (
         <FilterChip

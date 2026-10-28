@@ -1629,7 +1629,7 @@ export function ForumPane({
       className="sticky top-4 w-[280px] shrink-0 self-start pt-1"
       data-forum-rail=""
     >
-      <div className="rounded-[var(--radius-panel)] bg-surface-1 p-[18px]">
+      <div className="rounded-[var(--radius-panel)] bg-surface-1 p-[18px] redesign:rounded-[var(--radius-card)] redesign:border redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)]">
         {counts && counts.posts > 0 && (
           <dl className="grid grid-cols-3 gap-2">
             {[
