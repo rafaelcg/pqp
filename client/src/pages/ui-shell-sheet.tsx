@@ -1164,7 +1164,7 @@ function ComposerBlock() {
     [],
   );
   return (
-    <div data-testid="qa-shell-composer" className="flex flex-col gap-6">
+    <div data-testid="qa-shell-composer" className="grid grid-cols-2 items-start gap-6">
       {/* Resting; a draft typed (send enabled); replying to Rafa; slow mode
           with a wait; read-only. The
           shot opens the format bar on the first one. */}
