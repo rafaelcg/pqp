@@ -28,6 +28,7 @@ import { parseBotFaceAvatar, type PublicUser, type VoiceParticipant } from "@pqp
 import { RightColumnTabs } from "@/components/chat/right-column-tabs";
 import { ContextMenu, type ContextMenuItemDef } from "@/components/ui/context-menu";
 import { Tooltip } from "@/components/ui/tooltip";
+import { useRedesign } from "@/lib/redesign";
 import { StatusDot } from "@/components/user/status-dot";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { RankMarks } from "@/components/user/rank-marks";
@@ -935,6 +936,7 @@ function MemberRow({
   onMessage,
 }: MemberRowProps) {
   const { t } = useTranslation();
+  const redesign = useRedesign();
   const status = member.status ?? null;
   const shown = memberDisplayName(member);
   // Absent and empty are the same thing here. The API stores NULL for a recado
@@ -1028,7 +1030,13 @@ function MemberRow({
           </span>
         </button>
         {onMessage && (
-          <Tooltip label={t("friends.message")} name={`${t("friends.message")}: ${shown}`}>
+          <Tooltip
+            label={t("friends.message")}
+            name={`${t("friends.message")}: ${shown}`}
+            // Beside the button under the redesign, so it never covers the
+            // row above (its status line).
+            side={redesign ? "left" : undefined}
+          >
             <button
               type="button"
               data-member-message={member.id}
