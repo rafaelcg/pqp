@@ -1,10 +1,15 @@
 import { DM_MAX_RECIPIENTS, type DmSummary, type PublicUser } from "@pqp/shared";
 import { X } from "lucide-react";
+import { X as XBold } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { NewConversationDialog } from "@/components/conversations/new-conversation-dialog";
 import { UserSearch } from "@/components/user/user-search";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
+import { IconSwap } from "@/components/ui/icon";
+import { UserAvatar } from "@/components/user/user-avatar";
+import { PICKED_CHIP_REDESIGN } from "@/components/conversations/picker-redesign";
+import { cn } from "@/lib/utils";
 import { ApiError, createConversation } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
 
@@ -138,13 +143,24 @@ function ClassicNewDmDialog({
                       current.filter((one) => one.id !== person.id),
                     )
                   }
-                  className="flex items-center gap-1.5 rounded-full border border-border bg-surface-2 px-2.5 py-1 text-xs text-text hover:border-border-strong"
+                  className={cn("flex items-center gap-1.5 rounded-full border border-border bg-surface-2 px-2.5 py-1 text-xs text-text hover:border-border-strong", PICKED_CHIP_REDESIGN)}
                   aria-label={t("dm.dialog.removeAria", {
                     name: person.displayName,
                   })}
                 >
+                  {/* Under the redesign the pill carries the face, as Nova
+                      conversa's does. */}
+                  <span className="hidden redesign:block">
+                    <UserAvatar
+                      name={person.displayName}
+                      avatarUrl={person.avatarUrl}
+                      className="h-5 w-5"
+                      fallbackClassName="bg-surface-3 text-[9px] text-text"
+                      rounded="full"
+                    />
+                  </span>
                   {person.displayName}
-                  <X aria-hidden="true" className="h-3 w-3" />
+                  <IconSwap off={X} on={XBold} kind="symbol" offClassName="h-3 w-3" className="h-3.5 w-3.5" />
                 </button>
               </li>
             ))}
@@ -152,7 +168,7 @@ function ClassicNewDmDialog({
         )}
 
         {full ? (
-          <p className="text-xs text-text-muted">
+          <p className="text-xs text-text-muted redesign:text-[13px] redesign:text-text-secondary">
             {t("dm.dialog.full")}
           </p>
         ) : (

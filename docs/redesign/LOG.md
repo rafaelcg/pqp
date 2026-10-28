@@ -97,7 +97,7 @@ Read this file and the inventory at the start of every session.
 | 4 | `f-bau` | Merged, capped at round 5 (Opus 8.2 r5, no MUST). Not done: a teaser avatar and time; a scheduled post still shows its creation day |
 | 5 | `m-breakpoints` | Merged (code only, no council) |
 | 4 | `f-dm-home` | Merged, capped at round 5 (Opus 8.3 r4, no MUST; r5 MUST fixed after). Both versions rebuilt while open question 2 waits |
-| 4 | `f-new-dm` | Blocked on André: classic or new "new conversation" dialog (open question 2) |
+| 4 | `f-new-dm` | Merged, capped at round 5 (Opus 8.3 r5, no MUST). Both versions rebuilt while open question 2 waits |
 | 5 | `m-shell` | Blocked on André: phone bottom tabs or the drawer (open question 2) |
 
 Phase 2 end (2026-10-28): every inventory element is merged into
@@ -2016,6 +2016,32 @@ two-line row skeleton (the loading shot is the app-wide one); the search
 field's resting edge in dark belongs to `p-input`; the classic empty link
 still says "Mandar mensagem" when it opens Amigos (copy).
 
+### f-new-dm
+
+Spec (audit: `user/new-dm-dialog.tsx` (classic), `conversations/
+new-conversation-dialog.tsx` (Nova conversa, behind `conversations_home`),
+`conversations/quick-switcher.tsx` (Ctrl/Cmd+K "Ir pra", Conversas only);
+`UserSearch` and the results menu were built earlier):
+
+1. Job: start a conversation with one person or a group, or jump anywhere.
+   Both dialog versions are rebuilt while open question 2 waits.
+2. Redesign: one accent chip with a face for a picked person
+   (`picker-redesign.ts`); Nova conversa's people as list-row pills with
+   the dialog-scoped hover, the tall ticked fill and a whole-pill focus;
+   the switcher as a menu (round field, one highlight, footer keys that
+   match what works).
+3. Kept: every behaviour (a name opens, a tick builds a group, the cap of
+   nine, the background-created conversation, the keys).
+
+Rounds: r1 Codex 8.3, r2 Opus 7.9, r3 Opus 8.0, r4 Opus 8.1, r5 Opus 8.3 (no
+MUST, cap, best). After r5: the "name opens, tick builds" hint sits on one
+line over the list, ticked rows 6px apart, the switcher's scope hint hides
+once something is typed. Not done: a stronger letter fallback on the pale
+ticked fill in light; the classic Cancelar is ghost and Nova conversa's is
+secondary with the toggle off (the redesign draws both ghost). Copy
+question: the no-match line says "tente nome#0000" (você) inside dialogs
+that say tu.
+
 ## Open questions for André
 
 - Popover behaviour: eight popovers each place, portal and dismiss
@@ -2054,6 +2080,9 @@ still says "Mandar mensagem" when it opens Amigos (copy).
    "Entrar na chamada", 60px apart. Pick one wording (`call.panel.join`
    and the header key), or hide the header pill while the strip shows?
    Either changes the app with the toggle off, so it waits for you.
+8. New conversation: the no-match line says "tente nome#0000" (você)
+   inside dialogs that say tu ("Escolhe", "Marca", "Procura"). Change it to
+   "tenta"? It shows with the toggle off too.
 
 ## Decisions
 
