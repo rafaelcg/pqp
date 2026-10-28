@@ -15,8 +15,9 @@
 # - Linux has no display: xvfb-run gives it one. One X screen and no window
 #   manager is ONE source (Chromium lists only windows a manager has mapped),
 #   which the shell auto-picks without its picker. So a window manager runs
-#   too, the smallest there is (Ubuntu's `twm`, installed here when the image
-#   lacks it), and the app's own window becomes the second source. Splitting
+#   too, the smallest there is (Ubuntu's `twm` and the X fonts it draws
+#   with, installed here when the image lacks them), and the app's own window
+#   becomes the second source. Splitting
 #   the screen with `xrandr --setmonitor` was tried first: Xvfb ignores it.
 #   Ubuntu 24.04 also refuses unprivileged user namespaces to binaries with no
 #   AppArmor profile, which is how an AppImage's Chromium sandbox starts; that
@@ -51,9 +52,9 @@ case "$(uname -s)" in
     if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
       sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 >/dev/null
     fi
-    if ! command -v twm >/dev/null; then
-      sudo apt-get install -y --no-install-recommends twm >/dev/null 2>&1 || {
-        sudo apt-get update -qq >/dev/null && sudo apt-get install -y --no-install-recommends twm >/dev/null
+    if ! command -v twm >/dev/null || ! [ -d /usr/share/fonts/X11/misc ]; then
+      sudo apt-get install -y --no-install-recommends twm xfonts-base >/dev/null 2>&1 || {
+        sudo apt-get update -qq >/dev/null && sudo apt-get install -y --no-install-recommends twm xfonts-base >/dev/null
       }
     fi
     command -v twm >/dev/null || { echo "::error::twm is not installed, so the shell will auto-pick and never open its picker"; exit 1; }
