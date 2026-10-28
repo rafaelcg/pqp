@@ -20,6 +20,8 @@ export const CALL_CONTROL_REDESIGN = {
   leave: "redesign:bg-danger redesign:text-on-danger redesign:hover:bg-[color:var(--call-leave-hover)]",
   /** The dot on a control (music playing unheard, NOVO): ringed in the bar's own fill. */
   pip: "redesign:ring-[color:var(--call-bar-bg)]",
+  /** The same dot docked in the composer: ringed in the composer's fill. */
+  pipDock: "redesign:ring-[color:var(--call-dock-pip-ring)]",
 } as const;
 
 /** The floating bar on the open stage: a popover's surface, edge and lift. */

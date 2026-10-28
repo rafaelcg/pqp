@@ -4129,7 +4129,7 @@ export function CallControls({
           : appColumn.active
             ? // The column beside an app is ~300 px: six 44 px touch tiles fit
               // one row only with the tighter gap and padding.
-              cn("max-w-full flex-wrap justify-center gap-0.5 rounded-[1.625rem] bg-ink-2/90 px-1.5 py-1.5 shadow-lg ring-1 ring-ink-4/60 backdrop-blur", CALL_BAR_REDESIGN)
+              cn("max-w-full flex-wrap justify-center gap-0.5 rounded-[1.625rem] bg-ink-2/90 px-1.5 py-1.5 shadow-lg ring-1 ring-ink-4/60 backdrop-blur", CALL_BAR_REDESIGN, "redesign:gap-1")
             : cn("max-w-full flex-wrap justify-center gap-2 rounded-[1.625rem] bg-ink-2/90 px-2.5 py-1.5 shadow-lg ring-1 ring-ink-4/60 backdrop-blur @max-[40rem]:gap-1", CALL_BAR_REDESIGN, "redesign:px-2 redesign:py-2"),
       )}
     >
@@ -4452,7 +4452,7 @@ export function CallControls({
             <span
               data-music-pip=""
               aria-hidden="true"
-              className={cn("absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-signal ring-2 ring-ink", CALL_CONTROL_REDESIGN.pip)}
+              className={cn("absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-signal ring-2 ring-ink", collapsed ? CALL_CONTROL_REDESIGN.pipDock : CALL_CONTROL_REDESIGN.pip)}
             />
           ) : null}
           {/* The room has music and this machine is not hearing it. Nothing
@@ -4461,7 +4461,7 @@ export function CallControls({
             <span
               data-music-dock-dot=""
               aria-hidden="true"
-              className={cn("absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-signal ring-2 ring-ink", CALL_CONTROL_REDESIGN.pip)}
+              className={cn("absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-signal ring-2 ring-ink", collapsed ? CALL_CONTROL_REDESIGN.pipDock : CALL_CONTROL_REDESIGN.pip)}
             />
           ) : null}
         </button>
@@ -4515,12 +4515,12 @@ export function CallControls({
               <span
                 data-music-dock-dot=""
                 aria-hidden="true"
-                className={cn("absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-signal ring-2 ring-ink", CALL_CONTROL_REDESIGN.pip)}
+                className={cn("absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-signal ring-2 ring-ink", collapsed ? CALL_CONTROL_REDESIGN.pipDock : CALL_CONTROL_REDESIGN.pip)}
               />
             ) : joinLeaveMuted ? (
               <span
                 aria-hidden="true"
-                className={cn("absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-warning ring-2 ring-ink", CALL_CONTROL_REDESIGN.pip)}
+                className={cn("absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-warning ring-2 ring-ink", collapsed ? CALL_CONTROL_REDESIGN.pipDock : CALL_CONTROL_REDESIGN.pip)}
               />
             ) : null}
           </button>
