@@ -3684,3 +3684,15 @@ the web version sat behind a hover for months and nobody found it.
   an emulator against a local API with a second web participant. **Not
   verified:** that the gain is audible, which needs real audio from the other
   end.
+
+## Settings from inside a call
+
+The call bar has a quiet "Configurações do app" row (gear, muted text, no
+container) under the share and soundboard rows. It pushes `YouRoute`, the same
+screen the Tu tab and the profile button show, above whatever is open. The bar
+lives above the `NavHost`, so the call is untouched and back returns to the
+call. It is hidden while that screen is itself showing. The label says "do app"
+because that screen has the server and version, status, notifications, the voice
+connection check, blocked people, your data and sign out, and no microphone or
+camera settings. It also shows while a call is still joining, which is when the
+connection check on that screen is most wanted.

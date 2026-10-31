@@ -47,6 +47,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -91,6 +92,13 @@ fun CallBar(
      * a ring is out.
      */
     call: OutgoingCall? = null,
+    /**
+     * Opens the app's settings screen above whatever is showing, without
+     * touching the call. Null hides the row. The bar lives above the NavHost,
+     * so the call keeps running under the screen it pushes and back returns to
+     * the call.
+     */
+    onOpenSettings: (() -> Unit)? = null,
 ) {
     AnimatedVisibility(
         visible = state.isActive,
@@ -279,6 +287,11 @@ fun CallBar(
                 if (state.stage != VoiceStage.Joining) {
                     gg.pqp.app.soundboard.SoundboardRow(state.channelId)
                 }
+                // Also while joining: a call that will not connect is exactly
+                // when the connection check on that screen is wanted.
+                if (onOpenSettings != null) {
+                    SettingsEntry(onOpenSettings)
+                }
                 // Last of the three, and the only one made of pictures. The
                 // two text rows above it stay together; the strip sits against
                 // the divider so the chrome ends on the thing you look at.
@@ -288,6 +301,50 @@ fun CallBar(
                 // the line that says where one stops and the other starts.
                 ChromeDivider()
             }
+        }
+    }
+}
+
+/**
+ * "Configurações do app", in words, under the call controls.
+ *
+ * A person in a call asked for settings and could not find them: they live on
+ * the Tu tab, which is a screen away from a call and not on the call itself.
+ * This opens that same screen on top of the call (the route the profile button
+ * uses), so nothing is hung up and back lands here.
+ *
+ * Named for what is behind it. That screen has the server and version, the
+ * notifications nudge, the voice connection check, blocked people and sign out;
+ * it has no microphone or camera settings on Android, so the label says "do
+ * app" and promises nothing about devices. Quiet on purpose (no container, the
+ * muted text colour): it is a way out, not a call control.
+ */
+@Composable
+private fun SettingsEntry(onOpen: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = Spacing.sm, end = Spacing.sm),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        TextButton(
+            onClick = onOpen,
+            colors = ButtonDefaults.textButtonColors(
+                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            ),
+            modifier = Modifier.testTag("call.settings"),
+        ) {
+            Icon(
+                imageVector = PqpIcons.Settings,
+                contentDescription = null,
+                modifier = Modifier.size(Sizes.iconInline),
+            )
+            Spacer(Modifier.width(Spacing.sm))
+            Text(
+                text = stringResource(R.string.voice_open_settings),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }
