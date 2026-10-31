@@ -350,6 +350,13 @@
     <string name="voice_speaker_off">Earpiece</string>
     <string name="voice_server_muted_you">A moderator muted you</string>
     <string name="voice_server_muted_peer">%1$s was muted by a moderator</string>
+    <string name="voice_peer_volume_open">Volume per person</string>
+    <string name="voice_peer_volume_title">Volume per person</string>
+    <string name="voice_peer_volume_hint">Only you hear this. Above 100% a person plays louder than they send.</string>
+    <string name="voice_peer_volume_for">Volume for %1$s</string>
+    <string name="voice_peer_volume_percent">%1$d%%</string>
+    <string name="voice_peer_volume_mute">Mute %1$s</string>
+    <string name="voice_peer_volume_unmute">Unmute %1$s</string>
     <string name="voice_listen_only">Listen only</string>
     <string name="voice_listen_only_locked">Listening only. You do not have permission to speak in this channel.</string>
     <string name="voice_speak_granted">You can speak now. Unmute when you are ready.</string>

@@ -271,6 +271,10 @@ fun CallBar(
                 }
                 ServerMutedRow(state)
                 WatchScreenRow(state, controller)
+                // Per-person volume, in words. Absent when nobody else is here.
+                if (state.stage != VoiceStage.Joining) {
+                    PeerVolumeEntry(state, controller)
+                }
                 // The board, only where the room's server has it on.
                 if (state.stage != VoiceStage.Joining) {
                     gg.pqp.app.soundboard.SoundboardRow(state.channelId)

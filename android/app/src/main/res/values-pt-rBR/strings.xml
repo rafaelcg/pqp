@@ -336,6 +336,13 @@
     <string name="voice_speaker_off">Fone</string>
     <string name="voice_server_muted_you">Um moderador te mutou</string>
     <string name="voice_server_muted_peer">Um moderador mutou %1$s</string>
+    <string name="voice_peer_volume_open">Volume de cada um</string>
+    <string name="voice_peer_volume_title">Volume de cada um</string>
+    <string name="voice_peer_volume_hint">Só tu ouve essa mudança. Acima de 100% a pessoa sai mais alta do que ela manda.</string>
+    <string name="voice_peer_volume_for">Volume de %1$s</string>
+    <string name="voice_peer_volume_percent">%1$d%%</string>
+    <string name="voice_peer_volume_mute">Mutar %1$s</string>
+    <string name="voice_peer_volume_unmute">Tirar %1$s do mudo</string>
     <string name="voice_listen_only">Só ouvindo</string>
     <string name="voice_listen_only_locked">Só ouvindo. Tu não tem permissão pra falar neste canal.</string>
     <string name="voice_speak_granted">Agora tu pode falar. Liga o microfone quando quiser.</string>

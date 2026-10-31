@@ -894,8 +894,8 @@ Also verified between the two clients:
 - The moderator eviction, the socket-drop rebuild, and speaker routing, each
   above.
 
-Still known-missing rather than broken: no speaking indicators, no per-peer
-volume, no push-to-talk, no camera **to send**, and no screen-share audio.
+Still known-missing rather than broken: no speaking indicators on mesh, no
+push-to-talk, no camera **to send**, and no screen-share audio.
 Receiving somebody else's camera arrived later and is described below.
 
 **LiveKit rooms are now joined rather than refused, and the join has been run
@@ -3647,7 +3647,7 @@ too: a picker GIF may have come from any of the three clients.
 **Not built:** a GIF picker, replies, editing, pinning, threads,
 search, members and moderation surfaces, profile editing, communities, game
 connections. No camera **to send**, no screen-share audio *out of* this device,
-no speaking indicators, no per-peer volume, no push-to-talk. LiveKit rooms are
+no speaking indicators on mesh, no push-to-talk. Per-person volume exists (see below). LiveKit rooms are
 joined and can now be watched in: an incoming screen share renders, with the
 presentation's sound, at a capped layer, and remote cameras render as a strip
 of tiles under the call bar. No audio has been heard over that path from this
@@ -3656,3 +3656,31 @@ mesh-only.
 `assembleRelease` is unsigned unless a Play upload keystore is provided
 (see [`ANDROID_RELEASE.md`](./ANDROID_RELEASE.md)). The GitHub beta APK is
 a separate `sideload` build type, debug-signed on purpose.
+
+## Per-person volume in a call
+
+The call bar has a "Volume de cada um" row whenever somebody else is in the
+room. It opens a bottom sheet: a face, a name, a percentage, a mute button and
+a slider per person. The row is a labelled button on purpose, not a long press:
+the web version sat behind a hover for months and nobody found it.
+
+- **Range and default:** 0 to 200%, default 100%, in 5% steps. iOS has the same
+  range; the web stops at 100%.
+- **Remembered:** per user id (the peer id changes on every join), in memory
+  for the app session, as on web and iOS. Not written to disk, and a call
+  ending does not reset it. `PeerVolumes` in `voice/PeerVolumes.kt`.
+- **Mute** is the slider at zero. Unmuting goes back to the last level above
+  zero, not to 100%.
+- **Mesh:** `RemoteAudioGate` keeps a level per peer and applies it to every
+  audio track of that peer (the microphone and a share's sound, one slider per
+  person) through `AudioTrack.setVolume`, including to a track that arrives
+  after the slider moved. A moderator's server mute disables the track and
+  leaves the chosen level alone, so lifting it brings the person back at that
+  level.
+- **LiveKit:** `LiveKitEngine.setPeerVolume` holds the level per peer and calls
+  `RemoteAudioTrack.setVolume` on every audio publication, again at subscribe
+  time. The server mute is the SFU's business there.
+- **Verified:** unit tests for the rules and the gate, and the sheet driven on
+  an emulator against a local API with a second web participant. **Not
+  verified:** that the gain is audible, which needs real audio from the other
+  end.
