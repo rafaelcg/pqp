@@ -30,6 +30,7 @@ const MEDIA_FILES = [
   "voice-call-stage-back-to-streams.spec.ts",
   "voice-channel-slow-mode.spec.ts",
   "voice-fast-reconnect.spec.ts",
+  "voice-listener-reconnect.spec.ts",
   "voice-lobby.spec.ts",
   "voice-move-speaking-ring.spec.ts",
   "voice-note-dm.spec.ts",

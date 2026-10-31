@@ -284,6 +284,18 @@ the box (see "Two accounts" above for what it protects). GitHub never
 shows a secret's value back, so save it somewhere (a password manager, not
 git) before moving on, the same as the deploy key's private half.
 
+Pin the box's SSH host key too, so a deploy cannot be answered by anything
+else. It is a public key, so it is a repository **variable**, not a secret.
+Read it off the box over a connection you already trust (not `ssh-keyscan`):
+
+```bash
+gh variable set VULTR_API_HOST_KEY --body "$(ssh pqp@<ip> "cut -d' ' -f1,2 /etc/ssh/ssh_host_ed25519_key.pub")"
+```
+
+With it set, the deploy runs `StrictHostKeyChecking=yes` against exactly that
+key; unset, it falls back to trust on first use and logs a warning. A rebuilt
+box has a new host key, so update the variable when you rebuild it.
+
 `GITHUB_TOKEN` already has what it needs to push to
 `ghcr.io/rafaelcg/pqp-api` (the workflow requests `packages: write`); no
 extra PAT.

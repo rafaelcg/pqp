@@ -84,7 +84,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # The Windows installer packs the add-on and signs it with the rest of
       # the app. Without it the app would ship with no native share sound and
@@ -100,10 +100,10 @@ jobs:
 
       - name: Setup pnpm
         # Version comes from the root package.json "packageManager" field.
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: pnpm
@@ -119,7 +119,7 @@ jobs:
       # not go missing quietly: download-artifact fails when it is absent.
       - name: Fetch the Windows share-audio add-on
         if: matrix.platform == 'win'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: win-share-audio-prebuilds
           path: electron/native/win-share-audio/prebuilds
@@ -305,6 +305,43 @@ jobs:
           echo "electron-builder ${args[*]}"
           pnpm exec electron-builder "${args[@]}"
 
+      # THE SHARE, IN THE BINARY THIS JOB JUST BUILT. Desktop 0.2.8 shipped
+      # with screen sharing broken on Windows while this workflow was green,
+      # because nothing here ever started the packaged app and shared a screen
+      # with it. This does, through the real picker and the real
+      # getDisplayMedia, on all three runners (electron/test/share-smoke).
+      #
+      # Before the macOS and Windows publish steps on purpose: a failure here
+      # skips them, so a tag whose share is broken never reaches the draft for
+      # those two platforms. Linux has already uploaded inside "Package
+      # Electron". Either way the release cannot become latest without
+      # electron-release-verify.yml, which runs the same test against the
+      # files as published.
+      - name: Build the share smoke page
+        run: node client/e2e/desktop-share/build.mjs
+
+      - name: Share smoke test (the packaged app)
+        shell: bash
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          case "$PLATFORM" in
+            mac) app="$GITHUB_WORKSPACE/electron/release/mac-arm64/pqp.app" ;;
+            win) app="$GITHUB_WORKSPACE/electron/release/win-unpacked/pqp.exe" ;;
+            linux) app="$GITHUB_WORKSPACE/electron/release/linux-unpacked/pqp" ;;
+          esac
+          electron/test/share-smoke/run-ci.sh "$app"
+
+      - name: Keep the share smoke evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: share-smoke-${{ matrix.platform }}
+          path: electron/test-results/share-smoke/
+          if-no-files-found: ignore
+          retention-days: 14
+
       # SignPath signs the two top-level .exe files people actually download
       # and run (the NSIS installer, the portable build). It does not reach
       # inside the installer to sign the pqp.exe that ends up in Program
@@ -319,7 +356,7 @@ jobs:
       - name: Upload unsigned Windows artifacts for SignPath
         id: upload-unsigned-win
         if: matrix.platform == 'win' && env.SIGNPATH_ENABLED == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: windows-unsigned
           path: electron/release/*.exe
@@ -463,7 +500,7 @@ jobs:
           shopt -s nullglob
           tag="${GITHUB_REF#refs/tags/}"
           gh release view "$tag" --repo rafaelcg/pqp >/dev/null 2>&1 || \
-            gh release create "$tag" --repo rafaelcg/pqp --draft --title "$tag"
+            gh release create "$tag" --repo rafaelcg/pqp --draft --prerelease --title "$tag"
           assets=(release/*.dmg release/*.zip release/*.blockmap release/*.yml)
           if [ "${#assets[@]}" -eq 0 ]; then
             echo "::warning::No macOS release assets found in release/ to publish for $tag."
@@ -528,7 +565,7 @@ jobs:
           shopt -s nullglob
           tag="${GITHUB_REF#refs/tags/}"
           gh release view "$tag" --repo rafaelcg/pqp >/dev/null 2>&1 || \
-            gh release create "$tag" --repo rafaelcg/pqp --draft --title "$tag"
+            gh release create "$tag" --repo rafaelcg/pqp --draft --prerelease --title "$tag"
           assets=(release/*.exe release/*.blockmap release/*.yml)
           if [ "${#assets[@]}" -eq 0 ]; then
             echo "::warning::No Windows release assets found in release/ to publish for $tag."
@@ -537,7 +574,7 @@ jobs:
           gh release upload "$tag" "${assets[@]}" --repo rafaelcg/pqp --clobber
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: pqp-electron-${{ matrix.platform }}
           path: |
@@ -545,3 +582,30 @@ jobs:
             electron/release/*/*
           if-no-files-found: warn
           retention-days: 14
+
+  # A tag's draft must become a PRE-RELEASE when a person publishes it, never
+  # straight "latest": installed apps update from /releases/latest, and only
+  # electron-release-verify.yml may put a release there, after it has run the
+  # share smoke test against the published files (docs/DESKTOP.md §5).
+  # electron-builder creates the draft from the Linux leg without that flag
+  # (its `releaseType` cannot say "draft AND pre-release"), so it is set here
+  # once every leg has had its turn. The macOS and Windows publish steps
+  # create the draft with it already, when they happen to run first.
+  mark-prerelease:
+    name: Mark the draft as a pre-release
+    needs: build
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Mark it
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" --repo rafaelcg/pqp >/dev/null 2>&1; then
+            gh release edit "$TAG" --repo rafaelcg/pqp --prerelease
+            echo "$TAG is a draft pre-release. Publish it as a pre-release; electron-release-verify.yml then verifies it and is the only way it becomes latest." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::no release exists for $TAG: every build leg failed before publishing."
+          fi

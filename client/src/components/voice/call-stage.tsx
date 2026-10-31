@@ -159,10 +159,12 @@ import {
   resolveScreenTileSources,
   type ScreenShareTile,
 } from "@/components/voice/screen-stage";
+import { OwnShareStrip } from "@/components/voice/own-share-strip";
 import {
   listenersOf,
   listenerStripSlots,
   planStage,
+  screensDrawnOnStage,
   stageGridColumns,
   tileClickFullscreens,
   STAGE_TILE_LIMIT_NARROW,
@@ -1380,10 +1382,31 @@ function ActiveCall({
     watchPartyChrome,
   );
   const watchingHls = screenTiles.some((tile) => Boolean(tile.hlsUrl));
+  // The own share, when its preview is hidden on this device, is not a tile:
+  // the grid lays out only the pictures somebody can look at, and
+  // `OwnShareStrip` carries the "still sharing" signal. Not under the watch
+  // party's presenter stage, which draws the host's own share its own way
+  // and never honoured the preference.
+  const hidePreviewPref = useHideScreenPreview();
+  const presenterStageOwnsShare =
+    watchPartyChrome &&
+    presenterStage !== undefined &&
+    screenTiles.length === 1 &&
+    screenTiles[0]?.isSelf === true;
+  const ownShareHidden =
+    hidePreviewPref &&
+    !presenterStageOwnsShare &&
+    screenTiles.some((tile) => tile.isSelf);
+  const drawnScreenTiles = screensDrawnOnStage(screenTiles, ownShareHidden);
+  // Who is on the big slot is asked of what is drawn. With nothing else on
+  // the stage the hidden own share is still the one "being presented", so the
+  // header keeps its sound and uplink status for the person sharing.
+  const focusableTiles =
+    drawnScreenTiles.length > 0 ? drawnScreenTiles : screenTiles;
   const focusedTile =
-    screenTiles.find(
+    focusableTiles.find(
       (tile) => tile.peerId === voiceState.focusedScreenPeerId,
-    ) ?? screenTiles[0];
+    ) ?? focusableTiles[0];
   const screenStream = focusedTile?.stream ?? null;
   const presenterName = focusedTile?.presenterName;
   // Whose tile is on the big slot, which is not the same question as "am I
@@ -1522,7 +1545,7 @@ function ActiveCall({
    * watch party that produced them.
    */
   const stage = planStage({
-    screens: screenTiles.map((tile) => ({
+    screens: drawnScreenTiles.map((tile) => ({
       peerId: tile.peerId,
       isSelf: tile.isSelf,
     })),
@@ -1544,7 +1567,7 @@ function ActiveCall({
   );
   const listeners = listenersOf(
     allPeople,
-    screenTiles,
+    drawnScreenTiles,
     voiceState.peerId,
     overflowKeys,
   );
@@ -1817,7 +1840,14 @@ function ActiveCall({
     !soloMusic &&
     !stripInSidebar &&
     !stripOnlySelf;
-  const barReserve = barOverlay && (!barFloats || stripDrawn);
+  // The "you are still sharing" row, for an own share whose preview is
+  // hidden. Not while the own share is the picture on the stage (fullscreen
+  // on it): that placeholder carries its own menu. It is a row of the stage's
+  // flow, so a floating bar keeps its band under it exactly as under the
+  // listener strip.
+  const ownShareStripDrawn = ownShareHidden && !soloTile?.isSelf;
+  const barReserve =
+    barOverlay && (!barFloats || stripDrawn || ownShareStripDrawn);
   // EVERY share carries its own control, including the only one in the call.
   //
   // This used to be `screenTiles.length > 1`, on the reasoning that a single
@@ -2893,7 +2923,11 @@ function ActiveCall({
             /* Nobody is publishing. Not an empty box: the people who ARE here,
                large, in the middle. It is the same room the strip describes,
                and the state a voice call spends most of its life in. */
-            <RoomView people={listeners} youLabel={t("voice.tile.you")} />
+            <RoomView
+              people={listeners}
+              youLabel={t("voice.tile.you")}
+              othersOnly={ownShareHidden}
+            />
           )}
           {/* Picking one stream and clicking away from it used to leave no
               obvious way back — reported verbatim, 2026-09-27, as counter-
@@ -2939,6 +2973,12 @@ function ActiveCall({
             </button>
           )}
         </div>
+        {ownShareStripDrawn && (
+          <OwnShareStrip
+            onShowPreview={() => setHideScreenPreview(false)}
+            className={STAGE_LAYER.menus}
+          />
+        )}
         {/* The strip: everybody the stage did not take. Skipped while one
             picture is alone on the stage (that is what "alone" means) and
             while nobody is publishing at all, because then the room view above
@@ -3008,7 +3048,7 @@ function ActiveCall({
             compactPeers ? "w-24 sm:w-32" : "w-28 sm:w-40",
             pipDrag ? "cursor-grabbing" : "cursor-grab",
             !pipDrag &&
-              (showStrip
+              (showStrip || ownShareStripDrawn
                 ? PIP_CORNER_CLASS_WITH_STRIP
                 : controlRowExtraPx > 0
                   ? PIP_CORNER_CLASS_ABOVE_FOLDED_BAR
@@ -4959,9 +4999,15 @@ function TileClickTarget({
 export function RoomView({
   people,
   youLabel,
+  othersOnly = false,
 }: {
   people: StagePerson[];
   youLabel: string;
+  /**
+   * Our own share is up with its preview hidden, so "nobody is sharing" would
+   * be false: the line says nobody ELSE is.
+   */
+  othersOnly?: boolean;
 }) {
   const { t } = useTranslation();
   const slots = listenerStripSlots(people, ROOM_VIEW_LIMIT);
@@ -4981,7 +5027,7 @@ export function RoomView({
         )}
       </ul>
       <p className="text-xs text-paper-muted" role="status">
-        {t("voice.stage.noVideo")}
+        {t(othersOnly ? "voice.stage.noVideoElse" : "voice.stage.noVideo")}
       </p>
     </div>
   );

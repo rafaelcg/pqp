@@ -764,6 +764,7 @@ export function ForumComposerDialog({
     <Dialog
       open={open}
       eyebrow={forumName}
+      headerClassName="forum-dialog-header"
       title={t("forum.composer.heading")}
       size="lg"
       onClose={close}
@@ -839,7 +840,7 @@ export function ForumComposerDialog({
             aria-invalid={showErrors && titleMissing ? true : undefined}
             aria-describedby={showErrors && titleMissing ? titleErrorId : undefined}
             className={cn(
-              "h-auto border-0 border-b border-border/60 bg-transparent px-0 py-2 font-display text-2xl font-extrabold tracking-[-0.01em] text-text shadow-none placeholder:font-semibold placeholder:text-text-secondary rounded-none focus-visible:border-text focus-visible:ring-0 focus-visible:ring-offset-0 sm:text-[26px]",
+              "h-auto border-0 border-b border-border/60 bg-transparent px-0 py-2 forum-display text-2xl font-bold text-text shadow-none placeholder:font-medium placeholder:text-text-secondary rounded-none focus-visible:border-text focus-visible:ring-0 focus-visible:ring-offset-0",
               showErrors && titleMissing && "border-danger",
             )}
           />

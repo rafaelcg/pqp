@@ -510,7 +510,7 @@ describe("forum_channels against the forum config the client reads", () => {
     expect(def.perServer).toBe(true);
     expect(def.codeDefault).toBe(false);
     expect(def.clientVia).toBe("GET /api/forum/config?serverId= (enabled)");
-    expect(Object.keys(forumConfigForServer(null))).toEqual(["enabled"]);
+    expect(Object.keys(forumConfigForServer(null))).toEqual(["enabled", "announce"]);
   });
 
   it("the route is mounted, asked per server, and answers from the flag", () => {
@@ -549,6 +549,42 @@ describe("forum_channels against the forum config the client reads", () => {
       "utf8",
     );
     expect(dashboard).toMatch(/\bforum_channels:\s*"/);
+  });
+});
+
+/**
+ * `forum_announcement`: the one-time "O fórum abriu" corner card. Per server,
+ * off by default, served as `announce` on the same forum config, and only
+ * ever true where `forum_channels` is on too.
+ */
+describe("forum_announcement against the forum config the client reads", () => {
+  it("is per server, off by default, and served as `announce`", () => {
+    const def = FEATURE_FLAGS.forum_announcement;
+    expect(def.perServer).toBe(true);
+    expect(def.codeDefault).toBe(false);
+    expect(def.clientVia).toBe("GET /api/forum/config?serverId= (announce)");
+    expect(forumConfigForServer(null)).toEqual({ enabled: false, announce: false });
+  });
+
+  it("the server reads it per server and only beside forum_channels", () => {
+    const lib = readFileSync(path.join(serverSrc, "lib/forum-config.ts"), "utf8");
+    expect(lib).toMatch(/isEnabled\("forum_announcement",\s*\{\s*serverId\s*\}\)/);
+    expect(lib).toMatch(/enabled &&[\s\S]*?forum_announcement/);
+  });
+
+  it("the client keeps the field and the card reads it", () => {
+    const hook = readFileSync(path.join(clientSrc, "hooks/use-forum-config.ts"), "utf8");
+    expect(hook).toMatch(/answer\.announce === true/);
+    const app = readFileSync(path.join(clientSrc, "App.tsx"), "utf8");
+    expect(app).toMatch(/forumConfig\.announce/);
+  });
+
+  it("the dashboard has a note for it", () => {
+    const dashboard = readFileSync(
+      path.resolve(here, "../../../tools/admin-dashboard/site/novo.js"),
+      "utf8",
+    );
+    expect(dashboard).toMatch(/\bforum_announcement:\s*"/);
   });
 });
 

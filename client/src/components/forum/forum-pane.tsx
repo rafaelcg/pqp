@@ -230,7 +230,7 @@ function EmptyBlock({
   return (
     <div role={role} className="flex flex-col items-center px-6 py-16 text-center animate-fade-in">
       <div className="text-text-secondary">{icon}</div>
-      <p className="mt-4 font-display text-xl font-extrabold tracking-[-0.01em] text-text">{title}</p>
+      <p className="mt-4 forum-display text-xl font-bold text-text">{title}</p>
       {body && <p className="mt-1.5 max-w-sm text-sm leading-5 text-text-secondary">{body}</p>}
       {children && (
         <div className="mt-5 flex flex-wrap items-center justify-center gap-2">{children}</div>
@@ -1186,7 +1186,7 @@ export function ForumPane({
       <div className="flex min-w-0 flex-1 items-center gap-2">
         {compactList ? (
           <>
-            <span className="truncate font-display text-lg font-extrabold text-text">
+            <span className="forum-display truncate text-lg font-bold text-text">
               {channel.name}
             </span>
             {countsLine && (
@@ -1241,7 +1241,7 @@ export function ForumPane({
   const hero = compactList ? null : (
     <div className="flex items-end gap-4">
       <div className="min-w-0 flex-1">
-        <h1 className="flex min-w-0 items-center gap-2 font-display text-[28px] font-extrabold leading-[34px] tracking-[-0.02em] text-text sm:text-[34px] sm:leading-10">
+        <h1 className="flex min-w-0 items-center gap-2 forum-display-lg text-[28px] font-bold leading-[34px] text-text sm:text-[34px] sm:leading-10">
           <span className="truncate">{channel.name}</span>
           {creationEnabled && <BetaTag className="max-sm:hidden" />}
         </h1>
@@ -1596,7 +1596,7 @@ export function ForumPane({
               },
             ].map((stat) => (
               <div key={stat.label} className="min-w-0">
-                <dd className="font-display text-lg font-extrabold tabular-nums text-text">{stat.value}</dd>
+                <dd className="forum-display text-lg font-bold tabular-nums text-text">{stat.value}</dd>
                 <dt className="truncate text-xs text-text-secondary">{stat.label}</dt>
               </div>
             ))}
@@ -1605,7 +1605,7 @@ export function ForumPane({
         {rules && (
           <>
             {counts && counts.posts > 0 && <div aria-hidden className="my-4 h-px bg-border/60" />}
-            <h2 className="font-display text-[15px] font-bold leading-5 text-text">
+            <h2 className="forum-display text-[15px] font-bold leading-5 text-text">
               {t("forum.rules.title")}
             </h2>
             {ruleLines.length > 1 ? (
@@ -1812,7 +1812,7 @@ export function ForumPane({
       {openPostId && !openPost && openFailed && (
         <aside className="flex w-full flex-col items-center justify-center bg-surface-0 px-6 text-center shadow-[-1px_0_0_var(--color-border)] max-md:fixed max-md:inset-0 max-md:z-30 md:w-[520px]">
           <Trash2 className="h-7 w-7 text-text-secondary" aria-hidden strokeWidth={1.5} />
-          <p className="mt-4 font-display text-xl font-extrabold text-text">{t("forum.post.loadFailed")}</p>
+          <p className="mt-4 forum-display text-xl font-bold text-text">{t("forum.post.loadFailed")}</p>
           <p className="mt-1.5 max-w-xs text-sm text-text-secondary">{t("forum.post.loadFailed.body")}</p>
           <Button variant="secondary" className="mt-5 h-10" onClick={closePost}>
             {t("forum.post.back")}

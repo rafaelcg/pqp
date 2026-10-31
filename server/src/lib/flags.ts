@@ -772,6 +772,34 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/forum/config?serverId= (enabled)",
   },
+  forum_announcement: {
+    description:
+      "Aviso do fórum (só cliente): quem é membro do servidor vê uma vez um cartão no canto, \"O fórum abriu\", com Abrir o fórum e Agora não. Só aparece com o forum_channels ligado no mesmo servidor e um canal fórum que a pessoa enxerga; nunca numa call, compartilhando, numa watch party ou digitando.",
+    env: "FORUM_ANNOUNCEMENT",
+    parseEnv: exactTrue,
+    // Off: a campaign is switched on for one server (the QG) from the
+    // dashboard and off again when it has done its job.
+    codeDefault: false,
+    // The client asks `GET /api/forum/config?serverId=` for the server it has
+    // open; nothing else reads it.
+    perServer: true,
+    clientVia: "GET /api/forum/config?serverId= (announce)",
+  },
+  report_attachment_preview: {
+    description:
+      "Moderação: no cartão de uma denúncia, o botão Mostrar que abre, borrado e só com um clique, a imagem ou o gif da mensagem denunciada. Desligado: a lista de anexos (tipo, veredito do scanner) continua aparecendo, só o botão e a rota somem.",
+    env: "REPORT_ATTACHMENT_PREVIEW",
+    parseEnv: exactTrue,
+    // Off: it lets a person look at what somebody else reported. Turn it on
+    // globally once the instance moderators have read the runbook; the
+    // guardrails (docs/CONTENT_SAFETY.md) hold with it on.
+    codeDefault: false,
+    // A report belongs to a server only some of the time (a conversation
+    // report has none) and the reader is an instance moderator, who is not
+    // "in" any server: global only.
+    perServer: false,
+    clientVia: "GET /api/reports/all, /api/servers/:id/reports (attachments[].preview)",
+  },
   emulator_room: {
     description:
       "Sala de emulador (só local): uma janela no servidor onde cada pessoa abre, do próprio computador, um jogo que ela tem, num emulador que roda no navegador dela. O pqp não fornece jogo nenhum, o arquivo nunca sai do navegador e não existe sala compartilhada. Desligado: o item some do menu do servidor. Não ligue antes da revisão do advogado (docs/EMULATOR_ROOM.md).",

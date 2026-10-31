@@ -100,6 +100,7 @@ import type {
   PublicUser,
   AllReportPage,
   Report,
+  ReportAttachmentReveal,
   ReportContext,
   ReportPage,
   ReportStatus,
@@ -1199,6 +1200,8 @@ export const fetchGlobalVoiceConfig = () => apiFetch<VoiceConfig>("/api/voice/co
  */
 export interface ForumConfig {
   enabled?: boolean;
+  /** `forum_announcement`: show this server's members the "O fórum abriu" card once. */
+  announce?: boolean;
 }
 
 export const fetchForumConfig = (serverId: string) =>
@@ -3065,6 +3068,18 @@ export const fetchAllReports = (
  */
 export const fetchReportContext = (reportId: string) =>
   apiFetch<ReportContext>(`/api/reports/${reportId}/context`);
+
+/**
+ * Ask for ONE look at an image or gif on a reported message: a signed URL that
+ * lives 60 seconds. 404 while the `report_attachment_preview` flag is off or for
+ * anybody who may not read the report, 403 when a guardrail refuses it (the
+ * scanner flagged it, it is quarantined, it is not a picture), 429 on a burst.
+ * Never call this on render: the card asks only after a click.
+ */
+export const revealReportAttachment = (reportId: string, attachmentId: string) =>
+  post<ReportAttachmentReveal>(
+    `/api/reports/${reportId}/attachments/${attachmentId}/reveal`,
+  );
 
 /**
  * Terminate somebody else's account (instance moderators only). This is the

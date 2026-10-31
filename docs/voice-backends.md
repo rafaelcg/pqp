@@ -172,7 +172,7 @@ Not covered: closing a group conversation (`DELETE /api/dms/:channelId`) and blo
 - `VoiceParticipant.serverMuted` (`packages/shared/src/signaling.ts`, defaulted like `muted`) travels on `welcome`, `voice-roster`, `peer-joined` and `peer-updated`.
 - The server keeps the flag per (room, user) in `roomServerMutes` beside `roomTransports` in `server/src/ws/voice.ts`: it outlives the seat, so leaving and rejoining comes back `serverMuted: true, muted: true`, and it dies when the room empties. While it stands the target's own `set-voice-state` unmute is refused (the roster is re-sent and the client snaps back).
 - On LiveKit the route still asks the SFU to mute the publication first and can still 502; on both transports it then sets the flag and broadcasts the roster, so a tile looks the same whichever transport carried the call.
-- Receiving clients (web: `VoiceAudioSinks` via `serverMutedPeerIds` in `use-voice`) play a server-muted peer at zero without touching the stored per-peer volume, suppress their speaking indicator, and draw a distinct glyph. The target's own client pins `isMuted`, disables the unmute control and says a moderator did it. Clearing the flag does **not** unmute them: the mic stays off until they turn it back on, so someone freed mid-sentence does not land in the room the instant staff releases them.
+- Receiving clients (web: `VoiceAudioSinks` via `serverMutedPeerIds` in `use-voice`) play a server-muted peer at zero without touching the stored per-peer volume, suppress their speaking indicator, and draw a distinct glyph. The target's own client pins `isMuted`, disables the unmute control and says a moderator did it. Clearing the flag does **not** unmute them: the mic stays off until they turn it back on, so someone freed mid-sentence does not land in the room the instant staff releases them. On the SFU that also means lifting a mute never calls LiveKit's `mutePublishedTrack(muted=false)`, which the box refuses (`remote unmute not enabled`) unless `room.enable_remote_unmute` is set; the person's own unmute is always allowed.
 
 Trust model: a modified sender gains nothing (nobody plays it); a modified receiver can hear one muted person, which is exactly the power a modified receiver already has over an evicted peer's last packets. iOS and Android implement the same contract.
 
@@ -346,6 +346,21 @@ because ladder F shows the box does not degrade gracefully past its limit.
 Promotion is also refused when `readSfuStats().reachable` is `false`, and set
 `VOICE_PROMOTION_MAX_SFU_MBPS=0` to turn the whole feature off without a
 deploy.
+
+**Production value: 900 since 2026-10-27.** The default stays 600 in code; the
+Vultr box sets `VOICE_PROMOTION_MAX_SFU_MBPS=900` in `/opt/pqp/.env` (backup
+`.env.bak-budget-20261027`). Why: on 2026-10-20 the estimate reached 605 and
+refused 56 cameras and screens while the SFU sat at about 30% CPU, and the
+2026-10-25 capacity re-read found the logged estimate at 514 on a normal
+weekend night against a measured peak of 243 Mbit/s of real traffic, so the
+estimate runs about 2 to 6 times the bytes it stands for. At 900 the real load
+at the estimate's ceiling is well under half of the 935 Mbit/s the path was
+measured clean at. Watch real SFU transmit and CPU for a few evenings after a
+raise (the `pqp-capacity` alert rules in `tools/monitoring/` cover both) and
+lower it if either comes near its warning line. Rollback: delete the line from
+`/opt/pqp/.env` and roll the replicas (the `pqp` account's `sudo` needs a
+password, so roll through a deploy of a commit the API needs, see
+`tools/api-host/README.md`).
 
 **Log lines:** `voice.transportPromoted` (room, user, reason, room size,
 `loadMbps`, `addedMbps`, `budgetMbps`), `voice.transportPromotionRefused` (the

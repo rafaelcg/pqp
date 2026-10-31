@@ -1,0 +1,491 @@
+{
+  "_comment": [
+    "Grafana Alerting file-provisioning layout (apiVersion 1): the always-on",
+    "capacity group `pqp-capacity`. Eight rules: SFU CPU busy fraction warn (45% for",
+    "15m) and critical (60% for 10m), LiveKit participants above 240 for 5m, outgoing",
+    "packet loss p95 above 0.5% for 1h, SFU transmit above 600 Mbit/s for 10m, API box",
+    "root disk above 75%, API box memory above 75%, and a presence rule that fires when",
+    "one of the SFU trigger series has been missing for 30m (the others are noData OK,",
+    "so a vanished series would otherwise look healthy). Meant to stay imported, like",
+    "grafana-alert-rules-growth.json. The reasoning and the upgrade procedure these",
+    "alerts hand over to is docs/SFU_RESIZE_RUNBOOK.md.",
+    "",
+    "Every CPU threshold is a FRACTION of the box's core count (non-idle seconds per",
+    "second divided by count of the idle series), so resizing sfu-pqp from 4 to 8",
+    "cores keeps their meaning without an edit. The participants and tx thresholds are",
+    "absolute and are re-read after a resize (docs/SFU_RESIZE_RUNBOOK.md, 'After').",
+    "",
+    "Already existing in the Grafana stack, deliberately NOT re-added here (checked",
+    "against GET /api/v1/provisioning/alert-rules on 2026-10-25): 'sfu box: CPU above",
+    "85% for 10m' (pqp-sfu-cpu), 'sfu box: egress past 60% / 80% of the monthly",
+    "allowance', 'sfu box: load average above 6 for 10m', 'sfu box: root filesystem",
+    "above 85%', and 'api and egress boxes: root filesystem above 80%'",
+    "(pqp-boxes-disk-80, which already covers the egress box, box=sfu-hls).",
+    "",
+    "Datasource is written as grafanacloud-prom, the contact point is rafael-email,",
+    "no mute timing (a capacity trigger is valid at any hour). noDataState and",
+    "execErrState are OK on every rule: a dead exporter or Alloy is the job of the",
+    "existing 'no metrics for 10m' rules, and a one-scrape gap must not page.",
+    "Import: see tools/monitoring/README.md, 'Capacity alerts'. The provisioning API",
+    "wants folderUID ffxfigbmjr2f4e and ruleGroup added to each rule body."
+  ],
+  "apiVersion": 1,
+  "groups": [
+    {
+      "orgId": 1,
+      "name": "pqp-capacity",
+      "folder": "pqp",
+      "interval": "1m",
+      "rules": [
+        {
+          "uid": "pqp-capacity-sfu-cpu-warn",
+          "title": "SFU capacity: CPU busy above 45% for 15m",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "datasourceUid": "grafanacloud-prom",
+              "relativeTimeRange": {
+                "from": 900,
+                "to": 0
+              },
+              "model": {
+                "refId": "A",
+                "expr": "sum(rate(node_cpu_seconds_total{box=\"sfu-pqp\",mode!=\"idle\"}[5m])) / count(node_cpu_seconds_total{box=\"sfu-pqp\",mode=\"idle\"})",
+                "instant": true,
+                "range": false
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        0.45
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "OK",
+          "for": "15m",
+          "labels": {
+            "severity": "warning",
+            "area": "capacity"
+          },
+          "annotations": {
+            "summary": "The home SFU has been more than 45% busy for 15 minutes. Growth, not a blip: plan the resize.",
+            "description": "Busy fraction = non-idle CPU seconds per second over the box's core count, so the meaning survives a resize from 4 to 8 cores. A weekend peak at the time of writing was about 35%. This is the early warning for the pre-approved upgrade to vhp-8c-16gb-amd (docs/SFU_RESIZE_RUNBOOK.md): look at the evening 5-minute p95 on the pqp SFU box dashboard, and if it is above 60% of the cores on 3 evenings, ask Rafael to book the 09Z-12Z trough. Do not resize during a watch party, an LL session or a booked event. The older rule 'sfu box: CPU above 85% for 10m' still exists and is the last-resort page.",
+            "dashboard": "https://smallkestrel237.grafana.net/d/pqp-sfu-box",
+            "runbook": "docs/SFU_RESIZE_RUNBOOK.md"
+          },
+          "notification_settings": {
+            "receiver": "rafael-email"
+          }
+        },
+        {
+          "uid": "pqp-capacity-sfu-cpu-critical",
+          "title": "SFU capacity: CPU busy above 60% for 10m",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "datasourceUid": "grafanacloud-prom",
+              "relativeTimeRange": {
+                "from": 900,
+                "to": 0
+              },
+              "model": {
+                "refId": "A",
+                "expr": "sum(rate(node_cpu_seconds_total{box=\"sfu-pqp\",mode!=\"idle\"}[5m])) / count(node_cpu_seconds_total{box=\"sfu-pqp\",mode=\"idle\"})",
+                "instant": true,
+                "range": false
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        0.6
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "OK",
+          "for": "10m",
+          "labels": {
+            "severity": "critical",
+            "area": "capacity"
+          },
+          "annotations": {
+            "summary": "The home SFU has been more than 60% busy for 10 minutes. This is the upgrade trigger.",
+            "description": "Busy fraction above 0.60 for 10m (same expression as the warning rule, so it scales with the core count). 60% of the cores is the capacity review's trigger for the in-place upgrade to vhp-8c-16gb-amd. Follow docs/SFU_RESIZE_RUNBOOK.md: check occupancy and that no watch party, LL session or event is live, then apply in the 09Z-12Z trough unless this is an incident. If it is an incident (calls choppy right now), the runbook says how to resize in a hurry and what it costs: every call on the home SFU drops for about a minute.",
+            "dashboard": "https://smallkestrel237.grafana.net/d/pqp-sfu-box",
+            "runbook": "docs/SFU_RESIZE_RUNBOOK.md"
+          },
+          "notification_settings": {
+            "receiver": "rafael-email"
+          }
+        },
+        {
+          "uid": "pqp-capacity-sfu-participants",
+          "title": "SFU capacity: LiveKit participants above 240 for 5m",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "datasourceUid": "grafanacloud-prom",
+              "relativeTimeRange": {
+                "from": 300,
+                "to": 0
+              },
+              "model": {
+                "refId": "A",
+                "expr": "max_over_time(livekit_participant_total{box=\"sfu-pqp\"}[2m])",
+                "instant": true,
+                "range": false
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        240
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "OK",
+          "for": "5m",
+          "labels": {
+            "severity": "warning",
+            "area": "capacity"
+          },
+          "annotations": {
+            "summary": "More than 240 people are connected to the home SFU at once. This is an upgrade trigger.",
+            "description": "livekit_participant_total on the SFU box, max over the last 2 minutes, above 240 for 5m. Roughly double the peak seen in the October 22 capacity review, and one of the three written triggers for the in-place upgrade to vhp-8c-16gb-amd (docs/SFU_RESIZE_RUNBOOK.md). Mesh rooms never touch the SFU, so this counts only LiveKit rooms; compare with voice.participants on GET /api/admin/metrics, which counts both.",
+            "dashboard": "https://smallkestrel237.grafana.net/d/pqp-sfu-box",
+            "runbook": "docs/SFU_RESIZE_RUNBOOK.md"
+          },
+          "notification_settings": {
+            "receiver": "rafael-email"
+          }
+        },
+        {
+          "uid": "pqp-capacity-sfu-packet-loss",
+          "title": "SFU capacity: packet loss p95 above 0.5% for 1h",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "datasourceUid": "grafanacloud-prom",
+              "relativeTimeRange": {
+                "from": 1800,
+                "to": 0
+              },
+              "model": {
+                "refId": "A",
+                "expr": "histogram_quantile(0.95, sum by (le) (rate(livekit_packet_loss_percent_bucket{box=\"sfu-pqp\",direction=\"outgoing\"}[15m]))) and on() (sum(increase(livekit_packet_loss_percent_count{box=\"sfu-pqp\",direction=\"outgoing\"}[15m])) > 5000)",
+                "instant": true,
+                "range": false
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        0.5
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "OK",
+          "for": "1h",
+          "labels": {
+            "severity": "warning",
+            "area": "capacity"
+          },
+          "annotations": {
+            "summary": "Outgoing packet loss at the 95th percentile has been above 0.5% for an hour. This is an upgrade trigger.",
+            "description": "histogram_quantile(0.95) over livekit_packet_loss_percent_bucket{direction=outgoing} (LiveKit's per-track loss samples, what subscribers actually receive), 15m window, held for 1h, and only while more than 5000 samples landed in the window so a quiet hour cannot trip it. Today about 97% of samples are exactly 0, so the p95 normally reads 0. Loss alone is not proof the box is the cause: a few subscribers on a bad network can lift it, so check CPU busy and tx on the same dashboard before spending money. Back-test over the 30 days before this rule was written: sustained for an hour about 10 times, so expect an occasional firing and treat it as a prompt to look, not a page. Tune the threshold after the first real firings. docs/SFU_RESIZE_RUNBOOK.md.",
+            "dashboard": "https://smallkestrel237.grafana.net/d/pqp-sfu-box",
+            "runbook": "docs/SFU_RESIZE_RUNBOOK.md"
+          },
+          "notification_settings": {
+            "receiver": "rafael-email"
+          }
+        },
+        {
+          "uid": "pqp-capacity-sfu-tx",
+          "title": "SFU capacity: transmit above 600 Mbit/s for 10m",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "datasourceUid": "grafanacloud-prom",
+              "relativeTimeRange": {
+                "from": 900,
+                "to": 0
+              },
+              "model": {
+                "refId": "A",
+                "expr": "sum(rate(node_network_transmit_bytes_total{box=\"sfu-pqp\",device=\"enp1s0\"}[5m])) * 8 / 1e6",
+                "instant": true,
+                "range": false
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        600
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "OK",
+          "for": "10m",
+          "labels": {
+            "severity": "warning",
+            "area": "capacity"
+          },
+          "annotations": {
+            "summary": "The home SFU has been sending more than 600 Mbit/s for 10 minutes, a large share of the NIC's measured path ceiling.",
+            "description": "rate of node_network_transmit_bytes_total on enp1s0, 5m, in Mbit/s, above 600 for 10m. About 65% of the path ceiling measured in September (operator copy, ~/.config/pqp/capacity-measured.md). More CPU does not raise the NIC's ceiling: if this fires without CPU being high, the answer is not the resize, it is who is sending video (voice.videoAdmissionRefused, the per-box video budget in docs/CAPACITY.md section 1c) or a second SAO SFU as another region id (docs/SFU_RESIZE_RUNBOOK.md, last section). If the interface is ever renamed after a reboot this rule goes quiet with no data; the runbook's post-check queries it.",
+            "dashboard": "https://smallkestrel237.grafana.net/d/pqp-sfu-box",
+            "runbook": "docs/SFU_RESIZE_RUNBOOK.md"
+          },
+          "notification_settings": {
+            "receiver": "rafael-email"
+          }
+        },
+        {
+          "uid": "pqp-capacity-api-disk-75",
+          "title": "API box: root filesystem above 75%",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "datasourceUid": "grafanacloud-prom",
+              "relativeTimeRange": {
+                "from": 1800,
+                "to": 0
+              },
+              "model": {
+                "refId": "A",
+                "expr": "100 - (node_filesystem_avail_bytes{box=\"api-vultr\",mountpoint=\"/\"} / node_filesystem_size_bytes{box=\"api-vultr\",mountpoint=\"/\"} * 100)",
+                "instant": true,
+                "range": false
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        75
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "OK",
+          "for": "30m",
+          "labels": {
+            "severity": "warning",
+            "area": "capacity"
+          },
+          "annotations": {
+            "summary": "The API box (api-vultr) root filesystem is over 75%, an earlier warning than the 80% rule.",
+            "description": "The API box grew about 2 GB a day in the October 22 review (docker image layers from about six deploys a day, no prune in pqp-deploy.sh). The existing rule 'api and egress boxes: root filesystem above 80%' still covers the egress box and is not duplicated here. Check docker system df and /var/lib/docker, prune old images, and /var/backups/pqp (7 days of dumps). See docs/DB_RUNBOOK.md section 1 and tools/api-host/.",
+            "dashboard": "https://smallkestrel237.grafana.net/d/pqp-sfu-box",
+            "runbook": "docs/DB_RUNBOOK.md"
+          },
+          "notification_settings": {
+            "receiver": "rafael-email"
+          }
+        },
+        {
+          "uid": "pqp-capacity-api-memory-75",
+          "title": "API box: memory above 75% for 10m",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "datasourceUid": "grafanacloud-prom",
+              "relativeTimeRange": {
+                "from": 900,
+                "to": 0
+              },
+              "model": {
+                "refId": "A",
+                "expr": "100 * (1 - node_memory_MemAvailable_bytes{box=\"api-vultr\"} / node_memory_MemTotal_bytes{box=\"api-vultr\"})",
+                "instant": true,
+                "range": false
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        75
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "OK",
+          "for": "10m",
+          "labels": {
+            "severity": "warning",
+            "area": "capacity"
+          },
+          "annotations": {
+            "summary": "The API box (api-vultr) has less than 25% of its memory available.",
+            "description": "100 * (1 - MemAvailable / MemTotal) on box api-vultr above 75 for 10m. It sat near 20% in the October 22 review with api-a, api-b, the worker and Caddy together, so this fires only on a leak or a real change. The SFU box has its own memory rule; this one did not exist for the API box. Check docker stats on the box to see which container grew.",
+            "dashboard": "https://smallkestrel237.grafana.net/d/pqp-sfu-box",
+            "runbook": "docs/MONITORING.md"
+          },
+          "notification_settings": {
+            "receiver": "rafael-email"
+          }
+        },
+        {
+          "uid": "pqp-capacity-sfu-series-missing",
+          "title": "SFU capacity: a trigger series has been missing for 30m",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "datasourceUid": "grafanacloud-prom",
+              "relativeTimeRange": {
+                "from": 1800,
+                "to": 0
+              },
+              "model": {
+                "refId": "A",
+                "expr": "sum(absent(node_cpu_seconds_total{box=\"sfu-pqp\",mode=\"idle\"}) or absent(node_network_transmit_bytes_total{box=\"sfu-pqp\",device=\"enp1s0\"}) or absent(livekit_participant_total{box=\"sfu-pqp\"}) or absent(livekit_packet_loss_percent_bucket{box=\"sfu-pqp\",direction=\"outgoing\"}))",
+                "instant": true,
+                "range": false
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        0
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "OK",
+          "for": "30m",
+          "labels": {
+            "severity": "warning",
+            "area": "capacity"
+          },
+          "annotations": {
+            "summary": "One of the series the SFU capacity alerts read has disappeared while the box may still look alive, so those alerts would be silent.",
+            "description": "The other capacity rules have noDataState OK so one missed scrape does not page, which also means a series that vanishes (the enp1s0 interface renamed after a reboot or resize, LiveKit's metrics port changed, a label change) makes its rule look healthy forever. This rule fires when any of the node CPU, enp1s0 transmit, livekit_participant_total or outgoing packet loss series has been absent for 30 minutes. It will fire too if the whole box is down or being resized for longer than 30 minutes, which is also worth knowing. Check the series in Prometheus, then the interface name (ip -br link on the box) and tools/sfu-monitoring/config.alloy. docs/SFU_RESIZE_RUNBOOK.md, post-checks.",
+            "dashboard": "https://smallkestrel237.grafana.net/d/pqp-sfu-box",
+            "runbook": "docs/SFU_RESIZE_RUNBOOK.md"
+          },
+          "notification_settings": {
+            "receiver": "rafael-email"
+          }
+        }
+      ]
+    }
+  ]
+}

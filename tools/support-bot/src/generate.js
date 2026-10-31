@@ -86,7 +86,7 @@ export function estimateCostUsd(usage, model = DEFAULT_MODEL) {
  * also bounds the cost of a single pathological response.
  *
  * `unprompted` swaps the USER half only. The system prompt, the facts, the
- * model, the temperature and the ceiling are identical, because the thing that
+ * model and the ceiling are identical, because the thing that
  * differs between "somebody asked me" and "nobody asked me" is the bar for
  * speaking, not what is true.
  */
@@ -126,9 +126,10 @@ export async function generateAnswer({
   const message = await client.messages.create({
     model: DEFAULT_MODEL,
     max_tokens: 400,
-    // Deterministic-ish. This is a lookup, not a creative task, and two people
-    // asking the same question a week apart should get the same answer.
-    temperature: 0,
+    // No `temperature`: @anthropic-ai/sdk 1.x dropped it from the request
+    // params, so the model samples at its default. Correctness does not depend
+    // on it, `screenAnswer` grounds every answer against the fact file whatever
+    // the model produced.
     system,
     messages: [{ role: "user", content: user }],
   });
