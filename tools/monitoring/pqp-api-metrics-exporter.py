@@ -688,7 +688,7 @@ _SHARED_TAKE_FIRST_KEYS = (
 # in their own source file (db-tx-metrics.ts, read-cache.ts, chat.ts's
 # `getPresenceFanoutStats`, call-metrics.ts). Recursively summed, including
 # their nested label maps (`byPath`, `byRoute`, `joinRefusedByReason`, ...).
-_ADDITIVE_SUM_KEYS = ("dbTx", "dbQueries", "readCache", "presence", "calls", "streamQuality")
+_ADDITIVE_SUM_KEYS = ("dbTx", "dbQueries", "readCache", "presence", "calls", "streamQuality", "age")
 
 # Blocks that mix process-local and DB-derived fields: hand-written mergers.
 _CUSTOM_MERGERS = {
@@ -1050,6 +1050,34 @@ def render_nudge(lines: list[str], nudge: dict) -> None:
             "unavailable with sent flat is a client offering the button where the server never accepts it.",
             [({"reason": _vn_label(reason)}, _vn_num(count)) for reason, count in sorted(refused.items())],
         )
+
+
+def render_age(lines: list[str], age: dict) -> None:
+    """The `age` block (the 18+ gate, services/age-gate.ts). Counts only: the
+    server never logs or counts a date of birth or an account here. Counted in
+    the process that took the answer, since it booted, so summed across
+    replicas."""
+    counter(
+        lines,
+        "pqp_api_age_passed_total",
+        "Age declarations that opened the gate (age.passed), summed across replicas. Since process boot.",
+        _vn_num(age.get("passed")),
+    )
+    counter(
+        lines,
+        "pqp_api_age_blocked_total",
+        "Plausible age declarations under 18: recorded, final, account blocked (age.blocked), summed across "
+        "replicas. Since process boot.",
+        _vn_num(age.get("blocked")),
+    )
+    counter(
+        lines,
+        "pqp_api_age_implausible_total",
+        "Dates refused as not an answer (impossible, future, before 1900 or under 10 years back) without "
+        "spending the attempt (age.implausible), summed across replicas. Since process boot. A climb is a slip "
+        "or an autofill the form is not catching.",
+        _vn_num(age.get("implausible")),
+    )
 
 
 def render(
@@ -1726,6 +1754,11 @@ def render(
     voice_notes = payload.get("voiceNotes")
     if isinstance(voice_notes, dict) and voice_notes:
         render_voice_notes(lines, voice_notes)
+
+    # The 18+ gate's answers. Absent on an API older than the block.
+    age = payload.get("age")
+    if isinstance(age, dict) and age:
+        render_age(lines, age)
 
     # Chamar a atencao. Absent on an API older than the block.
     nudge = payload.get("nudge")

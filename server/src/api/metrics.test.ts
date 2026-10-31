@@ -393,6 +393,29 @@ describeDb("GET /api/admin/metrics", () => {
     });
   });
 
+  it("carries the age gate's answers as counts only, live", async () => {
+    const { resetAgeGateMetricsForTests, noteAgeDeclared } = await import(
+      "../services/age-gate.js"
+    );
+    resetAgeGateMetricsForTests();
+    const logs = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      noteAgeDeclared({ passed: true, implausible: false });
+      noteAgeDeclared({ passed: true, implausible: false });
+      noteAgeDeclared({ passed: false, implausible: false });
+      noteAgeDeclared({ passed: false, implausible: true });
+    } finally {
+      logs.mockRestore();
+    }
+    const result = await call<{ age: Record<string, unknown> }>(
+      operator,
+      "/api/admin/metrics",
+    );
+    expect(result.status).toBe(200);
+    expect(result.body.age).toEqual({ passed: 2, blocked: 1, implausible: 1 });
+    resetAgeGateMetricsForTests();
+  });
+
   it("answers an instance moderator with counts and no identities", async () => {
     const result = await call<MetricsBody>(operator, "/api/admin/metrics");
     expect(result.status).toBe(200);

@@ -346,6 +346,7 @@ import {
   AGE_GATE_PENDING_MESSAGE,
   isAgeGateExempt,
   isPlausibleBirthDate,
+  noteAgeDeclared,
   parseCalendarDate,
   recordAgeDeclaration,
 } from "../services/age-gate.js";
@@ -1800,6 +1801,11 @@ router.get("/api/me", async ({ user, ageGate }) => ({
   // Reachable while the gate is still pending or blocked — it is how the client
   // finds out which of the two it is looking at.
   ageGate,
+  // Only while the gate is open, and only here: a pending account can reach
+  // nothing else, so this is the one place the client can learn the switch.
+  ...(ageGate === "pending"
+    ? { ageGateReadback: isEnabled("age_gate_readback") }
+    : {}),
 }));
 
 /**
@@ -1811,15 +1817,31 @@ router.get("/api/me", async ({ user, ageGate }) => ({
  * rather than an error. A second attempt is what gets refused, with 409 — and
  * refusing it here is the whole feature. See `recordAgeDeclaration`.
  *
- * A date that is not a real date, or is in the future, is a 400 and does NOT
- * consume the attempt. That is not a loophole: every *plausible* date is final,
- * so there is nothing to probe for.
+ * A date that is not a real date, is in the future, or is less than ten years
+ * back (`MIN_PLAUSIBLE_AGE_YEARS`: the year somebody is typing it, a default,
+ * a slip) is a 400 and does NOT consume the attempt. That is not a loophole:
+ * every *plausible* date is final, so there is nothing to probe for, and a minor
+ * gains nothing from the floor (they could always type an adult date first).
+ * The 400 carries a stable `code` beside `error` so a client can say "check the
+ * year" without parsing a sentence: `birth_date_invalid` (not a real date) or
+ * `birth_date_implausible` (a real date nobody answering this could have).
  */
 router.post("/api/me/age-check", async ({ req, user }) => {
   const body = ageDeclarationSchema.parse(await readJsonBody(req));
   const dob = parseCalendarDate(body.dateOfBirth);
-  if (!dob || !isPlausibleBirthDate(dob)) {
-    throw new HttpError(400, "Enter a valid date of birth.");
+  if (!dob) {
+    noteAgeDeclared({ passed: false, implausible: true });
+    throw new HttpErrorWithDetail(400, "Enter a valid date of birth.", {
+      code: "birth_date_invalid",
+    });
+  }
+  if (!isPlausibleBirthDate(dob)) {
+    noteAgeDeclared({ passed: false, implausible: true });
+    throw new HttpErrorWithDetail(
+      400,
+      "That date of birth does not look right. Check the year.",
+      { code: "birth_date_implausible" },
+    );
   }
 
   const result = await recordAgeDeclaration(user.id, dob);

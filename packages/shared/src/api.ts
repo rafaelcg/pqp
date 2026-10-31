@@ -609,6 +609,16 @@ export const userSchema = z.object({
    */
   ageGate: ageGateStatusSchema.optional(),
   /**
+   * Whether the age gate asks the person to confirm their date back in words
+   * before it is sent (`age_gate_readback`, a runtime kill switch, default on).
+   * Sent only while `ageGate` is `pending`, because that is the one moment a
+   * client can use it: a pending account may reach nothing but `/api/me` and the
+   * declaration, so there is no config route it could ask instead. Absent reads
+   * as "off", which is today's direct submit, so an API that predates it and a
+   * client that predates it both keep working.
+   */
+  ageGateReadback: z.boolean().optional(),
+  /**
    * The account's public handle — `pqp.gg/@rafa` — or null when it has never
    * claimed one, which is most accounts.
    *

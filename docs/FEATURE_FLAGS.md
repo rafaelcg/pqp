@@ -1105,3 +1105,34 @@ Turn it on from controles → interruptores, or `PUT /api/admin/flags
 next load of the queue. Pinned by `server/src/api/report-attachments.test.ts`
 (the route and the list) and `client/src/components/layout/report-attachments.test.tsx`
 (the card).
+
+## `age_gate_readback` (global, default ON, a kill switch)
+
+The age gate's read-back step: before the date of birth is sent, the dialog says
+it back in words in the person's language ("Tu nasceu em 3 de dezembro de 2008.
+Confere o dia, o mês e o ano.") with "Está certo" (sends) and "Corrigir" (back to
+the fields, values kept). Everybody gets the same screen, pass or block, so it
+reveals nothing the gate's own warning does not already say. Behind
+`AGE_GATE_READBACK` (default **on**, `false` / `0` / `off` is the rollback,
+global: the person is a sign-up with no server).
+
+Off is exactly the direct submit the dialog always had. It is not a rollout
+flag: on is the shipped behaviour, and the switch exists so a bad build of the
+step can be turned off live. It does not touch the server's plausibility floor
+(a date under 10 years back answers 400 `birth_date_implausible` and does not
+spend the attempt), which is not a flag: it only ever refuses dates that were
+never an answer, and it gives a minor no way to pass.
+
+Served as `ageGateReadback` on `GET /api/me`, and **only while `ageGate` is
+`pending`**: a pending account can reach nothing but `/api/me` and the
+declaration, so there is no config route it could ask. A client that gets no
+field (an API that predates it) takes that as off and submits directly. Web:
+`client/src/components/user/age-gate-dialog.tsx` (`readback` prop, wired from
+`/api/me` in `App.tsx`). The phones read the same field and the same copy keys
+(`ageGate.readback.*`, `ageGate.error.checkYear`, `ageGate.blocked.contact.*`).
+
+Turn it off from controles → interruptores, or `PUT /api/admin/flags
+{ key: "age_gate_readback", enabled: false }`. A gate already on screen keeps
+the mode it loaded with; the next `/api/me` (a reload) picks the change up.
+Pinned by `server/src/api/age-gate.test.ts` (the field, pending only, and the
+switch) and `client/src/components/user/age-gate-dialog.test.tsx`.
