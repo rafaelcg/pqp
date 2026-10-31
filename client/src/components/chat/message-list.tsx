@@ -1,4 +1,30 @@
+import { MENU_SEPARATOR } from "@/components/ui/menu-items";
 import { StoryQuoteCard } from "@/components/stories/story-quote-card";
+import { Badge } from "@/components/ui/badge";
+import {
+  ArrowBendUpLeft,
+  ChatCircleText,
+  ChatsCircle,
+  DotsThree,
+  PencilSimple,
+  Smiley,
+  Play as PlayFill,
+  PushPin as PushPinFill,
+  UsersThree,
+  WarningCircle as WarningCircleFill,
+  WifiSlash,
+  ArrowDown as ArrowDownGlyph,
+  type Icon as PhosphorGlyph,
+} from "@phosphor-icons/react";
+import { Icon, Icon as Glyph } from "@/components/ui/icon";
+import { EmptyState as EmptyStateView } from "@/components/ui/empty-state";
+import {
+  CONTENT_CARD_FOCUS_REDESIGN,
+  CONTENT_CARD_HOVER_REDESIGN,
+  CONTENT_CARD_REDESIGN,
+  CONTENT_KICKER_REDESIGN,
+  CONTENT_MEDIA_REDESIGN,
+} from "@/components/ui/content-card";
 import type {
   Embed,
   MessageReaction,
@@ -21,7 +47,6 @@ import {
   ImagePlay,
   Link,
   ListChecks,
-  Loader2,
   Mail,
   MailOpen,
   MessageSquarePlus,
@@ -42,6 +67,7 @@ import {
 } from "lucide-react";
 import {
   Fragment,
+  cloneElement,
   memo,
   useCallback,
   useEffect,
@@ -51,9 +77,11 @@ import {
   useState,
   type CSSProperties,
   type MouseEvent as ReactMouseEvent,
+  type ReactElement,
   type ReactNode,
   type Ref,
 } from "react";
+import { useRedesign } from "@/lib/redesign";
 import { createPortal } from "react-dom";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useChatDisplay } from "@/hooks/use-chat-display";
@@ -143,6 +171,7 @@ import type {
   AuthorGoneCheck,
   MissingAuthor,
 } from "@/hooks/use-confirmed-gone-authors";
+import { Spinner } from "@/components/ui/spinner";
 
 /** Consecutive messages from one author within this window render as one block. */
 const GROUP_WINDOW_MS = 5 * 60 * 1000;
@@ -613,16 +642,117 @@ function mentionJoins(
 }
 
 function mentionRowRadius(joinTop: boolean, joinBottom: boolean): string {
+  // Under the redesign the same joins, on the row's own corner.
   if (joinTop && joinBottom) {
-    return "rounded-none";
+    return "rounded-none redesign:rounded-none";
   }
   if (joinTop) {
-    return "rounded-b-md";
+    return "rounded-b-md redesign:rounded-t-none redesign:rounded-b-[var(--message-row-radius)]";
   }
   if (joinBottom) {
-    return "rounded-t-md";
+    return "rounded-t-md redesign:rounded-b-none redesign:rounded-t-[var(--message-row-radius)]";
   }
   return "rounded-md";
+}
+
+/*
+ * A message row under the redesign: inset from the pane's edges with the
+ * row's corner, so the hover and a mention are rounded fills as in the
+ * mockup. The padding gives back what the inset takes, so the text does not
+ * move. Every string is redesign-only.
+ */
+const MESSAGE_ROW_REDESIGN =
+  "redesign:mx-2 redesign:rounded-[var(--message-row-radius)] redesign:px-3";
+/** The time beside a name and in the gutter. */
+const MESSAGE_TIME_REDESIGN = "redesign:text-xs redesign:text-text-tertiary";
+/*
+ * The chrome on a message (s-message-chrome), under the redesign. The hover
+ * toolbar floats as a pill on the popover surface; its buttons are 32px
+ * circles. The "more" panel is the menu's panel, and its rows the menu's rows,
+ * so it matches the right-click menu that repeats it.
+ */
+const TOOLBAR_REDESIGN =
+  "redesign:-top-4 redesign:right-3 redesign:gap-0.5 redesign:rounded-full redesign:border-[color:var(--popover-border)] redesign:bg-[color:var(--popover-surface)] redesign:p-1 redesign:shadow-[var(--popover-shadow)]";
+const TOOLBAR_BUTTON_REDESIGN =
+  "redesign:h-8 redesign:w-8 redesign:rounded-full redesign:text-text-secondary redesign:hover:bg-[color:var(--menu-row-hover)] redesign:hover:text-text redesign:focus-visible:ring-[color:var(--color-focus-ring)] redesign:focus-visible:ring-offset-[color:var(--popover-surface)]";
+/** A quick reaction you already gave: the accent's soft fill. */
+const TOOLBAR_BUTTON_ON_REDESIGN =
+  "redesign:bg-accent-soft redesign:hover:bg-accent-soft redesign:shadow-[inset_0_0_0_1.5px_var(--color-accent)]";
+const MORE_PANEL_REDESIGN =
+  "redesign:w-56 redesign:rounded-[var(--menu-radius)] redesign:border-[color:var(--popover-border)] redesign:bg-[color:var(--popover-surface)] redesign:p-[var(--menu-pad)] redesign:shadow-[var(--popover-shadow)]";
+/** A reaction: a pill on a text tint; yours is the accent's soft fill, ringed. */
+const REACTION_REDESIGN =
+  "redesign:h-7 redesign:gap-1.5 redesign:border-transparent redesign:px-2.5 redesign:text-[0.8125rem] redesign:focus-visible:ring-accent";
+const REACTION_OFF_REDESIGN =
+  "redesign:bg-[color:var(--content-glyph-bg)] redesign:text-text-secondary redesign:hover:border-transparent redesign:hover:bg-[color:var(--content-card-hover)] redesign:hover:text-text";
+const REACTION_ON_REDESIGN =
+  "redesign:bg-accent-soft redesign:text-on-accent-soft redesign:shadow-[inset_0_0_0_1.5px_var(--color-accent)]";
+
+/*
+ * The list's own chrome (s-log-chrome), under the redesign: the load buttons
+ * are the secondary pill; what floats over the log (the jump pill, the "that
+ * message is gone" note, the bulk bar) sits on the popover surface.
+ */
+const LOG_LOAD_REDESIGN =
+  "redesign:border-0 redesign:bg-[color:var(--button-secondary-bg)] redesign:px-3.5 redesign:py-1.5 redesign:font-semibold redesign:text-text redesign:hover:bg-[color:var(--button-secondary-hover)] redesign:hover:text-text redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent";
+const LOG_FLOAT_REDESIGN =
+  "redesign:border-[color:var(--popover-border)] redesign:bg-[color:var(--popover-surface)] redesign:shadow-[var(--popover-shadow)] redesign:backdrop-blur-none";
+
+/** Both glyphs of a toolbar button: the old one, and the redesign's. */
+function ToolbarGlyph({
+  old: Old,
+  glyph,
+  kind = "object",
+  className,
+}: {
+  old: LucideIcon;
+  glyph: PhosphorGlyph;
+  kind?: "object" | "symbol";
+  className?: string;
+}) {
+  return (
+    <>
+      <Old className={cn("h-3.5 w-3.5 redesign:hidden", className)} />
+      <Glyph icon={glyph} kind={kind} size="sm" className="hidden redesign:block" />
+    </>
+  );
+}
+
+/** A GIF or a pasted picture link: the media radius on the card's edge. */
+const MEDIA_REDESIGN = cn(CONTENT_MEDIA_REDESIGN, "redesign:bg-transparent");
+
+/**
+ * A continuation row's gutter. A pinned line has no header to carry its pin,
+ * so under the redesign the pin sits in the gutter at rest and gives way to
+ * the time on hover. Off the redesign the wrapper is `contents` and the pin
+ * is not drawn, so the row is what it was.
+ */
+function ContinuationGutter({
+  pinned,
+  pinTitle,
+  pinLabel,
+  children,
+}: {
+  pinned: boolean;
+  pinTitle: string;
+  pinLabel: string;
+  children: ReactElement<{ title?: string }>;
+}) {
+  const redesign = useRedesign();
+  if (!pinned) return children;
+  // The pin hides on hover, so its credit rides on the time's tooltip.
+  const time = redesign ? cloneElement(children, { title: `${children.props.title} · ${pinTitle}` }) : children;
+  return (
+    <span className="contents redesign:relative redesign:flex redesign:w-14 redesign:shrink-0">
+      {time}
+      <span
+        className="hidden redesign:absolute redesign:inset-y-0 redesign:right-2 redesign:flex redesign:items-center redesign:text-text-secondary redesign:transition-opacity redesign:group-hover:pointer-events-none redesign:group-hover:opacity-0"
+      >
+        <Glyph icon={PushPinFill} size="sm" className="h-3.5 w-3.5" />
+        <span className="sr-only">{pinLabel}</span>
+      </span>
+    </span>
+  );
 }
 
 /**
@@ -727,6 +857,25 @@ export const MessageList = memo(function MessageList({
     }
   }, [missingAuthorKey, reportMissingAuthors]);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const redesign = useRedesign();
+  // Under the redesign the jump pill clears the bot's note: it rises over
+  // the footer (the note and the typing line) while it is taller than the
+  // typing line alone, and follows the note down as it collapses.
+  const logFooterRef = useRef<HTMLDivElement>(null);
+  const [logFooterHeight, setLogFooterHeight] = useState(0);
+  useLayoutEffect(() => {
+    const el = logFooterRef.current;
+    if (!redesign || !el) {
+      setLogFooterHeight(0);
+      return;
+    }
+    const measure = () => setLogFooterHeight(el.offsetHeight > 32 ? el.offsetHeight : 0);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [redesign]);
   const [pickerMessageId, setPickerMessageId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isPinned, setIsPinned] = useState(true);
@@ -2039,15 +2188,15 @@ export const MessageList = memo(function MessageList({
         {hasMore && (
           <div className="flex justify-center pb-3">
             {isLoadingOlder ? (
-              <span className="flex items-center gap-2 text-xs text-paper-muted">
-                <Loader2 className="h-3 w-3 animate-spin" />
+              <span className="flex items-center gap-2 text-xs text-paper-muted redesign:text-text-secondary">
+                <Spinner className="h-3 w-3 animate-spin" />
                 Loading older messages…
               </span>
             ) : (
               <button
                 type="button"
                 onClick={loadOlder}
-                className="rounded-full border border-ink-4 px-3 py-1 text-xs text-paper-muted hover:text-paper"
+                className={cn("rounded-full border border-ink-4 px-3 py-1 text-xs text-paper-muted hover:text-paper", LOG_LOAD_REDESIGN)}
               >
                 Load older messages
               </button>
@@ -2441,17 +2590,17 @@ export const MessageList = memo(function MessageList({
         ) : null}
 
         {hasNewer && (
-          <div className="flex justify-center pt-3">
+          <div className="flex justify-center pt-3 redesign:pb-12">
             {isLoadingNewer ? (
-              <span className="flex items-center gap-2 text-xs text-paper-muted">
-                <Loader2 className="h-3 w-3 animate-spin" />
+              <span className="flex items-center gap-2 text-xs text-paper-muted redesign:text-text-secondary">
+                <Spinner className="h-3 w-3 animate-spin" />
                 {t("chat.loadingNewer")}
               </span>
             ) : (
               <button
                 type="button"
                 onClick={loadNewer}
-                className="rounded-full border border-ink-4 px-3 py-1 text-xs text-paper-muted hover:text-paper"
+                className={cn("rounded-full border border-ink-4 px-3 py-1 text-xs text-paper-muted hover:text-paper", LOG_LOAD_REDESIGN)}
               >
                 {t("chat.loadNewer")}
               </button>
@@ -2475,14 +2624,19 @@ export const MessageList = memo(function MessageList({
           // Above the corner card's z-30. Those cards are hints and they park
           // in the same bottom-right corner as this bar's buttons; a hint must
           // not sit on top of the button that ends a destructive flow.
-          className="relative z-40 flex flex-wrap items-center justify-between gap-2 border-t border-ink-4 bg-ink-2 px-4 py-2"
+          className={cn(
+            "relative z-40 flex flex-wrap items-center justify-between gap-2 border-t border-ink-4 bg-ink-2 px-4 py-2",
+            // A floating bar on the popover surface, inset from the pane.
+            "redesign:mx-3 redesign:mb-3 redesign:rounded-[var(--radius-card)] redesign:border redesign:py-2.5 redesign:pl-4 redesign:pr-2.5",
+            LOG_FLOAT_REDESIGN,
+          )}
         >
-          <p className="min-w-0 text-xs text-paper-muted">
+          <p className="min-w-0 text-xs text-paper-muted redesign:text-[0.8125rem] redesign:font-medium redesign:text-text">
             {selectedIds.size === 0
               ? t("chat.bulk.pick")
               : t("chat.bulk.selected", { count: selectedIds.size })}
             {selectedIds.size >= MESSAGE_BULK_DELETE_MAX && (
-              <span className="ml-2 text-paper-muted">
+              <span className="ml-2 text-paper-muted redesign:font-normal redesign:text-text-tertiary">
                 {t("chat.bulk.cap", { count: MESSAGE_BULK_DELETE_MAX })}
               </span>
             )}
@@ -2512,15 +2666,22 @@ export const MessageList = memo(function MessageList({
         onClose={() => setBulkConfirmOpen(false)}
       />
 
-      <Reveal show={!!botNotice}>
-        {botNotice && <BotNoticeRow notice={botNotice} onDismiss={() => onDismissBotNotice?.()} />}
-      </Reveal>
-      <TypingIndicator users={typingUsers} authors={authors} />
+      <div ref={logFooterRef} className="contents redesign:block">
+        <Reveal show={!!botNotice}>
+          {botNotice && <BotNoticeRow notice={botNotice} onDismiss={() => onDismissBotNotice?.()} />}
+        </Reveal>
+        <TypingIndicator users={typingUsers} authors={authors} />
+      </div>
 
       {jumpNotice && (
         <p
           role="status"
-          className="animate-rise absolute bottom-16 right-4 z-10 max-w-[16rem] rounded-md border border-border bg-surface-2 px-3 py-2 text-xs text-text-muted shadow-lg"
+          style={logFooterHeight > 0 ? { bottom: logFooterHeight + 56 } : undefined}
+          className={cn(
+            "animate-rise absolute bottom-16 right-4 z-10 max-w-[16rem] rounded-md border border-border bg-surface-2 px-3 py-2 text-xs text-text-muted shadow-lg",
+            "redesign:rounded-[var(--radius-card)] redesign:px-3.5 redesign:py-2.5 redesign:text-[0.8125rem] redesign:text-text-secondary",
+            LOG_FLOAT_REDESIGN,
+          )}
         >
           {t("chat.jump.gone")}
         </p>
@@ -2530,9 +2691,15 @@ export const MessageList = memo(function MessageList({
         <button
           type="button"
           onClick={jumpToPresentFromPill}
-          className="absolute bottom-4 right-4 z-10 flex items-center gap-1.5 rounded-full border border-ink-4 bg-ink-2/95 px-3 py-1.5 text-xs font-medium text-paper shadow-lg backdrop-blur transition-colors hover:border-signal/60 hover:text-signal"
+          style={logFooterHeight > 0 ? { bottom: logFooterHeight + 8 } : undefined}
+          className={cn(
+            "absolute bottom-4 right-4 z-10 flex items-center gap-1.5 rounded-full border border-ink-4 bg-ink-2/95 px-3 py-1.5 text-xs font-medium text-paper shadow-lg backdrop-blur transition-colors hover:border-signal/60 hover:text-signal",
+            "redesign:h-9 redesign:gap-2 redesign:pl-3 redesign:pr-4 redesign:text-[0.8125rem] redesign:font-semibold redesign:text-text redesign:hover:border-[color:var(--popover-border)] redesign:hover:bg-[color:var(--popover-surface)] redesign:hover:text-accent-text redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent",
+            LOG_FLOAT_REDESIGN,
+          )}
         >
-          <ArrowDown className="h-3.5 w-3.5" />
+          <ArrowDown className="h-3.5 w-3.5 redesign:hidden" />
+          <Glyph icon={ArrowDownGlyph} kind="symbol" size="sm" className="hidden redesign:block" />
           {/* In stream chat the pill says what Twitch's says: the chat is
               paused because you scrolled, and how much has come in since. */}
           {missedCount > 0 && !hasNewer
@@ -2553,8 +2720,11 @@ export const MessageList = memo(function MessageList({
   );
 });
 
-const FAILED_ACTION_TILE =
-  "inline-flex h-8 w-full min-w-0 items-center justify-center whitespace-nowrap rounded-md border border-ink-4 bg-ink-3 px-2.5 text-xs font-medium text-paper outline-none hover:border-signal/50 hover:text-signal focus-visible:ring-2 focus-visible:ring-signal/60 disabled:pointer-events-none disabled:opacity-40";
+const FAILED_ACTION_TILE = cn(
+  "inline-flex h-8 w-full min-w-0 items-center justify-center whitespace-nowrap rounded-md border border-ink-4 bg-ink-3 px-2.5 text-xs font-medium text-paper outline-none hover:border-signal/50 hover:text-signal focus-visible:ring-2 focus-visible:ring-signal/60 disabled:pointer-events-none disabled:opacity-40",
+  // The secondary button's pill under the redesign.
+  "redesign:rounded-full redesign:border-0 redesign:bg-[color:var(--button-secondary-bg)] redesign:font-semibold redesign:text-text redesign:hover:bg-[color:var(--button-secondary-hover)] redesign:hover:text-text redesign:focus-visible:ring-accent",
+);
 
 /**
  * Failed bubble: one status line, then equal-width actions. Retry stays
@@ -2576,8 +2746,9 @@ function QueuedSendFooter({
   const { t } = useTranslation();
   return (
     <div className="mt-1.5">
-      <p className="flex items-start gap-2 text-xs text-text-muted">
-        <WifiOff className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+      <p className="flex items-start gap-2 text-xs text-text-muted redesign:text-[13px] redesign:text-text-secondary">
+        <WifiOff className="mt-0.5 h-3.5 w-3.5 shrink-0 redesign:hidden" aria-hidden />
+        <Glyph icon={WifiSlash} kind="symbol" size="sm" className="mt-0.5 hidden shrink-0 redesign:block" />
         <span>{t("chat.queuedOffline")}</span>
       </p>
       <div className="mt-1.5 grid max-w-[8rem] grid-cols-1 gap-2">
@@ -2623,8 +2794,9 @@ function FailedSendFooter({
 
   return (
     <div className="mt-1.5">
-      <p className="flex items-start gap-2 text-xs text-danger">
-        <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+      <p className="flex items-start gap-2 text-xs text-danger redesign:text-[13px]">
+        <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 redesign:hidden" aria-hidden />
+        <Glyph icon={WarningCircleFill} size="sm" className="mt-0.5 hidden shrink-0 redesign:block" />
         <span>{copy.text ?? t(copy.key, copy.vars)}</span>
       </p>
       <div
@@ -2639,7 +2811,12 @@ function FailedSendFooter({
             tabIndex={tabIndex}
             disabled={!ready}
             onClick={onRetry}
-            className={cn(FAILED_ACTION_TILE, "tabular-nums")}
+            className={cn(
+              FAILED_ACTION_TILE,
+              "tabular-nums",
+              // Retry is the way forward; Discard stays neutral.
+              "redesign:bg-accent-soft redesign:text-on-accent-soft redesign:hover:bg-[color:color-mix(in_oklab,var(--color-accent-soft),var(--color-on-accent-soft)_10%)] redesign:hover:text-on-accent-soft",
+            )}
           >
             {waitSeconds > 0
               ? t("chat.retryWait", { seconds: waitSeconds })
@@ -2767,24 +2944,25 @@ function EmptyState({
       timer.current = window.setTimeout(() => setState("idle"), 1600);
     };
     return (
-      <div
+      <EmptyStateView
         data-empty-owner=""
-        className="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-16 text-center"
-      >
-        <p className="text-balance font-display text-xl font-bold text-text">
-          {t("chat.empty.owner.title")}
-        </p>
-        <p className="max-w-xs text-pretty text-sm text-text-tertiary">
-          {state === "failed"
+        icon={<Icon icon={UsersThree} size="lg" />}
+        title={t("chat.empty.owner.title")}
+        body={
+          state === "failed"
             ? t("chat.empty.owner.failed")
-            : t("chat.empty.owner.body")}
-        </p>
-        {showCopyButton ? (
+            : t("chat.empty.owner.body")
+        }
+        className="flex-1 justify-center gap-2 px-6 py-16"
+        iconClassName="hidden redesign:flex"
+        titleClassName="text-balance font-display text-xl font-bold text-text"
+        bodyClassName="max-w-xs text-pretty text-sm text-text-tertiary"
+        actions={showCopyButton ? (
           <Button
             // Secondary: the owner banner above carries the loud copy of this
             // same action, and two accent buttons a screen apart compete.
             variant="secondary"
-            className="mt-3"
+            className="mt-3 redesign:mt-0"
             data-empty-copy-invite=""
             disabled={state === "busy"}
             onClick={() => void copy()}
@@ -2798,20 +2976,21 @@ function EmptyState({
               ? t("chat.empty.owner.copied")
               : t("chat.empty.owner.copy")}
           </Button>
-        ) : null}
-      </div>
+        ) : undefined}
+      />
     );
   }
 
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-16 text-center">
-      <p className="text-balance font-display text-xl font-bold text-paper">
-        {t("chat.empty.title")}
-      </p>
-      <p className="max-w-xs text-pretty text-sm text-paper-muted">
-        {t("chat.empty.body")}
-      </p>
-    </div>
+    <EmptyStateView
+      icon={<Icon icon={ChatsCircle} size="lg" />}
+      title={t("chat.empty.title")}
+      body={t("chat.empty.body")}
+      className="flex-1 justify-center gap-2 px-6 py-16"
+      iconClassName="hidden redesign:flex"
+      titleClassName="text-balance font-display text-xl font-bold text-text"
+      bodyClassName="max-w-xs text-pretty text-sm text-text-tertiary"
+    />
   );
 }
 
@@ -2855,7 +3034,7 @@ function TypingIndicator({
     <>
     <Reveal show={people.length > 0}>
     <p
-      className="px-4 pb-1 text-xs text-paper-muted"
+      className="px-4 pb-1 text-xs text-paper-muted redesign:px-7 redesign:pb-1.5 redesign:text-text-secondary"
       aria-live="polite"
     >
       <span className="inline-flex items-center gap-1.5">
@@ -2863,7 +3042,7 @@ function TypingIndicator({
           {[0, 1, 2].map((index) => (
             <span
               key={index}
-              className="h-1 w-1 animate-bounce rounded-full bg-paper-muted"
+              className="h-1 w-1 animate-bounce rounded-full bg-paper-muted redesign:h-1.5 redesign:w-1.5 redesign:bg-text-tertiary"
               style={{ animationDelay: `${index * 120}ms` }}
             />
           ))}
@@ -2988,7 +3167,7 @@ function BotActivityRows({
                   key={key}
                   className="chat-swap-in mt-0.5 inline-flex items-center gap-1.5 rounded-full bg-surface-2 px-2.5 py-1 text-sm text-text-secondary"
                 >
-                  <Loader2 className="h-3.5 w-3.5 shrink-0 motion-safe:animate-spin" aria-hidden />
+                  <Spinner className="h-3.5 w-3.5 shrink-0 motion-safe:animate-spin" />
                   <span className="bot-shimmer">{t(key, { name: user.displayName })}</span>
                 </span>
               )}
@@ -3500,7 +3679,11 @@ const MessageRow = memo(function MessageRow({
           aria-label={t("chat.blocked")}
           onFocus={onFocusRow}
           onKeyDown={(event) => onNavigate(event, message.id)}
-          className="group mt-1 flex items-center gap-2 rounded-md px-5 py-1 text-xs text-paper-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+          className={cn(
+            "group mt-1 flex items-center gap-2 rounded-md px-5 py-1 text-xs text-paper-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
+            MESSAGE_ROW_REDESIGN,
+            "redesign:text-text-tertiary redesign:focus-visible:ring-accent",
+          )}
           style={ROW_CONTENT_VISIBILITY}
         >
           <span className="italic">{t("chat.blocked")}</span>
@@ -3508,7 +3691,7 @@ const MessageRow = memo(function MessageRow({
             type="button"
             tabIndex={controlTabIndex}
             onClick={onReveal}
-            className="underline underline-offset-2 hover:text-paper"
+            className="underline underline-offset-2 hover:text-paper redesign:font-medium redesign:text-text-secondary redesign:hover:text-text"
           >
             {t("chat.showBlocked")}
           </button>
@@ -3786,6 +3969,15 @@ const MessageRow = memo(function MessageRow({
             selecting && !selected && "hover:bg-ink-3/40",
             selected && "bg-danger/15 ring-1 ring-danger/50",
             forumAnswer && "shadow-[inset_3px_0_0_var(--color-success)]",
+            !stream && MESSAGE_ROW_REDESIGN,
+            // After the row's corner, so a mention's joins keep theirs.
+            mentionsYou && !isFlashing && !stream
+              ? mentionRowRadius(mentionJoinTop, mentionJoinBottom)
+              : null,
+            "redesign:focus-visible:ring-accent",
+            !mentionsYou && !isFlashing && !selecting &&
+              "redesign:hover:bg-[color:var(--message-hover)] redesign:hover:[--avatar-dot-ring:var(--message-hover-solid)]",
+            selecting && !selected && "redesign:hover:bg-[color:var(--message-hover)]",
           )}
           data-forum-answer={forumAnswer ? "" : undefined}
         >
@@ -3835,11 +4027,11 @@ const MessageRow = memo(function MessageRow({
                     author={authorInfo}
                     tabIndex={controlTabIndex}
                     onOpenProfile={openProfile}
-                    className="block h-9 w-9 shrink-0 overflow-hidden rounded-lg leading-none hover:no-underline"
+                    className="block h-9 w-9 shrink-0 overflow-hidden rounded-lg leading-none hover:no-underline redesign:rounded-full"
                   >
                     {message.isAutomod ? (
                       <span
-                        className="grid h-9 w-9 place-items-center rounded-lg bg-accent-soft text-on-accent-soft"
+                        className="grid h-9 w-9 place-items-center rounded-lg bg-accent-soft text-on-accent-soft redesign:rounded-full"
                         title={t("chat.automodPosted")}
                       >
                         <ShieldCheck className="h-5 w-5" aria-hidden />
@@ -3858,24 +4050,33 @@ const MessageRow = memo(function MessageRow({
                   {!message.isWebhook && authorInfo?.status && (
                     <StatusDot
                       status={authorInfo.status}
-                      className="absolute -bottom-0.5 -right-0.5"
-                      ringClassName="rounded-full bg-channel ring-2 ring-channel"
+                      className="absolute -bottom-0.5 -right-0.5 redesign:bottom-0 redesign:right-0"
+                      ringClassName="rounded-full bg-channel ring-2 ring-channel redesign:bg-[color:var(--avatar-dot-ring)] redesign:ring-[color:var(--avatar-dot-ring)]"
                     />
                   )}
                 </div>
               </div>
             ) : (
-              <time
-                className={cn(
-                  "w-14 shrink-0 pr-2 text-right text-[12px] leading-[var(--chat-line-height)] whitespace-nowrap tabular-nums text-paper-muted",
-                  compact ? "opacity-70" : "opacity-0 group-hover:opacity-100",
-                )}
-                dateTime={message.createdAt}
-                title={formatFullTimestamp(message.createdAt)}
-                data-row-gutter=""
+              <ContinuationGutter
+                pinned={isMessagePinned && !compact}
+                pinTitle={
+                  message.pinnedBy ? t("chat.pinnedBy", { name: message.pinnedBy.displayName }) : t("chat.pinned")
+                }
+                pinLabel={t("chat.pinned")}
               >
-                {formatTime(message.createdAt)}
-              </time>
+                <time
+                  className={cn(
+                    "w-14 shrink-0 pr-2 text-right text-[12px] leading-[var(--chat-line-height)] whitespace-nowrap tabular-nums text-paper-muted",
+                    MESSAGE_TIME_REDESIGN,
+                    compact ? "opacity-70" : "opacity-0 group-hover:opacity-100",
+                  )}
+                  dateTime={message.createdAt}
+                  title={formatFullTimestamp(message.createdAt)}
+                  data-row-gutter=""
+                >
+                  {formatTime(message.createdAt)}
+                </time>
+              </ContinuationGutter>
             )}
 
             <div className="min-w-0 flex-1">
@@ -3908,8 +4109,15 @@ const MessageRow = memo(function MessageRow({
                       className={cn(
                         "rounded text-[length:var(--chat-font-size)] font-bold leading-[var(--chat-line-height)]",
                         !roleColor && (isMine ? "text-signal" : "text-paper"),
+                        !roleColor && (isMine ? "redesign:text-[color:var(--message-own-name)]" : "redesign:text-text"),
+                        // A role colour has no contrast floor, so its lightness is
+                        // clamped: no darker than 0.72 in dark, no lighter than 0.52
+                        // (the light accent's) in light. A browser without relative
+                        // colours drops the rule and keeps the inline colour.
+                        roleColor &&
+                          "redesign:text-[color:oklch(from_var(--role-color)_max(l,0.72)_c_h)]! redesign:[:root[data-theme=light]_&]:text-[color:oklch(from_var(--role-color)_min(l,0.52)_c_h)]!",
                       )}
-                      style={roleColor ? { color: roleColor } : undefined}
+                      style={roleColor ? ({ color: roleColor, "--role-color": roleColor } as CSSProperties) : undefined}
                     >
                       {message.authorName}
                     </AuthorButton>
@@ -3928,16 +4136,19 @@ const MessageRow = memo(function MessageRow({
                     {serverBot && <ServerBotTags gone={authorGone} />}
                   </span>
                   {forumOp && (
-                    <span
-                      className="self-center rounded-[var(--radius-tick)] bg-surface-3 px-1 py-px text-[10px] font-bold uppercase tracking-wide text-text-secondary"
+                    <Badge
+                      size="tag"
+                      className="self-center font-bold"
                       title={t("forum.badge.opHint")}
                     >
                       {t("forum.badge.op")}
-                    </span>
+                    </Badge>
                   )}
                   {authorGone && !serverBot && (
-                    <span
-                      className="self-center rounded-[var(--radius-tick)] bg-surface-3 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-text-tertiary"
+                    <Badge
+                      variant="muted"
+                      size="tag"
+                      className="self-center"
                       title={t("chat.authorGoneHint", { name: message.authorName })}
                     >
                       {/* `title` reaches neither keyboard nor touch nor a
@@ -3947,28 +4158,31 @@ const MessageRow = memo(function MessageRow({
                       <span className="sr-only">
                         {t("chat.authorGoneHint", { name: message.authorName })}
                       </span>
-                    </span>
+                    </Badge>
                   )}
                   {message.isAutomod ? (
-                    <span
-                      className="rounded bg-accent-soft px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-on-accent-soft"
+                    <Badge
+                      variant="accent"
+                      size="tag"
+                      className="rounded"
                       title={t("chat.automodPosted")}
                     >
                       AutoMod
-                    </span>
+                    </Badge>
                   ) : (
                     message.isWebhook && (
-                      <span
-                        className="rounded bg-ink-4 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-paper-muted"
+                      <Badge
+                        size="tag"
+                        className="rounded bg-ink-4 text-paper-muted redesign:rounded-full redesign:bg-surface-3 redesign:text-text-secondary"
                         title={t("chat.webhookPosted")}
                       >
                         Webhook
-                      </span>
+                      </Badge>
                     )
                   )}
                   {!compact && (
                     <time
-                      className="whitespace-nowrap text-[12px] leading-[var(--chat-line-height)] text-paper-muted"
+                      className={cn("whitespace-nowrap text-[12px] leading-[var(--chat-line-height)] text-paper-muted", MESSAGE_TIME_REDESIGN)}
                       dateTime={message.createdAt}
                       title={formatFullTimestamp(message.createdAt)}
                     >
@@ -3977,7 +4191,7 @@ const MessageRow = memo(function MessageRow({
                   )}
                   {isMessagePinned && (
                     <span
-                      className="inline-flex items-center gap-0.5 text-[12px] leading-[var(--chat-line-height)] text-signal"
+                      className="inline-flex items-center gap-0.5 text-[12px] leading-[var(--chat-line-height)] text-signal redesign:self-center redesign:text-text-secondary"
                       title={
                         message.pinnedBy
                           ? t("chat.pinnedBy", {
@@ -3986,7 +4200,8 @@ const MessageRow = memo(function MessageRow({
                           : t("chat.pinned")
                       }
                     >
-                      <Pin className="h-3 w-3" aria-hidden />
+                      <Pin className="h-3 w-3 redesign:hidden" aria-hidden />
+                      <Glyph icon={PushPinFill} size="sm" className="hidden h-3.5 w-3.5 redesign:block" />
                       <span className="sr-only">{t("chat.pinned")}</span>
                     </span>
                   )}
@@ -4036,8 +4251,12 @@ const MessageRow = memo(function MessageRow({
                   ) : message.body && !hideBodyForBauCard ? (
                     <div
                       className={cn(
-                        "markdown-body text-[length:var(--chat-font-size)] leading-[var(--chat-line-height)] text-paper/90",
+                        "markdown-body text-[length:var(--chat-font-size)] leading-[var(--chat-line-height)] text-paper/90 redesign:text-text",
                         stream && "[&>p]:inline",
+                        // "(editada)" ends the last line it belongs to, never a line of its own:
+                        // the marker is the last child, so only a paragraph right before it goes
+                        // inline. A body ending in a list, quote or code keeps its block.
+                        message.editedAt && attachments.length === 0 && !message.forward && "redesign:[&>p:nth-last-child(2)]:inline",
                       )}
                     >
                       {streamAuthor}
@@ -4077,7 +4296,7 @@ const MessageRow = memo(function MessageRow({
                   {!message.body &&
                     attachments.length === 0 &&
                     message.webhookEmbeds.length === 0 && (
-                      <p className="text-[length:var(--chat-font-size)] italic leading-relaxed text-paper-muted">
+                      <p className="text-[length:var(--chat-font-size)] italic leading-relaxed text-paper-muted redesign:text-text-tertiary">
                         {t("chat.attachmentUnavailable")}
                       </p>
                     )}
@@ -4146,6 +4365,7 @@ const MessageRow = memo(function MessageRow({
             <div
               className={cn(
                 "absolute -top-3 right-2 z-10 items-center gap-0.5 rounded-md border border-ink-4 bg-ink-2 p-0.5 shadow-sm",
+                TOOLBAR_REDESIGN,
                 moreOpen
                   ? "flex"
                   : "hidden group-hover:flex group-focus-within:flex",
@@ -4177,7 +4397,13 @@ const MessageRow = memo(function MessageRow({
                       variant="ghost"
                       size="icon"
                       tabIndex={-1}
-                      className={cn("h-6 w-6 text-sm", mine && "bg-ink-3")}
+                      className={cn(
+                        "h-6 w-6 text-sm",
+                        mine && "bg-ink-3",
+                        TOOLBAR_BUTTON_REDESIGN,
+                        "redesign:text-base",
+                        mine && TOOLBAR_BUTTON_ON_REDESIGN,
+                      )}
                       onClick={() => onToggleReaction(message.id, emoji)}
                     >
                       {emoji}
@@ -4192,10 +4418,13 @@ const MessageRow = memo(function MessageRow({
                     variant="ghost"
                     size="icon"
                     tabIndex={-1}
-                    className="h-6 w-6"
+                    className={cn("group/addtb h-6 w-6", TOOLBAR_BUTTON_REDESIGN)}
                     onClick={onOpenPicker}
                   >
-                    <SmilePlus className="h-3.5 w-3.5" />
+                    {/* "Add", not a fourth emoji: the bold outline at rest, filled on hover, as on the bar. */}
+                    <SmilePlus className="h-3.5 w-3.5 redesign:hidden" />
+                    <Glyph icon={Smiley} kind="symbol" size="sm" className="hidden redesign:block redesign:group-hover/addtb:hidden redesign:group-focus-visible/addtb:hidden" />
+                    <Glyph icon={Smiley} size="sm" className="hidden redesign:group-hover/addtb:block redesign:group-focus-visible/addtb:block" />
                   </Button>
                 </Tooltip>
               )}
@@ -4206,10 +4435,10 @@ const MessageRow = memo(function MessageRow({
                     variant="ghost"
                     size="icon"
                     tabIndex={-1}
-                    className="h-6 w-6"
+                    className={cn("h-6 w-6", TOOLBAR_BUTTON_REDESIGN)}
                     onClick={onReply}
                   >
-                    <Reply className="h-3.5 w-3.5" />
+                    <ToolbarGlyph old={Reply} glyph={ArrowBendUpLeft} kind="symbol" />
                   </Button>
                 </Tooltip>
               )}
@@ -4223,10 +4452,10 @@ const MessageRow = memo(function MessageRow({
                     variant="ghost"
                     size="icon"
                     tabIndex={-1}
-                    className="h-6 w-6 text-accent"
+                    className={cn("h-6 w-6 text-accent", TOOLBAR_BUTTON_REDESIGN, "redesign:text-accent-text redesign:hover:text-accent-text")}
                     onClick={onOpenThread}
                   >
-                    <MessageSquareText className="h-3.5 w-3.5" />
+                    <ToolbarGlyph old={MessageSquareText} glyph={ChatCircleText} />
                   </Button>
                 </Tooltip>
               )}
@@ -4237,10 +4466,10 @@ const MessageRow = memo(function MessageRow({
                     variant="ghost"
                     size="icon"
                     tabIndex={-1}
-                    className="h-6 w-6"
+                    className={cn("h-6 w-6", TOOLBAR_BUTTON_REDESIGN)}
                     onClick={onStartThread}
                   >
-                    <MessageSquarePlus className="h-3.5 w-3.5" />
+                    <ToolbarGlyph old={MessageSquarePlus} glyph={ChatsCircle} />
                   </Button>
                 </Tooltip>
               )}
@@ -4251,10 +4480,10 @@ const MessageRow = memo(function MessageRow({
                     variant="ghost"
                     size="icon"
                     tabIndex={-1}
-                    className="h-6 w-6"
+                    className={cn("h-6 w-6", TOOLBAR_BUTTON_REDESIGN)}
                     onClick={onStartEdit}
                   >
-                    <Pencil className="h-3.5 w-3.5" />
+                    <ToolbarGlyph old={Pencil} glyph={PencilSimple} />
                   </Button>
                 </Tooltip>
               )}
@@ -4267,10 +4496,10 @@ const MessageRow = memo(function MessageRow({
                     tabIndex={-1}
                     aria-haspopup="menu"
                     aria-expanded={moreOpen}
-                    className="h-6 w-6"
+                    className={cn("h-6 w-6", TOOLBAR_BUTTON_REDESIGN, moreOpen && "redesign:bg-[color:var(--menu-row-hover)] redesign:text-text")}
                     onClick={() => setMoreOpen((open) => !open)}
                   >
-                    <MoreHorizontal className="h-3.5 w-3.5" />
+                    <ToolbarGlyph old={MoreHorizontal} glyph={DotsThree} kind="symbol" />
                   </Button>
                 </Tooltip>
                 {moreOpen && (
@@ -4282,6 +4511,8 @@ const MessageRow = memo(function MessageRow({
                     className={cn(
                       "absolute right-0 z-20 max-h-[18rem] w-48 overflow-y-auto rounded-md border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)]",
                       moreUp ? "bottom-full mb-0.5" : "top-full mt-0.5",
+                      MORE_PANEL_REDESIGN,
+                      moreUp ? "redesign:mb-2" : "redesign:mt-2",
                     )}
                   >
                     {onToggleAnswer && isReal && (
@@ -4343,6 +4574,10 @@ const MessageRow = memo(function MessageRow({
                       >
                         {unreadHeld ? t("chat.markRead") : t("chat.markUnread")}
                       </MoreMenuItem>
+                    )}
+                    {(canReport || canDelete) && (
+                      // The right-click menu's rule before its red rows; drawn under the redesign only.
+                      <div role="separator" className={cn("hidden redesign:block", MENU_SEPARATOR)} />
                     )}
                     {canReport && (
                       <MoreMenuItem
@@ -4486,12 +4721,13 @@ function AuthorButton({
 /** The date rule between two days of messages. */
 function DaySeparator({ label }: { label: string }) {
   return (
-    <div className="my-4 flex items-center gap-3 px-5" role="separator">
-      <span className="h-px flex-1 bg-ink-4/60" />
-      <span className="text-[11px] font-medium uppercase tracking-wider text-paper-muted">
+    <div className="my-4 flex items-center gap-3 px-5 redesign:gap-2" role="separator">
+      <span className="h-px flex-1 bg-ink-4/60 redesign:bg-[color:var(--pane-header-rule)]" />
+      {/* Under the redesign a pill in sentence case, as the mockup's. */}
+      <span className="text-[11px] font-medium uppercase tracking-wider text-paper-muted redesign:inline-block redesign:first-letter:uppercase redesign:rounded-full redesign:bg-transparent redesign:shadow-[inset_0_0_0_1px_var(--pane-header-rule)] redesign:px-2.5 redesign:py-0.5 redesign:text-xs redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">
         {label}
       </span>
-      <span className="h-px flex-1 bg-ink-4/60" />
+      <span className="h-px flex-1 bg-ink-4/60 redesign:bg-[color:var(--pane-header-rule)]" />
     </div>
   );
 }
@@ -4512,7 +4748,8 @@ function UnreadSeparator({
       aria-label={label}
     >
       <span className="h-px flex-1 bg-danger" />
-      <span className="text-[11px] font-semibold uppercase tracking-wider text-danger">
+      {/* Under the redesign the danger fill's pill, in sentence case. */}
+      <span className="text-[11px] font-semibold uppercase tracking-wider text-danger redesign:rounded-full redesign:bg-danger redesign:px-2.5 redesign:py-0.5 redesign:text-xs redesign:normal-case redesign:tracking-normal redesign:text-on-danger">
         {label}
       </span>
     </div>
@@ -4531,18 +4768,33 @@ function MoreMenuItem({
   /** Left of the label, the same glyph the right-click menu draws for it. */
   icon?: LucideIcon;
 }) {
+  const redesign = useRedesign();
   return (
     <button
       type="button"
       role="menuitem"
+      // Under the redesign the pointer moves focus, so only one row is ever filled.
+      onPointerMove={redesign ? (event) => event.currentTarget.focus({ preventScroll: true }) : undefined}
       className={cn(
         "flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-sm outline-none hover:bg-ink-3 focus-visible:bg-ink-3",
         danger ? "text-danger" : "text-paper",
+        // The menu's row under the redesign (ui/menu-items.tsx).
+        "group/more redesign:gap-[var(--menu-row-gap)] redesign:rounded-[var(--menu-row-radius)] redesign:py-[var(--menu-row-py)] redesign:hover:bg-transparent redesign:focus:bg-[color:var(--menu-row-hover)]",
+        danger
+          ? "redesign:focus:bg-[color:var(--menu-danger-hover)]"
+          : "redesign:text-text",
       )}
       onClick={onSelect}
     >
       {Icon ? (
-        <Icon className="h-3.5 w-3.5 shrink-0 opacity-80" aria-hidden />
+        <Icon
+          className={cn(
+            "h-3.5 w-3.5 shrink-0 opacity-80",
+            "redesign:size-[var(--menu-icon-size)] redesign:opacity-100 redesign:[stroke-width:var(--icon-stroke)]",
+            !danger && "redesign:text-[color:var(--menu-icon)] redesign:group-focus/more:text-current",
+          )}
+          aria-hidden
+        />
       ) : null}
       <span className="min-w-0 flex-1">{children}</span>
     </button>
@@ -4555,7 +4807,7 @@ function EditedMarker({ editedAt }: { editedAt: string | null | undefined }) {
   }
   return (
     <span
-      className="ml-1 align-baseline text-[10px] text-paper-muted"
+      className="ml-1 align-baseline text-[10px] text-paper-muted redesign:text-[11px] redesign:text-text-tertiary"
       title={formatFullTimestamp(editedAt)}
     >
       ({translateMessage("chat.edited")})
@@ -4622,7 +4874,7 @@ export function GifAttachment({ media }: { media: GifMedia }) {
         decoding="async"
         referrerPolicy="no-referrer"
         style={style}
-        className="mt-1 w-auto max-w-full rounded-md border border-border"
+        className={cn("mt-1 w-auto max-w-full rounded-md border border-border", MEDIA_REDESIGN)}
       />
     );
   }
@@ -4634,7 +4886,11 @@ export function GifAttachment({ media }: { media: GifMedia }) {
       type="button"
       onClick={() => setIsPlaying(true)}
       aria-label={translateMessage("chat.playMedia", { name: media.alt })}
-      className="group/gif relative mt-1 block w-fit max-w-full overflow-hidden rounded-md border border-border text-left hover:border-border-strong"
+      className={cn(
+        "group/gif relative mt-1 block w-fit max-w-full overflow-hidden rounded-md border border-border text-left hover:border-border-strong",
+        MEDIA_REDESIGN,
+        CONTENT_CARD_FOCUS_REDESIGN,
+      )}
     >
       {media.stillUrl ? (
         <img
@@ -4653,8 +4909,9 @@ export function GifAttachment({ media }: { media: GifMedia }) {
         </span>
       )}
       <span className="absolute inset-0 flex items-center justify-center">
-        <span className="flex h-9 w-9 items-center justify-center rounded-full border border-border bg-surface-1/90 text-text opacity-85 transition-opacity group-hover/gif:opacity-100">
-          <Play className="h-4 w-4" />
+        <span className="flex h-9 w-9 items-center justify-center rounded-full border border-border bg-surface-1/90 text-text opacity-85 transition-opacity group-hover/gif:opacity-100 redesign:h-11 redesign:w-11 redesign:border-0 redesign:bg-accent redesign:text-on-accent redesign:opacity-100">
+          <Play className="h-4 w-4 redesign:hidden" />
+          <Glyph icon={PlayFill} size="md" className="ml-0.5 hidden redesign:block" />
         </span>
       </span>
     </button>
@@ -4686,7 +4943,11 @@ function EmbedCard({ embed }: { embed: Embed }) {
         href={embed.url}
         target="_blank"
         rel="noopener noreferrer"
-        className="mt-1.5 block w-fit max-w-full overflow-hidden rounded-md border border-border"
+        className={cn(
+          "mt-1.5 block w-fit max-w-full overflow-hidden rounded-md border border-border",
+          MEDIA_REDESIGN,
+          CONTENT_CARD_FOCUS_REDESIGN,
+        )}
       >
         <img
           src={imageUrl}
@@ -4712,21 +4973,27 @@ function EmbedCard({ embed }: { embed: Embed }) {
       href={embed.url}
       target="_blank"
       rel="noopener noreferrer"
-      className="mt-1.5 flex max-w-md gap-3 overflow-hidden rounded-md border border-border border-l-[3px] border-l-signal bg-surface-2/60 p-2.5 transition-colors hover:bg-surface-2"
+      className={cn(
+        "mt-1.5 flex max-w-md gap-3 overflow-hidden rounded-md border border-border border-l-[3px] border-l-signal bg-surface-2/60 p-2.5 transition-colors hover:bg-surface-2",
+        CONTENT_CARD_REDESIGN,
+        CONTENT_CARD_HOVER_REDESIGN,
+        CONTENT_CARD_FOCUS_REDESIGN,
+        "redesign:p-[var(--content-card-pad)]",
+      )}
     >
       <div className="min-w-0 flex-1">
         {embed.siteName && (
-          <p className="truncate text-[11px] uppercase tracking-wide text-paper-muted">
+          <p className={cn("truncate text-[11px] uppercase tracking-wide text-paper-muted", CONTENT_KICKER_REDESIGN)}>
             {embed.siteName}
           </p>
         )}
         {embed.title && (
-          <p className="mt-0.5 line-clamp-2 text-sm font-medium text-signal">
+          <p className="mt-0.5 line-clamp-2 text-sm font-medium text-signal redesign:mt-1 redesign:font-display redesign:text-[0.9375rem] redesign:font-semibold redesign:leading-snug redesign:text-accent-text">
             {embed.title}
           </p>
         )}
         {embed.description && (
-          <p className="mt-1 line-clamp-3 text-xs text-paper-muted">
+          <p className="mt-1 line-clamp-3 text-xs text-paper-muted redesign:text-[0.8125rem] redesign:leading-snug redesign:text-text-secondary">
             {embed.description}
           </p>
         )}
@@ -4737,7 +5004,7 @@ function EmbedCard({ embed }: { embed: Embed }) {
           alt=""
           loading="lazy"
           decoding="async"
-          className="h-16 w-16 shrink-0 rounded object-cover"
+          className="h-16 w-16 shrink-0 rounded object-cover redesign:h-[4.5rem] redesign:w-[4.5rem] redesign:rounded-[var(--radius-control)]"
         />
       )}
     </a>
@@ -4771,21 +5038,42 @@ function WebhookEmbedCard({ embed }: { embed: WebhookEmbed }) {
       {...(embed.url
         ? { href: embed.url, target: "_blank", rel: "noopener noreferrer" }
         : {})}
-      className="mt-1.5 block max-w-md space-y-1.5 rounded-md border border-border bg-surface-2/60 p-2.5"
+      className={cn(
+        "mt-1.5 block max-w-md space-y-1.5 rounded-md border border-border bg-surface-2/60 p-2.5",
+        // The sender's colour stays on the left edge (the inline style beats
+        // the card's edge); the rest is the card every message carries.
+        CONTENT_CARD_REDESIGN,
+        embed.url && CONTENT_CARD_HOVER_REDESIGN,
+        embed.url && CONTENT_CARD_FOCUS_REDESIGN,
+        "redesign:p-[var(--content-card-pad)]",
+        // Under the redesign every webhook card keeps the plain card edge; the
+        // sender's colour, when it chose one, is an inner bar below, so it never
+        // thins into a crescent along the rounded corners.
+        "redesign:relative redesign:![border-left-width:1px] redesign:![border-left-color:var(--card-border)]",
+        // With a colour, the content clears the bar by 10px.
+        accent && "redesign:pl-[calc(var(--content-card-pad)+3px+0.625rem)]",
+      )}
       style={{ borderLeftWidth: "3px", borderLeftColor: accent ?? "var(--color-signal)" }}
     >
+      {accent && (
+        <span
+          aria-hidden
+          className="absolute bottom-[var(--content-card-pad)] left-[var(--content-card-pad)] top-[var(--content-card-pad)] hidden w-[3px] rounded-full redesign:block"
+          style={{ background: accent }}
+        />
+      )}
       {embed.title && (
         <p
           className={cn(
-            "text-sm font-medium",
-            embed.url ? "text-signal" : "text-paper",
+            "text-sm font-medium redesign:font-display redesign:text-[0.9375rem] redesign:font-semibold",
+            embed.url ? "text-signal redesign:text-accent-text" : "text-paper",
           )}
         >
           {embed.title}
         </p>
       )}
       {embed.description && (
-        <p className="whitespace-pre-wrap text-xs text-paper-muted">
+        <p className="whitespace-pre-wrap text-xs text-paper-muted redesign:text-[0.8125rem] redesign:leading-snug redesign:text-text-secondary">
           {embed.description}
         </p>
       )}
@@ -4796,16 +5084,16 @@ function WebhookEmbedCard({ embed }: { embed: WebhookEmbed }) {
               key={index}
               className={field.inline ? "" : "col-span-2"}
             >
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-paper-muted">
+              <p className={cn("text-[11px] font-semibold uppercase tracking-wide text-paper-muted", CONTENT_KICKER_REDESIGN, "redesign:font-medium redesign:text-text-tertiary")}>
                 {field.name}
               </p>
-              <p className="text-xs text-paper">{field.value}</p>
+              <p className="text-xs text-paper redesign:text-[0.8125rem] redesign:text-text">{field.value}</p>
             </div>
           ))}
         </div>
       )}
       {embed.footer?.text && (
-        <p className="pt-1 text-[11px] text-paper-muted">{embed.footer.text}</p>
+        <p className="pt-1 text-[11px] text-paper-muted redesign:text-xs redesign:text-text-tertiary">{embed.footer.text}</p>
       )}
     </Wrapper>
   );
@@ -4829,8 +5117,9 @@ function ReplyQuote({
   const { t } = useTranslation();
   if (replyTo.deleted) {
     return (
-      <p className="mb-0.5 flex items-center gap-1.5 text-xs text-text-muted">
-        <CornerUpLeft className="h-3 w-3 shrink-0" />
+      <p className="mb-0.5 flex items-center gap-1.5 text-xs text-text-muted redesign:mb-1 redesign:text-text-tertiary">
+        <CornerUpLeft className="h-3 w-3 shrink-0 redesign:hidden" />
+        <Glyph icon={ArrowBendUpLeft} kind="symbol" size="sm" className="hidden redesign:block" />
         <span className="italic">{t("chat.originalDeleted")}</span>
       </p>
     );
@@ -4845,10 +5134,11 @@ function ReplyQuote({
         name: replyTo.authorName ?? "",
         excerpt: replyTo.excerpt ?? "",
       })}
-      className="mb-0.5 flex w-full min-w-0 items-center gap-1.5 text-left text-xs text-text-muted hover:text-text focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+      className="mb-0.5 flex w-full min-w-0 items-center gap-1.5 text-left text-xs text-text-muted hover:text-text focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60 redesign:mb-1 redesign:w-fit redesign:max-w-full redesign:rounded-full redesign:text-[0.8125rem] redesign:text-text-secondary redesign:focus-visible:ring-accent"
     >
-      <CornerUpLeft className="h-3 w-3 shrink-0" aria-hidden />
-      <span className="shrink-0 font-medium text-accent">
+      <CornerUpLeft className="h-3 w-3 shrink-0 redesign:hidden" aria-hidden />
+      <Glyph icon={ArrowBendUpLeft} kind="symbol" size="sm" className="hidden text-text-tertiary redesign:block" />
+      <span className="shrink-0 font-medium text-accent redesign:font-semibold redesign:text-text">
         {replyTo.authorName}
       </span>
       <span className="min-w-0 flex-1 truncate">{replyTo.excerpt}</span>
@@ -4941,9 +5231,9 @@ function EditComposer({
             void submit();
           }
         }}
-        className="w-full resize-none rounded-md border border-ink-4 bg-ink-3 px-2.5 py-1.5 text-[length:var(--chat-font-size)] text-paper outline-none focus:border-signal/60"
+        className="w-full resize-none rounded-md border border-ink-4 bg-ink-3 px-2.5 py-1.5 text-[length:var(--chat-font-size)] text-paper outline-none focus:border-signal/60 redesign:rounded-[var(--radius-card)] redesign:border-[color:var(--composer-border)] redesign:bg-[color:var(--composer-bg)] redesign:px-3 redesign:py-2 redesign:text-text redesign:focus:border-[color:var(--composer-border-focus)]"
       />
-      <p className="mt-1 text-[11px] text-paper-muted">
+      <p className="mt-1 text-[11px] text-paper-muted redesign:mt-1.5 redesign:text-xs redesign:text-text-tertiary">
         Enter to save · Escape to cancel
       </p>
     </div>
@@ -5005,7 +5295,9 @@ function ReactionWhoTip({
         left,
         visibility: placed ? "visible" : "hidden",
       }}
-      className="z-[130] max-w-64 rounded-md border border-ink-4 bg-ink-2 px-2 py-1 text-xs text-paper shadow-[var(--shadow-popover)]"
+      // The tooltip's tokens with this tip's own fallbacks: one bubble under
+      // the redesign, unchanged with the toggle off (`ui/tooltip.tsx`).
+      className="z-[130] max-w-[var(--tooltip-max-w,16rem)] leading-[var(--tooltip-leading,1rem)] rounded-[var(--tooltip-radius,0.375rem)] border border-[color:var(--tooltip-border,var(--color-ink-4))] bg-[color:var(--tooltip-bg,var(--color-ink-2))] px-[var(--tooltip-px,0.5rem)] py-[var(--tooltip-py,0.25rem)] text-xs text-[color:var(--tooltip-text,var(--color-paper))] shadow-[var(--tooltip-shadow,var(--shadow-popover))] [font-weight:var(--tooltip-weight,400)]"
     >
       {children}
     </div>,
@@ -5069,9 +5361,11 @@ function ReactionChip({
           reaction.me
             ? "border-signal/50 bg-signal/15 text-signal"
             : "border-ink-4 bg-ink-3/80 text-paper-muted hover:border-ink-4 hover:text-paper",
+          REACTION_REDESIGN,
+          reaction.me ? REACTION_ON_REDESIGN : REACTION_OFF_REDESIGN,
         )}
       >
-        <span className="text-sm leading-none" aria-hidden>
+        <span className="text-sm leading-none redesign:text-base" aria-hidden>
           {reaction.emoji}
         </span>
         <span className="font-medium tabular-nums">{reaction.count}</span>
@@ -5098,8 +5392,8 @@ function ReactionBar({
   }
 
   return (
-    <div className="relative mt-1.5 flex w-fit max-w-full flex-wrap items-center gap-1">
-      {reactions.map((reaction) => (
+    <div className="relative mt-1.5 flex w-fit max-w-full flex-wrap items-center gap-1 redesign:gap-1.5">
+      {reactions.slice(0, -1).map((reaction) => (
         <ReactionChip
           key={reaction.emoji}
           reaction={reaction}
@@ -5108,15 +5402,32 @@ function ReactionBar({
           tabIndex={tabIndex}
         />
       ))}
-      <button
-        type="button"
-        tabIndex={tabIndex}
-        aria-label={t("chat.addReaction")}
-        onClick={onOpenPicker}
-        className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-dashed border-ink-4 text-paper-muted hover:border-signal/50 hover:text-signal focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
-      >
-        <SmilePlus className="h-3 w-3" />
-      </button>
+      {/* The last reaction and the add button wrap together under the
+          redesign, so a wrapped row never ends in a lone smiley. Off the
+          redesign the wrapper is `contents`, so the row is what it was. */}
+      <span className="contents redesign:inline-flex redesign:items-center redesign:gap-1.5">
+        {reactions.slice(-1).map((reaction) => (
+          <ReactionChip
+            key={reaction.emoji}
+            reaction={reaction}
+            currentUserId={currentUserId}
+            onToggle={onToggle}
+            tabIndex={tabIndex}
+          />
+        ))}
+        <button
+          type="button"
+          tabIndex={tabIndex}
+          aria-label={t("chat.addReaction")}
+          onClick={onOpenPicker}
+          className="group/add inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-dashed border-ink-4 text-paper-muted hover:border-signal/50 hover:text-signal focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60 redesign:h-7 redesign:w-7 redesign:border-transparent redesign:text-text-tertiary redesign:hover:border-transparent redesign:hover:bg-[color:var(--content-glyph-bg)] redesign:hover:text-text redesign:focus-visible:ring-accent"
+        >
+          <SmilePlus className="h-3 w-3 redesign:hidden" />
+          {/* Under the redesign a quiet outline at rest that fills on hover and focus. */}
+          <Glyph icon={Smiley} kind="symbol" size="sm" className="hidden redesign:block redesign:group-hover/add:hidden redesign:group-focus-visible/add:hidden" />
+          <Glyph icon={Smiley} size="sm" className="hidden redesign:group-hover/add:block redesign:group-focus-visible/add:block" />
+        </button>
+      </span>
       {isPickerOpen && (
         <EmojiPickerPanel
           onSelect={(emoji) => {

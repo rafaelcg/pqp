@@ -16,6 +16,8 @@ import { Button } from "@/components/ui/button";
 import { answerBotAsk, ApiError, decideBotPlan } from "@/lib/api";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { intlLocale, type Locale } from "@/lib/locale";
+import { Spinner } from "@/components/ui/spinner";
+import { CONTENT_CARD_REDESIGN } from "@/components/ui/content-card";
 import { cn } from "@/lib/utils";
 
 /** A card younger than this animates in; older ones are drawn still. */
@@ -59,6 +61,8 @@ function CardFrame({
         "mt-1.5 max-w-md overflow-hidden rounded-[var(--radius-card)] border bg-surface-card transition-colors duration-[var(--duration-base)]",
         calling ? "border-warning" : "border-border",
         fresh && "bot-step-in",
+        CONTENT_CARD_REDESIGN,
+        calling && "redesign:border-warning",
       )}
     >
       {children}
@@ -84,7 +88,11 @@ function CardHeader({
   return (
     <div className="flex items-center gap-2.5 px-3 pb-2 pt-3">
       <span className={cn("grid h-7 w-7 shrink-0 place-items-center rounded-[var(--radius-control)]", TILE[tone])}>
-        <Icon className={cn("h-4 w-4", spin && "motion-safe:animate-spin")} aria-hidden />
+        {spin ? (
+          <Spinner className="h-4 w-4 motion-safe:animate-spin" />
+        ) : (
+          <Icon className="h-4 w-4" aria-hidden />
+        )}
       </span>
       <div className="min-w-0 flex-1">
         <p className="truncate text-[13px] font-semibold leading-tight text-text">{title}</p>
@@ -222,10 +230,9 @@ function StatusMark({
   }
   if (running) {
     return (
-      <Loader2
+      <Spinner
         className="h-5 w-5 shrink-0 text-accent motion-safe:animate-spin"
-        aria-label={t("chat.botCard.status.running")}
-        role="img"
+        label={t("chat.botCard.status.running")}
       />
     );
   }
@@ -317,6 +324,7 @@ export function BotActionCard({
     };
   } else if (running) {
     header = {
+      // Drawn as the shared Spinner (`spin`); the glyph is only the type.
       icon: Loader2,
       tone: "accent",
       spin: true,
@@ -432,7 +440,7 @@ export function BotActionCard({
             {card.planId && mine ? (
               <PlanButtons planId={card.planId} />
             ) : (
-              <p className="border-t border-border px-3 py-2 text-xs text-text-tertiary">
+              <p className="border-t border-border px-3 py-2 text-xs text-text-tertiary redesign:border-[color:var(--card-border)]">
                 {t("chat.botCard.onlyRequester", { who })}
               </p>
             )}
@@ -629,16 +637,16 @@ function AskCard({
                     disabled={sending !== null}
                     onClick={() => void answer(index)}
                     className={cn(
-                      "flex max-w-full items-center gap-1.5 rounded-full border px-3 py-1.5 text-left text-[13px] font-medium text-text transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-focus-ring)] disabled:cursor-default",
+                      "flex max-w-full items-center gap-1.5 rounded-full border px-3 py-1.5 text-left text-[13px] font-medium text-text transition-colors duration-[var(--duration-fast)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-focus-ring)] disabled:cursor-default redesign:focus-visible:ring-accent",
                       sending === index
                         ? "border-accent bg-accent-soft text-on-accent-soft"
-                        : "border-border-strong bg-surface-2 hover:border-accent hover:bg-accent-soft hover:text-on-accent-soft",
+                        : "border-border-strong bg-surface-2 hover:border-accent hover:bg-accent-soft hover:text-on-accent-soft redesign:border-transparent redesign:bg-[color:var(--content-glyph-bg)] redesign:hover:border-transparent",
                       sending !== null && sending !== index && "text-text-tertiary",
                       fresh && "bot-step-in",
                     )}
                     style={{ animationDelay: `${index * STAGGER_MS}ms` }}
                   >
-                    {sending === index && <Loader2 className="h-3.5 w-3.5 shrink-0 motion-safe:animate-spin" aria-hidden />}
+                    {sending === index && <Spinner className="h-3.5 w-3.5 shrink-0 motion-safe:animate-spin" />}
                     <span className="min-w-0 break-words">{option}</span>
                   </button>
                 ) : (
@@ -646,7 +654,7 @@ function AskCard({
                     key={index}
                     className={cn(
                       "max-w-full break-words rounded-full border px-3 py-1.5 text-[13px]",
-                      card.answer === index ? "border-accent bg-accent-soft text-on-accent-soft" : "border-border text-text-secondary",
+                      card.answer === index ? "border-accent bg-accent-soft text-on-accent-soft redesign:border-transparent" : "border-border text-text-secondary redesign:border-[color:var(--card-border)]",
                     )}
                   >
                     {option}
@@ -692,10 +700,10 @@ function PlanButtons({ planId }: { planId: string }) {
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-2 border-t border-border px-3 py-2.5">
+    <div className="flex flex-wrap items-center gap-2 border-t border-border px-3 py-2.5 redesign:border-[color:var(--card-border)]">
       <Button type="button" size="sm" disabled={sending !== null} onClick={() => void decide("yes")}>
         {sending === "yes" ? (
-          <Loader2 className="mr-1.5 h-3.5 w-3.5 motion-safe:animate-spin" aria-hidden />
+          <Spinner className="mr-1.5 h-3.5 w-3.5 motion-safe:animate-spin" />
         ) : (
           <Check className="mr-1.5 h-3.5 w-3.5" aria-hidden />
         )}
@@ -735,12 +743,16 @@ export function BotNoticeRow({ notice, onDismiss }: { notice: BotNotice; onDismi
     <div
       role="status"
       data-bot-notice={notice.reason}
-      className="mx-4 mb-1 flex shrink-0 items-start gap-2 rounded-md border border-border bg-surface-2/60 px-3 py-2 text-xs text-paper/90"
+      className={cn(
+        "mx-4 mb-1 flex shrink-0 items-start gap-2 rounded-md border border-border bg-surface-2/60 px-3 py-2 text-xs text-paper/90",
+        CONTENT_CARD_REDESIGN,
+        "redesign:mx-4 redesign:mb-2 redesign:items-center redesign:gap-3 redesign:py-2.5 redesign:pl-3 redesign:pr-2 redesign:text-[0.8125rem] redesign:text-text",
+      )}
     >
-      <Clock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-paper-muted" aria-hidden />
+      <Clock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-paper-muted redesign:mt-0 redesign:h-4 redesign:w-4 redesign:text-text-secondary" aria-hidden />
       <div className="min-w-0 flex-1">
         <p>{text}</p>
-        <p className="mt-0.5 inline-flex items-center gap-1 text-[11px] text-paper-muted">
+        <p className="mt-0.5 inline-flex items-center gap-1 text-[11px] text-paper-muted redesign:text-xs redesign:text-text-tertiary">
           <EyeOff className="h-3 w-3" aria-hidden />
           {t("chat.botNotice.onlyYou")}
         </p>
@@ -748,7 +760,7 @@ export function BotNoticeRow({ notice, onDismiss }: { notice: BotNotice; onDismi
       <button
         type="button"
         onClick={onDismiss}
-        className="shrink-0 rounded p-0.5 text-paper-muted hover:bg-surface-3 hover:text-paper"
+        className="shrink-0 rounded p-0.5 text-paper-muted hover:bg-surface-3 hover:text-paper redesign:flex redesign:h-8 redesign:w-8 redesign:items-center redesign:justify-center redesign:rounded-full redesign:p-0 redesign:text-text-secondary redesign:hover:bg-[color:var(--button-ghost-hover)] redesign:hover:text-text redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent"
         aria-label={t("chat.botNotice.dismiss")}
       >
         <X className="h-3.5 w-3.5" aria-hidden />

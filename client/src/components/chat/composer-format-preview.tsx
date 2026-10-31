@@ -28,7 +28,7 @@ export function ComposerFormatPreview({
       id={COMPOSER_FORMAT_PREVIEW_ID}
       role="region"
       aria-label={label}
-      className="markdown-body mb-2 max-h-[200px] cursor-text overflow-y-auto rounded-[var(--radius-control)] bg-surface-3/60 px-3 py-2 text-[length:var(--chat-font-size)] leading-[var(--chat-line-height)] text-text/90"
+      className="markdown-body mb-2 max-h-[200px] cursor-text overflow-y-auto rounded-[var(--radius-control)] bg-surface-3/60 px-3 py-2 text-[length:var(--chat-font-size)] leading-[var(--chat-line-height)] text-text/90 redesign:rounded-[var(--radius-card)] redesign:border redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)] redesign:text-text"
       onPointerDown={(event) => {
         event.preventDefault();
         onActivate();

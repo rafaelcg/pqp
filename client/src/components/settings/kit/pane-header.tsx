@@ -1,4 +1,5 @@
 import type { ReactNode, Ref } from "react";
+import { PaneHeader } from "@/components/ui/section-header";
 
 /**
  * The pane's title, its one-line description and the header actions.
@@ -20,23 +21,14 @@ export function SettingsPaneHeader({
   actionsRef?: Ref<HTMLDivElement>;
 }) {
   return (
-    <header className="mb-8 flex items-start justify-between gap-4">
-      <div className="min-w-0">
-        <h3 className="font-display text-xl font-bold text-text">{title}</h3>
-        {description ? (
-          <p className="mt-1 text-sm text-pretty text-text-secondary">
-            {description}
-          </p>
-        ) : null}
-      </div>
-      {/* Empty until a tab portals something in; `empty:hidden` keeps an
-          empty slot from claiming the gap. */}
-      <div
-        ref={actionsRef}
-        className="flex shrink-0 items-center gap-2 empty:hidden"
-      >
-        {actions}
-      </div>
-    </header>
+    <PaneHeader
+      title={title}
+      description={description}
+      actions={actions}
+      actionsRef={actionsRef}
+      className="mb-8 gap-4"
+      titleClassName="font-display text-xl font-bold text-text"
+      descriptionClassName="mt-1 text-sm text-pretty text-text-secondary"
+    />
   );
 }

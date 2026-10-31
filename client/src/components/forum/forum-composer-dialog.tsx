@@ -840,8 +840,8 @@ export function ForumComposerDialog({
             aria-invalid={showErrors && titleMissing ? true : undefined}
             aria-describedby={showErrors && titleMissing ? titleErrorId : undefined}
             className={cn(
-              "h-auto border-0 border-b border-border/60 bg-transparent px-0 py-2 forum-display text-2xl font-bold text-text shadow-none placeholder:font-medium placeholder:text-text-secondary rounded-none focus-visible:border-text focus-visible:ring-0 focus-visible:ring-offset-0",
-              showErrors && titleMissing && "border-danger",
+              "h-auto border-0 border-b border-border/60 bg-transparent px-0 py-2 forum-display text-2xl font-bold text-text shadow-none placeholder:font-medium placeholder:text-text-secondary rounded-none focus-visible:border-text focus-visible:ring-0 focus-visible:ring-offset-0 redesign:border-[color:var(--card-border)] redesign:focus-visible:border-[color:var(--forum-card-open-border)]",
+              showErrors && titleMissing && "border-danger redesign:border-danger",
             )}
           />
           {showErrors && titleMissing && (
@@ -852,7 +852,7 @@ export function ForumComposerDialog({
           {showSimilar && (
             <div
               className={cn(
-                "mt-3 overflow-hidden rounded-[var(--radius-card)] bg-surface-2 animate-door-reveal transition-opacity duration-[var(--duration-fast)]",
+                "mt-3 overflow-hidden rounded-[var(--radius-card)] bg-surface-2 animate-door-reveal transition-opacity duration-[var(--duration-fast)] redesign:border redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)]",
                 similarLoading && "opacity-60",
               )}
             >
@@ -1013,6 +1013,7 @@ export function ForumComposerDialog({
                       on
                         ? "bg-text font-semibold text-surface-0"
                         : "text-text-secondary ring-1 ring-inset ring-border hover:bg-surface-3 hover:text-text",
+                      !on && "redesign:bg-[color:var(--segmented-bg)] redesign:ring-0 redesign:hover:bg-[color:var(--segmented-thumb)]",
                       disabled && "cursor-not-allowed opacity-40",
                     )}
                   >

@@ -8,6 +8,7 @@ import { useTranslation } from "@/lib/i18n";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { cn } from "@/lib/utils";
 import { STAGE_LAYER } from "@/lib/stage-layers";
+import { SHEET_SAFE_BOTTOM, SHEET_SCRIM, SHEET_SURFACE_PHONE } from "@/components/ui/sheet";
 
 /**
  * Full-bleed HLS video for a live stream's audience: no roster, no mute or
@@ -167,11 +168,18 @@ export function CinemaStage({
       )}
       {sheetOpen && (
         <div
-          className={cn("fixed inset-0 flex items-end justify-center bg-ink/60 sm:items-center", STAGE_LAYER.menus)}
+          className={cn("fixed inset-0 flex items-end justify-center bg-ink/60 sm:items-center", SHEET_SCRIM, STAGE_LAYER.menus)}
           onClick={() => setSheetOpen(false)}
         >
           <div
-            className="w-full max-w-sm rounded-t-xl bg-ink-2 p-3 sm:rounded-xl"
+            className={cn(
+              "w-full max-w-sm rounded-t-xl bg-ink-2 p-3 sm:rounded-xl",
+              // A sheet on a phone; the card from `sm` up moves with `f-call`.
+              SHEET_SURFACE_PHONE,
+              // Clear of the home indicator on a phone, as the dialog footer
+              // and the launcher already are.
+              SHEET_SAFE_BOTTOM,
+            )}
             onClick={(event) => event.stopPropagation()}
           >
             <p className="mb-2 px-1 text-sm font-semibold text-paper">

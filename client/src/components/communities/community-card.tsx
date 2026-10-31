@@ -1,5 +1,7 @@
 import { publicCommunityUrl, type CommunitySummary } from "@pqp/shared";
 import { Check, Flag, Link2, Users } from "lucide-react";
+import { Check as CheckGlyph, Flag as FlagGlyph, LinkSimple, UsersThree } from "@phosphor-icons/react";
+import { IconSwap } from "@/components/ui/icon";
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -92,6 +94,10 @@ function tintStyle(hue: number, strength: number): CSSProperties {
   } as CSSProperties;
 }
 
+/** The share and report buttons over the header: 28px round glass, the control-over-a-picture look. */
+const CARD_CORNER_BUTTON_REDESIGN =
+  "redesign:grid redesign:h-7 redesign:w-7 redesign:place-items-center redesign:rounded-full redesign:p-0 redesign:bg-[color:var(--glass-bg)] redesign:text-[color:var(--glass-fg)] redesign:ring-1 redesign:ring-[color:var(--glass-border)] redesign:hover:bg-[color:color-mix(in_oklab,var(--glass-bg)_80%,var(--glass-fg))] redesign:focus-visible:ring-2 redesign:focus-visible:ring-[color:var(--list-row-ring)]";
+
 export function CommunityCard({
   community,
   joining,
@@ -150,7 +156,7 @@ export function CommunityCard({
 
   return (
     <li
-      className="group relative flex flex-col overflow-hidden rounded-2xl border border-ink-4 bg-ink-2 transition duration-200 hover:-translate-y-0.5 hover:border-signal/45 hover:shadow-[0_14px_36px_var(--glow-accent)] focus-within:border-signal/45"
+      className="group relative flex flex-col overflow-hidden rounded-2xl border border-ink-4 bg-ink-2 transition duration-200 hover:-translate-y-0.5 hover:border-signal/45 hover:shadow-[0_14px_36px_var(--glow-accent)] focus-within:border-signal/45 redesign:rounded-[var(--radius-card)] redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--community-card-bg)] redesign:hover:translate-y-0 redesign:hover:shadow-none redesign:hover:border-[color:color-mix(in_oklab,var(--color-accent)_40%,transparent)] redesign:focus-within:border-[color:color-mix(in_oklab,var(--color-accent)_40%,transparent)]"
       data-community={community.id}
     >
       {/* The header. Short enough that it never pushes the name below the fold
@@ -179,11 +185,10 @@ export function CommunityCard({
             something to sit against rather than a hard seam. */}
         <span
           aria-hidden="true"
-          className="absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-ink-2 to-transparent"
+          className="absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-ink-2 to-transparent redesign:from-[color:var(--community-card-bg)]"
         />
         <span
-          aria-hidden="true"
-          className="absolute left-3 top-3 flex items-center gap-1.5 rounded-full bg-ink/55 px-2.5 py-1 text-[11px] font-semibold text-paper backdrop-blur-sm"
+          className="absolute left-3 top-3 flex items-center gap-1.5 rounded-full bg-ink/55 px-2.5 py-1 text-[11px] font-semibold text-paper backdrop-blur-sm redesign:h-[var(--badge-h)] redesign:px-[var(--badge-px)] redesign:py-0 redesign:text-[length:var(--badge-text)] redesign:bg-[color:var(--glass-bg)] redesign:text-[color:var(--glass-fg)] redesign:ring-1 redesign:ring-[color:var(--glass-border)]"
         >
           <span aria-hidden="true">{CATEGORY_EMOJI[community.category]}</span>
           {t(`communities.category.${community.category}` as never)}
@@ -204,13 +209,15 @@ export function CommunityCard({
                 shared
                   ? "text-success"
                   : "text-paper-muted hover:text-signal",
+                CARD_CORNER_BUTTON_REDESIGN,
+                shared ? "redesign:text-success" : "redesign:hover:text-[color:var(--glass-fg)]",
               )}
               onClick={share}
             >
               {shared ? (
-                <Check aria-hidden="true" className="h-3.5 w-3.5" />
+                <IconSwap off={Check} on={CheckGlyph} kind="symbol" offClassName="h-3.5 w-3.5" className="h-4 w-4" />
               ) : (
-                <Link2 aria-hidden="true" className="h-3.5 w-3.5" />
+                <IconSwap off={Link2} on={LinkSimple} kind="symbol" offClassName="h-3.5 w-3.5" className="h-4 w-4" />
               )}
             </button>
           )}
@@ -218,10 +225,14 @@ export function CommunityCard({
             type="button"
             title={t("communities.report")}
             aria-label={`${t("communities.report")}: ${community.name}`}
-            className="rounded-lg bg-ink/50 p-1.5 text-paper-muted backdrop-blur-sm transition hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+            className={cn(
+              "rounded-lg bg-ink/50 p-1.5 text-paper-muted backdrop-blur-sm transition hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
+              CARD_CORNER_BUTTON_REDESIGN,
+              "redesign:hover:text-danger",
+            )}
             onClick={onReport}
           >
-            <Flag aria-hidden="true" className="h-3.5 w-3.5" />
+            <IconSwap off={Flag} on={FlagGlyph} kind="object" offClassName="h-3.5 w-3.5" className="h-4 w-4" />
           </button>
         </div>
       </div>
@@ -233,7 +244,7 @@ export function CommunityCard({
             sliced in half by the banner it is supposed to overlap. */}
         <span
           aria-hidden="true"
-          className="relative -mt-7 flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-2xl font-display text-base font-bold text-paper ring-4 ring-ink-2"
+          className="relative -mt-7 flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-2xl font-display text-base font-bold text-paper ring-4 ring-ink-2 redesign:rounded-full redesign:ring-[color:var(--community-card-bg)]"
           style={showIcon ? undefined : tintStyle(hue, 55)}
         >
           {iconSrc && (
@@ -254,12 +265,12 @@ export function CommunityCard({
           {!showIcon && monogram(community.name)}
         </span>
 
-        <h3 className="mt-3 truncate font-display text-base font-bold text-paper">
+        <h3 className="mt-3 truncate font-display text-base font-bold text-paper redesign:font-[family-name:var(--type-title-font)] redesign:text-text">
           {community.name}
         </h3>
 
-        <p className="mt-1 flex items-center gap-1.5 text-xs text-paper-muted">
-          <Users aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
+        <p className="mt-1 flex items-center gap-1.5 text-xs text-paper-muted redesign:text-text-secondary">
+          <IconSwap off={Users} on={UsersThree} kind="object" offClassName="h-3.5 w-3.5 shrink-0" className="h-3.5 w-3.5 shrink-0" />
           {/* Tabular figures so a column of counts lines up rather than
               shimmering as the digits change width. */}
           <span className="tabular-nums">
@@ -273,7 +284,7 @@ export function CommunityCard({
         {/* Clamped to two lines rather than truncated to one: a tagline is the
             joke, and half a joke is worse than none. */}
         {community.tagline && (
-          <p className="mt-2 line-clamp-2 text-sm leading-snug text-paper-muted">
+          <p className="mt-2 line-clamp-2 text-sm leading-snug text-paper-muted redesign:text-text-secondary">
             {community.tagline}
           </p>
         )}
@@ -296,7 +307,7 @@ export function CommunityCard({
               glance. */}
           {community.joined && (
             <span className="flex items-center gap-1 text-xs font-medium text-success">
-              <Check aria-hidden="true" className="h-3.5 w-3.5" />
+              <IconSwap off={Check} on={CheckGlyph} kind="symbol" offClassName="h-3.5 w-3.5" className="h-3.5 w-3.5" />
               {t("communities.joinedBadge")}
             </span>
           )}
@@ -318,18 +329,23 @@ export function CommunityCardSkeleton({ className }: { className?: string }) {
     <li
       className={cn(
         "flex flex-col overflow-hidden rounded-2xl border border-ink-4 bg-ink-2",
+        "redesign:rounded-[var(--radius-card)] redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--community-card-bg)]",
         className,
       )}
       aria-hidden="true"
     >
-      <Skeleton className="h-20 w-full rounded-none" />
+      <div className="relative">
+        <Skeleton className="h-20 w-full rounded-none" />
+        {/* The real card's fade, so the stub has no hard seam under the redesign. */}
+        <span aria-hidden="true" className="absolute inset-x-0 bottom-0 hidden h-10 bg-gradient-to-t from-[color:var(--community-card-bg)] to-transparent redesign:block" />
+      </div>
       <div className="px-4 pb-4">
-        <Skeleton className="-mt-7 h-14 w-14 rounded-2xl ring-4 ring-ink-2" />
+        <Skeleton className="-mt-7 h-14 w-14 rounded-2xl ring-4 ring-ink-2 redesign:rounded-full redesign:ring-[color:var(--community-card-bg)]" />
         <Skeleton className="mt-3 h-4 w-2/3" />
         <Skeleton className="mt-2 h-3 w-24" />
         <Skeleton className="mt-3 h-3 w-full" />
         <Skeleton className="mt-1.5 h-3 w-4/5" />
-        <Skeleton className="mt-4 h-8 w-24 rounded-md" />
+        <Skeleton className="mt-4 h-8 w-24 rounded-md redesign:h-[var(--control-sm)] redesign:rounded-full" />
       </div>
     </li>
   );

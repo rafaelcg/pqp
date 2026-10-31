@@ -1,5 +1,15 @@
 import type { Server, UserStatus } from "@pqp/shared";
+import { cn } from "@/lib/utils";
+import { CARD_SURFACE } from "@/components/ui/card";
 import { Check, Hand, Link2, UserPlus } from "lucide-react";
+import {
+  Check as CheckBold,
+  HandWaving as HandWavingFill,
+  LinkSimple as LinkBold,
+  UserPlus as UserPlusFill,
+} from "@phosphor-icons/react";
+import { IconSwap } from "@/components/ui/icon";
+import { SECTION_LABEL_REDESIGN } from "@/components/ui/section-header";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { StatusDot } from "@/components/user/status-dot";
@@ -128,19 +138,19 @@ export function ConversationsEmpty({
           <UserAvatar
             name={memberDisplayName(faces[0].member)}
             avatarUrl={faces[0].member.avatarUrl}
-            className="h-12 w-12 ring-4 ring-surface-0"
+            className="h-12 w-12 ring-4 ring-surface-0 redesign:ring-pane-main"
             fallbackClassName="bg-surface-3 text-sm font-semibold text-text"
             rounded="full"
           />
         )}
-        <span className="z-10 -mx-2 flex h-14 w-14 items-center justify-center rounded-full bg-accent-soft text-on-accent-soft ring-4 ring-surface-0">
-          <Hand className="h-6 w-6" />
+        <span className="z-10 -mx-2 flex h-14 w-14 items-center justify-center rounded-full bg-accent-soft text-on-accent-soft ring-4 ring-surface-0 redesign:ring-pane-main">
+          <IconSwap off={Hand} on={HandWavingFill} size="lg" offClassName="h-6 w-6" />
         </span>
         {faces[1] && (
           <UserAvatar
             name={memberDisplayName(faces[1].member)}
             avatarUrl={faces[1].member.avatarUrl}
-            className="h-12 w-12 ring-4 ring-surface-0"
+            className="h-12 w-12 ring-4 ring-surface-0 redesign:ring-pane-main"
             fallbackClassName="bg-surface-3 text-sm font-semibold text-text"
             rounded="full"
           />
@@ -154,7 +164,7 @@ export function ConversationsEmpty({
       </p>
       <div className="mt-5 flex flex-wrap justify-center gap-2">
         <Button onClick={onAddFriend}>
-          <UserPlus className="h-4 w-4" aria-hidden="true" />
+          <IconSwap off={UserPlus} on={UserPlusFill} offClassName="h-4 w-4" />
           {t("friends.addFriend")}
         </Button>
         <Button
@@ -168,16 +178,16 @@ export function ConversationsEmpty({
           }}
         >
           {copied ? (
-            <Check className="h-4 w-4 animate-icon-swap" aria-hidden="true" />
+            <IconSwap off={Check} on={CheckBold} kind="symbol" offClassName="h-4 w-4 animate-icon-swap" className="animate-icon-swap" />
           ) : (
-            <Link2 className="h-4 w-4" aria-hidden="true" />
+            <IconSwap off={Link2} on={LinkBold} kind="symbol" offClassName="h-4 w-4" />
           )}
           {copied ? t("conversations.emptyHero.copied") : t("conversations.emptyHero.invite")}
         </Button>
       </div>
       {suggestions.length > 0 && (
-        <div className="mt-6 w-full rounded-[var(--radius-card)] border border-border bg-surface-card p-3 text-left">
-          <h3 className="px-1 pb-2 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
+        <div className={cn(CARD_SURFACE, "mt-6 w-full p-3 text-left")}>
+          <h3 className={cn("px-1 pb-2 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary", SECTION_LABEL_REDESIGN)}>
             {t("conversations.emptyHero.suggestions")}
           </h3>
           <ul>
@@ -198,7 +208,7 @@ export function ConversationsEmpty({
                   {member.status && (
                     <StatusDot
                       status={member.status}
-                      className="absolute -bottom-0.5 -right-0.5 bg-surface-card"
+                      className="absolute -bottom-0.5 -right-0.5 redesign:bottom-0 redesign:right-0 bg-surface-card"
                       ringClassName="rounded-full ring-2 ring-surface-card"
                     />
                   )}
@@ -207,10 +217,10 @@ export function ConversationsEmpty({
                   <span className="block truncate text-sm font-medium text-text">
                     {memberDisplayName(member)}
                   </span>
-                  <span className="block truncate text-xs text-text-tertiary">{serverName}</span>
+                  <span className="block truncate text-xs text-text-tertiary redesign:text-[13px] redesign:text-text-secondary">{serverName}</span>
                 </span>
                 <Button size="sm" variant="secondary" onClick={() => onSayHi(member.id)}>
-                  <Hand className="h-3.5 w-3.5" aria-hidden="true" />
+                  <IconSwap off={Hand} on={HandWavingFill} offClassName="h-3.5 w-3.5" />
                   {t("conversations.emptyHero.sayHi")}
                 </Button>
               </li>

@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
+import { Tabs } from "@/components/ui/tabs";
 import { useAppColumn } from "@/components/apps/app-column";
 import {
   appColumnStageTarget,
@@ -1111,34 +1112,19 @@ function ChatPaneHeader({
     >
       <span className="flex min-w-0 flex-1 items-center gap-1 truncate text-xs">
         {header.tabs ? (
-          <span role="tablist" className="flex shrink-0 items-center gap-0.5">
-            {header.tabs.items.map((tab) => {
-              const active = tab.id === header.tabs?.active;
-              return (
-                <button
-                  key={tab.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={active}
-                  data-watch-party-panel-tab={tab.id}
-                  className={cn(
-                    "rounded-[var(--radius-control)] px-2 py-0.5 font-semibold transition-colors",
-                    active
-                      ? "bg-surface-2 text-paper"
-                      : "text-paper-muted hover:bg-surface-2 hover:text-paper",
-                  )}
-                  onClick={() => header.tabs?.onSelect(tab.id)}
-                >
-                  {tab.label}
-                  {tab.count !== undefined && tab.count > 0 && (
-                    <span className="ml-1 rounded-full bg-signal/20 px-1.5 text-[10px] text-signal">
-                      {tab.count}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </span>
+          <Tabs
+            variant="pill"
+            size="xs"
+            label={header.title}
+            value={header.tabs.active}
+            onValueChange={(id) => header.tabs?.onSelect(id)}
+            items={header.tabs.items.map((tab) => ({
+              id: tab.id,
+              label: tab.label,
+              count: tab.count,
+              data: { "data-watch-party-panel-tab": tab.id },
+            }))}
+          />
         ) : (
           <span className="font-semibold text-paper">{header.title}</span>
         )}

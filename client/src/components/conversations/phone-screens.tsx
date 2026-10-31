@@ -1,4 +1,5 @@
 import type { Server } from "@pqp/shared";
+import { CARD_LIST, CARD_ROW_HOVER, CARD_SURFACE } from "@/components/ui/card";
 import {
   ChevronRight,
   CircleHelp,
@@ -8,13 +9,25 @@ import {
   Sparkles,
   UserPen,
 } from "lucide-react";
+import {
+  CaretRight as CaretRightBold,
+  Compass as CompassFill,
+  GearSix as GearFill,
+  PencilSimpleLine as PencilFill,
+  Plus as PlusBold,
+  Question as QuestionFill,
+  Sparkle as SparkleFill,
+} from "@phosphor-icons/react";
 import type { ReactNode } from "react";
-import { formatBadgeCount, type UnreadState } from "@/components/layout/channel-list";
+import { IconSwap } from "@/components/ui/icon";
+import { PANE_HEADER_ACTION_REDESIGN } from "@/components/ui/pane-header";
+import { type UnreadState } from "@/components/layout/channel-list";
 import { ServerIcon } from "@/components/layout/server-identity";
 import { UpdateIndicator } from "@/components/layout/update-indicator";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { CountBadge } from "@/components/ui/count-badge";
 
 /**
  * The phone shell's two full screens beside Conversas (the list itself is
@@ -24,19 +37,35 @@ import { cn } from "@/lib/utils";
  */
 
 const SCREEN =
-  "fixed inset-x-0 top-0 bottom-[calc(4rem+env(safe-area-inset-bottom))] z-30 flex flex-col bg-surface-1 animate-fade-in md:hidden";
+  "fixed inset-x-0 top-0 bottom-[calc(4rem+env(safe-area-inset-bottom))] z-30 flex flex-col bg-surface-1 animate-fade-in md:hidden redesign:bg-pane-side";
 
 function ScreenHeader({ title, actions }: { title: string; actions?: ReactNode }) {
   return (
-    <div className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-border pl-4 pr-2 pt-[env(safe-area-inset-top)]">
-      <h2 className="truncate font-display text-lg font-semibold text-text">{title}</h2>
+    <div className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-border pl-4 pr-2 pt-[env(safe-area-inset-top)] redesign:border-b-0 redesign:pl-[calc(var(--list-row-px)+0.75rem)] redesign:pr-3">
+      {/* The Conversas tab's title, so the three tabs read as one bar. */}
+      <h2 className="truncate font-display text-lg font-semibold text-text redesign:text-[length:var(--pane-bar-title-size)] redesign:tracking-[-0.012em] redesign:max-sm:text-xl">{title}</h2>
       <div className="flex items-center gap-0.5">{actions}</div>
     </div>
   );
 }
 
-const ICON_BUTTON =
-  "flex h-10 w-10 items-center justify-center rounded-[var(--radius-control)] text-text-tertiary hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring";
+const ICON_BUTTON = cn(
+  "flex h-10 w-10 items-center justify-center rounded-[var(--radius-control)] text-text-tertiary hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
+  PANE_HEADER_ACTION_REDESIGN,
+  "redesign:focus-visible:ring-offset-pane-side",
+);
+
+/*
+ * THE REDESIGN (docs/redesign/LOG.md, `m-shell`): the screens sit on the
+ * side pane, their headers lose the rule, a server is a list-row pill with
+ * the rail's round tile, and the glyphs are Phosphor. Redesign-only classes
+ * after the old ones, so the toggle off changes nothing.
+ */
+const SERVER_ROW_REDESIGN =
+  "redesign:min-h-14 redesign:rounded-[var(--list-row-radius)] redesign:py-1.5 redesign:pl-2 redesign:pr-[var(--list-row-px)] redesign:hover:bg-[color:var(--list-row-hover)] redesign:focus-visible:ring-[color:var(--list-row-ring)]";
+/** The rail's server tile: round, on the tile tint. */
+const SERVER_TILE_REDESIGN =
+  "redesign:h-11 redesign:w-11 redesign:rounded-full redesign:bg-[color:var(--phone-server-tile)] redesign:group-hover:bg-[color:var(--phone-server-tile-hover)]";
 
 export function PhoneServersScreen({
   servers,
@@ -73,7 +102,7 @@ export function PhoneServersScreen({
                 aria-label={t("communities.title")}
                 onClick={onOpenCommunities}
               >
-                <Compass className="h-5 w-5" aria-hidden="true" />
+                <IconSwap off={Compass} on={CompassFill} kind="symbol" size="md" offClassName="h-5 w-5" />
               </button>
             )}
             <button
@@ -82,12 +111,12 @@ export function PhoneServersScreen({
               aria-label={t("empty.createServer")}
               onClick={onCreateServer}
             >
-              <Plus className="h-5 w-5" aria-hidden="true" />
+              <IconSwap off={Plus} on={PlusBold} kind="symbol" size="md" offClassName="h-5 w-5" />
             </button>
           </>
         }
       />
-      <div className="min-h-0 flex-1 overflow-y-auto p-2">
+      <div className="min-h-0 flex-1 overflow-y-auto p-2 redesign:px-3 redesign:pt-1">
         {servers.map((server) => {
           const unread = serverUnread[server.id];
           const mentions = unread?.mentions ?? 0;
@@ -98,9 +127,9 @@ export function PhoneServersScreen({
               type="button"
               data-phone-server={server.id}
               onClick={() => onSelectServer(server.id)}
-              className="flex min-h-16 w-full items-center gap-3 rounded-[var(--radius-card)] px-2 py-2 text-left hover:bg-surface-2/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring"
+              className={cn("group flex min-h-16 w-full items-center gap-3 rounded-[var(--radius-card)] px-2 py-2 text-left hover:bg-surface-2/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring", SERVER_ROW_REDESIGN, "redesign:mb-0.5")}
             >
-              <span className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-surface-3 font-display text-sm font-bold text-text">
+              <span className={cn("flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-surface-3 font-display text-sm font-bold text-text", SERVER_TILE_REDESIGN)}>
                 <ServerIcon name={server.name} iconUrl={server.iconUrl} />
               </span>
               <span className="min-w-0 flex-1">
@@ -108,6 +137,7 @@ export function PhoneServersScreen({
                   className={cn(
                     "block truncate text-[15px]",
                     (unread?.count ?? 0) > 0 ? "font-semibold text-text" : "font-medium text-text",
+                    (unread?.count ?? 0) === 0 && "redesign:text-[color:var(--list-row-text)]",
                   )}
                 >
                   {server.name}
@@ -120,11 +150,13 @@ export function PhoneServersScreen({
                 )}
               </span>
               {mentions > 0 ? (
-                <span className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-danger px-1 text-[10px] font-bold leading-none tabular-nums text-on-danger">
-                  {formatBadgeCount(mentions)}
-                </span>
+                <CountBadge
+                  count={mentions}
+                  className="redesign:h-[var(--count-badge-h)] redesign:min-w-[var(--count-badge-h)] redesign:py-0 redesign:text-[length:var(--count-badge-text)] redesign:tabular-nums"
+                />
               ) : (unread?.count ?? 0) > 0 ? (
-                <span className="h-2 w-2 rounded-full bg-text" aria-label={t("chrome.unreadMessagesSr")} />
+                // Under the redesign, the channel row's end pip.
+                <span className="h-2 w-2 rounded-full bg-text redesign:h-[var(--list-row-pip)] redesign:w-[var(--list-row-pip)] redesign:bg-indicator" aria-label={t("chrome.unreadMessagesSr")} />
               ) : null}
             </button>
           );
@@ -132,14 +164,14 @@ export function PhoneServersScreen({
         <button
           type="button"
           onClick={onJoinServer}
-          className="mt-1 flex min-h-16 w-full items-center gap-3 rounded-[var(--radius-card)] px-2 py-2 text-left hover:bg-surface-2/60"
+          className={cn("mt-1 flex min-h-16 w-full items-center gap-3 rounded-[var(--radius-card)] px-2 py-2 text-left hover:bg-surface-2/60", SERVER_ROW_REDESIGN, "redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-inset")}
         >
-          <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-dashed border-border-strong text-text-tertiary">
-            <Plus className="h-5 w-5" aria-hidden="true" />
+          <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-dashed border-border-strong text-text-tertiary redesign:h-11 redesign:w-11 redesign:rounded-full redesign:border-[color:var(--sidebar-invite-border)] redesign:text-text-secondary">
+            <IconSwap off={Plus} on={PlusBold} kind="symbol" size="md" offClassName="h-5 w-5" />
           </span>
           <span className="min-w-0 flex-1">
             <span className="block text-[15px] font-medium text-text">{t("phoneTabs.createOrJoin")}</span>
-            <span className="block text-xs text-text-tertiary">{t("phoneTabs.createOrJoinBody")}</span>
+            <span className="block text-xs text-text-tertiary redesign:text-[13px] redesign:text-text-secondary">{t("phoneTabs.createOrJoinBody")}</span>
           </span>
         </button>
       </div>
@@ -173,11 +205,11 @@ export function PhoneYouScreen({
         title={t("phoneTabs.tu")}
         actions={<UpdateIndicator variant="row" onOpenWhatsNew={onOpenWhatsNew} className="mr-1" />}
       />
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5">
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 redesign:px-3">
         <button
           type="button"
           onClick={onOpenProfile}
-          className="flex w-full items-center gap-4 rounded-[var(--radius-card)] text-left"
+          className="flex w-full items-center gap-4 rounded-[var(--radius-card)] text-left redesign:rounded-full redesign:pl-2 redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-offset-4 redesign:focus-visible:ring-offset-pane-side redesign:focus-visible:ring-[color:var(--list-row-ring)]"
         >
           <UserAvatar
             name={me.displayName}
@@ -190,26 +222,26 @@ export function PhoneYouScreen({
             <span className="block truncate font-display text-xl font-semibold text-text">
               {me.displayName}
             </span>
-            <span className="block truncate text-sm text-text-tertiary">
+            <span className="block truncate text-sm text-text-tertiary redesign:text-text-secondary">
               {me.handle ? `@${me.handle}` : (me.tag ?? "")}
             </span>
           </span>
         </button>
-        <div className="mt-6 overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface-card">
-          <YouRow icon={<UserPen className="h-5 w-5" aria-hidden="true" />} label={t("phoneTabs.editProfile")} onClick={onOpenProfile} />
-          <YouRow icon={<Settings className="h-5 w-5" aria-hidden="true" />} label={t("phoneTabs.settings")} onClick={onOpenSettings} />
+        <div className={cn(CARD_SURFACE, CARD_LIST, "mt-6")}>
+          <YouRow icon={<IconSwap off={UserPen} on={PencilFill} size="md" offClassName="h-5 w-5" />} label={t("phoneTabs.editProfile")} onClick={onOpenProfile} />
+          <YouRow icon={<IconSwap off={Settings} on={GearFill} size="md" offClassName="h-5 w-5" />} label={t("phoneTabs.settings")} onClick={onOpenSettings} />
           {onOpenWhatsNew && (
             <YouRow
-              icon={<Sparkles className="h-5 w-5" aria-hidden="true" />}
+              icon={<IconSwap off={Sparkles} on={SparkleFill} size="md" offClassName="h-5 w-5" />}
               label={t("phoneTabs.whatsNew")}
               pip={whatsNewUnread}
               onClick={onOpenWhatsNew}
             />
           )}
-          <YouRow icon={<CircleHelp className="h-5 w-5" aria-hidden="true" />} label={t("phoneTabs.help")} onClick={onOpenHelp} />
+          <YouRow icon={<IconSwap off={CircleHelp} on={QuestionFill} size="md" offClassName="h-5 w-5" />} label={t("phoneTabs.help")} onClick={onOpenHelp} />
         </div>
       </div>
-      <div className="shrink-0">{footer}</div>
+      <div className="shrink-0 redesign:px-1 redesign:pb-1.5">{footer}</div>
     </section>
   );
 }
@@ -229,12 +261,12 @@ function YouRow({
     <button
       type="button"
       onClick={onClick}
-      className="flex min-h-12 w-full items-center gap-3 border-b border-border px-4 text-left last:border-b-0 hover:bg-surface-2/60"
+      className={cn("flex min-h-12 w-full items-center gap-3 px-4 text-left hover:bg-surface-2/60", CARD_ROW_HOVER, "redesign:min-h-[3.25rem] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-inset redesign:focus-visible:ring-[color:var(--list-row-ring)]")}
     >
-      <span className="text-text-tertiary">{icon}</span>
+      <span className="text-text-tertiary redesign:text-[color:var(--list-row-icon)]">{icon}</span>
       <span className="min-w-0 flex-1 text-[15px] text-text">{label}</span>
-      {pip && <span className="h-2 w-2 rounded-full bg-accent" aria-hidden="true" />}
-      <ChevronRight className="h-4 w-4 text-text-tertiary" aria-hidden="true" />
+      {pip && <span className="h-2 w-2 rounded-full bg-accent redesign:h-[var(--list-row-pip)] redesign:w-[var(--list-row-pip)]" aria-hidden="true" />}
+      <IconSwap off={ChevronRight} on={CaretRightBold} kind="symbol" offClassName="h-4 w-4 text-text-tertiary" className="text-text-tertiary" />
     </button>
   );
 }

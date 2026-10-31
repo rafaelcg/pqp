@@ -784,6 +784,24 @@ nothing persists (`lib/hints.ts`), so set `localStorage["pqp:hints-persist"] =
 browser (`navigator.webdriver`, Playwright) never sees a hint at all.
 
 
+## `redesign` (global, client presentation only)
+
+The new look, built element by element (`docs/redesign/LOG.md`). Born as a
+flag, default off (`REDESIGN`, `exactTrue`), global: a look belongs to the
+person's screen, and a DM has no server to override it for. Served as
+`redesign` on `GET /api/onboarding/config` and applied by
+`client/src/lib/redesign.ts`, through the same loader as the hint switches.
+
+The flag is only the default for people who never chose. The person's own
+switch, Settings > Beta > Novo visual (`pqp-redesign` on the device), wins over
+it in both directions, and `?redesign=1` or `?redesign=0` on the URL wins over
+both for one page (the design council capture uses it). On, `<html>` carries
+`data-redesign` and the `redesign:` Tailwind variant applies. Off, nothing on
+screen differs.
+
+Do not turn it on until the redesign has shipped. Merging the change that adds
+it restarts the API (`restarts-api`): it touches `server/`.
+
 ## `conversations_home` and `conversations_home_phone_tabs` (global, client presentation only)
 
 Conversas, the DM redesign: conversations become a first-class place instead of

@@ -74,6 +74,84 @@
   --color-success-soft: oklch(0.3 0.06 150);
   --color-on-success-soft: oklch(0.84 0.13 150);
 
+  /*
+   * SHELL AND ROW ROLES, added for the redesign (docs/redesign/LOG.md) and
+   * read only by `redesign:` classes, so the toggle off draws nothing new.
+   * Every one is DERIVED from roles each look already sets, so all ten looks,
+   * the custom accent and high contrast get them without restating anything.
+   * The Clássico look under the redesign sets its own values further down.
+   *
+   *   canvas       the frame the panes float on, a step below everything.
+   *                Dark mixes surface-0 toward black; light mixes the panel
+   *                toward the text (in the light block), so the step is the
+   *                same size in every look instead of whatever each rail is.
+   *   pane-side    the channel list, the member list, the DM list.
+   *   pane-main    the conversation. ONE RULE: it is the brightest pane, in
+   *                dark and in light, as in direction B. Dark takes surface-1
+   *                and sets the side pane between it and surface-0; light
+   *                (in the light block) takes surface-0, the page white.
+   *   row-hover    a list row under the pointer. A fill, never a colour change:
+   *                the brightest pane pulled 6% toward the text in dark (the
+   *                side pane 5% in light), so it differs from both panes in
+   *                every look and the dim text on it stays readable.
+   *   row-selected the current row. The accent's soft fill, so it retints with
+   *                the accent (deepened toward the accent in light, where the
+   *                soft fill alone is too close to a hover). Its label is the
+   *                accent as text in dark, as in direction B, and the body
+   *                text in light, where a green label on green is too quiet.
+   *   accent-text  the accent used AS TEXT (a link, "Na call", a count). The
+   *                bright accent is about 2:1 on a light page; this is the
+   *                soft pair's foreground pulled a little toward the text,
+   *                which clears 4.5 everywhere.
+   *   success-text the same idea for success.
+   *   mention-*    a message that pings you: the row wash, its left bar, and
+   *                the @name chip. Opaque, so the bench can measure the text
+   *                on it; an alpha wash of lime reads khaki on dark.
+   *
+   * Unread is not a colour: it is the body text colour, weight 600 and the
+   * indicator pip, so it can never be confused with hover or selected.
+   */
+  --color-canvas: color-mix(in oklab, var(--color-surface-0) 75%, oklch(0 0 0));
+  --color-pane-side: color-mix(in oklab, var(--color-surface-1) 60%, var(--color-surface-0));
+  --color-pane-main: var(--color-surface-1);
+  --color-row-hover: color-mix(in oklab, var(--color-pane-main) 94%, var(--color-text));
+  --color-row-selected: var(--color-accent-soft);
+  --color-on-row-selected: var(--color-accent-text);
+  --color-accent-text: color-mix(
+    in oklab,
+    var(--color-on-accent-soft) 85%,
+    var(--color-text)
+  );
+  --color-success-text: color-mix(
+    in oklab,
+    var(--color-on-success-soft) 85%,
+    var(--color-text)
+  );
+  --color-mention-row: color-mix(
+    in oklab,
+    var(--color-accent-soft) 45%,
+    var(--color-pane-main)
+  );
+  --color-mention-bar: var(--color-accent);
+  --color-mention-chip: var(--color-accent-soft);
+  --color-on-mention-chip: var(--color-on-accent-soft);
+  /* The tooltip bubble under the redesign. In dark, below the deepest
+     surface, so it parts from every pane and dialog by its fill and needs
+     only a soft edge (a strong one read as an outlined button); inverted in
+     light, where a white bubble would vanish into a white page. Unused with
+     the toggle off. */
+  --color-tooltip: color-mix(in oklab, var(--color-surface-0) 55%, oklch(0 0 0));
+  --color-tooltip-border: color-mix(in oklab, var(--color-text) 18%, var(--color-tooltip));
+  --color-on-tooltip: var(--color-text);
+  --color-tooltip-detail: color-mix(in oklab, var(--color-on-tooltip) 80%, var(--color-tooltip));
+  /* A text field's fill under the redesign: the deepest surface, a well
+     below panes and dialogs. In light a faint tint of the text, so a field
+     still reads on the white conversation. Unused with the toggle off. */
+  --color-field: var(--color-surface-0);
+  /* A field's edge: 3:1 against its fill and against a dialog, the floor for
+     the boundary of a control (WCAG 1.4.11). */
+  --color-field-border: color-mix(in oklab, var(--color-border-strong) 50%, var(--color-text));
+
   /* Code sits BELOW the message list in dark and would be the page itself in
      light, so it is a role rather than an alias for a surface. */
   --color-code-bg: oklch(0.16 0.012 250);
@@ -235,6 +313,14 @@
   --radius-card: 0.5rem;
   --radius-panel: 1rem;
   --radius-pill: 999px;
+  /* A list row (channel, member, conversation). The control radius today; a
+     pill under the redesign. */
+  --radius-row: var(--radius-control);
+  /* A shell pane (channel list, conversation). The panel radius today. */
+  --radius-pane: var(--radius-panel);
+  /* A button (ui/button.tsx). The control radius today; a pill under the
+     redesign. */
+  --radius-button: var(--radius-control);
   /* Message list drawing. Overridden on the root by src/lib/chat-display.ts. */
   --chat-font-size: 15px;
   --chat-line-height: 22px;
@@ -328,6 +414,9 @@
   --type-label-leading: 1rem;
   --type-caption-size: 0.6875rem;
   --type-caption-leading: 1rem;
+  /* The face the title role is drawn in. The workhorse today; the display
+     face under the redesign. */
+  --type-title-font: var(--font-sans);
 
   /*
    * CONTROL HEIGHTS. The three the ui/ primitives already draw: h-8 for a
@@ -338,6 +427,27 @@
   --control-sm: 2rem;
   --control-md: 2.25rem;
   --control-lg: 2.5rem;
+  /* A list row's height. */
+  --control-row: 2rem;
+
+  /*
+   * SPACE, the two layout distances the shell names. `gutter` is the gap
+   * between panes (none today: the panes meet at a border) and `pane` is a
+   * pane's inner horizontal padding. Everything else stays on Tailwind's 4px
+   * scale.
+   */
+  --space-gutter: 0rem;
+  --space-pane: 1rem;
+
+  /*
+   * ICONS. Three sizes: 16 inline with a label, 20 in a toolbar or a row,
+   * 24 alone as the target. The stroke is Lucide's own default, named so a
+   * primitive can pass it rather than a number.
+   */
+  --icon-sm: 1rem;
+  --icon-md: 1.25rem;
+  --icon-lg: 1.5rem;
+  --icon-stroke: 2;
 
   --overlay: oklch(0.1 0.02 250 / 0.8);
   --shadow-speaking: 0 0 10px oklch(0.88 0.19 125 / 0.45);
@@ -529,6 +639,619 @@
 }
 
 /*
+ * THE REDESIGN, direction B "Salas" (docs/redesign/LOG.md). Everything below
+ * up to the light block applies only while `<html>` carries `data-redesign`
+ * (lib/redesign.ts), so the toggle off changes nothing.
+ *
+ * WHERE THESE BLOCKS SIT IS THE CASCADE. The redesign selector has the same
+ * specificity as the light block and as every look's block (one attribute on
+ * `:root`), so source order decides between them. (Do not quote those
+ * selectors in this comment: the token bench finds blocks by regex.)
+ *
+ *   - shape (this block) and the Clássico palette (the next one) come BEFORE
+ *     the light block, so light still sets its own colours and shadows;
+ *   - every look, high contrast and the custom accent come AFTER, so they win
+ *     over the redesign wherever they set a value. Retro keeps its own shape.
+ *   - the light halves carry one more attribute and sit after the light block.
+ *
+ * SHAPE, TYPE, SPACING, ICONS, MOTION: every look. A look is a palette; the
+ * redesign is the structure underneath all of them.
+ */
+:root[data-redesign] {
+  /* Softer and larger. A row is a pill; a pane is a 20px panel. */
+  --radius-tick: 0.25rem;
+  --radius-control: 0.625rem;
+  --radius-card: 0.875rem;
+  --radius-panel: 1.25rem;
+  --radius-row: 999px;
+  /* A full-height shell pane is a touch tighter than a dialog. */
+  --radius-pane: 1rem;
+  --radius-button: var(--radius-pill);
+
+  /* Button (ui/button.tsx). Unset with the toggle off: each falls back, in
+     the class, to what the button always drew. */
+  --button-px: 1.25rem;
+  --button-px-sm: 0.875rem;
+  --button-px-lg: 1.5rem;
+  /* A top highlight and a cast shadow that clears the fill; the light block
+     sets its own. */
+  --button-primary-shadow:
+    inset 0 1px 0 oklch(1 0 0 / 0.22), 0 1px 1px oklch(0.06 0.02 262 / 0.55),
+    0 4px 10px oklch(0.06 0.02 262 / 0.35);
+  /* Tints of the text, never a surface: a dialog is surface-2, the same as
+     the old secondary fill, and a surface hover can be darker than it. */
+  --button-secondary-bg: color-mix(in oklab, var(--color-text) 7%, transparent);
+  --button-secondary-hover: color-mix(in oklab, var(--color-text) 15%, transparent);
+  --button-secondary-border: var(--color-border-strong);
+  --button-ghost-text: var(--color-text-secondary);
+  --button-ghost-hover: color-mix(in oklab, var(--color-text) 8%, transparent);
+  --button-danger-ghost-hover: color-mix(in oklab, var(--color-danger) 14%, transparent);
+  --button-danger-ghost-hover-text: var(--color-on-danger-soft);
+  --button-disabled-opacity: 0.5;
+  /* A small button steps down in height, not in legibility. */
+  --button-text-sm: 0.8125rem;
+  /* Switch, CheckRow, Checkbox (ui/switch.tsx, ui/check-row.tsx,
+     ui/checkbox.tsx). Off is a faint tint inside the field's 3:1 edge, so an
+     unticked box or an off track is visible on a card, a dialog and a pane
+     alike. The edge reads the field role (p-input) and falls back to the
+     same mix until that role is everywhere. */
+  --choice-edge: var(--color-field-border, color-mix(in oklab, var(--color-border-strong) 50%, var(--color-text)));
+  --choice-row-hover: var(--button-ghost-hover);
+  /* A dimmed row (a setting a parent switch turned off) fades a step less
+     than a disabled control, so its label stays readable. */
+  --choice-row-disabled-opacity: 0.6;
+  --switch-w: 2.5rem;
+  --switch-h: 1.5rem;
+  --switch-knob: 1.125rem;
+  --switch-pad: 0.1875rem;
+  --switch-travel: 1rem;
+  --switch-desc-offset: -0.125rem;
+  --switch-off-bg: color-mix(in oklab, var(--color-text) 8%, transparent);
+  --switch-off-ring: var(--choice-edge);
+  /* Between secondary and tertiary: an off column does not outshine the on ones. */
+  --switch-knob-off: color-mix(in oklab, var(--color-text-secondary) 80%, var(--color-text-tertiary));
+  --switch-knob-shadow: 0 1px 2px oklch(0.06 0.02 262 / 0.45), 0 0 0 0.5px oklch(0.06 0.02 262 / 0.2);
+  --tick-size: 1.125rem;
+  /* An 18px tick on a 20px first line: the row aligns to the top. */
+  --check-row-align: flex-start;
+  --tick-line-offset: 0.0625rem;
+  --tick-size-md: 1.25rem;
+  --tick-glyph: 0.75rem;
+  --tick-glyph-md: 0.875rem;
+  --tick-ring-w: 1.5px;
+  --tick-off-bg: color-mix(in oklab, var(--color-text) 4%, transparent);
+  --tick-off-ring: var(--choice-edge);
+  --tick-hover-ring: color-mix(in oklab, var(--choice-edge) 55%, var(--color-text));
+  --checkbox-appearance: none;
+
+  /* Icon button (ui/icon-button.tsx). Unset with the toggle off: each falls
+     back, in the class, to what the icon button always drew. */
+  /* Tooltip (ui/tooltip.tsx), same rule. */
+  --tooltip-bg: var(--color-tooltip);
+  --tooltip-border: var(--color-tooltip-border);
+  --tooltip-text: var(--color-on-tooltip);
+  --tooltip-detail: var(--color-tooltip-detail);
+  /* A faint top highlight, as on the primary button; light drops it. */
+  --tooltip-shadow: inset 0 1px 0 oklch(1 0 0 / 0.06), var(--shadow-2);
+  --tooltip-px: 0.625rem;
+  --tooltip-py: 0.3125rem;
+  --tooltip-weight: 500;
+  --tooltip-radius: var(--radius-control);
+  --tooltip-max-w: 18rem;
+  --tooltip-leading: 1.375;
+  --tooltip-detail-gap: 0.125rem;
+  --tooltip-detail-leading: 1.25;
+  --tooltip-rail-font: var(--type-title-font);
+  --tooltip-rail-weight: 600;
+  --tooltip-rail-px: 0.625rem;
+  --tooltip-rail-py: 0.375rem;
+  --tooltip-rail-size: 13px;
+  --tooltip-rail-shadow: var(--tooltip-shadow);
+  /* A place (a server, a pinned conversation) gets pqp's lime: a short
+     straight bar on the bubble's start edge. Actions on the rail stay plain. */
+  --tooltip-rail-mark: var(--color-accent);
+
+  /* Input and Textarea (ui/input.tsx), same rule. The edge is the field
+     role, 3:1 on the fill and on a dialog; disabled keeps it and fades the
+     text instead. */
+  --input-bg: var(--color-field);
+  --input-border: var(--color-field-border);
+  /* An invalid field's second cue beside its red edge; a disabled field
+     never takes it (disabled wins). Stronger in dark, where 6% over the
+     well barely shows. */
+  --input-invalid-bg: color-mix(in oklab, var(--color-danger) 10%, var(--color-field));
+  --input-hover-border: color-mix(in oklab, var(--color-field-border) 40%, var(--color-text));
+  --input-placeholder: var(--color-text-tertiary);
+  --input-prefix: var(--color-text-secondary);
+  --input-prefix-gap: 0.125rem;
+  --input-px: 0.875rem;
+  --input-h: var(--control-md);
+  --input-disabled-opacity: 1;
+  /* Select (ui/select.tsx): the native arrow off, a Phosphor caret drawn
+     in its place, with room for it. */
+  --select-appearance: none;
+  --select-pr: 2.5rem;
+  --select-h-sm: var(--control-sm);
+
+  /* Popovers: the pane radius, a faint edge of the text (the level-3 edge is
+     the plain border, which disappears on a dark canvas) and a deeper lift
+     with a top highlight, so a picker reads as a lit object over the app. */
+  --popover-radius: var(--radius-pane);
+  --popover-surface: var(--color-surface-2);
+  --popover-border: color-mix(in oklab, var(--color-text) 10%, transparent);
+  /* The menu rung: a dialog keeps the deeper --shadow-3 in both themes. */
+  --popover-highlight: oklch(1 0 0 / 0.07);
+  --popover-shadow: inset 0 1px 0 var(--popover-highlight), var(--shadow-2);
+  /* Menus: the highlight is a tint of the text, so it shows on the menu's own
+     surface (the old one was that surface's colour and did not show). Rows
+     sit concentric inside the panel; icons are quieter than their label and
+     come up to it on the highlighted row. Headings are sentence case. The
+     panel floats on the popover surface (radius, fill, edge and lift). */
+  --menu-radius: var(--popover-radius);
+  --menu-pad: 0.375rem;
+  --menu-row-radius: calc(var(--menu-radius) - var(--menu-pad));
+  --menu-row-py: 0.4375rem;
+  --menu-row-gap: 0.625rem;
+  --menu-row-hover: color-mix(in oklab, var(--color-text) 9%, transparent);
+  /* Message search's highlighted result: the menu's row fill, a step up in
+     light so it never reads as a second field under the search field. */
+  --search-row-selected: var(--menu-row-hover);
+  --menu-danger-hover: color-mix(in oklab, var(--color-danger) 16%, transparent);
+  --menu-icon: var(--color-text-secondary);
+  --menu-icon-size: var(--icon-sm);
+  --menu-icon-box: 1.125rem;
+  --menu-separator: color-mix(in oklab, var(--color-text) 10%, transparent);
+  --menu-more-edge: var(--color-border-strong);
+  --menu-disabled-opacity: 0.5;
+  /* A disabled row's hint fades a little, so its label stays a step above it. */
+  --menu-detail-disabled-opacity: 0.7;
+  --menu-strip-h: 2.125rem;
+
+  /* Slider: a visible track on any surface (a text tint, not a surface that
+     can match the pane), a lifted knob without an edge, and a scrub track
+     that thickens when a pointer or focus arrives. */
+  --slider-track: color-mix(in oklab, var(--color-text) 16%, transparent);
+  --slider-scrub-h: 0.25rem;
+  --slider-scrub-h-hover: 0.375rem;
+  --slider-volume-h: 0.375rem;
+  --slider-hue-h: 0.625rem;
+  --slider-thumb: 1rem;
+  --slider-thumb-hue: 1.25rem;
+  --slider-thumb-bg: var(--color-text);
+  --slider-thumb-border: transparent;
+  --slider-thumb-shadow: 0 1px 2px oklch(0.06 0.02 262 / 0.5), 0 2px 6px oklch(0.06 0.02 262 / 0.35);
+  --slider-thumb-press: 1.12;
+  --slider-disabled-opacity: 0.5;
+  /* Every control rings in the solid accent, as IconButton does. */
+  --slider-ring: var(--color-accent);
+  --slider-ring-offset-color: transparent;
+
+  /* Cards (ui/card.tsx): tints of the text, so a card reads on a pane and
+     on a dialog alike. */
+  --card-bg: color-mix(in oklab, var(--color-text) 4%, transparent);
+  /* The same card fill made solid on the main pane, for a ring that has to
+     cut (stacked faces on a card in chat). */
+  --card-bg-solid: color-mix(in oklab, var(--color-text) 4%, var(--color-pane-main));
+  --card-border: color-mix(in oklab, var(--color-text) 8%, transparent);
+  --card-row-hover: color-mix(in oklab, var(--color-text) 6%, transparent);
+  /* A whole card under the pointer: one step over the card's own fill. */
+  --card-hover: color-mix(in oklab, var(--color-text) 7%, transparent);
+  /* A footer card's fill as a solid colour over the side pane, for cutouts
+     (the presence dot's ring) that must match the card exactly. */
+  --footer-card-solid: color-mix(in oklab, var(--color-text) 4%, var(--color-pane-side));
+  --footer-card-solid-hover: color-mix(in oklab, var(--color-text) 6%, var(--footer-card-solid));
+  /* A settings notice in the info tone, on its own (settings/kit/notice.tsx):
+     a quiet tint of the text, a step over the card it usually sits in. */
+  --settings-notice-info-bg: color-mix(in oklab, var(--color-text) 7%, transparent);
+
+  /* The monogram disc's edge: none in dark, where surface-3 already stands
+     off the panes; a hairline in light, where it is close to the white pane. */
+  --avatar-edge: transparent;
+  /* The cutout behind a presence dot: the colour of the pane the avatar
+     sits on (the side panes by default, the conversation below). */
+  --avatar-dot-ring: var(--color-pane-side);
+
+  /* Banners (ui/banner.tsx): an inset card on the look's soft tone fill,
+     with a faint edge of the tone, so a strip reads as a note pinned to
+     the conversation rather than a stripe across it. */
+  --banner-radius: 0.75rem;
+  --banner-edge: 28%;
+
+  /* Badges (ui/badge.tsx): a small pill in sentence case; a tag beside a
+     name is a step smaller. Counts are a touch larger in type than the old
+     10px, with tabular figures. */
+  --badge-radius: var(--radius-pill);
+  --badge-h: 1.25rem;
+  --badge-px: 0.5rem;
+  --badge-tag-h: 1.125rem;
+  --badge-tag-px: 0.375rem;
+  --badge-text: 0.6875rem;
+  --count-badge-h: 1.125rem;
+  --count-badge-text: 0.6875rem;
+  --count-badge-sm-text: 0.625rem;
+
+  /* Scrollbars: a thumb of the tertiary text on no track, at least 3:1 on
+     both panes (see the rule on html[data-redesign] below). It resolves at
+     :root, so a subtree that redefines --color-text-tertiary keeps the
+     root's thumb. */
+  --scrollbar-thumb: color-mix(in oklab, var(--color-text-tertiary) 65%, transparent);
+  --scrollbar-thumb-hover: color-mix(in oklab, var(--color-text-secondary) 80%, transparent);
+  /* Server rail (layout/server-rail.tsx): round tiles on the canvas, in the
+     side pane's colour. The selected one turns into the accent's rounded
+     square; a hover only lifts the fill, so lime always means "here". */
+  --rail-tile: 2.75rem;
+  --rail-tile-radius-selected: 1rem;
+  /* A touch of text over the side pane, so an idle door reads on the dark canvas. */
+  --rail-tile-bg: color-mix(in oklab, var(--color-text) 4%, var(--color-pane-side));
+  --rail-tile-hover: color-mix(in oklab, var(--color-text) 9%, var(--color-pane-side));
+  --rail-tile-shadow: 0 2px 8px -2px oklch(0 0 0 / 0.45);
+  --rail-divider: var(--color-border);
+  /* Empty states (ui/empty-state.tsx): a page empty state leads with its
+     glyph on a soft disc of the raised fill, then a Gabarito title. */
+  --empty-icon-disc: 3.5rem;
+  --empty-icon-bg: var(--color-surface-3);
+  --empty-title-size: 1.25rem;
+
+  /* Message rows (chat/message-list.tsx): inset with a corner, a faint
+     tint of the text on hover, the accent's soft fill when you are named. */
+  --message-row-radius: 0.5rem;
+  --message-hover: color-mix(in oklab, var(--color-text) 4.5%, transparent);
+  /* The same hover laid on the pane, for the presence dot's cutout. */
+  --message-hover-solid: color-mix(in oklab, var(--color-text) 4.5%, var(--color-pane-main));
+  /* The system's mention row, tuned per appearance so a mention never reads
+     as the selected channel; the hover one step toward the accent. */
+  --message-mention-bg: var(--color-mention-row);
+  --message-mention-hover: color-mix(in oklab, var(--message-mention-bg) 85%, var(--color-accent));
+  /* Your own name on your messages. */
+  --message-own-name: var(--color-accent-text);
+
+  /* What a message carries (s-message-content): every card in a message is
+     the card surface at the card radius; a picture is a step tighter. */
+  --content-media-radius: 0.75rem;
+  /* A message card rests on the pane: no lift. */
+  --content-card-shadow: none;
+  --content-card-hover: var(--card-hover);
+  /* Every message card pads its content the same. */
+  --content-card-pad: 0.875rem;
+  --content-glyph-bg: color-mix(in oklab, var(--color-text) 7%, transparent);
+  /* The thread chip open in the panel: the selected row's fill (light steps down to the accent's soft fill). */
+  --thread-chip-open-bg: var(--color-row-selected);
+  --thread-chip-open-fg: var(--color-on-row-selected);
+  --content-quote-bar: color-mix(in oklab, var(--color-text) 22%, transparent);
+  --content-link-line: color-mix(in oklab, var(--color-accent-text) 45%, transparent);
+  /* The composer (s-composer): one rounded well on a faint text tint, whose
+     edge comes up a step while you type in it. */
+  --composer-radius: 1.25rem;
+  --composer-bg: color-mix(in oklab, var(--color-text) 5%, transparent);
+  --composer-border: color-mix(in oklab, var(--color-text) 9%, transparent);
+  --composer-border-focus: color-mix(in oklab, var(--color-text) 28%, transparent);
+  /* A field you cannot type into: a dashed edge of its own. */
+  --composer-border-readonly: color-mix(in oklab, var(--color-text) 18%, transparent);
+
+  /* Glass: a close or control laid over a picture (corner-card heroes). */
+  --glass-bg: oklch(0.12 0.01 262 / 0.62);
+  --glass-fg: oklch(0.98 0 0);
+  --glass-border: transparent;
+
+  /* Pane headers (ui/pane-header.ts): the chat's and every other pane's
+     top bar, on one rule, one inset and one title size. */
+  --pane-header-rule: color-mix(in oklab, var(--color-text) 8%, transparent);
+  --pane-header-px: 1rem;
+  --pane-bar-title-size: 1rem;
+
+  /* The icons-only sidebar (layout/channel-list.tsx): a channel is a
+     rounded square, so the strip does not read as a second server rail. */
+  --strip-tile-radius: 0.75rem;
+
+  /* Loading (ui/spinner.tsx, ui/skeleton.tsx): a ring with a faint track,
+     and placeholder shapes as a faint text tint, so both read on a pane, a
+     card or a dialog. */
+  --spinner-track-opacity: 0.25;
+  --skeleton-bg: color-mix(in oklab, var(--color-text) 8%, transparent);
+
+  /* Section headers (ui/section-header.tsx). A pane's title is Gabarito at
+     20px with its line under it; a section label inside a list or a dialog
+     is a 13px semibold label in sentence case, no tracking, one step
+     quieter than the body. */
+  --pane-header-title-size: 1.25rem;
+  --pane-header-gap: 1.5rem;
+  --section-label-size: 0.8125rem;
+  --section-label-gap: 0.375rem;
+  --section-group-size: 0.9375rem;
+
+  /* List rows (ui/list-row.tsx): Salas pills on the row roles, a step
+     taller than before, with more room inside. */
+  --list-row-radius: var(--radius-pill);
+  --list-row-px: 0.75rem;
+  /* 8px: at 6px on a 36px pill the pip read as a full stop. */
+  --list-row-pip: 0.5rem;
+  --list-row-h-sm: 2.25rem;
+  --list-row-h-md: 2.75rem;
+  --list-row-h-lg: 3.25rem;
+  --list-row-gap-sm: 0.5rem;
+  --list-row-gap: 0.75rem;
+  --list-row-hover: var(--color-row-hover);
+  --list-row-selected: var(--color-row-selected);
+  --list-row-selected-text: var(--color-on-row-selected);
+  /* A two-line row (a conversation): the selected role at 64%, so a row
+     half again as tall as a channel reads at the same weight, under the
+     names and the unread counts. */
+  --list-row-selected-tall: color-mix(in oklab, var(--list-row-selected) 64%, transparent);
+  /* A server's tile in the phone shell's list: its own tint, so it never
+     melts into the row's hover, and a step up while the row is hovered. */
+  --phone-server-tile: color-mix(in oklab, var(--color-text) 8%, var(--color-pane-side));
+  --phone-server-tile-hover: color-mix(in oklab, var(--color-text) 12%, var(--color-pane-side));
+  /* A row's second line (a tag, a status, a count): the tertiary text. */
+  --list-row-detail: var(--color-text-tertiary);
+  /* A read row's name and its icon: a step and two steps under the body,
+     so unread (full text, semibold) reads by colour as well as weight. */
+  --list-row-text: var(--color-text-secondary);
+  --list-row-icon: var(--color-text-tertiary);
+  /* The room after a row's last tile: the 28px tiles sit close to the cap. */
+  --list-row-action-pr: 0.25rem;
+  /* The communities directory: a full page in the conversation's tone, its
+     cards one solid step above it (solid, so the banner fade and the icon's
+     cut ring match the card). */
+  --communities-bg: var(--color-pane-main);
+  --community-card-bg: color-mix(in oklab, var(--color-text) 4%, var(--color-pane-main));
+  /* A muted row (a channel you silenced) stays a step above a disabled one
+     (0.4), so the two read apart. */
+  --list-row-muted-opacity: 0.6;
+  /* The solid accent, as IconButton's and Slider's rings: the 60% focus
+     ring all but vanishes on the light selected fill. */
+  --list-row-ring: var(--color-accent);
+  /* Forum cards (forum/forum-post-card.tsx): the card tokens; a hover
+     strengthens the edge, the open post's edge is a step stronger still. */
+  --forum-card-hover-border: color-mix(in oklab, var(--color-text) 18%, transparent);
+  --forum-card-open-border: color-mix(in oklab, var(--color-text) 32%, transparent);
+  /* The compact row open beside the list: a faint accent tint, so the open post leads (light uses the accent's soft fill). */
+  --forum-row-open-bg: color-mix(in oklab, var(--color-accent) 14%, transparent);
+  /* Settings dialogs: a small frame. The band and the rail sit on the side
+     pane's tone, the page is an inset pane in the conversation's tone. */
+  --settings-surface: var(--color-pane-side);
+  --settings-pane-bg: var(--color-pane-main);
+  --settings-pane-inset: 0.5rem;
+  --settings-rule: color-mix(in oklab, var(--color-border) 70%, transparent);
+  /* Faces stacked in an app strip or card cut their rings from the ground
+     they sit on: the pane for the strip, the card for a card. */
+  --app-face-cut: var(--color-pane-main, var(--color-surface-1));
+
+  /* The call (voice/call-stage.tsx). The bar's controls are round wells on
+     a text tint; a control that is on (camera, share, a raised hand) takes
+     the soft accent, a muted mic the soft danger, and the hang-up is the one
+     solid red. Tiles take the card radius on a raised surface, and whoever
+     is talking gets a ring with a gap, so it reads on a dark picture too. */
+  --call-control-bg: color-mix(in oklab, var(--color-text) 10%, transparent);
+  --call-control-hover: color-mix(in oklab, var(--color-text) 16%, transparent);
+  --call-control-on-bg: var(--color-accent-soft);
+  --call-control-on-text: var(--color-on-accent-soft);
+  /* A hover step on the soft accent, toward the accent itself. */
+  --call-control-on-hover: color-mix(in oklab, var(--color-accent) 18%, var(--color-accent-soft));
+  --call-control-off-bg: color-mix(in oklab, var(--color-danger) 20%, transparent);
+  --call-control-off-hover: color-mix(in oklab, var(--color-danger) 28%, transparent);
+  --call-leave-hover: color-mix(in oklab, var(--color-danger) 85%, var(--color-text));
+  /* Answer and join: the success fill one step toward the text. */
+  --call-answer-hover: color-mix(in oklab, var(--color-success) 80%, var(--color-text));
+  --call-bar-bg: var(--popover-surface);
+  --call-bar-border: var(--popover-border);
+  --call-bar-shadow: var(--popover-shadow);
+  --call-stage-bg: var(--color-surface-0);
+  --call-tile-bg: var(--color-surface-2);
+  /* Muted by a moderator: the soft warning, with a hover step. */
+  --call-control-warn-bg: color-mix(in oklab, var(--color-warning) 18%, transparent);
+  /* A dot on a docked control is ringed in the composer's own fill, made solid. */
+  --call-dock-pip-ring: color-mix(in oklab, var(--color-text) 5%, var(--color-pane-main));
+  --call-control-warn-hover: color-mix(in oklab, var(--color-warning) 26%, transparent);
+  --call-tile-radius: var(--radius-card);
+  --call-speaking: var(--color-success);
+  --call-badge-bg: oklch(0.12 0.01 262 / 0.62);
+  --call-badge-text: oklch(0.98 0 0);
+  --call-badge-hover: oklch(0.12 0.01 262 / 0.82);
+
+  /* Dialogs: a deeper scrim with more blur, so the app behind recedes; the
+     panel takes a text edge and the deepest lift. The header loses its rule
+     (the title and the space under it separate it) and the footer's rule
+     softens. Titles step down from 24px to 22px, the inset grows to 24px. */
+  /* The sheets' one scrim (--sheet-scrim), so a dialog and a sheet agree. */
+  --dialog-scrim: var(--sheet-scrim);
+  --dialog-scrim-blur: var(--sheet-scrim-blur);
+  --dialog-border: color-mix(in oklab, var(--color-text) 10%, transparent);
+  --dialog-shadow: inset 0 1px 0 oklch(1 0 0 / 0.05), var(--shadow-3);
+  --dialog-header-rule: transparent;
+  --dialog-header-pt: 1.25rem;
+  --dialog-header-pb: 0.5rem;
+  --dialog-solo-header-pb: 1rem;
+  --dialog-solo-footer-pt: 0.5rem;
+  --dialog-footer-pb: 1.25rem;
+  --dialog-close-glyph: 1.125rem;
+  --dialog-eyebrow-size: 0.8125rem;
+  --dialog-footer-rule: color-mix(in oklab, var(--color-text) 8%, transparent);
+  --dialog-px: 1.5rem;
+  --dialog-title-size: 1.375rem;
+  --dialog-title-leading: 1.875rem;
+
+  /* Sidebar header (layout/channel-list.tsx): the server's name in the title
+     face over no rule, a search pill a step off the pane, the banner as an
+     inset card. */
+  --sidebar-header-title-size: 1rem;
+  --sidebar-search-h: 2.25rem;
+  --sidebar-search-bg: color-mix(in oklab, var(--color-text) 6%, var(--color-pane-side));
+  --sidebar-search-hover: color-mix(in oklab, var(--color-text) 9%, var(--color-pane-side));
+  --sidebar-search-border: transparent;
+  /* The header trigger's ladder over the search pill (6%): hover 8%, the
+     ghost buttons' step beside it; open 10%. */
+  --sidebar-trigger-hover: var(--button-ghost-hover);
+  --sidebar-trigger-open: color-mix(in oklab, var(--color-text) 10%, transparent);
+  --sidebar-banner-radius: 0.75rem;
+
+  /* Sidebar blocks (ui/sidebar-block.ts): stories, a watch party and the Baú
+     above the channels, as cards on the card tint or dashed invitations. */
+  --sidebar-card-radius: 0.875rem;
+  --sidebar-invite-border: color-mix(in oklab, var(--color-text) 22%, transparent);
+  /* The solid AO VIVO badge: the danger hue a step deeper on a dark page,
+     where on-danger is white, so 10px text clears 4.5:1. Looks whose
+     on-danger is a dark ink keep the plain danger (below). */
+  --live-badge-bg: color-mix(in oklab, var(--color-danger) 78%, black);
+
+  --icon-button-radius: var(--radius-pill);
+  --icon-button-text: var(--color-text-secondary);
+  /* Tints, like the button's: an icon button sits on panes and dialogs. */
+  --icon-button-hover: var(--button-ghost-hover);
+  /* A touch deeper than the button's, so the disc shows on a small circle. */
+  --icon-button-danger-hover: color-mix(in oklab, var(--color-danger) 20%, transparent);
+  --icon-button-ring-offset: 2px;
+  /* The band between a ghost circle and its ring shows what is behind it,
+     not one fixed surface, so a focused close button on a dialog has no
+     stray ring of the pane colour. */
+  --icon-button-ring-offset-color: transparent;
+  --icon-button-press: 0.94;
+  --icon-button-glyph-xs: 0.875rem;
+  --icon-button-glyph-sm: 1rem;
+  --icon-button-glyph-md: 1.125rem;
+  --icon-button-glyph-lg: 1.25rem;
+  /* RadioGroup (ui/radio-group.tsx). The segmented track is a tinted pill
+     with a raised thumb, so the choice reads by shape and not by a shade of
+     grey; chips take the strong edge; the list's dot fills with the accent
+     and sits inside the field's 3:1 edge when off. */
+  --segmented-radius: 999px;
+  --segmented-pad: 0.1875rem;
+  --segmented-h: calc(var(--control-md) - 2 * var(--segmented-pad));
+  --segmented-h-sm: calc(var(--control-sm) - 2 * var(--segmented-pad));
+  --segmented-ring-offset: 1px;
+  --radio-text-sm: var(--button-text-sm);
+  --segmented-bg: color-mix(in oklab, var(--color-text) 6%, transparent);
+  --segmented-border: transparent;
+  /* No border width either, so the track is exactly the control height. */
+  --segmented-border-w: 0px;
+  --segmented-thumb: color-mix(in oklab, var(--color-text) 15%, transparent);
+  --segmented-thumb-shadow: inset 0 1px 0 oklch(1 0 0 / 0.06), 0 1px 2px oklch(0.06 0.02 262 / 0.4);
+  --segmented-text: var(--color-text-secondary);
+  --chip-border: var(--color-border-strong);
+  --chip-hover: var(--button-ghost-hover);
+  /* On the control ladder, the same height as a segmented track. */
+  --chip-h: var(--control-md);
+  --chip-h-sm: var(--control-sm);
+  /* Doubles the checked chip's 1px accent edge, inside its box. */
+  --chip-on-ring: inset 0 0 0 1px var(--color-accent);
+  --radio-row-hover: var(--button-ghost-hover);
+  --radio-size: 1.125rem;
+  --radio-ring-w: 1.5px;
+  --radio-off-ring: var(--color-field-border, color-mix(in oklab, var(--color-border-strong) 50%, var(--color-text)));
+  --radio-off-bg: color-mix(in oklab, var(--color-text) 4%, transparent);
+  --radio-dot: var(--color-on-accent);
+  --radio-dot-size: 0.4375rem;
+  --radio-disabled-opacity: 0.5;
+  /* Tabs (ui/tabs.tsx). Off tabs read in secondary text; pills are pills;
+     the selected pill is a neutral tint, since a tab picks a view, not a
+     value. `segmented` shares RadioGroup's track and thumb above. */
+  --tabs-off-text: var(--color-text-secondary);
+  --tabs-pill-radius: 999px;
+  /* Ten points over the 8% ghost hover: on a dark pane a smaller step reads
+     as the same pill. */
+  --tabs-pill-on: color-mix(in oklab, var(--color-text) 18%, transparent);
+  --tabs-rule: var(--color-border);
+  --tabs-pill-hover: var(--button-ghost-hover);
+  --tabs-filled-off: color-mix(in oklab, var(--color-text) 7%, transparent);
+  --tabs-filled-hover: color-mix(in oklab, var(--color-text) 12%, transparent);
+  --tabs-disabled-opacity: var(--button-disabled-opacity);
+  --tabs-count-bg: var(--color-accent-soft);
+  --tabs-count-text: var(--color-on-accent-soft);
+  --tabs-count-size: 11px;
+
+  /* The title role is drawn in the display face: server names, channel
+     titles and pane headers, in sentence case. */
+  --type-display-leading: 1.25;
+  --type-title-leading: 1.4;
+  --type-title-font: var(--font-display);
+  --type-body-leading: 1.375rem;
+
+  --control-row: 2.25rem;
+
+  /* The panes float on the canvas with a gutter between them. */
+  --space-gutter: 0.5rem;
+  --space-pane: 1rem;
+
+  /* Snappier: a state change under the pointer should feel instant. */
+  --duration-fast: 120ms;
+  --duration-base: 180ms;
+  --duration-slow: 280ms;
+
+  /* Filled icons (Phosphor): objects use weight "fill", symbols "bold".
+     There is no stroke to set, so the stroke token only reaches the Lucide
+     icons a surface has not been rebuilt away from yet. */
+  --icon-stroke: 2.25;
+
+  --shadow-1: 0 1px 2px oklch(0.06 0.02 262 / 0.4);
+  --shadow-2: 0 12px 32px oklch(0.06 0.02 262 / 0.45);
+  --shadow-3: 0 24px 64px -16px oklch(0.04 0.02 262 / 0.6);
+  /* A modal is the one thing that floats over everything, so it gets the
+     deepest rung instead of sharing a menu's. */
+  --elevation-3-shadow: var(--shadow-3);
+  /* Sheets (ui/sheet.tsx): a panel rising from a phone's bottom edge. A
+     larger top radius than a card, the raised fill, a hairline on the top
+     edge only and a shadow cast upwards. */
+  --sheet-radius: 1.5rem;
+  --sheet-surface: var(--color-surface-2);
+  --sheet-edge: color-mix(in oklab, var(--color-text) 10%, transparent);
+  /* One top edge: the 10% border, no inset highlight doubling it. */
+  --sheet-shadow: 0 -12px 32px oklch(0.06 0.02 262 / 0.45);
+  /* A right-edge drawer casts to the left. */
+  --drawer-shadow: -12px 0 32px oklch(0.06 0.02 262 / 0.45);
+  --sheet-scrim: oklch(0.06 0.02 262 / 0.62);
+  --sheet-scrim-blur: 6px;
+}
+
+/*
+ * Gutters cost width a phone does not have: under `md` (768px) the panes
+ * meet, as they do today, and the frame classes in ui/pane.ts float from
+ * `md` up, so the token and the classes switch together. A council risk
+ * named for direction B in round D1.
+ */
+/* lib/breakpoints.ts BELOW_MD */
+@media (max-width: 47.999rem) {
+  :root[data-redesign] {
+    --space-gutter: 0rem;
+  }
+}
+
+/*
+ * THE CLÁSSICO PALETTE under the redesign, dark only. `:where()` keeps the
+ * look and the brightness out of the specificity, so this block ranks like
+ * the shape block above and high contrast and the custom accent still beat
+ * it. The canvas is the
+ * darkest tone, the side panes sit a step above it and the conversation a step
+ * above those; the hue moves from 250 to a cooler 262 to match. The accent is
+ * not restated, so the custom accent hue still applies.
+ */
+:root[data-redesign]:where([data-appearance="signal"]:not([data-theme="light"])) {
+  /* The emoji picker's fill is the popover's (surface-2 here). */
+  --rgb-picker-background: 31, 35, 43;
+  --color-surface-0: oklch(0.165 0.013 262);
+  --color-surface-1: oklch(0.2 0.014 262);
+  --color-surface-2: oklch(0.255 0.016 262);
+  --color-surface-3: oklch(0.31 0.018 262);
+  --color-rail: oklch(0.125 0.012 262);
+  --color-canvas: var(--color-rail);
+  --color-pane-side: oklch(0.185 0.014 262);
+  --color-pane-main: var(--color-surface-1);
+
+  --color-border: oklch(0.29 0.016 262);
+  --color-border-strong: oklch(0.38 0.02 262);
+
+  --color-text: oklch(0.95 0.006 95);
+  --color-text-secondary: oklch(0.82 0.01 95);
+  --color-text-tertiary: oklch(0.7 0.014 262);
+
+  --color-on-accent: oklch(0.15 0.012 262);
+  /* A greener soft fill than the plain theme's: at chroma 0.06 a selected row
+     reads olive. The custom accent's own block still wins over it. */
+  --color-accent-soft: oklch(0.33 0.085 128);
+  --color-code-bg: oklch(0.165 0.013 262);
+  --color-indicator: oklch(0.95 0.006 95);
+  --picker-border: oklch(0.29 0.016 262);
+}
+
+/*
  * Light is not an inversion of dark. `@theme` emits into `@layer theme`, so this
  * unlayered block outranks it without any specificity trick — keep it unlayered.
  *
@@ -536,6 +1259,8 @@
  * it in both themes, so a light scrim would be a bug rather than a theme.
  */
 :root[data-theme="light"] {
+  /* A quieter info tint on light, the weight of a row hover: at 6% it read as a disabled field. */
+  --settings-notice-info-bg: color-mix(in oklab, var(--color-text) 4%, transparent);
   color-scheme: light;
 
   --color-surface-0: oklch(0.98 0.005 95);
@@ -639,6 +1364,200 @@
   --rgb-picker-color: 40, 44, 52;
   --rgb-picker-accent: 90, 130, 40;
   --picker-border: oklch(0.86 0.01 95);
+
+  /* The redesign's canvas in every light look: the panel pulled toward the
+     text, so it is a visible step below the panes whatever the look's rail
+     is. Read only by `redesign:` classes. */
+  --color-canvas: color-mix(in oklab, var(--color-surface-1) 90%, var(--color-text));
+  --color-pane-side: var(--color-surface-1);
+  --color-pane-main: var(--color-surface-0);
+  --color-on-row-selected: var(--color-text);
+  /* A hover steps DOWN from the side pane here, since the conversation is
+     the white page; in dark it steps up from the conversation. Either way it
+     differs from both panes. */
+  --color-row-hover: color-mix(in oklab, var(--color-pane-side) 95%, var(--color-text));
+  /* The soft fills are pale on a light page: a selected row is deepened
+     toward the accent so it cannot pass for a hover, and a mention row takes
+     the whole soft fill so it stands off the white conversation; the @name
+     chip on it is deepened the same way so it does not vanish into the row. */
+  --color-row-selected: color-mix(in oklab, var(--color-accent-soft) 88%, var(--color-accent));
+  --color-mention-row: var(--color-accent-soft);
+  --color-mention-chip: color-mix(in oklab, var(--color-accent-soft) 78%, var(--color-accent));
+  --color-on-mention-chip: color-mix(in oklab, var(--color-on-accent-soft) 25%, var(--color-text));
+  --color-tooltip: color-mix(in oklab, var(--color-text) 94%, var(--color-surface-0));
+  --color-tooltip-border: transparent;
+  --color-on-tooltip: var(--color-surface-0);
+  --color-field: color-mix(in oklab, var(--color-text) 3%, var(--color-surface-0));
+}
+
+/* Catppuccin and Everforest dark draw on-danger in a dark ink: darkening the
+   badge would lower its contrast there, so they keep the plain danger. */
+:root[data-redesign]:where([data-appearance="catppuccin"], [data-appearance="everforest"]):not([data-theme="light"]) {
+  --live-badge-bg: var(--color-danger);
+}
+
+/* The redesign's shadows on a light page: tinted, never black. Every look. */
+:root[data-redesign][data-theme="light"] {
+  --forum-row-open-bg: color-mix(in oklab, var(--color-accent) 22%, transparent);
+  /* 3% reads in light; dark needs 4.5%. */
+  --message-hover: color-mix(in oklab, var(--color-text) 3%, transparent);
+  --message-hover-solid: color-mix(in oklab, var(--color-text) 3%, var(--color-pane-main));
+  /* The full soft accent is the selected channel's fill in light; a mention
+     sits a step quieter so it never reads as selected. */
+  --message-mention-bg: color-mix(in oklab, var(--color-accent-soft) 70%, var(--color-pane-main));
+  /* A smaller step than dark, so the @you chip keeps its edge on a hovered row. */
+  --message-mention-hover: color-mix(in oklab, var(--message-mention-bg) 92%, var(--color-accent));
+  /* Your own name: the lime itself in light, where accent-text is a near-black olive. */
+  --message-own-name: var(--color-accent);
+  --glass-bg: oklch(0.99 0 0 / 0.72);
+  /* The directory in light: a grey page under white cards, never a grey tray on white. */
+  --communities-bg: var(--color-surface-1);
+  --community-card-bg: var(--color-surface-0);
+  --glass-fg: var(--color-text);
+  --glass-border: var(--popover-border);
+  /* Light panes need a stronger thumb to clear 3:1. */
+  --scrollbar-thumb: color-mix(in oklab, var(--color-text-tertiary) 80%, transparent);
+  --scrollbar-thumb-hover: color-mix(in oklab, var(--color-text-secondary) 90%, transparent);
+  /* The light danger is already deep enough for white text. */
+  --live-badge-bg: var(--color-danger);
+  /* On the near-white panes the 8% tint all but vanishes at the pulse's low
+     point, and a 25% track at 12px is a hairline. */
+  --skeleton-bg: color-mix(in oklab, var(--color-text) 10%, transparent);
+  --spinner-track-opacity: 0.3;
+
+  /* Cards. In light a text tint darkens into a grey tray; a white wash lifts
+     the card on a grey dialog and leaves the edge alone on the white pane. */
+  --card-bg: color-mix(in oklab, var(--color-surface-0) 60%, transparent);
+  --card-bg-solid: color-mix(in oklab, var(--color-surface-0) 60%, var(--color-pane-main));
+  /* Lighter than dark's: over the white wash on a grey dialog, 6% lands at
+     the dialog's own grey and the row reads as a hole. */
+  --card-row-hover: color-mix(in oklab, var(--color-text) 4%, transparent);
+  --card-hover: color-mix(in oklab, var(--color-text) 3%, var(--color-surface-0));
+  --footer-card-solid: color-mix(in oklab, var(--color-surface-0) 60%, var(--color-pane-side));
+  --footer-card-solid-hover: color-mix(in oklab, var(--color-text) 4%, var(--footer-card-solid));
+  --card-border: color-mix(in oklab, var(--color-text) 10%, transparent);
+  /* The composer on the white pane: a light grey well with a firmer edge. */
+  --composer-bg: color-mix(in oklab, var(--color-text) 3%, transparent);
+  --composer-border: color-mix(in oklab, var(--color-text) 13%, transparent);
+
+  /* Avatars: a hairline keeps the monogram disc a disc on the white pane. */
+  --avatar-edge: var(--color-border);
+
+  /* Banners: the soft fills are pale in light; a lighter edge keeps them calm. */
+  --banner-edge: 22%;
+  /* Rail: a softer drop under the accent tile on a light canvas, and a hover
+     that lifts to the brightest surface (a text tint lands on the canvas's
+     own grey and the tile disappears). */
+  --rail-tile-shadow: 0 2px 6px -2px oklch(0.4 0.02 262 / 0.3);
+  --rail-tile-hover: var(--color-surface-0);
+  /* Sidebar search: the field's white with its edge, on the light pane. */
+  --sidebar-search-bg: var(--color-field);
+  --sidebar-search-hover: var(--color-surface-0);
+  --sidebar-search-border: var(--color-border);
+  --rail-tile-bg: var(--color-pane-side);
+  --thread-chip-open-bg: var(--color-accent-soft);
+  --thread-chip-open-fg: var(--color-on-accent-soft);
+  --input-invalid-bg: color-mix(in oklab, var(--color-danger) 6%, var(--color-field));
+  /* Tabs */
+  /* 7 points over the 8% ghost hover, so a hovered pill never reads as selected. */
+  --tabs-pill-on: color-mix(in oklab, var(--color-text) 15%, transparent);
+  --shadow-1: 0 1px 2px oklch(0.4 0.02 262 / 0.08);
+  --shadow-2: 0 12px 32px oklch(0.4 0.02 262 / 0.16);
+  --shadow-3: 0 24px 64px -16px oklch(0.4 0.02 262 / 0.26);
+  --button-primary-shadow: inset 0 1px 0 oklch(1 0 0 / 0.25), 0 1px 2px oklch(0.4 0.02 262 / 0.18);
+  /* Light shows the 12% step clearly; dark needs 15%. */
+  --button-secondary-hover: color-mix(in oklab, var(--color-text) 12%, transparent);
+  /* A ghost icon button has no chrome but its ring, and the shared 60% ring
+     reads 2.4:1 on a light page; it takes the solid accent instead. */
+  --icon-button-ring: var(--color-accent);
+  /* The same for a field: the 60% ring is about 2.4:1 on a light page. */
+  --input-ring: var(--color-accent);
+  /* Tighter than the panel shadow: a small label sits close to its control. */
+  --tooltip-shadow: var(--shadow-1), 0 4px 12px oklch(0.4 0.02 262 / 0.14);
+  /* The light accent is a dark green that sinks into the dark bubble; mix it
+     toward the bubble's own label so the mark stays bright in every look. */
+  --tooltip-rail-mark: color-mix(in oklab, var(--color-accent) 55%, var(--color-on-tooltip));
+  --switch-knob-shadow: 0 1px 2px oklch(0.4 0.02 262 / 0.28), 0 0 0 0.5px oklch(0.4 0.02 262 / 0.18);
+  /* No top highlight on a light panel; a close shadow under the wide one.
+     The fill is the brightest surface, so the panel sits above the pane. */
+  --popover-surface: var(--color-surface-0);
+  /* A plain dialog on the same white as a popover and a phone sheet; the
+     beige surface-2 made it the darkest thing floating. */
+  --dialog-surface: var(--color-surface-0);
+  --popover-border: color-mix(in oklab, var(--color-text) 10%, transparent);
+  --popover-shadow: 0 1px 2px oklch(0.4 0.02 262 / 0.1), var(--shadow-2);
+  /* Light raises the thumb as a white chip on the grey track. */
+  --segmented-thumb: var(--color-surface-0);
+  --segmented-thumb-shadow: 0 1px 2px oklch(0.4 0.02 262 / 0.2), 0 0 0 0.5px oklch(0.4 0.02 262 / 0.12);
+  /* Light shows a 7% step as clearly as dark shows 9%. */
+  --menu-row-hover: color-mix(in oklab, var(--color-text) 7%, transparent);
+  --search-row-selected: color-mix(in oklab, var(--color-text) 10%, transparent);
+  --menu-danger-hover: color-mix(in oklab, var(--color-danger) 11%, transparent);
+  /* A white knob with a hairline, as the segmented thumb is a white chip. */
+  --slider-track: color-mix(in oklab, var(--color-text) 13%, transparent);
+  --slider-thumb-bg: var(--color-surface-0);
+  --slider-thumb-border: color-mix(in oklab, var(--color-text) 24%, transparent);
+  /* A white knob at half opacity vanishes on a white pane: disabled, it
+     takes a grey fill instead. */
+  --slider-thumb-disabled-bg: color-mix(in oklab, var(--color-text) 22%, var(--color-surface-0));
+  --slider-thumb-shadow: 0 1px 2px oklch(0.4 0.02 262 / 0.2), 0 2px 6px oklch(0.4 0.02 262 / 0.14);
+  /* The brightest surface in light, so a sheet reads lifted, not sunk. */
+  --sheet-surface: var(--color-surface-0);
+  /* One top edge: the border alone, as in dark. */
+  --sheet-shadow: 0 -8px 24px oklch(0.4 0.02 262 / 0.22);
+  --drawer-shadow: -8px 0 24px oklch(0.4 0.02 262 / 0.22);
+  --sheet-scrim: oklch(0.3 0.02 262 / 0.3);
+  /* 10% as in dark: a pale panel over a pale scrim needs the edge. */
+  --dialog-border: color-mix(in oklab, var(--color-text) 10%, transparent);
+  --dialog-shadow: 0 1px 2px oklch(0.4 0.02 262 / 0.1), var(--shadow-3);
+  /* Light: a 7% well reads as clearly as 10% on dark; the stage is the
+     canvas grey so the white tiles lift off it. */
+  --call-control-bg: color-mix(in oklab, var(--color-text) 7%, transparent);
+  --call-control-hover: color-mix(in oklab, var(--color-text) 12%, transparent);
+  --call-control-off-bg: color-mix(in oklab, var(--color-danger) 14%, transparent);
+  --call-control-off-hover: color-mix(in oklab, var(--color-danger) 20%, transparent);
+  --call-leave-hover: color-mix(in oklab, var(--color-danger) 88%, black);
+  --call-tile-bg: var(--color-surface-0);
+  /* The stage is the canvas grey, so a white tile has an edge and the speaking ring's gap cuts. */
+  --call-stage-bg: var(--color-canvas);
+  --call-control-warn-bg: color-mix(in oklab, var(--color-warning) 22%, transparent);
+  --call-dock-pip-ring: color-mix(in oklab, var(--color-text) 3%, var(--color-pane-main));
+  --call-control-warn-hover: color-mix(in oklab, var(--color-warning) 30%, transparent);
+}
+
+/*
+ * The Clássico palette under the redesign, light. Warm paper panes on a
+ * darker canvas; the conversation is the brightest surface. The accent and
+ * its soft pair are the plain light theme's, so the custom accent applies.
+ */
+:root[data-redesign][data-theme="light"]:where([data-appearance="signal"]) {
+  --color-surface-0: oklch(0.995 0.002 95);
+  --color-surface-1: oklch(0.975 0.004 95);
+  --color-surface-2: oklch(0.945 0.006 95);
+  --color-surface-3: oklch(0.9 0.01 95);
+  --color-rail: oklch(0.905 0.01 95);
+  --color-canvas: var(--color-rail);
+  --color-pane-side: var(--color-surface-1);
+  /* The emoji picker's fill is the popover's (surface-0), so its strip and
+     the panel around it are one colour. */
+  --rgb-picker-background: 253, 253, 251;
+  --color-pane-main: var(--color-surface-0);
+
+  --color-border: oklch(0.88 0.008 95);
+  --color-border-strong: oklch(0.74 0.012 95);
+
+  --color-text: oklch(0.2 0.015 262);
+  --color-text-secondary: oklch(0.36 0.016 262);
+  --color-text-tertiary: oklch(0.46 0.018 262);
+
+  /* The plain light theme's soft pair sits at hue 135, which reads mint on a
+     selected row; the target is lime. The custom accent's light block still
+     wins over these. */
+  --color-accent-soft: oklch(0.935 0.06 126);
+  --color-on-accent-soft: oklch(0.38 0.13 128);
+  --color-code-bg: oklch(0.955 0.005 95);
+  --color-indicator: oklch(0.2 0.015 262);
+  --picker-border: oklch(0.88 0.008 95);
 }
 
 /*
@@ -1530,6 +2449,67 @@
  * on whatever appearance is already active. Keep unlayered. Two-attribute
  * light beats this one-attribute dark block.
  */
+/*
+ * THE REDESIGN IN THE OTHER LOOKS. Each look keeps its palette under the
+ * redesign; these blocks only fix what the new shell roles need from a few of
+ * them. Same pattern as the Clássico blocks: `:where()` keeps the look and
+ * the brightness out of the specificity, so these beat the look (they come
+ * after it) and lose to high contrast and the custom accent (they come
+ * before them). The token bench measures every look under the redesign.
+ */
+
+/* Night: the canvas is pure black, so the side pane leans further toward
+   the panel than the default to stay off it. */
+:root[data-redesign]:where([data-appearance="night"]:not([data-theme="light"])) {
+  --color-pane-side: color-mix(in oklab, var(--color-surface-1) 75%, var(--color-surface-0));
+}
+
+/* Modo 2005: surface-0 is lighter than the panel here, so the brightest pane
+   is surface-0, the canvas is the panel pulled toward black (the default
+   would sit above the side pane), and a hover is the raised surface. */
+:root[data-redesign]:where([data-appearance="retro"]:not([data-theme="light"])) {
+  --color-pane-side: var(--color-surface-1);
+  --color-pane-main: var(--color-surface-0);
+  --color-canvas: color-mix(in oklab, var(--color-surface-1) 70%, oklch(0 0 0));
+  --color-row-hover: var(--color-surface-2);
+}
+:root[data-redesign][data-theme="light"]:where([data-appearance="retro"]) {
+  /* In light this look's panel is the white one and surface-0 is tinted
+     blue, so the two panes swap to keep the conversation the brightest. */
+  --color-pane-side: var(--color-surface-0);
+  --color-pane-main: var(--color-surface-1);
+}
+
+/* Everforest and Catppuccin light set their quietest text right at 4.5:1 on
+   the panel, which leaves nothing for a hovered row or a mention to take.
+   Raised just enough for a timestamp to stay readable on both. Everforest
+   light also had its three text roles within 0.05 of each other, so a name, a
+   timestamp and an offline name read the same; they are spread apart. */
+:root[data-redesign]:where([data-appearance="everforest"]:not([data-theme="light"])) {
+  --color-text-tertiary: oklch(0.77 0.0186 153.43);
+  /* The soft fill sits close to the panel here: the mention takes more of
+     it to stand off the conversation, and the @name chip and the selected row
+     sink below it (lighter would cost their labels contrast) so they stay
+     apart from the mention row and from a hover. */
+  --color-mention-row: color-mix(in oklab, var(--color-accent-soft) 55%, var(--color-pane-main));
+  --color-mention-chip: color-mix(in oklab, var(--color-accent-soft) 70%, oklch(0 0 0));
+  --color-row-selected: color-mix(in oklab, var(--color-accent-soft) 70%, oklch(0 0 0));
+}
+:root[data-redesign][data-theme="light"]:where([data-appearance="everforest"]) {
+  --color-text: oklch(0.38 0.0212 232.87);
+  --color-text-secondary: oklch(0.44 0.0174 190.64);
+  --color-text-tertiary: oklch(0.49 0.0292 143.51);
+  /* The soft fill is close to the panel here; deepen the selected row a
+     little more than the default so it never reads as a hover. */
+  --color-row-selected: color-mix(in oklab, var(--color-accent-soft) 84%, var(--color-accent));
+}
+:root[data-redesign][data-theme="light"]:where([data-appearance="catppuccin"]) {
+  --color-text-tertiary: oklch(0.49 0.0343 279.08);
+  /* The accent is a deep saturated purple, so the chip takes less of it to
+     keep its label readable. */
+  --color-mention-chip: color-mix(in oklab, var(--color-accent-soft) 86%, var(--color-accent));
+}
+
 :root[data-contrast="more"] {
   --color-text: oklch(0.99 0.01 95);
   --color-text-secondary: oklch(0.94 0.012 95);
@@ -1989,9 +2969,39 @@ html[data-app-shell] body {
   overflow: hidden;
 }
 
+/* Under the redesign a presence dot in the conversation is cut out of the
+   conversation pane's colour. */
+:where([data-redesign]) main {
+  --avatar-dot-ring: var(--color-pane-main);
+}
+
 html[data-app-shell] #root {
   overflow: hidden;
   overflow: clip;
+}
+
+/*
+ * Under the redesign a native scrollbar takes the look's colours: a thumb
+ * of tertiary text at 65% (80% in light) and no track. It keeps the platform's width, so it
+ * stays easy to grab on Windows and Linux. `scrollbar-color` inherits, so
+ * one rule on the root reaches every pane; an element that hides its bar
+ * (`scrollbar-width: none`) still does.
+ */
+html[data-redesign] {
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+/*
+ * A pane under the pointer lifts its thumb to secondary text, so hover reads
+ * as a state even where the platform draws one colour for rest, hover and drag.
+ * Only the innermost scroller under the pointer lifts: `scrollbar-color`
+ * inherits, so without the `:has` a log would light every bar inside it.
+ */
+html[data-redesign]
+  :where(.overflow-y-auto, .overflow-auto, .overflow-x-auto, textarea):hover:not(
+    :has(:where(.overflow-y-auto, .overflow-auto, .overflow-x-auto, textarea):hover)
+  ) {
+  scrollbar-color: var(--scrollbar-thumb-hover) transparent;
 }
 
 /*
@@ -2214,6 +3224,21 @@ h2,
   background: color-mix(in oklch, var(--color-accent) 26%, transparent);
 }
 
+/* Under the redesign the @you chip takes the chip tokens, measured against
+   the mention row it sits on. */
+:root[data-redesign] .pqp-mention.pqp-mention-self {
+  background: var(--color-mention-chip);
+  color: var(--color-on-mention-chip);
+}
+
+/* On a row that names you, other people's chips go neutral, so yours is the
+   one lime chip on the fill. */
+:root[data-redesign] .pqp-message-mention .pqp-mention:not(.pqp-mention-self) {
+  background: color-mix(in oklab, var(--color-text) 9%, transparent);
+  font-weight: 500;
+  color: var(--color-text);
+}
+
 .pqp-mention-mass {
   font-weight: 600;
 }
@@ -2226,6 +3251,72 @@ h2,
 
 .pqp-message-mention:hover {
   background: color-mix(in oklch, var(--color-accent) 20%, transparent);
+}
+
+/* Under the redesign a mention is the accent's soft fill, as in the mockup. */
+:root[data-redesign] .pqp-message-mention {
+  background: var(--message-mention-bg);
+  --avatar-dot-ring: var(--message-mention-bg);
+}
+
+:root[data-redesign] .pqp-message-mention:hover {
+  background: var(--message-mention-hover);
+  --avatar-dot-ring: var(--message-mention-hover);
+}
+
+/* Markdown under the redesign (s-message-content): links in the accent's
+   readable ink with a soft underline, rounded code, a quote bar in a text
+   tint, a code block on the card radius. */
+:root[data-redesign] .markdown-body a {
+  color: var(--color-accent-text);
+  text-decoration-color: var(--content-link-line);
+  text-decoration-thickness: 1px;
+}
+
+:root[data-redesign] .markdown-body a:hover {
+  text-decoration-color: currentColor;
+}
+
+:root[data-redesign] .markdown-body code {
+  border-radius: 0.375rem;
+  padding: 0.125rem 0.375rem;
+}
+
+/* Inline code on the family's tint in the text colour: lime is for what
+   can be acted on (links, mentions). The theme's code colours stay in code
+   blocks. */
+:root[data-redesign] .markdown-body :not(pre) > code {
+  background: var(--content-glyph-bg);
+  color: var(--color-text);
+}
+
+:root[data-redesign] .markdown-body pre {
+  /* The cards' width, so a code block stops on their right edge. */
+  max-width: 28rem;
+  background: var(--card-bg);
+  border-color: var(--card-border);
+  border-radius: var(--radius-control);
+  padding: 0.625rem 0.75rem;
+  margin: 0.375rem 0;
+}
+
+:root[data-redesign] .markdown-body pre code {
+  padding: 0;
+}
+
+:root[data-redesign] .markdown-body blockquote {
+  border-left: 3px solid var(--content-quote-bar);
+  border-radius: 1px;
+  padding-left: 0.75rem;
+  color: var(--color-text-secondary);
+}
+
+:root[data-redesign] .pqp-mention {
+  border-radius: 0.375rem;
+  padding: 0.0625rem 0.3125rem;
+  font-weight: 600;
+  background: color-mix(in oklch, var(--color-accent) 18%, transparent);
+  color: var(--color-accent-text);
 }
 
 @keyframes rise-in {
@@ -2265,6 +3356,13 @@ h2,
    (`prerender-hero-parity.test.tsx` checks it). */
 @custom-variant pre-pin (@media (min-width: 1024px) and (prefers-reduced-motion: no-preference));
 @custom-variant pre-unpin (@media not all and (min-width: 1024px) and (prefers-reduced-motion: no-preference));
+
+/* The redesign toggle (lib/redesign.ts, docs/redesign/LOG.md). `redesign:bg-x`
+   applies only while <html> carries data-redesign, so a redesigned element
+   keeps its old classes for everyone else. `:where` keeps the variant at zero
+   specificity: a redesign class outranks the old one by source order alone,
+   never by a heavier selector a later fix would have to fight. */
+@custom-variant redesign (&:where([data-redesign], [data-redesign] *));
 
 #pre-hero {
   display: contents;
@@ -2541,6 +3639,17 @@ html[data-pre] [data-home-hero] .animate-rise {
 
 .animate-badge-pop {
   animation: badge-pop 0.32s var(--ease-emphasized) both;
+}
+
+/* The ring around an incoming caller: only the ring breathes. */
+@keyframes call-ring {
+  0%,
+  100% {
+    opacity: 0.7;
+  }
+  50% {
+    opacity: 0.3;
+  }
 }
 
 /* A soundboard tile that just played: the icon kicks once from full size. */
@@ -3410,7 +4519,14 @@ html[data-pre] [data-home-hero] .animate-rise {
 }
 
 .safe-pb {
-  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  padding-bottom: max(var(--safe-pb-min, 0.75rem), env(safe-area-inset-bottom));
+}
+
+/* The user panel's card under the redesign: the home-indicator inset sits
+   below the card, never inside it, so the row stays centred. */
+:root[data-redesign] .safe-pb[data-user-panel-card] {
+  padding-bottom: 0;
+  margin-bottom: max(0.5rem, env(safe-area-inset-bottom));
 }
 
 /*
@@ -3429,7 +4545,8 @@ html[data-pre] [data-home-hero] .animate-rise {
  * the zoom to exist. Only on the screens that can be zoomed that way — a
  * pointer device or a wide window keeps the tighter type.
  */
-@media (max-width: 639px), (pointer: coarse) {
+/* lib/breakpoints.ts BELOW_SM */
+@media (max-width: 39.999rem), (pointer: coarse) {
   input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not(
       [type="color"]
     ),
@@ -3482,6 +4599,30 @@ html[data-pre] [data-home-hero] .animate-rise {
   border: none;
   height: 340px;
   max-height: 100%;
+}
+
+/* Under the redesign the picker fills its popover: no second corner, no
+   second shadow. Its grid has a fixed width inside the web component, so
+   the shell takes the picker's own fill and the strip beside it blends in. */
+:root[data-redesign] .emoji-mart-shell {
+  background-color: rgb(var(--rgb-picker-background));
+}
+:root[data-redesign] .emoji-mart-shell em-emoji-picker {
+  --border-radius: 0;
+  --shadow: none;
+  width: 100%;
+}
+/* emoji-mart's React wrapper is an auto-height div, so the picker's own
+   max-height never resolved and it stayed 340px whatever the shell's height
+   or bottom padding. Filling the shell lets the padding keep the category
+   bar off the bottom edge. (With the toggle off a short window still cuts
+   that bar; logged for the composer surface.) */
+:root[data-redesign] .emoji-mart-shell > div {
+  height: 100%;
+}
+/* The picker paints its own fill over the shell's inset highlight. */
+:root[data-redesign]:not([data-theme="light"]) .emoji-mart-shell em-emoji-picker {
+  border-top: 1px solid var(--popover-highlight);
 }
 
 /*
@@ -4189,7 +5330,8 @@ html[data-immersive-stage] [data-immersive-hide] {
   width: min(100vw, calc((100dvh - var(--story-cmp-top) - var(--story-cmp-bottom)) * 9 / 16));
   max-height: 100dvh;
 }
-@media (max-width: 640px) {
+/* lib/breakpoints.ts BELOW_SM */
+@media (max-width: 39.999rem) {
   .story-cmp {
     --story-cmp-top: 52px;
     --story-cmp-bottom: 168px;
@@ -4230,7 +5372,8 @@ html[data-immersive-stage] [data-immersive-hide] {
   container-type: size;
   box-shadow: 0 0 0 1px var(--story-hairline);
 }
-@media (max-width: 640px) {
+/* lib/breakpoints.ts BELOW_SM */
+@media (max-width: 39.999rem) {
   .story-cmp-canvas {
     border-radius: 14px;
   }

@@ -38,6 +38,10 @@ import {
   type SharePriority,
 } from "@/lib/share-priority";
 import { cn } from "@/lib/utils";
+import { SectionLabel } from "@/components/ui/section-header";
+import { IconSwap } from "@/components/ui/icon";
+import { CALL_CONTROL_REDESIGN } from "@/components/voice/call-control-classes";
+import { SlidersHorizontal as SlidersHorizontalFill } from "@phosphor-icons/react";
 
 /**
  * The camera's quality setting, on the call, next to the camera button.
@@ -138,6 +142,7 @@ export function VideoQualityMenu({
   participantCount = 1,
   buttonClassName,
   iconClassName,
+  idleClassName = CALL_CONTROL_REDESIGN.idle,
 }: {
   value: VideoQuality;
   open: boolean;
@@ -172,6 +177,8 @@ export function VideoQualityMenu({
   participantCount?: number;
   buttonClassName?: string;
   iconClassName?: string;
+  /** The redesign's resting look: a well on the stage, a ghost in the dock. */
+  idleClassName?: string;
 }) {
   const { t } = useTranslation();
   const rootRef = useRef<HTMLDivElement>(null);
@@ -420,9 +427,9 @@ export function VideoQualityMenu({
           }}
         >
           {isSendingVideo && (
-            <p className="px-2.5 pb-1 pt-1.5 text-xs uppercase tracking-wide text-paper-muted">
+            <SectionLabel as="p" className="px-2.5 pb-1 pt-1.5 text-xs uppercase tracking-wide text-paper-muted">
               {t("settings.voice.videoQuality")}
-            </p>
+            </SectionLabel>
           )}
           {isSendingVideo &&
             qualities.map((quality) => {
@@ -462,9 +469,9 @@ export function VideoQualityMenu({
           )}
           {isSharingScreen && onScreenFrameRateChange && (
             <>
-              <p className="px-2.5 pb-1 pt-1.5 text-xs uppercase tracking-wide text-paper-muted">
+              <SectionLabel as="p" className="px-2.5 pb-1 pt-1.5 text-xs uppercase tracking-wide text-paper-muted">
                 {t("call.quality.send.frameRate")}
-              </p>
+              </SectionLabel>
               {SCREEN_FRAME_RATES.map((rate) => {
                 const selected = rate === screenFrameRate;
                 return (
@@ -502,9 +509,9 @@ export function VideoQualityMenu({
               the picture swing between 720p and 360p with nothing to press. */}
           {isSharingScreen && (
             <>
-              <p className="px-2.5 pb-1 pt-1.5 text-xs uppercase tracking-wide text-paper-muted">
+              <SectionLabel as="p" className="px-2.5 pb-1 pt-1.5 text-xs uppercase tracking-wide text-paper-muted">
                 {t("call.quality.send.priority")}
-              </p>
+              </SectionLabel>
               {SHARE_PRIORITIES.map((priority) => {
                 const selected = priority === sharePriority;
                 return (
@@ -556,9 +563,9 @@ export function VideoQualityMenu({
               somebody else: "mine is fine and theirs is 360p" is a diagnosis,
               and it is unavailable from any other surface in the product. */}
           <div className="mt-1 border-t border-ink-4/60 pb-1.5 pt-1">
-            <p className="px-2.5 pb-0.5 text-xs uppercase tracking-wide text-paper-muted">
+            <SectionLabel as="p" className="px-2.5 pb-0.5 text-xs uppercase tracking-wide text-paper-muted">
               {t("call.quality.receiving")}
-            </p>
+            </SectionLabel>
             {usingSfu &&
               !watchingHls &&
               RECEIVE_QUALITIES.map((quality) => {
@@ -649,10 +656,17 @@ export function VideoQualityMenu({
             (isSharingScreen && sharePriority !== "motion"))
             ? "bg-signal/20 text-signal"
             : "bg-ink-3 text-paper hover:bg-ink-4",
+          CALL_CONTROL_REDESIGN.base,
+          isSendingVideo &&
+          (value !== "auto" ||
+            screenFrameRate !== "auto" ||
+            (isSharingScreen && sharePriority !== "motion"))
+            ? CALL_CONTROL_REDESIGN.on
+            : idleClassName,
         )}
         onClick={() => onOpenChange(!open)}
       >
-        <SlidersHorizontal className={iconClassName} />
+        <IconSwap off={SlidersHorizontal} on={SlidersHorizontalFill} offClassName={iconClassName} className={iconClassName} />
       </button>
       </Tooltip>
     </div>

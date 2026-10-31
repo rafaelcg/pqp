@@ -64,7 +64,7 @@ export function VoiceCleanHint({
         <div className="flex gap-2">
           <Button
             size="sm"
-            className="cta-lift rounded-full px-4"
+            data-cta className="cta-lift rounded-full px-4"
             onClick={activate}
           >
             {t("voiceClean.hint.activate")}

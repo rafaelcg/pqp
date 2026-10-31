@@ -18,7 +18,8 @@ import {
   Users,
   Video,
 } from "lucide-react";
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
 import { Menu as ActionMenu } from "@/components/ui/menu";
 import { WatchPartyBarSlot } from "@/components/watch-party/watch-party-bar";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
@@ -298,6 +299,7 @@ import {
 } from "@/lib/watch-party-history-access";
 import { useWatchPartyHistoryAvailability } from "@/lib/use-watch-party-history-availability";
 import { useWatchParties } from "@/hooks/use-watch-parties";
+import { FRAME_REDESIGN, PANE_MAIN_REDESIGN, PANE_ROW_REDESIGN } from "@/components/ui/pane";
 import {
   claimWatchPartyHost as apiClaimWatchPartyHost,
   createServerWatchParty as apiCreateServerWatchParty,
@@ -376,7 +378,33 @@ import { CallRatingPrompt } from "@/components/voice/call-rating-prompt";
 import { useCallRating } from "@/hooks/use-call-rating";
 import { usePermissions } from "@/hooks/use-permissions";
 import { ShareHandleButton } from "@/components/handle/share-handle-button";
+import { BANNER_FILL_REDESIGN, Banner, BannerAction, BannerText } from "@/components/ui/banner";
+import {
+  CalendarPlus as HeaderCalendarIcon,
+  CaretLeft as HeaderBackIcon,
+  ClockCounterClockwise as HeaderHistoryIcon,
+  DotsThree as HeaderMoreIcon,
+  GearSix as HeaderSettingsIcon,
+  List as HeaderMenuIcon,
+  Lock as HeaderLockIcon,
+  Phone as HeaderPhoneIcon,
+  PushPin as HeaderPinIcon,
+  Users as HeaderMembersIcon,
+  VideoCamera as HeaderVideoIcon,
+  CheckCircle as BannerCheckIcon,
+  Code as BannerCodeIcon,
+  HourglassMedium as BannerIdleIcon,
+  WarningCircle as BannerErrorIcon,
+} from "@phosphor-icons/react";
 import { BetaTag } from "@/components/ui/beta-tag";
+import { Icon } from "@/components/ui/icon";
+import {
+  PANE_HEADER_ACTION_ON_REDESIGN,
+  PANE_HEADER_ACTION_REDESIGN,
+  PANE_HEADER_DETAIL_REDESIGN,
+  PANE_HEADER_REDESIGN,
+  PANE_HEADER_TITLE_REDESIGN,
+} from "@/components/ui/pane-header";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PromptDialog } from "@/components/ui/prompt-dialog";
 import { Tooltip, TooltipProvider } from "@/components/ui/tooltip";
@@ -753,6 +781,7 @@ import { adoptThemePreference, themeToAdopt } from "@/lib/theme";
 import { isMeshForced } from "@/lib/voice-backend";
 import type { VideoQuality } from "@/lib/video-quality";
 import { cn } from "@/lib/utils";
+import { useRedesign } from "@/lib/redesign";
 import { shouldJoinMuted } from "@/lib/join-muted";
 import { setInCall, setWatchingParty } from "@/lib/in-call-state";
 import { useUpdateOffered } from "@/lib/update-prompt-state";
@@ -828,14 +857,31 @@ import { openStoryComposer } from "@/lib/stories/ui-store";
 import { useStoriesEnabledFor } from "@/lib/stories/use-story-strip";
 import { EmulatorRoom } from "@/components/emulator/emulator-room";
 import { useEmulatorEnabledFor } from "@/lib/emulator/use-emulator-enabled";
+import { Skeleton } from "@/components/ui/skeleton";
 
 export type TokenResolver = (options?: {
   forceRefresh?: boolean;
 }) => Promise<string | null>;
 
 /** Equal-width icon tiles in the chat header (pins, channel settings, call, roster). */
-const HEADER_ACTION_TILE =
-  "flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-paper-muted hover:bg-ink-3 hover:text-paper";
+const HEADER_ACTION_TILE = cn(
+  "flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-paper-muted hover:bg-ink-3 hover:text-paper",
+  PANE_HEADER_ACTION_REDESIGN,
+);
+
+/** A header tile's glyph: the Lucide one with the toggle off, Phosphor under the redesign. */
+function HeaderGlyph({ off, on, kind = "object" }: { off: ReactNode; on: PhosphorIcon; kind?: "object" | "symbol" }) {
+  return (
+    <>
+      <span className="contents redesign:hidden">{off}</span>
+      <Icon icon={on} kind={kind} size="sm" className="hidden h-[1.125rem] w-[1.125rem] redesign:block" />
+    </>
+  );
+}
+
+/** A green "join the call" pill in a header. */
+const HEADER_JOIN_REDESIGN =
+  "redesign:mr-1.5 redesign:h-8 redesign:rounded-full redesign:px-3.5 redesign:py-0 redesign:text-[13px] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-pane-main";
 
 /**
  * A reconnect's message refetch (`transport.onReady`, `reconnected` branch)
@@ -1474,6 +1520,7 @@ function MainAppContent({
   clerkAccount = null,
 }: MainAppContentProps) {
   const { t, locale } = useTranslation();
+  const redesign = useRedesign();
   const [user, setUser] = useState<User | null>(null);
   // The voice note player remembers its speed per account.
   useEffect(() => {
@@ -11925,7 +11972,7 @@ function MainAppContent({
                 aria-label={t("watchPartySchedule.header.schedule")}
                 onClick={() => setScheduleSheetOpen(true)}
               >
-                <CalendarClock className="h-4 w-4" />
+                <HeaderGlyph off={<CalendarClock className="h-4 w-4" />} on={HeaderCalendarIcon} />
               </button>
             </Tooltip>
           )}
@@ -11935,7 +11982,7 @@ function MainAppContent({
               className={HEADER_ACTION_TILE}
               onClick={() => setPinsOpen(true)}
             >
-              <Pin className="h-4 w-4" />
+              <HeaderGlyph off={<Pin className="h-4 w-4" />} on={HeaderPinIcon} />
             </button>
           </Tooltip>
           {canViewWatchPartyHistory && selectedChannel.kind === "server" && (
@@ -11949,7 +11996,7 @@ function MainAppContent({
                   setWatchPartyHistoryChannelId(selectedChannel.id)
                 }
               >
-                <History className="h-4 w-4" />
+                <HeaderGlyph off={<History className="h-4 w-4" />} on={HeaderHistoryIcon} />
               </button>
             </Tooltip>
           )}
@@ -11969,7 +12016,7 @@ function MainAppContent({
                   })
                 }
               >
-                <Settings className="h-4 w-4" />
+                <HeaderGlyph off={<Settings className="h-4 w-4" />} on={HeaderSettingsIcon} />
               </button>
             </Tooltip>
           )}
@@ -11987,6 +12034,7 @@ function MainAppContent({
                 className={cn(
                   HEADER_ACTION_TILE,
                   memberSidebar.open && !openThread && "text-paper",
+                  memberSidebar.open && !openThread && PANE_HEADER_ACTION_ON_REDESIGN,
                 )}
                 onClick={() => {
                   // A thread occupies the same right column as the roster. The
@@ -12002,7 +12050,7 @@ function MainAppContent({
                   memberSidebar.toggle();
                 }}
               >
-                <Users className="h-4 w-4" />
+                <HeaderGlyph off={<Users className="h-4 w-4" />} on={HeaderMembersIcon} />
               </button>
             </Tooltip>
           )}
@@ -12046,15 +12094,19 @@ function MainAppContent({
         </Suspense>
       )}
       {!partyOwnsHeader && !voiceStageOwnsHeader && !retroWindow && (
-      <header className="flex h-14 shrink-0 items-center border-b border-ink-4/60 px-3 sm:px-4">
+      <header data-chat-header="" className={cn("flex h-14 shrink-0 items-center border-b border-ink-4/60 px-3 sm:px-4", PANE_HEADER_REDESIGN, "redesign:max-sm:px-2")}>
         <button
           type="button"
-          className="relative mr-2 rounded-md p-1.5 hover:bg-ink-3 md:hidden"
+          className={cn("relative mr-2 rounded-md p-1.5 hover:bg-ink-3 md:hidden", PANE_HEADER_ACTION_REDESIGN, "redesign:mr-0 redesign:flex redesign:items-center redesign:justify-center redesign:p-0 redesign:md:hidden")}
           aria-label={phoneShell ? t("phoneTabs.back") : t("chrome.openNav")}
           data-phone-back={phoneShell ? "" : undefined}
           onClick={() => setMobileNavOpen(true)}
         >
-          {phoneShell ? <ChevronLeft className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+          {phoneShell ? (
+            <HeaderGlyph off={<ChevronLeft className="h-5 w-5" />} on={HeaderBackIcon} kind="symbol" />
+          ) : (
+            <HeaderGlyph off={<Menu className="h-5 w-5" />} on={HeaderMenuIcon} kind="symbol" />
+          )}
           {/* On a narrow window without the phone tabs the rail (and the
               update indicator at its foot) is behind this button: a dot says
               there is something in there. */}
@@ -12062,39 +12114,68 @@ function MainAppContent({
             <span
               aria-hidden="true"
               data-update-menu-dot=""
-              className="absolute right-0.5 top-0.5 h-2 w-2 rounded-full bg-signal ring-2 ring-ink"
+              className="absolute right-0.5 top-0.5 h-2 w-2 rounded-full bg-signal ring-2 ring-ink redesign:right-1 redesign:top-1 redesign:bg-accent redesign:ring-pane-main"
             />
           )}
         </button>
         {/* The channel list's own fold control lives in ITS header now,
             beside settings, members and invite (see `channelSidebarToggle`
             on `ChannelList`). */}
-        <div className="min-w-0">
-          <p className="flex items-center gap-1.5 truncate font-display text-base font-bold">
+        {/* Under the redesign, from `md` up, the topic sits beside the name
+            after a rule, as in the mockup; on a phone it stays under it. */}
+        <div className="min-w-0 redesign:flex-1 redesign:md:flex redesign:md:items-center redesign:md:gap-3">
+          <p className={cn("flex items-center gap-1.5 truncate font-display text-base font-bold", PANE_HEADER_TITLE_REDESIGN, "redesign:gap-2 redesign:md:shrink-0 redesign:md:max-w-[60%]")}>
             {selectedChannel.imageUrl ? (
               <ChannelIcon channel={selectedChannel} className="h-4 w-4" />
             ) : (
               selectedChannel.isPrivate && (
-                <Lock className="h-3.5 w-3.5 shrink-0 text-warning" />
+                <>
+                  <Lock className="h-3.5 w-3.5 shrink-0 text-warning redesign:hidden" />
+                  <Icon icon={HeaderLockIcon} size="sm" className="hidden shrink-0 text-warning redesign:block" />
+                </>
               )
             )}
             {/* `#` names a channel inside a server. A conversation's title is a
                 person, and hashing it renames them. Skipped once the channel
                 has its own image/emoji — `ChannelIcon` above already carries
                 that identity, and stacking `#` in front of it doubles up. */}
-            {!selectedChannel.imageUrl &&
-            selectedChannel.kind === "server" &&
-            selectedChannel.type === "text" &&
-            !selectedChannel.isPrivate
-              ? "#"
-              : ""}
-            {selectedChannel.name}
+            {redesign ? (
+              <>
+                {!selectedChannel.imageUrl &&
+                selectedChannel.kind === "server" &&
+                selectedChannel.type === "text" &&
+                !selectedChannel.isPrivate ? (
+                  <span className="text-[18px] leading-none font-normal text-text-tertiary">#</span>
+                ) : !selectedChannel.imageUrl &&
+                  selectedChannel.kind === "server" &&
+                  isVoiceRoomChannelType(selectedChannel.type) &&
+                  !selectedChannel.isPrivate ? (
+                  // A voice room's chat carries the room's glyph, as `#`
+                  // marks a text channel.
+                  <span className="inline-flex text-text-tertiary">
+                    <ChannelIcon channel={selectedChannel} className="h-4 w-4" />
+                  </span>
+                ) : null}
+                <span className="truncate">{selectedChannel.name}</span>
+              </>
+            ) : (
+              // With the toggle off, `#` and the name stay one text run.
+              <>
+                {!selectedChannel.imageUrl &&
+                selectedChannel.kind === "server" &&
+                selectedChannel.type === "text" &&
+                !selectedChannel.isPrivate
+                  ? "#"
+                  : ""}
+                {selectedChannel.name}
+              </>
+            )}
           </p>
           {/* A watch party channel with a party on it has its own count on
               the bar ("N assistindo"); a second one here, of the seated
               room, says a different number about the same show. */}
           {!(isWatchPartySplit && watchParties.byChannel[selectedChannel.id]) && (
-            <p className="truncate text-[11px] text-paper-muted">
+            <p className={cn("truncate text-[11px] text-paper-muted", PANE_HEADER_DETAIL_REDESIGN, "redesign:max-md:text-xs redesign:md:min-w-0 redesign:md:border-l redesign:md:border-[color:var(--pane-header-rule)] redesign:md:pl-3")}>
               {activeConversation
                 ? conversationSubtitle(activeConversation)
                 : selectedChannel.topic
@@ -12103,7 +12184,7 @@ function MainAppContent({
             </p>
           )}
         </div>
-        <div className="ml-auto flex items-center gap-0.5 sm:gap-1">
+        <div className="ml-auto flex items-center gap-0.5 sm:gap-1 redesign:shrink-0 redesign:gap-0.5">
           {/* The call entry points live here, always visible — the sidebar's
               hover affordance does not exist on touch, and a call you cannot
               start from your phone is a call that does not happen. */}
@@ -12131,14 +12212,15 @@ function MainAppContent({
                 <button
                   type="button"
                   aria-label={t("voice.join")}
-                  className="flex shrink-0 items-center gap-1.5 rounded-md bg-success/90 px-2.5 py-1.5 text-xs font-semibold text-ink hover:bg-success"
+                  className={cn("flex shrink-0 items-center gap-1.5 rounded-md bg-success/90 px-2.5 py-1.5 text-xs font-semibold text-ink hover:bg-success", HEADER_JOIN_REDESIGN)}
                   onClick={() =>
                     guardVoiceJoin(selectedChannel.id, () =>
                       handleJoinVoice(selectedChannel.id),
                     )
                   }
                 >
-                  <Phone className="h-3.5 w-3.5" />
+                  <Phone className="h-3.5 w-3.5 redesign:hidden" />
+                  <Icon icon={HeaderPhoneIcon} size="sm" className="hidden redesign:block" />
                   {t("voice.join")}
                 </button>
               </Tooltip>
@@ -12171,12 +12253,13 @@ function MainAppContent({
                 return (
                   <button
                     type="button"
-                    className="flex shrink-0 items-center gap-1.5 rounded-md bg-success/90 px-2.5 py-1.5 text-xs font-semibold text-ink hover:bg-success"
+                    className={cn("flex shrink-0 items-center gap-1.5 rounded-md bg-success/90 px-2.5 py-1.5 text-xs font-semibold text-ink hover:bg-success", HEADER_JOIN_REDESIGN)}
                     onClick={() =>
                       void handleConversationCall(callChannelId, false)
                     }
                   >
-                    <Phone className="h-3.5 w-3.5" />
+                    <Phone className="h-3.5 w-3.5 redesign:hidden" />
+                    <Icon icon={HeaderPhoneIcon} size="sm" className="hidden redesign:block" />
                     {t("call.header.joinCount", { count: liveCount })}
                   </button>
                 );
@@ -12191,7 +12274,7 @@ function MainAppContent({
                         void handleConversationCall(callChannelId, true)
                       }
                     >
-                      <Phone className="h-4 w-4" />
+                      <HeaderGlyph off={<Phone className="h-4 w-4" />} on={HeaderPhoneIcon} />
                     </button>
                   </Tooltip>
                   <Tooltip label={t("call.startVideo")}>
@@ -12202,7 +12285,7 @@ function MainAppContent({
                         void handleConversationCall(callChannelId, true, true)
                       }
                     >
-                      <Video className="h-4 w-4" />
+                      <HeaderGlyph off={<Video className="h-4 w-4" />} on={HeaderVideoIcon} />
                     </button>
                   </Tooltip>
                 </>
@@ -12474,7 +12557,7 @@ function MainAppContent({
                     title={t("chrome.moreActions")}
                     data-channel-header-more=""
                   >
-                    <MoreHorizontal className="h-4 w-4" aria-hidden />
+                    <HeaderGlyph off={<MoreHorizontal className="h-4 w-4" aria-hidden />} on={HeaderMoreIcon} kind="symbol" />
                   </button>
                 </ActionMenu>
               ) : undefined
@@ -13369,7 +13452,7 @@ function MainAppContent({
     {/* `app-shell`, not `overflow-hidden`: see index.css. A hidden box is
         still a scroll container that script can move, and it was moved. */}
     <div
-      className="app-shell animate-fade-in relative flex h-full"
+      className={cn("app-shell animate-fade-in relative flex h-full", FRAME_REDESIGN)}
       data-phone-tabs={phoneShell ? "" : undefined}
       data-phone-bar={phoneBarVisible ? "" : undefined}
     >
@@ -13707,6 +13790,7 @@ function MainAppContent({
       <div
         className={cn(
           "flex min-h-0 min-w-0 flex-1",
+          PANE_ROW_REDESIGN,
           whatsNewOpen && "hidden",
         )}
       >
@@ -13942,11 +14026,16 @@ function MainAppContent({
         />
       )}
 
-      <main className="flex min-w-0 flex-1 flex-col bg-transparent">
+      <main className={cn("flex min-w-0 flex-1 flex-col bg-transparent", PANE_MAIN_REDESIGN)}>
         {isDevAuthBypassEnabled() && (
-          <div className="border-b border-warning/30 bg-warning/10 px-3 py-1 text-center text-xs text-warning">
-            {t("chrome.devBypass")}
-          </div>
+          <Banner
+            tone="warning"
+            icon={BannerCodeIcon}
+            role="note"
+            className="block border-warning/30 px-3 py-1 text-center text-xs"
+          >
+            <BannerText grow={false}>{t("chrome.devBypass")}</BannerText>
+          </Banner>
         )}
 
         <ConnectionBanner
@@ -13958,31 +14047,26 @@ function MainAppContent({
         />
 
         {appError && (
-          <div className="flex items-start gap-3 border-b border-danger/40 bg-danger/10 px-4 py-2 text-sm text-danger">
-            <span className="flex-1">{appError}</span>
-            <button
-              type="button"
-              className="shrink-0 text-xs underline underline-offset-2"
-              onClick={() => setAppError(null)}
-            >
+          <Banner tone="danger" icon={BannerErrorIcon}>
+            <BannerText>{appError}</BannerText>
+            <BannerAction onClick={() => setAppError(null)}>
               {t("connection.dismiss")}
-            </button>
-          </div>
+            </BannerAction>
+          </Banner>
         )}
 
         {idleWarning && (
-          <div className="flex items-start gap-3 border-b border-warning/40 bg-warning/10 px-4 py-2 text-sm text-warning">
-            <span className="flex-1">
+          <Banner tone="warning" icon={BannerIdleIcon}>
+            <BannerText>
               {t("voice.idle.warning", {
                 count: Math.max(
                   1,
                   Math.round((idleWarning.disconnectAt - Date.now()) / 60_000),
                 ),
               })}
-            </span>
-            <button
-              type="button"
-              className="shrink-0 text-xs underline underline-offset-2"
+            </BannerText>
+            <BannerAction
+              prominent
               onClick={() => {
                 // Send and wait: the banner clears on the server's
                 // `voice-idle-warning-cancelled` confirmation, not on this
@@ -13996,26 +14080,26 @@ function MainAppContent({
               }}
             >
               {t("voice.idle.stillHere")}
-            </button>
-          </div>
+            </BannerAction>
+          </Banner>
         )}
 
         {/* Same slot, same shape, opposite tone — see `appNotice`. */}
         {appNotice && (
-          <div className="flex items-start gap-3 border-b border-success/40 bg-success/10 px-4 py-2 text-sm text-success">
-            <span className="flex-1">{appNotice}</span>
-            {claimedHandle && <ShareHandleButton handle={claimedHandle} />}
-            <button
-              type="button"
-              className="shrink-0 text-xs underline underline-offset-2"
+          <Banner tone="success" icon={BannerCheckIcon}>
+            <BannerText>{appNotice}</BannerText>
+            {claimedHandle && (
+              <ShareHandleButton handle={claimedHandle} className={BANNER_FILL_REDESIGN} />
+            )}
+            <BannerAction
               onClick={() => {
                 setAppNotice(null);
                 setClaimedHandle(null);
               }}
             >
               {t("connection.dismiss")}
-            </button>
-          </div>
+            </BannerAction>
+          </Banner>
         )}
 
         {/* Home with nothing selected is the Friends view — who is online,
@@ -14192,8 +14276,8 @@ function MainAppContent({
 
         {!selectedChannel && channelsLoading && !communityHomeOpen && (
           <div className="flex min-h-0 flex-1 flex-col">
-            <header className="flex h-14 shrink-0 items-center border-b border-ink-4/60 px-4">
-              <div className="h-5 w-36 animate-pulse rounded-md bg-ink-4/50" />
+            <header className={cn("flex h-14 shrink-0 items-center border-b border-ink-4/60 px-4", PANE_HEADER_REDESIGN)}>
+              <Skeleton className="h-5 w-36 rounded-md bg-ink-4/50" />
             </header>
             <MessageList
               messages={[]}
@@ -14281,7 +14365,7 @@ function MainAppContent({
                           })
                         }
                       >
-                        <Settings className="h-4 w-4" />
+                        <HeaderGlyph off={<Settings className="h-4 w-4" />} on={HeaderSettingsIcon} />
                       </button>
                     </Tooltip>
                   )}
@@ -14294,10 +14378,11 @@ function MainAppContent({
                         className={cn(
                           HEADER_ACTION_TILE,
                           memberSidebar.open && "text-paper",
+                          memberSidebar.open && PANE_HEADER_ACTION_ON_REDESIGN,
                         )}
                         onClick={() => memberSidebar.toggle()}
                       >
-                        <Users className="h-4 w-4" />
+                        <HeaderGlyph off={<Users className="h-4 w-4" />} on={HeaderMembersIcon} />
                       </button>
                     </Tooltip>
                   )}

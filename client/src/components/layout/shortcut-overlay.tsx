@@ -8,6 +8,7 @@ import {
   type ForumKeyRowId,
   type ShortcutAction,
 } from "@/lib/keyboard-shortcuts";
+import { SectionLabel } from "@/components/ui/section-header";
 
 const FORUM_KEY_LABEL: Record<ForumKeyRowId, MessageKey> = {
   forumMove: "shortcuts.action.forumMove",
@@ -180,9 +181,9 @@ export function ShortcutOverlay({
         <div className="grid gap-6 px-5 py-5 sm:grid-cols-2">
           {SHORTCUT_GROUPS.map((group) => (
             <section key={group.id}>
-              <h3 className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-paper-muted">
+              <SectionLabel className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-paper-muted">
                 {t(GROUP_LABEL[group.id])}
-              </h3>
+              </SectionLabel>
               <div className="divide-y divide-ink-4/70">
                 {group.id === "voice" && (
                   <>
@@ -225,9 +226,9 @@ export function ShortcutOverlay({
           ))}
           {forumKeys && (
             <section data-shortcut-group="forum">
-              <h3 className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-paper-muted">
+              <SectionLabel className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-paper-muted">
                 {t("shortcuts.group.forum")}
-              </h3>
+              </SectionLabel>
               <div className="divide-y divide-ink-4/70">
                 {FORUM_KEY_ROWS.map((row) => (
                   <ForumKeyRow

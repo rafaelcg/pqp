@@ -1,3 +1,19 @@
+import {
+  Confetti as ConfettiGlyph,
+  GlobeSimple as GlobeGlyph,
+  Image as ImageGlyph,
+  Key as KeyGlyph,
+  Robot as RobotGlyph,
+  Scroll as ScrollGlyph,
+  ShieldCheck as ShieldCheckGlyph,
+  ShieldSlash as ShieldSlashGlyph,
+  Smiley as SmileyGlyph,
+  SquaresFour as SquaresFourGlyph,
+  Users as UsersGlyph,
+  Warning as WarningGlyph,
+  WebhooksLogo as WebhooksLogoGlyph,
+  type Icon as PhosphorIcon,
+} from "@phosphor-icons/react";
 import type {
   AuditAction,
   AuditLogEntry,
@@ -24,7 +40,9 @@ import {
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { SectionRail } from "@/components/ui/section-rail";
+import { SectionRail, SETTINGS_PANE_REDESIGN } from "@/components/ui/section-rail";
+import { SETTINGS_CARD_REDESIGN } from "@/components/settings/kit/classes";
+import { Select } from "@/components/ui/select";
 import { ReportsSection } from "@/components/layout/reports-section";
 import { AutomodSettingsSection } from "@/components/layout/automod-settings-section";
 import { ServerIdentitySection } from "@/components/layout/server-identity-section";
@@ -44,6 +62,7 @@ import { useCommunitiesEnabled } from "@/components/communities/use-communities-
 import { shouldShowCommunityHomeSettingsRow } from "@/lib/community-home";
 import { useTranslation, type MessageKey, type Translator } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { PaneHeader, SectionLabel } from "@/components/ui/section-header";
 import {
   ApiError,
   deleteServer,
@@ -317,6 +336,8 @@ interface SectionDef {
   label: MessageKey;
   description: MessageKey;
   icon: LucideIcon;
+  /** Under the redesign: the filled Phosphor icon. */
+  glyph: PhosphorIcon;
   /** False for a section an admin may see too. */
   ownerOnly: boolean;
 }
@@ -327,6 +348,7 @@ const SECTIONS: SectionDef[] = [
     label: "serverSettings.section.overview",
     description: "serverSettings.overview.description",
     icon: ImageIcon,
+    glyph: ImageGlyph,
     ownerOnly: true,
   },
   {
@@ -335,6 +357,7 @@ const SECTIONS: SectionDef[] = [
     label: "serverSettings.section.emoji",
     description: "serverSettings.emoji.description",
     icon: Smile,
+    glyph: SmileyGlyph,
     ownerOnly: false,
   },
   {
@@ -345,6 +368,7 @@ const SECTIONS: SectionDef[] = [
     label: "serverSettings.section.community",
     description: "serverSettings.community.description",
     icon: Globe,
+    glyph: GlobeGlyph,
     ownerOnly: false,
   },
   {
@@ -352,6 +376,7 @@ const SECTIONS: SectionDef[] = [
     label: "serverSettings.section.access",
     description: "serverSettings.access.description",
     icon: KeyRound,
+    glyph: KeyGlyph,
     ownerOnly: true,
   },
   {
@@ -359,6 +384,7 @@ const SECTIONS: SectionDef[] = [
     label: "serverSettings.section.roles",
     description: "serverSettings.roles.description",
     icon: Users,
+    glyph: UsersGlyph,
     ownerOnly: false,
   },
   {
@@ -366,6 +392,7 @@ const SECTIONS: SectionDef[] = [
     label: "serverSettings.section.soundboard",
     description: "serverSettings.soundboard.description",
     icon: PartyPopper,
+    glyph: ConfettiGlyph,
     ownerOnly: false,
   },
   {
@@ -373,6 +400,7 @@ const SECTIONS: SectionDef[] = [
     label: "serverSettings.section.bots",
     description: "serverSettings.bots.description",
     icon: Bot,
+    glyph: RobotGlyph,
     ownerOnly: false,
   },
   {
@@ -382,6 +410,7 @@ const SECTIONS: SectionDef[] = [
     label: "serverSettings.section.apps",
     description: "serverSettings.apps.description",
     icon: LayoutGrid,
+    glyph: SquaresFourGlyph,
     ownerOnly: false,
   },
   {
@@ -389,6 +418,7 @@ const SECTIONS: SectionDef[] = [
     label: "serverSettings.section.integrations",
     description: "serverSettings.integrations.description",
     icon: Webhook,
+    glyph: WebhooksLogoGlyph,
     ownerOnly: false,
   },
   {
@@ -396,6 +426,7 @@ const SECTIONS: SectionDef[] = [
     label: "serverSettings.section.moderation",
     description: "serverSettings.moderation.description",
     icon: ShieldCheck,
+    glyph: ShieldCheckGlyph,
     ownerOnly: false,
   },
   {
@@ -403,6 +434,7 @@ const SECTIONS: SectionDef[] = [
     label: "serverSettings.section.automod",
     description: "serverSettings.automod.description",
     icon: ShieldBan,
+    glyph: ShieldSlashGlyph,
     ownerOnly: false,
   },
   {
@@ -410,6 +442,7 @@ const SECTIONS: SectionDef[] = [
     label: "serverSettings.section.audit",
     description: "serverSettings.audit.description",
     icon: ScrollText,
+    glyph: ScrollGlyph,
     ownerOnly: false,
   },
   {
@@ -417,6 +450,7 @@ const SECTIONS: SectionDef[] = [
     label: "serverSettings.section.danger",
     description: "serverSettings.danger.description",
     icon: TriangleAlert,
+    glyph: WarningGlyph,
     ownerOnly: true,
   },
 ];
@@ -426,12 +460,13 @@ const SECTIONS: SectionDef[] = [
 function SectionHeader({ section }: { section: SectionDef }) {
   const { t } = useTranslation();
   return (
-    <div className="mb-5">
-      <h3 className="font-display text-lg font-bold text-paper">
-        {t(section.label)}
-      </h3>
-      <p className="mt-1 text-xs text-paper-muted">{t(section.description)}</p>
-    </div>
+    <PaneHeader
+      title={t(section.label)}
+      description={t(section.description)}
+      className="mb-5"
+      titleClassName="font-display text-lg font-bold text-paper"
+      descriptionClassName="mt-1 text-xs text-paper-muted"
+    />
   );
 }
 
@@ -440,26 +475,36 @@ function Block({
   title,
   children,
   tone = "normal",
+  card = false,
 }: {
   title: string;
   children: ReactNode;
   tone?: "normal" | "danger";
+  /** Under the redesign: the title and the fields in one card, like the channel overview's groups. */
+  card?: boolean;
 }) {
   return (
     <section
       className={cn(
         "space-y-2",
+        card && cn(SETTINGS_CARD_REDESIGN, "redesign:p-4"),
         tone === "danger" && "rounded-lg border border-danger/40 bg-danger/5 p-4",
+        // Under the redesign: a card with the danger banner's edge.
+        tone === "danger" &&
+          "redesign:rounded-[var(--radius-card)] redesign:border-[color:color-mix(in_oklab,var(--color-danger)_var(--banner-edge),transparent)] redesign:bg-[color:color-mix(in_oklab,var(--color-danger)_6%,transparent)] redesign:p-4",
       )}
     >
-      <h4
+      <SectionLabel
+        as="h4"
+        variant="group"
+        tone={tone === "danger" ? "danger" : undefined}
         className={cn(
           "font-display text-sm font-bold uppercase tracking-wider",
           tone === "danger" ? "text-danger" : "text-paper-muted",
         )}
       >
         {title}
-      </h4>
+      </SectionLabel>
       {children}
     </section>
   );
@@ -536,12 +581,12 @@ function AuditLogSection({ serverId }: { serverId: string }) {
         </p>
       )}
       {!loading && entries.length === 0 && !error && (
-        <p className="text-sm text-paper-muted">
+        <p className="text-sm text-paper-muted redesign:rounded-[var(--radius-card)] redesign:border redesign:border-dashed redesign:border-[color:var(--card-border)] redesign:px-6 redesign:py-8 redesign:text-center redesign:text-text-secondary">
           {t("serverSettings.audit.empty")}
         </p>
       )}
       {entries.length > 0 && (
-        <ul className="space-y-1.5">
+        <ul className={cn("space-y-1.5", SETTINGS_CARD_REDESIGN, "redesign:space-y-0 redesign:overflow-hidden")}>
           {entries.map((entry) => {
             const key = (
               AUDIT_ACTION_KEYS as Partial<Record<string, MessageKey>>
@@ -551,7 +596,7 @@ function AuditLogSection({ serverId }: { serverId: string }) {
             return (
               <li
                 key={entry.id}
-                className="rounded-md border border-ink-4 bg-ink-3/40 p-2 text-sm"
+                className="rounded-md border border-ink-4 bg-ink-3/40 p-2 text-sm redesign:rounded-none redesign:border-0 redesign:bg-transparent redesign:px-4 redesign:py-3 redesign:not-last:border-b redesign:not-last:border-[color:var(--card-border)]"
               >
                 {/* A reason is free text and can be one unbroken run of
                     characters, so it wraps anywhere rather than pushing the
@@ -1033,7 +1078,7 @@ export function ServerSettingsDialog({
         }
       >
         <div className="space-y-2 px-5 py-5">
-          <p className="text-sm text-paper-muted">
+          <p className="text-sm text-paper-muted redesign:text-[13px] redesign:text-text-secondary">
             {t("serverSettings.readOnly.member")}
           </p>
         </div>
@@ -1062,6 +1107,7 @@ export function ServerSettingsDialog({
             id: section.id,
             label: t(section.label),
             icon: section.icon,
+            glyph: section.glyph,
             danger: section.id === "danger",
             dirty: section.id === "automod" && automodDirty,
           }))}
@@ -1077,13 +1123,18 @@ export function ServerSettingsDialog({
           role="tabpanel"
           aria-labelledby={`${tabIdPrefix}-${active.id}`}
           tabIndex={0}
-          className="min-w-0 flex-1 space-y-6 overflow-y-auto overscroll-contain px-5 py-5 focus-visible:outline-none"
+          className={cn(
+            "min-w-0 flex-1 space-y-6 overflow-y-auto overscroll-contain px-5 py-5 focus-visible:outline-none redesign:space-y-4",
+            SETTINGS_PANE_REDESIGN,
+            "sm:redesign:px-8 sm:redesign:pt-7 sm:redesign:pb-8",
+          )}
         >
           <SectionHeader section={active} />
 
           {active.id === "overview" && (
             <>
-              <Block title={t("serverSettings.name.title")}>
+              <Block title={t("serverSettings.name.title")} card>
+                <div className="space-y-2">
                 <div className="flex gap-2">
                   <Input
                     value={name}
@@ -1118,6 +1169,7 @@ export function ServerSettingsDialog({
                     {nameError}
                   </p>
                 )}
+                </div>
               </Block>
 
               {serverId && (
@@ -1164,8 +1216,8 @@ export function ServerSettingsDialog({
           )}
 
           {active.id === "access" && (
-            <Block title={t("serverSettings.sso.title")}>
-              <p className="text-sm text-paper-muted">
+            <Block title={t("serverSettings.sso.title")} card>
+              <p className="text-sm text-paper-muted redesign:text-[13px] redesign:text-text-secondary">
                 {t("serverSettings.sso.description", { server: server.name })}
               </p>
               <div className="flex gap-2">
@@ -1233,17 +1285,17 @@ export function ServerSettingsDialog({
               {serverId && <ReportsSection serverId={serverId} />}
 
               {isOwner && (
-                <Block title={t("serverSettings.retention.title")}>
-                  <p className="text-sm text-paper-muted">
+                <Block title={t("serverSettings.retention.title")} card>
+                  <p className="text-sm text-paper-muted redesign:text-[13px] redesign:text-text-secondary">
                     {t("serverSettings.retention.description", {
                       server: server.name,
                     })}
                   </p>
-                  <select
+                  <Select
                     value={retentionDays === null ? "" : String(retentionDays)}
                     aria-label={t("serverSettings.retention.label")}
                     disabled={savingRetention}
-                    className="h-10 w-full rounded-md border border-ink-4 bg-ink px-3 text-sm text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/50 disabled:opacity-50"
+                    
                     onChange={(e) =>
                       void saveRetention(
                         e.target.value === "" ? null : Number(e.target.value),
@@ -1262,7 +1314,7 @@ export function ServerSettingsDialog({
                     <option value="365">
                       {t("serverSettings.retention.year")}
                     </option>
-                  </select>
+                  </Select>
                   <p
                     role="status"
                     aria-live="polite"
@@ -1294,8 +1346,8 @@ export function ServerSettingsDialog({
 
           {active.id === "danger" && (
             <>
-              <Block title={t("serverSettings.export.title")}>
-                <p className="text-sm text-paper-muted">
+              <Block title={t("serverSettings.export.title")} card>
+                <p className="text-sm text-paper-muted redesign:text-[13px] redesign:text-text-secondary">
                   {t("serverSettings.export.description", {
                     server: server.name,
                   })}
@@ -1316,8 +1368,8 @@ export function ServerSettingsDialog({
                 )}
               </Block>
 
-              <Block title={t("serverSettings.transfer.title")}>
-                <p className="text-sm text-paper-muted">
+              <Block title={t("serverSettings.transfer.title")} card>
+                <p className="text-sm text-paper-muted redesign:text-[13px] redesign:text-text-secondary">
                   {t("serverSettings.transfer.description", {
                     server: server.name,
                   })}
@@ -1332,16 +1384,16 @@ export function ServerSettingsDialog({
                     {t("serverSettings.transfer.loading")}
                   </p>
                 ) : candidates.length === 0 ? (
-                  <p className="text-sm text-paper-muted">
+                  <p className="text-sm text-paper-muted redesign:text-[13px] redesign:text-text-secondary">
                     {t("serverSettings.transfer.nobody")}
                   </p>
                 ) : (
                   <div className="space-y-2">
-                    <select
+                    <Select
                       value={targetId}
                       aria-label={t("serverSettings.transfer.label")}
                       disabled={transferArmed || transferring}
-                      className="h-10 w-full rounded-md border border-ink-4 bg-ink px-3 text-sm text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/50 disabled:opacity-50"
+                      
                       onChange={(e) => setTargetId(e.target.value)}
                     >
                       <option value="">
@@ -1353,7 +1405,7 @@ export function ServerSettingsDialog({
                           {member.tag ? ` ${member.tag}` : ""}
                         </option>
                       ))}
-                    </select>
+                    </Select>
 
                     {!transferArmed ? (
                       <Button
@@ -1420,7 +1472,7 @@ export function ServerSettingsDialog({
               </Block>
 
               <Block title={t("serverSettings.delete.title")} tone="danger">
-                <p className="text-sm text-paper-muted">
+                <p className="text-sm text-paper-muted redesign:text-[13px] redesign:text-text-secondary">
                   {t("serverSettings.delete.description", {
                     server: server.name,
                   })}

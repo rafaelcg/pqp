@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { tooltipA11y } from "./tooltip";
+import { tooltipA11y, tooltipBubbleClass } from "./tooltip";
 
 describe("tooltipA11y", () => {
   it("says the label once when the tooltip is only the label", () => {
@@ -36,5 +36,23 @@ describe("tooltipA11y", () => {
     const a11y = tooltipA11y({ label: "Reply", detail: "" });
     expect(a11y.description).toBeUndefined();
     expect(a11y.describedBy).toBe(false);
+  });
+});
+
+describe("tooltipBubbleClass", () => {
+  it("draws today's bubble when the redesign tokens are unset", () => {
+    const bubble = tooltipBubbleClass();
+    expect(bubble).toContain("bg-[color:var(--tooltip-bg,var(--elevation-3-surface))]");
+    expect(bubble).toContain("border-[color:var(--tooltip-border,var(--elevation-3-border))]");
+    expect(bubble).toContain("shadow-[var(--tooltip-shadow,var(--elevation-3-shadow))]");
+    expect(bubble).toContain("px-[var(--tooltip-px,0.5rem)]");
+    // No `redesign:` class: the toggle reaches the bubble through tokens only.
+    expect(bubble).not.toContain("redesign:");
+  });
+
+  it("keeps the rail bubble's own surface as its fallback", () => {
+    const rail = tooltipBubbleClass("rail");
+    expect(rail).toContain("bg-[color:var(--tooltip-bg,var(--color-surface-0))]");
+    expect(rail).toContain("[font-family:var(--tooltip-rail-font,inherit)]");
   });
 });

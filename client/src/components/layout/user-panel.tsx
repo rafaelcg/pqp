@@ -1,10 +1,31 @@
+import { useRedesign } from "@/lib/redesign";
 import { BellOff, Bug, CircleHelp, Check, Download, HeadphoneOff, Headphones, Mic, MicOff, Pencil, Settings, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import {
+  BellSlash,
+  Bug as BugFill,
+  Check as CheckBold,
+  DownloadSimple,
+  EarSlash,
+  GearSix,
+  Headphones as HeadphonesFill,
+  Microphone,
+  MicrophoneSlash,
+  PencilSimple,
+  Question,
+  X as XBold,
+  LockSimple,
+} from "@phosphor-icons/react";
 import { UserButton } from "@clerk/clerk-react";
 import { CUSTOM_STATUS_MAX_LENGTH, type ManualStatus, type UserStatus } from "@pqp/shared";
 import { DownloadDialog } from "@/components/downloads/download-dialog";
 import { DownloadHint } from "@/components/downloads/download-hint";
 import { Button } from "@/components/ui/button";
+import { Icon } from "@/components/ui/icon";
+import {
+  SIDEBAR_FOOTER_CARD_COMPACT_REDESIGN,
+  SIDEBAR_FOOTER_CARD_REDESIGN,
+} from "@/components/ui/sidebar-block";
 import { Tooltip } from "@/components/ui/tooltip";
 import { StatusDot } from "@/components/user/status-dot";
 import { UserAvatar } from "@/components/user/user-avatar";
@@ -115,6 +136,27 @@ interface UserPanelProps {
  */
 const CUSTOM_STATUS_INPUT_MAX = CUSTOM_STATUS_MAX_LENGTH * 4;
 
+/*
+ * Under the redesign. Every string is redesign-only, appended after the
+ * classes the panel always drew, so the toggle off changes nothing.
+ *
+ * The status menu keeps its own behaviour (the recado field and the roving
+ * focus are not a Radix menu) and takes the menu's look: the popover
+ * surface, its padding, the row shape and the quiet icons.
+ */
+const MENU_PANEL_REDESIGN =
+  "redesign:rounded-[var(--popover-radius)] redesign:border-[color:var(--popover-border)] redesign:bg-[color:var(--popover-surface)] redesign:p-[var(--menu-pad)] redesign:shadow-[var(--popover-shadow)]";
+const MENU_ROW_REDESIGN =
+  "redesign:gap-[var(--menu-row-gap)] redesign:rounded-[var(--menu-row-radius)] redesign:py-[var(--menu-row-py)] redesign:text-text redesign:hover:bg-[color:var(--menu-row-hover)] redesign:focus-visible:bg-[color:var(--menu-row-hover)]";
+const MENU_ICON_REDESIGN = "hidden shrink-0 text-[color:var(--menu-icon)] redesign:block";
+const MENU_SEPARATOR_REDESIGN = "redesign:my-1.5 redesign:border-[color:var(--menu-separator)]";
+/** The panel's round buttons: mute, deafen, Não Perturbe, settings. */
+const PANEL_BUTTON_REDESIGN =
+  "redesign:rounded-full redesign:text-[color:var(--list-row-icon)] redesign:hover:bg-[color:var(--card-row-hover)] redesign:hover:text-text redesign:focus-visible:ring-accent";
+/** Mic or sound off: the danger tone's soft pair, so "off" is a fill, not only a colour. */
+const PANEL_BUTTON_OFF_REDESIGN =
+  "redesign:bg-danger-soft redesign:text-on-danger-soft redesign:hover:bg-danger-soft redesign:hover:text-on-danger-soft";
+
 const CHOICES: readonly {
   manual: ManualStatus;
   /** The pip a choice shows — invisible deliberately borrows offline's. */
@@ -211,6 +253,8 @@ export function UserPanel({
   // Deafen forces the mic off, so both slashes show. Undeafen can leave the
   // mic slash up: that is the mute from before, not a second deafen.
   const micShownOff = serverMuted || isMuted || isDeafened;
+  /** In a call without the right to speak (audience mode), not muted by anyone. */
+  const listenOnly = inVoice && !canSpeak && !serverMuted;
 
   // Re-seed the draft from the truth: when the menu opens, and whenever the
   // saved value moves under it (another tab, another device, or this write
@@ -264,6 +308,8 @@ export function UserPanel({
   // that they are "Offline" would leave them unable to tell whether the setting
   // took, which is the failure a privacy control cannot afford.
   const retro = useRetroLook();
+  // Under the redesign a locked mic is named for what it shows.
+  const lockedName = useRedesign() && listenOnly;
   const ownLabel =
     manualStatus === "invisible"
       ? t(retro ? retroStatusKey("invisible") : "status.invisible")
@@ -307,7 +353,18 @@ export function UserPanel({
   }
 
   return (
-    <div className="safe-pb relative border-t border-ink-4/60 bg-ink">
+    <div
+      className={cn(
+        "safe-pb relative border-t border-ink-4/60 bg-ink",
+        // An inset card at the foot of the sidebar, like the voice strip
+        // above it. The presence dot's cutout is the card's colour, opaque.
+        compact ? SIDEBAR_FOOTER_CARD_COMPACT_REDESIGN : SIDEBAR_FOOTER_CARD_REDESIGN,
+        "redesign:[--avatar-dot-ring:var(--footer-card-solid)]",
+      )}
+      // Under the redesign the home-indicator inset goes outside the card, so
+      // the row stays centred in it (`index.css`, `[data-user-panel-card]`).
+      data-user-panel-card=""
+    >
       {showHint && (
         <DownloadHint
           onOpen={() => setDownloadOpen(true)}
@@ -319,7 +376,7 @@ export function UserPanel({
       )}
       <div
         className={cn(
-          "relative flex gap-2 px-2 py-2",
+          "relative flex gap-2 px-2 py-2 redesign:gap-1 redesign:p-1.5",
           compact ? "flex-col items-center gap-1" : "items-center",
         )}
       >
@@ -328,7 +385,12 @@ export function UserPanel({
             ref={popoverRef}
             role="menu"
             aria-label={t("status.change")}
-            className="absolute bottom-full left-0 z-50 mb-2 w-64 overflow-hidden rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)] animate-fade-in"
+            className={cn(
+              "absolute bottom-full left-0 z-50 mb-2 w-64 overflow-hidden rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)] animate-fade-in",
+              MENU_PANEL_REDESIGN,
+              // Lines up with both edges of the card instead of a fixed 256px.
+              "redesign:right-0 redesign:w-auto",
+            )}
           >
           {/* Renaming lives first because this menu is where people look for
               it. Somebody who signed in with Google lands with their real
@@ -340,16 +402,17 @@ export function UserPanel({
           <button
             type="button"
             role="menuitem"
-            className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-paper outline-none hover:bg-ink-3 focus-visible:bg-ink-3"
+            className={cn("flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-paper outline-none hover:bg-ink-3 focus-visible:bg-ink-3", MENU_ROW_REDESIGN)}
             onClick={() => {
               onOpenProfile();
               setOpen(false);
             }}
           >
-            <Pencil className="h-4 w-4 shrink-0 text-paper-muted" aria-hidden />
+            <Pencil className="h-4 w-4 shrink-0 text-paper-muted redesign:hidden" aria-hidden />
+            <Icon icon={PencilSimple} size="sm" className={MENU_ICON_REDESIGN} />
             {t("userMenu.editProfile")}
           </button>
-          <div role="separator" className="my-1 border-t border-ink-4/60" />
+          <div role="separator" className={cn("my-1 border-t border-ink-4/60", MENU_SEPARATOR_REDESIGN)} />
 
           {/* O RECADO, and it lives HERE rather than in Settings.
 
@@ -381,7 +444,11 @@ export function UserPanel({
                 aria-label={t("customStatus.label")}
                 placeholder={t("customStatus.placeholder")}
                 data-custom-status-input=""
-                className="w-full rounded-md border border-ink-4 bg-ink px-2.5 py-1.5 pr-7 text-sm text-paper placeholder:text-paper-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60 disabled:opacity-60"
+                className={cn(
+                  "w-full rounded-md border border-ink-4 bg-ink px-2.5 py-1.5 pr-7 text-sm text-paper placeholder:text-paper-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60 disabled:opacity-60",
+                  // The field's look (ui/input.tsx), at the menu's row height.
+                  "redesign:h-9 redesign:rounded-[var(--input-radius,var(--radius-control))] redesign:border-[color:var(--input-border)] redesign:bg-[color:var(--input-bg)] redesign:py-0 redesign:pl-3 redesign:pr-8 redesign:text-text redesign:placeholder:text-[color:var(--input-placeholder)] redesign:hover:border-[color:var(--input-hover-border)] redesign:focus-visible:ring-[color:var(--input-ring,var(--color-accent))]",
+                )}
                 onChange={(event) => {
                   onClearCustomStatusError();
                   setDraft(event.target.value);
@@ -400,7 +467,7 @@ export function UserPanel({
                   type="button"
                   aria-label={t("customStatus.clear")}
                   title={t("customStatus.clear")}
-                  className="absolute right-1 top-1/2 -translate-y-1/2 rounded p-1 text-paper-muted hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+                  className="absolute right-1 top-1/2 -translate-y-1/2 rounded p-1 text-paper-muted hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60 redesign:right-1.5 redesign:rounded-full redesign:text-text-tertiary redesign:hover:bg-[color:var(--menu-row-hover)] redesign:hover:text-text redesign:focus-visible:ring-accent"
                   // Keeps focus on the input, so clearing does not first fire
                   // the blur handler and save the very text it is removing.
                   onMouseDown={(event) => event.preventDefault()}
@@ -409,7 +476,8 @@ export function UserPanel({
                     onSetCustomStatus("");
                   }}
                 >
-                  <X className="h-3.5 w-3.5" />
+                  <X className="h-3.5 w-3.5 redesign:hidden" />
+                  <Icon icon={XBold} kind="symbol" size="sm" className="hidden h-3.5 w-3.5 redesign:block" />
                 </button>
               )}
             </div>
@@ -422,7 +490,7 @@ export function UserPanel({
                 <p
                   className={cn(
                     "mt-1 text-right text-[11px] tabular-nums",
-                    remaining < 0 ? "text-danger" : "text-paper-muted",
+                    remaining < 0 ? "text-danger" : "text-paper-muted redesign:text-text-tertiary",
                   )}
                   data-custom-status-remaining=""
                 >
@@ -431,7 +499,7 @@ export function UserPanel({
               )
             )}
           </div>
-          <div role="separator" className="my-1 border-t border-ink-4/60" />
+          <div role="separator" className={cn("my-1 border-t border-ink-4/60", MENU_SEPARATOR_REDESIGN)} />
           {/* `role="group"`, not `listbox` — a listbox may only contain
               `option` children, and this container is a menu that also holds
               the rename item, the recado field, feedback and the download
@@ -450,20 +518,27 @@ export function UserPanel({
                 role="menuitemradio"
                 aria-checked={selected}
                 disabled={statusSaving}
-                className="flex w-full items-start gap-2.5 rounded-md px-2.5 py-2 text-left outline-none hover:bg-ink-3 focus-visible:bg-ink-3 disabled:pointer-events-none disabled:opacity-50"
+                className={cn(
+                  "flex w-full items-start gap-2.5 rounded-md px-2.5 py-2 text-left outline-none hover:bg-ink-3 focus-visible:bg-ink-3 disabled:pointer-events-none disabled:opacity-50",
+                  MENU_ROW_REDESIGN,
+                )}
                 onClick={() => {
                   onSetStatus(choice.manual);
                   setOpen(false);
                 }}
               >
-                <StatusDot
-                  status={choice.pip}
-                  size="md"
-                  className="mt-0.5"
-                  label=""
-                />
+                {/* A 16px slot under the redesign, so the label lines up with
+                    the action rows' labels above. */}
+                <span className="contents redesign:mt-0.5 redesign:flex redesign:h-4 redesign:w-4 redesign:shrink-0 redesign:items-center redesign:justify-center">
+                  <StatusDot
+                    status={choice.pip}
+                    size="md"
+                    className="mt-0.5 redesign:mt-0"
+                    label=""
+                  />
+                </span>
                 <span className="min-w-0 flex-1">
-                  <span className="block text-sm text-paper">
+                  <span className="block text-sm text-paper redesign:text-text">
                     {t(retro ? retroStatusKey(choice.pip === "offline" ? "invisible" : choice.pip) : choice.labelKey)}
                   </span>
                   {/* The hint is not decoration. "Invisible" without the
@@ -471,13 +546,16 @@ export function UserPanel({
                       not keep, and someone would only find that out from a
                       friend saying "I can see you in the call". */}
                   {choice.hintKey && (
-                    <span className="mt-0.5 block text-[11px] leading-snug text-paper-muted">
+                    <span className="mt-0.5 block text-[11px] leading-snug text-paper-muted redesign:text-xs redesign:text-text-secondary">
                       {t(choice.hintKey)}
                     </span>
                   )}
                 </span>
                 {selected && (
-                  <Check className="mt-0.5 h-4 w-4 shrink-0 text-signal" />
+                  <>
+                    <Check className="mt-0.5 h-4 w-4 shrink-0 text-signal redesign:hidden" />
+                    <Icon icon={CheckBold} kind="symbol" size="sm" className="mt-0.5 hidden shrink-0 text-accent-text redesign:block" />
+                  </>
                 )}
               </button>
             );
@@ -490,30 +568,32 @@ export function UserPanel({
           )}
           {/* The low-key home of the feedback box: one quiet menu item under
               the status choices, on every screen, costing no footer space. */}
-          <div role="separator" className="my-1 border-t border-ink-4/60" />
+          <div role="separator" className={cn("my-1 border-t border-ink-4/60", MENU_SEPARATOR_REDESIGN)} />
           <button
             type="button"
             role="menuitem"
-            className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-paper outline-none hover:bg-ink-3 focus-visible:bg-ink-3"
+            className={cn("flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-paper outline-none hover:bg-ink-3 focus-visible:bg-ink-3", MENU_ROW_REDESIGN)}
             onClick={() => {
               onOpenFeedback();
               setOpen(false);
             }}
           >
-            <Bug className="h-4 w-4 shrink-0 text-paper-muted" aria-hidden />
+            <Bug className="h-4 w-4 shrink-0 text-paper-muted redesign:hidden" aria-hidden />
+            <Icon icon={BugFill} size="sm" className={MENU_ICON_REDESIGN} />
             {t("userMenu.feedback")}
           </button>
           {onOpenHelp && (
             <button
               type="button"
               role="menuitem"
-              className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-paper outline-none hover:bg-ink-3 focus-visible:bg-ink-3"
+              className={cn("flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-paper outline-none hover:bg-ink-3 focus-visible:bg-ink-3", MENU_ROW_REDESIGN)}
               onClick={() => {
                 onOpenHelp();
                 setOpen(false);
               }}
             >
-              <CircleHelp className="h-4 w-4 shrink-0 text-paper-muted" aria-hidden />
+              <CircleHelp className="h-4 w-4 shrink-0 text-paper-muted redesign:hidden" aria-hidden />
+              <Icon icon={Question} size="sm" className={MENU_ICON_REDESIGN} />
               {t("userMenu.help")}
             </button>
           )}
@@ -521,16 +601,17 @@ export function UserPanel({
             <button
               type="button"
               role="menuitem"
-              className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-paper outline-none hover:bg-ink-3 focus-visible:bg-ink-3"
+              className={cn("flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-paper outline-none hover:bg-ink-3 focus-visible:bg-ink-3", MENU_ROW_REDESIGN)}
               onClick={() => {
                 setDownloadOpen(true);
                 setOpen(false);
               }}
             >
               <Download
-                className="h-4 w-4 shrink-0 text-paper-muted"
+                className="h-4 w-4 shrink-0 text-paper-muted redesign:hidden"
                 aria-hidden
               />
+              <Icon icon={DownloadSimple} kind="symbol" size="sm" className={MENU_ICON_REDESIGN} />
               {t("userMenu.download")}
             </button>
           )}
@@ -541,11 +622,15 @@ export function UserPanel({
         <button
         ref={triggerRef}
         type="button"
+        data-user-panel-trigger=""
         aria-haspopup="menu"
         aria-expanded={open}
         className={cn(
           "flex min-w-0 items-center gap-2 rounded-md px-1 py-0.5 text-left hover:bg-ink-2",
           !compact && "flex-1",
+          "redesign:gap-2.5 redesign:rounded-full redesign:py-1 redesign:pl-1 redesign:pr-2 redesign:hover:bg-[color:var(--card-row-hover)] redesign:hover:[--avatar-dot-ring:var(--footer-card-solid-hover)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent",
+          compact && "redesign:p-1",
+          open && "redesign:bg-[color:var(--card-row-hover)] redesign:[--avatar-dot-ring:var(--footer-card-solid-hover)]",
         )}
         onClick={() => setOpen((prev) => !prev)}
       >
@@ -559,12 +644,12 @@ export function UserPanel({
           <StatusDot
             status={effectiveStatus}
             label={ownLabel}
-            className="absolute -bottom-0.5 -right-0.5"
-            ringClassName="rounded-full bg-ink ring-2 ring-ink"
+            className="absolute -bottom-0.5 -right-0.5 redesign:bottom-0 redesign:right-0"
+            ringClassName="rounded-full bg-ink ring-2 ring-ink redesign:bg-[color:var(--avatar-dot-ring)] redesign:ring-[color:var(--avatar-dot-ring)]"
           />
         </span>
         <span className={cn("min-w-0 flex-1", compact && "hidden")}>
-          <span className="block truncate text-sm font-semibold">
+          <span className="block truncate text-sm font-semibold redesign:text-text">
             {displayName}
           </span>
           {/* Presence is the pip on the avatar. This line is one identity
@@ -574,8 +659,9 @@ export function UserPanel({
               "dev_us… O…". */}
           <span
             className={cn(
-              "block truncate text-[11px]",
+              "block truncate text-[11px] redesign:text-xs",
               statusSaving ? "text-paper-muted/60" : "text-paper-muted",
+              statusSaving ? "redesign:text-text-tertiary/60" : "redesign:text-text-tertiary",
             )}
           >
             {ownLabel ??
@@ -598,11 +684,19 @@ export function UserPanel({
         label={
           serverMuted
             ? t("voice.control.serverMuted")
-            : micShownOff
-              ? t("userPanel.unmute")
-              : t("userPanel.mute")
+            : lockedName
+              ? t("voice.bar.listenOnly")
+              : micShownOff
+                ? t("userPanel.unmute")
+                : t("userPanel.mute")
         }
-        name={micShownOff ? t("userPanel.unmuteMic") : t("userPanel.muteMic")}
+        name={
+          lockedName
+            ? t("voice.bar.listenOnly")
+            : micShownOff
+              ? t("userPanel.unmuteMic")
+              : t("userPanel.muteMic")
+        }
         detail={
           !inVoice
             ? t("userPanel.joinToUse")
@@ -621,24 +715,50 @@ export function UserPanel({
           <Button
             variant="ghost"
             size="icon"
-            className="h-8 w-8 shrink-0"
+            className={cn(
+              "h-8 w-8 shrink-0",
+              PANEL_BUTTON_REDESIGN,
+              micShownOff && inVoice && canSpeak && !serverMuted && PANEL_BUTTON_OFF_REDESIGN,
+              // A moderator's mute is disabled, and must still read at full
+              // strength: it is the one time "am I heard" matters most.
+              serverMuted && "redesign:bg-warning-soft redesign:text-on-warning-soft redesign:[--button-disabled-opacity:1]",
+              // Listen only: locked, not unavailable. A neutral fill and the
+              // slashed mic at full strength.
+              listenOnly && "redesign:relative redesign:bg-transparent redesign:text-text-secondary redesign:ring-1 redesign:ring-inset redesign:ring-[color:var(--card-border)] redesign:[--button-disabled-opacity:1]",
+            )}
             onClick={onToggleMute}
             disabled={!inVoice || !canSpeak || serverMuted}
-            aria-pressed={micShownOff}
+            aria-pressed={lockedName ? undefined : micShownOff}
             aria-label={
               serverMuted
                 ? t("voice.control.serverMuted")
-                : micShownOff
+                : lockedName
+                  ? t("voice.bar.listenOnly")
+                  : micShownOff
                   ? t("userPanel.unmuteMic")
                   : t("userPanel.muteMic")
             }
           >
             {micShownOff ? (
               <MicOff
-                className={cn("h-4 w-4", serverMuted ? "text-warning" : "text-danger")}
+                className={cn("h-4 w-4 redesign:hidden", serverMuted ? "text-warning" : "text-danger")}
               />
             ) : (
-              <Mic className="h-4 w-4" />
+              <Mic className="h-4 w-4 redesign:hidden" />
+            )}
+            <Icon
+              icon={micShownOff || listenOnly ? MicrophoneSlash : Microphone}
+              size="sm"
+              className="hidden redesign:block"
+            />
+            {/* The lock, visible without a hover: the mic is held, not off. */}
+            {listenOnly && (
+              <span
+                aria-hidden="true"
+                className="absolute -bottom-0.5 -right-0.5 hidden h-3.5 w-3.5 items-center justify-center rounded-full bg-[color:var(--footer-card-solid)] text-text-secondary redesign:flex"
+              >
+                <Icon icon={LockSimple} size="sm" className="h-3 w-3" />
+              </span>
             )}
           </Button>
         </span>
@@ -655,7 +775,11 @@ export function UserPanel({
           <Button
             variant="ghost"
             size="icon"
-            className="h-8 w-8 shrink-0"
+            className={cn(
+              "h-8 w-8 shrink-0",
+              PANEL_BUTTON_REDESIGN,
+              isDeafened && inVoice && PANEL_BUTTON_OFF_REDESIGN,
+            )}
             onClick={onToggleDeafen}
             disabled={!inVoice}
             aria-pressed={isDeafened}
@@ -666,9 +790,16 @@ export function UserPanel({
             }
           >
             {isDeafened ? (
-              <HeadphoneOff className="h-4 w-4 text-danger" />
+              <>
+                <HeadphoneOff className="h-4 w-4 text-danger redesign:hidden" />
+                {/* The bold ear, as the voice row's deafened badge. */}
+                <Icon icon={EarSlash} kind="symbol" size="sm" className="hidden redesign:block" />
+              </>
             ) : (
-              <Headphones className="h-4 w-4" />
+              <>
+                <Headphones className="h-4 w-4 redesign:hidden" />
+                <Icon icon={HeadphonesFill} size="sm" className="hidden redesign:block" />
+              </>
             )}
           </Button>
         </span>
@@ -683,10 +814,13 @@ export function UserPanel({
           <Button
             variant="ghost"
             size="icon"
-            className="h-8 w-8 shrink-0 text-danger"
+            // Red alone means Não Perturbe, as its presence dot does; a coloured
+            // fill in this row always means voice is off.
+            className={cn("h-8 w-8 shrink-0 text-danger", PANEL_BUTTON_REDESIGN, "redesign:bg-transparent redesign:text-danger redesign:hover:bg-[color:var(--card-row-hover)] redesign:hover:text-danger")}
             onClick={() => onSetStatus("online")}
           >
-            <BellOff className="h-4 w-4" />
+            <BellOff className="h-4 w-4 redesign:hidden" />
+            <Icon icon={BellSlash} size="sm" className="hidden redesign:block" />
           </Button>
         </Tooltip>
       )}
@@ -697,10 +831,11 @@ export function UserPanel({
         <Button
           variant="ghost"
           size="icon"
-          className="h-8 w-8 shrink-0"
+          className={cn("h-8 w-8 shrink-0", PANEL_BUTTON_REDESIGN)}
           onClick={onOpenSettings}
         >
-          <Settings className="h-4 w-4" />
+          <Settings className="h-4 w-4 redesign:hidden" />
+          <Icon icon={GearSix} kind="symbol" size="sm" className="hidden redesign:block" />
         </Button>
       </Tooltip>
       </div>

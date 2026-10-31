@@ -1,5 +1,5 @@
 import type { PublicUser } from "@pqp/shared";
-import { Loader2, Search } from "lucide-react";
+import { Search } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import { AutocompleteMenu } from "@/components/chat/autocomplete-menu";
 import { clampSelection } from "@/components/search/search-results";
@@ -8,6 +8,9 @@ import { ApiError, lookupUserByTag, searchUsers } from "@/lib/api";
 import { excludeUsers, readUserQuery } from "@/lib/user-search";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { Spinner } from "@/components/ui/spinner";
+import { MagnifyingGlass } from "@phosphor-icons/react";
+import { Icon } from "@/components/ui/icon";
 
 /** Same as message search: one typed word is one request, and it still feels live. */
 const DEBOUNCE_MS = 300;
@@ -154,9 +157,12 @@ export function UserSearch({
         className={cn(
           "flex items-center gap-2 rounded-md border border-border bg-surface-0/60 px-2.5 py-2",
           "focus-within:border-border-strong",
+          // The input's field under the redesign, as a round search.
+          "redesign:h-[var(--input-h)] redesign:gap-2.5 redesign:rounded-full redesign:border-[color:var(--input-border)] redesign:bg-[color:var(--input-bg)] redesign:px-[var(--input-px)] redesign:py-0 redesign:hover:border-[color:var(--input-hover-border)] redesign:focus-within:ring-2 redesign:focus-within:ring-offset-2 redesign:focus-within:ring-offset-ring-offset redesign:focus-within:ring-[color:var(--input-ring,var(--color-focus-ring))]",
         )}
       >
-        <Search aria-hidden="true" className="h-4 w-4 shrink-0 text-text-muted" />
+        <Search aria-hidden="true" className="h-4 w-4 shrink-0 text-text-muted redesign:hidden" />
+        <Icon icon={MagnifyingGlass} kind="symbol" size="sm" className="hidden text-[color:var(--input-placeholder)] redesign:block" />
         <input
           value={query}
           autoFocus={autoFocus}
@@ -171,13 +177,10 @@ export function UserSearch({
           aria-expanded={searching}
           aria-controls={listboxId}
           aria-autocomplete="list"
-          className="min-w-0 flex-1 bg-transparent text-sm text-text placeholder:text-text-muted focus:outline-none"
+          className="min-w-0 flex-1 bg-transparent text-sm text-text placeholder:text-text-muted focus:outline-none redesign:placeholder:text-[color:var(--input-placeholder)]"
         />
         {loading && (
-          <Loader2
-            aria-hidden="true"
-            className="h-4 w-4 shrink-0 animate-spin text-text-muted"
-          />
+          <Spinner className="h-4 w-4 shrink-0 animate-spin text-text-muted" />
         )}
       </div>
 

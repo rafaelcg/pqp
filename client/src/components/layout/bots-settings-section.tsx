@@ -12,8 +12,18 @@ import {
   type ServerBotModelChoice,
   type ServerBotOverview,
 } from "@pqp/shared";
+import { CARD_SURFACE } from "@/components/ui/card";
 import { useEffect, useId, useRef, useState } from "react";
 import { AtSign, ListChecks, ShieldCheck, Sparkles, Trash2 } from "lucide-react";
+import {
+  At,
+  ListChecks as ListChecksGlyph,
+  ShieldCheck as ShieldCheckGlyph,
+  Sparkle,
+  Trash,
+  type Icon as PhosphorIcon,
+} from "@phosphor-icons/react";
+import { IconSwap } from "@/components/ui/icon";
 import { BotFace } from "@/components/bots/bot-face";
 import { RadioChoices } from "@/components/bots/radio-choices";
 import {
@@ -33,6 +43,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { Select } from "@/components/ui/select";
 import {
   ApiError,
   deleteServerBot,
@@ -45,6 +56,15 @@ import {
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { intlLocale } from "@/lib/locale";
 import { cn } from "@/lib/utils";
+import {
+  BOT_CARD_CHOSEN_REDESIGN,
+  BOT_CARD_REDESIGN,
+  BOT_CHOICE_FOCUS_REDESIGN,
+  BOT_SWATCH_CHOSEN_REDESIGN,
+  BOT_SWATCH_REDESIGN,
+  BOT_RING_OFFSET_PANE_REDESIGN,
+  ChosenCheck,
+} from "@/components/bots/bot-choice";
 
 /** The channels a bot can be put in: the ones people chat in. A forum covers its posts. */
 function chatChannels(channels: Channel[]): Channel[] {
@@ -306,7 +326,7 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
             className="h-16 w-16"
           />
           {!off && (
-            <span className="absolute bottom-0 right-0 h-3.5 w-3.5 rounded-full bg-success ring-2 ring-[var(--color-surface-1)]" aria-hidden />
+            <span className="absolute bottom-0 right-0 h-3.5 w-3.5 rounded-full bg-success ring-2 ring-[var(--color-surface-1)] redesign:bottom-1 redesign:right-1 redesign:ring-[color:var(--settings-pane-bg)]" aria-hidden />
           )}
         </span>
         <div className="min-w-0 flex-1">
@@ -328,12 +348,12 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
             {t("bots.settings.editFace")}
           </button>
         </div>
-        <div className="flex shrink-0 items-center gap-4 rounded-[var(--radius-card)] border border-border bg-surface-card px-4 py-3">
+        <div className={cn(CARD_SURFACE, "flex shrink-0 items-center gap-4 px-4 py-3")}>
           <div>
             <p className="text-sm font-semibold text-text">
               {off ? t("bots.settings.asleep") : t("bots.settings.awake")}
             </p>
-            <p className="whitespace-nowrap text-xs text-text-tertiary">
+            <p className="whitespace-nowrap text-xs text-text-tertiary redesign:text-text-secondary">
               {off ? t("bots.settings.asleepHint") : t("bots.settings.awakeHint")}
             </p>
           </div>
@@ -355,7 +375,7 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
 
       <BotTabs value={tab} onChange={setTab} />
 
-      {tab === "overview" && <BotOverviewPanel bot={bot} overview={overview} channels={channels} />}
+      {tab === "overview" && <BotOverviewPanel bot={bot} overview={overview} channels={channels} onOpenPowers={() => setTab("powers")} />}
 
       {tab === "voice" && (
         <>
@@ -383,9 +403,18 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
               cn(
                 "grid h-10 w-10 place-items-center rounded-full border-2 bg-surface-2",
                 selected ? "border-text" : "border-transparent",
+                BOT_SWATCH_REDESIGN,
+                selected && BOT_SWATCH_CHOSEN_REDESIGN,
+                BOT_CHOICE_FOCUS_REDESIGN,
+                BOT_RING_OFFSET_PANE_REDESIGN,
               )
             }
-            renderItem={(color) => <BotFace color={color} face="oi" live={false} className="h-7 w-7" />}
+            renderItem={(color, selected) => (
+              <>
+                <BotFace color={color} face="oi" live={false} className="h-7 w-7" />
+                {selected && <ChosenCheck corner="bottom" />}
+              </>
+            )}
           />
           <RadioChoices
             label={t("bots.wizard.face.face")}
@@ -398,12 +427,16 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
                 selected
                   ? "border-accent bg-accent-soft text-on-accent-soft"
                   : "border-border bg-surface-2 text-text-secondary",
+                selected ? BOT_CARD_CHOSEN_REDESIGN : BOT_CARD_REDESIGN,
+                BOT_CHOICE_FOCUS_REDESIGN,
+                BOT_RING_OFFSET_PANE_REDESIGN,
               )
             }
-            renderItem={(face) => (
+            renderItem={(face, selected) => (
               <>
                 <BotFace color={draft.color} face={face} live={false} className="h-8 w-8" />
                 {t(`bots.face.${face}`)}
+                {selected && <ChosenCheck />}
               </>
             )}
           />
@@ -435,7 +468,11 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
                   size="sm"
                   variant="secondary"
                   aria-pressed={active}
-                  className={active ? "border-accent text-accent" : undefined}
+                  className={cn(
+                    active && "border-accent text-accent",
+                    // Under the redesign a chosen preset is the selected pill, not accent text.
+                    active && "redesign:border-transparent redesign:bg-[color:var(--list-row-selected)] redesign:text-text",
+                  )}
                   onClick={() => edit({ persona: text })}
                 >
                   {t(`serverSettings.bots.preset.${preset}.name`)}
@@ -529,9 +566,10 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
             <>
               <label className="block space-y-1.5">
                 <span className="text-xs font-semibold text-text-secondary">{t("bots.welcome.channel")}</span>
-                <select
+                <Select
                   value={draft.welcomeChannelId}
-                  className="h-[var(--control-md)] w-full rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 text-sm text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-focus-ring)]"
+                  raised
+                  className="h-[var(--input-h,var(--control-md))]"
                   onChange={(e) => edit({ welcomeChannelId: e.target.value })}
                 >
                   {textChannels.map((channel) => (
@@ -539,7 +577,7 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
                       #{channel.name}
                     </option>
                   ))}
-                </select>
+                </Select>
               </label>
               <label className="block space-y-1.5">
                 <span className="text-xs font-semibold text-text-secondary">{t("bots.welcome.message")}</span>
@@ -563,11 +601,12 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
       {models.length > 1 && (
         <SettingsGroup title={t("serverSettings.bots.model")}>
           <div className="p-4">
-            <select
+            <Select
               id={ids.model}
               aria-label={t("serverSettings.bots.model")}
               value={draft.model}
-              className="h-[var(--control-md)] w-full rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 text-sm text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-focus-ring)]"
+              raised
+              className="h-[var(--input-h,var(--control-md))]"
               onChange={(e) => edit({ model: e.target.value })}
             >
               <option value="">{t("serverSettings.bots.modelDefault", { model: models[0]!.label })}</option>
@@ -576,7 +615,7 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
                   {choice.label}
                 </option>
               ))}
-            </select>
+            </Select>
           </div>
         </SettingsGroup>
       )}
@@ -587,7 +626,7 @@ export function BotsSettingsSection({ serverId, onCreate }: { serverId: string; 
             {t("bots.settings.dangerBody", { name: bot.name })}
           </p>
           <Button type="button" variant="danger" onClick={() => setConfirmDelete(true)}>
-            <Trash2 className="mr-2 h-4 w-4" aria-hidden />
+            <IconSwap off={Trash2} on={Trash} offClassName="mr-2 h-4 w-4" />
             {t("serverSettings.bots.delete")}
           </Button>
         </div>
@@ -632,13 +671,20 @@ function BotInvite({ onCreate }: { onCreate: () => void }) {
     ["grape", "kkkk", "h-14 w-14"],
     ["sun", "focado", "h-12 w-12"],
   ];
-  const features: Array<[typeof AtSign, MessageKey, MessageKey]> = [
-    [AtSign, "bots.invite.answers", "bots.invite.answersBody"],
-    [ListChecks, "bots.invite.work", "bots.invite.workBody"],
-    [ShieldCheck, "bots.invite.asks", "bots.invite.asksBody"],
+  const features: Array<[typeof AtSign, PhosphorIcon, MessageKey, MessageKey]> = [
+    [AtSign, At, "bots.invite.answers", "bots.invite.answersBody"],
+    [ListChecks, ListChecksGlyph, "bots.invite.work", "bots.invite.workBody"],
+    [ShieldCheck, ShieldCheckGlyph, "bots.invite.asks", "bots.invite.asksBody"],
   ];
   return (
-    <section className="rounded-[var(--radius-card)] border border-border bg-surface-card px-6 py-8 text-center">
+    <section
+      className={cn(
+        CARD_SURFACE,
+        "px-6 py-8 text-center",
+        // Under the redesign the invite sits on the pane, like a page empty state.
+        "redesign:border-0 redesign:bg-transparent redesign:shadow-none redesign:px-0",
+      )}
+    >
       <div className="flex items-end justify-center gap-3" aria-hidden="true">
         {cast.map(([color, face, size]) => (
           <BotFace key={color} color={color} face={face} variant="full" className={size} />
@@ -647,18 +693,25 @@ function BotInvite({ onCreate }: { onCreate: () => void }) {
       <h2 className="mt-6 font-display text-3xl font-extrabold text-text">{t("bots.invite.title")}</h2>
       <p className="mx-auto mt-2 max-w-md text-text-secondary">{t("bots.invite.description")}</p>
       <div className="mt-6 grid gap-3 text-left sm:grid-cols-3">
-        {features.map(([Icon, title, body]) => (
-          <div key={title} className="rounded-[var(--radius-card)] border border-border bg-surface-2 p-3">
-            <p className="flex items-center gap-2 text-sm font-semibold text-text">
-              <Icon className="h-4 w-4 text-accent" aria-hidden />
+        {features.map(([Icon, glyph, title, body]) => (
+          <div
+            key={title}
+            className={cn(
+              "rounded-[var(--radius-card)] border border-border bg-surface-2 p-3",
+              // The invite has no frame under the redesign, so these are plain cards on the pane.
+              "redesign:border-[color:var(--card-border)] redesign:bg-[color:var(--card-bg)]",
+            )}
+          >
+            <p className="flex items-center gap-2 text-sm font-semibold text-text redesign:items-start">
+              <IconSwap off={Icon} on={glyph} offClassName="h-4 w-4 shrink-0 text-accent" className="mt-0.5 text-accent-text" />
               {t(title)}
             </p>
-            <p className="mt-1 text-xs text-text-secondary">{t(body)}</p>
+            <p className="mt-1 text-xs text-text-secondary redesign:pl-6">{t(body)}</p>
           </div>
         ))}
       </div>
       <Button type="button" className="mt-6" onClick={onCreate}>
-        <Sparkles className="mr-2 h-4 w-4" aria-hidden />
+        <IconSwap off={Sparkles} on={Sparkle} offClassName="mr-2 h-4 w-4" />
         {t("bots.invite.create")}
       </Button>
       <p className="mt-3 text-xs text-text-tertiary">{t("bots.invite.cost")}</p>

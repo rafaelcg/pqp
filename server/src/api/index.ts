@@ -7412,6 +7412,10 @@ router.get("/api/onboarding/config", async () => ({
   // default, read by `client/src/lib/hint-config.ts`.
   hintDiet: isEnabled("hint_diet"),
   hintBudget: isEnabled("hint_budget"),
+  // The new look's default for people who never chose (`redesign`, global,
+  // off by default), read by `client/src/lib/redesign.ts` through the same
+  // loader as the hint switches.
+  redesign: isEnabled("redesign"),
 }));
 
 /**

@@ -6,6 +6,7 @@ import { ChannelIcon } from "@/components/layout/channel-icon";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { Select } from "@/components/ui/select";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useForumConfig } from "@/hooks/use-forum-config";
 import {
@@ -23,6 +24,9 @@ import {
 } from "@/lib/api";
 import { useTranslation, type MessageKey, type Translator } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { SETTINGS_CARD_REDESIGN } from "@/components/settings/kit/classes";
+import { SECTION_LABEL_REDESIGN } from "@/components/ui/section-header";
+import { BADGE_REDESIGN } from "@/components/ui/badge";
 
 const STATUS_KEYS: Record<OutgoingWebhook["status"], MessageKey> = {
   active: "integrations.status.active",
@@ -355,7 +359,7 @@ function SkipPicker({
         className="h-9 rounded-xl border-0 bg-ink-2"
         onChange={(e) => onQuery(e.target.value)}
       />
-      <ul className="max-h-48 overflow-y-auto rounded-2xl bg-ink-2">
+      <ul className={cn("max-h-48 overflow-y-auto rounded-2xl bg-ink-2", SETTINGS_CARD_REDESIGN)}>
         {leftovers.map(({ id, name }) => {
           return (
             <li key={id}>
@@ -577,11 +581,11 @@ function HookForm({
                 <span className="text-xs font-medium text-paper-muted">
                   {t("integrations.authNameLabel")}
                 </span>
-                <select
+                <Select
                   value={draft.authName}
                   aria-label={t("integrations.authNameLabel")}
                   disabled={disabled}
-                  className="h-10 w-full rounded-md border border-ink-4 bg-ink px-3 text-sm text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/50 disabled:opacity-50"
+                  
                   onChange={(e) =>
                     onChange({
                       ...draft,
@@ -595,7 +599,7 @@ function HookForm({
                       {option || t("integrations.authNone")}
                     </option>
                   ))}
-                </select>
+                </Select>
               </label>
               <label className="space-y-1.5 text-sm text-paper">
                 <span className="text-xs font-medium text-paper-muted">
@@ -917,7 +921,7 @@ export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
       )}
 
       <div className="flex items-center justify-between gap-3">
-        <h4 className="font-display text-sm font-bold uppercase tracking-wider text-paper-muted">
+        <h4 className={cn("font-display text-sm font-bold uppercase tracking-wider text-paper-muted", SECTION_LABEL_REDESIGN)}>
           {t("integrations.listTitle")}
         </h4>
         {!composing && (
@@ -938,7 +942,7 @@ export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
       </div>
 
       {composing && (
-        <section className="rounded-2xl border border-ink-4 bg-ink-2/60 p-4">
+        <section className={cn("rounded-2xl border border-ink-4 bg-ink-2/60 p-4", SETTINGS_CARD_REDESIGN)}>
           <h5 className="mb-4 text-sm font-semibold text-paper">
             {t("integrations.createTitle")}
           </h5>
@@ -967,7 +971,7 @@ export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
       )}
 
       {!loading && hooks.length === 0 && !composing && (
-        <div className="flex flex-col items-center rounded-2xl border border-dashed border-ink-4 bg-ink-2/40 px-6 py-10 text-center">
+        <div className="flex flex-col items-center rounded-2xl border border-dashed border-ink-4 bg-ink-2/40 px-6 py-10 text-center redesign:rounded-[var(--radius-card)] redesign:border-[color:var(--card-border)] redesign:bg-transparent">
           <span className="flex h-11 w-11 items-center justify-center rounded-full bg-ink-3 text-paper-muted">
             <Webhook className="h-5 w-5" aria-hidden />
           </span>
@@ -1003,7 +1007,7 @@ export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
           return (
             <li
               key={hook.id}
-              className="space-y-3 rounded-2xl border border-ink-4 bg-ink-2/40 p-4"
+              className={cn("space-y-3 rounded-2xl border border-ink-4 bg-ink-2/40 p-4", SETTINGS_CARD_REDESIGN)}
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
@@ -1028,6 +1032,8 @@ export function OutgoingWebhooksSection({ serverId }: { serverId: string }) {
                 <span
                   className={cn(
                     "shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide",
+                    BADGE_REDESIGN,
+                    "redesign:h-[var(--badge-h)] redesign:py-0 redesign:inline-flex redesign:items-center",
                     hook.status === "active" && "bg-signal/15 text-signal",
                     hook.status === "failing" && "bg-danger/15 text-danger",
                     hook.status === "disabled" && "bg-ink-3 text-paper-muted",

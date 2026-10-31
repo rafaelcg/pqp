@@ -4,14 +4,20 @@ import {
   type PublicUser,
   type UserStatus,
 } from "@pqp/shared";
-import { Check, X } from "lucide-react";
+import { X } from "lucide-react";
+import { X as XBold } from "@phosphor-icons/react";
+import { IconSwap } from "@/components/ui/icon";
+import { SECTION_LABEL_REDESIGN } from "@/components/ui/section-header";
+import { DIALOG_CUT_REDESIGN, PICKED_CHIP_REDESIGN } from "@/components/conversations/picker-redesign";
 import { useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { FriendsContext } from "@/components/friends/use-friends";
 import { Button } from "@/components/ui/button";
+import { TickBox } from "@/components/ui/check-row";
 import { Dialog } from "@/components/ui/dialog";
 import { StatusDot } from "@/components/user/status-dot";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { UserSearch } from "@/components/user/user-search";
+import { readUserQuery } from "@/lib/user-search";
 import { ApiError, createConversation } from "@/lib/api";
 import { foldForSearch } from "@/lib/conversation-list";
 import { useTranslation } from "@/lib/i18n";
@@ -222,10 +228,17 @@ export function NewConversationDialog({
       onClose={close}
       footer={
         <div className="flex w-full items-center gap-3">
-          <p className="mr-auto hidden text-xs text-text-tertiary sm:block">
+          <p className="mr-auto hidden text-xs text-text-tertiary sm:block redesign:sm:hidden">
             {t("conversations.new.hint")}
           </p>
-          <Button variant="secondary" onClick={close} disabled={busy}>
+          {/* Ghost under the redesign, as the classic dialog's: the open
+              button stays the strongest thing even while it waits. */}
+          <Button
+            variant="secondary"
+            onClick={close}
+            disabled={busy}
+            className="redesign:border-transparent redesign:bg-transparent redesign:text-[color:var(--button-ghost-text,var(--color-text-tertiary))] redesign:hover:bg-[var(--button-ghost-hover,var(--color-surface-2))] redesign:hover:text-text"
+          >
             {t("common.cancel")}
           </Button>
           <Button
@@ -250,7 +263,7 @@ export function NewConversationDialog({
                 <button
                   type="button"
                   onClick={() => toggle(person)}
-                  className="flex items-center gap-1.5 rounded-full border border-accent bg-accent-soft py-0.5 pl-0.5 pr-2 text-xs font-medium text-on-accent-soft"
+                  className={cn("flex items-center gap-1.5 rounded-full border border-accent bg-accent-soft py-0.5 pl-0.5 pr-2 text-xs font-medium text-on-accent-soft", PICKED_CHIP_REDESIGN)}
                   aria-label={t("dm.dialog.removeAria", { name: person.displayName })}
                 >
                   <UserAvatar
@@ -261,14 +274,14 @@ export function NewConversationDialog({
                     rounded="full"
                   />
                   {person.displayName}
-                  <X aria-hidden="true" className="h-3 w-3" />
+                  <IconSwap off={X} on={XBold} kind="symbol" offClassName="h-3 w-3" className="h-3.5 w-3.5" />
                 </button>
               </li>
             ))}
           </ul>
         )}
         {full ? (
-          <p className="text-xs text-text-tertiary">{t("dm.dialog.full")}</p>
+          <p className="text-xs text-text-tertiary redesign:text-[13px] redesign:text-text-secondary">{t("dm.dialog.full")}</p>
         ) : (
           <UserSearch
             label={t("dm.dialog.findPeople")}
@@ -280,9 +293,24 @@ export function NewConversationDialog({
           />
         )}
 
-        <div className="-mx-2 max-h-[min(50vh,22rem)] overflow-y-auto">
+        {/* Under the redesign the hint sits over the list it explains, on one
+            line, instead of wrapping beside the footer's buttons. */}
+        <p className="hidden px-2.5 text-xs text-text-secondary sm:redesign:block">
+          {t("conversations.new.hint")}
+        </p>
+        {/* On the dialog the row hover is the menu's tint: the sidebar's
+            opaque one is mixed for the pane and vanishes here in dark. */}
+        <div className="-mx-2 max-h-[min(50vh,22rem)] overflow-y-auto redesign:mx-0 redesign:[--list-row-hover:var(--menu-row-hover)]">
           {nobody ? (
-            <p className="px-2 py-3 text-sm text-text-tertiary">
+            <p
+              className={cn(
+                "px-2 py-3 text-sm text-text-tertiary redesign:px-3 redesign:text-text-secondary",
+                // Once the search above runs it answers for all of pqp; the
+                // local line would say "nobody" a second time. Below its
+                // minimum length it stays idle, and this line speaks.
+                readUserQuery(query).kind !== "idle" && "redesign:hidden",
+              )}
+            >
               {query.trim() ? t("conversations.new.noLocalMatch") : t("conversations.new.noFriends")}
             </p>
           ) : (
@@ -310,7 +338,7 @@ function Section({ label, children }: { label: string; children: ReactNode[] }) 
   }
   return (
     <section data-new-conversation-section="">
-      <h3 className="px-2 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
+      <h3 className={cn("px-2 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary", SECTION_LABEL_REDESIGN, "redesign:px-2.5 redesign:pt-3")}>
         {label}
       </h3>
       {children}
@@ -338,12 +366,19 @@ function PersonRow({
       className={cn(
         "group flex items-center gap-1 rounded-[var(--radius-control)] pr-2",
         checked ? "bg-surface-3" : "hover:bg-surface-3/50",
+        // A two-line list row: the pill, its hover, the tall selected fill.
+        "redesign:mb-1.5 redesign:rounded-[var(--list-row-radius)] redesign:pr-1.5",
+        // Keyboard focus rings the whole pill, the tick included.
+        "redesign:has-[>button:first-child:focus-visible]:ring-2 redesign:has-[>button:first-child:focus-visible]:ring-inset redesign:has-[>button:first-child:focus-visible]:ring-[color:var(--list-row-ring)]",
+        checked
+          ? "redesign:bg-[color:var(--list-row-selected-tall)] redesign:hover:bg-[color:var(--list-row-selected-tall)]"
+          : "redesign:hover:bg-[color:var(--list-row-hover)]",
       )}
     >
       <button
         type="button"
         onClick={onOpen}
-        className="flex min-h-11 min-w-0 flex-1 items-center gap-3 rounded-[var(--radius-control)] px-2 py-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring"
+        className="flex min-h-11 min-w-0 flex-1 items-center gap-3 rounded-[var(--radius-control)] px-2 py-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring redesign:rounded-[var(--list-row-radius)] redesign:pl-2.5 redesign:focus-visible:ring-0"
       >
         <span className="relative shrink-0">
           <UserAvatar
@@ -356,8 +391,8 @@ function PersonRow({
           {person.status && (
             <StatusDot
               status={person.status}
-              className="absolute -bottom-0.5 -right-0.5 bg-surface-2"
-              ringClassName="rounded-full ring-2 ring-surface-2"
+              className={cn("absolute -bottom-0.5 -right-0.5 redesign:bottom-0 redesign:right-0 bg-surface-2", DIALOG_CUT_REDESIGN)}
+              ringClassName={cn("rounded-full ring-2 ring-surface-2", DIALOG_CUT_REDESIGN)}
             />
           )}
         </span>
@@ -366,7 +401,7 @@ function PersonRow({
             {person.displayName}
           </span>
           {person.tag && (
-            <span className="block truncate text-[11px] text-text-tertiary">{person.tag}</span>
+            <span className="block truncate text-[11px] text-text-tertiary redesign:text-xs">{person.tag}</span>
           )}
         </span>
       </button>
@@ -377,17 +412,9 @@ function PersonRow({
         aria-label={t("conversations.new.tick", { name: person.displayName })}
         disabled={tickDisabled}
         onClick={onToggle}
-        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-control)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:opacity-40"
+        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-control)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:opacity-40 redesign:rounded-full redesign:focus-visible:ring-[color:var(--list-row-ring)]"
       >
-        <span
-          aria-hidden="true"
-          className={cn(
-            "flex h-5 w-5 items-center justify-center rounded-[var(--radius-tick)] transition-colors duration-[var(--duration-fast)]",
-            checked ? "bg-accent" : "bg-surface-2 ring-1 ring-inset ring-border-strong",
-          )}
-        >
-          {checked && <Check className="h-3.5 w-3.5 text-on-accent" strokeWidth={3} />}
-        </span>
+        <TickBox checked={checked} size="md" />
       </button>
     </div>
   );

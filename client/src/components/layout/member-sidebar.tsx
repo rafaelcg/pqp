@@ -22,12 +22,14 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type ReactNode,
 } from "react";
 import { parseBotFaceAvatar, type PublicUser, type VoiceParticipant } from "@pqp/shared";
 import { RightColumnTabs } from "@/components/chat/right-column-tabs";
 import { ContextMenu, type ContextMenuItemDef } from "@/components/ui/context-menu";
 import { Tooltip } from "@/components/ui/tooltip";
+import { useRedesign } from "@/lib/redesign";
 import { StatusDot } from "@/components/user/status-dot";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { RankMarks } from "@/components/user/rank-marks";
@@ -70,6 +72,29 @@ import {
   type SectionCollapseState,
 } from "@/lib/member-groups";
 import { cn } from "@/lib/utils";
+import { PANE_SIDE_REDESIGN } from "@/components/ui/pane";
+import {
+  PANE_HEADER_ACTION_REDESIGN,
+  PANE_HEADER_REDESIGN,
+  PANE_HEADER_TITLE_REDESIGN,
+} from "@/components/ui/pane-header";
+import {
+  CATEGORY_LABEL_REDESIGN,
+  CATEGORY_ROW_REDESIGN,
+  SectionCaret,
+} from "@/components/layout/channel-section-header";
+import { ChatCircle, MagnifyingGlass, X as XGlyph } from "@phosphor-icons/react";
+import { Icon } from "@/components/ui/icon";
+
+/*
+ * The member list under the redesign (s-member-list): the channel list's
+ * grammar on the other side. Section headers are the category rows; a person
+ * is `ui/list-row.tsx`'s `md` row on its tokens (a pill, the row roles); the
+ * header is the pane header; the search is a round field.
+ */
+const MEMBER_ROW_REDESIGN =
+  "redesign:min-h-[var(--list-row-h-md)] redesign:gap-[var(--list-row-gap)] redesign:rounded-[var(--list-row-radius)] redesign:py-1 redesign:pl-2 redesign:pr-1 redesign:hover:bg-[color:var(--list-row-hover)]";
+const MEMBER_DETAIL_REDESIGN = "redesign:text-xs redesign:text-[color:var(--list-row-detail)]";
 
 const EMPTY_MEMBERS: readonly ServerMember[] = [];
 
@@ -590,24 +615,31 @@ export const MemberSidebar = memo(function MemberSidebar({
     return (
       <section key={section.id} data-member-section={section.id} className="mb-4">
         {searching ? (
-          <div className="flex w-full items-center gap-1 px-1 py-1 text-left text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
-            <span className="truncate">{headingFor(section)}</span>
+          <div className={cn("flex w-full items-center gap-1 px-1 py-1 text-left text-[11px] font-semibold uppercase tracking-wider text-paper-muted", CATEGORY_ROW_REDESIGN, "redesign:hover:text-text-secondary")}>
+            <span className={cn("truncate", CATEGORY_LABEL_REDESIGN)}>{headingFor(section)}</span>
           </div>
         ) : (
           <button
             type="button"
             aria-expanded={!shut}
-            className="flex w-full items-center gap-1 rounded px-1 py-1 text-left text-[11px] font-semibold uppercase tracking-wider text-paper-muted hover:text-paper"
+            className={cn(
+              "flex w-full items-center gap-1 rounded px-1 py-1 text-left text-[11px] font-semibold uppercase tracking-wider text-paper-muted hover:text-paper",
+              CATEGORY_ROW_REDESIGN,
+              "redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent",
+            )}
             onClick={() =>
               setCollapsed((prev) => toggleSectionCollapse(section, prev))
             }
           >
             {shut ? (
-              <ChevronRight className="h-3 w-3 shrink-0" />
+              <ChevronRight className="h-3 w-3 shrink-0 redesign:hidden" />
             ) : (
-              <ChevronDown className="h-3 w-3 shrink-0" />
+              <ChevronDown className="h-3 w-3 shrink-0 redesign:hidden" />
             )}
-            <span className="truncate">{headingFor(section)}</span>
+            <span className="hidden redesign:contents">
+              <SectionCaret collapsed={shut} />
+            </span>
+            <span className={cn("truncate", CATEGORY_LABEL_REDESIGN)}>{headingFor(section)}</span>
           </button>
         )}
         {visible.map((member) => (
@@ -634,7 +666,7 @@ export const MemberSidebar = memo(function MemberSidebar({
         {remaining > 0 && (
           <button
             type="button"
-            className="mt-1 w-full rounded px-2 py-1.5 text-left text-xs text-signal hover:bg-ink-3"
+            className="mt-1 w-full rounded px-2 py-1.5 text-left text-xs text-signal hover:bg-ink-3 redesign:min-h-9 redesign:rounded-[var(--list-row-radius)] redesign:px-[var(--list-row-px)] redesign:text-[0.8125rem] redesign:font-semibold redesign:text-accent-text redesign:hover:bg-[color:var(--list-row-hover)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent"
             onClick={() =>
               setShown((prev) => ({
                 ...prev,
@@ -658,7 +690,7 @@ export const MemberSidebar = memo(function MemberSidebar({
       {!wide && (
         <button
           type="button"
-          className="fixed inset-0 z-20 bg-ink/70"
+          className="fixed inset-0 z-20 bg-ink/70 redesign:bg-[color:var(--sheet-scrim,oklch(0_0_0/0.6))]"
           aria-label={t("memberList.close")}
           onClick={onClose}
         />
@@ -670,7 +702,7 @@ export const MemberSidebar = memo(function MemberSidebar({
         className={cn(
           "flex shrink-0 flex-col border-l border-ink-4/60 bg-channel",
           wide
-            ? "w-60"
+            ? cn("w-60", PANE_SIDE_REDESIGN)
             : "fixed inset-y-0 right-0 z-30 w-[min(100%,15rem)] shadow-[var(--shadow-popover)]",
         )}
       >
@@ -696,10 +728,12 @@ export const MemberSidebar = memo(function MemberSidebar({
             "flex shrink-0 items-center justify-between gap-2 border-b border-ink-4/60 px-3",
             // The switch above already carries the heading and the count.
             onSelectThread ? "h-10" : "h-14",
+            PANE_HEADER_REDESIGN,
+            onSelectThread && "redesign:h-12",
           )}
         >
           {!onSelectThread && (
-            <p className="truncate text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
+            <p className={cn("truncate text-[11px] font-semibold uppercase tracking-wider text-paper-muted", "redesign:font-[family-name:var(--type-title-font)] redesign:font-bold redesign:normal-case redesign:tracking-normal", PANE_HEADER_TITLE_REDESIGN)}>
               {t("memberList.sectionHeading", {
                 label: t("memberList.title"),
                 count: total,
@@ -711,20 +745,27 @@ export const MemberSidebar = memo(function MemberSidebar({
           <Tooltip label={t("memberList.close")} side="left">
             <button
               type="button"
-              className="shrink-0 rounded-md p-1.5 text-paper-muted hover:bg-ink-3 hover:text-paper"
+              className={cn("shrink-0 rounded-md p-1.5 text-paper-muted hover:bg-ink-3 hover:text-paper", PANE_HEADER_ACTION_REDESIGN, "redesign:ml-auto redesign:-mr-1.5 redesign:flex redesign:items-center redesign:justify-center redesign:p-0")}
               onClick={onClose}
             >
-              <X className="h-4 w-4" />
+              <X className="h-4 w-4 redesign:hidden" />
+              <Icon icon={XGlyph} kind="symbol" size="md" className="hidden redesign:block" />
             </button>
           </Tooltip>
         </div>
 
         {rows.length > 0 && (
-          <div role="search" className="shrink-0 px-2 pb-1 pt-2">
+          <div role="search" className="shrink-0 px-2 pb-1 pt-2 redesign:px-3 redesign:pt-2">
             <div className="relative">
               <Search
                 aria-hidden="true"
-                className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-paper-muted"
+                className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-paper-muted redesign:hidden"
+              />
+              <Icon
+                icon={MagnifyingGlass}
+                kind="symbol"
+                size="sm"
+                className="pointer-events-none absolute left-3.5 top-1/2 hidden -translate-y-1/2 text-[color:var(--input-placeholder)] redesign:block"
               />
               <input
                 ref={searchRef}
@@ -740,6 +781,8 @@ export const MemberSidebar = memo(function MemberSidebar({
                 className={cn(
                   "h-9 w-full appearance-none rounded-xl bg-ink-2 pl-9 text-sm text-paper placeholder:text-paper-muted",
                   "focus:outline-none focus:ring-2 focus:ring-signal/60",
+                  // The sidebar search's pill, like "Buscar mensagens" across the shell.
+                  "redesign:h-[var(--sidebar-search-h)] redesign:rounded-full redesign:border redesign:border-[color:var(--sidebar-search-border)] redesign:bg-[color:var(--sidebar-search-bg)] redesign:pl-10 redesign:text-text redesign:placeholder:text-[color:var(--input-placeholder)] redesign:hover:bg-[color:var(--sidebar-search-hover)] redesign:focus:ring-accent",
                   "[&::-webkit-search-cancel-button]:hidden",
                   searching ? "pr-9" : "pr-3",
                 )}
@@ -756,13 +799,14 @@ export const MemberSidebar = memo(function MemberSidebar({
                 <button
                   type="button"
                   aria-label={t("memberList.searchClear")}
-                  className="absolute right-1 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-paper-muted hover:bg-ink-3 hover:text-paper focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+                  className="absolute right-1 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-paper-muted hover:bg-ink-3 hover:text-paper focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60 redesign:rounded-full redesign:text-text-secondary redesign:hover:bg-[color:var(--button-ghost-hover)] redesign:hover:text-text redesign:focus-visible:ring-accent"
                   onClick={() => {
                     setQuery("");
                     searchRef.current?.focus();
                   }}
                 >
-                  <X className="h-3.5 w-3.5" />
+                  <X className="h-3.5 w-3.5 redesign:hidden" />
+                  <Icon icon={XGlyph} kind="symbol" size="sm" className="hidden redesign:block" />
                 </button>
               )}
             </div>
@@ -774,7 +818,7 @@ export const MemberSidebar = memo(function MemberSidebar({
             on every rank mark escaped this clip, sat below the window for a
             long roster, and gave the app shell height to scroll into
             (e2e/app-shell-scroll.spec.ts). */}
-        <div className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-3">
+        <div className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-3 redesign:px-3 redesign:py-2">
           {error && (
             <p role="alert" className="px-1 pb-2 text-xs text-danger">
               {error}
@@ -784,13 +828,13 @@ export const MemberSidebar = memo(function MemberSidebar({
             <p
               role="status"
               aria-live="polite"
-              className="px-1 py-2 text-xs text-paper-muted"
+              className="px-1 py-2 text-xs text-paper-muted redesign:px-2 redesign:text-[0.8125rem] redesign:text-text-secondary"
             >
               {t("memberList.loading")}
             </p>
           )}
           {!loading && sections.length === 0 && !error && (
-            <p className="px-1 py-2 text-xs text-paper-muted">
+            <p className="px-1 py-2 text-xs text-paper-muted redesign:px-2 redesign:text-[0.8125rem] redesign:text-text-secondary">
               {searching
                 ? t("memberList.noMatches", { query: query.trim() })
                 : t("memberList.empty")}
@@ -893,6 +937,7 @@ function MemberRow({
   onMessage,
 }: MemberRowProps) {
   const { t } = useTranslation();
+  const redesign = useRedesign();
   const status = member.status ?? null;
   const shown = memberDisplayName(member);
   // Absent and empty are the same thing here. The API stores NULL for a recado
@@ -912,13 +957,16 @@ function MemberRow({
         className={cn(
           "group flex items-center gap-2 rounded-md px-1 py-1 hover:bg-ink-3",
           dim && "opacity-60 hover:opacity-100",
+          MEMBER_ROW_REDESIGN,
+          "redesign:relative",
+          dim && "redesign:opacity-[var(--list-row-muted-opacity)]",
         )}
       >
         <button
           type="button"
           data-member-sidebar-trigger={member.id}
           title={t("profile.open", { name: shown })}
-          className="flex min-w-0 flex-1 items-center gap-2 rounded text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+          className="flex min-w-0 flex-1 items-center gap-2 rounded text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60 redesign:gap-[var(--list-row-gap)] redesign:rounded-full redesign:focus-visible:ring-accent"
           onClick={(event) => onOpenProfile(event.currentTarget)}
         >
           <span className="relative shrink-0">
@@ -937,12 +985,14 @@ function MemberRow({
             {status && (
               <StatusDot
                 status={status}
-                className="absolute -bottom-0.5 -right-0.5"
-                ringClassName="rounded-full bg-channel ring-2 ring-channel"
+                className="absolute -bottom-0.5 -right-0.5 redesign:bottom-0 redesign:right-0"
+                ringClassName="rounded-full bg-channel ring-2 ring-channel redesign:bg-[color:var(--avatar-dot-ring)] redesign:ring-[color:var(--avatar-dot-ring)]"
               />
             )}
           </span>
-          <span className="min-w-0 flex-1">
+          {/* Where the message button floats over the row, the text fades under it
+              while the row is hovered or focused, so nothing reflows. */}
+          <span className="min-w-0 flex-1 redesign:[@media(hover:hover)]:group-hover:[mask-image:linear-gradient(to_left,transparent_2.75rem,#000_3.75rem)] redesign:[@media(hover:hover)]:group-focus-within:[mask-image:linear-gradient(to_left,transparent_2.75rem,#000_3.75rem)]">
             {/* `text-paper` explicitly: role colours are the next thing to land
                 here, and a name that inherits its colour has nowhere to put
                 one. */}
@@ -951,8 +1001,12 @@ function MemberRow({
                 className={cn(
                   "truncate text-sm font-medium",
                   !nameColor && "text-paper",
+                  // The message row's clamp, so a role colour reads on both
+                  // themes and a name is the same colour in both places.
+                  nameColor &&
+                    "redesign:text-[color:oklch(from_var(--role-color)_max(l,0.72)_c_h)]! redesign:[:root[data-theme=light]_&]:text-[color:oklch(from_var(--role-color)_min(l,0.52)_c_h)]!",
                 )}
-                style={nameColor ? { color: nameColor } : undefined}
+                style={nameColor ? ({ color: nameColor, "--role-color": nameColor } as CSSProperties) : undefined}
               >
                 {shown}
               </span>
@@ -968,7 +1022,7 @@ function MemberRow({
             </span>
             {statusLine && (
               <span
-                className="block truncate text-[11px] text-paper-muted"
+                className={cn("block truncate text-[11px] text-paper-muted", MEMBER_DETAIL_REDESIGN)}
                 title={statusLine}
                 data-member-custom-status={appLine ? undefined : member.id}
                 data-member-app-presence={appLine ? member.id : undefined}
@@ -977,21 +1031,30 @@ function MemberRow({
               </span>
             )}
             {voiceChannelName && (
-              <span className="block truncate text-[11px] text-signal">
+              <span className="block truncate text-[11px] text-signal redesign:text-xs redesign:font-medium redesign:text-success">
                 {t("memberList.inVoice", { channel: voiceChannelName })}
               </span>
             )}
           </span>
         </button>
         {onMessage && (
-          <Tooltip label={t("friends.message")} name={`${t("friends.message")}: ${shown}`}>
+          <Tooltip
+            label={t("friends.message")}
+            name={`${t("friends.message")}: ${shown}`}
+            // Beside the button under the redesign, so it never covers the
+            // row above (its status line).
+            side={redesign ? "left" : undefined}
+          >
             <button
               type="button"
               data-member-message={member.id}
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-text-tertiary opacity-0 transition-opacity duration-[var(--duration-fast)] hover:bg-surface-3 hover:text-text focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100"
+              // Out of the flow where a pointer can hover, so a status line
+              // keeps its full width until the row is hovered.
+              className="redesign:[@media(hover:hover)]:absolute redesign:[@media(hover:hover)]:right-1.5 redesign:[@media(hover:hover)]:top-1/2 redesign:[@media(hover:hover)]:-translate-y-1/2 flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-text-tertiary opacity-0 transition-opacity duration-[var(--duration-fast)] hover:bg-surface-3 hover:text-text focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100 redesign:rounded-full redesign:text-text-secondary redesign:hover:bg-[color:var(--button-ghost-hover)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent"
               onClick={onMessage}
             >
-              <MessageCircle className="h-4 w-4" aria-hidden="true" />
+              <MessageCircle className="h-4 w-4 redesign:hidden" aria-hidden="true" />
+              <Icon icon={ChatCircle} size="sm" className="hidden redesign:block" />
             </button>
           </Tooltip>
         )}
@@ -1005,13 +1068,13 @@ function BotInviteRow({ onCreate }: { onCreate: () => void }) {
   const { t } = useTranslation();
   return (
     <section data-member-section="bot-invite" className="mb-4">
-      <p className="px-1 py-1 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
+      <p className={cn("px-1 py-1 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary", CATEGORY_ROW_REDESIGN, "redesign:flex redesign:items-center redesign:hover:text-text-secondary", CATEGORY_LABEL_REDESIGN)}>
         {t("bots.memberList.heading")}
       </p>
       <button
         type="button"
         onClick={onCreate}
-        className="group flex w-full items-center gap-2.5 rounded-[var(--radius-control)] border border-dashed border-border-strong px-2 py-2 text-left transition-colors duration-[var(--duration-fast)] hover:border-accent hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-focus-ring)]"
+        className="group flex w-full items-center gap-2.5 rounded-[var(--radius-control)] border border-dashed border-border-strong px-2 py-2 text-left transition-colors duration-[var(--duration-fast)] hover:border-accent hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-focus-ring)] redesign:gap-3 redesign:rounded-[var(--radius-card)] redesign:p-2.5 redesign:hover:bg-[color:var(--list-row-hover)] redesign:focus-visible:ring-accent"
       >
         <BotFace color="lime" face="curioso" className="h-8 w-8" />
         <span className="min-w-0 flex-1">
