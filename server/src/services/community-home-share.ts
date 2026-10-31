@@ -83,9 +83,19 @@ export function mentionedChannelIds(
   return [...ids];
 }
 
+/**
+ * The composer leaves a space after an inserted link, so a body typed as
+ * "no #geral, passam" is stored as `<#id> , passam`. A reference swallows the
+ * blanks between it and punctuation that follows, so the name sits flush
+ * against the comma on the card.
+ */
+function markedRefPattern(): RegExp {
+  return new RegExp(`${CHANNEL_REF_PATTERN.source}(?:[ \\t]+(?=[,.;:!?)\\]]))?`, "gi");
+}
+
 export function markChannelRefs(text: string, ids: readonly string[]): string {
   return text.replace(
-    channelRefPattern(),
+    markedRefPattern(),
     (_all, id: string) => `${MARK_OPEN}${ids.indexOf(id.toLowerCase())}${MARK_CLOSE}`,
   );
 }

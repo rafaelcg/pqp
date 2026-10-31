@@ -240,6 +240,23 @@ describe("toPostCard", () => {
       expect(card.teaser).not.toMatch(UUID_FRAGMENT);
     });
 
+    it("sits flush against punctuation, with the composer's trailing space absorbed", () => {
+      const teaserOf = (body: string) => toPostCard({ ...base, body }, "Mesa", names).teaser;
+      // The composer stores a space after an inserted link.
+      expect(teaserOf(`no <#${GERAL}> , passam mil`)).toBe("no #geral, passam mil");
+      expect(teaserOf(`no <#${GERAL}> . Fim`)).toBe("no #geral. Fim");
+      expect(teaserOf(`vem pro <#${GERAL}> `)).toBe("vem pro #geral");
+      expect(teaserOf(`vem pro <#${GERAL}>`)).toBe("vem pro #geral");
+      expect(teaserOf(`vem pro <#${GERAL}>!`)).toBe("vem pro #geral!");
+      // A link at the start of the body.
+      expect(teaserOf(`<#${GERAL}> , é aqui`)).toBe("#geral, é aqui");
+      expect(teaserOf(`<#${GERAL}> é aqui`)).toBe("#geral é aqui");
+      // A word after the link keeps its space, and an unknown channel is flush too.
+      expect(teaserOf(`no <#${GERAL}> e no <#${SECRETO}> , já`)).toBe(
+        "no #geral e no um canal, já",
+      );
+    });
+
     it("never leaks the id when the name is unknown to the viewer", () => {
       const card = toPostCard(
         { ...base, body: `entra no <#${SECRETO}> e no <#${GERAL}>` },
