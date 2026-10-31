@@ -27,7 +27,11 @@ const { maybeQueueBotReply, queuePlanDecision } = await import("./bots.js");
 
 type Completion = Awaited<ReturnType<import("./bot-llm.js").BotProvider["complete"]>>;
 type Input = Parameters<import("./bot-llm.js").BotProvider["complete"]>[0];
-type Step = { text?: string; calls?: Array<{ name: string; input: Record<string, unknown> }> };
+type Step = {
+  text?: string;
+  calls?: Array<{ name: string; input: Record<string, unknown> }>;
+  stop?: string;
+};
 
 function reply(step: Step, turn: number): Completion {
   const toolCalls = (step.calls ?? []).map((call, index) => ({ id: `t${turn}-${index}`, ...call }));
@@ -42,7 +46,7 @@ function reply(step: Step, turn: number): Completion {
     cacheReadTokens: 0,
     cacheWriteTokens: 0,
     model: "fixture",
-    stopReason: toolCalls.length ? "tool_use" : "end_turn",
+    stopReason: step.stop ?? (toolCalls.length ? "tool_use" : "end_turn"),
   };
 }
 
@@ -141,6 +145,52 @@ describeDb("server bot actions", () => {
         [botUserId],
       )
     ).rows.map((row) => row.body);
+
+  describe("a promise with no answer", () => {
+    const outcomeOf = async (botUserId: string) =>
+      (
+        await getPool().query<{ outcome: string }>(
+          `SELECT r.outcome FROM server_bot_runs r JOIN server_bots b ON b.id = r.bot_id WHERE b.user_id = $1`,
+          [botUserId],
+        )
+      ).rows.map((row) => row.outcome);
+
+    it("never posts the narration beside a tool call as the answer", async () => {
+      const { member, channelId, bot } = await setup();
+      // The model keeps saying "ja te passo" and reading, and the turns run out.
+      script = () => ({
+        text: "Beleza! Ja te passo onde fica cada coisa.",
+        calls: [{ name: "list_channels", input: {} }],
+      });
+      await postChannelMessage({ author: member, channelId, body: "@caio_bot onde fica isso no Android?" });
+      await runBotRunsTick();
+
+      expect(await botReplies(bot.userId)).toEqual([]);
+      expect(await outcomeOf(bot.userId)).toEqual(["no-answer-turn-limit"]);
+    });
+
+    it("never posts the sentence before a tool call that thinking left no room to write", async () => {
+      const { member, channelId, bot } = await setup();
+      script = () => ({ text: "Beleza! Ja te passo onde fica cada coisa.", stop: "max_tokens" });
+      await postChannelMessage({ author: member, channelId, body: "@caio_bot onde fica isso no Android?" });
+      await runBotRunsTick();
+
+      expect(await botReplies(bot.userId)).toEqual([]);
+      expect(await outcomeOf(bot.userId)).toEqual(["no-answer-truncated"]);
+    });
+
+    it("posts the tool-free turn after the narration, and only that", async () => {
+      const { member, channelId, bot } = await setup();
+      script = (_input, turn) =>
+        turn === 0
+          ? { text: "Ja te passo.", calls: [{ name: "list_channels", input: {} }] }
+          : { text: "Fica em Configuracoes, depois Notificacoes." };
+      await postChannelMessage({ author: member, channelId, body: "@caio_bot onde fica isso no Android?" });
+      await runBotRunsTick();
+
+      expect(await botReplies(bot.userId)).toEqual(["Fica em Configuracoes, depois Notificacoes."]);
+    });
+  });
 
   it("runs a small request at once, and the audit row says who asked", async () => {
     const { owner, server, channelId, bot } = await setup();
