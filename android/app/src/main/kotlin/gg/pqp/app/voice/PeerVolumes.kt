@@ -93,16 +93,18 @@ class PeerAudioLevels<T : Any>(private val apply: (track: T, volume: Double) -> 
      * them. Returns false, and never calls [tracks], on a repeat: roster frames
      * resend every level, so the scan must cost nothing when nothing changed.
      *
-     * [tracks] is asked after the level is stored, and the caller holds the
-     * lock that [trackSubscribed] also takes, so a track subscribing at the
-     * same moment is either already in the list or applies the new level
-     * itself, never the old one.
+     * The caller holds the lock that [trackSubscribed] also takes, so a track
+     * subscribing at the same moment either is already in the list or runs
+     * afterwards and finds the new level, never the old one.
      */
     fun setLevel(peerId: String, volume: Double, tracks: () -> Collection<T>): Boolean {
         val before = levels[peerId] ?: PEER_VOLUME_DEFAULT
-        levels[peerId] = volume
         if (before == volume) return false
+        // Stored only once every track has taken it: if the scan or an apply
+        // throws, the next roster frame resends this level and must find it
+        // still unapplied rather than skip it as a repeat.
         tracks().forEach { apply(it, volume) }
+        levels[peerId] = volume
         return true
     }
 

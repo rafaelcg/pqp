@@ -168,6 +168,18 @@ class PeerVolumesTest {
     }
 
     @Test
+    fun `a scan that throws leaves the level unapplied so the next frame retries`() {
+        val sfu = sfu()
+        try {
+            sfu.setLevel("bob", 0.4) { error("room went away") }
+        } catch (_: IllegalStateException) {
+        }
+        assertEquals(1.0, sfu.levelFor("bob"), 0.0)
+        assertTrue(sfu.setLevel("bob", 0.4) { listOf("bob-mic") })
+        assertEquals(0.4, levels["bob-mic"]!!, 0.0)
+    }
+
+    @Test
     fun `a forgotten peer comes back at 100 percent`() {
         val sfu = sfu()
         sfu.setLevel("bob", 0.3) { emptyList() }
