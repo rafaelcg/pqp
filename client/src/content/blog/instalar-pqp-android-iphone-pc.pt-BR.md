@@ -53,11 +53,12 @@ O app de celular não é a web numa moldura: ele tem menos coisa que o pqp no na
 
 Ainda não tem ajuste de microfone nem de vídeo no Android.
 
-**Na call.** A barra da call tem **Mudo**, **Silenciar tudo** (tu para de ouvir a call), **Viva-voz** (alterna com o fone) e **Sair** pra desligar. Abaixo dela aparecem **Compartilhar tela**, nas salas onde tu tem permissão (o som do jogo vai junto no Android 10 ou mais novo), e o **Soundboard**, nos servidores que ligaram ele.
+**Na call.** A barra da call tem **Mudo**, **Silenciar tudo** (tu para de ouvir a call), **Viva-voz** (alterna com o fone) e **Sair** pra desligar. Abaixo dela aparecem **Compartilhar tela**, nas salas onde tu tem permissão (o som do jogo vai junto no Android 10 ou mais novo), o **Soundboard**, nos servidores que ligaram ele, e **Configurações do app**, que abre a mesma tela da aba Tu sem tu sair da call. Pra voltar pra call é só usar o voltar do celular.
+
+**Volume de cada um.** A partir da versão **0.4.28**, quando tem mais alguém na call aparece na barra a linha **Volume de cada um**. Toca nela e abre uma folha com um controle deslizante por pessoa, que vai de 0 até 200% (acima de 100% a pessoa sai mais alta do que ela manda). Só tu ouve a mudança. Pra mutar alguém, é só levar o controle até o zero, ou tocar no botão de mudo ao lado do nome, que na volta devolve o nível que tu tinha deixado. O nível de cada pessoa fica guardado enquanto o app continua aberto e não é salvo depois que tu fecha. Se a linha não aparece, atualiza o app pela Play Store.
 
 **O que ainda não tem no Android:**
 
-- **Volume por pessoa na call.** Ainda não tem. Se alguém tá alto ou baixo demais, hoje só dá pra resolver pelo navegador ou pelo desktop.
 - **A fila de música.** Funciona na web, no PWA e no desktop. O app nativo, de Android e de iPhone, ainda não tem.
 
 Se a call trava ou algo estranho acontece no navegador, fechar a aba e abrir de novo costuma resolver. No app nativo não tem aba: sai da call e entra de novo, ou usa o **Verificar conexão**.
