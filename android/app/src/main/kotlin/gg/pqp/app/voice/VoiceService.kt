@@ -17,27 +17,6 @@ import gg.pqp.app.PqpApplication
 import gg.pqp.app.R
 
 /**
- * The notification that keeps a call alive.
- *
- * This is not decoration. Android stops an app's threads shortly after it is
- * backgrounded, and the only sanctioned way to say "keep running, the user
- * knows" is a foreground service with a visible notification. Without one a
- * call dies the moment somebody switches apps, which on a phone is most of the
- * time somebody is in one.
- *
- * The service holds no call state. [VoiceController] owns the mesh and lives on
- * the Application, so a service restart cannot desynchronise the two.
- *
- * It does own one piece of *ordering*, though, and that is deliberate. From
- * Android 14 a `MediaProjection` may only be created once a foreground service
- * of type `mediaProjection` is already running, and `startForegroundService`
- * is asynchronous: a caller that starts the service and then immediately builds
- * the projection loses that race and gets a `SecurityException` from inside the
- * capturer, where it reads like a capture failure. So the consent grant travels
- * *into* the service and the capture starts from [onStartCommand], after
- * `startForeground` has returned. There is no way to lose that race.
- */
-/**
  * The one line the call notification shows, which on Android 12+ is also the
  * `Person` name of the `CallStyle`.
  *
@@ -58,6 +37,27 @@ internal fun callNotificationLine(
     else -> title
 }
 
+/**
+ * The notification that keeps a call alive.
+ *
+ * This is not decoration. Android stops an app's threads shortly after it is
+ * backgrounded, and the only sanctioned way to say "keep running, the user
+ * knows" is a foreground service with a visible notification. Without one a
+ * call dies the moment somebody switches apps, which on a phone is most of the
+ * time somebody is in one.
+ *
+ * The service holds no call state. [VoiceController] owns the mesh and lives on
+ * the Application, so a service restart cannot desynchronise the two.
+ *
+ * It does own one piece of *ordering*, though, and that is deliberate. From
+ * Android 14 a `MediaProjection` may only be created once a foreground service
+ * of type `mediaProjection` is already running, and `startForegroundService`
+ * is asynchronous: a caller that starts the service and then immediately builds
+ * the projection loses that race and gets a `SecurityException` from inside the
+ * capturer, where it reads like a capture failure. So the consent grant travels
+ * *into* the service and the capture starts from [onStartCommand], after
+ * `startForeground` has returned. There is no way to lose that race.
+ */
 class VoiceService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
