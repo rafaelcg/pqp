@@ -351,11 +351,11 @@ export const ARTICLES: readonly BlogArticle[] = [
   {
     slug: "instalar-pqp-android-iphone-pc",
     date: "2026-09-17",
-    updated: "2026-09-17",
+    updated: "2026-10-31",
     title: { "pt-BR": "Como instalar o pqp no Android, iPhone e computador" },
     summary: {
       "pt-BR":
-        "A web sempre funciona sem instalar nada. Pra voz em segundo plano e compartilhar tela no celular, tem app nativo de Android, beta de iPhone e app de PC.",
+        "A web funciona sem instalar nada. Pra voz em segundo plano no celular, tem o app de Android na Play Store, beta de iPhone e app de PC, e onde ficam os ajustes.",
     },
     locales: ["pt-BR"],
     faq: [
@@ -370,7 +370,7 @@ export const ARTICLES: readonly BlogArticle[] = [
         question: { "pt-BR": "Onde eu baixo o pqp no Android?" },
         answer: {
           "pt-BR":
-            "Tem um APK direto em pqp.gg/android, e o app também está no Google Play em teste aberto. Voz, texto, DM, lista de amigos e compartilhar tela (enviar e receber) já rodam nativamente.",
+            "O app está no Google Play (pqp.gg/android leva pro botão da Play), e o APK direto continua lá como opção. Voz, texto, DM, lista de amigos e compartilhar tela (enviar e receber) rodam nativamente.",
         },
       },
       {
