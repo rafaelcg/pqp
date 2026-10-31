@@ -335,6 +335,7 @@
     <string name="voice_speaker_on">Viva-voz</string>
     <string name="voice_speaker_off">Fone</string>
     <string name="voice_server_muted_you">Um moderador te mutou</string>
+    <string name="voice_open_settings">Configurações do app</string>
     <string name="voice_server_muted_peer">Um moderador mutou %1$s</string>
     <string name="voice_peer_volume_open">Volume de cada um</string>
     <string name="voice_peer_volume_title">Volume de cada um</string>

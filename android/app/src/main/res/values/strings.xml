@@ -349,6 +349,7 @@
     <string name="voice_speaker_on">Speaker</string>
     <string name="voice_speaker_off">Earpiece</string>
     <string name="voice_server_muted_you">A moderator muted you</string>
+    <string name="voice_open_settings">App settings</string>
     <string name="voice_server_muted_peer">%1$s was muted by a moderator</string>
     <string name="voice_peer_volume_open">Volume per person</string>
     <string name="voice_peer_volume_title">Volume per person</string>

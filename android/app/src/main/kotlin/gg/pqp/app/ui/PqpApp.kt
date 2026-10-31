@@ -37,6 +37,7 @@ import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
 import gg.pqp.app.R
@@ -558,6 +559,9 @@ private fun SignedInNav(
         )
     }
 
+    val onSettingsScreen = nav.currentBackStackEntryAsState().value
+        ?.destination?.hasRoute<YouRoute>() == true
+
     Column(Modifier.fillMaxSize()) {
         // The call bar belongs to the process, not to the screen that started
         // the call, so it lives above the NavHost rather than inside any one
@@ -565,7 +569,21 @@ private fun SignedInNav(
         // showing, and the content below then stops adding that inset a second
         // time. The connection banner sits under it and carries the inset only
         // when the call bar is not there to.
-        CallBar(voiceState, voice, Modifier.statusBarsPadding(), call = callState.outgoing)
+        CallBar(
+            voiceState,
+            voice,
+            Modifier.statusBarsPadding(),
+            call = callState.outgoing,
+            // The same screen the profile button opens, pushed on top of
+            // whatever is showing. This bar sits above the NavHost, so the
+            // call is untouched and back returns to it.
+            // Not offered on that screen itself, where it would do nothing.
+            onOpenSettings = if (onSettingsScreen) {
+                null
+            } else {
+                { nav.navigate(YouRoute) { launchSingleTop = true } }
+            },
+        )
 
         // Above the NavHost and below the call bar: a ring is not part of any
         // screen, and it must not be hidden by the one that happens to be open.
