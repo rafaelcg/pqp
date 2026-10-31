@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import {
@@ -50,7 +51,9 @@ vi.mock("../auth/clerk.js", () => ({
 const { getPool, initDb, closePool } = await import("../db.js");
 const { handleApi, resetApiRateLimits } = await import("../api/index.js");
 const { upsertUser } = await import("./users.js");
-const { createServer: createChatServer } = await import("./servers.js");
+const { createServer: createChatServer, createChannel: createChat } = await import(
+  "./servers.js"
+);
 const { assignRole, createRole, upsertChannelOverwrite } = await import(
   "./roles.js"
 );
@@ -216,6 +219,106 @@ describe("toPostCard", () => {
     expect(card.posterUrl).toBe("https://bucket/capa.jpg?sig=1");
   });
 
+  describe("channel links in the card's words", () => {
+    const GERAL = randomUUID();
+    const SECRETO = randomUUID();
+    const UUID_FRAGMENT = /[0-9a-f]{8}-[0-9a-f]{4}/i;
+    const names = new Map([[GERAL, "geral"]]);
+
+    it("shows the channel's current name, not the stored id, in the cut teaser", () => {
+      const card = toPostCard(
+        {
+          ...base,
+          body: `Tu manda a pergunta no <#${GERAL}>, passam mil mensagens e ela sumiu. Agora tudo fica no Baú.`,
+        },
+        "Mesa",
+        names,
+      );
+      expect(card.teaser).toBe(
+        "Tu manda a pergunta no #geral, passam mil mensagens e ela sumiu. Agora tudo fica no Baú.",
+      );
+      expect(card.teaser).not.toMatch(UUID_FRAGMENT);
+    });
+
+    it("sits flush against punctuation, with the composer's trailing space absorbed", () => {
+      const teaserOf = (body: string) => toPostCard({ ...base, body }, "Mesa", names).teaser;
+      // The composer stores a space after an inserted link.
+      expect(teaserOf(`no <#${GERAL}> , passam mil`)).toBe("no #geral, passam mil");
+      expect(teaserOf(`no <#${GERAL}> . Fim`)).toBe("no #geral. Fim");
+      expect(teaserOf(`vem pro <#${GERAL}> `)).toBe("vem pro #geral");
+      expect(teaserOf(`vem pro <#${GERAL}>`)).toBe("vem pro #geral");
+      expect(teaserOf(`vem pro <#${GERAL}>!`)).toBe("vem pro #geral!");
+      // A link at the start of the body.
+      expect(teaserOf(`<#${GERAL}> , é aqui`)).toBe("#geral, é aqui");
+      expect(teaserOf(`<#${GERAL}> é aqui`)).toBe("#geral é aqui");
+      // A word after the link keeps its space, and an unknown channel is flush too.
+      expect(teaserOf(`no <#${GERAL}> e no <#${SECRETO}> , já`)).toBe(
+        "no #geral e no um canal, já",
+      );
+    });
+
+    it("never leaks the id when the name is unknown to the viewer", () => {
+      const card = toPostCard(
+        { ...base, body: `entra no <#${SECRETO}> e no <#${GERAL}>` },
+        "Mesa",
+        names,
+      );
+      expect(card.teaser).toBe("entra no um canal e no #geral");
+      expect(card.teaser).not.toContain(SECRETO);
+      // No lookup at all (the default) is the same answer for every channel.
+      const none = toPostCard({ ...base, body: `no <#${GERAL}>` }, "Mesa");
+      expect(none.teaser).toBe("no um canal");
+    });
+
+    it("resolves a hand-written teaser, a locked one, and the title", () => {
+      const written = toPostCard(
+        { ...base, teaser: `vem pro <#${GERAL}>`, body: "outro texto" },
+        "Mesa",
+        names,
+      );
+      expect(written.teaser).toBe("vem pro #geral");
+      const locked = toPostCard(
+        {
+          ...base,
+          visibility: "members",
+          locked: true,
+          body: null,
+          teaser: `só no <#${GERAL}>`,
+          title: `Aviso no <#${GERAL}>`,
+        },
+        "Mesa",
+        names,
+      );
+      expect(locked.teaser).toBe("só no #geral");
+      expect(locked.title).toBe("Aviso no #geral");
+    });
+
+    it("keeps a channel name that has markdown characters in it", () => {
+      const card = toPostCard(
+        { ...base, body: `fala no <#${GERAL}>` },
+        "Mesa",
+        new Map([[GERAL, "off_topic*"]]),
+      );
+      expect(card.teaser).toBe("fala no #off_topic*");
+    });
+
+    it("a cut that lands inside the link drops it whole, never a half id", () => {
+      const filler = "palavra ".repeat(26);
+      for (let pad = 0; pad < 12; pad += 1) {
+        const card = toPostCard(
+          {
+            ...base,
+            body: `${filler}${"x".repeat(pad)} <#${GERAL}> e o resto do texto que passa do limite`,
+          },
+          "Mesa",
+          names,
+        );
+        expect(card.teaser).not.toMatch(UUID_FRAGMENT);
+        expect(card.teaser).not.toContain("<");
+      }
+    });
+  });
+
   it("a locked post keeps the teaser and the public poster and nothing else", () => {
     const card = toPostCard(
       {
@@ -359,6 +462,42 @@ describeDb("Baú card and share endpoints", () => {
       `/api/servers/${randomUuid()}/home/posts/${post.id}/card`,
     );
     expect(wrongServer.status).toBeGreaterThanOrEqual(403);
+  });
+
+  it("a channel link in the body reads as its current name, and a private one stays hidden from who cannot see it", async () => {
+    const secret = await createChat(serverId, "reservado", "text", true);
+    const { post } = await publish({
+      body: `Tu manda no <#${generalId}> ou no <#${secret.id}>, passam mil mensagens.`,
+    });
+    const generalName = (
+      await getPool().query<{ name: string }>(`SELECT name FROM channels WHERE id = $1`, [
+        generalId,
+      ])
+    ).rows[0]!.name;
+
+    // The owner sees both; a plain member cannot see the private one.
+    const asOwner = await call<{ card: Card }>(owner, "GET", `${base()}/posts/${post.id}/card`);
+    expect(asOwner.body.card.teaser).toBe(
+      `Tu manda no #${generalName} ou no #reservado, passam mil mensagens.`,
+    );
+    const asMember = await call<{ card: Card }>(member, "GET", `${base()}/posts/${post.id}/card`);
+    expect(asMember.body.card.teaser).toBe(
+      `Tu manda no #${generalName} ou no um canal, passam mil mensagens.`,
+    );
+    expect(JSON.stringify(asMember.body)).not.toContain(secret.id);
+    expect(JSON.stringify(asMember.body)).not.toContain("reservado");
+
+    // A rename shows at once: the link stores the id, not the name.
+    await getPool().query(`UPDATE channels SET name = 'renomeado' WHERE id = $1`, [generalId]);
+    const renamed = await call<{ card: Card }>(member, "GET", `${base()}/posts/${post.id}/card`);
+    expect(renamed.body.card.teaser).toContain("#renomeado");
+
+    // The latest strip goes through the same projection.
+    const latest = await call<{ posts: Card[] }>(member, "GET", `${base()}/latest`);
+    expect(latest.status).toBe(200);
+    expect(latest.body.posts[0]!.teaser).toBe(
+      "Tu manda no #renomeado ou no um canal, passam mil mensagens.",
+    );
   });
 
   it("404s when Baú is off for the server or for the instance", async () => {

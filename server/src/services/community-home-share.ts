@@ -1,6 +1,7 @@
 import {
   BAU_CARD_TEASER_MAX,
   bauPostPath,
+  CHANNEL_REF_PATTERN,
   type CommunityHomeLatestResponse,
   type CommunityHomePost,
   type CommunityHomePostCard,
@@ -14,6 +15,7 @@ import {
   listLatestCommunityHomePosts,
 } from "./community-home.js";
 import { getChannel } from "./servers.js";
+import { channelVisibleSql } from "./users.js";
 
 /**
  * Baú posts in chat: the card a message with a permalink is drawn as, and the
@@ -48,10 +50,140 @@ export function teaserFromBody(body: string | null): string | null {
   return `${base.replace(/[\s.,;:!?-]+$/, "")}...`;
 }
 
+/**
+ * `<#channelId>` references in a card's words.
+ *
+ * A post stores a channel link as `<#uuid>`, and `teaserFromBody` strips
+ * markdown, which eats the `#` and the closing `>` and leaves the id behind
+ * (`no <ed0870d1-...`). So a reference is swapped for a private-use marker
+ * BEFORE the cut and resolved AFTER it (`markChannelRefs`,
+ * `resolveChannelMarks`); the name is the channel's current one, and a channel
+ * the reader cannot see is "um canal", so the sentence still reads and a
+ * private name never travels. A cut that lands inside a marker drops the half.
+ * The public Baú page uses the same two functions.
+ */
+const MARK_OPEN = "";
+const MARK_CLOSE = "";
+
+/** A fresh global copy: `matchAll` refuses a non-global one, `lastIndex` is shared state. */
+export function channelRefPattern(): RegExp {
+  return new RegExp(CHANNEL_REF_PATTERN.source, "gi");
+}
+
+/** Every channel id a set of texts mentions, lowercased, once each. */
+export function mentionedChannelIds(
+  texts: ReadonlyArray<string | null | undefined>,
+): string[] {
+  const ids = new Set<string>();
+  for (const text of texts) {
+    for (const match of (text ?? "").matchAll(channelRefPattern())) {
+      ids.add(match[1]!.toLowerCase());
+    }
+  }
+  return [...ids];
+}
+
+/**
+ * The composer leaves a space after an inserted link, so a body typed as
+ * "no #geral, passam" is stored as `<#id> , passam`. A reference swallows the
+ * blanks between it and punctuation that follows, so the name sits flush
+ * against the comma on the card.
+ */
+function markedRefPattern(): RegExp {
+  return new RegExp(`${CHANNEL_REF_PATTERN.source}(?:[ \\t]+(?=[,.;:!?)\\]]))?`, "gi");
+}
+
+export function markChannelRefs(text: string, ids: readonly string[]): string {
+  return text.replace(
+    markedRefPattern(),
+    (_all, id: string) => `${MARK_OPEN}${ids.indexOf(id.toLowerCase())}${MARK_CLOSE}`,
+  );
+}
+
+export function resolveChannelMarks(
+  text: string,
+  ids: readonly string[],
+  visible: ReadonlyMap<string, string>,
+): string {
+  return text
+    .replace(
+      new RegExp(`${MARK_OPEN}(\\d+)${MARK_CLOSE}`, "g"),
+      (_all, index: string) => {
+        const name = visible.get(ids[Number(index)] ?? "");
+        return name ? `#${name}` : "um canal";
+      },
+    )
+    .replace(new RegExp(`${MARK_OPEN}\\d*(?:${MARK_CLOSE})?`, "g"), "");
+}
+
+/**
+ * Of the channels a post mentions, the ones THIS VIEWER may see (id to name).
+ * The viewer's own `channelVisibleSql`, the predicate chat uses, so a private
+ * channel they are not in resolves to nothing. Only real server channels of
+ * this server count. Never cached: a card is built per viewer, and a shared
+ * value would bake one person's permissions into another's card.
+ */
+export async function viewerVisibleChannelNames(
+  serverId: string,
+  viewerId: string,
+  ids: readonly string[],
+): Promise<Map<string, string>> {
+  const visible = new Map<string, string>();
+  if (ids.length === 0) {
+    return visible;
+  }
+  try {
+    const { rows } = await getPool().query<{ id: string; name: string }>(
+      `SELECT c.id, c.name
+         FROM channels c
+         LEFT JOIN server_members sm
+           ON sm.server_id = c.server_id AND sm.user_id = $3
+        WHERE c.id = ANY($1::uuid[])
+          AND c.server_id = $2
+          AND c.kind = 'server'
+          AND c.type <> 'thread'
+          AND ${channelVisibleSql("$3")}`,
+      [[...ids], serverId, viewerId],
+    );
+    for (const row of rows) {
+      visible.set(row.id.toLowerCase(), row.name);
+    }
+  } catch (error) {
+    // A mention is garnish: when the lookup fails every one reads "um canal"
+    // (the safe answer) and the card is still served.
+    console.error(
+      "[bau-card] channel lookup failed, hiding mentions:",
+      error instanceof Error ? error.message : error,
+    );
+  }
+  return visible;
+}
+
+/** The channel ids a card's words (title, teaser, and the body it is cut from) mention. */
+function cardChannelIds(post: CommunityHomePost): string[] {
+  return mentionedChannelIds([
+    post.title,
+    post.teaser,
+    post.locked ? null : post.body,
+  ]);
+}
+
+/** The viewer's visible names for every channel these posts' cards mention. One query. */
+async function channelsForCards(
+  serverId: string,
+  viewerId: string,
+  posts: readonly CommunityHomePost[],
+): Promise<Map<string, string>> {
+  const ids = [...new Set(posts.flatMap(cardChannelIds))];
+  return viewerVisibleChannelNames(serverId, viewerId, ids);
+}
+
 /** Pure projection of a feed post into the small card. Exported for tests. */
 export function toPostCard(
   post: CommunityHomePost,
   serverName: string,
+  /** Channels the viewer can see (id to name); absent means none, so every mention reads "um canal". */
+  channels: ReadonlyMap<string, string> = new Map(),
 ): CommunityHomePostCard {
   let mediaKind: CommunityHomePostCard["mediaKind"] = null;
   let mediaUrl: string | null = null;
@@ -75,15 +207,24 @@ export function toPostCard(
       mediaUrl = post.posterUrl;
     }
   }
-  const teaser = post.locked
-    ? post.teaser
-    : (post.teaser?.trim() || teaserFromBody(post.body));
+  const ids = cardChannelIds(post);
+  // Marked before the cut, resolved after (see `markChannelRefs`).
+  const marked = (text: string | null | undefined) =>
+    text ? markChannelRefs(text, ids) : null;
+  const rawTeaser = post.locked
+    ? marked(post.teaser)
+    : (marked(post.teaser?.trim()) || teaserFromBody(marked(post.body)));
+  const cutTeaser = rawTeaser ? teaserFromBody(rawTeaser) : null;
+  const teaser = cutTeaser ? resolveChannelMarks(cutTeaser, ids, channels) : null;
+  const title = post.title
+    ? resolveChannelMarks(markChannelRefs(post.title, ids), ids, channels)
+    : post.title;
   return {
     postId: post.id,
     serverId: post.serverId,
     serverName,
-    title: post.title,
-    teaser: teaser ? teaserFromBody(teaser) : null,
+    title,
+    teaser: teaser || null,
     author: post.locked
       ? null
       : {
@@ -125,7 +266,11 @@ export async function getCommunityHomePostCard(
   if (post.status !== "published") {
     throw new CommunityHomeError("not_found", "Post not found");
   }
-  return toPostCard(post, row.name);
+  return toPostCard(
+    post,
+    row.name,
+    await channelsForCards(serverId, viewerId, [post]),
+  );
 }
 
 /**
@@ -157,11 +302,16 @@ export async function listLatestCommunityHomeCards(
     limit,
     lang,
   );
+  const channels = await channelsForCards(
+    serverId,
+    viewerId,
+    latest.posts.map(({ post }) => post),
+  );
   return {
     unread: latest.unread,
     lastSeenAt: latest.lastSeenAt,
     posts: latest.posts.map(({ post, isNew }) => ({
-      ...toPostCard(post, row.name),
+      ...toPostCard(post, row.name, channels),
       isNew,
     })),
   };
