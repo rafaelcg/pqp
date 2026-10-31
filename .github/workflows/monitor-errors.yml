@@ -1,62 +1,35 @@
 name: Monitor (errors)
 
-# "Is it throwing?", every 15 minutes, reading logs from Fly.
+# "Is the support bot there?", every 15 minutes, reading its state from Fly.
 #
-# STATE SINCE 2026-09-17: THE API LOGS ARE NOT READ HERE ANY MORE
-#
-# Production moved to the Vultr box behind Cloudflare, and the Fly apps
-# `pqp-api` and `pqp-worker` run zero machines. `fly logs` on them returns a
-# stale buffer, so the `api-error-rate` check below kept reporting on lines
-# from the day of the cutover and could not mean anything. It now runs only
-# when the repository variable MONITOR_FLY_ROLLBACK is "true" (a rollback to
-# Fly). The API's and worker's log errors are Grafana Loki alerts, which read
-# every line (docs/MONITORING.md, "Logs in Grafana Cloud"); a GitHub runner has
-# no SSH key and no repo secret that reaches the box.
-#
-# What still runs by default is `support-bot-alive`: `pqp-support` (the QG help
-# bot) is still a Fly app. The comments below describe the original design and
-# stay accurate for both checks.
+# WHAT RUNS: `support-bot-alive`, and only that. `pqp-support` (the QG help
+# bot) is still a Fly app, so its machine state and heartbeat are real. The
+# API's and worker's log errors are Grafana Loki alerts, which read every line
+# (docs/MONITORING.md, "Logs in Grafana Cloud"); a GitHub runner has no SSH key
+# and no repo secret that reaches the Vultr box. The old `api-error-rate` check
+# read `fly logs` for `pqp-api`; it was removed with the Fly apps on
+# 2026-10-22.
 #
 # WHY THIS IS SEPARATE FROM Monitor (uptime)
 #
 # The uptime group is availability-shaped: /health answers, the WebSocket
-# upgrades, the app's own component probes are green. Every one of those can be
-# true while the API throws on every third request — /health does a `SELECT 1`
-# and returns 200; it does not know that a route has been 500ing for an hour.
-# Nothing read the logs, so nothing would have said so.
-#
-# The second check has its own scar. `pqp-support` went down three minutes
-# after its first deploy: it exited 0 on purpose (the SIGTERM handler does
-# that), Fly's default restart policy read a clean exit as "the job finished"
-# and retired the machine, and the bot was simply absent from #ajuda with
-# nothing anywhere saying so. A bot that is quietly missing is worse than one
-# that is obviously broken, because nobody goes looking.
-#
-# THE TRAP, WRITTEN DOWN SO NOBODY "FIXES" IT BACK
+# upgrades, the component probes are green. None of that says a bot that lives
+# outside the API is still there. `pqp-support` went down three minutes after
+# its first deploy: it exited 0 on purpose (the SIGTERM handler does that),
+# Fly's default restart policy read a clean exit as "the job finished" and
+# retired the machine, and the bot was simply absent from #ajuda with nothing
+# anywhere saying so. A bot that is quietly missing is worse than one that is
+# obviously broken, because nobody goes looking.
 #
 # `fly logs --no-tail` returns roughly the LAST 100 LINES, so the period it
-# covers is bounded by VOLUME, NOT TIME. Measured on 2026-08-23 in the same
-# minute: pqp-api's 100 records spanned 28 minutes, pqp-support's 79 spanned
-# 7 hours. A check phrased as "errors in the last 15 minutes" would silently
-# mean two hours at 03:00 and ninety seconds at peak. So the check measures a
-# RATE and derives its window from the first and last timestamps in the output,
-# and a window too short to be meaningful is a SKIP with the reason, never a
-# pass. THE 15-MINUTE CRON IS THE SAMPLING INTERVAL, NOT THE WINDOW. Do not
-# assume the two are related.
+# covers is bounded by VOLUME, NOT TIME. THE 15-MINUTE CRON IS THE SAMPLING
+# INTERVAL, NOT THE WINDOW. Do not assume the two are related. GitHub queues
+# scheduled runs on public repos at low priority and they are routinely 5-20
+# minutes late, so treat detection as "within 15-40 minutes".
 #
-# WHY 15 MINUTES AND NOT 10
-#
-# An error rate is a trend, not an event. At current volume the buffer covers
-# ~30 minutes, so running every 10 would mostly re-read lines the previous run
-# already read. GitHub queues scheduled runs on public repos at low priority
-# and they are routinely 5-20 minutes late anyway, so treat detection as
-# "within 15-40 minutes".
-#
-# NEEDS AN ORG-SCOPED FLY TOKEN. `FLY_API_TOKEN` is a deploy token scoped to
-# `pqp-api`: it can read that app's logs and nothing else, so `support-bot-alive`
-# SKIPs on it with instructions rather than reporting a false outage.
-# `FLY_ORG_TOKEN` (already in this repo, created for the Postgres check) reads
-# both, and is preferred when present. See docs/MONITORING.md.
+# NEEDS AN ORG-SCOPED FLY TOKEN: `FLY_ORG_TOKEN`. An app-scoped deploy token
+# cannot read `pqp-support`, so `support-bot-alive` SKIPs without it, with
+# instructions, rather than reporting a false outage. See docs/MONITORING.md.
 
 on:
   schedule:
@@ -111,13 +84,10 @@ jobs:
       - name: Run error checks
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Org-scoped first; the app-scoped deploy token is the fallback and
-          # can only read pqp-api, which makes support-bot-alive SKIP.
+          # Org-scoped: an app-scoped token cannot read pqp-support, which
+          # makes support-bot-alive SKIP.
           FLY_ORG_TOKEN: ${{ secrets.FLY_ORG_TOKEN }}
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           MONITOR_REPO: ${{ github.repository }}
-          # ROLLBACK ONLY: brings the `fly logs` API error-rate check back.
-          MONITOR_FLY_ROLLBACK: ${{ vars.MONITOR_FLY_ROLLBACK }}
           # Comma-separated check keys to silence without disabling the monitor.
           # `gh variable set MONITOR_MUTED --body "support-bot-alive"`.
           MONITOR_MUTED: ${{ vars.MONITOR_MUTED }}

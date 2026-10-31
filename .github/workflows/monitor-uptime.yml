@@ -12,9 +12,8 @@ name: Monitor (uptime)
 # 2026-09-17), and a GitHub runner has no SSH key and no repo secret for it, so
 # every probe here is a public one: /health, /ready (Postgres, pool, SFU,
 # storage, watch-party bucket, extra SFU regions), /status.json, the WebSocket
-# handshake and the site. The Fly-only checks are off unless the repository
-# variable MONITOR_FLY_ROLLBACK is "true" (docs/MONITORING.md, "Rolling back
-# to Fly").
+# handshake and the site. (The Fly rollback checks were removed with the Fly
+# apps on 2026-10-22; docs/MONITORING.md, "What was retired".)
 #
 # contato@pqp.gg currently BOUNCES (Cloudflare Email Routing has DNS but no
 # verified destination), and pqp's own incoming webhooks are circular — the API
@@ -68,11 +67,6 @@ jobs:
         with:
           node-version: "22"
 
-      # Needed only by the two Fly rollback checks, so it is installed only
-      # while a rollback is declared.
-      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # master 2026-04-08
-        if: ${{ vars.MONITOR_FLY_ROLLBACK == 'true' }}
-
       # ONE run of the probes. Exit codes carry the meaning:
       #   0/1 -> the checks ran; whatever they found is now a GitHub issue, and
       #          the JOB stays green. A failing check must NOT redden the run:
@@ -85,11 +79,6 @@ jobs:
       - name: Run availability checks
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # ROLLBACK ONLY. Production left Fly on 2026-09-17; the two Fly checks
-          # (fly-machines, worker-image-drift) run only when this variable is
-          # "true", and then need the org-scoped token to list pqp-worker too.
-          MONITOR_FLY_ROLLBACK: ${{ vars.MONITOR_FLY_ROLLBACK }}
-          FLY_API_TOKEN: ${{ secrets.FLY_ORG_TOKEN || secrets.FLY_API_TOKEN }}
           MONITOR_REPO: ${{ github.repository }}
           # Comma-separated check keys to silence without disabling the monitor.
           # `gh variable set MONITOR_MUTED --body "r2-usage"`; empty means nothing muted.

@@ -1,18 +1,18 @@
 # Fly.io configuration for the STAGING API + WebSocket server (pqp-api-staging).
 #
-# A copy of fly.toml with three deliberate differences, all about cost: staging
-# scales to zero when idle. auto_stop_machines = "stop", auto_start_machines =
-# true, min_machines_running = 0. Production keeps min 1 and auto-stop OFF on
-# purpose — a stopped machine drops every live WebSocket at once — but on
-# staging nobody is mid-call, and the price of the trade is only that the first
-# request after an idle period takes a few seconds while the machine boots.
+# Staging scales to zero when idle: auto_stop_machines = "stop",
+# auto_start_machines = true, min_machines_running = 0. The price of the trade
+# is only that the first request after an idle period takes a few seconds while
+# the machine boots; nobody on staging is mid-call. (This file started as a
+# copy of the production fly.toml, which was deleted on 2026-10-22 when
+# production's Fly rollback was retired: production runs on the Vultr box,
+# tools/api-host/. This is now the only Fly config for the API in the repo, and
+# the one a self-host on Fly would start from; docs/deploy-fly.md.)
 #
 # Deployed by .github/workflows/deploy-staging.yml (push to the `staging`
 # branch, or workflow_dispatch on any ref). Operator doc: docs/STAGING.md.
-# Everything not commented below matches fly.toml — keep the two files in sync
-# when the production one changes.
 #
-# THE ONE THING TO KNOW BEFORE EDITING THIS FILE (same as fly.toml)
+# THE ONE THING TO KNOW BEFORE EDITING THIS FILE
 # -----------------------------------------------------------------
 # This server is single-process BY DESIGN. WebSocket connection state, presence,
 # voice-room membership and rate-limit buckets all live in in-process Maps
@@ -48,8 +48,13 @@ kill_timeout = 30
   # "deploy succeeded, health check never passes".
   PORT = "3001"
 
-  # Exactly one proxy (fly-proxy) sits in front of this process. See fly.toml
-  # for the full rationale; raise only if another proxy goes in front of Fly.
+  # Exactly one proxy (fly-proxy) sits in front of this process and appends the
+  # real client address to X-Forwarded-For. `clientAddress()` counts in from the
+  # RIGHT of that chain, so the depth has to be right: too low and the rate
+  # limiter keys on an attacker-supplied value, too high and it falls back to
+  # the socket address, which behind the proxy is one shared bucket for
+  # everybody. One hop = "true". Raise this only if you put another proxy
+  # (e.g. Cloudflare proxied DNS) in front of Fly.
   TRUST_PROXY = "true"
 
   # pg pool ceiling per process. Staging shares the pqp-db cluster with

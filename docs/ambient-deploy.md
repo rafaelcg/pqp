@@ -57,7 +57,7 @@ no new platform:
 # /etc/systemd/system/pqp-ambient.service
 [Service]
 WorkingDirectory=/opt/pqp/tools/ambient
-Environment=PQP_API_URL=https://pqp-api.fly.dev
+Environment=PQP_API_URL=https://api.pqp.gg
 Environment=AMBIENT_TOKENS_FILE=/etc/pqp/characters.json
 Environment=AMBIENT_STATE_DIR=/var/lib/pqp-ambient
 EnvironmentFile=/etc/pqp/ambient.env    # ANTHROPIC_API_KEY
@@ -123,7 +123,7 @@ node scripts/provision.mjs --dry-run            # print the plan
 With **your own** bearer token — these servers are yours:
 
 ```bash
-PQP_API_URL=https://pqp-api.fly.dev \
+PQP_API_URL=https://api.pqp.gg \
 AMBIENT_HOST_TOKEN='<your Clerk session token>' \
   node scripts/seed-servers.mjs --config personas.yaml
 ```

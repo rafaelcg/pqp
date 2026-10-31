@@ -1,6 +1,28 @@
 # DB runbook: backups, restore, and the managed Postgres that went sideways
 
-Production Postgres is **Fly Managed Postgres (MPG)** in `gru`. One cluster, two databases:
+> **Status as of 2026-10-22 (read this first).** Production Postgres has been a
+> **Vultr managed cluster** (database `pqp`) since 2026-09-13, reached only from
+> the API box (`trusted_ips`, section 1). There is no Fly cluster left: the
+> Fly apps `pqp-api`, `pqp-worker` and `pqp-log-shipper` were destroyed on
+> 2026-10-22 and `fly mpg list` is empty. **Section 1 (the nightly backup) and
+> section 3 (the connection budget) are current.** The rest of this file,
+> from the paragraph below through section 2, describes Fly Managed Postgres
+> and is kept as the incident record and for self-hosters still on Fly; do not
+> run its `fly` commands against production.
+>
+> **If production's database is lost or corrupt today:** restore the newest
+> nightly dump from R2 (`pqp-live-enam/backups/pqp-db/`, 30 days of them; see
+> "Verify a dump restores" below for the restore check) into a fresh Vultr
+> managed Postgres, set the new `DATABASE_URL` in `/opt/pqp/.env` (and add the
+> box to the new cluster's `trusted_ips`), and run
+> `sudo /usr/local/bin/pqp-deploy $(cat /opt/pqp/.deployed-tag)` on the box.
+> That is the whole of the production rollback for the data layer: there is no
+> second live database to fail over to, and anything written after the last
+> 04:23 UTC dump is lost unless the Vultr plan's own point-in-time recovery
+> covers it. See `docs/deploy-vultr.md` section 7 for the rest of the rollback
+> plan.
+
+Production Postgres **was** Fly Managed Postgres (MPG) in `gru` until 2026-09-13. One cluster, two databases:
 
 | Database | Used by | Notes |
 |---|---|---|
@@ -387,7 +409,7 @@ No other platform-level reservation showed up in `pg_stat_activity` beyond the o
 | `pqp-api` pool (`PG_POOL_MAX`, per machine) | up to `PG_POOL_MAX`, **times the machine count** |
 | `pqp-api`'s `CLUSTER_BUS` `LISTEN` session, per machine | 1 per machine, outside the pool |
 | `pqp-api`'s outgoing-webhook poller `LISTEN` session, per machine | 1 per machine, outside the pool (a second, separate `LISTEN` connection — easy to undercount if you only remember the bus's) |
-| `pqp-worker` pool (`PG_POOL_MAX` there, `fly.worker.toml`) | up to 4, fixed regardless of API machine count |
+| `worker` service pool (`WORKER_PG_POOL_MAX`, default 4, in `tools/api-host/compose.yaml`) | up to 4, fixed regardless of API machine count |
 | `pqp-api-staging` pool | separate cluster (`pqp-db-staging-lite`) as of 2026-09-08 — does not compete with production's budget any more |
 | Superuser-reserved (Postgres platform reservation) | 3, already carved out of `max_connections` above, never available to the app |
 | Humans in a `psql`/GUI session against the cluster, and anything else transient | budgeted as part of the 5-connection admin/platform reserve above |

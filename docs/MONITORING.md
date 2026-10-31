@@ -12,16 +12,17 @@ repository.
 > **Where production runs (since 2026-09-17).** The API is a Vultr box
 > (`/opt/pqp`, compose services `api-a`, `api-b`, `worker`, `caddy`) behind
 > Cloudflare, with a Vultr managed Postgres; the SFU and egress boxes are
-> separate Vultr machines. The Fly apps `pqp-api` and `pqp-worker` run zero
-> machines and exist only as a rollback until about 2026-10-17. A GitHub runner
+> separate Vultr machines. The Fly apps `pqp-api`, `pqp-worker` and
+> `pqp-log-shipper` were destroyed on 2026-10-22; only the support bot
+> (`pqp-support`), `pqp-ambient` and staging remain on Fly. A GitHub runner
 > has **no SSH key and no repository secret that reaches any of those
 > machines**, so the workflows below can only read what is public: `/health`,
 > `/ready`, `/status.json`, the WebSocket handshake, the site and the
 > certificates. Anything deeper (log errors, box CPU and disk, the database)
 > is owned by Grafana or by a human; see "What GitHub does not watch" below.
-> Until 2026-10-16 three checks still read the dead Fly apps and reported green
-> or stale-red (issues #607 and #695 sat open for a month); they are retired,
-> see "Retired checks".
+> Three checks used to read the Fly apps and reported green or stale-red
+> (issues #607 and #695 sat open for a month); they are retired and their code
+> is gone, see "Retired checks".
 
 ---
 
@@ -95,9 +96,9 @@ An alert that fires spuriously gets muted, and then the real one is missed. So:
 
 | Key | Was | Why it is gone |
 |---|---|---|
-| `fly-machines` | exactly one started `pqp-api` machine in `gru` | The Fly apps run zero machines. It read a stale `stopped` machine and held issue #607 open for a month. |
+| `fly-machines` | exactly one started `pqp-api` machine in `gru` | The Fly apps are destroyed. It read a stale `stopped` machine and held issue #607 open for a month. |
 | `worker-image-drift` | `pqp-worker` runs the API's image | The worker is a compose service on the box now, deployed by the same `pqp-deploy` run as the API; there is no second registry to drift against. Nothing a runner can reach shows the box's worker image. |
-| `api-error-rate` | share of error lines in `fly logs -a pqp-api` | Read a stale buffer (issue #695 still quotes lines from the cutover day). Loki alerts own log errors now. |
+| `api-error-rate` | share of error lines in `fly logs -a pqp-api`, with a classifier and an ignore list | Read a stale buffer (issue #695 still quotes lines from the cutover day), then the app went away. Loki alerts own log errors now; the classifier was deleted on 2026-10-22. |
 | `postgres-disk` | `pg_database_size` over a `fly mpg proxy` tunnel | The Fly cluster is gone and no GitHub secret reaches the Vultr one. |
 
 A removed check leaves its last issue open forever, because nothing reports
@@ -107,23 +108,15 @@ any still open, with a comment saying why (`retiredIssues`, tested). Closing
 #607 and #695 happens on the first run after this merges; nobody needs to do it
 by hand.
 
-#### Rolling back to Fly
+#### There is no Fly rollback to monitor
 
-The three Fly-reading checks (`fly-machines`, `worker-image-drift`,
-`api-error-rate`) still exist and run only while the repository variable
-`MONITOR_FLY_ROLLBACK` is exactly `true`. Set it as part of the rollback recipe
-in `docs/deploy-vultr.md` and unset it after:
-
-```bash
-gh variable set MONITOR_FLY_ROLLBACK --body true     # during a rollback to Fly
-gh variable delete MONITOR_FLY_ROLLBACK              # back on Vultr
-```
-
-`fly-machines` expects `MONITOR_FLY_EXPECTED_MACHINES` started machines in
-`gru` (default 2, the rollback recipe's count). They need `FLY_ORG_TOKEN` (or
-the app-scoped `FLY_API_TOKEN` for `pqp-api` alone), as before. While the
-variable is set, the Vultr-side checks above keep running and will, correctly,
-fail if the API is no longer on the box.
+Until 2026-10-22 these three checks could be brought back with the repository
+variable `MONITOR_FLY_ROLLBACK=true` during a rollback to Fly. The Fly apps they
+read were destroyed that day and the checks, their variable and the Fly
+deploy workflow were deleted. The production rollback plan is the box itself
+(`docs/deploy-vultr.md` section 7), and the Vultr-side checks above are what
+watch it. The variable `MONITOR_FLY_ROLLBACK`, if it is still set on the
+repository, does nothing and can be deleted.
 
 ### `GET /ready`: the endpoint for an external monitor
 
@@ -177,8 +170,9 @@ other hostnames, no provider names, no error strings. It is rate-limited to a
 few requests per second per address, which bounds the `SELECT 1` cost; the two
 remote probes are bounded by their cache regardless.
 
-**Why this is not the platform's health check.** `fly.toml` (and, on the box,
-`tools/api-host/compose.yaml` and the Caddyfile) point at `/health`, which stays
+**Why this is not the platform's health check.** The Docker healthcheck and the
+Caddyfile on the box (`tools/api-host/compose.yaml`; `fly.toml` did the same on
+Fly) point at `/health`, which stays
 exactly as shallow as it is. If that check were dependency-aware, a two-minute
 Postgres blip would make the platform restart or stop routing to the API, which
 drops every WebSocket and helps nobody. A monitor that pages a human can afford
@@ -224,7 +218,7 @@ third-party monitor:
 
 | Endpoint | Why not |
 |---|---|
-| `/health` | **The platform's own health check** (`fly.toml` on Fly; Docker's and Caddy's on the Vultr box), and it gates every release. Its semantics belong to the deploy, not to us, and since A3.1 those semantics are liveness only, no database call at all, so it answers a narrower question than `/up` or `/ready` even before the "not for a third party" reasoning below. It also returns `version`, the deployed commit, which is fine for the platform and is not something to hand an anonymous poller forever. |
+| `/health` | **The platform's own health check** (Docker's and Caddy's on the Vultr box; Fly's on a self-host), and it gates every release. Its semantics belong to the deploy, not to us, and since A3.1 those semantics are liveness only, no database call at all, so it answers a narrower question than `/up` or `/ready` even before the "not for a third party" reasoning below. It also returns `version`, the deployed commit, which is fine for the platform and is not something to hand an anonymous poller forever. |
 | `/status.json` | **Returns 200 while reporting components as down.** The state is in the JSON body, so a status-code monitor never fires. Our own GitHub check reads the body (`status-components` above), which is exactly why nobody noticed. |
 | `latencyMs` on `/status.json` | **Absent is not zero, and a missing field is not a fast probe.** A component whose health is inferred rather than measured omits the field entirely: the API cannot time its own round trip from inside itself, and mesh voice has no server-side media to time. A monitor that reads a missing `latencyMs` as `0` will report the fastest dependency on the instance. Read presence first. |
 
@@ -337,83 +331,31 @@ on a body change.
 
 `.github/workflows/monitor-errors.yml` → `node scripts/monitor/run.mjs errors`
 
-> **Since the move to Vultr this group no longer reads the API's logs.** The Fly
-> apps behind `api-error-rate` run zero machines, so `fly logs` returned a stale
-> buffer and the check could not go green or red for any reason that is true
-> today. It runs only under `MONITOR_FLY_ROLLBACK=true`. What it measured is
-> covered by the Grafana Loki alerts on the box's container logs (error lines
-> over 20 in 5 minutes, `Connection terminated`, no `ws.connect`; see "Logs in
-> Grafana Cloud"). `/ready` and `/status.json` carry no error counters, and
-> `GET /api/admin/metrics`, which does, needs `ADMIN_METRICS_TOKEN`, which is
-> not a repository secret (it lives on the `pqp-admin` Worker). Add it as a
-> secret and a counter check can come back here. **What still runs by default
-> is `support-bot-alive`**, because `pqp-support` is still a Fly app. The rest
-> of this section describes the original log-reading design, which is what the
-> rollback path runs.
-
-**Why this group exists.** Everything in the availability group is
-*availability-shaped*: `/health` answers, the WebSocket upgrades, the app's own
-component probes are green. All of that can be true **while the API throws on
-every third request** — `/health` (liveness only since A3.1) has no way to see
-that, and did not know it even back when it ran a `SELECT 1`, since a 500 in a
-route is not a database failure. Nothing read the logs, so nothing would have
-said so.
+> **This group no longer reads the API's logs.** It used to: `api-error-rate`
+> read `fly logs -a pqp-api` and classified every line. Production left Fly on
+> 2026-09-17, the check measured a stale buffer from then on, and on 2026-10-22
+> the Fly app was destroyed and the check, its classifier and its ignore list
+> were deleted. What it measured is covered by the Grafana Loki alerts on the
+> box's container logs (error lines over 20 in 5 minutes, `Connection
+> terminated`, no `ws.connect`; see "Logs in Grafana Cloud"). `/ready` and
+> `/status.json` carry no error counters, and `GET /api/admin/metrics`, which
+> does, needs `ADMIN_METRICS_TOKEN`, which is not a repository secret (it lives
+> on the `pqp-admin` Worker). Add it as a secret and a counter check can come
+> back here. **What runs is `support-bot-alive`**, because `pqp-support` is
+> still a Fly app.
 
 | Check | Passes when | Why it exists |
 |---|---|---|
-| `api-error-rate` (**rollback only**) | fewer than 5% of `pqp-api` log lines are errors, and no process-level fault appears at all | The only check that reads what the server actually says. `fail` at 15%; `warn` at 5%; a single `[process] unhandled rejection` / `uncaught exception` fails on its own regardless of rate, because that is CLAUDE.md pitfall #9, it crashes the process and drops every connected client. |
-| `support-bot-alive` | exactly one `pqp-support` machine, `started`, whose last `bot.*` lifecycle line is a start | The bot went down three minutes after its first deploy — clean exit, Fly retired the machine, absent from `#ajuda`, nothing said so. Machine state alone is not enough: with `restart policy = "always"` a bot that halts on every boot presents as a permanently `started` machine, so the lifecycle trail is read too. |
-
-#### The window is set by traffic, not by the clock
+| `support-bot-alive` | exactly one `pqp-support` machine, `started`, whose last `bot.*` lifecycle line is a start, and whose `bot.heartbeat` says the socket is up | The bot went down three minutes after its first deploy: clean exit, Fly retired the machine, absent from `#ajuda`, nothing said so. Machine state alone is not enough: with `restart policy = "always"` a bot that halts on every boot presents as a permanently `started` machine, so the lifecycle trail is read too, and a started bot with a dead socket is caught by the heartbeat (`scripts/monitor/bot-heartbeat.mjs`). |
 
 `fly logs --no-tail` returns roughly the **last 100 lines**, so the period it
-covers is bounded by **volume, not time**. Measured on 2026-08-23, both in the
-same minute:
+covers is bounded by **volume, not time** (measured on 2026-08-23, `pqp-support`
+kept 79 records over 7 hours). The 15-minute cron is the *sampling interval*,
+not the window; they are unrelated.
 
-| App | Records | Span |
-|---|---|---|
-| `pqp-api` | 100 | 28 minutes |
-| `pqp-support` | 79 | 7 hours |
-
-A check phrased as *"errors in the last 15 minutes"* would therefore silently
-mean two hours at 03:00 and ninety seconds at peak, and its threshold would mean
-something different every time it ran. So the check **measures a rate** and
-**derives the window from the first and last timestamps in the output**. The
-15-minute cron is the *sampling interval*, not the window; they are unrelated.
-
-A window too short to mean anything (under 120s, or under 25 records) is a
-**`skip` with the reason, never a pass** — a green taken from a twenty-second
-snapshot is not evidence. A short window that is *full of errors* still alerts:
-refusing to certify health is not the same as refusing to report a fire.
-
-#### The ignore list
-
-Known-benign noise is filtered by an explicit, commented rule table
-(`IGNORE_RULES` in `scripts/monitor/errors.mjs`), never by a regex buried in a
-condition. **Every run prints how many lines each rule swallowed**, on a pass as
-well as a failure, because a rule that has quietly started matching everything
-produces a permanent green and its climbing count is the only tell.
-
-| Rule | What it drops | Why that is not a fault |
-|---|---|---|
-| `pg-deprecation` | the boot-time `DeprecationWarning` from `pg` | a library's migration notice, emitted once per machine start |
-| `proxy-invalid-authority` | fly-proxy `invalid authority` | the edge refusing a junk `Host` before it reaches us; the app never saw it |
-| `naw-blocked` | `blocked by NAW:` | Fly's edge **blocking** an exploit probe. Counting it would make the check louder the better we are defended |
-| `token-rejected`, `ws-auth-failure` | a 401 on a bad JWT | the auth layer working. **Budgeted, not blanket-ignored** — see below |
-| `deploy-health-check` | Fly health-check errors | **conditional**: dropped only when the same buffer contains deploy markers. A rolling deploy on a single machine produces these on every release; a health check failing when *nothing is deploying* is exactly the thing worth waking up for, and stays an error |
-
-**Auth failures are budgeted rather than ignored**, because one stale client and
-a Clerk outage produce the identical log line and only the rate separates them.
-The measured background is ~7.5 lines/hour — one stale automated client retrying
-every ~25 minutes, logging *twice* per attempt (once from the HTTP path, once
-from the socket). The budget is 20/hour, scaled to the measured window;
-everything above it is counted as an error. A real auth outage is every
-connecting client failing at once, which is an order of magnitude clear of that.
-
-> **This needs `FLY_ORG_TOKEN`.** `FLY_API_TOKEN` is a *deploy* token scoped to
-> `pqp-api`, so it can read that app's logs and nothing else — `support-bot-alive`
-> would `SKIP` on it with instructions rather than reporting a false outage. The
-> org-scoped token (`FLY_ORG_TOKEN`, if it is set) reads both.
+> **This needs `FLY_ORG_TOKEN`.** An app-scoped deploy token cannot read
+> `pqp-support`, so without the org-scoped `FLY_ORG_TOKEN` the check `SKIP`s with
+> instructions rather than reporting a false outage.
 
 ### Certificates, domain and quotas — daily at 11:17 UTC
 
@@ -486,28 +428,25 @@ The uptime workflow needs **nothing new** to run: it uses the built-in
 `GITHUB_TOKEN` and public URLs only. The limits workflow degrades the same way:
 each unconfigured check (`r2-usage`, `pages-builds`, `clerk-users`) reports
 `SKIP` with the exact credential it wants. The errors workflow runs
-`support-bot-alive`, which needs `FLY_ORG_TOKEN` (org-scoped; the app-scoped
-deploy token cannot read `pqp-support`) and `SKIP`s without it. The
-repository variable `MONITOR_FLY_ROLLBACK` is only ever set during a rollback.
+`support-bot-alive`, which needs `FLY_ORG_TOKEN` (org-scoped; an app-scoped
+deploy token cannot read `pqp-support`) and `SKIP`s without it.
 
 To turn the remaining ones on:
 
-### 1. Fly org token: the support bot, and a rollback
+### 1. Fly org token: the support bot
 
-The existing `FLY_API_TOKEN` is a **deploy** token scoped to the `pqp-api` app.
-`support-bot-alive` reads a *different app* (`pqp-support`), which it cannot
-see, so without `FLY_ORG_TOKEN` that check `SKIP`s, visibly, with the fix in the
-message. An org-scoped read token fixes it:
+`support-bot-alive` reads the `pqp-support` Fly app, which an app-scoped deploy
+token cannot see, so without `FLY_ORG_TOKEN` that check `SKIP`s, visibly, with
+the fix in the message. An org-scoped read token fixes it:
 
 ```bash
 fly tokens create org --name pqp-monitor --expiry 8760h
 gh secret set FLY_ORG_TOKEN            # paste it
 ```
 
-During a rollback to Fly the same token also serves `worker-image-drift` (it
-lists `pqp-worker` as well as `pqp-api`) and the `fly logs` reader. Nothing about
-Postgres needs it any more: the Fly cluster this once read is gone, and the
-`MONITOR_MPG_CLUSTER` variable can be deleted.
+Nothing about Postgres needs it: the Fly cluster this once read is gone, and
+the `MONITOR_MPG_CLUSTER` variable can be deleted. The old `FLY_API_TOKEN`
+secret (a deploy token for `pqp-api`) is not read by anything any more.
 
 ### 2. R2 and Pages — check what the stored Cloudflare token can do
 
@@ -547,8 +486,7 @@ node scripts/monitor/run.mjs availability          # print a report
 node scripts/monitor/run.mjs limits --json         # machine-readable
 node scripts/monitor/run.mjs availability --alert --dry-run   # show what it would do to issues
 
-MONITOR_FLY_ROLLBACK=true MONITOR_FLY_LOCAL=1 node scripts/monitor/run.mjs availability   # include the rollback-only Fly checks using your own `fly auth`
-MONITOR_FLY_LOCAL=1 node scripts/monitor/run.mjs errors --json  # support-bot-alive; add MONITOR_FLY_ROLLBACK=true for the log reader and its per-rule ignore counts
+MONITOR_FLY_LOCAL=1 node scripts/monitor/run.mjs errors --json  # support-bot-alive, using your own `fly auth`
 ```
 
 The two groups with real branching logic are tested, and CI runs them:
@@ -565,14 +503,10 @@ Useful environment variables:
 | Variable | Purpose |
 |---|---|
 | `MONITOR_RESOLVE=api.pqp.gg=<ip>` | Pin a hostname to an address, for running from a network whose resolver hijacks or NXDOMAINs the domain. |
-| `MONITOR_FLY_ROLLBACK=true` | Turn the three Fly-reading checks back on (a rollback to Fly only; see "Rolling back to Fly"). `MONITOR_FLY_EXPECTED_MACHINES` (default 2) is the machine count `fly-machines` expects. |
 | `MONITOR_POOL_WARN_FRACTION` | Fraction of one replica's pool in use at which `api-pool` warns (0.85). |
 | `MONITOR_API_ORIGIN`, `MONITOR_WEB_ORIGIN` | Point the probes elsewhere — how the failure paths get exercised. |
 | `MONITOR_RETRY_DELAY_MS` | Shorten the retry spacing when testing. Leave it alone in CI. |
 | `MONITOR_TLS_WARN_DAYS`, `MONITOR_WARN_FRACTION`, `MONITOR_UPTIME_FLOOR` | Threshold overrides. |
-| `MONITOR_ERROR_WARN_FRACTION`, `MONITOR_ERROR_FAIL_FRACTION`, `MONITOR_ERROR_MIN_COUNT` | Error-rate thresholds (0.05, 0.15, 3). |
-| `MONITOR_ERROR_MIN_RECORDS`, `MONITOR_ERROR_MIN_WINDOW_SECONDS` | The sample floors below which the check `skip`s instead of certifying health (25, 120). |
-| `MONITOR_AUTHFAIL_BUDGET_PER_HOUR` | Tolerated background auth-failure lines per hour (20). Raise only with a measurement. |
 | `MONITOR_MUTED` | See below. |
 
 ## Silencing an alert
@@ -606,12 +540,12 @@ These are printed at the end of every `limits` run as well.
 |---|---|---|---|
 | **ExpressTURN relay bandwidth** | **1,000 GB/month** on the free tier ([expressturn.com](https://www.expressturn.com/)) | ExpressTURN publishes no usage API and issues no API key. The only reading is the account page. This is the quota most likely to actually bite: TURN relays *all* audio for cross-NAT peers. | Monthly, and after any busy voice weekend |
 | **Clerk MRU** | 50,000 monthly retained users | The Backend API exposes a user count but not an MRU count. The automated check uses total users as a conservative proxy. | Quarterly |
-| **Vultr and Fly spend** | Usage-billed; no free-tier wall | Both bill rather than cutting off, so the failure mode is a surprise invoice, not an outage. The provider's own spend alert handles this better than a probe could. The Fly apps go away around 2026-10-17. | Set the spend alert once in each dashboard, then glance monthly |
+| **Vultr and Fly spend** | Usage-billed; no free-tier wall | Both bill rather than cutting off, so the failure mode is a surprise invoice, not an outage. The provider's own spend alert handles this better than a probe could. Fly now only holds the support bot, ambient and staging. | Set the spend alert once in each dashboard, then glance monthly |
 | **Vultr managed Postgres disk and connections** | The plan's volume | No credential for it exists in GitHub, and the old `postgres-disk` check read a Fly volume that is gone. `api-pool` shows only connection pressure. | Monthly glance in the Vultr dashboard, and before any big event |
 | **API box disk, CPU, memory** | The box's plan | Alloy ships them to Grafana as `box="api-pqp"`; whether an alert rule matches that label is not verifiable from here. | Confirm once in Grafana |
 | **Origin certificate (Cloudflare Origin CA)** | Set at issue | Caddy shows it only to Cloudflare. | Calendar item when issued |
 | **Porkbun payment card** | — | No API. Auto-renew is on, and the way auto-renew fails is an expired card. The `domain-registration` check catches the *consequence*; only you can prevent the *cause*. | Yearly, in July, before the 7 August fee date |
-| **Log lines older than what Loki keeps** | 14 days of retention | Fixed by moving the log reading to Grafana Loki, which sees every line. The `fly logs --no-tail` 100-line buffer limit only applies to the rollback-only `api-error-rate` check. | n/a |
+| **Log lines older than what Loki keeps** | 14 days of retention | Fixed by moving the log reading to Grafana Loki, which sees every line. The `fly logs --no-tail` 100-line buffer limit now only applies to `support-bot-alive`. | n/a |
 | **`pqp-ambient` error rate and liveness** | n/a | Nothing technical: the same check fits it unchanged. Deliberately not wired up, because the house cast going quiet costs nothing and one more alert key on day one is one more thing to learn to ignore. One line in `runErrorChecks` when it starts mattering. | revisit if the cast becomes load-bearing |
 | **Errors the server never logs** | n/a | Every log-based check, Loki included, reads what the server says about itself. A route that 500s without a `console.error` is invisible; Faro covers the browser half. | n/a |
 | **Scheduled workflows still enabled** | — | **GitHub disables scheduled workflows after 60 days with no repository activity.** A repo that goes quiet loses its monitoring silently. | Monthly: confirm `Monitor (uptime)` has run recently in the Actions tab |
@@ -632,9 +566,9 @@ this repo cannot reach.
   because nothing in GitHub can see the database's disk (see "What GitHub does
   not watch").
 
-**Fly.io** (fly.io/dashboard → the `personal` org). Only the rollback apps, the
-support bot and the log shipper remain; the Fly apps for the API go away around
-2026-10-17.
+**Fly.io** (fly.io/dashboard → the `personal` org). The API apps and the log
+shipper were destroyed on 2026-10-22; the support bot, `pqp-ambient` and
+staging remain.
 - **Spend alert / billing notification** while any Fly app still bills.
 
 **Cloudflare** (dash.cloudflare.com → Notifications)
@@ -674,31 +608,26 @@ in the repo.
 
 ### How the lines get there
 
-> **Since 2026-09-17 the API runs on the Vultr box, and its lines arrive a
-> different way:** Grafana Alloy on the box reads the `api-a`, `api-b`, `worker`
-> and `caddy` containers' logs off the Docker socket and pushes them to this
-> same stack (`tools/api-host/config.alloy`). The repo's config labels them by
-> compose service (`{container="api-a"}`); whether the older
-> `{fly_app_name="pqp-api"}` queries and alert rules still match depends on how
-> the live Alloy relabels, so check a panel before trusting it. The Fly pipeline
-> below is the original one and is kept only while `pqp-log-shipper` and the Fly
-> rollback exist. The LogQL examples below use the old label.
+> **Since 2026-09-17 the API runs on the Vultr box, and its lines arrive this
+> way:** Grafana Alloy on the box reads the `api-a`, `api-b`, `worker` and
+> `caddy` containers' logs off the Docker socket and pushes them to this
+> stack (`tools/api-host/config.alloy`). The repo's config labels them by
+> compose service (`{container="api-a"}`) and the live Alloy also stamps
+> `fly_app_name="pqp-api"` on the API's lines, so the older queries and alert
+> rules that use that label keep matching; the LogQL examples below use it.
+> The earlier pipeline (Fly NATS log stream, then `pqp-log-shipper`) is gone:
+> the Fly app was destroyed on 2026-10-22 and `tools/log-shipper/` is kept only
+> as a record.
 
 ```
-pqp-api (Fly, gru) -> Fly NATS log stream -> pqp-log-shipper (Fly, Vector) -> Loki push
+api-a / api-b / worker / caddy (Vultr box) -> Grafana Alloy -> Loki push
 ```
 
-`tools/log-shipper/` holds the Fly app: the official
-`flyio/log-shipper` image with `SUBJECT = "logs.pqp-api.>"`, so only the API
-is shipped (not the worker, not staging). Its README lists the five secrets
-and where each value comes from. Four are staged; `LOKI_PASSWORD` needs a
-grafana.com Access Policy token with `logs:write`, which only the org owner
-can create. Deployed 2026-09-06; lines arrive within seconds. If the shipper
-is down every panel below shows "No data" and the alert rules stay `Normal`
-(no data resolves to OK on purpose: a silent shipper must not page as an
-outage), so the no-traffic rule is the one that notices.
+If Alloy is down every panel below shows "No data" and the alert rules stay
+`Normal` (no data resolves to OK on purpose: a silent shipper must not page as
+an outage), so the no-traffic rule is the one that notices.
 
-Deploying or restarting the shipper never touches `pqp-api`.
+Deploying or restarting Alloy never touches the API.
 
 ### The log format, and why it stays
 
@@ -712,8 +641,8 @@ The API logs `[pqp] key=value` text, not JSON:
 `logEvent` in `server/src/lib/log.ts` writes the first kind: one line per
 event, `[pqp] <event.name>` then `key=value` pairs, nothing quoted. The second
 kind is a plain `console.warn` / `console.error` with a `[module]` prefix. Do
-not switch either to JSON: `scripts/monitor/errors.mjs` (the error heartbeat)
-parses the text, and `fly logs` in a terminal is still the fastest debugging
+not switch either to JSON: the Loki alert rules and queries below match the
+text, and `docker compose logs` on the box is still the fastest debugging
 tool. LogQL handles the text fine; every pattern below is a substring filter.
 
 ### LogQL patterns
@@ -827,18 +756,19 @@ browsers still connecting are the ones that are never going to declare it.
 ```bash
 # the trend, over a week
 {fly_app_name="pqp-api"} |= "voice.seats"
-
-fly secrets set VOICE_MESH_RESUME_REQUIRES_CAP=true --app pqp-api
 ```
 
-`restarts-api`, so treat it like any other deploy and pick a quiet moment.
+Then flip the runtime flag `VOICE_MESH_RESUME_REQUIRES_CAP` on from the operator
+dashboard (controles, interruptores): it takes effect without a deploy or a
+restart. (Setting `VOICE_MESH_RESUME_REQUIRES_CAP=true` in `/opt/pqp/.env` is
+the same default through the environment, and that one needs a `pqp-deploy` to
+pick up, which restarts the API, so pick a quiet moment.)
 
 **Afterwards.** `requiresCap=true` on the next hourly line confirms it landed.
 `meshHoldsRefused` should start climbing slowly: that is phones no longer
 leaving ghosts, which is the point. `idleOverAnHour` should trend down. If
 `meshHoldsRefused` climbs *fast* and users report being dropped from calls,
-`fly secrets unset VOICE_MESH_RESUME_REQUIRES_CAP --app pqp-api` is the whole
-rollback.
+turning the flag back off on the dashboard is the whole rollback.
 
 The client half of the same bug is in the iOS app (#411) and only reaches
 people who update. This switch reaches every build already on a phone, which
@@ -1062,12 +992,13 @@ bare `console.log`:
 Grafana Cloud free tier: 50 GB of logs per month, 14 days retention, and
 the stack's trial (30 days from 2026-09-06) is on the Pro tier meanwhile. A
 12 minute `fly logs` sample on 2026-09-06 (a quiet Sunday morning, one
-machine) was 100 lines, 12.9 KB after stripping ANSI: about 18 bytes/s, so
+machine, when the API still ran on Fly) was 100 lines, 12.9 KB after stripping ANSI: about 18 bytes/s, so
 roughly **0.05 GB/month**. A busy evening with a large watch party is maybe
 20x that; a MoonKase-sized spike (2026-09-05) a few hundred times for an
-hour. Even a permanent 100x would sit at 5 GB, a tenth of the free tier. The
-`SUBJECT` filter in `fly.toml` is what keeps the worker and staging out; widen
-it to `logs.>` only with that arithmetic in mind.
+hour. Even a permanent 100x would sit at 5 GB, a tenth of the free tier. (On
+Fly, the shipper's `SUBJECT` filter kept the worker and staging out. On the
+box, Alloy ships `api-a`, `api-b`, `worker` and `caddy`; add a container only
+with that arithmetic in mind.)
 
 ---
 
@@ -1740,7 +1671,7 @@ the SFU box is a separate manual deploy and is NOT in the API image.
 | `tools/monitoring/grafana-dashboard-capacity.json` | "pqp Capacity" dashboard: estimated vs measured SFU load, per-container CPU and memory, Caddy, event-loop lag |
 | `tools/monitoring/grafana-alert-rules-capacity-gauges.json` | "SFU admission estimate far above what the box carries" and "API event loop stalled" |
 | `tools/sfu-monitoring/install-regional.sh` | Idempotent monitoring install for a regional SFU box; `PQP_REGIONAL_DRY_RUN=1` checks without changing anything |
-| `tools/log-shipper/` | Fly app `pqp-log-shipper`: ships `pqp-api` logs to Grafana Cloud Loki |
+| `tools/log-shipper/` | Historical: the Fly app `pqp-log-shipper` that shipped `pqp-api` logs to Grafana Cloud Loki (destroyed 2026-10-22; the box ships its own, `tools/api-host/config.alloy`) |
 | `tools/sfu-monitoring/` | Grafana Alloy config, the vnstat/docker textfile exporter and the installer for the SFU box |
 | `tools/monitoring/pqp-api-metrics-exporter.py` | Textfile exporter: scrapes `GET /api/admin/metrics` into Prometheus series (readiness, pool, voice, and the growth counters above) |
 | `tools/monitoring/grafana-dashboard-growth.json` | "pqp Growth" dashboard: signups, messages, call outcomes, watch-party reliability, push delivery |

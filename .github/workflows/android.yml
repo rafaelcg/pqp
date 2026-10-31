@@ -2,8 +2,8 @@ name: Android
 
 # Its own workflow file, deliberately, and not a job bolted onto `ci.yml`.
 #
-# `ci.yml` guards the API and the web client, and `deploy-api-fly.yml` ships the
-# API from `main` minutes after a merge. An Android build that cannot find an
+# `ci.yml` guards the API and the web client, and `deploy-api-vultr.yml` ships
+# the API from `main` minutes after a merge. An Android build that cannot find an
 # SDK platform must never be the reason an API fix does not deploy, so the two
 # pipelines share nothing: no runner, no toolchain, no required check.
 #

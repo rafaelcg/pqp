@@ -154,8 +154,8 @@ jobs:
 
       # Same reason as the monitor scripts above, with a sharper edge: this one
       # decides whether merging drops every live WebSocket. It used to be a
-      # `grep` inside deploy-api-fly.yml, where the only way to learn what it
-      # did was to merge something and watch.
+      # `grep` inside the old Fly deploy workflow, where the only way to learn
+      # what it did was to merge something and watch.
       - name: Test deploy relevance
         run: node --test scripts/deploy/*.test.mjs
 

@@ -1,15 +1,21 @@
 # Vultr deployment (API + WebSocket)
 
-Runbook for moving the pqp API and WebSocket server from **Fly.io** to a
-single **Vultr** box in São Paulo. Decision and cost arithmetic:
+Runbook for the pqp API and WebSocket server on a single **Vultr** box in
+São Paulo, which is production. The API moved here from **Fly.io** on
+2026-09-17 (decision and cost arithmetic:
 [`docs/plans/WATCH_PARTY_POSTMORTEM_2026-09-12.md`](./plans/WATCH_PARTY_POSTMORTEM_2026-09-12.md)
-section E, written after the 2026-09-12 watch party.
+section E, written after the 2026-09-12 watch party). The Fly rollback apps
+`pqp-api` and `pqp-worker`, and the Fly deploy workflow and config
+(`deploy-api-fly.yml`, `fly.toml`, `fly.worker.toml`), were **removed on
+2026-10-22**. Sections 0 to 6 below are the migration as it happened and double
+as the record for rebuilding the box from nothing; **section 7 is the rollback
+plan that exists today**. A self-host that wants Fly still has
+[`docs/deploy-fly.md`](./deploy-fly.md) and the staging config
+`fly.staging.toml`.
 
-Only the API + worker move. The SPA stays on Cloudflare Pages; this box
-serves `/api/*`, `/health`, `/ready`, `/status.json` and the `/ws` upgrade,
-behind Caddy, behind Cloudflare. `fly.toml` and `deploy-api-fly.yml` are
-deliberately left in place for **30 days after cutover**. They are the
-rollback path — see "Rollback" below.
+The SPA lives on Cloudflare Pages; this box serves `/api/*`, `/health`,
+`/ready`, `/status.json` and the `/ws` upgrade, behind Caddy, behind
+Cloudflare.
 
 Files this runbook drives: [`tools/api-host/`](../tools/api-host/)
 (`cloud-init.yaml`, `provision.sh`, `compose.yaml`, `Caddyfile`,
@@ -37,9 +43,10 @@ needs a `DATABASE_URL` that resolves, which section "Secrets" below covers.
   region São Paulo.
 - `ssh`, `scp` locally.
 - `gh` authenticated against `rafaelcg/pqp`, for secrets and workflow steps.
-- The existing Fly secrets, readable (`fly secrets list -a pqp-api` shows
-  names, not values — pull values from wherever they are actually kept; Fly
-  never shows them back).
+- The API's secret values (on a live box they are in `/opt/pqp/.env` and
+  `/opt/pqp/worker.env`; for a rebuild, pull them from wherever they are
+  actually kept). Fly never showed secret values back, and the Fly copy no
+  longer exists.
 - Cloudflare dashboard access for the `api` DNS record and, if using Mode A
   in `tools/api-host/Caddyfile`, an Origin CA certificate.
 
@@ -146,10 +153,9 @@ file of its own, it reads `DATABASE_URL` and `LIVE_HLS_S3_*` out of `.env`.
 
 ## 3. Secrets
 
-`/opt/pqp/.env` on the box (0600, `pqp:pqp`, never in git) needs the same
-values as `fly secrets list -a pqp-api`. Names only, from CLAUDE.md's env
-table — copy the actual values from wherever they are kept, not from Fly,
-which never shows secret values back:
+`/opt/pqp/.env` on the box (0600, `pqp:pqp`, never in git) holds the API's
+secrets. Names only, from CLAUDE.md's env table — copy the actual values from
+wherever they are kept:
 
 ```
 DATABASE_URL              CLERK_SECRET_KEY          CORS_ALLOWED_ORIGINS
@@ -161,10 +167,9 @@ MAX_ATTACHMENT_BYTES / ATTACHMENT_URL_TTL_SECONDS
 LIVE_HLS_S3_ENDPOINT / LIVE_HLS_S3_BUCKET / LIVE_HLS_S3_REGION / LIVE_HLS_S3_ACCESS_KEY_ID / LIVE_HLS_S3_SECRET_ACCESS_KEY / LIVE_HLS_S3_FORCE_PATH_STYLE
   (watch party recording; also what the nightly backup below uploads to, see docs/DB_RUNBOOK.md)
 PUBLIC_APP_URL / STEAM_WEB_API_KEY / BATTLENET_CLIENT_ID / BATTLENET_CLIENT_SECRET / TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET
-CLUSTER_BUS / VOICE_REGISTRY    (both "postgres", matching fly.toml — this
-                                  box is one machine, same as pqp-api today,
-                                  but the app boots with the same production
-                                  config either way)
+CLUSTER_BUS / VOICE_REGISTRY    (both "postgres": api-a and api-b share chat
+                                  fan-out and the voice peer map through
+                                  Postgres, section 9)
 ADMIN_METRICS_TOKEN
 COMMUNITIES_ENABLED / COMMUNITY_HOME_ENABLED / COMMUNITY_HOME_VIP_ENABLED
 WS_COMPRESSION
@@ -186,8 +191,8 @@ changes. The `worker` service runs the `<sha>-worker` image (the Dockerfile's
 `worker` target, which adds ffmpeg for the voice note AAC copy);
 `deploy-api-vultr.yml` pushes it beside the plain tag.
 
-`TRUST_PROXY=true` still means exactly one hop, same as `fly.toml`'s
-comment — that hop is now Caddy on this box, not fly-proxy. That hop is only
+`TRUST_PROXY=true` means exactly one hop (it was fly-proxy on Fly, and is
+Caddy on this box). That hop is only
 trustworthy if Caddy itself is configured to trust it: Caddy's
 `reverse_proxy`, per its own docs, does not use the `X-Forwarded-For` it
 receives from Cloudflare's edge unless the immediate connection is in its
@@ -313,9 +318,10 @@ starting with the very first deploy. Pick one:
   unset and the login is skipped, which only works if the package is
   public.
 
-Leave `vars.DEPLOY_TARGET` at `fly` for now — merging
-`deploy-api-vultr.yml` changes nothing until you flip it (see the
-workflow's own header comment). You can still exercise the whole pipeline
+`vars.DEPLOY_TARGET` is `vultr` in production, and `deploy-api-vultr.yml`
+only runs while it is (it is the workflow's gate, so do not delete the
+variable). On a fresh setup, leave it unset until the box is ready: merging
+the workflow changes nothing until you set it. You can still exercise the whole pipeline
 early with `gh workflow run "Deploy API (Vultr)"` — the `workflow_dispatch`
 branch of the `if:` still requires `vars.DEPLOY_TARGET == 'vultr'`, so a true
 dry run before cutover is a manual SSH deploy (`docker compose pull && up -d
@@ -371,62 +377,70 @@ otherwise refuse its own reverse proxy's certificate.
    (`tools/api-host/Caddyfile`'s header explains why "Flexible" is wrong
    here).
 3. Watch clients reconnect (`docs/MONITORING.md` dashboards, or just
-   `GET /api/admin/metrics`). Fly is still running the old commit at this
-   point; new connections land on Vultr, and Fly is not yet told to stop.
+   `GET /api/admin/metrics`). At the real cutover Fly was still running the
+   old commit at this point; new connections landed on Vultr.
 4. Flip CI over:
    ```bash
    gh variable set DEPLOY_TARGET --body vultr
-   gh workflow disable "Deploy API (Fly)"
    ```
 5. Trigger and watch the first CI-driven deploy:
    ```bash
    gh workflow run "Deploy API (Vultr)"
    gh run watch
    ```
-6. **Scale Fly to zero, but keep it** for the 30-day rollback window (the
-   postmortem plan's own arithmetic: ~$60-80 of double-running the API for a
-   month, bought as insurance):
-   ```bash
-   fly scale count 0 --region gru --app pqp-api
-   ```
-   Leaving `min_machines_running` in `fly.toml` untouched is fine — the
-   workflow that would re-assert it is now disabled, and `fly scale count 0`
-   is the manual override in effect until rollback or the 30 days pass.
+6. **Fly was scaled to zero and kept for 30 days** as the rollback window
+   (about $60-80 of insurance), then destroyed on 2026-10-22. Nothing to do
+   here any more.
 7. Update the deploy table pointer in `CLAUDE.md` and `docs/DEPLOY.md` (both
-   already point here as of this PR) and `docs/HANDOVER.md` if it names Fly
-   as current.
-8. **Logs.** `tools/log-shipper` reads Fly's org-level NATS log stream and
-   has nothing to ship once `pqp-api` is scaled to zero on Fly. Once
-   cutover is confirmed stable, `fly apps destroy pqp-log-shipper` (or scale
-   it to zero) and update any saved Grafana Explore queries / alert rules
-   from `{fly_app_name="pqp-api"}` to `{container="api"}` /
-   `{container="worker"}` (`tools/api-host/config.alloy`'s label scheme) —
-   see `docs/MONITORING.md`.
+   point here) and `docs/HANDOVER.md` if it names Fly as current.
+8. **Logs.** `tools/log-shipper` read Fly's org-level NATS log stream and had
+   nothing to ship once `pqp-api` was scaled to zero; the `pqp-log-shipper`
+   Fly app was destroyed with the other two. The box ships its own logs
+   (`tools/api-host/config.alloy`, labels `{container="api"}` /
+   `{container="worker"}`; the `fly_app_name="pqp-api"` label is kept on those
+   lines so older queries and alert rules still match), see
+   `docs/MONITORING.md`.
 
 ## 7. Rollback
 
-Same "decide the point of no easy return up front" rule as
-`docs/deploy-fly.md` §8: before the first message is written against
-whichever Postgres this box points at, rollback is a DNS record. After that
-it is a database migration.
+**There is no second production to fail over to.** Fly was the rollback target
+until 2026-10-22 and is gone: the apps are destroyed, the secrets they held
+went with them, and the deploy workflow, `fly.toml` and `fly.worker.toml` are
+deleted (they are in git history). What exists instead, in order of how often
+it is needed:
 
-```bash
-# 1. Point api.pqp.gg back at Fly (60s TTL from the cutover means this lands fast).
-# 2. Bring Fly back up:
-fly scale count 1 --region gru --app pqp-api
-# 3. Restore CI:
-gh workflow enable "Deploy API (Fly)"
-gh variable set DEPLOY_TARGET --body fly
-# 4. Stop the box from taking further writes, once traffic has drained:
-ssh pqp@<ip> 'cd /opt/pqp && docker compose stop api-a api-b worker'
-# (harmless if api-b was never running — API_REPLICAS=1 — compose just
-# reports it has no container for that service)
-```
+1. **A bad deploy: put an older image back, by hand.** Every deploy is a
+   `ghcr.io/rafaelcg/pqp-api:<sha>` image, and the box keeps pulling by tag,
+   so any earlier sha that is still in GHCR is a valid target:
+   ```bash
+   ssh pqp@<ip> 'sudo /usr/local/bin/pqp-deploy <older sha>'
+   ```
+   `pqp-deploy` is the same rolling script CI runs: `api-a` is recreated and
+   confirmed healthy on the old tag before `api-b` is touched, so one
+   container is always serving. The workflow already does this by itself when
+   its own verification fails (it re-runs `pqp-deploy $PREV`). To stop the
+   next merge from redeploying the bad commit meanwhile, set the merge freeze
+   (`gh variable set DEPLOY_FREEZE --body true`, which
+   `deploy-api-vultr.yml` honours) and clear it after the fix lands.
+   "Rolling back a deploy on the box, and the worker's image" below covers the
+   worker's `-worker` tag.
+2. **A bad config or env change:** edit `/opt/pqp/.env` (or `worker.env`) and
+   re-run `sudo /usr/local/bin/pqp-deploy $(cat /opt/pqp/.deployed-tag)`.
+   Runtime feature flags (`docs/FEATURE_FLAGS.md`) are flipped from the
+   operator dashboard with no deploy.
+3. **The box is lost:** rebuild it from this runbook (sections 1 to 5:
+   `cloud-init.yaml`, `provision.sh`, the secrets from wherever they are
+   kept, the first deploy), then point the `api.pqp.gg` record at the new IP.
+   This is full downtime until it is done, and it is the one failure the two
+   replicas do not cover. The database is a separate managed cluster, so the
+   data is not on the box.
+4. **The database is lost or corrupt:** the nightly `pg_dump` the box uploads
+   to R2 (`backups/pqp-db/`, 30 days, `tools/api-host/db-backup.sh`), and how
+   to verify and restore one, are in `docs/DB_RUNBOOK.md`. Never resize the
+   managed cluster during a live event.
 
-If the two Postgres instances have diverged (writes landed on the Vultr
-database that Fly's never saw), rollback also means reconciling or accepting
-data loss — the same warning `docs/deploy-fly.md` gives about Railway.
-Decide the cutover window with that in mind, same as the Fly migration was.
+The old "decide the point of no easy return up front" warning is moot: there is
+no second Postgres to fall back to.
 
 ### Rolling back a deploy on the box, and the worker's image
 
@@ -538,8 +552,8 @@ profile.
 on the box) to pick it up — `pqp-deploy.sh` always brings up whichever
 replicas `API_REPLICAS` currently calls for, so this is the same motion as
 a normal deploy, just against the tag already running. This restarts every
-api replica and the worker, same WebSocket-drop contract as a Fly secret
-rotation, but rolling — see §9.
+api replica and the worker, with the same WebSocket-drop contract as any
+restart, but rolling — see §9.
 
 **Provisioning drift.** Re-run `provision.sh` (see step 2); it changes
 nothing that already matches and never touches the running containers.
@@ -583,7 +597,7 @@ serving, and it's the drain contract CLAUDE.md pitfall #11 already
 describes: `/health` goes unhealthy on that container first (Caddy's active
 health check pulls it out of rotation within ~5s), then its sockets close
 in batches, and the reconnects land on the sibling via Caddy the same way a
-second Fly machine used to catch them. A single container crash (OOM, an
+second machine used to catch them on Fly. A single container crash (OOM, an
 unhandled exception that takes the process down, `docker restart` by hand)
 fails over the same way, automatically, with no deploy involved.
 

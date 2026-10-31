@@ -1,8 +1,8 @@
 name: Announce merge freeze
 
 # docs/plans/WATCH_PARTY_POSTMORTEM_2026-09-12.md A6: the other half of the
-# merge freeze in deploy-api-vultr.yml and deploy-api-fly.yml. Those
-# workflows enforce the freeze through the DEPLOY_FREEZE repo variable. This
+# merge freeze in deploy-api-vultr.yml. That workflow enforces the freeze
+# through the DEPLOY_FREEZE repo variable. This
 # one only announces it on the PR itself, the moment someone adds the
 # `freeze` label, so nobody has to read a workflow file to learn why a merge
 # did not deploy.

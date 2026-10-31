@@ -1,6 +1,6 @@
 name: Deploy Staging
 
-# Staging twin of deploy-web.yml + deploy-api-fly.yml, deliberately simpler.
+# Staging twin of deploy-web.yml + deploy-api-vultr.yml, deliberately simpler.
 # See docs/STAGING.md for what staging is and how to use it.
 #
 # Two triggers:
@@ -166,7 +166,7 @@ jobs:
         uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # master 2026-04-08
 
       # --ha=false and rolling for the same reason as prod: the server is
-      # single-process by design (see fly.staging.toml / fly.toml headers), and
+      # single-process by design (see the fly.staging.toml header), and
       # even on staging two machines would be two disjoint chat servers.
       # -e APP_VERSION stamps the commit so /health can report it and the verify
       # step below can read it back.
