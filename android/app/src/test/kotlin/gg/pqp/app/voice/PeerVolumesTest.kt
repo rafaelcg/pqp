@@ -140,7 +140,7 @@ class PeerVolumesTest {
         sfu.trackSubscribed("bob", "bob-mic")
         assertEquals(1.0, levels["bob-mic"]!!, 0.0)
 
-        assertTrue(sfu.setLevel("bob", 0.25, listOf("bob-mic", "bob-share")))
+        assertTrue(sfu.setLevel("bob", 0.25) { listOf("bob-mic", "bob-share") })
 
         assertEquals(0.25, levels["bob-mic"]!!, 0.0)
         assertEquals(0.25, levels["bob-share"]!!, 0.0)
@@ -149,7 +149,7 @@ class PeerVolumesTest {
     @Test
     fun `a track that subscribes after the level was chosen starts at it`() {
         val sfu = sfu()
-        sfu.setLevel("bob", 1.5, emptyList())
+        sfu.setLevel("bob", 1.5) { emptyList() }
         sfu.trackSubscribed("bob", "bob-mic")
         assertEquals(1.5, levels["bob-mic"]!!, 0.0)
     }
@@ -157,10 +157,12 @@ class PeerVolumesTest {
     @Test
     fun `an SFU level repeat applies nothing and one peer does not move another`() {
         val sfu = sfu()
-        assertTrue(sfu.setLevel("bob", 0.5, listOf("bob-mic")))
+        assertTrue(sfu.setLevel("bob", 0.5) { listOf("bob-mic") })
         levels.clear()
-        assertFalse(sfu.setLevel("bob", 0.5, listOf("bob-mic")))
+        var scanned = false
+        assertFalse(sfu.setLevel("bob", 0.5) { scanned = true; listOf("bob-mic") })
         assertTrue(levels.isEmpty())
+        assertFalse("a repeat must not scan the room", scanned)
         sfu.trackSubscribed("ana", "ana-mic")
         assertEquals(1.0, levels["ana-mic"]!!, 0.0)
     }
@@ -168,7 +170,7 @@ class PeerVolumesTest {
     @Test
     fun `a forgotten peer comes back at 100 percent`() {
         val sfu = sfu()
-        sfu.setLevel("bob", 0.3, emptyList())
+        sfu.setLevel("bob", 0.3) { emptyList() }
         sfu.forget("bob")
         assertEquals(1.0, sfu.levelFor("bob"), 0.0)
     }

@@ -1208,12 +1208,18 @@ class LiveKitEngine(
     override fun setPeerVolume(remotePeerId: String, volume: Double) {
         // `audioTrackPublications` is a list of (publication, track) pairs, the
         // track being null until subscribed, hence the `second`.
-        val tracks = room?.remoteParticipants?.values
-            ?.firstOrNull { it.identity?.value == remotePeerId }
-            ?.audioTrackPublications
-            ?.mapNotNull { it.second as? RemoteAudioTrack }
-            .orEmpty()
-        synchronized(peerLock) { peerVolumes.setLevel(remotePeerId, volume, tracks) }
+        // The scan runs inside the lock and only when the level changed:
+        // `onTrackSubscribed` takes the same lock to apply the stored level,
+        // so a subscription racing this call cannot keep the old one.
+        synchronized(peerLock) {
+            peerVolumes.setLevel(remotePeerId, volume) {
+                room?.remoteParticipants?.values
+                    ?.firstOrNull { it.identity?.value == remotePeerId }
+                    ?.audioTrackPublications
+                    ?.mapNotNull { it.second as? RemoteAudioTrack }
+                    .orEmpty()
+            }
+        }
     }
 
     private fun forgetPeer(peerId: String) {
