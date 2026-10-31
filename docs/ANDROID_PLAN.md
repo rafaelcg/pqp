@@ -352,6 +352,7 @@ report to the desktop.
 **Size:** two evenings. **Depends on:** navigation (D4).
 
 ### B9. Speaking indicators and per-peer volume
+**Status:** per-peer volume shipped (a "Volume de cada um" row on the call bar, a sheet with a 0 to 200% slider and a mute button per person, on mesh through `AudioTrack.setVolume` and on LiveKit through `RemoteAudioTrack.setVolume`). Speaking indicators for LiveKit rooms exist; mesh still draws none.
 **What:** `RTCAudioTrack` level polling or `audioLevel` from `getStats`, and a
 per-peer gain control.
 **Why:** without a speaking indicator, a silent call and a working call look

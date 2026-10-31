@@ -217,6 +217,14 @@ class LiveKitEngine(
      */
     private val sharingByRoster = mutableSetOf<String>()
 
+    /**
+     * The listener's level per peer, under [peerLock]. Held here and not read
+     * back off the tracks because a track subscribes after the roster (and
+     * after the slider) has already spoken, and a room that reconnects hands
+     * back fresh tracks that know nothing. Absent means untouched.
+     */
+    private val peerVolumes = mutableMapOf<String, Double>()
+
     @Volatile private var muted = false
     @Volatile private var deafened = false
 
@@ -880,9 +888,11 @@ class LiveKitEngine(
             // makes somebody count as audible, it must still be silenced by
             // deafen, and it only plays for a presenter the roster announced.
             track.enabled = screenAudioEnabledFor(peerId)
+            applyVolume(peerId, track)
             return
         }
         track.enabled = !deafened
+        applyVolume(peerId, track)
         val sid = event.publication.sid
         if (synchronized(peerLock) { peers.voiceTrackAdded(peerId, sid) }) {
             report(peerId)
@@ -1186,9 +1196,35 @@ class LiveKitEngine(
         }
     }
 
+    /**
+     * The listener's level for one peer, applied to every audio track of theirs
+     * (voice and a share's sound), now and for tracks that subscribe later. The
+     * SDK's own gain, 0 to 10 with 1 untouched, so [PEER_VOLUME_MAX] is well
+     * inside it. A moderator's mute is the SFU's business on this transport and
+     * is not mixed in here.
+     */
+    override fun setPeerVolume(remotePeerId: String, volume: Double) {
+        val changed = synchronized(peerLock) {
+            val before = peerVolumes[remotePeerId] ?: PEER_VOLUME_DEFAULT
+            peerVolumes[remotePeerId] = volume
+            before != volume
+        }
+        if (!changed) return
+        room?.remoteParticipants?.values
+            ?.firstOrNull { it.identity?.value == remotePeerId }
+            ?.audioTrackPublications
+            ?.forEach { (_, track) -> (track as? RemoteAudioTrack)?.let { applyVolume(remotePeerId, it) } }
+    }
+
+    private fun applyVolume(peerId: String, track: RemoteAudioTrack) {
+        val volume = synchronized(peerLock) { peerVolumes[peerId] } ?: PEER_VOLUME_DEFAULT
+        runCatching { track.setVolume(volume) }
+    }
+
     private fun forgetPeer(peerId: String) {
         cancelCameraPause(peerId)
         val (hadScreen, hadCamera) = synchronized(peerLock) {
+            peerVolumes.remove(peerId)
             sharingByRoster.remove(peerId)
             watchedScreens.remove(peerId)
             cameraDemand.forget(peerId)
@@ -1599,6 +1635,7 @@ class LiveKitEngine(
         rosterAllowsScreen = false
         val (showing, oncamera) = synchronized(peerLock) {
             sharingByRoster.clear()
+            peerVolumes.clear()
             watchedScreens.clear()
             cameraDemand.clear()
             cameraPauseJobs.values.forEach { it.cancel() }

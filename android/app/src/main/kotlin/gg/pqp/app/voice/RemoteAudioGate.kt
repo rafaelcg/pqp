@@ -35,6 +35,13 @@ package gg.pqp.app.voice
  * controller's coroutines.
  */
 class RemoteAudioGate<T : Any>(
+    /**
+     * Set one track's playback level, 1 being what the sender sent. Applied to
+     * every track of the peer, the screen's sound included: one person, one
+     * slider, as on the web and iOS. First, so that [apply] stays the trailing
+     * lambda every existing caller already passes.
+     */
+    private val applyVolume: (track: T, volume: Double) -> Unit = { _, _ -> },
     /** Switch one track's playout on or off. */
     private val apply: (track: T, enabled: Boolean) -> Unit,
 ) {
@@ -55,6 +62,14 @@ class RemoteAudioGate<T : Any>(
 
         /** The stream id the roster named as this peer's screen audio, or null. */
         var screenAudioStreamId: String? = null
+
+        /**
+         * The listener's own level for this peer. Separate from [serverMuted]
+         * on purpose: a moderator's mute disables the track and leaves this
+         * alone, so the person comes back at the level that was chosen for
+         * them and not at a zero somebody else put there.
+         */
+        var volume: Double = PEER_VOLUME_DEFAULT
     }
 
     private val peers = HashMap<String, PeerAudio<T>>()
@@ -96,6 +111,7 @@ class RemoteAudioGate<T : Any>(
         audio.tracks[trackId] = track
         audio.streamIdByTrack[trackId] = streamId
         apply(track, plays(peerId, streamId))
+        applyVolume(track, audio.volume)
     }
 
     fun trackRemoved(peerId: String, trackId: String) {
@@ -134,6 +150,21 @@ class RemoteAudioGate<T : Any>(
         refresh(peerId, audio)
         return true
     }
+
+    /**
+     * This listener's level for one peer, set from the slider or re-sent from
+     * the roster. Remembered per peer so a track that lands later arrives at
+     * the right level, exactly like the mute flag. Returns true on a change.
+     */
+    fun setVolume(peerId: String, volume: Double): Boolean {
+        val audio = peers.getOrPut(peerId) { PeerAudio() }
+        if (audio.volume == volume) return false
+        audio.volume = volume
+        audio.tracks.values.forEach { applyVolume(it, volume) }
+        return true
+    }
+
+    fun volumeFor(peerId: String): Double = peers[peerId]?.volume ?: PEER_VOLUME_DEFAULT
 
     /**
      * This device stopped, or resumed, listening to the whole room.
