@@ -50,7 +50,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Same three secrets docs/TESTFLIGHT.md's "CI builds" section already
       # documents for the testflight job in ios.yml (APPLE_API_KEY_P8,
@@ -188,14 +188,19 @@ jobs:
       - name: Summarise
         if: always()
         shell: bash
+        env:
+          APP_VERSION: ${{ inputs.app_version }}
+          SUBMIT_FOR_REVIEW: ${{ inputs.submit_for_review }}
+          SKIP_SCREENSHOTS: ${{ inputs.skip_screenshots }}
+          RAN: ${{ steps.secrets.outputs.ready == 'true' }}
         run: |
           {
             echo "### iOS store metadata"
             echo
             echo "| | |"
             echo "|---|---|"
-            echo "| app_version | ${{ inputs.app_version }} |"
-            echo "| submit_for_review | ${{ inputs.submit_for_review }} |"
-            echo "| skip_screenshots | ${{ inputs.skip_screenshots }} |"
-            echo "| ran | ${{ steps.secrets.outputs.ready == 'true' }} |"
+            echo "| app_version | ${APP_VERSION} |"
+            echo "| submit_for_review | ${SUBMIT_FOR_REVIEW} |"
+            echo "| skip_screenshots | ${SKIP_SCREENSHOTS} |"
+            echo "| ran | ${RAN} |"
           } >> "$GITHUB_STEP_SUMMARY"

@@ -1603,6 +1603,7 @@ restart and would churn the series set for nothing.
 | `tools/monitoring/pqp-api-metrics-exporter.py` | Textfile exporter: scrapes `GET /api/admin/metrics` into Prometheus series (readiness, pool, voice, and the growth counters above) |
 | `tools/monitoring/grafana-dashboard-growth.json` | "pqp Growth" dashboard: signups, messages, call outcomes, watch-party reliability, push delivery |
 | `tools/monitoring/grafana-alert-rules-growth.json` | Always-on "call failure rate high" and "push failure rate high" alert rules |
+| `tools/monitoring/grafana-alert-rules-capacity.json` | Always-on group `pqp-capacity`: the SFU resize triggers (CPU busy fraction, participants, packet loss, transmit) and API box disk and memory early warnings; hands over to `docs/SFU_RESIZE_RUNBOOK.md` |
 | `tools/monitoring/grafana-dashboard-voice-notes.json` | "pqp Mensagens de voz" dashboard: voice-note usage and pipeline health |
 | `tools/monitoring/grafana-alert-rules-voice-notes.json` | Voice-note alerts: queue stuck, job failure rate, speech budget exhausted and at 80% |
 | `tools/monitoring/grafana-dashboard-activation.json` | "pqp Activation" dashboard: the new-user funnel and its conversions |

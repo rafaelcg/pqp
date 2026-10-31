@@ -43,7 +43,8 @@ const {
 } = require("./lib/web-cache");
 const { loginItemSupported } = require("./lib/login-item");
 const { createDesktopAuthController } = require("./lib/desktop-auth-session");
-const { senderMatchesAppOrigin } = require("./lib/ipc-origin");
+const { createIpcGuard } = require("./lib/ipc-guard");
+const { ALLOW_OVERRIDE_ENV, resolveAppUrlSource } = require("./lib/app-url");
 const {
   THUMBNAIL_SIZE,
   MAC_SCREEN_SETTINGS_URL,
@@ -255,6 +256,9 @@ const desktopAuth = createDesktopAuthController({
 });
 /** @type {BrowserWindow | null} */
 let pickerWindow = null;
+// Every `ipcMain` channel in this shell is registered through this guard, never
+// directly. See lib/ipc-guard.js.
+const ipcGuard = createIpcGuard({ ipcMain, getAppOrigin: () => sessionAppOrigin });
 
 /** @type {Electron.Tray | null} */
 let tray = null;
@@ -419,11 +423,20 @@ function ensureAppPath(url) {
 }
 
 function remoteOrDevUrl() {
-  return ensureAppPath(
-    process.env.PQP_APP_URL ||
-      process.env.VITE_APP_URL ||
-      (app.isPackaged ? DEFAULT_PROD_URL : DEFAULT_DEV_URL),
-  );
+  const picked = resolveAppUrlSource({
+    env: process.env,
+    isPackaged: app.isPackaged,
+    prodUrl: DEFAULT_PROD_URL,
+    devUrl: DEFAULT_DEV_URL,
+  });
+  if (picked.ignored) {
+    console.warn(
+      `[pqp] ignoring PQP_APP_URL / VITE_APP_URL in a packaged build; loading ${DEFAULT_PROD_URL}. Set ${ALLOW_OVERRIDE_ENV}=1 to test an installed build against another site.`,
+    );
+  } else if (app.isPackaged && picked.source === "override") {
+    console.warn(`[pqp] ${ALLOW_OVERRIDE_ENV} is set: this installed build loads a non-default site.`);
+  }
+  return ensureAppPath(picked.url);
 }
 
 /**
@@ -1048,10 +1061,14 @@ function showSourcePicker(labeled, offersNativeAudio) {
     // Every one of these channels is answered only for this window's own
     // webContents. The app window has a different preload and cannot reach
     // them, but an ipcMain channel is global and this is one line.
-    const fromPicker = (event) => !win.isDestroyed() && event.sender === win.webContents;
+    // `ipcGuard.check` with `sender` accepts exactly this webContents and logs a
+    // rejection like every other channel (the picker is a file:// page, so it
+    // has no web origin to match).
+    const fromPicker = (event, channel) =>
+      !win.isDestroyed() && ipcGuard.check(event, channel, { sender: win.webContents });
 
     const onLoad = (event) =>
-      fromPicker(event)
+      fromPicker(event, "pqp:picker-load")
         ? {
             sources: labeled,
             dark,
@@ -1083,7 +1100,7 @@ function showSourcePicker(labeled, offersNativeAudio) {
         : null;
 
     const onReady = (event) => {
-      if (!fromPicker(event) || loadTimer === null) {
+      if (!fromPicker(event, "pqp:picker-ready") || loadTimer === null) {
         return;
       }
       clearTimeout(loadTimer);
@@ -1091,14 +1108,14 @@ function showSourcePicker(labeled, offersNativeAudio) {
     };
 
     const onChoose = (event, sourceId, shareAudio) => {
-      if (!fromPicker(event) || typeof sourceId !== "string") {
+      if (!fromPicker(event, "pqp:picker-choose") || typeof sourceId !== "string") {
         return;
       }
       finish({ id: sourceId, shareAudio: shareAudio === true });
     };
 
     const onCancel = (event) => {
-      if (!fromPicker(event)) {
+      if (!fromPicker(event, "pqp:picker-cancel")) {
         return;
       }
       finish(null);
@@ -1537,9 +1554,11 @@ function configureSessionSecurity(appOrigin) {
       }
       chooseDisplaySource(request?.audioRequested === true, requesterKey(request?.frame))
         .then((response) => {
-          // `null` cancels. Chromium turns that into a NotAllowedError, which
-          // the client already words as "blocked or cancelled" rather than as
-          // a failure, so backing out of the picker reads as backing out.
+          // `null` cancels. Measured on Electron 44.0.0 and 44.9.1: the page
+          // gets `AbortError: Invalid capture constraints`, NOT a
+          // NotAllowedError, for a Cancel and for every refusal above alike.
+          // So that string from the desktop app means "the shell said no"
+          // (see docs/DESKTOP.md 3.6b for the 0.2.8 picker that never loaded).
           callback(response);
         })
         .catch((err) => {
@@ -1667,6 +1686,10 @@ function createWindow(appUrl, allowedOrigin) {
           width: 480,
           height: 720,
           autoHideMenuBar: true,
+          // No `preload`: a sign-in popup gets no `window.pqpDesktop`. Checked
+          // against Electron 44.9: a window.open child does not inherit the
+          // opener's preload. (The main window DOES keep its preload across
+          // an in-window auth hop, which is what `ipcGuard` is for.)
           webPreferences: {
             contextIsolation: true,
             nodeIntegration: false,
@@ -2374,82 +2397,90 @@ if (probingShareAudio) {
     handleDeepLink(url);
   });
 
-  ipcMain.handle("pqp:get-pending-deep-link", () => {
-    const value = pendingDeepLink;
-    pendingDeepLink = null;
-    return value;
-  });
+  // Every channel below goes through `ipcGuard` (lib/ipc-guard.js): the sender
+  // must be the app origin, and a sender that is not never reaches the handler.
+  // `rejected` is what such a sender is answered.
+  ipcGuard.handle(
+    "pqp:get-pending-deep-link",
+    () => {
+      const value = pendingDeepLink;
+      pendingDeepLink = null;
+      return value;
+    },
+    { rejected: null },
+  );
 
-  ipcMain.handle("pqp:start-desktop-auth", (event, mode) => {
-    if (!senderMatchesAppOrigin(event, sessionAppOrigin)) {
-      return { ok: false, url: "" };
-    }
-    return desktopAuth.start(mode === "sign-up" ? "sign-up" : "sign-in");
-  });
+  ipcGuard.handle(
+    "pqp:start-desktop-auth",
+    (_event, mode) => desktopAuth.start(mode === "sign-up" ? "sign-up" : "sign-in"),
+    { rejected: { ok: false, url: "" } },
+  );
 
-  ipcMain.handle("pqp:cancel-desktop-auth", (event) => {
-    if (!senderMatchesAppOrigin(event, sessionAppOrigin)) {
-      return;
-    }
+  ipcGuard.handle("pqp:cancel-desktop-auth", () => {
     desktopAuth.stop("cancelled");
   });
 
-  ipcMain.handle("pqp:desktop-auth-status", (event) => {
-    if (!senderMatchesAppOrigin(event, sessionAppOrigin)) {
-      return { active: false, url: null };
-    }
-    return desktopAuth.status();
+  ipcGuard.handle("pqp:desktop-auth-status", () => desktopAuth.status(), {
+    rejected: { active: false, url: null },
   });
 
   // Linux share audio. `status` is asked before a share, to decide whether to
   // offer the sound at all; `claim` after `getDisplayMedia` resolved, and
   // names the source to open when this share's bus is up. Both answer "no" off
   // Linux and to any frame that is not the app.
-  ipcMain.handle("pqp:linux-share-audio-status", async (event) => {
-    if (!linuxShareAudio || !senderMatchesAppOrigin(event, sessionAppOrigin)) {
-      return { available: false, server: null };
-    }
-    const probe = await linuxShareAudio.probe().catch(() => null);
-    return {
-      available: probe?.available === true,
-      server: probe?.server ?? null,
-    };
-  });
+  ipcGuard.handle(
+    "pqp:linux-share-audio-status",
+    async () => {
+      if (!linuxShareAudio) {
+        return { available: false, server: null };
+      }
+      const probe = await linuxShareAudio.probe().catch(() => null);
+      return {
+        available: probe?.available === true,
+        server: probe?.server ?? null,
+      };
+    },
+    { rejected: { available: false, server: null } },
+  );
 
-  ipcMain.handle("pqp:linux-share-audio-arm", (event) => {
-    if (!linuxShareAudio || !senderMatchesAppOrigin(event, sessionAppOrigin)) {
-      return false;
-    }
-    linuxShareAudio.arm();
-    return true;
-  });
+  ipcGuard.handle(
+    "pqp:linux-share-audio-arm",
+    () => {
+      if (!linuxShareAudio) {
+        return false;
+      }
+      linuxShareAudio.arm();
+      return true;
+    },
+    { rejected: false },
+  );
 
-  ipcMain.handle("pqp:linux-share-audio-claim", (event) => {
-    if (!linuxShareAudio || !senderMatchesAppOrigin(event, sessionAppOrigin)) {
-      return { active: false, label: null };
-    }
-    const active = linuxShareAudio.isActive();
-    return { active, label: active ? LINUX_SHARE_SOURCE_LABEL : null };
-  });
+  ipcGuard.handle(
+    "pqp:linux-share-audio-claim",
+    () => {
+      if (!linuxShareAudio) {
+        return { active: false, label: null };
+      }
+      const active = linuxShareAudio.isActive();
+      return { active, label: active ? LINUX_SHARE_SOURCE_LABEL : null };
+    },
+    { rejected: { active: false, label: null } },
+  );
 
   // What the live (or last) Linux share did with each stream, for the share
   // diagnostic page. Memory only: reads nothing from the sound server and
   // spawns nothing.
-  ipcMain.handle("pqp:linux-share-audio-diagnostics", (event) => {
-    if (!linuxShareAudio || !senderMatchesAppOrigin(event, sessionAppOrigin)) {
-      return null;
-    }
-    return linuxShareAudio.diagnostics();
+  ipcGuard.handle(
+    "pqp:linux-share-audio-diagnostics",
+    () => (linuxShareAudio ? linuxShareAudio.diagnostics() : null),
+    { rejected: null },
+  );
+
+  ipcGuard.handle("pqp:get-pending-desktop-auth-ticket", () => desktopAuth.takePendingTicket(), {
+    rejected: null,
   });
 
-  ipcMain.handle("pqp:get-pending-desktop-auth-ticket", (event) => {
-    if (!senderMatchesAppOrigin(event, sessionAppOrigin)) {
-      return null;
-    }
-    return desktopAuth.takePendingTicket();
-  });
-
-  ipcMain.on("pqp:set-theme", (_event, theme) => {
+  ipcGuard.on("pqp:set-theme", (_event, theme) => {
     if (theme !== "dark" && theme !== "light") {
       return;
     }
@@ -2457,7 +2488,7 @@ if (probingShareAudio) {
     saveTheme(app.getPath("userData"), theme);
   });
 
-  ipcMain.handle("pqp:set-locale", (_event, locale) => {
+  ipcGuard.handle("pqp:set-locale", (_event, locale) => {
     saveLocale(app.getPath("userData"), locale);
     const next = loadLocale(app.getPath("userData"), app.getLocale());
     setLanguage(next);
@@ -2467,7 +2498,7 @@ if (probingShareAudio) {
     // the old language until the next state change.
     refreshTray();
     return next;
-  });
+  }, { rejected: null });
 
   /**
    * Launch at login. Supported on macOS and Windows only (see
@@ -2479,83 +2510,89 @@ if (probingShareAudio) {
   // an untrusted page navigated into a window retaining this preload (or a
   // renderer XSS) must not be able to flip, unlike, say, pqp:set-theme
   // (Farol review, PR 675).
-  ipcMain.handle("pqp:get-start-at-login", (event) => {
-    if (!senderMatchesAppOrigin(event, sessionAppOrigin)) {
-      return false;
-    }
-    if (!loginItemSupported(process.platform)) {
-      return false;
-    }
-    try {
-      return app.getLoginItemSettings().openAtLogin === true;
-    } catch (err) {
-      console.warn("[pqp] read start-at-login failed:", err?.message ?? err);
-      return false;
-    }
-  });
+  ipcGuard.handle(
+    "pqp:get-start-at-login",
+    () => {
+      if (!loginItemSupported(process.platform)) {
+        return false;
+      }
+      try {
+        return app.getLoginItemSettings().openAtLogin === true;
+      } catch (err) {
+        console.warn("[pqp] read start-at-login failed:", err?.message ?? err);
+        return false;
+      }
+    },
+    { rejected: false },
+  );
 
-  ipcMain.handle("pqp:set-start-at-login", (event, value) => {
-    if (!senderMatchesAppOrigin(event, sessionAppOrigin)) {
-      return false;
-    }
-    if (!loginItemSupported(process.platform)) {
-      return false;
-    }
-    const desired = value === true;
-    try {
-      app.setLoginItemSettings({ openAtLogin: desired });
-    } catch (err) {
-      console.warn("[pqp] set start-at-login failed:", err?.message ?? err);
-      return false;
-    }
-    // The write already succeeded at this point. Read back only to catch a
-    // genuine mismatch (the OS silently refusing) rather than letting a
-    // transient readback failure report a successful write as disabled
-    // (Farol review, PR 675) -- the renderer would overwrite its toggle to
-    // "off" while the app still launches at login.
-    try {
-      return app.getLoginItemSettings().openAtLogin === true;
-    } catch (err) {
-      console.warn("[pqp] read-back after set start-at-login failed:", err?.message ?? err);
-      return desired;
-    }
-  });
+  ipcGuard.handle(
+    "pqp:set-start-at-login",
+    (_event, value) => {
+      if (!loginItemSupported(process.platform)) {
+        return false;
+      }
+      const desired = value === true;
+      try {
+        app.setLoginItemSettings({ openAtLogin: desired });
+      } catch (err) {
+        console.warn("[pqp] set start-at-login failed:", err?.message ?? err);
+        return false;
+      }
+      // The write already succeeded at this point. Read back only to catch a
+      // genuine mismatch (the OS silently refusing) rather than letting a
+      // transient readback failure report a successful write as disabled
+      // (Farol review, PR 675) -- the renderer would overwrite its toggle to
+      // "off" while the app still launches at login.
+      try {
+        return app.getLoginItemSettings().openAtLogin === true;
+      } catch (err) {
+        console.warn("[pqp] read-back after set start-at-login failed:", err?.message ?? err);
+        return desired;
+      }
+    },
+    { rejected: false },
+  );
 
-  ipcMain.on("pqp:set-badge", (_event, count) => {
+  ipcGuard.on("pqp:set-badge", (_event, count) => {
     if (!Number.isFinite(count)) {
       return;
     }
     applyBadgeCount(Math.max(0, Math.floor(count)));
   });
 
-  ipcMain.handle("pqp:ptt-bind", (_event, accelerator) => {
+  ipcGuard.handle("pqp:ptt-bind", (_event, accelerator) => {
     if (accelerator !== null && typeof accelerator !== "string") {
       return false;
     }
     return setPushToTalkAccelerator(accelerator);
-  });
+  }, { rejected: false });
 
-  ipcMain.handle("pqp:ptt-bind-native", (_event, binding, releaseDelayMs) => {
+  // The global key hook (uiohook): the one channel here that asks the OS for a
+  // keyboard-wide listener, so the one that most needs a sender check.
+  ipcGuard.handle("pqp:ptt-bind-native", (_event, binding, releaseDelayMs) => {
     if (binding !== null && typeof binding !== "object") {
       return { registered: false, via: "none" };
     }
     return setNativePushToTalkBinding(binding, releaseDelayMs);
-  });
+  }, { rejected: { registered: false, via: "none" } });
 
-  ipcMain.handle("pqp:ptt-permission-status", () => {
-    return macAccessibilityPermission(process.platform, systemPreferences);
-  });
+  ipcGuard.handle(
+    "pqp:ptt-permission-status",
+    () => macAccessibilityPermission(process.platform, systemPreferences),
+    { rejected: "unknown" },
+  );
 
   // Read-only, binds nothing: lets the settings UI explain the native hook
   // (or say why it cannot run, Wayland chiefly) before anyone has joined a
   // call to actually try it. `syncNativePushToTalk` re-derives the same
   // thing every time it runs; this is the same probe, just callable without
   // a binding already in place.
-  ipcMain.handle("pqp:ptt-native-capability", () => {
-    return nativeHookPlatformSupport(process.platform);
+  ipcGuard.handle("pqp:ptt-native-capability", () => nativeHookPlatformSupport(process.platform), {
+    rejected: { supported: false, reason: "origin" },
   });
 
-  ipcMain.on("pqp:ptt-open-permission-settings", () => {
+  ipcGuard.on("pqp:ptt-open-permission-settings", () => {
     if (process.platform !== "darwin") {
       return;
     }
@@ -2572,7 +2609,7 @@ if (probingShareAudio) {
     shell.openExternal(MAC_INPUT_MONITORING_SETTINGS_URL).catch(() => {});
   });
 
-  ipcMain.handle("pqp:global-voice-bind", (_event, accelerators) => {
+  ipcGuard.handle("pqp:global-voice-bind", (_event, accelerators) => {
     const toggleMute =
       accelerators && typeof accelerators === "object"
         ? (accelerators.toggleMute ?? null)
@@ -2588,57 +2625,61 @@ if (probingShareAudio) {
       return { toggleMute: false, toggleDeafen: false };
     }
     return setGlobalVoiceHotkeys({ toggleMute, toggleDeafen });
-  });
+  }, { rejected: { toggleMute: false, toggleDeafen: false } });
 
   /**
    * Native share audio (Windows). Every channel answers the app window only:
    * the game-connection pages this shell keeps in-window share the preload,
    * and none of them has any business arming a capture of the machine.
    */
-  ipcMain.handle("pqp:native-share-audio-status", async (event) => {
-    if (process.platform !== "win32" || !senderMatchesAppOrigin(event, sessionAppOrigin)) {
-      return { available: false, reason: "platform", stage: null, hr: null, build: 0 };
-    }
-    const status = await shareAudio().status();
-    return { ...status, build: windowsNtBuild(os.release()) };
-  });
+  ipcGuard.handle(
+    "pqp:native-share-audio-status",
+    async () => {
+      if (process.platform !== "win32") {
+        return { available: false, reason: "platform", stage: null, hr: null, build: 0 };
+      }
+      const status = await shareAudio().status();
+      return { ...status, build: windowsNtBuild(os.release()) };
+    },
+    { rejected: { available: false, reason: "platform", stage: null, hr: null, build: 0 } },
+  );
 
-  ipcMain.handle("pqp:native-share-audio-arm", (event) => {
-    if (process.platform !== "win32" || !senderMatchesAppOrigin(event, sessionAppOrigin)) {
-      return false;
-    }
-    return shareAudio().arm();
-  });
+  ipcGuard.handle(
+    "pqp:native-share-audio-arm",
+    () => (process.platform !== "win32" ? false : shareAudio().arm()),
+    { rejected: false },
+  );
 
   // PQP-31: the share the page just asked for failed. True when that request
   // carried loopback a moment ago, and the next video-only request will reuse
   // its surface without opening the picker (`lib/share-silent-retry.js`).
-  ipcMain.handle("pqp:share-silent-retry-arm", (event) => {
-    if (!senderMatchesAppOrigin(event, sessionAppOrigin)) {
-      return false;
-    }
-    return shareSilentRetry.arm(requesterKey(event.senderFrame));
-  });
+  ipcGuard.handle(
+    "pqp:share-silent-retry-arm",
+    (event) => shareSilentRetry.arm(requesterKey(event.senderFrame)),
+    { rejected: false },
+  );
 
-  ipcMain.handle("pqp:native-share-audio-claim", async (event) => {
-    if (!shareAudioController || !senderMatchesAppOrigin(event, sessionAppOrigin)) {
-      return { active: false, reason: "none", stage: null, hr: null };
-    }
-    const outcome = await shareAudioController.claim();
-    if (!outcome.active) {
-      return outcome;
-    }
-    const { port, ...rest } = outcome;
-    // The PCM port goes to the page on its own message: `invoke` can only
-    // return data, and a MessagePort is not data.
-    event.sender.postMessage("pqp:native-share-audio-port", { sessionId: rest.sessionId }, [port]);
-    return rest;
-  });
+  ipcGuard.handle(
+    "pqp:native-share-audio-claim",
+    async (event) => {
+      if (!shareAudioController) {
+        return { active: false, reason: "none", stage: null, hr: null };
+      }
+      const outcome = await shareAudioController.claim();
+      if (!outcome.active) {
+        return outcome;
+      }
+      const { port, ...rest } = outcome;
+      // The PCM port goes to the page on its own message: `invoke` can only
+      // return data, and a MessagePort is not data.
+      event.sender.postMessage("pqp:native-share-audio-port", { sessionId: rest.sessionId }, [port]);
+      return rest;
+    },
+    { rejected: { active: false, reason: "none", stage: null, hr: null } },
+  );
 
-  ipcMain.handle("pqp:native-share-audio-stop", (event, sessionId) => {
-    if (senderMatchesAppOrigin(event, sessionAppOrigin)) {
-      shareAudioController?.stop(typeof sessionId === "string" ? sessionId : undefined);
-    }
+  ipcGuard.handle("pqp:native-share-audio-stop", (_event, sessionId) => {
+    shareAudioController?.stop(typeof sessionId === "string" ? sessionId : undefined);
   });
 
   /**
@@ -2646,29 +2687,29 @@ if (probingShareAudio) {
    * Answers the app window only, like every channel that changes what this
    * machine does. Not Windows: nothing to do, and it says so.
    */
-  ipcMain.handle("pqp:share-live", (event, live) => {
-    if (!senderMatchesAppOrigin(event, sessionAppOrigin)) {
-      return { live: false, boost: "unsupported", processes: 0 };
-    }
-    return live === true ? sharePriority.start() : sharePriority.stop();
-  });
+  ipcGuard.handle(
+    "pqp:share-live",
+    (_event, live) => (live === true ? sharePriority.start() : sharePriority.stop()),
+    { rejected: { live: false, boost: "unsupported", processes: 0 } },
+  );
 
   /** What this shell knows about the share pipeline, for `pqpShareHealth()`. */
-  ipcMain.handle("pqp:share-health", (event) => {
-    if (!senderMatchesAppOrigin(event, sessionAppOrigin)) {
-      return null;
-    }
-    return {
-      platform: process.platform,
-      versions: {
-        electron: process.versions.electron ?? null,
-        chrome: process.versions.chrome ?? null,
-      },
-      gpu: gpuStatusSummary(),
-      priority: sharePriority.status(),
-      capture: screenCapturerFor(process.platform, os.release()),
-    };
-  });
+  ipcGuard.handle(
+    "pqp:share-health",
+    () => {
+      return {
+        platform: process.platform,
+        versions: {
+          electron: process.versions.electron ?? null,
+          chrome: process.versions.chrome ?? null,
+        },
+        gpu: gpuStatusSummary(),
+        priority: sharePriority.status(),
+        capture: screenCapturerFor(process.platform, os.release()),
+      };
+    },
+    { rejected: null },
+  );
 
   /**
    * `share_game_capture_hint`: is a Direct3D app holding the display in
@@ -2676,14 +2717,11 @@ if (probingShareAudio) {
    * the page only when it already suspects a dead share. Never touches the
    * game: see `lib/fullscreen-state.js`. App window only.
    */
-  ipcMain.handle("pqp:fullscreen-app-state", async (event) => {
-    if (!senderMatchesAppOrigin(event, sessionAppOrigin)) {
-      return { state: "unsupported", raw: null, exclusiveFullscreen: null };
-    }
-    return fullscreenState.query();
+  ipcGuard.handle("pqp:fullscreen-app-state", async () => fullscreenState.query(), {
+    rejected: { state: "unsupported", raw: null, exclusiveFullscreen: null },
   });
 
-  ipcMain.on("pqp:voice-state", (_event, payload) => {
+  ipcGuard.on("pqp:voice-state", (_event, payload) => {
     const next = normalizeVoiceState(payload);
     if (
       next.inCall === voiceState.inCall &&
@@ -2696,11 +2734,11 @@ if (probingShareAudio) {
     refreshTray();
   });
 
-  ipcMain.on("pqp:signed-in", (_event, value) => {
+  ipcGuard.on("pqp:signed-in", (_event, value) => {
     signedIn = value === true;
   });
 
-  ipcMain.on("pqp:notify", (_event, payload) => {
+  ipcGuard.on("pqp:notify", (_event, payload) => {
     if (!payload || typeof payload.title !== "string") {
       return;
     }

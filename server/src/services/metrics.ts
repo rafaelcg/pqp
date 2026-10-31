@@ -66,9 +66,11 @@ import {
   type AudienceModeMetrics,
 } from "../voice/audience.js";
 import {
+  getSfuAdmissionSnapshot,
   getVoiceActivitySnapshot,
   localVoicePeerCount,
 } from "../ws/voice.js";
+import type { SfuAdmissionSnapshot } from "../voice/sfu-admission-metrics.js";
 import { watchPartyStateFrameCounters } from "../ws/watch-party-events.js";
 import {
   watchPartyWaitlistMetrics,
@@ -323,6 +325,19 @@ export interface AdminMetrics {
    * as `sfu`. `pinnedRooms` is this process's pins per region.
    */
   sfuRegions: SfuRegionsReport;
+  /**
+   * What the video admission estimator believes, per SFU box
+   * (`voice/sfu-admission-metrics.ts`): the Mbit/s it prices for the rooms on
+   * the box (`loadMbps`), the budget it holds them to, and how many camera,
+   * share and promotion checks it answered and refused in the last five
+   * minutes. Divide `loadMbps` by the box's MEASURED transmit rate to see how
+   * far the estimate has drifted from the hardware (the 2026-10-20 refusals
+   * were an estimate at 524 to 605 of 600 on a box at 32 percent CPU).
+   * `loads` are cluster-wide (registry rooms, cached 10 s); the counts are
+   * this process's own, so the exporter sums them across replicas. Null when
+   * the room read failed. Additive: nothing here is read by an admission.
+   */
+  sfuAdmission: SfuAdmissionSnapshot | null;
   /**
    * Runtime feature flags (`lib/flags.ts`): every flag's answer on the
    * process that served this request and where it came from (a row, the
@@ -1274,6 +1289,7 @@ type CachedMetrics = Omit<
   | "ready"
   | "sfu"
   | "sfuRegions"
+  | "sfuAdmission"
   | "instanceId"
   | "instanceCount"
   | "cluster"
@@ -2074,6 +2090,7 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     ready,
     sfu,
     sfuRegions,
+    sfuAdmission,
     flags,
     communityHomeTranslation,
     communityHomeCaptions,
@@ -2085,6 +2102,7 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     checkReady(),
     readSfuStats(),
     sfuRegionsReport(),
+    getSfuAdmissionSnapshot(),
     featureFlagMetrics(),
     communityHomeTranslationMetrics(),
     communityHomeCaptionsMetrics(),
@@ -2103,6 +2121,7 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     ready,
     sfu,
     sfuRegions,
+    sfuAdmission,
     flags,
     communityHomeTranslation,
     communityHomeCaptions,

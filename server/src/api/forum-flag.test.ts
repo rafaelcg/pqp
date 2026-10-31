@@ -20,6 +20,7 @@ if (DATABASE_URL) {
   process.env.DATABASE_URL = DATABASE_URL;
 }
 delete process.env.FORUM_CHANNELS;
+delete process.env.FORUM_ANNOUNCEMENT;
 
 const stubs = vi.hoisted(() => ({
   actor: null as { id: string; clerk_id: string } | null,
@@ -115,7 +116,7 @@ describeDb("forum_channels: config and the create guard", () => {
   it("is off by default: the config says so and a forum create is 403", async () => {
     const config = await call("GET", `/api/forum/config?serverId=${serverId}`);
     expect(config.status).toBe(200);
-    expect(forumConfigSchema.parse(config.body)).toEqual({ enabled: false });
+    expect(forumConfigSchema.parse(config.body)).toEqual({ enabled: false, announce: false });
 
     const created = await createForum(serverId);
     expect(created.status).toBe(403);
@@ -139,13 +140,17 @@ describeDb("forum_channels: config and the create guard", () => {
     await setServerFlagOverride("forum_channels", serverId, true, { kind: "dashboard" });
 
     const on = await call("GET", `/api/forum/config?serverId=${serverId}`);
-    expect(on.body).toEqual({ enabled: true });
+    expect(on.body).toEqual({ enabled: true, announce: false });
     const off = await call("GET", `/api/forum/config?serverId=${otherServerId}`);
-    expect(off.body).toEqual({ enabled: false });
+    expect(off.body).toEqual({ enabled: false, announce: false });
     // No server (or garbage) is the global answer.
-    expect((await call("GET", "/api/forum/config")).body).toEqual({ enabled: false });
+    expect((await call("GET", "/api/forum/config")).body).toEqual({
+      enabled: false,
+      announce: false,
+    });
     expect((await call("GET", "/api/forum/config?serverId=nope")).body).toEqual({
       enabled: false,
+      announce: false,
     });
 
     const created = await createForum(serverId);
@@ -168,5 +173,40 @@ describeDb("forum_channels: config and the create guard", () => {
     });
     expect((await createForum(serverId)).status).toBe(201);
     expect((await createForum(otherServerId)).status).toBe(403);
+  });
+
+  // `forum_announcement`: the "O fórum abriu" corner card, served as
+  // `announce` on the same config, set with rows like production (pitfall 12).
+  const config = async (server?: string) =>
+    forumConfigSchema.parse(
+      (await call("GET", `/api/forum/config${server ? `?serverId=${server}` : ""}`)).body,
+    );
+
+  it("announce is off by default, even where forums are on", async () => {
+    await setServerFlagOverride("forum_channels", serverId, true, { kind: "dashboard" });
+    expect(await config(serverId)).toEqual({ enabled: true, announce: false });
+  });
+
+  it("an announce override turns it on for that server only, and off again live", async () => {
+    await setServerFlagOverride("forum_channels", serverId, true, { kind: "dashboard" });
+    await setServerFlagOverride("forum_channels", otherServerId, true, { kind: "dashboard" });
+    await setServerFlagOverride("forum_announcement", serverId, true, { kind: "dashboard" });
+    expect(await config(serverId)).toEqual({ enabled: true, announce: true });
+    expect(await config(otherServerId)).toEqual({ enabled: true, announce: false });
+
+    await setServerFlagOverride("forum_announcement", serverId, null, { kind: "dashboard" });
+    expect(await config(serverId)).toEqual({ enabled: true, announce: false });
+  });
+
+  it("never announces a forum nobody may post in", async () => {
+    await setServerFlagOverride("forum_announcement", serverId, true, { kind: "dashboard" });
+    expect(await config(serverId)).toEqual({ enabled: false, announce: false });
+  });
+
+  it("a global announce still needs a named server", async () => {
+    await setGlobalFlag("forum_channels", true, { kind: "dashboard" });
+    await setGlobalFlag("forum_announcement", true, { kind: "dashboard" });
+    expect(await config(serverId)).toEqual({ enabled: true, announce: true });
+    expect(await config()).toEqual({ enabled: true, announce: false });
   });
 });

@@ -1253,7 +1253,16 @@ export function evictSfuUser(
  * That makes this a "shut off the hot mic" tool, not a sticky sanction — the
  * sticky ones remain timeout and disconnect. The UI copy says so.
  *
- * Returns true when at least one audio track was muted (or unmuted).
+ * Lifting a mute (`muted === false`) never calls the SFU, and that is the
+ * product rule, not a shortcut: clearing a moderator's mute is not an unmute,
+ * the person's mic stays off until they turn it on themselves (their own
+ * unmute is always allowed by LiveKit). A server-initiated unmute would also
+ * be refused by the media box, which answers "remote unmute not enabled"
+ * unless `room.enable_remote_unmute` is set, and that refusal used to turn a
+ * moderator's "unmute" into a 502 that left the roster flag set. The caller
+ * lifts the roster flag; returns true so it proceeds.
+ *
+ * Returns true when at least one audio track was muted.
  */
 export async function setSfuUserMuted(
   room: string,
@@ -1261,6 +1270,9 @@ export async function setSfuUserMuted(
   muted: boolean,
   knownIdentities: ReadonlyMap<string, string>,
 ): Promise<boolean> {
+  if (!muted) {
+    return true;
+  }
   const targets = await targetsFor("mute", [room], [], false);
   if (targets.length === 0) {
     return false;

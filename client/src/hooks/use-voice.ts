@@ -6880,7 +6880,44 @@ export function createVoiceController(transport: RealtimeTransport) {
       if (!intendedChannelId || state.status === "idle") {
         return;
       }
-      if (!pipeline) {
+      // A SEAT WITH NO MICROPHONE IS STILL A SEAT. An audience seat
+      // (`audienceOnly`) and the listen-only fallback of a mic that would not
+      // open both have `pipeline === null` by design, and that is most of the
+      // people watching a screen share. This used to read "no pipeline, so
+      // the media was dropped, join again", which is `join()`, whose idempotency
+      // guard sends a pipeline-less seat to `retakeSeatWithMicrophone`: a
+      // `leave-voice-room` carrying the resume pair (which retires the very seat
+      // the server was holding for us), then a cold join that also asks for the
+      // microphone. Seen in production on 2026-10-24: 74 viewers of one share
+      // orphaned, 6 resumed, the rest looped join, orphan, leave, join. Held
+      // media and the token are what say a seat is resumable, mic or no mic.
+      const seatWithoutMic =
+        !pipeline &&
+        (audienceSeat || micUnavailable || state.peerId !== null);
+      const reconnectPath =
+        !pipeline && !seatWithoutMic
+          ? "retake"
+          : holdingMedia || resumeToken
+            ? "resume"
+            : "cold";
+      reportFaroEvent("voice.reconnect", {
+        hadMic: pipeline ? "true" : "false",
+        seat: pipeline
+          ? "mic"
+          : audienceSeat
+            ? "audience"
+            : micUnavailable
+              ? "listen-only"
+              : "none",
+        path: reconnectPath,
+        transport: state.roomTransport ?? "unknown",
+        status: state.status,
+        hasPeerId: state.peerId ? "true" : "false",
+        hasToken: resumeToken ? "true" : "false",
+      });
+      if (reconnectPath === "retake") {
+        // Still opening the microphone for a join the dropped socket never
+        // carried: start it over, as before.
         await this.join(intendedChannelId);
         return;
       }

@@ -67,7 +67,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.ref }}
           # Full history: the relevance check diffs against whatever commit
@@ -147,7 +147,7 @@ jobs:
 
       - name: Set up Docker Buildx
         if: steps.relevant.outputs.needed == 'true'
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
         with:
           # BuildKit's own image, from Google's Docker Hub mirror: the default
           # pull from registry-1.docker.io hit the anonymous rate limit on the
@@ -157,7 +157,7 @@ jobs:
 
       - name: Log in to GHCR
         if: steps.relevant.outputs.needed == 'true'
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -170,7 +170,7 @@ jobs:
       # only one is ever live per vars.DEPLOY_TARGET.
       - name: Build & push image
         if: steps.relevant.outputs.needed == 'true'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: Dockerfile
@@ -188,7 +188,7 @@ jobs:
       # step above just filled. No `:latest` alias: nothing floats to it.
       - name: Build & push worker image
         if: steps.relevant.outputs.needed == 'true'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: Dockerfile
@@ -199,11 +199,57 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Write deploy SSH key
+      # The key goes in through env, not interpolated into the script text.
+      #
+      # Host key: a fresh runner has an empty known_hosts, so
+      # `StrictHostKeyChecking=accept-new` alone trusts whatever answers on
+      # the first connection of every run, which is no check at all. With the
+      # repository VARIABLE VULTR_API_HOST_KEY set (the box's public host key,
+      # `<type> <base64>`, one per line, NOT a secret) the run connects with
+      # StrictHostKeyChecking=yes against exactly that key, and a different
+      # answer fails the deploy. Unset, behaviour is unchanged and a warning
+      # says so, so adding this changed nothing until the variable exists. Set
+      # but unparseable fails the run rather than quietly dropping the pin.
+      # Read the key off the box over a connection you already trust, never
+      # with ssh-keyscan: the value is `cut -d' ' -f1,2` of
+      # /etc/ssh/ssh_host_ed25519_key.pub, and a rebuilt box needs the
+      # variable updated, which is the point.
+      # The result is one ssh config file ($SSH_CONFIG) that every ssh and
+      # scp below reads with -F.
+      - name: Write deploy SSH key and host key
         if: steps.relevant.outputs.needed == 'true'
+        env:
+          SSH_KEY_SECRET: ${{ secrets.VULTR_API_SSH_KEY }}
+          HOST: ${{ secrets.VULTR_API_HOST }}
+          HOST_KEY: ${{ vars.VULTR_API_HOST_KEY }}
         run: |
           install -m 0600 /dev/null "$RUNNER_TEMP/vultr_deploy_key"
-          printf '%s\n' "${{ secrets.VULTR_API_SSH_KEY }}" > "$RUNNER_TEMP/vultr_deploy_key"
+          printf '%s\n' "$SSH_KEY_SECRET" > "$RUNNER_TEMP/vultr_deploy_key"
+
+          known="$RUNNER_TEMP/vultr_known_hosts"
+          cfg="$RUNNER_TEMP/vultr_ssh_config"
+          : > "$known"
+          while read -r ktype kdata _; do
+            case "$ktype" in
+              ssh-*|ecdsa-*|sk-*)
+                if [ -n "$kdata" ]; then
+                  printf '%s %s %s\n' "$HOST" "$ktype" "$kdata" >> "$known"
+                fi
+                ;;
+            esac
+          done <<< "$HOST_KEY"
+
+          if [ -s "$known" ]; then
+            echo "Pinned $(wc -l < "$known" | tr -d ' ') host key(s) for the deploy box."
+            printf 'Host *\n  UserKnownHostsFile %s\n  StrictHostKeyChecking yes\n' "$known" > "$cfg"
+          elif [ -n "${HOST_KEY//[[:space:]]/}" ]; then
+            echo "::error::Repository variable VULTR_API_HOST_KEY is set but holds no '<type> <base64>' line (for example 'ssh-ed25519 AAAA...'). Fix it or unset it."
+            exit 1
+          else
+            echo "::warning::VULTR_API_HOST_KEY is not set, so the deploy trusts the box's SSH host key on first use (this run only). Pin it: gh variable set VULTR_API_HOST_KEY (see the comment above this step)."
+            printf 'Host *\n  StrictHostKeyChecking accept-new\n' > "$cfg"
+          fi
+          echo "SSH_CONFIG=$cfg" >> "$GITHUB_ENV"
 
       # This key authenticates to `pqp-deploy`, not `pqp` — see
       # tools/api-host/cloud-init.yaml and provision.sh. That account has
@@ -222,7 +268,7 @@ jobs:
           HOST: ${{ secrets.VULTR_API_HOST }}
         run: |
           ssh_cmd() {
-            ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 "pqp-deploy@$HOST" "$@"
+            ssh -i "$SSH_KEY" -F "$SSH_CONFIG" -o ConnectTimeout=15 "pqp-deploy@$HOST" "$@"
           }
           tag=$(ssh_cmd 'cat /opt/pqp/.deployed-tag 2>/dev/null' || true)
           echo "tag=${tag:-}" >> "$GITHUB_OUTPUT"
@@ -250,7 +296,7 @@ jobs:
           HOST: ${{ secrets.VULTR_API_HOST }}
         run: |
           set +e
-          ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 "pqp-deploy@$HOST" \
+          ssh -i "$SSH_KEY" -F "$SSH_CONFIG" -o ConnectTimeout=15 "pqp-deploy@$HOST" \
             'grep -q "pqp-deploy-capability: caddy-dir-v1" /usr/local/bin/pqp-deploy'
           rc=$?
           set -e
@@ -336,9 +382,9 @@ jobs:
           SHA: ${{ steps.commit.outputs.sha }}
         run: |
           ssh_cmd() {
-            ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 "pqp-deploy@$HOST" "$@"
+            ssh -i "$SSH_KEY" -F "$SSH_CONFIG" -o ConnectTimeout=15 "pqp-deploy@$HOST" "$@"
           }
-          scp -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new \
+          scp -i "$SSH_KEY" -F "$SSH_CONFIG" \
             tools/api-host/compose.yaml tools/api-host/Caddyfile tools/api-host/pqp-deploy.sh \
             "$RUNNER_TEMP/manifest.sha256" "$RUNNER_TEMP/manifest.sig" \
             "pqp-deploy@$HOST:/home/pqp-deploy/incoming/"
@@ -461,7 +507,7 @@ jobs:
           EXPECTED_REPLICAS: ${{ steps.deploy.outputs.replicas }}
         run: |
           ssh_cmd() {
-            ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 "pqp-deploy@$HOST" "$@"
+            ssh -i "$SSH_KEY" -F "$SSH_CONFIG" -o ConnectTimeout=15 "pqp-deploy@$HOST" "$@"
           }
           # One SSH session per attempt (not four), and all four curls
           # launched CONCURRENTLY inside it (not chained) — with four
@@ -559,7 +605,7 @@ jobs:
           PREV: ${{ steps.prevtag.outputs.tag }}
         run: |
           echo "::warning::Deploy of ${{ steps.commit.outputs.sha }} failed; rolling back to $PREV"
-          ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 \
+          ssh -i "$SSH_KEY" -F "$SSH_CONFIG" -o ConnectTimeout=15 \
             "pqp-deploy@$HOST" "sudo /usr/local/bin/pqp-deploy $PREV" \
             || echo "::error::Rollback to $PREV itself failed. SSH in as pqp (docs/deploy-vultr.md) and check 'docker compose logs api-a api-b worker caddy' immediately."
 

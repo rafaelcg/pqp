@@ -27,6 +27,17 @@ ceiling on a box that matches production's configuration, not a viewer count
 on production itself, and the section says so explicitly. Results for the
 rest: the operator's copy.
 
+**Growing the home media server.** `sfu-pqp` stays on `vhp-4c-8gb-amd` with an
+in-place upgrade to `vhp-8c-16gb-amd` pre-approved behind written triggers
+(decision of 2026-10-22, made an alert on 2026-10-25). The procedure, ten
+minutes and one reboot of about a minute, one way only, is
+[`docs/SFU_RESIZE_RUNBOOK.md`](./SFU_RESIZE_RUNBOOK.md); the alerts that name
+the triggers are
+[`tools/monitoring/grafana-alert-rules-capacity.json`](../tools/monitoring/grafana-alert-rules-capacity.json)
+(group `pqp-capacity`, thresholds as fractions of the core count so a resize
+does not change what they mean). The resize also needs the UDP mux range
+widened from four ports to eight, which the runbook covers.
+
 For the dedicated egress box's encoder headroom (the B3.1 upgrade-only-on-a-reading
 question in `docs/plans/BROADCAST_PIPELINE.md` section 5), see
 [`tools/egress-bench/`](../tools/egress-bench/).

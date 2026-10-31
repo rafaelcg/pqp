@@ -188,6 +188,11 @@ import {
 } from "../voice/box-budget.js";
 import { readSfuStatsForRegion } from "../voice/sfu-stats.js";
 import {
+  admissionLedger,
+  buildSfuAdmissionSnapshot,
+  type SfuAdmissionSnapshot,
+} from "../voice/sfu-admission-metrics.js";
+import {
   SFU_REGION_CAP,
   decideSfuRegion,
   regionCapRequired,
@@ -6816,6 +6821,8 @@ export function removeVoicePeerBySocket(socket: WebSocket) {
 /** Test hook: drop every peer, orphan timer, and retired-id window. */
 export function resetVoicePeers(): void {
   reconnectLookupMissAt.clear();
+  resumeRefusedLines.clear();
+  resumeRefusedSweptAt = 0;
   lastPresenterByChannel.clear();
   presenterPeopleByChannel.clear();
   resetRosterSequences();
@@ -7500,6 +7507,102 @@ type VoiceResumePlan =
     }
   | { kind: "cold" };
 
+/**
+ * Why a join that asked to resume was seated cold, or refused outright.
+ *
+ * Until 2026-10-24 the server said nothing when it declined a resume: a cold
+ * join looked the same as a first join, so "the client never asked" and "the
+ * server said no" could not be told apart (74 seats orphaned in one LiveKit
+ * room, six ever resumed, and the log could not say which side was
+ * responsible). One line per refusal now, and only for a join that carried a
+ * `resumePeerId`: a first join has nothing to refuse.
+ */
+type ResumeRefusal =
+  | "token-missing"
+  | "token-invalid"
+  | "capability-missing"
+  | "peer-mismatch"
+  | "peer-retired"
+  | "row-mismatch"
+  | "transport-pinned-elsewhere"
+  | "region-mismatch"
+  | "room-promoted"
+  | "join-rate-limited"
+  | "character"
+  | "no-access"
+  | "invalid-channel"
+  | "blocked"
+  | "timeout"
+  | "watch-party-full";
+
+/**
+ * A reconnect herd refuses hundreds of resumes for the same reason in the
+ * same second, so the line is bounded per reason and room, like the audience
+ * lines (`voice/audience.ts`): the first is logged, the rest are counted into
+ * `suppressed` on the next one past the window.
+ *
+ * The room id in the key is client-supplied, and a refusal does not need a
+ * real room, so the table is bounded: at most `RESUME_REFUSED_MAX_BUCKETS`
+ * live buckets, swept at most once a window. A flood of made-up rooms stops
+ * being logged until the window turns, and costs one map lookup per frame.
+ */
+const RESUME_REFUSED_LOG_WINDOW_MS = 10_000;
+const RESUME_REFUSED_MAX_BUCKETS = 500;
+const resumeRefusedLines = new Map<
+  string,
+  { at: number; suppressed: number }
+>();
+let resumeRefusedSweptAt = 0;
+
+function noteResumeRefused(
+  reason: ResumeRefusal,
+  fields: {
+    userId: string;
+    voiceChannelId: string;
+    peerId: string | undefined;
+  } & Record<string, unknown>,
+  now = Date.now(),
+): void {
+  const key = `${reason}:${fields.voiceChannelId}`;
+  const entry = resumeRefusedLines.get(key);
+  if (entry && now - entry.at < RESUME_REFUSED_LOG_WINDOW_MS) {
+    entry.suppressed += 1;
+    return;
+  }
+  if (!entry && resumeRefusedLines.size >= RESUME_REFUSED_MAX_BUCKETS) {
+    if (now - resumeRefusedSweptAt >= RESUME_REFUSED_LOG_WINDOW_MS) {
+      resumeRefusedSweptAt = now;
+      for (const [stale, value] of resumeRefusedLines) {
+        if (now - value.at >= RESUME_REFUSED_LOG_WINDOW_MS) {
+          resumeRefusedLines.delete(stale);
+        }
+      }
+    }
+    if (resumeRefusedLines.size >= RESUME_REFUSED_MAX_BUCKETS) {
+      return;
+    }
+  }
+  const suppressed = entry?.suppressed ?? 0;
+  resumeRefusedLines.set(key, { at: now, suppressed: 0 });
+  logEvent("voice.resumeRefused", {
+    reason,
+    ...fields,
+    ...(suppressed ? { suppressed } : {}),
+  });
+}
+
+/** The cold plan, with the reason on the record. */
+function declineResume(
+  reason: ResumeRefusal,
+  userId: string,
+  voiceChannelId: string,
+  peerId: string | undefined,
+  extra: Record<string, unknown> = {},
+): { kind: "cold" } {
+  noteResumeRefused(reason, { userId, voiceChannelId, peerId, ...extra });
+  return { kind: "cold" };
+}
+
 function planVoiceResume(
   userId: string,
   payload: {
@@ -7510,19 +7613,26 @@ function planVoiceResume(
   capabilities: VoiceRoomTransport[],
 ): VoiceResumePlan {
   const claimed = payload.resumePeerId;
-  if (!claimed || !payload.resumeToken) {
+  const channelId = payload.voiceChannelId;
+  if (!claimed) {
+    // A first join: nothing was asked, so nothing is refused.
     return { kind: "cold" };
+  }
+  if (!payload.resumeToken) {
+    return declineResume("token-missing", userId, channelId, claimed);
   }
   const verified = verifyVoiceResumeToken(payload.resumeToken, {
     userId,
     peerId: claimed,
-    voiceChannelId: payload.voiceChannelId,
+    voiceChannelId: channelId,
   });
   if (!verified) {
-    return { kind: "cold" };
+    return declineResume("token-invalid", userId, channelId, claimed);
   }
   if (!capabilities.includes(verified.transport)) {
-    return { kind: "cold" };
+    return declineResume("capability-missing", userId, channelId, claimed, {
+      transport: verified.transport,
+    });
   }
 
   const existing = peers.get(claimed);
@@ -7531,7 +7641,7 @@ function planVoiceResume(
       existing.userId !== userId ||
       existing.voiceChannelId !== payload.voiceChannelId
     ) {
-      return { kind: "cold" };
+      return declineResume("peer-mismatch", userId, channelId, claimed);
     }
     // The token already proves this user owns the peer. A Wi-Fi blip can
     // reconnect before the heartbeat notices the old socket died, so the
@@ -7541,11 +7651,17 @@ function planVoiceResume(
   }
 
   if (!registryOn() && retiredPeerIds.has(claimed)) {
-    return { kind: "cold" };
+    return declineResume("peer-retired", userId, channelId, claimed);
   }
   const pinned = roomTransports.get(payload.voiceChannelId);
   if (pinned && pinned !== verified.transport) {
-    return { kind: "cold" };
+    return declineResume(
+      "transport-pinned-elsewhere",
+      userId,
+      channelId,
+      claimed,
+      { transport: verified.transport, pinned },
+    );
   }
   // Same rule one level down: LiveKit media held on one box is no use in a
   // room pinned to another. Mesh media has no box, so only an SFU room asks.
@@ -7553,7 +7669,7 @@ function planVoiceResume(
     pinned === "livekit" &&
     !sameSfuRegion(pinnedRoomRegion(payload.voiceChannelId), verified.region)
   ) {
-    return { kind: "cold" };
+    return declineResume("region-mismatch", userId, channelId, claimed);
   }
   return {
     kind: "reconstruct",
@@ -7860,6 +7976,14 @@ export async function handleVoiceMessage(
 
   if (payload.type === "join-voice-room") {
     if (!roomLimiter.take(user.id)) {
+      // Silent to the client as well, so the log is the only witness.
+      if (payload.resumePeerId) {
+        noteResumeRefused("join-rate-limited", {
+          userId: user.id,
+          voiceChannelId: payload.voiceChannelId,
+          peerId: payload.resumePeerId,
+        });
+      }
       return;
     }
     // Every join past the per-user room rate limiter is one attempt. The
@@ -7875,6 +7999,17 @@ export async function handleVoiceMessage(
         });
       }
     };
+    // The same refusal, with the reason on the record (`voice.resumeRefused`).
+    const declineJoin = (reason: ResumeRefusal) => {
+      if (payload.resumePeerId) {
+        noteResumeRefused(reason, {
+          userId: user.id,
+          voiceChannelId: payload.voiceChannelId,
+          peerId: payload.resumePeerId,
+        });
+      }
+      refuseResume();
+    };
     // A CHARACTER NEVER JOINS VOICE. The house cast is a frame that works in a
     // public text room and nowhere else — a fictional stranger in your ear is
     // something no disclosure setting makes comfortable, and there is no
@@ -7888,12 +8023,12 @@ export async function handleVoiceMessage(
     // that mints an SFU token.
     if (user.is_character) {
       noteJoinRefused("character");
-      refuseResume();
+      declineJoin("character");
       return;
     }
     if (!(await canAccessChannel(payload.voiceChannelId, user.id))) {
       noteJoinRefused("no-access");
-      refuseResume();
+      declineJoin("no-access");
       return;
     }
     // `type` says which kind of *server* channel this is, and a conversation is
@@ -7917,12 +8052,12 @@ export async function handleVoiceMessage(
     const channel = await getChannel(payload.voiceChannelId);
     if (!channel) {
       noteJoinRefused("invalid-channel");
-      refuseResume();
+      declineJoin("invalid-channel");
       return;
     }
     if (channel.kind === "server" && !isVoiceRoomChannelType(channel.type)) {
       noteJoinRefused("invalid-channel");
-      refuseResume();
+      declineJoin("invalid-channel");
       return;
     }
 
@@ -7935,7 +8070,7 @@ export async function handleVoiceMessage(
       (await isDmSendBlocked(payload.voiceChannelId, user.id))
     ) {
       noteJoinRefused("blocked");
-      refuseResume();
+      declineJoin("blocked");
       return;
     }
     // THE VOICE CHOKEPOINT for timeouts. `join-voice-room` is the only way into
@@ -7956,7 +8091,7 @@ export async function handleVoiceMessage(
       (await findTimeoutForChannel(user.id, payload.voiceChannelId))
     ) {
       noteJoinRefused("timeout");
-      refuseResume();
+      declineJoin("timeout");
       return;
     }
 
@@ -7990,7 +8125,7 @@ export async function handleVoiceMessage(
       );
       if (!hasPermission(resolved.permissions, Permission.CONNECT)) {
         noteJoinRefused("no-access");
-        refuseResume();
+        declineJoin("no-access");
         return;
       }
       canSpeak = hasPermission(resolved.permissions, Permission.SPEAK);
@@ -8091,6 +8226,13 @@ export async function handleVoiceMessage(
         logEvent("voice.watchPartySeatRefused", {
           channelId: payload.voiceChannelId,
         });
+        if (payload.resumePeerId) {
+          noteResumeRefused("watch-party-full", {
+            userId: user.id,
+            voiceChannelId: payload.voiceChannelId,
+            peerId: payload.resumePeerId,
+          });
+        }
         // A COLD JOIN TOO. `refuseResume` only answers a resume, because the
         // other gates on this path (no access, a timeout, a block) have
         // always been silent and iOS treats `voice-join-refused` as "could
@@ -8155,7 +8297,7 @@ export async function handleVoiceMessage(
         });
       }
       if (retired) {
-        resume = { kind: "cold" };
+        resume = declineResume("peer-retired", user.id, payload.voiceChannelId, payload.resumePeerId);
       } else if (
         row &&
         row.userId === user.id &&
@@ -8172,7 +8314,7 @@ export async function handleVoiceMessage(
         // Somebody else's seat under this id, or this person's seat in
         // another room: the token proved neither. Cold, like a local
         // mismatch in `planVoiceResume`.
-        resume = { kind: "cold" };
+        resume = declineResume("row-mismatch", user.id, payload.voiceChannelId, payload.resumePeerId);
       }
       if (socket.readyState !== 1) {
         return;
@@ -8275,7 +8417,11 @@ export async function handleVoiceMessage(
           (resume.kind === "reconstruct" || resume.kind === "adopt") &&
           resume.transport !== stored
         ) {
-          resume = { kind: "cold" };
+          resume = declineResume(
+            "transport-pinned-elsewhere",
+            user.id, payload.voiceChannelId, payload.resumePeerId,
+            { transport: resume.transport, pinned: stored },
+          );
         }
         // And on the box: LiveKit media held on Miami is no use in a room
         // pinned to São Paulo, which is what a restart that lost the local
@@ -8285,7 +8431,7 @@ export async function handleVoiceMessage(
           stored === "livekit" &&
           !sameSfuRegion(resume.region, region)
         ) {
-          resume = { kind: "cold" };
+          resume = declineResume("region-mismatch", user.id, payload.voiceChannelId, payload.resumePeerId);
         }
       } catch (error) {
         logEvent("voice.registryPinFailed", {
@@ -8339,7 +8485,11 @@ export async function handleVoiceMessage(
           (resume.kind === "reconstruct" || resume.kind === "adopt") &&
           resume.transport !== "livekit"
         ) {
-          resume = { kind: "cold" };
+          resume = declineResume(
+            "room-promoted",
+            user.id, payload.voiceChannelId, payload.resumePeerId,
+            { transport: resume.transport },
+          );
         }
       }
       // The awaits may have outlived the socket, and the promotion releases
@@ -11968,10 +12118,22 @@ function meshCameraLimit(voiceChannelId: string): number | null {
  * only one instance, so its own map is the whole truth.
  */
 async function readRoomLoads(): Promise<SfuRoomLoad[]> {
+  return (await readRoomLoadsWithSource()).rooms;
+}
+
+/**
+ * `readRoomLoads` plus where the answer came from: `cluster` is the registry's
+ * rooms, `local` is this process's own map (registry off, or its read failed).
+ * The admission gauge says which, because a local view is a floor.
+ */
+async function readRoomLoadsWithSource(): Promise<{
+  rooms: SfuRoomLoad[];
+  source: "cluster" | "local";
+}> {
   if (registryOn()) {
     try {
-      const rooms = await listVoiceRosters();
-      return rooms.map((room) => {
+      const rosters = await listVoiceRosters();
+      const rooms = rosters.map((room): SfuRoomLoad => {
         const publishing = countPublishers(room.peers);
         return {
           channelId: room.channelId,
@@ -11986,6 +12148,7 @@ async function readRoomLoads(): Promise<SfuRoomLoad[]> {
             room.watchParty || getRoomPeers(room.channelId).some((p) => p.watchParty),
         };
       });
+      return { source: "cluster", rooms };
     } catch (error) {
       logEvent("voice.registryReadFailed", {
         op: "promotionLoad",
@@ -12022,7 +12185,86 @@ async function readRoomLoads(): Promise<SfuRoomLoad[]> {
       room.screenPublishers += 1;
     }
   }
-  return [...byRoom.values()];
+  return { source: "local", rooms: [...byRoom.values()] };
+}
+
+/**
+ * Tell the admission gauge how a budget decision went. The key is the
+ * CANONICAL box (`boxOfRegion`: a null, unknown or removed region is the home
+ * box), the same mapping the guards price with, so two region ids that are one
+ * physical box never split into two partial rows.
+ */
+function noteAdmissionCheck(
+  region: string | null | undefined,
+  refused: boolean,
+): void {
+  admissionLedger.note(boxOfRegion(region), refused);
+}
+
+/**
+ * What the video admission estimator believes right now, per SFU box, for
+ * `GET /api/admin/metrics` (`sfuAdmission`). READ-ONLY: the guards price rooms
+ * exactly as before and only tell the ledger how they answered. Cached for
+ * 10 s with the in-flight read shared, because the exporter scrapes every
+ * replica every 20 s and the read is the registry's room list. Null when the
+ * read itself failed, which is a gauge with no value rather than a wrong one.
+ */
+const SFU_ADMISSION_TTL_MS = 10_000;
+let sfuAdmissionCache: { at: number; value: SfuAdmissionSnapshot | null } | null =
+  null;
+let sfuAdmissionInFlight: Promise<SfuAdmissionSnapshot | null> | null = null;
+
+export async function getSfuAdmissionSnapshot(
+  now = Date.now(),
+): Promise<SfuAdmissionSnapshot | null> {
+  if (sfuAdmissionCache && now - sfuAdmissionCache.at < SFU_ADMISSION_TTL_MS) {
+    return sfuAdmissionCache.value;
+  }
+  if (sfuAdmissionInFlight) {
+    return sfuAdmissionInFlight;
+  }
+  sfuAdmissionInFlight = (async () => {
+    try {
+      const loaded = await readRoomLoadsWithSource();
+      const source = loaded.source;
+      // Canonical boxes on every input, whatever the reader produced: the
+      // rows are keyed by box, and a region id that maps onto another box
+      // must land there and not as a second, partial row.
+      const rooms = loaded.rooms.map((room) => ({
+        ...room,
+        region: boxOfRegion(room.region),
+      }));
+      const value = buildSfuAdmissionSnapshot({
+        rooms,
+        source,
+        perBox: perBoxBudgetOn(),
+        price: priceOptions(),
+        homeBox: homeBoxId(),
+        boxIds: [
+          ...new Set((sfuRegions() ?? []).map((r) => boxOfRegion(r.id))),
+        ],
+        budgetFor: (box) => boxBudgetMbps(box),
+        clusterBudgetMbps: boxBudgetMbps(null),
+        counts: admissionLedger.counts(now),
+      });
+      sfuAdmissionCache = { at: now, value };
+      return value;
+    } catch (error) {
+      logEvent("voice.sfuAdmissionSnapshotFailed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    } finally {
+      sfuAdmissionInFlight = null;
+    }
+  })();
+  return sfuAdmissionInFlight;
+}
+
+/** Test seam: the snapshot is cached, and a test needs a fresh read. */
+export function resetSfuAdmissionSnapshotCache(): void {
+  sfuAdmissionCache = null;
+  sfuAdmissionInFlight = null;
 }
 
 /**
@@ -12093,6 +12335,7 @@ async function admitVideoOnSfu(
     scope: boxScopeFor(region),
     price: priceOptions(),
   });
+  noteAdmissionCheck(region, !verdict.admit);
   if (!verdict.admit) {
     // The counter that proves the mechanism runs. Without it a budget that is
     // wrong looks exactly like a room where nobody wanted their camera on.
@@ -12314,6 +12557,11 @@ async function attemptPromotion(
     scope: boxScopeFor(region),
     price: priceOptions(),
   });
+  // Only a decision against the budget is an admission check: an
+  // unconfigured or unreachable SFU is a different failure.
+  if (verdict.promote || verdict.refusal === "budget") {
+    noteAdmissionCheck(region, !verdict.promote);
+  }
   if (!verdict.promote) {
     logEvent("voice.transportPromotionRefused", {
       voiceChannelId,

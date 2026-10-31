@@ -60,6 +60,8 @@ coverage/
 # Playwright
 client/test-results/
 electron/test-results/
+# The share smoke test's page, built from the client by client/e2e/desktop-share/build.mjs.
+electron/test/share-smoke/.page/
 client/playwright-report/
 client/e2e-results.json
 

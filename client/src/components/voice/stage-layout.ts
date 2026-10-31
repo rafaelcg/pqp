@@ -84,6 +84,25 @@ export interface StagePersonInput {
 }
 
 /**
+ * The shares the stage draws a tile for.
+ *
+ * Our own share is left out once the person has hidden its preview on this
+ * device. The placeholder ("you are sharing") used to stay in the grid as a
+ * tile, so hiding the picture still cost a whole slot under a friend's screen;
+ * a share nobody can see is not a picture, and the strip says it is still
+ * going out (`OwnShareStrip`). What is published does not change: this only
+ * decides what is drawn here.
+ */
+export function screensDrawnOnStage<T extends StageScreenInput>(
+  screens: readonly T[],
+  hideOwnPreview: boolean,
+): T[] {
+  return hideOwnPreview
+    ? screens.filter((screen) => !screen.isSelf)
+    : [...screens];
+}
+
+/**
  * The stage's tiles, in order: shares, then other people's cameras, then ours.
  *
  * Shares first because a share is the thing a room gathers around, and the

@@ -41,8 +41,16 @@ Clerk-identical to the web app. It needs no server-side change of its own.
 |---|---|---|
 | Hosted (default, packaged) | no env override | `https://pqp.gg` |
 | Dev | `pnpm electron:dev` | `http://localhost:5173` |
-| Explicit | `PQP_APP_URL=https://…` | that URL |
+| Explicit | `PQP_APP_URL=https://…` | that URL, in `pnpm electron:dev` only. An installed build ignores it (and `VITE_APP_URL`) and loads production, unless `PQP_ALLOW_APP_URL_OVERRIDE=1` is set too |
 | Bundled client | `PQP_LOAD_STATIC=1` | `http://127.0.0.1:<random>` |
+
+**Testing an installed build against staging** needs both variables:
+`PQP_ALLOW_APP_URL_OVERRIDE=1 PQP_APP_URL=https://staging.pqp-3yr.pages.dev`
+(`set` / `$env:` on Windows). Without the switch a packaged app logs
+`ignoring PQP_APP_URL / VITE_APP_URL in a packaged build` and loads
+`https://pqp.gg/app`, so a shortcut or launcher that does not know about it
+cannot point the signed app, with its microphone, camera and input-monitoring
+grants, at another site. See `electron/lib/app-url.js`.
 
 `PQP_LOAD_STATIC=1` is kept for offline use and self-hosting. A self-hoster
 either leaves `CORS_ALLOWED_ORIGINS` unset (which falls open to `*`) or accepts
@@ -914,6 +922,74 @@ runtime breaks Electron without the first three:
 | `network.client` / `network.server` | API, WS, WebRTC; loopback static server; desktop sign-in callback |
 | `files.user-selected.read-write` | attachment pickers |
 
+**Open question, deliberately not changed yet (2026-10-26 audit).**
+`allow-dyld-environment-variables` and `disable-library-validation` together let
+another local process start pqp with `DYLD_INSERT_LIBRARIES` or load an unsigned
+dylib into it, and inherit the app's microphone, camera, Accessibility and Input
+Monitoring grants. Removing them is the right direction and cannot be judged
+without a signed, notarized build on a real Mac, which is why it is a follow-up
+and not part of the Electron 44.9 PR. What that test has to cover:
+
+- Remove `allow-dyld-environment-variables` first. Nothing in the shell sets a
+  `DYLD_*` variable; Electron needs it only for debugging. Check the signed app
+  launches, notarizes and joins a call.
+- Then `disable-library-validation`. With it off, every Mach-O the app loads must
+  carry OUR Team ID. electron-builder re-signs Electron's frameworks and helpers
+  with our identity, so those should pass. The one to watch is
+  `uiohook-napi`'s prebuilt `.node` files (the global push-to-talk hook, in
+  `app.asar.unpacked/node_modules/uiohook-napi/prebuilds/darwin-*`): they come
+  from npm, so confirm `codesign -dv` on the packaged `.node` shows our Team ID
+  and that `pqp:ptt-bind-native` still installs the hook after granting
+  Accessibility and Input Monitoring. Every platform's prebuild is packed
+  into the app (win32 and linux ones included), but only `darwin-arm64` and
+  `darwin-x64` ever load on macOS, and `win-share-audio` is Windows only.
+- Test the arm64 and the x64 build, the dmg-installed app and the app after an
+  electron-updater (Squirrel.Mac) update.
+
+### 3.6b Electron fuses
+
+`electronFuses` in `electron/package.json` flips, at pack time and before
+signing: `RunAsNode`, `EnableNodeOptionsEnvironmentVariable` and
+`EnableNodeCliInspectArguments` off (no `ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS` or
+`--inspect` against the installed binary; the shell has no use for any of them,
+the Windows share-audio helper is a `utilityProcess`, which does not need
+`RunAsNode`). `resetAdHocDarwinSignature`
+is on because an unsigned arm64 pack is otherwise killed at launch by the broken
+ad-hoc signature a fuse flip leaves behind; a signed build is signed after the
+flip, so it changes nothing there.
+
+`GrantFileProtocolExtraPrivileges` stays ON, and is written out as `true` so
+nobody flips it by reading the list above as "the rest". 0.2.8 turned it off on
+the reasoning that the only `file://` page is the share picker and it uses no
+`fetch`. The picker lives inside `app.asar`, though, and reading a `file://`
+URL out of an asar archive is one of the privileges that fuse grants. With it
+off the picker window fails with `ERR_FILE_NOT_FOUND`, `showSourcePicker`
+resolves null, the display-media handler calls `callback(null)`, and Electron
+turns that into `AbortError: Invalid capture constraints` before any picker is
+on screen: no share started on any packaged 0.2.8 (27 Oct 2026). Unpackaged
+runs and the smoke specs load the picker from a real folder, where the fuse
+changes nothing, so only a packaged build shows it. `lib/fuses.test.mjs` pins
+it. Turning the fuse off again means serving the picker from a custom protocol
+first (`protocol.handle` reading through the asar-aware `fs`), then proving it
+on a packaged build of every OS.
+
+Note also that `callback(null)` from the handler is NOT a `NotAllowedError` in
+Electron 44: it is `AbortError: Invalid capture constraints`, the same string a
+Cancel in the picker produces. That string from the desktop app means "the
+shell answered no", never a bad constraint from the page.
+
+Not flipped, with the reason: `EnableEmbeddedAsarIntegrityValidation` and
+`OnlyLoadAppFromAsar` (the pair is what makes tampering with `app.asar` detectable,
+but it is macOS and Windows only, has to be proven on a signed Windows build and on
+the auto-update path, and a failure is "does not start" for every user of that OS;
+do it as its own release), `EnableCookieEncryption` (one-way: cookies written after
+it cannot be read by a build without it, so a rollback would sign everybody out).
+Read the state of a build with
+`node node_modules/@electron/fuses/dist/bin.js read --app <path to pqp.app>`.
+A packaged binary can no longer be driven by Playwright's `_electron.launch`
+(that needs `--inspect`); the smoke specs launch the unpackaged Electron and are
+unaffected.
+
 ### 3.7 Microphone
 
 Three things must all be true or the mic fails, and two of them fail *silently*:
@@ -1280,24 +1356,136 @@ download. Both are built — do not drop `zip` from `mac.target`.
 
 ### Cutting a release
 
-1. Bump `version` in **`electron/package.json`**. electron-updater compares
-   against this value; a release whose tag is ahead of it will never be offered.
+Draft, then **pre-release**, then the gate, then latest. Nothing reaches an
+installed app until the last step, and only a workflow that has just run the
+share smoke test on all three platforms can take it.
+
+1. Bump `version` in **`electron/package.json`** (plain `MAJOR.MINOR.PATCH`:
+   a `-beta` suffix would make the updater follow pre-releases, see below).
+   electron-updater compares against this value; a release whose tag is ahead
+   of it will never be offered.
 2. Commit, tag, push:
    ```bash
-   git tag v0.1.0
-   git push origin v0.1.0
+   git tag v0.2.9
+   git push origin v0.2.9
    ```
-3. The workflow builds all three platforms and runs
-   `electron-builder --publish always`, which creates a **draft** release and
-   uploads binaries plus the `latest*.yml` feed files.
-4. **Check the draft contains `latest-mac.yml`, `latest.yml` and
-   `latest-linux.yml`** before publishing. Without them electron-updater reads
-   the feed as "no updates available" forever, and it looks like nothing is
-   wrong.
-5. Publish the release. Existing installs pick it up within 6 hours.
+3. `electron.yml` builds all three platforms. Each leg runs the share smoke
+   test against the app it just packaged; a red one keeps that platform's files
+   off the draft. The result is a **draft** release, already marked
+   **pre-release**, holding the binaries and the `latest*.yml` feed files.
+4. **Publish it as a pre-release.** In the release page leave "Set as a
+   pre-release" ticked (it is already) and press Publish, or:
+   ```bash
+   gh release edit v0.2.9 --draft=false --prerelease
+   ```
+   A pre-release is public (the gate downloads it like anyone would) but
+   invisible to installed apps: electron-updater asks GitHub for
+   `/releases/latest`, which skips pre-releases, and so do the website's
+   download buttons and the Flatpak bump.
+5. Publishing starts **`electron-release-verify.yml`** on its own. Look at its
+   run: every job green, and the summary tables (one per OS) say what was
+   shared and what each runner could not check.
+6. **Promote**, by hand, which verifies everything again from scratch first:
+   ```bash
+   gh workflow run electron-release-verify.yml -f tag=v0.2.9 -f promote=true
+   ```
+   Only if every job passes does it run
+   `gh release edit v0.2.9 --prerelease=false --latest` and start the Flatpak
+   bump. Existing installs pick it up within 6 hours.
+7. Do the short list in "What a person still checks" below, on real machines,
+   while the release is a pre-release. Promote after, not before.
 
 A push to `main` builds but publishes nothing (`--publish never`), so ordinary
 merges cannot rewrite the feed that installed apps are polling.
+
+**Never** publish a desktop release straight as latest, and never edit one to
+latest by hand: that is exactly how 0.2.8 shipped. If a promoted release turns
+out broken, demote it (`gh release edit vX --prerelease`) and the previous
+release is latest again for every app that has not updated yet.
+
+### The release gate: what it proves and what it does not
+
+`electron-release-verify.yml`, on the files as published:
+
+| Job | What it checks |
+|---|---|
+| Feed and assets | `latest.yml`, `latest-mac.yml`, `latest-linux.yml` exist, name this version, and every file they name is on the release with the same size and sha512 (parsed with electron-updater's own parser, `electron/scripts/verify-release-feed.mjs`). Both dmgs, the installer, the portable exe, the AppImage and the .deb are there. The release is published (not a draft). |
+| Share smoke, macOS | The arm64 dmg passes Gatekeeper (`spctl`, `stapler validate`) and so does the app inside it (`codesign --deep --strict`). Then the share smoke test on that app. |
+| Share smoke, Windows | The NSIS installer installs silently; the Authenticode status of the installer, the portable exe and the installed `pqp.exe` is reported. Unsigned is a warning today (SignPath is not configured, §4) and a failure once the repository variable `REQUIRE_WINDOWS_SIGNATURE` is `true`; a signature that does not verify always fails. Then the share smoke test on the installed app. |
+| Share smoke, Linux | The AppImage, unpacked, under Xvfb. Then the share smoke test. |
+| Promote | Only on a manual run with `promote` ticked, only if every job above SUCCEEDED, only if the release is still a published pre-release with exactly the files that were verified. |
+
+**The share smoke test** (`electron/test/share-smoke/`) starts the packaged
+binary with its fuses as shipped. Playwright's `_electron` cannot attach to it
+(it needs `--inspect`, and the inspect fuse is off), so the test passes
+`--remote-debugging-port`, a Chromium switch no fuse gates, and drives the
+renderers over CDP; the main process is untouched. The app is pointed at a
+local page with the documented `PQP_ALLOW_APP_URL_OVERRIDE=1` + `PQP_APP_URL`.
+That page (`client/e2e/desktop-share/`) is the client's real share code
+bundled with Vite: `liveScreenCaptureEnvironment`, the native audio arm,
+`screenCaptureOptions`, in the order the share button calls them, reading the
+real `window.pqpDesktop`. It calls the real `getDisplayMedia`; the shell's
+real handler opens its real picker; the test clicks the first screen and
+Share. Then it requires: no rejection, a `live` video track with a size, frames
+that keep arriving for a second, the audio the picker promised (one live track
+with the Windows sound switch on, none with it off), and every track `ended`
+after stop. On Windows it runs three shares (sound on, sound off, native share
+audio on), elsewhere one, all in one app, so each also proves the last one let
+go. Finally it merges an impossible constraint (`width: {max: 0}`, and a
+`min`) over what the app built and requires the same judgement to call that a
+failure: a green run is evidence that red was possible.
+
+On CI every runner must open the shell's picker and capture real frames
+(measured 2026-10-28, all three green on v0.2.7, all three red on v0.2.8):
+
+- **Windows** (`windows-latest`, Server 2025): a 1024x768 screen among three
+  sources, the picker's sound switch, Chromium's loopback ("System audio") and
+  the native per-process capture both arrive as live tracks.
+- **macOS** (`macos-latest`, arm64): a fresh runner has not granted the bundle
+  Screen Recording, so `run-ci.sh` writes the grant into TCC (hosted runners
+  allow it); the picker then lists the display with previews and frames
+  arrive. If the grant ever stops taking, the test fails, it does not pass on
+  less. (A developer Mac where only the terminal holds the grant gets a live
+  track with no frames; `pnpm electron:smoke-share` then reports frames as
+  "not verified" instead of failing.)
+- **Linux** (`ubuntu-latest`): Xvfb plus the smallest window manager there is
+  (`twm`), so the app's own window is a second source and the shell opens its
+  picker; with one source it auto-picks and the picker never runs.
+
+What it does **not** prove, and why:
+
+- **That anybody hears the sound.** On Windows the loopback and native tracks
+  are proven live, not that they carry the machine's sound without the call:
+  nothing plays on a runner. The call itself, LiveKit, the encoder and the
+  viewers are not in this test at all.
+- **Real Windows 11 desktops.** The runner is Windows Server 2025 (build
+  26100), which the shell treats as Windows 11. GPU, drivers, multiple
+  monitors, HDR, a game in exclusive fullscreen: none of that is on a runner.
+- **Sign-in, push-to-talk, deep links, auto-update from the previous version.**
+  Not exercised.
+- **The hosted client.** The page is the client code of the commit the
+  workflow runs from. Installed apps load pqp.gg, so run the promotion from
+  `main` with no undeployed client change in between.
+- **Intel Macs and Windows on ARM.** The gate installs the arm64 dmg and the
+  x64 installer only.
+
+### What a person still checks
+
+On the pre-release, before promoting. Five minutes:
+
+1. **Windows 11 PC:** install the pre-release over the current version, join
+   a call with a second person, share the screen with the sound switch on.
+   They see it move and hear the computer, and do **not** hear themselves.
+2. **Mac:** same share; the first time, the Screen Recording prompt appears,
+   and after granting it a share starts.
+3. **Sign in** on one of those (system browser, back into the app).
+4. **Push-to-talk** works with the window in the background.
+5. **Auto-update:** an install of the previous version, after promotion, shows
+   "Restart now" within six hours (or on relaunch) and comes back on the new
+   version.
+
+Run the test locally against a build of your own with
+`pnpm electron:smoke-share` (see `scripts/electron-smoke-share.mjs`).
 
 macOS ships **arm64 and x64** as separate artifacts. The `${arch}` in
 `artifactName` is load-bearing: electron-updater selects the right file by
@@ -1321,6 +1509,8 @@ download an Apple Silicon build.
       verify` on the `.exe` prints `Valid` / `Signature verification: ok`.
 - [ ] `electron/package.json` `version` bumped to match the tag.
 - [ ] Draft release contains the `latest*.yml` feed files.
+- [ ] Published as a **pre-release**, `electron-release-verify.yml` green on
+      all three platforms, promoted by that workflow and not by hand (§5).
 - [ ] Sign in on a signed build. Current shells open the system browser
       (`/desktop-login`) and hand a one-shot ticket back over `127.0.0.1`.
       Confirm Google and Apple (and email) finish there, then land in the

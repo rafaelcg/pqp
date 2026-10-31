@@ -1200,6 +1200,8 @@ export const fetchGlobalVoiceConfig = () => apiFetch<VoiceConfig>("/api/voice/co
  */
 export interface ForumConfig {
   enabled?: boolean;
+  /** `forum_announcement`: show this server's members the "O fórum abriu" card once. */
+  announce?: boolean;
 }
 
 export const fetchForumConfig = (serverId: string) =>
