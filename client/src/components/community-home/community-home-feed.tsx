@@ -1277,7 +1277,7 @@ const NO_COVER = {
   clearCover: false,
 } as const;
 
-const emptyCompose = (): ComposeState => ({
+export const emptyCompose = (): ComposeState => ({
   editingId: null,
   editingStatus: null,
   title: "",
@@ -1330,6 +1330,17 @@ function composeMainIsVideo(state: ComposeState): boolean {
 /** Which main video the composer holds: the session upload, else the post's own. */
 function composeMainKey(state: ComposeState): string {
   return state.upload?.uploadId ?? `existing:${state.editingId ?? ""}`;
+}
+
+/**
+ * The React key of a picker that hangs off the main video: the main video's
+ * key under the picker's own name. The phone cut and the cover are siblings in
+ * the form, so keying both by the bare main key gave two children the same key
+ * and React duplicated or dropped one of them on every update (the phone
+ * button repeated down the card).
+ */
+function composeSlotKey(slot: "mobile" | "cover", state: ComposeState): string {
+  return `${slot}:${composeMainKey(state)}`;
 }
 
 /** The cut as the composer shows it: picked now, else the one on the post. */
@@ -1448,7 +1459,7 @@ function previewPost(
 
 type ComposeAction = "publish" | "draft" | "schedule" | "save";
 
-function ComposeCard({
+export function ComposeCard({
   state,
   setState,
   serverId,
@@ -1997,7 +2008,7 @@ function ComposeCard({
             // Keyed by the main video: a new main file remounts the picker,
             // which aborts a cut still uploading for the old one, so it can
             // never land beside a video it was not cut from.
-            key={composeMainKey(state)}
+            key={composeSlotKey("mobile", state)}
             serverId={serverId}
             current={composeMobile(state)}
             onUploaded={(uploaded, previewUrl) => {
@@ -2033,7 +2044,7 @@ function ComposeCard({
             // Keyed by the main video, like the phone cut: a new main file
             // remounts the picker, which aborts a cover still uploading for
             // the old one.
-            key={composeMainKey(state)}
+            key={composeSlotKey("cover", state)}
             serverId={serverId}
             videoUrl={
               state.upload ? state.uploadPreviewUrl : (state.existingMedia?.url ?? null)
