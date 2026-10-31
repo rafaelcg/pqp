@@ -73,3 +73,45 @@ fun VoiceState.otherParticipants(): List<VoiceParticipant> =
     participants
         .filter { it.peerId != localPeerId }
         .distinctBy { it.userId }
+
+/**
+ * The SFU side of per-person volume: a level per peer, applied to the peer's
+ * audio tracks both when the level changes and when a track arrives later.
+ *
+ * Held apart from [LiveKitEngine] so the two orders that matter can be tested
+ * without the SDK: the slider moving after the track is already subscribed
+ * (the common case in a call that has been up a while) and a track subscribing
+ * after the slider moved (a reconnect hands back fresh tracks). [apply] is
+ * `RemoteAudioTrack.setVolume` in the engine. Not thread safe; the engine
+ * confines it to its peer lock.
+ */
+class PeerAudioLevels<T : Any>(private val apply: (track: T, volume: Double) -> Unit) {
+    private val levels = HashMap<String, Double>()
+
+    /**
+     * Stores the level and applies it to [tracks], the peer's tracks as they
+     * are right now. Returns false, and touches nothing, on a repeat.
+     */
+    fun setLevel(peerId: String, volume: Double, tracks: Collection<T>): Boolean {
+        val before = levels[peerId] ?: PEER_VOLUME_DEFAULT
+        levels[peerId] = volume
+        if (before == volume) return false
+        tracks.forEach { apply(it, volume) }
+        return true
+    }
+
+    /** A track subscribed: bring it to the level already chosen for its peer. */
+    fun trackSubscribed(peerId: String, track: T) {
+        apply(track, levels[peerId] ?: PEER_VOLUME_DEFAULT)
+    }
+
+    fun levelFor(peerId: String): Double = levels[peerId] ?: PEER_VOLUME_DEFAULT
+
+    fun forget(peerId: String) {
+        levels.remove(peerId)
+    }
+
+    fun clear() {
+        levels.clear()
+    }
+}

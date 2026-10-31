@@ -130,6 +130,49 @@ class PeerVolumesTest {
         assertEquals(0.4, levels["bob-mic"]!!, 0.0)
     }
 
+    // --- the SFU's levels ---------------------------------------------------
+
+    private fun sfu() = PeerAudioLevels<String> { track, volume -> levels[track] = volume }
+
+    @Test
+    fun `a level moved after the track was already subscribed reaches it`() {
+        val sfu = sfu()
+        sfu.trackSubscribed("bob", "bob-mic")
+        assertEquals(1.0, levels["bob-mic"]!!, 0.0)
+
+        assertTrue(sfu.setLevel("bob", 0.25, listOf("bob-mic", "bob-share")))
+
+        assertEquals(0.25, levels["bob-mic"]!!, 0.0)
+        assertEquals(0.25, levels["bob-share"]!!, 0.0)
+    }
+
+    @Test
+    fun `a track that subscribes after the level was chosen starts at it`() {
+        val sfu = sfu()
+        sfu.setLevel("bob", 1.5, emptyList())
+        sfu.trackSubscribed("bob", "bob-mic")
+        assertEquals(1.5, levels["bob-mic"]!!, 0.0)
+    }
+
+    @Test
+    fun `an SFU level repeat applies nothing and one peer does not move another`() {
+        val sfu = sfu()
+        assertTrue(sfu.setLevel("bob", 0.5, listOf("bob-mic")))
+        levels.clear()
+        assertFalse(sfu.setLevel("bob", 0.5, listOf("bob-mic")))
+        assertTrue(levels.isEmpty())
+        sfu.trackSubscribed("ana", "ana-mic")
+        assertEquals(1.0, levels["ana-mic"]!!, 0.0)
+    }
+
+    @Test
+    fun `a forgotten peer comes back at 100 percent`() {
+        val sfu = sfu()
+        sfu.setLevel("bob", 0.3, emptyList())
+        sfu.forget("bob")
+        assertEquals(1.0, sfu.levelFor("bob"), 0.0)
+    }
+
     @Test
     fun `deafening and undeafening do not move the level`() {
         val gate = gate()
