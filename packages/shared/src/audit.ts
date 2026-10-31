@@ -129,6 +129,16 @@ export const AUDIT_ACTIONS = [
    * DM-report split exists to prevent.
    */
   "report.resolve",
+  /**
+   * A moderator asked to look at an image or gif on a reported message
+   * (`POST /api/reports/:id/attachments/:attachmentId/reveal`, behind the
+   * `report_attachment_preview` flag). Target is the attachment, the report id
+   * travels in `changes`. Written BEFORE the signed URL is handed out, so
+   * nobody looks at a file without a row saying so, and never carries the URL.
+   * Like `report.resolve`, only a report with a server behind it can file
+   * one; a conversation report leaves the `[moderation]` log line alone.
+   */
+  "report.attachment_reveal",
   // --- voice moderation ---
   //
   // Voice-specific sanctions. `voice_disconnect` and `voice_move` record the

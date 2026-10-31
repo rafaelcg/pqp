@@ -16,6 +16,7 @@ import {
   type QualityAccumulator,
   type ReconnectTracker,
 } from "@/lib/call-quality-summary";
+import { noteLinkSample, resetLinkWindow } from "@/lib/call-link-window";
 import { subscribeVoiceStats } from "@/lib/voice-stats-probe";
 import { currentAudioHealthSummary } from "@/lib/audio-health-monitor";
 import { hasAudioHealth } from "@/lib/audio-health";
@@ -180,14 +181,24 @@ export function useCallRating(voice: VoiceShape): {
       return;
     }
     const myGeneration = generation.current;
-    return subscribeVoiceStats((snap) => {
+    resetLinkWindow();
+    const unsubscribe = subscribeVoiceStats((snap) => {
       sampleQualityIfCurrent(
         quality.current,
         snap,
         myGeneration,
         generation.current,
       );
+      // The same tick also feeds the short window a feedback report reads
+      // ("how was the link in the last 30 s"); no second poll.
+      if (myGeneration === generation.current) {
+        noteLinkSample(snap);
+      }
     });
+    return () => {
+      unsubscribe();
+      resetLinkWindow();
+    };
   }, [connected]);
 
   return { pending, dismiss: () => setPending(null) };

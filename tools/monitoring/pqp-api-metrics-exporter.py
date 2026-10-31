@@ -569,6 +569,48 @@ def _merge_watch_party(a: dict | None, b: dict | None) -> dict | None:
     return out
 
 
+def _merge_sfu_admission(a: dict | None, b: dict | None) -> dict | None:
+    """`payload.sfuAdmission` (voice/sfu-admission-metrics.ts, wired in
+    services/metrics.ts). Two halves with opposite policies, per box:
+
+    * `loadMbps`, `budgetMbps`, `rooms`, `participants`, the publisher counts
+      are the estimator's view of the CLUSTER's rooms (voice registry rows),
+      identical on both replicas -- take one, never sum. The exception is a
+      replica whose room read fell back to its own map (`source: "local"`,
+      a floor): prefer the replica that read the cluster.
+    * `checks5m`, `refusals5m`, `checksTotal`, `refusalsTotal` are this
+      process's own admission decisions -- sum across replicas, the same way
+      `calls` and `voice` counters are."""
+    if not a and not b:
+        return None
+    if not a:
+        return b
+    if not b:
+        return a
+    base = b if (a.get("source") == "local" and b.get("source") != "local") else a
+    other = a if base is b else b
+    counter_keys = ("checks5m", "refusals5m", "checksTotal", "refusalsTotal")
+    other_by_box = {box.get("box"): box for box in other.get("boxes") or [] if isinstance(box, dict)}
+    boxes = []
+    seen = set()
+    for box in base.get("boxes") or []:
+        if not isinstance(box, dict):
+            continue
+        seen.add(box.get("box"))
+        twin = other_by_box.get(box.get("box")) or {}
+        merged = dict(box)
+        for key in counter_keys:
+            merged[key] = deep_sum(box.get(key), twin.get(key))
+        boxes.append(merged)
+    for name, box in other_by_box.items():
+        if name not in seen:
+            boxes.append(box)
+    out = dict(base)
+    out["boxes"] = boxes
+    out["source"] = "cluster" if "cluster" in (a.get("source"), b.get("source")) else "local"
+    return out
+
+
 def _merge_product(a: dict | None, b: dict | None) -> dict | None:
     """`payload.product` (services/metrics.ts). `friendships`/
     `pendingFriendRequests`/`attachments`/`invites`/`push` come from one SQL
@@ -654,6 +696,7 @@ _CUSTOM_MERGERS = {
     "liveHls": _merge_live_hls,
     "watchParty": _merge_watch_party,
     "product": _merge_product,
+    "sfuAdmission": _merge_sfu_admission,
     "voiceNotes": _merge_voice_notes,
     "nudge": _merge_nudge,
 }
@@ -742,6 +785,35 @@ def pool_wait_across(payloads: list[dict]) -> dict | None:
         "waitedOver1s": sum((w.get("waitedOver1s") or 0) for w in windows),
         "authPeakQueued": max(((g.get("peakQueued") or 0) for g in auth), default=0),
         "authOverflowed": sum((g.get("overflowed") or 0) for g in auth),
+    }
+
+
+def event_loop_across(payloads: list[dict]) -> dict | None:
+    """The worst replica's event-loop lag over its last minute.
+
+    `runtime.eventLoop` (server/src/lib/event-loop.ts) is per process, and the
+    merge above takes `runtime` from whichever replica answered first. Wrong
+    for this question for the same reason as the pool: a stall holds ONE
+    replica's thread, and a scrape that happened to read the calm sibling would
+    report a healthy loop through it. So the figures are the max across every
+    scraped snapshot. None when no replica reports the block (an API older
+    than the field, or one whose monitor has not produced a sample yet)."""
+    windows = []
+    for payload in payloads:
+        lag = ((payload or {}).get("runtime") or {}).get("eventLoop")
+        if isinstance(lag, dict):
+            windows.append(lag)
+    if not windows:
+        return None
+
+    def worst(key: str) -> float:
+        return max((w.get(key) or 0) for w in windows)
+
+    return {
+        "p50Ms": worst("p50Ms"),
+        "p99Ms": worst("p99Ms"),
+        "maxMs": worst("maxMs"),
+        "replicas": len(windows),
     }
 
 
@@ -986,6 +1058,7 @@ def render(
     replicas_scraped: int = 1,
     instances_expected: int = 1,
     pool_wait: dict | None = None,
+    event_loop: dict | None = None,
 ) -> str:
     ready = ready_payload if ready_payload else payload.get("ready", {})
     checks = ready.get("checks", {})
@@ -1107,6 +1180,117 @@ def render(
         "(same falsy-default convention as pqp_api_ready_ok).",
         0 if breaker.get("state", "closed") == "closed" else 1,
     )
+    # Event-loop lag (runtime.eventLoop, server/src/lib/event-loop.ts): how late
+    # the API process fires its own timers, worst replica, last minute, idle
+    # floor already subtracted. The reading host CPU and the pool cannot give:
+    # one stalled Node thread with three idle cores. Omitted on an API older
+    # than the field so a panel reads "no data", not a confident zero.
+    loop = event_loop if event_loop is not None else event_loop_across([payload])
+    if loop is not None:
+        gauge(
+            lines,
+            "pqp_api_event_loop_lag_p50_ms",
+            "Median event-loop lag over the last minute, worst replica (runtime.eventLoop.p50Ms). "
+            "About 0 to 2 on a healthy process.",
+            loop["p50Ms"],
+        )
+        gauge(
+            lines,
+            "pqp_api_event_loop_lag_p99_ms",
+            "Worst 5 s slice's p99 event-loop lag over the last minute, worst replica "
+            "(runtime.eventLoop.p99Ms). Sustained above 200 means a handler is holding the thread.",
+            loop["p99Ms"],
+        )
+        gauge(
+            lines,
+            "pqp_api_event_loop_lag_max_ms",
+            "Longest single event-loop stall in the last minute, worst replica (runtime.eventLoop.maxMs).",
+            loop["maxMs"],
+        )
+        gauge(
+            lines,
+            "pqp_api_event_loop_replicas_reporting",
+            "Replicas whose event-loop monitor contributed to the three lag gauges.",
+            loop["replicas"],
+        )
+    # What the SFU video admission estimator believes (sfuAdmission,
+    # server/src/voice/sfu-admission-metrics.ts), per box. Divide
+    # estimated_mbps by that box's MEASURED transmit rate in Grafana: a ratio
+    # that climbs while the box's CPU stays low is an estimate that has drifted
+    # (2026-10-20: 524 to 605 of 600 estimated on a box at 32 percent CPU).
+    admission = payload.get("sfuAdmission")
+    if isinstance(admission, dict) and admission.get("boxes"):
+        boxes = [box for box in admission["boxes"] if isinstance(box, dict) and box.get("box")]
+        gauge(
+            lines,
+            "pqp_api_sfu_admission_cluster_view",
+            "1 when the estimator's room list is the whole cluster's (registry rows), 0 when it is "
+            "one replica's own rooms (a floor: registry off or its read failed).",
+            1 if admission.get("source") == "cluster" else 0,
+        )
+        for name, help_text, key in (
+            (
+                "pqp_api_sfu_admission_estimated_mbps",
+                "Mbit/s the admission estimator prices for the SFU rooms on this box "
+                "(sfuAdmission.boxes[].loadMbps; region=all when the per-box flag is off).",
+                "loadMbps",
+            ),
+            (
+                "pqp_api_sfu_admission_budget_mbps",
+                "Mbit/s ceiling a video admission on this box is held to "
+                "(VOICE_PROMOTION_MAX_SFU_MBPS, or the box's own override).",
+                "budgetMbps",
+            ),
+            (
+                "pqp_api_sfu_admission_rooms",
+                "Rooms on the SFU on this box as the estimator counts them (mesh rooms cost nothing).",
+                "rooms",
+            ),
+            (
+                "pqp_api_sfu_admission_participants",
+                "People in those rooms.",
+                "participants",
+            ),
+            (
+                "pqp_api_sfu_admission_camera_publishers",
+                "Cameras published in those rooms.",
+                "cameraPublishers",
+            ),
+            (
+                "pqp_api_sfu_admission_screen_publishers",
+                "Screen shares published in those rooms.",
+                "screenPublishers",
+            ),
+            (
+                "pqp_api_sfu_admission_checks_5m",
+                "Camera, share and promotion decisions against the budget on this box in the last "
+                "5 minutes, summed across replicas.",
+                "checks5m",
+            ),
+            (
+                "pqp_api_sfu_admission_refusals_5m",
+                "Of those, how many the budget refused in the last 5 minutes, summed across replicas.",
+                "refusals5m",
+            ),
+        ):
+            labeled_gauge(
+                lines,
+                name,
+                help_text,
+                [({"region": str(box["box"])}, _vn_num(box.get(key))) for box in boxes],
+            )
+        labeled_counter(
+            lines,
+            "pqp_api_sfu_admission_checks_total",
+            "Cumulative admission decisions per box since the API booted, summed across replicas.",
+            [({"region": str(box["box"])}, _vn_num(box.get("checksTotal"))) for box in boxes],
+        )
+        labeled_counter(
+            lines,
+            "pqp_api_sfu_admission_refusals_total",
+            "Cumulative admission refusals per box since the API booted, summed across replicas.",
+            [({"region": str(box["box"])}, _vn_num(box.get("refusalsTotal"))) for box in boxes],
+        )
     # Pool waits (runtime.poolWait, server/src/lib/pool-wait.ts): what a peak
     # COST rather than how high it went. Worst replica, last five minutes, so
     # a 20 s exporter tick never misses a deploy burst that the once-a-minute
@@ -1627,6 +1811,7 @@ def main() -> int:
             replicas_scraped=scraped,
             instances_expected=expected,
             pool_wait=pool_wait_across(payloads),
+            event_loop=event_loop_across(payloads),
         )
     except (
         urllib.error.URLError,

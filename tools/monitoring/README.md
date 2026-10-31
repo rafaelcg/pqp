@@ -27,13 +27,14 @@ actually running on a box with a Prometheus textfile collector -- see
 |---|---|
 | `pqp-api-metrics-exporter.py` | Reads `GET /api/admin/metrics` (the `ready`, `runtime`, `voice`, `liveHls`, `cluster`, `users`, `servers`, `messages`, `activation`, `calls`, `streamQuality` and `product` blocks) every 20s and writes a node_exporter textfile, so readiness, Postgres latency, pool queue depth, seated count, sockets, voice-by-backend, HLS rung/session counts, the DB breaker state, the **activation funnel** (per-step cohort counts and step-to-step conversion), **the growth counters** (signups, messages by scope, call attempts/connects/refusals-by-reason and ring outcomes, watch-party starts/restarts and playlist rejections, and push delivery by platform/outcome) **and screen-share/watch-party video quality** (fps/bitrate/resolution buckets by role and transport, and WebRTC's own `qualityLimitationReason` for the presenter) become Prometheus series Grafana can alert and graph on over time, not just read as an instantaneous pull. Scrapes the endpoint repeatedly and dedups by the payload's own `instanceId` (`collect_admin_metrics_snapshots()`), merging the distinct per-replica snapshots (`merge_admin_metrics()`) into one correct, monotonic payload before `render()` runs -- no Caddy route or per-replica URL required; see "Replica-split metrics" below. Adding a field to `/api/admin/metrics` does not surface it here on its own -- `render()` hand-picks fields, so a new metric needs a line here too, and if the field is process-local it needs a merge rule too. |
 | `grafana-dashboard-capacity.json` | Standing "pqp Capacity" dashboard (uid `pqp-capacity`): estimated vs measured SFU load and their ratio, admission refusals, CPU and memory per container and Caddy request rate and 5xx on the API box, and the API event-loop lag. Import and leave up. Built on `pqp_api_sfu_admission_*`, `pqp_api_event_loop_*`, Alloy's cAdvisor and Caddy scrapes (`tools/api-host/config.alloy`); see docs/MONITORING.md "Capacity gauges". |
-| `grafana-alert-rules-capacity.json` | Always-on group `pqp-capacity`: "SFU admission estimate far above what the box carries" (estimated/measured above 2.5 for 15m while CPU is under 40%) and "API event loop stalled" (p99 above 200 ms for 5m). Windows are 3 minutes or more on purpose (the series land once a minute). |
+| `grafana-alert-rules-capacity-gauges.json` | Always-on group `pqp-capacity`: "SFU admission estimate far above what the box carries" (estimated/measured above 2.5 for 15m while CPU is under 40%) and "API event loop stalled" (p99 above 200 ms for 5m). Windows are 3 minutes or more on purpose (the series land once a minute). |
 | `grafana-dashboard-growth.json` | Standing "pqp Growth" dashboard: signups, messages by scope, call attempts/connect/failure-rate/refusals, ring outcomes, watch-party reliability, playlist rejections, push delivery. Import and leave up. |
 | `grafana-dashboard-activation.json` | Standing "pqp Activation" dashboard: the new-user funnel (signup -> age gate -> handle -> first join -> first message -> first voice -> first watch party) as a bar-funnel for the 7- and 30-day signup cohorts, the headline signup -> first-message activation rate, step-to-step conversion, and conversion over time. Import and leave up. Built on `payload.activation`; see docs/MONITORING.md and `server/src/services/activation.ts`. |
 | `grafana-alert-rules-growth.json` | Always-on alert rules: "call failure rate high" and "push failure rate high", each with a volume floor in the query so low traffic never pages. Unlike the event rules, meant to stay imported. |
 | `grafana-alert-rules-activation.json` | One always-on rule: "activation funnel stalled at the age gate" -- fires only when signups keep arriving (> 20 in 7 days) while the first gated step after signup is near zero for an hour, i.e. a broken step rather than a slow week. Deliberately the only funnel alert: a conversion floor is a threshold guess with no day-0 baseline and would cry wolf. |
 | `grafana-dashboard-voice-notes.json` | Standing "pqp Mensagens de voz" dashboard (uid `pqp-voice-notes`): a usage row (sent by scope and recorder, senders, length, first plays, listened share, refused requests) and a health row (oldest due job, queue depth, jobs settled and success rate, time to done, transcript status, speech budget). Built on `payload.voiceNotes`. Import and leave up. |
 | `grafana-alert-rules-voice-notes.json` | Always-on group `pqp-voice-notes`: queue stuck, job failure rate high, speech budget exhausted, speech budget at 80%. |
+| `grafana-alert-rules-capacity.json` | Always-on group `pqp-capacity` (eight rules, thresholds are fractions of the core count where they can be): SFU CPU busy above 45% for 15m (warn) and 60% for 10m (critical), LiveKit participants above 240 for 5m, outgoing packet loss p95 above 0.5% for 1h, SFU transmit above 600 Mbit/s for 10m, API box root disk above 75% and memory above 75%, and a presence rule for the SFU trigger series. They read node exporter and LiveKit series, not the API exporter above. They hand over to `docs/SFU_RESIZE_RUNBOOK.md`. See "Capacity alerts" below. |
 | `pqp-api-metrics.service` / `.timer` | The systemd timer that runs it. |
 | `install.sh` | Idempotent installer for the box above. |
 | `grafana-alert-rules-event.json` | Grafana Alerting file-provisioning format: the 6 event-window alert rules (readiness false 60s, `/ready` postgres ms > 200 for 2m, pool queued > 20 for 60s, pool waits over 1 s (see "Pool waits" below), HLS rung deaths > 3 in 5m, API process restarted). Contact point `rafael-email`, same as every other alert in this repo's Grafana stack. |
@@ -362,6 +363,80 @@ every panel reads "No data", which is harmless).
    The dashboard lands at `$GRAFANA_URL/d/pqp-voice-notes`. The series arrive
    about a minute after step 1 (the timer ticks every 20 s, Alloy scrapes the
    textfile, remote-write adds a little).
+
+## Capacity alerts (added 2026-10-25)
+
+`grafana-alert-rules-capacity.json` is the "make the trigger an alert" half of
+the SFU decision in the 2026-10-22 capacity review: the home SFU stays on 4 vCPU
+and a pre-approved upgrade to 8 vCPU waits behind written triggers, so the
+triggers page instead of being remembered. The upgrade itself is
+[`docs/SFU_RESIZE_RUNBOOK.md`](../../docs/SFU_RESIZE_RUNBOOK.md).
+
+Group `pqp-capacity`, always on, meant to stay imported. Nothing here reads the
+API exporter: every series is node exporter or LiveKit's own `:6789`, both
+shipped by Alloy from the boxes.
+
+| Rule | Expression, threshold, for |
+|---|---|
+| SFU CPU busy above 45% (warning) | `sum(rate(node_cpu_seconds_total{box="sfu-pqp",mode!="idle"}[5m])) / count(node_cpu_seconds_total{box="sfu-pqp",mode="idle"})` above 0.45 for 15m |
+| SFU CPU busy above 60% (critical) | same expression above 0.60 for 10m |
+| LiveKit participants above 240 | `max_over_time(livekit_participant_total{box="sfu-pqp"}[2m])` above 240 for 5m |
+| Packet loss p95 above 0.5% | `histogram_quantile(0.95, ... livekit_packet_loss_percent_bucket{direction="outgoing"}[15m])` above 0.5 for 1h, only while more than 5000 samples landed in the window |
+| SFU transmit above 600 Mbit/s | `rate(node_network_transmit_bytes_total{device="enp1s0"}[5m])` in Mbit/s above 600 for 10m |
+| API box root disk above 75% | filesystem used percent on `box="api-vultr"` above 75 for 30m |
+| API box memory above 75% | `100 * (1 - MemAvailable / MemTotal)` on `box="api-vultr"` above 75 for 10m |
+| SFU trigger series missing | `sum(absent(...) or absent(...) ...)` over the node CPU, `enp1s0` transmit, `livekit_participant_total` and outgoing loss series, above 0 for 30m. Present because the rules above are `noDataState: OK`: without it a renamed interface would silence the transmit rule for good |
+
+**Fractions on purpose.** The CPU rules divide by the core count (the number of
+`mode="idle"` series), so resizing the SFU from 4 to 8 cores does not change
+what "45%" means. The participants and transmit thresholds are absolute; the
+runbook's "After" section says which to re-read after a resize.
+
+**What already existed and is not repeated here**, checked against
+`GET /api/v1/provisioning/alert-rules` on 2026-10-25: `sfu box: CPU above 85%
+for 10m`, `sfu box: egress past 60% / 80% of the monthly allowance`, `sfu box:
+load average above 6 for 10m`, `sfu box: root filesystem above 85%`, and `api and
+egress boxes: root filesystem above 80%` (which already covers the egress box,
+`box="sfu-hls"`, so there is no new egress disk rule; the API box gets an
+earlier 75% rule because it grew about 2 GB a day in the review).
+
+**Quiet by design.** `noDataState` and `execErrState` are `OK` on every rule: a
+dead exporter or Alloy is the job of the existing "no metrics for 10m" rules,
+and one missed scrape must not page. A single series vanishing while the
+exporter lives is the eighth rule's job (30 minutes). Each rule has a `for` of 5 to 60 minutes,
+and the packet loss rule also has a sample-count floor so a quiet hour cannot
+trip it. No mute timing: a capacity trigger is valid at any hour.
+
+**Packet loss, honestly.** LiveKit exports loss as a histogram of per-track loss
+percent samples (`livekit_packet_loss_percent_*`, with `direction`) and as
+counters (`livekit_packet_loss_total`, `livekit_packet_total`). The rule uses the
+histogram because the trigger is worded as a p95. About 97% of samples are
+exactly 0, so the p95 sits at 0 and moves only when more than 5% of tracks lose
+more than 0.5%. A back-test on the 30 days before import found it sustained for
+an hour about ten times, so expect it to fire now and then and read it as "look
+at CPU and tx", not as a page. The alternative, the aggregate ratio of the two
+counters, fired about six hours in the same 30 days.
+
+Import (the pattern from the voice notes section, one POST per rule, editable in
+the UI; the rule bodies need `folderUID` and `ruleGroup` added, and the folder
+uid below is the one every `pqp-*` group already uses):
+
+```bash
+set -a; . ~/.config/pqp/grafana.env; set +a
+cd tools/monitoring
+jq -c '.groups[] | .name as $g | .rules[] | . + {folderUID: "ffxfigbmjr2f4e", ruleGroup: $g}' \
+    grafana-alert-rules-capacity.json \
+  | while read -r rule; do
+      printf '%s' "$rule" | curl -sS -X POST "$GRAFANA_URL/api/v1/provisioning/alert-rules" \
+        -H "Authorization: Bearer $GRAFANA_SA_TOKEN" -H 'Content-Type: application/json' \
+        -H 'X-Disable-Provenance: true' -d @-
+      echo
+    done
+```
+
+A second run fails with a uid conflict; update with
+`PUT /api/v1/provisioning/alert-rules/<uid>`. Check afterwards that all eight
+show under group `pqp-capacity` in Alerting.
 
 ## Pool waits (added 2026-10-01)
 

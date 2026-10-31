@@ -64,6 +64,11 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Explicit least privilege. The repository default is already read-only; this
+# keeps it that way if the default is ever widened.
+permissions:
+  contents: read
+
 jobs:
   # The old single `checks` job ran lint, typecheck, every test suite and the
   # builds one after the other (~12-15 min, 8.5-11 of them the Test step). It is
@@ -80,7 +85,7 @@ jobs:
     # No Postgres service here: nothing in this job reads a database.
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up workspace
         uses: ./.github/actions/setup-workspace
@@ -242,7 +247,7 @@ jobs:
       # old one. Bundling here costs seconds and turns that into a red PR.
       - name: Bundle Pages functions
         working-directory: client
-        run: npx wrangler pages functions build --outfile=/tmp/functions-bundle.js
+        run: npx --yes wrangler@4.149.0 pages functions build --outfile=/tmp/functions-bundle.js
 
   # The server suite (~5,200 tests in ~335 files) against a real database; it
   # was ~8.5 of the old job's 12 minutes. Sharded by file (`vitest --shard`):
@@ -289,7 +294,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up workspace
         uses: ./.github/actions/setup-workspace
@@ -316,7 +321,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up workspace
         uses: ./.github/actions/setup-workspace
@@ -377,7 +382,8 @@ jobs:
   e2e-shard:
     name: e2e (${{ matrix.suite }} ${{ matrix.label }})
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # A leg may carry its own, lower budget (`timeout` in the matrix).
+    timeout-minutes: ${{ matrix.timeout || 20 }}
     strategy:
       fail-fast: false
       matrix:
@@ -438,9 +444,13 @@ jobs:
           # generated test patterns and a canary server that must see nothing
           # (apps/locadora/e2e). No API, no database. Chromium only here; the
           # three engines run locally (`pnpm --filter @pqp-apps/locadora e2e`).
+          #
+          # A healthy run is about 11 minutes (3 setup, 6 sandbox, 2 guest, 2
+          # share sound), so 18 is a hang named by its step, not a slow day.
           - suite: apps-sandbox
             label: Locadora in the sandbox
             apps: true
+            timeout: 18
 
     services:
       postgres:
@@ -466,26 +476,41 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up workspace
         uses: ./.github/actions/setup-workspace
 
+      # The Azure Ubuntu mirror intermittently stalls ONE package fetch for
+      # ~75 s with no data (`Ign:` in the log) and apt waits it out, package
+      # after package: `playwright install-deps` took 10 to 14 minutes in at
+      # least 12 of the 77 jobs sampled across 7 runs (2026-10-23 to 26, any
+      # leg), and on this job's 20 minute budget that is a cancellation with
+      # no failing test. A short per-fetch timeout with retries turns a stall
+      # into a retry, and the step timeouts below are the backstop that names
+      # the step.
+      - name: Bound apt stalls
+        run: |
+          printf 'Acquire::http::Timeout "20";\nAcquire::https::Timeout "20";\nAcquire::Retries "5";\n' \
+            | sudo tee /etc/apt/apt.conf.d/99ci-bounded > /dev/null
+
       - name: Cache Playwright browsers
         id: playwright-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cache/ms-playwright
           key: playwright-chromium-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
 
       - name: Install Playwright browser
         if: steps.playwright-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 8
         run: pnpm --filter @pqp/client exec playwright install --with-deps chromium
 
       # A cache hit restores the browser binaries but not the apt packages the
       # runner image may be missing; install-deps alone is cheap.
       - name: Install Playwright system deps
         if: steps.playwright-cache.outputs.cache-hit == 'true'
+        timeout-minutes: 8
         run: pnpm --filter @pqp/client exec playwright install-deps chromium
 
       # Firefox runs only the stale-bundle install specs, so only that job
@@ -494,17 +519,19 @@ jobs:
       - name: Cache Playwright Firefox
         if: matrix.stale || matrix.appframe
         id: playwright-firefox-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cache/ms-playwright/firefox-*
           key: playwright-firefox-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
 
       - name: Install Playwright Firefox
         if: (matrix.stale || matrix.appframe) && steps.playwright-firefox-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 8
         run: pnpm --filter @pqp/client exec playwright install --with-deps firefox
 
       - name: Install Playwright Firefox system deps
         if: (matrix.stale || matrix.appframe) && steps.playwright-firefox-cache.outputs.cache-hit == 'true'
+        timeout-minutes: 8
         run: pnpm --filter @pqp/client exec playwright install-deps firefox
 
       - name: E2E (${{ matrix.suite }} ${{ matrix.label }})
@@ -528,6 +555,7 @@ jobs:
       # frame, and a canary server on another port that records nothing.
       - name: E2E apps sandbox (Locadora, test patterns, canary)
         if: matrix.apps
+        timeout-minutes: 12
         run: pnpm --filter @pqp-apps/locadora e2e
       # Locadora without an account (client/e2e/locadora-guest/): the real
       # client and API with the guest flags on, the real Locadora build on its
@@ -535,6 +563,7 @@ jobs:
       # if the title, the file name or the file's hash is in any request.
       - name: E2E Locadora guest player (no account, canary)
         if: matrix.apps
+        timeout-minutes: 6
         env:
           E2E_DATABASE_URL: ${{ env.DATABASE_URL }}
         run: pnpm --filter @pqp/client e2e:locadora-guest
@@ -545,6 +574,7 @@ jobs:
       # call's own (must not come back inside the share).
       - name: E2E Locadora share sound (two clients, measured at the viewer)
         if: matrix.apps
+        timeout-minutes: 8
         env:
           E2E_DATABASE_URL: ${{ env.DATABASE_URL }}
         run: pnpm --filter @pqp/client e2e:locadora-share-sound
@@ -560,15 +590,19 @@ jobs:
           command -v ffmpeg || (sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg)
           pnpm --filter @pqp/client e2e:camera-sync
 
+      # `cancelled()` too: a step that hit its timeout ends the job as a
+      # cancellation, and that is exactly when the output is wanted.
       - name: Upload E2E artifacts
-        if: failure()
-        uses: actions/upload-artifact@v4
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
+          if-no-files-found: ignore
           # upload-artifact@v4 hard-fails on duplicate names across matrix jobs.
           name: playwright-report-${{ matrix.suite }}-${{ matrix.total }}-${{ strategy.job-index }}
           path: |
             client/test-results
             client/e2e-results*.json
+            apps/locadora/e2e/test-results
           retention-days: 7
 
   # Aggregator for the sharded e2e jobs, named for the job it replaced (see

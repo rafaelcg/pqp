@@ -24,7 +24,7 @@ const { requestConfigRefresh, resetConfigRefreshForTests } = await import(
 
 let root: Root | null = null;
 let host: HTMLElement | null = null;
-const seen: Array<{ enabled: boolean; loaded: boolean }> = [];
+const seen: Array<{ enabled: boolean; announce: boolean; loaded: boolean }> = [];
 
 function Probe({ serverId }: { serverId: string | null }) {
   seen.push(useForumConfig(serverId));
@@ -63,10 +63,31 @@ describe("useForumConfig", () => {
   it("is off and not loaded until the server answers, then follows the answer", async () => {
     fetchForumConfigMock.mockResolvedValue({ enabled: true });
     mount("s1");
-    expect(seen[0]).toEqual({ enabled: false, loaded: false });
+    expect(seen[0]).toEqual({ enabled: false, announce: false, loaded: false });
     await flush();
-    expect(seen.at(-1)).toEqual({ enabled: true, loaded: true });
+    expect(seen.at(-1)).toEqual({ enabled: true, announce: false, loaded: true });
     expect(fetchForumConfigMock).toHaveBeenCalledWith("s1");
+  });
+
+  it("carries `announce`, only beside `enabled`, and re-renders when it flips", async () => {
+    fetchForumConfigMock.mockResolvedValue({ enabled: true, announce: true });
+    mount("s1");
+    await flush();
+    expect(seen.at(-1)).toEqual({ enabled: true, announce: true, loaded: true });
+
+    // The operator turns the card off: the next refresh pass is heard.
+    fetchForumConfigMock.mockResolvedValue({ enabled: true, announce: false });
+    await act(async () => {
+      await loadForumConfig("s1");
+    });
+    expect(seen.at(-1)).toEqual({ enabled: true, announce: false, loaded: true });
+
+    // A server that says announce without forums on is read as no card.
+    fetchForumConfigMock.mockResolvedValue({ enabled: false, announce: true });
+    await act(async () => {
+      await loadForumConfig("s1");
+    });
+    expect(seen.at(-1)).toEqual({ enabled: false, announce: false, loaded: true });
   });
 
   it("reads an API that predates the route (404) as a real answer: off", async () => {
@@ -75,7 +96,7 @@ describe("useForumConfig", () => {
     );
     mount("s1");
     await flush();
-    expect(seen.at(-1)).toEqual({ enabled: false, loaded: true });
+    expect(seen.at(-1)).toEqual({ enabled: false, announce: false, loaded: true });
   });
 
   it("keeps a network blip unknown rather than claiming the forum is paused", async () => {
@@ -84,14 +105,14 @@ describe("useForumConfig", () => {
     );
     mount("s1");
     await flush();
-    expect(seen.at(-1)).toEqual({ enabled: false, loaded: false });
+    expect(seen.at(-1)).toEqual({ enabled: false, announce: false, loaded: false });
   });
 
   it("follows an operator flip on the next config refresh, without a reload", async () => {
     fetchForumConfigMock.mockResolvedValueOnce({ enabled: false });
     mount("s1");
     await flush();
-    expect(seen.at(-1)).toEqual({ enabled: false, loaded: true });
+    expect(seen.at(-1)).toEqual({ enabled: false, announce: false, loaded: true });
 
     fetchForumConfigMock.mockResolvedValueOnce({ enabled: true });
     act(() => {
@@ -99,22 +120,22 @@ describe("useForumConfig", () => {
     });
     await flush();
     expect(fetchForumConfigMock).toHaveBeenCalledTimes(2);
-    expect(seen.at(-1)).toEqual({ enabled: true, loaded: true });
+    expect(seen.at(-1)).toEqual({ enabled: true, announce: false, loaded: true });
   });
 
   it("asks once per server however many surfaces mount", async () => {
     fetchForumConfigMock.mockResolvedValue({ enabled: true });
     await Promise.all([loadForumConfig("s1"), loadForumConfig("s1")]);
     expect(fetchForumConfigMock).toHaveBeenCalledTimes(1);
-    expect(settledForumConfig("s1")).toEqual({ enabled: true, loaded: true });
-    expect(settledForumConfig(null)).toEqual({ enabled: false, loaded: false });
+    expect(settledForumConfig("s1")).toEqual({ enabled: true, announce: false, loaded: true });
+    expect(settledForumConfig(null)).toEqual({ enabled: false, announce: false, loaded: false });
   });
 
   it("never reads the previous server's answer as the new one's", async () => {
     fetchForumConfigMock.mockResolvedValueOnce({ enabled: true });
     mount("s1");
     await flush();
-    expect(seen.at(-1)).toEqual({ enabled: true, loaded: true });
+    expect(seen.at(-1)).toEqual({ enabled: true, announce: false, loaded: true });
     seen.length = 0;
     fetchForumConfigMock.mockReturnValueOnce(new Promise(() => {}));
     act(() => root!.render(<Probe serverId="s2" />));
@@ -130,13 +151,13 @@ describe("useForumConfig", () => {
         .mockResolvedValueOnce({ enabled: true });
       mount("s1");
       await flush();
-      expect(seen.at(-1)).toEqual({ enabled: false, loaded: false });
+      expect(seen.at(-1)).toEqual({ enabled: false, announce: false, loaded: false });
       await act(async () => {
         vi.advanceTimersByTime(FORUM_CONFIG_RETRY_MS);
       });
       await flush();
       expect(fetchForumConfigMock).toHaveBeenCalledTimes(2);
-      expect(seen.at(-1)).toEqual({ enabled: true, loaded: true });
+      expect(seen.at(-1)).toEqual({ enabled: true, announce: false, loaded: true });
     } finally {
       vi.useRealTimers();
     }
@@ -144,7 +165,7 @@ describe("useForumConfig", () => {
 
   it("has nothing to say without a server", () => {
     mount(null);
-    expect(seen.at(-1)).toEqual({ enabled: false, loaded: false });
+    expect(seen.at(-1)).toEqual({ enabled: false, announce: false, loaded: false });
     expect(fetchForumConfigMock).not.toHaveBeenCalled();
   });
 });

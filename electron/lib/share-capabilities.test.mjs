@@ -170,10 +170,13 @@ describe("native share audio (Windows process loopback)", () => {
 
   it("answers the app window only, on every channel", () => {
     for (const channel of ["status", "arm", "claim", "stop"]) {
-      const at = main.indexOf(`ipcMain.handle("pqp:native-share-audio-${channel}"`);
-      assert.notEqual(at, -1, `no handler for ${channel}`);
-      const body = main.slice(at, main.indexOf("});", at));
-      assert.match(body, /senderMatchesAppOrigin\(event, sessionAppOrigin\)/, channel);
+      // Through the shared guard (lib/ipc-guard.js), which asks the sender's
+      // origin before the handler runs.
+      assert.match(
+        main,
+        new RegExp(`ipcGuard\\.handle\\(\\s*"pqp:native-share-audio-${channel}"`),
+        channel,
+      );
     }
   });
 

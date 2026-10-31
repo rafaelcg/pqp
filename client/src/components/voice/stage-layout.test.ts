@@ -3,6 +3,7 @@ import {
   listenersOf,
   listenerStripSlots,
   planStage,
+  screensDrawnOnStage,
   stageGridColumns,
   tileClickFullscreens,
   stageTileSlots,
@@ -558,5 +559,28 @@ describe("stageTileSlots with more shares than the grid can draw", () => {
     const { shown } = stageTileSlots(tiles, 12, speaking);
 
     expect(shown.filter((tile) => tile.kind === "screen")).toHaveLength(4);
+  });
+});
+
+describe("screensDrawnOnStage", () => {
+  const screens = [
+    { peerId: "friend", isSelf: false },
+    { peerId: "me", isSelf: true },
+  ];
+
+  it("keeps every share while the own preview is shown", () => {
+    expect(screensDrawnOnStage(screens, false)).toEqual(screens);
+  });
+
+  it("drops only our own share once its preview is hidden, and the grid reflows", () => {
+    const drawn = screensDrawnOnStage(screens, true);
+    expect(drawn.map((s) => s.peerId)).toEqual(["friend"]);
+    const plan = planStage({ screens: drawn, people: [] });
+    expect(plan.tiles.map((tile) => tile.id)).toEqual(["friend"]);
+    expect(stageGridColumns(plan.tiles.length, true)).toBe(1);
+  });
+
+  it("leaves nothing when ours is the only share", () => {
+    expect(screensDrawnOnStage([screens[1]!], true)).toEqual([]);
   });
 });

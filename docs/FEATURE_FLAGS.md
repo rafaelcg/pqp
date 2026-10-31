@@ -850,6 +850,26 @@ build that hides unknown channel types must be out, or a forum inside a
 category is a dead row there. `server/src/lib/flag-client-contract.test.ts`
 pins the route, the field and the create guard.
 
+## `forum_announcement` (per server, client presentation only)
+
+"O fórum abriu": a one-time corner card that tells the members of a server its
+forum is live, with **Abrir o fórum** and **Agora não**. Behind
+`FORUM_ANNOUNCEMENT` (default off, **per server**, born as a flag). Served as
+`announce` on `GET /api/forum/config?serverId=` (`server/src/lib/forum-config.ts`),
+which answers true only for a named server where `forum_channels` is on too, so
+the card can never send people to a forum whose posts are paused.
+
+Off is nothing at all: no card, nothing stored. On, the client still draws it
+only for a member of that server who can see a forum channel there, is not on
+it, has not closed it or opened the forum on that browser, and is not in a call,
+a share, an app or a live party (`client/src/lib/forum-announcement.ts`,
+`docs/ONBOARDING.md`). It is a campaign: turn it on for one server
+(`PUT /api/admin/flag-overrides { key: "forum_announcement", serverId,
+enabled: true }` or controles → interruptores), and off again (`enabled: null`)
+once it has done its job. Open tabs follow on the next config refresh (focus or
+10 min). `server/src/lib/flag-client-contract.test.ts` pins the field on both
+sides; `server/src/api/forum-flag.test.ts` pins the answer with rows.
+
 ## `apps` (per server)
 
 The apps platform: small interactive things (Locadora, a game room) that a person
@@ -1060,3 +1080,28 @@ new account would get it; turn this on only once Saves na conta is on for
 everybody. The claims it gates are data (`client/src/lib/locadora-claims.ts`),
 and `locadora-claims.test.ts` fails when a claim that talks about cloud saves
 or watching is filed as live.
+
+## `report_attachment_preview` (global, default off)
+
+The Mostrar button on a report card: a moderator clicks, the card asks
+`POST /api/reports/:id/attachments/:attachmentId/reveal` for a 60 second signed
+URL and shows the image or gif (blurred, un-blurred only after the click). Behind
+`REPORT_ATTACHMENT_PREVIEW` (default off, global: the reader is an instance
+moderator, who is not "in" any server, and a conversation report has no server).
+
+Off is exactly today: the route answers 404 and the card never draws the button.
+The attachment LIST on the card (kind, content type, scanner verdict) is not
+behind it and shows either way, served as `attachments` on every report row of
+`GET /api/reports/all`, `/api/reports/instance` and `/api/servers/:id/reports`;
+each entry carries `preview` (`available` | `off` | `blocked` | `unsupported`)
+so the client has no rule of its own to get wrong. The guardrails (scanner
+flagged, rejected or error, an `illegal` or `csam_suspected` label, a
+quarantined object, a minor-in-sexual-content report, videos and files) hold with
+the flag on; see `docs/CONTENT_SAFETY.md`, "What a moderator sees of a reported
+attachment". Every reveal writes `report.attachment_reveal` to the audit log.
+
+Turn it on from controles → interruptores, or `PUT /api/admin/flags
+{ key: "report_attachment_preview", enabled: true }`. Open tabs follow on the
+next load of the queue. Pinned by `server/src/api/report-attachments.test.ts`
+(the route and the list) and `client/src/components/layout/report-attachments.test.tsx`
+(the card).

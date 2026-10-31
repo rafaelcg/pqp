@@ -69,6 +69,7 @@ function makeReport(overrides: Partial<AllReport>): AllReport {
     messageId: null,
     messageDeleted: false,
     contentSnapshot: null,
+    attachments: [],
     channelId: null,
     channelName: null,
     storyId: null,

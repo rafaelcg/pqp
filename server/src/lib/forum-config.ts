@@ -14,13 +14,26 @@ import { isEnabled } from "./flags.js";
  * `serverId` absent or not a uuid is read as absent, and the answer is the
  * global value (what the Discord import asks, since a new server has no
  * override yet).
+ *
+ * `announce` is the "O fórum abriu" corner card (`forum_announcement`, per
+ * server, default off). It is only ever true for a named server where forums
+ * are also on: telling people a forum opened where nobody may post would send
+ * them to "Novos posts estão pausados". With no server it is false, whatever
+ * the global row says, because the card is about one server's forum.
  */
 const serverIdSchema = z.string().uuid();
 
 export function forumConfigForServer(rawServerId: string | null): ForumConfig {
   const parsed = serverIdSchema.safeParse(rawServerId);
   const serverId = parsed.success ? parsed.data : null;
-  return { enabled: forumChannelsEnabled(serverId) };
+  const enabled = forumChannelsEnabled(serverId);
+  return {
+    enabled,
+    announce:
+      enabled &&
+      serverId !== null &&
+      isEnabled("forum_announcement", { serverId }),
+  };
 }
 
 export function forumChannelsEnabled(serverId: string | null): boolean {

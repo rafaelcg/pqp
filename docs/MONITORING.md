@@ -1194,6 +1194,34 @@ To check the budget, `grafanacloud_org_fe_o11y_billable_sessions` against
 `grafanacloud_org_fe_o11y_included_sessions` on the `grafanacloud-usage`
 Prometheus data source. Counts read off Faro are a sample: multiply by five.
 
+### The call link on a feedback report (`voice.link`)
+
+A bug report sent from inside a call carries `context.voice.link`, so "the call
+was bad" arrives with the path it took (`feedbackVoiceLinkSchema` in
+`packages/shared/src/feedback.ts`, built by `currentLinkSummary` in
+`client/src/lib/call-link-window.ts`). It is read off the sampler the call
+already runs (the one shared `sampleVoiceStats()` tick, no extra poll) and
+covers the last 30 seconds: `relayed` (the selected ICE pair had a TURN
+allocation on either end), `relayProtocol` (`udp`, `tcp` or `tls`, only for our
+own relay) and `relayHost` (the TURN hostname, for example `turn.cloudflare.com`;
+a relay named by IP address is left blank, and nothing in the field is ever an
+address), `rttMsAvg`, `lossPctAvg`, `samples`, `sharing` (a screen share up in
+either direction), and the browser's `effectiveType` / `downlinkMbps` where it
+exposes `navigator.connection`. The transport (mesh or sfu) is the existing
+`voice.transport`. Every field is optional: an older client sends none of it, and
+a `link` the server cannot parse is dropped on its own without losing the rest of
+the context. Read it on the operator dashboard's feedback queue (the `link:`
+line under each item) or in `GET /api/admin/feedback`. How to read it: the ms is
+the round trip to the OTHER PERSON in the call, through the relay when there is
+one, not to a pqp server, so it is not comparable with Discord's ping to its own
+server; loss is inbound only. High ms with `relayed: false` points at a far or
+slow peer or the reporter's own Wi-Fi (check `effectiveType` and `sharing`);
+`relayed: true` with `relayProtocol: tcp` or `tls` points at a relay reached over
+a blocked-UDP path, which adds delay and jitter; a missing `link` on a mesh
+report means the report was sent from outside a call or before the first sample.
+The window is empty once the call ends, so a report sent right after hanging up
+has no `link`.
+
 ## The activation funnel
 
 The growth counters above say how much is happening. The **activation funnel**
@@ -1577,7 +1605,7 @@ was log lines. Everything below is read-only: no gauge here is consulted by an
 admission or any other decision.
 
 Dashboard `pqp Capacity` (uid `pqp-capacity`, `tools/monitoring/grafana-dashboard-capacity.json`),
-two rules in group `pqp-capacity` (`tools/monitoring/grafana-alert-rules-capacity.json`).
+two rules in group `pqp-capacity` (`tools/monitoring/grafana-alert-rules-capacity-gauges.json`).
 
 ### Estimated against measured SFU load
 
@@ -1710,13 +1738,14 @@ the SFU box is a separate manual deploy and is NOT in the API image.
 | Path | Role |
 |---|---|
 | `tools/monitoring/grafana-dashboard-capacity.json` | "pqp Capacity" dashboard: estimated vs measured SFU load, per-container CPU and memory, Caddy, event-loop lag |
-| `tools/monitoring/grafana-alert-rules-capacity.json` | "SFU admission estimate far above what the box carries" and "API event loop stalled" |
+| `tools/monitoring/grafana-alert-rules-capacity-gauges.json` | "SFU admission estimate far above what the box carries" and "API event loop stalled" |
 | `tools/sfu-monitoring/install-regional.sh` | Idempotent monitoring install for a regional SFU box; `PQP_REGIONAL_DRY_RUN=1` checks without changing anything |
 | `tools/log-shipper/` | Fly app `pqp-log-shipper`: ships `pqp-api` logs to Grafana Cloud Loki |
 | `tools/sfu-monitoring/` | Grafana Alloy config, the vnstat/docker textfile exporter and the installer for the SFU box |
 | `tools/monitoring/pqp-api-metrics-exporter.py` | Textfile exporter: scrapes `GET /api/admin/metrics` into Prometheus series (readiness, pool, voice, and the growth counters above) |
 | `tools/monitoring/grafana-dashboard-growth.json` | "pqp Growth" dashboard: signups, messages, call outcomes, watch-party reliability, push delivery |
 | `tools/monitoring/grafana-alert-rules-growth.json` | Always-on "call failure rate high" and "push failure rate high" alert rules |
+| `tools/monitoring/grafana-alert-rules-capacity.json` | Always-on group `pqp-capacity`: the SFU resize triggers (CPU busy fraction, participants, packet loss, transmit) and API box disk and memory early warnings; hands over to `docs/SFU_RESIZE_RUNBOOK.md` |
 | `tools/monitoring/grafana-dashboard-voice-notes.json` | "pqp Mensagens de voz" dashboard: voice-note usage and pipeline health |
 | `tools/monitoring/grafana-alert-rules-voice-notes.json` | Voice-note alerts: queue stuck, job failure rate, speech budget exhausted and at 80% |
 | `tools/monitoring/grafana-dashboard-activation.json` | "pqp Activation" dashboard: the new-user funnel and its conversions |

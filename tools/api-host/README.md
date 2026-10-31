@@ -49,6 +49,15 @@ every `pqp-deploy.sh` run rewrites it to the tag it just verified healthy,
 so a bare manual recreate with no tag in scope lands on the last deployed
 build, not a stale hand-written one.
 
+`.env`'s `PG_POOL_MAX` is the total for the API half, not a per-replica value:
+`pqp-deploy.sh` divides it by the replica count on every roll
+(`API_PG_POOL_MAX_PER_REPLICA`). It is 64 since 2026-10-26, so 32 per replica;
+the reasoning and the rollback are in `docs/DB_RUNBOOK.md` section 3. A change
+to `.env` takes effect only on the next roll of `api-a` and `api-b`, and the
+`pqp` account's `sudo` needs a password, so the way to roll is a deploy through
+the workflow, which only runs when the API needs the commit (a change under
+`tools/api-host/` counts).
+
 ## Viewer address (what the API's limiters key on)
 
 The API keys its per-address limiters (anonymous routes, `/ws` sockets, every

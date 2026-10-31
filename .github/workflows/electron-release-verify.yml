@@ -1,0 +1,398 @@
+name: Electron release verify
+
+# THE GATE BETWEEN A DESKTOP PRE-RELEASE AND "LATEST".
+#
+# Desktop 0.2.8 was promoted to latest on 2026-10-27 and Windows 11 users could
+# not start a screen share ("Invalid capture constraints") while every check
+# was green: the shell's 505 unit tests run against a mock of Chromium, the
+# window smoke test never shares, and the Windows audio add-on smoke test never
+# opens the app. The updater handed it out within the hour.
+#
+# The flow now (docs/DESKTOP.md §5 "Cutting a release"):
+#
+#   1. A `v*` tag builds a DRAFT, already marked pre-release (electron.yml).
+#   2. A person publishes it as a pre-release. Installed apps do not see it:
+#      electron-updater asks GitHub for /releases/latest, which skips
+#      pre-releases (pinned by electron/lib/updater-prerelease.test.mjs), and
+#      so does the website's download button.
+#   3. Publishing fires this workflow, which verifies THE PUBLISHED FILES:
+#      downloads them from the release, installs or unpacks them on each OS,
+#      checks signatures and the update feeds, and runs the share smoke test
+#      (electron/test/share-smoke) against the installed app.
+#   4. A person runs this workflow by hand with `promote` ticked. It verifies
+#      everything again, from scratch, and only if every job passed does it
+#      make the release latest. That is the only step that reaches users.
+#
+# FAILS CLOSED. `promote` needs every verify job to have SUCCEEDED (a skipped,
+# cancelled or failed one blocks it), re-checks that the release is still the
+# same published pre-release with the same files it verified, and refuses
+# anything else. There is no input that skips a check.
+#
+# On a pull request touching this gate it runs as a dry run against releases
+# that already exist, so a change to the gate is itself tested on all three
+# runners, and never promotes anything.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Desktop release tag to verify, e.g. v0.2.9"
+        required: true
+        type: string
+      promote:
+        description: "Make it the latest release if, and only if, every check passes"
+        required: false
+        type: boolean
+        default: false
+  release:
+    types: [published]
+  pull_request:
+    paths:
+      - ".github/workflows/electron-release-verify.yml"
+      - "electron/test/share-smoke/**"
+      - "electron/playwright.share-smoke.config.mjs"
+      - "electron/scripts/verify-release-feed.mjs"
+      - "client/e2e/desktop-share/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: electron-release-verify-${{ inputs.tag || github.event.release.tag_name || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  REPO: rafaelcg/pqp
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      targets: ${{ steps.plan.outputs.targets }}
+      promote: ${{ steps.plan.outputs.promote }}
+    steps:
+      - name: Decide what to verify
+        id: plan
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_PROMOTE: ${{ inputs.promote }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          promote=false
+          case "$EVENT" in
+            workflow_dispatch)
+              tag="$INPUT_TAG"
+              [ "$INPUT_PROMOTE" = "true" ] && promote=true
+              ;;
+            release)
+              tag="$RELEASE_TAG"
+              # android-v*, ios-v*: not desktop releases, nothing to verify.
+              if ! [[ "$tag" =~ ^v[0-9] ]]; then
+                echo "targets=[]" >> "$GITHUB_OUTPUT"
+                echo "promote=false" >> "$GITHUB_OUTPUT"
+                echo "$tag is not a desktop release."
+                exit 0
+              fi
+              ;;
+            pull_request)
+              # A dry run of the gate itself against releases that exist.
+              # v0.2.7 is the build installed apps run; v0.2.8 is the one that
+              # broke sharing on Windows, kept as evidence that the gate goes
+              # red on it (allowed to fail, so it does not block the PR).
+              echo 'targets=[{"tag":"v0.2.7","version":"0.2.7","evidence":false},{"tag":"v0.2.8","version":"0.2.8","evidence":true}]' >> "$GITHUB_OUTPUT"
+              echo "promote=false" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+            *)
+              echo "::error::unexpected event $EVENT"
+              exit 1
+              ;;
+          esac
+          if ! [[ "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "::error::'$tag' is not a desktop release tag (vMAJOR.MINOR.PATCH)."
+            exit 1
+          fi
+          version="${BASH_REMATCH[1]}"
+          echo "targets=[{\"tag\":\"$tag\",\"version\":\"$version\",\"evidence\":false}]" >> "$GITHUB_OUTPUT"
+          echo "promote=$promote" >> "$GITHUB_OUTPUT"
+
+  # The update feeds, against the bytes actually on the release. Also records
+  # the release's state and file list, which `promote` compares against so a
+  # file swapped after verification cannot be promoted.
+  feed:
+    name: Feed and assets (${{ matrix.target.tag }}${{ matrix.target.evidence && ', evidence' || '' }})
+    needs: plan
+    if: needs.plan.outputs.targets != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: ${{ matrix.target.evidence }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.plan.outputs.targets) }}
+    outputs:
+      fingerprint: ${{ steps.release.outputs.fingerprint }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up workspace
+        uses: ./.github/actions/setup-workspace
+
+      - name: Read the release
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ matrix.target.tag }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" --repo "$REPO" --json tagName,isDraft,isPrerelease,publishedAt,assets > release.json
+          node -e '
+            const r = require("./release.json");
+            console.log(`tag ${r.tagName}  draft ${r.isDraft}  prerelease ${r.isPrerelease}  published ${r.publishedAt}`);
+            for (const a of r.assets) console.log(`  ${a.name}  ${a.size}`);
+            if (r.isDraft) { console.log("::error::the release is still a draft: publish it as a pre-release first, the gate verifies published files only"); process.exit(1); }
+          '
+          fingerprint="$(node -e '
+            const r = require("./release.json");
+            const files = r.assets.map((a) => `${a.name}:${a.size}:${a.digest ?? ""}:${a.updatedAt ?? ""}`).sort();
+            process.stdout.write(require("node:crypto").createHash("sha256").update(files.join("\n")).digest("hex"));
+          ')"
+          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+
+      - name: Download the published files
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ matrix.target.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/assets"
+          gh release download "$TAG" --repo "$REPO" --dir "$RUNNER_TEMP/assets" --clobber
+          ls -la "$RUNNER_TEMP/assets"
+
+      - name: Check the update feeds against the files
+        working-directory: electron
+        env:
+          VERSION: ${{ matrix.target.version }}
+        run: node scripts/verify-release-feed.mjs "$RUNNER_TEMP/assets" "$VERSION"
+
+  verify:
+    name: Share smoke (${{ matrix.os }}, ${{ matrix.target.tag }}${{ matrix.target.evidence && ', evidence, expected red' || '' }})
+    needs: plan
+    if: needs.plan.outputs.targets != '[]'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    continue-on-error: ${{ matrix.target.evidence }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+        target: ${{ fromJSON(needs.plan.outputs.targets) }}
+    env:
+      # Nothing here may run the repo's own Electron by accident.
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up workspace
+        uses: ./.github/actions/setup-workspace
+
+      # The page runs the client's share code from THIS commit. The installed
+      # app loads the hosted client, so on a dispatch from main this is the
+      # code pqp.gg serves (give or take one deploy), not the tag's copy.
+      - name: Build the share smoke page
+        run: node client/e2e/desktop-share/build.mjs
+
+      - name: Download the published files
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ matrix.target.tag }}
+          VERSION: ${{ matrix.target.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/assets"
+          case "$RUNNER_OS" in
+            macOS) pattern="pqp-${VERSION}-arm64.dmg" ;;
+            Windows) pattern="pqp-${VERSION}-x64*.exe" ;;
+            Linux) pattern="pqp-${VERSION}-x86_64.AppImage" ;;
+          esac
+          gh release download "$TAG" --repo "$REPO" --dir "$RUNNER_TEMP/assets" --pattern "$pattern" --clobber
+          ls -la "$RUNNER_TEMP/assets"
+
+      # macOS: the disk image a person double-clicks, then the app inside it.
+      - name: Install from the disk image, check signature and notarization
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          VERSION: ${{ matrix.target.version }}
+        run: |
+          set -uo pipefail
+          dmg="$RUNNER_TEMP/assets/pqp-${VERSION}-arm64.dmg"
+          status=0
+          check() {
+            local label="$1"; shift
+            echo "--- $label"
+            if "$@" 2>&1; then echo "    OK"; else echo "::error::$label FAILED"; status=1; fi
+          }
+          check "spctl assess (install) dmg" spctl -a -vvv -t install "$dmg"
+          check "stapler validate dmg" xcrun stapler validate "$dmg"
+          mount="$(mktemp -d)"
+          hdiutil attach "$dmg" -nobrowse -readonly -mountpoint "$mount" >/dev/null || { echo "::error::could not mount $dmg"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/app"
+          ditto "$mount/pqp.app" "$RUNNER_TEMP/app/pqp.app"
+          hdiutil detach "$mount" >/dev/null || true
+          app="$RUNNER_TEMP/app/pqp.app"
+          check "codesign verify app" codesign --verify --deep --strict --verbose=2 "$app"
+          check "spctl assess (exec) app" spctl -a -vvv -t exec "$app"
+          check "stapler validate app" xcrun stapler validate "$app"
+          echo "APP=$app" >> "$GITHUB_ENV"
+          {
+            echo "### macOS signature (${VERSION})"
+            if [ "$status" = 0 ]; then echo "Signed, notarized, ticket stapled on the dmg and the app."; else echo "**FAILED**: see the step log."; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $status
+
+      # Windows: the installer a person runs, silently, into a folder of ours.
+      # SignPath is not configured yet, so these files are UNSIGNED; that is
+      # reported as such and is not a failure until the repository variable
+      # REQUIRE_WINDOWS_SIGNATURE is "true".
+      - name: Install with the NSIS installer, report the signature
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          VERSION: ${{ matrix.target.version }}
+          REQUIRE_SIGNED: ${{ vars.REQUIRE_WINDOWS_SIGNATURE }}
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP "assets\pqp-$env:VERSION-x64.exe"
+          $portable = Join-Path $env:RUNNER_TEMP "assets\pqp-$env:VERSION-x64-portable.exe"
+          $target = Join-Path $env:RUNNER_TEMP "pqp-install"
+          $proc = Start-Process -FilePath $installer -ArgumentList "/S", "/D=$target" -Wait -PassThru
+          if ($proc.ExitCode -ne 0) { Write-Host "::error::installer exited $($proc.ExitCode)"; exit 1 }
+          $exe = Join-Path $target "pqp.exe"
+          if (-not (Test-Path $exe)) { Write-Host "::error::no pqp.exe in $target after install"; Get-ChildItem $target -ErrorAction SilentlyContinue; exit 1 }
+          $rows = @()
+          $unsigned = $false
+          $broken = $false
+          foreach ($file in @($installer, $portable, $exe)) {
+            if (-not (Test-Path $file)) { continue }
+            $sig = Get-AuthenticodeSignature $file
+            $rows += "| $(Split-Path $file -Leaf) | $($sig.Status) | $($sig.SignerCertificate.Subject) |"
+            if ($sig.Status -eq "NotSigned") { $unsigned = $true }
+            elseif ($sig.Status -ne "Valid") { $broken = $true }
+          }
+          $summary = @("### Windows signature ($env:VERSION)", "", "| File | Status | Signer |", "|---|---|---|") + $rows
+          if ($unsigned) { $summary += "", "UNSIGNED: SmartScreen warns on download. Expected until SignPath is configured (docs/DESKTOP.md §4)." }
+          $summary -join "`n" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          if ($broken) { Write-Host "::error::a Windows file carries a signature that does not verify"; exit 1 }
+          if ($unsigned -and $env:REQUIRE_SIGNED -eq "true") { Write-Host "::error::REQUIRE_WINDOWS_SIGNATURE is true and a file is unsigned"; exit 1 }
+          if ($unsigned) { Write-Host "::warning::Windows release files are unsigned (SignPath not configured)." }
+          "APP=$exe" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      # Linux: the AppImage, unpacked (an AppImage mounts itself with FUSE,
+      # which a runner does not have; the files inside are the same).
+      - name: Unpack the AppImage
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          VERSION: ${{ matrix.target.version }}
+        run: |
+          set -euo pipefail
+          image="$RUNNER_TEMP/assets/pqp-${VERSION}-x86_64.AppImage"
+          chmod +x "$image"
+          mkdir -p "$RUNNER_TEMP/app"
+          (cd "$RUNNER_TEMP/app" && "$image" --appimage-extract >/dev/null)
+          test -x "$RUNNER_TEMP/app/squashfs-root/pqp"
+          echo "APP=$RUNNER_TEMP/app/squashfs-root/pqp" >> "$GITHUB_ENV"
+
+      - name: Share smoke test against the installed app
+        shell: bash
+        env:
+          PQP_SHARE_SMOKE_EXPECT_VERSION: ${{ matrix.target.version }}
+        run: electron/test/share-smoke/run-ci.sh "$APP"
+
+      - name: Keep the evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: share-smoke-${{ matrix.target.tag }}-${{ runner.os }}
+          path: electron/test-results/share-smoke/
+          if-no-files-found: warn
+          retention-days: 30
+
+  promote:
+    name: Promote to latest
+    needs: [plan, feed, verify]
+    # No status function here, so GitHub also requires every job in `needs`
+    # to have succeeded: a failed, cancelled or skipped one skips this.
+    if: github.event_name == 'workflow_dispatch' && needs.plan.outputs.promote == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - name: Every check passed
+        env:
+          FEED: ${{ needs.feed.result }}
+          VERIFY: ${{ needs.verify.result }}
+        run: |
+          echo "feed=$FEED verify=$VERIFY"
+          if [ "$FEED" != "success" ] || [ "$VERIFY" != "success" ]; then
+            echo "::error::not promoting: feed=$FEED verify=$VERIFY"
+            exit 1
+          fi
+
+      - name: Still the release that was verified
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          VERIFIED: ${{ needs.feed.outputs.fingerprint }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" --repo "$REPO" --json tagName,isDraft,isPrerelease,assets > release.json
+          now="$(node -e '
+            const r = require("./release.json");
+            const files = r.assets.map((a) => `${a.name}:${a.size}:${a.digest ?? ""}:${a.updatedAt ?? ""}`).sort();
+            process.stdout.write(require("node:crypto").createHash("sha256").update(files.join("\n")).digest("hex"));
+          ')"
+          node -e '
+            const r = require("./release.json");
+            if (r.isDraft) { console.log("::error::the release is a draft"); process.exit(1); }
+            if (!r.isPrerelease) { console.log("::error::the release is not a pre-release: it reached users without this gate, or was already promoted"); process.exit(1); }
+          '
+          if [ -z "$VERIFIED" ] || [ "$now" != "$VERIFIED" ]; then
+            echo "::error::the release's files changed after they were verified ($VERIFIED vs $now). Run this workflow again."
+            exit 1
+          fi
+
+      - name: Make it latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: gh release edit "$TAG" --repo "$REPO" --prerelease=false --latest
+
+      # Turning a pre-release into a release fires `released`, not
+      # `published`, and an edit made with this token fires nothing at all, so
+      # the Flatpak workflow (which skips pre-releases) is started by name.
+      - name: Start the Flatpak bump
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: gh workflow run flatpak-manifest.yml --repo "$REPO" -f tag="$TAG"
+
+      - name: Summary
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          echo "### $TAG is now the latest desktop release" >> "$GITHUB_STEP_SUMMARY"
+          echo "Installed apps pick it up within six hours. The Flatpak bump was started." >> "$GITHUB_STEP_SUMMARY"
