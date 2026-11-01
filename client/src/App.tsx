@@ -13594,6 +13594,10 @@ function MainAppContent({
                 : undefined
             }
             currentUserId={user?.id ?? null}
+            conversations={conversations}
+            pinnedChannelIds={pinnedChannelIds}
+            onTogglePin={handleTogglePinnedConversation}
+            onBlockUser={(person) => void handleBlockUser(person.id)}
             onOpenNav={() => setMobileNavOpen(true)}
             onOpenConversation={(conversation) => {
               trackDmOpen("friends");
