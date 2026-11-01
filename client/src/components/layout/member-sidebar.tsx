@@ -259,6 +259,8 @@ function asRosterRow(person: PublicUser): ServerMember {
     // already has it and the row can draw the same second line it draws in a
     // server. Presence stays absent here on purpose (see the note on the pip).
     customStatus: person.customStatus ?? null,
+    // So the card offers "Ver perfil" for a group's participants too.
+    handle: person.handle ?? null,
   };
 }
 
