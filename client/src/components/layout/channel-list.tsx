@@ -3641,8 +3641,9 @@ function CommunityHomeFace({
 }) {
   const tile = cn(
     compact ? "h-9 w-9 rounded-[10px]" : "h-8 w-8 rounded-lg",
-    // Concentric with the strip's tile, and the row's avatar size.
-    compact ? "redesign:rounded-[calc(var(--strip-tile-radius)-2px)]" : "redesign:h-7 redesign:w-7 redesign:rounded-[0.5rem]",
+    // Concentric with its container (outer radius minus the inset): the
+    // strip's tile, or the row, which insets the face by its 0.25rem padding.
+    compact ? "redesign:rounded-[calc(var(--strip-tile-radius)-2px)]" : "redesign:h-7 redesign:w-7 redesign:rounded-[calc(var(--list-row-radius)-0.25rem)]",
   );
   const type = compact ? "text-[11px]" : "text-[10px]";
   const poster = server.isCommunity || Boolean(server.iconUrl);
