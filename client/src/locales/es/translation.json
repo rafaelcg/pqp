@@ -3854,6 +3854,8 @@
   "chrome.railReorderFailed": "No se pudo guardar el orden nuevo. Tus servidores volvieron a su lugar.",
   "chrome.joinInvite": "Entrar con invitación",
   "chrome.deleteChannelConfirm": "¿Eliminar este canal? Los mensajes no se pueden recuperar.",
+  "chrome.deleteChannelConfirmNamed": "¿Eliminar {name}? Los mensajes no se pueden recuperar.",
+  "chrome.deleteCategoryConfirm": "¿Eliminar la categoría {name}? Sus canales no se eliminan. Quedan en la lista, sin categoría. No se pierde ningún mensaje.",
   "composer.placeholder": "Mensaje en {name}",
   "composer.placeholderFallback": "Mensaje en el canal",
   "composer.slowMode": "Modo lento. Puedes volver a enviar en {seconds}s.",

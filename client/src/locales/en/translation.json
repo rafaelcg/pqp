@@ -3810,6 +3810,8 @@
   "chrome.railReorderFailed": "Couldn't save the new order. Your servers are back where they were.",
   "chrome.joinInvite": "Join with invite",
   "chrome.deleteChannelConfirm": "Delete this channel? Messages cannot be recovered.",
+  "chrome.deleteChannelConfirmNamed": "Delete {name}? Messages cannot be recovered.",
+  "chrome.deleteCategoryConfirm": "Delete the category {name}? Its channels are not deleted. They stay in the list without a category. No messages are lost.",
   "composer.placeholder": "Message {name}",
   "composer.placeholderFallback": "Message channel",
   "composer.slowMode": "Slow mode. You can send again in {seconds}s.",

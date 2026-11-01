@@ -364,6 +364,7 @@ import {
   PANE_HEADER_TITLE_REDESIGN,
 } from "@/components/ui/pane-header";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { deleteDialogCopy } from "@/lib/channel-delete-copy";
 import { PromptDialog } from "@/components/ui/prompt-dialog";
 import { Tooltip, TooltipProvider } from "@/components/ui/tooltip";
 import { Seo } from "@/components/marketing/seo";
@@ -14463,9 +14464,10 @@ function MainAppContent({
       />
       <ConfirmDialog
         open={pendingDeleteChannelId !== null}
-        title={t("chrome.deleteChannel")}
-        description={t("chrome.deleteChannelConfirm")}
-        confirmLabel={t("chrome.deleteChannel")}
+        {...deleteDialogCopy(
+          channels.find((c) => c.id === pendingDeleteChannelId),
+          t,
+        )}
         onConfirm={() => void confirmDeleteChannel()}
         onClose={() => setPendingDeleteChannelId(null)}
       />
