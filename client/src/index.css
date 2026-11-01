@@ -499,6 +499,15 @@
     oklch(0.58 0.17 var(--hero-hue-far, 265)) var(--hero-tint-strength-far, 32%),
     var(--color-surface-0)
   );
+  /* A person with no picture on a room card: a disc in their own hue at one
+     fixed depth (`.avatar-tint`), so no two people share a grey and none
+     outshouts the speaking ring. Only lightness, chroma and strength live
+     here; the hue is per element. */
+  --avatar-tint-l: 0.68;
+  --avatar-tint-c: 0.15;
+  --avatar-tint-mix: 45%;
+  --avatar-tint-text-l: 0.94;
+  --avatar-tint-text-c: 0.05;
   /*
    * The default community cover when nobody has uploaded a banner.
    *
@@ -1344,6 +1353,11 @@
     oklch(0.55 0.14 var(--hero-hue-far, 265)) var(--hero-tint-strength-far, 22%),
     var(--color-surface-0)
   );
+  --avatar-tint-l: 0.78;
+  --avatar-tint-c: 0.12;
+  --avatar-tint-mix: 55%;
+  --avatar-tint-text-l: 0.34;
+  --avatar-tint-text-c: 0.1;
   --hero-mosaic-tile: color-mix(in oklab, var(--color-text) 12%, transparent);
   --hero-mosaic-mark: color-mix(in oklab, var(--color-text) 40%, transparent);
   --shadow-hero-avatar: 0 20px 44px -20px oklch(0.4 0.02 250 / 0.28);
@@ -3363,6 +3377,18 @@ h2,
    specificity: a redesign class outranks the old one by source order alone,
    never by a heavier selector a later fix would have to fight. */
 @custom-variant redesign (&:where([data-redesign], [data-redesign] *));
+
+/* Composed on the element, not on :root: a custom property that reads another
+   is resolved where it is declared, so a `--avatar-tint` on :root would give
+   every person the default hue. `--avatar-hue` comes from `UserAvatar`'s `tint`. */
+.avatar-tint {
+  background-color: color-mix(
+    in oklab,
+    oklch(var(--avatar-tint-l) var(--avatar-tint-c) var(--avatar-hue, 125)) var(--avatar-tint-mix),
+    var(--color-surface-2)
+  );
+  color: oklch(var(--avatar-tint-text-l) var(--avatar-tint-text-c) var(--avatar-hue, 125));
+}
 
 #pre-hero {
   display: contents;

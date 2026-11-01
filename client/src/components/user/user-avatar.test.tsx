@@ -6,7 +6,7 @@ vi.mock("@/lib/utils", async (importOriginal) => ({
   getApiBaseUrl: () => "https://api.example.test",
 }));
 
-const { UserAvatar } = await import("./user-avatar");
+const { UserAvatar, cardInitials } = await import("./user-avatar");
 
 /**
  * The component every person's picture now goes through. What matters is what
@@ -110,3 +110,20 @@ describe("UserAvatar", () => {
   });
 });
 
+describe("a tinted monogram (the room's cards)", () => {
+  it("takes the first and the last word, or two letters of one word", () => {
+    expect(cardInitials("Dev User bob")).toBe("DB");
+    expect(cardInitials("Dev User")).toBe("DU");
+    expect(cardInitials("rafa")).toBe("RA");
+    expect(cardInitials("  ")).toBe("?");
+  });
+
+  it("gives two people two hues, and the same person the same one", () => {
+    const hue = (seed: string) =>
+      /--avatar-hue:(\d+)/.exec(
+        renderToStaticMarkup(<UserAvatar name="Dev User" tint={seed} />),
+      )?.[1];
+    expect(hue("user-a")).toBe(hue("user-a"));
+    expect(hue("user-a")).not.toBe(hue("user-b"));
+  });
+});

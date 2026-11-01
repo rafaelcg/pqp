@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import { parseBotFaceAvatar, type BotFace as BotFaceName } from "@pqp/shared";
 import { BotFace } from "@/components/bots/bot-face";
 import { resolveAvatarUrl } from "@/lib/avatar";
+import { heroHue } from "@/lib/hero-tint";
 import { cn } from "@/lib/utils";
 
 interface UserAvatarProps {
@@ -36,6 +37,12 @@ interface UserAvatarProps {
    * app's.
    */
   ownPalette?: boolean;
+  /**
+   * A seed (the user id) for a monogram in that person's own hue, with two
+   * initials instead of one. For the room's cards, where a row of identical
+   * grey discs is a row nobody can tell apart.
+   */
+  tint?: string;
 }
 
 /**
@@ -72,6 +79,7 @@ export function UserAvatar({
   dimmed = false,
   botFace,
   ownPalette = false,
+  tint,
 }: UserAvatarProps) {
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
   const bot = parseBotFaceAvatar(avatarUrl);
@@ -112,6 +120,24 @@ export function UserAvatar({
     );
   }
 
+  if (tint !== undefined) {
+    return (
+      <span
+        aria-hidden="true"
+        style={{ "--avatar-hue": String(heroHue(tint)) } as CSSProperties}
+        className={cn(
+          "avatar-tint flex shrink-0 items-center justify-center font-display font-semibold tracking-[-0.02em]",
+          shape,
+          className,
+          dim,
+          circle,
+        )}
+      >
+        {cardInitials(name)}
+      </span>
+    );
+  }
+
   return (
     <span
       aria-hidden="true"
@@ -132,4 +158,23 @@ export function UserAvatar({
       {(name.trim().slice(0, 1) || "?").toUpperCase()}
     </span>
   );
+}
+
+/**
+ * Two letters for a tinted monogram: the first and the last word, the way a
+ * contact list does it ("Dev User bob" is DB, not DU like every other dev
+ * account), or the first two letters of a single word ("rafa" is RA).
+ * `Array.from` so an emoji counts as one character.
+ */
+export function cardInitials(name: string): string {
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) {
+    return "?";
+  }
+  const first = Array.from(words[0] ?? "");
+  if (words.length === 1) {
+    return first.slice(0, 2).join("").toUpperCase();
+  }
+  const last = Array.from(words[words.length - 1] ?? "");
+  return `${first[0] ?? ""}${last[0] ?? ""}`.toUpperCase();
 }

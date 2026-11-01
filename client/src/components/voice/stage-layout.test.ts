@@ -2,7 +2,15 @@ import { describe, expect, it } from "vitest";
 import {
   listenersOf,
   listenerStripSlots,
+  planRoomCards,
+  fitRoomCards,
+  planRoomStage,
+  roomStripFit,
+  ROOM_STRIP_MAX_PX,
+  ROOM_STRIP_MIN_PX,
   planStage,
+  ROOM_CARD_LIMIT,
+  roomCardColumns,
   screensDrawnOnStage,
   stageGridColumns,
   tileClickFullscreens,
@@ -582,5 +590,132 @@ describe("screensDrawnOnStage", () => {
 
   it("leaves nothing when ours is the only share", () => {
     expect(screensDrawnOnStage([screens[1]!], true)).toEqual([]);
+  });
+});
+
+describe("the room's cards", () => {
+  const person = (key: string, extra: Partial<{ isSelf: boolean; speaking: boolean; handPosition: number | null; camera: boolean }> = {}) => ({
+    key,
+    isSelf: false,
+    speaking: false,
+    handPosition: null,
+    ...extra,
+  });
+  const room = (count: number) => [
+    person("me", { isSelf: true }),
+    ...Array.from({ length: count - 1 }, (_, at) => person(`p${at}`)),
+  ];
+
+  it("lays two side by side, four in a square, nine in three rows, sixteen in four", () => {
+    expect(roomCardColumns(1)).toBe(1);
+    expect(roomCardColumns(2)).toBe(2);
+    expect(roomCardColumns(4)).toBe(2);
+    expect(roomCardColumns(5)).toBe(3);
+    expect(roomCardColumns(9)).toBe(3);
+    expect(roomCardColumns(10)).toBe(4);
+    expect(roomCardColumns(16)).toBe(4);
+  });
+
+  it("beside the chat, stacks landscape cards instead of drawing tall portraits", () => {
+    // The stage column next to the chat: narrow and the window's full height.
+    const fit = fitRoomCards(2, { width: 480, height: 1100 }, 12);
+    expect(fit.columns).toBe(1);
+    expect(fit.width / fit.height).toBeCloseTo(16 / 9, 1);
+  });
+
+  it("on a wide stage, puts the same two in a row", () => {
+    expect(fitRoomCards(2, { width: 1400, height: 500 }, 12).columns).toBe(2);
+  });
+
+  it("never lets a card outgrow its cell", () => {
+    for (const cells of [1, 3, 7, 16]) {
+      const box = { width: 900, height: 600 };
+      const fit = fitRoomCards(cells, box, 12);
+      const rows = Math.ceil(cells / fit.columns);
+      expect(fit.width * fit.columns + 12 * (fit.columns - 1)).toBeLessThanOrEqual(box.width);
+      expect(fit.height * rows + 12 * (rows - 1)).toBeLessThanOrEqual(box.height);
+    }
+  });
+
+  it("before the pane is measured, falls back to the fixed columns", () => {
+    expect(fitRoomCards(5, { width: 0, height: 0 }, 12).columns).toBe(roomCardColumns(5));
+  });
+
+  it("keeps a card for every camera before the rest of the roster", () => {
+    const people = [
+      person("me", { isSelf: true }),
+      ...Array.from({ length: 20 }, (_, at) => person(`p${at}`)),
+      person("cam", { camera: true }),
+    ];
+    const keys = planRoomCards(people, { aloneCard: true, limit: 4 }).shown.map(
+      (shown) => shown.key,
+    );
+    expect(keys).toContain("cam");
+  });
+
+  it("puts cameras in their cards and leaves only shares on the stage", () => {
+    const plan = planRoomStage([
+      { kind: "screen", key: "peer-a" },
+      { kind: "camera", key: "bob" },
+      { kind: "camera", key: "me" },
+    ]);
+    expect(plan.screens.map((tile) => tile.key)).toEqual(["peer-a"]);
+    expect([...plan.cameraKeys]).toEqual(["bob", "me"]);
+  });
+
+  it("sizes the row under a share from the stage, inside its bounds", () => {
+    expect(roomStripFit({ width: 1000, height: 200 }, 8, 2).height).toBe(ROOM_STRIP_MIN_PX);
+    expect(roomStripFit({ width: 4000, height: 2000 }, 8, 2).height).toBe(ROOM_STRIP_MAX_PX);
+  });
+
+  it("shrinks the row's cards before it hides anybody behind +N", () => {
+    const box = { width: 900, height: 525 };
+    const tall = roomStripFit(box, 12, 3);
+    const six = roomStripFit(box, 12, 6);
+    expect(six.perRow).toBeGreaterThanOrEqual(6);
+    expect(six.height).toBeLessThan(tall.height);
+    expect(six.perRow * six.width + (six.perRow - 1) * 12).toBeLessThanOrEqual(box.width);
+  });
+
+  it("past the shortest card, fits what it can and leaves the rest to +N", () => {
+    const fit = roomStripFit({ width: 600, height: 500 }, 12, 30);
+    expect(fit.height).toBe(ROOM_STRIP_MIN_PX);
+    expect(fit.perRow).toBeLessThan(30);
+  });
+
+  it("alone, lays out our card beside the alone card", () => {
+    const plan = planRoomCards(room(1), { aloneCard: true });
+    expect(plan.shown.map((p) => p.key)).toEqual(["me"]);
+    expect(plan.cells).toBe(2);
+    expect(plan.columns).toBe(2);
+    expect(planRoomCards(room(1), { aloneCard: false }).cells).toBe(1);
+  });
+
+  it("draws sixteen people whole, and never spends a card on +1", () => {
+    const plan = planRoomCards(room(ROOM_CARD_LIMIT + 1), { aloneCard: true });
+    expect(plan.shown).toHaveLength(16);
+    expect(plan.overflow).toBe(0);
+    expect(plan.columns).toBe(4);
+  });
+
+  it("past sixteen, keeps fifteen cards and counts the rest", () => {
+    const plan = planRoomCards(room(40), { aloneCard: true });
+    expect(plan.shown).toHaveLength(ROOM_CARD_LIMIT);
+    expect(plan.overflow).toBe(25);
+    expect(plan.cells).toBe(16);
+  });
+
+  it("keeps us, then whoever speaks, then raised hands, in roster order", () => {
+    const people = [
+      ...Array.from({ length: 30 }, (_, at) => person(`p${at}`)),
+      person("talker", { speaking: true }),
+      person("hand2", { handPosition: 2 }),
+      person("hand1", { handPosition: 1 }),
+      person("me", { isSelf: true }),
+    ];
+    const keys = planRoomCards(people, { aloneCard: true, limit: 4 }).shown.map(
+      (p) => p.key,
+    );
+    expect(keys).toEqual(["talker", "hand2", "hand1", "me"]);
   });
 });
