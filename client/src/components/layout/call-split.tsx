@@ -1065,14 +1065,25 @@ function SplitDivider({
               : "h-5 flex-1 cursor-row-resize before:inset-x-0 before:-inset-y-1.5",
             dragging ? "bg-accent/25" : "hover:bg-ink-3",
             // Under the redesign the bar is a hairline, the way an editor's
-            // pane edge is: 1px of border in the middle of the same 20px hit
-            // area (so every clamp keeps its number), which turns accent and
-            // doubles on hover, focus and drag. The grip pill goes; the cursor
-            // and the tooltip are what say it moves.
+            // pane edge is: 1px of border inside the same 20px hit area (so
+            // every clamp keeps its number), which turns accent and doubles
+            // on hover, focus and drag. The grip pill goes; the cursor and
+            // the tooltip are what say it moves.
+            //
+            // THE LINE SITS ON THE STAGE'S EDGE, not in the middle of the
+            // hit area. The area itself is transparent, so it shows the
+            // conversation pane's colour (`--color-pane-main`), while the
+            // stage paints `--call-stage-bg` (surface-0 on dark, the canvas
+            // grey on light). A centred line left 10px of that other tone
+            // between the stage and the line, which read as padding on the
+            // stage. Pinned to the leading edge, the whole strip behind the
+            // line is pane colour and merges with the chat. Stacked, the
+            // line starts 1px up so it covers the stage's own `border-b`
+            // instead of drawing a second hairline beside it.
             "after:hidden after:content-[''] redesign:border-0 redesign:bg-transparent redesign:hover:bg-transparent redesign:focus-visible:ring-0 redesign:after:absolute redesign:after:block redesign:after:bg-[color:var(--color-border)] redesign:after:transition-[background-color,width,height] redesign:after:duration-[var(--duration-fast)] redesign:hover:after:bg-accent redesign:focus-visible:after:bg-accent motion-reduce:after:transition-none",
             sideBySide
-              ? "redesign:after:inset-y-0 redesign:after:left-1/2 redesign:after:w-px redesign:after:-translate-x-1/2 redesign:hover:after:w-0.5 redesign:focus-visible:after:w-0.5"
-              : "redesign:after:inset-x-0 redesign:after:top-1/2 redesign:after:h-px redesign:after:-translate-y-1/2 redesign:hover:after:h-0.5 redesign:focus-visible:after:h-0.5",
+              ? "redesign:after:inset-y-0 redesign:after:left-0 redesign:after:w-px redesign:hover:after:w-0.5 redesign:focus-visible:after:w-0.5"
+              : "redesign:after:inset-x-0 redesign:after:-top-px redesign:after:h-px redesign:hover:after:h-0.5 redesign:focus-visible:after:h-0.5",
             dragging &&
               (sideBySide
                 ? "redesign:after:w-0.5 redesign:after:bg-accent"
