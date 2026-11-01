@@ -564,6 +564,10 @@ export default defineConfig(({ command }) => ({
   optimizeDeps: { entries: ["index.html"] },
   server: {
     port: 5173,
+    // Transform the entry and the chat client's module graph when the dev
+    // server starts, not when the first tab asks for `/app`: App.tsx alone is
+    // 15,000 lines, and its graph was most of the wait on the loading shell.
+    warmup: { clientFiles: ["./src/main.tsx", "./src/App.tsx"] },
     allowedHosts: [".ngrok-free.app"],
     proxy: {
       "/api": {

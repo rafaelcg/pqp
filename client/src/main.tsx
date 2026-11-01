@@ -42,6 +42,7 @@ import { isDesktopApp } from "./lib/desktop";
 import { isDevAuthBypassEnabled } from "./lib/dev-auth";
 import { initFaro } from "./lib/faro";
 import { withoutCacheBuster } from "./lib/update-ladder";
+import { getApiBaseUrl } from "./lib/utils";
 import { primeDownloadPlan } from "./components/downloads/use-download-assets";
 import {
   hasPrerenderedHero,
@@ -76,7 +77,19 @@ import "./index.css";
 // The chat client, the emoji picker's data, and the legal pages are all dead
 // weight for a visitor who only ever sees the landing page. Desktop always lands
 // on /app, so eagerly warm the chunk there instead.
-const App = lazy(() => import("./App").then((m) => ({ default: m.App })));
+//
+// One promise for the chunk, so the early start below (on `/app`) and the
+// route's own lazy load are the same download. A failure is not kept: the next
+// caller asks again.
+let appChunk: Promise<typeof import("./App")> | null = null;
+function loadApp(): Promise<typeof import("./App")> {
+  appChunk ??= import("./App").catch((error: unknown) => {
+    appChunk = null;
+    throw error;
+  });
+  return appChunk;
+}
+const App = lazy(() => loadApp().then((m) => ({ default: m.App })));
 const PrivacyPage = lazy(() =>
   import("./pages/privacy-page").then((m) => ({ default: m.PrivacyPage })),
 );
@@ -694,6 +707,38 @@ window.addEventListener("vite:preloadError", (event) => {
     event.preventDefault();
   }
 });
+
+// On `/app` the chat client is the first thing the page needs, so its import
+// starts now instead of at the first render, and the API's origin is dialled
+// while the chunk and Clerk load: the first `/api/me` then skips DNS, TCP and
+// TLS. Both after the listener above, so a stale chunk found this early is
+// recovered exactly as a late one is. The reader's catalogue starts here too
+// (the provider asks for the same one at its first render).
+if (/^\/app(\/|$)/.test(window.location.pathname)) {
+  void loadApp().catch(() => {});
+  preconnectApi();
+  const bootLocale = detectLocale();
+  if (bootLocale !== "en") {
+    void loadLocale(bootLocale).catch(() => {});
+  }
+}
+
+function preconnectApi(): void {
+  try {
+    const api = new URL(getApiBaseUrl(), window.location.href);
+    if (api.origin === window.location.origin) {
+      return;
+    }
+    const link = document.createElement("link");
+    link.rel = "preconnect";
+    // `apiFetch` sends no credentials, so the request uses the anonymous pool.
+    link.crossOrigin = "";
+    link.href = api.origin;
+    document.head.appendChild(link);
+  } catch {
+    // An address that does not parse is left to `apiFetch` to report.
+  }
+}
 
 /**
  * A keyboard visitor's first key press is what starts the app, and React then
