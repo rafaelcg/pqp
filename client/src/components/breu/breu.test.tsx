@@ -20,4 +20,18 @@ describe("Breu", () => {
     expect(html).not.toContain("data-glyph");
     expect(html).toMatch(/data-empty-mascot="hello"[^>]*aria-hidden="true"|aria-hidden="true"[^>]*data-empty-mascot="hello"/);
   });
+
+  it("moves only when asked, on wrappers the compositor can run, and holds still for reduced motion", () => {
+    const still = renderToStaticMarkup(<Breu mood="focused" />);
+    expect(still).not.toContain("data-breu-motion");
+    expect(still).not.toContain("breu-work");
+
+    const working = renderToStaticMarkup(<Breu mood="focused" motion="working" />);
+    expect(working).toContain('data-breu-motion="working"');
+    expect(working).toContain("animate-[breu-work-bob_");
+    expect(working).toContain("animate-[breu-work-lean_");
+    expect(working.match(/motion-reduce:animate-none/g)).toHaveLength(2);
+    // The face inside is held still, so its SVG breathing does not fight the hop.
+    expect(working).not.toContain("bot-face-live");
+  });
 });
