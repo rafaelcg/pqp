@@ -827,6 +827,14 @@ function HeaderGlyph({ off, on, kind = "object" }: { off: ReactNode; on: Phospho
 }
 
 /** A green "join the call" pill in a header. */
+/**
+ * On a phone the join pill is its glyph alone (the button keeps its
+ * `aria-label`): the pill's words took the width the channel name needed, and
+ * the hamburger was crushed to 18px beside it.
+ */
+const HEADER_JOIN_PHONE_REDESIGN =
+  "redesign:max-sm:w-8 redesign:max-sm:justify-center redesign:max-sm:gap-0 redesign:max-sm:px-0";
+
 const HEADER_JOIN_REDESIGN =
   "redesign:mr-1.5 redesign:h-8 redesign:rounded-full redesign:px-3.5 redesign:py-0 redesign:text-[13px] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-pane-main";
 
@@ -11591,7 +11599,7 @@ function MainAppContent({
       <header data-chat-header="" className={cn("flex h-14 shrink-0 items-center border-b border-ink-4/60 px-3 sm:px-4", PANE_HEADER_REDESIGN, "redesign:max-sm:px-2")}>
         <button
           type="button"
-          className={cn("relative mr-2 rounded-md p-1.5 hover:bg-ink-3 md:hidden", PANE_HEADER_ACTION_REDESIGN, "redesign:mr-0 redesign:flex redesign:items-center redesign:justify-center redesign:p-0 redesign:md:hidden")}
+          className={cn("relative mr-2 shrink-0 rounded-md p-1.5 hover:bg-ink-3 md:hidden", PANE_HEADER_ACTION_REDESIGN, "redesign:mr-0 redesign:flex redesign:items-center redesign:justify-center redesign:p-0 redesign:md:hidden")}
           aria-label={phoneShell ? t("phoneTabs.back") : t("chrome.openNav")}
           data-phone-back={phoneShell ? "" : undefined}
           onClick={() => setMobileNavOpen(true)}
@@ -11617,7 +11625,7 @@ function MainAppContent({
             on `ChannelList`). */}
         {/* Under the redesign, from `md` up, the topic sits beside the name
             after a rule, as in the mockup; on a phone it stays under it. */}
-        <div className="min-w-0 redesign:flex-1 redesign:md:flex redesign:md:items-center redesign:md:gap-3">
+        <div className="min-w-0 redesign:max-sm:min-w-[4.5rem] redesign:flex-1 redesign:md:flex redesign:md:items-center redesign:md:gap-3">
           <p className={cn("flex items-center gap-1.5 truncate font-display text-base font-bold", PANE_HEADER_TITLE_REDESIGN, "redesign:gap-2 redesign:md:shrink-0 redesign:md:max-w-[60%]")}>
             {selectedChannel.imageUrl ? (
               <ChannelIcon channel={selectedChannel} className="h-4 w-4" />
@@ -11706,7 +11714,7 @@ function MainAppContent({
                 <button
                   type="button"
                   aria-label={t("voice.join")}
-                  className={cn("flex shrink-0 items-center gap-1.5 rounded-md bg-success/90 px-2.5 py-1.5 text-xs font-semibold text-ink hover:bg-success", HEADER_JOIN_REDESIGN)}
+                  className={cn("flex shrink-0 items-center gap-1.5 rounded-md bg-success/90 px-2.5 py-1.5 text-xs font-semibold text-ink hover:bg-success", HEADER_JOIN_REDESIGN, HEADER_JOIN_PHONE_REDESIGN)}
                   onClick={() =>
                     guardVoiceJoin(selectedChannel.id, () =>
                       handleJoinVoice(selectedChannel.id),
@@ -11715,7 +11723,7 @@ function MainAppContent({
                 >
                   <Phone className="h-3.5 w-3.5 redesign:hidden" />
                   <Icon icon={HeaderPhoneIcon} size="sm" className="hidden redesign:block" />
-                  {t("voice.join")}
+                  <span className="redesign:max-sm:sr-only">{t("voice.join")}</span>
                 </button>
               </Tooltip>
             )}
@@ -14008,6 +14016,7 @@ function MainAppContent({
               : null
           }
           currentUserId={user?.id ?? null}
+          selfStatus={status.effective}
           role={selectedServer?.role ?? "member"}
           canManageNicknames={canManageNicknames}
           showManageRoster={canStaff}

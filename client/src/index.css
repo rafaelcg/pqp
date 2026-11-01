@@ -2546,6 +2546,34 @@
 }
 
 /*
+ * The new look draws its edges from tokens that are an alpha of the text
+ * colour (8 to 28 percent), not from `--color-border`, so the block above never
+ * reached a card, a dialog or a menu: the text darkened and the edges stayed
+ * where they were. With high contrast on, every one of those tokens reads the
+ * border pair instead, which the blocks above already set for both brightnesses
+ * and every look. Hairlines (rules, separators) take `--color-border`;
+ * the edge of a surface that floats or holds a field takes the strong one.
+ * Placed after the redesign token blocks, at the same specificity, so it wins.
+ */
+:root[data-redesign][data-contrast="more"] {
+  --card-border: var(--color-border-strong);
+  --popover-border: var(--color-border-strong);
+  --dialog-border: var(--color-border-strong);
+  --sheet-edge: var(--color-border-strong);
+  --menu-separator: var(--color-border);
+  --pane-header-rule: var(--color-border);
+  --dialog-header-rule: var(--color-border);
+  --dialog-footer-rule: var(--color-border);
+  --settings-rule: var(--color-border);
+  --composer-border: var(--color-border-strong);
+  --composer-border-focus: var(--color-text);
+  --composer-border-readonly: var(--color-border-strong);
+  --sidebar-invite-border: var(--color-border-strong);
+  --forum-card-hover-border: var(--color-border-strong);
+  --forum-card-open-border: var(--color-text);
+}
+
+/*
  * Custom accent hue. Stacks on the named look. Conservative lightness so
  * yellows still clear the accent-on-surface floor in light. Keep unlayered.
  */

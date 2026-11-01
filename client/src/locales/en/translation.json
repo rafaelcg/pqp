@@ -6751,6 +6751,7 @@
   "serverEmoji.error.name": "The name needs 2 to 32 lowercase letters, digits or _.",
   "serverEmoji.error.generic": "Something went wrong. Try again.",
   "emojiPicker.serverCategory": "This server",
+  "emojiPicker.noResults": "No emoji found",
   "bauShare.button": "Share",
   "bauShare.aria": "Share this post",
   "bauShare.copyLink": "Copy link",
