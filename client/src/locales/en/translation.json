@@ -898,6 +898,7 @@
   "bootstrapError.deploy.3": "set at build time. See",
   "bootstrapError.retry": "Try again",
   "bootstrapError.home": "Back to home",
+  "bootstrapError.bubble": "pqp!",
   "empty.noServers.title": "No communities yet",
   "empty.noServers.body": "Make a community or join with an invite code.",
   "empty.pickChannel.title": "Pick a channel",

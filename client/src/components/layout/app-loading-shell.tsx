@@ -1,4 +1,4 @@
-import { Breu } from "@/components/breu/breu";
+import { Breu, BreuSpeechBubble } from "@/components/breu/breu";
 import { PANE_HEADER_REDESIGN } from "@/components/ui/pane-header";
 import { SIDEBAR_FOOTER_CARD_REDESIGN } from "@/components/ui/sidebar-block";
 import {
@@ -212,12 +212,21 @@ export function AppBootstrapError({ message, onRetry }: AppBootstrapErrorProps) 
     </>
   );
   return (
-    <div className="relative flex h-full flex-col items-start justify-end overflow-hidden p-8 sm:p-12 redesign:justify-center redesign:bg-pane-main">
+    <div
+      className={
+        redesign
+          ? // A wide screen puts the big Breu beside the text. Plain
+            // `justify-center` here: a `redesign:` one would outrank `sm:`.
+            "relative flex h-full flex-col items-start justify-center overflow-hidden bg-pane-main p-8 sm:flex-row sm:items-center sm:justify-between sm:gap-8 sm:p-12"
+          : "relative flex h-full flex-col items-start justify-end overflow-hidden p-8 sm:p-12 redesign:justify-center redesign:bg-pane-main"
+      }
+    >
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_80%_10%,var(--glow-danger),transparent_45%)] redesign:bg-[radial-gradient(circle_at_85%_0%,var(--glow-danger),transparent_35%)]" />
       {/* Under the redesign the failure is announced, and focus lands on the retry. */}
       <div className="relative z-10 max-w-lg" role={redesign ? "alert" : undefined}>
-        {/* Its own line: inline, it sat beside "pqp.gg" on the baseline and floated above the text. */}
-        <Breu mood="sad" size="md" className="mb-2 block" />
+        {/* Its own line: inline, it sat beside "pqp.gg" on the baseline and floated above the text.
+            Under the redesign only on a narrow screen: a wide one has the big Breu. */}
+        <Breu mood="sad" size="md" className={cn("mb-2 block", redesign && "sm:hidden")} />
         <Link
           to="/"
           className="mb-3 inline-block text-xs uppercase tracking-[0.28em] text-signal redesign:text-sm redesign:font-bold redesign:normal-case redesign:tracking-normal redesign:text-accent-text"
@@ -250,6 +259,20 @@ export function AppBootstrapError({ message, onRetry }: AppBootstrapErrorProps) 
           </Button>
         </div>
       </div>
+      {redesign ? (
+        // Decorative: the alert beside it is the message. Breu drops in,
+        // sways, and says the brand word once he has landed.
+        <div
+          aria-hidden="true"
+          data-bootstrap-breu=""
+          className="pointer-events-none relative z-10 hidden shrink-0 sm:mr-[4%] sm:block"
+        >
+          <BreuSpeechBubble className="absolute right-[72%] top-[4%]">
+            {t("bootstrapError.bubble")}
+          </BreuSpeechBubble>
+          <Breu mood="sad" size="xl" motion="oops" className="max-lg:h-48 max-lg:w-48" />
+        </div>
+      ) : null}
     </div>
   );
 }

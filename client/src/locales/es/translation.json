@@ -898,6 +898,7 @@
   "bootstrapError.deploy.3": "definidos al compilar. Consulta",
   "bootstrapError.retry": "Reintentar",
   "bootstrapError.home": "Volver al inicio",
+  "bootstrapError.bubble": "pqp!",
   "empty.noServers.title": "Todavía no tienes comunidades",
   "empty.noServers.body": "Crea una comunidad o entra con un código de invitación.",
   "empty.pickChannel.title": "Elige un canal",
