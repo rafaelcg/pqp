@@ -19,6 +19,7 @@ export interface CreatedScript {
   type?: string;
   async?: boolean;
   crossOrigin?: string;
+  fetchPriority?: string;
   attrs: Record<string, string>;
 }
 

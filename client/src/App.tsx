@@ -104,7 +104,7 @@ import {
 } from "@/components/chat/report-dialog";
 import {
   AppBootstrapError,
-  AppLoadingShell,
+  BootShellHold,
 } from "@/components/layout/app-loading-shell";
 import { ChannelIcon } from "@/components/layout/channel-icon";
 import { ForumPane } from "@/components/forum";
@@ -1146,7 +1146,7 @@ function ClerkAppGate() {
   }, [desktop]);
 
   if (!isLoaded) {
-    return <AppLoadingShell label={t("app.loading.signingIn")} />;
+    return <BootShellHold />;
   }
 
   if (!isSignedIn) {
@@ -10548,7 +10548,7 @@ function MainAppContent({
   }
 
   if (!bootstrapReady) {
-    return <AppLoadingShell label={t("app.loading.servers")} />;
+    return <BootShellHold />;
   }
 
   /**

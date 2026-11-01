@@ -5925,6 +5925,58 @@ html[data-immersive-stage] [data-immersive-hide] {
   }
 }
 
+/* Breu on the API failure page (`motion="oops"`): one drop with a squash on
+   landing, then a slow sway from upright, then the bubble's pop. Transforms
+   and opacity only, on HTML wrappers. */
+@keyframes breu-oops-drop {
+  0% {
+    opacity: 0;
+    transform: translateY(-30%);
+  }
+  60% {
+    opacity: 1;
+    transform: translateY(0) scale(1, 1);
+  }
+  75% {
+    transform: translateY(0) scale(1.08, 0.92);
+  }
+  90% {
+    transform: translateY(-2%) scale(0.98, 1.02);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes breu-oops-sway {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  25% {
+    transform: rotate(-3deg);
+  }
+  75% {
+    transform: rotate(3deg);
+  }
+}
+
+@keyframes breu-bubble-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.4);
+  }
+  70% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 @keyframes bot-pop {
   0% {
     transform: scale(0.92, 1.06);

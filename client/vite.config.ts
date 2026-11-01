@@ -369,15 +369,18 @@ function deferEntry(): Plugin {
     transformIndexHtml: {
       order: "post",
       handler: (html, ctx) => {
-        // The chat client's chunk, when this is a production build: preloaded
-        // beside the entry on `/app` routes (see `src/lib/defer-entry.ts`).
+        // The chat client's chunk and the chunks it imports, when this is a
+        // production build: preloaded beside the entry on `/app` routes (see
+        // `src/lib/defer-entry.ts`).
         const appChunk = Object.values(ctx.bundle ?? {}).find(
           (output) =>
             output.type === "chunk" &&
             output.isDynamicEntry &&
             /[\\/]src[\\/]App\.tsx$/.test(output.facadeModuleId ?? ""),
         );
-        return deferEntryScript(html, appChunk?.fileName);
+        const appDeps =
+          appChunk?.type === "chunk" ? appChunk.imports : [];
+        return deferEntryScript(html, appChunk?.fileName, appDeps);
       },
     },
   };
@@ -561,6 +564,10 @@ export default defineConfig(({ command }) => ({
   optimizeDeps: { entries: ["index.html"] },
   server: {
     port: 5173,
+    // Transform the entry and the chat client's module graph when the dev
+    // server starts, not when the first tab asks for `/app`: App.tsx alone is
+    // 15,000 lines, and its graph was most of the wait on the loading shell.
+    warmup: { clientFiles: ["./src/main.tsx", "./src/App.tsx"] },
     allowedHosts: [".ngrok-free.app"],
     proxy: {
       "/api": {
