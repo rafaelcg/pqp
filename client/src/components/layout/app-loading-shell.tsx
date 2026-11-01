@@ -114,7 +114,8 @@ export function AppBootstrapError({ message, onRetry }: AppBootstrapErrorProps) 
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_80%_10%,var(--glow-danger),transparent_45%)] redesign:bg-[radial-gradient(circle_at_85%_0%,var(--glow-danger),transparent_35%)]" />
       {/* Under the redesign the failure is announced, and focus lands on the retry. */}
       <div className="relative z-10 max-w-lg" role={redesign ? "alert" : undefined}>
-        <Breu mood="sad" size="md" className="mb-4" />
+        {/* Its own line: inline, it sat beside "pqp.gg" on the baseline and floated above the text. */}
+        <Breu mood="sad" size="md" className="mb-2 block" />
         <Link
           to="/"
           className="mb-3 inline-block text-xs uppercase tracking-[0.28em] text-signal redesign:text-sm redesign:font-bold redesign:normal-case redesign:tracking-normal redesign:text-accent-text"
