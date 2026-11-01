@@ -340,7 +340,10 @@ export function UserPanel({
       <div
         className={cn(
           "relative flex gap-2 px-2 py-2 redesign:gap-1 redesign:p-1.5",
-          compact ? "flex-col items-center gap-1" : "items-center",
+          // Wraps instead of squeezing: below the name's minimum width the
+          // controls drop to their own line under it, so the name never
+          // collapses (a narrow sidebar with Não Perturbe on lost it).
+          compact ? "flex-col items-center gap-1" : "flex-wrap items-center",
         )}
       >
         {open && (
@@ -581,7 +584,7 @@ export function UserPanel({
           </div>
         )}
 
-        <Tooltip label={t("status.change")}>
+        <Tooltip label={t("status.change")} detail={displayName}>
         <button
         ref={triggerRef}
         type="button"
@@ -590,7 +593,7 @@ export function UserPanel({
         aria-expanded={open}
         className={cn(
           "flex min-w-0 items-center gap-2 rounded-md px-1 py-0.5 text-left hover:bg-ink-2",
-          !compact && "flex-1",
+          !compact && "min-w-[var(--user-panel-name-min,7rem)] flex-1",
           "redesign:gap-2.5 redesign:rounded-full redesign:py-1 redesign:pl-1 redesign:pr-2 redesign:hover:bg-[color:var(--card-row-hover)] redesign:hover:[--avatar-dot-ring:var(--footer-card-solid-hover)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent",
           compact && "redesign:p-1",
           open && "redesign:bg-[color:var(--card-row-hover)] redesign:[--avatar-dot-ring:var(--footer-card-solid-hover)]",
@@ -639,6 +642,14 @@ export function UserPanel({
           appearance={{ elements: { avatarBox: "h-8 w-8 rounded-md" } }}
         />
       )}
+      {/* One group, so the controls wrap together and keep their order. */}
+      <div
+        className={
+          compact
+            ? "contents"
+            : "ml-auto flex shrink-0 items-center gap-2 redesign:gap-1"
+        }
+      >
       {/* Mute and deafen sit here so they are reachable without opening the
           voice channel. Off a call they stay visible but disabled; the
           wrapper span is what the tooltip can hover, because Button drops
@@ -801,6 +812,7 @@ export function UserPanel({
           <Icon icon={GearSix} kind="symbol" size="sm" className="hidden redesign:block" />
         </Button>
       </Tooltip>
+      </div>
       </div>
       <DownloadDialog
         open={downloadOpen}
