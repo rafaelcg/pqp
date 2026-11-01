@@ -13999,6 +13999,7 @@ function MainAppContent({
               : null
           }
           currentUserId={user?.id ?? null}
+          selfStatus={status.effective}
           role={selectedServer?.role ?? "member"}
           canManageNicknames={canManageNicknames}
           showManageRoster={canStaff}

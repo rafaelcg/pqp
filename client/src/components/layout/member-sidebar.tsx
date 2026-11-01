@@ -25,7 +25,12 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { parseBotFaceAvatar, type PublicUser, type VoiceParticipant } from "@pqp/shared";
+import {
+  parseBotFaceAvatar,
+  type PublicUser,
+  type UserStatus,
+  type VoiceParticipant,
+} from "@pqp/shared";
 import { RightColumnTabs } from "@/components/chat/right-column-tabs";
 import { ContextMenu, type ContextMenuItemDef } from "@/components/ui/context-menu";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -155,6 +160,13 @@ interface MemberSidebarProps {
    */
   self: PublicUser | null;
   currentUserId: string | null;
+  /**
+   * What this account's own status is right now, from the same hook the user
+   * panel reads. The roster is pulled every few seconds, so without this the
+   * viewer's own row kept the old dot after a status change until the next
+   * read. Null leaves the row to the roster.
+   */
+  selfStatus?: UserStatus | null;
   /** The acting account's role here, for the profile card's own gating. */
   role: MemberRole;
   blockedUserIds: ReadonlySet<string>;
@@ -259,6 +271,7 @@ export const MemberSidebar = memo(function MemberSidebar({
   participants,
   self,
   currentUserId,
+  selfStatus = null,
   blockedUserIds,
   members = EMPTY_MEMBERS,
   onMemberNickname,
@@ -355,9 +368,16 @@ export const MemberSidebar = memo(function MemberSidebar({
             if (member.role === "owner" && !ids.includes("owner")) {
               ids.push("owner");
             }
-            return { ...member, roleIds: ids };
+            return {
+              ...member,
+              roleIds: ids,
+              // Your own dot follows the panel at once, not the next poll.
+              ...(selfStatus && member.id === currentUserId
+                ? { status: selfStatus }
+                : null),
+            };
           }),
-    [participants, self, members, adminRoleId, ownerRoleId],
+    [participants, self, members, adminRoleId, ownerRoleId, selfStatus, currentUserId],
   );
 
   const conversationKey = serverId
