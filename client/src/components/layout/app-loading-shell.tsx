@@ -1,7 +1,15 @@
 import { Breu } from "@/components/breu/breu";
 import { PANE_HEADER_REDESIGN } from "@/components/ui/pane-header";
 import { SIDEBAR_FOOTER_CARD_REDESIGN } from "@/components/ui/sidebar-block";
-import { type CSSProperties } from "react";
+import {
+  createContext,
+  useContext,
+  useLayoutEffect,
+  useRef,
+  useSyncExternalStore,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import { Link } from "react-router-dom";
 import {
   ChannelListSkeleton,
@@ -20,14 +28,22 @@ import {
 import { FRAME_REDESIGN, PANE_MAIN_REDESIGN, PANE_SIDE_REDESIGN, RAIL_REDESIGN } from "@/components/ui/pane";
 import { cn } from "@/lib/utils";
 
-interface AppLoadingShellProps {
-  /** Already translated by the caller — this is a label, not a key. */
-  label?: string;
-}
-
-export function AppLoadingShell({ label }: AppLoadingShellProps) {
+/**
+ * The boot screen: one skeleton, one card, one label, from the first frame of
+ * `/app` until the app replaces it.
+ *
+ * The boot has three stages that each used to draw their own copy (the chat
+ * chunk loading, Clerk loading, the bootstrap reads), with a different label
+ * each and a card that grew with the label, so the screen visibly jumped and
+ * Breu's loop started over at every handoff. Now each stage renders
+ * `BootShellHold`, which draws nothing, and `BootShellHost` near the router
+ * root draws this shell while any hold is mounted. A handoff unmounts one hold
+ * and mounts the next in the same commit, so the shell (and Breu inside it) is
+ * never unmounted between stages.
+ */
+export function AppLoadingShell() {
   const { t } = useTranslation();
-  const text = label ?? t("app.loading");
+  const text = t("app.loading");
   return (
     <div
       className={cn("relative flex h-full overflow-hidden", FRAME_REDESIGN)}
@@ -77,18 +93,104 @@ export function AppLoadingShell({ label }: AppLoadingShellProps) {
 
       <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-ink/40 backdrop-blur-[1px] redesign:bg-[color:color-mix(in_oklab,var(--color-canvas)_40%,transparent)] redesign:[:root[data-theme=light]_&]:bg-[color:color-mix(in_oklab,var(--color-canvas)_25%,transparent)]">
         {/* Under the redesign Breu and its label sit on their own card, off the skeleton bars. */}
-        <div className="flex flex-col items-center gap-3 redesign:rounded-[var(--radius-card)] redesign:bg-pane-main redesign:px-5 redesign:py-4 redesign:ring-1 redesign:ring-inset redesign:ring-[color:var(--color-border)]">
+        {/* A fixed size, so a label that changes (English until the reader's
+            catalogue lands) never resizes the card. */}
+        <div
+          data-boot-card=""
+          className="flex w-44 flex-col items-center gap-3 redesign:h-32 redesign:justify-center redesign:rounded-[var(--radius-card)] redesign:bg-pane-main redesign:px-4 redesign:ring-1 redesign:ring-inset redesign:ring-[color:var(--color-border)]"
+        >
           {/* Breu at work, hopping and leaning on a steady 2s loop (still under
               reduced motion), instead of a spinning "pqp" ring: the most-seen
               moment Breu gets. */}
           <Breu mood="focused" size="sm" motion="working" />
-          <p className="text-xs uppercase tracking-[0.2em] text-paper-muted redesign:text-[13px] redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">
-            {text}
+          <p className="w-full text-center text-xs uppercase tracking-[0.2em] text-paper-muted redesign:text-[13px] redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">
+            <BootLabel text={text} />
           </p>
         </div>
       </div>
     </div>
   );
+}
+
+/**
+ * The label, faded in when it changes after the first paint (the English word
+ * swapped for the reader's own once the catalogue loads) instead of snapping.
+ * The first word shows at once.
+ */
+function BootLabel({ text }: { text: string }) {
+  const first = useRef(text);
+  return (
+    <span
+      key={text}
+      data-boot-label=""
+      className={cn(
+        "block truncate",
+        text !== first.current && "animate-[fade-in_0.28s_ease_both] motion-reduce:animate-none",
+      )}
+    >
+      {text}
+    </span>
+  );
+}
+
+let bootHolds = 0;
+const bootHoldListeners = new Set<() => void>();
+
+function changeBootHolds(delta: number): void {
+  bootHolds += delta;
+  for (const listener of [...bootHoldListeners]) {
+    listener();
+  }
+}
+
+function subscribeBootHolds(listener: () => void): () => void {
+  bootHoldListeners.add(listener);
+  return () => {
+    bootHoldListeners.delete(listener);
+  };
+}
+
+const BootShellHostContext = createContext(false);
+
+/**
+ * Draws the one boot shell while any `BootShellHold` is mounted below it.
+ * The shell comes after `children`, in the same parent, which is exactly where
+ * a stage's own shell used to be: a hold renders nothing, so while the app
+ * boots the shell is the only thing in the frame.
+ */
+export function BootShellHost({ children }: { children: ReactNode }) {
+  const held = useSyncExternalStore(
+    subscribeBootHolds,
+    () => bootHolds > 0,
+    () => false,
+  );
+  return (
+    <BootShellHostContext.Provider value>
+      {children}
+      {held ? <AppLoadingShell /> : null}
+    </BootShellHostContext.Provider>
+  );
+}
+
+/**
+ * "This stage is still loading": the boot shell stays up while it is mounted.
+ *
+ * A layout effect, so the count moves inside the commit that swaps one stage
+ * for the next (one hold's cleanup, the next one's setup) and the host's
+ * re-render runs before the browser paints: the shell is never missing for a
+ * frame. Outside a host (a test, a page that renders a stage alone) it draws
+ * the shell itself, as the stages always did.
+ */
+export function BootShellHold() {
+  const hosted = useContext(BootShellHostContext);
+  useLayoutEffect(() => {
+    if (!hosted) {
+      return;
+    }
+    changeBootHolds(1);
+    return () => changeBootHolds(-1);
+  }, [hosted]);
+  return hosted ? null : <AppLoadingShell />;
 }
 
 interface AppBootstrapErrorProps {

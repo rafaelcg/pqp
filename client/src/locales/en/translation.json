@@ -861,7 +861,6 @@
   "app.seo.description": "Open pqp, communities, text, and voice.",
   "app.loading": "Loading…",
   "app.loading.signingIn": "Signing in…",
-  "app.loading.servers": "Loading communities…",
   "signedOut.title": "Sign in to talk.",
   "signedOut.body": "Create an account or sign in to open your communities.",
   "signedOut.createAccount": "Create account",

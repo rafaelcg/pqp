@@ -861,7 +861,6 @@
   "app.seo.description": "Abre pqp: comunidades, texto y voz.",
   "app.loading": "Cargando…",
   "app.loading.signingIn": "Iniciando sesión…",
-  "app.loading.servers": "Cargando comunidades…",
   "signedOut.title": "Inicia sesión para conversar.",
   "signedOut.body": "Crea una cuenta o inicia sesión para abrir tus comunidades.",
   "signedOut.createAccount": "Crear cuenta",

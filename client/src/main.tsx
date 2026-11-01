@@ -21,7 +21,10 @@ import {
   useLocation,
   useParams,
 } from "react-router-dom";
-import { AppLoadingShell } from "./components/layout/app-loading-shell";
+import {
+  BootShellHold,
+  BootShellHost,
+} from "./components/layout/app-loading-shell";
 import { DesktopDeepLinkBridge } from "./components/desktop-bridge";
 import { ErrorBoundary } from "./components/error-boundary";
 import { DesktopTitleBar } from "./components/layout/desktop-title-bar";
@@ -286,10 +289,19 @@ function PublicBauPostRoute() {
   );
 }
 
+// The host keeps one boot shell mounted from the chunk loading below to the
+// app's own bootstrap (see `BootShellHost`), so the stages read as one screen.
 function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
-  const { t } = useTranslation();
   return (
-    <Suspense fallback={<AppLoadingShell label={t("app.loading")} />}>
+    <BootShellHost>
+      <AppRouteTable devBypass={devBypass} />
+    </BootShellHost>
+  );
+}
+
+function AppRouteTable({ devBypass }: { devBypass: boolean }) {
+  return (
+    <Suspense fallback={<BootShellHold />}>
       <BuildWatcher />
       <UpdatePrompt />
       <ForcedUpdateScreen />
