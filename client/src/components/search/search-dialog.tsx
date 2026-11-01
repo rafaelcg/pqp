@@ -246,6 +246,7 @@ export function SearchDialog({
             <SearchEmpty icon="none" title={t("search.searching")} />
           ) : results.length === 0 ? (
             <SearchEmpty
+              icon="breu"
               title={t("search.noMatch", { query: trimmed })}
               hint={t("search.wholeWords")}
             />
@@ -372,15 +373,17 @@ function SearchEmpty({
 }: {
   title: string;
   hint?: string;
-  /** The glass for the prompt and no match, a warning for an error, none while the field spins. */
-  icon?: "search" | "error" | "none";
+  /** The glass for the prompt, Breu for no match, a warning for an error, none while the field spins. */
+  icon?: "search" | "breu" | "error" | "none";
 }) {
   return (
     <EmptyState
       size="inline"
+      // Breu, in both looks: nothing found is a moment, not a list row.
+      mascot={icon === "breu" ? "curious" : undefined}
       // Under the redesign only, so it leads like every other inline state.
       icon={
-        icon === "none" ? undefined : icon === "error" ? (
+        icon === "none" || icon === "breu" ? undefined : icon === "error" ? (
           <Icon icon={WarningCircle} size="sm" className="text-danger" />
         ) : (
           // Quiet, so the field's glass stays the one search mark.

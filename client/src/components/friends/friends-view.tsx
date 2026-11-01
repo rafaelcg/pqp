@@ -1,3 +1,4 @@
+import { Breu } from "@/components/breu/breu";
 import {
   PANE_HEADER_NAV_REDESIGN,
   PANE_HEADER_RULE_REDESIGN,
@@ -518,6 +519,7 @@ export function FriendsView({
     }
     return (
       <div className="max-w-sm redesign:px-2">
+        <Breu mood="hello" size="sm" className="mb-3" />
         <p className="font-display text-xl font-bold redesign:text-text">
           {t("friends.empty.all.title")}
         </p>

@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { WarningCircle } from "@phosphor-icons/react";
+import { Breu, type BreuMood } from "@/components/breu/breu";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 
@@ -16,6 +17,11 @@ import { cn } from "@/lib/utils";
  * and a body line in secondary text; an inline one is a quiet icon, a
  * label and a smaller line. A failure (`role="alert"`) draws its disc in the
  * warning tone, with the retry as its action.
+ *
+ * `mascot` draws Breu in place of the icon, in both looks: for the empty
+ * states a person meets early and rarely (a new channel, no DMs yet, a forum
+ * with no posts, a search that found nothing). Not for compact lists, where
+ * Breu would take over the row.
  */
 export type EmptyStateSize = "page" | "inline";
 
@@ -42,6 +48,7 @@ const BODY: Record<EmptyStateSize, string> = {
 export function EmptyState({
   size = "page",
   icon,
+  mascot,
   title,
   body,
   actions,
@@ -56,6 +63,8 @@ export function EmptyState({
   size?: EmptyStateSize;
   /** A glyph, drawn on a soft disc under the redesign. */
   icon?: ReactNode;
+  /** Breu in place of the icon, with this face. */
+  mascot?: BreuMood;
   title: ReactNode;
   body?: ReactNode;
   /** One or two buttons. */
@@ -80,7 +89,11 @@ export function EmptyState({
       {...data}
       className={cn("flex flex-col items-center text-center", className, ROOT[size])}
     >
-      {glyph ? (
+      {mascot ? (
+        <div aria-hidden="true" data-empty-mascot={mascot} className="mb-3 flex justify-center">
+          <Breu mood={mascot} size={size === "page" ? "md" : "sm"} />
+        </div>
+      ) : glyph ? (
         <div
           aria-hidden="true"
           className={cn(

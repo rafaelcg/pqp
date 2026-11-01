@@ -99,6 +99,7 @@ import { useTranslation } from "@/lib/i18n";
 import type { MentionCandidate } from "@/lib/mention-autocomplete";
 import { ChannelIcon } from "@/components/layout/channel-icon";
 import { cn } from "@/lib/utils";
+import type { BreuMood } from "@/components/breu/breu";
 import { EmptyState } from "@/components/ui/empty-state";
 import {
   ChatsCircle as PhChatsCircle,
@@ -245,12 +246,15 @@ function ForumEmptyGlyph({ line, filled }: { line: ReactNode; filled: ReactNode 
 
 function EmptyBlock({
   icon,
+  mascot,
   title,
   body,
   children,
   role,
 }: {
   icon: ReactNode;
+  /** Breu instead of the glyph, for the states a person meets rarely. */
+  mascot?: BreuMood;
   title: string;
   body?: string;
   children?: ReactNode;
@@ -260,6 +264,7 @@ function EmptyBlock({
     <EmptyState
       role={role}
       icon={icon}
+      mascot={mascot}
       title={title}
       body={body}
       actions={children}
@@ -1396,6 +1401,7 @@ export function ForumPane({
     listBody = (
       <EmptyBlock
         role="alert"
+        mascot="sad"
         icon={<ForumEmptyGlyph line={<WifiOff className="h-7 w-7" aria-hidden strokeWidth={1.5} />} filled={<Icon icon={PhWifiSlash} kind="symbol" size="lg" />} />}
         title={t("forum.loadError")}
         body={t("forum.loadError.body")}
@@ -1408,6 +1414,7 @@ export function ForumPane({
   } else if (forumEmpty) {
     listBody = (
       <EmptyBlock
+        mascot="asleep"
         icon={<ForumEmptyGlyph line={<MessagesSquare className="h-7 w-7" aria-hidden strokeWidth={1.5} />} filled={<Icon icon={PhChatsCircle} size="lg" />} />}
         title={t("forum.empty")}
         body={t("forum.empty.body")}
@@ -1496,6 +1503,7 @@ export function ForumPane({
         {noResults && list.posts.length === 0 ? (
           filters.q ? (
             <EmptyBlock
+              mascot="curious"
               icon={<ForumEmptyGlyph line={<SearchX className="h-7 w-7" aria-hidden strokeWidth={1.5} />} filled={<Icon icon={PhMagnifyingGlass} kind="symbol" size="lg" />} />}
               title={t("forum.searchEmpty", { query: filters.q })}
               body={t("forum.searchEmpty.body")}

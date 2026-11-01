@@ -404,6 +404,7 @@ export function CommunitiesView({
             // the warning disc, a title, the reason and a retry.
             <EmptyState
               role="alert"
+              mascot="sad"
               className="mt-14 redesign:mt-0"
               title={t("communities.errorTitle")}
               body={error}
@@ -431,8 +432,7 @@ export function CommunitiesView({
           ) : communities.length === 0 && redesign ? (
             <EmptyState
               className="mt-14 redesign:mt-0"
-              icon={<span className="text-[2rem] drop-shadow-sm redesign:text-[2.25rem]">🦗</span>}
-              iconClassName="redesign:!bg-[color:var(--glow-accent-soft)] redesign:ring-1 redesign:ring-[color:color-mix(in_oklab,var(--color-accent)_20%,transparent)]"
+              mascot="curious"
               title={t(filtered ? "communities.empty.titleFiltered" : empty.title)}
               body={
                 <>

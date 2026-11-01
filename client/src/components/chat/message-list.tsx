@@ -10,13 +10,12 @@ import {
   Smiley,
   Play as PlayFill,
   PushPin as PushPinFill,
-  UsersThree,
   WarningCircle as WarningCircleFill,
   WifiSlash,
   ArrowDown as ArrowDownGlyph,
   type Icon as PhosphorGlyph,
 } from "@phosphor-icons/react";
-import { Icon, Icon as Glyph } from "@/components/ui/icon";
+import { Icon as Glyph } from "@/components/ui/icon";
 import { EmptyState as EmptyStateView } from "@/components/ui/empty-state";
 import {
   CONTENT_CARD_FOCUS_REDESIGN,
@@ -2946,7 +2945,7 @@ function EmptyState({
     return (
       <EmptyStateView
         data-empty-owner=""
-        icon={<Icon icon={UsersThree} size="lg" />}
+        mascot="curious"
         title={t("chat.empty.owner.title")}
         body={
           state === "failed"
@@ -2983,7 +2982,7 @@ function EmptyState({
 
   return (
     <EmptyStateView
-      icon={<Icon icon={ChatsCircle} size="lg" />}
+      mascot="hello"
       title={t("chat.empty.title")}
       body={t("chat.empty.body")}
       className="flex-1 justify-center gap-2 px-6 py-16"

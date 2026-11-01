@@ -1,3 +1,4 @@
+import { Breu } from "@/components/breu/breu";
 import { PANE_HEADER_REDESIGN } from "@/components/ui/pane-header";
 import { SIDEBAR_FOOTER_CARD_REDESIGN } from "@/components/ui/sidebar-block";
 import { type CSSProperties } from "react";
@@ -75,15 +76,11 @@ export function AppLoadingShell({ label }: AppLoadingShellProps) {
       </main>
 
       <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-ink/40 backdrop-blur-[1px] redesign:bg-[color:color-mix(in_oklab,var(--color-canvas)_40%,transparent)] redesign:[:root[data-theme=light]_&]:bg-[color:color-mix(in_oklab,var(--color-canvas)_25%,transparent)]">
-        {/* Under the redesign the spinner and its label sit on their own card, off the skeleton bars. */}
+        {/* Under the redesign Breu and its label sit on their own card, off the skeleton bars. */}
         <div className="flex flex-col items-center gap-3 redesign:rounded-[var(--radius-card)] redesign:bg-pane-main redesign:px-5 redesign:py-4 redesign:ring-1 redesign:ring-inset redesign:ring-[color:var(--color-border)]">
-          <div className="relative flex h-12 w-12 items-center justify-center">
-            <span className="absolute inset-0 rounded-full border-2 border-signal/20 redesign:border-[color:color-mix(in_oklab,var(--color-accent)_25%,transparent)]" />
-            <span className="absolute inset-0 animate-spin rounded-full border-2 border-transparent border-t-signal motion-reduce:animate-none redesign:border-t-accent" />
-            <span className="font-display text-sm font-bold text-signal redesign:font-[family-name:var(--type-title-font)] redesign:text-accent-text">
-              pqp
-            </span>
-          </div>
+          {/* Breu at work, breathing (still under reduced motion), instead of a
+              spinning "pqp" ring: the most-seen moment Breu gets. */}
+          <Breu mood="focused" size="sm" />
           <p className="text-xs uppercase tracking-[0.2em] text-paper-muted redesign:text-[13px] redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">
             {text}
           </p>
@@ -116,6 +113,7 @@ export function AppBootstrapError({ message, onRetry }: AppBootstrapErrorProps) 
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_80%_10%,var(--glow-danger),transparent_45%)] redesign:bg-[radial-gradient(circle_at_85%_0%,var(--glow-danger),transparent_35%)]" />
       {/* Under the redesign the failure is announced, and focus lands on the retry. */}
       <div className="relative z-10 max-w-lg" role={redesign ? "alert" : undefined}>
+        <Breu mood="sad" size="md" className="mb-4" />
         <Link
           to="/"
           className="mb-3 inline-block text-xs uppercase tracking-[0.28em] text-signal redesign:text-sm redesign:font-bold redesign:normal-case redesign:tracking-normal redesign:text-accent-text"

@@ -1,3 +1,4 @@
+import { Breu } from "@/components/breu/breu";
 import type { Server, UserStatus } from "@pqp/shared";
 import { cn } from "@/lib/utils";
 import { CARD_SURFACE } from "@/components/ui/card";
@@ -143,8 +144,9 @@ export function ConversationsEmpty({
             rounded="full"
           />
         )}
-        <span className="z-10 -mx-2 flex h-14 w-14 items-center justify-center rounded-full bg-accent-soft text-on-accent-soft ring-4 ring-surface-0 redesign:ring-pane-main">
-          <IconSwap off={Hand} on={HandWavingFill} size="lg" offClassName="h-6 w-6" />
+        {/* Breu waves hello between the first two faces of the server. */}
+        <span className="z-10 -mx-1 flex">
+          <Breu mood="hello" size="md" />
         </span>
         {faces[1] && (
           <UserAvatar

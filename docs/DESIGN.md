@@ -1581,6 +1581,29 @@ line).
 - **Disabled with an action.** The action is `inert`, out of pointer and
   keyboard reach.
 
+## Breu
+
+Breu is the pqp mascot. Bots wear its face; the app also shows it on a few rare moments.
+
+Use `<Breu mood>` (`client/src/components/breu/breu.tsx`). It is the bots' `BotFace`, always lime, in the full drawing. It is decorative: the text next to it says what happened. In an empty state, pass `mascot` to `EmptyState` instead of `icon`.
+
+| Mood | Face | Where |
+|---|---|---|
+| `panic` | panico | The root error screen |
+| `sad` | triste | The API is unreachable, the forum or communities failed to load |
+| `focused` | focado | Loading the app, "Updating pqp", the forced update |
+| `hello` | oi | An empty channel, no DMs yet, no friends yet, a phone with no servers |
+| `curious` | curioso | The owner's empty channel, search with no match, empty communities, a free handle |
+| `asleep` | dormindo | A forum with no posts |
+
+Keep Breu out of these surfaces:
+
+1. A live call, the call dock and watch party chrome.
+2. Moderation, bans and reports, including the CSAM flow.
+3. Legal pages and the age gate's refusal.
+4. Compact lists and settings rows.
+5. Frequent warnings: 503 toasts, rate limits, the reconnect banner.
+
 ## Planned primitives
 
 Not built. Do not invent a local one; add it here instead, in `ui/`, with a
