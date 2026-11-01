@@ -1433,6 +1433,7 @@
   "voice.join": "Entrar a la llamada",
   "voice.joinNamed": "Entrar a {name}",
   "voice.doubleClickToJoin": "Doble clic para entrar",
+  "voice.tapToOpen": "Toca para abrir. Para entrar a la llamada, toca Entrar a la llamada arriba.",
   "voice.connectingTo": "Conectando a {channel}…",
   "voice.cancel": "Cancelar",
   "voice.alone": "Por ahora solo estás tú.",

@@ -69,3 +69,26 @@ export function resolveVoiceRowKey(
   }
   return null;
 }
+
+/**
+ * Which hint a voice row carries, so the words match what the gesture does.
+ *
+ * A mouse joins on a double click. A finger does not: one tap opens the
+ * channel's chat and stage like any row, and the call is joined from the
+ * header's button. So on touch the hint says to tap and where the join is,
+ * and never "double click". No hint for a watch party (it has its own chip), a
+ * text channel, or the room you are already in.
+ */
+export type VoiceRowHint = "double-click" | "tap" | null;
+
+export function voiceRowHint(options: {
+  hasJoinHandler: boolean;
+  connected: boolean;
+  watchParty: boolean;
+  touch: boolean;
+}): VoiceRowHint {
+  if (options.watchParty || !options.hasJoinHandler || options.connected) {
+    return null;
+  }
+  return options.touch ? "tap" : "double-click";
+}

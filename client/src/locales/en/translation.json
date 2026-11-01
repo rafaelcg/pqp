@@ -1431,6 +1431,7 @@
   "voice.join": "Join Voice",
   "voice.joinNamed": "Join {name}",
   "voice.doubleClickToJoin": "Double-click to join",
+  "voice.tapToOpen": "Tap to open. To join the call, tap Join Voice at the top.",
   "voice.connectingTo": "Connecting to {channel}…",
   "voice.cancel": "Cancel",
   "voice.alone": "You're the only one here so far.",

@@ -114,6 +114,7 @@ import {
   resolveVoiceRowClick,
   resolveVoiceRowDoubleClick,
   resolveVoiceRowKey,
+  voiceRowHint,
 } from "@/lib/voice-row-interaction";
 import {
   ServerBannerStrip,
@@ -134,6 +135,7 @@ import { Icon } from "@/components/ui/icon";
 import { IconButton } from "@/components/ui/icon-button";
 import { MENU_SEPARATOR } from "@/components/ui/menu-items";
 import { useIsTruncated } from "@/lib/use-is-truncated";
+import { useTouchPrimary } from "@/hooks/use-touch-primary";
 import { VoiceOccupantRow } from "@/components/layout/voice-occupant-row";
 import { useProfilePopover } from "@/components/user/user-profile-popover";
 import { publicProfileHref } from "@/components/user/profile-relations";
@@ -3463,13 +3465,14 @@ export function ChannelRailItem({
     connected,
     liveWatchParty: live,
   });
+  const touch = useTouchPrimary();
   return (
     <Tooltip
       label={
         live
           ? `${channel.name} ${t("chrome.watchPartyLive")}`
           : joinable
-            ? `${channel.name}: ${t("voice.doubleClickToJoin")}`
+            ? `${channel.name}: ${touch ? t("voice.tapToOpen") : t("voice.doubleClickToJoin")}`
             : channel.name
       }
       // The strip has no room to write it, and the padlock glyph is the only
@@ -4040,10 +4043,19 @@ export function ChannelRow({
      narrow and a label rendered in the row ate the channel name on a real
      rail. It is the shared `Tooltip` rather than a native `title` so it
      opens in a quarter second instead of one, and on keyboard focus too. */
+  const touch = useTouchPrimary();
+  const hintKind = voiceRowHint({
+    hasJoinHandler: !!onJoinVoice,
+    connected,
+    watchParty,
+    touch,
+  });
   const joinHint =
-    !watchParty && onJoinVoice && !connected
-      ? t("voice.doubleClickToJoin")
-      : null;
+    hintKind === "tap"
+      ? t("voice.tapToOpen")
+      : hintKind === "double-click"
+        ? t("voice.doubleClickToJoin")
+        : null;
   /* `Tooltip` names its trigger with `aria-label`, which would hide the
      `sr-only` hints inside the row. Say them here instead. */
   const rowName = [
