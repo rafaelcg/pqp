@@ -1,12 +1,10 @@
 import { CaretRight } from "@phosphor-icons/react";
-import { ChevronRight, Plus, RotateCw, Trash2, X } from "lucide-react";
-import { useEffect, useMemo, useState, type MouseEvent } from "react";
+import { ChevronRight, Plus, RotateCw, Trash2 } from "lucide-react";
+import { useEffect, useMemo, type MouseEvent } from "react";
 import type { StoryAuthor, StoryNotice, StoryStripItem } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
-import { UserAvatar } from "@/components/user/user-avatar";
 import { useTranslation } from "@/lib/i18n";
-import { isHintSeen, rememberHint } from "@/lib/hints";
 import { ringLabel } from "@/lib/stories/format";
 import { failedRingLabel } from "@/lib/stories/post";
 import { useSeenStories } from "@/lib/stories/seen-store";
@@ -31,9 +29,9 @@ import { StoryRing } from "./story-ring";
  * or of the Conversas list (friends' stories).
  *
  * Draws nothing at all unless something is live, so a server without stories
- * pays no row for them (design decision 22). The two exceptions are the
- * one-off first-run row, and the card telling an author that staff removed
- * their story, which is said once and then acknowledged.
+ * pays no row for them (design decision 22). The one exception is the card
+ * telling an author that staff removed their story, which is said once and
+ * then acknowledged.
  */
 
 export interface StoryViewerSelf {
@@ -52,13 +50,6 @@ interface StoryStripProps {
   ownSlot?: boolean;
 }
 
-/** Session memory for a dismissed first-run row, where hints do not persist. */
-const dismissedThisSession = new Set<string>();
-
-function firstRunKey(meId: string, audience: StoryAudienceKey): string {
-  return `pqp:stories-first-run:${meId}:${ringAudienceKey(audience)}`;
-}
-
 export function StoryStrip({ audience, me, ownSlot = false }: StoryStripProps) {
   const { t } = useTranslation();
   const stripAudience = useMemo(
@@ -72,10 +63,6 @@ export function StoryStrip({ audience, me, ownSlot = false }: StoryStripProps) {
   const { strip, now, setPointerOnStrip } = useStoryStrip(stripAudience, me.id);
   const seen = useSeenStories();
   const ui = useStoriesUi();
-  const hintKey = firstRunKey(me.id, audience);
-  const [dismissed, setDismissed] = useState(
-    () => dismissedThisSession.has(hintKey) || isHintSeen(hintKey),
-  );
   const { notices, dismiss } = useStoryNotices(Boolean(strip?.enabled));
 
   const audienceKey = ringAudienceKey(audience);
@@ -83,7 +70,7 @@ export function StoryStrip({ audience, me, ownSlot = false }: StoryStripProps) {
     ui.posting && ui.posting.audienceKeys.includes(audienceKey) ? ui.posting : null;
 
   const view = strip
-    ? stripView(strip, { now, seenIds: seen, firstRunDismissed: dismissed, ownSlot })
+    ? stripView(strip, { now, seenIds: seen, ownSlot })
     : ({ kind: "hidden" } as const);
 
   // Warm the first unseen story of the first three rings while the strip is up, so opening one shows
@@ -115,23 +102,6 @@ export function StoryStrip({ audience, me, ownSlot = false }: StoryStripProps) {
   const noticeCards = myNotices.map((notice) => (
     <RemovedNoticeCard key={notice.id} notice={notice} onDismiss={() => dismiss(notice.id)} />
   ));
-
-  if (view.kind === "first-run" && !posting) {
-    return (
-      <div className="mb-3 space-y-2">
-        {noticeCards}
-        <FirstRunRow
-          me={me}
-          onPost={compose}
-          onDismiss={() => {
-            dismissedThisSession.add(hintKey);
-            rememberHint(hintKey);
-            setDismissed(true);
-          }}
-        />
-      </div>
-    );
-  }
 
   if (view.kind === "hidden" && !posting) {
     return noticeCards.length > 0 ? <div className="mb-3 space-y-2">{noticeCards}</div> : null;
@@ -326,54 +296,6 @@ export function StoryStrip({ audience, me, ownSlot = false }: StoryStripProps) {
         ))}
       </div>
     </section>
-  );
-}
-
-function FirstRunRow({
-  me,
-  onPost,
-  onDismiss,
-}: {
-  me: StoryViewerSelf;
-  onPost: () => void;
-  onDismiss: () => void;
-}) {
-  const { t } = useTranslation();
-  return (
-    <div
-      data-story-first-run=""
-      className="relative flex items-start gap-3 rounded-[var(--radius-card)] border border-dashed border-border-strong p-3 redesign:rounded-[var(--sidebar-card-radius)] redesign:border-[color:var(--sidebar-invite-border)]"
-    >
-      <div className="relative h-10 w-10 shrink-0">
-        <UserAvatar
-          name={me.displayName}
-          avatarUrl={me.avatarUrl}
-          rounded="full"
-          className="h-10 w-10"
-          fallbackClassName="bg-surface-3 text-text text-sm"
-        />
-        <span className="absolute -bottom-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-accent text-[11px] font-bold leading-none text-on-accent shadow-[0_0_0_2px_var(--color-surface-1)] redesign:shadow-[0_0_0_2px_var(--color-pane-side)]">
-          +
-        </span>
-      </div>
-      <div className="min-w-0 flex-1 pr-4">
-        <p className="text-sm font-semibold text-text">{t("stories.empty.title")}</p>
-        <p className="mt-0.5 text-xs leading-snug text-text-secondary">
-          {t("stories.empty.body")}
-        </p>
-        <Button size="sm" className="mt-2 h-7 rounded-full px-3" onClick={onPost}>
-          {t("stories.empty.cta")}
-        </Button>
-      </div>
-      <button
-        type="button"
-        aria-label={t("stories.empty.dismiss")}
-        onClick={onDismiss}
-        className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-[var(--radius-control)] text-text-tertiary hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring redesign:rounded-full redesign:hover:bg-row-hover redesign:focus-visible:ring-accent"
-      >
-        <X className="h-3.5 w-3.5" aria-hidden />
-      </button>
-    </div>
   );
 }
 

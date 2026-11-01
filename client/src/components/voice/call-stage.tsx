@@ -101,7 +101,6 @@ import {
   requestElementFullscreen,
   type WebkitFullscreenElement,
 } from "@/components/voice/document-fullscreen";
-import { CinemaHint } from "@/components/voice/cinema-hint";
 import { LinuxShareAudioHint } from "@/components/voice/linux-share-audio-hint";
 import { ShareSoundIndicator } from "@/components/voice/share-sound-indicator";
 import { CapacityNotice } from "@/components/voice/capacity-notice";
@@ -150,9 +149,7 @@ import {
   videoSupportsNativeFullscreen,
   type StageFullscreenStrategy,
 } from "@/lib/fullscreen";
-import { BringFriendsHint } from "@/components/layout/bring-friends-hint";
 import { ChatMusicContext } from "@/components/layout/call-split";
-import { FeatureHint, useFeatureHintEnabled } from "@/components/layout/feature-hint";
 import { Tooltip } from "@/components/ui/tooltip";
 import { shareAppTarget } from "@/lib/share-app-hint";
 import {
@@ -2389,7 +2386,6 @@ function ActiveCall({
         roseFrom={voiceState.capacityRoseFrom}
         visible={!chrome.hidden}
       />
-      <CinemaHint visible={screenStream !== null} />
       {/* Linux only (see `lib/linux-share-audio-hint.ts`): next to the
           share button, before the picker opens, since that is where the
           question actually gets asked. Gone once the share is already
@@ -3754,17 +3750,7 @@ export function CallControls({
   const shareCursor = useShareCursor();
   const joinLeaveAutoMute = useJoinLeaveAutoMuteEnabled();
   const cursorLiveControl = useMemo(() => canControlShareCursor(), []);
-  const watchPartyHintEnabled = useFeatureHintEnabled("watchParty");
-  // "The controls moved down here." Once, the first time the dock opens.
-  // Pressing any control in the dock is proof enough that they were found,
-  // so one capture handler on the row closes the card; the impression is
-  // already recorded by then (`FeatureHint` remembers on first paint), so it
-  // does not come back either way.
-  const callDockHintEnabled = useFeatureHintEnabled("callDock");
   const hintHost = useCallDockHintHost();
-  const [dockControlUsed, setDockControlUsed] = useState(false);
-  const bringFriendsHintEnabled = useFeatureHintEnabled("bringFriends");
-  const musicHintEnabled = useFeatureHintEnabled("music");
   const musicDock = useMusicDock();
   // The pip outlives the card: it is spent by opening the panel, which the
   // card's own impression never waits for. `lib/music-pip.ts` says why the
@@ -4035,14 +4021,12 @@ export function CallControls({
       )}
     >
       {/* ABOVE THE BAR, OUT OF THE FLOW.
-          These sat in the column and pushed the bar (and with it the whole
-          composer) down by the height of whichever card was up, so the
-          controls moved the moment a card explaining them appeared. Docked,
-          they go through `useCallDockHintHost` into a host the outlet hangs
-          above its own clipped row; on the expanded stage there is no dock
-          and nothing clips, so the same markup is anchored here. Either way
-          the wrapper passes pointer events through, so the row underneath
-          still takes the click that spends the call dock card. */}
+          A line that appears here must not push the bar (and with it the whole
+          composer) down, or the controls move the moment it shows. Docked, it
+          goes through `useCallDockHintHost` into a host the outlet hangs above
+          its own clipped row; on the expanded stage there is no dock and
+          nothing clips, so the same markup is anchored here. Either way the
+          wrapper passes pointer events through. */}
       {renderCallHints(
         hintHost,
         <div
@@ -4053,45 +4037,10 @@ export function CallControls({
               "pointer-events-none absolute bottom-full left-0 z-30 mb-2 w-full [&>*]:pointer-events-auto",
           )}
         >
-        {collapsed && callDockHintEnabled && (
-          <div className="mb-1">
-            <FeatureHint
-              id="callDock"
-              enabled={!dockControlUsed}
-              title={t("featureHint.callDock.title")}
-              body={t("featureHint.callDock.body")}
-            />
-          </div>
-        )}
-        {watchPartyHintEnabled && canWatchParty && !listenOnly && !noVideo && (
-          <div className="mb-1">
-            <FeatureHint
-              id="watchParty"
-              enabled
-              body={t("featureHint.watchParty.body")}
-            />
-          </div>
-        )}
-        {bringFriendsHintEnabled && voiceState.isSharingScreen && (!collapsed || videoOnStage) && (
-          <div className="mb-1">
-            <BringFriendsHint enabled />
-          </div>
-        )}
-        {/* Mounted whether or not it wins, so the card can tell "the gate
-            turned off" (a track started, the panel opened) from "the strip
-            swapped under me". The first spends it; the second must not. */}
-        <div className={cn(musicHintEnabled && "mb-1")}>
-          <FeatureHint
-            id="music"
-            enabled={musicHintEnabled}
-            title={t("featureHint.music.title")}
-            body={t("featureHint.music.body")}
+          <PttFocusHint
+            show={pushToTalk && Boolean(pushToTalkKeyLabel) && !windowFocused}
+            className="text-center"
           />
-        </div>
-        <PttFocusHint
-          show={pushToTalk && Boolean(pushToTalkKeyLabel) && !windowFocused}
-          className="text-center"
-        />
         </div>,
       )}
 
@@ -4155,20 +4104,6 @@ export function CallControls({
             ? "w-full flex-col @min-[35rem]:flex-row @min-[35rem]:flex-wrap @min-[35rem]:gap-x-3 @min-[35rem]:gap-y-2"
             : "flex-wrap justify-center",
         )}
-        // Capture, so the pill's pointerdown and every tile's click count,
-        // including the ones that open a menu and stop propagation.
-        onPointerDownCapture={
-          collapsed && callDockHintEnabled && !dockControlUsed
-            ? (event) => {
-                if (
-                  event.target instanceof Element &&
-                  event.target.closest("button")
-                ) {
-                  setDockControlUsed(true);
-                }
-              }
-            : undefined
-        }
       >
         {collapsed && leading && (
           <div

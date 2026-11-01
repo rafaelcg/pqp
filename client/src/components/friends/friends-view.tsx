@@ -21,16 +21,10 @@ import type {
   Friend,
   FriendRequestEntry,
   PublicUser,
-  User,
 } from "@pqp/shared";
 import { Check, Menu, UserPlus, Users, X } from "lucide-react";
 import { useEffect, useId, useState, type ReactNode } from "react";
 import { PendingDepoimentos } from "@/components/depoimentos/pending-depoimentos";
-import { FirstRunCard } from "@/components/onboarding/first-run-card";
-import {
-  shouldShowFirstRun,
-  shouldStampFirstRunComplete,
-} from "@/lib/first-run";
 import { Button } from "@/components/ui/button";
 import { Tabs } from "@/components/ui/tabs";
 import { StatusDot } from "@/components/user/status-dot";
@@ -71,29 +65,6 @@ const FRIEND_SECTION_REDESIGN = cn(SECTION_LABEL_REDESIGN, "redesign:px-2");
  * not even send a status for them.
  */
 
-/**
- * Everything the first-run checklist needs that this view does not already own.
- *
- * It lives here rather than in `App` because two of the three things it offers
- * are already this component's business — the friend count it ticks off is the
- * list this view is holding, and "add a friend" is this view's own search panel.
- * `App` would have to duplicate the fetch to know the first and lift state to
- * reach the second.
- */
-export interface FriendsFirstRun {
-  user: User;
-  serverCount: number;
-  onCreateServer: () => void;
-  onJoinServer: () => void;
-  onImportDiscord?: () => void;
-  onPickAvatar: () => void;
-  /**
-   * The checklist is answered — put away by hand, or finished. One preference
-   * write, and it never comes back on any device.
-   */
-  onSettled: () => void;
-}
-
 interface FriendsViewProps {
   /** Kept out of add-friend results — you cannot befriend yourself. */
   currentUserId: string | null;
@@ -104,14 +75,11 @@ interface FriendsViewProps {
   /** Extra content for the quiet state — the SSO server suggestions ride here. */
   extras?: ReactNode;
   /**
-   * Conversas (`conversations_home`): drawn at the top of the panel, under the
-   * first-run card, while the account has no conversation at all. Handed the
-   * view's own "add a friend" so its button opens the same field the header's
-   * does.
+   * Conversas (`conversations_home`): drawn at the top of the panel while the
+   * account has no conversation at all. Handed the view's own "add a friend"
+   * so its button opens the same field the header's does.
    */
   hero?: (actions: { openAdd: () => void }) => ReactNode;
-  /** Absent for an account past its first run, which is nearly all of them. */
-  firstRun?: FriendsFirstRun;
 }
 
 export function FriendsView({
@@ -120,7 +88,6 @@ export function FriendsView({
   onOpenNav,
   extras,
   hero,
-  firstRun,
 }: FriendsViewProps) {
   const { t } = useTranslation();
   const redesign = useRedesign();
@@ -189,38 +156,6 @@ export function FriendsView({
 
   const online = onlineFriends(data.friends);
   const pending = pendingActionCount(data, pendingDepoimentos);
-
-  /**
-   * The checklist's inputs, and the two questions asked of them.
-   *
-   * Gated on `!loading` because the friend list starts empty: asking before the
-   * first snapshot lands would draw "find your people" un-ticked at somebody who
-   * has friends, and then tick it a moment later under their eyes.
-   */
-  const firstRunInputs = firstRun
-    ? {
-        user: firstRun.user,
-        serverCount: firstRun.serverCount,
-        friendCount: data.friends.length,
-      }
-    : null;
-  const showFirstRun =
-    firstRunInputs !== null && !loading && shouldShowFirstRun(firstRunInputs);
-  const stampFirstRun =
-    firstRunInputs !== null &&
-    !loading &&
-    shouldStampFirstRunComplete(firstRunInputs);
-
-  // Close the derived-state loop: once all three read as done, record it so that
-  // undoing one of them a year from now cannot bring the card back. The effect
-  // rather than the render because it writes, and `onSettled` is idempotent on
-  // the App side — `shouldStampFirstRunComplete` goes false as soon as the
-  // preference lands, so this cannot loop.
-  useEffect(() => {
-    if (stampFirstRun) {
-      firstRun?.onSettled();
-    }
-  }, [stampFirstRun, firstRun]);
 
   async function run(userId: string, action: () => Promise<void>) {
     setBusyId(userId);
@@ -428,23 +363,6 @@ export function FriendsView({
         role="tabpanel"
         className="flex-1 overflow-y-auto p-4 redesign:px-2"
       >
-        {/* Above the tab content, because it is the reason this screen is not
-            empty. It stays put while they switch tabs — the three errands do not
-            belong to Online or to Pending. */}
-        {showFirstRun && firstRun && (
-          <FirstRunCard
-            user={firstRun.user}
-            serverCount={firstRun.serverCount}
-            friendCount={data.friends.length}
-            onCreateServer={firstRun.onCreateServer}
-            onJoinServer={firstRun.onJoinServer}
-            onImportDiscord={firstRun.onImportDiscord}
-            onAddFriend={() => setAdding(true)}
-            onPickAvatar={firstRun.onPickAvatar}
-            onDismiss={firstRun.onSettled}
-          />
-        )}
-
         {hero?.({ openAdd: () => setAdding(true) })}
 
         {loading ? (
@@ -507,14 +425,10 @@ export function FriendsView({
   );
 
   function NoFriendsYet({ onAdd }: { onAdd: () => void }) {
-    // The checklist above is already asking for exactly this, with its own
-    // button. Two "Add friend" buttons a screen apart is not twice the
-    // encouragement, it is a layout that looks unfinished. And the one line
-    // that was left said the card's own sentence again in different words ("@"
-    // there, "identificador" here), so while the card is up this says nothing.
-    // The Conversas hero above already offers Adicionar amigo, for the same
-    // reason.
-    if (showFirstRun || hero) {
+    // The Conversas hero above already offers Adicionar amigo. Two buttons a
+    // screen apart is not twice the encouragement, it is a layout that looks
+    // unfinished.
+    if (hero) {
       return null;
     }
     return (

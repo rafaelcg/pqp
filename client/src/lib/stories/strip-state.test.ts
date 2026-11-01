@@ -70,7 +70,7 @@ describe("order and seen", () => {
 });
 
 describe("which face the strip shows", () => {
-  const base = { now: NOW, seenIds: new Set<string>(), firstRunDismissed: false };
+  const base = { now: NOW, seenIds: new Set<string>() };
 
   it("flag off: nothing, whatever else the answer says", () => {
     expect(stripView(strip({ enabled: false, items: [item("a", 60)] }), base).kind).toBe("hidden");
@@ -90,12 +90,10 @@ describe("which face the strip shows", () => {
     expect(stripView(strip({ items: [item("a", -5)], own: item("me", -1) }), base).kind).toBe("hidden");
   });
 
-  it("first run: only when the server says so, the viewer may post, and it was not dismissed", () => {
-    expect(stripView(strip({ firstRunHint: true }), base).kind).toBe("first-run");
-    expect(stripView(strip({ firstRunHint: true, canPost: false }), base).kind).toBe("hidden");
-    expect(stripView(strip({ firstRunHint: true }), { ...base, firstRunDismissed: true }).kind).toBe(
-      "hidden",
-    );
+  it("the server's first-run hint no longer draws a row", () => {
+    // `firstRunHint` is still in the answer; the dashed first-run row it
+    // asked for was removed on 2026-11-01.
+    expect(stripView(strip({ firstRunHint: true }), base).kind).toBe("hidden");
     expect(stripView(strip({ firstRunHint: true, items: [item("a", 60)] }), base).kind).toBe("strip");
   });
 

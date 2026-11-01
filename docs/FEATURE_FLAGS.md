@@ -564,6 +564,8 @@ per-server value would make the config endpoint and the transcoder disagree.
 
 ## `party_newcomer_experience` (per server, client presentation only)
 
+Client status: the context strip and the get-the-app suppression were removed on 2026-11-01. Only the phone layout remains.
+
 The newcomer's first minutes in a live watch party, behind one flag
 (`PARTY_NEWCOMER_EXPERIENCE`, default off, `perServer: true`). The client learns
 it from `GET /api/live-hls/config?serverId=` as `newcomerExperience` (absent on
@@ -649,6 +651,8 @@ Turn it off from controles → interruptores or `PUT /api/admin/flags
 
 ## `newcomer_invite_moment` (global, client presentation only)
 
+Client status: the strip and the first-run checklist were removed on 2026-11-01, so the client no longer reads this flag. The server still serves it.
+
 "Chama teus amigos pra cá". Behind `NEWCOMER_INVITE_MOMENT` (default off,
 global, born as a flag). The client learns it from `GET /api/onboarding/config`
 as `inviteMoment`, asked once the age gate has passed (every `/api` route is
@@ -731,6 +735,8 @@ config refresh (focus or 10 min). Merging this PR restarts the API
 (`restarts-api`): it touches `server/` and `packages/shared`.
 
 ## `hint_diet` and `hint_budget` (global, client presentation only)
+
+Client status: on 2026-11-01 the diet list shrank to one id, the owner empty channel's "Copiar convite", because the other hints it hid were removed. The list in the first bullet is the earlier one.
 
 The two switches of the 2026-10-20 hints audit (`docs/ONBOARDING.md` §"The
 diet and the quiet contexts"). Both born as flags, default off (`HINT_DIET`,
@@ -869,6 +875,8 @@ category is a dead row there. `server/src/lib/flag-client-contract.test.ts`
 pins the route, the field and the create guard.
 
 ## `forum_announcement` (per server, client presentation only)
+
+Client status: the card was removed on 2026-11-01, so the client no longer reads `announce`. The server still serves it.
 
 "O fórum abriu": a one-time corner card that tells the members of a server its
 forum is live, with **Abrir o fórum** and **Agora não**. Behind

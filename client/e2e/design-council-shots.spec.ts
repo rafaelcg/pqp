@@ -333,7 +333,6 @@ async function as(page: Page, theme: "dark" | "light"): Promise<void> {
       if (look) localStorage.setItem("pqp-appearance", look);
       if (look === "retro") localStorage.setItem("pqp-appearance-retro", "1");
       if (contrast) localStorage.setItem("pqp-contrast", contrast);
-      localStorage.setItem("pqp:download-hint-dismissed", "1");
       localStorage.setItem("pqp-redesign", redesign ? "on" : "off");
     },
     [VIEWER, theme, REDESIGN, LOOK, CONTRAST] as const,
@@ -1424,7 +1423,6 @@ test("captures the watch party", async ({ browser }) => {
         ([value, redesign]) => {
           localStorage.setItem("pqp:dev-user-suffix", "rafa");
           localStorage.setItem("pqp-theme", value);
-          localStorage.setItem("pqp:download-hint-dismissed", "1");
           localStorage.setItem("pqp-redesign", redesign ? "on" : "off");
         },
         [theme, REDESIGN] as const,
@@ -1765,7 +1763,6 @@ test("captures the dm home", async ({ browser }) => {
         ([value, redesign]) => {
           localStorage.setItem("pqp:dev-user-suffix", "ze");
           localStorage.setItem("pqp-theme", value);
-          localStorage.setItem("pqp:download-hint-dismissed", "1");
           localStorage.setItem("pqp-redesign", redesign ? "on" : "off");
         },
         [theme, REDESIGN] as const,

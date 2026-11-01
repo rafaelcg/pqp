@@ -17,7 +17,7 @@ import {
 import { Icon } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
 import { UserAvatar } from "@/components/user/user-avatar";
-import { useBringFriendsServer } from "@/components/layout/bring-friends-hint";
+import { useBringFriendsServer } from "@/components/layout/bring-friends-server";
 import {
   PeerAudioMenu,
   usePeerAudioMenu,

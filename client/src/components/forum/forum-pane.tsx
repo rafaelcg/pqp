@@ -44,7 +44,6 @@ import type {
   MessageAuthorInfo,
   MessageRoleColor,
 } from "@/components/chat/message-list";
-import { FeatureHint, useFeatureHintEnabled } from "@/components/layout/feature-hint";
 import { BetaTag } from "@/components/ui/beta-tag";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
@@ -1067,10 +1066,6 @@ export function ForumPane({
     return () => document.removeEventListener("keydown", onKey);
   }, [canCompose, closePost, focusCard, isPhone, openComposer, rovingId]);
 
-  // --------------------------------------------------------------- hint
-  const hintWanted = useFeatureHintEnabled("forum");
-  const hasPosts = list.posts.length + list.pinned.length > 0;
-
   // ------------------------------------------------------------- render
   const counts = list.counts;
   const forumEmpty =
@@ -1163,14 +1158,6 @@ export function ForumPane({
           </kbd>
         )}
       </Button>
-      <div className="absolute right-0 top-full z-30 mt-2 w-72">
-        <FeatureHint
-          id="forum"
-          enabled={hintWanted && hasPosts && !postOpen}
-          title={t("forum.hint.title")}
-          body={t("forum.hint.body")}
-        />
-      </div>
     </div>
   ) : null;
 

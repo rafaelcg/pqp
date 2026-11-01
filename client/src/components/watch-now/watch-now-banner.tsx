@@ -1,9 +1,5 @@
 import { ChevronDown, ChevronUp, MonitorPlay } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import {
-  FeatureHint,
-  useFeatureHintEnabled,
-} from "@/components/layout/feature-hint";
 import { CaretDown, CaretUp, MonitorPlay as MonitorPlayFill } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { BANNER_DISC_REDESIGN, BANNER_QUIET_REDESIGN, bannerSurfaceRedesign } from "@/components/ui/banner";
@@ -43,8 +39,6 @@ export interface WatchNowBannerProps {
   joiningChannelId?: string | null;
   /** Why the last join failed, already in the person's language. */
   failure?: string | null;
-  /** The one-time newcomer hint is allowed to draw under the strip. */
-  hintAllowed?: boolean;
   /** Test seam: the clock the age is read from. */
   now?: number;
 }
@@ -78,7 +72,6 @@ export function WatchNowBanner({
   onDismiss,
   joiningChannelId = null,
   failure = null,
-  hintAllowed = false,
   now: nowOverride,
 }: WatchNowBannerProps) {
   const { t } = useTranslation();
@@ -152,8 +145,6 @@ export function WatchNowBanner({
       setOpen(false);
     }
   }, [rest.length]);
-
-  const hintEnabled = useFeatureHintEnabled("watchNow");
 
   if (!headline) {
     return null;
@@ -237,12 +228,6 @@ export function WatchNowBanner({
           </div>
         )}
       </div>
-      {/* Outside the clipped row: the card hangs below the strip. */}
-      {hintAllowed && hintEnabled && (
-        <div className="pointer-events-none absolute left-3 top-full z-30 mt-1 [&>*]:pointer-events-auto">
-          <FeatureHint id="watchNow" enabled body={t("watchNow.hint")} />
-        </div>
-      )}
     </section>
   );
 }

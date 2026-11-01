@@ -136,8 +136,9 @@ test("A posts a text story; B sees the ring, opens it, reacts and replies; A see
   const second = await newClient(browser);
   try {
     await openAs(second.page, here, bob);
-    // Nobody has posted: B gets the one-off first-run row, not an empty strip.
-    await expect(second.page.locator("[data-story-first-run]")).toBeVisible({ timeout: 20_000 });
+    // Nobody has posted: B's page has no story strip yet.
+    await expect(second.page.getByPlaceholder(/^Message /)).toBeVisible({ timeout: 20_000 });
+    await expect(second.page.locator("[data-story-strip]")).toHaveCount(0);
 
     // ---- A posts a text story from the server menu.
     await openAs(page, here, alice);
@@ -271,7 +272,7 @@ test("with the flag off for a server, nothing about stories is drawn there", asy
 
   await openAs(page, `/app/server/${serverId}/channel/${channelId}`, owner);
   await expect(page.getByPlaceholder(/^Message /)).toBeVisible({ timeout: 20_000 });
-  await expect(page.locator("[data-story-strip], [data-story-first-run]")).toHaveCount(0);
+  await expect(page.locator("[data-story-strip]")).toHaveCount(0);
   await page.locator("[data-server-menu-trigger]").first().click();
   await expect(page.getByRole("menuitem", { name: "Invite people" })).toBeVisible();
   await expect(page.getByRole("menuitem", { name: "Post a story" })).toHaveCount(0);

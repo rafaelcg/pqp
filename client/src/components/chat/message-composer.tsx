@@ -71,8 +71,6 @@ import {
 import { ComposerFormatPreview } from "@/components/chat/composer-format-preview";
 import { Icon as Glyph } from "@/components/ui/icon";
 import { MusicHintHostProvider } from "@/components/voice/call-dock";
-import { FeatureHint, useFeatureHintEnabled } from "@/components/layout/feature-hint";
-import { rememberFeatureHint } from "@/lib/feature-hints";
 import { registerComposerActivity } from "@/lib/hint-quiet";
 import { VoiceNoteTranscriptionNotice } from "@/components/chat/voice-note-transcription-notice";
 import { PollComposer } from "@/components/chat/poll-composer";
@@ -508,7 +506,6 @@ export function MessageComposer({
   const [isInsertMenuOpen, setIsInsertMenuOpen] = useState(false);
   const [callHintHost, setCallHintHost] = useState<HTMLElement | null>(null);
   const [isFormatBarOpen, setIsFormatBarOpen] = useState(false);
-  const formatHintEnabled = useFeatureHintEnabled("composerFormat");
   const [gifQuery, setGifQuery] = useState("");
   const [isGifSearchEnabled, setIsGifSearchEnabled] = useState(false);
   const [attachmentLimits, setAttachmentLimits] = useState<{
@@ -586,12 +583,6 @@ export function MessageComposer({
       writeDraft(channelId, bodyRef.current);
     };
   }, [channelId]);
-
-  useEffect(() => {
-    if (isFormatBarOpen) {
-      rememberFeatureHint("composerFormat");
-    }
-  }, [isFormatBarOpen]);
 
   // Tells the hint queue (`lib/hint-quiet.ts`) whether somebody is in the
   // middle of a message: focus in the box, or text waiting in it. App cannot
@@ -1644,11 +1635,11 @@ export function MessageComposer({
       onSubmit={(event) => void handleSubmit(event)}
       className={COMPOSER_FORM_CLASS}
     >
-      {/* The call's coachmarks, above the WHOLE composer. The dock cannot
-          hang them itself: its row animates open by collapsing and has to
-          be `overflow-hidden`, and the queue panel sits above it in the
-          same well, so a card anchored there was either clipped away or
-          laid over the field it names. */}
+      {/* The call's hint line (push-to-talk focus), above the WHOLE composer.
+          The dock cannot hang it itself: its row animates open by collapsing
+          and has to be `overflow-hidden`, and the queue panel sits above it
+          in the same well, so a line anchored there was either clipped away
+          or laid over the field it names. */}
       <div
         ref={setCallHintHost}
         className="pointer-events-none absolute bottom-full left-3 right-3 z-30 mb-2 sm:left-4 sm:right-4 [&>*]:pointer-events-auto"
@@ -1657,17 +1648,6 @@ export function MessageComposer({
         recording={voiceNoteActive}
         serverId={voiceNotesServerId}
       />
-      {formatHintEnabled && !isFormatBarOpen && !feedback && !voiceNoteActive && (
-        <div className="absolute bottom-full left-3 z-20 mb-2 sm:left-4">
-          <FeatureHint
-            id="composerFormat"
-            enabled
-            body={t("featureHint.composerFormat.body", {
-              control: t("featureHint.composerFormat.aa"),
-            })}
-          />
-        </div>
-      )}
       {menuKind && (
         <AutocompleteMenu
           id={MENU_ID}

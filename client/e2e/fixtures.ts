@@ -48,12 +48,8 @@ export async function ensureServer(): Promise<void> {
   // every message spec then times out uniformly in setup. Locally this is a
   // no-op, since the shared dev account has long since been stamped.
   //
-  // `firstRunDismissedAt` rides along for the same reason one step further in.
-  // The shared account has a server but never a friend and never an avatar, so
-  // the hub's first-run checklist reads as outstanding forever and would draw
-  // itself above the tab content on every spec that opens `/app/dm` — moving the
-  // rows the DM and call specs measure. Only `first-run.spec.ts` wants to see it,
-  // and that spec mints its own account rather than borrowing this one.
+  // `firstRunDismissedAt` rides along as a stamp the server preference still
+  // accepts. The first-run checklist it once silenced was removed on 2026-11-01.
   await fetch(`${API}/api/me/preferences`, {
     method: "PATCH",
     headers,

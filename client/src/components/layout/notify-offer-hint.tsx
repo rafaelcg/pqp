@@ -26,7 +26,7 @@ export function NotifyOfferHint({
   onDismiss,
 }: {
   enabled: boolean;
-  /** Frees the corner for the queue; see `CargosHint` for why it matters. */
+  /** Frees the corner for the queue: App keeps offering it to a card nobody sees until told. */
   onDismiss?: () => void;
 }) {
   const { t } = useTranslation();

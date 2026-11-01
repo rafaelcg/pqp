@@ -1,5 +1,3 @@
-import { browserStorage } from "./arrival";
-
 /**
  * THE NEWCOMER'S FIRST MINUTES IN A LIVE WATCH PARTY, as pure rules.
  *
@@ -10,23 +8,14 @@ import { browserStorage } from "./arrival";
  * median of 4 minutes, 65% of them on a phone, where the film was all there
  * was and the room was a swipe nobody told them about.
  *
- * Three behaviours hang off one flag, and this file is the only place that
- * decides who gets which:
- *
- *  - the PHONE LAYOUT (a chat floor, the server rail put away) is for every
- *    seatless viewer of a live party on the flagged server. It is a layout,
- *    not a lesson, so it does not look at how old the account is;
- *  - the CONTEXT STRIP and the QUIET FROM THE APP INVITE are for a newcomer:
- *    an account that finished first-run recently.
+ * One behaviour hangs off the flag: the PHONE LAYOUT (a chat floor, the server
+ * rail put away) is for every seatless viewer of a live party on the flagged
+ * server. It is a layout, not a lesson, so it does not look at how old the
+ * account is. The one-line "what is this" strip and the quiet from the app
+ * invite that shared this flag were removed on 2026-11-01.
  *
  * No React and no `window`, so each rule is a plain function a test can call.
  */
-
-/** How long an account counts as new. A show and the next morning. */
-export const NEWCOMER_WINDOW_MS = 24 * 60 * 60 * 1000;
-
-/** Remembered once the strip is closed. Per browser, like every campaign card. */
-export const PARTY_NEWCOMER_STRIP_STORAGE_KEY = "pqp:party-newcomer-strip-2026-09";
 
 /**
  * A pane narrower than this is a phone for layout purposes. The same 640 the
@@ -35,56 +24,6 @@ export const PARTY_NEWCOMER_STRIP_STORAGE_KEY = "pqp:party-newcomer-strip-2026-0
  */
 export const PHONE_PANE_MAX_WIDTH_PX = 640;
 
-/**
- * Whether the account finished first-run within the window.
- *
- * `preferences.onboardedAt` is the signal because it is the one instant the
- * client already holds for an account: written when the wizard finishes or is
- * skipped, and backfilled once, in August 2026, for accounts that predate it
- * (so a regular is never mistaken for a newcomer). There is no `createdAt` on
- * the user the client receives. Absent, unparseable, or in the future (a wrong
- * device clock) all read as "not new": failing quiet costs a missing strip,
- * failing loud puts a beginner's strip over a regular's film.
- */
-export function isNewcomerAccount(
-  onboardedAt: string | null | undefined,
-  now: number = Date.now(),
-  windowMs: number = NEWCOMER_WINDOW_MS,
-): boolean {
-  if (!onboardedAt) {
-    return false;
-  }
-  const at = Date.parse(onboardedAt);
-  if (!Number.isFinite(at)) {
-    return false;
-  }
-  const age = now - at;
-  // A minute of slack for a device clock a little behind the server's.
-  return age >= -60_000 && age < windowMs;
-}
-
-export function isPartyNewcomerStripDismissed(
-  storage: Pick<Storage, "getItem"> | null = browserStorage(),
-): boolean {
-  try {
-    return storage?.getItem(PARTY_NEWCOMER_STRIP_STORAGE_KEY) === "1";
-  } catch {
-    // Unreadable storage shows the strip: the session state in the component
-    // still lets the person close it, and it is one line.
-    return false;
-  }
-}
-
-export function dismissPartyNewcomerStrip(
-  storage: Pick<Storage, "setItem"> | null = browserStorage(),
-): void {
-  try {
-    storage?.setItem(PARTY_NEWCOMER_STRIP_STORAGE_KEY, "1");
-  } catch {
-    // Session-only hide lives in the component that called this.
-  }
-}
-
 export interface PartyNewcomerFacts {
   /** `LiveHlsConfig.newcomerExperience` for the open server. Absent is off. */
   flagOn: boolean | undefined;
@@ -92,10 +31,6 @@ export interface PartyNewcomerFacts {
   partyLive: boolean;
   /** This person has no seat in the call: they are watching the picture. */
   audience: boolean;
-  /** `isNewcomerAccount(...)`. */
-  newcomer: boolean;
-  /** The strip was closed on this device (or this session). */
-  dismissed: boolean;
 }
 
 /**
@@ -107,28 +42,6 @@ export function partyPhoneLayoutOn(
   facts: Pick<PartyNewcomerFacts, "flagOn" | "partyLive" | "audience">,
 ): boolean {
   return facts.flagOn === true && facts.partyLive && facts.audience;
-}
-
-/** The one-line "what is this" strip. */
-export function partyNewcomerStripVisible(facts: PartyNewcomerFacts): boolean {
-  return (
-    facts.flagOn === true &&
-    facts.partyLive &&
-    facts.audience &&
-    facts.newcomer &&
-    !facts.dismissed
-  );
-}
-
-/**
- * The "get the app" strip under the channel list is furniture for everybody
- * else and a way out of the page for somebody who arrived ten minutes ago from
- * a stream. Held back only for a newcomer, only while the party is on air.
- */
-export function suppressAppInviteForNewcomer(
-  facts: Pick<PartyNewcomerFacts, "flagOn" | "partyLive" | "newcomer">,
-): boolean {
-  return facts.flagOn === true && facts.partyLive && facts.newcomer;
 }
 
 /**

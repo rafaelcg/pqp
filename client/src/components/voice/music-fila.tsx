@@ -37,10 +37,6 @@ import {
 } from "@/components/voice/music-now-playing";
 import { MusicQueueList } from "@/components/voice/music-queue-list";
 import { MusicSearchPicker } from "@/components/voice/music-search-picker";
-import {
-  FeatureHint,
-  useFeatureHintEnabled,
-} from "@/components/layout/feature-hint";
 import { useScrub } from "@/components/voice/use-scrub";
 import {
   MUSIC_COVER_REDESIGN,
@@ -94,7 +90,6 @@ export function MusicFila({
   const playing = music.state?.status === "playing";
   const progress = usePlaybackProgress(music, current?.durationMs ?? null);
   const scrub = useScrub((value) => seekTo(value));
-  const fieldHintEnabled = useFeatureHintEnabled("musicField");
   /** Empty field, so the line that says what it takes is still useful. */
   const [fieldIdle, setFieldIdle] = useState(true);
   // The picker reports this from an effect that lists the callback, so a
@@ -360,24 +355,6 @@ export function MusicFila({
           />
         </div>
 
-        {fieldHintEnabled ? (
-          /* Attached to the field, under it, where the answer to "what do I
-             type here" belongs, and OUT OF THE FLOW: in it the card pushed
-             the queue and the sources line down by its own height, so the
-             panel jumped the moment it opened. It only draws when it holds
-             the one attached slot; `lib/feature-hints.ts` is the queue. */
-          <div className="pointer-events-none relative z-30 h-0 [&>*]:pointer-events-auto">
-            <div className="absolute inset-x-3 top-2">
-            <FeatureHint
-              id="musicField"
-              enabled
-              title={t("featureHint.musicField.title")}
-              body={t("featureHint.musicField.body")}
-            />
-            </div>
-          </div>
-        ) : null}
-
         {fieldIdle ? (
           /* Under the field, not over it: the first thing a new person needs
              is somewhere to paste, and the second is what may be pasted.
@@ -480,13 +457,8 @@ export function MusicFila({
           // `--fila-room` is what the call split has left under the stage,
           // so a long queue scrolls instead of pushing the composer away.
           // Cut that short, the whole panel scrolls rather than letting its
-          // add field spill over the player below it. Not while the field's
-          // first-run card shows: it hangs out of the panel and a scroll
-          // container would cut it in half.
-          className={cn(
-            "flex max-h-[min(28rem,50dvh,var(--fila-room,28rem))] min-h-0 flex-col",
-            !fieldHintEnabled && "overflow-y-auto overscroll-contain",
-          )}
+          // add field spill over the player below it.
+          className="flex max-h-[min(28rem,50dvh,var(--fila-room,28rem))] min-h-0 flex-col overflow-y-auto overscroll-contain"
         >
           {panel}
         </section>

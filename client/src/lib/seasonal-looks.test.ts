@@ -3,7 +3,6 @@ import {
   SEASON_OVERRIDE_KEY,
   currentSeason,
   isLookOffered,
-  seasonalHintKey,
 } from "./seasonal-looks";
 
 const empty = { getItem: () => null };
@@ -50,16 +49,5 @@ describe("isLookOffered", () => {
 
   it("offers every seasonal look when all year is on", () => {
     expect(isLookOffered("christmas", "signal", null, true)).toBe(true);
-  });
-});
-
-describe("seasonalHintKey", () => {
-  it("counts early January as the previous year's Christmas", () => {
-    expect(seasonalHintKey("christmas", day(2026, 12, 20))).toBe(
-      seasonalHintKey("christmas", day(2027, 1, 3)),
-    );
-    expect(seasonalHintKey("halloween", day(2026, 10, 10))).toBe(
-      "pqp:seasonal-look-halloween-2026",
-    );
   });
 });

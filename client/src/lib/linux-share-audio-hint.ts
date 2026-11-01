@@ -28,7 +28,7 @@ import {
  *   the computer's sound, full stop. The browser is the only route to sound.
  *
  * Persistence rides `lib/hints.ts` (one store, localhost never persists
- * unless `HINTS_PERSIST_OVERRIDE_KEY` is set), same as `cinema-hint.ts`.
+ * unless `HINTS_PERSIST_OVERRIDE_KEY` is set).
  */
 
 export const LINUX_SHARE_AUDIO_HINT_STORAGE_KEY =

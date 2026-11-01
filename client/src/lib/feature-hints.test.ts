@@ -1,19 +1,13 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   ATTACHED_FEATURE_HINT_ORDER,
+  FEATURE_HINT_IDS,
   FEATURE_HINT_STORAGE_KEYS,
   isFeatureHintSeen,
   rememberFeatureHint,
-  shouldOfferBringFriendsHint,
-  shouldOfferCallDockHint,
-  shouldOfferChannelPinHint,
-  shouldOfferComposerFormatHint,
-  shouldOfferMusicFieldHint,
-  shouldOfferMusicHint,
-  shouldOfferShortcutsHint,
   shouldOfferVoiceNoteTranscriptionNotice,
-  shouldOfferWatchNowHint,
-  shouldOfferWatchPartyHint,
+  shouldOfferWatchPartyHostHint,
+  shouldOfferWatchPartyViewerHint,
   resetFeatureHintsForTests,
   spendFeatureHintForLoad,
   winningFeatureHint,
@@ -29,412 +23,111 @@ function memory(seed: Record<string, string> = {}) {
   };
 }
 
+describe("the coach marks that are left", () => {
+  it("are the two watch party hints and the voice note notice", () => {
+    expect([...FEATURE_HINT_IDS]).toEqual([
+      "watchPartyHost",
+      "watchPartyViewer",
+      "voiceNoteTranscription",
+    ]);
+    // The notice is drawn by the composer, so it is not in the queue.
+    expect([...ATTACHED_FEATURE_HINT_ORDER]).toEqual([
+      "watchPartyHost",
+      "watchPartyViewer",
+    ]);
+  });
+});
+
 describe("winningFeatureHint", () => {
+  beforeEach(() => resetFeatureHintsForTests());
+
   it("returns null when nobody wants a bubble", () => {
     expect(winningFeatureHint({})).toBeNull();
     expect(
-      winningFeatureHint({ watchParty: false, composerFormat: false }),
+      winningFeatureHint({ watchPartyHost: false, watchPartyViewer: false }),
     ).toBeNull();
   });
 
-  it("lets the moved controls beat every hint that points at one of them", () => {
+  it("lets the host's hint beat the viewer's", () => {
     expect(
-      winningFeatureHint({
-        callDock: true,
-        watchPartyHost: true,
-        watchPartyViewer: true,
-        watchParty: true,
-        music: true,
-        composerFormat: true,
-      }),
-    ).toBe("callDock");
-    expect(ATTACHED_FEATURE_HINT_ORDER[0]).toBe("callDock");
-    // And steps aside once it has had its turn.
-    expect(winningFeatureHint({ callDock: false, music: true })).toBe("music");
-  });
-
-  it("lets Watch party beat the format bar, and format beat pin", () => {
-    expect(
-      winningFeatureHint({ watchParty: true, composerFormat: true, channelPin: true }),
-    ).toBe("watchParty");
-    expect(
-      winningFeatureHint({ composerFormat: true, channelPin: true }),
-    ).toBe("composerFormat");
-    expect(winningFeatureHint({ channelPin: true })).toBe("channelPin");
-    // The forum's tip waits behind every other attached tip.
-    expect(winningFeatureHint({ channelPin: true, forum: true })).toBe("channelPin");
-    expect(winningFeatureHint({ forum: true })).toBe("forum");
-    expect(
-      winningFeatureHint({ watchParty: true, bringFriends: true }),
-    ).toBe("watchParty");
-    expect(
-      winningFeatureHint({ bringFriends: true, music: true }),
-    ).toBe("bringFriends");
+      winningFeatureHint({ watchPartyHost: true, watchPartyViewer: true }),
+    ).toBe("watchPartyHost");
+    expect(winningFeatureHint({ watchPartyViewer: true })).toBe(
+      "watchPartyViewer",
+    );
   });
 });
 
 describe("a hint that has had its turn stops holding the slot", () => {
   /*
-   * WHY THIS IS NOT ONLY A LOCALHOST PROBLEM.
-   *
    * The queue hands the slot to the first id that wants it, and `wanting`
-   * is computed from standing conditions: connected, in a call, a dock on
-   * screen. None of them changes when somebody presses Entendi, so the
-   * card that has already been seen went on winning for the rest of the
-   * page load and every tip behind it waited for good. On a developer's
-   * machine, where `lib/hints.ts` deliberately remembers nothing so every
-   * card can be seen again, that is forever: `callDock` is first, so the
-   * music card could never once be drawn.
+   * is computed from standing conditions. None of them changes when somebody
+   * presses Entendi, so the card that has already been seen would go on
+   * winning for the rest of the page load and every tip behind it would wait
+   * for good. On a developer's machine, where `lib/hints.ts` deliberately
+   * remembers nothing so every card can be seen again, that is forever.
    */
   beforeEach(() => resetFeatureHintsForTests());
 
   it("passes the slot on once the winner is spent", () => {
-    expect(winningFeatureHint({ callDock: true, music: true })).toBe("callDock");
-    spendFeatureHintForLoad("callDock");
-    expect(winningFeatureHint({ callDock: true, music: true })).toBe("music");
-  });
-
-  it("keeps passing it down the order", () => {
-    spendFeatureHintForLoad("callDock");
-    spendFeatureHintForLoad("music");
     expect(
-      winningFeatureHint({ callDock: true, music: true, composerFormat: true }),
-    ).toBe("composerFormat");
+      winningFeatureHint({ watchPartyHost: true, watchPartyViewer: true }),
+    ).toBe("watchPartyHost");
+    spendFeatureHintForLoad("watchPartyHost");
+    expect(
+      winningFeatureHint({ watchPartyHost: true, watchPartyViewer: true }),
+    ).toBe("watchPartyViewer");
   });
 
   it("says nothing is wanted once every wanter has had its turn", () => {
-    spendFeatureHintForLoad("music");
-    expect(winningFeatureHint({ music: true })).toBeNull();
+    spendFeatureHintForLoad("watchPartyViewer");
+    expect(winningFeatureHint({ watchPartyViewer: true })).toBeNull();
   });
 });
 
 describe("remember / seen", () => {
   it("records each id under its own key", () => {
     const storage = memory();
-    expect(isFeatureHintSeen("composerFormat", storage, true)).toBe(false);
-    rememberFeatureHint("composerFormat", storage, true);
-    expect(storage.getItem(FEATURE_HINT_STORAGE_KEYS.composerFormat)).toBe(
+    expect(isFeatureHintSeen("watchPartyViewer", storage, true)).toBe(false);
+    rememberFeatureHint("watchPartyViewer", storage, true);
+    expect(storage.getItem(FEATURE_HINT_STORAGE_KEYS.watchPartyViewer)).toBe(
       "1",
     );
-    expect(isFeatureHintSeen("composerFormat", storage, true)).toBe(true);
-    expect(isFeatureHintSeen("watchParty", storage, true)).toBe(false);
+    expect(isFeatureHintSeen("watchPartyViewer", storage, true)).toBe(true);
+    expect(isFeatureHintSeen("watchPartyHost", storage, true)).toBe(false);
   });
 
   it("writes nothing when persist is off", () => {
     const storage = memory();
-    rememberFeatureHint("shortcuts", storage, false);
-    expect(storage.getItem(FEATURE_HINT_STORAGE_KEYS.shortcuts)).toBeNull();
-    expect(isFeatureHintSeen("shortcuts", storage, false)).toBe(false);
+    rememberFeatureHint("watchPartyHost", storage, false);
+    expect(storage.getItem(FEATURE_HINT_STORAGE_KEYS.watchPartyHost)).toBeNull();
+    expect(isFeatureHintSeen("watchPartyHost", storage, false)).toBe(false);
   });
 });
 
-describe("shouldOfferWatchNowHint", () => {
-  const base = {
-    seen: false,
-    automated: false,
-    bannerVisible: true,
-    newcomer: true,
-  };
-
-  it("fires once, for a newcomer, with the strip on screen", () => {
-    expect(shouldOfferWatchNowHint(base)).toBe(true);
-    expect(shouldOfferWatchNowHint({ ...base, seen: true })).toBe(false);
-    expect(shouldOfferWatchNowHint({ ...base, automated: true })).toBe(false);
-    expect(shouldOfferWatchNowHint({ ...base, bannerVisible: false })).toBe(false);
-  });
-
-  it("is not explained to somebody who has been here a while", () => {
-    expect(shouldOfferWatchNowHint({ ...base, newcomer: false })).toBe(false);
-  });
-
-  it("is a moment: it beats the standing tips, and only the dock beats it", () => {
-    expect(winningFeatureHint({ watchNow: true, composerFormat: true, channelPin: true })).toBe(
-      "watchNow",
-    );
-    expect(winningFeatureHint({ watchNow: true, watchParty: true, music: true })).toBe(
-      "watchNow",
-    );
-    expect(winningFeatureHint({ callDock: true, watchNow: true })).toBe("callDock");
-  });
-
-  it("keeps its own remembered key", () => {
-    expect(FEATURE_HINT_STORAGE_KEYS.watchNow).toBe("pqp:feature-hint-watch-now-2026-10");
-  });
-});
-
-describe("shouldOfferCallDockHint", () => {
-  const ready = {
-    seen: false,
-    automated: false,
-    dockVisible: true,
-    connected: true,
-  };
-
-  it("shows the first time the dock opens in a room you are in", () => {
-    expect(shouldOfferCallDockHint(ready)).toBe(true);
-  });
-
-  it("stays away once seen, under automation, off the dock, or before the join lands", () => {
-    expect(shouldOfferCallDockHint({ ...ready, seen: true })).toBe(false);
-    expect(shouldOfferCallDockHint({ ...ready, automated: true })).toBe(false);
-    expect(shouldOfferCallDockHint({ ...ready, dockVisible: false })).toBe(
+describe("the watch party hints", () => {
+  it("the host's shows once, on the setup surface", () => {
+    const base = { seen: false, automated: false, settingUp: true };
+    expect(shouldOfferWatchPartyHostHint(base)).toBe(true);
+    expect(shouldOfferWatchPartyHostHint({ ...base, seen: true })).toBe(false);
+    expect(shouldOfferWatchPartyHostHint({ ...base, automated: true })).toBe(
       false,
     );
-    expect(shouldOfferCallDockHint({ ...ready, connected: false })).toBe(
+    expect(shouldOfferWatchPartyHostHint({ ...base, settingUp: false })).toBe(
       false,
     );
   });
 
-  it("has a key of its own", () => {
-    expect(FEATURE_HINT_STORAGE_KEYS.callDock).toBe(
-      "pqp:feature-hint-call-dock-2026-09",
-    );
-  });
-});
-
-describe("shouldOfferWatchPartyHint", () => {
-  const ready = {
-    seen: false,
-    automated: false,
-    connected: true,
-    canStream: true,
-    canShare: true,
-  };
-
-  it("shows once when the call strip can share", () => {
-    expect(shouldOfferWatchPartyHint(ready)).toBe(true);
-  });
-
-  it("hides when the strip would not offer share", () => {
-    expect(shouldOfferWatchPartyHint({ ...ready, seen: true })).toBe(false);
-    expect(shouldOfferWatchPartyHint({ ...ready, automated: true })).toBe(false);
-    expect(shouldOfferWatchPartyHint({ ...ready, connected: false })).toBe(
+  it("the viewer's shows once, to somebody watching without a seat", () => {
+    const base = { seen: false, automated: false, watching: true };
+    expect(shouldOfferWatchPartyViewerHint(base)).toBe(true);
+    expect(shouldOfferWatchPartyViewerHint({ ...base, seen: true })).toBe(false);
+    expect(shouldOfferWatchPartyViewerHint({ ...base, automated: true })).toBe(
       false,
     );
-    expect(shouldOfferWatchPartyHint({ ...ready, canStream: false })).toBe(
+    expect(shouldOfferWatchPartyViewerHint({ ...base, watching: false })).toBe(
       false,
     );
-    expect(shouldOfferWatchPartyHint({ ...ready, canShare: false })).toBe(
-      false,
-    );
-  });
-});
-
-describe("shouldOfferBringFriendsHint", () => {
-  const ready = {
-    seen: false,
-    automated: false,
-    presenting: true,
-    inServer: true,
-    canInvite: true,
-    roomSize: 1,
-  };
-
-  it("shows once when you are presenting to a small server call", () => {
-    expect(shouldOfferBringFriendsHint(ready)).toBe(true);
-    expect(shouldOfferBringFriendsHint({ ...ready, roomSize: 2 })).toBe(true);
-  });
-
-  it("hides for viewers, DMs, a full trio, or a second look", () => {
-    expect(shouldOfferBringFriendsHint({ ...ready, seen: true })).toBe(false);
-    expect(shouldOfferBringFriendsHint({ ...ready, automated: true })).toBe(
-      false,
-    );
-    expect(shouldOfferBringFriendsHint({ ...ready, presenting: false })).toBe(
-      false,
-    );
-    expect(shouldOfferBringFriendsHint({ ...ready, inServer: false })).toBe(
-      false,
-    );
-    expect(shouldOfferBringFriendsHint({ ...ready, canInvite: false })).toBe(
-      false,
-    );
-    expect(shouldOfferBringFriendsHint({ ...ready, roomSize: 3 })).toBe(false);
-    expect(shouldOfferBringFriendsHint({ ...ready, roomSize: 0 })).toBe(false);
-  });
-
-  it("records under the September 2026 key", () => {
-    const storage = memory();
-    rememberFeatureHint("bringFriends", storage, true);
-    expect(storage.getItem(FEATURE_HINT_STORAGE_KEYS.bringFriends)).toBe("1");
-    expect(isFeatureHintSeen("bringFriends", storage, true)).toBe(true);
-    expect(isFeatureHintSeen("bringFriends", storage, false)).toBe(false);
-  });
-});
-
-describe("shouldOfferMusicHint", () => {
-  const ready = {
-    seen: false,
-    automated: false,
-    connected: true,
-    canSpeak: true,
-    playing: false,
-    filaOpen: false,
-  };
-
-  it("shows once in a call where nobody has put anything on", () => {
-    expect(shouldOfferMusicHint(ready)).toBe(true);
-  });
-
-  it("stays quiet for a listener, a room with music on, and an open panel", () => {
-    expect(shouldOfferMusicHint({ ...ready, seen: true })).toBe(false);
-    expect(shouldOfferMusicHint({ ...ready, automated: true })).toBe(false);
-    expect(shouldOfferMusicHint({ ...ready, connected: false })).toBe(false);
-    // Without SPEAK there is nothing this person could add, so the card
-    // would be describing a control they cannot use.
-    expect(shouldOfferMusicHint({ ...ready, canSpeak: false })).toBe(false);
-    // The bar is on screen: the card would point at what they are reading.
-    expect(shouldOfferMusicHint({ ...ready, playing: true })).toBe(false);
-    // They already opened the panel the card exists to send them to.
-    expect(shouldOfferMusicHint({ ...ready, filaOpen: true })).toBe(false);
-  });
-
-  it("records under the second September 2026 key", () => {
-    const storage = memory();
-    // The card was re-aimed twice under the first key, so everybody who saw
-    // the sidebar-era copy has it stamped and would never see this one.
-    expect(FEATURE_HINT_STORAGE_KEYS.music).toBe(
-      "pqp:feature-hint-music-2026-09-2",
-    );
-    rememberFeatureHint("music", storage, true);
-    expect(isFeatureHintSeen("music", storage, true)).toBe(true);
-  });
-});
-
-describe("shouldOfferMusicFieldHint", () => {
-  const ready = {
-    seen: false,
-    automated: false,
-    filaOpen: true,
-    canAdd: true,
-  };
-
-  /*
-   * A MOMENT, NOT A STANDING TIP. The music card points at the tile from
-   * across the call; this one fires when somebody has opened the panel and
-   * is looking straight at the field, which is why it goes BEFORE `music`
-   * in the order — the same reasoning the two watch party hints carry.
-   */
-  it("fires the first time the panel is opened", () => {
-    expect(shouldOfferMusicFieldHint(ready)).toBe(true);
-  });
-
-  it("says nothing with the panel shut, or to somebody who cannot add", () => {
-    expect(shouldOfferMusicFieldHint({ ...ready, seen: true })).toBe(false);
-    expect(shouldOfferMusicFieldHint({ ...ready, automated: true })).toBe(false);
-    expect(shouldOfferMusicFieldHint({ ...ready, filaOpen: false })).toBe(false);
-    expect(shouldOfferMusicFieldHint({ ...ready, canAdd: false })).toBe(false);
-  });
-
-  it("beats the tile's card, which points at what they already opened", () => {
-    expect(winningFeatureHint({ music: true, musicField: true })).toBe(
-      "musicField",
-    );
-    expect(ATTACHED_FEATURE_HINT_ORDER.indexOf("musicField")).toBeLessThan(
-      ATTACHED_FEATURE_HINT_ORDER.indexOf("music"),
-    );
-  });
-
-  it("has a key of its own", () => {
-    const storage = memory();
-    rememberFeatureHint("musicField", storage, true);
-    expect(storage.getItem(FEATURE_HINT_STORAGE_KEYS.musicField)).toBe("1");
-    expect(FEATURE_HINT_STORAGE_KEYS.musicField).not.toBe(
-      FEATURE_HINT_STORAGE_KEYS.music,
-    );
-  });
-});
-
-describe("shouldOfferChannelPinHint", () => {
-  it("shows on a server channel list, once", () => {
-    expect(
-      shouldOfferChannelPinHint({
-        seen: false,
-        automated: false,
-        serverOpen: true,
-      }),
-    ).toBe(true);
-    expect(
-      shouldOfferChannelPinHint({
-        seen: true,
-        automated: false,
-        serverOpen: true,
-      }),
-    ).toBe(false);
-    expect(
-      shouldOfferChannelPinHint({
-        seen: false,
-        automated: false,
-        serverOpen: false,
-      }),
-    ).toBe(false);
-  });
-});
-
-describe("shouldOfferComposerFormatHint", () => {
-  it("shows on a text channel, once", () => {
-    expect(
-      shouldOfferComposerFormatHint({
-        seen: false,
-        automated: false,
-        textChannelOpen: true,
-      }),
-    ).toBe(true);
-    expect(
-      shouldOfferComposerFormatHint({
-        seen: true,
-        automated: false,
-        textChannelOpen: true,
-      }),
-    ).toBe(false);
-    expect(
-      shouldOfferComposerFormatHint({
-        seen: false,
-        automated: false,
-        textChannelOpen: false,
-      }),
-    ).toBe(false);
-  });
-});
-
-describe("shouldOfferShortcutsHint", () => {
-  it("waits for a keyboard, a quiet beat, and an empty attached slot", () => {
-    expect(
-      shouldOfferShortcutsHint({
-        seen: false,
-        automated: false,
-        hasKeyboard: true,
-        quietReady: true,
-        attachedHint: null,
-      }),
-    ).toBe(true);
-    expect(
-      shouldOfferShortcutsHint({
-        seen: false,
-        automated: false,
-        hasKeyboard: true,
-        quietReady: false,
-        attachedHint: null,
-      }),
-    ).toBe(false);
-    expect(
-      shouldOfferShortcutsHint({
-        seen: false,
-        automated: false,
-        hasKeyboard: false,
-        quietReady: true,
-        attachedHint: null,
-      }),
-    ).toBe(false);
-    expect(
-      shouldOfferShortcutsHint({
-        seen: false,
-        automated: false,
-        hasKeyboard: true,
-        quietReady: true,
-        attachedHint: "composerFormat",
-      }),
-    ).toBe(false);
   });
 });
 
@@ -452,6 +145,6 @@ describe("shouldOfferVoiceNoteTranscriptionNotice", () => {
     expect(isFeatureHintSeen("voiceNoteTranscription", storage, true)).toBe(false);
     rememberFeatureHint("voiceNoteTranscription", storage, true);
     expect(isFeatureHintSeen("voiceNoteTranscription", storage, true)).toBe(true);
-    expect(isFeatureHintSeen("composerFormat", storage, true)).toBe(false);
+    expect(isFeatureHintSeen("watchPartyViewer", storage, true)).toBe(false);
   });
 });

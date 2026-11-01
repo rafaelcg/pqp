@@ -4,12 +4,12 @@ import { useSyncExternalStore } from "react";
  * THE HINT DIET (`hint_diet`, global, default OFF).
  *
  * The 2026-10-20 hints audit counted 20 surfaces before a new owner sent a
- * first message (17 for an invitee). Most of them are cards that tell a
- * person something the product already shows: a What's new card that points
- * at a rail that already carries the pip, a "controls moved" card shown to
- * accounts made after the move, coach marks for the format bar and the pin.
- * With the flag on the client treats the ids below as hidden, as if they had
- * been seen, and never draws them.
+ * first message (17 for an invitee). With the flag on the client treats the
+ * ids below as hidden, as if they had been seen, and never draws them. Every
+ * card and coach mark the list used to name (What's new, cargos, shortcuts,
+ * Voz limpa, the seasonal look, the call dock, watch party, music, the
+ * composer format bar, the channel pin) was removed outright on 2026-11-01,
+ * so the list is down to the one id that is not a queue member.
  *
  * ONE LIST, CHECKED IN THE PLACES THE QUEUES READ. Not scattered conditionals:
  * `winningCornerHint` and `winningFeatureHint` skip a hidden id (so the next
@@ -17,13 +17,12 @@ import { useSyncExternalStore } from "react";
  * (so a coach mark never becomes eligible), and `rememberFeatureHint` writes
  * nothing for it. NOTHING IS STORED for a hidden hint, ever, which is the
  * whole reversibility story: turning the flag off restores every card
- * exactly as it was, including for the account that used the format bar
- * while the flag was on.
+ * exactly as it was, including for the account that used the control while
+ * the flag was on.
  *
  * KEPT ON PURPOSE (not here): the Música tile pip (spent by use), the Voz
- * limpa NOVO dot in Settings, the QG invite, bringFriends, watchNow, the
- * forum hint, the notify offer, the mobile beta card and the first-run
- * checklist. See `docs/ONBOARDING.md` §"The diet".
+ * limpa NOVO dot in Settings, the notify offer, the watch party coach marks.
+ * See `docs/ONBOARDING.md` §"The diet".
  *
  * The answer arrives on `GET /api/onboarding/config` as `hintDiet` (see
  * `lib/hint-config.ts`). Anything but an explicit `true` is off, so an older
@@ -31,21 +30,9 @@ import { useSyncExternalStore } from "react";
  * behave exactly as the client did before this file existed.
  */
 export const HINT_DIET_IDS = [
-  // Corner queue (`lib/corner-hints.ts`).
-  "whatsNew",
-  "cargos",
-  "shortcuts",
-  "voiceClean",
-  "seasonalLook",
-  // Attached coach marks (`lib/feature-hints.ts`).
-  "callDock",
-  "watchParty",
-  "music",
-  "musicField",
-  "composerFormat",
-  "channelPin",
   // Not a queue member: the owner's empty channel repeats the arrival
-  // banner's "Copiar convite" a screen away from it.
+  // banner's "Copiar convite" a screen away from it. Every hint the diet
+  // used to hide was removed outright on 2026-11-01.
   "ownerInviteButton",
 ] as const;
 

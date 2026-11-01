@@ -19,7 +19,6 @@ import {
 import { UserButton } from "@clerk/clerk-react";
 import { CUSTOM_STATUS_MAX_LENGTH, type ManualStatus, type UserStatus } from "@pqp/shared";
 import { DownloadDialog } from "@/components/downloads/download-dialog";
-import { DownloadHint } from "@/components/downloads/download-hint";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import {
@@ -35,11 +34,6 @@ import { retroStatusKey } from "@/lib/retro-look";
 import { isDesktopApp } from "@/lib/desktop";
 import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import { escapeOwnedByOverlay } from "@/lib/escape-unless-overlay";
-import { isAndroidDevice, isIOSDevice } from "@/lib/downloads";
-import {
-  dismissDownloadHint,
-  isDownloadHintDismissed,
-} from "@/lib/download-hint";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -102,13 +96,6 @@ interface UserPanelProps {
    * collapsed sidebar would be a way to get stranded muted.
    */
   compact?: boolean;
-  /**
-   * Hold back the "Get the app" strip above this row. Set for a newcomer in a
-   * live party on a flagged server (`suppressAppInviteForNewcomer`); the strip
-   * is a way out of the page for somebody who just arrived from a stream.
-   * Everyone else keeps it, and the Download entry in the status menu stays.
-   */
-  hideDownloadHint?: boolean;
 }
 
 /**
@@ -218,7 +205,6 @@ export function UserPanel({
   onOpenFeedback,
   onOpenHelp,
   compact = false,
-  hideDownloadHint = false,
 }: UserPanelProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -227,7 +213,6 @@ export function UserPanel({
   // saved one is what every other surface in the app is drawing meanwhile.
   const [draft, setDraft] = useState(customStatus);
   const [downloadOpen, setDownloadOpen] = useState(false);
-  const [hintDismissed, setHintDismissed] = useState(isDownloadHintDismissed);
   const popoverRef = useRef<HTMLDivElement>(null);
   const choiceRefs = useRef<Array<HTMLButtonElement | null>>([]);
   /**
@@ -237,19 +222,6 @@ export function UserPanel({
    */
   const triggerRef = useRef<HTMLButtonElement>(null);
   const showDownload = !isDesktopApp();
-  // Phone browsers get the corner card instead. Two invites for the same
-  // APK/TestFlight hop in a 16rem sidebar is noise, and this strip used to
-  // open a desktop-shaped dialog on a phone.
-  const onPhone = isAndroidDevice() || isIOSDevice();
-  // Not on the icons-only strip: the hint is a sentence and a button in a
-  // 72px column, which renders as two unexplained glyphs. It comes back with
-  // the labels, and it is a one-shot invitation rather than a control.
-  const showHint =
-    showDownload &&
-    !hintDismissed &&
-    !onPhone &&
-    !compact &&
-    !hideDownloadHint;
   // Deafen forces the mic off, so both slashes show. Undeafen can leave the
   // mic slash up: that is the mute from before, not a second deafen.
   const micShownOff = serverMuted || isMuted || isDeafened;
@@ -365,15 +337,6 @@ export function UserPanel({
       // the row stays centred in it (`index.css`, `[data-user-panel-card]`).
       data-user-panel-card=""
     >
-      {showHint && (
-        <DownloadHint
-          onOpen={() => setDownloadOpen(true)}
-          onDismiss={() => {
-            dismissDownloadHint();
-            setHintDismissed(true);
-          }}
-        />
-      )}
       <div
         className={cn(
           "relative flex gap-2 px-2 py-2 redesign:gap-1 redesign:p-1.5",

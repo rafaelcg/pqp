@@ -410,39 +410,3 @@ test("the fullscreen button asks the platform, and its state follows the platfor
   await expectNoSidewaysScroll(page);
   await leaveVoiceIfConnected(page);
 });
-
-test("the home-screen hint shows once on an iPhone in a tab, never on Android", async ({
-  page,
-}, testInfo) => {
-  const project = testInfo.project.name as MobileProject;
-  await ensureVoiceChannel();
-  await openApp(page);
-  await joinLobbyFromPhone(page);
-  await startShare(page);
-
-  const hint = page.locator("[data-cinema-hint]");
-  if (project !== "mobile-iphone") {
-    await expect(hint).toHaveCount(0);
-    await leaveVoiceIfConnected(page);
-    return;
-  }
-
-  await expect(hint).toBeVisible();
-  await expect(hint).toContainText("Add pqp to your home screen");
-  await page.screenshot({
-    path: testInfo.outputPath(`${project}-portrait-hint.png`),
-  });
-  await hint.getByRole("button", { name: "Dismiss hint" }).click();
-  await expect(hint).toHaveCount(0);
-  await leaveVoiceIfConnected(page);
-
-  // A fresh load, same browser: it remembers.
-  await page.reload();
-  await expect(page.getByRole("button", { name: "Send" })).toBeVisible({
-    timeout: 20_000,
-  });
-  await joinLobbyFromPhone(page);
-  await startShare(page);
-  await expect(hint).toHaveCount(0);
-  await leaveVoiceIfConnected(page);
-});

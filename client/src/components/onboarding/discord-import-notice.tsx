@@ -22,8 +22,7 @@ export function resetDiscordImportNoticeViewsForTests(): void {
  * The button opens the Discord import; the X closes it, and
  * `lib/discord-import-notice.ts` decides whether it ever comes back.
  *
- * Same frame as the arrival strip and the newcomer-invite strip, and it takes
- * the arrival strip's slot: one instruction per screen. Who sees it is
+ * Same frame as the arrival strip, and it takes the arrival strip's slot: one instruction per screen. Who sees it is
  * `discordImportNoticeVisible`; this file only draws it. A labelled region,
  * not a live region: it is a standing offer, and announcing it on every
  * channel switch would be noise for a screen reader.

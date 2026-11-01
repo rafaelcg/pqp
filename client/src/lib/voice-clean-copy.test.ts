@@ -37,16 +37,6 @@ describe("Voz limpa copy", () => {
     }
   });
 
-  it("uses the exact pt-BR nudge copy", () => {
-    expect(ptBR["voiceClean.hint.title"]).toBe("Voz limpa");
-    expect(ptBR["voiceClean.hint.body"]).toBe(
-      "Corta ventilador, teclado e o vizinho. Só a tua voz passa.",
-    );
-    expect(ptBR["voiceClean.hint.activate"]).toBe("Ativar");
-    expect(ptBR["voiceClean.hint.later"]).toBe("Depois");
-    expect(ptBR["voiceClean.hint.activatedToast"]).toBe("Voz limpa ativada");
-  });
-
   it("uses the exact pt-BR fallback notice", () => {
     expect(ptBR["voice.notice.noiseSuppressionUnsupported"]).toBe(
       "O teu navegador não suporta a Voz limpa ainda; a supressão padrão continua ligada.",
