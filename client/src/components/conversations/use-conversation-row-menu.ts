@@ -74,6 +74,9 @@ export function useConversationRowMenu({
                     displayName: solo.displayName,
                     tag: solo.tag ?? null,
                     avatarUrl: solo.avatarUrl ?? null,
+                    username: solo.username ?? null,
+                    handle: solo.handle ?? null,
+                    customStatus: solo.customStatus ?? null,
                   },
                   anchor,
                 );

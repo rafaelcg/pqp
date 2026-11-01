@@ -23,15 +23,22 @@ import type {
   PublicUser,
 } from "@pqp/shared";
 import { Check, Menu, UserPlus, Users, X } from "lucide-react";
-import { useEffect, useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { PendingDepoimentos } from "@/components/depoimentos/pending-depoimentos";
 import { Button } from "@/components/ui/button";
+import { ContextMenu } from "@/components/ui/context-menu";
 import { Tabs } from "@/components/ui/tabs";
 import { StatusDot } from "@/components/user/status-dot";
 import { UserAvatar } from "@/components/user/user-avatar";
+import { useProfilePopover } from "@/components/user/user-profile-popover";
 import { UserSearch } from "@/components/user/user-search";
 import { ApiError, createConversation } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
+import {
+  directConversationWith,
+  friendProfileSubject,
+  friendRowMenuItems,
+} from "./friend-row-menu";
 import {
   onlineFriends,
   pendingActionCount,
@@ -80,6 +87,16 @@ interface FriendsViewProps {
    * so its button opens the same field the header's does.
    */
   hero?: (actions: { openAdd: () => void }) => ReactNode;
+  /**
+   * The account's conversations, so a friend row can offer "Fixar" for the 1:1
+   * it already has with that friend. Absent, the row simply has no pin entry.
+   */
+  conversations?: readonly DmSummary[];
+  /** Pinned conversation ids, the same set the DM list reads. */
+  pinnedChannelIds?: ReadonlySet<string>;
+  onTogglePin?: (channelId: string) => void;
+  /** "Bloquear" in a friend row's menu. Absent, the entry is not drawn. */
+  onBlockUser?: (user: PublicUser) => void;
 }
 
 export function FriendsView({
@@ -88,6 +105,10 @@ export function FriendsView({
   onOpenNav,
   extras,
   hero,
+  conversations,
+  pinnedChannelIds,
+  onTogglePin,
+  onBlockUser,
 }: FriendsViewProps) {
   const { t } = useTranslation();
   const redesign = useRedesign();
@@ -415,6 +436,10 @@ export function FriendsView({
               busyId={busyId}
               onMessage={(id) => void handleMessage(id)}
               onRemove={setConfirmingRemoval}
+              conversations={conversations}
+              pinnedChannelIds={pinnedChannelIds}
+              onTogglePin={onTogglePin}
+              onBlock={onBlockUser}
             />
           </>
         )}
@@ -456,6 +481,10 @@ function FriendRows({
   busyId,
   onMessage,
   onRemove,
+  conversations,
+  pinnedChannelIds,
+  onTogglePin,
+  onBlock,
 }: {
   friends: Friend[];
   emptyState: ReactNode;
@@ -463,17 +492,95 @@ function FriendRows({
   onMessage: (userId: string) => void;
   /** The whole person, not an id: the confirmation has to name them. */
   onRemove: (friend: Friend) => void;
+  conversations?: readonly DmSummary[];
+  pinnedChannelIds?: ReadonlySet<string>;
+  onTogglePin?: (channelId: string) => void;
+  onBlock?: (user: PublicUser) => void;
 }) {
-  const { t } = useTranslation();
   if (friends.length === 0) {
     return <>{emptyState}</>;
   }
   return (
     <ul className="max-w-2xl redesign:max-w-none">
       {friends.map((friend) => (
-        <li
+        <FriendRow
           key={friend.id}
-          className={cn("group mb-1 flex items-center gap-3 rounded-md px-2 py-2 hover:bg-ink-3", FRIEND_ROW_REDESIGN)}
+          friend={friend}
+          busy={busyId === friend.id}
+          conversations={conversations}
+          pinnedChannelIds={pinnedChannelIds}
+          onMessage={onMessage}
+          onRemove={onRemove}
+          onTogglePin={onTogglePin}
+          onBlock={onBlock}
+        />
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * One friend. The face and name are a button that opens the profile card, the
+ * row answers right-click and long-press with the DM list row's menu, and
+ * "Mensagem" and the remove control stay where they were.
+ */
+function FriendRow({
+  friend,
+  busy,
+  conversations,
+  pinnedChannelIds,
+  onMessage,
+  onRemove,
+  onTogglePin,
+  onBlock,
+}: {
+  friend: Friend;
+  busy: boolean;
+  conversations?: readonly DmSummary[];
+  pinnedChannelIds?: ReadonlySet<string>;
+  onMessage: (userId: string) => void;
+  onRemove: (friend: Friend) => void;
+  onTogglePin?: (channelId: string) => void;
+  onBlock?: (user: PublicUser) => void;
+}) {
+  const { t } = useTranslation();
+  const openProfile = useProfilePopover();
+  const rowRef = useRef<HTMLLIElement>(null);
+  const conversation = directConversationWith(conversations, friend.id);
+
+  // The card hangs off the row, not the button the click came from, so the
+  // menu's "Ver perfil" and a plain click open it in the same place.
+  function showProfile() {
+    const anchor = rowRef.current;
+    if (anchor) {
+      openProfile(friendProfileSubject(friend), anchor);
+    }
+  }
+
+  const items = friendRowMenuItems({
+    t,
+    friend,
+    conversation,
+    pinned: conversation ? (pinnedChannelIds?.has(conversation.channelId) ?? false) : false,
+    onOpenProfile: showProfile,
+    onTogglePin,
+    onBlock,
+    onRemove,
+  });
+
+  return (
+    <ContextMenu items={items}>
+      <li
+        ref={rowRef}
+        data-friend-row={friend.id}
+        className={cn("group mb-1 flex items-center gap-3 rounded-md px-2 py-2 hover:bg-ink-3", FRIEND_ROW_REDESIGN)}
+      >
+        <button
+          type="button"
+          data-friend-profile={friend.id}
+          aria-label={t("profile.open", { name: friend.displayName })}
+          onClick={showProfile}
+          className="flex min-w-0 flex-1 items-center gap-3 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring redesign:rounded-[var(--list-row-radius)] redesign:focus-visible:ring-[color:var(--list-row-ring)]"
         >
           <FriendFace person={friend} status={friend.status} />
           <div className="min-w-0 flex-1">
@@ -486,32 +593,32 @@ function FriendRows({
               </p>
             )}
           </div>
-          <div className="flex shrink-0 items-center gap-1.5">
-            <Button
-              size="sm"
-              variant="secondary"
-              disabled={busyId === friend.id}
-              onClick={() => onMessage(friend.id)}
-            >
-              {t("friends.message")}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={busyId === friend.id}
-              aria-label={`${t("friends.remove")} — ${friend.displayName}`}
-              title={t("friends.remove")}
-              data-remove-friend={friend.id}
-              onClick={() => onRemove(friend)}
-              className="redesign:w-[var(--control-sm)] redesign:px-0"
-            >
-              <X aria-hidden="true" className="h-4 w-4 redesign:hidden" />
-              <Icon icon={XGlyph} kind="symbol" size="sm" className="hidden redesign:block" />
-            </Button>
-          </div>
-        </li>
-      ))}
-    </ul>
+        </button>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={busy}
+            onClick={() => onMessage(friend.id)}
+          >
+            {t("friends.message")}
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={busy}
+            aria-label={`${t("friends.remove")} — ${friend.displayName}`}
+            title={t("friends.remove")}
+            data-remove-friend={friend.id}
+            onClick={() => onRemove(friend)}
+            className="redesign:w-[var(--control-sm)] redesign:px-0"
+          >
+            <X aria-hidden="true" className="h-4 w-4 redesign:hidden" />
+            <Icon icon={XGlyph} kind="symbol" size="sm" className="hidden redesign:block" />
+          </Button>
+        </div>
+      </li>
+    </ContextMenu>
   );
 }
 

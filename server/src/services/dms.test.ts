@@ -474,10 +474,25 @@ describeDb("conversations", () => {
       "avatarUrl",
       "customStatus",
       "displayName",
+      "handle",
       "id",
       "tag",
       "username",
     ]);
+  });
+
+  it("carries a participant's claimed handle, null when they have none", async () => {
+    await getPool().query(`UPDATE users SET handle = $2 WHERE id = $1`, [
+      bob.id,
+      "bobzin",
+    ]);
+    await openConversation(alice.id, [bob.id]);
+    const [summary] = await listConversations(alice.id);
+    expect(summary?.participants[0]?.handle).toBe("bobzin");
+
+    await getPool().query(`UPDATE users SET handle = NULL WHERE id = $1`, [bob.id]);
+    const [again] = await listConversations(alice.id);
+    expect(again?.participants[0]?.handle).toBeNull();
   });
 
   it("resolves a mention in a conversation against its participants", async () => {
