@@ -34,7 +34,7 @@ import {
   type ServerMember,
   type ServerRole,
 } from "@/lib/api";
-import { displayRoleName } from "@/lib/role-labels";
+import { displayRoleName, rankRoles } from "@/lib/role-labels";
 import { loadServerStoriesEnabled } from "@/lib/stories/config";
 import { useAppsConfig } from "@/hooks/use-apps-config";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
@@ -233,24 +233,6 @@ function tabsFor(role: ServerRole | null): RoleEditorTab[] {
     return ["display", "permissions"];
   }
   return ["display", "permissions", "members"];
-}
-
-function rankRoles(roles: ServerRole[]): ServerRole[] {
-  return [...roles].sort((a, b) => {
-    if (a.systemKey === "owner") {
-      return -1;
-    }
-    if (b.systemKey === "owner") {
-      return 1;
-    }
-    if (a.isEveryone) {
-      return 1;
-    }
-    if (b.isEveryone) {
-      return -1;
-    }
-    return b.position - a.position;
-  });
 }
 
 function ownerNeedsPin(roles: ServerRole[]): boolean {
