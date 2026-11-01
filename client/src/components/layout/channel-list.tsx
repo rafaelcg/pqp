@@ -4030,6 +4030,8 @@ export function ChannelRow({
   const muted = notifications.level === "none";
   const hasUnread = !selected && unread.count > 0;
   const hasDraft = useHasDraft(channel.id) && !selected;
+  const nameRef = useRef<HTMLSpanElement | null>(null);
+  const nameTruncated = useIsTruncated(nameRef, channel.name);
   // A muted channel keeps counting for the read cursor, but nothing about it
   // should pull the eye — that is the whole point of muting it.
   const mentions = selected || muted ? 0 : unread.mentions;
@@ -4146,6 +4148,7 @@ export function ChannelRow({
       {watchParty ? (
         <span className="flex min-w-0 flex-1 flex-col">
           <span
+            ref={nameRef}
             className={cn(
               "truncate",
               hasUnread && !muted && "font-semibold",
@@ -4192,7 +4195,10 @@ export function ChannelRow({
           )}
         </span>
       ) : (
-        <span className={cn("truncate", hasUnread && !muted && "font-semibold")}>
+        <span
+          ref={nameRef}
+          className={cn("truncate", hasUnread && !muted && "font-semibold")}
+        >
           {channel.name}
         </span>
       )}
@@ -4379,7 +4385,17 @@ export function ChannelRow({
         {/* Always the same element. Rendering a bare button when there is
             no hint would swap the element type the moment `connected`
             flips, and React would drop keyboard focus on the way. */}
-        <Tooltip label={joinHint ?? channel.name} name={rowName} side="right">
+        {/* Above the row, never to its right: the right is where the row's
+            own Fixar and Configurações tiles appear on hover, and the bubble
+            sat on top of them. It opens only when it says something the row
+            does not: the join hint, or a name the row cuts off. */}
+        <Tooltip
+          label={joinHint ?? channel.name}
+          name={rowName}
+          side="top"
+          align="start"
+          disabled={joinHint === null && !nameTruncated}
+        >
           {rowButton}
         </Tooltip>
         {watchParty && live && !connected && (

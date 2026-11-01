@@ -287,6 +287,13 @@ export interface TooltipProps extends TooltipA11yProps {
    */
   mark?: boolean;
   /**
+   * Never open the bubble. The trigger keeps its element, its ref and its
+   * `aria-label`, so a row that only needs the bubble sometimes (a name that
+   * is cut off) does not swap element type and drop keyboard focus when the
+   * answer changes.
+   */
+  disabled?: boolean;
+  /**
    * The control. Must be a single element that forwards props and a ref to a
    * real DOM node — our `Button`, or a plain `<button>`.
    */
@@ -301,6 +308,7 @@ export function Tooltip({
   align = "center",
   tone = "default",
   mark = false,
+  disabled = false,
   children,
 }: TooltipProps) {
   const a11y = tooltipA11y({ label, detail, name });
@@ -309,7 +317,7 @@ export function Tooltip({
   const redesign = useRedesign();
 
   return (
-    <TooltipPrimitive.Root>
+    <TooltipPrimitive.Root open={disabled ? false : undefined}>
       <TooltipPrimitive.Trigger
         asChild
         // The name lives here rather than on the child, so a button's label and
