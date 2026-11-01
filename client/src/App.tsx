@@ -594,6 +594,7 @@ import {
   conversationUnreadTotals,
   sortConversations,
   touchConversation,
+  unknownRingingConversationIds,
   unreadFromConversations,
   upsertConversation,
 } from "@/lib/conversations";
@@ -3957,6 +3958,20 @@ function MainAppContent({
 
   const loadConversationsRef = useRef(loadConversations);
   loadConversationsRef.current = loadConversations;
+
+  // A first call from somebody this account has never talked to rings before
+  // the conversation is in this device's list: the server created it for the
+  // caller, and nothing told us. Fetch it as the ring arrives, so Atender lands
+  // on a thread that exists and the sidebar already lists it.
+  const ringingUnknownConversations = unknownRingingConversationIds(
+    voiceState.incomingCalls,
+    conversations,
+  ).join(",");
+  useEffect(() => {
+    if (ringingUnknownConversations) {
+      void loadConversationsRef.current();
+    }
+  }, [ringingUnknownConversations]);
 
   /**
    * The people the open channel can name. A conversation is closed: everyone
@@ -8647,6 +8662,12 @@ function MainAppContent({
   ) {
     voiceServerIdRef.current = null;
     pendingVideoCallRef.current = withVideo ? channelId : null;
+    // Answering a first call from a stranger: the conversation may not be in the
+    // list yet (the ring can beat the fetch above). The thread opens only once
+    // the list has it; selecting an unknown id lands on Amigos instead.
+    if (!conversationsRef.current.some((one) => one.channelId === channelId)) {
+      await loadConversations();
+    }
     void selectConversation(channelId);
     refreshIceServers();
     const options = {
