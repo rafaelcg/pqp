@@ -2015,10 +2015,14 @@ function MainAppContent({
       // The seated surface and the audience surface share that one answer
       // (see `isWatchPartySplit`): a person who flips it while watching
       // should not have it flip back the moment they take a seat.
+      // A server voice call under the redesign keeps its own answer too: its
+      // default is the chat beside the cards, a DM call's is stacked.
       const next: CallSplitPreference =
         kind === "watch" || kind === "watch-audience"
           ? { ...previous, watchOrientation: flipped }
-          : { ...previous, orientation: flipped };
+          : kind === "room"
+            ? { ...previous, roomOrientation: flipped }
+            : { ...previous, orientation: flipped };
       saveCallSplit(next);
       return next;
     });
@@ -11224,7 +11228,12 @@ function MainAppContent({
       ? inSelectedWatchPartyCall
         ? "watch"
         : "watch-audience"
-      : "call";
+      : redesign &&
+          selectedChannel?.kind === "server" &&
+          voiceState.voiceChannelId === selectedChannel.id &&
+          voiceState.status !== "idle"
+        ? "room"
+        : "call";
   /** Either watch-party pane kind — the one distinction most of the chrome
    * around the split actually cares about is "is this a watch party room at
    * all", not which of its two surfaces is currently up. */

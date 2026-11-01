@@ -18,6 +18,7 @@ import {
   rememberStageCollapsed,
   rememberStagePinnedKey,
   shouldShowExpandedStage,
+  showsRoomView,
   stagePinnedKey,
 } from "./call-stage-state";
 
@@ -302,5 +303,40 @@ describe("call start bookkeeping", () => {
     expect(markCallStarted(second, 5_000)).toBe(5_000);
     // The finished call's entry is gone — the map cannot grow for the session.
     expect(callStartedAt(first)).toBeNull();
+  });
+});
+
+/**
+ * Under the redesign a server voice call opens the stage with a card per
+ * person even when nobody publishes. Everything else keeps the slim bar.
+ */
+describe("the room view", () => {
+  const lobby = {
+    redesign: true,
+    serverCall: true,
+    watchParty: false,
+    wide: true,
+    musicOnStage: false,
+  };
+
+  it("opens for a server voice call on a wide screen in the new look", () => {
+    expect(showsRoomView(lobby)).toBe(true);
+  });
+
+  it("stays shut in the old look, in a DM, in a watch party and on a phone", () => {
+    expect(showsRoomView({ ...lobby, redesign: false })).toBe(false);
+    expect(showsRoomView({ ...lobby, serverCall: false })).toBe(false);
+    expect(showsRoomView({ ...lobby, watchParty: true })).toBe(false);
+    expect(showsRoomView({ ...lobby, wide: false })).toBe(false);
+  });
+
+  it("gives the stage to the music clip when one is on it", () => {
+    expect(showsRoomView({ ...lobby, musicOnStage: true })).toBe(false);
+  });
+
+  it("expands the stage, and a collapse the person chose still wins", () => {
+    expect(shouldShowExpandedStage(false, false, false, true)).toBe(true);
+    expect(shouldShowExpandedStage(false, true, false, true)).toBe(false);
+    expect(shouldShowExpandedStage(false, false, false, false)).toBe(false);
   });
 });

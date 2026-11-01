@@ -70,6 +70,15 @@ export interface CallSplitPreference {
    */
   watchOrientation: CallSplitOrientation | null;
   /**
+   * A server voice call's own orientation under the redesign (`"room"`), or
+   * NULL for "side by side, unless the pane cannot". The room is a grid of
+   * cards with the channel's chat beside it, the way Discord draws a voice
+   * channel; a DM call keeps `orientation`, which starts stacked. Null for the
+   * same reason as `watchOrientation`: a person who never chose follows the
+   * product's answer.
+   */
+  roomOrientation: CallSplitOrientation | null;
+  /**
    * The stage's share of the pane's HEIGHT while stacked, 0..1, or NULL for
    * "nobody has moved it".
    *
@@ -128,6 +137,7 @@ export interface CallSplitPreference {
 export const CALL_SPLIT_DEFAULT: CallSplitPreference = {
   orientation: "stacked",
   watchOrientation: null,
+  roomOrientation: null,
   stacked: null,
   side: 0.62,
   watchAudienceSide: null,
@@ -143,7 +153,7 @@ export const CALL_SPLIT_DEFAULT: CallSplitPreference = {
  * The two want different defaults and different minimums, and the kind is
  * how the same component tells them apart.
  */
-export type CallSplitKind = "call" | "watch" | "watch-audience";
+export type CallSplitKind = "call" | "room" | "watch" | "watch-audience";
 
 /**
  * `"watch"` and `"watch-audience"` share the same width minimums and the
@@ -158,11 +168,17 @@ function isWatchKind(kind: CallSplitKind): boolean {
 
 /** The orientation a room of this kind starts in, unless the person chose. */
 export function effectiveOrientation(
-  preference: Pick<CallSplitPreference, "orientation" | "watchOrientation">,
+  preference: Pick<
+    CallSplitPreference,
+    "orientation" | "watchOrientation" | "roomOrientation"
+  >,
   kind: CallSplitKind,
 ): CallSplitOrientation {
   if (isWatchKind(kind)) {
     return preference.watchOrientation ?? "side-by-side";
+  }
+  if (kind === "room") {
+    return preference.roomOrientation ?? "side-by-side";
   }
   return preference.orientation;
 }
@@ -206,6 +222,15 @@ export const MIN_CHAT_WIDTH_PX = 560;
 export const MIN_WATCH_CHAT_WIDTH_PX = 340;
 
 /**
+ * The chat beside a server voice room under the redesign (`kind: "room"`).
+ * 560 exists for the composer's toolbar, and there the composer carries no
+ * call controls (they float on the stage) and wraps its toolbar the way the
+ * watch party's does. 360 is a phone's transcript plus room for the box, and
+ * it is what lets side by side appear on a laptop with the roster open.
+ */
+export const MIN_ROOM_CHAT_WIDTH_PX = 360;
+
+/**
  * The divider's own thickness, counted against the pane before splitting.
  *
  * 20, up from 8. The 8px bar was a fine line and a poor control: the grip was
@@ -232,7 +257,11 @@ export function splitBounds(
   return orientation === "side-by-side"
     ? {
         minStage: MIN_STAGE_WIDTH_PX,
-        minChat: isWatchKind(kind) ? MIN_WATCH_CHAT_WIDTH_PX : MIN_CHAT_WIDTH_PX,
+        minChat: isWatchKind(kind)
+          ? MIN_WATCH_CHAT_WIDTH_PX
+          : kind === "room"
+            ? MIN_ROOM_CHAT_WIDTH_PX
+            : MIN_CHAT_WIDTH_PX,
       }
     : { minStage: MIN_STAGE_HEIGHT_PX, minChat: MIN_CHAT_HEIGHT_PX };
 }
@@ -462,6 +491,11 @@ export function loadCallSplit(): CallSplitPreference {
         value.watchOrientation === "side-by-side" ||
         value.watchOrientation === "stacked"
           ? value.watchOrientation
+          : null,
+      roomOrientation:
+        value.roomOrientation === "side-by-side" ||
+        value.roomOrientation === "stacked"
+          ? value.roomOrientation
           : null,
       stacked:
         typeof value.stacked === "number" && Number.isFinite(value.stacked)

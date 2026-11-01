@@ -186,6 +186,7 @@ import { OwnShareStrip } from "@/components/voice/own-share-strip";
 import {
   listenersOf,
   listenerStripSlots,
+  planRoomStage,
   planStage,
   screensDrawnOnStage,
   stageGridColumns,
@@ -196,6 +197,7 @@ import {
   STRIP_LIMIT_WIDE,
 } from "@/components/voice/stage-layout";
 import { ListenerStrip } from "@/components/voice/listener-strip";
+import { RoomCards, type RoomCardEntry } from "@/components/voice/room-cards";
 import {
   showsVideoQualityControl,
   videoQualityMenuOpen,
@@ -236,6 +238,7 @@ import {
 import { useAutoHideStageControls } from "@/lib/stage-controls-pref";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useLgUp } from "@/hooks/use-lg-up";
+import { useRedesign } from "@/lib/redesign";
 import { useLiveHlsReady } from "@/hooks/use-live-hls-src";
 import {
   isCameraAtCap,
@@ -313,6 +316,7 @@ import {
   rememberStageCollapsed,
   rememberStagePinnedKey,
   shouldShowExpandedStage,
+  showsRoomView,
   stagePinnedKey,
   type PipCorner,
 } from "@/components/dm/call-stage-state";
@@ -342,6 +346,8 @@ export interface StagePerson {
    * (the muted person most of all) need to tell the two apart at a glance.
    */
   serverMuted: boolean;
+  /** They turned their sound off. Only the room cards draw it. */
+  deafened?: boolean;
   /** Their place in the room's queue of raised hands (1-based), or null. */
   handPosition?: number | null;
   connecting: boolean;
@@ -1260,11 +1266,20 @@ function ActiveCall({
   const musicPlacement = useMusicPlacement();
   const musicPresence = useMusicStagePresence();
   const musicOnStage = musicPlacement === "stage" && musicPresence.active;
+  const redesign = useRedesign();
+  const roomView = showsRoomView({
+    redesign,
+    serverCall: serverId !== null,
+    watchParty: watchPartyChrome || isWatchPartyChannel,
+    wide,
+    musicOnStage,
+  });
   // Cameras and shares take the overlay bar. Music on the stage is a clip.
   const chromeExpanded = shouldShowExpandedStage(
     hasVideo,
     userCollapsed,
     ringing,
+    roomView,
   );
   const musicPictureOnly = isMusicPictureOnlyStage({
     musicOnStage,
@@ -1326,6 +1341,7 @@ function ActiveCall({
           !voiceState.isMuted,
         muted: voiceState.isMuted,
         serverMuted: selfServerMuted,
+        deafened: voiceState.isDeafened,
         handPosition: handPositions.get(currentUser.id) ?? null,
         connecting: false,
         isSelf: true,
@@ -1347,6 +1363,7 @@ function ActiveCall({
       speaking: speaking.has(peer.peerId) && !serverMuted.has(peer.peerId),
       muted: rosterByPeerId.get(peer.peerId)?.muted ?? false,
       serverMuted: serverMuted.has(peer.peerId),
+      deafened: rosterByPeerId.get(peer.peerId)?.deafened ?? false,
       handPosition: peer.userId
         ? (handPositions.get(peer.userId) ?? null)
         : null,
@@ -1594,8 +1611,6 @@ function ActiveCall({
     voiceState.peerId,
     overflowKeys,
   );
-  const gridColumns = stageGridColumns(staged.tiles.length, wide);
-  const clickFullscreens = tileClickFullscreens(staged.tiles.length);
   const anyVideo = hasVideo || musicOnStage;
   /**
    * The row exists only when somebody is in it, and only beside a stage.
@@ -1815,8 +1830,15 @@ function ActiveCall({
     // so the controls would have nowhere visible to be.
     (smallLandscape && anyVideo && chromeExpanded && !stageHidden) ||
     composerHidden;
+  // THE ONE EXCEPTION, under the redesign's room view: the stage is the room
+  // there (cards, cameras in them, a share above them), so the controls float
+  // on it the way every other voice app draws a call, and the composer is
+  // only the chat's. With the call hidden ("Esconder a call") they go back to
+  // the composer, which is then the only place left to put them.
   const dockControls =
-    !composerOutOfSight && !(chromeExpanded && watchPartyChrome);
+    !composerOutOfSight &&
+    !(chromeExpanded && watchPartyChrome) &&
+    !(roomView && chromeExpanded && !stageHidden);
   const dockComposer = dockControls && dockPublish !== null;
   // The control bar is drawn over the stage. Outside fullscreen the stage
   // keeps a band for it (a page with no composer); in fullscreen the bar
@@ -1851,7 +1873,23 @@ function ActiveCall({
   // the bar floats on the picture.
   const musicGivesWay = smallLandscape && barFloats && !immersive.immersive;
   const chatMusic = useContext(ChatMusicContext);
+  // THE ROOM STAGE (redesign): the cards stay the stage when a picture
+  // arrives. A camera is drawn in its owner's card and a share takes the
+  // space above a row of cards (`planRoomStage`). Not while one picture is
+  // blown up, which is the solo view's job, and not with the music clip on
+  // the stage, which `roomView` already rules out.
+  const roomStage =
+    roomView && !ringing && !soloPerson && !soloTile && !soloMusic;
+  const roomPlan = planRoomStage(staged.tiles);
+  // Our own camera beside exactly one other picture is the floating preview
+  // on the ordinary stage (`selfPreview`). The room stage has no floating
+  // preview: our camera is our card, like everybody else's.
+  const roomCameraKeys =
+    stage.selfPreview && self?.stream
+      ? new Set([...roomPlan.cameraKeys, self.key])
+      : roomPlan.cameraKeys;
   const stripDrawn =
+    !roomStage &&
     showStrip &&
     !(musicGivesWay && chatMusic && !peerFailed) &&
     // Beside an app the column is too short for a row of chips as well as a
@@ -2375,7 +2413,9 @@ function ActiveCall({
       collapsed={collapsed || dockComposer}
       videoOnStage={dockComposer && chromeExpanded}
       leading={collapsedLeading}
-      canExpand={hasVideo}
+      // The room view is a stage with or without a picture, so the way back
+      // from "Recolher" stays on the menu after the last camera goes off.
+      canExpand={hasVideo || roomView}
       userCollapsed={userCollapsed}
       fullscreenAvailable={fullscreen.available && chromeExpanded}
       isFullscreen={fullscreen.isFullscreen}
@@ -2536,6 +2576,141 @@ function ActiveCall({
           ? null
           : t("call.panel.inCall", { count: remotes.length + 1 })));
 
+  /**
+   * The grid of pictures. The ordinary stage draws every tile in it; the
+   * redesign's room stage draws only the shares here and keeps cameras in
+   * their owners' cards (`planRoomStage`).
+   */
+  const stageGrid = (gridTiles: typeof staged.tiles, gridFeatured: boolean) => {
+    const columns = stageGridColumns(gridTiles.length, wide);
+    const clickFull = tileClickFullscreens(gridTiles.length);
+    return (
+      <ul
+        data-testid="stage-grid"
+        data-columns={columns}
+        className={cn(
+          "grid h-full w-full",
+          // One publisher owns the stage edge to edge, the way a single
+          // share always has. Padding is what separates tiles from each
+          // other, so with nothing to separate it is only a border of
+          // wasted picture.
+          gridTiles.length > 1 && "gap-2 p-2",
+        )}
+        style={{
+          gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+          // The featured row (a pin, or the one screen a crowded room
+          // is watching) gets twice the height of the rows under it.
+          // Without it a share at the top of a three-row grid is a third
+          // of the stage, which is not "featured" in any useful sense.
+          gridTemplateRows: gridFeatured ? "minmax(0, 2fr)" : undefined,
+          // Equal rows for the rest. Without this they size to content,
+          // and a tile whose picture is absolutely positioned has none.
+          gridAutoRows: "minmax(0, 1fr)",
+        }}
+      >
+        {gridTiles.map((tile, index) => {
+          const wideRow = gridFeatured && index === 0 && columns > 1;
+          const videoRef = index === 0 ? primaryVideoRef : undefined;
+          const pinned = pinnedTileId === tile.id;
+          if (tile.kind === "music") {
+            return (
+              <li
+                key={tile.id}
+                className={cn(
+                  "relative min-h-0 overflow-hidden bg-surface-0",
+                  gridTiles.length > 1 && "rounded-xl",
+                  wideRow && "col-span-full",
+                )}
+              >
+                <MusicStageTile
+                  title={musicPresence.title}
+                  addedByUserId={musicPresence.addedByUserId}
+                  addedByName={musicPresence.addedByName}
+                  voiceState={voiceState}
+                  clickToFullscreen={clickFull}
+                  onToggleFullscreen={() =>
+                    fullscreen.toggleScreen(MUSIC_STAGE_TILE_ID)
+                  }
+                  className="h-full w-full"
+                />
+              </li>
+            );
+          }
+          if (tile.kind === "screen") {
+            const screenTile = screenTiles.find(
+              (candidate) => candidate.peerId === tile.key,
+            );
+            if (!screenTile) {
+              return null;
+            }
+            return (
+              <li
+                key={tile.id}
+                className={cn(
+                  "relative min-h-0 overflow-hidden bg-black",
+                  gridTiles.length > 1 && cn("rounded-xl", CALL_TILE_REDESIGN.rounded),
+                  wideRow && "col-span-full",
+                )}
+              >
+                <ScreenTileFrame
+                  tile={screenTile}
+                  videoRef={videoRef}
+                  isFullscreen={false}
+                  showName
+                  clickToFullscreen={clickFull}
+                  onToggleFullscreen={() => {
+                    // Keep the header's "X is presenting" line pointing
+                    // at the share the person just acted on.
+                    onFocusScreenShare?.(screenTile.peerId);
+                    fullscreen.toggleScreen(screenTile.peerId);
+                  }}
+                  onPin={
+                    gridTiles.length > 1
+                      ? () => togglePin(tile.id)
+                      : undefined
+                  }
+                  pinned={pinned}
+                  registerPipVideo={registerPipVideo}
+                  audio={shareAudioControl(screenTile)}
+                  dismissed={shareDismissControl(screenTile)}
+                  className="h-full w-full"
+                  mediaTitle={title}
+                  communityName={serverName}
+                  coverUrl={serverIconUrl}
+                />
+              </li>
+            );
+          }
+          const person = allPeople.find(
+            (candidate) => candidate.key === tile.key,
+          );
+          if (!person) {
+            return null;
+          }
+          return (
+            <CameraTile
+              key={tile.id}
+              person={person}
+              videoRef={videoRef}
+              youLabel={t("voice.tile.you")}
+              wideRow={wideRow}
+              rounded={gridTiles.length > 1}
+              clickToFullscreen={clickFull}
+              onToggleFullscreen={() => toggleCameraFullscreen(person.key)}
+              onPin={
+                gridTiles.length > 1
+                  ? () => togglePin(tile.id)
+                  : undefined
+              }
+              pinned={pinned}
+              hidden={cameraHideControl(person)}
+            />
+          );
+        })}
+      </ul>
+    );
+  };
+
   return (
     <WakePressContext.Provider value={isWakePress}>
     <TileMenuHoldContext.Provider value={reportTileMenu}>
@@ -2567,7 +2742,11 @@ function ActiveCall({
               // the live pane: a second one here would fight it.
               "h-full min-h-0"
             : stageHeightClass({
-                anyVideo,
+                // A room of more than four cards needs the picture's height:
+                // four cards to a row in the short stage are thumbnails.
+                anyVideo:
+                  anyVideo ||
+                  (roomView && redesign && !ringing && listeners.length > 4),
                 musicPictureOnly,
                 // Sideways with the chat beside the floating bar, not under
                 // the takeover, where the chat is not on screen at all.
@@ -2798,6 +2977,45 @@ function ActiveCall({
               communityName={serverName}
               coverUrl={serverIconUrl}
             />
+          ) : roomStage ? (
+            <RoomCards
+              youLabel={t("voice.tile.you")}
+              stage={
+                roomPlan.screens.length > 0
+                  ? stageGrid(roomPlan.screens, false)
+                  : undefined
+              }
+              people={allPeople.map((person) =>
+                roomCardEntry(person, roomCameraKeys.has(person.key)),
+              )}
+              renderCamera={(entry, style, className, first) => {
+                const person = allPeople.find(
+                  (candidate) => candidate.key === entry.key,
+                );
+                if (!person) {
+                  return null;
+                }
+                return (
+                  <CameraTile
+                    key={entry.key}
+                    person={person}
+                    // The first picture is the stage's primary video when
+                    // no share took that slot.
+                    videoRef={
+                      first && roomPlan.screens.length === 0
+                        ? primaryVideoRef
+                        : undefined
+                    }
+                    youLabel={t("voice.tile.you")}
+                    rounded
+                    onToggleFullscreen={() => toggleCameraFullscreen(person.key)}
+                    hidden={cameraHideControl(person)}
+                    style={style}
+                    className={className}
+                  />
+                );
+              }}
+            />
           ) : watchPartyChrome &&
             presenterStage &&
             localShare &&
@@ -2813,129 +3031,7 @@ function ActiveCall({
             screenTiles.length === 1 ? (
             presenterStage(localShare.stream)
           ) : staged.tiles.length > 0 ? (
-            <ul
-              data-testid="stage-grid"
-              data-columns={gridColumns}
-              className={cn(
-                "grid h-full w-full",
-                // One publisher owns the stage edge to edge, the way a single
-                // share always has. Padding is what separates tiles from each
-                // other, so with nothing to separate it is only a border of
-                // wasted picture.
-                staged.tiles.length > 1 && "gap-2 p-2",
-              )}
-              style={{
-                gridTemplateColumns: `repeat(${gridColumns}, minmax(0, 1fr))`,
-                // The featured row (a pin, or the one screen a crowded room
-                // is watching) gets twice the height of the rows under it.
-                // Without it a share at the top of a three-row grid is a third
-                // of the stage, which is not "featured" in any useful sense.
-                gridTemplateRows: staged.featured ? "minmax(0, 2fr)" : undefined,
-                // Equal rows for the rest. Without this they size to content,
-                // and a tile whose picture is absolutely positioned has none.
-                gridAutoRows: "minmax(0, 1fr)",
-              }}
-            >
-              {staged.tiles.map((tile, index) => {
-                const wideRow = staged.featured && index === 0 && gridColumns > 1;
-                const videoRef = index === 0 ? primaryVideoRef : undefined;
-                const pinned = pinnedTileId === tile.id;
-                if (tile.kind === "music") {
-                  return (
-                    <li
-                      key={tile.id}
-                      className={cn(
-                        "relative min-h-0 overflow-hidden bg-surface-0",
-                        staged.tiles.length > 1 && "rounded-xl",
-                        wideRow && "col-span-full",
-                      )}
-                    >
-                      <MusicStageTile
-                        title={musicPresence.title}
-                        addedByUserId={musicPresence.addedByUserId}
-                        addedByName={musicPresence.addedByName}
-                        voiceState={voiceState}
-                        clickToFullscreen={clickFullscreens}
-                        onToggleFullscreen={() =>
-                          fullscreen.toggleScreen(MUSIC_STAGE_TILE_ID)
-                        }
-                        className="h-full w-full"
-                      />
-                    </li>
-                  );
-                }
-                if (tile.kind === "screen") {
-                  const screenTile = screenTiles.find(
-                    (candidate) => candidate.peerId === tile.key,
-                  );
-                  if (!screenTile) {
-                    return null;
-                  }
-                  return (
-                    <li
-                      key={tile.id}
-                      className={cn(
-                        "relative min-h-0 overflow-hidden bg-black",
-                        staged.tiles.length > 1 && cn("rounded-xl", CALL_TILE_REDESIGN.rounded),
-                        wideRow && "col-span-full",
-                      )}
-                    >
-                      <ScreenTileFrame
-                        tile={screenTile}
-                        videoRef={videoRef}
-                        isFullscreen={false}
-                        showName
-                        clickToFullscreen={clickFullscreens}
-                        onToggleFullscreen={() => {
-                          // Keep the header's "X is presenting" line pointing
-                          // at the share the person just acted on.
-                          onFocusScreenShare?.(screenTile.peerId);
-                          fullscreen.toggleScreen(screenTile.peerId);
-                        }}
-                        onPin={
-                          staged.tiles.length > 1
-                            ? () => togglePin(tile.id)
-                            : undefined
-                        }
-                        pinned={pinned}
-                        registerPipVideo={registerPipVideo}
-                        audio={shareAudioControl(screenTile)}
-                        dismissed={shareDismissControl(screenTile)}
-                        className="h-full w-full"
-                        mediaTitle={title}
-                        communityName={serverName}
-                        coverUrl={serverIconUrl}
-                      />
-                    </li>
-                  );
-                }
-                const person = allPeople.find(
-                  (candidate) => candidate.key === tile.key,
-                );
-                if (!person) {
-                  return null;
-                }
-                return (
-                  <CameraTile
-                    key={tile.id}
-                    person={person}
-                    videoRef={videoRef}
-                    youLabel={t("voice.tile.you")}
-                    wideRow={wideRow}
-                    rounded={staged.tiles.length > 1}
-                    clickToFullscreen={clickFullscreens}
-                    onToggleFullscreen={() => toggleCameraFullscreen(person.key)}
-                    onPin={
-                      staged.tiles.length > 1
-                        ? () => togglePin(tile.id)
-                        : undefined
-                    }
-                    pinned={pinned}
-                    hidden={cameraHideControl(person)}
-                  />
-                );
-              })}
-            </ul>
+            stageGrid(staged.tiles, staged.featured)
           ) : ringing ? (
             <RingView
               faces={ringFaces}
@@ -2950,6 +3046,7 @@ function ActiveCall({
               people={listeners}
               youLabel={t("voice.tile.you")}
               othersOnly={ownShareHidden}
+              cards={redesign}
             />
           )}
           {/* Picking one stream and clicking away from it used to leave no
@@ -3056,7 +3153,7 @@ function ActiveCall({
           it — somebody else is publishing exactly one picture, so the stage
           belongs to them (`stage-layout.ts`). Hidden while our own camera is
           the thing blown up: a preview of the picture filling the screen. */}
-      {stage.selfPreview && self && !soloPerson?.isSelf && (
+      {stage.selfPreview && self && !soloPerson?.isSelf && !roomStage && (
         <div
           data-call-tile={self.name}
           data-call-pip=""
@@ -4905,10 +5002,15 @@ export function CameraTile({
   onPin,
   pinned = false,
   hidden,
+  style,
+  className,
 }: {
   person: StagePerson;
   videoRef?: RefObject<WebkitFullscreenVideo | null>;
   youLabel: string;
+  /** A size handed down by a layout that is not a CSS grid (the room's cards). */
+  style?: CSSProperties;
+  className?: string;
   /**
    * This viewer hid the camera (`voiceState.dismissedCameraPeerIds`). The
    * tile stays where it was and says so, with the way back on it, the same
@@ -4932,7 +5034,9 @@ export function CameraTile({
     <li
       ref={boxRef}
       data-call-tile={person.name}
+      style={style}
       className={cn(
+        className,
         "group relative min-h-0 overflow-hidden bg-ink-2",
         rounded && "rounded-xl",
         wideRow && "col-span-full",
@@ -5065,10 +5169,32 @@ function TileClickTarget({
  * same people the strip would, larger and centred, with the same overflow rule
  * so a lobby of 200 is still one screen.
  */
+/** A stage person as a room card (`room-cards.tsx`). */
+function roomCardEntry(person: StagePerson, camera: boolean): RoomCardEntry {
+  return {
+    key: person.key,
+    userId: person.userId,
+    name: person.name,
+    avatarUrl: person.avatarUrl,
+    speaking: person.speaking,
+    muted: person.muted,
+    deafened: person.deafened === true,
+    serverMuted: person.serverMuted,
+    handPosition: person.handPosition ?? null,
+    connecting: person.connecting,
+    isSelf: person.isSelf,
+    failed: person.failed,
+    onRetry: person.onRetry,
+    camera,
+    audio: personAudioTracks(person),
+  };
+}
+
 export function RoomView({
   people,
   youLabel,
   othersOnly = false,
+  cards = false,
 }: {
   people: StagePerson[];
   youLabel: string;
@@ -5077,8 +5203,18 @@ export function RoomView({
    * be false: the line says nobody ELSE is.
    */
   othersOnly?: boolean;
+  /** The redesign's room: a card per person (`room-cards.tsx`). */
+  cards?: boolean;
 }) {
   const { t } = useTranslation();
+  if (cards) {
+    return (
+      <RoomCards
+        youLabel={youLabel}
+        people={people.map((person) => roomCardEntry(person, false))}
+      />
+    );
+  }
   const slots = listenerStripSlots(people, ROOM_VIEW_LIMIT);
   return (
     <div
