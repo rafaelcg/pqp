@@ -5900,6 +5900,31 @@ html[data-immersive-stage] [data-immersive-hide] {
   }
 }
 
+/* Breu at work on the loading screen (`<Breu motion="working">`). Two HTML
+   wrappers, `transform` only: unlike the SVG groups above, these are
+   composited, so the loop keeps going while the main thread parses chunks.
+   One 2s cycle: a hop with a squash at the bottom, and a lean from side to
+   side that reads as a glance. About 5px of travel at 56px. */
+@keyframes breu-work-bob {
+  0%,
+  100% {
+    transform: translateY(0) scale(1.04, 0.96);
+  }
+  50% {
+    transform: translateY(-9%) scale(0.98, 1.03);
+  }
+}
+
+@keyframes breu-work-lean {
+  0%,
+  100% {
+    transform: rotate(-6deg);
+  }
+  50% {
+    transform: rotate(6deg);
+  }
+}
+
 @keyframes bot-pop {
   0% {
     transform: scale(0.92, 1.06);

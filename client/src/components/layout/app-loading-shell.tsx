@@ -78,9 +78,10 @@ export function AppLoadingShell({ label }: AppLoadingShellProps) {
       <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-ink/40 backdrop-blur-[1px] redesign:bg-[color:color-mix(in_oklab,var(--color-canvas)_40%,transparent)] redesign:[:root[data-theme=light]_&]:bg-[color:color-mix(in_oklab,var(--color-canvas)_25%,transparent)]">
         {/* Under the redesign Breu and its label sit on their own card, off the skeleton bars. */}
         <div className="flex flex-col items-center gap-3 redesign:rounded-[var(--radius-card)] redesign:bg-pane-main redesign:px-5 redesign:py-4 redesign:ring-1 redesign:ring-inset redesign:ring-[color:var(--color-border)]">
-          {/* Breu at work, breathing (still under reduced motion), instead of a
-              spinning "pqp" ring: the most-seen moment Breu gets. */}
-          <Breu mood="focused" size="sm" />
+          {/* Breu at work, hopping and leaning on a steady 2s loop (still under
+              reduced motion), instead of a spinning "pqp" ring: the most-seen
+              moment Breu gets. */}
+          <Breu mood="focused" size="sm" motion="working" />
           <p className="text-xs uppercase tracking-[0.2em] text-paper-muted redesign:text-[13px] redesign:font-semibold redesign:normal-case redesign:tracking-normal redesign:text-text-secondary">
             {text}
           </p>
@@ -113,7 +114,8 @@ export function AppBootstrapError({ message, onRetry }: AppBootstrapErrorProps) 
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_80%_10%,var(--glow-danger),transparent_45%)] redesign:bg-[radial-gradient(circle_at_85%_0%,var(--glow-danger),transparent_35%)]" />
       {/* Under the redesign the failure is announced, and focus lands on the retry. */}
       <div className="relative z-10 max-w-lg" role={redesign ? "alert" : undefined}>
-        <Breu mood="sad" size="md" className="mb-4" />
+        {/* Its own line: inline, it sat beside "pqp.gg" on the baseline and floated above the text. */}
+        <Breu mood="sad" size="md" className="mb-2 block" />
         <Link
           to="/"
           className="mb-3 inline-block text-xs uppercase tracking-[0.28em] text-signal redesign:text-sm redesign:font-bold redesign:normal-case redesign:tracking-normal redesign:text-accent-text"
