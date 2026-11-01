@@ -173,6 +173,11 @@ import {
   useNotificationState,
 } from "@/hooks/use-notifications";
 import { resolveNotificationLevel } from "@/lib/notifications";
+import {
+  leaveCommunityMenuItems,
+  serverNotificationMenuItems,
+  type StreamAlertInfo,
+} from "@/components/layout/server-menu-items";
 import { ChannelSessionHint } from "@/components/layout/channel-session-hint";
 import { formatSessionRelativeTime } from "@/lib/channel-session-schedule";
 import { heroHue, heroTintStyle, initialsFor } from "@/lib/hero-tint";
@@ -556,6 +561,13 @@ interface ChannelListProps {
   onOpenMembers: () => void;
   onOpenServerSettings: () => void;
   /**
+   * "Sair da comunidade" in the server header menu, the same item the rail's
+   * menu has. Absent, or for the owner, the item is not offered.
+   */
+  onLeaveServer?: () => void;
+  /** This server's `stream_start_notifications` state, for the tick in the notification items. */
+  streamAlertInfo?: StreamAlertInfo;
+  /**
    * Fold this list to a strip of icons. Lives in THIS header, beside the
    * other controls about this server, rather than in the channel header: a
    * control that hides the column belongs on the column.
@@ -707,6 +719,8 @@ export const ChannelList = memo(function ChannelList({
   onOpenMembers,
   channelSidebarToggle,
   onOpenServerSettings,
+  onLeaveServer,
+  streamAlertInfo,
   footer,
   mobileOpen = false,
   onMobileClose,
@@ -2371,6 +2385,13 @@ export const ChannelList = memo(function ChannelList({
               })),
             ]
           : []),
+        ...serverNotificationMenuItems(
+          server.id,
+          notificationState,
+          streamAlertInfo,
+          t,
+        ),
+        ...leaveCommunityMenuItems(server.role === "owner", onLeaveServer, t),
       ]
     : [];
 

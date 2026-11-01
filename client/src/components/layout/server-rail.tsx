@@ -5,10 +5,8 @@ import {
   Eye,
   EyeOff,
   Globe,
-  LogOut,
   MessageCircle,
   PinOff,
-  Radio,
   Plus,
   Palette,
   Settings,
@@ -29,6 +27,10 @@ import type { DmSummary, PublicUser, Server } from "@pqp/shared";
 import { useId, useMemo } from "react";
 import type { UnreadState } from "@/components/layout/channel-list";
 import { ServerIcon } from "@/components/layout/server-identity";
+import {
+  leaveCommunityMenuItems,
+  serverNotificationMenuItems,
+} from "@/components/layout/server-menu-items";
 import { Button } from "@/components/ui/button";
 import { CountBadge } from "@/components/ui/count-badge";
 import { Icon, type IconKind } from "@/components/ui/icon";
@@ -39,7 +41,6 @@ import {
 } from "@/components/ui/context-menu";
 import { offersProfileVisibility } from "@/components/depoimentos/depoimentos-model";
 import {
-  notificationLevelItems,
   serverNotificationControls,
   useChannelNotificationLevel,
   useNotificationState,
@@ -52,7 +53,6 @@ import { useTranslation } from "@/lib/i18n";
 import { isServerPublic } from "@/lib/community-access";
 import {
   resolveNotificationLevel,
-  setServerStreamAlerts,
 } from "@/lib/notifications";
 import { conversationsWithUnread } from "@/lib/conversation-list";
 import { conversationTitle } from "@/lib/conversations";
@@ -518,22 +518,13 @@ export function ServerRail({
           });
         }
         items.push(
-          ...notificationLevelItems("notify", levels, "account"),
+          ...serverNotificationMenuItems(
+            server.id,
+            notifications,
+            streamAlertInfo?.[server.id],
+            t,
+          ),
         );
-        const alerts = streamAlertInfo?.[server.id];
-        if (alerts?.flag) {
-          // Only where an operator turned `stream_start_notifications` on. The
-          // tick is what this person gets: their own choice, else the server's
-          // default (on for a small server, off for a large one).
-          const alertsOn = notifications.streamAlerts[server.id] ?? alerts.default;
-          items.push({
-            id: "stream-alerts",
-            label: t("notify.menu.streamAlerts"),
-            icon: Radio,
-            checked: alertsOn,
-            onSelect: () => setServerStreamAlerts(server.id, !alertsOn),
-          });
-        }
         if (onReorderServers && servers.length > 1) {
           // The same move as Alt+arrows, for the mouse, the phone and anybody
           // who would not find a keyboard chord.
@@ -555,18 +546,13 @@ export function ServerRail({
             },
           );
         }
-        if (server.role !== "owner") {
-          items.push(
-            { id: "sep", label: "", separator: true },
-            {
-              id: "leave",
-              label: t("chrome.leaveCommunity"),
-              icon: LogOut,
-              danger: true,
-              onSelect: () => onLeaveServer(server.id),
-            },
-          );
-        }
+        items.push(
+          ...leaveCommunityMenuItems(
+            server.role === "owner",
+            () => onLeaveServer(server.id),
+            t,
+          ),
+        );
 
         return (
           // Tooltip wraps a span so the context-menu trigger can still be the

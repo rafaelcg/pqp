@@ -13448,6 +13448,14 @@ function MainAppContent({
           onInvite={stableOnInvite}
           onOpenMembers={stableOnOpenMembers}
           onOpenServerSettings={stableOnOpenServerSettings}
+          onLeaveServer={
+            selectedServerId
+              ? () => void handleLeaveServer(selectedServerId)
+              : undefined
+          }
+          streamAlertInfo={
+            selectedServerId ? streamAlerts.byServer[selectedServerId] : undefined
+          }
           iconsOnly={sidebarIconsOnly}
           onExpand={stableOnExpand}
           footer={sidebarFooter(sidebarIconsOnly, { userPanel: !phoneShell })}
