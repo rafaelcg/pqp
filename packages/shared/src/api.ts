@@ -612,12 +612,11 @@ export const userSchema = z.object({
    * The account's public handle — `pqp.gg/@rafa` — or null when it has never
    * claimed one, which is most accounts.
    *
-   * On `userSchema` and deliberately NOT on `publicUserSchema`. A handle is
-   * public by definition, so hiding it is not the point; the point is that
-   * nothing in the app needs somebody else's handle to render a message row or
-   * a member list, and the shape that reaches strangers should carry only what
-   * its call sites use. The public *profile* endpoint is where a handle is read
-   * about somebody else, and it is keyed BY the handle.
+   * Also on `publicUserSchema`, since the profile card needs it for anybody it
+   * opens on. A handle is public by definition, and the card offers "Ver
+   * perfil" and the `pqp.gg/@` line only when it has one. The public *profile*
+   * endpoint is still where a stranger's page is read, and it is keyed BY the
+   * handle.
    */
   handle: z.string().nullable().default(null),
   /**
@@ -629,8 +628,8 @@ export const userSchema = z.object({
    * The banner across the top of this account's public page and profile card,
    * or null.
    *
-   * On `userSchema` and deliberately NOT on `publicUserSchema`, exactly as
-   * `handle` is: no message row or member list draws somebody else's banner.
+   * On `userSchema` and deliberately NOT on `publicUserSchema`: no message
+   * row or member list draws somebody else's banner.
    * The two surfaces that do read it on their own: `pqp.gg/@rafa` from the
    * public profile endpoint keyed by handle, and the profile card from
    * `GET /api/users/:userId/banner-url` when it opens. Defaulted so a response
@@ -703,6 +702,18 @@ export const publicUserSchema = z.object({
    * one line instead of reserving space for a second.
    */
   customStatus: z.string().nullable().default(null),
+  /**
+   * The claimed public handle (`pqp.gg/@rafa`), or null.
+   *
+   * ON THE PUBLIC SHAPE SO THE PROFILE CARD CAN OFFER THE PUBLIC PAGE FROM A
+   * FRIEND ROW OR A CONVERSATION, not only from a server's member list. A handle
+   * is public by definition: anybody can read it off a screenshot of the page,
+   * and the user search that returns this shape already finds people by prefix
+   * of it. It adds no way to enumerate accounts. Optional so a payload from an
+   * API that predates it still parses and a row built without it needs no key;
+   * null and absent both mean "has none".
+   */
+  handle: z.string().nullable().optional(),
 });
 
 export type PublicUser = z.infer<typeof publicUserSchema>;

@@ -4133,6 +4133,7 @@ function MainAppContent({
       }
       map.set(person.id, {
         username: person.username,
+        handle: person.handle ?? null,
         customStatus: person.customStatus ?? null,
       });
     }

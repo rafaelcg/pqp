@@ -288,7 +288,7 @@ export async function toPublicUser(user: DbUser) {
 }
 
 /** Columns every public-shaped read selects. */
-const PUBLIC_USER_COLUMNS = `id, display_name, username, discriminator, avatar_url, custom_status`;
+const PUBLIC_USER_COLUMNS = `id, display_name, username, discriminator, avatar_url, custom_status, handle`;
 
 interface PublicUserRow {
   id: string;
@@ -302,6 +302,8 @@ interface PublicUserRow {
    * reserve layout for, which is what the `?? null` below is doing.
    */
   custom_status?: string | null;
+  /** Optional for the same reason; absent reads as "none". */
+  handle?: string | null;
 }
 
 /**
@@ -323,6 +325,9 @@ export function toPublicUserSummary(row: PublicUserRow): PublicUser {
     // this shape: a recado is written to be read by the people around you. See
     // the note on `publicUserSchema`.
     customStatus: row.custom_status ?? null,
+    // Public by definition, and what lets the profile card offer the public
+    // page from a friend row or a conversation. See `publicUserSchema`.
+    handle: row.handle ?? null,
   };
 }
 

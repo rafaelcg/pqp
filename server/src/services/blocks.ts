@@ -114,10 +114,11 @@ export async function listBlocks(userId: string): Promise<BlockedUser[]> {
     username: string | null;
     discriminator: string | null;
     avatar_url: string | null;
+    handle: string | null;
     created_at: Date;
   }>(
     `SELECT u.id, u.display_name, u.username, u.discriminator, u.avatar_url,
-            b.created_at
+            u.handle, b.created_at
      FROM user_blocks b
      JOIN users u ON u.id = b.blocked_user_id
      WHERE b.user_id = $1
