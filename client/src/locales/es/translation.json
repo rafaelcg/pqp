@@ -6820,6 +6820,7 @@
   "serverEmoji.error.name": "El nombre necesita de 2 a 32 letras minúsculas, números o _.",
   "serverEmoji.error.generic": "Algo salió mal. Inténtalo de nuevo.",
   "emojiPicker.serverCategory": "Del servidor",
+  "emojiPicker.noResults": "No se encontró ningún emoji",
   "bauShare.button": "Compartir",
   "bauShare.aria": "Compartir este post",
   "bauShare.copyLink": "Copiar enlace",
