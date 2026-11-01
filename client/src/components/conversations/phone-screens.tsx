@@ -1,3 +1,4 @@
+import { Breu } from "@/components/breu/breu";
 import type { Server } from "@pqp/shared";
 import { CARD_LIST, CARD_ROW_HOVER, CARD_SURFACE } from "@/components/ui/card";
 import {
@@ -6,7 +7,6 @@ import {
   Compass,
   Plus,
   Settings,
-  Sparkles,
   UserPen,
 } from "lucide-react";
 import {
@@ -16,7 +16,6 @@ import {
   PencilSimpleLine as PencilFill,
   Plus as PlusBold,
   Question as QuestionFill,
-  Sparkle as SparkleFill,
 } from "@phosphor-icons/react";
 import type { ReactNode } from "react";
 import { IconSwap } from "@/components/ui/icon";
@@ -161,6 +160,12 @@ export function PhoneServersScreen({
             </button>
           );
         })}
+        {servers.length === 0 && (
+          // No servers yet: Breu over the one row that does something about it.
+          <div className="flex flex-col items-center px-4 pb-2 pt-8 text-center" data-phone-no-servers="">
+            <Breu mood="hello" size="md" />
+          </div>
+        )}
         <button
           type="button"
           onClick={onJoinServer}
@@ -182,7 +187,6 @@ export function PhoneServersScreen({
 
 export function PhoneYouScreen({
   me,
-  whatsNewUnread,
   onOpenProfile,
   onOpenSettings,
   onOpenWhatsNew,
@@ -190,9 +194,9 @@ export function PhoneYouScreen({
   footer,
 }: {
   me: { displayName: string; avatarUrl: string | null; tag: string | null; handle: string | null };
-  whatsNewUnread: boolean;
   onOpenProfile: () => void;
   onOpenSettings: () => void;
+  /** The release notes, from the update popover's "see all" link. */
   onOpenWhatsNew?: () => void;
   onOpenHelp: () => void;
   /** The user bar (status, mute, deafen) and the call bar, as on desktop. */
@@ -230,14 +234,6 @@ export function PhoneYouScreen({
         <div className={cn(CARD_SURFACE, CARD_LIST, "mt-6")}>
           <YouRow icon={<IconSwap off={UserPen} on={PencilFill} size="md" offClassName="h-5 w-5" />} label={t("phoneTabs.editProfile")} onClick={onOpenProfile} />
           <YouRow icon={<IconSwap off={Settings} on={GearFill} size="md" offClassName="h-5 w-5" />} label={t("phoneTabs.settings")} onClick={onOpenSettings} />
-          {onOpenWhatsNew && (
-            <YouRow
-              icon={<IconSwap off={Sparkles} on={SparkleFill} size="md" offClassName="h-5 w-5" />}
-              label={t("phoneTabs.whatsNew")}
-              pip={whatsNewUnread}
-              onClick={onOpenWhatsNew}
-            />
-          )}
           <YouRow icon={<IconSwap off={CircleHelp} on={QuestionFill} size="md" offClassName="h-5 w-5" />} label={t("phoneTabs.help")} onClick={onOpenHelp} />
         </div>
       </div>

@@ -89,6 +89,17 @@ export function setRedesignChoice(on: boolean): void {
   } catch {
     // The page still switches; it just will not remember.
   }
+  // A `?redesign=` in the address outranks the stored choice, so a switch
+  // flipped on such a page would do nothing. The person's click wins: drop it.
+  try {
+    const url = new URL(window.location.href);
+    if (url.searchParams.has(URL_PARAM)) {
+      url.searchParams.delete(URL_PARAM);
+      window.history.replaceState(window.history.state, "", url);
+    }
+  } catch {
+    // No window (tests without a DOM): nothing to drop.
+  }
   changed();
 }
 

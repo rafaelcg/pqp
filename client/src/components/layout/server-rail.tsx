@@ -10,8 +10,8 @@ import {
   PinOff,
   Radio,
   Plus,
+  Palette,
   Settings,
-  Sparkles,
   UserPlus,
   Users,
 } from "lucide-react";
@@ -19,8 +19,8 @@ import {
   ChatCircle,
   Compass as CompassFill,
   GlobeSimple,
+  Palette as PaletteFill,
   Plus as PlusBold,
-  Sparkle,
   UserPlus as UserPlusFill,
   type Icon as PhosphorIcon,
 } from "@phosphor-icons/react";
@@ -59,7 +59,7 @@ import { conversationTitle } from "@/lib/conversations";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useServerRailReorder } from "@/hooks/use-server-rail-reorder";
 import { UpdateIndicator } from "@/components/layout/update-indicator";
-import { useUpdateOffered } from "@/lib/update-prompt-state";
+import { setRedesignChoice, useRedesign } from "@/lib/redesign";
 import { cn } from "@/lib/utils";
 import { RAIL_REDESIGN } from "@/components/ui/pane";
 
@@ -116,10 +116,7 @@ interface ServerRailProps {
    * exist-and-refuse.
    */
   onOpenCommunities?: () => void;
-  /** True while the in-app release notes are covering the channel columns. */
-  whatsNewSelected?: boolean;
-  /** A pip, not a count: something newer than last visit, or nothing. */
-  whatsNewUnread?: boolean;
+  /** The in-app release notes, from the update popover's "see all" link. */
   onOpenWhatsNew?: () => void;
   /**
    * Conversations this person pinned to the rail, already filtered to ones
@@ -240,8 +237,6 @@ export function ServerRail({
   friendRequestCount = 0,
   communitiesSelected = false,
   onOpenCommunities,
-  whatsNewSelected = false,
-  whatsNewUnread = false,
   onOpenWhatsNew,
   pinnedConversations = [],
   pinnedUnread = {},
@@ -267,9 +262,7 @@ export function ServerRail({
   openConversationId = null,
 }: ServerRailProps) {
   const { t } = useTranslation();
-  // A new build to take: the quiet indicator at the foot of the rail. It draws
-  // itself; the rail only needs to know whether it is there, for the rule above.
-  const updateOffered = useUpdateOffered();
+  const redesign = useRedesign();
   // Subscribed once for the whole rail: hook rules forbid reading the store
   // inside the map below, and every icon needs the same snapshot anyway.
   const notifications = useNotificationState();
@@ -758,99 +751,68 @@ export function ServerRail({
         </Button>
       </Tooltip>
 
-      {/* Product chrome, at the FOOT of the rail and separated from the halls.
-          The sparkle is not a hall: mixing it into the list would read as
-          another room. It sits with discovery, pinned to the bottom, the
-          same place Discord puts things that are not servers. A pip is
-          allowed here (unlike the compass) because a new post is something
-          waiting; a count is not, because this is not a mention.
+      {/* Product chrome, at the FOOT of the rail and separated from the halls,
+          the same place Discord puts things that are not servers: discovery
+          (the compass), then the two switches that are about the app itself,
+          the look and the update. None of them is a hall.
 
-          The update indicator goes LAST, below everything else, and only
-          exists while there is a build to take. It is not a door: a small round
-          button, smaller than the tiles above it (under the redesign a 44px
-          tile like them), with a dot, and a popover when it is clicked. See `components/layout/update-indicator.tsx`. */}
-      {onOpenWhatsNew && (
-        <>
-          <span
-            aria-hidden="true"
-            className={cn("mt-auto h-px w-8 shrink-0 rounded-full bg-ink-4/70", RAIL_DIVIDER_REDESIGN)}
-          />
-          <Tooltip
-            label={
-              whatsNewUnread ? t("whatsNew.rail.unread") : t("whatsNew.rail")
-            }
-            side="right"
-            tone="rail"
-          >
-            <button
-              type="button"
-              data-whats-new-rail
-              onClick={onOpenWhatsNew}
-              aria-current={whatsNewSelected ? "page" : undefined}
-              className={cn(
-                "group relative flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl transition-all duration-200 hover:rounded-xl",
-                whatsNewSelected
-                  ? "rounded-xl bg-signal text-ink"
-                  : "bg-ink-3 text-paper hover:bg-signal hover:text-ink",
-                RAIL_TILE_REDESIGN,
-                whatsNewSelected && RAIL_TILE_SELECTED_REDESIGN,
-              )}
-            >
-              <RailPill
-                kind={
-                  whatsNewSelected ? "selected" : whatsNewUnread ? "unread" : "none"
-                }
-              />
-              <RailGlyph off={Sparkles} on={Sparkle} />
-              {whatsNewUnread && !whatsNewSelected && (
-                <span
-                  aria-hidden="true"
-                  className="absolute right-[-2px] top-[-2px] h-2.5 w-2.5 rounded-full bg-signal ring-[3px] ring-rail redesign:bg-accent redesign:ring-canvas"
-                />
-              )}
-            </button>
-          </Tooltip>
-        </>
-      )}
+          The sparkle that opened the release notes used to sit here. Baú
+          carries the news now, and the notes are still one click away from
+          the update popover's "see all".
+
+          The update button is ALWAYS here, like T3 Code's: up to date, an
+          update to download, downloading, ready to restart or reload, or a
+          failure to retry. See `components/layout/update-indicator.tsx`. */}
+      <span
+        aria-hidden="true"
+        className={cn("mt-auto h-px w-8 shrink-0 rounded-full bg-ink-4/70", RAIL_DIVIDER_REDESIGN)}
+      />
       {onOpenCommunities && (
-        <>
-          {!onOpenWhatsNew && (
-            <span
-              aria-hidden="true"
-              className={cn("mt-auto h-px w-8 shrink-0 rounded-full bg-ink-4/70", RAIL_DIVIDER_REDESIGN)}
-            />
-          )}
-          <Tooltip label={t("communities.title")} side="right" tone="rail">
-            <button
-              type="button"
-              data-communities-rail
-              onClick={onOpenCommunities}
-              aria-current={communitiesSelected ? "page" : undefined}
-              className={cn(
-                "group relative flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl transition-all duration-200 hover:rounded-xl",
-                communitiesSelected
-                  ? "rounded-xl bg-signal text-ink"
-                  : "bg-ink-3 text-paper hover:bg-signal hover:text-ink",
-                RAIL_TILE_REDESIGN,
-                communitiesSelected && RAIL_TILE_SELECTED_REDESIGN,
-              )}
-            >
-              <RailPill kind={communitiesSelected ? "selected" : "none"} />
-              <RailGlyph off={Compass} on={CompassFill} />
-            </button>
-          </Tooltip>
-        </>
+        <Tooltip label={t("communities.title")} side="right" tone="rail">
+          <button
+            type="button"
+            data-communities-rail
+            onClick={onOpenCommunities}
+            aria-current={communitiesSelected ? "page" : undefined}
+            className={cn(
+              "group relative flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl transition-all duration-200 hover:rounded-xl",
+              communitiesSelected
+                ? "rounded-xl bg-signal text-ink"
+                : "bg-ink-3 text-paper hover:bg-signal hover:text-ink",
+              RAIL_TILE_REDESIGN,
+              communitiesSelected && RAIL_TILE_SELECTED_REDESIGN,
+            )}
+          >
+            <RailPill kind={communitiesSelected ? "selected" : "none"} />
+            <RailGlyph off={Compass} on={CompassFill} />
+          </button>
+        </Tooltip>
       )}
-      {updateOffered && (
-        <div
+      {/* Novo visual, the same switch as Configurações > Beta, here while the
+          redesign is being tried so nobody has to dig for the way back. */}
+      <Tooltip
+        label={redesign ? t("rail.newLook.on") : t("rail.newLook.off")}
+        side="right"
+        tone="rail"
+      >
+        <button
+          type="button"
+          data-new-look-rail=""
+          aria-pressed={redesign}
+          aria-label={t("rail.newLook.label")}
+          onClick={() => setRedesignChoice(!redesign)}
           className={cn(
-            "flex shrink-0 justify-center pt-0.5",
-            !onOpenWhatsNew && !onOpenCommunities && "mt-auto",
+            "relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-surface-2 text-text-secondary transition-colors duration-[var(--duration-fast)] hover:bg-border hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring",
+            "redesign:h-[var(--rail-tile)] redesign:w-[var(--rail-tile)] redesign:bg-[color:var(--rail-tile-bg)] redesign:text-text-secondary redesign:hover:bg-[color:var(--rail-tile-hover)] redesign:hover:text-text redesign:focus-visible:ring-text redesign:focus-visible:ring-offset-2 redesign:focus-visible:ring-offset-canvas",
           )}
         >
-          <UpdateIndicator variant="rail" onOpenWhatsNew={onOpenWhatsNew} />
-        </div>
-      )}
+          <Palette className="h-4 w-4 redesign:hidden" aria-hidden="true" />
+          <Icon icon={PaletteFill} kind="symbol" size="sm" className="hidden redesign:block" />
+        </button>
+      </Tooltip>
+      <div className="flex shrink-0 justify-center pt-0.5">
+        <UpdateIndicator variant="rail" always onOpenWhatsNew={onOpenWhatsNew} />
+      </div>
     </nav>
   );
 }

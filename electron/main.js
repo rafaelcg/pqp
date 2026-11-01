@@ -264,6 +264,8 @@ const ipcGuard = createIpcGuard({ ipcMain, getAppOrigin: () => sessionAppOrigin 
 let tray = null;
 /** What the renderer last said about the call, for the tray icon and menu. */
 let voiceState = { inCall: false, muted: false, deafened: false };
+/** The shell updater's controller, set once the app is ready (`lib/updater.js`). */
+let updater = null;
 /** Whether the renderer has a signed-in session. Unknown (false) until it says. */
 let signedIn = false;
 /** `{ keepInTray: boolean }`, read from userData at startup. */
@@ -2721,6 +2723,42 @@ if (probingShareAudio) {
     rejected: { state: "unsupported", raw: null, exclusiveFullscreen: null },
   });
 
+  /**
+   * The rail's update button (`lib/updater.js`). Asking for the state is also
+   * how the page says it draws the button, which retires the native box.
+   * Install refuses unless an update is downloaded; the page asks the person
+   * first when they are in a call.
+   */
+  ipcGuard.handle(
+    "pqp:update-state",
+    async () => {
+      updater?.attach();
+      return updater?.getState() ?? { status: "disabled" };
+    },
+    { rejected: { status: "disabled" } },
+  );
+  ipcGuard.handle(
+    "pqp:update-check",
+    async () => {
+      updater?.attach();
+      updater?.check();
+      return true;
+    },
+    { rejected: false },
+  );
+  ipcGuard.handle(
+    "pqp:update-download",
+    async () => {
+      updater?.attach();
+      updater?.download();
+      return true;
+    },
+    { rejected: false },
+  );
+  ipcGuard.handle("pqp:update-install", async () => updater?.install() ?? false, {
+    rejected: false,
+  });
+
   ipcGuard.on("pqp:voice-state", (_event, payload) => {
     const next = normalizeVoiceState(payload);
     if (
@@ -2812,7 +2850,14 @@ if (probingShareAudio) {
     recreateWindow = () => createWindow(appUrl, allowedOrigin);
     createWindow(appUrl, allowedOrigin);
     // The box never goes over a call: `voiceState` is what the page reports.
-    initAutoUpdate(() => mainWindow, () => voiceState.inCall);
+    // Every change goes to the page, which draws the rail's update button.
+    updater = initAutoUpdate(() => mainWindow, () => voiceState.inCall, {
+      onState: (state) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send("pqp:update-state", state);
+        }
+      },
+    });
 
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) {

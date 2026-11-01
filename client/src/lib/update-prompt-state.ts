@@ -67,17 +67,28 @@ export const FRESH_BUILD: BuildStaleness = {
 interface UpdateState {
   waiting: boolean;
   build: BuildStaleness;
+  /**
+   * The build the person's own "check again" found, if any: that build is theirs
+   * to take now, gate or not. Only that one: the next deploy waits for the gate
+   * again, or a check would bring back a dot on every deploy.
+   */
+  askedFor: string | null;
 }
 
 let state: UpdateState = {
   waiting: false,
   build: FRESH_BUILD,
+  askedFor: null,
 };
 const listeners = new Set<() => void>();
 
 function set(next: Partial<UpdateState>): void {
   const merged = { ...state, ...next };
-  if (merged.waiting === state.waiting && merged.build === state.build) {
+  if (
+    merged.waiting === state.waiting &&
+    merged.build === state.build &&
+    merged.askedFor === state.askedFor
+  ) {
     return;
   }
   state = merged;
@@ -111,6 +122,19 @@ export function setBuildStaleness(next: BuildStaleness): void {
   set({ build: next });
 }
 
+/**
+ * The person pressed "check again". The daily gate (`announceAtFor`) exists so
+ * nobody is TOLD of every deploy; somebody who asks is answered with what is
+ * there.
+ */
+export function setUpdateAsked(build: string | null): void {
+  set({ askedFor: build });
+}
+
+function updateAskedFor(): string | null {
+  return state.askedFor;
+}
+
 export function getBuildStaleness(): BuildStaleness {
   return state.build;
 }
@@ -128,6 +152,7 @@ export function resetUpdateState(): void {
   state = {
     waiting: false,
     build: FRESH_BUILD,
+    askedFor: null,
   };
   for (const listener of listeners) {
     listener();
@@ -155,15 +180,19 @@ export function useUpdateWaiting(): boolean {
  *  - the version poll says the page is behind but the gate is still closed: no,
  *    and not because the worker says one is waiting either, which would make
  *    the gate a way to be told a minute later than before and nothing more;
+ *  - the person checked by hand and this is the build that check found: yes,
+ *    gate or not;
  *  - otherwise a service worker with a waiting build, for a page the poll has
  *    not spoken about yet: yes.
  */
 export function isUpdateOffered(
-  input: { build: BuildStaleness; waiting: boolean },
+  input: { build: BuildStaleness; waiting: boolean; askedFor?: string | null },
   now: number,
 ): boolean {
   if (input.build.stale) {
-    return isAnnounced(input.build.announceAt, now);
+    const asked =
+      input.askedFor != null && input.askedFor === input.build.latestBuild;
+    return asked || isAnnounced(input.build.announceAt, now);
   }
   return input.waiting;
 }
@@ -175,6 +204,7 @@ export function isUpdateOffered(
 export function useUpdateOffered(): boolean {
   const build = useBuildStaleness();
   const waiting = useUpdateWaiting();
+  const askedFor = useSyncExternalStore(subscribe, updateAskedFor, () => null);
   const [now, setNow] = useState(() => Date.now());
   const announceAt = build.stale ? (build.announceAt ?? null) : null;
   useEffect(() => {
@@ -190,5 +220,5 @@ export function useUpdateOffered(): boolean {
     const timer = setTimeout(() => setNow(Date.now()), Math.min(wait, 2 ** 31 - 1));
     return () => clearTimeout(timer);
   }, [announceAt]);
-  return isUpdateOffered({ build, waiting }, now);
+  return isUpdateOffered({ build, waiting, askedFor }, now);
 }

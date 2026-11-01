@@ -659,6 +659,42 @@ contextBridge.exposeInMainWorld("pqpDesktop", {
     });
   },
 
+  /**
+   * The shell's own updater, for the rail's update button
+   * (`client/src/lib/desktop-update.ts`). Absent in shells built before it, so
+   * absence means "draw the web-only button". `getState()` resolves
+   * `{ status }` from `lib/update-state.js`; `disabled` in development, in a
+   * Flatpak and wherever the updater cannot run. `install()` restarts the app.
+   */
+  update: Object.freeze({
+    getState() {
+      return ipcRenderer.invoke("pqp:update-state");
+    },
+    check() {
+      return ipcRenderer.invoke("pqp:update-check");
+    },
+    download() {
+      return ipcRenderer.invoke("pqp:update-download");
+    },
+    install() {
+      return ipcRenderer.invoke("pqp:update-install");
+    },
+    onState(callback) {
+      if (typeof callback !== "function") {
+        return () => {};
+      }
+      const handler = (_event, state) => {
+        if (state && typeof state === "object" && typeof state.status === "string") {
+          callback(state);
+        }
+      };
+      ipcRenderer.on("pqp:update-state", handler);
+      return () => {
+        ipcRenderer.removeListener("pqp:update-state", handler);
+      };
+    },
+  }),
+
   /** Call state for the tray icon and menu. */
   setVoiceState(state) {
     if (!state || typeof state !== "object") {

@@ -1661,7 +1661,6 @@ export function ShellSheet() {
             onOpenSettings={noop}
             onLeaveServer={noop}
             onOpenWhatsNew={noop}
-            whatsNewUnread
             onOpenCommunities={noop}
           />
         </RailFrame>

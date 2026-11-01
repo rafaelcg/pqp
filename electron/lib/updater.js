@@ -2,6 +2,7 @@ const { app, dialog } = require("electron");
 const { t } = require("./i18n");
 const { isFlatpak } = require("./flatpak");
 const { RETRY_WHILE_BUSY_MS, decideUpdatePrompt } = require("./update-prompt-policy");
+const { DISABLED, IDLE, nextUpdateState, serializeUpdateState } = require("./update-state");
 
 /**
  * Shell auto-update, over electron-updater / GitHub Releases.
@@ -13,11 +14,16 @@ const { RETRY_WHILE_BUSY_MS, decideUpdatePrompt } = require("./update-prompt-pol
  * That is a much slower cadence than the web app, and it is why the update is
  * allowed to sit until the next quit instead of interrupting anyone.
  *
- * UX matches the web client's convention rather than inventing a second one:
- * download in the background, then *ask*. This app holds a live WebSocket and
- * possibly an active call; restarting under either is worse than running
- * yesterday's shell for another day. "Later" is a real answer — the update is
- * already staged and installs on the next ordinary quit.
+ * The page drives it. The rail's update button (`client/src/lib/desktop-update.ts`)
+ * reads the state from `update-state.js` and does the two steps the person
+ * asks for, like T3 Code's update pill: one click downloads, a second click
+ * restarts and installs. Nothing downloads, opens or restarts by itself. A
+ * downloaded update still installs on the next ordinary quit, so "not now" is
+ * a real answer.
+ *
+ * A page that never asks (a hosted bundle from before the button) gets the old
+ * behaviour: download in the background, then the native box, once per
+ * version and never over a call. `pageDrives` is how the two are told apart.
  *
  * macOS caveat: the updater is Squirrel.Mac, which verifies the code signature
  * of the downloaded build against the running one. An unsigned or ad-hoc
@@ -25,7 +31,8 @@ const { RETRY_WHILE_BUSY_MS, decideUpdatePrompt } = require("./update-prompt-pol
  * piece of work, not two.
  */
 
-const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+/** Hourly: the button is always on screen, and "up to date" should mean it. */
+const CHECK_INTERVAL_MS = 60 * 60 * 1000;
 
 /** @type {NodeJS.Timeout | null} */
 let timer = null;
@@ -42,13 +49,45 @@ function log(...args) {
  * @param {() => import("electron").BrowserWindow | null} getWindow
  * @param {() => boolean} [isBusy] whether the person is in a call right now; the
  *   box never goes over one (`update-prompt-policy.js`)
+ * @param {{ onState?: (state: object) => void }} [hooks] `onState` hears every
+ *   change, for main to forward to the page
+ * @returns {{ getState: () => object, check: () => void, download: () => void, install: () => boolean, attach: () => void }}
  */
-function initAutoUpdate(getWindow, isBusy = () => false) {
+function initAutoUpdate(getWindow, isBusy = () => false, hooks = {}) {
+  /** @type {import("./update-state").UpdateState} */
+  let state = DISABLED;
+  const emit = () => {
+    try {
+      hooks.onState?.(serializeUpdateState(state));
+    } catch (err) {
+      log("state listener failed:", err?.message ?? err);
+    }
+  };
+  /** @param {import("./update-state").UpdateEvent} event */
+  const dispatch = (event) => {
+    const next = nextUpdateState(state, event);
+    if (next !== state) {
+      state = next;
+      emit();
+    }
+  };
+  /** The page has asked about updates at least once: it draws the button. */
+  let pageDrives = false;
+  const controller = {
+    getState: () => serializeUpdateState(state),
+    attach: () => {
+      pageDrives = true;
+    },
+    check: () => {},
+    download: () => {},
+    install: () => false,
+  };
+
   // Development runs from source with no `app-update.yml`, and every check
   // would log a failure on each `pnpm electron:dev`.
   if (!app.isPackaged) {
     log("skipped: not a packaged build");
-    return;
+    return controller;
   }
   // Flathub ships the updates for the Flatpak build, and electron-updater
   // there would pick its .deb updater, which needs pkexec and a writable /opt
@@ -56,11 +95,11 @@ function initAutoUpdate(getWindow, isBusy = () => false) {
   // update" that does nothing.
   if (isFlatpak()) {
     log("skipped: running as a Flatpak, Flathub updates this build");
-    return;
+    return controller;
   }
   if (process.env.PQP_DISABLE_AUTO_UPDATE === "1") {
     log("skipped: PQP_DISABLE_AUTO_UPDATE=1");
-    return;
+    return controller;
   }
 
   let autoUpdater;
@@ -68,11 +107,14 @@ function initAutoUpdate(getWindow, isBusy = () => false) {
     ({ autoUpdater } = require("electron-updater"));
   } catch (err) {
     log("electron-updater unavailable:", err?.message ?? err);
-    return;
+    return controller;
   }
+  state = IDLE;
 
   autoUpdater.logger = null;
-  autoUpdater.autoDownload = true;
+  // The person's click downloads (`download` below). A page that does not draw
+  // the button gets the download started for it on `update-available`.
+  autoUpdater.autoDownload = false;
   // The whole point of "Later": the staged update is applied on a normal quit,
   // with no dialog and no second download.
   autoUpdater.autoInstallOnAppQuit = true;
@@ -82,17 +124,70 @@ function initAutoUpdate(getWindow, isBusy = () => false) {
   // dialog. An update that did not happen is invisible; an error box about a
   // release feed is a support ticket.
   autoUpdater.on("error", (err) => {
-    log("check failed:", err?.message ?? err);
+    log("updater error:", err?.message ?? err);
+    dispatch({ type: "error" });
+  });
+
+  autoUpdater.on("checking-for-update", () => {
+    dispatch({ type: "check" });
+  });
+
+  autoUpdater.on("update-not-available", () => {
+    dispatch({ type: "not-available", at: Date.now() });
   });
 
   autoUpdater.on("update-available", (info) => {
     log(`update available: ${info?.version}`);
+    dispatch({ type: "available", version: String(info?.version ?? "") });
+    if (!pageDrives) {
+      download();
+    }
+  });
+
+  autoUpdater.on("download-progress", (progress) => {
+    dispatch({ type: "progress", percent: progress?.percent });
   });
 
   autoUpdater.on("update-downloaded", (info) => {
     log(`update downloaded: ${info?.version}`);
-    void offer(info);
+    dispatch({ type: "downloaded", version: String(info?.version ?? "") });
+    if (!pageDrives) {
+      void offer(info);
+    }
   });
+
+  let downloading = false;
+  function download() {
+    if (downloading || (state.status !== "available" && state.status !== "error")) {
+      return;
+    }
+    if (state.status === "error" && !state.version) {
+      // Nothing was found to download: the retry is a check.
+      check();
+      return;
+    }
+    downloading = true;
+    dispatch({ type: "download" });
+    autoUpdater
+      .downloadUpdate()
+      .catch((err) => {
+        // Also reported on "error"; swallowed so it is never unhandled.
+        log("download rejected:", err?.message ?? err);
+      })
+      .finally(() => {
+        downloading = false;
+      });
+  }
+
+  function install() {
+    if (state.status !== "downloaded") {
+      return false;
+    }
+    log(`installing ${state.version} on the person's request`);
+    // isSilent = true, isForceRunAfter = true.
+    autoUpdater.quitAndInstall(true, true);
+    return true;
+  }
 
   /** The one version the person said "Later" to in this run of the app. */
   let declinedVersion = null;
@@ -145,7 +240,7 @@ function initAutoUpdate(getWindow, isBusy = () => false) {
         // isSilent = true, isForceRunAfter = true.
         autoUpdater.quitAndInstall(true, true);
       } else {
-        // "Later" is an answer: the six-hourly check reports this same staged
+        // "Later" is an answer: the hourly check reports this same staged
         // update again, and asking again each time is how a box came back all
         // day. It installs on the next ordinary quit with no box.
         declinedVersion = version;
@@ -157,13 +252,20 @@ function initAutoUpdate(getWindow, isBusy = () => false) {
     }
   }
 
-  const check = () => {
+  function check() {
+    if (state.status === "checking" || state.status === "downloading") {
+      return;
+    }
     autoUpdater.checkForUpdates().catch((err) => {
       // Also caught by the "error" listener; swallowed here so an offline
       // launch never surfaces an unhandled rejection.
       log("check rejected:", err?.message ?? err);
     });
-  };
+  }
+
+  controller.check = check;
+  controller.download = download;
+  controller.install = install;
 
   // Not on the first tick of the app: launch is already doing enough.
   setTimeout(check, 10_000).unref?.();
@@ -176,6 +278,8 @@ function initAutoUpdate(getWindow, isBusy = () => false) {
       timer = null;
     }
   });
+
+  return controller;
 }
 
 module.exports = { initAutoUpdate, CHECK_INTERVAL_MS };

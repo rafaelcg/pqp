@@ -219,6 +219,31 @@ export interface PqpDesktop {
   setSignedIn?(signedIn: boolean): void;
   /** Mute, deafen and leave requested from the tray menu. */
   onVoiceCommand?(cb: (command: DesktopVoiceCommand) => void): () => void;
+  /**
+   * The shell's own updater, for the rail's update button
+   * (`lib/desktop-update.ts`). Absent in shells built before it.
+   */
+  update?: DesktopUpdateBridge;
+}
+
+/** What the shell's updater is doing (`electron/lib/update-state.js`). */
+export type DesktopUpdateState =
+  | { status: "disabled" }
+  | { status: "idle" }
+  | { status: "checking" }
+  | { status: "up-to-date"; checkedAt: number }
+  | { status: "available"; version: string }
+  | { status: "downloading"; version: string; percent: number }
+  | { status: "downloaded"; version: string }
+  | { status: "error"; context: "check" | "download"; version: string | null };
+
+export interface DesktopUpdateBridge {
+  getState(): Promise<DesktopUpdateState>;
+  check(): Promise<boolean>;
+  download(): Promise<boolean>;
+  /** Restarts the app into the downloaded update. False when there is none. */
+  install(): Promise<boolean>;
+  onState(cb: (state: DesktopUpdateState) => void): () => void;
 }
 
 /**
