@@ -12504,6 +12504,14 @@ function MainAppContent({
             onLowerHand={(userId) => void handleLowerOccupantHand(userId)}
             onLowerAllHands={() => void handleLowerAllHands(selectedChannel.id)}
             audienceHost={audienceHostFor(selectedChannel)}
+            occupantModeration={{
+              canServerMute: stableCanMuteIn(selectedChannel.id),
+              canDisconnect: stableCanMoveIn(selectedChannel.id),
+              canKick: stableCanKickUser,
+              onServerMute: stableOnServerMuteOccupant,
+              onDisconnect: stableOnDisconnectVoiceOccupant,
+              onKick: stableOnKickOccupant,
+            }}
             compactPeers={localSettings.compactPeers}
           />
         )}

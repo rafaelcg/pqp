@@ -194,7 +194,16 @@ import {
   STRIP_LIMIT_WIDE,
 } from "@/components/voice/stage-layout";
 import { ListenerStrip } from "@/components/voice/listener-strip";
-import { RoomCards, type RoomCardEntry } from "@/components/voice/room-cards";
+import {
+  RoomCards,
+  type RoomCardEntry,
+  type RoomCardMenuFor,
+} from "@/components/voice/room-cards";
+import {
+  roomCardMenuItems,
+  type StageOccupantModeration,
+} from "@/components/voice/room-card-menu";
+import { useProfilePopover } from "@/components/user/user-profile-popover";
 import { MusicStagePanel } from "@/components/voice/music-stage-panel";
 import {
   showsVideoQualityControl,
@@ -874,6 +883,13 @@ export interface CallStageProps {
    * a conversation call.
    */
   audienceHost?: AudienceModeHostControls | null;
+  /**
+   * What the right-click menu of a person's room card may do to them: server
+   * mute, disconnect, kick, with the permission answers the sidebar row's menu
+   * uses. Absent (a conversation call, a test), the card's menu still offers
+   * profile, mute for you and copy name.
+   */
+  occupantModeration?: StageOccupantModeration;
   /** Shrinks the listener chips. Same setting the old lobby grid used. */
   compactPeers?: boolean;
   /**
@@ -979,6 +995,7 @@ export function CallStage({
   onLowerHand,
   onLowerAllHands,
   audienceHost = null,
+  occupantModeration,
   compactPeers = false,
   ringWhenAlone = true,
   fill = false,
@@ -1088,6 +1105,7 @@ export function CallStage({
       canLowerHands={canLowerHands}
       onLowerHand={onLowerHand}
       audienceHost={audienceHost}
+      occupantModeration={occupantModeration}
       compactPeers={compactPeers}
       ringWhenAlone={ringWhenAlone}
       fill={fill}
@@ -1147,6 +1165,7 @@ function ActiveCall({
   canLowerHands = false,
   onLowerHand,
   audienceHost = null,
+  occupantModeration,
   compactPeers = false,
   ringWhenAlone = true,
   fill = false,
@@ -1236,6 +1255,7 @@ function ActiveCall({
   canLowerHands?: boolean;
   onLowerHand?: (userId: string) => void;
   audienceHost?: AudienceModeHostControls | null;
+  occupantModeration?: StageOccupantModeration;
   compactPeers?: boolean;
   ringWhenAlone?: boolean;
   fill?: boolean;
@@ -1527,6 +1547,59 @@ function ActiveCall({
     ? voiceState.isSharingScreenAudio
     : receivedShareHasAudio;
   const allPeople: StagePerson[] = [...(self ? [self] : []), ...remotes];
+  // The right-click menu of a room card: the sidebar row's, built from the
+  // same actions (`room-card-menu.ts`).
+  const openProfile = useProfilePopover();
+  const roomCardMenuFor: RoomCardMenuFor = (entry, anchor) => {
+    const person = allPeople.find((candidate) => candidate.key === entry.key);
+    if (!person) {
+      return [];
+    }
+    const audienceSpeakers =
+      audienceHost && voiceState.audience
+        ? voiceState.audience.speakerUserIds
+        : null;
+    return roomCardMenuItems({
+      t,
+      userId: person.userId,
+      name: person.name,
+      isSelf: person.isSelf,
+      serverMuted: person.serverMuted,
+      handRaised: person.handPosition != null,
+      volume: person.volume,
+      onSetVolume: person.onSetVolume,
+      moderation: occupantModeration,
+      onLowerHand: canLowerHands ? onLowerHand : undefined,
+      audience:
+        audienceHost && audienceSpeakers && person.userId
+          ? {
+              action: audienceSpeakers.includes(person.userId)
+                ? "silence"
+                : rosterByPeerId.get(person.key)?.canSpeak === false
+                  ? "allow"
+                  : null,
+              onSet: (userId, allowed) =>
+                allowed
+                  ? audienceHost.onAllow(userId)
+                  : audienceHost.onSilence(userId),
+            }
+          : undefined,
+      openProfile: () => {
+        const element = anchor();
+        if (element && person.userId) {
+          openProfile(
+            {
+              id: person.userId,
+              displayName: person.name,
+              tag: null,
+              avatarUrl: person.avatarUrl,
+            },
+            element,
+          );
+        }
+      },
+    });
+  };
   const [pinnedTileId, setPinnedTileId] = useState(() =>
     stagePinnedKey(channelId),
   );
@@ -2996,6 +3069,7 @@ function ActiveCall({
           ) : roomStage ? (
             <RoomCards
               youLabel={t("voice.tile.you")}
+              menuFor={roomCardMenuFor}
               stage={
                 roomPlan.screens.length > 0 ? (
                   stageGrid(roomPlan.screens, false)
@@ -3065,6 +3139,7 @@ function ActiveCall({
               youLabel={t("voice.tile.you")}
               othersOnly={ownShareHidden}
               cards={redesign}
+              menuFor={roomCardMenuFor}
             />
           )}
           {/* Picking one stream and clicking away from it used to leave no
@@ -5152,6 +5227,7 @@ export function RoomView({
   youLabel,
   othersOnly = false,
   cards = false,
+  menuFor,
 }: {
   people: StagePerson[];
   youLabel: string;
@@ -5162,6 +5238,8 @@ export function RoomView({
   othersOnly?: boolean;
   /** The redesign's room: a card per person (`room-cards.tsx`). */
   cards?: boolean;
+  /** The right-click menu of a card. See `RoomCards`. */
+  menuFor?: RoomCardMenuFor;
 }) {
   const { t } = useTranslation();
   if (cards) {
@@ -5169,6 +5247,7 @@ export function RoomView({
       <RoomCards
         youLabel={youLabel}
         people={people.map((person) => roomCardEntry(person, false))}
+        menuFor={menuFor}
       />
     );
   }

@@ -14,8 +14,13 @@ import {
   ShieldSlash,
   SpinnerGap,
 } from "@phosphor-icons/react";
+import { Volume2, VolumeX } from "lucide-react";
 import { Icon } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
+import {
+  ContextMenu,
+  type ContextMenuItemDef,
+} from "@/components/ui/context-menu";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useBringFriendsServer } from "@/components/layout/bring-friends-server";
 import {
@@ -87,11 +92,29 @@ const SHOW_ALL_MIN_WIDTH = 200;
 const RESIZE =
   "transition-[width,height] duration-[var(--duration-slow)] ease-out motion-reduce:transition-none";
 
+/**
+ * How far the control dock reaches up into the cards' box, in px. The dock
+ * floats over the stage's bottom edge when the composer is out of sight (chat
+ * hidden), and cards laid out to the full box ran under it. Under 2px of
+ * overlap is the rounding of two boxes that touch, not a dock to clear.
+ */
+export function dockOverlap(rootBottom: number, dockTop: number): number {
+  const overlap = rootBottom - dockTop;
+  return overlap >= 2 ? Math.ceil(overlap) : 0;
+}
+
+/** What a card's menu is given to anchor the profile card on its element. */
+export type RoomCardMenuFor = (
+  person: RoomCardEntry,
+  anchor: () => HTMLElement | null,
+) => ContextMenuItemDef[];
+
 export function RoomCards({
   people,
   youLabel,
   stage,
   renderCamera,
+  menuFor,
 }: {
   people: RoomCardEntry[];
   youLabel: string;
@@ -111,11 +134,17 @@ export function RoomCards({
     className: string,
     first: boolean,
   ) => ReactNode;
+  /**
+   * The right-click menu of a person's card: the one the sidebar row has.
+   * Absent, a card has no menu beyond the audio panel its click opens.
+   */
+  menuFor?: RoomCardMenuFor;
 }) {
   const { t } = useTranslation();
   const [showAll, setShowAll] = useState(false);
   const [box, setBox] = useState({ width: 0, height: 0 });
   const [banners, setBanners] = useState(0);
+  const [dockReserve, setDockReserve] = useState(0);
   const rootRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const root = rootRef.current;
@@ -128,26 +157,58 @@ export function RoomCards({
     for (let at = root.parentElement; at && !banner; at = at.parentElement) {
       banner = at.querySelector(":scope > [data-stage-banners]");
     }
-    const measure = () => {
-      const rect = root.getBoundingClientRect();
+    // The control dock is the banner's sibling too, over the stage's bottom
+    // edge. It is only mounted while the composer is out of sight, so it can
+    // arrive after us (the chat gets hidden): it is looked up on every
+    // measure, and the stage's own children are watched for it coming.
+    const stageEl = banner?.parentElement ?? null;
+    let dock: Element | null = null;
+    const observer = new ResizeObserver(() => measure());
+    const findDock = () => {
+      const next =
+        stageEl?.querySelector(":scope > [data-call-chrome='bar']") ?? null;
+      if (next !== dock) {
+        if (dock) {
+          observer.unobserve(dock);
+        }
+        dock = next;
+        if (dock) {
+          observer.observe(dock);
+        }
+      }
+    };
+    function measure() {
+      findDock();
+      const rect = root!.getBoundingClientRect();
       // How far the banners reach down over us, measured rather than read
       // from `--stage-banners`, which the stage sets a render later.
       const top = banner
         ? Math.max(0, banner.getBoundingClientRect().bottom - rect.top)
         : 0;
+      const bottom = dock
+        ? dockOverlap(rect.bottom, dock.getBoundingClientRect().top)
+        : 0;
       setBanners(top);
+      setDockReserve(bottom);
       setBox({
         width: Math.max(0, rect.width - PAD * 2),
-        height: Math.max(0, rect.height - PAD * 2 - top),
+        height: Math.max(0, rect.height - PAD * 2 - top - bottom),
       });
-    };
+    }
     measure();
-    const observer = new ResizeObserver(measure);
     observer.observe(root);
     if (banner) {
       observer.observe(banner);
     }
-    return () => observer.disconnect();
+    const mutations =
+      stageEl && typeof MutationObserver !== "undefined"
+        ? new MutationObserver(measure)
+        : null;
+    mutations?.observe(stageEl!, { childList: true });
+    return () => {
+      observer.disconnect();
+      mutations?.disconnect();
+    };
   }, []);
 
   const strip = stage !== undefined;
@@ -217,6 +278,7 @@ export function RoomCards({
             youLabel={youLabel}
             style={cell}
             compact={strip}
+            menuFor={menuFor}
           />
         ),
       )}
@@ -265,7 +327,7 @@ export function RoomCards({
       style={{
         paddingTop: PAD + banners,
         paddingRight: PAD,
-        paddingBottom: PAD,
+        paddingBottom: PAD + dockReserve,
         paddingLeft: PAD,
         gap: GAP,
       }}
@@ -285,16 +347,40 @@ function RoomCard({
   youLabel,
   style,
   compact = false,
+  menuFor,
 }: {
   person: RoomCardEntry;
   youLabel: string;
   style?: CSSProperties;
   /** In the row under a share: a smaller badge. */
   compact?: boolean;
+  menuFor?: RoomCardMenuFor;
 }) {
   const { t } = useTranslation();
   const menu = usePeerAudioMenu<HTMLLIElement>();
   const actionable = Boolean(person.audio || (person.failed && person.onRetry));
+  // The sidebar row's menu, on the card. "Their sound" leads it, as it does
+  // there, and only when the click would open a panel that governs something.
+  const hasSound = Boolean(person.audio?.voice || person.audio?.share);
+  const soundSilenced =
+    (person.audio?.voice === undefined || person.audio.voice.volume === 0) &&
+    (person.audio?.share === undefined || person.audio.share.volume === 0);
+  const personItems = menuFor
+    ? menuFor(person, () => menu.rootRef.current)
+    : [];
+  const menuItems: ContextMenuItemDef[] =
+    hasSound && personItems.length > 0
+      ? [
+          {
+            id: "peer-audio",
+            label: t("voice.audio.title", { name: person.name }),
+            icon: soundSilenced ? VolumeX : Volume2,
+            onSelect: () => menu.setOpen(true),
+          },
+          { id: "sep-peer-audio", label: "", separator: true },
+          ...personItems,
+        ]
+      : personItems;
   const silent = person.muted || person.deafened || person.serverMuted;
   const face = (
     <>
@@ -317,7 +403,8 @@ function RoomCard({
     </>
   );
   const cardClass = cn(
-    "@container relative flex h-full w-full flex-col items-center justify-center overflow-hidden rounded-[var(--call-tile-radius)] bg-[color:var(--call-tile-bg)] ring-2 ring-inset ring-transparent transition-shadow duration-[var(--duration-fast)] motion-reduce:transition-none",
+    // select-none: a right-click on the initials selected them.
+    "@container relative flex select-none h-full w-full flex-col items-center justify-center overflow-hidden rounded-[var(--call-tile-radius)] bg-[color:var(--call-tile-bg)] ring-2 ring-inset ring-transparent transition-shadow duration-[var(--duration-fast)] motion-reduce:transition-none",
     person.speaking && "ring-[color:var(--call-speaking)]",
   );
   return (
@@ -329,23 +416,25 @@ function RoomCard({
       style={style}
     >
       <SoundboardFloat userId={person.userId} />
-      {actionable ? (
-        <button
-          type="button"
-          aria-haspopup="dialog"
-          aria-expanded={menu.open}
-          aria-label={t("voice.audio.title", { name: person.name })}
-          onClick={menu.toggle}
-          className={cn(
-            cardClass,
-            "hover:bg-[color:var(--call-control-hover)] focus-visible:outline-none focus-visible:ring-[color:var(--color-focus-ring)]",
-          )}
-        >
-          {face}
-        </button>
-      ) : (
-        <div className={cardClass}>{face}</div>
-      )}
+      <ContextMenu items={menuItems}>
+        {actionable ? (
+          <button
+            type="button"
+            aria-haspopup="dialog"
+            aria-expanded={menu.open}
+            aria-label={t("voice.audio.title", { name: person.name })}
+            onClick={menu.toggle}
+            className={cn(
+              cardClass,
+              "hover:bg-[color:var(--call-control-hover)] focus-visible:outline-none focus-visible:ring-[color:var(--color-focus-ring)]",
+            )}
+          >
+            {face}
+          </button>
+        ) : (
+          <div className={cardClass}>{face}</div>
+        )}
+      </ContextMenu>
       {person.failed && person.onRetry && (
         <Button
           variant="secondary"
