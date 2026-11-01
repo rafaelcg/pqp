@@ -1,4 +1,4 @@
-import { useLayoutEffect } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import type { VoiceState } from "@/hooks/use-voice";
 import { useTranslation } from "@/lib/i18n";
 import { useMusicPrefs } from "@/lib/music-prefs";
@@ -27,6 +27,14 @@ import {
 } from "@/components/voice/music-local-playback";
 import { MusicNowPlaying } from "@/components/voice/music-now-playing";
 import { claimStageMusicPanel } from "@/components/voice/music-stage-panel-store";
+
+/**
+ * Wide enough for the cover and the queue side by side. 576px leaves the
+ * queue its 22rem column (the drawer's 15rem is the narrowest it is drawn
+ * anywhere) and the player about 300px, room for a 16:9 cover and the
+ * transport, so the usual stage beside the chat (about 630px) gets both.
+ */
+const SIDE_BY_SIDE_PX = 576;
 
 /**
  * THE PLAYER, ON THE ROOM STAGE (redesign).
@@ -58,14 +66,34 @@ export function MusicStagePanel({
   const local = useMusicLocalPlayback();
   // Before paint, so the composer's bar never shows for a frame beside this.
   useLayoutEffect(() => claimStageMusicPanel(channelId), [channelId]);
+  // The queue beside the player from SIDE_BY_SIDE_PX. Unmeasured (the first
+  // paint, a test) reads as wide, the common case beside the chat.
+  const slotRef = useRef<HTMLDivElement | null>(null);
+  const [slotWidth, setSlotWidth] = useState(0);
+  useLayoutEffect(() => {
+    const slot = slotRef.current;
+    if (!slot || typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const measure = () => setSlotWidth(slot.getBoundingClientRect().width);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(slot);
+    return () => observer.disconnect();
+  }, []);
   const current = music.state?.current ?? null;
   const parked = music.parked;
+  const side =
+    music.open &&
+    (current !== null || parked !== null) &&
+    (slotWidth === 0 || slotWidth >= SIDE_BY_SIDE_PX);
   const playing = music.state?.status === "playing";
   const canManage = effectiveCanManageMusic(voiceState, music.state);
   const canSetSwitches = canSetMusicSwitches(voiceState);
   const player = current ? (
     <MusicNowPlaying
       tone="stage"
+      stageCompact={music.open && !side}
       current={current}
       music={music}
       voiceState={voiceState}
@@ -87,7 +115,7 @@ export function MusicStagePanel({
       onVolume={setMusicLocalVolume}
     />
   ) : parked ? (
-    <div className="flex h-full w-full items-center justify-center">
+    <div className="flex w-full justify-center py-2">
       <div className="w-full max-w-md">
         <MusicEndedBar
           track={parked}
@@ -102,30 +130,34 @@ export function MusicStagePanel({
   ) : null;
 
   return (
-    <section
-      // `data-music-composer` keeps a press inside this panel from closing
-      // the queue (`MusicFila` closes its sheet on a press anywhere else).
-      data-music-composer=""
-      data-music-stage-panel=""
-      aria-label={t("music.title")}
-      className={cn(
-        "@container flex h-full w-full min-w-0 overflow-hidden rounded-[var(--call-tile-radius)] bg-surface-1",
-        // The sheet caps itself for the composer, where it shares the
-        // column with the chat; here it is the panel's height.
-        "[&_[data-music-fila='sheet']]:h-full [&_[data-music-fila='sheet']]:max-h-full",
-      )}
+    /*
+     * The stage slot, as a size container: the cover reads `100cqh` to stay
+     * inside it, and the panel is a block centred in it, as tall as what it
+     * holds. A queue with two songs is a short list, not a stage-tall box.
+     */
+    <div
+      ref={slotRef}
+      className="flex h-full w-full items-center justify-center [container-type:size]"
     >
-      {/* Each column is a container of its own, so the player's and the
-          queue's width rules read their column, not the whole panel. */}
-      <div className="flex h-full w-full min-w-0 flex-col @min-[40rem]:flex-row">
+      <section
+        // `data-music-composer` keeps a press inside this panel from closing
+        // the queue (`MusicFila` closes its sheet on a press anywhere else).
+        data-music-composer=""
+        data-music-stage-panel=""
+        data-music-stage-layout={side ? "side" : "stacked"}
+        aria-label={t("music.title")}
+        className={cn(
+          "flex max-h-full w-full min-w-0 overflow-hidden rounded-[var(--call-tile-radius)] bg-surface-1",
+          side ? "flex-row" : "flex-col",
+        )}
+      >
+        {/* Each column is a container of its own, so the player's and the
+            queue's width rules read their column, not the whole panel. */}
         {player && (
           <div
             className={cn(
-              "@container min-h-0 min-w-0 flex-1",
-              // Stacked under a narrow stage the queue needs the height more
-              // than the cover does: the player gives up the picture.
-              music.open &&
-                "@max-[40rem]:max-h-[50%] @max-[40rem]:flex-none @max-[40rem]:[&_[data-music-art]]:hidden",
+              "@container flex min-h-0 min-w-0 shrink-0 flex-col justify-center",
+              side && "flex-1",
             )}
           >
             {player}
@@ -134,15 +166,20 @@ export function MusicStagePanel({
         {music.open && (
           <div
             className={cn(
-              "@container flex min-h-0 min-w-0 flex-1 flex-col",
+              // The sheet keeps its own ceiling (28rem) and scrolls past it;
+              // cut shorter by the stage, it gives way before the player.
+              "@container flex min-h-0 min-w-0 flex-col",
+              side ? "w-[min(22rem,45%)] shrink-0" : "flex-1",
               player &&
-                "border-t border-[color:var(--card-border)] @min-[40rem]:w-[min(24rem,45%)] @min-[40rem]:flex-none @min-[40rem]:border-l @min-[40rem]:border-t-0",
+                (side
+                  ? "border-l border-[color:var(--card-border)]"
+                  : "border-t border-[color:var(--card-border)]"),
             )}
           >
             <MusicFila variant="sheet" voiceState={voiceState} />
           </div>
         )}
-      </div>
-    </section>
+      </section>
+    </div>
   );
 }

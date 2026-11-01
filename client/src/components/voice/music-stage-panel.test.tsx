@@ -305,6 +305,32 @@ describe("the music panel on the room stage", () => {
     expect(el.querySelectorAll("[data-music-fila]")).toHaveLength(1);
   });
 
+  it("puts the queue beside the player on the usual stage", () => {
+    receiveMusic(CHANNEL, musicState());
+    act(() => setMusicOpen(true));
+    const el = mount(voiceWith());
+    expect(panel(el)?.getAttribute("data-music-stage-layout")).toBe("side");
+    expect(panel(el)?.querySelector("[data-music-stage-compact]")).toBeNull();
+  });
+
+  it("stacks the queue under a thumbnail player on a narrow stage", () => {
+    const rect = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockReturnValue({ width: 480, height: 400 } as DOMRect);
+    try {
+      receiveMusic(CHANNEL, musicState());
+      act(() => setMusicOpen(true));
+      const el = mount(voiceWith());
+      expect(panel(el)?.getAttribute("data-music-stage-layout")).toBe("stacked");
+      const compact = panel(el)?.querySelector("[data-music-stage-compact]");
+      expect(compact?.querySelector("[data-music-art] img")).not.toBeNull();
+      expect(compact?.querySelector("[data-music-title]")?.textContent).toBe(LONG_TITLE);
+      expect(panel(el)?.querySelector("[data-music-search]")).not.toBeNull();
+    } finally {
+      rect.mockRestore();
+    }
+  });
+
   it("draws the queue alone when nothing is playing yet", () => {
     const el = mount(voiceWith());
     expect(panel(el)).toBeNull();

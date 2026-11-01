@@ -172,6 +172,7 @@ export function MusicNowPlaying({
   onMute,
   onVolume,
   tone = "rail",
+  stageCompact = false,
 }: {
   current: MusicTrack;
   music: MusicSnapshot;
@@ -199,6 +200,8 @@ export function MusicNowPlaying({
    * controls, laid out around a large cover with the whole title.
    */
   tone?: "rail" | "composer" | "stage";
+  /** The stage tone over its queue: a thumbnail beside the lines. */
+  stageCompact?: boolean;
 }) {
   const { t } = useTranslation();
   const onStage = useMusicPlacement() === "stage";
@@ -558,93 +561,131 @@ export function MusicNowPlaying({
      * title on up to two lines, then the seek and the composer's controls
      * under it. Stopped here, the cover dims and the one decision is Ouvir,
      * the same as the bar.
+     *
+     * `stageCompact` is the panel stacked over its queue: the cover becomes
+     * a thumbnail beside the title and controls, so the queue gets the height
+     * and the top still reads as the player.
      */
-    return (
+    const art = (
+      <button
+        // Keyed on the track for the same fade as the bar's art.
+        key={`stage-art-${current.id}`}
+        data-music-art=""
+        type="button"
+        className={cn(
+          "relative flex shrink-0 animate-fade-in items-center justify-center overflow-hidden bg-surface-3",
+          stageCompact
+            ? "h-16 w-16 rounded-md"
+            : // As tall as the stage leaves once the lines under it are
+              // drawn (`100cqh` is the stage slot, `MusicStagePanel`).
+              "aspect-video h-[clamp(5rem,calc(100cqh-13rem),20rem)] max-w-full rounded-[var(--radius-card)]",
+          music.open && "ring-2 ring-accent",
+        )}
+        aria-expanded={music.open}
+        aria-label={expandLabel}
+        onClick={onOpenFila}
+      >
+        {current.thumbnailUrl ? (
+          <img
+            src={current.thumbnailUrl}
+            alt=""
+            className={cn("h-full w-full object-cover", stopped && "opacity-50")}
+          />
+        ) : (
+          <Icon icon={MusicNotes} size="lg" className={mutedText} />
+        )}
+      </button>
+    );
+    const heading = (
+      <div className={cn("w-full min-w-0", !stageCompact && "max-w-xl")}>
+        <p
+          key={`stage-title-${current.id}`}
+          data-music-title=""
+          title={current.title}
+          className={cn(
+            "line-clamp-2 animate-fade-in break-words font-semibold leading-snug",
+            stageCompact ? "text-sm" : "text-base",
+            stopped ? mutedText : "text-text",
+          )}
+        >
+          {current.title}
+        </p>
+        <div className={cn("flex min-w-0", !stageCompact && "justify-center")}>
+          {subline}
+        </div>
+      </div>
+    );
+    const align = stageCompact ? "justify-start" : "justify-center";
+    const controls = stopped ? (
+      <div className={cn("flex shrink-0 items-center gap-1", align)}>
+        <button
+          type="button"
+          data-music-listen=""
+          className="flex h-8 shrink-0 items-center rounded-full bg-accent px-3 text-[11px] font-semibold text-on-accent"
+          onClick={() => setListening(true)}
+        >
+          {t("music.listen")}
+        </button>
+        {queueButton}
+        {overflow}
+      </div>
+    ) : (
+      <>
+        <div className={cn("w-full min-w-0 shrink-0", !stageCompact && "max-w-xl")}>
+          {seekBar}
+        </div>
+        <div
+          className={cn(
+            "flex w-full shrink-0 flex-wrap items-center gap-x-3 gap-y-1",
+            align,
+          )}
+        >
+          <div className="flex items-center justify-center gap-1">
+            <MusicAutoplayButton
+              autoplay={music.state?.autoplay === true}
+              className={modeHide}
+              disabled={!canSetSwitches}
+            />
+            {previousControl}
+            {playControl}
+            {skipControl}
+            <MusicRepeatButton
+              repeat={music.state?.repeat ?? "off"}
+              className={modeHide}
+              disabled={!canSetSwitches}
+            />
+          </div>
+          <div className="flex items-center justify-center gap-1">
+            {stageButton}
+            {queueButton}
+            {overflow}
+            {extras}
+          </div>
+        </div>
+      </>
+    );
+    return stageCompact ? (
+      <div
+        data-music-now-playing="stage"
+        data-music-stage-compact=""
+        data-music-listening={stopped ? "off" : undefined}
+        className="flex w-full min-w-0 items-start gap-3 px-3 py-3"
+      >
+        {art}
+        <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+          {heading}
+          {controls}
+        </div>
+      </div>
+    ) : (
       <div
         data-music-now-playing="stage"
         data-music-listening={stopped ? "off" : undefined}
-        className="flex h-full min-h-0 w-full min-w-0 flex-col items-center gap-2 px-4 py-3 text-center"
+        className="flex w-full min-w-0 flex-col items-center gap-2 px-4 py-3 text-center"
       >
-        <div className="flex min-h-0 w-full flex-1 items-center justify-center">
-          <button
-            // Keyed on the track for the same fade as the bar's art.
-            key={`stage-art-${current.id}`}
-            data-music-art=""
-            type="button"
-            className={cn(
-              "relative flex aspect-video h-full max-h-80 max-w-full animate-fade-in items-center justify-center overflow-hidden rounded-[var(--radius-card)] bg-surface-3",
-              music.open && "ring-2 ring-accent",
-            )}
-            aria-expanded={music.open}
-            aria-label={expandLabel}
-            onClick={onOpenFila}
-          >
-            {current.thumbnailUrl ? (
-              <img
-                src={current.thumbnailUrl}
-                alt=""
-                className={cn("h-full w-full object-cover", stopped && "opacity-50")}
-              />
-            ) : (
-              <Icon icon={MusicNotes} size="lg" className={mutedText} />
-            )}
-          </button>
-        </div>
-        <div className="w-full min-w-0 max-w-xl shrink-0">
-          <p
-            key={`stage-title-${current.id}`}
-            data-music-title=""
-            title={current.title}
-            className={cn(
-              "line-clamp-2 animate-fade-in break-words text-base font-semibold leading-snug",
-              stopped ? mutedText : "text-text",
-            )}
-          >
-            {current.title}
-          </p>
-          <div className="flex min-w-0 justify-center">{subline}</div>
-        </div>
-        {stopped ? (
-          <div className="flex shrink-0 items-center justify-center gap-1">
-            <button
-              type="button"
-              data-music-listen=""
-              className="flex h-8 shrink-0 items-center rounded-full bg-accent px-3 text-[11px] font-semibold text-on-accent"
-              onClick={() => setListening(true)}
-            >
-              {t("music.listen")}
-            </button>
-            {queueButton}
-            {overflow}
-          </div>
-        ) : (
-          <>
-            <div className="w-full min-w-0 max-w-xl shrink-0">{seekBar}</div>
-            <div className="flex w-full shrink-0 flex-wrap items-center justify-center gap-x-3 gap-y-1">
-              <div className="flex items-center justify-center gap-1">
-                <MusicAutoplayButton
-                  autoplay={music.state?.autoplay === true}
-                  className={modeHide}
-                  disabled={!canSetSwitches}
-                />
-                {previousControl}
-                {playControl}
-                {skipControl}
-                <MusicRepeatButton
-                  repeat={music.state?.repeat ?? "off"}
-                  className={modeHide}
-                  disabled={!canSetSwitches}
-                />
-              </div>
-              <div className="flex items-center justify-center gap-1">
-                {stageButton}
-                {queueButton}
-                {overflow}
-                {extras}
-              </div>
-            </div>
-          </>
-        )}
+        {art}
+        {heading}
+        {controls}
       </div>
     );
   }
