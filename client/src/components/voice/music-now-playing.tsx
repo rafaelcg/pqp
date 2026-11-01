@@ -9,9 +9,11 @@ import {
   SkipForward,
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
+import { MusicNotes } from "@phosphor-icons/react";
 import { MUSIC_MAX_DURATION_MS } from "@pqp/shared";
 import type { MusicTrack, VoiceParticipant } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
+import { Icon } from "@/components/ui/icon";
 import { MarqueeText } from "@/components/ui/marquee-text";
 import { Slider } from "@/components/ui/slider";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -170,6 +172,7 @@ export function MusicNowPlaying({
   onMute,
   onVolume,
   tone = "rail",
+  stageCompact = false,
 }: {
   current: MusicTrack;
   music: MusicSnapshot;
@@ -192,7 +195,13 @@ export function MusicNowPlaying({
   onTapToPlay: () => void;
   onMute: () => void;
   onVolume: (value: number) => void;
-  tone?: "rail" | "composer";
+  /**
+   * `stage` is the room stage's panel (`MusicStagePanel`): the composer's
+   * controls, laid out around a large cover with the whole title.
+   */
+  tone?: "rail" | "composer" | "stage";
+  /** The stage tone over its queue: a thumbnail beside the lines. */
+  stageCompact?: boolean;
 }) {
   const { t } = useTranslation();
   const onStage = useMusicPlacement() === "stage";
@@ -200,8 +209,17 @@ export function MusicNowPlaying({
   const progress = usePlaybackProgress(music, current.durationMs);
   const scrub = useScrub((value) => seekTo(value));
   const expandLabel = t("music.open");
-  const secondary = current.autoplayed ? t("music.autoplayed") : addedBy.name;
-  const composer = tone === "composer";
+  const stageTone = tone === "stage";
+  // The panel has the room to say it in words; the bar only has the name.
+  const secondary = current.autoplayed
+    ? t("music.autoplayed")
+    : stageTone
+      ? t("music.addedBy", { name: addedBy.name })
+      : addedBy.name;
+  // The stage panel sits on the same surface tokens as the composer and
+  // carries every one of its controls; only the layout differs.
+  const composer = tone === "composer" || stageTone;
+  const lineText = stageTone ? "text-[13px]" : "text-[11px]";
   const mutedText = composer ? "text-text-secondary" : "text-paper-muted";
   const titleText = music.open
     ? composer
@@ -226,6 +244,53 @@ export function MusicNowPlaying({
       {`· ${listenersLabel}`}
     </span>
   ) : null;
+
+  /** Who put it on, or why this machine is not playing it. */
+  const subline = stopped ? (
+    /* The room did not stop, this machine did. Saying so is the whole
+       job of this line: a player that only goes quiet reads as broken. */
+    <span
+      data-music-stopped=""
+      className={cn(`mt-0.5 block truncate ${lineText} leading-tight`, mutedText)}
+    >
+      {listenerCount > 0
+        ? t("music.stopped.playing", { count: listenerCount })
+        : t("music.stopped.alone")}
+    </span>
+  ) : playbackFailed ? (
+    /* This machine cannot play the video, the room is fine. Without
+       this line the bar reads as playing while nothing sounds. */
+    <span
+      data-music-unplayable=""
+      className={cn(`mt-0.5 block truncate ${lineText} leading-tight`, mutedText)}
+    >
+      {t("music.error.playback")}
+    </span>
+  ) : current.autoplayed ? (
+    <span
+      data-music-autoplayed=""
+      className={cn(`mt-0.5 flex min-w-0 items-center gap-1 ${lineText} leading-tight`, mutedText)}
+    >
+      <span className="truncate">{secondary}</span>
+      {listeners}
+    </span>
+  ) : (
+    <span className={cn(`mt-0.5 flex min-w-0 items-center gap-1 ${lineText} leading-tight`, mutedText)}>
+      <UserAvatar
+        name={addedBy.name}
+        avatarUrl={addedBy.avatarUrl}
+        className={stageTone ? "h-5 w-5" : "h-3.5 w-3.5"}
+        fallbackClassName={
+          composer
+            ? "bg-surface-3 text-[9px] text-text"
+            : "bg-ink-3 text-[9px] text-paper"
+        }
+        rounded="full"
+      />
+      <span className="truncate">{secondary}</span>
+      {listeners}
+    </span>
+  );
 
   const identity = (
     <>
@@ -282,51 +347,7 @@ export function MusicNowPlaying({
             stopped ? mutedText : titleText,
           )}
         />
-        {stopped ? (
-          /* The room did not stop, this machine did. Saying so is the whole
-             job of this line: a player that only goes quiet reads as broken. */
-          <span
-            data-music-stopped=""
-            className={cn("mt-0.5 block truncate text-[11px] leading-tight", mutedText)}
-          >
-            {listenerCount > 0
-              ? t("music.stopped.playing", { count: listenerCount })
-              : t("music.stopped.alone")}
-          </span>
-        ) : playbackFailed ? (
-          /* This machine cannot play the video, the room is fine. Without
-             this line the bar reads as playing while nothing sounds. */
-          <span
-            data-music-unplayable=""
-            className={cn("mt-0.5 block truncate text-[11px] leading-tight", mutedText)}
-          >
-            {t("music.error.playback")}
-          </span>
-        ) : current.autoplayed ? (
-          <span
-            data-music-autoplayed=""
-            className={cn("mt-0.5 flex min-w-0 items-center gap-1 text-[11px] leading-tight", mutedText)}
-          >
-            <span className="truncate">{secondary}</span>
-            {listeners}
-          </span>
-        ) : (
-          <span className={cn("mt-0.5 flex min-w-0 items-center gap-1 text-[11px] leading-tight", mutedText)}>
-            <UserAvatar
-              name={addedBy.name}
-              avatarUrl={addedBy.avatarUrl}
-              className="h-3.5 w-3.5"
-              fallbackClassName={
-                composer
-                  ? "bg-surface-3 text-[9px] text-text"
-                  : "bg-ink-3 text-[9px] text-paper"
-              }
-              rounded="full"
-            />
-            <span className="truncate">{secondary}</span>
-            {listeners}
-          </span>
-        )}
+        {subline}
       </button>
     </>
   );
@@ -533,6 +554,141 @@ export function MusicNowPlaying({
       scrub={scrub}
     />
   );
+
+  if (stageTone) {
+    /*
+     * THE STAGE PANEL. The cover as large as the stage allows, the whole
+     * title on up to two lines, then the seek and the composer's controls
+     * under it. Stopped here, the cover dims and the one decision is Ouvir,
+     * the same as the bar.
+     *
+     * `stageCompact` is the panel stacked over its queue: the cover becomes
+     * a thumbnail beside the title and controls, so the queue gets the height
+     * and the top still reads as the player.
+     */
+    const art = (
+      <button
+        // Keyed on the track for the same fade as the bar's art.
+        key={`stage-art-${current.id}`}
+        data-music-art=""
+        type="button"
+        className={cn(
+          "relative flex shrink-0 animate-fade-in items-center justify-center overflow-hidden bg-surface-3",
+          stageCompact
+            ? "h-16 w-16 rounded-md"
+            : // As tall as the stage leaves once the lines under it are
+              // drawn (`100cqh` is the stage slot, `MusicStagePanel`).
+              "aspect-video h-[clamp(5rem,calc(100cqh-13rem),20rem)] max-w-full rounded-[var(--radius-card)]",
+          music.open && "ring-2 ring-accent",
+        )}
+        aria-expanded={music.open}
+        aria-label={expandLabel}
+        onClick={onOpenFila}
+      >
+        {current.thumbnailUrl ? (
+          <img
+            src={current.thumbnailUrl}
+            alt=""
+            className={cn("h-full w-full object-cover", stopped && "opacity-50")}
+          />
+        ) : (
+          <Icon icon={MusicNotes} size="lg" className={mutedText} />
+        )}
+      </button>
+    );
+    const heading = (
+      <div className={cn("w-full min-w-0", !stageCompact && "max-w-xl")}>
+        <p
+          key={`stage-title-${current.id}`}
+          data-music-title=""
+          title={current.title}
+          className={cn(
+            "line-clamp-2 animate-fade-in break-words font-semibold leading-snug",
+            stageCompact ? "text-sm" : "text-base",
+            stopped ? mutedText : "text-text",
+          )}
+        >
+          {current.title}
+        </p>
+        <div className={cn("flex min-w-0", !stageCompact && "justify-center")}>
+          {subline}
+        </div>
+      </div>
+    );
+    const align = stageCompact ? "justify-start" : "justify-center";
+    const controls = stopped ? (
+      <div className={cn("flex shrink-0 items-center gap-1", align)}>
+        <button
+          type="button"
+          data-music-listen=""
+          className="flex h-8 shrink-0 items-center rounded-full bg-accent px-3 text-[11px] font-semibold text-on-accent"
+          onClick={() => setListening(true)}
+        >
+          {t("music.listen")}
+        </button>
+        {queueButton}
+        {overflow}
+      </div>
+    ) : (
+      <>
+        <div className={cn("w-full min-w-0 shrink-0", !stageCompact && "max-w-xl")}>
+          {seekBar}
+        </div>
+        <div
+          className={cn(
+            "flex w-full shrink-0 flex-wrap items-center gap-x-3 gap-y-1",
+            align,
+          )}
+        >
+          <div className="flex items-center justify-center gap-1">
+            <MusicAutoplayButton
+              autoplay={music.state?.autoplay === true}
+              className={modeHide}
+              disabled={!canSetSwitches}
+            />
+            {previousControl}
+            {playControl}
+            {skipControl}
+            <MusicRepeatButton
+              repeat={music.state?.repeat ?? "off"}
+              className={modeHide}
+              disabled={!canSetSwitches}
+            />
+          </div>
+          <div className="flex items-center justify-center gap-1">
+            {stageButton}
+            {queueButton}
+            {overflow}
+            {extras}
+          </div>
+        </div>
+      </>
+    );
+    return stageCompact ? (
+      <div
+        data-music-now-playing="stage"
+        data-music-stage-compact=""
+        data-music-listening={stopped ? "off" : undefined}
+        className="flex w-full min-w-0 items-start gap-3 px-3 py-3"
+      >
+        {art}
+        <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+          {heading}
+          {controls}
+        </div>
+      </div>
+    ) : (
+      <div
+        data-music-now-playing="stage"
+        data-music-listening={stopped ? "off" : undefined}
+        className="flex w-full min-w-0 flex-col items-center gap-2 px-4 py-3 text-center"
+      >
+        {art}
+        {heading}
+        {controls}
+      </div>
+    );
+  }
 
   if (composer && stopped) {
     /* One decision, one button. The transport and the seek belong to sound
