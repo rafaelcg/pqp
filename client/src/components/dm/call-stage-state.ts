@@ -71,8 +71,11 @@ export function shouldShowExpandedStage(
  *
  * Only where there is room and nothing else owns the stage. Not a DM or group
  * call (later), not a watch party's room, which has its own chrome, not under
- * a phone's width, where the slim bar is the call, and not while the music
- * clip is on the stage, which already takes the picture pane on its own
+ * a phone's width, where the slim bar is the call.
+ *
+ * The music clip on the stage is a picture like a share: the room keeps its
+ * cards and its dock around it (`planRoomStage` counts the clip as a screen).
+ * Only where there is no room view does the clip take the whole picture pane
  * (`isMusicPictureOnlyStage`).
  */
 export function showsRoomView(input: {
@@ -80,15 +83,8 @@ export function showsRoomView(input: {
   serverCall: boolean;
   watchParty: boolean;
   wide: boolean;
-  musicOnStage: boolean;
 }): boolean {
-  return (
-    input.redesign &&
-    input.serverCall &&
-    !input.watchParty &&
-    input.wide &&
-    !input.musicOnStage
-  );
+  return input.redesign && input.serverCall && !input.watchParty && input.wide;
 }
 
 /**

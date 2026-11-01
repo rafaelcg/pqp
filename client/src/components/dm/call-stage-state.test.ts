@@ -316,7 +316,6 @@ describe("the room view", () => {
     serverCall: true,
     watchParty: false,
     wide: true,
-    musicOnStage: false,
   };
 
   it("opens for a server voice call on a wide screen in the new look", () => {
@@ -330,8 +329,9 @@ describe("the room view", () => {
     expect(showsRoomView({ ...lobby, wide: false })).toBe(false);
   });
 
-  it("gives the stage to the music clip when one is on it", () => {
-    expect(showsRoomView({ ...lobby, musicOnStage: true })).toBe(false);
+  // QA-051: the clip is a picture above the cards, not a replacement for them.
+  it("keeps the room view when the music clip is on the stage", () => {
+    expect(showsRoomView(lobby)).toBe(true);
   });
 
   it("expands the stage, and a collapse the person chose still wins", () => {

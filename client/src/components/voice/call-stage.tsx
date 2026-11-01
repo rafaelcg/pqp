@@ -1270,7 +1270,6 @@ function ActiveCall({
     serverCall: serverId !== null,
     watchParty: watchPartyChrome || isWatchPartyChannel,
     wide,
-    musicOnStage,
   });
   // Cameras and shares take the overlay bar. Music on the stage is a clip.
   const chromeExpanded = shouldShowExpandedStage(
@@ -1279,12 +1278,16 @@ function ActiveCall({
     ringing,
     roomView,
   );
-  const musicPictureOnly = isMusicPictureOnlyStage({
-    musicOnStage,
-    hasLiveVideo: hasVideo,
-    ringing,
-    watchPartyChrome,
-  });
+  // Not in the room view: there the clip sits above the cards like a share
+  // and the dock stays on the stage, so the stage is not "the picture only".
+  const musicPictureOnly =
+    !roomView &&
+    isMusicPictureOnlyStage({
+      musicOnStage,
+      hasLiveVideo: hasVideo,
+      ringing,
+      watchPartyChrome,
+    });
   const collapsed = !chromeExpanded && !musicPictureOnly;
   useEffect(() => {
     if (playOutgoingRingtone && callingOut) {
