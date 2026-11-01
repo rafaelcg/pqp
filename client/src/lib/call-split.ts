@@ -387,14 +387,22 @@ export function splitFraction(sizePx: number, container: number): number {
  * Keyboard resize. `delta` is in pixels, positive meaning "give the stage
  * more", and the result is clamped by the same rule the pointer obeys, so the
  * two paths cannot disagree about where the ends are.
+ *
+ * `bounds` MUST be the live ones the divider is drawn with (the room and
+ * watch kinds have their own chat minimum, and stacked the composer's measured
+ * height). It used to be rebuilt here from the orientation alone, which is the
+ * call's 560px chat floor: in a pane that cannot hold that floor the clamp
+ * fell back to the proportional split, and the first arrow press threw the
+ * divider to the minimum while every press after it landed on the same spot.
  */
 export function nudgeSplit(input: {
   fraction: number;
   container: number;
   orientation: CallSplitOrientation;
   deltaPx: number;
+  bounds?: SplitBounds;
 }): number {
-  const bounds = splitBounds(input.orientation);
+  const bounds = input.bounds ?? splitBounds(input.orientation);
   const current = clampSplit({
     fraction: input.fraction,
     container: input.container,

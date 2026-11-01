@@ -140,8 +140,9 @@ export function MusicStagePanel({
       className="flex h-full w-full items-center justify-center [container-type:size]"
     >
       <section
-        // `data-music-composer` keeps a press inside this panel from closing
-        // the queue (`MusicFila` closes its sheet on a press anywhere else).
+        // `data-music-composer` marks the player for the composer sheet's
+        // outside-press rule and for the split's measuring. This panel's own
+        // queue does not close on an outside press at all.
         data-music-composer=""
         data-music-stage-panel=""
         data-music-stage-layout={side ? "side" : "stacked"}
@@ -176,7 +177,11 @@ export function MusicStagePanel({
                   : "border-t border-[color:var(--card-border)]"),
             )}
           >
-            <MusicFila variant="sheet" voiceState={voiceState} />
+            <MusicFila
+              variant="sheet"
+              voiceState={voiceState}
+              closeOnOutsidePress={false}
+            />
           </div>
         )}
       </section>

@@ -77,9 +77,18 @@ function onPage(node: ReactNode): ReactNode {
 export function MusicFila({
   variant = "sheet",
   voiceState,
+  closeOnOutsidePress = true,
 }: {
   variant?: "sheet" | "drawer";
   voiceState: VoiceState;
+  /**
+   * The sheet in the composer is a popover and closes on a press anywhere
+   * else. The stage panel is a place the room is looking at, not a popover:
+   * it stays until its own close button or Escape, so a person can add a
+   * song and go back to the chat (or raise a hand, or open a card's menu)
+   * without losing the queue.
+   */
+  closeOnOutsidePress?: boolean;
 }) {
   const { t } = useTranslation();
   const music = useMusic();
@@ -147,7 +156,7 @@ export function MusicFila({
    * itself opened is portalled out of the composer, so it is excluded too.
    */
   useEffect(() => {
-    if (!sheet || !music.open) {
+    if (!sheet || !music.open || !closeOnOutsidePress) {
       return;
     }
     const onPointerDown = (event: PointerEvent) => {
@@ -163,7 +172,7 @@ export function MusicFila({
     };
     window.addEventListener("pointerdown", onPointerDown);
     return () => window.removeEventListener("pointerdown", onPointerDown);
-  }, [sheet, music.open]);
+  }, [sheet, music.open, closeOnOutsidePress]);
 
   if (!music.open) {
     return null;

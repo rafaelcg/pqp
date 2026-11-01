@@ -819,6 +819,7 @@ export function CallSplit({
       container,
       orientation,
       deltaPx,
+      bounds,
     });
     commitFraction(
       splitFraction(clampSplit({ fraction: nudged, container, ...bounds }), container),

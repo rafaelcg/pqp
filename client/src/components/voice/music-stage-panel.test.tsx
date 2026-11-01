@@ -7,6 +7,7 @@ import type { VoiceState } from "@/hooks/use-voice";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { REDESIGN_STORAGE_KEY, resetRedesignForTests } from "@/lib/redesign";
 import {
+  getMusicSnapshot,
   receiveMusic,
   resetMusicStoreForTests,
   setMusicOpen,
@@ -331,6 +332,37 @@ describe("the music panel on the room stage", () => {
     }
   });
 
+  // QA-016: the panel is a place on the stage, not a popover. Only its own
+  // close button (or Escape) puts it away.
+  it("stays open when something outside it is pressed", () => {
+    receiveMusic(CHANNEL, musicState());
+    act(() => setMusicOpen(true));
+    const el = mount(voiceWith());
+    const away = document.createElement("textarea");
+    document.body.append(away);
+    act(() => {
+      away.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    });
+    expect(getMusicSnapshot().open).toBe(true);
+    expect(panel(el)?.querySelector("[data-music-fila='sheet']")).not.toBeNull();
+    away.remove();
+  });
+
+  it("closes from its own close button and from Escape", () => {
+    receiveMusic(CHANNEL, musicState());
+    act(() => setMusicOpen(true));
+    const el = mount(voiceWith());
+    act(() => {
+      el.querySelector<HTMLElement>("[data-music-fila-close]")!.click();
+    });
+    expect(getMusicSnapshot().open).toBe(false);
+    act(() => setMusicOpen(true));
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    });
+    expect(getMusicSnapshot().open).toBe(false);
+  });
+
   it("draws the queue alone when nothing is playing yet", () => {
     const el = mount(voiceWith());
     expect(panel(el)).toBeNull();
@@ -402,6 +434,21 @@ describe("the music panel on the room stage", () => {
     expect(panel(el)).toBeNull();
     expect(isStageMusicPanelDrawn(CHANNEL)).toBe(false);
     expect(composerBar(el)).not.toBeNull();
+  });
+
+  // QA-051: the clip is a picture above the cards, like a share. The room
+  // keeps its cards and the dock, and the player stays in the composer.
+  it("keeps the room cards and the dock around the clip on the stage", () => {
+    act(() => setMusicPlacement("stage"));
+    receiveMusic(CHANNEL, musicState());
+    const el = mount(voiceWith());
+    const cards = el.querySelector("[data-testid=stage-room-cards]");
+    expect(cards).not.toBeNull();
+    expect(cards?.getAttribute("data-room-layout")).toBe("share");
+    expect(el.querySelector("[data-music-stage-tile]")).not.toBeNull();
+    expect(cards?.querySelector("[data-music-stage-tile]")).not.toBeNull();
+    expect(el.querySelector("[data-testid=call-controls-bar]")).not.toBeNull();
+    expect(el.querySelector("[data-music-picture]")).toBeNull();
   });
 });
 

@@ -29,6 +29,8 @@ const {
   loadCallSplit,
   MIN_WATCH_CHAT_WIDTH_PX,
   nudgeSplit,
+  CALL_SPLIT_STEP_PX,
+  CALL_SPLIT_STEP_COARSE_PX,
   resolveCollapsed,
   resolveOrientation,
   saveCallSplit,
@@ -162,6 +164,71 @@ describe("nudgeSplit", () => {
       deltaPx: -400,
     });
     expect(Math.round(bottom * 900)).toBe(MIN_STAGE_HEIGHT_PX);
+  });
+});
+
+describe("nudgeSplit with the live bounds", () => {
+  // QA-015: a room's pane is too narrow for the call's 560px chat floor, so a
+  // nudge clamped against the call bounds threw the divider to the minimum.
+  const ROOM = splitBounds("side-by-side", "room");
+  const container = 820 + CALL_SPLIT_DIVIDER_PX;
+  const px = (fraction: number) => Math.round(fraction * 820);
+
+  it("steps from a mid value in both directions", () => {
+    const start = 0.45;
+    const grown = nudgeSplit({
+      fraction: start,
+      container,
+      orientation: "side-by-side",
+      deltaPx: CALL_SPLIT_STEP_PX,
+      bounds: ROOM,
+    });
+    expect(px(grown) - px(start)).toBe(CALL_SPLIT_STEP_PX);
+    const shrunk = nudgeSplit({
+      fraction: grown,
+      container,
+      orientation: "side-by-side",
+      deltaPx: -CALL_SPLIT_STEP_PX,
+      bounds: ROOM,
+    });
+    expect(px(shrunk)).toBe(px(start));
+  });
+
+  it("keeps moving on repeated presses and takes the coarse step", () => {
+    let fraction = 0.4;
+    const seen: number[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      fraction = nudgeSplit({
+        fraction,
+        container,
+        orientation: "side-by-side",
+        deltaPx: CALL_SPLIT_STEP_COARSE_PX,
+        bounds: ROOM,
+      });
+      seen.push(px(fraction));
+    }
+    expect(seen[1]! - seen[0]!).toBe(CALL_SPLIT_STEP_COARSE_PX);
+    // The third press runs into the maximum and stops there.
+    expect(seen[2]).toBe(820 - ROOM.minChat);
+  });
+
+  it("sends Home and End to the live minimum and maximum", () => {
+    const home = nudgeSplit({
+      fraction: 0.5,
+      container,
+      orientation: "side-by-side",
+      deltaPx: -container,
+      bounds: ROOM,
+    });
+    const end = nudgeSplit({
+      fraction: 0.5,
+      container,
+      orientation: "side-by-side",
+      deltaPx: container,
+      bounds: ROOM,
+    });
+    expect(px(home)).toBe(ROOM.minStage);
+    expect(px(end)).toBe(820 - ROOM.minChat);
   });
 });
 
