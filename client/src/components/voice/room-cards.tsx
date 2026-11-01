@@ -14,8 +14,13 @@ import {
   ShieldSlash,
   SpinnerGap,
 } from "@phosphor-icons/react";
+import { Volume2, VolumeX } from "lucide-react";
 import { Icon } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
+import {
+  ContextMenu,
+  type ContextMenuItemDef,
+} from "@/components/ui/context-menu";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useBringFriendsServer } from "@/components/layout/bring-friends-server";
 import {
@@ -87,11 +92,18 @@ const SHOW_ALL_MIN_WIDTH = 200;
 const RESIZE =
   "transition-[width,height] duration-[var(--duration-slow)] ease-out motion-reduce:transition-none";
 
+/** What a card's menu is given to anchor the profile card on its element. */
+export type RoomCardMenuFor = (
+  person: RoomCardEntry,
+  anchor: () => HTMLElement | null,
+) => ContextMenuItemDef[];
+
 export function RoomCards({
   people,
   youLabel,
   stage,
   renderCamera,
+  menuFor,
 }: {
   people: RoomCardEntry[];
   youLabel: string;
@@ -111,6 +123,11 @@ export function RoomCards({
     className: string,
     first: boolean,
   ) => ReactNode;
+  /**
+   * The right-click menu of a person's card: the one the sidebar row has.
+   * Absent, a card has no menu beyond the audio panel its click opens.
+   */
+  menuFor?: RoomCardMenuFor;
 }) {
   const { t } = useTranslation();
   const [showAll, setShowAll] = useState(false);
@@ -217,6 +234,7 @@ export function RoomCards({
             youLabel={youLabel}
             style={cell}
             compact={strip}
+            menuFor={menuFor}
           />
         ),
       )}
@@ -285,16 +303,40 @@ function RoomCard({
   youLabel,
   style,
   compact = false,
+  menuFor,
 }: {
   person: RoomCardEntry;
   youLabel: string;
   style?: CSSProperties;
   /** In the row under a share: a smaller badge. */
   compact?: boolean;
+  menuFor?: RoomCardMenuFor;
 }) {
   const { t } = useTranslation();
   const menu = usePeerAudioMenu<HTMLLIElement>();
   const actionable = Boolean(person.audio || (person.failed && person.onRetry));
+  // The sidebar row's menu, on the card. "Their sound" leads it, as it does
+  // there, and only when the click would open a panel that governs something.
+  const hasSound = Boolean(person.audio?.voice || person.audio?.share);
+  const soundSilenced =
+    (person.audio?.voice === undefined || person.audio.voice.volume === 0) &&
+    (person.audio?.share === undefined || person.audio.share.volume === 0);
+  const personItems = menuFor
+    ? menuFor(person, () => menu.rootRef.current)
+    : [];
+  const menuItems: ContextMenuItemDef[] =
+    hasSound && personItems.length > 0
+      ? [
+          {
+            id: "peer-audio",
+            label: t("voice.audio.title", { name: person.name }),
+            icon: soundSilenced ? VolumeX : Volume2,
+            onSelect: () => menu.setOpen(true),
+          },
+          { id: "sep-peer-audio", label: "", separator: true },
+          ...personItems,
+        ]
+      : personItems;
   const silent = person.muted || person.deafened || person.serverMuted;
   const face = (
     <>
@@ -317,7 +359,8 @@ function RoomCard({
     </>
   );
   const cardClass = cn(
-    "@container relative flex h-full w-full flex-col items-center justify-center overflow-hidden rounded-[var(--call-tile-radius)] bg-[color:var(--call-tile-bg)] ring-2 ring-inset ring-transparent transition-shadow duration-[var(--duration-fast)] motion-reduce:transition-none",
+    // select-none: a right-click on the initials selected them.
+    "@container relative flex select-none h-full w-full flex-col items-center justify-center overflow-hidden rounded-[var(--call-tile-radius)] bg-[color:var(--call-tile-bg)] ring-2 ring-inset ring-transparent transition-shadow duration-[var(--duration-fast)] motion-reduce:transition-none",
     person.speaking && "ring-[color:var(--call-speaking)]",
   );
   return (
@@ -329,23 +372,25 @@ function RoomCard({
       style={style}
     >
       <SoundboardFloat userId={person.userId} />
-      {actionable ? (
-        <button
-          type="button"
-          aria-haspopup="dialog"
-          aria-expanded={menu.open}
-          aria-label={t("voice.audio.title", { name: person.name })}
-          onClick={menu.toggle}
-          className={cn(
-            cardClass,
-            "hover:bg-[color:var(--call-control-hover)] focus-visible:outline-none focus-visible:ring-[color:var(--color-focus-ring)]",
-          )}
-        >
-          {face}
-        </button>
-      ) : (
-        <div className={cardClass}>{face}</div>
-      )}
+      <ContextMenu items={menuItems}>
+        {actionable ? (
+          <button
+            type="button"
+            aria-haspopup="dialog"
+            aria-expanded={menu.open}
+            aria-label={t("voice.audio.title", { name: person.name })}
+            onClick={menu.toggle}
+            className={cn(
+              cardClass,
+              "hover:bg-[color:var(--call-control-hover)] focus-visible:outline-none focus-visible:ring-[color:var(--color-focus-ring)]",
+            )}
+          >
+            {face}
+          </button>
+        ) : (
+          <div className={cardClass}>{face}</div>
+        )}
+      </ContextMenu>
       {person.failed && person.onRetry && (
         <Button
           variant="secondary"
