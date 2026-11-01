@@ -7,6 +7,7 @@ import type { VoiceState } from "@/hooks/use-voice";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { REDESIGN_STORAGE_KEY, resetRedesignForTests } from "@/lib/redesign";
 import {
+  getMusicSnapshot,
   receiveMusic,
   resetMusicStoreForTests,
   setMusicOpen,
@@ -329,6 +330,37 @@ describe("the music panel on the room stage", () => {
     } finally {
       rect.mockRestore();
     }
+  });
+
+  // QA-016: the panel is a place on the stage, not a popover. Only its own
+  // close button (or Escape) puts it away.
+  it("stays open when something outside it is pressed", () => {
+    receiveMusic(CHANNEL, musicState());
+    act(() => setMusicOpen(true));
+    const el = mount(voiceWith());
+    const away = document.createElement("textarea");
+    document.body.append(away);
+    act(() => {
+      away.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    });
+    expect(getMusicSnapshot().open).toBe(true);
+    expect(panel(el)?.querySelector("[data-music-fila='sheet']")).not.toBeNull();
+    away.remove();
+  });
+
+  it("closes from its own close button and from Escape", () => {
+    receiveMusic(CHANNEL, musicState());
+    act(() => setMusicOpen(true));
+    const el = mount(voiceWith());
+    act(() => {
+      el.querySelector<HTMLElement>("[data-music-fila-close]")!.click();
+    });
+    expect(getMusicSnapshot().open).toBe(false);
+    act(() => setMusicOpen(true));
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    });
+    expect(getMusicSnapshot().open).toBe(false);
   });
 
   it("draws the queue alone when nothing is playing yet", () => {
