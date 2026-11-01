@@ -302,7 +302,6 @@ export function ServerRail({
 
   return (
     <nav
-      ref={reorder.navRef}
       data-rail-dragging={reorder.drag ? "" : undefined}
       data-immersive-hide=""
       data-rail-phone-hidden={phoneHidden ? "" : undefined}
@@ -316,6 +315,16 @@ export function ServerRail({
             : "max-md:hidden"),
       )}
     >
+      {/* The scroll region: conversations, pinned chats and the server list.
+          It alone scrolls, so the add, join and footer tiles below keep their
+          size and stay in view on a short window or with many servers (the
+          reorder hook reads its scroll position and autoscrolls it). Not
+          re-indented, to keep this diff to the lines that changed. */}
+      <div
+        ref={reorder.navRef}
+        data-rail-scroll=""
+        className="flex min-h-0 w-full flex-1 flex-col items-center gap-2 overflow-y-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      >
       {/* Above the servers, and separated from them: conversations belong to no
           server, so putting Home in the list would read as one more of them. */}
       {/* Every bubble on this rail points right. The rail is 72px against the
@@ -727,11 +736,12 @@ export function ServerRail({
           </span>
         </>
       )}
+      </div>
       <Tooltip label={t("empty.createServer")} side="right" tone="rail">
         <Button
           variant="secondary"
           size="icon"
-          className={cn("h-12 w-12 rounded-2xl hover:rounded-xl", RAIL_TILE_REDESIGN, "redesign:border-0")}
+          className={cn("h-12 w-12 shrink-0 rounded-2xl hover:rounded-xl", RAIL_TILE_REDESIGN, "redesign:border-0")}
           onClick={onCreateServer}
         >
           <RailGlyph off={Plus} on={PlusBold} kind="symbol" />
@@ -742,7 +752,7 @@ export function ServerRail({
           variant="ghost"
           size="icon"
           className={cn(
-            "h-12 w-12 rounded-2xl hover:rounded-xl",
+            "h-12 w-12 shrink-0 rounded-2xl hover:rounded-xl",
             RAIL_TILE_REDESIGN,
           )}
           onClick={onJoinServer}

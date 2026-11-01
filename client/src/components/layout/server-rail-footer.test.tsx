@@ -67,6 +67,27 @@ describe("the foot of the rail", () => {
     );
   });
 
+  it("scrolls the server list alone and keeps the footer tiles outside it (QA-048)", async () => {
+    await mount();
+    const scroll = document.querySelector("[data-rail-scroll]")!;
+    expect(scroll.className).toContain("overflow-y-auto");
+    expect(scroll.className).toContain("min-h-0");
+    expect(scroll.querySelector("[data-rail-list]")).not.toBeNull();
+    // Add, join, the look switch and the update button stay out of the
+    // scrolling part, so a short window cannot push them off or squash them.
+    expect(scroll.querySelector("[data-new-look-rail]")).toBeNull();
+    expect(scroll.querySelector("[data-update-indicator]")).toBeNull();
+    const nav = scroll.parentElement!;
+    const fixed = [...nav.children].filter((child) => child !== scroll);
+    const tiles = fixed.flatMap((child) =>
+      child.tagName === "BUTTON" ? [child as HTMLElement] : [],
+    );
+    expect(tiles.length).toBeGreaterThanOrEqual(3);
+    for (const tile of tiles) {
+      expect(tile.className).toContain("shrink-0");
+    }
+  });
+
   it("flips the look and remembers it", async () => {
     await mount();
     const toggle = document.querySelector<HTMLButtonElement>("[data-new-look-rail]")!;
