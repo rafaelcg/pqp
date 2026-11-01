@@ -92,6 +92,17 @@ const SHOW_ALL_MIN_WIDTH = 200;
 const RESIZE =
   "transition-[width,height] duration-[var(--duration-slow)] ease-out motion-reduce:transition-none";
 
+/**
+ * How far the control dock reaches up into the cards' box, in px. The dock
+ * floats over the stage's bottom edge when the composer is out of sight (chat
+ * hidden), and cards laid out to the full box ran under it. Under 2px of
+ * overlap is the rounding of two boxes that touch, not a dock to clear.
+ */
+export function dockOverlap(rootBottom: number, dockTop: number): number {
+  const overlap = rootBottom - dockTop;
+  return overlap >= 2 ? Math.ceil(overlap) : 0;
+}
+
 /** What a card's menu is given to anchor the profile card on its element. */
 export type RoomCardMenuFor = (
   person: RoomCardEntry,
@@ -133,6 +144,7 @@ export function RoomCards({
   const [showAll, setShowAll] = useState(false);
   const [box, setBox] = useState({ width: 0, height: 0 });
   const [banners, setBanners] = useState(0);
+  const [dockReserve, setDockReserve] = useState(0);
   const rootRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const root = rootRef.current;
@@ -145,26 +157,58 @@ export function RoomCards({
     for (let at = root.parentElement; at && !banner; at = at.parentElement) {
       banner = at.querySelector(":scope > [data-stage-banners]");
     }
-    const measure = () => {
-      const rect = root.getBoundingClientRect();
+    // The control dock is the banner's sibling too, over the stage's bottom
+    // edge. It is only mounted while the composer is out of sight, so it can
+    // arrive after us (the chat gets hidden): it is looked up on every
+    // measure, and the stage's own children are watched for it coming.
+    const stageEl = banner?.parentElement ?? null;
+    let dock: Element | null = null;
+    const observer = new ResizeObserver(() => measure());
+    const findDock = () => {
+      const next =
+        stageEl?.querySelector(":scope > [data-call-chrome='bar']") ?? null;
+      if (next !== dock) {
+        if (dock) {
+          observer.unobserve(dock);
+        }
+        dock = next;
+        if (dock) {
+          observer.observe(dock);
+        }
+      }
+    };
+    function measure() {
+      findDock();
+      const rect = root!.getBoundingClientRect();
       // How far the banners reach down over us, measured rather than read
       // from `--stage-banners`, which the stage sets a render later.
       const top = banner
         ? Math.max(0, banner.getBoundingClientRect().bottom - rect.top)
         : 0;
+      const bottom = dock
+        ? dockOverlap(rect.bottom, dock.getBoundingClientRect().top)
+        : 0;
       setBanners(top);
+      setDockReserve(bottom);
       setBox({
         width: Math.max(0, rect.width - PAD * 2),
-        height: Math.max(0, rect.height - PAD * 2 - top),
+        height: Math.max(0, rect.height - PAD * 2 - top - bottom),
       });
-    };
+    }
     measure();
-    const observer = new ResizeObserver(measure);
     observer.observe(root);
     if (banner) {
       observer.observe(banner);
     }
-    return () => observer.disconnect();
+    const mutations =
+      stageEl && typeof MutationObserver !== "undefined"
+        ? new MutationObserver(measure)
+        : null;
+    mutations?.observe(stageEl!, { childList: true });
+    return () => {
+      observer.disconnect();
+      mutations?.disconnect();
+    };
   }, []);
 
   const strip = stage !== undefined;
@@ -283,7 +327,7 @@ export function RoomCards({
       style={{
         paddingTop: PAD + banners,
         paddingRight: PAD,
-        paddingBottom: PAD,
+        paddingBottom: PAD + dockReserve,
         paddingLeft: PAD,
         gap: GAP,
       }}

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   RoomCards,
+  dockOverlap,
   type RoomCardEntry,
   type RoomCardMenuFor,
 } from "./room-cards";
@@ -182,5 +183,115 @@ describe("a room card's right-click menu", () => {
     mount(<RoomCards youLabel="(you)" people={[entry("Bia")]} />);
     rightClick(cardFace("Bia"));
     expect(document.querySelector("[role='menu']")).toBeNull();
+  });
+});
+
+describe("dockOverlap", () => {
+  it("is how far the dock reaches up into the cards' box", () => {
+    expect(dockOverlap(900, 828)).toBe(72);
+    expect(dockOverlap(900, 827.4)).toBe(73);
+  });
+
+  it("is zero when the dock sits below, or only touches, the cards' box", () => {
+    expect(dockOverlap(828, 900)).toBe(0);
+    expect(dockOverlap(900, 900)).toBe(0);
+    expect(dockOverlap(900, 899)).toBe(0);
+  });
+});
+
+describe("the room cards and the floating dock", () => {
+  class FakeResizeObserver {
+    static instances: FakeResizeObserver[] = [];
+    constructor(private readonly callback: () => void) {
+      FakeResizeObserver.instances.push(this);
+    }
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+    fire() {
+      this.callback();
+    }
+  }
+
+  const rect = (top: number, bottom: number, width = 800): DOMRect =>
+    ({
+      top,
+      bottom,
+      left: 0,
+      right: width,
+      width,
+      height: bottom - top,
+      x: 0,
+      y: top,
+      toJSON() {},
+    }) as DOMRect;
+
+  beforeEach(() => {
+    FakeResizeObserver.instances = [];
+    vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("reserves the space the dock covers, so the last row stays whole", () => {
+    // A stage: the banner column and the dock are children of the stage,
+    // beside the element that holds the cards.
+    const stage = document.createElement("div");
+    const banner = document.createElement("div");
+    banner.setAttribute("data-stage-banners", "");
+    const dock = document.createElement("div");
+    dock.setAttribute("data-call-chrome", "bar");
+    const body = document.createElement("div");
+    stage.append(banner, body, dock);
+    document.body.append(stage);
+    banner.getBoundingClientRect = () => rect(0, 0);
+    dock.getBoundingClientRect = () => rect(800, 892);
+
+    root = createRoot(body);
+    host = stage;
+    act(() => {
+      root!.render(
+        <TooltipProvider>
+          <RoomCards
+            youLabel="(you)"
+            people={[entry("Ana"), entry("Bia"), entry("Cai")]}
+          />
+        </TooltipProvider>,
+      );
+    });
+    const cards = stage.querySelector<HTMLElement>(
+      '[data-testid="stage-room-cards"]',
+    )!;
+    // The cards' box runs to the stage's bottom edge (892), under the dock.
+    cards.getBoundingClientRect = () => rect(0, 892);
+    act(() => FakeResizeObserver.instances.forEach((o) => o.fire()));
+
+    // 892 - 800 = 92px of dock over the box, on top of the 12px padding.
+    expect(cards.style.paddingBottom).toBe("104px");
+    expect(cards.style.paddingTop).toBe("12px");
+  });
+
+  it("reserves nothing when there is no dock over the cards", () => {
+    const stage = document.createElement("div");
+    const banner = document.createElement("div");
+    banner.setAttribute("data-stage-banners", "");
+    const body = document.createElement("div");
+    stage.append(banner, body);
+    document.body.append(stage);
+    banner.getBoundingClientRect = () => rect(0, 0);
+    root = createRoot(body);
+    host = stage;
+    act(() => {
+      root!.render(
+        <TooltipProvider>
+          <RoomCards youLabel="(you)" people={[entry("Ana")]} />
+        </TooltipProvider>,
+      );
+    });
+    const cards = stage.querySelector<HTMLElement>(
+      '[data-testid="stage-room-cards"]',
+    )!;
+    cards.getBoundingClientRect = () => rect(0, 892);
+    act(() => FakeResizeObserver.instances.forEach((o) => o.fire()));
+    expect(cards.style.paddingBottom).toBe("12px");
   });
 });
