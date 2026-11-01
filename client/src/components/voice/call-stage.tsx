@@ -198,6 +198,7 @@ import {
 } from "@/components/voice/stage-layout";
 import { ListenerStrip } from "@/components/voice/listener-strip";
 import { RoomCards, type RoomCardEntry } from "@/components/voice/room-cards";
+import { MusicStagePanel } from "@/components/voice/music-stage-panel";
 import {
   showsVideoQualityControl,
   videoQualityMenuOpen,
@@ -1881,6 +1882,20 @@ function ActiveCall({
   const roomStage =
     roomView && !ringing && !soloPerson && !soloTile && !soloMusic;
   const roomPlan = planRoomStage(staged.tiles);
+  // THE MUSIC ON THE ROOM STAGE: with no share above the cards, a track (on,
+  // or just ended) or the open queue takes that space as `MusicStagePanel`,
+  // and its mount tells App to leave the composer's bar out. Not collapsed or
+  // hidden, where the composer is the only place left to show it. A share
+  // keeps the space, so with one on the stage the music stays in the
+  // composer's bar (no strip beside the share yet). The clip on the stage
+  // (`placement: "stage"`) is not this: `roomView` already hands it the stage.
+  const stageMusic = useMusicDock();
+  const musicPanel =
+    roomStage &&
+    !collapsed &&
+    !stageHidden &&
+    roomPlan.screens.length === 0 &&
+    (stageMusic.on || stageMusic.open);
   // Our own camera beside exactly one other picture is the floating preview
   // on the ordinary stage (`selfPreview`). The room stage has no floating
   // preview: our camera is our card, like everybody else's.
@@ -2743,9 +2758,11 @@ function ActiveCall({
               "h-full min-h-0"
             : stageHeightClass({
                 // A room of more than four cards needs the picture's height:
-                // four cards to a row in the short stage are thumbnails.
+                // four cards to a row in the short stage are thumbnails. So
+                // does the music panel, a cover and a row of cards under it.
                 anyVideo:
                   anyVideo ||
+                  musicPanel ||
                   (roomView && redesign && !ringing && listeners.length > 4),
                 musicPictureOnly,
                 // Sideways with the chat beside the floating bar, not under
@@ -2981,9 +2998,11 @@ function ActiveCall({
             <RoomCards
               youLabel={t("voice.tile.you")}
               stage={
-                roomPlan.screens.length > 0
-                  ? stageGrid(roomPlan.screens, false)
-                  : undefined
+                roomPlan.screens.length > 0 ? (
+                  stageGrid(roomPlan.screens, false)
+                ) : musicPanel ? (
+                  <MusicStagePanel channelId={channelId} voiceState={voiceState} />
+                ) : undefined
               }
               people={allPeople.map((person) =>
                 roomCardEntry(person, roomCameraKeys.has(person.key)),

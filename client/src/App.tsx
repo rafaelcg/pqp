@@ -363,6 +363,10 @@ import { useVoiceStateSync } from "@/components/voice/voice-state-sync";
 import { VoiceStatusBar } from "@/components/voice/voice-status-bar";
 import { MusicMiniPlayer } from "@/components/voice/music-mini-player";
 import { MusicComposer } from "@/components/voice/music-composer";
+import {
+  composerDrawsMusic,
+  useStageMusicPanel,
+} from "@/components/voice/music-stage-panel-store";
 import { setMusicOpen, useMusicDock } from "@/lib/music-store";
 import {
   isCameraAtCap,
@@ -10743,6 +10747,9 @@ function MainAppContent({
       }
     : null;
 
+  // Read before the early returns below, for `musicBarInComposer`.
+  const stageDrawsMusic = useStageMusicPanel(voiceState.voiceChannelId);
+
   if (bootstrapError) {
     return (
       <AppBootstrapError
@@ -11360,6 +11367,12 @@ function MainAppContent({
   );
   const musicInComposer =
     voiceState.status === "connected" && viewingThisCall;
+  // The room stage draws the player itself under the redesign (call-stage's
+  // `musicPanel`), and then the composer leaves its bar out.
+  const musicBarInComposer = composerDrawsMusic(
+    musicInComposer,
+    stageDrawsMusic,
+  );
   // The two things the apps launcher offers as shortcuts rather than apps: the
   // music queue (it lives in the call this person is in) and the server's
   // watch party channel (open the one there is, or create it where allowed).
@@ -13243,7 +13256,7 @@ function MainAppContent({
         // The call dock and music bar still live in this well, so they are
         // drawn here while the composer, which normally holds them, is hidden.
         <div>
-          {musicInComposer ? <MusicComposer voiceState={voiceState} /> : null}
+          {musicBarInComposer ? <MusicComposer voiceState={voiceState} /> : null}
           <CallDockOutlet channelId={selectedChannel.id} />
           <ComposerReadOnlyNotice />
         </div>
@@ -13331,7 +13344,7 @@ function MainAppContent({
         // Keyed by channel so the composer of any other channel stays plain.
         dock={canSendHere ? <CallDockOutlet channelId={selectedChannel.id} /> : undefined}
         music={
-          musicInComposer && canSendHere ? <MusicComposer voiceState={voiceState} /> : undefined
+          musicBarInComposer && canSendHere ? <MusicComposer voiceState={voiceState} /> : undefined
         }
         appsLauncher={
           selectedChannel.kind === "server" &&
