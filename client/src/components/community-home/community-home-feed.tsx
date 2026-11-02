@@ -911,6 +911,9 @@ export function PostCard({
     !locked &&
     post.author.id !== me.id;
   const showCardMenu = showStaffMenu || canReport;
+  // A member's menu is one row, so it only nudges the first line clear of the
+  // corner button instead of narrowing the whole card the way staff's does.
+  const memberMenuOnly = canReport && !showStaffMenu;
 
   useEffect(() => {
     if (!confirmDelete) {
@@ -1172,13 +1175,23 @@ export function PostCard({
         />
       )}
 
-      <div className={cn("p-5", showCardMenu && "pr-12")}>
+      <div className={cn("p-5", showStaffMenu && "pr-12")}>
         {view.title && (
-          <h2 className="break-words font-display text-2xl font-bold leading-snug tracking-tight text-text">
+          <h2
+            className={cn(
+              "break-words font-display text-2xl font-bold leading-snug tracking-tight text-text",
+              memberMenuOnly && "pr-6",
+            )}
+          >
             {view.title}
           </h2>
         )}
-        <p className="mt-1.5 flex flex-wrap items-center gap-2 text-sm text-text-tertiary">
+        <p
+          className={cn(
+            "mt-1.5 flex flex-wrap items-center gap-2 text-sm text-text-tertiary",
+            memberMenuOnly && !view.title && "pr-6",
+          )}
+        >
           <span>
             {isPreview
               ? t("communityHome.compose.previewNow")
