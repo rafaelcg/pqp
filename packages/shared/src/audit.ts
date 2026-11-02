@@ -269,6 +269,22 @@ export const AUDIT_ACTIONS = [
   /** Written in the SOURCE server: the owner's "Permitir seguir" switch moved. */
   "bau_follow.allow",
   "bau_follow.disallow",
+  /**
+   * Baú+ (paid VIP, `docs/BAU_PAYMENTS.md`). Written in the CREATOR's server.
+   * `plan_update` is staff (actor set). The membership rows are the fan's own
+   * action (actor = the fan: activate on a paid charge, cancel, resume,
+   * refund) or the system's (`actorId` null: grace, expire, the VIP cargo
+   * given back on a rejoin). Target is the fan; `changes` carries the status
+   * move and, for a payment, the charge id. Never an amount on a fan row.
+   */
+  "bau_plus.plan_update",
+  "bau_plus.activate",
+  "bau_plus.cancel",
+  "bau_plus.resume",
+  "bau_plus.refund",
+  "bau_plus.grace",
+  "bau_plus.expire",
+  "bau_plus.vip_regrant",
 ] as const;
 
 export const auditActionSchema = z.enum(AUDIT_ACTIONS);

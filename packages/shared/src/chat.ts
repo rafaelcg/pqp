@@ -37,6 +37,7 @@ import { permissionsUpdateSchema } from "./permissions.js";
 import { communityHomeUpdateSchema } from "./community-home.js";
 import { storiesUpdateFrameSchema } from "./stories.js";
 import { watchPartyWaitlistApprovedSchema } from "./watch-party-waitlist.js";
+import { bauPlusUpdateSchema } from "./bau-payments.js";
 import { sanctionNoticeSchema } from "./sanctions.js";
 import { serverRemovedSchema } from "./moderation.js";
 import { serverOrderUpdateSchema } from "./server-order.js";
@@ -746,6 +747,9 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   watchPartyUpdateSchema,
   // Per person, like `friend-activity`: see `watch-party-waitlist.ts`.
   watchPartyWaitlistApprovedSchema,
+  // Per person: one of the account's own Baú+ memberships moved (paid,
+  // expired, refunded...). See `bau-payments.ts`.
+  bauPlusUpdateSchema,
   // Per person too: see `moderation.ts`, and its absence from the list below.
   serverRemovedSchema,
   // Per person too: the account's own sockets, see `server-order.ts`.

@@ -2321,7 +2321,7 @@ export async function resolveBauReportTarget(input: {
   if (
     post.status !== "published" ||
     post.locked ||
-    (post.visibility === "members" && !isCommunityHomeVipEnabled())
+    (post.visibility === "members" && !isCommunityHomeVipEnabled(serverId))
   ) {
     return null;
   }

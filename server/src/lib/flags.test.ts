@@ -83,6 +83,7 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   forward_messages: (raw) => raw === "true",
   community_home_vip: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
+  bau_payments: (raw) => raw === "true",
   community_home_translation: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
   bau_mobile_rendition: (raw) => raw === "true",

@@ -108,6 +108,7 @@ import {
 import { ChannelIcon } from "@/components/layout/channel-icon";
 import { ForumPane } from "@/components/forum";
 import { dispatchForumFrame, dispatchForumReconnected } from "@/lib/forum-frames";
+import { emitBauPlusUpdate } from "@/lib/bau-plus/updates";
 import { ChannelList } from "@/components/layout/channel-list";
 import {
   ChannelSettingsDialog,
@@ -6189,6 +6190,13 @@ function MainAppContent({
           // cooldown, the button's wait.
           if (message.type === "nudge-refused") {
             handleNudgeRefused(message);
+            return;
+          }
+
+          // Baú+: one of this account's own memberships moved (paid, expired,
+          // refunded...). Per person, never a channel frame.
+          if (message.type === "bau-plus-update") {
+            emitBauPlusUpdate(message);
             return;
           }
 

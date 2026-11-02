@@ -1,4 +1,5 @@
 import { getPool } from "../db.js";
+import { bauPaymentsMetrics, type BauPaymentsMetrics } from "./bau-payments/metrics.js";
 
 /**
  * The creator hub on `GET /api/admin/metrics` (`creatorHub`): the first-party
@@ -46,6 +47,11 @@ export function recordCreatorHubEvent(kind: CreatorHubEventKind): void {
 export interface CreatorHubMetrics {
   /** Since this process started. */
   process: { ctaViews: number; supportClicks: number };
+  /**
+   * Baú+ payments (fans paying for VIP inside pqp): this process's counters
+   * and deployment-wide counts. See `services/bau-payments/metrics.ts`.
+   */
+  payments: BauPaymentsMetrics;
   /** Deployment wide, from the database. Null when the read failed. */
   db: {
     /** Servers whose owner turned the Baú on, and how many of them have posted. */
@@ -243,5 +249,5 @@ export async function creatorHubMetrics(): Promise<CreatorHubMetrics> {
       );
     }
   }
-  return { process: { ...stats }, db };
+  return { process: { ...stats }, payments: await bauPaymentsMetrics(), db };
 }

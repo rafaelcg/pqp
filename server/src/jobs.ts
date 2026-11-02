@@ -34,6 +34,7 @@ import { sweepOrphanedCommunityHomeMedia } from "./services/community-home.js";
 import { sweepQuarantinedCommunityHomeMedia } from "./services/community-home-scan.js";
 import { sweepQuarantinedServerEmoji } from "./services/server-emoji-scan.js";
 import { runBauFollowTick } from "./services/bau-follow-delivery.js";
+import { sweepBauPayments } from "./services/bau-payments/sweep.js";
 import { sweepCommunityHomeTranslations } from "./services/community-home-translation.js";
 import { sweepCommunityHomeCaptions } from "./services/community-home-captions.js";
 import { sweepPendingAccountDeletions } from "./services/account.js";
@@ -186,6 +187,7 @@ export const COMMUNITY_HOME_MEDIA_SWEEP_INTERVAL_MS = 30_000;
  * own. With nothing followed it is one indexed read.
  */
 export const BAU_FOLLOW_INTERVAL_MS = 10_000;
+export const BAU_PAYMENTS_SWEEP_INTERVAL_MS = 60_000;
 
 /**
  * Outgoing webhook outbox. First attempt is also kicked from enqueue, in
@@ -434,6 +436,11 @@ export function startColdJobs(): ColdJobs {
       sweepCommunityHomeMedia,
     ),
     every(BAU_FOLLOW_INTERVAL_MS, "bau-follow", () => runBauFollowTick()),
+    // Baú+ payments: codes that ran out, the renewal reminder, grace, expiry,
+    // and the VIP cargo taken back or given back. Runs whatever the flags say
+    // (off stops new checkouts, never the months already paid). One indexed
+    // read per step when nobody pays. See services/bau-payments/sweep.ts.
+    every(BAU_PAYMENTS_SWEEP_INTERVAL_MS, "bau-payments", sweepBauPayments),
     // Never touches an illegal-content row at any age.
     every(ATTACHMENT_SWEEP_INTERVAL_MS, "server-emoji-quarantine", sweepQuarantinedServerEmoji),
     every(

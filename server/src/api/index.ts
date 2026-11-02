@@ -376,6 +376,11 @@ import {
   resetLivePreviewRateLimits,
 } from "./live-preview-routes.js";
 import { registerAppRoutes } from "./app-routes.js";
+import {
+  handleBauPaymentsWebhook,
+  registerBauPaymentsRoutes,
+} from "./bau-payments-routes.js";
+import { noteStaffVipChange } from "../services/bau-payments/vip.js";
 import { endSessionsOfChannel } from "../apps/sweeps.js";
 import { publicAppsConfig } from "../apps/public-config.js";
 import { registerAppOwnerRoutes } from "./app-owner-routes.js";
@@ -1717,6 +1722,7 @@ const router = createRouter();
 
 // The apps platform's routes (`app-routes.ts`), behind the `apps` flag.
 registerAppRoutes(router);
+registerBauPaymentsRoutes(router);
 // The owner's switches for the apps the operator released (`app-owner-routes.ts`).
 registerAppOwnerRoutes(router);
 
@@ -11724,6 +11730,12 @@ router.put(
     }
     await requireOutranked(serverId!, user.id, userId!, "kick");
     await assignRole(serverId!, userId!, roleId!);
+    if (role.system_key === "vip") {
+      // Best effort: the role change already committed and is what counts.
+      await noteStaffVipChange(serverId!, userId!).catch((error: unknown) => {
+        console.error("[bau-payments] staff VIP note failed:", error);
+      });
+    }
     await logAudit({
       serverId: serverId!,
       actorId: user.id,
@@ -11750,6 +11762,11 @@ router.delete(
     }
     await requireOutranked(serverId!, user.id, userId!, "kick");
     await unassignRole(serverId!, userId!, roleId!);
+    if (role.system_key === "vip") {
+      await noteStaffVipChange(serverId!, userId!).catch((error: unknown) => {
+        console.error("[bau-payments] staff VIP note failed:", error);
+      });
+    }
     const revoked = new Set(
       await listRevokedPrivateChannelIds(serverId!, userId!),
     );
@@ -15324,6 +15341,12 @@ export async function handleApi(
   // The signed-out live preview's listing and start routes. Not matched at
   // all while `live_preview` is off everywhere (see `live-preview-routes.ts`).
   if (await handleLivePreviewRoute(req, res, pathname)) {
+    return;
+  }
+
+  // Baú+ payment provider notifications: no session, the adapter's
+  // signature check is the door (see `bau-payments-routes.ts`).
+  if (await handleBauPaymentsWebhook(req, res, pathname)) {
     return;
   }
 
