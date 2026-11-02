@@ -550,6 +550,18 @@ extension APIClient {
         try await get("/api/me")
     }
 
+    /// The one-shot age declaration. Every status comes back as a value
+    /// (`AgeGate.result`), because the gate reacts differently to a 400 (fix
+    /// the date, the attempt is kept), a 409 (another device answered) and a
+    /// failed save; only the transport throws.
+    func submitAgeCheck(dateOfBirth: String) async throws -> AgeGate.Answer {
+        struct Body: Encodable { let dateOfBirth: String }
+        let (data, status) = try await rawRequest(
+            "/api/me/age-check", method: "POST", body: Body(dateOfBirth: dateOfBirth)
+        )
+        return AgeGate.result(status: status, body: data)
+    }
+
     // MARK: The cached reads
     //
     // Four endpoints, one shape: ask conditionally with whatever validator is

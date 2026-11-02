@@ -77,6 +77,10 @@ final class FirstRunV2UITests: XCTestCase {
         year.typeText("1994")
         shot("03-age-filled")
         app.buttons["ageGate.submit"].tap()
+        // With `age_gate_readback` on the date is said back first. A server
+        // that predates the flag goes straight through, so it is optional here.
+        let confirm = app.buttons["ageGate.confirm"]
+        if confirm.waitForExistence(timeout: 3) { confirm.tap() }
     }
 
     // MARK: - The invitee

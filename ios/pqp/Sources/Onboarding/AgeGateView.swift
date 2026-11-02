@@ -18,6 +18,19 @@ import SwiftUI
 ///
 /// Focus moves itself: two digits in Day hands over to Month, choosing a month
 /// hands over to Year, so the whole answer is three touches on a number pad.
+///
+/// THE READ-BACK. A typed date is the one input nobody can take back, and the
+/// usual way it goes wrong is a slip (a swapped day and month, a year that is
+/// not the one meant), not a lie. So, with `ageGateReadback` on, Continue sends
+/// nothing: it says the date back in words ("Tu nasceu em 3 de dezembro de
+/// 2008") and only "Está certo" sends it. "Corrigir" returns to the fields with
+/// what was typed still in them. Everybody gets the same step, so it leaks
+/// nothing about the verdict. Off, Continue sends directly, as it always did.
+/// The step is state of this view, not a pushed screen, so there is no back
+/// gesture that could leave the gate. A 400 from the server (a date under the
+/// plausibility floor) is the same kind of slip and never spends the attempt:
+/// the fields come back, the year under the cursor. The decisions live in
+/// `AgeGate`, which the tests pin.
 struct AgeStep: View {
     @Environment(SessionStore.self) private var session
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -31,6 +44,10 @@ struct AgeStep: View {
     @State private var submitting = false
     @State private var error: String?
     @State private var failures = 0
+    /// The read-back is a step of this screen, not a screen: the fields' state
+    /// lives above it, so "Corrigir" gives back exactly what was typed.
+    @State private var readingBack = false
+    @AccessibilityFocusState private var readbackFocused: Bool
     /// Draws the eye to Month once Day is done, because a menu cannot be
     /// opened on somebody's behalf.
     @State private var nudgeMonth = false
@@ -41,13 +58,21 @@ struct AgeStep: View {
     /// Localized month names. Calendar hands these out in the app's locale.
     private let monthNames = Calendar.current.monthSymbols
 
-    private var dateOfBirth: String? {
-        guard let dayValue = Int(day), (1...31).contains(dayValue),
-              (1...12).contains(month),
-              let yearValue = Int(year),
-              (1900...Calendar.current.component(.year, from: Date())).contains(yearValue)
+    /// Everything is filled in. Whether it is a real date is Continue's answer,
+    /// so that 31 February gets a sentence instead of a dead button.
+    private var complete: Bool { !day.isEmpty && month != 0 && year.count == 4 }
+
+    private var locale: Locale { AgeGate.interfaceLocale }
+
+    /// The date in words, only while the read-back is showing. Computed from
+    /// the fields on every render, never cached, so it cannot outlive an edit.
+    private var readback: (isoDate: String, inWords: String)? {
+        guard readingBack,
+              case .readBack(let iso, let words) = AgeGate.continueOutcome(
+                  day: day, month: month, year: year, readback: true, locale: locale
+              )
         else { return nil }
-        return String(format: "%04d-%02d-%02d", yearValue, month, dayValue)
+        return (iso, words)
     }
 
     var body: some View {
@@ -55,33 +80,22 @@ struct AgeStep: View {
             VStack(alignment: .leading, spacing: 26) {
                 StepHeading(
                     eyebrow: Text("Just once"),
-                    title: Text("Your date of birth"),
-                    description: Text("pqp is \(Self.minimumAge)+. We ask once and take your word for it."),
+                    title: readback == nil ? Text("Your date of birth") : Text("Check your date of birth"),
+                    description: readback == nil
+                        ? Text("pqp is \(Self.minimumAge)+. We ask once and take your word for it.")
+                        : nil,
                     eyebrowIcon: "checkmark.shield"
                 )
 
-                fields
-
-                HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: "exclamationmark.circle")
-                        .foregroundStyle(Palette.warning)
-                        .accessibilityHidden(true)
-                    Text("Check it before you continue: this answer cannot be changed later, and a date under \(Self.minimumAge) closes the account on the spot.")
-                        .font(FirstRunType.footnote)
-                        .foregroundStyle(Palette.paperSubtle)
-                        .fixedSize(horizontal: false, vertical: true)
+                if let readback {
+                    readbackSentence(readback.inWords)
+                } else {
+                    fields
                 }
-                .padding(14)
-                .background(
-                    RoundedRectangle(cornerRadius: Metrics.cornerRadius, style: .continuous)
-                        .fill(Palette.warning.opacity(0.08))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: Metrics.cornerRadius, style: .continuous)
-                        .strokeBorder(Palette.warning.opacity(0.25), lineWidth: 1)
-                )
-                .accessibilityElement(children: .combine)
 
+                // Right under what it is about, above the warning: with the
+                // number pad up, anything lower is behind the keyboard, which
+                // is exactly when "Check the year" has to be seen.
                 if let error {
                     Label(error, systemImage: "xmark.octagon.fill")
                         .font(FirstRunType.callout)
@@ -89,6 +103,8 @@ struct AgeStep: View {
                         .transition(.opacity)
                         .accessibilityIdentifier("ageGate.error")
                 }
+
+                if readback == nil { warning }
             }
             .padding(.horizontal, 20)
             .padding(.top, 12)
@@ -96,17 +112,101 @@ struct AgeStep: View {
         }
         .scrollDismissesKeyboard(.interactively)
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            VStack(spacing: 6) {
+            footer
+        }
+        .animation(.easeInOut(duration: 0.2), value: error)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: readingBack)
+        .sensoryFeedback(.error, trigger: failures)
+        .onChange(of: error) { _, message in
+            // The sentence is drawn under a field that may be off screen, and a
+            // screen reader user would not otherwise hear that the date was
+            // refused.
+            if let message { AccessibilityNotification.Announcement(message).post() }
+        }
+        .task {
+            // After the step has landed, so the keyboard does not rise into a
+            // screen that is still moving.
+            try? await Task.sleep(for: .milliseconds(550))
+            if day.isEmpty { focus = .day }
+        }
+    }
+
+    /// The "do not send it yet" warning, in the only prose on the fields step.
+    private var warning: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.circle")
+                .foregroundStyle(Palette.warning)
+                .accessibilityHidden(true)
+            Text("Check it before you continue: this answer cannot be changed later, and a date under \(Self.minimumAge) closes the account on the spot.")
+                .font(FirstRunType.footnote)
+                .foregroundStyle(Palette.paperSubtle)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: Metrics.cornerRadius, style: .continuous)
+                .fill(Palette.warning.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Metrics.cornerRadius, style: .continuous)
+                .strokeBorder(Palette.warning.opacity(0.25), lineWidth: 1)
+        )
+        .accessibilityElement(children: .combine)
+    }
+
+    /// The date said back. One accessibility element, and VoiceOver lands on it
+    /// (not on a button) when the step appears: somebody who double-taps by
+    /// reflex as the screen changes must not confirm a date they have not
+    /// heard, which is what this step exists to prevent.
+    private func readbackSentence(_ inWords: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("You were born on \(inWords).")
+                .font(.title2.weight(.semibold))
+                .foregroundStyle(Palette.paper)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("Check the day, the month and the year.")
+                .font(FirstRunType.callout)
+                .foregroundStyle(Palette.paperMuted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+        .accessibilityFocused($readbackFocused)
+        .accessibilityIdentifier("ageGate.readback")
+    }
+
+    private var footer: some View {
+        VStack(spacing: 6) {
+            if let readback {
                 Button {
-                    Task { await submit() }
+                    Task { await submit(readback.isoDate) }
+                } label: {
+                    HStack(spacing: 8) {
+                        if submitting { ProgressView().tint(Palette.inkDeep) }
+                        Text(submitting ? "Saving…" : "That is right")
+                    }
+                }
+                .buttonStyle(PrimaryButtonStyle())
+                .disabled(submitting)
+                .accessibilityIdentifier("ageGate.confirm")
+
+                Button(LocalizedStringResource("ageGate.readback.edit", defaultValue: "Change it")) {
+                    goBackToFields()
+                }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .disabled(submitting)
+                    .accessibilityIdentifier("ageGate.edit")
+            } else {
+                Button {
+                    Task { await onContinue() }
                 } label: {
                     HStack(spacing: 8) {
                         if submitting { ProgressView().tint(Palette.inkDeep) }
                         Text(submitting ? "Saving…" : "Continue")
                     }
                 }
-                .buttonStyle(PrimaryButtonStyle(isEnabled: dateOfBirth != nil))
-                .disabled(dateOfBirth == nil || submitting)
+                .buttonStyle(PrimaryButtonStyle(isEnabled: complete))
+                .disabled(!complete || submitting)
                 .accessibilityIdentifier("ageGate.submit")
 
                 // The way out for a wrong account. Not a way around the
@@ -120,19 +220,11 @@ struct AgeStep: View {
                 .disabled(submitting)
                 .accessibilityIdentifier("ageGate.signOut")
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 10)
-            .padding(.bottom, 12)
-            .background { FooterScrim() }
         }
-        .animation(.easeInOut(duration: 0.2), value: error)
-        .sensoryFeedback(.error, trigger: failures)
-        .task {
-            // After the step has landed, so the keyboard does not rise into a
-            // screen that is still moving.
-            try? await Task.sleep(for: .milliseconds(550))
-            if day.isEmpty { focus = .day }
-        }
+        .padding(.horizontal, 20)
+        .padding(.top, 10)
+        .padding(.bottom, 12)
+        .background { FooterScrim() }
     }
 
     private var fields: some View {
@@ -230,19 +322,83 @@ struct AgeStep: View {
         }
     }
 
-    private func submit() async {
-        guard let dateOfBirth else { return }
+    /// Continue: say the date back first when the switch is on, else send it.
+    private func onContinue() async {
+        guard !submitting else { return }
+        switch AgeGate.continueOutcome(
+            day: day, month: month, year: year,
+            readback: session.ageGateReadback, locale: locale
+        ) {
+        case .badDate:
+            failures += 1
+            error = String(localized: "That is not a date we can read. Check the day, month and year.")
+        case .submit(let iso):
+            await submit(iso)
+        case .readBack:
+            focus = nil
+            error = nil
+            readingBack = true
+            // After the step has been drawn, or there is nothing to focus.
+            try? await Task.sleep(for: .milliseconds(150))
+            readbackFocused = true
+        }
+    }
+
+    private func goBackToFields() {
+        guard !submitting else { return }
+        error = nil
+        readbackFocused = false
+        readingBack = false
+        refocus(.day)
+    }
+
+    /// Back on the fields after the step or a refusal changed what is on screen.
+    private func refocus(_ field: Field) {
+        Task {
+            try? await Task.sleep(for: .milliseconds(150))
+            focus = field
+        }
+    }
+
+    private func submit(_ isoDate: String) async {
+        guard !submitting else { return }
         focus = nil
         submitting = true
-        error = await session.submitAgeDeclaration(dateOfBirth: dateOfBirth)
+        error = nil
+        let failure = await session.submitAgeDeclaration(dateOfBirth: isoDate)
         submitting = false
-        if error != nil { failures += 1 }
+        guard let failure else { return }
+        failures += 1
+        // A 400 is the person's input, never the blocked state, and the
+        // attempt is not spent: back to the fields with the values kept. Only
+        // a failed save (nothing was decided) stays on the step it is on.
+        switch failure {
+        case .checkYear:
+            error = String(localized: "Check the year. That date of birth does not look right.")
+            readingBack = false
+            refocus(.year)
+        case .badDate:
+            error = String(localized: "That is not a date we can read. Check the day, month and year.")
+            readingBack = false
+            refocus(.day)
+        case .stale, .save:
+            error = String(localized: "Could not save that. Check your connection and try again.")
+        }
     }
 }
 
-/// The terminal screen for an account that declared under 18. Deliberately
-/// quiet and final: there is one attempt and no self-serve way out, and the
-/// person reading this has just been told they cannot use the product.
+/// The final screen for an account that answered under 18 (the web's
+/// `AgeGateBlocked`). It used to be a bare "can't be used" with only a sign-out.
+///
+/// The reader may well be a child: it says what happened and what can be done,
+/// accuses nobody of lying, and does not suggest signing up again. The way back
+/// for somebody who typed the wrong date is on the screen itself, not one link
+/// away: write to `AgeGate.appealEmail` from the account's own email address,
+/// and the Terms page explains the appeal and the deletion of the account.
+///
+/// The two links are inside the localized sentences (markdown), so a translator
+/// places them where the language wants them. `NoEmDashTests` and
+/// `AgeGateTests` pin the address, the URL and the words against the web.
 struct AgeBlockedView: View {
     @Environment(SessionStore.self) private var session
 
@@ -250,34 +406,48 @@ struct AgeBlockedView: View {
         ZStack {
             Palette.ink.ignoresSafeArea()
 
-            VStack(spacing: 16) {
-                Spacer(minLength: 0)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    StepHeading(
+                        eyebrow: Text("Age check"),
+                        title: Text("pqp is for \(AgeStep.minimumAge) and over"),
+                        description: Text("Thanks for answering honestly. The date of birth you gave is under \(AgeStep.minimumAge), so this account is closed. That is a rule about the service, not a judgement about you, pqp is built for adults and we are not able to make exceptions to it."),
+                        eyebrowIcon: "hand.raised"
+                    )
 
-                Image(systemName: "hand.raised")
-                    .font(.system(size: 40))
-                    .foregroundStyle(Palette.paperMuted)
+                    Text("Entered the wrong date by mistake? Write to [contato@pqp.gg](mailto:contato@pqp.gg) from this account's email address.")
+                        .font(Typography.body)
+                        .foregroundStyle(Palette.paper)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("ageGate.blocked.contact")
 
-                Text("This account can't be used")
-                    .font(Typography.title(22))
-                    .foregroundStyle(Palette.paper)
-                    .multilineTextAlignment(.center)
+                    Text("How appeals work, and how to ask us to delete the account and the data attached to it, is on our [Terms page](https://pqp.gg/terms).")
+                        .font(Typography.body)
+                        .foregroundStyle(Palette.paperMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("ageGate.blocked.appeal")
 
-                Text("The date of birth on file is under 18. pqp's Terms require everyone to be 18 or older.")
-                    .font(Typography.body)
-                    .foregroundStyle(Palette.paperMuted)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 320)
-
-                Spacer(minLength: 0)
-
+                    Text("Please do not open another account in the meantime, we would rather settle this one.")
+                        .font(Typography.body)
+                        .foregroundStyle(Palette.paperMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("ageGate.blocked.wait")
+                }
+                .tint(Palette.signal)
+                .padding(.horizontal, Metrics.hPadding)
+                .padding(.top, 48)
+                .padding(.bottom, 24)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
                 Button("Sign out") {
                     Task { await session.signOut() }
                 }
                 .buttonStyle(SecondaryButtonStyle())
                 .padding(.horizontal, 24)
-                .padding(.bottom, 16)
+                .padding(.vertical, 12)
+                .accessibilityIdentifier("ageGate.blocked.signOut")
             }
-            .padding(.horizontal, Metrics.hPadding)
         }
     }
 }
