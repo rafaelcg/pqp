@@ -52,6 +52,8 @@ export interface CreateChargeInput {
 
 export interface ProviderCharge {
   ref: string;
+  /** Our attempt id, as the provider echoes it back (its external reference). */
+  reference: string | null;
   status: ProviderChargeStatus;
   /** Pix copia e cola. The client draws the QR from this exact text. */
   pixCode: string | null;
@@ -68,6 +70,8 @@ export interface ProviderWebhookEvent {
   type: string;
   /** The charge the event is about; `getCharge` is asked what it says. */
   chargeRef: string;
+  /** Our attempt id when the provider sends it back; a fallback match only. */
+  reference?: string | null;
 }
 
 export interface PaymentProvider {

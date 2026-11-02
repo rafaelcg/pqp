@@ -500,6 +500,86 @@ describeDb("Baú+ payments", () => {
     expect(await holdsVip(fan.id)).toBe(true);
   });
 
+  it("only the first-ever payment is refundable: coming back after a refund is not a new window", async () => {
+    planId = await createPlan();
+    await turnOn(serverId);
+    const first = await pay((await checkout()).body.attempt.id);
+    await call(fan, "POST", `/api/bau-plus/memberships/${first.membership.id}/refund`);
+    const back = await pay((await checkout()).body.attempt.id);
+    expect(back.membership.status).toBe("active");
+    expect(back.membership.refundableUntil).toBeNull();
+    expect((await call(fan, "POST", `/api/bau-plus/memberships/${back.membership.id}/refund`)).status).toBe(409);
+  });
+
+  it("a paid charge cancels its open siblings at the provider, not only here", async () => {
+    planId = await createPlan();
+    await turnOn(serverId);
+    const { sandboxProvider } = await import("./service.js");
+    const pix = await checkout("pix");
+    // A second open code, as two tabs racing would leave.
+    const sibling = await sandboxProvider.createCharge({
+      account: { ref: "x", sellerName: "x" },
+      reference: "00000000-0000-4000-8000-00000000abcd",
+      amountCents: 990,
+      currency: "BRL",
+      method: "card",
+      description: "VIP",
+      expiresAt: new Date(Date.now() + 600_000),
+    });
+    await getPool().query(
+      `INSERT INTO bau_payment_attempts
+         (membership_id, server_id, user_id, plan_id, provider, account_ref, provider_ref, method, kind,
+          amount_cents, seller_name, provider_label, expires_at)
+       SELECT membership_id, server_id, user_id, plan_id, provider, account_ref, $2, 'card', kind,
+              amount_cents, seller_name, provider_label, NOW() + INTERVAL '10 minutes'
+         FROM bau_payment_attempts WHERE id = $1`,
+      [pix.body.attempt.id, sibling.ref],
+    );
+    const cancel = vi.spyOn(sandboxProvider, "cancelCharge");
+    await pay(pix.body.attempt.id);
+    expect(cancel).toHaveBeenCalledWith(expect.anything(), sibling.ref);
+    const after = await sandboxProvider.getCharge({ ref: "x", sellerName: "x" }, sibling.ref);
+    expect(after.status).toBe("cancelled");
+    cancel.mockRestore();
+  });
+
+  it("a cancel the provider refuses is reported, and the code stays open", async () => {
+    planId = await createPlan();
+    await turnOn(serverId);
+    const { sandboxProvider } = await import("./service.js");
+    const pix = await checkout();
+    const cancel = vi.spyOn(sandboxProvider, "cancelCharge").mockRejectedValueOnce(new Error("down"));
+    const res = await call(fan, "POST", `/api/bau-plus/attempts/${pix.body.attempt.id}/cancel`);
+    expect(res.status).toBe(502);
+    const row = await getPool().query(`SELECT status FROM bau_payment_attempts WHERE id = $1`, [
+      pix.body.attempt.id,
+    ]);
+    expect(row.rows[0]!.status).toBe("pending");
+    cancel.mockRestore();
+  });
+
+  it("a charge whose ref never reached our row is still matched by our own reference", async () => {
+    planId = await createPlan();
+    await turnOn(serverId);
+    const pix = await checkout();
+    const ref = await refOf(pix.body.attempt.id);
+    // As if the write after createCharge had failed.
+    await getPool().query(`UPDATE bau_payment_attempts SET provider_ref = NULL WHERE id = $1`, [
+      pix.body.attempt.id,
+    ]);
+    const { sandboxProvider } = await import("./service.js");
+    sandboxProvider.setEventSink(null);
+    await sandboxProvider.act(ref, "pay");
+    const { handleProviderEvents } = await import("./service.js");
+    sandboxProvider.setEventSink((events) => handleProviderEvents(sandboxProvider, events).then(() => {}));
+    const webhook = await postWebhook({
+      events: [{ id: "evt_stranded", type: "charge.paid", charge: ref, reference: pix.body.attempt.id }],
+    });
+    expect(webhook.status).toBe(200);
+    expect(await holdsVip(fan.id)).toBe(true);
+    expect(await refOf(pix.body.attempt.id)).toBe(ref);
+  });
+
   it("a new price is a new plan; the old checkout is refused as changed", async () => {
     planId = await createPlan();
     await turnOn(serverId);

@@ -202,11 +202,15 @@ function refundableUntil(membership: MembershipRow, attempts: AttemptRow[], now:
   if (membership.status === "refunded" || membership.status === "pending") {
     return null;
   }
-  const latestPaid = attempts.find((a) => a.status === "paid");
-  if (!latestPaid || latestPaid.kind !== "first" || !latestPaid.paid_at) {
+  // The withdrawal right is for the membership's FIRST-EVER payment: the one
+  // charge it has ever settled. A renewal, and a payment after an earlier one
+  // was refunded or ran out, do not reopen it.
+  const settled = attempts.filter((a) => a.status === "paid" || a.status === "refunded");
+  const only = settled.length === 1 ? settled[0]! : null;
+  if (!only || only.status !== "paid" || !only.paid_at) {
     return null;
   }
-  const until = new Date(latestPaid.paid_at.getTime() + BAU_REFUND_WINDOW_DAYS * DAY_MS);
+  const until = new Date(only.paid_at.getTime() + BAU_REFUND_WINDOW_DAYS * DAY_MS);
   return until > now ? until : null;
 }
 
@@ -266,8 +270,10 @@ function toMembership(
     refundedAt: row.refunded_at?.toISOString() ?? null,
     seller,
     pendingAttempt: pending ? toAttempt(pending) : null,
+    // Two years of months is plenty for a screen; the rows stay.
     receipts: attempts
       .filter((a) => a.status === "paid" || a.status === "refunded")
+      .slice(0, 24)
       .map(toReceipt),
   };
 }
@@ -410,12 +416,18 @@ export async function getBauOffer(serverId: string, userId: string): Promise<Bau
 
 // ------------------------------------------------------------------ checkout
 
-async function attemptWithMembership(attemptId: string): Promise<BauAttemptResponse> {
-  const attempt = await getPool().query<AttemptRow>(
-    `SELECT * FROM bau_payment_attempts WHERE id = $1`,
-    [attemptId],
-  );
-  const row = attempt.rows[0];
+async function attemptWithMembership(
+  attemptId: string,
+  loaded?: AttemptRow,
+): Promise<BauAttemptResponse> {
+  let row = loaded;
+  if (!row) {
+    const attempt = await getPool().query<AttemptRow>(
+      `SELECT * FROM bau_payment_attempts WHERE id = $1`,
+      [attemptId],
+    );
+    row = attempt.rows[0];
+  }
   if (!row) {
     throw new HttpError(404, "Not found");
   }
@@ -536,12 +548,7 @@ export async function startBauCheckout(
     throw new HttpError(502, "provider_unavailable");
   }
 
-  await getPool().query(
-    `UPDATE bau_payment_attempts
-        SET provider_ref = $2, pix_code = $3, redirect_url = $4, expires_at = $5, updated_at = NOW()
-      WHERE id = $1`,
-    [attempt.id, charge.ref, charge.pixCode, charge.redirectUrl, charge.expiresAt],
-  );
+  await recordProviderCharge(attempt.id, charge);
   countBauPayments("checkoutsStarted");
   logEvent("bauPayments.checkout", {
     serverId,
@@ -562,6 +569,32 @@ export async function startBauCheckout(
   return attemptWithMembership(attempt.id);
 }
 
+/**
+ * The provider made the charge; this row must learn its ref, or a payment on
+ * it could never be matched. Retried, and if the database still refuses, the
+ * webhook path finds the attempt by the reference we sent (`charge.reference`
+ * is our attempt id) and fills the ref in then.
+ */
+async function recordProviderCharge(attemptId: string, charge: ProviderCharge): Promise<void> {
+  let lastError: unknown = null;
+  for (let tries = 0; tries < 3; tries += 1) {
+    try {
+      await getPool().query(
+        `UPDATE bau_payment_attempts
+            SET provider_ref = $2, pix_code = $3, redirect_url = $4, expires_at = $5, updated_at = NOW()
+          WHERE id = $1`,
+        [attemptId, charge.ref, charge.pixCode, charge.redirectUrl, charge.expiresAt],
+      );
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 150 * (tries + 1)));
+    }
+  }
+  console.error("[bau-payments] provider charge not recorded", { attemptId, ref: charge.ref });
+  throw lastError;
+}
+
 async function cancelOtherPending(membershipId: string, keepId: string): Promise<void> {
   try {
     const others = await getPool().query<AttemptRow>(
@@ -577,15 +610,21 @@ async function cancelOtherPending(membershipId: string, keepId: string): Promise
   }
 }
 
-async function cancelPendingAttemptRow(row: AttemptRow): Promise<void> {
+/**
+ * Cancel an open charge at the provider, and only then here. True when it is
+ * cancelled. A provider that refuses leaves the attempt pending: it still
+ * expires on its own, and if the fan pays it anyway the payment is applied
+ * (paid always wins), rather than reporting a cancel that did not happen.
+ */
+async function cancelPendingAttemptRow(row: AttemptRow): Promise<boolean> {
   const provider = getRegisteredProvider(row.provider);
   if (provider && row.provider_ref) {
     try {
       await provider.cancelCharge(accountOf(row), row.provider_ref);
     } catch (error) {
-      // A charge that could not be cancelled at the provider may still be
-      // paid; a webhook for it is still applied (a paid charge always wins).
+      countBauPayments("providerErrors");
       console.error("[bau-payments] cancelCharge failed:", error);
+      return false;
     }
   }
   await getPool().query(
@@ -594,6 +633,7 @@ async function cancelPendingAttemptRow(row: AttemptRow): Promise<void> {
       WHERE id = $1 AND status = 'pending'`,
     [row.id],
   );
+  return true;
 }
 
 function accountOf(row: AttemptRow): ProviderAccount {
@@ -635,9 +675,10 @@ export async function getBauAttempt(
         lastRefresh.clear();
       }
       await syncAttemptFromProvider(row);
+      return attemptWithMembership(row.id);
     }
   }
-  return attemptWithMembership(row.id);
+  return attemptWithMembership(row.id, row);
 }
 
 async function syncAttemptFromProvider(row: AttemptRow): Promise<void> {
@@ -663,8 +704,8 @@ async function syncAttemptFromProvider(row: AttemptRow): Promise<void> {
 
 export async function cancelBauAttempt(attemptId: string, userId: string): Promise<BauAttemptResponse> {
   const row = await ownAttempt(attemptId, userId);
-  if (row.status === "pending") {
-    await cancelPendingAttemptRow(row);
+  if (row.status === "pending" && !(await cancelPendingAttemptRow(row))) {
+    throw new HttpError(502, "cancel_failed");
   }
   return attemptWithMembership(row.id);
 }
@@ -674,6 +715,8 @@ export async function cancelBauAttempt(attemptId: string, userId: string): Promi
 type ApplySource = "webhook" | "poll" | "sweep" | "provider" | "refund";
 
 interface Applied {
+  /** Other open charges of the membership, to cancel once this one is paid. */
+  siblings?: AttemptRow[];
   attempt: AttemptRow;
   membership: MembershipRow;
   reason: "paid" | "attempt-expired" | "attempt-failed" | "refunded" | null;
@@ -766,14 +809,17 @@ async function transition(
         RETURNING *`,
       [membership.id, paidRow.plan_id, paidRow.period_start, paidRow.period_end],
     );
-    // Any other code still open for this membership is now pointless.
-    await client.query(
-      `UPDATE bau_payment_attempts
-          SET status = 'cancelled', failure_reason = 'cancelled', updated_at = NOW()
+    // Any other code still open for this membership is now pointless. It is
+    // cancelled at the provider after this commits (`afterTransition`), and
+    // only marked cancelled here once the provider agrees, so a sibling the
+    // provider would still accept is never reported cancelled.
+    const siblings = await client.query<AttemptRow>(
+      `SELECT * FROM bau_payment_attempts
         WHERE membership_id = $1 AND status = 'pending' AND id <> $2`,
       [membership.id, attempt.id],
     );
     return {
+      siblings: siblings.rows,
       attempt: paidRow,
       membership: updatedMembership.rows[0]!,
       reason: "paid",
@@ -836,6 +882,9 @@ async function transition(
 async function afterTransition(applied: Applied, source: ApplySource): Promise<void> {
   const { attempt, membership, reason } = applied;
   if (reason === "paid") {
+    for (const sibling of applied.siblings ?? []) {
+      await cancelPendingAttemptRow(sibling);
+    }
     countBauPayments("paid");
     if (attempt.kind === "renewal") {
       countBauPayments("renewalsPaid");
@@ -931,7 +980,25 @@ export async function handleProviderEvents(
       `SELECT * FROM bau_payment_attempts WHERE provider = $1 AND provider_ref = $2`,
       [provider.id, event.chargeRef],
     );
-    const row = attempt.rows[0];
+    let row = attempt.rows[0];
+    if (!row && event.reference && /^[0-9a-f-]{36}$/i.test(event.reference)) {
+      // The charge exists at the provider but its ref never reached our row
+      // (`recordProviderCharge` gave up). Our own reference names the attempt;
+      // the provider must agree before the ref is written.
+      const byReference = await getPool().query<AttemptRow>(
+        `SELECT * FROM bau_payment_attempts
+          WHERE id = $1 AND provider = $2 AND provider_ref IS NULL`,
+        [event.reference, provider.id],
+      );
+      const candidate = byReference.rows[0];
+      if (candidate) {
+        const charge = await provider.getCharge(accountOf(candidate), event.chargeRef);
+        if (charge.reference === candidate.id) {
+          await recordProviderCharge(candidate.id, charge);
+          row = { ...candidate, provider_ref: charge.ref };
+        }
+      }
+    }
     let error: string | null = null;
     if (!row) {
       countBauPayments("webhooksUnknownCharge");

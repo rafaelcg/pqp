@@ -21,7 +21,12 @@ function deliverLocally(envelope: Envelope): void {
   const payload = JSON.stringify(envelope.frame);
   forEachSocketOfUser(envelope.userId, (socket) => {
     if (socket.readyState === 1) {
-      socket.send(payload);
+      // One closing socket must not stop the others, or the bus publish.
+      try {
+        socket.send(payload);
+      } catch {
+        // It is closing; the next read of the membership catches it up.
+      }
     }
   });
 }
