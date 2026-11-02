@@ -567,7 +567,19 @@ export async function startBauCheckout(
   });
   if (reserved.reused) {
     countBauPayments("checkoutsReused");
-    return attemptWithMembership(reserved.row.id, reserved.row);
+    // The twin request that reserved it may still be talking to the
+    // provider: give it a moment so both callers get the code, not a blank.
+    // Past that the pay sheet's poll fills it in.
+    let row = reserved.row;
+    for (let waited = 0; !row.provider_ref && waited < 3_000; waited += 250) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      const again = await getPool().query<AttemptRow>(
+        `SELECT * FROM bau_payment_attempts WHERE id = $1`,
+        [row.id],
+      );
+      row = again.rows[0] ?? row;
+    }
+    return attemptWithMembership(row.id, row);
   }
   const attempt = reserved.row;
   const serverName = await getPool().query<{ name: string }>(

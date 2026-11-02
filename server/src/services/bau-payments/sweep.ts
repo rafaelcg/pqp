@@ -82,16 +82,23 @@ export async function sweepBauPayments(): Promise<BauSweepResult> {
   // again every tick until the provider agrees, so a sibling never stays
   // payable for its whole lifetime after a refusal.
   const orphans = await pool.query<BauAttemptRow>(
+    // Least recently tried first, and a refusal is stamped, so a handful the
+    // provider keeps refusing can never starve the rest. A settled sibling
+    // that was later refunded still counts: the code is just as pointless.
     `SELECT a.* FROM bau_payment_attempts a
       WHERE a.status = 'pending'
         AND EXISTS (SELECT 1 FROM bau_payment_attempts p
-                     WHERE p.membership_id = a.membership_id AND p.status = 'paid'
+                     WHERE p.membership_id = a.membership_id
+                       AND p.status IN ('paid', 'refunded')
                        AND p.paid_at > a.created_at)
+      ORDER BY a.updated_at
       LIMIT 100`,
   );
   for (const row of orphans.rows) {
     try {
-      await cancelPendingAttemptRow(row);
+      if (!(await cancelPendingAttemptRow(row))) {
+        await pool.query(`UPDATE bau_payment_attempts SET updated_at = NOW() WHERE id = $1`, [row.id]);
+      }
     } catch (error) {
       console.error("[bau-payments] sweep sibling cancel failed:", error);
     }
