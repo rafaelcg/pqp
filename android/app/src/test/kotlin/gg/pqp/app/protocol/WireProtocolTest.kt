@@ -282,6 +282,7 @@ class WireProtocolTest {
         // the operator turns on a server they waited for. The waitlist lives
         // on the web; the push that goes out with it reaches the phone.
         "watch-party-waitlist-approved" to "no waitlist surface on the phone; the push covers it",
+        "bau-plus-update" to "Baú+ payments are web and desktop only (store policy); the VIP cargo reaches the phone through permissions-update",
         // Coalesced emoji burst counts for a channel's live reactions. No
         // reaction-overlay surface on the phone yet.
         "live-reactions" to "no live reactions surface on the phone",
