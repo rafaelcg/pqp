@@ -23,8 +23,15 @@ function post<T>(path: string, body?: unknown): Promise<T> {
 export const fetchBauOffer = (serverId: string) =>
   apiFetch<BauOffer>(`/api/servers/${serverId}/bau-plus`);
 
-export const startBauCheckout = (serverId: string, planId: string, method: BauPaymentMethod) =>
-  post<BauAttemptResponse>(`/api/servers/${serverId}/bau-plus/checkout`, { planId, method });
+export const startBauCheckout = (
+  serverId: string,
+  planId: string,
+  method: BauPaymentMethod,
+) =>
+  post<BauAttemptResponse>(`/api/servers/${serverId}/bau-plus/checkout`, {
+    planId,
+    method,
+  });
 
 export const fetchBauAttempt = (attemptId: string, refresh = false) =>
   apiFetch<BauAttemptResponse>(
@@ -34,17 +41,28 @@ export const fetchBauAttempt = (attemptId: string, refresh = false) =>
 export const cancelBauAttempt = (attemptId: string) =>
   post<BauAttemptResponse>(`/api/bau-plus/attempts/${attemptId}/cancel`);
 
-export const actOnSandboxAttempt = (attemptId: string, action: BauSandboxAction) =>
-  post<BauAttemptResponse>(`/api/bau-plus/attempts/${attemptId}/sandbox`, { action });
+export const actOnSandboxAttempt = (
+  attemptId: string,
+  action: BauSandboxAction,
+) =>
+  post<BauAttemptResponse>(`/api/bau-plus/attempts/${attemptId}/sandbox`, {
+    action,
+  });
 
 export const fetchMyBauMemberships = () =>
   apiFetch<BauMembershipsResponse>("/api/bau-plus/memberships");
 
 export const cancelBauMembership = (membershipId: string) =>
-  post<{ membership: BauMembership }>(`/api/bau-plus/memberships/${membershipId}/cancel`);
+  post<{ membership: BauMembership }>(
+    `/api/bau-plus/memberships/${membershipId}/cancel`,
+  );
 
 export const resumeBauMembership = (membershipId: string) =>
-  post<{ membership: BauMembership }>(`/api/bau-plus/memberships/${membershipId}/resume`);
+  post<{ membership: BauMembership }>(
+    `/api/bau-plus/memberships/${membershipId}/resume`,
+  );
 
 export const refundBauMembership = (membershipId: string) =>
-  post<{ membership: BauMembership }>(`/api/bau-plus/memberships/${membershipId}/refund`);
+  post<{ membership: BauMembership }>(
+    `/api/bau-plus/memberships/${membershipId}/refund`,
+  );

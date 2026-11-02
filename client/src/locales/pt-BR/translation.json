@@ -3789,6 +3789,7 @@
   "bauPlus.manager.loading": "Carregando tuas assinaturas",
   "bauPlus.manager.loadFailed": "Não deu pra carregar tuas assinaturas.",
   "bauPlus.manager.retry": "Tentar de novo",
+  "bauPlus.manager.stale": "Não deu pra atualizar. Isso aqui pode estar desatualizado.",
   "bauPlus.manager.emptyTitle": "Tu ainda não é VIP de ninguém",
   "bauPlus.manager.emptyBody": "Quando tu apoiar um criador no Baú, a assinatura aparece aqui.",
   "bauPlus.manager.plan": "{plan}, {price} por mês",

@@ -3829,6 +3829,7 @@
   "bauPlus.manager.loading": "Cargando tus suscripciones",
   "bauPlus.manager.loadFailed": "No se pudieron cargar tus suscripciones.",
   "bauPlus.manager.retry": "Intentar de nuevo",
+  "bauPlus.manager.stale": "No se pudo actualizar. Lo que ves acá puede estar desactualizado.",
   "bauPlus.manager.emptyTitle": "Todavía no eres VIP de nadie",
   "bauPlus.manager.emptyBody": "Cuando apoyes a un creador en un Baú, la suscripción aparece acá.",
   "bauPlus.manager.plan": "{plan}, {price} al mes",

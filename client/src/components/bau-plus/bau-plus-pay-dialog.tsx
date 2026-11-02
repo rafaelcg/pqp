@@ -126,6 +126,7 @@ export function BauPlusPayDialog({
   const wasOpen = useRef(false);
   useEffect(() => {
     if (open && !wasOpen.current) {
+      paidRef.current = false;
       setError(null);
       setBusy(false);
       setMethod(methods[0] ?? "pix");
@@ -138,12 +139,18 @@ export function BauPlusPayDialog({
     wasOpen.current = open;
   }, [open, offer.membership?.pendingAttempt, methods]);
 
+  // Once paid, the sheet stays paid: a poll that left before the frame and
+  // answers after it ("still pending") must not take the confirmation away.
+  const paidRef = useRef(false);
   const settle = useCallback(
     (attempt: BauPaymentAttempt, membership: BauMembership) => {
       if (attempt.status === "paid") {
-        setStep({ kind: "paid", membership, attempt });
-        onPaid(membership);
-      } else {
+        if (!paidRef.current) {
+          paidRef.current = true;
+          setStep({ kind: "paid", membership, attempt });
+          onPaid(membership);
+        }
+      } else if (!paidRef.current) {
         setStep({ kind: "pay", attempt });
       }
     },

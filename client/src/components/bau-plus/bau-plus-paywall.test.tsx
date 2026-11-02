@@ -2,7 +2,11 @@
 import type { BauMembership, BauOffer } from "@pqp/shared";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { formatBauDay, formatBrl, formatCountdown } from "@/lib/bau-plus/format";
+import {
+  formatBauDay,
+  formatBrl,
+  formatCountdown,
+} from "@/lib/bau-plus/format";
 import { BauPlusPaywall } from "./bau-plus-paywall";
 
 /**
@@ -59,7 +63,11 @@ function membership(patch: Partial<BauMembership>): BauMembership {
 describe("BauPlusPaywall", () => {
   it("is a live button with the monthly price, described by the sentence above it", () => {
     const html = renderToStaticMarkup(
-      <BauPlusPaywall offer={offer} serverName="Canal da Bia" onStart={() => {}} />,
+      <BauPlusPaywall
+        offer={offer}
+        serverName="Canal da Bia"
+        onStart={() => {}}
+      />,
     );
     expect(html).toContain("data-bau-paywall-cta");
     expect(html).toContain("Support for R$9.90/month");
@@ -122,8 +130,12 @@ describe("Baú+ formatting", () => {
 
   it("dates are long so a sentence never ends in a double period", () => {
     const now = new Date("2026-11-02T12:00:00Z");
-    expect(formatBauDay("2026-12-02T12:00:00Z", "pt-BR", now)).toBe("2 de dezembro");
-    expect(formatBauDay("2027-01-05T12:00:00Z", "en", now)).toBe("January 5, 2027");
+    expect(formatBauDay("2026-12-02T12:00:00Z", "pt-BR", now)).toBe(
+      "2 de dezembro",
+    );
+    expect(formatBauDay("2027-01-05T12:00:00Z", "en", now)).toBe(
+      "January 5, 2027",
+    );
   });
 
   it("the countdown is minutes and padded seconds, never negative", () => {

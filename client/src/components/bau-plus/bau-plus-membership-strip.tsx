@@ -73,6 +73,7 @@ export function BauPlusMembershipStrip({
 }) {
   const { t, locale } = useTranslation();
   const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
   const membership = offer.membership;
   if (!membership) return null;
   const variant = variantOf(membership, welcome);
@@ -124,9 +125,12 @@ export function BauPlusMembershipStrip({
   async function resume() {
     if (!membership) return;
     setBusy(true);
+    setFailed(false);
     try {
       await resumeBauMembership(membership.id);
       onChanged();
+    } catch {
+      setFailed(true);
     } finally {
       setBusy(false);
     }
@@ -173,6 +177,11 @@ export function BauPlusMembershipStrip({
           <p className="mt-0.5 text-pretty text-sm leading-5 opacity-85">
             {t(copy[variant].body, vars)}
           </p>
+          {failed && (
+            <p className="mt-1.5 text-sm font-medium text-danger" role="alert">
+              {t("bauPlus.manager.actionFailed")}
+            </p>
+          )}
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-1.5 pl-[30px] sm:pl-0">

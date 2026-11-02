@@ -44,7 +44,9 @@ export function requestBauPay(serverId: string): void {
   }
 }
 
-export function onBauPayRequest(listener: (serverId: string) => void): () => void {
+export function onBauPayRequest(
+  listener: (serverId: string) => void,
+): () => void {
   payListeners.add(listener);
   return () => {
     payListeners.delete(listener);

@@ -4,7 +4,7 @@ import type {
   BauReceipt,
 } from "@pqp/shared";
 import { Receipt, RotateCcw, Sparkles } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ServerIcon } from "@/components/layout/server-identity";
 import { SettingsEmpty, SettingsGroup } from "@/components/settings/kit";
 import { Badge } from "@/components/ui/badge";
@@ -57,13 +57,21 @@ const STATUS_BADGE: Record<
 export function useMyBauMemberships() {
   const [memberships, setMemberships] = useState<BauMembership[] | null>(null);
   const [failed, setFailed] = useState(false);
+  // Only the newest read may write: an older answer arriving late must not
+  // put back a state the person already moved past.
+  const seq = useRef(0);
   const reload = useCallback(async () => {
+    const mine = ++seq.current;
     try {
       const answer = await fetchMyBauMemberships();
-      setMemberships(answer.memberships);
-      setFailed(false);
+      if (mine === seq.current) {
+        setMemberships(answer.memberships);
+        setFailed(false);
+      }
     } catch {
-      setFailed(true);
+      if (mine === seq.current) {
+        setFailed(true);
+      }
     }
   }, []);
   useEffect(() => {
@@ -138,6 +146,22 @@ export function SubscriptionsSection({
             </Button>
           </div>
         </SettingsGroup>
+      )}
+      {failed && memberships !== null && (
+        <p
+          className="flex flex-wrap items-center gap-2 text-sm text-text-secondary"
+          role="status"
+        >
+          {t("bauPlus.manager.stale")}
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-8"
+            onClick={() => void reload()}
+          >
+            {t("bauPlus.manager.retry")}
+          </Button>
+        </p>
       )}
       {memberships && memberships.length === 0 && (
         <SettingsGroup>
@@ -493,7 +517,8 @@ function ReceiptDialog({
                 <dd
                   className={cn(
                     "min-w-0 break-all text-right text-text",
-                    label === "bauPlus.receipt.reference" && "font-mono text-xs leading-5",
+                    label === "bauPlus.receipt.reference" &&
+                      "font-mono text-xs leading-5",
                   )}
                 >
                   {value}

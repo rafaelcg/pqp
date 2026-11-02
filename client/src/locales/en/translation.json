@@ -3789,6 +3789,7 @@
   "bauPlus.manager.loading": "Loading your memberships",
   "bauPlus.manager.loadFailed": "Couldn't load your memberships.",
   "bauPlus.manager.retry": "Try again",
+  "bauPlus.manager.stale": "Couldn't refresh. What you see here may be out of date.",
   "bauPlus.manager.emptyTitle": "You're not VIP anywhere yet",
   "bauPlus.manager.emptyBody": "When you support a creator in a Baú, the membership shows up here.",
   "bauPlus.manager.plan": "{plan}, {price} per month",

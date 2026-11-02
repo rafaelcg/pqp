@@ -16,20 +16,23 @@ export function useBauOffer(serverId: string | null, enabled = true) {
   const [loaded, setLoaded] = useState(false);
   const current = useRef(serverId);
   current.current = serverId;
+  // Only the newest read may write (a slow answer must not undo a newer one).
+  const seq = useRef(0);
 
   const reload = useCallback(async () => {
     if (!serverId || !enabled) {
       return null;
     }
+    const mine = ++seq.current;
     try {
       const next = await fetchBauOffer(serverId);
-      if (current.current === serverId) {
+      if (current.current === serverId && mine === seq.current) {
         setOffer(next);
         setLoaded(true);
       }
       return next;
     } catch {
-      if (current.current === serverId) {
+      if (current.current === serverId && mine === seq.current) {
         setLoaded(true);
       }
       return null;

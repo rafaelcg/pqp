@@ -18,7 +18,11 @@ export function formatBrl(cents: number, locale: Locale): string {
  * "2 de dezembro" / "December 2". Long, so a sentence never ends in "dez..".
  * The year only when it is not this year.
  */
-export function formatBauDay(iso: string, locale: Locale, now = new Date()): string {
+export function formatBauDay(
+  iso: string,
+  locale: Locale,
+  now = new Date(),
+): string {
   const date = new Date(iso);
   return new Intl.DateTimeFormat(intlLocale(locale), {
     day: "numeric",
