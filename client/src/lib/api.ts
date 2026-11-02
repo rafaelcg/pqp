@@ -2709,9 +2709,17 @@ export const previewInvite = (code: string) =>
 // the same mint / PUT / claim dance as attachments — see `uploadHomeMedia` in
 // `lib/community-home/media.ts` for the sequence in one place.
 
-/** The instance flags. Off is a 200 with `enabled: false`, never a 404. */
-export const fetchCommunityHomeConfig = () =>
-  apiFetch<CommunityHomeConfig>("/api/community-home/config");
+/**
+ * The instance flags. Off is a 200 with `enabled: false`, never a 404.
+ * `vipEnabled` is a per-server flag: with `serverId` it is that server's
+ * answer, without it the global one (what the boot probe asks).
+ */
+export const fetchCommunityHomeConfig = (serverId?: string) =>
+  apiFetch<CommunityHomeConfig>(
+    serverId
+      ? `/api/community-home/config?serverId=${encodeURIComponent(serverId)}`
+      : "/api/community-home/config",
+  );
 
 /** This server's own opt-in (owner-set in Server settings). */
 export const fetchServerCommunityHomeConfig = (serverId: string) =>

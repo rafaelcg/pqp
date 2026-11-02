@@ -26,6 +26,10 @@ import {
 } from "./community-home-captions.js";
 import { storiesMetrics, type StoriesMetrics } from "./story-metrics.js";
 import {
+  creatorHubMetrics,
+  type CreatorHubMetrics,
+} from "./creator-hub-metrics.js";
+import {
   communityColumns,
   communityTag,
   type CommunityColumns,
@@ -373,6 +377,15 @@ export interface AdminMetrics {
    * live bytes and the sweep lag. Live like `communityHomeCaptions`.
    */
   stories: StoriesMetrics;
+  /**
+   * The Baú creator hub (`services/creator-hub-metrics.ts`): servers with Baú
+   * on, posts and their members-only share, VIP holders (total and the top
+   * servers), Seguir follows and their deliveries, and joins in the last 7
+   * days into Baú servers by door and by tagged link, deployment wide and
+   * cached 30 s; plus this process's `ctaViews` / `supportClicks` counters.
+   * Counts only. Live like `stories`.
+   */
+  creatorHub: CreatorHubMetrics;
   /**
    * The start-of-stream notice (`services/stream-alerts.ts`), since this
    * process started: shares that armed a timer, those dropped for the flag, the
@@ -1297,6 +1310,7 @@ type CachedMetrics = Omit<
   | "communityHomeTranslation"
   | "communityHomeCaptions"
   | "stories"
+  | "creatorHub"
   | "streamAlerts"
   | "livePreview"
   | "nudge"
@@ -2095,6 +2109,7 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     communityHomeTranslation,
     communityHomeCaptions,
     stories,
+    creatorHub,
     channelLayout,
     apps,
   ] = await Promise.all([
@@ -2107,6 +2122,7 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     communityHomeTranslationMetrics(),
     communityHomeCaptionsMetrics(),
     storiesMetrics(),
+    creatorHubMetrics(),
     channelLayoutReport(),
     appsMetrics(),
   ]);
@@ -2126,6 +2142,7 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     communityHomeTranslation,
     communityHomeCaptions,
     stories,
+    creatorHub,
     streamAlerts: streamAlertMetrics(),
     livePreview: livePreviewMetrics(),
     nudge: nudgeMetrics(),

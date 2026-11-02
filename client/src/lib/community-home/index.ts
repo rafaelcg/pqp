@@ -12,6 +12,7 @@ export {
 export {
   COMMUNITY_HOME_CONFIG_OFF,
   loadCommunityHomeConfig,
+  loadCommunityHomeVipEnabled,
   resetCommunityHomeConfigProbe,
 } from "./config";
 export {

@@ -30,6 +30,23 @@ export function loadCommunityHomeConfig(): Promise<CommunityHomeConfig> {
   return probe;
 }
 
+/**
+ * Whether the VIP half is on for ONE server (`community_home_vip` is a
+ * per-server runtime flag, so the boot probe above, which names no server,
+ * cannot answer it for a pilot server). Not memoised: the feed asks when it
+ * opens, so the operator's flip is seen on the next open. Off on any failure.
+ */
+export async function loadCommunityHomeVipEnabled(
+  serverId: string,
+): Promise<boolean> {
+  try {
+    const config = await fetchCommunityHomeConfig(serverId);
+    return config.enabled === true && config.vipEnabled === true;
+  } catch {
+    return false;
+  }
+}
+
 /** Tests only: forget the cached answer. */
 export function resetCommunityHomeConfigProbe(): void {
   probe = null;

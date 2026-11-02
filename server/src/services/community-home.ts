@@ -111,10 +111,18 @@ export function isCommunityHomeEnabled(): boolean {
  * into existence, existing ones are hidden from the member feed (staff still
  * see them in drafts), and the client shows no lock, no tier chip and no
  * "preview as" inspector. Requires the main flag; on its own it does nothing.
+ *
+ * Runtime flag `community_home_vip`, PER SERVER (the creator-hub pilot turns
+ * it on for one server at a time); `COMMUNITY_HOME_VIP_ENABLED` is its default
+ * and a global row beats it, so with no per-server override the answer is
+ * what it always was. Every reader says which server it is answering for;
+ * `null` (no server named, e.g. the config probe before a server is chosen)
+ * is the global answer.
  */
-export function isCommunityHomeVipEnabled(): boolean {
-  // Runtime flag `community_home_vip`; `COMMUNITY_HOME_VIP_ENABLED` is its default.
-  return isCommunityHomeEnabled() && isEnabled("community_home_vip");
+export function isCommunityHomeVipEnabled(serverId: string | null): boolean {
+  return (
+    isCommunityHomeEnabled() && isEnabled("community_home_vip", { serverId })
+  );
 }
 
 /**
@@ -759,7 +767,7 @@ export async function listCommunityHomePosts(
   // With VIP off, members-only rows stay out of the feed for everybody,
   // staff included. They are still reachable through the drafts list so an
   // owner can flip them to free rather than lose them.
-  const visibilityFilter = isCommunityHomeVipEnabled()
+  const visibilityFilter = isCommunityHomeVipEnabled(serverId)
     ? ""
     : " AND p.visibility = 'free'";
   const result = await getPool().query<PostRow>(
@@ -854,7 +862,7 @@ export async function countUnreadCommunityHomePosts(
   // Same catch-up as the feed read: a due scheduled post counts toward unread
   // the moment its time passes, so the badge and the feed never disagree.
   await flushDueScheduledPosts(serverId);
-  const visibilityFilter = isCommunityHomeVipEnabled()
+  const visibilityFilter = isCommunityHomeVipEnabled(serverId)
     ? ""
     : " AND p.visibility = 'free'";
   const result = await getPool().query<{ n: string; newest: Date | null }>(
@@ -894,35 +902,45 @@ export async function countUnreadCommunityHomePostsAllServers(
   servers: Record<string, number>;
   newest: Record<string, string>;
 }> {
-  const visibilityFilter = isCommunityHomeVipEnabled()
-    ? ""
-    : " AND p.visibility = 'free'";
+  // The VIP switch is per server, so the SQL cannot filter on it: count free
+  // and members-only separately and drop the members-only half in code for
+  // every server where VIP is off (what the single-server count does in SQL).
   const result = await getPool().query<{
     server_id: string;
+    visibility: CommunityHomeVisibility;
     n: string;
     newest: Date | null;
   }>(
-    `SELECT p.server_id, COUNT(*)::text AS n, MAX(p.published_at) AS newest
+    `SELECT p.server_id, p.visibility, COUNT(*)::text AS n,
+            MAX(p.published_at) AS newest
        FROM server_members sm
        JOIN servers s ON s.id = sm.server_id AND s.community_home_enabled
        JOIN community_home_posts p
          ON p.server_id = sm.server_id
         AND p.status = 'published'
         AND p.author_id <> $1
-        ${visibilityFilter}
        LEFT JOIN community_home_reads r
          ON r.server_id = sm.server_id AND r.user_id = $1
       WHERE sm.user_id = $1
         AND (r.last_seen_at IS NULL OR p.published_at > r.last_seen_at)
-      GROUP BY p.server_id`,
+      GROUP BY p.server_id, p.visibility`,
     [viewerId],
   );
   const servers: Record<string, number> = {};
   const newest: Record<string, string> = {};
   for (const row of result.rows) {
-    servers[row.server_id] = Number(row.n);
+    if (
+      row.visibility === "members" &&
+      !isCommunityHomeVipEnabled(row.server_id)
+    ) {
+      continue;
+    }
+    servers[row.server_id] = (servers[row.server_id] ?? 0) + Number(row.n);
     if (row.newest) {
-      newest[row.server_id] = new Date(row.newest).toISOString();
+      const at = new Date(row.newest).toISOString();
+      if (!newest[row.server_id] || at > newest[row.server_id]!) {
+        newest[row.server_id] = at;
+      }
     }
   }
   return { servers, newest };
@@ -974,7 +992,7 @@ export async function listLatestCommunityHomePosts(
   const caps = await resolveHomeViewerCaps(serverId, viewerId);
   // Same catch-up as the feed and the unread read.
   await flushDueScheduledPosts(serverId);
-  const visibilityFilter = isCommunityHomeVipEnabled()
+  const visibilityFilter = isCommunityHomeVipEnabled(serverId)
     ? ""
     : " AND p.visibility = 'free'";
   type LatestRow = PostRow & {
@@ -1466,11 +1484,14 @@ function assertPublishable(input: {
   }
 }
 
-function assertVisibilityAllowed(visibility: CommunityHomeVisibility): void {
-  if (visibility === "members" && !isCommunityHomeVipEnabled()) {
+function assertVisibilityAllowed(
+  serverId: string,
+  visibility: CommunityHomeVisibility,
+): void {
+  if (visibility === "members" && !isCommunityHomeVipEnabled(serverId)) {
     throw new CommunityHomeError(
       "invalid",
-      "VIP posts are off on this instance",
+      "VIP posts are off on this server",
     );
   }
 }
@@ -1509,7 +1530,7 @@ export async function createCommunityHomePost(
   if (input.mediaUploadId && input.youtubeUrl) {
     throw new CommunityHomeError("invalid", "Pick one media source");
   }
-  assertVisibilityAllowed(input.visibility);
+  assertVisibilityAllowed(serverId, input.visibility);
 
   const status = input.status;
   if (status === "scheduled") {
@@ -1812,7 +1833,7 @@ export async function updateCommunityHomePost(
 
     const visibility = input.visibility ?? row.visibility;
     if (input.visibility !== undefined) {
-      assertVisibilityAllowed(visibility);
+      assertVisibilityAllowed(serverId, visibility);
     }
     const title = input.title !== undefined ? input.title : row.title;
     const body = input.body !== undefined ? (input.body ?? "") : row.body;

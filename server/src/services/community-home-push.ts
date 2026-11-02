@@ -167,7 +167,7 @@ async function announceServerPosts(
     return 0;
   }
   const now = Date.now();
-  const vipOn = isCommunityHomeVipEnabled();
+  const vipOn = isCommunityHomeVipEnabled(serverId);
   const posts = claimed
     .filter(
       (post) =>
