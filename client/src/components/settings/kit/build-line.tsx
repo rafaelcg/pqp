@@ -3,7 +3,11 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
 import { BUILD_ID, BUILD_TIME, DEV_BUILD_ID } from "@/lib/build-info";
-import { isDesktopApp } from "@/lib/desktop";
+import {
+  desktopShellVersion,
+  isDesktopApp,
+  sanitizeShellVersion,
+} from "@/lib/desktop";
 import { useTranslation } from "@/lib/i18n";
 import { SETTINGS_FOCUS } from "@/components/settings/kit/classes";
 import {
@@ -22,7 +26,10 @@ function pad(value: number): string {
 /**
  * Which build this is, in one line a person can paste into a bug report:
  * `pqp web · 2026.10.03 · a1b2c3d`. The shell is "pqp desktop" inside the
- * Electron app. A `vite dev` session (id "dev", time 0) says `pqp web · dev`.
+ * Electron app, and there it also carries the shell's own version, which is
+ * not the web bundle's build: `pqp desktop 0.2.9 · 2026.10.03 · a1b2c3d`. A
+ * shell that does not report a usable version says plain `pqp desktop`. A
+ * `vite dev` session (id "dev", time 0) says `pqp web · dev`.
  *
  * The date is the build's UTC day, so two people on the same deploy read the
  * same line whatever their timezone.
@@ -31,8 +38,20 @@ export function formatBuildLine({
   build = BUILD_ID,
   builtAt = BUILD_TIME,
   desktop = isDesktopApp(),
-}: { build?: string; builtAt?: number; desktop?: boolean } = {}): string {
-  const shell = desktop ? "pqp desktop" : "pqp web";
+  shellVersion = desktop ? desktopShellVersion() : null,
+}: {
+  build?: string;
+  builtAt?: number;
+  desktop?: boolean;
+  /** The shell's version; only read in the desktop app. Defaults to the bridge's. */
+  shellVersion?: string | null;
+} = {}): string {
+  const version = desktop ? sanitizeShellVersion(shellVersion) : null;
+  const shell = desktop
+    ? version
+      ? `pqp desktop ${version}`
+      : "pqp desktop"
+    : "pqp web";
   if (build === DEV_BUILD_ID || !builtAt) {
     return `${shell} · ${DEV_BUILD_ID}`;
   }
