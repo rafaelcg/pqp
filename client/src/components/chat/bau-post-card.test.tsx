@@ -133,7 +133,7 @@ describe("BauPostCardView", () => {
         mediaUrl: "https://i.ytimg.com/vi/x/hqdefault.jpg",
       }),
     );
-    expect(html).toContain("Locked");
+    expect(html).toContain("VIP only");
     expect(html).not.toContain("data-bau-card-play");
     expect(html).not.toContain("<video");
   });

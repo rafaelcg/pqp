@@ -27,3 +27,34 @@ export function onBauPlusUpdate(listener: Listener): () => void {
     listeners.delete(listener);
   };
 }
+
+/**
+ * "Renovar" from somewhere that is not the creator's Baú (Configurações,
+ * Assinaturas): the app opens that server's Baú and the feed opens the pay
+ * sheet. The request waits here until that feed takes it, so the order in which
+ * the two mount does not matter.
+ */
+let pendingPay: string | null = null;
+const payListeners = new Set<(serverId: string) => void>();
+
+export function requestBauPay(serverId: string): void {
+  pendingPay = serverId;
+  for (const listener of [...payListeners]) {
+    listener(serverId);
+  }
+}
+
+export function onBauPayRequest(listener: (serverId: string) => void): () => void {
+  payListeners.add(listener);
+  return () => {
+    payListeners.delete(listener);
+  };
+}
+
+export function takeBauPayRequest(serverId: string): boolean {
+  if (pendingPay === serverId) {
+    pendingPay = null;
+    return true;
+  }
+  return false;
+}

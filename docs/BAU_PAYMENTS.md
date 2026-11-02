@@ -210,6 +210,43 @@ plan (VIP, R$ 9,90) and a sandbox payout account named "Dev User". Turn on
 `community_home`, `community_home_vip` and `bau_payments` (env or the dashboard)
 and the hall sells.
 
+## The fan's screens (web and desktop)
+
+All in `client/src/components/bau-plus/`, strings under `bauPlus.*`. Never on
+the phone apps.
+
+- **The locked post** (`BauPlusPaywall`): when the server's offer is
+  `enabled`, a members-only post shows the creator's teaser, then text that is
+  clearly there and not readable (a stock sentence from the catalogue,
+  blurred; the real body never reaches the client), then one card: "Post
+  exclusivo pra VIP", one sentence, and "Apoiar por R$ X/mês". Never a disabled
+  button: mid-payment it says "Continuar o pagamento", after VIP ran out
+  "Voltar pro VIP". Without an offer the card is the support-link card, as
+  before. A VIP reader gets a small "VIP" chip on members-only posts.
+- **The pay sheet** (`BauPlusPayDialog`), one dialog in three steps: summary
+  (seller, price, the creator's perks, Pix or card when the adapter offers
+  card, the renewal and 7-day lines), pay (amount, the QR drawn from the copia
+  e cola, one copy button, "Esperando o pagamento" with the countdown, three
+  short steps; on a phone the QR is smaller and the copy button leads), and
+  paid (a check that draws itself and one ring, the date VIP lasts until,
+  "Ler o post"). Expired, declined and "Já paguei e não liberou" (a provider
+  re-fetch) live in the pay step. The sandbox shows its three dev buttons
+  there. The sheet flips on `bau-plus-update` and polls every 4 s under it.
+- **The membership strip** at the top of the creator's Baú, only when there is
+  something to do: an open Pix, the renewal reminder (`renewalDue`), grace, a
+  cancelled month still running, a VIP that ended in the last 30 days, and the
+  welcome right after paying.
+- **Configurações, Assinaturas** (`SubscriptionsSection`, shown once the person
+  has a membership): one box per creator with status, the one next step
+  (renew, continue, reactivate, come back), cancel and the 7-day refund (both
+  confirm first), and the receipts (each opens a receipt with seller, item,
+  period, method, provider and the provider's reference). "Renovar" from here
+  opens that creator's Baú with the pay sheet up (`requestBauPay`).
+
+Motion is three moments only (the step settling, the waiting dot, the
+confirmation), all in `index.css` under `bau-*` and off under reduced motion.
+The e2e is `client/e2e/bau-plus-pay.spec.ts`, against the sandbox.
+
 ## Metrics
 
 `creatorHub.payments` on `GET /api/admin/metrics`: `process` counters

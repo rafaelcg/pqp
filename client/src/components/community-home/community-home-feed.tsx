@@ -135,6 +135,13 @@ import { ComposeCover } from "./community-home-compose-cover";
 import { ComposeMobileRendition } from "./community-home-compose-mobile";
 import { UnlockedMedia } from "./community-home-media";
 import { VipUnlockCard } from "./community-home-vip-unlock";
+import { Badge } from "@/components/ui/badge";
+import { BauPlusMembershipStrip } from "@/components/bau-plus/bau-plus-membership-strip";
+import { BauPlusPayDialog } from "@/components/bau-plus/bau-plus-pay-dialog";
+import { BauPlusPaywall } from "@/components/bau-plus/bau-plus-paywall";
+import { onBauPayRequest, onBauPlusUpdate, takeBauPayRequest } from "@/lib/bau-plus/updates";
+import { useBauOffer } from "@/lib/bau-plus/use-bau-offer";
+import { requestSettingsSection } from "@/lib/settings-request";
 import { BauShareButton } from "./community-home-share-public";
 import {
   ComposeTranslationNote,
@@ -828,6 +835,11 @@ type PostCardProps = {
   /** Funnel events for the locked card; see `VipUnlockCard`. */
   onSupportView?: () => void;
   onSupportClick?: () => void;
+  /**
+   * Baú+: what a locked card shows instead of the support-link card when the
+   * server sells VIP in pqp (`BauPlusPaywall`). Absent, the card is as before.
+   */
+  unlock?: ReactNode;
 };
 
 /**
@@ -862,6 +874,7 @@ export function PostCard({
   support = null,
   onSupportView,
   onSupportClick,
+  unlock,
 }: PostCardProps) {
   const { t, locale } = useTranslation();
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -1206,6 +1219,13 @@ export function PostCard({
               {t("communityHome.lockedBadge")}
             </span>
           )}
+          {!locked && post.visibility === "members" && vipEnabled && (
+            // The reader holds VIP (or staff): say so, so a paid post never
+            // looks like any other.
+            <Badge variant="accent" data-home-vip-chip>
+              {t("communityHome.vipChip")}
+            </Badge>
+          )}
           {post.pinned && (
             <span
               className="inline-flex items-center gap-1 rounded bg-signal/15 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-signal"
@@ -1237,12 +1257,16 @@ export function PostCard({
                 <ChannelText text={summary} />
               </p>
             )}
-            <LockedBodyBlur />
-            <VipUnlockCard
-              support={support}
-              onView={onSupportView}
-              onSupportClick={onSupportClick}
-            />
+            {unlock ?? (
+              <>
+                <LockedBodyBlur />
+                <VipUnlockCard
+                  support={support}
+                  onView={onSupportView}
+                  onSupportClick={onSupportClick}
+                />
+              </>
+            )}
           </>
         ) : (
           <>
@@ -2626,6 +2650,14 @@ export function CommunityHomeFeed({
   // nothing is recorded yet.
   const onSupportView = undefined;
   const onSupportClick = undefined;
+  // Baú+: the server sells VIP inside pqp. Web and desktop only (this is the
+  // web client; the phone apps have their own Baú with no price on it).
+  const bau = useBauOffer(serverId, vipEnabled && feedAvailable);
+  const bauOffer = bau.offer;
+  const [payOpen, setPayOpen] = useState(false);
+  const [payPostId, setPayPostId] = useState<string | null>(null);
+  const [bauWelcome, setBauWelcome] = useState(false);
+  const bauSelling = Boolean(bauOffer?.enabled && bauOffer.plan);
   const [identityEditing, setIdentityEditing] = useState(false);
   const [identityDraft, setIdentityDraft] = useState<CommunityIdentityDraft>(
     () => identityDraftFrom(server),
@@ -2689,6 +2721,73 @@ export function CommunityHomeFeed({
       void load(true);
     }
   }, [refreshSignal, load]);
+
+  // A change to the fan's own membership on this server (paid elsewhere,
+  // expired, refunded) can unlock or lock posts: read the feed again.
+  useEffect(
+    () =>
+      onBauPlusUpdate((message) => {
+        if (message.serverId === serverId) {
+          void load(true);
+        }
+      }),
+    [serverId, load],
+  );
+
+  const openBauPay = useCallback((postId: string | null) => {
+    setPayPostId(postId);
+    setPayOpen(true);
+  }, []);
+
+  // "Renovar" from Configurações, Assinaturas lands here with a request.
+  useEffect(() => {
+    if (bauSelling && takeBauPayRequest(serverId)) {
+      openBauPay(null);
+    }
+    return onBauPayRequest((requested) => {
+      if (requested === serverId && bauSelling && takeBauPayRequest(serverId)) {
+        openBauPay(null);
+      }
+    });
+  }, [serverId, bauSelling, openBauPay]);
+
+  const reloadBau = bau.reload;
+  const onBauPaid = useCallback(() => {
+    setBauWelcome(true);
+    void load(true);
+    void reloadBau();
+  }, [load, reloadBau]);
+
+  const closeBauPay = useCallback(() => {
+    setPayOpen(false);
+    const postId = payPostId;
+    if (postId && bauWelcome) {
+      // Back to the post they wanted, now open.
+      window.setTimeout(() => {
+        document
+          .querySelector(`[data-home-post-id="${CSS.escape(postId)}"]`)
+          ?.scrollIntoView({ behavior: "smooth", block: "start" });
+        setHighlightId(postId);
+        window.setTimeout(
+          () => setHighlightId((current) => (current === postId ? null : current)),
+          2400,
+        );
+      }, 60);
+    }
+  }, [payPostId, bauWelcome]);
+
+  function renderUnlock(post: CommunityHomePost): ReactNode {
+    if (!bauSelling || !bauOffer) {
+      return undefined;
+    }
+    return (
+      <BauPlusPaywall
+        offer={bauOffer}
+        serverName={serverName}
+        onStart={() => openBauPay(post.id)}
+      />
+    );
+  }
 
   useEffect(() => {
     if (!notice) {
@@ -3403,6 +3502,34 @@ export function CommunityHomeFeed({
                 />
               )}
 
+              {bauOffer?.membership && (
+                <BauPlusMembershipStrip
+                  offer={bauOffer}
+                  serverName={serverName}
+                  welcome={bauWelcome && !payOpen}
+                  onDismissWelcome={() => setBauWelcome(false)}
+                  onPay={() => openBauPay(null)}
+                  onManage={() => requestSettingsSection("subscriptions")}
+                  onChanged={() => void bau.reload()}
+                />
+              )}
+              {bauOffer && bauSelling && (
+                <BauPlusPayDialog
+                  open={payOpen}
+                  offer={bauOffer}
+                  serverName={serverName}
+                  serverIconUrl={server.iconUrl ?? null}
+                  onClose={closeBauPay}
+                  onPaid={onBauPaid}
+                  onOfferStale={() => void bau.reload()}
+                  primaryAfterPaid={payPostId ? "post" : "feed"}
+                  onOpenMembership={() => {
+                    setPayOpen(false);
+                    requestSettingsSection("subscriptions");
+                  }}
+                />
+              )}
+
               {loadError && (
                 <div className="flex flex-wrap items-center gap-3 rounded-xl border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger">
                   <span className="min-w-0 flex-1">{loadError}</span>
@@ -3522,6 +3649,7 @@ export function CommunityHomeFeed({
                   support={supportLink}
                   onSupportView={onSupportView}
                   onSupportClick={onSupportClick}
+                  unlock={renderUnlock(post)}
                   onPatch={(patch) => patchPost(post.id, patch)}
                   onEdit={canManageServer ? beginEdit : undefined}
                   onDelete={

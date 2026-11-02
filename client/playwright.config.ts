@@ -221,6 +221,12 @@ export default defineConfig({
         // `watch-party-waitlist.spec.ts` would test nothing. The flag-off
         // answers are pinned in `server/src/api/watch-party-waitlist.test.ts`.
         WATCH_PARTY_WAITLIST: "on",
+        // Baú+ (`e2e/bau-plus-pay.spec.ts`): the dev bypass makes the built-in
+        // sandbox the payment provider; it pays only when the spec presses its
+        // button, so nothing races the assertions. The `bau_payments` flag stays
+        // off and the spec turns it on for its own server through the machine
+        // token, the way the dashboard does.
+        BAU_PAYMENTS_SANDBOX_AUTOPAY_SECONDS: "0",
         // The operator dashboard's machine token, so a spec can flip a runtime
         // feature flag (`server/src/lib/flags.ts`) the way the dashboard does
         // and watch an open tab follow it. A throwaway value for this local

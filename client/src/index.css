@@ -5022,3 +5022,111 @@ html[data-immersive-stage] [data-immersive-hide] {
     transition: none;
   }
 }
+
+/*
+ * Baú+ (the fan paying for VIP, components/bau-plus/). Three moments of
+ * motion and nothing else: the step of the pay sheet settling in, a quiet
+ * breathing dot while the bank has not answered, and the confirmation (one
+ * ring that opens and fades, a check that draws itself). All off under
+ * reduced motion, where each state is simply there.
+ */
+@keyframes bau-step-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.bau-step-in {
+  animation: bau-step-in var(--duration-slow) var(--ease-emphasized) backwards;
+  animation-delay: calc(var(--stagger, 0) * 60ms);
+}
+
+@keyframes bau-wait {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.bau-wait-dot {
+  animation: bau-wait 1.6s var(--ease-standard) infinite;
+}
+
+@keyframes bau-ring {
+  from {
+    opacity: 0.55;
+    transform: scale(0.7);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.9);
+  }
+}
+
+@keyframes bau-mark-in {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes bau-check-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.bau-paid-ring {
+  animation: bau-ring 900ms var(--ease-emphasized) 120ms both;
+}
+
+.bau-paid-mark {
+  animation: bau-mark-in 420ms var(--ease-emphasized) both;
+}
+
+.bau-paid-check {
+  stroke-dasharray: 30;
+  stroke-dashoffset: 30;
+  animation: bau-check-draw 380ms var(--ease-emphasized) 220ms forwards;
+}
+
+/*
+ * The locked post's preview: sentence-shaped text the reader cannot read,
+ * fading into the card under it (the real body never reaches the client).
+ */
+.bau-blur-text {
+  filter: blur(5px);
+  user-select: none;
+  -webkit-mask-image: linear-gradient(to bottom, black 20%, transparent 95%);
+  mask-image: linear-gradient(to bottom, black 20%, transparent 95%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bau-step-in,
+  .bau-wait-dot,
+  .bau-paid-ring,
+  .bau-paid-mark {
+    animation: none;
+  }
+  .bau-paid-ring {
+    opacity: 0;
+  }
+  .bau-paid-check {
+    animation: none;
+    stroke-dashoffset: 0;
+  }
+}
