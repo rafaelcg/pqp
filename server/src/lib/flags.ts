@@ -291,6 +291,18 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/community-home/config?serverId= (vipEnabled)",
   },
+  bau_payments: {
+    description:
+      "Baú+: o fã paga o VIP no próprio pqp (Pix). Precisa do Baú e do VIP ligados e de um provedor configurado.",
+    env: "BAU_PAYMENTS",
+    parseEnv: exactTrue,
+    codeDefault: false,
+    // Every reader knows the server: the offer, checkout and the creator's
+    // plan are routes under `/servers/:id`; a charge, a membership and the
+    // sweep's rows each carry their server id.
+    perServer: true,
+    clientVia: "GET /api/servers/:id/bau-plus (enabled)",
+  },
   community_home_translation: {
     description:
       "Tradução automática dos posts do Baú para quem lê em outro idioma.",

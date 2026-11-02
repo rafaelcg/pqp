@@ -123,6 +123,14 @@ decides for every server without an override, so with no row nothing changes.
 Still needs the global `community_home`. Served as `vipEnabled` on
 `GET /api/community-home/config?serverId=`; without `serverId` the answer is the
 global one, which is what phones ask today, see `docs/COMMUNITY_HOME.md`),
+`BAU_PAYMENTS` (`bau_payments`, **per server**, default off: Baú+, a fan pays
+the creator for VIP inside pqp, Pix first; also needs `community_home`,
+`community_home_vip` for that server, an active plan, a connected payout
+account and a provider (`BAU_PAYMENTS_PROVIDER`, which is not a flag: unset is
+the sandbox under the dev bypass and off everywhere else). Off stops NEW
+checkouts only; months already paid keep running and still expire on their
+date. Served as `enabled` on `GET /api/servers/:id/bau-plus`; see
+`docs/BAU_PAYMENTS.md`),
 `PARTY_NEWCOMER_EXPERIENCE` (per server; default off; see below),
 `COMMUNITY_HOME_TRANSLATION` (`community_home_translation`, **per server**,
 default off; automatic translation of Baú posts, which also needs

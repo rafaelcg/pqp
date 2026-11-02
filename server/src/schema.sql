@@ -7345,3 +7345,128 @@ CREATE TABLE IF NOT EXISTS locadora_save_uploads (
 );
 CREATE INDEX IF NOT EXISTS idx_locadora_save_uploads_user ON locadora_save_uploads (user_id);
 CREATE INDEX IF NOT EXISTS idx_locadora_save_uploads_created ON locadora_save_uploads (created_at);
+
+-- ---------------------------------------------------------------- Baú+ payments
+-- A fan pays a creator for the VIP cargo (docs/BAU_PAYMENTS.md). The CREATOR
+-- is the merchant: every charge is made by a payment provider on the creator's
+-- own payout account, and pqp keeps only these records, never the money. All
+-- empty unless the `bau_payments` runtime flag is on for a server and a
+-- provider is configured; a self-host with payments off never writes a row.
+
+-- The one plan a server sells (one active plan per server for now).
+CREATE TABLE IF NOT EXISTS bau_plans (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  name TEXT NOT NULL CHECK (char_length(name) BETWEEN 1 AND 40),
+  price_cents INT NOT NULL CHECK (price_cents BETWEEN 500 AND 20000),
+  currency TEXT NOT NULL DEFAULT 'BRL' CHECK (currency = 'BRL'),
+  perks JSONB NOT NULL DEFAULT '[]'::jsonb,
+  active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_bau_plans_one_active
+  ON bau_plans (server_id) WHERE active;
+
+-- Where a server's money goes: the creator's account at the provider. The
+-- connect flow is a later slice; `account_ref` is the provider's id for it
+-- (never a secret: keys, when a provider needs one, live elsewhere encrypted).
+CREATE TABLE IF NOT EXISTS bau_payout_accounts (
+  server_id UUID PRIMARY KEY REFERENCES servers(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  account_ref TEXT NOT NULL,
+  seller_name TEXT NOT NULL CHECK (char_length(seller_name) BETWEEN 1 AND 80),
+  status TEXT NOT NULL DEFAULT 'connected' CHECK (status IN ('connected', 'disabled')),
+  connected_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- One row per fan per server, reused across months and re-subscriptions.
+-- `vip_owned` is the SOURCE marker: TRUE only when this membership put the
+-- VIP row in `member_roles`, so a revoke never removes a VIP staff gave by
+-- hand, and a lapsed paid VIP never survives. `vip_granted_at` against
+-- `server_members.joined_at` is how a rejoin (kick, leave: the FK cascade
+-- drops the role) is told apart from staff taking the cargo away on purpose.
+CREATE TABLE IF NOT EXISTS bau_memberships (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  plan_id UUID NOT NULL REFERENCES bau_plans(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'active', 'grace', 'expired', 'cancelled', 'refunded')),
+  period_start TIMESTAMPTZ,
+  period_end TIMESTAMPTZ,
+  first_paid_at TIMESTAMPTZ,
+  last_paid_at TIMESTAMPTZ,
+  cancelled_at TIMESTAMPTZ,
+  refunded_at TIMESTAMPTZ,
+  expired_at TIMESTAMPTZ,
+  -- The `period_end` the renewal reminder was sent for: one per month.
+  reminded_for TIMESTAMPTZ,
+  vip_owned BOOLEAN NOT NULL DEFAULT FALSE,
+  vip_granted_at TIMESTAMPTZ,
+  vip_revoked_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (server_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_bau_memberships_user ON bau_memberships (user_id);
+CREATE INDEX IF NOT EXISTS idx_bau_memberships_due
+  ON bau_memberships (period_end) WHERE status IN ('active', 'grace', 'cancelled');
+CREATE INDEX IF NOT EXISTS idx_bau_memberships_vip_owned
+  ON bau_memberships (server_id) WHERE vip_owned;
+
+-- One charge. `provider_ref` is the provider's id, unique per provider, which
+-- is what a webhook names. Seller and provider label are copied in at
+-- creation so a receipt still says who sold it after an account changes.
+CREATE TABLE IF NOT EXISTS bau_payment_attempts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  membership_id UUID NOT NULL REFERENCES bau_memberships(id) ON DELETE CASCADE,
+  server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  plan_id UUID NOT NULL REFERENCES bau_plans(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  -- The payout account the charge was made on, so a re-fetch still reaches
+  -- it after the creator connects a different one.
+  account_ref TEXT NOT NULL,
+  provider_ref TEXT,
+  method TEXT NOT NULL CHECK (method IN ('pix', 'card')),
+  kind TEXT NOT NULL CHECK (kind IN ('first', 'renewal')),
+  amount_cents INT NOT NULL CHECK (amount_cents > 0),
+  currency TEXT NOT NULL DEFAULT 'BRL',
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'paid', 'expired', 'failed', 'cancelled', 'refunded')),
+  failure_reason TEXT,
+  pix_code TEXT,
+  redirect_url TEXT,
+  seller_name TEXT NOT NULL,
+  provider_label TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  paid_at TIMESTAMPTZ,
+  refunded_at TIMESTAMPTZ,
+  period_start TIMESTAMPTZ,
+  period_end TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_bau_payment_attempts_ref
+  ON bau_payment_attempts (provider, provider_ref) WHERE provider_ref IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_bau_payment_attempts_membership
+  ON bau_payment_attempts (membership_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_bau_payment_attempts_pending
+  ON bau_payment_attempts (expires_at) WHERE status = 'pending';
+
+-- Every provider notification, once. The primary key is the idempotency: a
+-- webhook delivered twice finds its row and does nothing the second time.
+CREATE TABLE IF NOT EXISTS bau_payment_events (
+  provider TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  type TEXT NOT NULL,
+  provider_ref TEXT,
+  received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  processed_at TIMESTAMPTZ,
+  error TEXT,
+  PRIMARY KEY (provider, event_id)
+);
+CREATE INDEX IF NOT EXISTS idx_bau_payment_events_received ON bau_payment_events (received_at);

@@ -125,8 +125,10 @@ supporter-only posts; it does not mention VIP voice or watch-party rooms,
 because a person who cannot see those rooms is told nothing about them), then
 shows "Apoiar" when the server has a **support link**, then says to ask whoever
 runs the server for the VIP cargo, which staff grant by hand. No support link
-and the button is simply absent. There is no checkout, Gift, Buy post, or price.
-See [`BAU_VIP_STRATEGY.md`](./BAU_VIP_STRATEGY.md).
+and the button is simply absent. There is no checkout, Gift, Buy post, or price on this path.
+See [`BAU_VIP_STRATEGY.md`](./BAU_VIP_STRATEGY.md). **Baú+**, the native path
+where the fan pays inside pqp and the VIP cargo arrives on its own, is behind
+the per-server `bau_payments` flag: [`BAU_PAYMENTS.md`](./BAU_PAYMENTS.md).
 
 The support link is an official-link kind, `support`, and the one kind that is
 never derived from a host: it has its own box ("Apoiar o criador") in both

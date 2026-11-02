@@ -376,6 +376,10 @@ import {
   resetLivePreviewRateLimits,
 } from "./live-preview-routes.js";
 import { registerAppRoutes } from "./app-routes.js";
+import {
+  handleBauPaymentsWebhook,
+  registerBauPaymentsRoutes,
+} from "./bau-payments-routes.js";
 import { endSessionsOfChannel } from "../apps/sweeps.js";
 import { publicAppsConfig } from "../apps/public-config.js";
 import { registerAppOwnerRoutes } from "./app-owner-routes.js";
@@ -1717,6 +1721,7 @@ const router = createRouter();
 
 // The apps platform's routes (`app-routes.ts`), behind the `apps` flag.
 registerAppRoutes(router);
+registerBauPaymentsRoutes(router);
 // The owner's switches for the apps the operator released (`app-owner-routes.ts`).
 registerAppOwnerRoutes(router);
 
@@ -15324,6 +15329,12 @@ export async function handleApi(
   // The signed-out live preview's listing and start routes. Not matched at
   // all while `live_preview` is off everywhere (see `live-preview-routes.ts`).
   if (await handleLivePreviewRoute(req, res, pathname)) {
+    return;
+  }
+
+  // Baú+ payment provider notifications: no session, the adapter's
+  // signature check is the door (see `bau-payments-routes.ts`).
+  if (await handleBauPaymentsWebhook(req, res, pathname)) {
     return;
   }
 

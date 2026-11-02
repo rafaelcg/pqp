@@ -426,12 +426,15 @@ describeDb("GET /api/admin/metrics", () => {
       creatorHub: {
         process: { ctaViews: number; supportClicks: number };
         db: { servers: { bauOn: number }; vip: { holders: number } } | null;
+        payments: { process: { paid: number }; db: { plansActive: number } | null };
       };
     }>(operator, "/api/admin/metrics");
     expect(result.status).toBe(200);
     expect(result.body.creatorHub.process).toEqual({ ctaViews: 1, supportClicks: 0 });
     expect(result.body.creatorHub.db?.servers.bauOn).toBe(0);
     expect(result.body.creatorHub.db?.vip.holders).toBeGreaterThanOrEqual(0);
+    expect(result.body.creatorHub.payments.process.paid).toBe(0);
+    expect(result.body.creatorHub.payments.db?.plansActive).toBe(0);
     resetCreatorHubStatsForTests();
   });
 
