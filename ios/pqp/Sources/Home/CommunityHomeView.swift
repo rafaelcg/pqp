@@ -463,9 +463,11 @@ private struct Chip: View {
 
 /// What a member without the cargo sees instead of the body.
 ///
-/// The button is disabled and says so. There is no checkout on any client,
-/// and a button that opened nothing would be worse than one that admits it is
-/// not ready.
+/// A plain card, not a button: it says what VIP gets and how to get it, and
+/// nothing on it is tappable. Deliberately no purchase link, price or outbound
+/// payment button. Phones stay link-free until Apple's 3.1.1 (unlocking in-app
+/// content through an outside payment) is checked for Brazil. VoiceOver reads
+/// it as one element.
 private struct LockedBox: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -477,13 +479,12 @@ private struct LockedBox: View {
                     .font(Typography.bodyMedium)
                     .foregroundStyle(Palette.paper)
             }
-            Text("The full post is for members with the VIP cargo.")
+            Text("VIP unlocks members-only posts, and VIP rooms on servers that have them.")
                 .font(Typography.callout)
                 .foregroundStyle(Palette.paperMuted)
-            Button("VIP, coming soon") {}
-                .buttonStyle(SecondaryButtonStyle())
-                .disabled(true)
-                .padding(.top, 4)
+            Text("Support the creator and ask whoever runs the server for the VIP cargo.")
+                .font(Typography.callout)
+                .foregroundStyle(Palette.paperMuted)
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -491,6 +492,7 @@ private struct LockedBox: View {
             RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous)
                 .fill(Palette.surfaceRaised)
         )
+        .accessibilityElement(children: .combine)
         .accessibilityIdentifier("bau.locked")
     }
 }
