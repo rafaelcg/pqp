@@ -76,6 +76,34 @@ export function isCommunitySupportHost(hostname: string): boolean {
 }
 
 /**
+ * A host on the list is not a destination on the list: YouTube's
+ * `/redirect?q=https://elsewhere` and `/attribution_link?u=...` bounce to any
+ * address. Refused outright, and so is any link that carries another URL in its
+ * query or fragment, which is what every open redirect needs. A payment page
+ * has no reason to.
+ */
+function isOpenRedirect(url: URL): boolean {
+  if (/^\/(redirect|attribution_link)(\/|$)/i.test(url.pathname)) {
+    return true;
+  }
+  const carriesUrl = (value: string): boolean => {
+    let decoded = value;
+    try {
+      decoded = decodeURIComponent(value);
+    } catch {
+      // Malformed escapes: judge the raw text.
+    }
+    return /(^|[^a-z0-9])(https?:)?\/\/|:\/\/|^https?%3a/i.test(decoded);
+  };
+  for (const value of url.searchParams.values()) {
+    if (carriesUrl(value)) {
+      return true;
+    }
+  }
+  return carriesUrl(url.hash.slice(1));
+}
+
+/**
  * An https URL on the allowlist, normalised by `URL`, or null. No credentials,
  * no other scheme, no look-alike host.
  */
@@ -92,7 +120,13 @@ export function parseCommunitySupportUrl(raw: string): string | null {
     if (!isCommunitySupportHost(url.hostname)) {
       return null;
     }
-    return url.toString();
+    if (isOpenRedirect(url)) {
+      return null;
+    }
+    // `URL` may lengthen what was typed (percent-encoding): the stored form is
+    // what the column and the schema cap.
+    const normalised = url.toString();
+    return normalised.length > SUPPORT_URL_MAX_LENGTH ? null : normalised;
   } catch {
     return null;
   }

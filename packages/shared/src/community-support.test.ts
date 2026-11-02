@@ -96,6 +96,22 @@ describe("parseCommunitySupportUrl", () => {
     );
   });
 
+  it("refuses open redirects on an allowed host and a URL that grows past the cap", () => {
+    for (const raw of [
+      "https://www.youtube.com/redirect?q=https%3A%2F%2Fattacker.example",
+      "https://youtube.com/attribution_link?u=/x",
+      "https://livepix.gg/rafa?next=https://attacker.example",
+      "https://livepix.gg/rafa?next=//attacker.example",
+      "https://livepix.gg/rafa#https://attacker.example",
+    ]) {
+      expect(parseCommunitySupportUrl(raw)).toBeNull();
+    }
+    // Ordinary query strings stay fine.
+    expect(parseCommunitySupportUrl("https://youtube.com/@rafa/join?x=1")).not.toBeNull();
+    // 100 accented letters are 100 characters typed and 600 once percent-encoded.
+    expect(parseCommunitySupportUrl(`https://livepix.gg/${"é".repeat(100)}`)).toBeNull();
+  });
+
   it("refuses http, credentials, other schemes and unlisted hosts", () => {
     expect(parseCommunitySupportUrl("http://livepix.gg/rafa")).toBeNull();
     expect(parseCommunitySupportUrl("https://u:p@livepix.gg/rafa")).toBeNull();
