@@ -20,6 +20,11 @@ struct CurrentUser: Codable, Identifiable, Hashable, Sendable {
     /// matching the web client; a gate the server does not enforce must not be
     /// invented client-side, because its `POST /api/me/age-check` would 404.
     var ageGate: String?
+    /// Whether the age gate says the date back in words before sending it (the
+    /// `age_gate_readback` kill switch). The server sends it only while
+    /// `ageGate` is `"pending"`, the one moment a client can use it. Absent
+    /// reads as off, like the web: see `AgeGate.readbackEnabled`.
+    var ageGateReadback: Bool?
     /// The account's public handle — `pqp.gg/@rafa` — or nil when it has never
     /// claimed one, which is most accounts.
     ///

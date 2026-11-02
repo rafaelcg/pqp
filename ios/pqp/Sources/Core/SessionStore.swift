@@ -170,6 +170,11 @@ final class SessionStore {
     /// what marks a brand-new account (see `Onboarding.shouldRun`).
     private var answeredAgeGateThisLaunch = false
 
+    /// Whether the age gate says the date back before sending it, from the
+    /// `/api/me` that sent the phase there (`age_gate_readback`). Off until a
+    /// pending account is routed: see `AgeGate.readbackEnabled`.
+    private(set) var ageGateReadback = false
+
     /// The account's settings, as the server last stated them.
     ///
     /// COMPUTED off `currentUser` rather than stored beside it, so there is
@@ -414,6 +419,10 @@ final class SessionStore {
         storyPosts.restore(userId: user.id)
         switch user.ageGate {
         case "pending":
+            // Read from the same `/api/me` that said pending, and never
+            // cleared: the gate keeps its screen through the hand-off that
+            // follows a pass, like the web.
+            ageGateReadback = AgeGate.readbackEnabled(user.ageGateReadback)
             // The gate is screen one of the wizard: it draws the same dots, so
             // the walk starts here rather than after it.
             if firstRun == nil {
@@ -449,37 +458,38 @@ final class SessionStore {
     }
 
     /// The one-shot declaration. `POST /api/me/age-check` answers **200 for
-    /// both outcomes** — refusal is a routing decision, not an HTTP error.
-    /// Returns an error sentence to show inline, or nil when routed onward.
-    func submitAgeDeclaration(dateOfBirth: String) async -> String? {
-        struct Body: Encodable { let dateOfBirth: String }
-        struct Response: Decodable { let ageGate: String }
+    /// both outcomes**: a verdict is a routing decision, not an HTTP error.
+    /// Returns nil when routed onward, or what the gate has to do about a
+    /// refusal that is not a verdict (`AgeGate.Failure`).
+    ///
+    /// A 400 is never the blocked state: it is a date to fix (the plausibility
+    /// floor included) and the server keeps the attempt. A 409 means another
+    /// device already answered: the server's record wins, so `/api/me` is
+    /// re-read and routed, and the gate lets go of its fields.
+    func submitAgeDeclaration(dateOfBirth: String) async -> AgeGate.Failure? {
+        let answer: AgeGate.Answer
         do {
-            let response: Response = try await api.post(
-                "/api/me/age-check", body: Body(dateOfBirth: dateOfBirth)
-            )
-            if response.ageGate == "passed" {
-                answeredAgeGateThisLaunch = true
-                await refreshCurrentUser()
-                await becomeReady()
-            } else {
-                phase = .blocked
-            }
-            return nil
-        } catch let apiError as APIError {
-            if case .server(let status, _) = apiError, status == 409 {
-                // Already answered — this screen is stale (another device got
-                // there first). The server's record wins; re-read and route.
-                if let user = try? await api.currentUser() {
-                    await route(user)
-                    return nil
-                }
-            }
-            // A 400 is "that date does not exist" and does not consume the
-            // attempt; the server's own sentence is the clearest thing to show.
-            return apiError.errorDescription
+            answer = try await api.submitAgeCheck(dateOfBirth: dateOfBirth)
         } catch {
-            return error.localizedDescription
+            return .save
+        }
+        switch answer {
+        case .verdict("passed"):
+            answeredAgeGateThisLaunch = true
+            await refreshCurrentUser()
+            await becomeReady()
+            return nil
+        case .verdict:
+            phase = .blocked
+            return nil
+        case .failure(.stale):
+            if let user = try? await api.currentUser() {
+                await route(user)
+                return nil
+            }
+            return .save
+        case .failure(let failure):
+            return failure
         }
     }
 
