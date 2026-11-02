@@ -508,6 +508,25 @@ export function desktopShareCapabilities(): DesktopShareCapabilities | null {
   return getDesktop()?.capabilities ?? null;
 }
 
+const SHELL_VERSION_PATTERN = /^\d+\.\d+\.\d+([-+][\w.]+)?$/;
+
+/**
+ * The Electron shell's own version (`0.2.9`), which is not the web bundle's
+ * build id. Null in a browser, in a shell that predates
+ * `capabilities.version`, and for anything not shaped like a semver: the value
+ * comes from a launch argument and ends up in a line people paste to support.
+ */
+export function desktopShellVersion(): string | null {
+  return sanitizeShellVersion(getDesktop()?.capabilities?.version);
+}
+
+/** The version if it is shaped like a semver, otherwise null. */
+export function sanitizeShellVersion(version: unknown): string | null {
+  return typeof version === "string" && SHELL_VERSION_PATTERN.test(version)
+    ? version
+    : null;
+}
+
 /**
  * Normalize a deep-link payload to an `/app` path.
  * Accepts either a mapped path (`/app/...`) or a raw `pqp://` URL.
