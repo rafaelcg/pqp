@@ -127,8 +127,9 @@ no email service. A recurring provider (Pix Automático, a card subscription)
 replaces the reminder later by sending `paid` before `periodEnd`; the states do
 not change.
 
-**7-day refund** (CDC art. 49): the FIRST payment of a membership, within
-`BAU_REFUND_WINDOW_DAYS` (7) of it, one tap, no creator approval. The provider
+**7-day refund** (CDC art. 49): the FIRST payment a membership ever settled,
+within `BAU_REFUND_WINDOW_DAYS` (7) of it, one tap, no creator approval. A
+payment after an earlier one was refunded or ran out does not reopen it. The provider
 refunds from the creator's balance; when it cannot, the fan gets an error and
 nothing changes (pqp never tops a refund up). A renewal is not refundable from
 the app.
