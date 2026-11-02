@@ -297,11 +297,16 @@ async function attemptsFor(membershipIds: string[]): Promise<Map<string, Attempt
   if (membershipIds.length === 0) {
     return byMembership;
   }
+  // The newest 30 per membership: enough for the screen (24 receipts and any
+  // open code), and the pay sheet's poll never drags a long history along.
   const result = await getPool().query<AttemptRow>(
-    `SELECT * FROM bau_payment_attempts
-      WHERE membership_id = ANY($1::uuid[])
-      ORDER BY created_at DESC
-      LIMIT 500`,
+    `SELECT * FROM (
+       SELECT a.*, ROW_NUMBER() OVER (PARTITION BY a.membership_id ORDER BY a.created_at DESC) AS rn
+         FROM bau_payment_attempts a
+        WHERE a.membership_id = ANY($1::uuid[])
+     ) ranked
+     WHERE rn <= 30
+     ORDER BY created_at DESC`,
     [membershipIds],
   );
   for (const row of result.rows) {
@@ -443,6 +448,72 @@ async function attemptWithMembership(
   return { attempt: toAttempt(row), membership };
 }
 
+async function reserveAttempt(
+  membershipId: string,
+  input: {
+    serverId: string;
+    userId: string;
+    method: BauPaymentMethod;
+    kind: BauAttemptKind;
+    expiresAt: Date;
+    sale: Sellable;
+  },
+): Promise<{ row: AttemptRow; reused: boolean }> {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(`SELECT 1 FROM bau_memberships WHERE id = $1 FOR UPDATE`, [membershipId]);
+    const pending = await client.query<AttemptRow>(
+      `SELECT * FROM bau_payment_attempts
+        WHERE membership_id = $1 AND status = 'pending' AND method = $2
+          AND expires_at > NOW() + ($3::int * INTERVAL '1 millisecond')
+        ORDER BY created_at DESC LIMIT 1`,
+      [membershipId, input.method, REUSE_MARGIN_MS],
+    );
+    const open = pending.rows[0];
+    if (open && open.amount_cents === input.sale.plan.price_cents) {
+      await client.query("COMMIT");
+      return { row: open, reused: true };
+    }
+    const recent = await client.query<{ n: string }>(
+      `SELECT COUNT(*)::text AS n FROM bau_payment_attempts
+        WHERE membership_id = $1 AND created_at > NOW() - INTERVAL '1 hour'`,
+      [membershipId],
+    );
+    if (Number(recent.rows[0]?.n ?? 0) >= ATTEMPTS_PER_HOUR) {
+      throw new HttpError(429, "too_many_attempts");
+    }
+    const created = await client.query<AttemptRow>(
+      `INSERT INTO bau_payment_attempts
+         (membership_id, server_id, user_id, plan_id, provider, account_ref, method, kind,
+          amount_cents, seller_name, provider_label, expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+       RETURNING *`,
+      [
+        membershipId,
+        input.serverId,
+        input.userId,
+        input.sale.plan.id,
+        input.sale.provider.id,
+        input.sale.payout.account_ref,
+        input.method,
+        input.kind,
+        input.sale.plan.price_cents,
+        input.sale.payout.seller_name,
+        input.sale.provider.label,
+        input.expiresAt,
+      ],
+    );
+    await client.query("COMMIT");
+    return { row: created.rows[0]!, reused: false };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 /**
  * Start (or resume) paying for the server's plan. Hands back a pending charge
  * that is still good rather than making a second one, so a double tap, a
@@ -480,51 +551,25 @@ export async function startBauCheckout(
     throw new HttpError(409, "already_member");
   }
 
-  const pending = await getPool().query<AttemptRow>(
-    `SELECT * FROM bau_payment_attempts
-      WHERE membership_id = $1 AND status = 'pending' AND method = $2
-        AND expires_at > NOW() + ($3::int * INTERVAL '1 millisecond')
-      ORDER BY created_at DESC LIMIT 1`,
-    [membership.id, body.method, REUSE_MARGIN_MS],
-  );
-  if (pending.rows[0] && pending.rows[0].amount_cents === sale.plan.price_cents) {
-    countBauPayments("checkoutsReused");
-    return attemptWithMembership(pending.rows[0].id);
-  }
-
-  const recent = await getPool().query<{ n: string }>(
-    `SELECT COUNT(*)::text AS n FROM bau_payment_attempts
-      WHERE membership_id = $1 AND created_at > NOW() - INTERVAL '1 hour'`,
-    [membership.id],
-  );
-  if (Number(recent.rows[0]?.n ?? 0) >= ATTEMPTS_PER_HOUR) {
-    throw new HttpError(429, "too_many_attempts");
-  }
-
+  // One checkout at a time per membership: the "is there a good open code"
+  // question and the insert of a new one run under a transaction lock, so two
+  // taps or two tabs at the same instant get the same code instead of two
+  // payable charges.
   const kind: BauAttemptKind = access ? "renewal" : "first";
   const expiresAt = new Date(now.getTime() + (body.method === "pix" ? pixTtlMs() : CARD_TTL_MS));
-  const created = await getPool().query<AttemptRow>(
-    `INSERT INTO bau_payment_attempts
-       (membership_id, server_id, user_id, plan_id, provider, account_ref, method, kind,
-        amount_cents, seller_name, provider_label, expires_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-     RETURNING *`,
-    [
-      membership.id,
-      serverId,
-      userId,
-      sale.plan.id,
-      sale.provider.id,
-      sale.payout.account_ref,
-      body.method,
-      kind,
-      sale.plan.price_cents,
-      sale.payout.seller_name,
-      sale.provider.label,
-      expiresAt,
-    ],
-  );
-  const attempt = created.rows[0]!;
+  const reserved = await reserveAttempt(membership.id, {
+    serverId,
+    userId,
+    method: body.method,
+    kind,
+    expiresAt,
+    sale,
+  });
+  if (reserved.reused) {
+    countBauPayments("checkoutsReused");
+    return attemptWithMembership(reserved.row.id, reserved.row);
+  }
+  const attempt = reserved.row;
   const serverName = await getPool().query<{ name: string }>(
     `SELECT name FROM servers WHERE id = $1`,
     [serverId],
@@ -1066,7 +1111,11 @@ export async function cancelBauMembership(membershipId: string, userId: string):
     [row.id],
   );
   for (const attempt of pending.rows) {
-    await cancelPendingAttemptRow(attempt);
+    // A code the provider will not cancel could still be paid, and paying it
+    // would bring the membership back: say so rather than report a cancel.
+    if (!(await cancelPendingAttemptRow(attempt))) {
+      throw new HttpError(502, "cancel_failed");
+    }
   }
   if (row.status === "active" || row.status === "grace") {
     const updated = await getPool().query<MembershipRow>(
@@ -1080,6 +1129,8 @@ export async function cancelBauMembership(membershipId: string, userId: string):
     if (updated.rows[0]) {
       countBauPayments("cancels");
       await auditBauMembership(row, "bau_plus.cancel", [{ key: "status", old: row.status, new: "cancelled" }], userId);
+      // A no-op while the paid month runs (the revoke re-checks access); it
+      // takes the cargo only for a cancel in grace, where nothing was paid.
       await revokeVipForMembership(row.id);
       notifyBauPlusUpdate(userId, {
         serverId: row.server_id,

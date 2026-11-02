@@ -580,6 +580,36 @@ describeDb("Baú+ payments", () => {
     expect(await refOf(pix.body.attempt.id)).toBe(ref);
   });
 
+  it("two checkouts at the same instant get one code", async () => {
+    planId = await createPlan();
+    await turnOn(serverId);
+    const [a, b] = await Promise.all([checkout(), checkout()]);
+    expect(a.status).toBe(200);
+    expect(b.status).toBe(200);
+    expect(a.body.attempt.id).toBe(b.body.attempt.id);
+    const rows = await getPool().query(`SELECT 1 FROM bau_payment_attempts WHERE user_id = $1`, [fan.id]);
+    expect(rows.rowCount).toBe(1);
+  });
+
+  it("a VIP staff took away and gave back by hand survives the payment ending", async () => {
+    planId = await createPlan();
+    await turnOn(serverId);
+    const paid = await pay((await checkout()).body.attempt.id);
+    const role = await getPool().query<{ id: string }>(
+      `SELECT id FROM roles WHERE server_id = $1 AND system_key = 'vip'`,
+      [serverId],
+    );
+    const path = `/api/servers/${serverId}/members/${fan.id}/roles/${role.rows[0]!.id}`;
+    expect((await call(owner, "DELETE", path)).status).toBe(200);
+    expect((await call(owner, "PUT", path)).status).toBe(200);
+    await getPool().query(
+      `UPDATE bau_memberships SET status = 'expired', period_end = NOW() - INTERVAL '10 days' WHERE id = $1`,
+      [paid.membership.id],
+    );
+    await sweepBauPayments();
+    expect(await holdsVip(fan.id)).toBe(true);
+  });
+
   it("a new price is a new plan; the old checkout is refused as changed", async () => {
     planId = await createPlan();
     await turnOn(serverId);

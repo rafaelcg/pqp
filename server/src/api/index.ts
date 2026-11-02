@@ -380,6 +380,7 @@ import {
   handleBauPaymentsWebhook,
   registerBauPaymentsRoutes,
 } from "./bau-payments-routes.js";
+import { noteStaffVipChange } from "../services/bau-payments/vip.js";
 import { endSessionsOfChannel } from "../apps/sweeps.js";
 import { publicAppsConfig } from "../apps/public-config.js";
 import { registerAppOwnerRoutes } from "./app-owner-routes.js";
@@ -11729,6 +11730,9 @@ router.put(
     }
     await requireOutranked(serverId!, user.id, userId!, "kick");
     await assignRole(serverId!, userId!, roleId!);
+    if (role.system_key === "vip") {
+      await noteStaffVipChange(serverId!, userId!);
+    }
     await logAudit({
       serverId: serverId!,
       actorId: user.id,
@@ -11755,6 +11759,9 @@ router.delete(
     }
     await requireOutranked(serverId!, user.id, userId!, "kick");
     await unassignRole(serverId!, userId!, roleId!);
+    if (role.system_key === "vip") {
+      await noteStaffVipChange(serverId!, userId!);
+    }
     const revoked = new Set(
       await listRevokedPrivateChannelIds(serverId!, userId!),
     );

@@ -27,10 +27,32 @@ async function afterRoleChange(serverId: string): Promise<void> {
   invalidateServerAudience(serverId);
   // Bumps `permissions_version` and tells every member's sockets, on every
   // instance; the fan's client refetches what it may see, so a VIP post and a
-  // VIP room open without a reload.
-  await notifyPermissionsUpdate(serverId).catch((error) => {
-    console.error("[bau-payments] permissions-update failed:", error);
-  });
+  // VIP room open without a reload. One retry: past that the role row is
+  // already right, and the client re-reads permissions on reconnect and focus.
+  for (let tries = 0; tries < 2; tries += 1) {
+    try {
+      await notifyPermissionsUpdate(serverId);
+      return;
+    } catch (error) {
+      console.error("[bau-payments] permissions-update failed:", error);
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+    }
+  }
+}
+
+/**
+ * Staff gave or took the VIP cargo by hand (the member roles routes). From
+ * then on it is theirs: the payment no longer owns the row, so an expiry never
+ * removes a VIP staff re-added, and a VIP staff took away is not given back by
+ * the rejoin pass (the grant is not older than the join).
+ */
+export async function noteStaffVipChange(serverId: string, userId: string): Promise<void> {
+  await getPool().query(
+    `UPDATE bau_memberships
+        SET vip_owned = FALSE, vip_granted_at = NOW(), updated_at = NOW()
+      WHERE server_id = $1 AND user_id = $2`,
+    [serverId, userId],
+  );
 }
 
 /**
