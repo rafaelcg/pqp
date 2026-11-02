@@ -127,6 +127,7 @@ export function BauPlusPayDialog({
   useEffect(() => {
     if (open && !wasOpen.current) {
       paidRef.current = false;
+      shownRef.current = offer.membership?.pendingAttempt ?? null;
       setError(null);
       setBusy(false);
       setMethod(methods[0] ?? "pix");
@@ -142,6 +143,7 @@ export function BauPlusPayDialog({
   // Once paid, the sheet stays paid: a poll that left before the frame and
   // answers after it ("still pending") must not take the confirmation away.
   const paidRef = useRef(false);
+  const shownRef = useRef<BauPaymentAttempt | null>(null);
   const settle = useCallback(
     (attempt: BauPaymentAttempt, membership: BauMembership) => {
       if (attempt.status === "paid") {
@@ -151,6 +153,19 @@ export function BauPlusPayDialog({
           onPaid(membership);
         }
       } else if (!paidRef.current) {
+        // Statuses only move forward: a poll that left while the code was
+        // open must not bring back a code the provider already declined or
+        // let expire.
+        const shown = shownRef.current;
+        if (
+          shown &&
+          shown.id === attempt.id &&
+          shown.status !== "pending" &&
+          attempt.status === "pending"
+        ) {
+          return;
+        }
+        shownRef.current = attempt;
         setStep({ kind: "pay", attempt });
       }
     },
@@ -443,15 +458,19 @@ function PayStep({
   const declined = attempt.status === "failed";
   const [checking, setChecking] = useState(false);
   const [checkedLate, setCheckedLate] = useState(false);
+  const [checkFailed, setCheckFailed] = useState(false);
 
   async function checkAgain() {
     setChecking(true);
+    setCheckFailed(false);
     try {
       const answer = await fetchBauAttempt(attempt.id, true);
       onSettle(answer.attempt, answer.membership);
       setCheckedLate(answer.attempt.status !== "paid");
     } catch {
-      setCheckedLate(true);
+      // Could not ask: not the same as "the bank has not confirmed".
+      setCheckedLate(false);
+      setCheckFailed(true);
     } finally {
       setChecking(false);
     }
@@ -554,6 +573,9 @@ function PayStep({
                 >
                   {t("bauPlus.pix.lateNote")}
                 </p>
+              )}
+              {checkFailed && (
+                <ErrorLine message={t("bauPlus.pix.checkFailed")} />
               )}
             </>
           )}

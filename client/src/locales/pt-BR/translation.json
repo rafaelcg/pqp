@@ -3728,6 +3728,7 @@
   "bauPlus.pix.paidAlready": "Já paguei e não liberou",
   "bauPlus.pix.checking": "Conferindo...",
   "bauPlus.pix.lateNote": "O banco ainda não confirmou. Se tu pagou, o VIP libera sozinho assim que chegar, mesmo com o código vencido.",
+  "bauPlus.pix.checkFailed": "Não deu pra conferir agora. Confere a internet e tenta de novo.",
   "bauPlus.pix.back": "Voltar",
   "bauPlus.card.title": "Paga com cartão",
   "bauPlus.card.body": "O cartão é digitado numa página segura do {provider}. Volta pra cá quando terminar, que libera sozinho.",

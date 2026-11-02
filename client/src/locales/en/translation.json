@@ -3728,6 +3728,7 @@
   "bauPlus.pix.paidAlready": "I paid and it didn't unlock",
   "bauPlus.pix.checking": "Checking...",
   "bauPlus.pix.lateNote": "The bank hasn't confirmed yet. If you paid, VIP unlocks on its own as soon as it arrives, even with the code expired.",
+  "bauPlus.pix.checkFailed": "Couldn't check right now. Check your connection and try again.",
   "bauPlus.pix.back": "Back",
   "bauPlus.card.title": "Pay by card",
   "bauPlus.card.body": "You type the card on a secure {provider} page. Come back here when you're done and it unlocks on its own.",
