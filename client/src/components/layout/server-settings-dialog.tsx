@@ -115,6 +115,7 @@ const AUDIT_ACTION_KEYS: Record<AuditAction, MessageKey> = {
   "report.resolve": "serverSettings.audit.action.report.resolve",
   "report.attachment_reveal":
     "serverSettings.audit.action.report.attachment_reveal",
+  "report.bau_view": "serverSettings.audit.action.report.bau_view",
   "role.create": "serverSettings.audit.action.role.create",
   "role.update": "serverSettings.audit.action.role.update",
   "role.delete": "serverSettings.audit.action.role.delete",

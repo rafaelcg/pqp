@@ -104,6 +104,7 @@ function makeContext(overrides: Partial<ReportContext> = {}): ReportContext {
       },
     ],
     surrounding: null,
+    bau: null,
     actions: { canTerminate: true, server: null },
     ...overrides,
   };
@@ -269,6 +270,58 @@ describe("ReportContextPanel", () => {
     expect(host!.textContent).toContain("who reported");
     // Where the message lives, even if the report row has no server.
     expect(host!.textContent).toContain("Message in #Lobby, server Pedro's room.");
+  });
+
+  it("opens a reported Baú post, says it was opened past the VIP lock, and marks the reported comment", async () => {
+    const authorId = "11111111-1111-4111-8111-111111111111";
+    const comment = (id: string, body: string) => ({
+      id,
+      authorId,
+      authorName: "Niki",
+      body,
+      createdAt: at(1),
+    });
+    fetchMock.mockResolvedValue(
+      makeContext({
+        bau: {
+          serverId: "44444444-4444-4444-8444-444444444444",
+          serverName: "Comunidade",
+          post: {
+            id: "99999999-9999-4999-8999-999999999999",
+            authorName: "Dono",
+            title: "Titulo trancado",
+            body: "SO PARA VIP",
+            teaser: null,
+            visibility: "members",
+            status: "published",
+            publishedAt: at(0),
+            media: {
+              kind: "video",
+              name: "clip.mp4",
+              contentType: "video/mp4",
+              byteSize: 10,
+              link: null,
+            },
+          },
+          comment: comment("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "Citrus"),
+          commentsBefore: [comment("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "before")],
+          commentsAfter: [comment("cccccccc-cccc-4ccc-8ccc-cccccccccccc", "after")],
+        },
+      }),
+    );
+    await mount();
+    await expand();
+    const section = host!.querySelector("[data-report-bau]");
+    expect(section?.textContent).toContain("Titulo trancado");
+    expect(section?.textContent).toContain("SO PARA VIP");
+    expect(section?.textContent).toContain("Members only (VIP)");
+    expect(section?.textContent).toContain("Opened past the VIP lock");
+    // Files are metadata only: the name, never a way to open the bytes.
+    expect(section?.textContent).toContain("clip.mp4");
+    expect(section?.querySelector("a, video")).toBeNull();
+    const marked = section?.querySelector('[aria-current="true"]');
+    expect(marked?.textContent).toContain("Citrus");
+    expect(marked?.textContent).toContain("Reported comment");
   });
 
   it("says plainly when the reported account never answered the reporter", async () => {

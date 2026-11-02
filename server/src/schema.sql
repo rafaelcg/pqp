@@ -6343,6 +6343,59 @@ END $$;
 -- CONCURRENTLY at boot (`CONCURRENT_INDEXES` in db.ts), so adding them never
 -- blocks writes to `reports` while the existing rows are scanned.
 
+-- Baú reports (`subject_type = 'bau_post'` and `'bau_comment'`): one post, or
+-- one comment, in a server's Baú. Additive: older builds never write either
+-- kind. The subject's id is a SET NULL reference like every other subject, so
+-- deleting the post (the first thing an offender does) keeps the report, and
+-- the words as they were reported live in `bau_snapshot` (never
+-- `content_snapshot`, which the table's first CHECK reserves for message
+-- reports). A comment report also names its post, so the moderator's card can
+-- open the thread around it. Rewritten only when the constraint does not
+-- already allow the kinds, so a boot that changes nothing does not drop it.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conrelid = 'reports'::regclass
+       AND conname = 'reports_subject_type_check'
+       AND pg_get_constraintdef(oid) LIKE '%bau_comment%'
+  ) THEN
+    ALTER TABLE reports DROP CONSTRAINT IF EXISTS reports_subject_type_check;
+    ALTER TABLE reports
+      ADD CONSTRAINT reports_subject_type_check
+      CHECK (subject_type IN (
+        'message', 'user', 'server', 'story', 'bau_post', 'bau_comment'
+      ));
+  END IF;
+END $$;
+
+ALTER TABLE reports ADD COLUMN IF NOT EXISTS reported_bau_post_id UUID
+  REFERENCES community_home_posts(id) ON DELETE SET NULL;
+ALTER TABLE reports ADD COLUMN IF NOT EXISTS reported_bau_comment_id UUID
+  REFERENCES community_home_comments(id) ON DELETE SET NULL;
+ALTER TABLE reports ADD COLUMN IF NOT EXISTS bau_snapshot TEXT;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conrelid = 'reports'::regclass
+       AND conname = 'reports_bau_subject_check'
+  ) THEN
+    ALTER TABLE reports
+      ADD CONSTRAINT reports_bau_subject_check
+      -- One-directional, like the story check: the post is deleted long
+      -- before the report, and the report must survive it.
+      CHECK (
+        subject_type IN ('bau_post', 'bau_comment')
+        OR (reported_bau_post_id IS NULL AND reported_bau_comment_id IS NULL)
+      );
+  END IF;
+END $$;
+
+-- The two Baú dedupe indexes are built CONCURRENTLY at boot
+-- (`CONCURRENT_INDEXES` in db.ts).
+
 -- POST_STORIES (bit 25 = 33554432): post a story to the server. On for
 -- @everyone by default, like SEND_MESSAGES, so staff can take it away per
 -- role; listed communities too (they add a 72 h account age rule in code).

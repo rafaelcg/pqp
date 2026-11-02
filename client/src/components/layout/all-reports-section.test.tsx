@@ -73,6 +73,8 @@ function makeReport(overrides: Partial<AllReport>): AllReport {
     channelId: null,
     channelName: null,
     storyId: null,
+    bauPostId: null,
+    bauCommentId: null,
     resolvedAt: null,
     resolvedByName: null,
     resolutionNote: null,

@@ -60,7 +60,7 @@ import {
   scheduleCommunityHomeCaptions,
 } from "./community-home-captions.js";
 import { isCommunitiesEnabled } from "./communities.js";
-import { toPublicUserSummary } from "./users.js";
+import { getMemberRole, toPublicUserSummary } from "./users.js";
 import { checkCommunityHomeUpload } from "./community-home-scan.js";
 import { isContentScanConfigured, type ScanStatus } from "./content-scan.js";
 
@@ -2224,6 +2224,321 @@ export async function toggleCommunityHomeLike(
   );
   const liked = !existing.rows[0];
   return { liked, likeCount: Number(count.rows[0]?.n ?? 0) };
+}
+
+// ----------------------------------------------------------------- reports
+
+/** What a report needs to know about the Baú thing it is about. */
+export interface BauReportTarget {
+  serverId: string;
+  postId: string;
+  /** Set for a comment report, null for a post report. */
+  commentId: string | null;
+  /** The person who wrote the reported post or comment. */
+  authorId: string;
+  /** The words as they stand now, to be copied into the report. */
+  snapshot: string;
+}
+
+/**
+ * The Baú post or comment a reporter may report, or null.
+ *
+ * "You cannot report what you cannot see" (rule 1 of services/reports.ts),
+ * answered with the SAME reads the feed uses and never a copy of their rules:
+ * the instance flag and the server's membership (what every `/home/*` route
+ * runs first), then `getCommunityHomePost`, whose `locked` is the VIP gate, so
+ * a members-only post is reportable by exactly the people the lock lets in
+ * (staff and the VIP cargo) and by nobody else. A comment is looked for in
+ * `listCommunityHomeComments`, which already hides a locked post's comments,
+ * comments switched off, and the ones by somebody the reporter blocked.
+ *
+ * Then, on top: a draft or scheduled post is not published and cannot be
+ * reported; a members-only post with the VIP half switched off is out of the
+ * feed for everybody, so it is out of reach here too; and your own words are
+ * not reportable. Every one of those, like "no such id", is the same null, so
+ * the route's 404 stays an answer that confirms nothing.
+ */
+export async function resolveBauReportTarget(input: {
+  reporterId: string;
+  postId?: string;
+  commentId?: string;
+}): Promise<BauReportTarget | null> {
+  if (!isCommunityHomeEnabled()) {
+    return null;
+  }
+  const pool = getPool();
+  let postId = input.postId ?? null;
+  const commentId = input.commentId ?? null;
+  if (commentId) {
+    const found = await pool.query<{ post_id: string }>(
+      `SELECT post_id FROM community_home_comments WHERE id = $1`,
+      [commentId],
+    );
+    postId = found.rows[0]?.post_id ?? null;
+  }
+  if (!postId) {
+    return null;
+  }
+  const home = await pool.query<{ server_id: string }>(
+    `SELECT server_id FROM community_home_posts WHERE id = $1`,
+    [postId],
+  );
+  const serverId = home.rows[0]?.server_id;
+  if (!serverId || !(await getMemberRole(serverId, input.reporterId))) {
+    return null;
+  }
+
+  let post: CommunityHomePost;
+  try {
+    post = await getCommunityHomePost(serverId, postId, input.reporterId);
+  } catch (error) {
+    if (error instanceof CommunityHomeError) {
+      return null;
+    }
+    throw error;
+  }
+  if (
+    post.status !== "published" ||
+    post.locked ||
+    (post.visibility === "members" && !isCommunityHomeVipEnabled())
+  ) {
+    return null;
+  }
+
+  if (commentId) {
+    const comments = await listCommunityHomeComments(
+      serverId,
+      postId,
+      input.reporterId,
+    );
+    const comment = comments.find((c) => c.id === commentId);
+    if (!comment || comment.author.id === input.reporterId) {
+      return null;
+    }
+    return {
+      serverId,
+      postId,
+      commentId,
+      authorId: comment.author.id,
+      snapshot: comment.body,
+    };
+  }
+  if (post.author.id === input.reporterId) {
+    return null;
+  }
+  return {
+    serverId,
+    postId,
+    commentId: null,
+    authorId: post.author.id,
+    snapshot: bauPostSnapshot(post),
+  };
+}
+
+/**
+ * The reported post's words, copied at report time: the title, the body, and
+ * one line naming the media (the bytes are not copied: an uploaded file is
+ * metadata, an embed is its link). Evidence that outlives the post.
+ */
+function bauPostSnapshot(post: CommunityHomePost): string {
+  const parts: string[] = [];
+  if (post.title?.trim()) {
+    parts.push(post.title.trim());
+  }
+  if (post.body?.trim()) {
+    parts.push(post.body.trim());
+  }
+  const media = post.media;
+  if (media) {
+    const link = media.youtubeUrl ?? media.twitchUrl;
+    parts.push(
+      `[${media.kind}${media.name ? `: ${media.name}` : ""}${link ? ` ${link}` : ""}]`,
+    );
+  }
+  return parts.join("\n\n");
+}
+
+/**
+ * THE ONE READ IN THE PRODUCT THAT SKIPS THE VIP LOCK, for a moderator.
+ *
+ * A members-only post is exactly what somebody reports, and the person who has
+ * to judge it is an instance moderator who is not a VIP (or a server's
+ * moderation staff who lack MANAGE_SERVER). So the report's card opens the
+ * post as it stands. It is narrow on purpose: it takes the ids a REPORT names
+ * and nothing else (there is no route that passes it a post id from a
+ * client), the caller (`getReportContext`, behind the same gate as the rest of
+ * the card) writes the audit trail before handing the words out, it returns
+ * words and media metadata only (never a URL to a stored upload), and it does
+ * not touch the feed, the comment list or any viewer's lock.
+ *
+ * Null when the post is gone; the report's own snapshot is what is left.
+ */
+export async function readBauSubjectForModeration(input: {
+  postId: string | null;
+  commentId: string | null;
+}): Promise<{
+  serverId: string;
+  serverName: string;
+  post: {
+    id: string;
+    authorName: string;
+    title: string | null;
+    body: string;
+    teaser: string | null;
+    visibility: CommunityHomeVisibility;
+    status: CommunityHomePostStatus;
+    publishedAt: string | null;
+    media: {
+      kind: string;
+      name: string | null;
+      contentType: string | null;
+      byteSize: number | null;
+      link: string | null;
+    } | null;
+  } | null;
+  comment: ModerationBauComment | null;
+  commentsBefore: ModerationBauComment[];
+  commentsAfter: ModerationBauComment[];
+} | null> {
+  const pool = getPool();
+  let postId = input.postId;
+  let comment: ModerationBauComment | null = null;
+  if (input.commentId) {
+    const found = await pool.query<ModerationCommentRow>(
+      `SELECT c.id, c.post_id, c.author_id, c.body, c.created_at,
+              u.display_name AS author_name
+         FROM community_home_comments c
+         JOIN users u ON u.id = c.author_id
+        WHERE c.id = $1`,
+      [input.commentId],
+    );
+    const row = found.rows[0];
+    if (row) {
+      comment = toModerationComment(row);
+      postId = row.post_id;
+    }
+  }
+  if (!postId) {
+    return null;
+  }
+  const result = await pool.query<{
+    id: string;
+    server_id: string;
+    server_name: string;
+    author_name: string;
+    title: string | null;
+    body: string;
+    teaser: string | null;
+    visibility: CommunityHomeVisibility;
+    status: CommunityHomePostStatus;
+    published_at: Date | null;
+    media_kind: string | null;
+    media_name: string | null;
+    media_content_type: string | null;
+    media_byte_size: string | null;
+    media_youtube_url: string | null;
+  }>(
+    `SELECT p.id, p.server_id, s.name AS server_name,
+            u.display_name AS author_name, p.title, p.body, p.teaser,
+            p.visibility, p.status, p.published_at, p.media_kind, p.media_name,
+            p.media_content_type, p.media_byte_size, p.media_youtube_url
+       FROM community_home_posts p
+       JOIN servers s ON s.id = p.server_id
+       JOIN users u ON u.id = p.author_id
+      WHERE p.id = $1`,
+    [postId],
+  );
+  const row = result.rows[0];
+  if (!row) {
+    return null;
+  }
+
+  // Five comments either side of the reported one, compared INSIDE SQL: a JS
+  // Date carries milliseconds and a timestamptz microseconds, so a round trip
+  // through `Date` would let the anchor itself match.
+  let commentsBefore: ModerationBauComment[] = [];
+  let commentsAfter: ModerationBauComment[] = [];
+  if (comment) {
+    const select = `SELECT c.id, c.post_id, c.author_id, c.body, c.created_at,
+                           u.display_name AS author_name
+                      FROM community_home_comments c
+                      JOIN users u ON u.id = c.author_id`;
+    const [before, after] = await Promise.all([
+      pool.query<ModerationCommentRow>(
+        `${select}
+          WHERE c.post_id = $1
+            AND (c.created_at, c.id) < (SELECT created_at, id FROM community_home_comments WHERE id = $2)
+          ORDER BY c.created_at DESC, c.id DESC LIMIT 5`,
+        [postId, comment.id],
+      ),
+      pool.query<ModerationCommentRow>(
+        `${select}
+          WHERE c.post_id = $1
+            AND (c.created_at, c.id) > (SELECT created_at, id FROM community_home_comments WHERE id = $2)
+          ORDER BY c.created_at ASC, c.id ASC LIMIT 5`,
+        [postId, comment.id],
+      ),
+    ]);
+    commentsBefore = before.rows.reverse().map(toModerationComment);
+    commentsAfter = after.rows.map(toModerationComment);
+  }
+
+  const kind = row.media_kind;
+  const isLink =
+    kind != null && (kind === "twitch" || isCommunityHomeEmbedKind(kind));
+  return {
+    serverId: row.server_id,
+    serverName: row.server_name,
+    post: {
+      id: row.id,
+      authorName: row.author_name,
+      title: row.title,
+      body: row.body,
+      teaser: row.teaser,
+      visibility: row.visibility,
+      status: row.status,
+      publishedAt: row.published_at?.toISOString() ?? null,
+      media: kind
+        ? {
+            kind,
+            name: row.media_name,
+            contentType: row.media_content_type,
+            byteSize: row.media_byte_size ? Number(row.media_byte_size) : null,
+            link: isLink ? row.media_youtube_url : null,
+          }
+        : null,
+    },
+    comment,
+    commentsBefore,
+    commentsAfter,
+  };
+}
+
+interface ModerationCommentRow {
+  id: string;
+  post_id: string;
+  author_id: string;
+  author_name: string;
+  body: string;
+  created_at: Date;
+}
+
+interface ModerationBauComment {
+  id: string;
+  authorId: string;
+  authorName: string;
+  body: string;
+  createdAt: string;
+}
+
+function toModerationComment(row: ModerationCommentRow): ModerationBauComment {
+  return {
+    id: row.id,
+    authorId: row.author_id,
+    authorName: row.author_name,
+    body: row.body,
+    createdAt: row.created_at.toISOString(),
+  };
 }
 
 // ------------------------------------------------------------------ media

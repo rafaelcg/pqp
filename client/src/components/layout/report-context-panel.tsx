@@ -136,6 +136,108 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
   );
 }
 
+/**
+ * The reported Baú post (and, for a comment report, the thread around the
+ * comment) as the server opened it for this card. Rendered as plain text:
+ * the post body is the author's words and never markup.
+ */
+function BauSubject({
+  bau,
+  t,
+}: {
+  bau: NonNullable<ReportContext["bau"]>;
+  t: Translate;
+}) {
+  const { post, comment } = bau;
+  return (
+    <div className="space-y-2 text-xs">
+      <p className="text-paper-muted">
+        {t("reports.ctx.bau.server", { name: bau.serverName })}
+      </p>
+      {post && (
+        <div className="space-y-1 rounded border border-ink-4 bg-ink px-2.5 py-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {post.title && (
+              <p className="break-words text-sm font-semibold text-paper">
+                {post.title}
+              </p>
+            )}
+            {post.visibility === "members" && (
+              <span className="rounded bg-warning/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-warning">
+                {t("reports.ctx.bau.membersOnly")}
+              </span>
+            )}
+          </div>
+          {post.body && (
+            <p className="whitespace-pre-wrap break-words text-paper">
+              {post.body}
+            </p>
+          )}
+          {post.media && (
+            <p className="break-words text-paper-muted">
+              {t("reports.ctx.bau.media", {
+                media: [
+                  post.media.kind,
+                  post.media.name,
+                  post.media.link,
+                ]
+                  .filter(Boolean)
+                  .join(" · "),
+              })}
+            </p>
+          )}
+        </div>
+      )}
+      {comment && (
+        <div className="space-y-1">
+          <SectionTitle>{t("reports.ctx.bau.comments")}</SectionTitle>
+          <ul className="space-y-0.5">
+            {bau.commentsBefore.map((c) => (
+              <BauCommentLine key={c.id} comment={c} />
+            ))}
+            <BauCommentLine
+              comment={comment}
+              mark={t("reports.ctx.bau.reportedComment")}
+            />
+            {bau.commentsAfter.map((c) => (
+              <BauCommentLine key={c.id} comment={c} />
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BauCommentLine({
+  comment,
+  mark,
+}: {
+  comment: NonNullable<ReportContext["bau"]>["commentsBefore"][number];
+  /** The reported comment: accent background and this label. */
+  mark?: string;
+}) {
+  return (
+    <li
+      className={cn(
+        "rounded px-1.5 py-1",
+        mark && "bg-signal/10 ring-1 ring-signal/40",
+      )}
+      aria-current={mark ? "true" : undefined}
+    >
+      <span className="font-semibold text-paper">{comment.authorName}</span>
+      {mark && (
+        <span className="ml-1.5 text-[10px] font-semibold uppercase tracking-wider text-signal">
+          {mark}
+        </span>
+      )}
+      <p className="whitespace-pre-wrap break-words text-paper-muted">
+        {comment.body}
+      </p>
+    </li>
+  );
+}
+
 function Message({
   message,
   mark,
@@ -619,6 +721,16 @@ export function ReportContextPanel({ report, note }: ReportContextPanelProps) {
                       ))}
                     </ul>
                   )}
+                </section>
+              )}
+
+              {context.bau && (
+                <section className="space-y-2" data-report-bau>
+                  <SectionTitle>{t("reports.ctx.bau.title")}</SectionTitle>
+                  <p className="text-[11px] text-paper-muted">
+                    {t("reports.ctx.bau.audited")}
+                  </p>
+                  <BauSubject bau={context.bau} t={t} />
                 </section>
               )}
 

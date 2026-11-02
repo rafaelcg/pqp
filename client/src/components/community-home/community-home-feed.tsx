@@ -13,6 +13,7 @@ import {
 import {
   CalendarClock,
   Eye,
+  Flag,
   Heart,
   Link2,
   Lock,
@@ -52,6 +53,7 @@ import { supportDraftOf } from "@/components/communities/community-support-field
 import { EmojiPickerPanel } from "@/components/chat/emoji-picker";
 import { GifPickerPanel } from "@/components/chat/gif-picker";
 import { GifAttachment } from "@/components/chat/message-list";
+import { ReportDialog, type ReportTarget } from "@/components/chat/report-dialog";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -414,14 +416,49 @@ function LockedBodyBlur() {
 
 // ----------------------------------------------------------------- comments
 
+/**
+ * The comment's overflow menu. Today its only row is "Denunciar", offered to
+ * everybody but the author (the server refuses your own words anyway). The
+ * trigger is a quiet icon in the comment's header, the same weight as delete.
+ */
+function CommentMenu({ onReport }: { onReport: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <Menu
+      align="end"
+      items={[
+        {
+          id: "report",
+          label: t("communityHome.report.comment"),
+          icon: Flag,
+          onSelect: onReport,
+        },
+      ]}
+    >
+      <button
+        type="button"
+        className="shrink-0 rounded p-0.5 text-paper-muted hover:text-paper"
+        aria-label={t("communityHome.report.commentMenu")}
+        title={t("communityHome.report.commentMenu")}
+        data-home-comment-menu
+      >
+        <MoreHorizontal className="h-3.5 w-3.5" aria-hidden />
+      </button>
+    </Menu>
+  );
+}
+
 function CommentRow({
   comment,
   canDelete,
   onDelete,
+  onReport,
 }: {
   comment: CommunityHomeComment;
   canDelete: boolean;
   onDelete: () => void;
+  /** Absent for your own comment. */
+  onReport?: () => void;
 }) {
   const { t, locale } = useTranslation();
   return (
@@ -441,17 +478,20 @@ function CommentRow({
           <span className="shrink-0 text-[11px] text-paper-muted">
             {relativeDayLabel(comment.createdAt, t, locale)}
           </span>
-          {canDelete && (
-            <button
-              type="button"
-              className="ml-auto shrink-0 rounded p-0.5 text-paper-muted hover:text-danger"
-              aria-label={t("communityHome.comments.delete")}
-              title={t("communityHome.comments.delete")}
-              onClick={onDelete}
-            >
-              <Trash2 className="h-3.5 w-3.5" aria-hidden />
-            </button>
-          )}
+          <span className="ml-auto flex shrink-0 items-center gap-1">
+            {onReport && <CommentMenu onReport={onReport} />}
+            {canDelete && (
+              <button
+                type="button"
+                className="shrink-0 rounded p-0.5 text-paper-muted hover:text-danger"
+                aria-label={t("communityHome.comments.delete")}
+                title={t("communityHome.comments.delete")}
+                onClick={onDelete}
+              >
+                <Trash2 className="h-3.5 w-3.5" aria-hidden />
+              </button>
+            )}
+          </span>
         </div>
         {/* A comment that is nothing but a GIF link is media, not prose —
             the same rule chat uses, and the same renderer. */}
@@ -493,6 +533,7 @@ function CommentsBlock({
   const [error, setError] = useState<string | null>(null);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [gifOpen, setGifOpen] = useState(false);
+  const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null);
   /**
    * Which way the GIF panel opens. A comment box can sit anywhere in a
    * scrolling feed, unlike the chat composer which is always at the bottom,
@@ -594,8 +635,17 @@ function CommentsBlock({
     }
   }
 
+  function reportComment(comment: CommunityHomeComment) {
+    setReportTarget({
+      kind: "bau_comment",
+      commentId: comment.id,
+      subjectName: comment.author.displayName,
+    });
+  }
+
   return (
     <div className="mt-3 border-t border-ink-4/60 pt-3" data-home-comments>
+      <ReportDialog target={reportTarget} onClose={() => setReportTarget(null)} />
       {!expanded && teasers.length > 0 && (
         <ul className="space-y-1.5" data-home-comment-teaser>
           {teasers.map((comment) => (
@@ -603,9 +653,14 @@ function CommentsBlock({
               key={comment.id}
               className="rounded-lg bg-ink/60 px-3 py-2 text-sm"
             >
-              <p className="font-semibold text-paper">
-                {comment.author.displayName}
-              </p>
+              <div className="flex items-center gap-2">
+                <p className="min-w-0 flex-1 truncate font-semibold text-paper">
+                  {comment.author.displayName}
+                </p>
+                {comment.author.id !== me.id && (
+                  <CommentMenu onReport={() => reportComment(comment)} />
+                )}
+              </div>
               {gifMessageMedia(comment.body) ? (
                 <GifAttachment media={gifMessageMedia(comment.body)!} />
               ) : (
@@ -624,6 +679,11 @@ function CommentsBlock({
               comment={comment}
               canDelete={canManageServer || comment.author.id === me.id}
               onDelete={() => void remove(comment)}
+              onReport={
+                comment.author.id === me.id
+                  ? undefined
+                  : () => reportComment(comment)
+              }
             />
           ))}
         </ul>
@@ -806,6 +866,7 @@ export function PostCard({
   const { t, locale } = useTranslation();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
   const [liking, setLiking] = useState(false);
   // An automatic translation can be flipped back to the author's words, per
   // post, and the choice lasts the session. The lock is not involved: the API
@@ -841,6 +902,15 @@ export function PostCard({
         onCopyLink ||
         onForward,
     );
+  // Denunciar, for anybody who READS the post and did not write it. The server
+  // enforces the same rules (a locked post, a draft and your own post are all
+  // a 404), so this only keeps the button from offering what would fail.
+  const canReport =
+    mode === "feed" &&
+    post.status === "published" &&
+    !locked &&
+    post.author.id !== me.id;
+  const showCardMenu = showStaffMenu || canReport;
 
   useEffect(() => {
     if (!confirmDelete) {
@@ -889,7 +959,7 @@ export function PostCard({
         <UnlockedMedia
           media={post.media}
           flush
-          reserveCorner={showStaffMenu}
+          reserveCorner={showCardMenu}
           captions={
             post.captions && !isPreview
               ? {
@@ -902,7 +972,7 @@ export function PostCard({
           }
         />
       ) : null}
-      {showStaffMenu && (
+      {showCardMenu && (
         <div
           className={cn(
             "absolute z-10",
@@ -951,7 +1021,7 @@ export function PostCard({
                 {t("communityHome.drafts.unschedule")}
               </button>
             )}
-            {onForward && post.status === "published" && (
+            {showStaffMenu && onForward && post.status === "published" && (
               <button
                 type="button"
                 className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-paper-muted hover:bg-ink-3 hover:text-paper"
@@ -1055,6 +1125,20 @@ export function PostCard({
                 {t("communityHome.compose.edit")}
               </button>
             )}
+            {canReport && (
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-paper-muted hover:bg-ink-3 hover:text-paper"
+                onClick={() => {
+                  setMenuOpen(false);
+                  setReportOpen(true);
+                }}
+                data-home-report
+              >
+                <Flag className="h-3.5 w-3.5" aria-hidden />
+                {t("communityHome.report.post")}
+              </button>
+            )}
             {onDelete &&
               (confirmDelete ? (
                 <button
@@ -1081,7 +1165,14 @@ export function PostCard({
         </div>
       )}
 
-      <div className={cn("p-5", showStaffMenu && "pr-12")}>
+      {reportOpen && (
+        <ReportDialog
+          target={{ kind: "bau_post", postId: post.id, subjectName: null }}
+          onClose={() => setReportOpen(false)}
+        />
+      )}
+
+      <div className={cn("p-5", showCardMenu && "pr-12")}>
         {view.title && (
           <h2 className="break-words font-display text-2xl font-bold leading-snug tracking-tight text-text">
             {view.title}

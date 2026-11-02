@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { AUDIT_ACTIONS } from "./audit.js";
 import {
   allReportSchema,
+  createReportSchema,
   REPORT_ATTACHMENT_BLOCK_REASONS,
   REPORT_ATTACHMENT_KINDS,
   reportAttachmentRevealSchema,
@@ -113,5 +114,75 @@ describe("report attachments", () => {
 
   it("registers the audit action the reveal writes", () => {
     expect(AUDIT_ACTIONS).toContain("report.attachment_reveal");
+  });
+});
+
+describe("reporting a Baú post or comment", () => {
+  it("accepts the two new kinds with an id and a reason, and nothing about where it goes", () => {
+    const post = createReportSchema.parse({
+      subjectType: "bau_post",
+      postId: ID,
+      reason: "spam",
+    });
+    expect(post.subjectType).toBe("bau_post");
+    const comment = createReportSchema.parse({
+      subjectType: "bau_comment",
+      commentId: ID,
+      reason: "minor_sexual",
+      details: "texto",
+    });
+    expect(comment.subjectType).toBe("bau_comment");
+    // The client names the thing, never the destination: an unknown key is
+    // dropped, not trusted.
+    expect(
+      createReportSchema.parse({
+        subjectType: "bau_post",
+        postId: ID,
+        serverId: ID,
+        reason: "spam",
+      }),
+    ).not.toHaveProperty("serverId");
+  });
+
+  it("rejects a Baú report without its id, or with the wrong one", () => {
+    expect(() =>
+      createReportSchema.parse({ subjectType: "bau_post", reason: "spam" }),
+    ).toThrow();
+    expect(() =>
+      createReportSchema.parse({
+        subjectType: "bau_comment",
+        postId: ID,
+        reason: "spam",
+      }),
+    ).toThrow();
+    expect(() =>
+      createReportSchema.parse({
+        subjectType: "bau_post",
+        postId: "nope",
+        reason: "spam",
+      }),
+    ).toThrow();
+  });
+
+  it("keeps every older kind parsing exactly as before", () => {
+    expect(
+      createReportSchema.parse({
+        subjectType: "message",
+        messageId: ID,
+        reason: "spam",
+      }).subjectType,
+    ).toBe("message");
+    // An old stored row has neither Baú field: both default to null.
+    const parsed = reportSchema.parse(baseReport);
+    expect(parsed.bauPostId).toBeNull();
+    expect(parsed.bauCommentId).toBeNull();
+    expect(
+      reportSchema.parse({ ...baseReport, subjectType: "bau_comment", bauPostId: ID })
+        .subjectType,
+    ).toBe("bau_comment");
+  });
+
+  it("registers the audit action the moderator's read writes", () => {
+    expect(AUDIT_ACTIONS).toContain("report.bau_view");
   });
 });
