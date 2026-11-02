@@ -163,8 +163,8 @@
     <string name="bau_badge_staff">staff</string>
     <string name="bau_vip_chip">VIP</string>
     <string name="bau_locked_title">VIP post</string>
-    <string name="bau_locked_body">The full post is for members with the VIP cargo.</string>
-    <string name="bau_unlock_cta">VIP, coming soon</string>
+    <string name="bau_locked_body">VIP unlocks members-only posts, and VIP rooms on servers that have them.</string>
+    <string name="bau_locked_how">Support the creator and ask whoever runs the server for the VIP cargo.</string>
     <string name="bau_like">Like</string>
     <string name="bau_unlike">Remove like</string>
     <string name="bau_comments">Comments</string>
