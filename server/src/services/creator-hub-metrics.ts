@@ -110,7 +110,7 @@ const n = (value: string | null | undefined): number => Number(value ?? 0);
 
 async function readDb(): Promise<NonNullable<CreatorHubMetrics["db"]>> {
   const pool = getPool();
-  const [overview, topVip, follows, deliveries, joins] = await Promise.all([
+  const [overview, follows, deliveries, joins] = await Promise.all([
     pool.query<Record<string, string | null>>(
       `WITH post_servers AS (
          -- One pass over the posts: per server, then summed below.
@@ -141,16 +141,12 @@ async function readDb(): Promise<NonNullable<CreatorHubMetrics["db"]>> {
          (SELECT COALESCE(SUM(members), 0) FROM post_servers)::text AS posts_members,
          (SELECT COALESCE(SUM(recent), 0) FROM post_servers)::text AS posts_7d,
          (SELECT COALESCE(SUM(holders), 0) FROM vip)::text AS vip_holders,
-         (SELECT COUNT(*) FROM vip)::text AS vip_servers`,
-    ),
-    pool.query<{ server_id: string; name: string; holders: string }>(
-      `SELECT s.id AS server_id, s.name, COUNT(*)::text AS holders
-         FROM member_roles mr
-         JOIN roles r ON r.id = mr.role_id AND r.system_key = 'vip'
-         JOIN servers s ON s.id = mr.server_id
-        GROUP BY s.id, s.name
-        ORDER BY COUNT(*) DESC, s.name
-        LIMIT 5`,
+         (SELECT COUNT(*) FROM vip)::text AS vip_servers,
+         (SELECT COALESCE(json_agg(t ORDER BY t.holders DESC, t.name), '[]'::json)
+            FROM (SELECT s.id AS "serverId", s.name, v.holders::int AS holders
+                    FROM vip v JOIN servers s ON s.id = v.server_id
+                   ORDER BY v.holders DESC, s.name
+                   LIMIT 5) t)::text AS top_vip`,
     ),
     pool.query<Record<string, string | null>>(
       `SELECT COUNT(*)::text AS total,
@@ -208,11 +204,11 @@ async function readDb(): Promise<NonNullable<CreatorHubMetrics["db"]>> {
     },
     vip: {
       holders: n(o.vip_holders),
-      topServers: topVip.rows.map((row) => ({
-        serverId: row.server_id,
-        name: row.name,
-        holders: n(row.holders),
-      })),
+      topServers: JSON.parse(o.top_vip ?? "[]") as {
+        serverId: string;
+        name: string;
+        holders: number;
+      }[],
     },
     follows: {
       total: n(f.total),
