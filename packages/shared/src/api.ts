@@ -773,8 +773,19 @@ export const serverSchema = z.object({
   communityLinks: z
     .array(
       z.object({
-        kind: z.enum(["youtube", "twitch", "instagram", "tiktok", "x", "site"]),
-        url: z.string(),
+        kind: z.enum([
+          "youtube",
+          "twitch",
+          "instagram",
+          "tiktok",
+          "x",
+          "site",
+          // The creator's own "pay me here" link: a page in `url`, or a Pix
+          // key or copia e cola as text in `pix`, never an href.
+          "support",
+        ]),
+        url: z.string().optional(),
+        pix: z.string().optional(),
       }),
     )
     .default([]),

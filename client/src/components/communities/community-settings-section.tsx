@@ -6,8 +6,11 @@ import {
   COMMUNITY_SLUG_MAX_LENGTH,
   COMMUNITY_TAGLINE_MAX_LENGTH,
   DEFAULT_COMMUNITY_LANGUAGE,
+  communityLinksWithoutSupport,
+  communitySupportOf,
   parseCommunityFeaturedEmbed,
   parseCommunityLink,
+  parseCommunitySupport,
   publicCommunityPath,
   slugifyCommunityName,
   type CommunityCategory,
@@ -17,6 +20,10 @@ import {
 } from "@pqp/shared";
 import { Globe, Lock } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
+import {
+  CommunitySupportField,
+  supportDraftOf,
+} from "@/components/communities/community-support-field";
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -116,6 +123,7 @@ export function CommunitySettingsSection({
   const [tagline, setTagline] = useState("");
   const [about, setAbout] = useState("");
   const [linkUrls, setLinkUrls] = useState<string[]>([]);
+  const [supportText, setSupportText] = useState("");
   const [featuredUrl, setFeaturedUrl] = useState("");
   const [featuredImage, setFeaturedImage] = useState(false);
   const [uploadsOn, setUploadsOn] = useState(false);
@@ -164,7 +172,10 @@ export function CommunitySettingsSection({
     setListed(next.isListed);
     setTagline(next.tagline ?? "");
     setAbout(next.about ?? "");
-    setLinkUrls(next.links.map((link) => link.url));
+    setLinkUrls(
+      communityLinksWithoutSupport(next.links).map((link) => link.url ?? ""),
+    );
+    setSupportText(supportDraftOf(communitySupportOf(next.links)));
     if (next.featured?.kind === "image") {
       setFeaturedUrl("");
       setFeaturedImage(true);
@@ -264,6 +275,12 @@ export function CommunitySettingsSection({
         return;
       }
     }
+    const preparedSupport = supportText.trim();
+    if (preparedSupport && !parseCommunitySupport(preparedSupport)) {
+      setError(t("communities.support.invalid"));
+      setSaving(false);
+      return;
+    }
     const trimmedFeatured = featuredUrl.trim();
     let featured:
       | { kind: "youtube" | "twitch"; url: string }
@@ -287,6 +304,7 @@ export function CommunitySettingsSection({
         tagline: tagline.trim() === "" ? null : tagline.trim(),
         about: about.trim() === "" ? null : about.trim(),
         links: preparedLinks.map((url) => ({ url })),
+        support: preparedSupport === "" ? null : preparedSupport,
         ...(featured !== undefined ? { featured } : {}),
         category,
         ...(typedSlug ? { slug: typedSlug } : {}),
@@ -407,7 +425,10 @@ export function CommunitySettingsSection({
       (tagline.trim() || null) !== settings.tagline ||
       (about.trim() || null) !== settings.about ||
       JSON.stringify(linkUrls.map((url) => url.trim()).filter(Boolean)) !==
-        JSON.stringify(settings.links.map((link) => link.url)) ||
+        JSON.stringify(
+          communityLinksWithoutSupport(settings.links).map((link) => link.url),
+        ) ||
+      supportText.trim() !== supportDraftOf(communitySupportOf(settings.links)) ||
       featuredUrl.trim() !== currentEmbed ||
       category !== settings.category ||
       (slug.trim() || null) !== settings.slug ||
@@ -653,6 +674,17 @@ export function CommunitySettingsSection({
               </Button>
             )}
           </div>
+
+          <CommunitySupportField
+            value={supportText}
+            disabled={formBusy}
+            labelClassName="text-xs font-semibold uppercase tracking-wide text-paper-muted"
+            hintClassName="text-paper-muted"
+            onChange={(next) => {
+              setSupportText(next);
+              setSaved(false);
+            }}
+          />
 
           <FileDropZone
             className="space-y-2"

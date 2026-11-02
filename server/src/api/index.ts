@@ -117,6 +117,8 @@ import {
   communityTaglineSchema,
   communityAboutSchema,
   normalizeCommunityLinks,
+  parseCommunitySupport,
+  type CommunityLink,
   parseCommunityFeaturedEmbed,
   updateCommunitySchema,
   reportStatusSchema,
@@ -7797,6 +7799,25 @@ router.patch(
       links = parsed;
     }
 
+    // The support link, from its own box. Blank or null clears it. It never
+    // comes through `links`, whose kinds are derived from the host, so a
+    // payment page pasted there stays an ordinary "site" chip.
+    let support: CommunityLink | null | undefined;
+    if (body.support !== undefined) {
+      if (body.support === null || body.support.trim() === "") {
+        support = null;
+      } else {
+        const parsed = parseCommunitySupport(body.support);
+        if (!parsed) {
+          throw new HttpError(
+            400,
+            "That support link is not allowed. Use a Pix key, a Pix copia e cola, or an https link from LivePix, Apoia.se, Patreon, Ko-fi, Buy Me a Coffee, Cafecito, Catarse, Kick, Twitch, YouTube, PayPal.me or Mercado Pago.",
+          );
+        }
+        support = parsed;
+      }
+    }
+
     let featured: ReturnType<typeof parseCommunityFeaturedEmbed> | null | undefined;
     if (body.featured !== undefined) {
       if (body.featured === null) {
@@ -7825,6 +7846,7 @@ router.patch(
           ...(tagline !== undefined ? { tagline } : {}),
           ...(about !== undefined ? { about } : {}),
           ...(links !== undefined ? { links } : {}),
+          ...(support !== undefined ? { support } : {}),
           ...(featured !== undefined ? { featured } : {}),
           ...(body.category !== undefined ? { category: body.category } : {}),
           ...(slug !== undefined ? { slug } : {}),
@@ -7956,7 +7978,7 @@ router.patch(
             },
           ]
         : []),
-      ...(links !== undefined &&
+      ...((links !== undefined || support !== undefined) &&
       JSON.stringify(updated.previous.links) !==
         JSON.stringify(updated.settings.links)
         ? [
