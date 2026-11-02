@@ -2,7 +2,12 @@ import { BAU_GRACE_DAYS, BAU_REMINDER_DAYS, type BauMembershipStatus } from "@pq
 import { getPool } from "../../db.js";
 import { countBauPayments } from "./metrics.js";
 import { notifyBauPlusUpdate } from "./notify.js";
-import { auditBauMembership, syncAttemptFromProvider, type BauAttemptRow } from "./service.js";
+import {
+  auditBauMembership,
+  cancelPendingAttemptRow,
+  syncAttemptFromProvider,
+  type BauAttemptRow,
+} from "./service.js";
 import { HAS_ACCESS_SQL, grantVipForMembership, revokeVipForMembership } from "./vip.js";
 
 /**
@@ -69,6 +74,26 @@ export async function sweepBauPayments(): Promise<BauSweepResult> {
       result.attemptsChecked += 1;
     } catch (error) {
       console.error("[bau-payments] sweep sync failed:", error);
+    }
+  }
+
+  // Open codes made pointless by a payment on the same membership (two tabs,
+  // Pix then card) that the provider did not cancel when it settled. Asked
+  // again every tick until the provider agrees, so a sibling never stays
+  // payable for its whole lifetime after a refusal.
+  const orphans = await pool.query<BauAttemptRow>(
+    `SELECT a.* FROM bau_payment_attempts a
+      WHERE a.status = 'pending'
+        AND EXISTS (SELECT 1 FROM bau_payment_attempts p
+                     WHERE p.membership_id = a.membership_id AND p.status = 'paid'
+                       AND p.paid_at > a.created_at)
+      LIMIT 100`,
+  );
+  for (const row of orphans.rows) {
+    try {
+      await cancelPendingAttemptRow(row);
+    } catch (error) {
+      console.error("[bau-payments] sweep sibling cancel failed:", error);
     }
   }
 

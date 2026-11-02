@@ -202,15 +202,20 @@ function refundableUntil(membership: MembershipRow, attempts: AttemptRow[], now:
   if (membership.status === "refunded" || membership.status === "pending") {
     return null;
   }
-  // The withdrawal right is for the membership's FIRST-EVER payment: the one
-  // charge it has ever settled. A renewal, and a payment after an earlier one
-  // was refunded or ran out, do not reopen it.
-  const settled = attempts.filter((a) => a.status === "paid" || a.status === "refunded");
-  const only = settled.length === 1 ? settled[0]! : null;
-  if (!only || only.status !== "paid" || !only.paid_at) {
+  // The withdrawal right is for the membership's FIRST-EVER payment. The row
+  // keeps `first_paid_at` forever (a refund or an expiry never clears it) and
+  // it is the paid charge's own `paid_at`, so the test is on the membership,
+  // not on how much history was read: a renewal, and a payment after an
+  // earlier one was refunded or ran out, do not reopen it.
+  const latestPaid = attempts.find((a) => a.status === "paid");
+  if (
+    !latestPaid?.paid_at ||
+    !membership.first_paid_at ||
+    latestPaid.paid_at.getTime() !== membership.first_paid_at.getTime()
+  ) {
     return null;
   }
-  const until = new Date(only.paid_at.getTime() + BAU_REFUND_WINDOW_DAYS * DAY_MS);
+  const until = new Date(latestPaid.paid_at.getTime() + BAU_REFUND_WINDOW_DAYS * DAY_MS);
   return until > now ? until : null;
 }
 
@@ -616,7 +621,7 @@ async function cancelOtherPending(membershipId: string, keepId: string): Promise
  * expires on its own, and if the fan pays it anyway the payment is applied
  * (paid always wins), rather than reporting a cancel that did not happen.
  */
-async function cancelPendingAttemptRow(row: AttemptRow): Promise<boolean> {
+export async function cancelPendingAttemptRow(row: AttemptRow): Promise<boolean> {
   const provider = getRegisteredProvider(row.provider);
   if (provider && row.provider_ref) {
     try {
@@ -801,13 +806,13 @@ async function transition(
       `UPDATE bau_memberships
           SET status = 'active', plan_id = $2,
               period_start = $3, period_end = $4,
-              first_paid_at = COALESCE(first_paid_at, NOW()),
+              first_paid_at = COALESCE(first_paid_at, $5),
               last_paid_at = NOW(),
               cancelled_at = NULL, refunded_at = NULL, expired_at = NULL,
               updated_at = NOW()
         WHERE id = $1
         RETURNING *`,
-      [membership.id, paidRow.plan_id, paidRow.period_start, paidRow.period_end],
+      [membership.id, paidRow.plan_id, paidRow.period_start, paidRow.period_end, paidRow.paid_at],
     );
     // Any other code still open for this membership is now pointless. It is
     // cancelled at the provider after this commits (`afterTransition`), and
