@@ -745,7 +745,21 @@ export async function getBauAttempt(
 
 async function syncAttemptFromProvider(row: AttemptRow): Promise<void> {
   const provider = getRegisteredProvider(row.provider);
-  if (!provider || !row.provider_ref) {
+  if (!row.provider_ref) {
+    // The charge never got its ref recorded (or was never made). Past its
+    // expiry it is expired here; if the provider did take a payment on it,
+    // the webhook's reference fallback still finds it and paid beats expired.
+    if (row.expires_at.getTime() < Date.now() - 30_000) {
+      await getPool().query(
+        `UPDATE bau_payment_attempts
+            SET status = 'expired', failure_reason = 'expired', updated_at = NOW()
+          WHERE id = $1 AND status = 'pending' AND provider_ref IS NULL`,
+        [row.id],
+      );
+    }
+    return;
+  }
+  if (!provider) {
     return;
   }
   let charge: ProviderCharge;

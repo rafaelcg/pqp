@@ -11731,7 +11731,10 @@ router.put(
     await requireOutranked(serverId!, user.id, userId!, "kick");
     await assignRole(serverId!, userId!, roleId!);
     if (role.system_key === "vip") {
-      await noteStaffVipChange(serverId!, userId!);
+      // Best effort: the role change already committed and is what counts.
+      await noteStaffVipChange(serverId!, userId!).catch((error: unknown) => {
+        console.error("[bau-payments] staff VIP note failed:", error);
+      });
     }
     await logAudit({
       serverId: serverId!,
@@ -11760,7 +11763,9 @@ router.delete(
     await requireOutranked(serverId!, user.id, userId!, "kick");
     await unassignRole(serverId!, userId!, roleId!);
     if (role.system_key === "vip") {
-      await noteStaffVipChange(serverId!, userId!);
+      await noteStaffVipChange(serverId!, userId!).catch((error: unknown) => {
+        console.error("[bau-payments] staff VIP note failed:", error);
+      });
     }
     const revoked = new Set(
       await listRevokedPrivateChannelIds(serverId!, userId!),

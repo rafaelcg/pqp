@@ -107,7 +107,15 @@ export function isSandboxAllowed(): boolean {
   if (flyApp) {
     return flyApp.endsWith("-staging");
   }
-  return process.env.NODE_ENV !== "production";
+  // Opt-in, never by omission: a box that simply forgot NODE_ENV is not a
+  // development machine.
+  // `pnpm dev` leaves NODE_ENV unset, which is why the dev auth bypass (itself
+  // refused under production) counts too.
+  return (
+    process.env.NODE_ENV === "development" ||
+    process.env.NODE_ENV === "test" ||
+    isDevAuthBypassEnabled()
+  );
 }
 
 const registry = new Map<string, PaymentProvider>();
