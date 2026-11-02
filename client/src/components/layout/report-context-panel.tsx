@@ -168,6 +168,11 @@ function BauSubject({
               </span>
             )}
           </div>
+          {post.teaser && (
+            <p className="whitespace-pre-wrap break-words italic text-paper-muted">
+              {post.teaser}
+            </p>
+          )}
           {post.body && (
             <p className="whitespace-pre-wrap break-words text-paper">
               {post.body}

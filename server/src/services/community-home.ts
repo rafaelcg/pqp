@@ -2345,6 +2345,10 @@ function bauPostSnapshot(post: CommunityHomePost): string {
   if (post.title?.trim()) {
     parts.push(post.title.trim());
   }
+  if (post.teaser?.trim()) {
+    // The teaser is what a locked reader sees, so it can be the reported text.
+    parts.push(post.teaser.trim());
+  }
   if (post.body?.trim()) {
     parts.push(post.body.trim());
   }

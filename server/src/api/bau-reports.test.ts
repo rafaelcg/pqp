@@ -232,6 +232,7 @@ describeDb("reporting a Baú post or comment", () => {
   it("answers the same 404 for a members-only post to everybody the lock keeps out", async () => {
     const post = await publish(communityId, {
       title: "So VIP",
+      teaser: "isca da vitrine",
       body: "palavras trancadas",
       visibility: "members",
     });
@@ -246,6 +247,8 @@ describeDb("reporting a Baú post or comment", () => {
     const filed = await reportPost(vip, post.id);
     expect(filed.status).toBe(201);
     expect(filed.body.report.contentSnapshot).toContain("palavras trancadas");
+    // The teaser is what a locked reader sees, so it is evidence too.
+    expect(filed.body.report.contentSnapshot).toContain("isca da vitrine");
     // Staff read it too (the owner here is the author: own words are refused).
     expect((await reportPost(owner, post.id)).status).toBe(404);
   });

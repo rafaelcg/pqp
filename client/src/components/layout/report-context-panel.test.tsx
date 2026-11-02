@@ -291,7 +291,7 @@ describe("ReportContextPanel", () => {
             authorName: "Dono",
             title: "Titulo trancado",
             body: "SO PARA VIP",
-            teaser: null,
+            teaser: "isca da vitrine",
             visibility: "members",
             status: "published",
             publishedAt: at(0),
@@ -314,6 +314,7 @@ describe("ReportContextPanel", () => {
     const section = host!.querySelector("[data-report-bau]");
     expect(section?.textContent).toContain("Titulo trancado");
     expect(section?.textContent).toContain("SO PARA VIP");
+    expect(section?.textContent).toContain("isca da vitrine");
     expect(section?.textContent).toContain("Members only (VIP)");
     expect(section?.textContent).toContain("Opened past the VIP lock");
     // Files are metadata only: the name, never a way to open the bytes.
