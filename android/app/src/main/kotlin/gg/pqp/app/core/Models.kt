@@ -53,6 +53,13 @@ data class Me(
      */
     val ageGate: String? = null,
     /**
+     * Whether the age gate says the date back in words before sending it
+     * (`age_gate_readback`, a runtime kill switch). The server sends it only
+     * while [ageGate] is `pending`, the one moment a client can use it. Absent
+     * is read as on, see `ageGateReadbackEnabled`.
+     */
+    val ageGateReadback: Boolean? = null,
+    /**
      * The account's stored preferences, of which only `onboardedAt` is read
      * here. Null means the API predates the preference store, which is read
      * as "this deployment cannot record that onboarding ran", so the wizard
