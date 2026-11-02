@@ -112,23 +112,36 @@ async function readDb(): Promise<NonNullable<CreatorHubMetrics["db"]>> {
   const pool = getPool();
   const [overview, topVip, follows, deliveries, joins] = await Promise.all([
     pool.query<Record<string, string | null>>(
-      `SELECT
+      `WITH post_servers AS (
+         -- One pass over the posts: per server, then summed below.
+         SELECT server_id,
+                COUNT(*) AS total,
+                COUNT(*) FILTER (WHERE status = 'published') AS published,
+                COUNT(*) FILTER (WHERE status = 'published'
+                                   AND visibility = 'members') AS members,
+                COUNT(*) FILTER (WHERE status = 'published'
+                                   AND published_at > now() - interval '7 days') AS recent,
+                BOOL_OR(visibility = 'members') AS has_members
+           FROM community_home_posts
+          GROUP BY server_id
+       ),
+       vip AS (
+         -- One pass over the VIP grants: per server, then summed below.
+         SELECT mr.server_id, COUNT(*) AS holders
+           FROM member_roles mr
+           JOIN roles r ON r.id = mr.role_id AND r.system_key = 'vip'
+          GROUP BY mr.server_id
+       )
+       SELECT
          (SELECT COUNT(*) FROM servers WHERE community_home_enabled)::text AS bau_on,
-         (SELECT COUNT(DISTINCT server_id) FROM community_home_posts)::text AS with_posts,
-         (SELECT COUNT(DISTINCT server_id) FROM community_home_posts
-           WHERE visibility = 'members')::text AS with_members_posts,
-         (SELECT COUNT(*) FROM community_home_posts)::text AS posts_total,
-         (SELECT COUNT(*) FROM community_home_posts
-           WHERE status = 'published')::text AS posts_published,
-         (SELECT COUNT(*) FROM community_home_posts
-           WHERE status = 'published' AND visibility = 'members')::text AS posts_members,
-         (SELECT COUNT(*) FROM community_home_posts
-           WHERE status = 'published'
-             AND published_at > now() - interval '7 days')::text AS posts_7d,
-         (SELECT COUNT(*) FROM member_roles mr
-            JOIN roles r ON r.id = mr.role_id AND r.system_key = 'vip')::text AS vip_holders,
-         (SELECT COUNT(DISTINCT mr.server_id) FROM member_roles mr
-            JOIN roles r ON r.id = mr.role_id AND r.system_key = 'vip')::text AS vip_servers`,
+         (SELECT COUNT(*) FROM post_servers)::text AS with_posts,
+         (SELECT COUNT(*) FROM post_servers WHERE has_members)::text AS with_members_posts,
+         (SELECT COALESCE(SUM(total), 0) FROM post_servers)::text AS posts_total,
+         (SELECT COALESCE(SUM(published), 0) FROM post_servers)::text AS posts_published,
+         (SELECT COALESCE(SUM(members), 0) FROM post_servers)::text AS posts_members,
+         (SELECT COALESCE(SUM(recent), 0) FROM post_servers)::text AS posts_7d,
+         (SELECT COALESCE(SUM(holders), 0) FROM vip)::text AS vip_holders,
+         (SELECT COUNT(*) FROM vip)::text AS vip_servers`,
     ),
     pool.query<{ server_id: string; name: string; holders: string }>(
       `SELECT s.id AS server_id, s.name, COUNT(*)::text AS holders
