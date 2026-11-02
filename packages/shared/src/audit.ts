@@ -139,6 +139,16 @@ export const AUDIT_ACTIONS = [
    * one; a conversation report leaves the `[moderation]` log line alone.
    */
   "report.attachment_reveal",
+  /**
+   * A moderator opened a reported Baú post or comment past the VIP lock
+   * (`GET /api/reports/:id/context` on a `bau_post` / `bau_comment` report).
+   * Target is the post, the report id travels in `changes`. Written BEFORE the
+   * words are handed out. Only a server-scoped report can file one; a report
+   * about a community's Baú lives in the instance queue and leaves the
+   * `[moderation]` log line alone, so a community's own audit log never learns
+   * that somebody reported it.
+   */
+  "report.bau_view",
   // --- voice moderation ---
   //
   // Voice-specific sanctions. `voice_disconnect` and `voice_move` record the

@@ -7,11 +7,13 @@ import {
   type ReportResolution,
   type ReportScanInfo,
   type ReportStatus,
+  type ReportSubjectType,
   type ReportSummary,
 } from "@pqp/shared";
 import type { DbUser } from "../db.js";
 import { getPool } from "../db.js";
 import { withAttachments } from "./report-attachments.js";
+import { resolveBauReportTarget } from "./community-home.js";
 import { resolveStoryForReport } from "./stories.js";
 import { canAccessChannel } from "./users.js";
 
@@ -98,11 +100,27 @@ export interface CreateStoryReportInput extends CreateReportInput {
   serverId?: string | null;
 }
 
+/**
+ * One Baú post, or one Baú comment, reported from the card. Only the id: the
+ * server, the author and the destination are read from the post itself.
+ */
+export interface CreateBauPostReportInput extends CreateReportInput {
+  subjectType: "bau_post";
+  postId: string;
+}
+
+export interface CreateBauCommentReportInput extends CreateReportInput {
+  subjectType: "bau_comment";
+  commentId: string;
+}
+
 export type CreateReportInputs =
   | CreateMessageReportInput
   | CreateUserReportInput
   | CreateServerReportInput
-  | CreateStoryReportInput;
+  | CreateStoryReportInput
+  | CreateBauPostReportInput
+  | CreateBauCommentReportInput;
 
 /**
  * The reporter cannot see the thing they are reporting, or there is nothing
@@ -126,7 +144,7 @@ export class ReportFloodError extends Error {
 
 interface ReportRow {
   id: string;
-  subject_type: "message" | "user" | "server" | "story";
+  subject_type: ReportSubjectType;
   context_kind: ReportContextKind;
   reason: ReportReason;
   details: string | null;
@@ -141,6 +159,8 @@ interface ReportRow {
   channel_id: string | null;
   channel_label: string | null;
   reported_story_id: string | null;
+  reported_bau_post_id: string | null;
+  reported_bau_comment_id: string | null;
   resolved_at: Date | null;
   resolver_name: string | null;
   resolution_note: string | null;
@@ -151,9 +171,11 @@ const REPORT_COLUMNS = `
   r.id::text AS id, r.subject_type, r.context_kind, r.reason, r.details,
   r.status, r.created_at, r.reporter_id, reporter.display_name AS reporter_name,
   r.reported_user_id, r.subject_label, r.reported_message_id::text AS reported_message_id,
-  COALESCE(r.content_snapshot, r.story_snapshot) AS content_snapshot,
+  COALESCE(r.content_snapshot, r.story_snapshot, r.bau_snapshot) AS content_snapshot,
   r.channel_id::text AS channel_id, r.channel_label,
   r.reported_story_id::text AS reported_story_id,
+  r.reported_bau_post_id::text AS reported_bau_post_id,
+  r.reported_bau_comment_id::text AS reported_bau_comment_id,
   r.resolved_at, resolver.display_name AS resolver_name, r.resolution_note`;
 
 const REPORT_JOINS = `
@@ -186,6 +208,8 @@ function toReport(row: ReportRow): Report {
     channelId: row.channel_id,
     channelName: row.channel_label,
     storyId: row.reported_story_id,
+    bauPostId: row.reported_bau_post_id,
+    bauCommentId: row.reported_bau_comment_id,
     resolvedAt: row.resolved_at?.toISOString() ?? null,
     resolvedByName: row.resolver_name,
     resolutionNote: row.resolution_note,
@@ -255,6 +279,12 @@ interface ResolvedSubject {
   reportedStoryId?: string | null;
   /** Its caption or text as reported. Never `contentSnapshot` (see schema.sql). */
   storySnapshot?: string | null;
+  /** The reported Baú post, or the post a reported Baú comment sits on. */
+  reportedBauPostId?: string | null;
+  /** The reported Baú comment, for a `bau_comment` subject only. */
+  reportedBauCommentId?: string | null;
+  /** The Baú words as reported. Never `contentSnapshot` (see schema.sql). */
+  bauSnapshot?: string | null;
 }
 
 /**
@@ -534,6 +564,68 @@ async function resolveStorySubject(input: CreateStoryReportInput): Promise<Resol
   };
 }
 
+/**
+ * A Baú post or comment, reported from its card.
+ *
+ * VISIBLE THROUGH THE FEED'S OWN RULES, or the same 404 every other
+ * unreachable subject gets (`resolveBauReportTarget` reuses the feed's reads,
+ * the VIP lock included: a members-only post is reportable only by someone who
+ * can read it). The destination is decided here, from the post: a Baú in a
+ * COMMUNITY goes to the INSTANCE queue (`context_kind = 'none'`, no
+ * `server_id`), for the reason `resolveServerSubject` gives: the owner who runs
+ * the Baú must not hold, or be able to close, the accusation about it, and
+ * posts are written by the staff who would otherwise read the report. Any
+ * other server's Baú goes to that server's own queue like a message report.
+ * `minor_sexual` then moves either to the instance queue (`routeByReason`).
+ *
+ * The words are copied into `bau_snapshot` so the report survives the post's
+ * deletion, which is the first thing an offender does.
+ */
+async function resolveBauSubject(
+  input: CreateBauPostReportInput | CreateBauCommentReportInput,
+): Promise<ResolvedSubject> {
+  const target = await resolveBauReportTarget({
+    reporterId: input.reporterId,
+    ...(input.subjectType === "bau_post"
+      ? { postId: input.postId }
+      : { commentId: input.commentId }),
+  });
+  if (!target) {
+    throw new ReportTargetNotVisibleError();
+  }
+  const [author, server] = await Promise.all([
+    getPool().query<{
+      display_name: string;
+      username: string | null;
+      discriminator: string | null;
+    }>(`SELECT display_name, username, discriminator FROM users WHERE id = $1`, [
+      target.authorId,
+    ]),
+    getPool().query<{ is_community: boolean }>(
+      `SELECT is_community FROM servers WHERE id = $1`,
+      [target.serverId],
+    ),
+  ]);
+  const row = author.rows[0];
+  if (!row || !server.rows[0]) {
+    throw new ReportTargetNotVisibleError();
+  }
+  const community = server.rows[0].is_community;
+  return {
+    contextKind: community ? "none" : "server",
+    serverId: community ? null : target.serverId,
+    channelId: null,
+    channelLabel: null,
+    messageId: null,
+    contentSnapshot: null,
+    reportedUserId: target.authorId,
+    subjectLabel: labelFor(row),
+    reportedBauPostId: target.postId,
+    reportedBauCommentId: target.commentId,
+    bauSnapshot: target.snapshot,
+  };
+}
+
 export interface CreateReportResult {
   report: Report;
   /**
@@ -565,7 +657,10 @@ export async function createReport(
         ? await resolveServerSubject(input)
         : input.subjectType === "story"
           ? await resolveStorySubject(input)
-          : await resolveUserSubject(input),
+          : input.subjectType === "bau_post" ||
+              input.subjectType === "bau_comment"
+            ? await resolveBauSubject(input)
+            : await resolveUserSubject(input),
   );
 
   const params = [
@@ -584,6 +679,9 @@ export async function createReport(
     subject.reportedServerId ?? null,
     subject.reportedStoryId ?? null,
     subject.storySnapshot ?? null,
+    subject.reportedBauPostId ?? null,
+    subject.reportedBauCommentId ?? null,
+    subject.bauSnapshot ?? null,
   ];
 
   // A story report must HOLD the story's bytes, or it is accepted as though it
@@ -610,8 +708,10 @@ export async function createReport(
          reporter_id, subject_type, context_kind, reported_message_id,
          reported_user_id, server_id, channel_id, content_snapshot,
          subject_label, channel_label, reason, details, reported_server_id,
-         reported_story_id, story_snapshot
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+         reported_story_id, story_snapshot, reported_bau_post_id,
+         reported_bau_comment_id, bau_snapshot
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+                 $16, $17, $18)
        RETURNING id::text AS id`,
       params,
     );
@@ -670,6 +770,22 @@ async function findOpenDuplicate(
                AND r.reporter_id = $1 AND r.reported_server_id = $2`,
             [input.reporterId, subject.reportedServerId],
           ]
+        : input.subjectType === "bau_post"
+          ? [
+              // Mirrors `idx_reports_open_bau_post_dedupe`.
+              `SELECT ${REPORT_COLUMNS} FROM reports r ${REPORT_JOINS}
+               WHERE r.status = 'open' AND r.subject_type = 'bau_post'
+                 AND r.reporter_id = $1 AND r.reported_bau_post_id = $2`,
+              [input.reporterId, subject.reportedBauPostId],
+            ]
+        : input.subjectType === "bau_comment"
+          ? [
+              // Mirrors `idx_reports_open_bau_comment_dedupe`.
+              `SELECT ${REPORT_COLUMNS} FROM reports r ${REPORT_JOINS}
+               WHERE r.status = 'open' AND r.subject_type = 'bau_comment'
+                 AND r.reporter_id = $1 AND r.reported_bau_comment_id = $2`,
+              [input.reporterId, subject.reportedBauCommentId],
+            ]
         : input.subjectType === "story"
           ? [
               // Mirrors `idx_reports_open_story_dedupe`.

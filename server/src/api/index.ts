@@ -13040,6 +13040,24 @@ router.post("/api/reports", async ({ req, res, user }) => {
                 reason: body.reason,
                 details: body.details,
               }
+            : body.subjectType === "bau_post"
+              ? {
+                  // The Baú flag, membership and the VIP lock are checked in
+                  // services/community-home.ts (`resolveBauReportTarget`).
+                  subjectType: "bau_post",
+                  reporterId: user.id,
+                  postId: body.postId,
+                  reason: body.reason,
+                  details: body.details,
+                }
+              : body.subjectType === "bau_comment"
+                ? {
+                    subjectType: "bau_comment",
+                    reporterId: user.id,
+                    commentId: body.commentId,
+                    reason: body.reason,
+                    details: body.details,
+                  }
             : {
               subjectType: "user",
               reporterId: user.id,
@@ -13144,6 +13162,27 @@ router.get("/api/reports/:report/context", async ({ user }, { report }) => {
   const context = await getReportContext(reportId, { id: user.id, instance });
   if (!context) {
     throw new NotFound("Report not found");
+  }
+  if (context.bau) {
+    // The one read that opens a Baú post past the VIP lock, so nobody reads
+    // it without a row saying so. Written BEFORE the words leave, and a failed
+    // write fails the request. A server-scoped report files it under that
+    // server; a community's Baú report lives in the instance queue and must
+    // not show in the community's own audit log, so it leaves the line alone.
+    if (scope.serverId) {
+      await logAudit({
+        serverId: scope.serverId,
+        actorId: user.id,
+        action: "report.bau_view",
+        targetType: "bau_post",
+        targetId: context.bau.post?.id ?? null,
+        changes: [{ key: "report", old: null, new: reportId }],
+      });
+    }
+    console.log(
+      `[moderation] report bau opened: report ${reportId}, ` +
+        `post ${context.bau.post?.id ?? "gone"}, moderator ${user.id}`,
+    );
   }
   return context;
 });

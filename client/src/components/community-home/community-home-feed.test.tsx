@@ -572,11 +572,101 @@ describe("PostCard", () => {
     expect(staff).toContain("data-home-card-menu");
     expect(staff).toContain("data-home-media-reserve-corner");
 
+    // A member's card has the same corner menu now (it carries Denunciar), so
+    // the download link keeps clear of it too, with nothing of staff's in it.
     const member = render(
       <PostCard post={pdf} me={me} locked={false} canManageServer={false} vipEnabled={false} />,
     );
-    expect(member).not.toContain("data-home-card-menu");
-    expect(member).not.toContain("data-home-media-reserve-corner");
+    expect(member).toContain("data-home-card-menu");
+    expect(member).toContain("data-home-media-reserve-corner");
+    expect(member).not.toContain("data-home-edit");
+  });
+
+  it("offers Denunciar to a reader on somebody else's post, and to nobody on their own, a lock, a draft or a preview", () => {
+    const reader = render(
+      <PostCard post={post()} me={me} locked={false} canManageServer={false} vipEnabled />,
+    );
+    expect(reader).toContain("data-home-report");
+    expect(reader).toContain("Report post");
+    // The same menu offers nothing staff-only to a member.
+    expect(reader).not.toContain("data-home-edit");
+    expect(reader).not.toContain("data-home-delete");
+    expect(reader).not.toContain("data-home-forward-menu");
+
+    const own = render(
+      <PostCard
+        post={post({ author: me })}
+        me={me}
+        locked={false}
+        canManageServer={false}
+        vipEnabled
+      />,
+    );
+    expect(own).not.toContain("data-home-report");
+
+    const locked = render(
+      <PostCard
+        post={post({ visibility: "members", body: null, locked: true })}
+        me={me}
+        locked
+        canManageServer={false}
+        vipEnabled
+      />,
+    );
+    expect(locked).not.toContain("data-home-report");
+
+    const draft = render(
+      <PostCard
+        post={post({ status: "draft" })}
+        me={me}
+        locked={false}
+        canManageServer
+        vipEnabled
+        mode="drafts"
+        onEdit={() => {}}
+      />,
+    );
+    expect(draft).not.toContain("data-home-report");
+
+    const preview = render(
+      <PostCard post={post()} me={me} locked={false} canManageServer={false} vipEnabled mode="preview" />,
+    );
+    expect(preview).not.toContain("data-home-report");
+
+    // Staff report too, from the same menu, beside their own tools.
+    const staff = render(
+      <PostCard
+        post={post()}
+        me={me}
+        locked={false}
+        canManageServer
+        vipEnabled
+        onEdit={() => {}}
+      />,
+    );
+    expect(staff).toContain("data-home-report");
+    expect(staff).toContain("data-home-edit");
+  });
+
+  it("puts a comment menu with Denunciar on other people's comments only", () => {
+    const other = {
+      id: "dddddddd-dddd-4ddd-8ddd-ddddddddddd1",
+      author,
+      body: "comentario dele",
+      createdAt: "2026-09-01T12:00:00.000Z",
+    };
+    const mine = { ...other, id: "dddddddd-dddd-4ddd-8ddd-ddddddddddd2", author: me, body: "meu" };
+    const html = render(
+      <PostCard
+        post={post({ commentCount: 2, commentTeaser: [other, mine] })}
+        me={me}
+        locked={false}
+        canManageServer={false}
+        vipEnabled
+        onPatch={() => {}}
+      />,
+    );
+    expect(html.match(/data-home-comment-menu/g)).toHaveLength(1);
   });
 
   it("a Twitch post embeds the player with the page host as parent", () => {
