@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { safeTextSchema } from "./api.js";
 import { parseTwitchEmbed, parseYoutubeVideoId } from "./community-home.js";
+import {
+  COMMUNITY_SUPPORT_PIX_MAX_LENGTH,
+  parseCommunitySupportUrl,
+  parsePixSupport,
+} from "./community-support.js";
 
 /**
  * Communities — the public, joinable half of a server.
@@ -131,7 +136,19 @@ export const communityAboutSchema = z
   )
   .pipe(safeTextSchema);
 
-/** Official-link chips on the poster and the in-app header. Not a CMS. */
+/**
+ * Official-link chips on the poster and the in-app header. Not a CMS.
+ *
+ * `support` is different from the six others: it is how a creator says "this
+ * is where you pay me", and it is never derived from a host. The others are
+ * classified by `kindForOfficialLinkHost` out of whatever the owner pasted;
+ * `support` is only ever made by `parseCommunitySupport`, from its own box in
+ * the editor, so a Patreon link pasted into the ordinary list stays a "site"
+ * and the card never mistakes a website for a payment link. At most ONE
+ * support link per server (`mergeCommunityLinks`): the locked VIP card has room
+ * for one button, and "which of these four do I press" is how a fan gives up.
+ * Rules and the host allowlist: `community-support.ts`.
+ */
 export const COMMUNITY_LINK_KINDS = [
   "youtube",
   "twitch",
@@ -139,19 +156,106 @@ export const COMMUNITY_LINK_KINDS = [
   "tiktok",
   "x",
   "site",
+  "support",
 ] as const;
 export type CommunityLinkKind = (typeof COMMUNITY_LINK_KINDS)[number];
 
+/** Ordinary links. The one `support` link rides beside them and is not counted. */
 export const COMMUNITY_LINKS_MAX = 8;
 export const COMMUNITY_LINK_URL_MAX_LENGTH = 500;
 
 export const communityLinkKindSchema = z.enum(COMMUNITY_LINK_KINDS);
 
-export const communityLinkSchema = z.object({
-  kind: communityLinkKindSchema,
-  url: z.string().url().max(COMMUNITY_LINK_URL_MAX_LENGTH),
-});
+/**
+ * One stored link. Flat on purpose: `url` for every chip and for a `support`
+ * link that is a page, `pix` for a `support` link that is TEXT (a Pix key or a
+ * copia e cola) and has no URL at all. A reader that only knows `url` sees a
+ * link with no address and has to skip it. The native apps do not decode this
+ * field at all today (no `communityLinks` in either client), so an unknown kind
+ * cannot crash them; an older web bundle would draw a chip it has no label for.
+ */
+export const communityLinkSchema = z
+  .object({
+    kind: communityLinkKindSchema,
+    url: z.string().url().max(COMMUNITY_LINK_URL_MAX_LENGTH).optional(),
+    pix: z.string().max(COMMUNITY_SUPPORT_PIX_MAX_LENGTH).optional(),
+  })
+  .superRefine((link, ctx) => {
+    if (link.kind !== "support") {
+      if (link.url === undefined || link.pix !== undefined) {
+        ctx.addIssue({ code: "custom", message: "A link needs a url." });
+      }
+      return;
+    }
+    if ((link.url === undefined) === (link.pix === undefined)) {
+      ctx.addIssue({
+        code: "custom",
+        message: "A support link is a url or a Pix text, never both.",
+      });
+    } else if (link.url !== undefined) {
+      if (parseCommunitySupportUrl(link.url) === null) {
+        ctx.addIssue({ code: "custom", message: "Support host not allowed." });
+      }
+    } else if (parsePixSupport(link.pix!) === null) {
+      ctx.addIssue({ code: "custom", message: "Not a Pix key or code." });
+    }
+  });
 export type CommunityLink = z.infer<typeof communityLinkSchema>;
+/** A link that is certainly a page: every ordinary chip, and a support URL. */
+export type CommunityUrlLink = CommunityLink & { url: string };
+
+/**
+ * What the owner typed in the support box: a Pix key, a copia e cola, or an
+ * https link on the allowlist. Null when it is none of those. A bare
+ * `apoia.se/rafa` (no scheme) is taken as https, because that is what gets
+ * pasted from a bio.
+ */
+export function parseCommunitySupport(raw: string): CommunityLink | null {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+  // Pix first: a CNPJ (`12.345.678/0001-95`) looks like a host and a path.
+  const pix = parsePixSupport(trimmed);
+  if (pix !== null) {
+    return { kind: "support", pix };
+  }
+  const withScheme = /^[a-z][a-z0-9+.-]*:/i.test(trimmed)
+    ? trimmed
+    : `https://${trimmed}`;
+  const url = parseCommunitySupportUrl(withScheme);
+  return url === null ? null : { kind: "support", url };
+}
+
+/** The support link among `links`, if any. Only the first is ever honoured. */
+export function communitySupportOf(
+  links: readonly CommunityLink[] | null | undefined,
+): CommunityLink | null {
+  return links?.find((link) => link.kind === "support") ?? null;
+}
+
+/** Links without the support one: the list the ordinary editor shows. */
+export function communityLinksWithoutSupport(
+  links: readonly CommunityLink[] | null | undefined,
+): CommunityLink[] {
+  return (links ?? []).filter((link) => link.kind !== "support");
+}
+
+/**
+ * Ordinary links first, the single support link last. A support URL also
+ * listed as an ordinary link is dropped from the ordinary ones, which is what
+ * an older client re-sending the whole list leaves behind.
+ */
+export function mergeCommunityLinks(
+  others: readonly CommunityLink[],
+  support: CommunityLink | null,
+): CommunityLink[] {
+  const plain = others.filter(
+    (link) =>
+      link.kind !== "support" && !(support?.url && link.url === support.url),
+  );
+  return support ? [...plain, support] : plain;
+}
 
 function httpsUrl(raw: string): URL | null {
   const trimmed = raw.trim();
@@ -213,7 +317,7 @@ function kindForOfficialLinkHost(host: string): CommunityLinkKind | null {
  * Classify one official link. Kind is taken from the host, never from the
  * client: a body that labels twitter.com as youtube is still X.
  */
-export function parseCommunityLink(raw: string): CommunityLink | null {
+export function parseCommunityLink(raw: string): CommunityUrlLink | null {
   const url = httpsUrl(raw);
   if (!url) {
     return null;
@@ -232,8 +336,8 @@ export function parseCommunityLink(raw: string): CommunityLink | null {
  */
 export function normalizeCommunityLinks(
   input: readonly { url: string }[],
-): CommunityLink[] | null {
-  const out: CommunityLink[] = [];
+): CommunityUrlLink[] | null {
+  const out: CommunityUrlLink[] = [];
   const seen = new Set<string>();
   for (const item of input) {
     const parsed = parseCommunityLink(item.url);
@@ -252,12 +356,26 @@ export function normalizeCommunityLinks(
   return out;
 }
 
+/**
+ * What the column holds, validated item by item: one bad entry (a support host
+ * that left the allowlist since it was saved, say) is dropped instead of
+ * blanking the whole list. Eight ordinary links, then at most one support link.
+ */
 export function parseStoredCommunityLinks(raw: unknown): CommunityLink[] {
-  const parsed = z.array(communityLinkSchema).safeParse(raw);
-  if (!parsed.success) {
+  if (!Array.isArray(raw)) {
     return [];
   }
-  return parsed.data.slice(0, COMMUNITY_LINKS_MAX);
+  const all: CommunityLink[] = [];
+  for (const item of raw) {
+    const parsed = communityLinkSchema.safeParse(item);
+    if (parsed.success) {
+      all.push(parsed.data);
+    }
+  }
+  return mergeCommunityLinks(
+    communityLinksWithoutSupport(all).slice(0, COMMUNITY_LINKS_MAX),
+    communitySupportOf(all),
+  );
 }
 
 /**
@@ -651,6 +769,14 @@ export const updateCommunitySchema = z.object({
     .max(COMMUNITY_LINKS_MAX)
     .optional(),
   /**
+   * THE SUPPORT LINK, its own box beside the list above: a Pix key, a Pix copia
+   * e cola or an https link on the allowlist (`parseCommunitySupport`). Explicit
+   * `null` or an empty string clears it; absent leaves it, and so does a patch
+   * that only sends `links`. Payload guard only, the route re-parses it and
+   * answers with its own sentence.
+   */
+  support: z.string().max(2000).nullable().optional(),
+  /**
    * YouTube or Twitch for the `/c/` 16:9, or `null` to clear (image included).
    * An uploaded image is a separate mint/claim, not this field.
    */
@@ -747,7 +873,11 @@ export const communitySettingsSchema = z.object({
   slug: z.string().nullable().default(null),
   tagline: z.string().nullable(),
   about: z.string().nullable().default(null),
-  links: z.array(communityLinkSchema).max(COMMUNITY_LINKS_MAX).default([]),
+  // Eight ordinary links plus the one support link.
+  links: z
+    .array(communityLinkSchema)
+    .max(COMMUNITY_LINKS_MAX + 1)
+    .default([]),
   featured: communityFeaturedSchema.nullable().default(null),
   category: communityCategorySchema,
   language: communityLanguageSchema.default(DEFAULT_COMMUNITY_LANGUAGE),

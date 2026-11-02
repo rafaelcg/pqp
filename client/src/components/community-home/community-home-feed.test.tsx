@@ -107,7 +107,9 @@ describe("PostCard", () => {
     expect(html).toContain("data-home-locked-badge");
     expect(html).toContain("data-home-locked-blur");
     expect(html).toContain("data-home-unlock-cta");
-    expect(html).toContain("disabled");
+    // No support link on this server: no button, only who to ask.
+    expect(html).not.toContain("data-home-support-cta");
+    expect(html).toContain('data-home-unlock-support="0"');
     expect(html).not.toContain("data-home-vip-chip");
     expect(html).not.toContain("Tues");
     expect(html).not.toContain("data-home-comments");
@@ -164,6 +166,44 @@ describe("PostCard", () => {
     expect(html).not.toContain("data-home-locked-media");
     expect(html).toContain("data-home-locked-blur");
     expect(html).toContain("data-home-unlock-cta");
+  });
+
+  it("a locked post shows the server's support link, and leaks nothing more", () => {
+    const html = render(
+      <PostCard
+        post={post({
+          visibility: "members",
+          body: null,
+          teaser: "só o inner vê",
+          locked: true,
+        })}
+        me={me}
+        locked
+        canManageServer={false}
+        vipEnabled
+        support={{ kind: "support", url: "https://apoia.se/rafa" }}
+      />,
+    );
+    expect(html).toContain("data-home-support-cta");
+    expect(html).toContain('href="https://apoia.se/rafa"');
+    expect(html).toContain('rel="noopener noreferrer"');
+    expect(html).toContain('data-home-unlock-support="1"');
+    expect(html).not.toContain("o mapa do porão");
+  });
+
+  it("an unlocked post carries no unlock card, support link or not", () => {
+    const html = render(
+      <PostCard
+        post={post()}
+        me={me}
+        locked={false}
+        canManageServer={false}
+        vipEnabled
+        support={{ kind: "support", url: "https://apoia.se/rafa" }}
+      />,
+    );
+    expect(html).not.toContain("data-home-unlock-cta");
+    expect(html).not.toContain("apoia.se");
   });
 
   it("with the VIP flag off, a members post still has no VIP chip", () => {

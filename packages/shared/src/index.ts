@@ -9,6 +9,7 @@ export * from "./channel-sessions.js";
 export * from "./chat.js";
 export * from "./chat-text.js";
 export * from "./communities.js";
+export * from "./community-support.js";
 export * from "./community-home.js";
 export * from "./community-home-channel-refs.js";
 export * from "./community-home-share.js";

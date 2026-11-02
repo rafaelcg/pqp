@@ -1,7 +1,11 @@
 import {
   bauPostPath,
+  communityLinksWithoutSupport,
+  communitySupportOf,
   parseCommunityLink,
+  parseCommunitySupport,
   type Channel,
+  type CommunityLink,
   type Gif,
   type PublicUser,
   type Server,
@@ -44,6 +48,7 @@ import {
   CommunityIdentityRail,
   type CommunityIdentityDraft,
 } from "@/components/communities/community-identity-header";
+import { supportDraftOf } from "@/components/communities/community-support-field";
 import { EmojiPickerPanel } from "@/components/chat/emoji-picker";
 import { GifPickerPanel } from "@/components/chat/gif-picker";
 import { GifAttachment } from "@/components/chat/message-list";
@@ -127,6 +132,7 @@ import {
 import { ComposeCover } from "./community-home-compose-cover";
 import { ComposeMobileRendition } from "./community-home-compose-mobile";
 import { UnlockedMedia } from "./community-home-media";
+import { VipUnlockCard } from "./community-home-vip-unlock";
 import { BauShareButton } from "./community-home-share-public";
 import {
   ComposeTranslationNote,
@@ -317,7 +323,10 @@ function identityDraftFrom(server: Server): CommunityIdentityDraft {
   return {
     tagline: server.communityTagline ?? "",
     about: server.communityAbout ?? "",
-    linkUrls: communityLinksOf(server).map((link) => link.url),
+    linkUrls: communityLinksWithoutSupport(communityLinksOf(server)).map(
+      (link) => link.url ?? "",
+    ),
+    supportText: supportDraftOf(communitySupportOf(communityLinksOf(server))),
   };
 }
 
@@ -330,7 +339,13 @@ function identityDraftDirty(
     (draft.tagline.trim() || null) !== (server.communityTagline ?? null) ||
     (draft.about.trim() || null) !== (server.communityAbout ?? null) ||
     JSON.stringify(links) !==
-      JSON.stringify(communityLinksOf(server).map((link) => link.url))
+      JSON.stringify(
+        communityLinksWithoutSupport(communityLinksOf(server)).map(
+          (link) => link.url,
+        ),
+      ) ||
+    draft.supportText.trim() !==
+      supportDraftOf(communitySupportOf(communityLinksOf(server)))
   );
 }
 
@@ -745,6 +760,14 @@ type PostCardProps = {
   onForward?: (post: CommunityHomePost) => void;
   /** Followed from a permalink or a chat card: ring it for a moment. */
   highlighted?: boolean;
+  /**
+   * The server's support link (`communitySupportOf`): what the locked card's
+   * "Apoiar" opens. Absent or null and the card has no button.
+   */
+  support?: CommunityLink | null;
+  /** Funnel events for the locked card; see `VipUnlockCard`. */
+  onSupportView?: () => void;
+  onSupportClick?: () => void;
 };
 
 /**
@@ -776,6 +799,9 @@ export function PostCard({
   onCopyLink,
   onForward,
   highlighted = false,
+  support = null,
+  onSupportView,
+  onSupportClick,
 }: PostCardProps) {
   const { t, locale } = useTranslation();
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -1108,18 +1134,11 @@ export function PostCard({
               </p>
             )}
             <LockedBodyBlur />
-            <div className="mt-4">
-              <Button
-                type="button"
-                variant="secondary"
-                className="gap-1.5"
-                disabled
-                data-home-unlock-cta
-              >
-                <Lock className="h-3.5 w-3.5" aria-hidden />
-                {t("communityHome.unlockCta")}
-              </Button>
-            </div>
+            <VipUnlockCard
+              support={support}
+              onView={onSupportView}
+              onSupportClick={onSupportClick}
+            />
           </>
         ) : (
           <>
@@ -1472,6 +1491,7 @@ export function ComposeCard({
   customCoverEnabled,
   channels,
   announceChannel,
+  support = null,
   onDone,
   onCancelEdit,
 }: {
@@ -1488,6 +1508,8 @@ export function ComposeCard({
   mobileRenditionEnabled: boolean;
   /** `bau_custom_cover` is on here: offer a cover (a frame or an image) for a video. */
   customCoverEnabled: boolean;
+  /** The server's support link, so the locked preview draws the real card. */
+  support?: CommunityLink | null;
   /** Channels the author can see: the `#` picker lists these. */
   channels: readonly Channel[];
   /**
@@ -2291,6 +2313,7 @@ export function ComposeCard({
                 locked
                 canManageServer={false}
                 vipEnabled={vipEnabled}
+                support={support}
                 mode="preview"
               />
             </div>
@@ -2487,6 +2510,18 @@ export function CommunityHomeFeed({
   /** A permalink to a post older than the page the feed loads. */
   const [focusedExtra, setFocusedExtra] = useState<CommunityHomePost | null>(null);
   const [highlightId, setHighlightId] = useState<string | null>(null);
+  // What the locked VIP card's "Apoiar" opens: the creator's own link, held on
+  // the server row (`communityLinks`, kind `support`). Null and the card has no
+  // button, only the line that says who to ask.
+  const supportLink = communitySupportOf(communityLinksOf(server));
+  // TODO(creator-hub): report these through `recordCreatorHubEvent` (the
+  // first-party funnel counters, another PR) once it is on main: a `view` when a
+  // locked card with a support link is drawn, a `click` when "Apoiar" is
+  // pressed. That helper did not exist when this was written and a second one
+  // here would collide with it, so the card exposes the two callbacks and
+  // nothing is recorded yet.
+  const onSupportView = undefined;
+  const onSupportClick = undefined;
   const [identityEditing, setIdentityEditing] = useState(false);
   const [identityDraft, setIdentityDraft] = useState<CommunityIdentityDraft>(
     () => identityDraftFrom(server),
@@ -2637,6 +2672,11 @@ export function CommunityHomeFeed({
         return;
       }
     }
+    const supportText = identityDraft.supportText.trim();
+    if (supportText && !parseCommunitySupport(supportText)) {
+      setIdentityError(t("communities.support.invalid"));
+      return;
+    }
     setIdentitySaving(true);
     setIdentityError(null);
     try {
@@ -2648,6 +2688,7 @@ export function CommunityHomeFeed({
         about:
           identityDraft.about.trim() === "" ? null : identityDraft.about.trim(),
         links: preparedLinks.map((url) => ({ url })),
+        support: supportText === "" ? null : supportText,
       });
       onServerUpdated?.({
         ...server,
@@ -3200,6 +3241,7 @@ export function CommunityHomeFeed({
                 customCoverEnabled={customCoverEnabled}
                 channels={channels}
                 announceChannel={announceChannel}
+                support={supportLink}
                 onDone={onComposed}
                 onCancelEdit={() => {
                   setCompose(emptyCompose());
@@ -3373,6 +3415,9 @@ export function CommunityHomeFeed({
                   )}
                   canManageServer={canManageServer}
                   vipEnabled={vipEnabled}
+                  support={supportLink}
+                  onSupportView={onSupportView}
+                  onSupportClick={onSupportClick}
                   onPatch={(patch) => patchPost(post.id, patch)}
                   onEdit={canManageServer ? beginEdit : undefined}
                   onDelete={

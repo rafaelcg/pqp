@@ -1,6 +1,7 @@
 import type { CommunityLink, CommunityLinkKind } from "@pqp/shared";
-import { Globe } from "lucide-react";
+import { Check, Globe, Heart } from "lucide-react";
 import { ConnectionGlyph } from "@/components/connections/connection-badges";
+import { useCopyText } from "@/components/settings/kit/copy-button";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -11,6 +12,7 @@ const LINK_LABEL: Record<CommunityLinkKind, MessageKey> = {
   tiktok: "communities.link.tiktok",
   x: "communities.link.x",
   site: "communities.link.site",
+  support: "communities.link.support",
 };
 
 const INSTAGRAM_PATH =
@@ -55,6 +57,9 @@ function LinkGlyph({ kind }: { kind: CommunityLinkKind }) {
   if (kind === "x") {
     return <SimpleGlyph path={X_PATH} />;
   }
+  if (kind === "support") {
+    return <Heart aria-hidden className="h-4 w-4 shrink-0 text-signal" />;
+  }
   return <Globe aria-hidden className="h-4 w-4 shrink-0 text-text-tertiary" />;
 }
 
@@ -75,6 +80,34 @@ export function siteLinkLabel(url: string): string | null {
   }
 }
 
+const CHIP_CLASS =
+  "cta-lift inline-flex h-10 items-center gap-2 rounded-full border border-border bg-surface-1 px-3 text-sm text-text transition-colors duration-[var(--duration-fast)] hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring";
+
+/**
+ * A support link that is TEXT (a Pix key or copia e cola). It is a button that
+ * copies, never an anchor: there is nothing to open, and the text goes nowhere
+ * but the clipboard.
+ */
+function PixChip({ pix }: { pix: string }) {
+  const { t } = useTranslation();
+  const { copied, copy } = useCopyText(pix);
+  return (
+    <>
+      <button type="button" className={CHIP_CLASS} onClick={copy} data-community-pix>
+        {copied ? (
+          <Check aria-hidden className="h-4 w-4 shrink-0 text-success" />
+        ) : (
+          <Heart aria-hidden className="h-4 w-4 shrink-0 text-signal" />
+        )}
+        {t("communities.link.pix")}
+      </button>
+      <span role="status" className="sr-only">
+        {copied ? t("settings.rail.copied") : ""}
+      </span>
+    </>
+  );
+}
+
 export function CommunityOfficialLinks({
   links,
   className,
@@ -83,22 +116,30 @@ export function CommunityOfficialLinks({
   className?: string;
 }) {
   const { t } = useTranslation();
-  if (links.length === 0) {
+  // A link with no address and no Pix text is one this build cannot draw (a
+  // kind from a newer server): skipped, never an empty chip.
+  const drawable = links.filter((link) => link.url || link.pix);
+  if (drawable.length === 0) {
     return null;
   }
   return (
     <ul className={cn("flex flex-wrap gap-2", className)} data-community-links>
-      {links.map((link) => (
-        <li key={link.url}>
-          <a
-            href={link.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="cta-lift inline-flex h-10 items-center gap-2 rounded-full border border-border bg-surface-1 px-3 text-sm text-text transition-colors duration-[var(--duration-fast)] hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
-          >
-            <LinkGlyph kind={link.kind} />
-            {(link.kind === "site" && siteLinkLabel(link.url)) || t(LINK_LABEL[link.kind])}
-          </a>
+      {drawable.map((link) => (
+        <li key={link.url ?? `pix:${link.pix}`}>
+          {link.url ? (
+            <a
+              href={link.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={CHIP_CLASS}
+            >
+              <LinkGlyph kind={link.kind} />
+              {(link.kind === "site" && siteLinkLabel(link.url)) ||
+                t(LINK_LABEL[link.kind])}
+            </a>
+          ) : (
+            <PixChip pix={link.pix!} />
+          )}
         </li>
       ))}
     </ul>

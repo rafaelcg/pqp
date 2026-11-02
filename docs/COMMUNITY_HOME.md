@@ -112,9 +112,33 @@ Card footers are like + comment count only. Join-call chrome stays off Baú
 cards. Comment teasers on the card are 0–2 (owner reply else oldest, 2-line
 clamp); the rest opens on detail tap. Locked cards do not expand comments.
 
-The unlock CTA is disabled and reads "VIP, coming soon". There is no
-checkout, Gift, Buy post, or price. See [`BAU_VIP_STRATEGY.md`](./BAU_VIP_STRATEGY.md)
-for what would replace it.
+**The locked card sends the fan to the creator's own link (Option A, pqp never
+touches the money).** `VipUnlockCard` says in one line what VIP unlocks (the
+supporter-only posts; it does not mention VIP voice or watch-party rooms,
+because a person who cannot see those rooms is told nothing about them), then
+shows "Apoiar" when the server has a **support link**, then says to ask whoever
+runs the server for the VIP cargo, which staff grant by hand. No support link
+and the button is simply absent. There is no checkout, Gift, Buy post, or price.
+See [`BAU_VIP_STRATEGY.md`](./BAU_VIP_STRATEGY.md).
+
+The support link is an official-link kind, `support`, and the one kind that is
+never derived from a host: it has its own box ("Apoiar o criador") in both
+places the official links are edited (the Baú page in place, Server settings),
+sent as `support` on `PATCH /api/servers/:id/community` and stored beside the
+others in `servers.community_links`, **one per server**, last in the list. It
+is either an https page on the allowlist `COMMUNITY_SUPPORT_HOSTS` (LivePix,
+Apoia.se, Patreon, Ko-fi, Buy Me a Coffee, Cafecito, Catarse, Kick, Twitch,
+YouTube, PayPal.me, Mercado Pago, ...; one string per host, in
+`packages/shared/src/community-support.ts`, with a test), or **Pix text**: a Pix
+key (CPF, CNPJ, e-mail, phone, random key) or a "copia e cola" whose CRC16 is
+checked. Pix text is stored in `pix`, never fetched, rendered only as text with
+a copy button, never as a link. Members read it (it is on the server row they
+already get); **the public `/c/<slug>` poster never carries it**, because a Pix
+key is somebody's CPF, phone or e-mail. Native apps do not decode
+`communityLinks` at all today, so a new kind cannot crash them; an older web
+bundle draws no label for a `support` chip until it reloads.
+`recordCreatorHubEvent` (view and click) is not wired yet: see the TODO in
+`community-home-feed.tsx`.
 
 ## What is in the pane
 
