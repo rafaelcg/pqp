@@ -416,6 +416,25 @@ describeDb("GET /api/admin/metrics", () => {
     resetAgeGateMetricsForTests();
   });
 
+  it("carries the creator hub block: table counts and the two placeholder counters", async () => {
+    const { recordCreatorHubEvent, resetCreatorHubStatsForTests } = await import(
+      "../services/creator-hub-metrics.js"
+    );
+    resetCreatorHubStatsForTests();
+    recordCreatorHubEvent("ctaView");
+    const result = await call<{
+      creatorHub: {
+        process: { ctaViews: number; supportClicks: number };
+        db: { servers: { bauOn: number }; vip: { holders: number } } | null;
+      };
+    }>(operator, "/api/admin/metrics");
+    expect(result.status).toBe(200);
+    expect(result.body.creatorHub.process).toEqual({ ctaViews: 1, supportClicks: 0 });
+    expect(result.body.creatorHub.db?.servers.bauOn).toBe(0);
+    expect(result.body.creatorHub.db?.vip.holders).toBeGreaterThanOrEqual(0);
+    resetCreatorHubStatsForTests();
+  });
+
   it("answers an instance moderator with counts and no identities", async () => {
     const result = await call<MetricsBody>(operator, "/api/admin/metrics");
     expect(result.status).toBe(200);

@@ -115,7 +115,14 @@ both in `docs/CAPACITY.md` §"The video budget is per box"),
 `USER_STATS` (`user_stats`, default **on**: the per-person counts the
 Retrospectiva is built from; off stops every new write, nothing is deleted;
 see `server/src/services/user-stats.ts`),
-`COMMUNITY_HOME_ENABLED`, `COMMUNITY_HOME_VIP_ENABLED`,
+`COMMUNITY_HOME_ENABLED`, `COMMUNITY_HOME_VIP_ENABLED`
+(`community_home_vip`, **per server**: the creator-hub pilot turns VIP on for
+one server at a time with `PUT /api/admin/flag-overrides` or the dashboard's
+per-server switch; the variable stays the default and a global row still
+decides for every server without an override, so with no row nothing changes.
+Still needs the global `community_home`. Served as `vipEnabled` on
+`GET /api/community-home/config?serverId=`; without `serverId` the answer is the
+global one, which is what phones ask today, see `docs/COMMUNITY_HOME.md`),
 `PARTY_NEWCOMER_EXPERIENCE` (per server; default off; see below),
 `COMMUNITY_HOME_TRANSLATION` (`community_home_translation`, **per server**,
 default off; automatic translation of Baú posts, which also needs

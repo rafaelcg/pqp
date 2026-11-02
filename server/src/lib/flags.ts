@@ -285,8 +285,11 @@ export const FEATURE_FLAGS = {
     env: "COMMUNITY_HOME_VIP_ENABLED",
     parseEnv: exactTrue,
     codeDefault: false,
-    perServer: false,
-    clientVia: "GET /api/community-home/config (vipEnabled)",
+    // Every reader knows the server: the feed, unread counts, the latest read,
+    // the post write and the push all work from a server id, and the config
+    // probe is asked `?serverId=`. Still needs the global `community_home`.
+    perServer: true,
+    clientVia: "GET /api/community-home/config?serverId= (vipEnabled)",
   },
   community_home_translation: {
     description:

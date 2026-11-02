@@ -661,6 +661,7 @@ import {
   isCommunityHomeEnabled,
   isCommunityHomeRowNew,
   loadCommunityHomeConfig,
+  loadCommunityHomeVipEnabled,
   markCommunityHomeRowSeen,
   mergeServerUpdate,
   pickServerLandingTarget,
@@ -9169,6 +9170,30 @@ function MainAppContent({
       setCommunityHomeComposeNonce(0);
     }
   }, [communityHomeOpen]);
+  // `community_home_vip` is a per-server flag, so the boot probe (which names
+  // no server) cannot answer it for a pilot server: ask with the server when
+  // its feed opens, so an operator's flip is seen on the next open.
+  const [communityHomeVipByServer, setCommunityHomeVipByServer] = useState<
+    Record<string, boolean>
+  >({});
+  useEffect(() => {
+    if (!communityHomeOpen || !selectedServerId) {
+      return;
+    }
+    let cancelled = false;
+    void loadCommunityHomeVipEnabled(selectedServerId).then((on) => {
+      if (!cancelled) {
+        setCommunityHomeVipByServer((prev) =>
+          prev[selectedServerId] === on
+            ? prev
+            : { ...prev, [selectedServerId]: on },
+        );
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [communityHomeOpen, selectedServerId]);
   useEffect(() => {
     if (!communityHomeEnabled || !selectedServerId) {
       setCommunityHomeRowNew(false);
@@ -14166,7 +14191,10 @@ function MainAppContent({
             canManageServer={canManageServer}
             isOwner={selectedServer.role === "owner"}
             isVip={meVip}
-            vipEnabled={communityHomeConfig.vipEnabled}
+            vipEnabled={
+              communityHomeVipByServer[selectedServer.id] ??
+              communityHomeConfig.vipEnabled
+            }
             mediaEnabled={communityHomeConfig.mediaEnabled}
             introDismissed={Boolean(
               user.preferences?.communityHomeIntroDismissedAt,

@@ -6063,11 +6063,17 @@ function translationActiveFor(serverId: string): boolean {
  * `mediaEnabled` is the storage probe, folded in so the client needs one
  * request rather than two before it can draw the composer.
  */
-router.get("/api/community-home/config", async () => ({
-  enabled: isCommunityHomeEnabled(),
-  vipEnabled: isCommunityHomeVipEnabled(),
-  mediaEnabled: isCommunityHomeEnabled() && isCommunityHomeMediaConfigured(),
-}));
+router.get("/api/community-home/config", async ({ url }) => {
+  // `?serverId=` is the server the client is looking at: VIP is a per-server
+  // flag (`community_home_vip`). Absent or not a uuid, the answer is the
+  // global one, which is what every client before this change received.
+  const parsed = z.string().uuid().safeParse(url.searchParams.get("serverId"));
+  return {
+    enabled: isCommunityHomeEnabled(),
+    vipEnabled: isCommunityHomeVipEnabled(parsed.success ? parsed.data : null),
+    mediaEnabled: isCommunityHomeEnabled() && isCommunityHomeMediaConfigured(),
+  };
+});
 
 /**
  * This server's own opt-in. The instance flag says Baú exists here; this

@@ -14,7 +14,7 @@ Staging is the proving ground. Production has the flags unset.
 | Name | Default | What it does |
 |---|---|---|
 | `COMMUNITY_HOME_ENABLED` | off | The feed exists. Off: every `/home/*` route 404s, the schedule sweep idles, the client hides the row on a private hall. A community still lands on Overview (identity poster, empty feed). |
-| `COMMUNITY_HOME_VIP_ENABLED` | off | The VIP half. Off: `visibility: members` is refused on write, existing members-only posts leave the feed (staff still see them in Drafts), and the client shows no lock, no VIP chip, no tier picker and no "view as" inspector. Needs the first flag. |
+| `COMMUNITY_HOME_VIP_ENABLED` | off | The VIP half. Off: `visibility: members` is refused on write, existing members-only posts leave the feed (staff still see them in Drafts), and the client shows no lock, no VIP chip, no tier picker and no "view as" inspector. Needs the first flag. Runtime flag `community_home_vip`, **per server**: the variable is its default, a global row beats it and a per-server override (dashboard, or `PUT /api/admin/flag-overrides`) beats both, so one server can have VIP while the rest do not. With no row it answers what the variable always did. |
 
 A third switch, `community_home_translation`, is a **runtime flag** (per
 server, default off) and is described in "Translation" below. A fourth,
@@ -56,6 +56,13 @@ feed. There is no `VITE_` flag: the client asks `GET /api/community-home/config`
 it follows the attachments and communities configs. `mediaEnabled` is the
 `S3_*` probe folded in, so a deployment without storage still gets the feed
 with YouTube / Twitch / TikTok / Instagram links and text.
+
+`vipEnabled` is per server, so the web client asks `GET
+/api/community-home/config?serverId=<id>` when a server's feed opens and uses
+that answer. A call with no `serverId` (or one that is not a uuid) answers the
+global value. The iOS and Android clients still ask once with no server, so on
+a server where VIP is on only by a per-server override they do not yet draw the
+lock chip; moving them to the per-server ask is a separate native change.
 
 **Local override, dev bypass only.** With `DEV_AUTH_BYPASS=true`,
 `?communityHome=1|0` on `/app` forces the answer for that tab and latches it

@@ -576,10 +576,26 @@ describeDb("runtime flags against Postgres", () => {
 
     // VIP still needs the main switch, exactly as with the variables.
     await flags.setGlobalFlag("community_home_vip", true, { kind: "dashboard" });
-    expect(isCommunityHomeVipEnabled()).toBe(false);
+    expect(isCommunityHomeVipEnabled(null)).toBe(false);
     await flags.setGlobalFlag("community_home", true, { kind: "dashboard" });
     expect(isCommunityHomeEnabled()).toBe(true);
-    expect(isCommunityHomeVipEnabled()).toBe(true);
+    expect(isCommunityHomeVipEnabled(null)).toBe(true);
+
+    // And per server (the creator-hub pilot): an override beats the global row
+    // both ways, and the other server keeps the global answer.
+    await flags.setGlobalFlag("community_home_vip", false, { kind: "dashboard" });
+    await flags.setServerFlagOverride("community_home_vip", serverId, true, {
+      kind: "dashboard",
+    });
+    expect(isCommunityHomeVipEnabled(serverId)).toBe(true);
+    expect(isCommunityHomeVipEnabled(otherServerId)).toBe(false);
+    expect(isCommunityHomeVipEnabled(null)).toBe(false);
+    await flags.setGlobalFlag("community_home_vip", true, { kind: "dashboard" });
+    await flags.setServerFlagOverride("community_home_vip", otherServerId, false, {
+      kind: "dashboard",
+    });
+    expect(isCommunityHomeVipEnabled(otherServerId)).toBe(false);
+    expect(isCommunityHomeVipEnabled(serverId)).toBe(true);
   });
 
   it("Linux desktop system audio is switched from the dashboard and served by the share config", async () => {
