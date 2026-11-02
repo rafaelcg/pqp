@@ -139,9 +139,9 @@ fun AgeGateScreen(session: SessionStore, arrivedOnInvite: Boolean = false) {
         }
     }
     val complete = day.isNotEmpty() && month != null && year.length == 4
-    val readback = remember(day, month, year, locale) {
-        continueOutcome(day, month, year, readback = true, locale = locale) as? ContinueOutcome.ReadBack
-    }
+    // Not remembered: the outcome depends on today's date (a birth date after
+    // today is refused), so a cached null would outlive midnight. It is cheap.
+    val readback = continueOutcome(day, month, year, readback = true, locale = locale) as? ContinueOutcome.ReadBack
     val reading = readingBack && readback != null
 
     fun submit(date: String) {
