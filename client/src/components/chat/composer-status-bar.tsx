@@ -6,9 +6,10 @@ import { cn } from "@/lib/utils";
 export const COMPOSER_COUNT_FROM = 3_800;
 
 /**
- * The fixed 28px line under the composer under the redesign (the text
- * channels canvas, "O compositor: os estados"). Who is typing lives on the
- * left and the character count on the right, so nothing above it moves when
+ * The 28px line of the composer under the redesign (the text channels
+ * canvas, "O compositor: os estados"). Who is typing lives on the left and
+ * the character count on the right. `floating` lays it over the bottom of the
+ * log, so the main composer reserves no row for it and nothing moves when
  * either appears. Past the limit the count turns red and offers to send the
  * text as a file; `flash` is set for a moment when Enter was refused.
  */
@@ -18,12 +19,15 @@ export function ComposerStatusBar({
   max,
   flash,
   onSendAsFile,
+  floating = false,
 }: {
   typing: ReactNode;
   length: number;
   max: number;
   flash: boolean;
   onSendAsFile?: () => void;
+  /** Over the bottom of the log instead of a row of its own. */
+  floating?: boolean;
 }) {
   const { t, locale } = useTranslation();
   const over = length > max;
@@ -31,7 +35,11 @@ export function ComposerStatusBar({
   return (
     <div
       data-composer-status=""
-      className="flex h-7 min-w-0 items-center gap-3 px-3 text-xs text-text-secondary"
+      className={cn(
+        "flex h-7 min-w-0 items-center gap-3 px-3 text-xs text-text-secondary",
+        floating &&
+          "pointer-events-none absolute inset-x-3 bottom-full bg-gradient-to-t from-[color:var(--color-pane-main)] from-60% to-transparent sm:inset-x-4 [&_button]:pointer-events-auto",
+      )}
     >
       <div className="min-w-0 flex-1 truncate">{typing}</div>
       {length >= COMPOSER_COUNT_FROM && (

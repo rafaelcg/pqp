@@ -303,6 +303,16 @@ const COMPOSER_ICON_ON = "bg-surface-3 text-text redesign:bg-[color:color-mix(in
  * text tint, round tools and a round accent send, Phosphor glyphs. What
  * stacks inside the well (reply, chips, format bar) sits on the same tint.
  */
+/*
+ * The one-row composer (the + left of the field, tools and send right of it).
+ * The tools row dissolves into the row, so its buttons line up beside the
+ * field and sit level with its bottom as it grows to several lines.
+ */
+const COMPOSER_ROW_REDESIGN =
+  "redesign:flex redesign:items-end redesign:gap-1 redesign:p-[7px]";
+const COMPOSER_TOOLS_ROW_REDESIGN =
+  "redesign:contents redesign:[&>*]:order-2 redesign:[&>*]:mb-0.5";
+
 const COMPOSER_WELL_REDESIGN =
   "redesign:rounded-[var(--composer-radius)] redesign:border-[color:var(--composer-border)] redesign:bg-[color:var(--composer-bg)] redesign:focus-within:border-[color:var(--composer-border-focus)]";
 
@@ -502,6 +512,7 @@ export function MessageComposer({
 }: MessageComposerProps) {
   const { t, locale } = useTranslation();
   const redesign = useRedesign();
+  const oneRow = !embedded && variant !== "stream";
   // A narrow phone: @ suggestions sit above the keyboard as pills.
   const phone = useMediaQuery(BELOW_SM_QUERY, false);
   const inputPlaceholder = placeholder ?? t("composer.placeholderFallback");
@@ -1782,7 +1793,9 @@ export function MessageComposer({
     <form
       data-chat-composer=""
       onSubmit={(event) => void handleSubmit(event)}
-      className={COMPOSER_FORM_CLASS}
+      // The one-row composer ends level with the user card beside it, which
+      // sits 0.5rem above the home indicator plus its 1px border.
+      className={cn(COMPOSER_FORM_CLASS, oneRow && "redesign:[--safe-pb-min:calc(0.5rem+1px)]")}
     >
       {/* The call's hint line (push-to-talk focus), above the WHOLE composer.
           The dock cannot hang it itself: its row animates open by collapsing
@@ -2022,7 +2035,16 @@ export function MessageComposer({
           </div>
         )}
         {voiceNoteActive && <VoiceNotePanel controller={voiceNote} />}
-        <div className={cn("relative min-h-10 min-w-0", voiceNoteActive && "hidden")}>
+        {/* Under the redesign the main composer is one row: the +, the
+            field, then the tools and send, bottoms level, growing upward. */}
+        <div className={cn(oneRow && COMPOSER_ROW_REDESIGN)}>
+        <div
+          className={cn(
+            "relative min-h-10 min-w-0",
+            oneRow && "redesign:order-1 redesign:flex-1",
+            voiceNoteActive && "hidden",
+          )}
+        >
           {body.length === 0 && (
             <span
               aria-hidden
@@ -2090,6 +2112,7 @@ export function MessageComposer({
         <div
           className={cn(
             "flex items-center gap-0.5 px-1.5 pb-1.5 redesign:gap-1 redesign:px-2 redesign:pb-2",
+            oneRow && COMPOSER_TOOLS_ROW_REDESIGN,
             voiceNoteActive && !voiceNoteHolding && "hidden",
           )}
         >
@@ -2098,7 +2121,7 @@ export function MessageComposer({
           {/* Hidden rather than empty: a self-host without attachments in a
               panel without slash commands has nothing for the + to add. */}
           {insertItems.length > 0 && variant !== "stream" && (
-          <div ref={insertMenuRef} className="relative">
+          <div ref={insertMenuRef} className={cn("relative", oneRow && "redesign:order-0!")}>
             <Tooltip label={t("composer.insert")}>
               <Button
                 type="button"
@@ -2205,7 +2228,7 @@ export function MessageComposer({
           )}
           </>
           )}
-          <span className="flex-1" />
+          <span className={cn("flex-1", oneRow && "redesign:hidden")} />
         {embedded ? (
           embedded.trailing ?? null
         ) : voiceNote.available &&
@@ -2259,9 +2282,11 @@ export function MessageComposer({
         </Button>
         )}
         </div>
+        </div>
       </div>
       {redesign && !embedded && variant !== "stream" && (
         <ComposerStatusBar
+          floating
           typing={typingLine}
           length={body.length}
           max={MESSAGE_MAX_LENGTH}
