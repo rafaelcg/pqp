@@ -5,12 +5,16 @@ import {
   type Attachment,
 } from "@pqp/shared";
 import {
+  Copy,
   Download,
   File as FileIcon,
   FileAudio,
   FileText,
   FileVideo,
   ImageOff,
+  Link as LinkIcon,
+  Reply,
+  SmilePlus,
 } from "lucide-react";
 import {
   DownloadSimple,
@@ -21,7 +25,7 @@ import {
   ImageBroken,
   type Icon as Glyph,
 } from "@phosphor-icons/react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ImageLightbox } from "@/components/chat/image-lightbox";
 import { VoiceNoteCard, type VoiceNoteMessage } from "@/components/chat/voice-note-card";
 import {
@@ -31,15 +35,28 @@ import {
   CONTENT_GLYPH_TILE_REDESIGN,
   CONTENT_MEDIA_REDESIGN,
 } from "@/components/ui/content-card";
+import { ContextMenu, type ContextMenuItemDef } from "@/components/ui/context-menu";
 import { Icon as PhosphorIcon } from "@/components/ui/icon";
 import { fetchAttachmentUrl } from "@/lib/api";
 import { formatByteSize } from "@/lib/attachments";
-import { translateMessage } from "@/lib/i18n";
+import { translateMessage, useTranslation } from "@/lib/i18n";
+import { copyImageToClipboard, downloadImage } from "@/lib/image-actions";
+import { useRedesign } from "@/lib/redesign";
 import { cn } from "@/lib/utils";
 
 /** Big enough to read a screenshot, small enough that one image is not the pane. */
 const MAX_TILE_WIDTH_PX = 400;
 const MAX_TILE_HEIGHT_PX = 320;
+/** Under the redesign, the most images a message shows before "+N". */
+const GRID_MAX = 4;
+/** How long "Imagem copiada" stays on the image. */
+const IMAGE_NOTICE_MS = 1600;
+
+/** What an image's right-click menu can do beyond copy and save. */
+interface ImageMenuActions {
+  onReply?: () => void;
+  onReact?: () => void;
+}
 
 interface AttachmentGridProps {
   attachments: Attachment[];
@@ -49,6 +66,12 @@ interface AttachmentGridProps {
    * has no idea what `voice` is) it stays the plain audio player.
    */
   voiceMessage?: VoiceNoteMessage;
+  /** Under the redesign: Responder in an image's right-click menu. */
+  onReply?: () => void;
+  /** Under the redesign: Reagir in an image's right-click menu. */
+  onReact?: () => void;
+  /** Under the redesign: the lightbox's Ver no canal. */
+  onViewInChannel?: () => void;
 }
 
 /**
@@ -61,8 +84,15 @@ interface AttachmentGridProps {
  * conversation, and every URL in it was minted by the server for a reader who
  * has already been access-checked.
  */
-export function AttachmentGrid({ attachments, voiceMessage }: AttachmentGridProps) {
+export function AttachmentGrid({
+  attachments,
+  voiceMessage,
+  onReply,
+  onReact,
+  onViewInChannel,
+}: AttachmentGridProps) {
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const redesign = useRedesign();
 
   // The lightbox navigates only the images of this one message — a video or a
   // PDF chip sitting between two photos is not something arrow keys should
@@ -72,13 +102,24 @@ export function AttachmentGrid({ attachments, voiceMessage }: AttachmentGridProp
     [attachments],
   );
 
+  const menu: ImageMenuActions | null = useMemo(
+    () => (redesign ? { onReply, onReact } : null),
+    [redesign, onReply, onReact],
+  );
+
   if (attachments.length === 0) {
     return null;
   }
 
+  // Under the redesign two or more images share one grid of at most four
+  // (the text channels canvas, "Várias de uma vez"); the last cell says how
+  // many more the lightbox holds.
+  const grid = redesign && images.length >= 2;
+
   return (
     <>
       <div className="mt-1.5 flex flex-wrap items-start gap-2">
+        {grid && <ImageGrid images={images} menu={menu} onOpen={setLightboxIndex} />}
         {attachments.map((attachment) =>
           attachment.voice && voiceMessage ? (
             <VoiceNoteCard
@@ -87,13 +128,16 @@ export function AttachmentGrid({ attachments, voiceMessage }: AttachmentGridProp
               message={voiceMessage}
             />
           ) : isImageContentType(attachment.contentType) ? (
-            <ImageTile
-              key={attachment.id}
-              attachment={attachment}
-              onOpen={() =>
-                setLightboxIndex(images.findIndex((img) => img.id === attachment.id))
-              }
-            />
+            grid ? null : (
+              <ImageTile
+                key={attachment.id}
+                attachment={attachment}
+                menu={menu}
+                onOpen={() =>
+                  setLightboxIndex(images.findIndex((img) => img.id === attachment.id))
+                }
+              />
+            )
           ) : isVideoContentType(attachment.contentType) ? (
             <VideoTile key={attachment.id} attachment={attachment} />
           ) : isAudioContentType(attachment.contentType) ? (
@@ -110,6 +154,7 @@ export function AttachmentGrid({ attachments, voiceMessage }: AttachmentGridProp
           index={lightboxIndex}
           onClose={() => setLightboxIndex(null)}
           onIndexChange={setLightboxIndex}
+          onViewInChannel={redesign && onViewInChannel ? () => onViewInChannel() : undefined}
         />
       )}
     </>
@@ -142,13 +187,50 @@ function tileBox(
   };
 }
 
+function ImageGrid({
+  images,
+  menu,
+  onOpen,
+}: {
+  images: Attachment[];
+  menu: ImageMenuActions | null;
+  onOpen: (index: number) => void;
+}) {
+  const shown = images.slice(0, GRID_MAX);
+  const hidden = images.length - shown.length;
+  return (
+    <div data-attachment-grid="" className="grid w-full max-w-[396px] grid-cols-2 gap-1">
+      {shown.map((attachment, index) => (
+        <ImageTile
+          key={attachment.id}
+          attachment={attachment}
+          menu={menu}
+          cell
+          more={index === shown.length - 1 && hidden > 0 ? hidden : 0}
+          onOpen={() => onOpen(index)}
+        />
+      ))}
+    </div>
+  );
+}
+
 function ImageTile({
   attachment,
   onOpen,
+  menu = null,
+  cell = false,
+  more = 0,
 }: {
   attachment: Attachment;
   onOpen: () => void;
+  /** Set under the redesign: the image gets its own right-click menu. */
+  menu?: ImageMenuActions | null;
+  /** A cell of the redesign's grid: a fixed 148px row, cropped to fill. */
+  cell?: boolean;
+  /** On the grid's last cell, how many images did not fit. */
+  more?: number;
 }) {
+  const { t } = useTranslation();
   const [src, setSrc] = useState(attachment.url);
   const [isBroken, setIsBroken] = useState(false);
   /**
@@ -176,25 +258,44 @@ function ImageTile({
       .catch(() => setIsBroken(true));
   }
 
+  const box = cell ? null : tileBox(attachment.width, attachment.height);
+
   // Expired is the common case and heals itself; deleted is the rare one, and
-  // the chip at least still names what used to be there.
+  // the chip at least still names what used to be there. Under the redesign
+  // the image keeps its place instead, so nothing around it moves.
   if (isBroken) {
-    return <DownloadChip attachment={attachment} unavailable />;
+    if (!menu) {
+      return <DownloadChip attachment={attachment} unavailable />;
+    }
+    return (
+      <div
+        data-attachment-unavailable=""
+        style={box ? { width: box.width, height: box.height } : undefined}
+        className={cn(
+          "flex flex-col items-center justify-center gap-2 rounded-md bg-surface-1 px-4 text-center text-xs text-text-tertiary ring-1 ring-inset ring-border",
+          cell ? "h-[148px] w-full" : !box && "h-40 w-64 max-w-full",
+        )}
+      >
+        <PhosphorIcon icon={ImageBroken} size="md" />
+        {t("chat.attachmentGone")}
+      </div>
+    );
   }
 
-  const box = tileBox(attachment.width, attachment.height);
-
-  return (
+  const tile = (
     <button
       type="button"
       onClick={onOpen}
-      aria-label={translateMessage("chat.openAttachment", {
-        name: attachment.filename,
-      })}
+      aria-label={
+        more > 0
+          ? t("chat.image.moreLabel", { count: more })
+          : translateMessage("chat.openAttachment", { name: attachment.filename })
+      }
       style={box ? { width: box.width, height: box.height } : undefined}
       className={cn(
-        "block overflow-hidden rounded-md border border-ink-4 bg-ink-3/40 transition-colors hover:border-signal/60 focus-visible:border-signal focus-visible:outline-none",
-        !box && "max-w-full",
+        "relative block overflow-hidden rounded-md border border-ink-4 bg-ink-3/40 transition-colors hover:border-signal/60 focus-visible:border-signal focus-visible:outline-none",
+        !box && !cell && "max-w-full",
+        cell && "h-[148px] w-full",
         CONTENT_MEDIA_REDESIGN,
         "redesign:hover:border-[color:var(--color-border-strong)] redesign:focus-visible:border-transparent",
         CONTENT_CARD_FOCUS_REDESIGN,
@@ -206,13 +307,124 @@ function ImageTile({
         loading="lazy"
         decoding="async"
         onError={handleError}
-        style={box ? undefined : { maxHeight: `${MAX_TILE_HEIGHT_PX}px` }}
+        style={box || cell ? undefined : { maxHeight: `${MAX_TILE_HEIGHT_PX}px` }}
         className={cn(
           "block",
-          box ? "h-full w-full object-cover" : "w-auto max-w-full",
+          box || cell ? "h-full w-full object-cover" : "w-auto max-w-full",
         )}
       />
+      {more > 0 && (
+        <span
+          aria-hidden="true"
+          className="absolute inset-0 grid place-items-center bg-[color:var(--overlay)] text-xl font-bold text-[color:var(--color-on-media)]"
+        >
+          {t("chat.image.more", { count: more })}
+        </span>
+      )}
     </button>
+  );
+
+  return menu ? (
+    <ImageMenu attachment={attachment} src={src} menu={menu}>
+      {tile}
+    </ImageMenu>
+  ) : (
+    tile
+  );
+}
+
+/**
+ * Right-click on an image under the redesign (the text channels canvas,
+ * "Clique direito numa imagem"): the image's own actions first, then the
+ * message's Responder and Reagir. The wrapper keeps the right-click from also
+ * opening the row's message menu. What happened shows on the image itself
+ * for a moment, since the list has no toast.
+ */
+function ImageMenu({
+  attachment,
+  src,
+  menu,
+  children,
+}: {
+  attachment: Attachment;
+  src: string;
+  menu: ImageMenuActions;
+  children: ReactNode;
+}) {
+  const { t } = useTranslation();
+  const [notice, setNotice] = useState<string | null>(null);
+  const timer = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (timer.current !== null) {
+        window.clearTimeout(timer.current);
+      }
+    },
+    [],
+  );
+  function show(text: string) {
+    if (timer.current !== null) {
+      window.clearTimeout(timer.current);
+    }
+    setNotice(text);
+    timer.current = window.setTimeout(() => setNotice(null), IMAGE_NOTICE_MS);
+  }
+
+  const items: ContextMenuItemDef[] = [
+    {
+      id: "copy",
+      label: t("chat.image.copy"),
+      icon: Copy,
+      onSelect: () => {
+        copyImageToClipboard(src, attachment.contentType)
+          .then(() => show(t("chat.image.copied")))
+          .catch(() => show(t("lightbox.copyFailedNoFallbackToast")));
+      },
+    },
+    {
+      id: "save",
+      label: t("chat.image.save"),
+      icon: Download,
+      onSelect: () => void downloadImage(src, attachment.filename),
+    },
+    {
+      id: "copy-link",
+      label: t("chat.image.copyLink"),
+      icon: LinkIcon,
+      onSelect: () => {
+        navigator.clipboard
+          .writeText(src)
+          .then(() => show(t("lightbox.copyLinkDone")))
+          .catch(() => show(t("lightbox.copyLinkFailedToast")));
+      },
+    },
+  ];
+  if (menu.onReply || menu.onReact) {
+    items.push({ id: "sep", label: "", separator: true });
+  }
+  if (menu.onReply) {
+    items.push({ id: "reply", label: t("chat.reply"), icon: Reply, onSelect: menu.onReply });
+  }
+  if (menu.onReact) {
+    items.push({ id: "react", label: t("chat.image.react"), icon: SmilePlus, onSelect: menu.onReact });
+  }
+
+  return (
+    <span
+      data-image-menu=""
+      className="relative block min-w-0"
+      onContextMenu={(event) => event.stopPropagation()}
+    >
+      <ContextMenu items={items}>{children}</ContextMenu>
+      {notice && (
+        <span
+          role="status"
+          className="pointer-events-none absolute bottom-2 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-[color:var(--overlay)] px-3 py-1 text-xs font-semibold text-[color:var(--color-on-media)]"
+        >
+          {notice}
+        </span>
+      )}
+    </span>
   );
 }
 

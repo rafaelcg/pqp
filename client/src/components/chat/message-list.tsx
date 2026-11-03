@@ -3813,6 +3813,8 @@ const MessageRow = memo(function MessageRow({
   const isReal = !message.pending && !message.failed;
   const canDelete = isReal && !!onDelete && (isMine || canModerate);
   const canReply = isReal && !!onReply;
+  // The lightbox's Ver no canal: back to this row, with the jump's flash.
+  const viewInChannel = useCallback(() => onJumpToMessage(message.id), [onJumpToMessage, message.id]);
   const isMessagePinned = Boolean(message.pinnedAt);
   // -1 outside the active row so Tab costs one stop per log, not one per
   // control on every message — see `isActive` on MessageRowProps.
@@ -4612,6 +4614,9 @@ const MessageRow = memo(function MessageRow({
                           authorName: message.authorName,
                           isMine,
                         }}
+                        onReply={canReply ? onReply : undefined}
+                        onReact={isReal && !stream ? onOpenPicker : undefined}
+                        onViewInChannel={isReal ? viewInChannel : undefined}
                       />
                       <EditedMarker editedAt={message.editedAt} />
                     </div>
