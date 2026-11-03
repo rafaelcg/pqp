@@ -3321,6 +3321,12 @@ h2,
   --message-avatar: 2rem;
 }
 
+/* A call's chat, the third of the canvas's densities (36 on a phone, 32 in a
+   thread, 28 in a call). */
+:root[data-redesign] [data-message-surface="call"] {
+  --message-avatar: 1.75rem;
+}
+
 :root[data-redesign] .pqp-message-mention {
   background: var(--message-mention-bg);
   box-shadow: inset 2px 0 0 var(--message-mention-edge);

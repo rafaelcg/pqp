@@ -11640,6 +11640,9 @@ function MainAppContent({
       {...nudgeShake}
       className={cn("flex min-h-0 min-w-0 flex-1 flex-col", nudgeShake.className)}
       data-retro-window={retroWindow ? "" : undefined}
+      // A voice room's chat is the call's chat: the smallest avatar
+      // (index.css, `data-message-surface`).
+      data-message-surface={isVoiceRoomChannelType(selectedChannel.type) ? "call" : undefined}
       // The whole conversation is the drop target, not the textarea: dragging a
       // screenshot onto the messages is what people actually do, and a target
       // the size of one input is a target you miss.
