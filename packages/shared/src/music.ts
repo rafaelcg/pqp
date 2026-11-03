@@ -164,6 +164,11 @@ export const musicResolvedSchema = z.object({
   sourceUrl: z.string().url().max(2048).nullable(),
   thumbnailUrl: z.string().url().max(2048).nullable(),
   durationMs: z.number().int().nonnegative().nullable(),
+  /**
+   * The uploader, shown under a search result. Optional: only search answers
+   * carry it, and an older server sends none.
+   */
+  channel: z.string().max(200).nullable().optional(),
 });
 
 export type MusicResolved = z.infer<typeof musicResolvedSchema>;

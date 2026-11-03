@@ -35,8 +35,10 @@ import {
   getMusicSnapshot,
   moveTrackTo,
   musicSessionChannelId,
+  useMusic,
   type MusicAddOutcome,
 } from "@/lib/music-store";
+import { readMusicRecent, rememberMusicRecent } from "@/lib/music-recent";
 import { cn } from "@/lib/utils";
 import { formatMusicClock } from "@/components/voice/music-now-playing";
 
@@ -50,6 +52,9 @@ import { formatMusicClock } from "@/components/voice/music-now-playing";
  */
 export const LIVE_SEARCH_DEBOUNCE_MS = 350;
 export const LIVE_SEARCH_MIN_CHARS = 2;
+
+/** Past this a result is a concert or a mix, not a song, and says so. */
+export const MUSIC_LONG_VIDEO_MS = 20 * 60 * 1000;
 
 export function shouldResolveQuery(text: string): boolean {
   const trimmed = text.trim();
@@ -107,6 +112,7 @@ export function MusicSearchPicker({
   size = "sheet",
   canManage = false,
   autoFocus = false,
+  recents = false,
   onQueryActive,
   onEmptyEscape,
 }: {
@@ -120,6 +126,11 @@ export function MusicSearchPicker({
   size?: "sheet" | "stage" | "hero";
   canManage?: boolean;
   autoFocus?: boolean;
+  /**
+   * With the field empty, offer this person's recent picks (`music-recent`).
+   * The stage passes it only when the room has no history of its own.
+   */
+  recents?: boolean;
   onQueryActive?: (active: boolean) => void;
   onEmptyEscape?: () => void;
 }) {
@@ -132,9 +143,20 @@ export function MusicSearchPicker({
   /** The text these results answer, so a stale list cannot be added by Enter. */
   const [resultsFor, setResultsFor] = useState("");
   const [highlight, setHighlight] = useState(0);
+  /**
+   * A pasted link on the stage: what it is, before it goes in. One track, or
+   * a playlist's tracks. Elsewhere (the sheet, the drawer) a link still goes
+   * straight in, where there is no room for a card.
+   */
+  const [preview, setPreview] = useState<{ tracks: MusicResolved[] } | null>(null);
+  const [recentTracks] = useState<MusicResolved[]>(() => (recents ? readMusicRecent() : []));
+  const nothingOn = !useMusic().state?.current;
   const rail = chrome === "rail";
   const big = size !== "sheet";
   const hero = size === "hero";
+  const showRecents =
+    recents && big && !query.trim() && results === null && preview === null && recentTracks.length > 0;
+  const rows = results ?? (showRecents ? recentTracks : null);
   const lastQueried = useRef("");
   const runId = useRef(0);
 
@@ -176,6 +198,9 @@ export function MusicSearchPicker({
   const addResolved = useCallback(
     (track: MusicResolved, playNext = false) => {
       const outcome = playNext ? queueResolvedNext(track) : addTrack(track);
+      if (outcome === "queued" || outcome === "playing" || outcome === "playing-dropped") {
+        rememberMusicRecent([track]);
+      }
       tellOutcome(outcome);
     },
     [tellOutcome],
@@ -193,6 +218,12 @@ export function MusicSearchPicker({
       try {
         const { track, tracks } = await resolveMusic(text);
         if (room === null || musicSessionChannelId() !== room) {
+          return;
+        }
+        if (big) {
+          setResults(null);
+          setResultsFor("");
+          setPreview({ tracks: tracks && tracks.length > 1 ? tracks : [track] });
           return;
         }
         if (tracks && tracks.length > 1) {
@@ -217,8 +248,33 @@ export function MusicSearchPicker({
         setNotice(t(musicErrorKey(error)));
       }
     },
-    [t, tellOutcome],
+    [big, t, tellOutcome],
   );
+
+  const confirmPreview = useCallback(() => {
+    if (!preview) {
+      return;
+    }
+    const [only] = preview.tracks;
+    setPreview(null);
+    if (preview.tracks.length === 1 && only) {
+      addResolved(only);
+      return;
+    }
+    const outcome = addTracks(preview.tracks);
+    if (outcome.added === 0) {
+      setNotice(t("music.full"));
+      return;
+    }
+    rememberMusicRecent(preview.tracks.slice(0, 1));
+    setNotice(
+      outcome.dropped > 0
+        ? t("music.queuedManyDropped", { count: outcome.added, dropped: outcome.dropped })
+        : t("music.queuedMany", { count: outcome.added }),
+    );
+    setQuery("");
+    lastQueried.current = "";
+  }, [addResolved, preview, t]);
 
   const runSearch = useCallback(
     async (text: string) => {
@@ -278,6 +334,17 @@ export function MusicSearchPicker({
 
   const submit = useCallback(async () => {
     const text = query.trim();
+    if (preview) {
+      confirmPreview();
+      return;
+    }
+    if (!text && showRecents) {
+      const pick = recentTracks[highlight] ?? recentTracks[0];
+      if (pick) {
+        addResolved(pick);
+      }
+      return;
+    }
     if (!text || busy) {
       return;
     }
@@ -300,7 +367,20 @@ export function MusicSearchPicker({
     } finally {
       setBusy(false);
     }
-  }, [addResolved, busy, highlight, query, results, resultsFor, runResolve, runSearch]);
+  }, [
+    addResolved,
+    busy,
+    confirmPreview,
+    highlight,
+    preview,
+    query,
+    recentTracks,
+    results,
+    resultsFor,
+    runResolve,
+    runSearch,
+    showRecents,
+  ]);
 
   /*
    * A pasted link resolves at once. Only a paste, never a keystroke: somebody
@@ -332,12 +412,12 @@ export function MusicSearchPicker({
   };
 
   const onFieldKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "ArrowDown" && results && results.length > 0) {
+    if (event.key === "ArrowDown" && rows && rows.length > 0) {
       event.preventDefault();
-      setHighlight((index) => Math.min(results.length - 1, index + 1));
+      setHighlight((index) => Math.min(rows.length - 1, index + 1));
       return;
     }
-    if (event.key === "ArrowUp" && results && results.length > 0) {
+    if (event.key === "ArrowUp" && rows && rows.length > 0) {
       event.preventDefault();
       setHighlight((index) => Math.max(0, index - 1));
       return;
@@ -345,6 +425,11 @@ export function MusicSearchPicker({
     if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
+      if (preview) {
+        setPreview(null);
+        setQuery("");
+        return;
+      }
       if (results) {
         setResults(null);
         setResultsFor("");
@@ -368,6 +453,7 @@ export function MusicSearchPicker({
    */
   const onQueryChange = (value: string) => {
     setQuery(value);
+    setPreview(null);
     if (results && !value.trim()) {
       setResults(null);
       setResultsFor("");
@@ -381,7 +467,9 @@ export function MusicSearchPicker({
    */
   const placeholder = rail
     ? t("music.placeholder.short")
-    : compact
+    : big
+      ? t("music.placeholder.stage")
+      : compact
       ? t("music.placeholder.field")
       : t("music.placeholder");
 
@@ -392,11 +480,11 @@ export function MusicSearchPicker({
     placeholder,
     "aria-label": t("music.placeholder"),
     role: "combobox" as const,
-    "aria-expanded": results !== null,
+    "aria-expanded": rows !== null,
     "aria-controls": listId,
     "aria-autocomplete": "list" as const,
     "aria-activedescendant":
-      results && results[highlight] ? `${listId}-${highlight}` : undefined,
+      rows && rows[highlight] ? `${listId}-${highlight}` : undefined,
     onKeyDown: onFieldKeyDown,
     onPaste: onFieldPaste,
     onFocus: (event: { currentTarget: HTMLInputElement }) => {
@@ -451,33 +539,64 @@ export function MusicSearchPicker({
               )}
               onChange={(event) => onQueryChange(event.target.value)}
             />
-            <Tooltip label={t("music.add")}>
-              <Button
-                type="button"
-                size="icon"
-                variant="secondary"
-                className={cn(
-                  "h-8 w-8 shrink-0 redesign:h-[var(--control-sm)] redesign:w-[var(--control-sm)] redesign:disabled:border-transparent redesign:disabled:bg-transparent",
-                  big && "h-10 w-10 redesign:h-10 redesign:w-10",
-                  hero && "h-12 w-12 redesign:h-12 redesign:w-12",
-                )}
-                disabled={busy || !query.trim()}
-                onClick={() => void submit()}
-              >
-                <IconSwap off={Plus} on={PlusGlyph} kind="symbol" size="sm" offClassName="h-4 w-4" />
-              </Button>
-            </Tooltip>
+            {!big && (
+              <Tooltip label={t("music.add")}>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="secondary"
+                  className={cn(
+                    "h-8 w-8 shrink-0 redesign:h-[var(--control-sm)] redesign:w-[var(--control-sm)] redesign:disabled:border-transparent redesign:disabled:bg-transparent",
+                    big && "h-10 w-10 redesign:h-10 redesign:w-10",
+                    hero && "h-12 w-12 redesign:h-12 redesign:w-12",
+                  )}
+                  disabled={busy || !query.trim()}
+                  onClick={() => void submit()}
+                >
+                  <IconSwap off={Plus} on={PlusGlyph} kind="symbol" size="sm" offClassName="h-4 w-4" />
+                </Button>
+              </Tooltip>
+            )}
           </>
         )}
       </div>
-      {results && results.length > 0 && (
+      {preview && (
+        <MusicLinkPreview
+          tracks={preview.tracks}
+          nothingOn={nothingOn}
+          hero={hero}
+          onConfirm={confirmPreview}
+          onCancel={() => {
+            setPreview(null);
+            setQuery("");
+          }}
+        />
+      )}
+      {showRecents && (
+        <p className="px-1 pt-2 text-[12px] font-semibold text-text-secondary">{t("music.recent.title")}</p>
+      )}
+      {rows && rows.length > 0 && (
         <ul
           id={listId}
           role="listbox"
-          aria-label={t("music.search.results")}
+          aria-label={showRecents ? t("music.recent.title") : t("music.search.results")}
           className={cn("space-y-0.5", big && "pt-1")}
         >
-          {results.map((track, index) => (
+          {rows.map((track, index) =>
+            big ? (
+              <StageResultRow
+                key={`${track.videoId}-${index}`}
+                id={`${listId}-${index}`}
+                track={track}
+                highlighted={index === highlight}
+                hero={hero}
+                enterHint={nothingOn ? t("music.search.enterPlay") : t("music.search.enterQueue")}
+                canManage={canManage}
+                onPick={() => addResolved(track)}
+                onPlayNext={() => addResolved(track, true)}
+                onHover={() => setHighlight(index)}
+              />
+            ) : (
             <li
               key={`${track.videoId}-${index}`}
               id={`${listId}-${index}`}
@@ -556,7 +675,8 @@ export function MusicSearchPicker({
                 </Tooltip>
               )}
             </li>
-          ))}
+            ),
+          )}
         </ul>
       )}
       {notice && (
@@ -567,6 +687,185 @@ export function MusicSearchPicker({
           {notice}
         </p>
       )}
+    </div>
+  );
+}
+
+/** The cover at 16:9, which is what a YouTube result is, with its length on it. */
+function StageCover({ track, wide }: { track: MusicResolved; wide: boolean }) {
+  return (
+    <span
+      className={cn(
+        "relative aspect-video shrink-0 overflow-hidden rounded-md bg-surface-2",
+        wide ? "w-20" : "w-[72px]",
+      )}
+    >
+      {track.thumbnailUrl ? (
+        <img src={track.thumbnailUrl} alt="" className="h-full w-full object-cover" />
+      ) : null}
+      {track.durationMs ? (
+        <span className="absolute bottom-1 right-1 rounded bg-black/75 px-1 text-[10px] font-semibold leading-4 tabular-nums text-white">
+          {formatMusicClock(track.durationMs)}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+/**
+ * A search result on the stage: the uploader under the title tells two
+ * uploads of one song apart, a concert says it is long, and the highlighted
+ * row says what Enter does with it.
+ */
+function StageResultRow({
+  id,
+  track,
+  highlighted,
+  hero,
+  enterHint,
+  canManage,
+  onPick,
+  onPlayNext,
+  onHover,
+}: {
+  id: string;
+  track: MusicResolved;
+  highlighted: boolean;
+  hero: boolean;
+  enterHint: string;
+  canManage: boolean;
+  onPick: () => void;
+  onPlayNext: () => void;
+  onHover: () => void;
+}) {
+  const { t } = useTranslation();
+  const long = (track.durationMs ?? 0) > MUSIC_LONG_VIDEO_MS;
+  return (
+    <li
+      id={id}
+      role="option"
+      aria-selected={highlighted}
+      className={cn(
+        "group/hit flex items-center gap-2 rounded-lg p-1.5 pr-2 hover:bg-surface-2",
+        highlighted && "bg-surface-2",
+        MUSIC_ROW_REDESIGN,
+        highlighted && MUSIC_ROW_HIGHLIGHT_REDESIGN,
+      )}
+    >
+      <button
+        type="button"
+        className="flex min-w-0 flex-1 items-center gap-3 text-left"
+        onClick={onPick}
+        onMouseEnter={onHover}
+      >
+        <StageCover track={track} wide={hero} />
+        <span className="min-w-0 flex-1">
+          <span
+            className={cn("block truncate font-medium text-text", hero ? "text-[14px]" : "text-[13px]")}
+            title={track.title}
+          >
+            {track.title}
+          </span>
+          {track.channel || long ? (
+            <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[12px] text-text-tertiary">
+              {track.channel ? <span className="min-w-0 truncate">{track.channel}</span> : null}
+              {long ? (
+                <span className="shrink-0 rounded bg-surface-3 px-1.5 text-[11px] font-medium leading-[18px] text-text-secondary">
+                  {t("music.search.long")}
+                </span>
+              ) : null}
+            </span>
+          ) : null}
+        </span>
+        {highlighted ? (
+          <span
+            data-music-enter-hint=""
+            className="hidden shrink-0 items-center gap-1.5 text-[12px] text-text-tertiary [@media(hover:hover)]:flex"
+          >
+            <kbd className="rounded border border-[color:var(--card-border)] px-1 font-sans text-[11px] leading-[18px] text-text-secondary">
+              Enter
+            </kbd>
+            {enterHint}
+          </span>
+        ) : null}
+      </button>
+      {canManage && (
+        <Tooltip label={t("music.playNext")}>
+          <button
+            type="button"
+            aria-label={t("music.playNext")}
+            className={cn(
+              "flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-text-tertiary opacity-0 hover:bg-surface-3 hover:text-text group-hover/hit:opacity-100 group-focus-within/hit:opacity-100 [@media(hover:none)]:opacity-100",
+              MUSIC_ICON_REDESIGN,
+            )}
+            onClick={onPlayNext}
+          >
+            <IconSwap off={ListStart} on={Queue} kind="symbol" size="sm" offClassName="h-4 w-4" />
+          </button>
+        </Tooltip>
+      )}
+    </li>
+  );
+}
+
+/**
+ * A pasted link on the stage, before it goes in: one card with the cover,
+ * the title and the length, or the playlist's size, and one action.
+ */
+function MusicLinkPreview({
+  tracks,
+  nothingOn,
+  hero,
+  onConfirm,
+  onCancel,
+}: {
+  tracks: MusicResolved[];
+  nothingOn: boolean;
+  hero: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const { t } = useTranslation();
+  const [first] = tracks;
+  if (!first) {
+    return null;
+  }
+  const many = tracks.length > 1;
+  return (
+    <div
+      data-music-link-preview=""
+      className="mt-2 flex flex-col gap-2 rounded-xl bg-surface-2 p-2 shadow-[inset_0_0_0_1px_var(--card-border)]"
+    >
+      <div className="flex min-w-0 items-center gap-3">
+        <StageCover track={first} wide={hero} />
+        <div className="min-w-0 flex-1">
+          <p className="line-clamp-2 text-[14px] font-semibold leading-snug text-text" title={first.title}>
+            {first.title}
+          </p>
+          <p className="mt-0.5 truncate text-[12px] text-text-tertiary">
+            {many ? t("music.preview.tracks", { count: tracks.length }) : first.channel ?? ""}
+          </p>
+        </div>
+      </div>
+      <div className="flex justify-end gap-2">
+        <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
+          {t("music.preview.cancel")}
+        </Button>
+        {/* Lime only when nothing is on: with a track playing, the player's
+            pause is the screen's one lime button. */}
+        <Button
+          type="button"
+          size="sm"
+          variant={nothingOn ? "default" : "secondary"}
+          onClick={onConfirm}
+        >
+          {many
+            ? t("music.preview.queueMany", { count: tracks.length })
+            : nothingOn
+              ? t("music.preview.play")
+              : t("music.preview.queue")}
+        </Button>
+      </div>
     </div>
   );
 }

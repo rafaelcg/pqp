@@ -48,6 +48,8 @@ export interface InnerTubeVideo {
   title: string;
   durationMs: number | null;
   thumbnailUrl: string | null;
+  /** The uploader's name, so two uploads of one song can be told apart. */
+  channel?: string;
 }
 
 /**
@@ -180,7 +182,10 @@ function fromRenderer(node: Json): InnerTubeVideo | null {
   if (!title) {
     return null;
   }
+  const channel =
+    runsText(node.ownerText) || runsText(node.longBylineText) || runsText(node.shortBylineText);
   return {
+    ...(channel ? { channel } : {}),
     videoId,
     title,
     durationMs: parseDurationLabel(runsText(node.lengthText)),
@@ -207,7 +212,16 @@ function fromLockup(node: Json): InnerTubeVideo | null {
       durationMs = parseDurationLabel(typeof value.text === "string" ? value.text : undefined);
     }
   });
+  // The channel is the first text of the first metadata row.
+  let channel = "";
+  walk(isObject(metadata) ? metadata.metadata : null, (key, value) => {
+    if (!channel && key === "metadataParts" && Array.isArray(value)) {
+      const first = value[0];
+      channel = isObject(first) ? runsText(first.text) : "";
+    }
+  });
   return {
+    ...(channel ? { channel } : {}),
     videoId,
     title,
     durationMs,

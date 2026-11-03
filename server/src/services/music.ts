@@ -145,7 +145,7 @@ export async function resolveYouTube(
   const body = await fetchText(
     `https://www.youtube.com/oembed?url=${encodeURIComponent(watchUrl)}&format=json`,
   );
-  let parsed: { title?: string; thumbnail_url?: string } = {};
+  let parsed: { title?: string; thumbnail_url?: string; author_name?: string } = {};
   try {
     parsed = JSON.parse(body) as typeof parsed;
   } catch {
@@ -158,6 +158,10 @@ export async function resolveYouTube(
     sourceUrl,
     thumbnailUrl:
       parsed.thumbnail_url ?? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+    // The pasted link's preview names the channel, like a search row.
+    ...(parsed.author_name?.trim()
+      ? { channel: parsed.author_name.trim().slice(0, 200) }
+      : {}),
     /*
      * oEmbed has no duration, and the duration is half of the end-of-track
      * gate: without it the server cannot tell "the track ran out" from "a
@@ -226,6 +230,7 @@ interface SearchHit {
   title: string;
   thumbnailUrl: string | null;
   durationMs?: number | null;
+  channel?: string | null;
 }
 
 async function searchWithDataApi(query: string, key: string): Promise<SearchHit | null> {
@@ -434,6 +439,7 @@ async function searchUnofficial(query: string): Promise<SearchHit[]> {
         title: video.title,
         thumbnailUrl: video.thumbnailUrl,
         durationMs: video.durationMs,
+        ...(video.channel ? { channel: video.channel } : {}),
       }));
     }
     return [];
@@ -807,6 +813,7 @@ export async function searchMusicCandidates(query: string): Promise<MusicResolve
         title: video.title,
         thumbnailUrl: video.thumbnailUrl,
         durationMs: video.durationMs,
+        ...(video.channel ? { channel: video.channel } : {}),
       }));
     });
   } catch (error) {
@@ -826,6 +833,7 @@ export async function searchMusicCandidates(query: string): Promise<MusicResolve
       sourceUrl: null,
       thumbnailUrl: hit.thumbnailUrl,
       durationMs: hit.durationMs ?? null,
+      ...(hit.channel ? { channel: hit.channel } : {}),
     }));
   }
   /*

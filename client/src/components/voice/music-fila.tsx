@@ -2,9 +2,10 @@ import {
   MonitorPlay as MonitorPlayGlyph,
   Pause as PauseGlyph,
   Play as PlayGlyph,
+  Info as InfoGlyph,
   X as XGlyph,
 } from "@phosphor-icons/react";
-import { MonitorPlay, Pause, Play, X } from "lucide-react";
+import { Info, MonitorPlay, Pause, Play, X } from "lucide-react";
 import { IconSwap } from "@/components/ui/icon";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { rememberMusicPip } from "@/lib/music-pip";
@@ -564,16 +565,17 @@ function StageFila({
         centered && "mx-auto max-w-[44rem]",
         // Nothing on and nothing waiting: the field is the whole panel, so it
         // sits in the middle of the stage rather than under an empty list.
-        centered && nothing && "justify-center",
+        // The field stays put near the top, so results open downward instead
+        // of pushing it up the stage.
+        centered && nothing && "pt-16",
       )}
     >
       <div className="flex h-12 shrink-0 items-center gap-2 pl-4 pr-2">
-        <p className="font-display text-[15px] font-semibold text-text">{t("music.fila")}</p>
-        <span
-          data-music-queue-count=""
-          className="rounded-full bg-surface-2 px-1.5 text-[11px] font-semibold leading-5 tabular-nums text-text-secondary"
-        >
-          {queue.length}
+        <p className="font-display text-[15px] font-semibold text-text">{t("music.title")}</p>
+        <span data-music-queue-count="" className="text-[12px] tabular-nums text-text-secondary">
+          {queue.length === 0
+            ? t("music.stage.queueEmpty")
+            : t("music.stage.queueCount", { count: queue.length })}
         </span>
         {length ? (
           <span data-music-queue-length="" className="truncate text-[12px] text-text-tertiary">
@@ -581,6 +583,13 @@ function StageFila({
           </span>
         ) : null}
         <span className="flex-1" />
+        {nothing ? (
+          <Tooltip label={t("music.stage.emptyBody")} side="left">
+            <button type="button" className={icon} aria-label={t("music.stage.about")}>
+              <IconSwap off={Info} on={InfoGlyph} kind="symbol" size="sm" offClassName="h-4 w-4" />
+            </button>
+          </Tooltip>
+        ) : null}
         {canManage && queue.length > 1 ? <MusicShuffleButton className={icon} /> : null}
         <Tooltip label={t("music.stage.hideQueue")} side="left">
           <button
@@ -598,7 +607,6 @@ function StageFila({
       {nothing && fieldIdle ? (
         <div data-music-empty="" className="shrink-0 px-4 pb-4 pt-2">
           <p className="font-display text-2xl font-semibold text-text">{t("music.stage.emptyTitle")}</p>
-          <p className="mt-1.5 text-[14px] leading-snug text-text-secondary">{t("music.stage.emptyBody")}</p>
         </div>
       ) : null}
 
@@ -608,20 +616,11 @@ function StageFila({
           size={nothing ? "hero" : "stage"}
           canManage={canManage}
           autoFocus
+          recents={nothing && history.length === 0}
           onQueryActive={onQueryActive}
           onEmptyEscape={() => setMusicOpen(false)}
         />
       </div>
-      {fieldIdle ? (
-        // A short stage keeps its height for the list: the field's own
-        // placeholder already says what it takes.
-        <p
-          data-music-sources=""
-          className="shrink-0 px-4 pt-1.5 text-[11px] text-text-tertiary [@container(max-height:26rem)]:hidden"
-        >
-          {t("music.empty.sources")}
-        </p>
-      ) : null}
 
       <div
         className={cn(
