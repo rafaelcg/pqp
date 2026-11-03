@@ -18,6 +18,7 @@ import {
 } from "@phosphor-icons/react";
 import { Icon as Glyph } from "@/components/ui/icon";
 import { ChannelIntro, type ChannelIntroInfo } from "@/components/chat/channel-intro";
+import { UnreadStrip } from "@/components/chat/unread-strip";
 import { MessageFold } from "@/components/chat/message-fold";
 import {
   MemberModerationDialog,
@@ -210,6 +211,22 @@ const LOAD_MORE_THRESHOLD_PX = 240;
 const ANCHOR_HOLD_MS = 1500;
 /** How long a jumped-to message stays lit. */
 const HIGHLIGHT_MS = 2_000;
+/** Under the redesign, how long a load runs before its skeleton shows. */
+const SKELETON_DELAY_MS = 300;
+
+/** True once `on` has held for `ms`; false again the moment it drops. */
+function useDelayedTrue(on: boolean, ms: number): boolean {
+  const [due, setDue] = useState(false);
+  useEffect(() => {
+    if (!on) {
+      setDue(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setDue(true), ms);
+    return () => window.clearTimeout(timer);
+  }, [on, ms]);
+  return on && due;
+}
 /**
  * How long a jump's smooth scroll may take before it is treated as stopped,
  * for a browser without `scrollend` or a scroll that had nowhere to go (which
@@ -1284,6 +1301,34 @@ export const MessageList = memo(function MessageList({
     () => findFirstUnreadMessageId(messages, unreadSince, currentUserId),
     [messages, unreadSince, currentUserId],
   );
+  // Under the redesign, the strip at the top of the log (`unread-strip.tsx`):
+  // the count and mentions from the first new message down, others' only.
+  const unreadKey = `${channelId ?? ""}::${unreadSince ?? "none"}`;
+  const [unreadDismissedKey, setUnreadDismissedKey] = useState<string | null>(null);
+  const unreadDismissed = unreadDismissedKey === unreadKey;
+  const unreadStrip = useMemo(() => {
+    if (!redesign || !firstUnreadId) {
+      return null;
+    }
+    const start = rows.findIndex((row) => row.message.id === firstUnreadId);
+    if (start < 0) {
+      return null;
+    }
+    let count = 0;
+    let mentions = 0;
+    for (let index = start; index < rows.length; index += 1) {
+      if (rows[index].message.authorId === currentUserId) {
+        continue;
+      }
+      count += 1;
+      if (mentionMask[index]) {
+        mentions += 1;
+      }
+    }
+    return count > 0
+      ? { count, mentions, since: formatTime(rows[start].message.createdAt) }
+      : null;
+  }, [redesign, firstUnreadId, rows, mentionMask, currentUserId]);
   // A forum post's opening message is its first: known only once nothing
   // older is left to page in.
   const forumOpeningId =
@@ -2284,8 +2329,30 @@ export const MessageList = memo(function MessageList({
     return source.names.get(userId) ?? null;
   }, []);
 
+  const jumpToFirstUnread = useCallback(() => {
+    const node =
+      unreadDividerRef.current ??
+      (firstUnreadId ? rowNodes.current.get(firstUnreadId) : null) ??
+      null;
+    if (node && scrollRef.current) {
+      setIsPinned(false);
+      scrollWithin(scrollRef.current, node, { block: "center" });
+    }
+  }, [firstUnreadId]);
+  const dismissUnread = useCallback(() => {
+    setUnreadDismissedKey(unreadKey);
+    onMarkRead?.();
+  }, [unreadKey, onMarkRead]);
+  // Under the redesign a quick load shows nothing rather than a skeleton
+  // that blinks for a frame: it appears only after 300 ms.
+  const skeletonDue = useDelayedTrue(isLoading && redesign, SKELETON_DELAY_MS);
+
   if (isLoading) {
-    return <MessageListSkeleton />;
+    return redesign && !skeletonDue ? (
+      <div className="flex-1" data-message-list-waiting="" />
+    ) : (
+      <MessageListSkeleton />
+    );
   }
 
   return (
@@ -2310,6 +2377,15 @@ export const MessageList = memo(function MessageList({
         aria-live="off"
         className="flex-1 overflow-y-auto [overflow-anchor:none] py-4"
       >
+        {unreadStrip && !unreadDismissed && (
+          <UnreadStrip
+            count={unreadStrip.count}
+            mentions={unreadStrip.mentions}
+            since={unreadStrip.since}
+            onJump={jumpToFirstUnread}
+            onDismiss={dismissUnread}
+          />
+        )}
         {forumPost?.listHeader}
         {hasMore && (
           <div className="flex justify-center pb-3">
@@ -2713,7 +2789,9 @@ export const MessageList = memo(function MessageList({
                   : undefined
               }
               onMarkRead={onMarkRead}
-              showUnreadDivider={rowId === firstUnreadId}
+              showUnreadDivider={
+                rowId === firstUnreadId && !(redesign && unreadDismissed)
+              }
               afterForumOpening={
                 forumOpeningId !== null &&
                 index > 0 &&
@@ -4220,6 +4298,7 @@ const MessageRow = memo(function MessageRow({
             selecting && !selected && "redesign:hover:bg-[color:var(--message-hover)]",
           )}
           data-forum-answer={forumAnswer ? "" : undefined}
+          data-message-flash={isFlashing ? "" : undefined}
         >
           {selecting && onToggleSelect && isReal && (
             /* One overlay rather than a checkbox column: the row layout stays

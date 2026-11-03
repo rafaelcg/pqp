@@ -3418,6 +3418,22 @@ h2,
 }
 
 /* Someone else's long message, folded to eight lines until "Mostrar tudo". */
+:root[data-redesign] [data-message-flash] {
+  /* A jump's landing: lit at once, held, then let go (the text channels
+     canvas, "Não lidas"). The row drops the attribute after HIGHLIGHT_MS. */
+  animation: pqp-message-flash 2s var(--ease-standard) forwards;
+}
+@keyframes pqp-message-flash {
+  0%,
+  45% {
+    background-color: color-mix(in oklab, var(--color-accent) 15%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--color-accent) 50%, transparent);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: inset 0 0 0 1px transparent;
+  }
+}
 :root[data-redesign] .pqp-message-folded {
   max-height: calc(var(--chat-line-height) * 8);
   overflow: hidden;
