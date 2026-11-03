@@ -3052,6 +3052,29 @@ function QueuedSendFooter({
   );
 }
 
+/**
+ * A reaction's count. A change after the first render rolls the new number
+ * in from below (the text channels canvas, "Movimento", 1); a count that was
+ * already there when the message loaded does not move.
+ */
+function RollingCount({ value }: { value: number }) {
+  const first = useRef(value);
+  const changed = useRef(false);
+  if (value !== first.current) {
+    changed.current = true;
+  }
+  const rolled = changed.current;
+  return (
+    <span
+      key={value}
+      data-count-roll={rolled ? "" : undefined}
+      className="font-medium tabular-nums"
+    >
+      {value}
+    </span>
+  );
+}
+
 function FailedSendFooter({
   message,
   tabIndex,
@@ -3080,7 +3103,7 @@ function FailedSendFooter({
   }, [message.retryAvailableAt]);
 
   return (
-    <div className="mt-1.5">
+    <div className="mt-1.5" data-send-failed="">
       <p className="flex items-start gap-2 text-xs text-danger redesign:text-[13px]">
         <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 redesign:hidden" aria-hidden />
         <Glyph icon={WarningCircleFill} size="sm" className="mt-0.5 hidden shrink-0 redesign:block" />
@@ -4357,7 +4380,8 @@ const MessageRow = memo(function MessageRow({
             mentionsYou && !isFlashing
               ? mentionRowRadius(mentionJoinTop, mentionJoinBottom)
               : null,
-            message.pending && "opacity-60",
+            message.pending && "opacity-60 redesign:opacity-70",
+            "redesign:transition-opacity redesign:duration-100",
             isFlashing && "bg-accent/15 ring-1 ring-accent/50",
             mentionsYou && !isFlashing && "pqp-message-mention",
             !mentionsYou && !isFlashing && !selecting && "hover:bg-ink-3/40",
@@ -5886,7 +5910,7 @@ function ReactionChip({
         <span className="text-sm leading-none redesign:text-base" aria-hidden>
           {reaction.emoji}
         </span>
-        <span className="font-medium tabular-nums">{reaction.count}</span>
+        <RollingCount value={reaction.count} />
       </button>
       {anchor && (!onHold || pointer.current === "mouse") && <ReactionWhoTip anchor={anchor}>{tooltip}</ReactionWhoTip>}
     </>

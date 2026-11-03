@@ -3435,7 +3435,14 @@ h2,
 :root[data-redesign] [data-message-flash] {
   /* A jump's landing: lit at once, held, then let go (the text channels
      canvas, "Não lidas"). The row drops the attribute after HIGHLIGHT_MS. */
-  animation: pqp-message-flash 2s var(--ease-standard) forwards;
+  animation: pqp-message-flash 1.5s var(--ease-standard) forwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  /* No fade: the mark holds until the row lets go of it. */
+  :root[data-redesign] [data-message-flash] {
+    animation: none;
+    background-color: color-mix(in oklab, var(--color-accent) 15%, transparent);
+  }
 }
 /* A message's menu on a phone (the text channels canvas, "Segurando uma
    mensagem"): the same rows, risen from the bottom edge as a sheet instead
@@ -6360,12 +6367,51 @@ html[data-immersive-stage] [data-immersive-hide] {
     scale: 1;
   }
 }
+/* A menu grows from the control that opened it, in place. */
+@keyframes pqp-menu-in {
+  from {
+    opacity: 0;
+    scale: 0.97;
+  }
+  to {
+    opacity: 1;
+    scale: 1;
+  }
+}
+/* A count that changed rolls in from below; tabular figures keep its width. */
+@keyframes pqp-count-roll {
+  from {
+    opacity: 0;
+    translate: 0 50%;
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
+}
 @media (prefers-reduced-motion: no-preference) {
   :root[data-redesign] .chat-msg-in {
     animation-duration: var(--duration-base);
   }
   :root[data-redesign] [data-reaction-fresh] {
     animation: pqp-reaction-in var(--duration-base) var(--ease-emphasized) backwards;
+  }
+  :root[data-redesign] [data-radix-menu-content].animate-fade-in {
+    transform-origin: var(--radix-dropdown-menu-content-transform-origin, var(--radix-context-menu-content-transform-origin));
+    animation: pqp-menu-in var(--duration-fast) var(--ease-emphasized) both;
+  }
+  :root[data-redesign] [data-count-roll] {
+    display: inline-block;
+    animation: pqp-count-roll var(--duration-base) var(--ease-emphasized) backwards;
+  }
+  /* A thumbnail growing into the lightbox, and back. */
+  ::view-transition-group(pqp-lightbox-image) {
+    animation-duration: 280ms;
+    animation-timing-function: var(--ease-emphasized);
+  }
+  /* "Não foi": one shake, the nudge's curve, never a loop. */
+  :root[data-redesign] [data-send-failed] {
+    animation: nudge-shake 400ms var(--ease-standard) 1;
   }
 }
 @media (prefers-reduced-motion: reduce) {

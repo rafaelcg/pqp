@@ -26,7 +26,8 @@ import {
   type Icon as Glyph,
 } from "@phosphor-icons/react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ImageLightbox } from "@/components/chat/image-lightbox";
+import { flushSync } from "react-dom";
+import { ImageLightbox, LIGHTBOX_TRANSITION_NAME } from "@/components/chat/image-lightbox";
 import { VoiceNoteCard, type VoiceNoteMessage } from "@/components/chat/voice-note-card";
 import {
   CONTENT_CARD_FOCUS_REDESIGN,
@@ -95,7 +96,9 @@ export function AttachmentGrid({
   uploading = false,
 }: AttachmentGridProps) {
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const [transitionId, setTransitionId] = useState<string | null>(null);
   const redesign = useRedesign();
+  const gridRef = useRef<HTMLDivElement>(null);
 
   // The lightbox navigates only the images of this one message — a video or a
   // PDF chip sitting between two photos is not something arrow keys should
@@ -115,6 +118,63 @@ export function AttachmentGrid({
     return null;
   }
 
+  /*
+   * Under the redesign the thumbnail grows into the open picture and shrinks
+   * back on close (the text channels canvas, "Movimento", 8), through a View
+   * Transition. Without support, or with reduced motion, it simply opens.
+   */
+  const thumbOf = (id: string | undefined) =>
+    id
+      ? gridRef.current?.querySelector<HTMLElement>(
+          `[data-attachment-tile="${CSS.escape(id)}"] img`,
+        ) ?? null
+      : null;
+  const viewTransition = () => {
+    const start = (
+      document as Document & { startViewTransition?: (update: () => void) => { finished: Promise<void> } }
+    ).startViewTransition;
+    if (!redesign || !start || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+      return null;
+    }
+    return start.bind(document);
+  };
+  const openLightbox = (index: number) => {
+    const id = images[index]?.id;
+    const thumb = thumbOf(id);
+    const start = viewTransition();
+    if (!start || !thumb || !id) {
+      setLightboxIndex(index);
+      return;
+    }
+    thumb.style.viewTransitionName = LIGHTBOX_TRANSITION_NAME;
+    start(() => {
+      thumb.style.viewTransitionName = "";
+      flushSync(() => {
+        setTransitionId(id);
+        setLightboxIndex(index);
+      });
+    });
+  };
+  const closeLightbox = () => {
+    const id = lightboxIndex === null ? undefined : images[lightboxIndex]?.id;
+    const thumb = id === transitionId ? thumbOf(id) : null;
+    const start = viewTransition();
+    if (!start || !thumb) {
+      setTransitionId(null);
+      setLightboxIndex(null);
+      return;
+    }
+    start(() => {
+      flushSync(() => {
+        setTransitionId(null);
+        setLightboxIndex(null);
+      });
+      thumb.style.viewTransitionName = LIGHTBOX_TRANSITION_NAME;
+    }).finished.finally(() => {
+      thumb.style.viewTransitionName = "";
+    });
+  };
+
   // Under the redesign two or more images share one grid of at most four
   // (the text channels canvas, "Várias de uma vez"); the last cell says how
   // many more the lightbox holds.
@@ -122,9 +182,9 @@ export function AttachmentGrid({
 
   return (
     <>
-      <div className="mt-1.5 flex flex-wrap items-start gap-2">
+      <div ref={gridRef} className="mt-1.5 flex flex-wrap items-start gap-2">
         {grid && (
-          <ImageGrid images={images} menu={menu} uploading={uploading} onOpen={setLightboxIndex} />
+          <ImageGrid images={images} menu={menu} uploading={uploading} onOpen={openLightbox} />
         )}
         {attachments.map((attachment) =>
           attachment.voice && voiceMessage ? (
@@ -141,7 +201,7 @@ export function AttachmentGrid({
                 menu={menu}
                 uploading={uploading}
                 onOpen={() =>
-                  setLightboxIndex(images.findIndex((img) => img.id === attachment.id))
+                  openLightbox(images.findIndex((img) => img.id === attachment.id))
                 }
               />
             )
@@ -159,8 +219,9 @@ export function AttachmentGrid({
         <ImageLightbox
           attachments={images}
           index={lightboxIndex}
-          onClose={() => setLightboxIndex(null)}
+          onClose={closeLightbox}
           onIndexChange={setLightboxIndex}
+          transitionId={transitionId}
           onViewInChannel={redesign && onViewInChannel ? () => onViewInChannel() : undefined}
         />
       )}
@@ -299,6 +360,7 @@ function ImageTile({
     <button
       type="button"
       onClick={onOpen}
+      data-attachment-tile={attachment.id}
       aria-label={
         more > 0
           ? t("chat.image.moreLabel", { count: more })

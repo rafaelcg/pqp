@@ -45,6 +45,9 @@ const COPY_FLASH_MS = 1500;
 /** How long the failure toast stays up. */
 const TOAST_MS = 3000;
 
+/** The one shared View Transition name: a thumbnail and the open picture. */
+export const LIGHTBOX_TRANSITION_NAME = "pqp-lightbox-image";
+
 interface ImageLightboxProps {
   /** Already filtered to images — the navigable strip for this message/post. */
   attachments: Attachment[];
@@ -56,6 +59,12 @@ interface ImageLightboxProps {
    * Only passed under the redesign, from a message (never from a Baú post).
    */
   onViewInChannel?: (attachment: Attachment) => void;
+  /**
+   * The attachment the opening View Transition grows from its thumbnail.
+   * Its picture carries the shared transition name and is drawn at once,
+   * so the snapshot has something to grow into.
+   */
+  transitionId?: string | null;
 }
 
 /**
@@ -75,6 +84,7 @@ export function ImageLightbox({
   onClose,
   onIndexChange,
   onViewInChannel,
+  transitionId = null,
 }: ImageLightboxProps) {
   const { t } = useTranslation();
   const panelRef = useRef<HTMLDivElement>(null);
@@ -698,18 +708,19 @@ export function ImageLightbox({
               draggable={false}
               onLoad={(event) => handleLoad(current.id, event)}
               onError={() => handleImgError(current)}
-              style={
-                zoomed && natural
+              style={{
+                ...(zoomed && natural
                   ? {
                       width: natural.width,
                       height: natural.height,
                       transform: `translate(${pan.x}px, ${pan.y}px)`,
                     }
-                  : undefined
-              }
+                  : null),
+                ...(current.id === transitionId ? { viewTransitionName: LIGHTBOX_TRANSITION_NAME } : null),
+              }}
               className={cn(
                 "select-none object-contain transition-opacity duration-200",
-                isLoaded ? "opacity-100" : "opacity-0",
+                isLoaded || current.id === transitionId ? "opacity-100" : "opacity-0",
                 // No `touch-action` override here on purpose, in either state:
                 // the drag-to-pan gesture below only answers to mouse and pen
                 // pointer events, so a touch is never claimed by it, and native
