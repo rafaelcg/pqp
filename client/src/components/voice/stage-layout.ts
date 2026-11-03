@@ -572,6 +572,55 @@ export function planRoomStage<T extends { kind: string }>(
   };
 }
 
+/**
+ * The pin that puts the music in the card row on purpose ("Diminuir"), so a
+ * room with nothing else to show is a room of cards with the music among them.
+ */
+export const MUSIC_SHRUNK_PIN = "music-shrunk";
+
+/** What the room stage puts above the cards, `planRoomFocus`. */
+export type RoomFocus =
+  | { kind: "camera"; id: string }
+  /** `id` null: every share, the way the stage always drew them. */
+  | { kind: "share"; id: string | null }
+  | { kind: "music" }
+  | { kind: "none" };
+
+/**
+ * WHICH TILE IS THE MAIN ONE ON THE ROOM STAGE (redesign).
+ *
+ * Google Meet's Pin and Discord's focus: any picture can be made the big one,
+ * for this viewer only, and everything else becomes a card in the row under
+ * it. With no pin the stage picks: a share first, then the music, then
+ * nothing (the room of cards). A pin to a tile that is gone is no pin.
+ */
+export function planRoomFocus(input: {
+  pinnedTileId: string | null;
+  shareIds: readonly string[];
+  cameraIds: readonly string[];
+  /** The music is on the stage at all: a track, the end card or the queue. */
+  music: boolean;
+  musicId: string;
+}): RoomFocus {
+  const pin = input.pinnedTileId;
+  if (pin !== null && input.cameraIds.includes(pin)) {
+    return { kind: "camera", id: pin };
+  }
+  if (pin !== null && input.shareIds.includes(pin)) {
+    return { kind: "share", id: pin };
+  }
+  if (pin === input.musicId && input.music) {
+    return { kind: "music" };
+  }
+  if (input.shareIds.length > 0) {
+    return { kind: "share", id: null };
+  }
+  if (input.music && pin !== MUSIC_SHRUNK_PIN) {
+    return { kind: "music" };
+  }
+  return { kind: "none" };
+}
+
 /** The row of cards under a share: never shorter or taller than this. */
 export const ROOM_STRIP_MIN_PX = 72;
 export const ROOM_STRIP_MAX_PX = 132;

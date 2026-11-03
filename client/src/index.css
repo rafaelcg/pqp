@@ -5113,7 +5113,10 @@ html[data-immersive-stage] [data-immersive-hide] {
 [data-call-split]:fullscreen [data-call-split-boundary],
 [data-call-split]:fullscreen [data-call-split-restore],
 [data-call-split]:-webkit-full-screen [data-call-split-boundary],
-[data-call-split]:-webkit-full-screen [data-call-split-restore] {
+[data-call-split]:-webkit-full-screen [data-call-split-restore],
+/* The stage's in-page fullscreen (fixed, `STAGE_LAYER.fullscreen`): the tab's
+   layer is above it, so it would float over the picture. */
+[data-call-split]:has([data-testid="call-stage"].fixed) [data-call-split-restore] {
   display: none;
 }
 

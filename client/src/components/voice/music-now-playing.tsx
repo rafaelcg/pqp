@@ -1,12 +1,16 @@
 import {
   HeadphoneOff,
   ListMusic,
+  Lock,
+  Maximize2,
   MonitorPlay,
   Music,
   Pause,
   Play,
+  Shrink,
   SkipBack,
   SkipForward,
+  Tv,
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { MusicNotes } from "@phosphor-icons/react";
@@ -37,6 +41,8 @@ import {
   MusicVoteSkipButton,
 } from "@/components/voice/music-extras";
 import { MusicSpeakerControl } from "@/components/voice/music-speaker-control";
+import { MusicCaptionsButton } from "@/components/voice/music-captions-button";
+import { MusicEmbedOutlet } from "@/components/voice/music-embed-host";
 
 export function formatMusicClock(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));
@@ -173,6 +179,10 @@ export function MusicNowPlaying({
   onVolume,
   tone = "rail",
   stageCompact = false,
+  stageVideo = false,
+  onToggleFullscreen,
+  stageFooter,
+  onStageShrink,
 }: {
   current: MusicTrack;
   music: MusicSnapshot;
@@ -200,8 +210,16 @@ export function MusicNowPlaying({
    * controls, laid out around a large cover with the whole title.
    */
   tone?: "rail" | "composer" | "stage";
-  /** The stage tone over its queue: a thumbnail beside the lines. */
+  /** The stage tone over its queue: a sideways card, the cover beside the lines. */
   stageCompact?: boolean;
+  /** The stage tone with the YouTube video where the cover was ("Ver no palco"). */
+  stageVideo?: boolean;
+  /** The stage tone's video, alone on the whole stage. */
+  onToggleFullscreen?: () => void;
+  /** The stage tone with the queue closed: what plays next, under the player. */
+  stageFooter?: ReactNode;
+  /** The stage tone: give the stage back and become a card in the row. */
+  onStageShrink?: () => void;
 }) {
   const { t } = useTranslation();
   const onStage = useMusicPlacement() === "stage";
@@ -556,137 +574,57 @@ export function MusicNowPlaying({
   );
 
   if (stageTone) {
-    /*
-     * THE STAGE PANEL. The cover as large as the stage allows, the whole
-     * title on up to two lines, then the seek and the composer's controls
-     * under it. Stopped here, the cover dims and the one decision is Ouvir,
-     * the same as the bar.
-     *
-     * `stageCompact` is the panel stacked over its queue: the cover becomes
-     * a thumbnail beside the title and controls, so the queue gets the height
-     * and the top still reads as the player.
-     */
-    const art = (
-      <button
-        // Keyed on the track for the same fade as the bar's art.
-        key={`stage-art-${current.id}`}
-        data-music-art=""
-        type="button"
-        className={cn(
-          "relative flex shrink-0 animate-fade-in items-center justify-center overflow-hidden bg-surface-3",
-          stageCompact
-            ? "h-16 w-16 rounded-md"
-            : // As tall as the stage leaves once the lines under it are
-              // drawn (`100cqh` is the stage slot, `MusicStagePanel`).
-              "aspect-video h-[clamp(5rem,calc(100cqh-13rem),20rem)] max-w-full rounded-[var(--radius-card)]",
-          music.open && "ring-2 ring-accent",
-        )}
-        aria-expanded={music.open}
-        aria-label={expandLabel}
-        onClick={onOpenFila}
-      >
-        {current.thumbnailUrl ? (
-          <img
-            src={current.thumbnailUrl}
-            alt=""
-            className={cn("h-full w-full object-cover", stopped && "opacity-50")}
+    return (
+      <StagePlayer
+        current={current}
+        music={music}
+        voiceState={voiceState}
+        canManage={canManage}
+        canSetSwitches={canSetSwitches}
+        playing={playing}
+        needsTap={needsTap}
+        playbackFailed={playbackFailed}
+        listening={listening}
+        listenerCount={listenerCount}
+        addedBy={addedBy}
+        compact={stageCompact}
+        video={stageVideo}
+        onToggleFullscreen={onToggleFullscreen}
+        onShrink={onStageShrink}
+        seekBar={seekBar}
+        overflow={
+          <MusicOverflowMenu
+            canManage={canManage}
+            canSetSwitches={canSetSwitches}
+            listening={listening}
+            ducking={ducking}
+            openControls={music.state?.openControls === true}
+            autoplay={music.state?.autoplay === true}
+            repeat={music.state?.repeat ?? "off"}
+            queueLength={music.state?.queue.length ?? 0}
+            modes="menu"
+            side="bottom"
+            triggerClassName={overflowTrigger}
           />
-        ) : (
-          <Icon icon={MusicNotes} size="lg" className={mutedText} />
-        )}
-      </button>
-    );
-    const heading = (
-      <div className={cn("w-full min-w-0", !stageCompact && "max-w-xl")}>
-        <p
-          key={`stage-title-${current.id}`}
-          data-music-title=""
-          title={current.title}
-          className={cn(
-            "line-clamp-2 animate-fade-in break-words font-semibold leading-snug",
-            stageCompact ? "text-sm" : "text-base",
-            stopped ? mutedText : "text-text",
-          )}
-        >
-          {current.title}
-        </p>
-        <div className={cn("flex min-w-0", !stageCompact && "justify-center")}>
-          {subline}
-        </div>
-      </div>
-    );
-    const align = stageCompact ? "justify-start" : "justify-center";
-    const controls = stopped ? (
-      <div className={cn("flex shrink-0 items-center gap-1", align)}>
-        <button
-          type="button"
-          data-music-listen=""
-          className="flex h-8 shrink-0 items-center rounded-full bg-accent px-3 text-[11px] font-semibold text-on-accent"
-          onClick={() => setListening(true)}
-        >
-          {t("music.listen")}
-        </button>
-        {queueButton}
-        {overflow}
-      </div>
-    ) : (
-      <>
-        <div className={cn("w-full min-w-0 shrink-0", !stageCompact && "max-w-xl")}>
-          {seekBar}
-        </div>
-        <div
-          className={cn(
-            "flex w-full shrink-0 flex-wrap items-center gap-x-3 gap-y-1",
-            align,
-          )}
-        >
-          <div className="flex items-center justify-center gap-1">
-            <MusicAutoplayButton
-              autoplay={music.state?.autoplay === true}
-              className={modeHide}
-              disabled={!canSetSwitches}
+        }
+        speaker={
+          listening ? (
+            <MusicSpeakerControl
+              volume={volume}
+              muted={muted}
+              slider={!stageCompact}
+              onMute={onMute}
+              onVolume={onVolume}
             />
-            {previousControl}
-            {playControl}
-            {skipControl}
-            <MusicRepeatButton
-              repeat={music.state?.repeat ?? "off"}
-              className={modeHide}
-              disabled={!canSetSwitches}
-            />
-          </div>
-          <div className="flex items-center justify-center gap-1">
-            {stageButton}
-            {queueButton}
-            {overflow}
-            {extras}
-          </div>
-        </div>
-      </>
-    );
-    return stageCompact ? (
-      <div
-        data-music-now-playing="stage"
-        data-music-stage-compact=""
-        data-music-listening={stopped ? "off" : undefined}
-        className="flex w-full min-w-0 items-start gap-3 px-3 py-3"
-      >
-        {art}
-        <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-          {heading}
-          {controls}
-        </div>
-      </div>
-    ) : (
-      <div
-        data-music-now-playing="stage"
-        data-music-listening={stopped ? "off" : undefined}
-        className="flex w-full min-w-0 flex-col items-center gap-2 px-4 py-3 text-center"
-      >
-        {art}
-        {heading}
-        {controls}
-      </div>
+          ) : null
+        }
+        footer={stageFooter}
+        onOpenFila={onOpenFila}
+        onPlayPause={onPlayPause}
+        onSkip={onSkip}
+        onPrevious={onPrevious}
+        onTapToPlay={onTapToPlay}
+      />
     );
   }
 
@@ -859,6 +797,607 @@ function MusicSeekBar({
       <span className="shrink-0 text-right text-[11px] tabular-nums text-text-secondary">
         {formatMusicClockOrUnknown(durationKnown ? duration : null)}
       </span>
+    </div>
+  );
+}
+
+/**
+ * A CONTROL THIS PERSON MAY NOT USE, SAID WITH A LOCK.
+ *
+ * A dimmed button reads as broken or loading. A small lock on its corner,
+ * at full opacity, reads as "not for you", and the tooltip says what would
+ * open it.
+ */
+function Locked({ locked, children }: { locked: boolean; children: ReactNode }) {
+  return (
+    <span className="relative inline-flex" data-music-locked={locked ? "" : undefined}>
+      {children}
+      {locked ? (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-surface-2 text-text-tertiary shadow-[inset_0_0_0_1px_var(--card-border)]"
+        >
+          <Lock className="h-2 w-2" strokeWidth={3} />
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+/** Disabled stays legible: tertiary text, full opacity, the lock does the rest. */
+const LOCKED_BUTTON = "disabled:opacity-100 disabled:text-text-tertiary";
+
+/**
+ * THE PLAYER ON THE CALL STAGE.
+ *
+ * Laid out the way every music app lays out its now playing view: a line
+ * that says this plays for the whole call, the cover as large as the stage
+ * allows, the whole title, who asked for it, the seek, and one row of
+ * controls with the play button in the middle. A state that is not "playing
+ * here" (paused by somebody, stopped on this machine, waiting for a tap, a
+ * video this machine cannot play) is a bar under the cover, never a mark
+ * over it.
+ *
+ * `compact` is the sideways card over the queue on a narrow stage: the
+ * cover beside the lines, nested in the card's corner.
+ */
+function StagePlayer({
+  current,
+  music,
+  voiceState,
+  canManage,
+  canSetSwitches,
+  playing,
+  needsTap,
+  playbackFailed,
+  listening,
+  listenerCount,
+  addedBy,
+  compact,
+  video,
+  onToggleFullscreen,
+  onShrink,
+  seekBar,
+  overflow,
+  speaker,
+  footer,
+  onOpenFila,
+  onPlayPause,
+  onSkip,
+  onPrevious,
+  onTapToPlay,
+}: {
+  current: MusicTrack;
+  music: MusicSnapshot;
+  voiceState: VoiceState;
+  canManage: boolean;
+  canSetSwitches: boolean;
+  playing: boolean;
+  needsTap: boolean;
+  playbackFailed: boolean;
+  listening: boolean;
+  listenerCount: number;
+  addedBy: { name: string; avatarUrl: string | null };
+  compact: boolean;
+  video: boolean;
+  onToggleFullscreen?: () => void;
+  onShrink?: () => void;
+  seekBar: ReactNode;
+  overflow: ReactNode;
+  speaker: ReactNode;
+  footer?: ReactNode;
+  onOpenFila: () => void;
+  onPlayPause: () => void;
+  onSkip: () => void;
+  onPrevious?: () => void;
+  onTapToPlay: () => void;
+}) {
+  const { t } = useTranslation();
+  const onStage = useMusicPlacement() === "stage";
+  const stopped = !listening;
+  const room = musicRoomPeople(voiceState);
+  const paused = music.state?.status === "paused";
+  const pausedBy = paused ? lookupActorName(voiceState, music.state?.actorId ?? null) : null;
+  const lockDetail = `${t("music.noManage")}. ${t("music.stage.lockedHint")}`;
+
+  const listeners =
+    listenerCount > 1
+      ? t("music.listening", { count: listenerCount })
+      : listening
+        ? t("music.stage.alone")
+        : null;
+
+  /* One bar, the most urgent fact first: this machine before the room. */
+  const state: { kind: string; text: string; action?: ReactNode } | null = stopped
+    ? {
+        kind: "stopped",
+        text:
+          listenerCount > 0
+            ? t("music.stage.stopped", { count: listenerCount })
+            : t("music.stage.stoppedAlone"),
+        action: (
+          <button
+            type="button"
+            data-music-listen=""
+            className="flex h-7 shrink-0 items-center rounded-full bg-accent px-3 text-[12px] font-semibold text-on-accent"
+            onClick={() => setListening(true)}
+          >
+            {t("music.listen")}
+          </button>
+        ),
+      }
+    : playbackFailed
+      ? { kind: "unplayable", text: t("music.stage.unplayable") }
+      : needsTap
+        ? {
+            kind: "tap",
+            text: t("music.stage.needsTap"),
+            action: (
+              <button
+                type="button"
+                data-music-tap=""
+                className="flex h-7 shrink-0 items-center gap-1 rounded-full bg-accent px-3 text-[12px] font-semibold text-on-accent"
+                onClick={onTapToPlay}
+              >
+                <Play className="h-3.5 w-3.5" aria-hidden="true" />
+                {t("music.stage.tapToListen")}
+              </button>
+            ),
+          }
+        : paused
+          ? {
+              kind: "paused",
+              text: pausedBy
+                ? t("music.stage.pausedBy", { name: pausedBy })
+                : t("music.stage.paused"),
+            }
+          : null;
+
+  /*
+   * "Fulano pausou pra todo mundo" is a fact about the room, and it comes and
+   * goes with every press of play: as a bar between the picture and the
+   * title it shrank the video and pulled it back each time. It takes the
+   * header's listener line instead, which has the room. The other states
+   * carry a button and stay a bar.
+   */
+  const headerState = state?.kind === "paused" ? state : null;
+  const barState = headerState ? null : state;
+  const stateBarFor = (shown: typeof state) => shown ? (
+    <div
+      data-music-state={shown.kind}
+      data-music-stopped={shown.kind === "stopped" ? "" : undefined}
+      data-music-unplayable={shown.kind === "unplayable" ? "" : undefined}
+      role="status"
+      className={cn(
+        "flex w-full min-w-0 items-center gap-2 rounded-lg bg-surface-2 py-1 pl-3 pr-1 text-left text-[12px] leading-snug text-text-secondary",
+        !shown.action && "py-1.5 pr-3",
+        shown.kind === "unplayable" && "text-danger",
+      )}
+    >
+      <span className="min-w-0 flex-1">{shown.text}</span>
+      {shown.action}
+    </div>
+  ) : null;
+  const stateBar = stateBarFor(barState);
+
+  const stageLabel = onStage ? t("music.stage.hide") : t("music.stage.watch");
+  const watch = (
+    <Tooltip label={stageLabel}>
+      <button
+        type="button"
+        data-music-stage-watch=""
+        aria-pressed={onStage}
+        aria-label={stageLabel}
+        className={cn(
+          "flex h-8 shrink-0 items-center gap-1.5 rounded-full text-[12px] font-medium text-text-secondary transition-colors hover:bg-[color:var(--button-ghost-hover)] hover:text-text",
+          compact ? "w-8 justify-center" : "px-2.5",
+        )}
+        onClick={() => setMusicPlacement(onStage ? "hidden" : "stage")}
+      >
+        <Tv className="h-4 w-4" aria-hidden="true" />
+        {compact ? null : <span>{stageLabel}</span>}
+      </button>
+    </Tooltip>
+  );
+
+  /*
+   * The two ways to change what the stage shows, side by side: the video
+   * and the queue. The queue's used to live in a strip at the panel's
+   * bottom, the other end of the panel from the video's.
+   */
+  const queueCount = music.state?.queue.length ?? 0;
+  const queueLabel = music.open ? t("music.stage.hideQueue") : t("music.stage.showQueue");
+  const queueToggle = (
+    <Tooltip label={queueLabel}>
+      <button
+        type="button"
+        data-music-queue-toggle=""
+        aria-expanded={music.open}
+        aria-label={queueLabel}
+        className={cn(
+          "flex h-8 shrink-0 items-center gap-1.5 rounded-full text-[12px] font-medium transition-colors",
+          compact ? "px-2" : "px-2.5",
+          music.open
+            ? "bg-accent-soft text-on-accent-soft"
+            : "text-text-secondary hover:bg-[color:var(--button-ghost-hover)] hover:text-text",
+        )}
+        onClick={toggleMusicOpen}
+      >
+        <ListMusic className="h-4 w-4" aria-hidden="true" />
+        {compact ? null : <span>{t("music.fila")}</span>}
+        {queueCount > 0 ? (
+          <span data-music-queue-count="" className="tabular-nums">
+            {queueCount}
+          </span>
+        ) : null}
+      </button>
+    </Tooltip>
+  );
+
+  // Gives the stage back: the player becomes a card in the row under it, the
+  // way a pinned camera or share does (`planRoomFocus`).
+  const shrink = onShrink ? (
+    <Tooltip label={t("music.stage.shrink")}>
+      <button
+        type="button"
+        data-music-stage-shrink=""
+        aria-label={t("music.stage.shrink")}
+        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-text-secondary transition-colors hover:bg-[color:var(--button-ghost-hover)] hover:text-text"
+        onClick={onShrink}
+      >
+        <Shrink className="h-4 w-4" aria-hidden="true" />
+      </button>
+    </Tooltip>
+  ) : null;
+
+  const header = (
+    <div className="flex h-8 w-full min-w-0 items-center gap-2">
+      <span
+        data-music-stage-tag=""
+        className="inline-flex h-6 shrink-0 items-center gap-1 rounded-full bg-accent-soft px-2 text-[12px] font-semibold text-on-accent-soft"
+      >
+        <Music className="h-3 w-3" aria-hidden="true" />
+        {t("music.stage.tag")}
+      </span>
+      {headerState ? (
+        <span
+          data-music-state={headerState.kind}
+          role="status"
+          className="flex min-w-0 items-center gap-1 truncate text-[12px] text-text-secondary"
+        >
+          <Pause className="h-3 w-3 shrink-0" fill="currentColor" aria-hidden="true" />
+          <span className="truncate">{headerState.text}</span>
+        </span>
+      ) : listeners ? (
+        <span
+          data-music-listeners=""
+          className="hidden min-w-0 truncate text-[12px] text-text-tertiary @min-[20rem]:inline"
+        >
+          {listeners}
+        </span>
+      ) : null}
+      <span className="flex-1" />
+      {watch}
+      {queueToggle}
+      {overflow}
+      {shrink}
+    </div>
+  );
+
+  // As tall as the panel leaves once the lines around it are drawn, and no
+  // taller than its width allows at 16:9 (`cq*` is the player's panel,
+  // `MusicStagePanel`). The cover and the video share the one rule, so
+  // "Ver no palco" swaps the picture in place without the player moving.
+  // 12.5rem is YouTube's 200px floor for its player.
+  const coverHeight = `clamp(12.5rem, min(calc(100cqh - ${17 + (barState ? 2.75 : 0) + (footer ? 3.75 : 0)}rem), calc((100cqw - 2rem) * 0.5625)), 100cqh)`;
+  const art = video ? (
+    /*
+     * The real video, where the cover was. The iframe lives in App and is
+     * laid over this box (`MusicEmbedOutlet`), so moving between the cover
+     * and the video never reloads it. Nothing is drawn over it: YouTube's
+     * terms want its player unobstructed, and its captions sit at the
+     * bottom of the frame.
+     */
+    <div
+      data-music-stage-video=""
+      className={cn(
+        "relative aspect-video max-w-full shrink-0 overflow-hidden rounded-[calc(var(--call-tile-radius)-6px)] bg-black",
+        compact && "w-full",
+      )}
+      style={compact ? undefined : { height: coverHeight }}
+    >
+      <MusicEmbedOutlet />
+    </div>
+  ) : (
+    <button
+      // Keyed on the track, so a change remounts it and the fade plays again.
+      key={`stage-art-${current.id}`}
+      data-music-art=""
+      type="button"
+      className={cn(
+        "relative flex shrink-0 animate-fade-in items-center justify-center overflow-hidden bg-surface-3",
+        compact
+          ? "aspect-video w-[clamp(7.5rem,36%,14.75rem)] self-start rounded-[calc(var(--call-tile-radius)-6px)]"
+          : "aspect-video max-w-full rounded-lg",
+      )}
+      style={compact ? undefined : { height: coverHeight }}
+      aria-label={t("music.open")}
+      onClick={onOpenFila}
+    >
+      {current.thumbnailUrl ? (
+        <img
+          src={current.thumbnailUrl}
+          alt=""
+          className={cn("h-full w-full object-cover", stopped && "opacity-50")}
+        />
+      ) : (
+        <Icon icon={MusicNotes} size="lg" className="text-text-tertiary" />
+      )}
+    </button>
+  );
+
+  const heading = (
+    <div className={cn("w-full min-w-0", compact ? "text-left" : "max-w-[40rem] text-center")}>
+      <p
+        key={`stage-title-${current.id}`}
+        data-music-title=""
+        title={current.title}
+        className={cn(
+          "line-clamp-2 animate-fade-in break-words font-semibold leading-snug",
+          compact ? "text-[15px]" : "text-lg",
+          stopped ? "text-text-secondary" : "text-text",
+        )}
+      >
+        {current.title}
+      </p>
+      <p
+        className={cn(
+          "mt-0.5 flex min-w-0 items-center gap-1.5 text-[12px] text-text-secondary",
+          !compact && "justify-center",
+        )}
+      >
+        {current.autoplayed ? (
+          <span data-music-autoplayed="" className="truncate">
+            {t("music.autoplayed")}
+          </span>
+        ) : (
+          <>
+            <UserAvatar
+              name={addedBy.name}
+              avatarUrl={addedBy.avatarUrl}
+              className="h-4 w-4"
+              fallbackClassName="bg-surface-3 text-[8px] text-text"
+              rounded="full"
+            />
+            <span className="truncate">
+              {t("music.requestedBy", { name: addedBy.name })} · YouTube
+            </span>
+          </>
+        )}
+      </p>
+    </div>
+  );
+
+  const play = (
+    <Tooltip
+      label={playing ? t("music.pause") : t("music.play")}
+      detail={canManage ? undefined : lockDetail}
+    >
+      <span className="inline-flex">
+        <Locked locked={!canManage}>
+          <Button
+            type="button"
+            variant="default"
+            size="icon"
+            data-music-play=""
+            className={cn(
+              "shrink-0 rounded-full",
+              compact ? "h-10 w-10" : "h-12 w-12",
+              "transition-transform duration-150 ease-out hover:scale-[1.06] active:scale-95",
+              "motion-reduce:transition-none motion-reduce:transform-none",
+              "disabled:bg-surface-2 disabled:opacity-100 disabled:text-text-tertiary",
+            )}
+            aria-pressed={playing}
+            aria-label={playing ? t("music.pause") : t("music.play")}
+            disabled={!canManage}
+            onClick={onPlayPause}
+          >
+            {playing ? (
+              <Pause className={compact ? "h-4 w-4" : "h-5 w-5"} fill="currentColor" aria-hidden="true" />
+            ) : (
+              <Play className={cn("ml-0.5", compact ? "h-4 w-4" : "h-5 w-5")} fill="currentColor" aria-hidden="true" />
+            )}
+          </Button>
+        </Locked>
+      </span>
+    </Tooltip>
+  );
+
+  const transportIcon = cn("shrink-0 rounded-full", compact ? "h-8 w-8" : "h-10 w-10", LOCKED_BUTTON);
+  const previous = (
+    <Tooltip label={t("music.previous")} detail={canManage ? undefined : lockDetail}>
+      <span className="inline-flex">
+        <Locked locked={!canManage}>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            data-music-previous=""
+            className={transportIcon}
+            aria-label={t("music.previous")}
+            disabled={!canManage}
+            onClick={onPrevious}
+          >
+            <SkipBack className="h-5 w-5" fill="currentColor" aria-hidden="true" />
+          </Button>
+        </Locked>
+      </span>
+    </Tooltip>
+  );
+  const next = canManage ? (
+    <Tooltip label={t("music.skip")}>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        data-music-next=""
+        className={transportIcon}
+        aria-label={t("music.skip")}
+        onClick={onSkip}
+      >
+        <SkipForward className="h-5 w-5" fill="currentColor" aria-hidden="true" />
+      </Button>
+    </Tooltip>
+  ) : (
+    <MusicVoteSkipButton
+      skipVotes={music.state?.skipVotes ?? []}
+      userId={voiceState.self?.userId ?? null}
+      roomSize={room.length}
+      seatedUserIds={room.map((person) => person.userId)}
+    />
+  );
+  const mode = cn("h-8 w-8", LOCKED_BUTTON);
+  const repeat = (
+    <Locked locked={!canSetSwitches}>
+      <MusicRepeatButton
+        repeat={music.state?.repeat ?? "off"}
+        className={mode}
+        disabled={!canSetSwitches}
+      />
+    </Locked>
+  );
+  const autoplay = (
+    <Locked locked={!canSetSwitches}>
+      <MusicAutoplayButton
+        autoplay={music.state?.autoplay === true}
+        className={mode}
+        disabled={!canSetSwitches}
+      />
+    </Locked>
+  );
+
+  const bar = (
+    <div
+      data-music-stage-bar=""
+      className={cn(
+        "grid w-full min-w-0 grid-cols-[1fr_auto_1fr] items-center gap-2",
+        !compact && "max-w-[40rem]",
+      )}
+    >
+      <div className="flex min-w-0 items-center justify-start">{repeat}</div>
+      <div className="flex items-center gap-1">
+        {previous}
+        {play}
+        {next}
+      </div>
+      <div className="flex min-w-0 items-center justify-end gap-1">
+        {autoplay}
+        {speaker}
+        {video ? <MusicCaptionsButton /> : null}
+        {video && onToggleFullscreen ? (
+          <Tooltip label={t("voice.share.fullscreen")}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              data-music-stage-fullscreen=""
+              className="h-8 w-8 shrink-0 rounded-full"
+              aria-label={t("voice.share.fullscreen")}
+              onClick={onToggleFullscreen}
+            >
+              <Maximize2 className="h-4 w-4" aria-hidden="true" />
+            </Button>
+          </Tooltip>
+        ) : null}
+      </div>
+    </div>
+  );
+
+  if (compact && video) {
+    /*
+     * The video over the queue: full width in the card's corner, then one
+     * row with the title and the two header buttons, the seek, the controls.
+     * The tag and the listener count give way; the chat strip already says
+     * this plays for the call.
+     */
+    return (
+      <div
+        data-music-now-playing="stage"
+        data-music-stage-compact=""
+        data-music-listening={stopped ? "off" : undefined}
+        className="@container flex w-full min-w-0 flex-col gap-1.5 p-1.5"
+      >
+        {art}
+        <div className="flex min-w-0 flex-col gap-1 px-1.5 pb-0.5">
+          <div className="flex min-w-0 items-center gap-2">
+            <div className="min-w-0 flex-1">
+              <p
+                key={`stage-title-${current.id}`}
+                data-music-title=""
+                title={current.title}
+                className="truncate text-[14px] font-semibold leading-snug text-text"
+              >
+                {current.title}
+              </p>
+              <p className="truncate text-[12px] text-text-secondary">
+                {current.autoplayed
+                  ? t("music.autoplayed")
+                  : `${t("music.requestedBy", { name: addedBy.name })} · YouTube`}
+              </p>
+            </div>
+            {watch}
+            {queueToggle}
+            {overflow}
+            {shrink}
+          </div>
+          {stateBarFor(state)}
+          <div className="w-full min-w-0">{seekBar}</div>
+          {bar}
+        </div>
+      </div>
+    );
+  }
+
+  if (compact) {
+    return (
+      <div
+        data-music-now-playing="stage"
+        data-music-stage-compact=""
+        data-music-listening={stopped ? "off" : undefined}
+        className="flex w-full min-w-0 items-stretch gap-3 p-1.5"
+      >
+        {art}
+        <div className="@container flex min-w-0 flex-1 flex-col gap-1 py-0.5 pr-1">
+          {header}
+          {heading}
+          {stateBar}
+          <div className="w-full min-w-0">{seekBar}</div>
+          {bar}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      data-music-now-playing="stage"
+      data-music-listening={stopped ? "off" : undefined}
+      className="@container flex h-full w-full min-w-0 flex-col gap-3 p-4"
+    >
+      {header}
+      {/* The picture and its title float in the middle; the seek and the
+          controls stay pinned to the bottom, so they never move when the
+          cover turns into the video or a title wraps. */}
+      <div className="flex min-h-0 w-full flex-1 flex-col items-center justify-center gap-3">
+        {art}
+        {stateBar ? <div className="w-full max-w-[40rem]">{stateBar}</div> : null}
+        {heading}
+      </div>
+      <div data-music-stage-controls="" className="flex w-full shrink-0 flex-col items-center gap-1">
+        <div className="w-full min-w-0 max-w-[40rem]">{seekBar}</div>
+        {bar}
+      </div>
+      {footer}
     </div>
   );
 }

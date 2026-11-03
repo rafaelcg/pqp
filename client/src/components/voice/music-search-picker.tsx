@@ -104,6 +104,7 @@ export function queueResolvedNext(resolved: MusicResolved): MusicAddOutcome {
 export function MusicSearchPicker({
   compact = false,
   chrome = "default",
+  size = "sheet",
   canManage = false,
   autoFocus = false,
   onQueryActive,
@@ -112,6 +113,11 @@ export function MusicSearchPicker({
   compact?: boolean;
   /** Member-list field: icon in the box, paper tokens, square result thumbs. */
   chrome?: "default" | "rail";
+  /**
+   * The call stage's queue draws the field and the results at the stage's
+   * size: `stage` in its column, `hero` alone on the stage with nothing on.
+   */
+  size?: "sheet" | "stage" | "hero";
   canManage?: boolean;
   autoFocus?: boolean;
   onQueryActive?: (active: boolean) => void;
@@ -127,6 +133,8 @@ export function MusicSearchPicker({
   const [resultsFor, setResultsFor] = useState("");
   const [highlight, setHighlight] = useState(0);
   const rail = chrome === "rail";
+  const big = size !== "sheet";
+  const hero = size === "hero";
   const lastQueried = useRef("");
   const runId = useRef(0);
 
@@ -436,7 +444,11 @@ export function MusicSearchPicker({
           <>
             <Input
               {...fieldProps}
-              className="h-8 text-xs"
+              className={cn(
+                "h-8 text-xs",
+                big && "h-10 text-[13px]",
+                hero && "h-12 px-4 text-[15px]",
+              )}
               onChange={(event) => onQueryChange(event.target.value)}
             />
             <Tooltip label={t("music.add")}>
@@ -444,7 +456,11 @@ export function MusicSearchPicker({
                 type="button"
                 size="icon"
                 variant="secondary"
-                className="h-8 w-8 shrink-0 redesign:h-[var(--control-sm)] redesign:w-[var(--control-sm)] redesign:disabled:border-transparent redesign:disabled:bg-transparent"
+                className={cn(
+                  "h-8 w-8 shrink-0 redesign:h-[var(--control-sm)] redesign:w-[var(--control-sm)] redesign:disabled:border-transparent redesign:disabled:bg-transparent",
+                  big && "h-10 w-10 redesign:h-10 redesign:w-10",
+                  hero && "h-12 w-12 redesign:h-12 redesign:w-12",
+                )}
                 disabled={busy || !query.trim()}
                 onClick={() => void submit()}
               >
@@ -459,7 +475,7 @@ export function MusicSearchPicker({
           id={listId}
           role="listbox"
           aria-label={t("music.search.results")}
-          className="space-y-0.5"
+          className={cn("space-y-0.5", big && "pt-1")}
         >
           {results.map((track, index) => (
             <li
@@ -469,6 +485,7 @@ export function MusicSearchPicker({
               aria-selected={index === highlight}
               className={cn(
                 "group/hit flex items-center gap-2 rounded-md px-1 py-1",
+                big && "h-12 gap-2.5 rounded-lg p-1 pr-1.5 redesign:rounded-lg redesign:px-1",
                 index === highlight
                   ? rail
                     ? "bg-ink-3"
@@ -482,7 +499,7 @@ export function MusicSearchPicker({
             >
               <button
                 type="button"
-                className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                className={cn("flex min-w-0 flex-1 items-center gap-2 text-left", big && "gap-2.5")}
                 onClick={() => addResolved(track)}
                 onMouseEnter={() => setHighlight(index)}
               >
@@ -491,6 +508,7 @@ export function MusicSearchPicker({
                     "relative h-8 w-8 shrink-0 overflow-hidden rounded-md",
                     rail ? "bg-ink-3" : "bg-surface-2",
                     MUSIC_COVER_REDESIGN,
+                    big && "h-10 w-10 rounded redesign:rounded",
                   )}
                 >
                   {track.thumbnailUrl ? (
@@ -500,6 +518,8 @@ export function MusicSearchPicker({
                 <span
                   className={cn(
                     "min-w-0 flex-1 truncate text-sm",
+                    big && "text-[13px] font-medium",
+                    hero && "text-[14px]",
                     rail ? "text-paper" : "text-text",
                     MUSIC_TEXT_REDESIGN,
                   )}

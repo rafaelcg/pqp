@@ -11,6 +11,7 @@ import { rememberMusicPip } from "@/lib/music-pip";
 import { Slider } from "@/components/ui/slider";
 import { Tooltip } from "@/components/ui/tooltip";
 import { UserAvatar } from "@/components/user/user-avatar";
+import type { MusicTrack } from "@pqp/shared";
 import type { VoiceState } from "@/hooks/use-voice";
 import { createPortal } from "react-dom";
 import { useTranslation } from "@/lib/i18n";
@@ -78,9 +79,19 @@ export function MusicFila({
   variant = "sheet",
   voiceState,
   closeOnOutsidePress = true,
+  columns = 1,
+  centered = false,
 }: {
-  variant?: "sheet" | "drawer";
+  /**
+   * `stage` is the queue as a panel on the call stage (`MusicStagePanel`):
+   * the sheet's parts at the stage's size, and never a popover.
+   */
+  variant?: "sheet" | "drawer" | "stage";
   voiceState: VoiceState;
+  /** The stage's queue in two columns, under a wide sideways card. */
+  columns?: 1 | 2;
+  /** The stage's queue alone, with nothing playing: a centred column. */
+  centered?: boolean;
   /**
    * The sheet in the composer is a popover and closes on a press anywhere
    * else. The stage panel is a place the room is looking at, not a popover:
@@ -126,7 +137,8 @@ export function MusicFila({
     ? lookupAddedBy(voiceState, current.addedByUserId, current.addedByName)
     : null;
   const headingCount = (current ? 1 : 0) + queue.length;
-  const sheet = variant === "sheet";
+  const stage = variant === "stage";
+  const sheet = variant === "sheet" || stage;
   const iconClass = sheet ? SHEET_ICON : RAIL_ICON;
   const muted = cn(sheet ? "text-text-secondary" : "text-paper-muted", MUSIC_MUTED_REDESIGN);
   const title = cn(sheet ? "text-text" : "text-paper", MUSIC_TEXT_REDESIGN);
@@ -137,12 +149,15 @@ export function MusicFila({
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
+      // Escape out of a menu or a dialog closes that one first; the queue
+      // is the next Escape, not the same one.
+      if (event.key === "Escape" && !document.querySelector("[role='menu'], [role='dialog']")) {
         setMusicOpen(false);
       }
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    // Capture, so this runs before the menu's own Escape takes it down.
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, []);
 
   /*
@@ -156,7 +171,7 @@ export function MusicFila({
    * itself opened is portalled out of the composer, so it is excluded too.
    */
   useEffect(() => {
-    if (!sheet || !music.open || !closeOnOutsidePress) {
+    if (!sheet || stage || !music.open || !closeOnOutsidePress) {
       return;
     }
     const onPointerDown = (event: PointerEvent) => {
@@ -172,10 +187,23 @@ export function MusicFila({
     };
     window.addEventListener("pointerdown", onPointerDown);
     return () => window.removeEventListener("pointerdown", onPointerDown);
-  }, [sheet, music.open, closeOnOutsidePress]);
+  }, [sheet, stage, music.open, closeOnOutsidePress]);
 
   if (!music.open) {
     return null;
+  }
+
+  if (stage) {
+    return (
+      <StageFila
+        voiceState={voiceState}
+        canManage={canManage}
+        columns={columns}
+        centered={centered}
+        fieldIdle={fieldIdle}
+        onQueryActive={onQueryActive}
+      />
+    );
   }
 
   const panel = (
@@ -473,5 +501,154 @@ export function MusicFila({
         </section>
       )}
     </>
+  );
+}
+
+/** "28 min", "1 h 12 min": how long the songs waiting will play. */
+function useQueueLength(queue: MusicTrack[]): string | null {
+  const { t } = useTranslation();
+  const known = queue.filter((track) => track.durationMs);
+  if (known.length === 0) {
+    return null;
+  }
+  const minutes = Math.max(
+    1,
+    Math.round(known.reduce((sum, track) => sum + (track.durationMs ?? 0), 0) / 60_000),
+  );
+  return minutes < 60
+    ? t("music.queue.minutes", { count: minutes })
+    : t("music.queue.hours", { hours: Math.floor(minutes / 60), minutes: minutes % 60 });
+}
+
+/**
+ * THE QUEUE AS A PANEL ON THE STAGE.
+ *
+ * The header says how much is waiting (the count and how long it plays) and
+ * carries the two things that act on the whole list, shuffle for whoever
+ * manages the music and close. Then the field, then "A seguir", then what
+ * already played. Nothing here closes on a press elsewhere: it is a place
+ * on the stage, put away by its own button or Escape.
+ */
+function StageFila({
+  voiceState,
+  canManage,
+  columns,
+  centered,
+  fieldIdle,
+  onQueryActive,
+}: {
+  voiceState: VoiceState;
+  canManage: boolean;
+  columns: 1 | 2;
+  centered: boolean;
+  fieldIdle: boolean;
+  onQueryActive: (active: boolean) => void;
+}) {
+  const { t } = useTranslation();
+  const music = useMusic();
+  const current = music.state?.current ?? null;
+  const queue = music.state?.queue ?? [];
+  const history = music.state?.history ?? [];
+  const length = useQueueLength(queue);
+  const nothing = !current && queue.length === 0;
+  const icon =
+    "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-text-secondary hover:bg-[color:var(--button-ghost-hover)] hover:text-text";
+
+  return (
+    <section
+      data-music-fila="sheet"
+      data-music-fila-variant="stage"
+      aria-label={t("music.fila")}
+      className={cn(
+        "flex h-full min-h-0 w-full flex-col",
+        centered && "mx-auto max-w-[44rem]",
+        // Nothing on and nothing waiting: the field is the whole panel, so it
+        // sits in the middle of the stage rather than under an empty list.
+        centered && nothing && "justify-center",
+      )}
+    >
+      <div className="flex h-12 shrink-0 items-center gap-2 pl-4 pr-2">
+        <p className="font-display text-[15px] font-semibold text-text">{t("music.fila")}</p>
+        <span
+          data-music-queue-count=""
+          className="rounded-full bg-surface-2 px-1.5 text-[11px] font-semibold leading-5 tabular-nums text-text-secondary"
+        >
+          {queue.length}
+        </span>
+        {length ? (
+          <span data-music-queue-length="" className="truncate text-[12px] text-text-tertiary">
+            {length}
+          </span>
+        ) : null}
+        <span className="flex-1" />
+        {canManage && queue.length > 1 ? <MusicShuffleButton className={icon} /> : null}
+        <Tooltip label={t("music.stage.hideQueue")} side="left">
+          <button
+            type="button"
+            data-music-fila-close=""
+            className={icon}
+            aria-label={t("music.stage.hideQueue")}
+            onClick={() => setMusicOpen(false)}
+          >
+            <IconSwap off={X} on={XGlyph} kind="symbol" size="sm" offClassName="h-4 w-4" />
+          </button>
+        </Tooltip>
+      </div>
+
+      {nothing && fieldIdle ? (
+        <div data-music-empty="" className="shrink-0 px-4 pb-4 pt-2">
+          <p className="font-display text-2xl font-semibold text-text">{t("music.stage.emptyTitle")}</p>
+          <p className="mt-1.5 text-[14px] leading-snug text-text-secondary">{t("music.stage.emptyBody")}</p>
+        </div>
+      ) : null}
+
+      <div className="shrink-0 px-3">
+        <MusicSearchPicker
+          compact={!nothing}
+          size={nothing ? "hero" : "stage"}
+          canManage={canManage}
+          autoFocus
+          onQueryActive={onQueryActive}
+          onEmptyEscape={() => setMusicOpen(false)}
+        />
+      </div>
+      {fieldIdle ? (
+        // A short stage keeps its height for the list: the field's own
+        // placeholder already says what it takes.
+        <p
+          data-music-sources=""
+          className="shrink-0 px-4 pt-1.5 text-[11px] text-text-tertiary [@container(max-height:26rem)]:hidden"
+        >
+          {t("music.empty.sources")}
+        </p>
+      ) : null}
+
+      <div
+        className={cn(
+          "min-h-0 overflow-y-auto px-2 pb-2 pt-3",
+          !(centered && nothing) && "flex-1",
+          queue.length > 0 && "min-h-14",
+        )}
+      >
+        {queue.length > 0 ? (
+          <>
+            <p className="px-2 pb-1 text-[13px] font-semibold text-text-secondary">{t("music.queue")}</p>
+            <MusicQueueList
+              queue={queue}
+              voiceState={voiceState}
+              canManage={canManage}
+              tone="stage"
+              columns={columns}
+            />
+          </>
+        ) : null}
+        {music.state?.autoplay && queue.length === 0 && current ? (
+          <p data-music-autoplay-next="" className="px-2 py-1 text-[12px] text-text-secondary">
+            {t("music.autoplay.next")}
+          </p>
+        ) : null}
+        <MusicHistoryList history={history} defaultOpen={queue.length === 0} tone="composer" />
+      </div>
+    </section>
   );
 }
