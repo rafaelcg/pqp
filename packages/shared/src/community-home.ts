@@ -869,7 +869,14 @@ export type CommunityHomeLockedHint = z.infer<
 
 /** `lockedHint.readMinutes` for a body: 0 for none, else at least 1. */
 export function communityHomeReadMinutes(body: string | null): number {
-  const words = body?.trim() ? body.trim().split(/\s+/).length : 0;
+  // One pass, no word array: this runs for every locked post on every read.
+  let words = 0;
+  let inWord = false;
+  for (let i = 0; i < (body?.length ?? 0); i += 1) {
+    const space = /\s/.test(body![i]!);
+    if (!space && !inWord) words += 1;
+    inWord = !space;
+  }
   return words === 0 ? 0 : Math.ceil(words / COMMUNITY_HOME_WORDS_PER_MINUTE);
 }
 
