@@ -1,7 +1,8 @@
-import { ListMusic, RotateCcw, X } from "lucide-react";
-import { useLayoutEffect, useRef, useState } from "react";
+import { Expand, Music, Pause, Play, RotateCcw, SkipForward, X } from "lucide-react";
+import { useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import type { MusicTrack } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
+import { Tooltip } from "@/components/ui/tooltip";
 import { UserAvatar } from "@/components/user/user-avatar";
 import type { VoiceState } from "@/hooks/use-voice";
 import { useTranslation } from "@/lib/i18n";
@@ -67,11 +68,14 @@ export function MusicStagePanel({
   channelId,
   voiceState,
   onToggleFullscreen,
+  onShrink,
 }: {
   channelId: string;
   voiceState: VoiceState;
   /** The video alone on the whole stage (the solo view the call stage owns). */
   onToggleFullscreen?: () => void;
+  /** Give the stage back: the player becomes `MusicRoomCard` in the row. */
+  onShrink?: () => void;
 }) {
   const { t } = useTranslation();
   const music = useMusic();
@@ -113,52 +117,34 @@ export function MusicStagePanel({
   const next = queue[0] ?? null;
   const nextBy = next ? lookupAddedBy(voiceState, next.addedByUserId, next.addedByName) : null;
   /*
-   * The queue closed: what plays next, and the way back to the list. Without
-   * it, closing the queue hid the one thing people open it to check.
+   * The queue closed: what plays next, as one line under the player, and
+   * the whole line opens the queue. The queue's toggle itself is in the
+   * player's header, beside "Ver no palco". Nothing waiting, no line.
    */
-  const upNext = music.open ? undefined : (
-    <div
-      data-music-up-next=""
-      className="flex min-w-0 shrink-0 items-center gap-2.5 rounded-lg bg-surface-2 p-1 pl-3 shadow-[inset_0_0_0_1px_var(--card-border)]"
-    >
-      {next && nextBy ? (
-        <>
-          <span className="shrink-0 text-[12px] text-text-tertiary">{t("music.queue")}</span>
-          <span className="min-w-0 truncate text-[13px] font-semibold text-text" title={next.title}>
-            {next.title}
-          </span>
-          <span className="hidden shrink-0 items-center gap-1 text-[12px] text-text-secondary @min-[28rem]:flex">
-            <UserAvatar
-              name={nextBy.name}
-              avatarUrl={nextBy.avatarUrl}
-              className="h-4 w-4"
-              fallbackClassName="bg-surface-3 text-[8px] text-text"
-              rounded="full"
-            />
-            {nextBy.name}
-          </span>
-        </>
-      ) : music.state?.autoplay ? (
-        <span className="min-w-0 truncate text-[12px] text-text-secondary">{t("music.autoplay.next")}</span>
-      ) : null}
-      <span className="flex-1" />
+  const upNext =
+    music.open || !(next && nextBy) ? undefined : (
       <button
         type="button"
-        data-music-queue-toggle=""
-        aria-expanded={false}
-        className="flex h-8 shrink-0 items-center gap-1.5 rounded-md bg-surface-3 px-2.5 text-[12px] font-medium text-text transition-colors hover:bg-[color:var(--button-ghost-hover)]"
+        data-music-up-next=""
+        className="flex min-w-0 shrink-0 items-center gap-2.5 rounded-lg bg-surface-2 px-3 py-2 text-left shadow-[inset_0_0_0_1px_var(--card-border)] transition-colors hover:bg-surface-3"
         onClick={() => setMusicOpen(true)}
       >
-        <ListMusic className="h-4 w-4" aria-hidden="true" />
-        {t("music.stage.showQueue")}
-        {queue.length > 0 ? (
-          <span className="rounded-full bg-surface-1 px-1.5 text-[11px] font-semibold leading-4 tabular-nums text-text-secondary">
-            {queue.length}
-          </span>
-        ) : null}
+        <span className="shrink-0 text-[12px] text-text-tertiary">{t("music.queue")}</span>
+        <span className="min-w-0 truncate text-[13px] font-semibold text-text" title={next.title}>
+          {next.title}
+        </span>
+        <span className="hidden shrink-0 items-center gap-1 text-[12px] text-text-secondary @min-[28rem]:flex">
+          <UserAvatar
+            name={nextBy.name}
+            avatarUrl={nextBy.avatarUrl}
+            className="h-4 w-4"
+            fallbackClassName="bg-surface-3 text-[8px] text-text"
+            rounded="full"
+          />
+          {nextBy.name}
+        </span>
       </button>
-    </div>
-  );
+    );
   const player = current ? (
     <MusicNowPlaying
       tone="stage"
@@ -166,6 +152,7 @@ export function MusicStagePanel({
       stageVideo={video}
       onToggleFullscreen={onToggleFullscreen}
       stageFooter={upNext}
+      onStageShrink={onShrink}
       current={current}
       music={music}
       voiceState={voiceState}
@@ -252,6 +239,141 @@ export function MusicStagePanel({
         )}
       </section>
     </div>
+  );
+}
+
+/**
+ * THE MUSIC AS A CARD IN THE ROW (redesign).
+ *
+ * Something else is the main tile (a pinned camera or share, or "Diminuir"),
+ * so the player gives the stage back and sits among the people: the cover,
+ * the title, play and skip. The card, or its expand button, puts it back on
+ * the stage. The video never plays in here: YouTube's player needs 200 by 200,
+ * so the embed rests hidden and keeps the sound going.
+ *
+ * Mounted means drawn, so it claims the call the same way the panel does and
+ * App leaves the composer's bar out.
+ */
+export function MusicRoomCard({
+  channelId,
+  voiceState,
+  style,
+  className,
+  onExpand,
+}: {
+  channelId: string;
+  voiceState: VoiceState;
+  style?: CSSProperties;
+  className?: string;
+  onExpand: () => void;
+}) {
+  const { t } = useTranslation();
+  const music = useMusic();
+  const local = useMusicLocalPlayback();
+  useLayoutEffect(() => claimStageMusicPanel(channelId), [channelId]);
+  const current = music.state?.current ?? null;
+  const track = current ?? music.parked;
+  const playing = music.state?.status === "playing";
+  const canManage = effectiveCanManageMusic(voiceState, music.state);
+  const title = current
+    ? current.title
+    : music.parked
+      ? t("music.ended.title")
+      : t("music.title");
+  const expandLabel = t("music.stage.expand");
+  const control =
+    "flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors";
+  return (
+    <li
+      data-music-room-card=""
+      style={style}
+      className={cn(
+        className,
+        "group relative min-h-0 min-w-0 overflow-hidden rounded-[var(--call-tile-radius)] bg-surface-2 shadow-[inset_0_0_0_1px_var(--card-border)]",
+      )}
+    >
+      {track?.thumbnailUrl ? (
+        <img
+          src={track.thumbnailUrl}
+          alt=""
+          className={cn("absolute inset-0 h-full w-full object-cover", current ? "opacity-70" : "opacity-40")}
+        />
+      ) : (
+        <span className="absolute inset-0 flex items-center justify-center text-text-tertiary">
+          <Music className="h-8 w-8" aria-hidden="true" />
+        </span>
+      )}
+      <span className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent" />
+      {/* The whole card puts the music back on the stage. The controls sit
+          above it, so a press on play is never also a press on the card. */}
+      <button
+        type="button"
+        data-music-room-card-expand=""
+        aria-label={expandLabel}
+        className="absolute inset-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[color:var(--color-focus-ring)]"
+        onClick={onExpand}
+      />
+      <span className="pointer-events-none absolute left-2 top-2 inline-flex h-6 items-center gap-1 rounded-full bg-accent-soft px-2 text-[11px] font-semibold text-on-accent-soft">
+        <Music className="h-3 w-3" aria-hidden="true" />
+        {t("music.stage.tag")}
+      </span>
+      <Tooltip label={expandLabel}>
+        <button
+          type="button"
+          aria-label={expandLabel}
+          className={cn(
+            control,
+            "absolute right-1.5 top-1.5 bg-black/50 text-white hover:bg-black/70",
+            "[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-within:opacity-100",
+          )}
+          onClick={onExpand}
+        >
+          <Expand className="h-4 w-4" aria-hidden="true" />
+        </button>
+      </Tooltip>
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 flex min-w-0 items-center gap-1.5 p-2">
+        <p
+          data-music-room-card-title=""
+          className="min-w-0 flex-1 truncate text-[13px] font-semibold text-white"
+          title={title}
+        >
+          {title}
+        </p>
+        {current && local.needsTap ? (
+          <button
+            type="button"
+            aria-label={t("music.stage.tapToListen")}
+            className={cn(control, "pointer-events-auto bg-accent text-on-accent hover:bg-accent-hover")}
+            onClick={tapMusicLocalToPlay}
+          >
+            <Play className="ml-0.5 h-4 w-4" fill="currentColor" aria-hidden="true" />
+          </button>
+        ) : current && canManage ? (
+          <>
+            <button
+              type="button"
+              aria-label={playing ? t("music.pause") : t("music.play")}
+              className={cn(control, "pointer-events-auto bg-accent text-on-accent hover:bg-accent-hover")}
+              onClick={() => setPlaying(!playing)}
+            >
+              {playing ? (
+                <Pause className="h-4 w-4" fill="currentColor" aria-hidden="true" />
+              ) : (
+                <Play className="ml-0.5 h-4 w-4" fill="currentColor" aria-hidden="true" />
+              )}
+            </button>
+            <button
+              type="button"
+              aria-label={t("music.skip")}
+              className={cn(control, "pointer-events-auto text-white hover:bg-white/15")}
+              onClick={() => void skipToNext(musicRelatedTracks)}
+            >
+              <SkipForward className="h-4 w-4" fill="currentColor" aria-hidden="true" />
+            </button>
+          </>
+        ) : null}
+      </div>
+    </li>
   );
 }
 

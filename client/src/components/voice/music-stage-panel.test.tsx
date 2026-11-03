@@ -384,7 +384,7 @@ describe("the music panel on the room stage", () => {
     expect(drawn.querySelector("[data-music-next]")).toBeNull();
   });
 
-  it("says who paused it, in a bar under the cover", () => {
+  it("says who paused it, in the header where it cannot move the picture", () => {
     receiveMusic(CHANNEL, musicState({ status: "paused", actorId: "peer-friend" }));
     // The roster is where a name comes from.
     const el = mount({

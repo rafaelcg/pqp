@@ -7,6 +7,7 @@ import {
   Music,
   Pause,
   Play,
+  Shrink,
   SkipBack,
   SkipForward,
   Tv,
@@ -181,6 +182,7 @@ export function MusicNowPlaying({
   stageVideo = false,
   onToggleFullscreen,
   stageFooter,
+  onStageShrink,
 }: {
   current: MusicTrack;
   music: MusicSnapshot;
@@ -216,6 +218,8 @@ export function MusicNowPlaying({
   onToggleFullscreen?: () => void;
   /** The stage tone with the queue closed: what plays next, under the player. */
   stageFooter?: ReactNode;
+  /** The stage tone: give the stage back and become a card in the row. */
+  onStageShrink?: () => void;
 }) {
   const { t } = useTranslation();
   const onStage = useMusicPlacement() === "stage";
@@ -586,6 +590,7 @@ export function MusicNowPlaying({
         compact={stageCompact}
         video={stageVideo}
         onToggleFullscreen={onToggleFullscreen}
+        onShrink={onStageShrink}
         seekBar={seekBar}
         overflow={
           <MusicOverflowMenu
@@ -851,6 +856,7 @@ function StagePlayer({
   compact,
   video,
   onToggleFullscreen,
+  onShrink,
   seekBar,
   overflow,
   speaker,
@@ -875,6 +881,7 @@ function StagePlayer({
   compact: boolean;
   video: boolean;
   onToggleFullscreen?: () => void;
+  onShrink?: () => void;
   seekBar: ReactNode;
   overflow: ReactNode;
   speaker: ReactNode;
@@ -946,22 +953,32 @@ function StagePlayer({
             }
           : null;
 
-  const stateBar = state ? (
+  /*
+   * "Fulano pausou pra todo mundo" is a fact about the room, and it comes and
+   * goes with every press of play: as a bar between the picture and the
+   * title it shrank the video and pulled it back each time. It takes the
+   * header's listener line instead, which has the room. The other states
+   * carry a button and stay a bar.
+   */
+  const headerState = state?.kind === "paused" ? state : null;
+  const barState = headerState ? null : state;
+  const stateBarFor = (shown: typeof state) => shown ? (
     <div
-      data-music-state={state.kind}
-      data-music-stopped={state.kind === "stopped" ? "" : undefined}
-      data-music-unplayable={state.kind === "unplayable" ? "" : undefined}
+      data-music-state={shown.kind}
+      data-music-stopped={shown.kind === "stopped" ? "" : undefined}
+      data-music-unplayable={shown.kind === "unplayable" ? "" : undefined}
       role="status"
       className={cn(
         "flex w-full min-w-0 items-center gap-2 rounded-lg bg-surface-2 py-1 pl-3 pr-1 text-left text-[12px] leading-snug text-text-secondary",
-        !state.action && "py-1.5 pr-3",
-        state.kind === "unplayable" && "text-danger",
+        !shown.action && "py-1.5 pr-3",
+        shown.kind === "unplayable" && "text-danger",
       )}
     >
-      <span className="min-w-0 flex-1">{state.text}</span>
-      {state.action}
+      <span className="min-w-0 flex-1">{shown.text}</span>
+      {shown.action}
     </div>
   ) : null;
+  const stateBar = stateBarFor(barState);
 
   const stageLabel = onStage ? t("music.stage.hide") : t("music.stage.watch");
   const watch = (
@@ -983,6 +1000,56 @@ function StagePlayer({
     </Tooltip>
   );
 
+  /*
+   * The two ways to change what the stage shows, side by side: the video
+   * and the queue. The queue's used to live in a strip at the panel's
+   * bottom, the other end of the panel from the video's.
+   */
+  const queueCount = music.state?.queue.length ?? 0;
+  const queueLabel = music.open ? t("music.stage.hideQueue") : t("music.stage.showQueue");
+  const queueToggle = (
+    <Tooltip label={queueLabel}>
+      <button
+        type="button"
+        data-music-queue-toggle=""
+        aria-expanded={music.open}
+        aria-label={queueLabel}
+        className={cn(
+          "flex h-8 shrink-0 items-center gap-1.5 rounded-full text-[12px] font-medium transition-colors",
+          compact ? "px-2" : "px-2.5",
+          music.open
+            ? "bg-accent-soft text-on-accent-soft"
+            : "text-text-secondary hover:bg-[color:var(--button-ghost-hover)] hover:text-text",
+        )}
+        onClick={toggleMusicOpen}
+      >
+        <ListMusic className="h-4 w-4" aria-hidden="true" />
+        {compact ? null : <span>{t("music.fila")}</span>}
+        {queueCount > 0 ? (
+          <span data-music-queue-count="" className="tabular-nums">
+            {queueCount}
+          </span>
+        ) : null}
+      </button>
+    </Tooltip>
+  );
+
+  // Gives the stage back: the player becomes a card in the row under it, the
+  // way a pinned camera or share does (`planRoomFocus`).
+  const shrink = onShrink ? (
+    <Tooltip label={t("music.stage.shrink")}>
+      <button
+        type="button"
+        data-music-stage-shrink=""
+        aria-label={t("music.stage.shrink")}
+        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-text-secondary transition-colors hover:bg-[color:var(--button-ghost-hover)] hover:text-text"
+        onClick={onShrink}
+      >
+        <Shrink className="h-4 w-4" aria-hidden="true" />
+      </button>
+    </Tooltip>
+  ) : null;
+
   const header = (
     <div className="flex h-8 w-full min-w-0 items-center gap-2">
       <span
@@ -992,7 +1059,16 @@ function StagePlayer({
         <Music className="h-3 w-3" aria-hidden="true" />
         {t("music.stage.tag")}
       </span>
-      {listeners ? (
+      {headerState ? (
+        <span
+          data-music-state={headerState.kind}
+          role="status"
+          className="flex min-w-0 items-center gap-1 truncate text-[12px] text-text-secondary"
+        >
+          <Pause className="h-3 w-3 shrink-0" fill="currentColor" aria-hidden="true" />
+          <span className="truncate">{headerState.text}</span>
+        </span>
+      ) : listeners ? (
         <span
           data-music-listeners=""
           className="hidden min-w-0 truncate text-[12px] text-text-tertiary @min-[20rem]:inline"
@@ -1002,14 +1078,18 @@ function StagePlayer({
       ) : null}
       <span className="flex-1" />
       {watch}
+      {queueToggle}
       {overflow}
+      {shrink}
     </div>
   );
 
   // As tall as the panel leaves once the lines around it are drawn, and no
   // taller than its width allows at 16:9 (`cq*` is the player's panel,
-  // `MusicStagePanel`). The video may grow; the cover stops at 520 wide.
-  const coverHeight = `clamp(${video ? "12.5rem" : "5rem"}, min(calc(100cqh - ${17 + (state ? 2.75 : 0) + (footer ? 3.75 : 0)}rem), calc((100cqw - 2rem) * 0.5625)), ${video ? "100cqh" : "18.25rem"})`;
+  // `MusicStagePanel`). The cover and the video share the one rule, so
+  // "Ver no palco" swaps the picture in place without the player moving.
+  // 12.5rem is YouTube's 200px floor for its player.
+  const coverHeight = `clamp(12.5rem, min(calc(100cqh - ${17 + (barState ? 2.75 : 0) + (footer ? 3.75 : 0)}rem), calc((100cqw - 2rem) * 0.5625)), 100cqh)`;
   const art = video ? (
     /*
      * The real video, where the cover was. The iframe lives in App and is
@@ -1057,7 +1137,7 @@ function StagePlayer({
   );
 
   const heading = (
-    <div className={cn("w-full min-w-0", compact ? "text-left" : "max-w-[32.5rem] text-center")}>
+    <div className={cn("w-full min-w-0", compact ? "text-left" : "max-w-[40rem] text-center")}>
       <p
         key={`stage-title-${current.id}`}
         data-music-title=""
@@ -1201,7 +1281,7 @@ function StagePlayer({
       data-music-stage-bar=""
       className={cn(
         "grid w-full min-w-0 grid-cols-[1fr_auto_1fr] items-center gap-2",
-        !compact && !video && "max-w-[32.5rem]",
+        !compact && "max-w-[40rem]",
       )}
     >
       <div className="flex min-w-0 items-center justify-start">{repeat}</div>
@@ -1266,9 +1346,11 @@ function StagePlayer({
               </p>
             </div>
             {watch}
+            {queueToggle}
             {overflow}
+            {shrink}
           </div>
-          {stateBar}
+          {stateBarFor(state)}
           <div className="w-full min-w-0">{seekBar}</div>
           {bar}
         </div>
@@ -1303,11 +1385,16 @@ function StagePlayer({
       className="@container flex h-full w-full min-w-0 flex-col gap-3 p-4"
     >
       {header}
+      {/* The picture and its title float in the middle; the seek and the
+          controls stay pinned to the bottom, so they never move when the
+          cover turns into the video or a title wraps. */}
       <div className="flex min-h-0 w-full flex-1 flex-col items-center justify-center gap-3">
         {art}
-        {stateBar ? <div className="w-full max-w-[32.5rem]">{stateBar}</div> : null}
+        {stateBar ? <div className="w-full max-w-[40rem]">{stateBar}</div> : null}
         {heading}
-        <div className="w-full min-w-0 max-w-[32.5rem]">{seekBar}</div>
+      </div>
+      <div data-music-stage-controls="" className="flex w-full shrink-0 flex-col items-center gap-1">
+        <div className="w-full min-w-0 max-w-[40rem]">{seekBar}</div>
         {bar}
       </div>
       {footer}

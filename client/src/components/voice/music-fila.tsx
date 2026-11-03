@@ -561,7 +561,7 @@ function StageFila({
       aria-label={t("music.fila")}
       className={cn(
         "flex h-full min-h-0 w-full flex-col",
-        centered && "mx-auto max-w-[34rem]",
+        centered && "mx-auto max-w-[44rem]",
         // Nothing on and nothing waiting: the field is the whole panel, so it
         // sits in the middle of the stage rather than under an empty list.
         centered && nothing && "justify-center",
@@ -582,12 +582,12 @@ function StageFila({
         ) : null}
         <span className="flex-1" />
         {canManage && queue.length > 1 ? <MusicShuffleButton className={icon} /> : null}
-        <Tooltip label={t("music.close")} side="left">
+        <Tooltip label={t("music.stage.hideQueue")} side="left">
           <button
             type="button"
             data-music-fila-close=""
             className={icon}
-            aria-label={t("music.close")}
+            aria-label={t("music.stage.hideQueue")}
             onClick={() => setMusicOpen(false)}
           >
             <IconSwap off={X} on={XGlyph} kind="symbol" size="sm" offClassName="h-4 w-4" />
@@ -596,15 +596,16 @@ function StageFila({
       </div>
 
       {nothing && fieldIdle ? (
-        <div data-music-empty="" className="shrink-0 px-4 pb-3 pt-2">
-          <p className="font-display text-xl font-semibold text-text">{t("music.stage.emptyTitle")}</p>
-          <p className="mt-1 text-[13px] leading-snug text-text-secondary">{t("music.stage.emptyBody")}</p>
+        <div data-music-empty="" className="shrink-0 px-4 pb-4 pt-2">
+          <p className="font-display text-2xl font-semibold text-text">{t("music.stage.emptyTitle")}</p>
+          <p className="mt-1.5 text-[14px] leading-snug text-text-secondary">{t("music.stage.emptyBody")}</p>
         </div>
       ) : null}
 
       <div className="shrink-0 px-3">
         <MusicSearchPicker
           compact={!nothing}
+          size={nothing ? "hero" : "stage"}
           canManage={canManage}
           autoFocus
           onQueryActive={onQueryActive}

@@ -911,19 +911,27 @@ export function CallSplit({
         </ChatMusicContext.Provider>
         {/* THE WAY BACK TO THE CHAT, on the stage's corner where YouTube and
             Twitch put theirs, instead of a full-height strip at the edge.
-            Under the redesign the stage's top right is its content's own
-            controls (the music panel's "Ver no palco" and menu), so it sits
-            in the dock's band at the bottom right instead. */}
+            Under the redesign it is a tab on the stage's right edge, where
+            the chat went, always showing while the chat is away: the top
+            right is the content's own controls (the music panel's "Ver no
+            palco"), and the bottom is the control bar's band, whose box
+            takes every click across the stage's whole width (it once sat
+            there, drawn but dead). Above the bar's layer (`STAGE_LAYER`
+            chrome, z-50), under its menus (z-60). */}
         {collapsed === "chat" && (
           <button
             type="button"
             data-testid="call-split-restore"
             data-call-split-restore="chat"
-            className="absolute right-2 top-10 z-20 flex items-center gap-1 rounded-full bg-ink/80 px-2.5 py-1 text-xs text-paper shadow backdrop-blur-sm hover:bg-ink-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent redesign:bottom-7 redesign:right-4 redesign:top-auto"
+            aria-label={t("call.split.restoreChat")}
+            className={cn(
+              "absolute right-2 top-10 z-20 flex items-center gap-1 rounded-full bg-ink/80 px-2.5 py-1 text-xs text-paper shadow backdrop-blur-sm hover:bg-ink-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+              "redesign:right-0 redesign:top-1/2 redesign:z-[55] redesign:-translate-y-1/2 redesign:flex-col redesign:gap-2 redesign:rounded-l-xl redesign:rounded-r-none redesign:bg-surface-2 redesign:px-1.5 redesign:py-3 redesign:text-[12px] redesign:font-medium redesign:text-text-secondary redesign:shadow-[inset_0_0_0_1px_var(--card-border)] redesign:backdrop-blur-none redesign:hover:bg-surface-3 redesign:hover:text-text",
+            )}
             onClick={() => setCollapsed("none")}
           >
-            <MessageSquare className="h-3.5 w-3.5" aria-hidden="true" />
-            {t("call.split.restoreChat")}
+            <MessageSquare className="h-3.5 w-3.5 redesign:h-4 redesign:w-4" aria-hidden="true" />
+            <span className="redesign:[writing-mode:vertical-rl]">{t("call.split.restoreChat")}</span>
           </button>
         )}
       </div>
