@@ -12634,6 +12634,8 @@ function MainAppContent({
         }
         messages={chat.getMessages()}
         participants={activeConversation?.participants}
+        moderation={cardModeration}
+        onBlockUser={(userId) => void handleBlockUser(userId)}
         currentUserId={user?.id ?? null}
         currentUsername={user?.username ?? null}
         serverId={selectedServerId}

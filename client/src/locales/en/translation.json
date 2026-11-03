@@ -4841,6 +4841,7 @@
   "webhooks.forum.saveFailed": "Could not save the feed settings",
   "chat.blocked": "Blocked message",
   "chat.showBlocked": "Show",
+  "chat.menu.staff": "Staff",
   "chat.blockedRun_one": "{count} message from someone you blocked",
   "chat.blockedRun_other": "{count} messages from someone you blocked",
   "chat.copyCode": "Copy",

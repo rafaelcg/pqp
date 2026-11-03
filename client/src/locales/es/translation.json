@@ -4904,6 +4904,7 @@
   "webhooks.forum.saveFailed": "No se pudieron guardar los ajustes del feed",
   "chat.blocked": "Mensaje bloqueado",
   "chat.showBlocked": "Mostrar",
+  "chat.menu.staff": "Staff",
   "chat.blockedRun_one": "{count} mensaje de alguien que bloqueaste",
   "chat.blockedRun_other": "{count} mensajes de alguien que bloqueaste",
   "chat.copyCode": "Copiar",

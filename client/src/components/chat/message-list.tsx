@@ -1,4 +1,4 @@
-import { MENU_SEPARATOR } from "@/components/ui/menu-items";
+import { MENU_HEADING, MENU_SEPARATOR } from "@/components/ui/menu-items";
 import { StoryQuoteCard } from "@/components/stories/story-quote-card";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -18,6 +18,18 @@ import {
 } from "@phosphor-icons/react";
 import { Icon as Glyph } from "@/components/ui/icon";
 import { MessageFold } from "@/components/chat/message-fold";
+import {
+  MemberModerationDialog,
+  type ModerationSubject,
+} from "@/components/user/member-moderation-dialog";
+import {
+  moderationActions,
+  moderationNeedsConfirmation,
+  type ProfileModerationAction,
+  type ProfileModerationContext,
+} from "@/components/user/profile-relations";
+import { applyMemberModeration, moderationActionLabel } from "@/lib/member-moderation";
+import { orderMessageMenu } from "@/lib/message-menu-order";
 import { isJumboEmoji } from "@/lib/emoji-only";
 import { EmptyState as EmptyStateView } from "@/components/ui/empty-state";
 import {
@@ -65,6 +77,11 @@ import {
   Star,
   Crown,
   Trash2,
+  Ban,
+  Gavel,
+  TimerOff,
+  TimerReset,
+  UserMinus,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -314,6 +331,14 @@ export interface MessageRoleColor {
 /** Shared identity, so the default prop does not remount every row each render. */
 const EMPTY_BLOCKED: ReadonlySet<string> = new Set<string>();
 
+/** The staff rungs' glyphs, the same ones the member list draws. */
+const MESSAGE_MODERATION_ICON: Record<ProfileModerationAction, LucideIcon> = {
+  timeout: TimerOff,
+  endTimeout: TimerReset,
+  kick: UserMinus,
+  ban: Gavel,
+};
+
 /** A run of back-to-back curtained messages; `ids` is shared by the run. */
 type BlockedRun = { lead: boolean; ids: string[] };
 const EMPTY_AUTHORS: ReadonlyMap<string, MessageAuthorInfo> = new Map();
@@ -396,6 +421,14 @@ interface MessageListProps {
    * whether the channel has moderators.
    */
   onReportMessage?: (message: ChatMessage) => void;
+  /**
+   * The staff rungs on somebody else's message (redesign only): the same
+   * context the profile card reads, so the menu never offers what the API
+   * would refuse.
+   */
+  moderation?: ProfileModerationContext | null;
+  /** Blocks an author from the message menu (redesign only), after a confirm. */
+  onBlockUser?: (userId: string) => void;
   /** Client-render-only: the server unfurls and caches regardless, so turning
    * this off only stops this reader's own client from drawing the card. */
   showLinkEmbeds?: boolean;
@@ -816,6 +849,8 @@ export const MessageList = memo(function MessageList({
   onPinMessage,
   onUnpinMessage,
   onReportMessage,
+  moderation = null,
+  onBlockUser,
   showLinkEmbeds = true,
   onStartThread,
   onOpenThread,
@@ -1126,6 +1161,34 @@ export const MessageList = memo(function MessageList({
     }
     return runs;
   }, [redesign, rows, currentUserId, blockedAuthorIds, revealedIds]);
+  // The message menu's staff rungs and Bloquear (redesign only) open these.
+  const [pendingModeration, setPendingModeration] = useState<{
+    action: Exclude<ProfileModerationAction, "endTimeout">;
+    subject: ModerationSubject;
+  } | null>(null);
+  const [pendingBlock, setPendingBlock] = useState<ModerationSubject | null>(null);
+  const handleModerate = useCallback(
+    (action: ProfileModerationAction, subject: ModerationSubject) => {
+      if (!moderation) {
+        return;
+      }
+      if (action === "endTimeout") {
+        // Lifting a sentence takes nothing away: no dialog, as on the card.
+        void applyMemberModeration({
+          action,
+          serverId: moderation.serverId,
+          userId: subject.id,
+        }).then(() => moderation.onModerated(), () => {});
+        return;
+      }
+      setPendingModeration({ action, subject });
+    },
+    [moderation],
+  );
+  const handleBlockAuthor = useCallback(
+    (subject: ModerationSubject) => setPendingBlock(subject),
+    [],
+  );
   // `rows` (the array, not its contents) gets a new reference on every
   // message arrival even when almost every `Row` inside it is the cached,
   // reused one, so `rowIds` does too. `handleRowNavigate` below only reads
@@ -2380,6 +2443,9 @@ export const MessageList = memo(function MessageList({
                 !revealedIds.has(rowId)
               }
               blockedRun={blockedRuns.get(rowId)}
+              moderation={moderation}
+              onModerate={moderation ? handleModerate : undefined}
+              onBlockAuthor={onBlockUser ? handleBlockAuthor : undefined}
               onReveal={stableRowCallback(rowId, "reveal", [blockedRuns.get(rowId)?.ids.length], () => () => {
                 const run = blockedRuns.get(rowId);
                 const ids = run?.lead ? run.ids : [rowId];
@@ -2765,6 +2831,32 @@ export const MessageList = memo(function MessageList({
         </button>
       )}
     </div>
+    {moderation && (
+      <MemberModerationDialog
+        action={pendingModeration?.action ?? null}
+        subject={pendingModeration?.subject ?? null}
+        serverId={moderation.serverId}
+        onDone={() => {
+          moderation.onModerated();
+          moderation.onRolesChanged?.();
+        }}
+        onClose={() => setPendingModeration(null)}
+      />
+    )}
+    {onBlockUser && (
+      <ConfirmDialog
+        open={pendingBlock !== null}
+        title={t("profile.block")}
+        description={t("profile.block.confirm", { name: pendingBlock?.displayName ?? "" })}
+        confirmLabel={t("profile.block")}
+        onConfirm={() => {
+          if (pendingBlock) {
+            onBlockUser(pendingBlock.id);
+          }
+        }}
+        onClose={() => setPendingBlock(null)}
+      />
+    )}
     </VoiceNoteNamesContext.Provider>
     </CustomEmojiProvider>
   );
@@ -3345,6 +3437,10 @@ interface MessageRowProps {
   isBlocked: boolean;
   /** Its place in a run of curtained messages (redesign only). */
   blockedRun?: BlockedRun;
+  /** See `MessageListProps.moderation`. */
+  moderation?: ProfileModerationContext | null;
+  onModerate?: (action: ProfileModerationAction, subject: ModerationSubject) => void;
+  onBlockAuthor?: (subject: ModerationSubject) => void;
   onReveal: () => void;
   isFlashing: boolean;
   registerRow: (messageId: string, node: HTMLElement | null) => void;
@@ -3436,6 +3532,9 @@ const MessageRow = memo(function MessageRow({
   canModerate,
   isBlocked,
   blockedRun,
+  moderation = null,
+  onModerate,
+  onBlockAuthor,
   onReveal,
   isFlashing,
   registerRow,
@@ -3493,6 +3592,7 @@ const MessageRow = memo(function MessageRow({
   const { t, locale } = useTranslation();
   const openProfile = useProfilePopover();
   const compact = useChatDisplay().display.density === "compact";
+  const redesign = useRedesign();
   const { message, dayLabel } = row;
   // The first unread message opens a block even when the same person also
   // wrote the message above the "Novas" line: the divider is where the reader
@@ -3952,6 +4052,40 @@ const MessageRow = memo(function MessageRow({
       : []),
   ];
 
+  // Under the redesign the menu also carries Bloquear and the staff block,
+  // and is regrouped (lib/message-menu-order.ts). The toggle off keeps `items`.
+  const subject: ModerationSubject = { id: message.authorId, displayName: message.authorName };
+  const canActOnAuthor = isReal && !isMine && !stream && !message.isWebhook && !message.isAutomod;
+  const staffRungs = redesign && canActOnAuthor && onModerate
+    ? moderationActions(message.authorId, currentUserId, moderation)
+    : [];
+  const menuItems: ContextMenuItemDef[] = redesign
+    ? orderMessageMenu(
+        [
+          ...items,
+          ...(canActOnAuthor && onBlockAuthor
+            ? [
+                {
+                  id: "block",
+                  label: t("profile.block"),
+                  icon: Ban,
+                  onSelect: selectAndClose(() => onBlockAuthor(subject), false),
+                },
+              ]
+            : []),
+          ...staffRungs.map((rung) => ({
+            id: `mod-${rung}`,
+            label: moderationActionLabel(rung, t),
+            icon: MESSAGE_MODERATION_ICON[rung],
+            danger: moderationNeedsConfirmation(rung),
+            onSelect: selectAndClose(() => onModerate?.(rung, subject), false),
+          })),
+        ],
+        isMine,
+        t("chat.menu.staff"),
+      )
+    : items;
+
   /**
    * The quick reactions, as a STRIP rather than as menu items.
    *
@@ -3992,7 +4126,7 @@ const MessageRow = memo(function MessageRow({
       )}
 
       <ContextMenu
-        items={items}
+        items={menuItems}
         reactions={quickReactions}
         reactionsLabel={t("reactions.quick")}
         onMoreReactions={
@@ -4594,6 +4728,29 @@ const MessageRow = memo(function MessageRow({
                       moreUp ? "redesign:mb-2" : "redesign:mt-2",
                     )}
                   >
+                    {redesign ? (
+                      menuItems.map((item) =>
+                        item.separator ? (
+                          <div key={item.id} role="separator" className={MENU_SEPARATOR} />
+                        ) : item.heading ? (
+                          <div key={item.id} role="presentation" className={MENU_HEADING}>
+                            {item.label}
+                          </div>
+                        ) : (
+                          <MoreMenuItem
+                            key={item.id}
+                            icon={item.icon}
+                            danger={item.danger}
+                            onSelect={() => {
+                              setMoreOpen(false);
+                              item.onSelect?.();
+                            }}
+                          >
+                            {item.label}
+                          </MoreMenuItem>
+                        ),
+                      )
+                    ) : (<>
                     {onToggleAnswer && isReal && (
                       <MoreMenuItem
                         icon={CircleCheck}
@@ -4702,6 +4859,7 @@ const MessageRow = memo(function MessageRow({
                         {t("chat.bulk.select")}
                       </MoreMenuItem>
                     )}
+                    </>)}
                   </div>
                 )}
               </div>
