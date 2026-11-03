@@ -4882,6 +4882,7 @@
   "poll.composer.post": "Publicar encuesta",
   "poll.composer.cancel": "Cancelar",
   "composer.addPoll": "Crear encuesta",
+  "composer.serverApps": "Apps del servidor",
   "search.minChars": "Escribe al menos {count} caracteres. Los resultados cubren todos los canales que puedes ver.",
   "search.noMatch": "Ningún mensaje coincide con “{query}”.",
   "report.done": "Listo",

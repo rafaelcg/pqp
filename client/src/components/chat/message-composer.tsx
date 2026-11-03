@@ -43,9 +43,11 @@ import {
   TextQuote,
   User,
   UserPlus,
+  LayoutGrid,
   X,
   type LucideIcon,
 } from "lucide-react";
+import type { AppLauncherMenuTrigger } from "@/components/apps/app-launcher";
 import {
   ArrowBendUpLeft,
   ArrowUp as ArrowUpGlyph,
@@ -277,7 +279,7 @@ interface MessageComposerProps {
    * channel and the permissions; the composer only gives it a place and its
    * own icon-button size. Absent in a thread, a DM, a forum and stream chat.
    */
-  appsLauncher?: (buttonClassName: string) => ReactNode;
+  appsLauncher?: (buttonClassName: string, menu?: AppLauncherMenuTrigger) => ReactNode;
   /**
    * Who is typing, drawn in the status line under the field under the
    * redesign (`TypingLine`). The list then leaves people out of its own
@@ -513,6 +515,17 @@ export function MessageComposer({
   const { t, locale } = useTranslation();
   const redesign = useRedesign();
   const oneRow = !embedded && variant !== "stream";
+  // Under the redesign the apps are a row of the + menu, not a button.
+  const appsInMenu = redesign && variant !== "stream" && Boolean(appsLauncher);
+  const [appsState, setAppsState] = useState({ available: false, running: false });
+  const [appsRequest, setAppsRequest] = useState(0);
+  const onAppsState = useCallback(
+    (next: { available: boolean; running: boolean }) =>
+      setAppsState((prev) =>
+        prev.available === next.available && prev.running === next.running ? prev : next,
+      ),
+    [],
+  );
   // A narrow phone: @ suggestions sit above the keyboard as pills.
   const phone = useMediaQuery(BELOW_SM_QUERY, false);
   const inputPlaceholder = placeholder ?? t("composer.placeholderFallback");
@@ -1748,6 +1761,19 @@ export function MessageComposer({
           },
         }
       : null,
+    appsInMenu && appsState.available
+      ? {
+          id: "apps",
+          label: t("composer.serverApps"),
+          icon: LayoutGrid,
+          onSelect: () => {
+            setIsInsertMenuOpen(false);
+            setIsPickerOpen(false);
+            setIsGifPickerOpen(false);
+            setAppsRequest((n) => n + 1);
+          },
+        }
+      : null,
   ].filter((item): item is NonNullable<typeof item> => item !== null);
 
   // One set of format buttons, for the bar inside the field and for the one
@@ -2120,8 +2146,9 @@ export function MessageComposer({
           <>
           {/* Hidden rather than empty: a self-host without attachments in a
               panel without slash commands has nothing for the + to add. */}
-          {insertItems.length > 0 && variant !== "stream" && (
+          {(insertItems.length > 0 || appsInMenu) && variant !== "stream" && (
           <div ref={insertMenuRef} className={cn("relative", oneRow && "redesign:order-0!")}>
+            {insertItems.length > 0 && (
             <Tooltip label={t("composer.insert")}>
               <Button
                 type="button"
@@ -2140,21 +2167,36 @@ export function MessageComposer({
                 onMouseDown={keepComposerFocused}
                 className={cn(
                   iconButtonClass,
+                  "relative",
                   isInsertMenuOpen && COMPOSER_ICON_ON,
                 )}
               >
                 <ComposerGlyph old={Plus} glyph={PlusGlyph} kind="symbol" />
+                {appsInMenu && appsState.running && (
+                  <span
+                    aria-hidden
+                    data-composer-apps-running=""
+                    className="absolute right-1 top-1 h-2 w-2 rounded-full bg-accent ring-2 ring-[color:var(--composer-bg)]"
+                  />
+                )}
               </Button>
             </Tooltip>
+            )}
             {isInsertMenuOpen && (
               <ComposerInsertMenu
                 labelledBy="composer-insert"
                 items={insertItems}
               />
             )}
+            {appsInMenu &&
+              appsLauncher?.(iconButtonClass, {
+                anchor: insertMenuRef,
+                openRequest: appsRequest,
+                onState: onAppsState,
+              })}
           </div>
           )}
-          {variant !== "stream" && appsLauncher?.(iconButtonClass)}
+          {variant !== "stream" && !appsInMenu && appsLauncher?.(iconButtonClass)}
           {variant !== "stream" && (
           <Tooltip label={t("composer.format")}>
             <Button

@@ -4820,6 +4820,7 @@
   "poll.composer.post": "Postar enquete",
   "poll.composer.cancel": "Cancelar",
   "composer.addPoll": "Criar enquete",
+  "composer.serverApps": "Apps do servidor",
   "search.minChars": "Digite pelo menos {count} caracteres. Os resultados cobrem todos os canais que você vê.",
   "search.noMatch": "Nenhuma mensagem bateu com “{query}”.",
   "report.done": "Pronto",

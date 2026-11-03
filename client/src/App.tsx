@@ -12943,9 +12943,10 @@ function MainAppContent({
           selectedServerId &&
           (selectedChannel.type === "text" || selectedChannel.type === "voice") &&
           !isWatchPartySplit
-            ? (buttonClassName) => (
+            ? (buttonClassName, menu) => (
                 <AppLauncher
                   key={selectedChannel.id}
+                  menuTrigger={menu}
                   serverId={selectedServerId}
                   channelId={selectedChannel.id}
                   channelName={selectedChannel.name}

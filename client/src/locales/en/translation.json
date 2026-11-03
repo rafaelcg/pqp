@@ -4820,6 +4820,7 @@
   "poll.composer.post": "Post poll",
   "poll.composer.cancel": "Cancel",
   "composer.addPoll": "Create a poll",
+  "composer.serverApps": "Server apps",
   "search.minChars": "Type at least {count} characters. Results cover every channel you can see.",
   "search.noMatch": "No messages matched “{query}”.",
   "report.done": "Done",
