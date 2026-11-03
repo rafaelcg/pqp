@@ -1960,15 +1960,19 @@ function ActiveCall({
   // and its mount tells App to leave the composer's bar out. Not collapsed or
   // hidden, where the composer is the only place left to show it. A share
   // keeps the space, so with one on the stage the music stays in the
-  // composer's bar (no strip beside the share yet). The clip on the stage
-  // (`placement: "stage"`) is not this: `roomView` already hands it the stage.
+  // composer's bar (no strip beside the share yet). The video on the stage
+  // (`placement: "stage"`) is the panel too, with the video where the cover
+  // was: drawn as a picture of its own it sent the controls to the chat.
   const stageMusic = useMusicDock();
+  const onlyMusicPicture =
+    roomPlan.screens.length > 0 &&
+    roomPlan.screens.every((tile) => tile.kind === "music");
   const musicPanel =
     roomStage &&
     !collapsed &&
     !stageHidden &&
-    roomPlan.screens.length === 0 &&
-    (stageMusic.on || stageMusic.open);
+    (roomPlan.screens.length === 0 || onlyMusicPicture) &&
+    (stageMusic.on || stageMusic.open || musicOnStage);
   // Our own camera beside exactly one other picture is the floating preview
   // on the ordinary stage (`selfPreview`). The room stage has no floating
   // preview: our camera is our card, like everybody else's.
@@ -3071,10 +3075,14 @@ function ActiveCall({
               youLabel={t("voice.tile.you")}
               menuFor={roomCardMenuFor}
               stage={
-                roomPlan.screens.length > 0 ? (
+                musicPanel ? (
+                  <MusicStagePanel
+                    channelId={channelId}
+                    voiceState={voiceState}
+                    onToggleFullscreen={() => fullscreen.toggleScreen(MUSIC_STAGE_TILE_ID)}
+                  />
+                ) : roomPlan.screens.length > 0 ? (
                   stageGrid(roomPlan.screens, false)
-                ) : musicPanel ? (
-                  <MusicStagePanel channelId={channelId} voiceState={voiceState} />
                 ) : undefined
               }
               people={allPeople.map((person) =>

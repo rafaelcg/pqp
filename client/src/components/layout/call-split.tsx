@@ -910,13 +910,16 @@ export function CallSplit({
           {stage}
         </ChatMusicContext.Provider>
         {/* THE WAY BACK TO THE CHAT, on the stage's corner where YouTube and
-            Twitch put theirs, instead of a full-height strip at the edge. */}
+            Twitch put theirs, instead of a full-height strip at the edge.
+            Under the redesign the stage's top right is its content's own
+            controls (the music panel's "Ver no palco" and menu), so it sits
+            in the dock's band at the bottom right instead. */}
         {collapsed === "chat" && (
           <button
             type="button"
             data-testid="call-split-restore"
             data-call-split-restore="chat"
-            className="absolute right-2 top-10 z-20 flex items-center gap-1 rounded-full bg-ink/80 px-2.5 py-1 text-xs text-paper shadow backdrop-blur-sm hover:bg-ink-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            className="absolute right-2 top-10 z-20 flex items-center gap-1 rounded-full bg-ink/80 px-2.5 py-1 text-xs text-paper shadow backdrop-blur-sm hover:bg-ink-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent redesign:bottom-7 redesign:right-4 redesign:top-auto"
             onClick={() => setCollapsed("none")}
           >
             <MessageSquare className="h-3.5 w-3.5" aria-hidden="true" />
