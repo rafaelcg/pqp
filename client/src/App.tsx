@@ -11400,6 +11400,10 @@ function MainAppContent({
         compact={compact}
         chrome={!musicInComposer}
         embed={false}
+        onOpenRadio={() => {
+          setMusicOpen(true);
+          void openVoiceChannel();
+        }}
       />
       {voiceState.status !== "idle" && !seatedInLiveParty && (
         <VoiceStatusBar

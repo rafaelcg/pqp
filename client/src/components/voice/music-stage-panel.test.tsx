@@ -10,6 +10,7 @@ import {
   getMusicSnapshot,
   receiveMusic,
   resetMusicStoreForTests,
+  setListening,
   setMusicOpen,
   setMusicSession,
 } from "@/lib/music-store";
@@ -283,6 +284,27 @@ describe("the music panel on the room stage", () => {
     expect(drawn!.textContent).toContain("Ana");
     expect(isStageMusicPanelDrawn(CHANNEL)).toBe(true);
     expect(composerBar(el)).toBeNull();
+  });
+
+  it("invites somebody outside the Rádio instead of handing them its controls", () => {
+    receiveMusic(CHANNEL, musicState());
+    act(() => {
+      setListening(false);
+      setMusicOpen(true);
+    });
+    const el = mount(voiceWith());
+    const invite = panel(el)!.querySelector("[data-music-radio-invite]");
+    expect(invite).not.toBeNull();
+    expect(invite!.querySelector("[data-music-radio-invite-title]")?.textContent).toBe(LONG_TITLE);
+    expect(panel(el)!.querySelector("[data-music-play]")).toBeNull();
+    expect(panel(el)!.querySelector("[data-music-fila]")).toBeNull();
+    act(() => {
+      (invite!.querySelector("[data-music-join]") as HTMLButtonElement).click();
+    });
+    expect(getMusicSnapshot().listening).toBe(true);
+    expect(panel(el)!.querySelector("[data-music-radio-invite]")).toBeNull();
+    expect(panel(el)!.querySelector("[data-music-play]")).not.toBeNull();
+    expect(panel(el)!.querySelector("[data-music-fila]")).not.toBeNull();
   });
 
   it("never mounts the YouTube embed", () => {

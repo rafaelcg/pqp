@@ -6,6 +6,7 @@ import { Icon } from "@/components/ui/icon";
 import { MarqueeText } from "@/components/ui/marquee-text";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { markRadioJoinIntent } from "@/lib/music-prefs";
 import { setMusicOpen } from "@/lib/music-store";
 
 export type { ChannelMusicCardRights } from "@/components/voice/channel-music-card-rights";
@@ -38,11 +39,14 @@ export function ChannelMusicCard({
 }) {
   const { t } = useTranslation();
   const onTitleClick = () => {
+    // In the call, the Rádio is on the call's stage: open the call there,
+    // with the queue up. Outside it, the card is the way into the call.
     if (inCall) {
       setMusicOpen(true);
     } else {
-      onJoin?.();
+      markRadioJoinIntent(channelId);
     }
+    onJoin?.();
   };
 
   return (
@@ -91,7 +95,10 @@ export function ChannelMusicCard({
           type="button"
           size="sm"
           className="h-6 shrink-0 px-2 text-[11px]"
-          onClick={() => onJoin?.()}
+          onClick={() => {
+            markRadioJoinIntent(channelId);
+            onJoin?.();
+          }}
         >
           {t("music.listen")}
         </Button>

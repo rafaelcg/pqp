@@ -1,4 +1,4 @@
-import { Expand, Music, Pause, Play, RotateCcw, SkipForward, X } from "lucide-react";
+import { Expand, Headphones, Music, Pause, Play, RotateCcw, SkipForward, X } from "lucide-react";
 import { useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import type { MusicTrack } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,7 @@ import {
   clearParkedMusic,
   musicPrevious,
   readdFromHistory,
+  setListening,
   setMusicOpen,
   setPlaying,
   skipToNext,
@@ -29,7 +30,11 @@ import {
   toggleMusicLocalMuted,
   useMusicLocalPlayback,
 } from "@/components/voice/music-local-playback";
-import { lookupAddedBy, MusicNowPlaying } from "@/components/voice/music-now-playing";
+import {
+  lookupAddedBy,
+  musicRoomPeople,
+  MusicNowPlaying,
+} from "@/components/voice/music-now-playing";
 import { claimStageMusicPanel } from "@/components/voice/music-stage-panel-store";
 
 /**
@@ -106,11 +111,11 @@ export function MusicStagePanel({
   const queue = music.state?.queue ?? [];
   const wide = slotWidth === 0 || slotWidth >= SIDE_BY_SIDE_PX;
   const hasPlayer = current !== null || parked !== null;
-  const side = music.open && hasPlayer && wide;
+  const side = music.open && hasPlayer && wide && music.listening;
   // Over the queue the cover turns sideways; the video cannot (YouTube's
   // player has to stay at least 200 by 200), so it stays full width with the
   // lines tight under it (`StagePlayer`).
-  const overQueue = music.open && hasPlayer && !wide;
+  const overQueue = music.open && hasPlayer && !wide && music.listening;
   const playing = music.state?.status === "playing";
   const canManage = effectiveCanManageMusic(voiceState, music.state);
   const canSetSwitches = canSetMusicSwitches(voiceState);
@@ -145,7 +150,12 @@ export function MusicStagePanel({
         </span>
       </button>
     );
-  const player = current ? (
+  // Not in the Rádio: the stage holds the invite, never the controls. The
+  // room's music is somebody else's until this person joins it.
+  const invite = current !== null && !music.listening;
+  const player = invite ? (
+    <MusicRadioInvite track={current} voiceState={voiceState} />
+  ) : current ? (
     <MusicNowPlaying
       tone="stage"
       stageCompact={overQueue}
@@ -220,7 +230,7 @@ export function MusicStagePanel({
             {player}
           </div>
         )}
-        {music.open && (
+        {music.open && (music.listening || !hasPlayer) && (
           <div
             className={cn(
               PANEL,
@@ -238,6 +248,90 @@ export function MusicStagePanel({
           </div>
         )}
       </section>
+    </div>
+  );
+}
+
+/**
+ * THE RÁDIO, FOR SOMEBODY WHO HAS NOT JOINED IT.
+ *
+ * The Rádio is opt-in: sitting down in the call plays nothing. What is on,
+ * who asked for it and who is in, with one lime button. The queue and the
+ * transport belong to people who joined, so neither is here.
+ */
+function MusicRadioInvite({
+  track,
+  voiceState,
+}: {
+  track: MusicTrack;
+  voiceState: VoiceState;
+}) {
+  const { t } = useTranslation();
+  const selfPeerId = voiceState.self?.peerId ?? null;
+  const listeners = musicRoomPeople(voiceState).filter(
+    (person) => person.peerId !== selfPeerId && person.listeningMusic !== false,
+  );
+  const addedBy = lookupAddedBy(voiceState, track.addedByUserId, track.addedByName);
+  return (
+    <div
+      data-music-radio-invite=""
+      className="flex h-full w-full min-w-0 items-center justify-center p-4"
+    >
+      <div className="flex w-full max-w-[40rem] min-w-0 flex-col items-center gap-4 @min-[32rem]:flex-row @min-[32rem]:items-center">
+        <span className="relative block aspect-video w-[clamp(9rem,42%,16rem)] shrink-0 overflow-hidden rounded-lg bg-surface-3">
+          {track.thumbnailUrl ? (
+            <img src={track.thumbnailUrl} alt="" className="h-full w-full object-cover" />
+          ) : (
+            <Music className="absolute inset-0 m-auto h-8 w-8 text-text-tertiary" aria-hidden="true" />
+          )}
+        </span>
+        <div className="flex min-w-0 flex-1 flex-col items-center gap-2 text-center @min-[32rem]:items-start @min-[32rem]:text-left">
+          <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
+            <span className="h-1.5 w-1.5 rounded-full bg-signal" aria-hidden="true" />
+            {t("music.stage.tag")}
+          </span>
+          <p
+            data-music-radio-invite-title=""
+            className="line-clamp-2 font-display text-lg font-semibold leading-snug text-text"
+            title={track.title}
+          >
+            {track.title}
+          </p>
+          <p className="text-[13px] text-text-secondary">
+            {t("music.requestedBy", { name: addedBy.name })}
+          </p>
+          <div className="flex min-w-0 items-center gap-2 text-[12px] text-text-secondary">
+            {listeners.length > 0 ? (
+              <>
+                <span className="flex -space-x-1.5">
+                  {listeners.slice(0, 4).map((person) => (
+                    <UserAvatar
+                      key={person.peerId}
+                      name={person.displayName}
+                      avatarUrl={person.avatarUrl}
+                      className="h-5 w-5 ring-2 ring-surface-1"
+                      fallbackClassName="bg-surface-3 text-[9px] text-text"
+                      rounded="full"
+                    />
+                  ))}
+                </span>
+                {t("music.listening", { count: listeners.length })}
+              </>
+            ) : (
+              t("music.invite.nobody")
+            )}
+          </div>
+          <Button
+            data-music-join=""
+            className="mt-1 rounded-full px-4"
+            onClick={() => setListening(true)}
+          >
+            <Headphones className="mr-1.5 h-4 w-4" aria-hidden="true" />
+            {t("music.join")}
+          </Button>
+          <p className="text-[12px] text-text-tertiary">{t("music.invite.hint")}</p>
+        </div>
+      </div>
     </div>
   );
 }
@@ -339,7 +433,17 @@ export function MusicRoomCard({
         >
           {title}
         </p>
-        {current && local.needsTap ? (
+        {current && !music.listening ? (
+          <button
+            type="button"
+            data-music-join=""
+            className="pointer-events-auto flex h-8 shrink-0 items-center gap-1 rounded-full bg-accent px-3 text-[12px] font-semibold text-on-accent hover:bg-accent-hover"
+            onClick={() => setListening(true)}
+          >
+            <Headphones className="h-3.5 w-3.5" aria-hidden="true" />
+            {t("music.listen")}
+          </button>
+        ) : current && local.needsTap ? (
           <button
             type="button"
             aria-label={t("music.stage.tapToListen")}
