@@ -65,6 +65,7 @@ export interface PoolStats {
 export type { PoolCheckoutStats } from "./pool-checkouts.js";
 import type { PoolCheckoutStats } from "./pool-checkouts.js";
 import type { AdmissionStats } from "./admission.js";
+import { eventLoopLagSnapshot, type EventLoopLag } from "./event-loop.js";
 import {
   notePoolOccupancy,
   poolWaitSnapshot,
@@ -187,6 +188,16 @@ export interface RuntimeMetrics {
    * means somebody waited the gate's whole budget and was let through anyway.
    */
   wsAuth: (AdmissionStats & { enabled: boolean }) | null;
+  /**
+   * How late this process fires its own timers, over the last minute
+   * (`lib/event-loop.ts`): p50, p99 and max in milliseconds, with the idle
+   * floor already subtracted. THIS REPLICA ONLY, like everything in
+   * `runtime`; the exporter takes the worst across replicas. The reading the
+   * pool and host CPU cannot give: a synchronous stall that holds the one
+   * Node thread while three cores sit idle. Null until the monitor starts
+   * (a test, a CLI import) and in the first seconds after boot.
+   */
+  eventLoop: EventLoopLag | null;
   /**
    * The A3.1 circuit breaker over the pool (`lib/db-breaker.ts`, wired up in
    * `db.ts`). `state` is what a DB-dependent route is answering with right
@@ -412,6 +423,7 @@ export function runtimeSnapshot(): RuntimeMetrics {
     peakTrackedSince,
     poolWait: safePoolWait(),
     wsAuth: safeWsAuthStats(),
+    eventLoop: eventLoopLagSnapshot(),
     db: { breaker: safeDbBreakerStats() },
   };
 }

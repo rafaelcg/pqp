@@ -2,12 +2,13 @@
 /**
  * Does this diff need `pqp-api` redeployed?
  *
- * `deploy-api-fly.yml` used to answer this with one `grep -qE '^(server/|...)'`,
- * which is right about client-only changes and wrong about test-only ones: a
- * PR touching nothing but `server/src/**` *.test.ts files matched, replaced the
- * single Fly machine, and dropped every live WebSocket to ship a `dist` that
- * was byte-for-byte identical. The workflow's own comment already calls that
- * "a user-visible outage bought for nothing"; it just did not cover this case.
+ * The Fly deploy workflow (removed 2026-10-22) used to answer this with one
+ * `grep -qE '^(server/|...)'`, which is right about client-only changes and
+ * wrong about test-only ones: a PR touching nothing but `server/src/**`
+ * *.test.ts files matched, replaced the single Fly machine, and dropped every
+ * live WebSocket to ship a `dist` that was byte-for-byte identical. That is "a
+ * user-visible outage bought for nothing"; the workflow just did not cover this
+ * case.
  *
  * WHAT MAKES A FILE SAFE TO IGNORE IS THE BUILD, NOT ITS NAME. Nothing here
  * knows that `.test.ts` means anything. It reads each package's
@@ -35,13 +36,13 @@
 import { readFileSync } from "node:fs";
 
 /**
- * The paths that can change what the API image runs. Unchanged from the
- * workflow this replaces, including `deploy-api-fly.yml` itself: editing the
- * deploy causes the deploy, which is the safe direction for a file that
- * decides whether to deploy.
+ * The paths that can change what the API image runs. `fly.toml`,
+ * `fly.worker.toml` and the Fly deploy workflow were dropped from this list
+ * when they were deleted (2026-10-22): nothing the Vultr deploy builds reads
+ * them.
  */
 const RELEVANT =
-  /^(server\/|packages\/|Dockerfile|fly\.toml|fly\.worker\.toml|pnpm-lock\.yaml|pnpm-workspace\.yaml|package\.json|\.github\/workflows\/deploy-api-fly\.yml)/;
+  /^(server\/|packages\/|Dockerfile|pnpm-lock\.yaml|pnpm-workspace\.yaml|package\.json)/;
 
 /** Every package whose build output ends up in the API image. */
 const BUILD_CONFIGS = ["server", "packages/shared"];

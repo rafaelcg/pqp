@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Gamepad2, Bell, Bug, CircleHelp, Database, FlaskConical, Keyboard, Mic, Palette, Puzzle, ShieldCheck, Siren, UserRound, type LucideIcon } from "lucide-react";
+import { Gamepad2, Bell, Bug, CircleHelp, Database, FlaskConical, Gem, Keyboard, Mic, Palette, Puzzle, ShieldCheck, Siren, UserRound, type LucideIcon } from "lucide-react";
 import {
   Bell as BellGlyph,
   Bug as BugGlyph,
   Database as DatabaseGlyph,
+  Diamond as DiamondGlyph,
   Flask as FlaskGlyph,
   GameController as GameControllerGlyph,
   Keyboard as KeyboardGlyph,
@@ -59,6 +60,7 @@ import { AppsSection } from "@/components/settings/apps-section";
 import { PrivacySection } from "@/components/settings/privacy-section";
 import { useAppConsents } from "@/lib/apps/consents";
 import { DeleteAccountDialog, YourDataSection } from "@/components/settings/your-data-section";
+import { SubscriptionsSection, useHasBauMemberships } from "@/components/bau-plus/subscriptions-section";
 import { ProfileSection, type HandleAvailability } from "@/components/settings/profile-section";
 import { endFeedbackVisit, FeedbackSection } from "@/components/settings/feedback-section";
 import {
@@ -182,6 +184,14 @@ const SECTIONS: SectionDef[] = [
     description: "settings.apps.description",
     icon: Puzzle,
     glyph: PuzzlePieceGlyph,
+    group: "account",
+  },
+  {
+    id: "subscriptions",
+    label: "settings.section.subscriptions",
+    description: "settings.subscriptions.description",
+    icon: Gem,
+    glyph: DiamondGlyph,
     group: "account",
   },
   {
@@ -477,6 +487,7 @@ export function SettingsModal({
     if (hasAppConsentsNow) setSawAppConsents(true);
   }, [hasAppConsentsNow]);
   const hasAppConsents = hasAppConsentsNow || sawAppConsents;
+  const hasBauMemberships = useHasBauMemberships(open) || requestedSection === "subscriptions";
 
   // The whole nav, minus the moderation door for every account it did not
   // open for, and minus Atalhos on a touch-only device. Derived per render
@@ -490,9 +501,12 @@ export function SettingsModal({
           // Apps shows only for somebody who has accepted one: the list is
           // read where apps are on, so this asks for nothing when they are off.
           (hasAppConsents || entry.id !== "apps") &&
+          // Assinaturas shows for somebody who pays a creator (or asked for
+          // it by name, from a Baú's "Gerenciar"): nothing to list otherwise.
+          (hasBauMemberships || entry.id !== "subscriptions") &&
           !(touchOnly && entry.id === "keyboard"),
       ),
-    [canModerateInstance, touchOnly, hasAppConsents],
+    [canModerateInstance, touchOnly, hasAppConsents, hasBauMemberships],
   );
 
   // A caller (or a stale sticky section from a previous session) pointing at
@@ -1456,6 +1470,10 @@ export function SettingsModal({
                         )}
 
                         {active.id === "apps" && <AppsSection />}
+
+                        {active.id === "subscriptions" && (
+                          <SubscriptionsSection onNavigateAway={onClose} />
+                        )}
 
                         {active.id === "privacy" && (
                           <PrivacySection

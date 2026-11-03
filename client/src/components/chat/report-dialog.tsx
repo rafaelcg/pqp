@@ -46,7 +46,15 @@ export type ReportTarget =
    * to convey: somebody reporting a community is usually reporting the person
    * who would otherwise be reading the report.
    */
-  | { kind: "community"; serverId: string; subjectName: string | null };
+  | { kind: "community"; serverId: string; subjectName: string | null }
+  /**
+   * One Baú post or comment (docs/COMMUNITY_HOME.md). Only the id travels; the
+   * server reads the author, the server and the destination from the thing
+   * itself, and refuses a post this person cannot read (a members-only post
+   * is reportable only by those it is open to).
+   */
+  | { kind: "bau_post"; postId: string; subjectName: string | null }
+  | { kind: "bau_comment"; commentId: string; subjectName: string | null };
 
 interface ReportDialogProps {
   target: ReportTarget | null;
@@ -93,7 +101,11 @@ export function ReportDialog({ target, onClose, onBlock, isBlocked, placeName }:
         ? `message:${target.messageId}`
         : target.kind === "community"
           ? `community:${target.serverId}`
-          : `user:${target.userId}`;
+          : target.kind === "bau_post"
+            ? `bau_post:${target.postId}`
+            : target.kind === "bau_comment"
+              ? `bau_comment:${target.commentId}`
+              : `user:${target.userId}`;
 
   useEffect(() => {
     setReason(null);
@@ -132,13 +144,27 @@ export function ReportDialog({ target, onClose, onBlock, isBlocked, placeName }:
                 reason,
                 details: details.trim() || null,
               }
-            : {
-                subjectType: "user",
-                userId: target.userId,
-                serverId: target.serverId ?? null,
-                reason,
-                details: details.trim() || null,
-              };
+            : target.kind === "bau_post"
+              ? {
+                  subjectType: "bau_post",
+                  postId: target.postId,
+                  reason,
+                  details: details.trim() || null,
+                }
+              : target.kind === "bau_comment"
+                ? {
+                    subjectType: "bau_comment",
+                    commentId: target.commentId,
+                    reason,
+                    details: details.trim() || null,
+                  }
+                : {
+                    subjectType: "user",
+                    userId: target.userId,
+                    serverId: target.serverId ?? null,
+                    reason,
+                    details: details.trim() || null,
+                  };
       const { report } = await createReport(body);
       setFiled(report);
       // A duplicate answers 200 rather than an error, so re-reporting the same
@@ -258,7 +284,11 @@ export function ReportDialog({ target, onClose, onBlock, isBlocked, placeName }:
     target.subjectName ??
     (target.kind === "community"
       ? t("report.thisCommunity")
-      : t("report.thisAccount"));
+      : target.kind === "bau_post"
+        ? t("report.thisPost")
+        : target.kind === "bau_comment"
+          ? t("report.thisComment")
+          : t("report.thisAccount"));
 
   return (
     <Dialog
@@ -269,7 +299,11 @@ export function ReportDialog({ target, onClose, onBlock, isBlocked, placeName }:
           : t(
               target.kind === "message"
                 ? "report.title.message"
-                : "report.title.user",
+                : target.kind === "bau_post"
+                  ? "report.title.bauPost"
+                  : target.kind === "bau_comment"
+                    ? "report.title.bauComment"
+                    : "report.title.user",
             )
       }
       eyebrow={t("report.eyebrow")}
@@ -279,7 +313,11 @@ export function ReportDialog({ target, onClose, onBlock, isBlocked, placeName }:
           : t(
               target.kind === "message"
                 ? "report.body.message"
-                : "report.body.user",
+                : target.kind === "bau_post"
+                  ? "report.body.bauPost"
+                  : target.kind === "bau_comment"
+                    ? "report.body.bauComment"
+                    : "report.body.user",
             )
       }
       onClose={onClose}

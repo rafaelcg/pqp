@@ -50,6 +50,7 @@ import {
   healthVerdict,
 } from "./lib/drain.js";
 import { logEvent } from "./lib/log.js";
+import { startEventLoopMonitor } from "./lib/event-loop.js";
 import { registerInstanceSnapshot } from "./lib/instance-snapshot.js";
 import {
   noteRuntimeSample,
@@ -365,6 +366,10 @@ const wss = new WebSocketServer({
 // has to "people connected". A Set's `size`, read only when the dashboard asks.
 registerSocketCount(() => wss.clients.size);
 registerWsAuthStats(wsAuthAdmissionStats);
+
+// Event-loop lag for `runtime.eventLoop` on the admin metrics: a libuv timer
+// folded into 5 s slices, no per-request cost, unref'd. See lib/event-loop.ts.
+startEventLoopMonitor();
 
 // How many of those sockets actually negotiated compression.
 //

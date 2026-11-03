@@ -1,6 +1,28 @@
 # DB runbook: backups, restore, and the managed Postgres that went sideways
 
-Production Postgres is **Fly Managed Postgres (MPG)** in `gru`. One cluster, two databases:
+> **Status as of 2026-10-22 (read this first).** Production Postgres has been a
+> **Vultr managed cluster** (database `pqp`) since 2026-09-13, reached only from
+> the API box (`trusted_ips`, section 1). There is no Fly cluster left: the
+> Fly apps `pqp-api`, `pqp-worker` and `pqp-log-shipper` were destroyed on
+> 2026-10-22 and `fly mpg list` is empty. **Section 1 (the nightly backup) and
+> section 3 (the connection budget) are current.** The rest of this file,
+> from the paragraph below through section 2, describes Fly Managed Postgres
+> and is kept as the incident record and for self-hosters still on Fly; do not
+> run its `fly` commands against production.
+>
+> **If production's database is lost or corrupt today:** restore the newest
+> nightly dump from R2 (`pqp-live-enam/backups/pqp-db/`, 30 days of them; see
+> "Verify a dump restores" below for the restore check) into a fresh Vultr
+> managed Postgres, set the new `DATABASE_URL` in `/opt/pqp/.env` (and add the
+> box to the new cluster's `trusted_ips`), and run
+> `sudo /usr/local/bin/pqp-deploy $(cat /opt/pqp/.deployed-tag)` on the box.
+> That is the whole of the production rollback for the data layer: there is no
+> second live database to fail over to, and anything written after the last
+> 04:23 UTC dump is lost unless the Vultr plan's own point-in-time recovery
+> covers it. See `docs/deploy-vultr.md` section 7 for the rest of the rollback
+> plan.
+
+Production Postgres **was** Fly Managed Postgres (MPG) in `gru` until 2026-09-13. One cluster, two databases:
 
 | Database | Used by | Notes |
 |---|---|---|
@@ -11,11 +33,12 @@ Cluster ids move when a cluster is rebuilt, so **always look them up** with `fly
 
 This document exists because on 2026-09-05 a plan resize on the managed cluster failed mid-switchover, the primary kept answering at 80 to 240 ms per query while cutting every connection every 10 to 40 seconds, `fly mpg status` said `ready` the whole time, and the only way out was Fly's point-in-time restore, which would not accept a point inside the last ~20 minutes. Roughly twenty minutes of writes were lost. We now keep our own copy.
 
-Three parts:
+Four parts:
 
 1. [The nightly backup](#1-nightly-backup) and how to prove a dump restores.
 2. [Production is degraded: restore into a fresh MPG cluster and repoint the API](#2-production-postgres-is-degraded), the rehearsed procedure with the commands that were actually run.
 3. [Connection budget](#3-connection-budget-pg_pool_max) (`PG_POOL_MAX`).
+4. [Age-gate appeal](#4-age-gate-appeal-an-adult-blocked-by-a-mistyped-date): the manual reset for an adult blocked by a mistyped date.
 
 No em dashes in this file on purpose; it is meant to be pasted into a terminal at 3 am.
 
@@ -387,7 +410,7 @@ No other platform-level reservation showed up in `pg_stat_activity` beyond the o
 | `pqp-api` pool (`PG_POOL_MAX`, per machine) | up to `PG_POOL_MAX`, **times the machine count** |
 | `pqp-api`'s `CLUSTER_BUS` `LISTEN` session, per machine | 1 per machine, outside the pool |
 | `pqp-api`'s outgoing-webhook poller `LISTEN` session, per machine | 1 per machine, outside the pool (a second, separate `LISTEN` connection — easy to undercount if you only remember the bus's) |
-| `pqp-worker` pool (`PG_POOL_MAX` there, `fly.worker.toml`) | up to 4, fixed regardless of API machine count |
+| `worker` service pool (`WORKER_PG_POOL_MAX`, default 4, in `tools/api-host/compose.yaml`) | up to 4, fixed regardless of API machine count |
 | `pqp-api-staging` pool | separate cluster (`pqp-db-staging-lite`) as of 2026-09-08 — does not compete with production's budget any more |
 | Superuser-reserved (Postgres platform reservation) | 3, already carved out of `max_connections` above, never available to the app |
 | Humans in a `psql`/GUI session against the cluster, and anything else transient | budgeted as part of the 5-connection admin/platform reserve above |
@@ -436,3 +459,54 @@ A pool slot is only as reusable as the statement holding it, so every statement 
 **A timeout is not enough on its own, and this is the part that bites.** `query_timeout` rejects the promise but does not cancel the statement and does not make the connection unusable in the driver's eyes, so a client borrowed through `getPool().connect()` (every transaction in `server/src/services/`) is handed back by the caller's ordinary `finally { client.release() }` still waiting on a response that is never coming, and the pool gives it to the next request. Any query that ends in pg's read timeout or in a connection-level error therefore marks that client poisoned, and the release destroys it whatever the borrower passed; `db.pool.clientDestroyed` names the reason and belongs at zero. A `57014` does **not** destroy the connection, deliberately: Postgres cancelled it with an ErrorResponse and a ReadyForQuery, so the protocol resynchronised and the connection is genuinely fine.
 
 Boot DDL (`schema.sql` and `CREATE INDEX CONCURRENTLY`) runs on a connection with the bound lifted, destroyed rather than released afterwards, so an instance with real history cannot fail to boot on an index build and no `SET` leaks back into the pool. When the pool is saturated, read `runtime.pool.longestCheckoutMs` and `runtime.pool.checkedOutOver10s` on `GET /api/admin/metrics` before anything else: a high `busy` with a low `longestCheckoutMs` is load, and a high `busy` with a `longestCheckoutMs` in the minutes is this failure again. The `db.pool.stuckClient` log line names the statement, rate limited so a saturated pool produces one line rather than seventy.
+
+---
+
+## 4. Age-gate appeal (an adult blocked by a mistyped date)
+
+An account that answered the 18+ question with a date under 18 is blocked for good: the gate takes one attempt (`WHERE age_checked_at IS NULL`), every later `POST /api/me/age-check` answers 409, and every route except `GET /api/me`, the LGPD export and delete, and the desktop handoff answers 403. The Terms and the blocked screen both say to write to `contato@pqp.gg` from the account's email address when the date was typed wrong. There is no admin route and no in-app reset on purpose: a reset is a manual, logged act by a person. There is also no self-serve retry window, which was considered and rejected (it is retry-until-pass for any minor).
+
+Since 2026-10-23 a date under 10 years back is refused with a 400 and does not spend the attempt, and the web gate reads the date back in words before sending it, so most slips never reach this runbook. What does reach it is a swapped day and month, or a wrong year that still lands on an adult-looking age.
+
+### 1. Identify the account
+
+The email must come from the address on the account. Look the sender up in Clerk (dashboard, or `clerk users list` with the address) and take the Clerk user id (`user_...`). Do not accept a request from an address that is not on the account, and do not ask for a date of birth in the email: a person who mistyped can say what they meant to type privately, and we compare it with what we kept.
+
+### 2. Compare with what was kept
+
+The declared date of a refusal is retained for exactly this (`age_check_dob`, NULL for anybody who passed). Read it with the read-only role (`pqp_ro`; the cluster only answers the API box and the founder's allow-listed IP, see "trusted_ips" in section 1), never with the write credentials:
+
+```sql
+SELECT id, age_checked_at, age_check_passed, age_check_dob
+  FROM users
+ WHERE clerk_id = '<user_...>';
+```
+
+Decide on the evidence: what they say they meant to type against what is on file. A year typed one digit off, or a day and month swapped, that turns the stored date into an adult one is a typo. A stored date that is far under 18 and a story that moves the year by many years is not, and the answer is the Terms' answer: the decision stands. This is the operator's judgement call; write down the reason either way.
+
+### 3. Reset (only for a typo, only for a refusal)
+
+One account, one transaction, expecting exactly one row, so a wrong id or an already-reset account changes nothing:
+
+```sql
+BEGIN;
+UPDATE users
+   SET age_checked_at = NULL, age_check_passed = NULL, age_check_dob = NULL
+ WHERE clerk_id = '<user_...>' AND age_check_passed = FALSE;
+-- Expect: UPDATE 1. Anything else, ROLLBACK and look again.
+COMMIT;
+```
+
+All three columns together: the table has a constraint (`users_age_check_complete`) that refuses a half-reset row. The `age_check_passed = FALSE` guard is what stops this from ever touching an account that passed, and a character or webhook account is never a refusal.
+
+### 4. Wait, then tell them
+
+The blocked status is cached for 30 seconds per API instance (`AGE_GATE_TTL_MS`), and production runs two instances, so wait about a minute before telling the person to reload. They land on the age screen again with one fresh attempt, the same one-attempt rule and the same read-back. Do not reset the same account twice for the same person without asking why.
+
+### 5. Write it down
+
+Record who did it, when, and why (the account's Clerk id, what was on file, what they said, your call) wherever the team keeps operator notes. The reset itself leaves no trace in the database once `age_check_dob` is cleared, so this note is the only audit trail. Resets stay manual and logged. If the gate itself is ever changed again, that is a review trigger in `docs/RISK_ASSESSMENT.md` (section 4.3).
+
+### What to watch
+
+`age.passed`, `age.blocked` and `age.implausible` on `GET /api/admin/metrics` (exported as `pqp_api_age_passed_total`, `pqp_api_age_blocked_total`, `pqp_api_age_implausible_total`) and one log line per answer, `age.declared passed=<bool> implausible=<bool>`, with no date and no user id. `implausible` climbing is the form not catching a slip early enough; a run of appeals with `blocked` flat is the read-back not being shown (check the `age_gate_readback` flag on the dashboard).

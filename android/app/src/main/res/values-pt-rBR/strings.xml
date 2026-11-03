@@ -155,8 +155,8 @@
     <string name="bau_badge_staff">staff</string>
     <string name="bau_vip_chip">VIP</string>
     <string name="bau_locked_title">Post VIP</string>
-    <string name="bau_locked_body">O post inteiro é pra quem tem o cargo VIP.</string>
-    <string name="bau_unlock_cta">VIP, em breve</string>
+    <string name="bau_locked_body">O VIP libera os posts só pra membros e, nos servidores que têm, as salas VIP.</string>
+    <string name="bau_locked_how">Apoia o criador e pede o cargo VIP pra quem cuida do servidor.</string>
     <string name="bau_like">Curtir</string>
     <string name="bau_unlike">Tirar curtida</string>
     <string name="bau_comments">Comentários</string>
@@ -335,7 +335,15 @@
     <string name="voice_speaker_on">Viva-voz</string>
     <string name="voice_speaker_off">Fone</string>
     <string name="voice_server_muted_you">Um moderador te mutou</string>
+    <string name="voice_open_settings">Configurações do app</string>
     <string name="voice_server_muted_peer">Um moderador mutou %1$s</string>
+    <string name="voice_peer_volume_open">Volume de cada um</string>
+    <string name="voice_peer_volume_title">Volume de cada um</string>
+    <string name="voice_peer_volume_hint">Só tu ouve essa mudança. Acima de 100% a pessoa sai mais alta do que ela manda.</string>
+    <string name="voice_peer_volume_for">Volume de %1$s</string>
+    <string name="voice_peer_volume_percent">%1$d%%</string>
+    <string name="voice_peer_volume_mute">Mutar %1$s</string>
+    <string name="voice_peer_volume_unmute">Tirar %1$s do mudo</string>
     <string name="voice_listen_only">Só ouvindo</string>
     <string name="voice_listen_only_locked">Só ouvindo. Tu não tem permissão pra falar neste canal.</string>
     <string name="voice_speak_granted">Agora tu pode falar. Liga o microfone quando quiser.</string>

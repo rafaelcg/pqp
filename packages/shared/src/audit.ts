@@ -139,6 +139,16 @@ export const AUDIT_ACTIONS = [
    * one; a conversation report leaves the `[moderation]` log line alone.
    */
   "report.attachment_reveal",
+  /**
+   * A moderator opened a reported Baú post or comment past the VIP lock
+   * (`GET /api/reports/:id/context` on a `bau_post` / `bau_comment` report).
+   * Target is the post, the report id travels in `changes`. Written BEFORE the
+   * words are handed out. Only a server-scoped report can file one; a report
+   * about a community's Baú lives in the instance queue and leaves the
+   * `[moderation]` log line alone, so a community's own audit log never learns
+   * that somebody reported it.
+   */
+  "report.bau_view",
   // --- voice moderation ---
   //
   // Voice-specific sanctions. `voice_disconnect` and `voice_move` record the
@@ -259,6 +269,22 @@ export const AUDIT_ACTIONS = [
   /** Written in the SOURCE server: the owner's "Permitir seguir" switch moved. */
   "bau_follow.allow",
   "bau_follow.disallow",
+  /**
+   * Baú+ (paid VIP, `docs/BAU_PAYMENTS.md`). Written in the CREATOR's server.
+   * `plan_update` is staff (actor set). The membership rows are the fan's own
+   * action (actor = the fan: activate on a paid charge, cancel, resume,
+   * refund) or the system's (`actorId` null: grace, expire, the VIP cargo
+   * given back on a rejoin). Target is the fan; `changes` carries the status
+   * move and, for a payment, the charge id. Never an amount on a fan row.
+   */
+  "bau_plus.plan_update",
+  "bau_plus.activate",
+  "bau_plus.cancel",
+  "bau_plus.resume",
+  "bau_plus.refund",
+  "bau_plus.grace",
+  "bau_plus.expire",
+  "bau_plus.vip_regrant",
 ] as const;
 
 export const auditActionSchema = z.enum(AUDIT_ACTIONS);

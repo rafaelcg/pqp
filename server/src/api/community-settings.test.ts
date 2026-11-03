@@ -289,6 +289,75 @@ describeDb("community settings permissions", () => {
       expect(body.community.featured?.kind).toBe("youtube");
     });
 
+    it("keeps one support link beside the links, off the public poster", async () => {
+      await listedByOwner();
+      const path = `/api/servers/${serverId}/community`;
+      await call(admin, "PATCH", path, { slug: "moonkase" });
+
+      // A page on the allowlist: stored as `support`, after the ordinary links.
+      const set = await call<SettingsBody>(admin, "PATCH", path, {
+        links: [{ url: "https://www.twitch.tv/moonkaselive" }],
+        support: "livepix.gg/moonkase",
+      });
+      expect(set.status).toBe(200);
+      expect(set.body.community.links.map((l) => l.kind)).toEqual([
+        "twitch",
+        "support",
+      ]);
+      expect(set.body.community.links[1]?.url).toBe("https://livepix.gg/moonkase");
+
+      // A patch that only sends `links` must not wipe the support link, and
+      // one that only sends `support` must not wipe the links.
+      const relinked = await call<SettingsBody>(admin, "PATCH", path, {
+        links: [{ url: "https://youtube.com/@moonkase" }],
+      });
+      expect(relinked.body.community.links.map((l) => l.kind)).toEqual([
+        "youtube",
+        "support",
+      ]);
+      const pix = await call<SettingsBody>(admin, "PATCH", path, {
+        support: "moon@kase.gg",
+      });
+      expect(pix.body.community.links).toEqual([
+        { kind: "youtube", url: "https://youtube.com/@moonkase" },
+        { kind: "support", pix: "moon@kase.gg" },
+      ]);
+
+      // Strangers read the poster: no payment page, no Pix key.
+      const page = await fetch(`${baseUrl}/api/public/communities/moonkase`);
+      const body = (await page.json()) as {
+        community: { links: { kind: string }[] };
+      };
+      expect(body.community.links.map((l) => l.kind)).toEqual(["youtube"]);
+      expect(JSON.stringify(body)).not.toContain("moon@kase.gg");
+
+      // Not on the allowlist, http, and junk are refused with the row intact.
+      for (const support of [
+        "https://example.com/pay",
+        "http://livepix.gg/moonkase",
+        "javascript:alert(1)",
+        "oi",
+      ]) {
+        const refused = await call(admin, "PATCH", path, { support });
+        expect(refused.status).toBe(400);
+      }
+
+      // The ordinary list can never mint one: a Patreon link there is a site.
+      const sneaky = await call<SettingsBody>(admin, "PATCH", path, {
+        links: [{ url: "https://patreon.com/moonkase", kind: "support" }],
+      });
+      expect(sneaky.body.community.links.map((l) => l.kind)).toEqual([
+        "site",
+        "support",
+      ]);
+
+      // Null (or blank) clears it and leaves the links.
+      const cleared = await call<SettingsBody>(admin, "PATCH", path, {
+        support: null,
+      });
+      expect(cleared.body.community.links.map((l) => l.kind)).toEqual(["site"]);
+    });
+
     it("refuses an about longer than 2000 characters", async () => {
       await listedByOwner();
       const refused = await call(

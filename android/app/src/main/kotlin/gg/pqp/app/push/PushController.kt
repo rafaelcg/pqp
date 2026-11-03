@@ -7,6 +7,7 @@ import android.content.Intent
 import android.os.Bundle
 import android.util.Log
 import androidx.core.content.edit
+import com.google.android.gms.tasks.Task
 import com.google.firebase.messaging.FirebaseMessaging
 import gg.pqp.app.BuildConfig
 import gg.pqp.app.core.SessionPhase
@@ -489,12 +490,9 @@ class PushController(
         suspendCancellableCoroutine { continuation ->
             FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
                 if (!continuation.isActive) return@addOnCompleteListener
-                val token = task.result
-                if (task.isSuccessful && token != null) {
-                    continuation.resume(token)
-                } else {
-                    continuation.cancel(task.exception ?: IllegalStateException("no token"))
-                }
+                tokenOutcome(task)
+                    .onSuccess { continuation.resume(it) }
+                    .onFailure { continuation.cancel(it) }
             }
         }
 
@@ -546,4 +544,27 @@ class PushController(
         const val KEY_PROMPTED = "prompted"
         const val GMS_PACKAGE = "com.google.android.gms"
     }
+}
+
+/**
+ * What a finished `getToken()` task produced, without throwing.
+ *
+ * `Task.getResult()` on a task that FAILED does not return null: it throws
+ * `RuntimeExecutionException` wrapping the cause. The listener used to read
+ * `task.result` before checking `task.isSuccessful`, so a phone whose Play
+ * services answered `SERVICE_NOT_AVAILABLE` (common on Xiaomi, Redmi and POCO
+ * phones with background restrictions, and on any phone offline at launch)
+ * crashed the whole app on the main thread instead of reaching the backoff
+ * that exists for exactly that case. It was the second crash in Play's Android
+ * vitals in October 2026, and it repeats on every launch until FCM answers.
+ *
+ * The failure keeps the task's own exception so [PushFailures.classifyToken]
+ * and the log line see the real reason.
+ */
+internal fun tokenOutcome(task: Task<String>): Result<String> {
+    if (!task.isSuccessful) {
+        return Result.failure(task.exception ?: IllegalStateException("no FCM token"))
+    }
+    val token = task.result
+    return if (token.isNullOrEmpty()) Result.failure(IllegalStateException("empty FCM token")) else Result.success(token)
 }

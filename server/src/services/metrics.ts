@@ -13,6 +13,7 @@ import {
 } from "./stream-alerts.js";
 import { livePreviewMetrics } from "./live-preview.js";
 import { appsMetrics, type AppsMetrics } from "../apps/metrics.js";
+import { ageGateMetrics, type AgeGateMetrics } from "./age-gate.js";
 import { nudgeMetrics, type NudgeMetrics } from "./nudge.js";
 import { channelLayoutReport, type ChannelLayoutReport } from "./channel-layout.js";
 import {
@@ -24,6 +25,10 @@ import {
   type CommunityHomeCaptionsMetrics,
 } from "./community-home-captions.js";
 import { storiesMetrics, type StoriesMetrics } from "./story-metrics.js";
+import {
+  creatorHubMetrics,
+  type CreatorHubMetrics,
+} from "./creator-hub-metrics.js";
 import {
   communityColumns,
   communityTag,
@@ -65,9 +70,11 @@ import {
   type AudienceModeMetrics,
 } from "../voice/audience.js";
 import {
+  getSfuAdmissionSnapshot,
   getVoiceActivitySnapshot,
   localVoicePeerCount,
 } from "../ws/voice.js";
+import type { SfuAdmissionSnapshot } from "../voice/sfu-admission-metrics.js";
 import { watchPartyStateFrameCounters } from "../ws/watch-party-events.js";
 import {
   watchPartyWaitlistMetrics,
@@ -323,6 +330,19 @@ export interface AdminMetrics {
    */
   sfuRegions: SfuRegionsReport;
   /**
+   * What the video admission estimator believes, per SFU box
+   * (`voice/sfu-admission-metrics.ts`): the Mbit/s it prices for the rooms on
+   * the box (`loadMbps`), the budget it holds them to, and how many camera,
+   * share and promotion checks it answered and refused in the last five
+   * minutes. Divide `loadMbps` by the box's MEASURED transmit rate to see how
+   * far the estimate has drifted from the hardware (the 2026-10-20 refusals
+   * were an estimate at 524 to 605 of 600 on a box at 32 percent CPU).
+   * `loads` are cluster-wide (registry rooms, cached 10 s); the counts are
+   * this process's own, so the exporter sums them across replicas. Null when
+   * the room read failed. Additive: nothing here is read by an admission.
+   */
+  sfuAdmission: SfuAdmissionSnapshot | null;
+  /**
    * Runtime feature flags (`lib/flags.ts`): every flag's answer on the
    * process that served this request and where it came from (a row, the
    * environment, the code default), how many per-server overrides it has,
@@ -358,6 +378,15 @@ export interface AdminMetrics {
    */
   stories: StoriesMetrics;
   /**
+   * The Baú creator hub (`services/creator-hub-metrics.ts`): servers with Baú
+   * on, posts and their members-only share, VIP holders (total and the top
+   * servers), Seguir follows and their deliveries, and joins in the last 7
+   * days into Baú servers by door and by tagged link, deployment wide and
+   * cached 30 s; plus this process's `ctaViews` / `supportClicks` counters.
+   * Counts only. Live like `stories`.
+   */
+  creatorHub: CreatorHubMetrics;
+  /**
    * The start-of-stream notice (`services/stream-alerts.ts`), since this
    * process started: shares that armed a timer, those dropped for the flag, the
    * 20 s debounce or the cooldown, notices claimed, people told, why people
@@ -381,6 +410,13 @@ export interface AdminMetrics {
    * the 30 s cache.
    */
   nudge: NudgeMetrics;
+  /**
+   * The 18+ gate's answers (`services/age-gate.ts`), since this process started:
+   * `passed`, `blocked`, and `implausible` (a date refused without spending the
+   * attempt). Counts only, never a date or an account. Per process: with two
+   * instances read each. Live, never from the 30 s cache.
+   */
+  age: AgeGateMetrics;
   /**
    * Apps in channels (`apps/metrics.ts`): live sessions and seats from the
    * table, and since this process started the starts, ends by reason, handoffs,
@@ -1266,6 +1302,7 @@ type CachedMetrics = Omit<
   | "ready"
   | "sfu"
   | "sfuRegions"
+  | "sfuAdmission"
   | "instanceId"
   | "instanceCount"
   | "cluster"
@@ -1273,9 +1310,11 @@ type CachedMetrics = Omit<
   | "communityHomeTranslation"
   | "communityHomeCaptions"
   | "stories"
+  | "creatorHub"
   | "streamAlerts"
   | "livePreview"
   | "nudge"
+  | "age"
   | "channelLayout"
   | "apps"
 >;
@@ -2065,10 +2104,12 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     ready,
     sfu,
     sfuRegions,
+    sfuAdmission,
     flags,
     communityHomeTranslation,
     communityHomeCaptions,
     stories,
+    creatorHub,
     channelLayout,
     apps,
   ] = await Promise.all([
@@ -2076,10 +2117,12 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     checkReady(),
     readSfuStats(),
     sfuRegionsReport(),
+    getSfuAdmissionSnapshot(),
     featureFlagMetrics(),
     communityHomeTranslationMetrics(),
     communityHomeCaptionsMetrics(),
     storiesMetrics(),
+    creatorHubMetrics(),
     channelLayoutReport(),
     appsMetrics(),
   ]);
@@ -2094,13 +2137,16 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     ready,
     sfu,
     sfuRegions,
+    sfuAdmission,
     flags,
     communityHomeTranslation,
     communityHomeCaptions,
     stories,
+    creatorHub,
     streamAlerts: streamAlertMetrics(),
     livePreview: livePreviewMetrics(),
     nudge: nudgeMetrics(),
+    age: ageGateMetrics(),
     channelLayout,
     apps,
   };

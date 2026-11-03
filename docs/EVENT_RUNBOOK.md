@@ -25,19 +25,18 @@ actually explains the thing.
       ```bash
       gh variable set DEPLOY_FREEZE --body true
       ```
-      One variable gates both `deploy-api-fly.yml` and `deploy-api-vultr.yml`
-      (whichever `DEPLOY_TARGET` is live). Confirms on the next CI run as
-      that workflow's `deploy` job showing **skipped**, not a failure.
+      The variable gates `deploy-api-vultr.yml`. Confirms on the next CI run
+      as that workflow's `deploy` job showing **skipped**, not a failure.
       Announce it (`#moderacao` or wherever the team reads) so nobody is
       surprised a merged PR did not deploy. See "Merge freeze" below for
       what it does and does not cover.
-- [ ] **Disk.** `fly mpg status <production-cluster-id> --json` (id from
-      `fly mpg list --org personal`; see `docs/DB_RUNBOOK.md`) for Postgres
-      volume headroom, and glance at the SFU box's root filesystem panel on
-      the **pqp SFU box** Grafana dashboard (`docs/MONITORING.md` §"The SFU
-      box"; alerts at 85%). Both are also covered by the daily
-      `postgres-disk` / `root filesystem` checks, but T-24h is when you have
-      time to act on a bad number instead of discovering it mid-party.
+- [ ] **Disk.** The managed Postgres disk in the Vultr dashboard (the
+      database instance's usage graphs; nothing in GitHub can see it, see
+      `docs/MONITORING.md` "What GitHub does not watch"), and glance at the
+      SFU box's root filesystem panel on the **pqp SFU box** Grafana
+      dashboard (`docs/MONITORING.md` §"The SFU box"; alerts at 85%). T-24h
+      is when you have time to act on a bad number instead of discovering it
+      mid-party.
 - [ ] **Secrets.** Confirm on `pqp-api`: `LIVEKIT_URL` / `LIVEKIT_API_KEY` /
       `LIVEKIT_API_SECRET` (SFU), `LIVE_HLS_*` (watch-party bucket; see
       `docs/WATCH_PARTY.md`), `ADMIN_METRICS_TOKEN` (dashboard and the
@@ -135,9 +134,9 @@ an event there is no such thing as an ordinary settings change.
   and on a one-person team it usually is the same person by necessity — say
   so and know that means dashboard-watching and Encerrar-pressing are
   competing for the same attention.
-- **Nobody else touches Fly, the database, or the SFU box during the show.**
-  If something needs a `fly secrets set` or a `fly mpg` command, that is
-  already "During" below, not a routine change.
+- **Nobody else touches the API box, the database, or the SFU box during the
+  show.** If something needs an `.env` change plus a `pqp-deploy`, or a
+  database command, that is already "During" below, not a routine change.
 
 ## During
 
@@ -154,7 +153,7 @@ each panel means and what to do about a bad reading:
 | DB latency (postgres ms) | low single-digit to double-digit ms | Sustained above 200ms for 2+ minutes is Postgres straining under write load (A2's write-budget concern). Alert: "/ready postgres ms > 200 for 2m" |
 | Egress box CPU | well under 85% | High CPU here is what actually stalls a watch party's transcode, not API pool pressure — cross-check against HLS rungs/deaths |
 | HLS rungs / sessions | matches how many watch-party shares are live, rungs = renditions per share | `orphansStopped` above 0 is pitfall 15 (a leaked transcode); rungs dropping without a matching `voice.hlsRungDied` log line is worse — a rendition vanished silently |
-| API restarts | flat zero | Any bump means something restarted the API despite the freeze — a crash, an OOM, or someone running `fly deploy`/`fly machine restart` by hand. Every restart drops every `/ws` (CLAUDE.md pitfall 11) |
+| API restarts | flat zero | Any bump means something restarted the API despite the freeze — a crash, an OOM, or someone running `pqp-deploy` or `docker restart` on the box by hand. Every restart drops every `/ws` (CLAUDE.md pitfall 11) |
 | HLS rung deaths | occasional single deaths, self-healing | More than 3 in 5 minutes is the media box or LiveKit egress struggling, not a one-off hiccup |
 
 The five alert rules in `tools/monitoring/grafana-alert-rules-event.json`
@@ -172,9 +171,10 @@ what an in-flight repoint actually looked like that night).
 
 **If "API restarts" fires and you didn't do it:** check whether
 `DEPLOY_FREEZE` actually landed (`gh variable list` — it is a repo variable,
-not a secret, so this is instant) and check `fly machine list -a pqp-api`
-for a crash-restart. A frozen repo does not stop a manual `fly deploy` or a
-platform-initiated restart; the freeze only gates the automated workflow.
+not a secret, so this is instant) and check `docker compose ps` on the box
+(`ssh pqp@<ip>`, `cd /opt/pqp`) for a container that restarted by itself. A
+frozen repo does not stop a manual `pqp-deploy` or a crash-restart; the freeze
+only gates the automated workflow.
 
 **If someone reaches for a permission change, a role edit, or a server
 setting:** stop them. That is the whole lesson of this postmortem's A1 item.
@@ -190,7 +190,10 @@ later with no warning.
       "Transmissões anteriores". For an older session, before its retention
       window passes:
       ```sql
-      -- fly mpg connect <production-cluster-id> --database fly-db
+      -- Run on the API box (the managed cluster only answers it) with the
+      -- DATABASE_URL value from /opt/pqp/.env, e.g. in the postgres:17-alpine
+      -- container as docs/DB_RUNBOOK.md does for pg_dump. The variable is not
+      -- exported in a login shell, so "$DATABASE_URL" is empty until you set it.
       update hls_sessions set keep_replay = true
         where channel_id = '<channelId>' and ended_at > now() - interval '1 hour';
       ```
@@ -218,9 +221,7 @@ later with no warning.
       indefinitely — contrary to what the old wording here implied. So kick
       a reconciliation run explicitly, right after unfreezing:
       ```bash
-      gh workflow run "Deploy API (Fly)"       # or "Deploy API (Vultr)",
-                                                # whichever vars.DEPLOY_TARGET
-                                                # is live
+      gh workflow run "Deploy API (Vultr)"
       ```
       That dispatch diffs `main` against whatever commit `/health` says is
       actually deployed (not just the last merge), so it picks up every
@@ -250,11 +251,9 @@ later with no warning.
 
 ## Reference: merge freeze
 
-`DEPLOY_FREEZE` is a single GitHub repo variable read by **both**
-`.github/workflows/deploy-api-fly.yml` and
-`.github/workflows/deploy-api-vultr.yml`, so it stops whichever one
-`vars.DEPLOY_TARGET` currently points at without needing to know which that
-is. While it is `true`, each workflow's `deploy` job's own top-level `if`
+`DEPLOY_FREEZE` is a single GitHub repo variable read by
+`.github/workflows/deploy-api-vultr.yml` (the Fly deploy workflow it used to
+gate too was removed on 2026-10-22). While it is `true`, the workflow's `deploy` job's own top-level `if`
 condition is false, so the job shows **skipped** rather than run — a frozen
 deploy is a deliberate skip, not a malfunction, so it does not open a red X
 anybody has to explain later. Because the check sits in the job's `if`
@@ -277,7 +276,7 @@ the repo variable is the actual gate, and it applies to every PR, labeled or
 not.
 
 The freeze covers the automated deploy workflows only. It does not stop a
-manual `fly deploy` / SSH deploy, a platform-initiated machine restart, or a
+manual SSH `pqp-deploy`, a container restart on the box, or a
 crash — see "During" above for what to check if "API restarts" fires
 anyway.
 

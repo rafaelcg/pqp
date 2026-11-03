@@ -166,6 +166,16 @@ interface VoiceTransport {
     /** Which of a peer's audio streams is their screen's sound; a server mute spares it. */
     fun setPeerScreenAudioStreamId(remotePeerId: String, streamId: String?)
 
+    /**
+     * How loud this peer plays on this phone, 1 being what they sent and
+     * [PEER_VOLUME_MAX] the ceiling. Applied to all of the peer's audio, a
+     * share's sound included, and remembered per peer so a track that arrives
+     * later starts at it. The listener's own choice: a moderator's mute sits on
+     * top of it and never overwrites it. Re-sent from every roster, because a
+     * fresh engine knows nothing.
+     */
+    fun setPeerVolume(remotePeerId: String, volume: Double)
+
     // --- screen share ---
 
     /** False when this transport cannot publish a screen, or the capture failed. */

@@ -13,8 +13,13 @@ one directly. Effort in agent-days, solo-maintainer-and-agents pace.
 Two production facts that shape everything below: Postgres is now **Vultr
 Managed PostgreSQL**, plan `vultr-dbaas-startup-cc-hp-amd-2-128-4` (2 dedicated
 vCPU, 4 GB, single node, daily backups - HA with a standby needs a higher
-plan), and the API is one Fly machine moving to one Vultr box Monday, with Fly
-kept as a 30-day rollback per `docs/deploy-vultr.md` §7.
+plan), and the API was one Fly machine moving to one Vultr box (it moved on
+2026-09-17, with Fly kept as a 30-day rollback).
+
+> **Note, 2026-10-22.** The Fly apps were destroyed and `fly.toml`,
+> `fly.worker.toml` and `deploy-api-fly.yml` were deleted from the repo, so the
+> mentions of them below are history (the plan was written against them). The
+> rollback plan that exists now is `docs/deploy-vultr.md` §7.
 
 ## 1. What a watch party needs, and whether it survives today
 

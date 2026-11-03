@@ -170,6 +170,9 @@ vi.mock("./voice/hls-cleanup.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./voice/hls-cleanup.js")>()),
   sweepHlsSessions: vi.fn(async () => 0),
 }));
+vi.mock("./services/bau-payments/sweep.js", () => ({
+  sweepBauPayments: vi.fn(async () => ({})),
+}));
 vi.mock("./services/bot-stats.js", () => ({
   pruneBotPeopleDaily: vi.fn(async () => 0),
 }));
@@ -197,6 +200,7 @@ import { sweepWatchPartyHosts } from "./services/watch-parties.js";
 import { sweepRateLimitBuckets } from "./lib/cluster-rate-limit.js";
 import { processStoryVideos, sweepStories } from "./services/story-media.js";
 import { runBauFollowTick } from "./services/bau-follow-delivery.js";
+import { sweepBauPayments } from "./services/bau-payments/sweep.js";
 import { runChannelLayoutMigrations } from "./services/channel-layout.js";
 import { pruneBotPeopleDaily } from "./services/bot-stats.js";
 import { sweepLocadoraSaves } from "./apps/locadora-saves.js";
@@ -219,6 +223,7 @@ import {
   DAILY_MS,
   FORUM_SHELL_SWEEP_INTERVAL_MS,
   HLS_SESSION_SWEEP_INTERVAL_MS,
+  BAU_PAYMENTS_SWEEP_INTERVAL_MS,
   PENDING_DELETION_SWEEP_INTERVAL_MS,
   startColdJobs,
   type ColdJobs,
@@ -304,11 +309,12 @@ describe("cold jobs", () => {
     // below); 33 with the bot reminders (30 s, below); 34 with the client-platform
     // retention sweep (daily, asserted below); 36 with the apps platform's
     // ended-session retention (daily) and live-session sweep (15 s); 37 with
-    // Locadora's account saves sweep (daily, below).
+    // Locadora's account saves sweep (daily, below); 38 with the Baú+
+    // payments sweep (a minute, asserted below).
     // Bump this when a job is added, and assert the new job's cadence below
     // rather than only moving the number: a count on its own passes for a
     // job that is registered and never fires.
-    expect(jobs.count).toBe(37);
+    expect(jobs.count).toBe(38);
 
     // The Baú translation sweep: one a minute, none at boot (nothing to
     // catch up on a process that has only just started reading the flag).
@@ -355,6 +361,9 @@ describe("cold jobs", () => {
     // The HLS session sweep: a minute, so four, and none at boot.
     expect(HLS_SESSION_SWEEP_INTERVAL_MS).toBe(60_000);
     expect(sweepHlsSessions).toHaveBeenCalledTimes(4);
+    // The Baú+ payments sweep: a minute, so four, and none at boot.
+    expect(BAU_PAYMENTS_SWEEP_INTERVAL_MS).toBe(60_000);
+    expect(sweepBauPayments).toHaveBeenCalledTimes(4);
 
     await vi.advanceTimersByTimeAsync(PENDING_DELETION_SWEEP_INTERVAL_MS);
     expect(sweepPendingAccountDeletions).toHaveBeenCalledTimes(1);

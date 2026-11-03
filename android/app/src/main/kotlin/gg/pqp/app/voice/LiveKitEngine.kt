@@ -217,6 +217,16 @@ class LiveKitEngine(
      */
     private val sharingByRoster = mutableSetOf<String>()
 
+    /**
+     * The listener's level per peer, under [peerLock]. Held here and not read
+     * back off the tracks because a track subscribes after the roster (and
+     * after the slider) has already spoken, and a room that reconnects hands
+     * back fresh tracks that know nothing. Absent means untouched.
+     */
+    private val peerVolumes = PeerAudioLevels<RemoteAudioTrack> { track, volume ->
+        runCatching { track.setVolume(volume) }
+    }
+
     @Volatile private var muted = false
     @Volatile private var deafened = false
 
@@ -880,9 +890,11 @@ class LiveKitEngine(
             // makes somebody count as audible, it must still be silenced by
             // deafen, and it only plays for a presenter the roster announced.
             track.enabled = screenAudioEnabledFor(peerId)
+            synchronized(peerLock) { peerVolumes.trackSubscribed(peerId, track) }
             return
         }
         track.enabled = !deafened
+        synchronized(peerLock) { peerVolumes.trackSubscribed(peerId, track) }
         val sid = event.publication.sid
         if (synchronized(peerLock) { peers.voiceTrackAdded(peerId, sid) }) {
             report(peerId)
@@ -1186,9 +1198,34 @@ class LiveKitEngine(
         }
     }
 
+    /**
+     * The listener's level for one peer, applied to every audio track of theirs
+     * (voice and a share's sound), now and for tracks that subscribe later. The
+     * SDK's own gain, 0 to 10 with 1 untouched, so [PEER_VOLUME_MAX] is well
+     * inside it. A moderator's mute is the SFU's business on this transport and
+     * is not mixed in here.
+     */
+    override fun setPeerVolume(remotePeerId: String, volume: Double) {
+        // `audioTrackPublications` is a list of (publication, track) pairs, the
+        // track being null until subscribed, hence the `second`.
+        // The scan runs inside the lock and only when the level changed:
+        // `onTrackSubscribed` takes the same lock to apply the stored level,
+        // so a subscription racing this call cannot keep the old one.
+        synchronized(peerLock) {
+            peerVolumes.setLevel(remotePeerId, volume) {
+                room?.remoteParticipants?.values
+                    ?.firstOrNull { it.identity?.value == remotePeerId }
+                    ?.audioTrackPublications
+                    ?.mapNotNull { it.second as? RemoteAudioTrack }
+                    .orEmpty()
+            }
+        }
+    }
+
     private fun forgetPeer(peerId: String) {
         cancelCameraPause(peerId)
         val (hadScreen, hadCamera) = synchronized(peerLock) {
+            peerVolumes.forget(peerId)
             sharingByRoster.remove(peerId)
             watchedScreens.remove(peerId)
             cameraDemand.forget(peerId)
@@ -1599,6 +1636,7 @@ class LiveKitEngine(
         rosterAllowsScreen = false
         val (showing, oncamera) = synchronized(peerLock) {
             sharingByRoster.clear()
+            peerVolumes.clear()
             watchedScreens.clear()
             cameraDemand.clear()
             cameraPauseJobs.values.forEach { it.cancel() }

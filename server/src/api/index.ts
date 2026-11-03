@@ -117,6 +117,8 @@ import {
   communityTaglineSchema,
   communityAboutSchema,
   normalizeCommunityLinks,
+  parseCommunitySupport,
+  type CommunityLink,
   parseCommunityFeaturedEmbed,
   updateCommunitySchema,
   reportStatusSchema,
@@ -346,6 +348,7 @@ import {
   AGE_GATE_PENDING_MESSAGE,
   isAgeGateExempt,
   isPlausibleBirthDate,
+  noteAgeDeclared,
   parseCalendarDate,
   recordAgeDeclaration,
 } from "../services/age-gate.js";
@@ -373,6 +376,11 @@ import {
   resetLivePreviewRateLimits,
 } from "./live-preview-routes.js";
 import { registerAppRoutes } from "./app-routes.js";
+import {
+  handleBauPaymentsWebhook,
+  registerBauPaymentsRoutes,
+} from "./bau-payments-routes.js";
+import { noteStaffVipChange } from "../services/bau-payments/vip.js";
 import { endSessionsOfChannel } from "../apps/sweeps.js";
 import { publicAppsConfig } from "../apps/public-config.js";
 import { registerAppOwnerRoutes } from "./app-owner-routes.js";
@@ -1714,6 +1722,7 @@ const router = createRouter();
 
 // The apps platform's routes (`app-routes.ts`), behind the `apps` flag.
 registerAppRoutes(router);
+registerBauPaymentsRoutes(router);
 // The owner's switches for the apps the operator released (`app-owner-routes.ts`).
 registerAppOwnerRoutes(router);
 
@@ -1800,6 +1809,11 @@ router.get("/api/me", async ({ user, ageGate }) => ({
   // Reachable while the gate is still pending or blocked — it is how the client
   // finds out which of the two it is looking at.
   ageGate,
+  // Only while the gate is open, and only here: a pending account can reach
+  // nothing else, so this is the one place the client can learn the switch.
+  ...(ageGate === "pending"
+    ? { ageGateReadback: isEnabled("age_gate_readback") }
+    : {}),
 }));
 
 /**
@@ -1811,15 +1825,31 @@ router.get("/api/me", async ({ user, ageGate }) => ({
  * rather than an error. A second attempt is what gets refused, with 409 — and
  * refusing it here is the whole feature. See `recordAgeDeclaration`.
  *
- * A date that is not a real date, or is in the future, is a 400 and does NOT
- * consume the attempt. That is not a loophole: every *plausible* date is final,
- * so there is nothing to probe for.
+ * A date that is not a real date, is in the future, or is less than ten years
+ * back (`MIN_PLAUSIBLE_AGE_YEARS`: the year somebody is typing it, a default,
+ * a slip) is a 400 and does NOT consume the attempt. That is not a loophole:
+ * every *plausible* date is final, so there is nothing to probe for, and a minor
+ * gains nothing from the floor (they could always type an adult date first).
+ * The 400 carries a stable `code` beside `error` so a client can say "check the
+ * year" without parsing a sentence: `birth_date_invalid` (not a real date) or
+ * `birth_date_implausible` (a real date nobody answering this could have).
  */
 router.post("/api/me/age-check", async ({ req, user }) => {
   const body = ageDeclarationSchema.parse(await readJsonBody(req));
   const dob = parseCalendarDate(body.dateOfBirth);
-  if (!dob || !isPlausibleBirthDate(dob)) {
-    throw new HttpError(400, "Enter a valid date of birth.");
+  if (!dob) {
+    noteAgeDeclared({ passed: false, implausible: true });
+    throw new HttpErrorWithDetail(400, "Enter a valid date of birth.", {
+      code: "birth_date_invalid",
+    });
+  }
+  if (!isPlausibleBirthDate(dob)) {
+    noteAgeDeclared({ passed: false, implausible: true });
+    throw new HttpErrorWithDetail(
+      400,
+      "That date of birth does not look right. Check the year.",
+      { code: "birth_date_implausible" },
+    );
   }
 
   const result = await recordAgeDeclaration(user.id, dob);
@@ -6039,11 +6069,17 @@ function translationActiveFor(serverId: string): boolean {
  * `mediaEnabled` is the storage probe, folded in so the client needs one
  * request rather than two before it can draw the composer.
  */
-router.get("/api/community-home/config", async () => ({
-  enabled: isCommunityHomeEnabled(),
-  vipEnabled: isCommunityHomeVipEnabled(),
-  mediaEnabled: isCommunityHomeEnabled() && isCommunityHomeMediaConfigured(),
-}));
+router.get("/api/community-home/config", async ({ url }) => {
+  // `?serverId=` is the server the client is looking at: VIP is a per-server
+  // flag (`community_home_vip`). Absent or not a uuid, the answer is the
+  // global one, which is what every client before this change received.
+  const parsed = z.string().uuid().safeParse(url.searchParams.get("serverId"));
+  return {
+    enabled: isCommunityHomeEnabled(),
+    vipEnabled: isCommunityHomeVipEnabled(parsed.success ? parsed.data : null),
+    mediaEnabled: isCommunityHomeEnabled() && isCommunityHomeMediaConfigured(),
+  };
+});
 
 /**
  * This server's own opt-in. The instance flag says Baú exists here; this
@@ -7779,6 +7815,25 @@ router.patch(
       links = parsed;
     }
 
+    // The support link, from its own box. Blank or null clears it. It never
+    // comes through `links`, whose kinds are derived from the host, so a
+    // payment page pasted there stays an ordinary "site" chip.
+    let support: CommunityLink | null | undefined;
+    if (body.support !== undefined) {
+      if (body.support === null || body.support.trim() === "") {
+        support = null;
+      } else {
+        const parsed = parseCommunitySupport(body.support);
+        if (!parsed) {
+          throw new HttpError(
+            400,
+            "That support link is not allowed. Use a Pix key, a Pix copia e cola, or an https link from LivePix, Apoia.se, Patreon, Ko-fi, Buy Me a Coffee, Cafecito, Catarse, Kick, Twitch, YouTube, PayPal.me or Mercado Pago.",
+          );
+        }
+        support = parsed;
+      }
+    }
+
     let featured: ReturnType<typeof parseCommunityFeaturedEmbed> | null | undefined;
     if (body.featured !== undefined) {
       if (body.featured === null) {
@@ -7807,6 +7862,7 @@ router.patch(
           ...(tagline !== undefined ? { tagline } : {}),
           ...(about !== undefined ? { about } : {}),
           ...(links !== undefined ? { links } : {}),
+          ...(support !== undefined ? { support } : {}),
           ...(featured !== undefined ? { featured } : {}),
           ...(body.category !== undefined ? { category: body.category } : {}),
           ...(slug !== undefined ? { slug } : {}),
@@ -7938,7 +7994,7 @@ router.patch(
             },
           ]
         : []),
-      ...(links !== undefined &&
+      ...((links !== undefined || support !== undefined) &&
       JSON.stringify(updated.previous.links) !==
         JSON.stringify(updated.settings.links)
         ? [
@@ -11679,6 +11735,12 @@ router.put(
     }
     await requireOutranked(serverId!, user.id, userId!, "kick");
     await assignRole(serverId!, userId!, roleId!);
+    if (role.system_key === "vip") {
+      // Best effort: the role change already committed and is what counts.
+      await noteStaffVipChange(serverId!, userId!).catch((error: unknown) => {
+        console.error("[bau-payments] staff VIP note failed:", error);
+      });
+    }
     await logAudit({
       serverId: serverId!,
       actorId: user.id,
@@ -11705,6 +11767,11 @@ router.delete(
     }
     await requireOutranked(serverId!, user.id, userId!, "kick");
     await unassignRole(serverId!, userId!, roleId!);
+    if (role.system_key === "vip") {
+      await noteStaffVipChange(serverId!, userId!).catch((error: unknown) => {
+        console.error("[bau-payments] staff VIP note failed:", error);
+      });
+    }
     const revoked = new Set(
       await listRevokedPrivateChannelIds(serverId!, userId!),
     );
@@ -13001,6 +13068,24 @@ router.post("/api/reports", async ({ req, res, user }) => {
                 reason: body.reason,
                 details: body.details,
               }
+            : body.subjectType === "bau_post"
+              ? {
+                  // The Baú flag, membership and the VIP lock are checked in
+                  // services/community-home.ts (`resolveBauReportTarget`).
+                  subjectType: "bau_post",
+                  reporterId: user.id,
+                  postId: body.postId,
+                  reason: body.reason,
+                  details: body.details,
+                }
+              : body.subjectType === "bau_comment"
+                ? {
+                    subjectType: "bau_comment",
+                    reporterId: user.id,
+                    commentId: body.commentId,
+                    reason: body.reason,
+                    details: body.details,
+                  }
             : {
               subjectType: "user",
               reporterId: user.id,
@@ -13105,6 +13190,27 @@ router.get("/api/reports/:report/context", async ({ user }, { report }) => {
   const context = await getReportContext(reportId, { id: user.id, instance });
   if (!context) {
     throw new NotFound("Report not found");
+  }
+  if (context.bau) {
+    // The one read that opens a Baú post past the VIP lock, so nobody reads
+    // it without a row saying so. Written BEFORE the words leave, and a failed
+    // write fails the request. A server-scoped report files it under that
+    // server; a community's Baú report lives in the instance queue and must
+    // not show in the community's own audit log, so it leaves the line alone.
+    if (scope.serverId) {
+      await logAudit({
+        serverId: scope.serverId,
+        actorId: user.id,
+        action: "report.bau_view",
+        targetType: "bau_post",
+        targetId: context.bau.post?.id ?? null,
+        changes: [{ key: "report", old: null, new: reportId }],
+      });
+    }
+    console.log(
+      `[moderation] report bau opened: report ${reportId}, ` +
+        `post ${context.bau.post?.id ?? "gone"}, moderator ${user.id}`,
+    );
   }
   return context;
 });
@@ -15240,6 +15346,12 @@ export async function handleApi(
   // The signed-out live preview's listing and start routes. Not matched at
   // all while `live_preview` is off everywhere (see `live-preview-routes.ts`).
   if (await handleLivePreviewRoute(req, res, pathname)) {
+    return;
+  }
+
+  // Baú+ payment provider notifications: no session, the adapter's
+  // signature check is the door (see `bau-payments-routes.ts`).
+  if (await handleBauPaymentsWebhook(req, res, pathname)) {
     return;
   }
 

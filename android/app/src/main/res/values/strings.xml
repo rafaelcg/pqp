@@ -163,8 +163,8 @@
     <string name="bau_badge_staff">staff</string>
     <string name="bau_vip_chip">VIP</string>
     <string name="bau_locked_title">VIP post</string>
-    <string name="bau_locked_body">The full post is for members with the VIP cargo.</string>
-    <string name="bau_unlock_cta">VIP, coming soon</string>
+    <string name="bau_locked_body">VIP unlocks members-only posts, and VIP rooms on servers that have them.</string>
+    <string name="bau_locked_how">Support the creator and ask whoever runs the server for the VIP cargo.</string>
     <string name="bau_like">Like</string>
     <string name="bau_unlike">Remove like</string>
     <string name="bau_comments">Comments</string>
@@ -349,7 +349,15 @@
     <string name="voice_speaker_on">Speaker</string>
     <string name="voice_speaker_off">Earpiece</string>
     <string name="voice_server_muted_you">A moderator muted you</string>
+    <string name="voice_open_settings">App settings</string>
     <string name="voice_server_muted_peer">%1$s was muted by a moderator</string>
+    <string name="voice_peer_volume_open">Volume per person</string>
+    <string name="voice_peer_volume_title">Volume per person</string>
+    <string name="voice_peer_volume_hint">Only you hear this. Above 100% a person plays louder than they send.</string>
+    <string name="voice_peer_volume_for">Volume for %1$s</string>
+    <string name="voice_peer_volume_percent">%1$d%%</string>
+    <string name="voice_peer_volume_mute">Mute %1$s</string>
+    <string name="voice_peer_volume_unmute">Unmute %1$s</string>
     <string name="voice_listen_only">Listen only</string>
     <string name="voice_listen_only_locked">Listening only. You do not have permission to speak in this channel.</string>
     <string name="voice_speak_granted">You can speak now. Unmute when you are ready.</string>

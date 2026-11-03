@@ -1,0 +1,744 @@
+{
+  "_comment": [
+    "A standing 'pqp Capacity' dashboard from the 2026-10-22 capacity review (section G, the monitoring gaps):",
+    "estimated vs measured SFU load, per-container CPU and memory on the API box, Caddy request rate and 5xx,",
+    "and the API event-loop lag. Standard Grafana dashboard JSON model: Dashboards > New > Import, or POST it to",
+    "/api/dashboards/db as {dashboard: <this, id: null>, overwrite: true}. Replace <PROMETHEUS_DATASOURCE_UID>",
+    "with the datasource uid (`grafanacloud-prom` on this stack). Nothing here is provisioned from the repo; the",
+    "Grafana UI is the source of truth once imported.",
+    "WHICH SERIES NEED WHAT, so a 'No data' panel is read correctly:",
+    "  pqp_api_sfu_admission_* and pqp_api_event_loop_*  need the updated tools/monitoring exporter on the SFU box",
+    "    (the API change that adds the fields is its own PR, restarts-api);",
+    "  container_* {box=api-pqp}                          need the new config.alloy loaded on the API box;",
+    "  caddy_* {box=api-pqp}                              need the Caddyfile reloaded AND the new config.alloy loaded;",
+    "  node_* {box=sfu-pqp}                               already exist.",
+    "Default range is 24 hours at 1 minute refresh."
+  ],
+  "title": "pqp Capacity",
+  "uid": "pqp-capacity",
+  "tags": [
+    "pqp",
+    "capacity"
+  ],
+  "timezone": "utc",
+  "editable": true,
+  "graphTooltip": 1,
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "refresh": "1m",
+  "schemaVersion": 39,
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "title": "SFU: what the admission budget believes against what the box carries",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "panels": []
+    },
+    {
+      "id": 2,
+      "title": "Estimated vs measured SFU load (Mbit/s)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "<PROMETHEUS_DATASOURCE_UID>"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Mbits",
+          "min": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "budget (VOICE_PROMOTION_MAX_SFU_MBPS)"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "<PROMETHEUS_DATASOURCE_UID>"
+          },
+          "expr": "sum(pqp_api_sfu_admission_estimated_mbps{region=\"sao\"})",
+          "legendFormat": "estimated (admission estimator, sao)"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "<PROMETHEUS_DATASOURCE_UID>"
+          },
+          "expr": "sum(rate(node_network_transmit_bytes_total{box=\"sfu-pqp\"}[5m])) * 8 / 1e6",
+          "legendFormat": "measured tx (sfu-pqp, 5m rate)"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "<PROMETHEUS_DATASOURCE_UID>"
+          },
+          "expr": "max(pqp_api_sfu_admission_budget_mbps{region=\"sao\"})",
+          "legendFormat": "budget (VOICE_PROMOTION_MAX_SFU_MBPS)"
+        }
+      ],
+      "description": "Estimated: the Mbit/s the API prices for the SFU rooms on the home box (cameras and shares only; audio is not priced), from the same estimate an admission compares against the budget. Measured: the box's real transmit rate, everything it sends (audio, video, TURN). They are not meant to be equal: the estimate is deliberately a worst case. What matters is the ratio below and whether the estimate sits at the budget while the box is quiet, which is how 2026-10-20 refused 56 cameras on a box at 32 percent CPU. Needs the exporter deployed on the SFU box (PR with pqp_api_sfu_admission_*) and Alloy's node exporter there."
+    },
+    {
+      "id": 3,
+      "title": "Estimated / measured ratio (home box)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 9,
+        "w": 6,
+        "x": 12,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "<PROMETHEUS_DATASOURCE_UID>"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 2.5
+              }
+            ]
+          },
+          "custom": {
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "<PROMETHEUS_DATASOURCE_UID>"
+          },
+          "expr": "sum(pqp_api_sfu_admission_estimated_mbps{region=\"sao\"}) / clamp_min(sum(rate(node_network_transmit_bytes_total{box=\"sfu-pqp\"}[5m])) * 8 / 1e6, 1)",
+          "legendFormat": "estimated / measured tx"
+        }
+      ],
+      "description": "Above 2.5 for 15 minutes while the box CPU is under 40 percent pages (alert 'SFU admission estimate far above what the box carries'). A healthy room mix sits around the worst-case factor of the estimate; read the first week of data before trusting the line, because the price was recalibrated on 2026-10-21 (sfu_video_price_calibrated, per-box budget). The ratio is noisy below about 20 Mbit/s measured; the alert has a floor for that."
+    },
+    {
+      "id": 4,
+      "title": "SFU box CPU (sfu-pqp)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 9,
+        "w": 6,
+        "x": 18,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "<PROMETHEUS_DATASOURCE_UID>"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 40
+              },
+              {
+                "color": "red",
+                "value": 85
+              }
+            ]
+          },
+          "custom": {
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "<PROMETHEUS_DATASOURCE_UID>"
+          },
+          "expr": "100 * (1 - avg(rate(node_cpu_seconds_total{box=\"sfu-pqp\",mode=\"idle\"}[5m])))",
+          "legendFormat": "CPU busy %"
+        }
+      ],
+      "description": "The other half of the 2026-10-20 story: the estimate was at the budget while this read about 32 percent."
+    },
+    {
+      "id": 5,
+      "title": "Estimated load by region (Mbit/s)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 10
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "<PROMETHEUS_DATASOURCE_UID>"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Mbits",
+          "min": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*budget"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "<PROMETHEUS_DATASOURCE_UID>"
+          },
+          "expr": "pqp_api_sfu_admission_estimated_mbps",
+          "legendFormat": "{{region}} estimated"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "<PROMETHEUS_DATASOURCE_UID>"
+          },
+          "expr": "pqp_api_sfu_admission_budget_mbps",
+          "legendFormat": "{{region}} budget"
+        }
+      ],
+      "description": "Every region the estimator knows, including mia and lhr when LIVEKIT_REGIONS names them. region=all means sfu_video_budget_per_box is off and one number covers the cluster. To divide a regional estimate by its box, use node_network_transmit_bytes_total{box=\"sfu-mia\"} once install-regional.sh has run there."
+    },
+    {
+      "id": 6,
+      "title": "Admission checks and refusals (5 min window)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 10
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "<PROMETHEUS_DATASOURCE_UID>"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*refused"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "<PROMETHEUS_DATASOURCE_UID>"
+          },
+          "expr": "sum by (region) (pqp_api_sfu_admission_checks_5m)",
+          "legendFormat": "{{region}} checks"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "<PROMETHEUS_DATASOURCE_UID>"
+          },
+          "expr": "sum by (region) (pqp_api_sfu_admission_refusals_5m)",
+          "legendFormat": "{{region}} refused"
+        }
+      ],
+      "description": "Camera, share and mesh-promotion decisions against the budget, summed across both API replicas. Refusals above zero while the box CPU panel is low is the 2026-10-20 shape."
+    },
+    {
+      "id": 7,
+      "title": "API box: which container is using the box",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 18
+      },
+      "panels": []
+    },
+    {
+      "id": 8,
+      "title": "CPU per container (cores)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 19
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "<PROMETHEUS_DATASOURCE_UID>"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "<PROMETHEUS_DATASOURCE_UID>"
+          },
+          "expr": "sum by (service) (rate(container_cpu_usage_seconds_total{box=\"api-pqp\"}[5m]))",
+          "legendFormat": "{{service}}"
+        }
+      ],
+      "description": "cAdvisor inside Alloy on the API box. 1 is one full core of the box's 4. api-a and api-b should track each other; one far above the other is a hot replica, which host CPU cannot show."
+    },
+    {
+      "id": 9,
+      "title": "Memory per container (working set)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 19
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "<PROMETHEUS_DATASOURCE_UID>"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "<PROMETHEUS_DATASOURCE_UID>"
+          },
+          "expr": "max by (service) (container_memory_working_set_bytes{box=\"api-pqp\"})",
+          "legendFormat": "{{service}}"
+        }
+      ],
+      "description": "What the OOM killer counts (usage minus inactive file cache). The box has 8 GiB."
+    },
+    {
+      "id": 10,
+      "title": "Container restarts (last hour)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 19
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "<PROMETHEUS_DATASOURCE_UID>"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "<PROMETHEUS_DATASOURCE_UID>"
+          },
+          "expr": "sum by (service) (changes(container_start_time_seconds{box=\"api-pqp\"}[1h]))",
+          "legendFormat": "{{service}}"
+        }
+      ],
+      "description": "A rolling deploy shows one step per replica. A container that steps repeatedly with no deploy is crash-looping (an OOM kill shows here before any alert would)."
+    },
+    {
+      "id": 11,
+      "title": "Caddy: what the API box serves",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 27
+      },
+      "panels": []
+    },
+    {
+      "id": 12,
+      "title": "Request rate (req/s)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 28
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "<PROMETHEUS_DATASOURCE_UID>"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "<PROMETHEUS_DATASOURCE_UID>"
+          },
+          "expr": "sum(rate(caddy_http_request_duration_seconds_count{box=\"api-pqp\",handler!=\"metrics\"}[5m]))",
+          "legendFormat": "requests/s"
+        }
+      ],
+      "description": "Everything Caddy finished serving on api.pqp.gg. A WebSocket counts once, when it closes, so this is an HTTP-shaped number, not a socket count."
+    },
+    {
+      "id": 13,
+      "title": "5xx responses",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 28
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "<PROMETHEUS_DATASOURCE_UID>"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "<PROMETHEUS_DATASOURCE_UID>"
+          },
+          "expr": "sum(rate(caddy_http_request_duration_seconds_count{box=\"api-pqp\",handler!=\"metrics\",code=~\"5..\"}[5m]))",
+          "legendFormat": "5xx per second"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "<PROMETHEUS_DATASOURCE_UID>"
+          },
+          "expr": "sum by (code) (rate(caddy_http_request_duration_seconds_count{box=\"api-pqp\",handler!=\"metrics\",code=~\"5..\"}[5m]))",
+          "legendFormat": "{{code}}"
+        }
+      ],
+      "description": "502 and 503 are Caddy failing to reach an API replica or a replica answering database_unavailable. During a rolling deploy a few 502s are expected for under 10 seconds (the health check pulls a replica out of rotation every 5 s). Sustained 5xx is not."
+    },
+    {
+      "id": 14,
+      "title": "In flight and upstream health",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 28
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "<PROMETHEUS_DATASOURCE_UID>"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "<PROMETHEUS_DATASOURCE_UID>"
+          },
+          "expr": "sum(caddy_http_requests_in_flight{box=\"api-pqp\",handler!=\"metrics\"})",
+          "legendFormat": "in flight (about open sockets)"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "<PROMETHEUS_DATASOURCE_UID>"
+          },
+          "expr": "caddy_reverse_proxy_upstreams_healthy{box=\"api-pqp\"}",
+          "legendFormat": "healthy {{upstream}}"
+        }
+      ],
+      "description": "In flight is mostly open /ws connections (Caddy proxies them for their whole life). Healthy upstream is 1 per replica; api-b reads 0 when the box runs API_REPLICAS=1."
+    },
+    {
+      "id": 15,
+      "title": "API process: is a replica's thread stalled",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 36
+      },
+      "panels": []
+    },
+    {
+      "id": 16,
+      "title": "Event-loop lag, worst replica (ms)",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 37
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "<PROMETHEUS_DATASOURCE_UID>"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 100
+              },
+              {
+                "color": "red",
+                "value": 200
+              }
+            ]
+          },
+          "custom": {
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "<PROMETHEUS_DATASOURCE_UID>"
+          },
+          "expr": "pqp_api_event_loop_lag_p50_ms",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "<PROMETHEUS_DATASOURCE_UID>"
+          },
+          "expr": "pqp_api_event_loop_lag_p99_ms",
+          "legendFormat": "p99"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "<PROMETHEUS_DATASOURCE_UID>"
+          },
+          "expr": "pqp_api_event_loop_lag_max_ms",
+          "legendFormat": "max"
+        }
+      ],
+      "description": "How late the API process fires its own timers, over the last minute, with the 20 ms sampling floor already subtracted: a healthy process reads 0 to 2. p99 is the worst 5 s slice's p99. The alert fires at p99 above 200 ms for 5 minutes. A stall holds ONE replica's thread while host CPU reads 20 percent, so this is the number the pool and the box CPU cannot give. Worst of the two replicas."
+    },
+    {
+      "id": 17,
+      "title": "Event-loop lag against sockets",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 37
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "<PROMETHEUS_DATASOURCE_UID>"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "open sockets (this process)"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "unit",
+                "value": "short"
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "<PROMETHEUS_DATASOURCE_UID>"
+          },
+          "expr": "pqp_api_event_loop_lag_p99_ms",
+          "legendFormat": "p99 lag (ms)"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "<PROMETHEUS_DATASOURCE_UID>"
+          },
+          "expr": "pqp_api_sockets",
+          "legendFormat": "open sockets (this process)"
+        }
+      ],
+      "description": "Does lag climb with the socket count (a fan-out cost that scales with people) or arrive on its own (one slow handler)? Sockets are per scraped process, so read the shape rather than the level."
+    }
+  ]
+}

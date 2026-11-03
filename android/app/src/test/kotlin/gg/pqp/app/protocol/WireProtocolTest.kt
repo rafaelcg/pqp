@@ -266,9 +266,6 @@ class WireProtocolTest {
         "presence-delta" to "never negotiated, and the same missing roster surface as presence-update",
         // Threads exist on the web only; the phone has no thread view.
         "thread-update" to "no thread surface on the phone",
-        // Permissions are enforced server-side and this client draws no
-        // manager controls, so a version bump has nothing to invalidate.
-        "permissions-update" to "no permission-gated controls on the phone to refresh",
         // Polls render as their message body; votes and closes are web only.
         "poll-update" to "no poll surface on the phone",
         // The party's own CHAT frame, which the phone has no panel to put
@@ -282,6 +279,7 @@ class WireProtocolTest {
         // the operator turns on a server they waited for. The waitlist lives
         // on the web; the push that goes out with it reaches the phone.
         "watch-party-waitlist-approved" to "no waitlist surface on the phone; the push covers it",
+        "bau-plus-update" to "Baú+ payments are web and desktop only (store policy); the VIP cargo reaches the phone through permissions-update",
         // Coalesced emoji burst counts for a channel's live reactions. No
         // reaction-overlay surface on the phone yet.
         "live-reactions" to "no live reactions surface on the phone",

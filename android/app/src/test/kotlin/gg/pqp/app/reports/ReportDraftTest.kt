@@ -64,8 +64,11 @@ class ReportDraftTest {
 
     @Test
     fun `the subject types are the ones the schema discriminates on`() {
+        // `bau_post` and `bau_comment` are web-only for now: this client sends
+        // the first four and never decodes a report's subject type, so the two
+        // Baú kinds are pinned here without being shown (see Reports.kt).
         assertEquals(
-            listOf("message", "user", "server", "story"),
+            listOf("message", "user", "server", "story", "bau_post", "bau_comment"),
             RepoSources.enumValues(shared, "reportSubjectTypeSchema"),
         )
     }

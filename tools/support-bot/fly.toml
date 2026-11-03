@@ -1,11 +1,11 @@
 # Fly.io configuration for the QG support bot.
 #
-# A THIRD TINY APP, alongside `pqp-api` and `pqp-ambient`. The reasoning is the
+# A TINY APP of its own, alongside `pqp-ambient`. The reasoning is the
 # same one written at the top of `tools/ambient/fly.toml`, and it applies here
 # with one addition:
 #
-#   1. The API machine is single-by-design; a process group on it would restart
-#      chat for everybody every time somebody edits a fact.
+#   1. A process group on the API would restart chat for everybody every time
+#      somebody edits a fact.
 #   2. Blast radius. This holds a WebSocket and calls an external model API. If
 #      it wedges or gets rate-limited, support answers stop and the product does
 #      not.

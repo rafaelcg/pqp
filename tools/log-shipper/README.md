@@ -1,5 +1,12 @@
 # pqp-log-shipper
 
+> **Historical: the Fly app `pqp-log-shipper` was destroyed on 2026-10-22.**
+> Production's logs have been shipped by Grafana Alloy on the Vultr box since
+> 2026-09-17 (`tools/api-host/config.alloy`). This directory stays as the
+> record, and as a recipe for a self-host that runs the API on Fly and wants its
+> logs in Loki.
+
+
 Forwards `pqp-api` logs from Fly to Grafana Cloud Loki so dashboards and
 alert rules can run on application events. The full picture (what is
 monitored, LogQL patterns, cost) is in [`docs/MONITORING.md`](../../docs/MONITORING.md),

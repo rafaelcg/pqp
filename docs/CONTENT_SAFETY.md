@@ -337,6 +337,22 @@ decided once, by `createReport`/`createAutomatedReport`, from the reported
 thing, never by the client. This only widens who may *read and close* what
 was already filed.
 
+### Reporting a Baú post or comment
+
+`createReportSchema` also takes `bau_post` and `bau_comment` (id only). The
+reporter must be able to READ the post (the feed's own VIP lock decides, so a
+members-only post is reportable by staff and VIPs only), and the words are
+copied into `reports.bau_snapshot` so the report outlives the post. **A Baú in
+a community is routed to the instance queue**, like a community report, because
+the posts are written by the staff who would otherwise read the report; another
+server's Baú goes to its own queue, and `minor_sexual` always goes to the
+instance. The card's "Contexto" panel opens the post past the VIP lock:
+`GET /api/reports/:id/context` carries `bau`, the one read that skips the lock,
+behind the same gate as the rest of the card, text and media metadata only,
+audited as `report.bau_view` (server-scoped reports) plus a `[moderation]` log
+line (all), never in a community's own audit log. See
+[`COMMUNITY_HOME.md`](./COMMUNITY_HOME.md) §"Reporting a post or a comment".
+
 ### What a moderator sees of a reported attachment
 
 A report on a message that carries only an image used to show an empty bar, and

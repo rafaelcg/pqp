@@ -91,8 +91,8 @@ live. **Check the actual production environment, not the repo.**
 
 | Token | What it is | How to confirm | Pages |
 |---|---|---|---|
-| `{{HOSTING_PROVIDER}}` | Who runs the API and Postgres | `docs/DEPLOY.md` says Railway; `fly.toml` targets Fly.io. Confirm which is serving `api` today | privacy |
-| `{{HOSTING_REGION}}` | The region it runs in | Railway US East (Virginia) vs Fly `gru` (São Paulo). `fly.toml:36` sets `primary_region = "gru"` | privacy |
+| `{{HOSTING_PROVIDER}}` | Who runs the API and Postgres | Production API and worker run on a Vultr box (`docs/deploy-vultr.md`); Fly was retired 2026-10-22 and Railway long before. Confirm before filling this in | privacy |
+| `{{HOSTING_REGION}}` | The region it runs in | Vultr `gru` (São Paulo) for the API box; the database and the media boxes are Vultr too (`docs/deploy-vultr.md`, `docs/DB_RUNBOOK.md`) | privacy |
 | `{{OBJECT_STORAGE_PROVIDER}}` | Attachment storage vendor and region | Whatever `S3_ENDPOINT` points at (Cloudflare R2 in the hosted plan) | privacy |
 | `{{ATTACHMENTS_STATUS}}` | Literally "enabled" or "disabled" | Attachments are off entirely unless `S3_*` is set — `docs/ATTACHMENTS.md`. Per `MEMORY`, they were merged but not switched on in production | privacy |
 | `{{TURN_PROVIDER}}` | The STUN/TURN vendor(s) actually configured | `server/src/services/ice.ts` resolves in order: static `TURN_*` → Cloudflare Realtime → Metered/Open Relay. Name the one in use | privacy, cookies |

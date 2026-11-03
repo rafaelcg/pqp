@@ -6588,3 +6588,173 @@ html[data-immersive-stage] [data-immersive-hide] {
     transition: none;
   }
 }
+
+/*
+ * Baú+ (the fan paying for VIP, components/bau-plus/). A few quiet moments
+ * of motion and nothing else: the step of the pay sheet settling in, a
+ * breathing dot while the bank has not answered, and the confirmation (one
+ * halo that opens and fades behind the VIP seal). All off under reduced
+ * motion, where each state is simply there.
+ */
+@keyframes bau-step-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.bau-step-in {
+  animation: bau-step-in var(--duration-slow) var(--ease-emphasized) backwards;
+  animation-delay: calc(var(--stagger, 0) * 60ms);
+}
+
+@keyframes bau-wait {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.bau-wait-dot {
+  animation: bau-wait 1.6s var(--ease-standard) infinite;
+}
+
+@keyframes bau-ring {
+  from {
+    opacity: 0.55;
+    transform: scale(0.7);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.9);
+  }
+}
+
+.bau-paid-ring {
+  animation: bau-ring 900ms var(--ease-emphasized) 120ms both;
+}
+
+
+/*
+ * The locked post's placeholder: bars shaped like the hidden paragraph (as
+ * many as the text is long), fading into the card under them. Plainly not
+ * words; the real body never reaches the client.
+ */
+.bau-lock-lines {
+  user-select: none;
+  -webkit-mask-image: linear-gradient(to bottom, black 15%, transparent 92%);
+  mask-image: linear-gradient(to bottom, black 15%, transparent 92%);
+}
+
+/*
+ * The VIP seal arriving (`vip-seal.tsx`, the confirmation and the welcome
+ * strip): the tile settles, one band of light crosses it once, the gem
+ * medallion lands a beat later. Once, never looping.
+ */
+@keyframes bau-seal-in {
+  from {
+    opacity: 0;
+    transform: scale(0.86);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes bau-sheen {
+  from {
+    transform: translateX(-120%) skewX(-18deg);
+  }
+  to {
+    transform: translateX(220%) skewX(-18deg);
+  }
+}
+
+@keyframes bau-medal-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.4) rotate(-25deg);
+  }
+  70% {
+    opacity: 1;
+    transform: scale(1.08) rotate(4deg);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) rotate(0);
+  }
+}
+
+.bau-seal-in {
+  animation: bau-seal-in 480ms var(--ease-emphasized) both;
+}
+
+.bau-seal-sheen {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 45%;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--color-surface-0) 50%,
+    transparent
+  );
+  opacity: 0.55;
+  transform: translateX(-120%) skewX(-18deg);
+  animation: bau-sheen 900ms var(--ease-standard) 380ms both;
+}
+
+.bau-medal-in {
+  animation: bau-medal-in 520ms var(--ease-emphasized) 260ms both;
+}
+
+/* How much of the month is left: eases to its width when it first draws. */
+@keyframes bau-meter-in {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+.bau-meter-fill {
+  transform-origin: left center;
+  animation: bau-meter-in 700ms var(--ease-emphasized) 120ms backwards;
+}
+
+/* The Pix code's time left, draining once a second. */
+.bau-drain {
+  transition: width 1s linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bau-step-in,
+  .bau-wait-dot,
+  .bau-paid-ring,
+  .bau-seal-in,
+  .bau-medal-in,
+  .bau-meter-fill {
+    animation: none;
+  }
+  .bau-seal-sheen {
+    display: none;
+  }
+  .bau-drain {
+    transition: none;
+  }
+  .bau-paid-ring {
+    opacity: 0;
+  }
+}

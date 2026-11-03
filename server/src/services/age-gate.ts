@@ -9,6 +9,7 @@ import {
   type CalendarDate,
 } from "@pqp/shared";
 import { getPool } from "../db.js";
+import { logEvent } from "../lib/log.js";
 import {
   coalesce,
   invalidateExact as invalidateReadCache,
@@ -138,6 +139,64 @@ export async function getAgeGateStatus(userId: string): Promise<AgeGateStatus> {
   );
 }
 
+// -------------------------------------------------------------- observability
+
+/**
+ * What the gate has decided, counted. Per process, since it booted, like every
+ * other in-memory counter on `GET /api/admin/metrics` (the exporter sums the
+ * replicas).
+ *
+ * Until this existed the server said nothing at all about a refusal: 0 log
+ * lines in 14 days when an adult wrote in about being blocked, so there was no
+ * way to tell a wave of typos from nothing. The line and the counters carry the
+ * outcome and NOTHING else: no date of birth, no user id, no account. A date of
+ * birth is the one thing the gate goes out of its way not to keep for a pass,
+ * and a log line is the easiest place to start keeping it by accident.
+ */
+const declarations = { passed: 0, blocked: 0, implausible: 0 };
+
+export interface AgeGateMetrics {
+  /** Declared a date that is 18 or more years back: the gate opened. */
+  passed: number;
+  /** Declared a plausible date under 18: recorded, final, account blocked. */
+  blocked: number;
+  /**
+   * Typed a date the server would not take as a declaration (not a real date, in
+   * the future, before 1900, or under `MIN_PLAUSIBLE_AGE_YEARS` back). The
+   * attempt was NOT spent. A climb here is a slip, a default or an autofill
+   * the form is not catching.
+   */
+  implausible: number;
+}
+
+/** One line per answer: `age.declared passed=<bool> implausible=<bool>`. */
+export function noteAgeDeclared(outcome: {
+  passed: boolean;
+  implausible: boolean;
+}): void {
+  if (outcome.implausible) {
+    declarations.implausible += 1;
+  } else if (outcome.passed) {
+    declarations.passed += 1;
+  } else {
+    declarations.blocked += 1;
+  }
+  logEvent("age.declared", {
+    passed: outcome.passed,
+    implausible: outcome.implausible,
+  });
+}
+
+export function ageGateMetrics(): AgeGateMetrics {
+  return { ...declarations };
+}
+
+export function resetAgeGateMetricsForTests(): void {
+  declarations.passed = 0;
+  declarations.blocked = 0;
+  declarations.implausible = 0;
+}
+
 export interface AgeDeclarationResult {
   /** False when the account had already answered — see below. */
   recorded: boolean;
@@ -190,6 +249,7 @@ export async function recordAgeDeclaration(
     // exactly the staleness window this function exists to avoid.
     return { recorded: false, status: await fetchAgeGateStatus(userId) };
   }
+  noteAgeDeclared({ passed, implausible: false });
   return { recorded: true, status: statusOf(row) };
 }
 

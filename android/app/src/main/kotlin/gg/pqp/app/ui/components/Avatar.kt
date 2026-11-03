@@ -83,7 +83,7 @@ fun Avatar(
         modifier = modifier
             .size(size)
             .then(if (ring > 0.dp) Modifier.border(ring, Palette.Signal, shape) else Modifier)
-            .padding(ring + if (ring > 0.dp) 1.5.dp else 0.dp)
+            .padding(speakingRingInset(ring))
             .clip(shape)
             .background(monogramColor(seed)),
         contentAlignment = Alignment.Center,
@@ -118,6 +118,23 @@ fun Avatar(
         }
     }
 }
+
+/**
+ * How far the picture sits inside the speaking ring: the ring plus a 1.5dp gap
+ * while it shows, nothing once it is gone.
+ *
+ * Never negative, and that is the whole reason this is a function. The ring is
+ * animated by a spring with `dampingRatio = 0.7f`, which is underdamped: on its
+ * way from 2.5dp back to 0dp, when somebody stops talking, it overshoots to
+ * about -0.1dp before settling. `Modifier.padding` throws
+ * `IllegalArgumentException: Padding must be non-negative` for any value below
+ * zero, so the old `padding(ring + ...)` crashed the app for whoever was looking
+ * at that avatar. It was the top crash in Play's Android vitals in October 2026
+ * (22 people, 44% of everyone who crashed), and the reason the crash rate read
+ * 9% on the weekend of 24 and 25 October, when a lot of people were in calls.
+ */
+internal fun speakingRingInset(ring: Dp): Dp =
+    if (ring > 0.dp) ring + 1.5.dp else 0.dp
 
 /**
  * The seed's colour.

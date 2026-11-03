@@ -12,23 +12,15 @@
  * WHERE PRODUCTION RUNS: the Vultr box behind Cloudflare since 2026-09-17
  * (docs/deploy-vultr.md). Everything below reads only what a GitHub runner can
  * reach with no secret: `/health`, `/ready`, `/status.json`, the WebSocket and
- * the public site. The three Fly-only checks (`fly-machines`,
- * `worker-image-drift`, and the `fly logs` reader in errors.mjs) are kept for a
- * rollback and run only with `MONITOR_FLY_ROLLBACK=true`.
+ * the public site. The Fly-only checks (`fly-machines`, `worker-image-drift`,
+ * and the `fly logs` reader in errors.mjs) were removed when the Fly rollback
+ * apps were destroyed on 2026-10-22.
  */
 
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-import { flyRollback, httpGet, untilOk, wsProbe } from "./net.mjs";
-
-const exec = promisify(execFile);
+import { httpGet, untilOk, wsProbe } from "./net.mjs";
 
 export const API_ORIGIN = process.env.MONITOR_API_ORIGIN ?? "https://api.pqp.gg";
 export const WEB_ORIGIN = process.env.MONITOR_WEB_ORIGIN ?? "https://pqp.gg";
-const FLY_APP = process.env.MONITOR_FLY_APP ?? "pqp-api";
-// ROLLBACK ONLY (see checkFlyMachines). The rollback recipe in
-// docs/deploy-vultr.md scales pqp-api to two machines; override if it differs.
-const FLY_EXPECTED_MACHINES = Number(process.env.MONITOR_FLY_EXPECTED_MACHINES ?? 2);
 
 // Overridable only so the failure path can be exercised in seconds instead of
 // two minutes. Leave it alone in CI — the spacing is what makes a deploy
@@ -151,204 +143,6 @@ async function checkWebsocket() {
       "Chat, presence and voice signalling all ride this socket, so this being down is a total outage even while /health is green.",
       "1. `ssh root@<box>`, then `cd /opt/pqp && docker compose logs --tail=300 api-a api-b | grep '\\[pqp\\] ws\\.'`, `ws.connect` with no `ws.auth` means the auth path is broken, no `ws.connect` at all means the upgrade never reaches the app.",
       "2. api.pqp.gg is proxied by Cloudflare and terminated again by Caddy: check the Cloudflare dashboard for WebSocket and rule changes, and `docker compose logs caddy` for upgrade errors.",
-    ].join("\n"),
-  };
-}
-
-/**
- * ROLLBACK ONLY (`MONITOR_FLY_ROLLBACK=true`). Production left Fly on
- * 2026-09-17; with the apps at zero machines this reported a stale `stopped`
- * machine as an outage for a month (issue #607) and never meant anything about
- * the Vultr box. Kept, behind the variable, for the day the API rolls back.
- *
- * Exactly one machine, started, in gru.
- *
- * The machine count is a decision, not a side effect: fly.toml's
- * min_machines_running says what it is (1 today, by choice) and the comment
- * on it plus docs/deploy-fly.md 6a-bis say why. The deploy workflow asserts
- * the number at release time; this asserts it between deploys, because a
- * stray `fly scale count 2` or a machine Fly recreates after a host failure
- * does not go through the deploy workflow. The expected count is hardcoded
- * here on purpose so drift fails loudly: when fly.toml moves to 2, move this
- * in the same PR.
- */
-async function checkFlyMachines() {
-  if (!process.env.FLY_API_TOKEN && !process.env.MONITOR_FLY_LOCAL) {
-    return {
-      key: "fly-machines",
-      title: "Fly machine count",
-      status: "skip",
-      summary:
-        "Skipped: no FLY_API_TOKEN. Set MONITOR_FLY_LOCAL=1 to use your own `fly auth` session when running by hand.",
-    };
-  }
-
-  const result = await untilOk(
-    async () => {
-      const { stdout } = await exec("flyctl", ["machines", "list", "--app", FLY_APP, "--json"], {
-        maxBuffer: 8 * 1024 * 1024,
-      });
-      const machines = JSON.parse(stdout).filter((m) => m.state !== "destroyed");
-      const summary = machines.map((m) => `${m.id} ${m.state} ${m.region}`).join("; ") || "none";
-      const ok =
-        machines.length === FLY_EXPECTED_MACHINES &&
-        machines.every((m) => m.state === "started" && m.region === "gru");
-      return { ok, count: machines.length, note: summary };
-    },
-    { attempts: 2, delayMs: RETRY.delayMs },
-  );
-
-  return {
-    key: "fly-machines",
-    title: `Fly machine count (rollback: expects ${FLY_EXPECTED_MACHINES} started in gru)`,
-    status: result.ok ? "ok" : "fail",
-    summary: result.ok
-      ? `${FLY_EXPECTED_MACHINES} machine(s), started, gru: ${result.note}`
-      : `Expected ${FLY_EXPECTED_MACHINES} started machine(s) in gru, found: ${result.note.replace(/\s+/g, " ").trim()}`,
-    detail: trail(result.tries),
-    runbook: [
-      "This check only runs during a rollback to Fly (MONITOR_FLY_ROLLBACK=true). The count is a decision (docs/deploy-fly.md 6a-bis, docs/deploy-vultr.md rollback recipe), and a different number is a machine nobody decided to run, or one that is gone.",
-      `Fix: \`fly scale count ${FLY_EXPECTED_MACHINES} --region gru --app pqp-api\`, then confirm with \`fly machines list -a pqp-api\`.`,
-      "Zero machines, or one that is `stopped`: `fly machine start <id>` (auto_start_machines is off on purpose, so nothing will do it for you).",
-      "See the header of fly.toml before changing anything about machine count.",
-    ].join("\n"),
-  };
-}
-
-const WORKER_APP = process.env.MONITOR_WORKER_FLY_APP ?? "pqp-worker";
-
-
-/** `.image_ref.digest`, falling back the same way deploy-api-fly.yml's own
- * assertion does, so the two never disagree about what "the image" means. */
-function imagesOf(machines) {
-  return [
-    ...new Set(
-      machines
-        .filter((m) => m.state === "started")
-        .map((m) => m.image_ref?.digest ?? m.image_ref?.tag ?? m.config?.image ?? "unknown"),
-    ),
-  ];
-}
-
-async function listMachines(app) {
-  const { stdout } = await exec("flyctl", ["machines", "list", "--app", app, "--json"], {
-    maxBuffer: 8 * 1024 * 1024,
-  });
-  return JSON.parse(stdout).filter((m) => m.state !== "destroyed");
-}
-
-/**
- * The check this repo did not have on 2026-09-08. `pqp-worker` runs `jobs.ts`
- * (docs/plans/COLD_PATHS.md) — the attachment sweeps, retention, the outgoing
- * webhook outbox, watch-party reminders, the HLS retention sweep, voice
- * occupancy sampling. `deploy-api-fly.yml` deploys the SAME image to it right
- * after the API, under the same commit label, so the two are supposed to be
- * identical at all times.
- *
- * The failure this exists for is exactly what happened: the workflow's
- * "Deploy the worker" step started failing (`FLY_API_TOKEN_WORKER` could not
- * pull the API's image — an app-scoped deploy token cannot read another app's
- * registry ref), CI kept going red on a step everyone had already learned to
- * ignore because of unrelated Electron/size-label noise, and `pqp-worker` sat
- * on a two-day-old image while `pqp-api` redeployed two dozen times. Every job
- * merged in that window — watch-party session reminders, the HLS retention
- * sweep, voice occupancy sampling — was shipped and not running, silently,
- * because nothing compared the two images. This does, every 10 minutes, and
- * it alerts the same way `fly-machines` does: a GitHub issue, not a red CI
- * step nobody reads.
- *
- * Needs an ORG-scoped token: `FLY_API_TOKEN` (the one already used by
- * `fly-machines`) is a deploy token scoped to `pqp-api` alone and cannot list
- * `pqp-worker`'s machines. Reuses `FLY_ORG_TOKEN` — the same one `postgres-disk`
- * and `support-bot-alive` already need to read a second app.
- *
- * A fork or a fresh clone with no `pqp-worker` app skips, same as the deploy
- * workflow does: the API runs every job itself (`WORKER_MODE` unset) and
- * there is nothing to compare.
- */
-async function checkWorkerImageDrift() {
-  if (!process.env.FLY_API_TOKEN && !process.env.MONITOR_FLY_LOCAL) {
-    return {
-      key: "worker-image-drift",
-      title: "Worker image matches API image",
-      status: "skip",
-      summary:
-        "Skipped: no FLY_API_TOKEN. Set MONITOR_FLY_LOCAL=1 to use your own `fly auth` session when running by hand.",
-    };
-  }
-
-  const result = await untilOk(
-    async () => {
-      let apiMachines;
-      try {
-        apiMachines = await listMachines(FLY_APP);
-      } catch (error) {
-        return { ok: false, skip: true, note: `could not list ${FLY_APP}: ${error.message}` };
-      }
-
-      let workerMachines;
-      try {
-        workerMachines = await listMachines(WORKER_APP);
-      } catch (error) {
-        // Deliberately a skip, not a fail: an app-scoped FLY_API_TOKEN cannot
-        // see pqp-worker at all (the same asymmetry that broke the deploy
-        // step), and a fork with no worker app looks identical from here.
-        return {
-          ok: false,
-          skip: true,
-          note: `could not list ${WORKER_APP}: ${error.message}`,
-        };
-      }
-
-      const apiImages = imagesOf(apiMachines);
-      const workerImages = imagesOf(workerMachines);
-
-      if (apiImages.length === 0) {
-        // fly-machines already reports zero API machines as a fail; nothing to
-        // compare against here.
-        return { ok: false, skip: true, note: `${FLY_APP} has no started machines` };
-      }
-      if (workerImages.length === 0) {
-        return {
-          ok: false,
-          skip: true,
-          note: `${WORKER_APP} has no started machines (worker not deployed, or intentionally unused)`,
-        };
-      }
-
-      const match =
-        apiImages.length === 1 && workerImages.length === 1 && apiImages[0] === workerImages[0];
-      return {
-        ok: match,
-        skip: false,
-        note: `${FLY_APP}: ${apiImages.join(", ")} — ${WORKER_APP}: ${workerImages.join(", ")}`,
-      };
-    },
-    { attempts: 2, delayMs: RETRY.delayMs },
-  );
-
-  if (result.skip) {
-    return {
-      key: "worker-image-drift",
-      title: "Worker image matches API image",
-      status: "skip",
-      summary: `Skipped: ${result.note}. Cross-app listing needs FLY_ORG_TOKEN — see docs/MONITORING.md Setup.`,
-    };
-  }
-
-  return {
-    key: "worker-image-drift",
-    title: "Worker image matches API image",
-    status: result.ok ? "ok" : "fail",
-    summary: result.ok
-      ? `Same image on both apps: ${result.note}`
-      : `${WORKER_APP} is not running the same image as ${FLY_APP}: ${result.note}`,
-    detail: trail(result.tries),
-    runbook: [
-      "The worker is stuck on an old image, which means every cold job in server/src/jobs.ts (docs/plans/COLD_PATHS.md) is running old code, or not running the newest jobs at all.",
-      "1. Check the latest `Deploy API (Fly)` run's \"Deploy the worker (same image)\" step: `gh run list --workflow=deploy-api-fly.yml` then `gh run view <id> --log-failed`.",
-      "2. The usual cause is FLY_API_TOKEN_WORKER: it must be able to pull registry.fly.io/pqp-api:<sha>, which an app-scoped `pqp-worker` deploy token cannot do. Use an org-scoped token: `fly tokens create org -o personal`, then `gh secret set FLY_API_TOKEN_WORKER`.",
-      "3. To fix the running machine directly without waiting on CI: `fly deploy --config fly.worker.toml --app pqp-worker --image registry.fly.io/pqp-api:<api's current sha, from fly status -a pqp-api> --ha=false --strategy rolling`.",
     ].join("\n"),
   };
 }
@@ -843,7 +637,7 @@ async function checkPrecache() {
  * sat open and red for a month against a Fly app nobody was running).
  */
 export function retiredAvailabilityKeys() {
-  return flyRollback() ? [] : ["fly-machines", "worker-image-drift"];
+  return ["fly-machines", "worker-image-drift"];
 }
 
 export async function runAvailabilityChecks() {
@@ -860,14 +654,6 @@ export async function runAvailabilityChecks() {
     ["status-components", checkStatusComponents],
     ["live-hls", checkLiveHls],
     ["sfu-regions", checkSfuRegions],
-    // Rollback to Fly only: with the apps at zero machines these two read
-    // nothing true, so they are off unless somebody sets the variable.
-    ...(flyRollback()
-      ? [
-          ["fly-machines", checkFlyMachines],
-          ["worker-image-drift", checkWorkerImageDrift],
-        ]
-      : []),
   ];
   const results = [];
   for (const [key, check] of checks) {

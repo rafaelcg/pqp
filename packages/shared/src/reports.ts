@@ -48,8 +48,25 @@ export type ReportReason = z.infer<typeof reportReasonSchema>;
  * server's queue, a friends story to the instance queue (no server owns it,
  * exactly like a conversation). A reported story does not expire while the
  * report is open, and its bytes are held for 30 days after it is resolved.
+ *
+ * `bau_post` and `bau_comment` report one post, or one comment on a post, in a
+ * server's Baú (Community Home, docs/COMMUNITY_HOME.md). They are filed from
+ * the post card with nothing but the id: the server, the author and the
+ * destination are read from the post itself. Only somebody who can READ the
+ * post may report it, so a members-only (VIP) post is reportable by the people
+ * the lock lets in and by nobody else. A report about a Baú in a community
+ * goes to the INSTANCE queue (the owner who runs the Baú must not hold the
+ * accusation about it); in any other server it goes to that server's queue
+ * like a message report. Older clients never send these kinds.
  */
-export const reportSubjectTypeSchema = z.enum(["message", "user", "server", "story"]);
+export const reportSubjectTypeSchema = z.enum([
+  "message",
+  "user",
+  "server",
+  "story",
+  "bau_post",
+  "bau_comment",
+]);
 export type ReportSubjectType = z.infer<typeof reportSubjectTypeSchema>;
 
 /**
@@ -143,6 +160,20 @@ export const createReportSchema = z.discriminatedUnion("subjectType", [
     subjectType: z.literal("story"),
     storyId: z.string().uuid(),
     serverId: z.string().uuid().nullable().optional(),
+    reason: reportReasonSchema,
+    details: detailsSchema,
+  }),
+  /** One Baú post. Only the id: the server is read from the post. */
+  z.object({
+    subjectType: z.literal("bau_post"),
+    postId: z.string().uuid(),
+    reason: reportReasonSchema,
+    details: detailsSchema,
+  }),
+  /** One Baú comment. Only the id: the post and the server are read from it. */
+  z.object({
+    subjectType: z.literal("bau_comment"),
+    commentId: z.string().uuid(),
     reason: reportReasonSchema,
     details: detailsSchema,
   }),
@@ -316,6 +347,14 @@ export const reportSchema = z.object({
    * its caption or text as it was when reported.
    */
   storyId: z.string().uuid().nullable().default(null),
+  /**
+   * The reported Baú post (for a `bau_post` report) or the post a reported
+   * comment sits on (for a `bau_comment` one); null once the post is gone.
+   * `contentSnapshot` then carries the title and words as they were reported.
+   */
+  bauPostId: z.string().uuid().nullable().default(null),
+  /** The reported Baú comment, for a `bau_comment` report; null once deleted. */
+  bauCommentId: z.string().uuid().nullable().default(null),
 
   resolvedAt: z.string().nullable(),
   resolvedByName: z.string().nullable(),
@@ -466,6 +505,63 @@ const contactCountSchema = z.object({
   times: z.array(z.string()),
 });
 
+/**
+ * A reported Baú post or comment as it stands NOW, opened for a moderator.
+ *
+ * Read without the VIP lock, because the moderator is rarely a VIP and a
+ * members-only post is exactly what somebody reports. That is the one read in
+ * the product that skips the lock, so it is narrow: only the post a report
+ * names, only through `GET /api/reports/:id/context` (the same gate as the
+ * rest of the card), and every read is written to an audit trail. Uploaded
+ * media is metadata only (never a URL); an embedded link is shown as the link.
+ * A deleted post or comment is `null`, and the report's own snapshot is what
+ * is left.
+ */
+export const reportContextBauCommentSchema = z.object({
+  id: z.string().uuid(),
+  authorId: z.string().uuid(),
+  authorName: z.string(),
+  body: z.string(),
+  createdAt: z.string(),
+});
+export type ReportContextBauComment = z.infer<
+  typeof reportContextBauCommentSchema
+>;
+
+export const reportContextBauSchema = z.object({
+  serverId: z.string().uuid(),
+  serverName: z.string(),
+  post: z
+    .object({
+      id: z.string().uuid(),
+      authorName: z.string(),
+      title: z.string().nullable(),
+      body: z.string(),
+      teaser: z.string().nullable(),
+      /** `members` is the VIP lock; the card says so. */
+      visibility: z.enum(["free", "members"]),
+      status: z.enum(["draft", "published", "scheduled"]),
+      publishedAt: z.string().nullable(),
+      media: z
+        .object({
+          kind: z.string(),
+          name: z.string().nullable(),
+          contentType: z.string().nullable(),
+          byteSize: z.number().nullable(),
+          /** An embed's public link (YouTube, Twitch...). Never a stored upload's URL. */
+          link: z.string().nullable(),
+        })
+        .nullable(),
+    })
+    .nullable(),
+  /** The reported comment, for a `bau_comment` report; null once deleted. */
+  comment: reportContextBauCommentSchema.nullable(),
+  /** Up to five comments either side of the reported one, oldest first. */
+  commentsBefore: z.array(reportContextBauCommentSchema),
+  commentsAfter: z.array(reportContextBauCommentSchema),
+});
+export type ReportContextBau = z.infer<typeof reportContextBauSchema>;
+
 export const reportContextSchema = z.object({
   reportId: z.string(),
   lens: reportContextLensSchema,
@@ -611,6 +707,13 @@ export const reportContextSchema = z.object({
       withheld: z.enum(["group", "no_access"]).nullable(),
     })
     .nullable(),
+
+  /**
+   * A `bau_post` / `bau_comment` report's subject, opened past the VIP lock
+   * (see `reportContextBauSchema`). Null for every other kind, and for a Baú
+   * report whose post is gone and whose snapshot says all there is.
+   */
+  bau: reportContextBauSchema.nullable().default(null),
 
   /** What this viewer may do about the reported account, from the card. */
   actions: z.object({

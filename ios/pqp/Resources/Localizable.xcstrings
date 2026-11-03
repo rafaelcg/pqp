@@ -281,6 +281,16 @@
         }
       }
     },
+    "Support the creator and ask whoever runs the server for the VIP cargo." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apoia o criador e pede o cargo VIP pra quem cuida do servidor."
+          }
+        }
+      }
+    },
     "channel" : {
       "localizations" : {
         "pt-BR" : {
@@ -9047,16 +9057,6 @@
         }
       }
     },
-    "The full post is for members with the VIP cargo." : {
-      "localizations" : {
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "O post inteiro é pra quem tem o cargo VIP."
-          }
-        }
-      }
-    },
     "The marked answer was deleted." : {
       "localizations" : {
         "pt-BR" : {
@@ -9977,12 +9977,12 @@
         }
       }
     },
-    "VIP, coming soon" : {
+    "VIP unlocks members-only posts, and VIP rooms on servers that have them." : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "VIP, em breve"
+            "value" : "O VIP libera posts só pra membros e, nos servidores que têm, salas VIP."
           }
         }
       }

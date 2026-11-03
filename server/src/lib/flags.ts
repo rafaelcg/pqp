@@ -285,8 +285,23 @@ export const FEATURE_FLAGS = {
     env: "COMMUNITY_HOME_VIP_ENABLED",
     parseEnv: exactTrue,
     codeDefault: false,
-    perServer: false,
-    clientVia: "GET /api/community-home/config (vipEnabled)",
+    // Every reader knows the server: the feed, unread counts, the latest read,
+    // the post write and the push all work from a server id, and the config
+    // probe is asked `?serverId=`. Still needs the global `community_home`.
+    perServer: true,
+    clientVia: "GET /api/community-home/config?serverId= (vipEnabled)",
+  },
+  bau_payments: {
+    description:
+      "Baú+: o fã paga o VIP no próprio pqp (Pix). Precisa do Baú e do VIP ligados e de um provedor configurado.",
+    env: "BAU_PAYMENTS",
+    parseEnv: exactTrue,
+    codeDefault: false,
+    // Every reader knows the server: the offer, checkout and the creator's
+    // plan are routes under `/servers/:id`; a charge, a membership and the
+    // sweep's rows each carry their server id.
+    perServer: true,
+    clientVia: "GET /api/servers/:id/bau-plus (enabled)",
   },
   community_home_translation: {
     description:
@@ -897,6 +912,20 @@ export const FEATURE_FLAGS = {
     // No `(field)`: the contract test would ask for a client reader, and the
     // clients that read it land after the server.
     clientVia: "GET /api/stories/config + POST /api/stories/uploads",
+  },
+  age_gate_readback: {
+    description:
+      "Portão de idade: antes de enviar, a data aparece escrita por extenso (\"Tu nasceu em 3 de dezembro de 2008\") com Está certo / Corrigir. Desligado, volta o envio direto.",
+    env: "AGE_GATE_READBACK",
+    parseEnv: onUnlessOff,
+    // On: a kill switch, not a rollout. Off is exactly today's direct submit.
+    codeDefault: true,
+    // About the sign-up screen of an account that belongs to no server.
+    perServer: false,
+    // Served on /api/me while the gate is pending: it is the only route a
+    // pending account may call besides the declaration. No `(field)` for the
+    // contract test, whose readers are config routes.
+    clientVia: "GET /api/me (ageGateReadback, only while ageGate is pending)",
   },
   mixed_channel_list: {
     description:

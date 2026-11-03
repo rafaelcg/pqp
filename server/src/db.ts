@@ -1454,6 +1454,20 @@ const CONCURRENT_INDEXES: ReadonlyArray<{
     unique: false,
     definition: "ON reports (reported_story_id) WHERE reported_story_id IS NOT NULL",
   },
+  {
+    // A reporter's open report about a Baú post: a second tap is a duplicate.
+    name: "idx_reports_open_bau_post_dedupe",
+    unique: true,
+    definition:
+      "ON reports (reporter_id, reported_bau_post_id) WHERE status = 'open' AND subject_type = 'bau_post'",
+  },
+  {
+    // The same for a Baú comment.
+    name: "idx_reports_open_bau_comment_dedupe",
+    unique: true,
+    definition:
+      "ON reports (reporter_id, reported_bau_comment_id) WHERE status = 'open' AND subject_type = 'bau_comment'",
+  },
 ];
 
 async function ensureConcurrentIndexes(

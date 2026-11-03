@@ -115,7 +115,22 @@ both in `docs/CAPACITY.md` §"The video budget is per box"),
 `USER_STATS` (`user_stats`, default **on**: the per-person counts the
 Retrospectiva is built from; off stops every new write, nothing is deleted;
 see `server/src/services/user-stats.ts`),
-`COMMUNITY_HOME_ENABLED`, `COMMUNITY_HOME_VIP_ENABLED`,
+`COMMUNITY_HOME_ENABLED`, `COMMUNITY_HOME_VIP_ENABLED`
+(`community_home_vip`, **per server**: the creator-hub pilot turns VIP on for
+one server at a time with `PUT /api/admin/flag-overrides` or the dashboard's
+per-server switch; the variable stays the default and a global row still
+decides for every server without an override, so with no row nothing changes.
+Still needs the global `community_home`. Served as `vipEnabled` on
+`GET /api/community-home/config?serverId=`; without `serverId` the answer is the
+global one, which is what phones ask today, see `docs/COMMUNITY_HOME.md`),
+`BAU_PAYMENTS` (`bau_payments`, **per server**, default off: Baú+, a fan pays
+the creator for VIP inside pqp, Pix first; also needs `community_home`,
+`community_home_vip` for that server, an active plan, a connected payout
+account and a provider (`BAU_PAYMENTS_PROVIDER`, which is not a flag: unset is
+the sandbox under the dev bypass and off everywhere else). Off stops NEW
+checkouts only; months already paid keep running and still expire on their
+date. Served as `enabled` on `GET /api/servers/:id/bau-plus`; see
+`docs/BAU_PAYMENTS.md`),
 `PARTY_NEWCOMER_EXPERIENCE` (per server; default off; see below),
 `COMMUNITY_HOME_TRANSLATION` (`community_home_translation`, **per server**,
 default off; automatic translation of Baú posts, which also needs
@@ -1131,3 +1146,34 @@ Turn it on from controles → interruptores, or `PUT /api/admin/flags
 next load of the queue. Pinned by `server/src/api/report-attachments.test.ts`
 (the route and the list) and `client/src/components/layout/report-attachments.test.tsx`
 (the card).
+
+## `age_gate_readback` (global, default ON, a kill switch)
+
+The age gate's read-back step: before the date of birth is sent, the dialog says
+it back in words in the person's language ("Tu nasceu em 3 de dezembro de 2008.
+Confere o dia, o mês e o ano.") with "Está certo" (sends) and "Corrigir" (back to
+the fields, values kept). Everybody gets the same screen, pass or block, so it
+reveals nothing the gate's own warning does not already say. Behind
+`AGE_GATE_READBACK` (default **on**, `false` / `0` / `off` is the rollback,
+global: the person is a sign-up with no server).
+
+Off is exactly the direct submit the dialog always had. It is not a rollout
+flag: on is the shipped behaviour, and the switch exists so a bad build of the
+step can be turned off live. It does not touch the server's plausibility floor
+(a date under 10 years back answers 400 `birth_date_implausible` and does not
+spend the attempt), which is not a flag: it only ever refuses dates that were
+never an answer, and it gives a minor no way to pass.
+
+Served as `ageGateReadback` on `GET /api/me`, and **only while `ageGate` is
+`pending`**: a pending account can reach nothing but `/api/me` and the
+declaration, so there is no config route it could ask. A client that gets no
+field (an API that predates it) takes that as off and submits directly. Web:
+`client/src/components/user/age-gate-dialog.tsx` (`readback` prop, wired from
+`/api/me` in `App.tsx`). The phones read the same field and the same copy keys
+(`ageGate.readback.*`, `ageGate.error.checkYear`, `ageGate.blocked.contact.*`).
+
+Turn it off from controles → interruptores, or `PUT /api/admin/flags
+{ key: "age_gate_readback", enabled: false }`. A gate already on screen keeps
+the mode it loaded with; the next `/api/me` (a reload) picks the change up.
+Pinned by `server/src/api/age-gate.test.ts` (the field, pending only, and the
+switch) and `client/src/components/user/age-gate-dialog.test.tsx`.

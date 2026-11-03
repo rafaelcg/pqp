@@ -111,6 +111,7 @@ import {
 import { ChannelIcon } from "@/components/layout/channel-icon";
 import { ForumPane } from "@/components/forum";
 import { dispatchForumFrame, dispatchForumReconnected } from "@/lib/forum-frames";
+import { emitBauPlusUpdate, onBauPayRequest } from "@/lib/bau-plus/updates";
 import { ChannelList } from "@/components/layout/channel-list";
 import {
   ChannelSettingsDialog,
@@ -640,6 +641,7 @@ import {
   isCommunityHomeEnabled,
   isCommunityHomeRowNew,
   loadCommunityHomeConfig,
+  loadCommunityHomeVipEnabled,
   markCommunityHomeRowSeen,
   mergeServerUpdate,
   pickServerLandingTarget,
@@ -2317,6 +2319,13 @@ function MainAppContent({
   const [ageGate, setAgeGate] = useState<Exclude<AgeGateStatus, "passed"> | null>(
     null,
   );
+  /**
+   * Whether the gate says the date back in words before sending it (the
+   * `age_gate_readback` flag, as `/api/me` reported it while the gate was
+   * pending). Only ever set while pending and never cleared, so the dialog
+   * keeps the screen it is on through the hand-off that follows a pass.
+   */
+  const [ageGateReadback, setAgeGateReadback] = useState(false);
   /**
    * Whether this account still has to be shown the first-run flow.
    *
@@ -5221,6 +5230,9 @@ function MainAppContent({
         // read as "this deployment does not have one" and passes through. Only
         // an explicit `pending` or `blocked` stops here.
         if (me.ageGate === "pending" || me.ageGate === "blocked") {
+          if (me.ageGate === "pending") {
+            setAgeGateReadback(me.ageGateReadback === true);
+          }
           setAgeGate(me.ageGate);
           return;
         }
@@ -6116,6 +6128,13 @@ function MainAppContent({
           // cooldown, the button's wait.
           if (message.type === "nudge-refused") {
             handleNudgeRefused(message);
+            return;
+          }
+
+          // Baú+: one of this account's own memberships moved (paid, expired,
+          // refunded...). Per person, never a channel frame.
+          if (message.type === "bau-plus-update") {
+            emitBauPlusUpdate(message);
             return;
           }
 
@@ -8998,6 +9017,17 @@ function MainAppContent({
     [applyChannelRoute],
   );
 
+  // Baú+ "Renovar" from Configurações, Assinaturas: open that creator's Baú;
+  // the feed there takes the request and opens the pay sheet.
+  useEffect(
+    () =>
+      onBauPayRequest((serverId) => {
+        setSettingsOpen(false);
+        void applyHomeRoute(serverId, null);
+      }),
+    [applyHomeRoute],
+  );
+
   /**
    * Apply a `/app/dm[/<channelId>]` target.
    *
@@ -9061,6 +9091,30 @@ function MainAppContent({
       setCommunityHomeComposeNonce(0);
     }
   }, [communityHomeOpen]);
+  // `community_home_vip` is a per-server flag, so the boot probe (which names
+  // no server) cannot answer it for a pilot server: ask with the server when
+  // its feed opens, so an operator's flip is seen on the next open.
+  const [communityHomeVipByServer, setCommunityHomeVipByServer] = useState<
+    Record<string, boolean>
+  >({});
+  useEffect(() => {
+    if (!communityHomeOpen || !selectedServerId) {
+      return;
+    }
+    let cancelled = false;
+    void loadCommunityHomeVipEnabled(selectedServerId).then((on) => {
+      if (!cancelled) {
+        setCommunityHomeVipByServer((prev) =>
+          prev[selectedServerId] === on
+            ? prev
+            : { ...prev, [selectedServerId]: on },
+        );
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [communityHomeOpen, selectedServerId]);
   useEffect(() => {
     if (!communityHomeEnabled || !selectedServerId) {
       setCommunityHomeRowNew(false);
@@ -10603,6 +10657,7 @@ function MainAppContent({
         stepsTotal={firstRunPath === "cold" ? 4 : 2}
         path={firstRunPath}
         handingOff={gateHandoff}
+        readback={ageGateReadback}
         // Passing re-runs the whole bootstrap from the top, which is exactly
         // what is wanted: everything it would have loaded is still unloaded.
         onPassed={() => {
@@ -13844,7 +13899,10 @@ function MainAppContent({
             canManageServer={canManageServer}
             isOwner={selectedServer.role === "owner"}
             isVip={meVip}
-            vipEnabled={communityHomeConfig.vipEnabled}
+            vipEnabled={
+              communityHomeVipByServer[selectedServer.id] ??
+              communityHomeConfig.vipEnabled
+            }
             mediaEnabled={communityHomeConfig.mediaEnabled}
             introDismissed={Boolean(
               user.preferences?.communityHomeIntroDismissedAt,

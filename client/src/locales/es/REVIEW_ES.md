@@ -1,4 +1,4 @@
-# Spanish review: 10 minutes, 30 strings
+# Spanish review: 15 minutes, 40 strings
 
 For a friend in Mexico, Argentina, Colombia or Chile. You do not need to read code.
 
@@ -91,3 +91,20 @@ What the voice pass of October 18, 2026 changed in Spanish. Check the After colu
 |---|---|---|---|
 | 29 | `voice.watchParty.startingSoon.line4` | Falta poco para un stream de p*** madre. | |
 | 30 | `watchParty.create.namePlaceholder` | Cinemoon, función de medianoche, el chisme del reality | |
+
+## Baú+ (paying a creator for VIP): needs a native read
+
+New on 2026-11-03, written from the Portuguese and not yet read by a native speaker. Pix is a Brazilian payment, so these only show for Brazilian creators, but a Spanish reader can still land on one. "Pix Copia e Cola" stays in Portuguese on purpose: it is the name of the button in every Brazilian bank app.
+
+| # | Key | Spanish | OK? |
+|---|---|---|---|
+| 31 | `bauPlus.pix.phoneStep2` | En la app de tu banco, entra a Pix Copia e Cola. | |
+| 32 | `bauPlus.pix.phoneStep3` | Pega, confirma y vuelve. Se desbloquea solo. | |
+| 33 | `bauPlus.pix.showQr` | ¿Pagas desde otro celular? Mostrar el QR | |
+| 34 | `bauPlus.paid.reminder_other` | No se renueva solo. Te avisamos {count} días antes con el Pix del mes. | |
+| 35 | `bauPlus.strip.dueTitle_other` | Te quedan {count} días de VIP | |
+| 36 | `bauPlus.strip.dueBody` | Paga el Pix del próximo mes antes del {date}. Pagar antes no te quita ningún día. | |
+| 37 | `bauPlus.strip.cancelledBody` | Tu VIP vale hasta el {date}. ¿Cambiaste de idea? Reactívalo y nada cambia. | |
+| 38 | `bauPlus.manager.month.graceNote` | Paga el Pix y tu VIP sigue sin perder ningún día. | |
+| 39 | `bauPlus.paywall.readMinutes_one` | Lectura rápida | |
+| 40 | `bauPlus.paywall.kind.instagram` | Post de Instagram | |
