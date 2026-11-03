@@ -72,6 +72,8 @@ interface AttachmentGridProps {
   onReact?: () => void;
   /** Under the redesign: the lightbox's Ver no canal. */
   onViewInChannel?: () => void;
+  /** The message is on screen while its files still upload (redesign only). */
+  uploading?: boolean;
 }
 
 /**
@@ -90,6 +92,7 @@ export function AttachmentGrid({
   onReply,
   onReact,
   onViewInChannel,
+  uploading = false,
 }: AttachmentGridProps) {
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const redesign = useRedesign();
@@ -102,9 +105,10 @@ export function AttachmentGrid({
     [attachments],
   );
 
+  // No menu on a file that is not on the server yet: its link is local.
   const menu: ImageMenuActions | null = useMemo(
-    () => (redesign ? { onReply, onReact } : null),
-    [redesign, onReply, onReact],
+    () => (redesign && !uploading ? { onReply, onReact } : null),
+    [redesign, uploading, onReply, onReact],
   );
 
   if (attachments.length === 0) {
@@ -119,7 +123,9 @@ export function AttachmentGrid({
   return (
     <>
       <div className="mt-1.5 flex flex-wrap items-start gap-2">
-        {grid && <ImageGrid images={images} menu={menu} onOpen={setLightboxIndex} />}
+        {grid && (
+          <ImageGrid images={images} menu={menu} uploading={uploading} onOpen={setLightboxIndex} />
+        )}
         {attachments.map((attachment) =>
           attachment.voice && voiceMessage ? (
             <VoiceNoteCard
@@ -133,6 +139,7 @@ export function AttachmentGrid({
                 key={attachment.id}
                 attachment={attachment}
                 menu={menu}
+                uploading={uploading}
                 onOpen={() =>
                   setLightboxIndex(images.findIndex((img) => img.id === attachment.id))
                 }
@@ -190,10 +197,12 @@ function tileBox(
 function ImageGrid({
   images,
   menu,
+  uploading,
   onOpen,
 }: {
   images: Attachment[];
   menu: ImageMenuActions | null;
+  uploading: boolean;
   onOpen: (index: number) => void;
 }) {
   const shown = images.slice(0, GRID_MAX);
@@ -205,6 +214,7 @@ function ImageGrid({
           key={attachment.id}
           attachment={attachment}
           menu={menu}
+          uploading={uploading}
           cell
           more={index === shown.length - 1 && hidden > 0 ? hidden : 0}
           onOpen={() => onOpen(index)}
@@ -220,6 +230,7 @@ function ImageTile({
   menu = null,
   cell = false,
   more = 0,
+  uploading = false,
 }: {
   attachment: Attachment;
   onOpen: () => void;
@@ -229,6 +240,8 @@ function ImageTile({
   cell?: boolean;
   /** On the grid's last cell, how many images did not fit. */
   more?: number;
+  /** Still going up: a bar along the bottom of the image. */
+  uploading?: boolean;
 }) {
   const { t } = useTranslation();
   const [src, setSrc] = useState(attachment.url);
@@ -310,9 +323,20 @@ function ImageTile({
         style={box || cell ? undefined : { maxHeight: `${MAX_TILE_HEIGHT_PX}px` }}
         className={cn(
           "block",
-          box || cell ? "h-full w-full object-cover" : "w-auto max-w-full",
+          // Unsized (an upload still measuring): the same 400px cap a sized
+          // tile gets, so it does not jump when the real size arrives.
+          box || cell ? "h-full w-full object-cover" : "w-auto max-w-full redesign:max-w-[400px]",
         )}
       />
+      {uploading && (
+        <span
+          data-attachment-uploading=""
+          className="absolute inset-x-1.5 bottom-1.5 h-1 overflow-hidden rounded-full bg-[color:var(--overlay)]"
+        >
+          <span className="block h-full w-1/3 animate-pulse rounded-full bg-accent" />
+          <span className="sr-only">{t("composer.uploading", { name: attachment.filename })}</span>
+        </span>
+      )}
       {more > 0 && (
         <span
           aria-hidden="true"

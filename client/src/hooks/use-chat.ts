@@ -56,6 +56,13 @@ export interface ChatMessage extends Message {
   automodMessage?: string;
   /** Epoch ms after which Retry is allowed again. */
   retryAvailableAt?: number;
+  /** On screen while its files are still uploading; not on the wire yet. */
+  uploading?: boolean;
+  /**
+   * A file never finished uploading. Retry would send ids the server never
+   * minted, so the only way out is to discard it and send again.
+   */
+  uploadFailed?: boolean;
 }
 
 export function failedSendKey(
@@ -69,6 +76,7 @@ export function failedSendKey(
   | "chat.reject.automod"
   | "chat.reject.databaseUnavailable"
   | "chat.reject.locked"
+  | "chat.uploadFailedSend"
   | "chat.failedSend" {
   switch (reason) {
     case "rate-limited":
@@ -121,13 +129,15 @@ export function remainingWaitSeconds(
 
 /** Another click can succeed: timeout, rate-limit, or slow mode. */
 export function messageCanRetry(
-  message: Pick<ChatMessage, "failed" | "rejectReason">,
+  message: Pick<ChatMessage, "failed" | "rejectReason" | "uploadFailed">,
 ): boolean {
-  return Boolean(message.failed && !isPermanentRejectReason(message.rejectReason));
+  return Boolean(
+    message.failed && !message.uploadFailed && !isPermanentRejectReason(message.rejectReason),
+  );
 }
 
 export function messageRetryReady(
-  message: Pick<ChatMessage, "failed" | "rejectReason" | "retryAvailableAt">,
+  message: Pick<ChatMessage, "failed" | "rejectReason" | "retryAvailableAt" | "uploadFailed">,
   now = Date.now(),
 ): boolean {
   return (
@@ -141,7 +151,7 @@ export function messageRetryReady(
  * row and Send tell the same remaining seconds.
  */
 export function failedSendCopy(
-  message: Pick<ChatMessage, "rejectReason" | "retryAvailableAt" | "automodMessage">,
+  message: Pick<ChatMessage, "rejectReason" | "retryAvailableAt" | "automodMessage" | "uploadFailed">,
   now = Date.now(),
 ): {
   key: ReturnType<typeof failedSendKey> | "composer.slowMode";
@@ -149,6 +159,9 @@ export function failedSendCopy(
   /** The owner's own words for an AutoMod refusal; shown as-is, untranslated. */
   text?: string;
 } {
+  if (message.uploadFailed) {
+    return { key: "chat.uploadFailedSend" };
+  }
   if (message.rejectReason === "automod" && message.automodMessage) {
     return { key: "chat.reject.automod", text: message.automodMessage };
   }
@@ -1452,17 +1465,63 @@ export function createChatController(
         attachments: optimisticAttachments,
         queued: false,
       });
+      if (attachments.some((item) => item.pending)) {
+        optimistic.uploading = true;
+      }
       messages = [...messages, optimistic];
       if (!bypassSlowMode && slowModeSeconds > 0) {
         startSlowModeHold(nonce, slowModeSeconds * 1000);
       }
       emit();
-      transmit(
-        nonce,
-        clamped,
-        channelId,
-        replyTo?.id,
-        optimisticAttachments.map((attachment) => attachment.id),
+      const waiting = attachments.filter((item) => item.pending);
+      if (waiting.length === 0) {
+        transmit(
+          nonce,
+          clamped,
+          channelId,
+          replyTo?.id,
+          optimisticAttachments.map((attachment) => attachment.id),
+        );
+        return;
+      }
+      // The bubble is already up with the local files; the server only hears
+      // about it once each file has a real id. Held here, in memory: a reload
+      // in the middle loses it, like the upload itself.
+      const targetChannelId = channelId;
+      void Promise.all(waiting.map((item) => item.pending!)).then(
+        (done) => {
+          const real = new Map(waiting.map((item, index) => [item.attachmentId, done[index]!]));
+          const resolved = optimisticAttachments.map((attachment) => {
+            const uploaded = real.get(attachment.id);
+            return uploaded
+              ? {
+                  ...attachment,
+                  id: uploaded.attachmentId,
+                  width: uploaded.width ?? attachment.width,
+                  height: uploaded.height ?? attachment.height,
+                }
+              : attachment;
+          });
+          messages = messages.map((message) =>
+            message.nonce === nonce ? { ...message, uploading: false, attachments: resolved } : message,
+          );
+          emit();
+          transmit(
+            nonce,
+            clamped,
+            targetChannelId,
+            replyTo?.id,
+            resolved.map((attachment) => attachment.id),
+          );
+        },
+        () => {
+          messages = messages.map((message) =>
+            message.nonce === nonce
+              ? { ...message, pending: false, uploading: false, failed: true, uploadFailed: true }
+              : message,
+          );
+          emit();
+        },
       );
     },
 

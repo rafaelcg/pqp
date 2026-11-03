@@ -4022,6 +4022,7 @@
   "chat.sending": "Enviando",
   "chat.queuedOffline": "Se envía cuando vuelvas a estar en línea",
   "chat.failedSend": "No se pudo enviar",
+  "chat.uploadFailedSend": "Un archivo no terminó de subirse. Descártalo y envíalo de nuevo.",
   "chat.reject.rateLimited": "Estás enviando demasiado rápido",
   "chat.reject.noAccess": "No puedes enviar mensajes en este canal",
   "chat.reject.cannotSend": "No tienes permiso para enviar aquí",

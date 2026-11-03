@@ -3973,6 +3973,7 @@
   "chat.sending": "Enviando",
   "chat.queuedOffline": "Vai enviar quando a conexão voltar",
   "chat.failedSend": "Falha ao enviar",
+  "chat.uploadFailedSend": "Um arquivo não terminou de subir. Descarta e manda de novo.",
   "chat.reject.rateLimited": "Você tá mandando rápido demais",
   "chat.reject.noAccess": "Você não pode mandar mensagem neste canal",
   "chat.reject.cannotSend": "Você não tem permissão pra mandar aqui",

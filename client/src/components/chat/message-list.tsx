@@ -4617,6 +4617,7 @@ const MessageRow = memo(function MessageRow({
                         onReply={canReply ? onReply : undefined}
                         onReact={isReal && !stream ? onOpenPicker : undefined}
                         onViewInChannel={isReal ? viewInChannel : undefined}
+                        uploading={message.uploading}
                       />
                       <EditedMarker editedAt={message.editedAt} />
                     </div>

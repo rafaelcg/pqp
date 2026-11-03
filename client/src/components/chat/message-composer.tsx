@@ -466,6 +466,8 @@ interface PendingAttachment {
   error: string | null;
 }
 
+type UploadDone = Promise<{ attachmentId: string; width: number | null; height: number | null }>;
+
 let localIdCounter = 0;
 function nextLocalId(): string {
   localIdCounter += 1;
@@ -555,6 +557,8 @@ export function MessageComposer({
   const pendingRef = useRef(pending);
   pendingRef.current = pending;
   const uploadsRef = useRef(new Map<string, AbortController>());
+  /** Each running upload's result, so a send under the redesign can carry it. */
+  const uploadDoneRef = useRef(new Map<string, UploadDone>());
 
   useEffect(() => {
     if (!slowModeUntil || slowModeUntil <= Date.now()) {
@@ -1131,23 +1135,31 @@ export function MessageComposer({
       },
     ]);
 
+    const done = createGifAttachment(channelId, {
+      url: gif.url,
+      width: gif.width,
+      height: gif.height,
+      title: gif.title,
+    }).then(({ attachment }) => ({
+      attachmentId: attachment.id,
+      width: gif.width,
+      height: gif.height,
+    }));
+    uploadDoneRef.current.set(localId, done);
     try {
-      const { attachment } = await createGifAttachment(channelId, {
-        url: gif.url,
-        width: gif.width,
-        height: gif.height,
-        title: gif.title,
-      });
+      const { attachmentId } = await done;
       updatePending(localId, {
         status: "ready",
         progress: 1,
-        attachmentId: attachment.id,
+        attachmentId,
       });
     } catch (error) {
       updatePending(localId, {
         status: "failed",
         error: error instanceof Error ? error.message : t("composer.gifFailed"),
       });
+    } finally {
+      uploadDoneRef.current.delete(localId);
     }
   }
 
@@ -1188,10 +1200,12 @@ export function MessageComposer({
       },
     ]);
 
-    void uploadAttachment(targetChannelId, selected, {
+    const done = uploadAttachment(targetChannelId, selected, {
       signal: controller.signal,
       onProgress: (fraction) => updatePending(localId, { progress: fraction }),
-    })
+    });
+    uploadDoneRef.current.set(localId, done);
+    void done
       .then((uploaded) =>
         updatePending(localId, {
           status: "ready",
@@ -1212,7 +1226,10 @@ export function MessageComposer({
           error: error instanceof Error ? error.message : t("composer.uploadFailed"),
         });
       })
-      .finally(() => uploadsRef.current.delete(localId));
+      .finally(() => {
+        uploadsRef.current.delete(localId);
+        uploadDoneRef.current.delete(localId);
+      });
   }
 
   function addFiles(files: File[], folders: string[] = []) {
@@ -1412,11 +1429,13 @@ export function MessageComposer({
       (item) => item.status === "ready" && item.attachmentId,
     );
     // Sending mid-upload would silently drop whatever had not finished, so the
-    // send waits rather than sending a message the user did not compose.
-    if (isRunningSlash || isUploading) {
+    // send waits rather than sending a message the user did not compose. Under
+    // the redesign it goes at once instead and carries the unfinished files
+    // with it (see `commitSend`).
+    if (isRunningSlash || (isUploading && !redesign)) {
       return;
     }
-    if ((composerBodyIsEmpty(body) || !trimmed) && ready.length === 0) {
+    if ((composerBodyIsEmpty(body) || !trimmed) && ready.length === 0 && !(redesign && isUploading)) {
       return;
     }
 
@@ -1447,18 +1466,40 @@ export function MessageComposer({
     const ready = pending.filter(
       (item) => item.status === "ready" && item.attachmentId,
     );
+    // Under the redesign an upload still going travels with the message: the
+    // chat controller shows it at once and sends when it lands. Handed over,
+    // it is no longer this composer's to abort when the channel changes.
+    const waiting = redesign
+      ? pending.filter((item) => item.status === "uploading" && uploadDoneRef.current.has(item.localId))
+      : [];
     onSend(
       trimmed ? expandBody(trimmed) : "",
-      ready.map((item) => ({
-        attachmentId: item.attachmentId!,
-        filename: item.filename,
-        contentType: item.contentType,
-        byteSize: item.byteSize,
-        width: item.width,
-        height: item.height,
-        previewUrl: item.previewUrl,
-      })),
+      [
+        ...ready.map((item) => ({
+          attachmentId: item.attachmentId!,
+          filename: item.filename,
+          contentType: item.contentType,
+          byteSize: item.byteSize,
+          width: item.width,
+          height: item.height,
+          previewUrl: item.previewUrl,
+        })),
+        ...waiting.map((item) => ({
+          attachmentId: item.localId,
+          filename: item.filename,
+          contentType: item.contentType,
+          byteSize: item.byteSize,
+          width: item.width,
+          height: item.height,
+          previewUrl: item.previewUrl,
+          pending: uploadDoneRef.current.get(item.localId),
+        })),
+      ],
     );
+    for (const item of waiting) {
+      uploadsRef.current.delete(item.localId);
+      uploadDoneRef.current.delete(item.localId);
+    }
     // The object URLs of everything just sent now belong to the chat
     // controller, which revokes them when the real message replaces the
     // optimistic one — revoking here would blank the image it is showing.
@@ -2180,8 +2221,8 @@ export function MessageComposer({
             disabled ||
             slowModeRemaining > 0 ||
             isRunningSlash ||
-            isUploading ||
-            (composerBodyIsEmpty(body) && readyCount === 0)
+            (isUploading && !redesign) ||
+            (composerBodyIsEmpty(body) && readyCount === 0 && !(redesign && isUploading))
           }
           aria-label={
             slowModeRemaining > 0
