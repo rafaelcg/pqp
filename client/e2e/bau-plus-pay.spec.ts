@@ -109,6 +109,9 @@ test.describe("Baú+ pay flow (sandbox)", () => {
     const cta = post.locator("[data-bau-paywall-cta]");
     await expect(cta).toBeEnabled();
     await expect(cta).toContainText("9.90");
+    // The lock says what it hides (a short text, no media), never a word of it.
+    await expect(post.locator("[data-bau-lock-inside]")).toContainText("Quick read");
+    await expect(post).not.toContainText("O texto que só VIP lê.");
     await cta.click();
 
     const sheet = page.locator("[data-bau-pay]");
@@ -128,6 +131,9 @@ test.describe("Baú+ pay flow (sandbox)", () => {
     await expect(post).toHaveAttribute("data-home-post-locked", "0", { timeout: 15_000 });
     await expect(post.locator("[data-home-vip-chip]")).toBeVisible();
     await expect(page.locator('[data-bau-strip="welcome"]')).toBeVisible();
+    // Closing the welcome leaves the quiet member row, which opens Assinaturas.
+    await page.locator('[data-bau-strip="welcome"]').getByRole("button", { name: "Close" }).click();
+    await expect(page.locator('[data-bau-strip="member"]')).toBeVisible();
 
     // The manager, the receipt and the 7-day refund.
     await page.getByRole("button", { name: "Open settings" }).first().click();
@@ -161,6 +167,36 @@ test.describe("Baú+ pay flow (sandbox)", () => {
     await sheet.locator('[data-bau-sandbox-action="fail"]').click();
     await expect(sheet.locator("[data-bau-declined]")).toBeVisible();
     await sheet.getByRole("button", { name: "Pay with Pix" }).click();
+    await expect(sheet.locator("[data-bau-qr]")).toBeVisible();
+  });
+
+  test("on a phone the Pix fits one screen: copy leads, the QR folds away", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    const { serverId, postId } = await seedCreator();
+    await openAsFan(page, serverId);
+    const cta = page.locator(`[data-home-post-id="${postId}"] [data-bau-paywall-cta]`);
+    await cta.scrollIntoViewIfNeeded();
+    await cta.click();
+    const sheet = page.locator("[data-bau-pay]");
+    await sheet.locator("[data-bau-start]").click();
+    await expect(sheet.locator("[data-bau-waiting]")).toBeVisible();
+
+    // The whole decision without scrolling: status, copy, steps and the
+    // sandbox row all inside the viewport.
+    await expect(sheet.locator("[data-bau-qr]")).toHaveCount(0);
+    for (const part of ["[data-bau-waiting]", "[data-bau-copy]", "[data-bau-steps]", "[data-bau-sandbox]"]) {
+      const box = await sheet.locator(part).boundingBox();
+      expect(box, part).not.toBeNull();
+      expect(box!.y + box!.height, part).toBeLessThanOrEqual(844);
+    }
+
+    // Copying ticks the first step.
+    await sheet.locator("[data-bau-copy]").click();
+    await expect(sheet.locator("[data-bau-step-done]")).toHaveCount(1);
+
+    // Paying from another phone: the QR is one tap away.
+    await sheet.locator("[data-bau-qr-toggle]").click();
     await expect(sheet.locator("[data-bau-qr]")).toBeVisible();
   });
 });

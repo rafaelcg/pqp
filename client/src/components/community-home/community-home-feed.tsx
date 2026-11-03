@@ -5,6 +5,7 @@ import {
   parseCommunityLink,
   parseCommunitySupport,
   type Channel,
+  type CommunityHomeMediaKind,
   type CommunityLink,
   type Gif,
   type PublicUser,
@@ -15,15 +16,18 @@ import {
   Eye,
   Flag,
   Heart,
+  Image as ImageIcon,
   Link2,
   Lock,
   LockOpen,
   Menu as MenuIcon,
   MessageCircle,
   MoreHorizontal,
+  Paperclip,
   Pencil,
   Pin,
   PinOff,
+  Play,
   Plus,
   RotateCcw,
   Send,
@@ -380,12 +384,28 @@ function defaultScheduleValue(): string {
 
 // -------------------------------------------------------------------- media
 
-function LockedMedia({ posterUrl }: { posterUrl: string | null }) {
+function LockedMedia({
+  posterUrl,
+  mediaKind,
+}: {
+  posterUrl: string | null;
+  /** From `post.lockedHint`: the plate takes the shape of the hidden media. */
+  mediaKind: CommunityHomeMediaKind | null;
+}) {
   const { t } = useTranslation();
+  const KindIcon =
+    mediaKind === "image" || mediaKind === "instagram"
+      ? ImageIcon
+      : mediaKind === "file"
+        ? Paperclip
+        : mediaKind
+          ? Play
+          : null;
   return (
     <div
       className="relative aspect-video overflow-hidden bg-surface-0"
       data-home-locked-media
+      data-home-locked-kind={mediaKind ?? undefined}
     >
       <div
         className="absolute inset-0 bg-[repeating-linear-gradient(135deg,var(--color-surface-3)_0_10px,transparent_10px_20px)] opacity-80"
@@ -400,6 +420,14 @@ function LockedMedia({ posterUrl }: { posterUrl: string | null }) {
         />
       ) : null}
       <div className="absolute inset-0 bg-ink/45" aria-hidden />
+      {KindIcon && (
+        <span
+          aria-hidden
+          className="absolute left-1/2 top-1/2 grid h-14 w-14 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-ink/70 text-paper backdrop-blur-sm"
+        >
+          <KindIcon className="h-6 w-6" />
+        </span>
+      )}
       <span
         className="absolute bottom-3 left-3 inline-flex items-center gap-1.5 rounded-full bg-ink/85 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-paper"
         data-home-locked-badge
@@ -970,7 +998,12 @@ export function PostCard({
       data-home-post-status={post.status}
       data-home-post-locked={locked ? "1" : "0"}
     >
-      {showLockPlate && <LockedMedia posterUrl={posterUrl} />}
+      {showLockPlate && (
+        <LockedMedia
+          posterUrl={posterUrl}
+          mediaKind={post.lockedHint?.mediaKind ?? null}
+        />
+      )}
       {showMedia && post.media ? (
         <UnlockedMedia
           media={post.media}
@@ -2784,6 +2817,7 @@ export function CommunityHomeFeed({
       <BauPlusPaywall
         offer={bauOffer}
         serverName={serverName}
+        hint={post.lockedHint}
         onStart={() => openBauPay(post.id)}
       />
     );
@@ -3506,6 +3540,7 @@ export function CommunityHomeFeed({
                 <BauPlusMembershipStrip
                   offer={bauOffer}
                   serverName={serverName}
+                  serverIconUrl={server.iconUrl ?? null}
                   welcome={bauWelcome && !payOpen}
                   onDismissWelcome={() => setBauWelcome(false)}
                   onPay={() => openBauPay(null)}

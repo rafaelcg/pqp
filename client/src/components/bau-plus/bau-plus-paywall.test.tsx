@@ -3,6 +3,7 @@ import type { BauMembership, BauOffer } from "@pqp/shared";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import {
+  bauPeriodLeft,
   formatBauDay,
   formatBrl,
   formatCountdown,
@@ -76,8 +77,39 @@ describe("BauPlusPaywall", () => {
     const describedBy = /aria-describedby="([^"]+)"/.exec(html)?.[1];
     expect(describedBy).toBeTruthy();
     expect(html).toContain(`id="${describedBy}"`);
-    // The blurred lines are decoration, never the post.
-    expect(html).toMatch(/<p aria-hidden="true" class="bau-blur-text/);
+    // Without a hint (an older API) the placeholder is three plain bars,
+    // decoration only, never words.
+    expect(html).toContain('data-bau-lock-lines="3"');
+    expect(html).toMatch(/<div aria-hidden="true" class="bau-lock-lines/);
+    expect(html).not.toContain("data-bau-lock-inside");
+  });
+
+  it("is shaped like what it hides: as many lines as the text is long, and the media kind", () => {
+    const long = renderToStaticMarkup(
+      <BauPlusPaywall
+        offer={offer}
+        serverName="Canal da Bia"
+        hint={{ mediaKind: "video", readMinutes: 4 }}
+        onStart={() => {}}
+      />,
+    );
+    expect(long).toContain('data-bau-lock-lines="5"');
+    expect(long).toContain("Video");
+    expect(long).toContain("4 min read");
+
+    // A media-only post: the plate above already has the picture's shape, so
+    // no text lines are drawn under it.
+    const mediaOnly = renderToStaticMarkup(
+      <BauPlusPaywall
+        offer={offer}
+        serverName="Canal da Bia"
+        hint={{ mediaKind: "image", readMinutes: 0 }}
+        onStart={() => {}}
+      />,
+    );
+    expect(mediaOnly).not.toContain("data-bau-lock-lines");
+    expect(mediaOnly).toContain("Image");
+    expect(mediaOnly).not.toContain("min read");
   });
 
   it("says continue while a Pix is open, and come back after VIP ran out", () => {
@@ -141,5 +173,23 @@ describe("Baú+ formatting", () => {
   it("the countdown is minutes and padded seconds, never negative", () => {
     expect(formatCountdown(14 * 60_000 + 5_000)).toBe("14:05");
     expect(formatCountdown(-10)).toBe("0:00");
+  });
+
+  it("a month's time left is whole days rounded up and a share from 1 to 0", () => {
+    const start = "2026-11-01T00:00:00Z";
+    const end = "2026-12-01T00:00:00Z";
+    const at = (iso: string) => new Date(iso).getTime();
+    expect(bauPeriodLeft(start, end, at(start))).toEqual({
+      daysLeft: 30,
+      remaining: 1,
+    });
+    const late = bauPeriodLeft(start, end, at("2026-11-30T20:00:00Z"))!;
+    expect(late.daysLeft).toBe(1);
+    expect(late.remaining).toBeGreaterThan(0);
+    expect(bauPeriodLeft(start, end, at("2026-12-05T00:00:00Z"))).toEqual({
+      daysLeft: 0,
+      remaining: 0,
+    });
+    expect(bauPeriodLeft(null, end)).toBeNull();
   });
 });

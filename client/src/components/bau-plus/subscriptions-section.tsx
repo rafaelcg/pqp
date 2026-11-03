@@ -5,7 +5,6 @@ import type {
 } from "@pqp/shared";
 import { Receipt, RotateCcw, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ServerIcon } from "@/components/layout/server-identity";
 import { SettingsEmpty, SettingsGroup } from "@/components/settings/kit";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,10 +17,15 @@ import {
   refundBauMembership,
   resumeBauMembership,
 } from "@/lib/bau-plus/api";
-import { formatBauDay, formatBrl } from "@/lib/bau-plus/format";
+import {
+  bauPeriodLeft,
+  formatBauDay,
+  formatBrl,
+} from "@/lib/bau-plus/format";
 import { onBauPlusUpdate, requestBauPay } from "@/lib/bau-plus/updates";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { BauMonthMeter, VipSeal } from "./vip-seal";
 
 /**
  * Configurações, Assinaturas: every creator this person pays, one box each,
@@ -256,6 +260,59 @@ function MembershipCard({
               ? t("bauPlus.manager.situation.ended", { date: end })
               : "";
 
+  // While VIP is on: since when, until when, and a bar for the month.
+  const since =
+    membership.hasAccess && membership.firstPaidAt
+      ? formatBauDay(membership.firstPaidAt, locale)
+      : null;
+  const period = bauPeriodLeft(membership.periodStart, membership.periodEnd);
+  const daysLeft = (count: number) =>
+    t("bauPlus.manager.daysLeft", { count: Math.max(1, count) });
+  let month: {
+    label: string;
+    left: string | null;
+    remaining: number;
+    tone: "vip" | "warning" | "muted";
+    note: string | null;
+  } | null = null;
+  if (!membership.pendingAttempt && membership.hasAccess && end) {
+    if (membership.status === "active" && period) {
+      month = {
+        label: t(
+          membership.renewalDue
+            ? "bauPlus.manager.month.dueLabel"
+            : "bauPlus.manager.month.activeLabel",
+          { date: end },
+        ),
+        left: daysLeft(period.daysLeft),
+        remaining: period.remaining,
+        tone: "vip",
+        note: t(
+          membership.renewalDue
+            ? "bauPlus.manager.month.dueNote"
+            : "bauPlus.manager.month.activeNote",
+        ),
+      };
+    } else if (membership.status === "cancelled" && period) {
+      month = {
+        label: t("bauPlus.manager.month.cancelledLabel", { date: end }),
+        left: daysLeft(period.daysLeft),
+        remaining: period.remaining,
+        tone: "muted",
+        note: t("bauPlus.manager.month.cancelledNote"),
+      };
+    } else if (membership.status === "grace" && graceEnd) {
+      const grace = bauPeriodLeft(membership.periodEnd, membership.graceEndsAt);
+      month = {
+        label: t("bauPlus.manager.month.graceLabel", { date: end }),
+        left: t("bauPlus.manager.month.graceLeft", { date: graceEnd }),
+        remaining: grace?.remaining ?? 0,
+        tone: "warning",
+        note: t("bauPlus.manager.month.graceNote"),
+      };
+    }
+  }
+
   const needsPay =
     Boolean(membership.pendingAttempt) ||
     membership.status === "grace" ||
@@ -276,13 +333,13 @@ function MembershipCard({
       aria-labelledby={`bau-m-${membership.id}`}
       data-bau-membership={membership.status}
     >
-      <div className="flex items-start gap-3 p-4">
-        <span className="grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-[var(--radius-card)] bg-surface-3 text-sm font-semibold text-text-secondary">
-          <ServerIcon
-            name={membership.serverName}
-            iconUrl={membership.serverIconUrl}
-          />
-        </span>
+      <div className="flex items-start gap-3.5 p-4">
+        <VipSeal
+          name={membership.serverName}
+          iconUrl={membership.serverIconUrl}
+          tone={membership.hasAccess ? "vip" : "muted"}
+          className="mt-0.5"
+        />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <h4
@@ -296,16 +353,51 @@ function MembershipCard({
           <p className="mt-0.5 text-sm text-text-tertiary tabular-nums">
             {t("bauPlus.manager.plan", { plan: membership.plan.name, price })}
           </p>
-          {situation && (
+          {since && (
             <p
-              className="mt-2 text-pretty text-sm leading-5 text-text-secondary"
-              data-bau-situation
+              className="mt-0.5 text-sm text-text-tertiary"
+              data-bau-member-since
             >
-              {situation}
+              {t("bauPlus.manager.since", { date: since })}
             </p>
           )}
         </div>
       </div>
+
+      {month ? (
+        <div
+          className="border-t border-border px-4 py-3.5"
+          data-bau-situation
+        >
+          <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 text-sm">
+            <span className="min-w-0 text-pretty font-medium text-text">
+              {month.label}
+            </span>
+            {month.left && (
+              <span className="shrink-0 text-text-tertiary tabular-nums">
+                {month.left}
+              </span>
+            )}
+          </div>
+          <BauMonthMeter
+            remaining={month.remaining}
+            tone={month.tone}
+            className="mt-2.5"
+          />
+          {month.note && (
+            <p className="mt-2 text-pretty text-[13px] leading-5 text-text-tertiary">
+              {month.note}
+            </p>
+          )}
+        </div>
+      ) : situation ? (
+        <p
+          className="border-t border-border px-4 py-3.5 text-pretty text-sm leading-5 text-text-secondary"
+          data-bau-situation
+        >
+          {situation}
+        </p>
+      ) : null}
 
       <dl className="grid grid-cols-1 gap-x-6 gap-y-3 border-t border-border px-4 py-3.5 text-sm sm:grid-cols-2">
         <div className="min-w-0">

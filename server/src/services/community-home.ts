@@ -9,6 +9,7 @@ import {
   COMMUNITY_HOME_MAX_BYTES,
   COMMUNITY_HOME_MIME_ALLOWLIST,
   communityHomeMediaKindFromContentType,
+  communityHomeReadMinutes,
   hasPermission,
   isCommunityHomeEmbedKind,
   normalizeCommunityHomeLang,
@@ -655,6 +656,15 @@ function toPost(
         ? youtubePosterUrl(row.media_youtube_url)
         : null,
     locked,
+    // What the lock may say about what it hides: the kind of media and how
+    // long the text runs, from the ORIGINAL body (a translation is the same
+    // length to within a word). Only for a locked viewer; never a word of it.
+    lockedHint: locked
+      ? {
+          mediaKind: row.media_kind ?? null,
+          readMinutes: communityHomeReadMinutes(row.body),
+        }
+      : null,
     likeCount: Number(row.like_count),
     likedByMe: row.liked_by_me,
     commentCount: Number(row.comment_count),
