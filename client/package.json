@@ -54,7 +54,8 @@
     "remark-breaks": "^4.0.0",
     "remark-gfm": "^4.0.0",
     "tailwind-merge": "^2.6.0",
-    "three": "^0.185.1"
+    "three": "^0.185.1",
+    "uqr": "0.1.2"
   },
   "devDependencies": {
     "@emulatorjs/core-fceumm": "4.2.3",

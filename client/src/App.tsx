@@ -108,7 +108,7 @@ import {
 import { ChannelIcon } from "@/components/layout/channel-icon";
 import { ForumPane } from "@/components/forum";
 import { dispatchForumFrame, dispatchForumReconnected } from "@/lib/forum-frames";
-import { emitBauPlusUpdate } from "@/lib/bau-plus/updates";
+import { emitBauPlusUpdate, onBauPayRequest } from "@/lib/bau-plus/updates";
 import { ChannelList } from "@/components/layout/channel-list";
 import {
   ChannelSettingsDialog,
@@ -9090,6 +9090,17 @@ function MainAppContent({
       }
     },
     [applyChannelRoute],
+  );
+
+  // Baú+ "Renovar" from Configurações, Assinaturas: open that creator's Baú;
+  // the feed there takes the request and opens the pay sheet.
+  useEffect(
+    () =>
+      onBauPayRequest((serverId) => {
+        setSettingsOpen(false);
+        void applyHomeRoute(serverId, null);
+      }),
+    [applyHomeRoute],
   );
 
   /**
