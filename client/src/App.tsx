@@ -11769,9 +11769,21 @@ function MainAppContent({
             <p className={cn("truncate text-[11px] text-paper-muted", PANE_HEADER_DETAIL_REDESIGN, "redesign:max-md:text-xs redesign:md:min-w-0 redesign:md:border-l redesign:md:border-[color:var(--pane-header-rule)] redesign:md:pl-3")}>
               {activeConversation
                 ? conversationSubtitle(activeConversation)
-                : selectedChannel.topic
-                  ? selectedChannel.topic
-                  : `${selectedChannel.isPrivate ? t("chrome.privatePrefix") : ""}${t("chrome.peopleHere", { count: chat.getPresence().length })}`}
+                : redesign
+                  ? // "4 online · Papo geral do Sandbox": the count only while
+                    // the member list is closed, since the list shows the same
+                    // people, then the topic.
+                    [
+                      memberSidebarAvailable && memberSidebar.open && !openThread
+                        ? null
+                        : `${selectedChannel.isPrivate ? t("chrome.privatePrefix") : ""}${t("chrome.peopleOnline", { count: chat.getPresence().length })}`,
+                      selectedChannel.topic || null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")
+                  : selectedChannel.topic
+                    ? selectedChannel.topic
+                    : `${selectedChannel.isPrivate ? t("chrome.privatePrefix") : ""}${t("chrome.peopleHere", { count: chat.getPresence().length })}`}
             </p>
           )}
         </div>

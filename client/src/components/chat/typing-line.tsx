@@ -2,10 +2,15 @@ import type { TypingUser } from "@/hooks/use-chat";
 import type { Translator } from "@/lib/i18n";
 import { useTranslation } from "@/lib/i18n";
 
+/** Past this many, a count stops meaning anything: "Muita gente". */
+const TYPING_MANY = 20;
+
 /** "Bia está digitando", two names, or a count. People only, never bots. */
 export function typingLabel(t: Translator["t"], names: readonly string[]): string {
   return names.length === 0
     ? ""
+    : names.length > TYPING_MANY
+      ? t("chat.typingMany")
     : names.length === 1
       ? t("chat.typing_one", { name: names[0]! })
       : names.length === 2

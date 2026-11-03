@@ -2968,7 +2968,7 @@ export const MessageList = memo(function MessageList({
               )
             : variant === "stream" && !hasNewer
               ? t("chat.jump.paused")
-              : t("chat.jump.present")}
+              : t(redesign ? "chat.jump.end" : "chat.jump.present")}
         </button>
       )}
     </div>

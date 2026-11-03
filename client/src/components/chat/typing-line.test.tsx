@@ -12,5 +12,6 @@ describe("typingLabel", () => {
     expect(typingLabel(t, ["Bia"])).toContain("chat.typing_one");
     expect(typingLabel(t, ["Bia", "Rafa"])).toContain("chat.typing_two");
     expect(typingLabel(t, ["Bia", "Rafa", "Caio"])).toContain('"count":3');
+    expect(typingLabel(t, Array.from({ length: 21 }, (_, i) => `p${i}`))).toContain("chat.typingMany");
   });
 });
