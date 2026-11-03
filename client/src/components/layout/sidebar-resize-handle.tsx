@@ -35,6 +35,13 @@ import { cn } from "@/lib/utils";
  * `prefers-reduced-motion` to switch off: the keyboard steps and the double
  * click reset land in one frame for everybody.
  *
+ * EITHER EDGE. `edge="left"` is the member list's handle: it sits on the
+ * column's left border, and a drag or an arrow to the left grows it.
+ *
+ * UNDER THE REDESIGN THE LINE FOLLOWS THE PANE. The columns are rounded
+ * panes there, so the hover line is the pane's own edge, curving into its
+ * top and bottom corners, rather than a straight bar past them.
+ *
  * `role="separator"` with `aria-valuenow` is the ARIA window-splitter pattern.
  * It is focusable (`tabIndex=0`) because a separator that only a mouse can
  * move is a control half the people cannot reach.
@@ -44,6 +51,9 @@ export function SidebarResizeHandle({
   maxWidth,
   onWidthChange,
   onCommit,
+  edge = "right",
+  label,
+  defaultWidth,
 }: {
   /** The column's current width in CSS pixels. */
   width: number;
@@ -53,8 +63,18 @@ export function SidebarResizeHandle({
   onWidthChange: (width: number) => void;
   /** Called when the width is settled: pointer up, key up, reset. Persists. */
   onCommit: (width: number) => void;
+  /** Which border of the column it sits on. */
+  edge?: "right" | "left";
+  /** The separator's name. The channel column's by default. */
+  label?: string;
+  /** What a double click goes back to. The channel column's by default. */
+  defaultWidth?: number;
 }) {
   const { t } = useTranslation();
+  const name = label ?? t("chrome.resizeChannelList");
+  const sign = edge === "left" ? -1 : 1;
+  const clamp = (value: number) =>
+    Math.min(clampChannelSidebarWidth(value, viewport()), maxWidth);
   const [dragging, setDragging] = useState(false);
   // A ref rather than state: the pointer-move handler reads it on every frame
   // and must never see a stale render's copy.
@@ -105,12 +125,7 @@ export function SidebarResizeHandle({
     if (!current) {
       return;
     }
-    onWidthChange(
-      clampChannelSidebarWidth(
-        current.startWidth + (event.clientX - current.startX),
-        viewport(),
-      ),
-    );
+    onWidthChange(clamp(current.startWidth + sign * (event.clientX - current.startX)));
   }
 
   function onPointerUp(event: PointerEvent<HTMLDivElement>) {
@@ -118,30 +133,33 @@ export function SidebarResizeHandle({
     if (!current) {
       return;
     }
-    onCommit(
-      clampChannelSidebarWidth(
-        current.startWidth + (event.clientX - current.startX),
-        viewport(),
-      ),
-    );
+    onCommit(clamp(current.startWidth + sign * (event.clientX - current.startX)));
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (event.key === "Escape" && drag.current) {
       const current = endDrag(event.currentTarget);
       if (current) {
-        onCommit(clampChannelSidebarWidth(current.startWidth, viewport()));
+        onCommit(clamp(current.startWidth));
       }
       return;
     }
-    const next = channelSidebarWidthForKey(event.key, {
+    // The left edge moves the other way: ArrowLeft grows the member list.
+    const key =
+      edge === "left" && event.key === "ArrowLeft"
+        ? "ArrowRight"
+        : edge === "left" && event.key === "ArrowRight"
+          ? "ArrowLeft"
+          : event.key;
+    const found = channelSidebarWidthForKey(key, {
       current: width,
       shiftKey: event.shiftKey,
       viewportWidth: viewport(),
     });
-    if (next === null) {
+    if (found === null) {
       return;
     }
+    const next = Math.min(found, maxWidth);
     // Home and End are the page's own scroll keys otherwise, and the arrows
     // would move the focus ring out of the column.
     event.preventDefault();
@@ -153,18 +171,25 @@ export function SidebarResizeHandle({
       data-sidebar-resize=""
       role="separator"
       aria-orientation="vertical"
-      aria-label={t("chrome.resizeChannelList")}
+      aria-label={name}
       aria-valuenow={width}
       aria-valuemin={CHANNEL_SIDEBAR_MIN_WIDTH}
       aria-valuemax={maxWidth}
       tabIndex={0}
-      title={`${t("chrome.resizeChannelList")} · ${t("chrome.resizeChannelListReset")}`}
+      title={`${name} · ${t("chrome.resizeChannelListReset")}`}
       className={cn(
         // `hidden md:block`: below `md` the column is a drawer over the chat
         // and there is no edge to drag.
-        "absolute inset-y-0 right-0 z-30 hidden w-1.5 translate-x-1/2 cursor-col-resize touch-none select-none outline-none md:block",
+        "absolute inset-y-0 z-30 hidden w-1.5 cursor-col-resize touch-none select-none outline-none md:block",
+        edge === "left" ? "left-0 -translate-x-1/2" : "right-0 translate-x-1/2",
         "after:absolute after:inset-y-0 after:left-1/2 after:w-px after:-translate-x-1/2 after:bg-signal after:opacity-0",
         "hover:after:opacity-70 focus-visible:after:opacity-100 focus-visible:after:w-0.5",
+        // The pane's edge: a box the width of the corner radius with one
+        // border, rounded like the pane, so the line bends into the corners.
+        "redesign:after:w-[var(--radius-pane)] redesign:after:translate-x-0 redesign:after:border-signal redesign:after:bg-transparent redesign:focus-visible:after:w-[var(--radius-pane)]",
+        edge === "left"
+          ? "redesign:after:left-1/2 redesign:after:rounded-l-[var(--radius-pane)] redesign:after:border-l redesign:focus-visible:after:border-l-2"
+          : "redesign:after:left-auto redesign:after:right-1/2 redesign:after:rounded-r-[var(--radius-pane)] redesign:after:border-r redesign:focus-visible:after:border-r-2",
         dragging && "after:opacity-100",
       )}
       onPointerDown={onPointerDown}
@@ -172,7 +197,13 @@ export function SidebarResizeHandle({
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
       onKeyDown={onKeyDown}
-      onDoubleClick={() => onCommit(resetChannelSidebarWidth(viewport()))}
+      onDoubleClick={() =>
+        onCommit(
+          defaultWidth === undefined
+            ? Math.min(resetChannelSidebarWidth(viewport()), maxWidth)
+            : clamp(defaultWidth),
+        )
+      }
     />
   );
 }

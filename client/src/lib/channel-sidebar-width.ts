@@ -40,15 +40,28 @@ const STORAGE_KEY = "pqp:channel-sidebar-width";
  * (name, preview, time, count) is cut at 256px, so it starts at 340 and a drag
  * there does not move the channel column, and the reverse.
  */
-export const CONVERSATION_SIDEBAR_SLOT: Required<SidebarWidthSlot> = {
+export const CONVERSATION_SIDEBAR_SLOT: Required<Omit<SidebarWidthSlot, "maxWidth">> = {
   key: "pqp:conversation-sidebar-width",
   defaultWidth: 340,
 };
 
-/** Which stored width, and its default when nothing is stored. */
+/**
+ * The member list on the right keeps its own width too. It starts at `w-60`
+ * and stops at 360, lower than the channel column's 420: with both columns
+ * wide the conversation between them would otherwise get under half the
+ * window.
+ */
+export const MEMBER_SIDEBAR_SLOT: Required<SidebarWidthSlot> = {
+  key: "pqp:member-sidebar-width",
+  defaultWidth: 240,
+  maxWidth: 360,
+};
+
+/** Which stored width, its default when nothing is stored, and an optional lower cap. */
 export interface SidebarWidthSlot {
   key?: string;
   defaultWidth?: number;
+  maxWidth?: number;
 }
 
 /** `w-64`, the width the column has always had. Double click resets to it. */

@@ -4958,6 +4958,7 @@
   "chrome.privateChannel": "Canal privado",
   "chrome.resizeChannelList": "Ajustar el ancho de la lista de canales",
   "chrome.resizeChannelListReset": "Doble clic para restablecer",
+  "chrome.resizeMemberList": "Ajustar el ancho de la lista de miembros",
   "chrome.channelNamePlaceholder": "nombre-del-canal",
   "chrome.channelActionFailed": "No se pudo guardar el canal.",
   "chrome.devBypass": "Bypass de auth de desarrollo",

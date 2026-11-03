@@ -4895,6 +4895,7 @@
   "chrome.privateChannel": "Private channel",
   "chrome.resizeChannelList": "Resize the channel list",
   "chrome.resizeChannelListReset": "Double-click to reset",
+  "chrome.resizeMemberList": "Resize the member list",
   "chrome.channelNamePlaceholder": "channel-name",
   "chrome.channelActionFailed": "Could not save the channel.",
   "chrome.devBypass": "Dev auth bypass",
