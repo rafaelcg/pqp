@@ -5697,6 +5697,7 @@ function ReactionChip({
   currentUserId,
   onToggle,
   onHold,
+  fresh = false,
   tabIndex,
 }: {
   reaction: MessageReaction;
@@ -5704,6 +5705,8 @@ function ReactionChip({
   onToggle: (emoji: string) => void;
   /** Holding the chip opens who reacted (phone, under the redesign). */
   onHold?: (emoji: string) => void;
+  /** Added after the row mounted: pops in under the redesign (index.css). */
+  fresh?: boolean;
   tabIndex: number;
 }) {
   const { t } = useTranslation();
@@ -5803,6 +5806,7 @@ function ReactionChip({
         onBlur={() => setAnchor(null)}
         aria-pressed={reaction.me}
         aria-label={ariaLabel}
+        data-reaction-fresh={fresh ? "" : undefined}
         className={cn(
           "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
           reaction.me
@@ -5836,6 +5840,9 @@ function ReactionBar({
   const redesign = useRedesign();
   const phone = usePhoneWidth();
   const [whoEmoji, setWhoEmoji] = useState<string | null>(null);
+  // A reaction the row already had when it mounted never pops in: loading
+  // history and switching channels do not animate.
+  const loaded = useRef<ReadonlySet<string>>(new Set(reactions.map((r) => r.emoji)));
   const onHold = redesign && phone ? setWhoEmoji : undefined;
   const hasReactions = reactions.length > 0;
 
@@ -5852,6 +5859,7 @@ function ReactionBar({
           currentUserId={currentUserId}
           onToggle={onToggle}
           onHold={onHold}
+          fresh={!loaded.current.has(reaction.emoji)}
           tabIndex={tabIndex}
         />
       ))}
@@ -5866,6 +5874,7 @@ function ReactionBar({
             currentUserId={currentUserId}
             onToggle={onToggle}
             onHold={onHold}
+            fresh={!loaded.current.has(reaction.emoji)}
             tabIndex={tabIndex}
           />
         ))}

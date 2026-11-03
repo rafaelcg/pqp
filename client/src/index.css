@@ -391,6 +391,15 @@
   --duration-slow: 300ms;
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
   --ease-emphasized: cubic-bezier(0.16, 1, 0.3, 1);
+  /*
+   * From the text channels canvas ("Movimento"). `instant` is a press or an
+   * icon swapping; `layer` is only a full-screen view or a whole desktop
+   * panel, never a row in the conversation; `exit` is the curve for leaving,
+   * run in about 70% of the entrance's time.
+   */
+  --duration-instant: 100ms;
+  --duration-layer: 450ms;
+  --ease-exit: cubic-bezier(0.3, 0, 0.8, 0.15);
 
   /*
    * TYPE RAMP. Five roles. Every size matches a Tailwind utility the
@@ -6306,6 +6315,46 @@ html[data-immersive-stage] [data-immersive-hide] {
       grid-template-rows var(--duration-slow) var(--ease-emphasized),
       opacity var(--duration-base) var(--ease-standard) 60ms,
       visibility 0s;
+  }
+}
+
+/* Motion under the redesign (the text channels canvas, "Movimento"). A
+   message or a new reaction enters in the base time. Reduced motion is not
+   zero motion: what carries meaning (a message arriving, a menu, a sheet)
+   fades in place instead of travelling, a colour change stays, and what is
+   only decoration (the typing dots, the swipe's spring) stops. */
+@keyframes pqp-reaction-in {
+  from {
+    opacity: 0;
+    scale: 0.7;
+  }
+  to {
+    opacity: 1;
+    scale: 1;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  :root[data-redesign] .chat-msg-in {
+    animation-duration: var(--duration-base);
+  }
+  :root[data-redesign] [data-reaction-fresh] {
+    animation: pqp-reaction-in var(--duration-base) var(--ease-emphasized) backwards;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  :root[data-redesign] .chat-msg-in,
+  :root[data-redesign] [data-reaction-fresh],
+  :root[data-redesign] .animate-fade-in {
+    animation: fade-in var(--duration-fast) var(--ease-standard) backwards;
+  }
+  :root[data-redesign] .animate-rise {
+    animation: fade-in var(--duration-base) var(--ease-standard) both;
+  }
+  :root[data-redesign] .animate-bounce {
+    animation: none;
+  }
+  :root[data-redesign] [data-swipe-reply] {
+    transition-property: color, background-color, border-color, text-decoration-color, fill, stroke;
   }
 }
 
