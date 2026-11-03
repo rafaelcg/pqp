@@ -96,6 +96,13 @@ interface ContextMenuProps {
    * `[data-sheet-on-phone]`, because Radix positions the wrapper inline.
    */
   sheetOnPhone?: boolean;
+  /**
+   * The thing the sheet acts on, lifted above it on a phone (the canvas's
+   * held message). Drawn only by the sheet rule; the caller passes it only
+   * when the sheet applies. A copy of what is on the page, so hidden from
+   * assistive tech.
+   */
+  phonePreview?: ReactNode;
 }
 
 /** Keeps the menu clear of the very edge of the window on every side. */
@@ -111,6 +118,7 @@ export function ContextMenu({
   disabled = false,
   onOpenChange,
   sheetOnPhone = false,
+  phonePreview,
 }: ContextMenuProps) {
   // Radix anchors the menu to a zero-size rect at the pointer, which is right —
   // but it hardcodes `side="right" align="start"`, so floating-ui handles
@@ -234,6 +242,11 @@ export function ContextMenu({
           )}
           onCloseAutoFocus={(e) => e.preventDefault()}
         >
+          {sheetOnPhone && phonePreview && (
+            <div data-sheet-preview="" aria-hidden className="hidden">
+              {phonePreview}
+            </div>
+          )}
           {hasStrip && (
             <>
               {/* ONE ROW. `flex` with no wrapping and equal-basis cells is the

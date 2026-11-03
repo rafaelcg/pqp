@@ -3460,6 +3460,26 @@ h2,
   :root[data-redesign] [data-sheet-on-phone] [role="menuitem"] {
     min-height: 44px;
   }
+  /* The held message, lifted just above the sheet into the space it leaves
+     (at most 20dvh, since the sheet stops at 80). Placed against the fixed
+     wrapper, not the sheet: the sheet stays unpositioned, so its own scroll
+     never clips the card. */
+  :root[data-redesign] [data-sheet-on-phone] {
+    position: static !important;
+  }
+  :root[data-redesign] [data-sheet-on-phone] [data-sheet-preview] {
+    position: absolute;
+    bottom: calc(100% + 0.75rem);
+    left: 0.75rem;
+    right: 0.75rem;
+    display: block;
+    max-height: calc(20dvh - 1.5rem);
+    overflow: hidden;
+    border-radius: var(--radius-panel);
+    background: var(--color-surface-1);
+    box-shadow: var(--sheet-shadow);
+    pointer-events: none;
+  }
 }
 /* Drag a message right to reply (the text channels canvas, "Celular:
    gestos"; `lib/swipe-to-reply.ts` writes the two variables). The row

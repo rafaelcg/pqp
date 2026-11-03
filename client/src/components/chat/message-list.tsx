@@ -4267,6 +4267,24 @@ const MessageRow = memo(function MessageRow({
         }
         moreReactionsLabel={t("reactions.more")}
         sheetOnPhone
+        phonePreview={
+          redesign && phone && message.body.trim() ? (
+            <div data-held-message="" className="flex gap-2.5 px-3 py-2.5">
+              <UserAvatar
+                name={message.authorName}
+                avatarUrl={message.authorAvatarUrl}
+                rounded="full"
+                className="h-8 w-8 shrink-0"
+              />
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold text-text">{message.authorName}</p>
+                <p className="line-clamp-3 whitespace-pre-wrap break-words text-[0.9375rem] leading-[1.375rem] text-text">
+                  {message.body}
+                </p>
+              </div>
+            </div>
+          ) : undefined
+        }
         // While picking a set, the row's one job is to be picked. A menu
         // offering Reply and Edit over a checkbox is two interactions
         // competing for the same click.
