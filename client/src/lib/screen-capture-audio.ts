@@ -69,6 +69,7 @@ import {
 import type { Platform } from "./downloads";
 import type { MessageKey } from "@/lib/i18n";
 import {
+  isLinuxShellShareAudioTrack,
   linuxShellShareAudioReady,
   shellCanBuildLinuxShareAudio,
 } from "./linux-shell-share-audio";
@@ -971,6 +972,12 @@ export function stripLeakedSystemAudioTracks(stream: MediaStream): boolean {
   }
   let stripped = false;
   for (const track of audioTracks) {
+    // The Linux shell's "everything but pqp" bus is a microphone-style
+    // capture, not the mixer: the call never reaches it. The watch party
+    // preview puts it on the stream before go-live runs this check.
+    if (isLinuxShellShareAudioTrack(track)) {
+      continue;
+    }
     let restrictOwnAudio: boolean | undefined;
     let restrictOwnAudioCaps: boolean[] | undefined;
     try {

@@ -234,6 +234,18 @@ sounds, a film it plays) never reach the bus: that is the whole point.
 **Not in the Flatpak build.** The Flathub package never offers it and says why
 (§7 "Share audio in the sandbox").
 
+**A watch party asks for it in its setup preview (2026-11).** The preview is the
+watch party's only picker: go-live publishes that stream as it is and never arms
+the shell. Until this, the preview asked the Linux shell for no sound at all, so
+a Linux desktop host always went live silent, flag on or not, while an ordinary
+share in the same call carried sound. With the bus ready (shell, flag, sound
+server) the preview now asks for it, arms, and attaches it after the pick,
+defaulting to yes like the ordinary share prompt; the "sem áudio" line under the
+preview covers a failed attach. The bus track is skipped by
+`stripLeakedSystemAudioTracks` at go-live (`isLinuxShellShareAudioTrack`),
+because that check is about Chromium's mixer tap and this is not one. Client
+only. Not yet verified on a Linux machine.
+
 **How the bus is fed, since 0.2.4.** The first report from real hardware (a
 CachyOS desktop, PipeWire with pipewire-pulse) said browsers and one game reached
 viewers while Spotify from Flathub and Helldivers 2 did not. Up to 0.2.3 the

@@ -97,6 +97,11 @@ import {
   prefetchNativeShareAudio,
 } from "@/lib/native-share-audio";
 import {
+  armLinuxShellShareAudio,
+  attachLinuxShellShareAudio,
+  ensureLinuxShellShareAudio,
+} from "@/lib/linux-shell-share-audio";
+import {
   blocksGoLive,
   desktopSharesTabAudio,
   goLiveChecklist,
@@ -1223,6 +1228,10 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
       const [, nativeShareAudio] = await Promise.all([
         ensureOsCanExcludeCallAudio(),
         ensureNativeShareAudio(party.serverId ?? null),
+        // The Linux desktop app's "everything but pqp" bus. Warmed here
+        // because this surface is the watch party's only picker: go-live
+        // publishes this stream as it is and never arms the shell again.
+        ensureLinuxShellShareAudio(),
       ]);
       const intent = {
         preferBrowserTab: true,
@@ -1238,7 +1247,19 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
         intent,
       );
       setNativeShareAudioOffered(nativeAudio);
-      const options = screenCaptureOptions(false, pickEnv, intent);
+      // LINUX DESKTOP: the shell's picker never asks about sound (on Wayland
+      // it never even opens), so a watch party, whose whole point is the
+      // film's sound, asks for it here, the way the ordinary share prompt
+      // defaults to yes. Only where the shell, the runtime flag and a sound
+      // server all said yes (`shellLinuxShareAudio`); everywhere else this is
+      // the same `false` as before. Before this, a Linux desktop host always
+      // went live silent: the preview asked for no sound and go-live never
+      // arms a stream the preview already opened.
+      const linuxSound = pickEnv.shellLinuxShareAudio === true;
+      const options = screenCaptureOptions(linuxSound, pickEnv, intent);
+      if (linuxSound && options.audio !== false) {
+        await armLinuxShellShareAudio();
+      }
       let picked: MediaStream;
       let lostSound = false;
       try {
@@ -1267,6 +1288,12 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
         if (!attach.attached && attach.reason !== "none") {
           setNativeAudioNotice("failed");
         }
+      }
+      // The bus the arm above built, opened by name and put on the preview,
+      // so go-live broadcasts what the host checked. A failure leaves a silent
+      // pick, which the "sem áudio" line under the preview already says.
+      if (linuxSound && options.audio !== false && !lostSound) {
+        await attachLinuxShellShareAudio(picked);
       }
       stream?.getTracks().forEach((track) => track.stop());
       // The host stopping the share from the browser's own bar during setup
