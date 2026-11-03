@@ -1,13 +1,12 @@
 import { buildReplyExcerpt, type Message } from "@pqp/shared";
 import { DotsThree, X } from "@phosphor-icons/react";
 import { Pin } from "lucide-react";
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { createPortal } from "react-dom";
+import { useEffect, useId, useState, type ReactNode } from "react";
+import { HeaderPopover } from "@/components/chat/header-popover";
 import { Dialog } from "@/components/ui/dialog";
 import { Icon } from "@/components/ui/icon";
 import { IconButton } from "@/components/ui/icon-button";
 import { Menu } from "@/components/ui/menu";
-import { POPOVER_SURFACE } from "@/components/ui/popover";
 import { Spinner } from "@/components/ui/spinner";
 import { useMediaQuery } from "@/components/ui/use-media-query";
 import { UserAvatar } from "@/components/user/user-avatar";
@@ -218,36 +217,6 @@ export function PinnedMessagesPanel({
  * lines; a press jumps there, and unpinning lives in the row's ⋯.
  */
 
-const POPOVER_WIDTH = 380;
-const EDGE = 12;
-const GAP = 8;
-
-/** The header button that opened the pins: the focused one, else the visible one. */
-function pinsAnchor(): HTMLElement | null {
-  const focused = document.activeElement;
-  if (focused instanceof HTMLElement && focused.closest("[data-channel-header-pins]")) {
-    return focused.closest<HTMLElement>("[data-channel-header-pins]");
-  }
-  for (const el of document.querySelectorAll<HTMLElement>("[data-channel-header-pins]")) {
-    if (el.getBoundingClientRect().width > 0) {
-      return el;
-    }
-  }
-  return null;
-}
-
-/** Right edge under the button, clamped inside the window. Pure, so it is tested. */
-export function placePinsPopover(
-  anchor: { right: number; bottom: number } | null,
-  width: number,
-  viewport: { width: number; height: number },
-): { left: number; top: number; maxHeight: number } {
-  const right = anchor ? anchor.right : viewport.width - EDGE;
-  const top = anchor ? anchor.bottom + GAP : 64;
-  const left = Math.max(EDGE, Math.min(right - width, viewport.width - width - EDGE));
-  return { left, top, maxHeight: Math.max(160, viewport.height - top - EDGE) };
-}
-
 function PinsPopover({
   open,
   title,
@@ -261,94 +230,14 @@ function PinsPopover({
 }) {
   const { t } = useTranslation();
   const titleId = useId();
-  const panelRef = useRef<HTMLDivElement>(null);
-  const anchorRef = useRef<HTMLElement | null>(null);
-  const [box, setBox] = useState<{ left: number; top: number; maxHeight: number } | null>(null);
-
-  const place = useCallback(() => {
-    const anchor = anchorRef.current?.isConnected ? anchorRef.current : pinsAnchor();
-    anchorRef.current = anchor;
-    const width = Math.min(POPOVER_WIDTH, window.innerWidth - EDGE * 2);
-    setBox(
-      placePinsPopover(anchor?.getBoundingClientRect() ?? null, width, {
-        width: window.innerWidth,
-        height: window.innerHeight,
-      }),
-    );
-  }, []);
-
-  useLayoutEffect(() => {
-    if (!open) {
-      setBox(null);
-      return;
-    }
-    anchorRef.current = pinsAnchor();
-    place();
-    panelRef.current?.focus({ preventScroll: true });
-    window.addEventListener("resize", place);
-    return () => {
-      window.removeEventListener("resize", place);
-      // Back to the button that opened it, as a dialog would.
-      anchorRef.current?.focus({ preventScroll: true });
-    };
-  }, [open, place]);
-
-  // Escape and a press outside close it; a row's own ⋯ menu is not outside,
-  // and its Escape closes only the menu.
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    const insideMenu = (target: EventTarget | null) =>
-      target instanceof Element && target.closest("[role='menu']") !== null;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || insideMenu(event.target)) {
-        return;
-      }
-      event.stopPropagation();
-      onClose();
-    };
-    const onPointer = (event: PointerEvent) => {
-      const target = event.target as Node | null;
-      if (
-        !target ||
-        panelRef.current?.contains(target) ||
-        anchorRef.current?.contains(target) ||
-        insideMenu(event.target)
-      ) {
-        return;
-      }
-      onClose();
-    };
-    document.addEventListener("keydown", onKey, true);
-    document.addEventListener("pointerdown", onPointer, true);
-    return () => {
-      document.removeEventListener("keydown", onKey, true);
-      document.removeEventListener("pointerdown", onPointer, true);
-    };
-  }, [open, onClose]);
-
-  if (!open) {
-    return null;
-  }
-  return createPortal(
-    <div
-      ref={panelRef}
-      role="dialog"
-      aria-labelledby={titleId}
-      tabIndex={-1}
+  return (
+    <HeaderPopover
+      open={open}
+      anchorSelector="[data-channel-header-pins]"
+      width={380}
+      labelledBy={titleId}
+      onClose={onClose}
       data-pins-popover=""
-      style={{
-        width: `min(${POPOVER_WIDTH}px, calc(100vw - ${EDGE * 2}px))`,
-        left: box?.left ?? 0,
-        top: box?.top ?? 0,
-        maxHeight: box?.maxHeight,
-        visibility: box ? "visible" : "hidden",
-      }}
-      className={cn(
-        POPOVER_SURFACE,
-        "fixed z-[90] flex flex-col overflow-hidden text-text animate-pop-in focus-visible:outline-none",
-      )}
     >
       <div className="flex h-11 shrink-0 items-center gap-2 border-b border-[color:var(--pane-header-rule)] pl-3.5 pr-2">
         <h2 id={titleId} className="flex-1 text-sm font-semibold">
@@ -359,8 +248,7 @@ function PinsPopover({
         </IconButton>
       </div>
       <div className="min-h-0 overflow-y-auto">{children}</div>
-    </div>,
-    document.body,
+    </HeaderPopover>
   );
 }
 

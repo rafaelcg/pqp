@@ -140,6 +140,7 @@ import {
 } from "@/components/user/user-profile-popover";
 import type { ProfileModerationContext } from "@/components/user/profile-relations";
 import { PinnedMessagesPanel } from "@/components/chat/pinned-messages-panel";
+import { HeaderSearch } from "@/components/search/header-search";
 import { ServerRail } from "@/components/layout/server-rail";
 import { WhatsNewView } from "@/components/layout/whats-new-view";
 import { AgeGateDialog } from "@/components/user/age-gate-dialog";
@@ -814,6 +815,10 @@ export type TokenResolver = (options?: {
 }) => Promise<string | null>;
 
 /** Equal-width icon tiles in the chat header (pins, channel settings, call, roster). */
+/** Apple keyboards label the same chord differently. */
+const IS_APPLE_KEYBOARD =
+  typeof navigator !== "undefined" && /Mac|iPhone|iPad/i.test(navigator.userAgent);
+
 const HEADER_ACTION_TILE = cn(
   "flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-paper-muted hover:bg-ink-3 hover:text-paper",
   PANE_HEADER_ACTION_REDESIGN,
@@ -11546,6 +11551,17 @@ function MainAppContent({
             // "Fixadas 2", and the bell sits beside it.
             return redesign ? (
               <>
+                {selectedChannel.kind === "server" && selectedServer && selectedChannel.type === "text" && (
+                  <HeaderSearch
+                    serverId={selectedServer.id}
+                    serverName={selectedServer.name}
+                    channel={selectedChannel}
+                    members={serverMembers}
+                    channels={channels.filter((c) => c.type === "text" || c.type === "forum")}
+                    shortcut={IS_APPLE_KEYBOARD ? "⌘F" : "Ctrl F"}
+                    tileClassName={HEADER_ACTION_TILE}
+                  />
+                )}
                 <ChannelPinsButton
                   channelId={selectedChannel.id}
                   messages={chat.getMessages()}
