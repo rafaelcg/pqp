@@ -167,6 +167,7 @@ import {
 import { translateMessage, useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { useRedesign } from "@/lib/redesign";
+import { usePhoneWidth } from "@/lib/phone-tabs";
 import { ComposerStatusBar, textAsFile } from "@/components/chat/composer-status-bar";
 
 export interface ComposerSlashContext {
@@ -500,6 +501,7 @@ export function MessageComposer({
 }: MessageComposerProps) {
   const { t, locale } = useTranslation();
   const redesign = useRedesign();
+  const phone = usePhoneWidth();
   const inputPlaceholder = placeholder ?? t("composer.placeholderFallback");
   // The draft outlives the mount: App remounts this component per channel,
   // so what was typed here is read back when the channel is reopened and
@@ -813,6 +815,11 @@ export function MessageComposer({
       return mentionMatches.map((member) => ({
         id: member.id,
         primary: `@${member.username}`,
+        // A phone's pill names the person; @everyone and a role keep the @.
+        short:
+          member.mentionKind === "mass" || member.mentionKind === "role"
+            ? `@${member.username}`
+            : member.displayName,
         // Under the redesign a mass or role mention says how many it reaches.
         secondary:
           redesign && member.reach !== undefined && member.mentionKind === "mass"
@@ -1814,7 +1821,13 @@ export function MessageComposer({
           }
           options={options}
           selectedIndex={selectedIndex}
-          layout={rollPresetOpen ? "grid" : "list"}
+          layout={
+            rollPresetOpen
+              ? "grid"
+              : redesign && phone && menuKind === "mention"
+                ? "pills"
+                : "list"
+          }
           onSelect={applySelection}
           onHover={setSelectedIndex}
         />

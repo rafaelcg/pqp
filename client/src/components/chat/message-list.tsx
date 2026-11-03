@@ -98,11 +98,16 @@ import {
   useState,
   type CSSProperties,
   type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+  type TouchEvent as ReactTouchEvent,
   type ReactElement,
   type ReactNode,
   type Ref,
 } from "react";
 import { useRedesign } from "@/lib/redesign";
+import { usePhoneWidth } from "@/lib/phone-tabs";
+import { useSwipeToReply } from "@/lib/swipe-to-reply";
+import { ReactionWhoSheet } from "@/components/chat/reaction-who-sheet";
 import { createPortal } from "react-dom";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useChatDisplay } from "@/hooks/use-chat-display";
@@ -3935,6 +3940,13 @@ const MessageRow = memo(function MessageRow({
     };
   }
 
+  // Drag right to reply, on a phone under the redesign.
+  const phone = usePhoneWidth();
+  const swipe = useSwipeToReply(
+    redesign && phone && canReply && !selecting && !stream,
+    onReply,
+  );
+
   if (isBlocked && blockedRun && !blockedRun.lead) {
     // The rest of a run: registered so a permalink or reply lands, drawn as
     // nothing because the run's first line already counts it.
@@ -4252,6 +4264,7 @@ const MessageRow = memo(function MessageRow({
           isReal && !stream ? selectAndClose(onOpenPicker, false) : undefined
         }
         moreReactionsLabel={t("reactions.more")}
+        sheetOnPhone
         // While picking a set, the row's one job is to be picked. A menu
         // offering Reply and Edit over a checkbox is two interactions
         // competing for the same click.
@@ -4307,7 +4320,13 @@ const MessageRow = memo(function MessageRow({
           )}
           data-forum-answer={forumAnswer ? "" : undefined}
           data-message-flash={isFlashing ? "" : undefined}
+          {...swipe}
         >
+          {"data-swipe-reply" in swipe && (
+            <span data-swipe-reply-mark="" aria-hidden>
+              <Glyph icon={ArrowBendUpLeft} size="sm" />
+            </span>
+          )}
           {selecting && onToggleSelect && isReal && (
             /* One overlay rather than a checkbox column: the row layout stays
                exactly where it was, so nothing shifts sideways the moment the
@@ -4671,6 +4690,7 @@ const MessageRow = memo(function MessageRow({
                   onOpenPicker={onOpenPicker}
                   onClosePicker={onClosePicker}
                   tabIndex={controlTabIndex}
+                  authors={authors}
                 />
               )}
 
@@ -4707,6 +4727,7 @@ const MessageRow = memo(function MessageRow({
                   ? "flex"
                   : "hidden group-hover:flex group-focus-within:flex",
               )}
+              data-row-toolbar=""
               onContextMenu={forwardRowContextMenu}
             >
               {/* Hover-only by construction: this whole bar is out of tab
@@ -5610,6 +5631,8 @@ interface ReactionBarProps {
   onClosePicker: () => void;
   /** -1 outside the active row — see `controlTabIndex` in MessageRow. */
   tabIndex: number;
+  /** Avatars for the who-reacted sheet. */
+  authors: ReadonlyMap<string, MessageAuthorInfo>;
 }
 
 function ReactionWhoTip({
@@ -5666,19 +5689,41 @@ function ReactionWhoTip({
   );
 }
 
+/** How long a finger rests on a reaction before the who-reacted sheet opens. */
+const REACTION_HOLD_MS = 450;
+
 function ReactionChip({
   reaction,
   currentUserId,
   onToggle,
+  onHold,
   tabIndex,
 }: {
   reaction: MessageReaction;
   currentUserId: string | null;
   onToggle: (emoji: string) => void;
+  /** Holding the chip opens who reacted (phone, under the redesign). */
+  onHold?: (emoji: string) => void;
   tabIndex: number;
 }) {
   const { t } = useTranslation();
   const [anchor, setAnchor] = useState<DOMRect | null>(null);
+  const holdTimer = useRef<number | null>(null);
+  // The click that follows a hold is the end of the hold, not a toggle.
+  const held = useRef(false);
+  const clearHold = () => {
+    if (holdTimer.current !== null) {
+      window.clearTimeout(holdTimer.current);
+      holdTimer.current = null;
+    }
+  };
+  useEffect(() => clearHold, []);
+  const hold = () => {
+    clearHold();
+    held.current = true;
+    navigator.vibrate?.(10);
+    onHold?.(reaction.emoji);
+  };
   const named = formatReactionWho(
     reaction.users,
     reaction.count,
@@ -5706,7 +5751,48 @@ function ReactionChip({
       <button
         type="button"
         tabIndex={tabIndex}
-        onClick={() => onToggle(reaction.emoji)}
+        onClick={() => {
+          if (held.current) {
+            held.current = false;
+            return;
+          }
+          onToggle(reaction.emoji);
+        }}
+        {...(onHold && {
+          // The row's own menu opens on a long press too: a hold on a
+          // reaction is about the reaction, so the row never hears it.
+          onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => {
+            event.stopPropagation();
+            held.current = false;
+            if (event.pointerType !== "mouse") {
+              clearHold();
+              holdTimer.current = window.setTimeout(hold, REACTION_HOLD_MS);
+            }
+          },
+          onPointerUp: clearHold,
+          onPointerCancel: clearHold,
+          // The lift after a hold would arrive as a mousedown on the sheet's
+          // backdrop, which closes it the moment it opened.
+          onTouchEnd: (event: ReactTouchEvent<HTMLButtonElement>) => {
+            if (held.current) {
+              event.preventDefault();
+              held.current = false;
+            }
+          },
+          onPointerMove: (event: ReactPointerEvent<HTMLButtonElement>) => {
+            if (Math.abs(event.movementX) + Math.abs(event.movementY) > 6) {
+              clearHold();
+            }
+          },
+          // Android sends a contextmenu for the same hold; iOS never does.
+          onContextMenu: (event: ReactMouseEvent<HTMLButtonElement>) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (!held.current) {
+              hold();
+            }
+          },
+        })}
         onPointerEnter={(event) =>
           setAnchor(event.currentTarget.getBoundingClientRect())
         }
@@ -5731,7 +5817,7 @@ function ReactionChip({
         </span>
         <span className="font-medium tabular-nums">{reaction.count}</span>
       </button>
-      {anchor && <ReactionWhoTip anchor={anchor}>{tooltip}</ReactionWhoTip>}
+      {anchor && !onHold && <ReactionWhoTip anchor={anchor}>{tooltip}</ReactionWhoTip>}
     </>
   );
 }
@@ -5744,8 +5830,13 @@ function ReactionBar({
   onOpenPicker,
   onClosePicker,
   tabIndex,
+  authors,
 }: ReactionBarProps) {
   const { t } = useTranslation();
+  const redesign = useRedesign();
+  const phone = usePhoneWidth();
+  const [whoEmoji, setWhoEmoji] = useState<string | null>(null);
+  const onHold = redesign && phone ? setWhoEmoji : undefined;
   const hasReactions = reactions.length > 0;
 
   if (!hasReactions && !isPickerOpen) {
@@ -5760,6 +5851,7 @@ function ReactionBar({
           reaction={reaction}
           currentUserId={currentUserId}
           onToggle={onToggle}
+          onHold={onHold}
           tabIndex={tabIndex}
         />
       ))}
@@ -5773,6 +5865,7 @@ function ReactionBar({
             reaction={reaction}
             currentUserId={currentUserId}
             onToggle={onToggle}
+            onHold={onHold}
             tabIndex={tabIndex}
           />
         ))}
@@ -5796,6 +5889,16 @@ function ReactionBar({
             onClosePicker();
           }}
           onClose={onClosePicker}
+        />
+      )}
+      {whoEmoji !== null && onHold && (
+        <ReactionWhoSheet
+          reactions={reactions}
+          initialEmoji={whoEmoji}
+          currentUserId={currentUserId}
+          avatarFor={(userId) => authors.get(userId)?.avatarUrl ?? null}
+          onToggle={onToggle}
+          onClose={() => setWhoEmoji(null)}
         />
       )}
     </div>

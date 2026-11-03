@@ -30,7 +30,7 @@ const COMMANDS: AutocompleteOption[] = [
   { id: "roll", primary: "/roll", secondary: "Roll a die" },
 ];
 
-function render(options: AutocompleteOption[], layout?: "list" | "grid") {
+function render(options: AutocompleteOption[], layout?: "list" | "grid" | "pills") {
   return renderToStaticMarkup(
     <AutocompleteMenu
       label="Dice"
@@ -95,5 +95,21 @@ describe("AutocompleteMenu", () => {
     const html = render([]);
     expect(html).toContain("No matching commands");
     expect(html).not.toContain('role="listbox"');
+  });
+
+  it("draws @ on a phone as one row of pills with the short name", () => {
+    const html = render(
+      [
+        { id: "a", primary: "@bia", short: "Bia", secondary: "Bia" },
+        { id: "b", primary: "@everyone", secondary: "avisa 21 pessoas" },
+      ],
+      "pills",
+    );
+    expect(html).toContain("data-autocomplete-pills");
+    expect(html).toContain('aria-orientation="horizontal"');
+    expect(html).toContain(">Bia<");
+    expect(html).toContain(">@everyone<");
+    // No heading and no description: one line of people above the keyboard.
+    expect(html).not.toContain("avisa 21 pessoas");
   });
 });
