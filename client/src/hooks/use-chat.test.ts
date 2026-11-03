@@ -134,6 +134,65 @@ afterEach(() => {
 });
 
 describe("optimistic sending", () => {
+  it("shows a message at once while its file uploads and sends it when the file lands", async () => {
+    const { chat, sent } = setup();
+    let land!: (value: { attachmentId: string; width: number; height: number }) => void;
+    const pending = new Promise<{ attachmentId: string; width: number; height: number }>((resolve) => {
+      land = resolve;
+    });
+    chat.sendMessage("o mapa", null, [
+      {
+        attachmentId: "attachment-1",
+        filename: "mapa.png",
+        contentType: "image/png",
+        byteSize: 10,
+        width: null,
+        height: null,
+        previewUrl: "blob:local",
+        pending,
+      },
+    ]);
+    const before = sent.length;
+    expect(chat.getMessages()[0]?.uploading).toBe(true);
+    expect(chat.getMessages()[0]?.attachments?.[0]?.url).toBe("blob:local");
+
+    land({ attachmentId: "11111111-1111-4111-8111-111111111111", width: 800, height: 600 });
+    await vi.runAllTimersAsync();
+    expect(sent.length).toBe(before + 1);
+    const outgoing = sent.at(-1) as { attachmentIds?: string[] };
+    expect(outgoing.attachmentIds).toEqual(["11111111-1111-4111-8111-111111111111"]);
+    expect(chat.getMessages()[0]?.uploading).toBe(false);
+    expect(chat.getMessages()[0]?.attachments?.[0]?.width).toBe(800);
+  });
+
+  it("fails the bubble without a retry when its file never uploads", async () => {
+    const { chat, sent } = setup();
+    let refuse!: (error: Error) => void;
+    const pending = new Promise<{ attachmentId: string; width: null; height: null }>((_, reject) => {
+      refuse = reject;
+    });
+    chat.sendMessage("", null, [
+      {
+        attachmentId: "attachment-1",
+        filename: "mapa.png",
+        contentType: "image/png",
+        byteSize: 10,
+        width: null,
+        height: null,
+        previewUrl: "blob:local",
+        pending,
+      },
+    ]);
+    const before = sent.length;
+    refuse(new Error("put 500"));
+    await vi.runAllTimersAsync();
+    expect(sent.length).toBe(before);
+    const [message] = chat.getMessages();
+    expect(message?.failed).toBe(true);
+    expect(message?.uploadFailed).toBe(true);
+    expect(messageCanRetry(message!)).toBe(false);
+  });
+
   it("shows the message immediately as pending and sends a nonce", () => {
     const { chat, sent } = setup();
     chat.sendMessage("hi there");

@@ -37,6 +37,8 @@ const FULL_BLEED: Record<string, string> = {
   "conversations/quick-switcher.tsx": "a command palette: field, results and key hints edge to edge",
   "onboarding/onboarding-flow.tsx": "each step pads itself as it slides in",
   "bots/bot-wizard.tsx": "a form column beside a stage that runs to the panel edge",
+  "chat/pinned-messages-panel.tsx": "a list sheet on a phone: each pin's row is a tap target to the panel edge",
+  "chat/reaction-who-sheet.tsx": "a list sheet: each person's row is a tap target to the panel edge",
 };
 
 function tsxFiles(dir: string): string[] {

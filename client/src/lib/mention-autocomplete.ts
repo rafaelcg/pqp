@@ -30,6 +30,8 @@ export interface MentionCandidate {
   avatarUrl: string | null;
   /** Members win ties with @everyone/@here, which win ties with roles. */
   mentionKind?: "member" | "mass" | "role";
+  /** For a mass or role mention: how many people it notifies. */
+  reach?: number;
 }
 
 /**

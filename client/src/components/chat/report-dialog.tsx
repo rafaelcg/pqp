@@ -3,13 +3,17 @@ import {
   REPORT_REASONS,
   REPORT_REASON_LABELS,
   type CreateReportRequest,
+  type Report,
   type ReportReason,
 } from "@pqp/shared";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dialog } from "@/components/ui/dialog";
 import { useTranslation } from "@/lib/i18n";
 import { ApiError, createReport } from "@/lib/api";
+import { useRedesign } from "@/lib/redesign";
+import { reportReasonKey } from "@/lib/report-reasons";
 
 /**
  * What is being reported, in the two shapes the API accepts.
@@ -18,7 +22,13 @@ import { ApiError, createReport } from "@/lib/api";
  * the author and the context from the reported thing itself.
  */
 export type ReportTarget =
-  | { kind: "message"; messageId: string; subjectName: string | null }
+  | {
+      kind: "message";
+      messageId: string;
+      subjectName: string | null;
+      /** The author, so the sent screen can offer to block them. */
+      authorId?: string | null;
+    }
   | {
       kind: "user";
       userId: string;
@@ -41,10 +51,33 @@ export type ReportTarget =
 interface ReportDialogProps {
   target: ReportTarget | null;
   onClose: () => void;
+  /** Under the redesign the sent screen offers this, for the reported person. */
+  onBlock?: (userId: string) => void;
+  /** Whether that person is already blocked, so the offer is not made twice. */
+  isBlocked?: (userId: string) => boolean;
+  /** The server the report was filed from, for "Foi pra staff do …". */
+  placeName?: string | null;
 }
 
-export function ReportDialog({ target, onClose }: ReportDialogProps) {
+/**
+ * Where a filed report went, from the row the server answered with. The
+ * server decides routing; this only reads it back. A minor, a conversation, a
+ * report with no place and a whole community all go to the pqp team.
+ */
+export function sentToPqp(report: Pick<Report, "reason" | "subjectType" | "contextKind">): boolean {
+  return (
+    report.reason === "minor_sexual" ||
+    report.subjectType === "server" ||
+    report.contextKind !== "server"
+  );
+}
+
+export function ReportDialog({ target, onClose, onBlock, isBlocked, placeName }: ReportDialogProps) {
   const { t } = useTranslation();
+  const redesign = useRedesign();
+  const [filed, setFiled] = useState<Report | null>(null);
+  const [confirmBlock, setConfirmBlock] = useState(false);
+  const [blocked, setBlocked] = useState(false);
   const [reason, setReason] = useState<ReportReason | null>(null);
   const [details, setDetails] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -68,6 +101,9 @@ export function ReportDialog({ target, onClose }: ReportDialogProps) {
     setError(null);
     setDone(false);
     setSubmitting(false);
+    setFiled(null);
+    setConfirmBlock(false);
+    setBlocked(false);
   }, [targetKey]);
 
   if (!target) {
@@ -103,7 +139,8 @@ export function ReportDialog({ target, onClose }: ReportDialogProps) {
                 reason,
                 details: details.trim() || null,
               };
-      await createReport(body);
+      const { report } = await createReport(body);
+      setFiled(report);
       // A duplicate answers 200 rather than an error, so re-reporting the same
       // thing lands here too and is told the same thing. That is deliberate:
       // "we already have this" and "thank you" are the same fact to a reporter.
@@ -117,6 +154,78 @@ export function ReportDialog({ target, onClose }: ReportDialogProps) {
     } finally {
       setSubmitting(false);
     }
+  }
+
+  const blockUserId =
+    target.kind === "message" ? (target.authorId ?? null) : target.kind === "user" ? target.userId : null;
+
+  if (done && redesign) {
+    // The text channels canvas, "Enviada": where it went, that the other
+    // person hears nothing, and what helps right now. Nothing here is lime.
+    const name = target.subjectName;
+    const place = target.kind === "community" ? null : (placeName ?? null);
+    const toPqp = filed ? sentToPqp(filed) : target.kind === "community";
+    const canBlock = Boolean(blockUserId && onBlock && !(isBlocked?.(blockUserId) ?? false));
+    return (
+      <>
+        <Dialog
+          open
+          title={t("report.sent")}
+          eyebrow={t("report.eyebrow")}
+          onClose={onClose}
+          size="sm"
+          footer={
+            <Button variant="secondary" onClick={onClose}>
+              {t("common.close")}
+            </Button>
+          }
+        >
+          <div data-report-sent="" className="space-y-4 px-5 py-4 text-sm text-text-secondary">
+            <p>
+              {toPqp
+                ? t("report.sentTo.pqp")
+                : place
+                  ? t("report.sentTo.server", { place })
+                  : t("report.sentTo.serverUnnamed")}{" "}
+              {target.kind === "community"
+                ? null
+                : name
+                  ? t("report.sentQuiet", { name })
+                  : t("report.sentQuietSomeone")}
+            </p>
+            {(canBlock || blocked) && blockUserId && (
+              <div className="space-y-2">
+                <p className="text-xs font-semibold text-text-tertiary">{t("report.meanwhile")}</p>
+                {blocked ? (
+                  <p role="status" className="text-text">
+                    {t("report.blockedNamed", { name: name ?? t("report.thisAccount") })}
+                  </p>
+                ) : (
+                  <Button variant="secondary" size="sm" onClick={() => setConfirmBlock(true)}>
+                    {t("report.blockNamed", { name: name ?? t("report.thisAccount") })}
+                  </Button>
+                )}
+              </div>
+            )}
+          </div>
+        </Dialog>
+        <ConfirmDialog
+          open={confirmBlock}
+          title={t("profile.block")}
+          description={t("profile.block.confirm", { name: name ?? t("report.thisAccount") })}
+          confirmLabel={t("profile.block")}
+          destructive
+          onConfirm={() => {
+            if (blockUserId && onBlock) {
+              onBlock(blockUserId);
+              setBlocked(true);
+            }
+            setConfirmBlock(false);
+          }}
+          onClose={() => setConfirmBlock(false)}
+        />
+      </>
+    );
   }
 
   if (done) {
@@ -211,7 +320,7 @@ export function ReportDialog({ target, onClose }: ReportDialogProps) {
                 onChange={() => setReason(value)}
                 className="h-4 w-4 accent-[var(--color-signal)]"
               />
-              {REPORT_REASON_LABELS[value]}
+              {redesign ? t(reportReasonKey(value)) : REPORT_REASON_LABELS[value]}
             </label>
           ))}
         </fieldset>

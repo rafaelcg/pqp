@@ -21,6 +21,8 @@ import {
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
 import { Menu as ActionMenu } from "@/components/ui/menu";
+import { ChannelBellButton, ChannelPinsButton } from "@/components/chat/channel-header-tools";
+import { TypingLine } from "@/components/chat/typing-line";
 import { WatchPartyBarSlot } from "@/components/watch-party/watch-party-bar";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
 import { createPortal } from "react-dom";
@@ -138,6 +140,7 @@ import {
 } from "@/components/user/user-profile-popover";
 import type { ProfileModerationContext } from "@/components/user/profile-relations";
 import { PinnedMessagesPanel } from "@/components/chat/pinned-messages-panel";
+import { HeaderSearch } from "@/components/search/header-search";
 import { ServerRail } from "@/components/layout/server-rail";
 import { WhatsNewView } from "@/components/layout/whats-new-view";
 import { AgeGateDialog } from "@/components/user/age-gate-dialog";
@@ -812,6 +815,10 @@ export type TokenResolver = (options?: {
 }) => Promise<string | null>;
 
 /** Equal-width icon tiles in the chat header (pins, channel settings, call, roster). */
+/** Apple keyboards label the same chord differently. */
+const IS_APPLE_KEYBOARD =
+  typeof navigator !== "undefined" && /Mac|iPhone|iPad/i.test(navigator.userAgent);
+
 const HEADER_ACTION_TILE = cn(
   "flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-paper-muted hover:bg-ink-3 hover:text-paper",
   PANE_HEADER_ACTION_REDESIGN,
@@ -2089,6 +2096,7 @@ function MainAppContent({
       kind: "message",
       messageId: message.id,
       subjectName: message.authorName,
+      authorId: message.authorId,
     });
   }, []);
   const [pinsOpen, setPinsOpen] = useState(false);
@@ -4086,6 +4094,9 @@ function MainAppContent({
     }
     const extra: MentionCandidate[] = [];
     const canMass = perms.can(Permission.MENTION_EVERYONE);
+    // How many each mass or role mention reaches, not counting the sender:
+    // the @ list says so under the redesign.
+    const others = serverMembers.filter((member) => member.id !== user?.id);
     if (canMass) {
       extra.push({
         id: "mention:everyone",
@@ -4093,6 +4104,7 @@ function MainAppContent({
         displayName: t("composer.mentionEveryone"),
         avatarUrl: null,
         mentionKind: "mass",
+        reach: others.length,
       });
       extra.push({
         id: "mention:here",
@@ -4100,6 +4112,7 @@ function MainAppContent({
         displayName: t("composer.mentionHere"),
         avatarUrl: null,
         mentionKind: "mass",
+        reach: others.filter((member) => member.status && member.status !== "offline").length,
       });
     }
     for (const role of mentionableRoles) {
@@ -4113,6 +4126,7 @@ function MainAppContent({
           displayName: role.name,
           avatarUrl: null,
           mentionKind: "role",
+          reach: others.filter((member) => member.roleIds?.includes(role.id)).length,
         });
       }
     }
@@ -4129,6 +4143,7 @@ function MainAppContent({
     mentionableRoles,
     perms,
     t,
+    user?.id,
   ]);
 
   // The roster above is the whole server once it has loaded, so a message
@@ -9805,6 +9820,25 @@ function MainAppContent({
     },
     [loadBlocks, loadConversations],
   );
+  // Stable, so the memoized message list keeps its memo: the row's Bloquear
+  // and the channel intro's two buttons (`channel-intro.tsx`).
+  const handleBlockAuthor = useStableCallback((userId: string) => {
+    void handleBlockUser(userId);
+  });
+  const introCopyInvite = useStableCallback(() =>
+    selectedServerId
+      ? copyInvitePaste({ serverId: selectedServerId, locale }).then(() => undefined)
+      : Promise.resolve(),
+  );
+  const introEditChannel = useStableCallback(() => {
+    if (selectedChannelId) {
+      setChannelSettings({
+        channelId: selectedChannelId,
+        section: "overview",
+        forceAdvanced: false,
+      });
+    }
+  });
 
   const handleUnblockUser = useCallback(
     async (userId: string) => {
@@ -11500,15 +11534,52 @@ function MainAppContent({
               </button>
             </Tooltip>
           )}
-          <Tooltip label={t("chrome.pins")}>
-            <button
-              type="button"
-              className={HEADER_ACTION_TILE}
-              onClick={() => setPinsOpen(true)}
-            >
-              <HeaderGlyph off={<Pin className="h-4 w-4" />} on={HeaderPinIcon} />
-            </button>
-          </Tooltip>
+          {(() => {
+            const pinTile = (
+              <Tooltip label={t("chrome.pins")}>
+                <button
+                  type="button"
+                  data-channel-header-pins=""
+                  className={HEADER_ACTION_TILE}
+                  onClick={() => setPinsOpen(true)}
+                >
+                  <HeaderGlyph off={<Pin className="h-4 w-4" />} on={HeaderPinIcon} />
+                </button>
+              </Tooltip>
+            );
+            // Under the redesign a channel with pins says so in words,
+            // "Fixadas 2", and the bell sits beside it.
+            return redesign ? (
+              <>
+                {selectedChannel.kind === "server" && selectedServer && selectedChannel.type === "text" && (
+                  <HeaderSearch
+                    serverId={selectedServer.id}
+                    serverName={selectedServer.name}
+                    channel={selectedChannel}
+                    members={serverMembers}
+                    channels={channels.filter((c) => c.type === "text" || c.type === "forum")}
+                    shortcut={IS_APPLE_KEYBOARD ? "⌘F" : "Ctrl F"}
+                    tileClassName={HEADER_ACTION_TILE}
+                  />
+                )}
+                <ChannelPinsButton
+                  channelId={selectedChannel.id}
+                  messages={chat.getMessages()}
+                  onOpen={() => setPinsOpen(true)}
+                  fallback={pinTile}
+                />
+                {selectedChannel.kind === "server" && (
+                  <ChannelBellButton
+                    channel={selectedChannel}
+                    inherits={selectedServer?.name ?? null}
+                    className={HEADER_ACTION_TILE}
+                  />
+                )}
+              </>
+            ) : (
+              pinTile
+            );
+          })()}
           {canViewWatchPartyHistory && selectedChannel.kind === "server" && (
             <Tooltip label={t("chrome.watchPartyHistory")}>
               <button
@@ -11586,6 +11657,9 @@ function MainAppContent({
       {...nudgeShake}
       className={cn("flex min-h-0 min-w-0 flex-1 flex-col", nudgeShake.className)}
       data-retro-window={retroWindow ? "" : undefined}
+      // A voice room's chat is the call's chat: the smallest avatar
+      // (index.css, `data-message-surface`).
+      data-message-surface={isVoiceRoomChannelType(selectedChannel.type) ? "call" : undefined}
       // The whole conversation is the drop target, not the textarea: dragging a
       // screenshot onto the messages is what people actually do, and a target
       // the size of one input is a target you miss.
@@ -11698,13 +11772,35 @@ function MainAppContent({
           {/* A watch party channel with a party on it has its own count on
               the bar ("N assistindo"); a second one here, of the seated
               room, says a different number about the same show. */}
-          {!(isWatchPartySplit && watchParties.byChannel[selectedChannel.id]) && (
+          {!(isWatchPartySplit && watchParties.byChannel[selectedChannel.id]) &&
+            // Under the redesign "N aqui" is dropped while the member list
+            // beside it shows the same people; a topic always shows.
+            !(
+              redesign &&
+              !activeConversation &&
+              !selectedChannel.topic &&
+              memberSidebarAvailable &&
+              memberSidebar.open &&
+              !openThread
+            ) && (
             <p className={cn("truncate text-[11px] text-paper-muted", PANE_HEADER_DETAIL_REDESIGN, "redesign:max-md:text-xs redesign:md:min-w-0 redesign:md:border-l redesign:md:border-[color:var(--pane-header-rule)] redesign:md:pl-3")}>
               {activeConversation
                 ? conversationSubtitle(activeConversation)
-                : selectedChannel.topic
-                  ? selectedChannel.topic
-                  : `${selectedChannel.isPrivate ? t("chrome.privatePrefix") : ""}${t("chrome.peopleHere", { count: chat.getPresence().length })}`}
+                : redesign
+                  ? // "4 online · Papo geral do Sandbox": the count only while
+                    // the member list is closed, since the list shows the same
+                    // people, then the topic.
+                    [
+                      memberSidebarAvailable && memberSidebar.open && !openThread
+                        ? null
+                        : `${selectedChannel.isPrivate ? t("chrome.privatePrefix") : ""}${t("chrome.peopleOnline", { count: chat.getPresence().length })}`,
+                      selectedChannel.topic || null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")
+                  : selectedChannel.topic
+                    ? selectedChannel.topic
+                    : `${selectedChannel.isPrivate ? t("chrome.privatePrefix") : ""}${t("chrome.peopleHere", { count: chat.getPresence().length })}`}
             </p>
           )}
         </div>
@@ -12634,6 +12730,18 @@ function MainAppContent({
         }
         messages={chat.getMessages()}
         participants={activeConversation?.participants}
+        moderation={cardModeration}
+        onBlockUser={handleBlockAuthor}
+        introName={
+          selectedChannel.kind === "server" && selectedChannel.type === "text"
+            ? selectedChannel.name
+            : null
+        }
+        introTopic={selectedChannel.topic ?? null}
+        onIntroCopyInvite={
+          perms.can(Permission.CREATE_INVITE) ? introCopyInvite : undefined
+        }
+        onIntroEdit={canManageChannels ? introEditChannel : undefined}
         currentUserId={user?.id ?? null}
         currentUsername={user?.username ?? null}
         serverId={selectedServerId}
@@ -12648,6 +12756,7 @@ function MainAppContent({
         isLoadingOlder={chat.isLoadingOlder()}
         isLoadingNewer={chat.isLoadingNewer()}
         typingUsers={chat.getTypingUsers()}
+        typingInComposer={redesign && !isWatchPartySplit && canSendHere}
         botNotice={chat.getBotNotice()}
         onDismissBotNotice={chat.dismissBotNotice}
         canModerate={canManageMessages}
@@ -12764,6 +12873,7 @@ function MainAppContent({
       <div hidden={!canSendHere}>
       <MessageComposer
         variant={isWatchPartySplit ? "stream" : "default"}
+        typingLine={redesign ? <TypingLine users={chat.getTypingUsers()} /> : null}
         // Remount per channel: the draft is component state, so without this a
         // half-typed message follows you into the next channel, one Enter away
         // from the wrong audience.
@@ -12849,9 +12959,10 @@ function MainAppContent({
           selectedServerId &&
           (selectedChannel.type === "text" || selectedChannel.type === "voice") &&
           !isWatchPartySplit
-            ? (buttonClassName) => (
+            ? (buttonClassName, menu) => (
                 <AppLauncher
                   key={selectedChannel.id}
+                  menuTrigger={menu}
                   serverId={selectedServerId}
                   channelId={selectedChannel.id}
                   channelName={selectedChannel.name}
@@ -14312,6 +14423,9 @@ function MainAppContent({
       <ReportDialog
         target={reportTarget}
         onClose={() => setReportTarget(null)}
+        onBlock={handleBlockAuthor}
+        isBlocked={(userId) => blockedUserIds.has(userId)}
+        placeName={selection.kind === "server" ? (selectedServer?.name ?? null) : null}
       />
 
       <StoriesHost

@@ -226,6 +226,7 @@ export function ThreadPanel({
   return (
     <aside
       aria-label={`${t("thread.title")}: ${thread.name}`}
+      data-message-surface={forum ? undefined : "thread"}
       {...drop.zoneProps}
       onTouchStart={(event) => {
         if (isDockedPanel()) {

@@ -2086,12 +2086,29 @@ export function prefetchBootReads(route: AppRouteTarget | null): void {
  * Full-text search across every channel of one server the caller can see.
  * `before` is the opaque cursor the previous page returned.
  */
+/** The header search's chips. Each one only narrows; all optional. */
+export interface MessageSearchFilters {
+  channelId?: string;
+  authorId?: string;
+  mentionsId?: string;
+  has?: "link" | "image" | "file";
+  /** On or after this day, `YYYY-MM-DD`. */
+  since?: string;
+  /** Before this day, `YYYY-MM-DD`. */
+  until?: string;
+}
+
 export const searchServerMessages = (
   serverId: string,
-  options: { q: string; limit?: number; before?: string | null },
+  options: { q: string; limit?: number; before?: string | null; filters?: MessageSearchFilters },
   signal?: AbortSignal,
 ) => {
   const params = new URLSearchParams({ q: options.q });
+  for (const [key, value] of Object.entries(options.filters ?? {})) {
+    if (value) {
+      params.set(key, value);
+    }
+  }
   if (options.limit) {
     params.set("limit", String(options.limit));
   }

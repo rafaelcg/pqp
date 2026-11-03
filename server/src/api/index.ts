@@ -914,7 +914,7 @@ import {
   findUserIdByHandle,
   getPublicProfileByHandle,
 } from "../services/profiles.js";
-import { decodeSearchCursor, searchMessages } from "../services/search.js";
+import { decodeSearchCursor, parseSearchFilters, searchMessages } from "../services/search.js";
 // --- threads ---
 import { SIDEBAR_THREADS_PER_CHANNEL } from "@pqp/shared";
 import {
@@ -11412,6 +11412,7 @@ router.get("/api/servers/:serverId/search", async (ctx, { serverId }) => {
     query.data,
     limit,
     cursor ?? undefined,
+    parseSearchFilters(url.searchParams),
   );
 });
 

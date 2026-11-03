@@ -78,6 +78,9 @@ import {
 } from "@/lib/member-groups";
 import { cn } from "@/lib/utils";
 import { PANE_SIDE_REDESIGN } from "@/components/ui/pane";
+import { SidebarResizeHandle } from "@/components/layout/sidebar-resize-handle";
+import { useChannelSidebarWidth } from "@/hooks/use-channel-sidebar-width";
+import { MEMBER_SIDEBAR_SLOT } from "@/lib/channel-sidebar-width";
 import {
   PANE_HEADER_ACTION_REDESIGN,
   PANE_HEADER_REDESIGN,
@@ -293,6 +296,7 @@ export const MemberSidebar = memo(function MemberSidebar({
   showManageRoster = false,
 }: MemberSidebarProps) {
   const { t } = useTranslation();
+  const width = useChannelSidebarWidth(MEMBER_SIDEBAR_SLOT);
   const openProfile = useProfilePopover();
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -721,13 +725,25 @@ export const MemberSidebar = memo(function MemberSidebar({
         data-member-sidebar=""
         data-immersive-hide=""
         aria-label={t("memberList.title")}
+        style={wide ? ({ "--member-sidebar-width": `${width.width}px` } as CSSProperties) : undefined}
         className={cn(
           "flex shrink-0 flex-col border-l border-ink-4/60 bg-channel",
           wide
-            ? cn("w-60", PANE_SIDE_REDESIGN)
+            ? cn("relative w-[var(--member-sidebar-width)]", PANE_SIDE_REDESIGN)
             : "fixed inset-y-0 right-0 z-30 w-[min(100%,15rem)] shadow-[var(--shadow-popover)]",
         )}
       >
+        {wide && (
+          <SidebarResizeHandle
+            edge="left"
+            label={t("chrome.resizeMemberList")}
+            width={width.width}
+            maxWidth={width.maxWidth}
+            defaultWidth={MEMBER_SIDEBAR_SLOT.defaultWidth}
+            onWidthChange={width.setWidth}
+            onCommit={width.commitWidth}
+          />
+        )}
         {/* --- threads --- a thread that was swapped out for this list is
             still open as far as the reader is concerned, so it keeps a seat
             here rather than being silently discarded. */}

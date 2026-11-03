@@ -332,6 +332,8 @@ export function UserPanel({
         // above it. The presence dot's cutout is the card's colour, opaque.
         compact ? SIDEBAR_FOOTER_CARD_COMPACT_REDESIGN : SIDEBAR_FOOTER_CARD_REDESIGN,
         "redesign:[--avatar-dot-ring:var(--footer-card-solid)]",
+        // The row measures the card, not the window: see the name below.
+        "redesign:@container",
       )}
       // Under the redesign the home-indicator inset goes outside the card, so
       // the row stays centred in it (`index.css`, `[data-user-panel-card]`).
@@ -344,6 +346,9 @@ export function UserPanel({
           // controls drop to their own line under it, so the name never
           // collapses (a narrow sidebar with Não Perturbe on lost it).
           compact ? "flex-col items-center gap-1" : "flex-wrap items-center",
+          // Under the redesign the row never wraps: a narrow column drops the
+          // name and keeps the avatar beside the controls.
+          !compact && "redesign:flex-nowrap",
         )}
       >
         {open && (
@@ -593,7 +598,7 @@ export function UserPanel({
         aria-expanded={open}
         className={cn(
           "flex min-w-0 items-center gap-2 rounded-md px-1 py-0.5 text-left hover:bg-ink-2",
-          !compact && "min-w-[var(--user-panel-name-min,7rem)] flex-1",
+          !compact && "min-w-[var(--user-panel-name-min,7rem)] flex-1 redesign:min-w-0 redesign:min-h-11",
           "redesign:gap-2.5 redesign:rounded-full redesign:py-1 redesign:pl-1 redesign:pr-2 redesign:hover:bg-[color:var(--card-row-hover)] redesign:hover:[--avatar-dot-ring:var(--footer-card-solid-hover)] redesign:focus-visible:outline-none redesign:focus-visible:ring-2 redesign:focus-visible:ring-accent",
           compact && "redesign:p-1",
           open && "redesign:bg-[color:var(--card-row-hover)] redesign:[--avatar-dot-ring:var(--footer-card-solid-hover)]",
@@ -614,7 +619,10 @@ export function UserPanel({
             ringClassName="rounded-full bg-ink ring-2 ring-ink redesign:bg-[color:var(--avatar-dot-ring)] redesign:ring-[color:var(--avatar-dot-ring)]"
           />
         </span>
-        <span className={cn("min-w-0 flex-1", compact && "hidden")}>
+        <span
+          data-user-panel-name=""
+          className={cn("min-w-0 flex-1 redesign:@max-[14rem]:hidden", compact && "hidden")}
+        >
           <span className="block truncate text-sm font-semibold redesign:text-text">
             {displayName}
           </span>

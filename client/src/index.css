@@ -391,6 +391,15 @@
   --duration-slow: 300ms;
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
   --ease-emphasized: cubic-bezier(0.16, 1, 0.3, 1);
+  /*
+   * From the text channels canvas ("Movimento"). `instant` is a press or an
+   * icon swapping; `layer` is only a full-screen view or a whole desktop
+   * panel, never a row in the conversation; `exit` is the curve for leaving,
+   * run in about 70% of the entrance's time.
+   */
+  --duration-instant: 100ms;
+  --duration-layer: 450ms;
+  --ease-exit: cubic-bezier(0.3, 0, 0.8, 0.15);
 
   /*
    * TYPE RAMP. Five roles. Every size matches a Tailwind utility the
@@ -909,8 +918,14 @@
   --message-hover-solid: color-mix(in oklab, var(--color-text) 4.5%, var(--color-pane-main));
   /* The system's mention row, tuned per appearance so a mention never reads
      as the selected channel; the hover one step toward the accent. */
-  --message-mention-bg: var(--color-mention-row);
-  --message-mention-hover: color-mix(in oklab, var(--message-mention-bg) 85%, var(--color-accent));
+  /* A row that names you is amber with an amber edge (text channels canvas):
+     lime stays for primary, on and yours, and a mention must not read as
+     selected. */
+  --message-mention-bg: var(--color-warning-soft);
+  --message-mention-hover: color-mix(in oklab, var(--message-mention-bg) 94%, var(--color-text));
+  --message-mention-edge: var(--color-warning);
+  /* A message's avatar: 40 on desktop, 36 on a phone, 32 in a thread. */
+  --message-avatar: 2.5rem;
   /* Your own name on your messages. */
   --message-own-name: var(--color-accent-text);
 
@@ -1418,9 +1433,9 @@
   --message-hover-solid: color-mix(in oklab, var(--color-text) 3%, var(--color-pane-main));
   /* The full soft accent is the selected channel's fill in light; a mention
      sits a step quieter so it never reads as selected. */
-  --message-mention-bg: color-mix(in oklab, var(--color-accent-soft) 70%, var(--color-pane-main));
+  --message-mention-bg: color-mix(in oklab, var(--color-warning-soft) 80%, var(--color-pane-main));
   /* A smaller step than dark, so the @you chip keeps its edge on a hovered row. */
-  --message-mention-hover: color-mix(in oklab, var(--message-mention-bg) 92%, var(--color-accent));
+  --message-mention-hover: color-mix(in oklab, var(--message-mention-bg) 95%, var(--color-text));
   /* Your own name: the lime itself in light, where accent-text is a near-black olive. */
   --message-own-name: var(--color-accent);
   --glass-bg: oklch(0.99 0 0 / 0.72);
@@ -3296,9 +3311,34 @@ h2,
 }
 
 /* Under the redesign a mention is the accent's soft fill, as in the mockup. */
+@media (max-width: 767px) {
+  :root[data-redesign] {
+    --message-avatar: 2.25rem;
+  }
+}
+
+:root[data-redesign] [data-message-surface="thread"] {
+  --message-avatar: 2rem;
+}
+
+/* A call's chat, the third of the canvas's densities (36 on a phone, 32 in a
+   thread, 28 in a call). */
+:root[data-redesign] [data-message-surface="call"] {
+  --message-avatar: 1.75rem;
+}
+
 :root[data-redesign] .pqp-message-mention {
   background: var(--message-mention-bg);
+  box-shadow: inset 2px 0 0 var(--message-mention-edge);
   --avatar-dot-ring: var(--message-mention-bg);
+}
+
+/* Your own chip on that row takes the amber too, outlined, so the row has
+   one colour. */
+:root[data-redesign] .pqp-message-mention .pqp-mention.pqp-mention-self {
+  background: color-mix(in oklab, var(--message-mention-bg) 82%, var(--color-on-warning-soft));
+  color: var(--color-on-warning-soft);
+  box-shadow: inset 0 0 0 1px var(--color-on-warning-soft);
 }
 
 :root[data-redesign] .pqp-message-mention:hover {
@@ -3344,6 +3384,176 @@ h2,
 
 :root[data-redesign] .markdown-body pre code {
   padding: 0;
+}
+
+/* A code block with Copiar in its corner. The block scrolls sideways, the
+   button stays put. */
+:root[data-redesign] .markdown-body .pqp-code-block {
+  position: relative;
+  max-width: 28rem;
+}
+
+:root[data-redesign] .markdown-body .pqp-code-block pre {
+  max-width: 100%;
+}
+
+:root[data-redesign] .markdown-body .pqp-code-copy {
+  position: absolute;
+  top: 0.375rem;
+  right: 0.375rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  height: 1.5rem;
+  padding: 0 0.5rem;
+  border-radius: 0.375rem;
+  /* Solid, so code that scrolls under it never shows through. */
+  background: color-mix(in oklab, var(--color-text) 12%, var(--color-pane-main));
+  box-shadow: 0 0 0 4px color-mix(in oklab, var(--color-text) 4%, var(--color-pane-main));
+  color: var(--color-text);
+  font-family: var(--font-sans, inherit);
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
+:root[data-redesign] .markdown-body .pqp-code-copy:hover {
+  background: color-mix(in oklab, var(--color-text) 18%, var(--color-pane-main));
+}
+
+:root[data-redesign] .markdown-body .pqp-code-copy:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 1px;
+}
+
+/* A message of one to six emoji, drawn large. */
+:root[data-redesign] .markdown-body.pqp-jumbo {
+  font-size: 2.5rem;
+  line-height: 3rem;
+}
+
+:root[data-redesign] [data-message-flash] {
+  /* A jump's landing: lit at once, held, then let go (the text channels
+     canvas, "Não lidas"). The row drops the attribute after HIGHLIGHT_MS. */
+  animation: pqp-message-flash 1.5s var(--ease-standard) forwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  /* No fade: the mark holds until the row lets go of it. */
+  :root[data-redesign] [data-message-flash] {
+    animation: none;
+    background-color: color-mix(in oklab, var(--color-accent) 15%, transparent);
+  }
+}
+/* A message's menu on a phone (the text channels canvas, "Segurando uma
+   mensagem"): the same rows, risen from the bottom edge as a sheet instead
+   of floating at the finger. Radix writes the wrapper's position inline,
+   hence the !important. The 100vmax ring is the scrim. Below `sm`, the
+   width `lib/breakpoints.ts` names and the chat's phone gestures read. */
+@media (max-width: 39.999rem) {
+  :root[data-redesign] [data-radix-popper-content-wrapper]:has(> [data-sheet-on-phone]) {
+    position: fixed !important;
+    inset: auto 0 0 0 !important;
+    transform: none !important;
+    min-width: 0 !important;
+  }
+  :root[data-redesign] [data-sheet-on-phone] {
+    width: 100%;
+    max-height: 80dvh;
+    overflow-y: auto;
+    translate: none !important;
+    border-radius: var(--sheet-radius) var(--sheet-radius) 0 0;
+    border-width: 1px 0 0;
+    border-color: var(--sheet-edge);
+    background: var(--sheet-surface);
+    box-shadow:
+      0 0 0 100vmax var(--sheet-scrim),
+      var(--sheet-shadow);
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  }
+  :root[data-redesign] [data-sheet-on-phone] [role="menuitem"] {
+    min-height: 44px;
+  }
+  /* The held message, lifted just above the sheet into the space it leaves
+     (at most 20dvh, since the sheet stops at 80). Placed against the fixed
+     wrapper, not the sheet: the sheet stays unpositioned, so its own scroll
+     never clips the card. */
+  :root[data-redesign] [data-sheet-on-phone] {
+    position: static !important;
+  }
+  :root[data-redesign] [data-sheet-on-phone] [data-sheet-preview] {
+    position: absolute;
+    bottom: calc(100% + 0.75rem);
+    left: 0.75rem;
+    right: 0.75rem;
+    display: block;
+    max-height: calc(20dvh - 1.5rem);
+    overflow: hidden;
+    border-radius: var(--radius-panel);
+    background: var(--color-surface-1);
+    box-shadow: var(--sheet-shadow);
+    pointer-events: none;
+  }
+}
+/* Drag a message right to reply (the text channels canvas, "Celular:
+   gestos"; `lib/swipe-to-reply.ts` writes the two variables). The row
+   follows the finger with no transition and springs back when let go; the
+   colour transitions the row already had stay listed. */
+:root[data-redesign] [data-swipe-reply] {
+  touch-action: pan-y;
+  translate: var(--swipe-x, 0px) 0;
+  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke, translate;
+  transition-duration: var(--duration-slow);
+  transition-timing-function: var(--ease-emphasized);
+}
+:root[data-redesign] [data-swipe-reply][data-swiping] {
+  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke;
+}
+/* A finger on the row reads as hover; mid-swipe the toolbar is in the way. */
+:root[data-redesign] [data-swiping] [data-row-toolbar] {
+  display: none !important;
+}
+/* The reply mark stays where the row started while the row slides off it. */
+:root[data-redesign] [data-swipe-reply-mark] {
+  position: absolute;
+  top: 50%;
+  left: calc(14px - var(--swipe-x, 0px));
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  margin-top: -16px;
+  border-radius: 999px;
+  background: var(--color-surface-3);
+  color: var(--color-text);
+  opacity: var(--swipe-p, 0);
+  scale: calc(0.6 + 0.4 * var(--swipe-p, 0));
+  pointer-events: none;
+}
+@keyframes pqp-count-flash {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  40% {
+    opacity: 0.35;
+  }
+}
+@keyframes pqp-message-flash {
+  0%,
+  45% {
+    background-color: color-mix(in oklab, var(--color-accent) 15%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--color-accent) 50%, transparent);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: inset 0 0 0 1px transparent;
+  }
+}
+/* Someone else's long message, folded to eight lines until "Mostrar tudo". */
+:root[data-redesign] .pqp-message-folded {
+  max-height: calc(var(--chat-line-height) * 8);
+  overflow: hidden;
+  mask-image: linear-gradient(to bottom, black 70%, transparent);
 }
 
 :root[data-redesign] .markdown-body blockquote {
@@ -6139,6 +6349,85 @@ html[data-immersive-stage] [data-immersive-hide] {
       grid-template-rows var(--duration-slow) var(--ease-emphasized),
       opacity var(--duration-base) var(--ease-standard) 60ms,
       visibility 0s;
+  }
+}
+
+/* Motion under the redesign (the text channels canvas, "Movimento"). A
+   message or a new reaction enters in the base time. Reduced motion is not
+   zero motion: what carries meaning (a message arriving, a menu, a sheet)
+   fades in place instead of travelling, a colour change stays, and what is
+   only decoration (the typing dots, the swipe's spring) stops. */
+@keyframes pqp-reaction-in {
+  from {
+    opacity: 0;
+    scale: 0.7;
+  }
+  to {
+    opacity: 1;
+    scale: 1;
+  }
+}
+/* A menu grows from the control that opened it, in place. */
+@keyframes pqp-menu-in {
+  from {
+    opacity: 0;
+    scale: 0.97;
+  }
+  to {
+    opacity: 1;
+    scale: 1;
+  }
+}
+/* A count that changed rolls in from below; tabular figures keep its width. */
+@keyframes pqp-count-roll {
+  from {
+    opacity: 0;
+    translate: 0 50%;
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  :root[data-redesign] .chat-msg-in {
+    animation-duration: var(--duration-base);
+  }
+  :root[data-redesign] [data-reaction-fresh] {
+    animation: pqp-reaction-in var(--duration-base) var(--ease-emphasized) backwards;
+  }
+  :root[data-redesign] [data-radix-menu-content].animate-fade-in {
+    transform-origin: var(--radix-dropdown-menu-content-transform-origin, var(--radix-context-menu-content-transform-origin));
+    animation: pqp-menu-in var(--duration-fast) var(--ease-emphasized) both;
+  }
+  :root[data-redesign] [data-count-roll] {
+    display: inline-block;
+    animation: pqp-count-roll var(--duration-base) var(--ease-emphasized) backwards;
+  }
+  /* A thumbnail growing into the lightbox, and back. */
+  ::view-transition-group(pqp-lightbox-image) {
+    animation-duration: 280ms;
+    animation-timing-function: var(--ease-emphasized);
+  }
+  /* "Não foi": one shake, the nudge's curve, never a loop. */
+  :root[data-redesign] [data-send-failed] {
+    animation: nudge-shake 400ms var(--ease-standard) 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  :root[data-redesign] .chat-msg-in,
+  :root[data-redesign] [data-reaction-fresh],
+  :root[data-redesign] .animate-fade-in {
+    animation: fade-in var(--duration-fast) var(--ease-standard) backwards;
+  }
+  :root[data-redesign] .animate-rise {
+    animation: fade-in var(--duration-base) var(--ease-standard) both;
+  }
+  :root[data-redesign] .animate-bounce {
+    animation: none;
+  }
+  :root[data-redesign] [data-swipe-reply] {
+    transition-property: color, background-color, border-color, text-decoration-color, fill, stroke;
   }
 }
 

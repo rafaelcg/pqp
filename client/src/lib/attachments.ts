@@ -525,4 +525,10 @@ export interface OutgoingAttachment {
   previewUrl: string;
   /** Set on a voice note, so the optimistic bubble draws the card at once. */
   voice?: CreateVoiceNote;
+  /**
+   * Under the redesign a message may go before its files finish: then
+   * `attachmentId` is the composer's local id and this resolves to the real
+   * one. The bubble shows at once; the send waits for every one of these.
+   */
+  pending?: Promise<{ attachmentId: string; width: number | null; height: number | null }>;
 }

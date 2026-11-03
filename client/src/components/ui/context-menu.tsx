@@ -89,6 +89,20 @@ interface ContextMenuProps {
   children: ReactNode;
   disabled?: boolean;
   onOpenChange?: (open: boolean) => void;
+  /**
+   * Under the redesign, below `sm`, the menu rises from the bottom edge as a
+   * sheet instead of floating at the finger (the text channels canvas,
+   * "Segurando uma mensagem"). The rule lives in index.css, on
+   * `[data-sheet-on-phone]`, because Radix positions the wrapper inline.
+   */
+  sheetOnPhone?: boolean;
+  /**
+   * The thing the sheet acts on, lifted above it on a phone (the canvas's
+   * held message). Drawn only by the sheet rule; the caller passes it only
+   * when the sheet applies. A copy of what is on the page, so hidden from
+   * assistive tech.
+   */
+  phonePreview?: ReactNode;
 }
 
 /** Keeps the menu clear of the very edge of the window on every side. */
@@ -103,6 +117,8 @@ export function ContextMenu({
   children,
   disabled = false,
   onOpenChange,
+  sheetOnPhone = false,
+  phonePreview,
 }: ContextMenuProps) {
   // Radix anchors the menu to a zero-size rect at the pointer, which is right —
   // but it hardcodes `side="right" align="start"`, so floating-ui handles
@@ -212,6 +228,7 @@ export function ContextMenu({
           // Named so a test can address the open menu and its rows without
           // matching on translated labels.
           data-context-menu=""
+          data-sheet-on-phone={sheetOnPhone ? "" : undefined}
           // `animate-fade-in` rather than `animate-rise`: the latter animates
           // `translateY(14px)` over 650ms, so the menu spends half a second
           // visibly detached from the point it is anchored to.
@@ -225,6 +242,11 @@ export function ContextMenu({
           )}
           onCloseAutoFocus={(e) => e.preventDefault()}
         >
+          {sheetOnPhone && phonePreview && (
+            <div data-sheet-preview="" aria-hidden className="hidden">
+              {phonePreview}
+            </div>
+          )}
           {hasStrip && (
             <>
               {/* ONE ROW. `flex` with no wrapping and equal-basis cells is the
