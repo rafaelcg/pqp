@@ -37,9 +37,6 @@ export function ChannelIntro({ info, empty }: { info: ChannelIntroInfo; empty: b
           : "flex max-w-[49.5rem] flex-col gap-2 pb-4 pl-[4.5rem] pr-4 pt-6 max-sm:pl-4"
       }
     >
-      <div className="-ml-14 mb-1 grid h-14 w-14 place-items-center rounded-xl bg-surface-2 text-text-secondary ring-1 ring-inset ring-border max-sm:ml-0">
-        <Icon icon={Hash} size="lg" className="h-6 w-6" />
-      </div>
       <h2 className="m-0 font-display text-[28px] font-extrabold leading-8 text-text">
         {t("chat.intro.title", { name: info.name })}
       </h2>
