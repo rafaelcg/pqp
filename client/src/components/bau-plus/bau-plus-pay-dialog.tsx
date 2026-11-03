@@ -7,12 +7,14 @@ import type {
 } from "@pqp/shared";
 import {
   Check,
+  ChevronDown,
   ChevronLeft,
   Clock3,
   Copy,
   CreditCard,
   ExternalLink,
   FlaskConical,
+  QrCode,
   RotateCcw,
   ShieldCheck,
   TimerOff,
@@ -20,6 +22,7 @@ import {
 import {
   useCallback,
   useEffect,
+  useId,
   useRef,
   useState,
   type ReactNode,
@@ -29,6 +32,7 @@ import { useCopyText } from "@/components/settings/kit/copy-button";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { RadioGroup } from "@/components/ui/radio-group";
+import { SM_UP_QUERY, useMediaQuery } from "@/components/ui/use-media-query";
 import { ApiError } from "@/lib/api";
 import {
   actOnSandboxAttempt,
@@ -44,6 +48,7 @@ import { onBauPlusUpdate } from "@/lib/bau-plus/updates";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { PixQr } from "./pix-qr";
+import { BauMonthMeter, VipSeal } from "./vip-seal";
 
 /**
  * THE PAY SHEET. One calm column, Stripe Checkout's shape and a bank app's Pix
@@ -279,6 +284,8 @@ export function BauPlusPayDialog({
             membership={step.membership}
             attempt={step.attempt}
             serverName={serverName}
+            serverIconUrl={serverIconUrl}
+            perks={plan.perks}
             seller={seller}
             reminderDays={offer.reminderDays}
             primary={primaryAfterPaid}
@@ -586,13 +593,18 @@ function PayStep({
     );
   }
 
+  // The whole decision fits one phone screen: who and how much, whether it
+  // is still waiting and for how long, then the one action. The status sits
+  // above the action so it never scrolls away while the person is in their
+  // bank app and comes back.
+  const total =
+    new Date(attempt.expiresAt).getTime() -
+    new Date(attempt.createdAt).getTime();
   return (
     <div className="flex flex-col">
       {status}
-      {back}
-      <div className="bau-step-in">
-        <AmountLine price={price} seller={seller} centered />
-      </div>
+      <PayHeader price={price} seller={seller} onBack={onBack} />
+      <StatusCard left={left} total={total} />
 
       {attempt.method === "pix" ? (
         <PixBody attempt={attempt} price={price} />
@@ -600,9 +612,8 @@ function PayStep({
         <CardBody attempt={attempt} providerLabel={providerLabel} />
       )}
 
-      <WaitingLine left={left} />
       {error && <ErrorLine message={t(error)} />}
-
+      <Fineprint seller={seller} providerLabel={providerLabel} />
       {attempt.sandbox && (
         <SandboxControls
           attemptId={attempt.id}
@@ -610,7 +621,46 @@ function PayStep({
           onSettle={onSettle}
         />
       )}
-      <Fineprint seller={seller} providerLabel={providerLabel} />
+    </div>
+  );
+}
+
+/**
+ * "R$ 9,90 / para Bia" on the left, aligned with everything under it, and
+ * "Voltar" quietly on the right of the same row (it costs no height).
+ */
+function PayHeader({
+  price,
+  seller,
+  onBack,
+}: {
+  price: string;
+  seller: string;
+  onBack: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="bau-step-in flex items-start justify-between gap-3">
+      <div className="min-w-0">
+        <p
+          className="font-display text-[1.75rem] font-bold leading-none tracking-tight text-text tabular-nums"
+          data-bau-amount
+        >
+          {price}
+        </p>
+        <p className="mt-1.5 truncate text-sm text-text-tertiary">
+          {t("bauPlus.pix.to", { seller })}
+        </p>
+      </div>
+      <button
+        type="button"
+        className="-mr-2 -mt-1 inline-flex h-9 shrink-0 items-center gap-1 rounded-[var(--radius-control)] pl-1.5 pr-2.5 text-sm text-text-tertiary transition-colors duration-[var(--duration-fast)] hover:bg-surface-1 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+        onClick={onBack}
+        data-bau-back
+      >
+        <ChevronLeft aria-hidden className="h-4 w-4" />
+        {t("bauPlus.pix.back")}
+      </button>
     </div>
   );
 }
@@ -654,28 +704,21 @@ function StateNotice({
   );
 }
 
-function AmountLine({
-  price,
-  seller,
-  centered = false,
-}: {
-  price: string;
-  seller: string;
-  centered?: boolean;
-}) {
-  const { t } = useTranslation();
-  return (
-    <div className={cn("min-w-0", centered && "text-center")}>
-      <p className="font-display text-[1.75rem] font-bold leading-tight text-text tabular-nums">
-        {price}
-      </p>
-      <p className="mt-0.5 truncate text-sm text-text-tertiary">
-        {t("bauPlus.pix.to", { seller })}
-      </p>
-    </div>
-  );
-}
-
+/**
+ * The Pix itself. Two layouts, because the two situations are different:
+ *
+ *   phone     the bank app is on this same screen, so a QR is useless here:
+ *             "Copiar código Pix" leads, the steps say copy, paste, confirm,
+ *             and the QR folds away behind one row for paying from another
+ *             phone. There is no honest "open your bank" button: Pix has no
+ *             universal deep link, and guessing a bank's scheme would open
+ *             the wrong app for most people.
+ *   computer  the phone is the thing that pays: the QR leads, copying is the
+ *             quieter second way.
+ *
+ * Copying ticks the first step, so the person sees where they are when they
+ * come back from the bank app.
+ */
 function PixBody({
   attempt,
   price,
@@ -684,92 +727,183 @@ function PixBody({
   price: string;
 }) {
   const { t } = useTranslation();
+  const phone = !useMediaQuery(SM_UP_QUERY, true);
+  const [qrOpen, setQrOpen] = useState(false);
+  const qrId = useId();
   const code = attempt.pixCode ?? "";
   const codeRef = useRef<HTMLElement>(null);
   const { copied, failed, copy } = useCopyText(code, {
     selectOnFail: () => codeRef.current,
   });
-  const stepsList: MessageKey[] = [
-    "bauPlus.pix.step1",
-    "bauPlus.pix.step2",
-    "bauPlus.pix.step3",
-  ];
+  // Once copied, step one stays done even after the button's label resets.
+  const [copiedOnce, setCopiedOnce] = useState(false);
+  useEffect(() => {
+    if (copied) setCopiedOnce(true);
+  }, [copied]);
+  const steps: MessageKey[] = phone
+    ? [
+        "bauPlus.pix.phoneStep1",
+        "bauPlus.pix.phoneStep2",
+        "bauPlus.pix.phoneStep3",
+      ]
+    : ["bauPlus.pix.step1", "bauPlus.pix.step2", "bauPlus.pix.step3"];
+
+  const qr = code ? (
+    <PixQr
+      code={code}
+      label={t("bauPlus.pix.qrLabel", { price })}
+      className="aspect-square w-full"
+    />
+  ) : (
+    <div className="aspect-square w-full rounded-[var(--radius-card)] bg-surface-1" />
+  );
+
+  const copyButton = code ? (
+    <div>
+      <Button
+        variant={phone ? "default" : "secondary"}
+        className={cn("w-full text-[15px]", phone ? "h-12" : "h-11")}
+        onClick={copy}
+        data-bau-copy
+      >
+        <span
+          className="relative inline-grid h-4 w-4 place-items-center"
+          aria-hidden
+        >
+          <Copy
+            className={cn(
+              "col-start-1 row-start-1 h-4 w-4 transition-[opacity,transform,filter] duration-[var(--duration-base)] ease-[var(--ease-standard)]",
+              copied
+                ? "scale-[0.25] opacity-0 blur-[4px]"
+                : "scale-100 opacity-100 blur-0",
+            )}
+          />
+          <Check
+            className={cn(
+              "col-start-1 row-start-1 h-4 w-4 transition-[opacity,transform,filter] duration-[var(--duration-base)] ease-[var(--ease-standard)]",
+              copied
+                ? "scale-100 opacity-100 blur-0"
+                : "scale-[0.25] opacity-0 blur-[4px]",
+            )}
+          />
+        </span>
+        {copied ? t("bauPlus.pix.copied") : t("bauPlus.pix.copy")}
+      </Button>
+      <span className="sr-only" role="status">
+        {copied
+          ? t("bauPlus.pix.copied")
+          : failed
+            ? t("bauPlus.pix.copyFailed")
+            : ""}
+      </span>
+      <code
+        ref={codeRef}
+        className="mt-1.5 block select-all truncate px-1 text-center font-mono text-[11px] leading-5 text-text-tertiary"
+        data-bau-pix-code
+      >
+        {code}
+      </code>
+    </div>
+  ) : null;
+
+  const stepList = (
+    <ol
+      className="flex flex-col gap-1.5"
+      aria-label={t("bauPlus.pix.stepsLabel")}
+      data-bau-steps
+    >
+      {steps.map((key, index) => {
+        const done = phone && index === 0 && copiedOnce;
+        const next = phone && index === 1 && copiedOnce;
+        return (
+          <li
+            key={key}
+            className={cn(
+              "flex items-center gap-2.5 text-[13px] leading-5 transition-colors duration-[var(--duration-base)]",
+              done
+                ? "text-text-tertiary"
+                : next
+                  ? "font-medium text-text"
+                  : "text-text-secondary",
+            )}
+            data-bau-step-done={done ? "" : undefined}
+          >
+            <span
+              className={cn(
+                "grid h-5 w-5 shrink-0 place-items-center rounded-full text-[11px] font-semibold tabular-nums transition-colors duration-[var(--duration-base)]",
+                done
+                  ? "bg-accent-soft text-on-accent-soft"
+                  : next
+                    ? "bg-accent text-on-accent"
+                    : "bg-surface-1 text-text-secondary ring-1 ring-inset ring-border",
+              )}
+              aria-hidden
+            >
+              {done ? (
+                <Check className="h-3 w-3" strokeWidth={3} />
+              ) : (
+                index + 1
+              )}
+            </span>
+            <span className="min-w-0 text-pretty">{t(key)}</span>
+          </li>
+        );
+      })}
+    </ol>
+  );
+
+  if (phone) {
+    return (
+      <>
+        <div className="bau-step-in mt-4 [--stagger:2]">{copyButton}</div>
+        <div className="bau-step-in mt-3 [--stagger:3]">{stepList}</div>
+        {code && (
+          <div className="bau-step-in mt-3 border-t border-border [--stagger:4]">
+            <button
+              type="button"
+              className="flex h-11 w-full items-center justify-between gap-3 text-left text-[13px] text-text-secondary transition-colors duration-[var(--duration-fast)] hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+              aria-expanded={qrOpen}
+              aria-controls={qrId}
+              onClick={() => setQrOpen((open) => !open)}
+              data-bau-qr-toggle
+            >
+              <span className="inline-flex min-w-0 items-center gap-2">
+                <QrCode aria-hidden className="h-4 w-4 shrink-0" />
+                <span className="truncate">
+                  {qrOpen ? t("bauPlus.pix.hideQr") : t("bauPlus.pix.showQr")}
+                </span>
+              </span>
+              <ChevronDown
+                aria-hidden
+                className={cn(
+                  "h-4 w-4 shrink-0 transition-transform duration-[var(--duration-base)] ease-[var(--ease-standard)]",
+                  qrOpen && "rotate-180",
+                )}
+              />
+            </button>
+            {qrOpen && (
+              <div
+                id={qrId}
+                className="bau-step-in mx-auto w-full max-w-[12rem] pb-3"
+              >
+                {qr}
+              </div>
+            )}
+          </div>
+        )}
+      </>
+    );
+  }
 
   return (
     <>
-      {/* A phone cannot scan its own screen: there the copy button leads and
-          the QR is smaller; on a computer the QR is the main thing. */}
-      <div className="bau-step-in mx-auto mt-4 w-full max-w-[11rem] [--stagger:1] sm:mt-5 sm:max-w-[13.5rem]">
-        {code ? (
-          <PixQr
-            code={code}
-            label={t("bauPlus.pix.qrLabel", { price })}
-            className="aspect-square w-full"
-          />
-        ) : (
-          <div className="aspect-square w-full rounded-[var(--radius-card)] bg-surface-2" />
-        )}
+      <div className="bau-step-in mx-auto mt-5 w-full max-w-[13.5rem] [--stagger:2]">
+        {qr}
       </div>
-
-      {code && (
-        <div className="bau-step-in mt-4 [--stagger:2]">
-          <Button
-            className="h-11 w-full text-[15px]"
-            onClick={copy}
-            data-bau-copy
-          >
-            <span
-              className="relative mr-2 inline-grid h-4 w-4 place-items-center"
-              aria-hidden
-            >
-              <Copy
-                className={cn(
-                  "col-start-1 row-start-1 h-4 w-4 transition-[opacity,transform,filter] duration-[var(--duration-base)] ease-[var(--ease-standard)]",
-                  copied
-                    ? "scale-[0.25] opacity-0 blur-[4px]"
-                    : "scale-100 opacity-100 blur-0",
-                )}
-              />
-              <Check
-                className={cn(
-                  "col-start-1 row-start-1 h-4 w-4 transition-[opacity,transform,filter] duration-[var(--duration-base)] ease-[var(--ease-standard)]",
-                  copied
-                    ? "scale-100 opacity-100 blur-0"
-                    : "scale-[0.25] opacity-0 blur-[4px]",
-                )}
-              />
-            </span>
-            {copied ? t("bauPlus.pix.copied") : t("bauPlus.pix.copy")}
-          </Button>
-          <span className="sr-only" role="status">
-            {copied
-              ? t("bauPlus.pix.copied")
-              : failed
-                ? t("bauPlus.pix.copyFailed")
-                : ""}
-          </span>
-          <code
-            ref={codeRef}
-            className="mt-2 block select-all truncate px-1 text-center font-mono text-[11px] text-text-tertiary"
-            data-bau-pix-code
-          >
-            {code}
-          </code>
-          <ol className="mt-4 flex flex-col gap-2 border-t border-border pt-4">
-            {stepsList.map((key, index) => (
-              <li
-                key={key}
-                className="flex items-start gap-3 text-[13px] leading-5 text-text-secondary"
-              >
-                <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-surface-2 text-[11px] font-semibold text-text-secondary tabular-nums">
-                  {index + 1}
-                </span>
-                <span className="text-pretty">{t(key)}</span>
-              </li>
-            ))}
-          </ol>
-        </div>
-      )}
+      <div className="bau-step-in mt-4 [--stagger:3]">{copyButton}</div>
+      <div className="bau-step-in mt-4 border-t border-border pt-4 [--stagger:4]">
+        {stepList}
+      </div>
     </>
   );
 }
@@ -783,7 +917,7 @@ function CardBody({
 }) {
   const { t } = useTranslation();
   return (
-    <div className="bau-step-in mt-5 rounded-[var(--radius-card)] border border-border bg-surface-1 p-4 [--stagger:1]">
+    <div className="bau-step-in mt-4 rounded-[var(--radius-card)] border border-border bg-surface-1 p-4 [--stagger:2]">
       <div className="flex items-start gap-3">
         <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-surface-2 text-text-secondary">
           <CreditCard aria-hidden className="h-4 w-4" />
@@ -811,27 +945,53 @@ function CardBody({
   );
 }
 
-/** "● Esperando o pagamento" and, beside it, how long the code is good for. */
-function WaitingLine({ left }: { left: number }) {
+/** The last two minutes of a code are drawn in the warning colour. */
+const URGENT_MS = 2 * 60_000;
+
+/**
+ * "● Esperando o pagamento   Vence em 14:52", over a bar that drains with the
+ * code's time. One block, near the top, so it is the first thing seen when the
+ * person comes back from the bank app.
+ */
+function StatusCard({ left, total }: { left: number; total: number }) {
   const { t } = useTranslation();
+  const urgent = left <= URGENT_MS;
+  const share = total > 0 ? Math.min(1, Math.max(0, left / total)) : 0;
   return (
     <div
-      className="bau-step-in mt-4 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-[13px] text-text-secondary [--stagger:3]"
+      className="bau-step-in mt-4 rounded-[var(--radius-card)] border border-border bg-surface-1 px-3.5 pb-3 pt-2.5 [--stagger:1]"
       data-bau-waiting
     >
-      <span className="inline-flex items-center gap-2">
+      <div className="flex items-center justify-between gap-3 text-[13px] leading-5">
+        <span className="inline-flex min-w-0 items-center gap-2 font-medium text-text">
+          <span
+            aria-hidden
+            className="bau-wait-dot h-2 w-2 shrink-0 rounded-full bg-accent"
+          />
+          <span className="truncate">{t("bauPlus.pix.waiting")}</span>
+        </span>
         <span
-          aria-hidden
-          className="bau-wait-dot h-2 w-2 rounded-full bg-accent"
-        />
-        {t("bauPlus.pix.waiting")}
-      </span>
+          className={cn(
+            "inline-flex shrink-0 items-center gap-1.5 tabular-nums",
+            urgent ? "font-medium text-warning" : "text-text-secondary",
+          )}
+          data-bau-countdown
+        >
+          <Clock3 aria-hidden className="h-3.5 w-3.5" />
+          {t("bauPlus.pix.expiresIn", { time: formatCountdown(left) })}
+        </span>
+      </div>
       <span
-        className="inline-flex items-center gap-1.5 tabular-nums text-text-tertiary"
-        data-bau-countdown
+        aria-hidden
+        className="mt-2 block h-1 overflow-hidden rounded-full bg-surface-3"
       >
-        <Clock3 aria-hidden className="h-3.5 w-3.5" />
-        {t("bauPlus.pix.expiresIn", { time: formatCountdown(left) })}
+        <span
+          className={cn(
+            "bau-drain block h-full rounded-full",
+            urgent ? "bg-warning" : "bg-accent",
+          )}
+          style={{ width: `${Math.round(share * 1000) / 10}%` }}
+        />
       </span>
     </div>
   );
@@ -866,29 +1026,33 @@ function SandboxControls({
     },
     { action: "expire", label: "bauPlus.sandbox.expire" },
   ];
+  // One quiet row at the very bottom: a developer's tool, never in the way of
+  // the real path above it.
   return (
     <div
-      className="mt-4 rounded-[var(--radius-card)] border border-dashed border-border-strong px-3 py-2.5"
+      className="mt-4 flex flex-wrap items-center gap-x-1 gap-y-1 border-t border-dashed border-border-strong pt-2.5"
       data-bau-sandbox
     >
-      <p className="flex items-center gap-1.5 text-xs font-medium text-text-tertiary">
+      <p
+        className="mr-auto flex items-center gap-1.5 text-xs text-text-tertiary"
+        title={t("bauPlus.sandbox.note")}
+      >
         <FlaskConical aria-hidden className="h-3.5 w-3.5" />
-        {t("bauPlus.sandbox.note")}
+        {t("bauPlus.sandbox.short")}
       </p>
-      <div className="mt-2 flex flex-wrap gap-1.5">
-        {actions.map(({ action, label }) => (
-          <Button
-            key={action}
-            size="sm"
-            variant="secondary"
-            disabled={busy !== null}
-            onClick={() => void act(action)}
-            data-bau-sandbox-action={action}
-          >
-            {t(label)}
-          </Button>
-        ))}
-      </div>
+      {actions.map(({ action, label }) => (
+        <Button
+          key={action}
+          size="sm"
+          variant="ghost"
+          className="h-8 px-2.5 text-xs text-text-secondary"
+          disabled={busy !== null}
+          onClick={() => void act(action)}
+          data-bau-sandbox-action={action}
+        >
+          {t(label)}
+        </Button>
+      ))}
     </div>
   );
 }
@@ -902,7 +1066,7 @@ function Fineprint({
 }) {
   const { t } = useTranslation();
   return (
-    <p className="mt-5 flex items-start justify-center gap-1.5 text-pretty text-center text-xs leading-5 text-text-tertiary">
+    <p className="mt-4 flex items-start justify-center gap-1.5 text-pretty text-center text-xs leading-5 text-text-tertiary">
       <ShieldCheck aria-hidden className="mt-0.5 h-3.5 w-3.5 shrink-0" />
       <span>
         {t("bauPlus.pay.fineprint", { seller, provider: providerLabel })}
@@ -928,6 +1092,8 @@ function PaidStep({
   membership,
   attempt,
   serverName,
+  serverIconUrl,
+  perks,
   seller,
   reminderDays,
   primary,
@@ -937,6 +1103,8 @@ function PaidStep({
   membership: BauMembership;
   attempt: BauPaymentAttempt;
   serverName: string;
+  serverIconUrl: string | null;
+  perks: string[];
   seller: string;
   reminderDays: number;
   primary: "post" | "feed";
@@ -947,41 +1115,77 @@ function PaidStep({
   const until = membership.periodEnd
     ? formatBauDay(membership.periodEnd, locale)
     : null;
+  // The confirmation is the one celebratory moment in Baú+: the creator's
+  // seal arrives with its gem, a soft halo opens once behind it, and what the
+  // person just got is listed back to them. No confetti: a membership, not a
+  // prize.
   return (
-    <div className="flex flex-col items-center pt-2 text-center" data-bau-paid>
+    <div className="flex flex-col items-center pt-1 text-center" data-bau-paid>
       <p className="sr-only" role="status" aria-live="polite">
         {t("bauPlus.paid.announce")}
       </p>
-      <div className="relative grid h-16 w-16 place-items-center">
+      <div className="relative grid place-items-center">
         <span
           aria-hidden
-          className="bau-paid-ring absolute inset-0 rounded-full bg-success-soft"
+          className="bau-paid-ring absolute -inset-3 rounded-full bg-accent-soft"
         />
-        <span className="bau-paid-mark relative grid h-16 w-16 place-items-center rounded-full bg-success-soft text-on-success-soft">
-          <svg
-            viewBox="0 0 24 24"
-            aria-hidden
-            className="h-8 w-8"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={2.5}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <path className="bau-paid-check" d="M5 12.5l4.5 4.5L19 7.5" />
-          </svg>
-        </span>
+        <VipSeal
+          name={serverName}
+          iconUrl={serverIconUrl}
+          size="lg"
+          celebrate
+          ringClass="ring-[var(--elevation-3-surface)]"
+        />
       </div>
-      <p className="bau-step-in mt-5 font-display text-2xl font-bold text-text text-balance [--stagger:2]">
+      <p className="bau-step-in mt-5 font-display text-2xl font-bold text-text text-balance [--stagger:3]">
         {t("bauPlus.paid.headline", { server: serverName })}
       </p>
-      <p className="bau-step-in mt-2 max-w-[19rem] text-pretty text-sm leading-6 text-text-secondary [--stagger:3]">
-        {until
-          ? t("bauPlus.paid.until", { server: serverName, date: until })
-          : t("bauPlus.paid.unlocked", { server: serverName })}{" "}
-        {t("bauPlus.paid.reminder", { count: reminderDays })}
+      <p className="bau-step-in mt-1.5 text-pretty text-sm leading-6 text-text-secondary [--stagger:3]">
+        {t("bauPlus.paid.unlocked", { server: serverName })}
       </p>
-      <div className="bau-step-in mt-6 flex w-full flex-col gap-2 [--stagger:4]">
+
+      {until && (
+        <div
+          className="bau-step-in mt-5 w-full rounded-[var(--radius-card)] border border-border bg-surface-1 px-3.5 py-3 text-left [--stagger:4]"
+          data-bau-paid-until
+        >
+          <div className="flex items-baseline justify-between gap-3 text-sm">
+            <span className="text-text-secondary">
+              {t("bauPlus.paid.untilLabel")}
+            </span>
+            <span className="font-semibold text-text">{until}</span>
+          </div>
+          <BauMonthMeter remaining={1} className="mt-2.5" />
+          <p className="mt-2 text-pretty text-xs leading-5 text-text-tertiary">
+            {t("bauPlus.paid.reminder", { count: reminderDays })}
+          </p>
+        </div>
+      )}
+
+      {perks.length > 0 && (
+        <ul
+          className="mt-4 flex w-full flex-col gap-2 text-left"
+          aria-label={t("bauPlus.pay.perksLabel")}
+        >
+          {perks.map((perk, index) => (
+            <li
+              key={perk}
+              className="bau-step-in flex items-start gap-2.5 text-sm leading-5 text-text"
+              style={{ ["--stagger" as string]: 5 + index }}
+            >
+              <span className="mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded-full bg-accent-soft text-on-accent-soft">
+                <Check aria-hidden className="h-2.5 w-2.5" strokeWidth={3} />
+              </span>
+              <span className="text-pretty">{perk}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div
+        className="bau-step-in mt-6 flex w-full flex-col gap-2"
+        style={{ ["--stagger" as string]: 5 + perks.length }}
+      >
         <Button
           className="h-11 w-full text-[15px]"
           onClick={onDone}

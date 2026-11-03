@@ -126,6 +126,12 @@ struct CommunityHomeView: View {
                     expanded = [:]
                     Task { await load() }
                 }
+                // The VIP cargo arrived or left (a payment on the web, staff,
+                // an expiry): the same posts now open or lock, so read again.
+                if case .permissionsUpdate(let serverId, _) = event, serverId == server.id {
+                    expanded = [:]
+                    Task { await load() }
+                }
             }
         }
         .onDisappear {

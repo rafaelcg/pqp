@@ -93,6 +93,7 @@ interface PostBody {
   hasMedia: boolean;
   posterUrl: string | null;
   locked: boolean;
+  lockedHint?: { mediaKind: string | null; readMinutes: number } | null;
   commentCount: number;
   commentTeaser: { body: string }[];
   likeCount: number;
@@ -388,6 +389,9 @@ describeDb("community home (Baú)", () => {
     );
     expect(locked.commentCount).toBe(1);
     expect(locked.commentTeaser).toEqual([]);
+    // The lock may say what it hides (a video, a one-minute read), never
+    // a word of it.
+    expect(locked.lockedHint).toEqual({ mediaKind: "youtube", readMinutes: 1 });
     expect(JSON.stringify(asMember.body)).not.toContain("sessao-11");
     expect(JSON.stringify(asMember.body)).not.toContain("youtu.be");
 
@@ -418,6 +422,7 @@ describeDb("community home (Baú)", () => {
       const res = await call<{ posts: PostBody[] }>(viewer, "GET", `${base()}/posts`);
       const open = res.body.posts[0]!;
       expect(open.locked).toBe(false);
+      expect(open.lockedHint).toBeNull();
       expect(open.body).toContain("sessao-11-clip.webm");
       expect(open.hasMedia).toBe(true);
       expect(open.media?.kind).toBe("youtube");
@@ -432,6 +437,21 @@ describeDb("community home (Baú)", () => {
     expect(res.body.posts[0]!.body).toBe("mapa-porao.png");
     expect(res.body.posts[0]!.hasMedia).toBe(false);
     expect(res.body.posts[0]!.posterUrl).toBeNull();
+    expect(res.body.posts[0]!.lockedHint).toBeNull();
+  });
+
+  it("a locked text post's hint is its length in minutes and no media", async () => {
+    const words = Array.from({ length: 450 }, () => "segredo").join(" ");
+    await publish({
+      title: "Roteiro",
+      body: words,
+      visibility: "members",
+    });
+    const res = await call<{ posts: PostBody[] }>(member, "GET", `${base()}/posts`);
+    const locked = res.body.posts[0]!;
+    expect(locked.locked).toBe(true);
+    expect(locked.lockedHint).toEqual({ mediaKind: null, readMinutes: 3 });
+    expect(JSON.stringify(res.body)).not.toContain("segredo");
   });
 
   describe("with COMMUNITY_HOME_VIP_ENABLED unset", () => {

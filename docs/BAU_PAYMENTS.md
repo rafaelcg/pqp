@@ -216,36 +216,65 @@ All in `client/src/components/bau-plus/`, strings under `bauPlus.*`. Never on
 the phone apps.
 
 - **The locked post** (`BauPlusPaywall`): when the server's offer is
-  `enabled`, a members-only post shows the creator's teaser, then text that is
-  clearly there and not readable (a stock sentence from the catalogue,
-  blurred; the real body never reaches the client), then one card: "Post
-  exclusivo pra VIP", one sentence, and "Apoiar por R$ X/mês". Never a disabled
-  button: mid-payment it says "Continuar o pagamento", after VIP ran out
-  "Voltar pro VIP". Without an offer the card is the support-link card, as
-  before. A VIP reader gets a small "VIP" chip on members-only posts.
+  `enabled`, a members-only post shows the title, the date and the creator's
+  own teaser (the composer's "Prévia" field, written per post), then a
+  placeholder shaped like the hidden text: rows of word-sized bars, plainly
+  not words, as many rows as the text is long, and none under media with only
+  a caption (the plate above already has the media's shape, with a play,
+  picture or file mark). Then one card: "Post exclusivo pra VIP", what is
+  inside ("Vídeo", "Leitura rápida", "3 min de leitura"), one sentence, and
+  "Apoiar por R$ X/mês". The kind and the length come from
+  `post.lockedHint` (`{ mediaKind, readMinutes }`), which the feed API fills
+  only for a locked reader and which carries no word of the post; the real
+  body never reaches the client. Never a disabled button: mid-payment it says
+  "Continuar o pagamento", after VIP ran out "Voltar pro VIP". Without an
+  offer the card is the support-link card, as before. A VIP reader gets a
+  small "VIP" chip on members-only posts.
 - **The pay sheet** (`BauPlusPayDialog`), one dialog in three steps: summary
   (seller, price, the creator's perks, Pix or card when the adapter offers
-  card, the renewal and 7-day lines), pay (amount, the QR drawn from the copia
-  e cola, one copy button, "Esperando o pagamento" with the countdown, three
-  short steps; on a phone the QR is smaller and the copy button leads), and
-  paid (a check that draws itself and one ring, the date VIP lasts until,
-  "Ler o post"). Expired, declined and "Já paguei e não liberou" (a provider
-  re-fetch) live in the pay step. The sandbox shows its three dev buttons
-  there. The sheet flips on `bau-plus-update` and polls every 4 s under it.
-- **The membership strip** at the top of the creator's Baú, only when there is
-  something to do: an open Pix, the renewal reminder (`renewalDue`), grace, a
-  cancelled month still running, a VIP that ended in the last 30 days, and the
-  welcome right after paying.
+  card, the renewal and 7-day lines), pay, and paid. The pay step opens with
+  the amount (and "Voltar" on the same row) and a status block, "Esperando o
+  pagamento" with the countdown over a bar that drains with the code's time
+  (warning colour in the last two minutes), so the state is the first thing
+  seen when the person comes back from the bank app. Then two layouts:
+  - **phone** (under 640px): the bank app is on the same screen, so "Copiar
+    código Pix" leads, the steps say copy, paste in Pix Copia e Cola, confirm,
+    and the QR folds behind one row ("Pagar de outro celular? Mostrar o QR").
+    Copying ticks step one and lights step two. There is no "open your bank"
+    button: Pix has no universal deep link. The whole decision fits a 390x844
+    screen with no scroll (pinned by the e2e).
+  - **computer**: the phone is what pays, so the QR leads and copying is the
+    quieter second button.
+  Expired, declined and "Já paguei e não liberou" (a provider re-fetch) live
+  in the pay step. The sandbox's pay, fail and expire are one quiet row at the
+  very bottom. The paid step is the one celebratory moment: the creator's VIP
+  seal arrives (tile, one sheen, the gem medallion), a soft halo opens once,
+  then "VIP até" with the month's bar, the perks listed back, and "Ler o
+  post". The sheet flips on `bau-plus-update` and polls every 4 s under it.
+- **The VIP seal** (`vip-seal.tsx`): the creator's icon with a gem medallion
+  on its corner, the one mark for "tu é VIP daqui" on the confirmation, the
+  strip and Assinaturas; greyed when access is off. `BauMonthMeter` beside it
+  is how much of the paid month is left.
+- **The membership strip** at the top of the creator's Baú. While VIP runs
+  with nothing due it is a slim row (seal, "VIP desde ...", "Vale até ...", a
+  hairline for the month) that opens Assinaturas. It grows into a card with
+  one button when there is something to do: an open Pix, the renewal
+  reminder (`renewalDue`, "Faltam 3 dias de VIP"), grace, a cancelled month
+  still running, a VIP that ended in the last 30 days. Right after paying it
+  is the welcome, which plays the seal's arrival once.
 - **Configurações, Assinaturas** (`SubscriptionsSection`, shown once the person
-  has a membership): one box per creator with status, the one next step
-  (renew, continue, reactivate, come back), cancel and the 7-day refund (both
-  confirm first), and the receipts (each opens a receipt with seller, item,
-  period, method, provider and the provider's reference). "Renovar" from here
-  opens that creator's Baú with the pay sheet up (`requestBauPay`).
+  has a membership): one box per creator with the seal, status, "VIP desde",
+  and while access runs a month block ("Vale até ...", days left, the bar,
+  one friendly line on what happens next); then the one next step (renew,
+  continue, reactivate, come back), cancel and the 7-day refund (both confirm
+  first), and the receipts (each opens a receipt with seller, item, period,
+  method, provider and the provider's reference). "Renovar" from here opens
+  that creator's Baú with the pay sheet up (`requestBauPay`).
 
-Motion is three moments only (the step settling, the waiting dot, the
-confirmation), all in `index.css` under `bau-*` and off under reduced motion.
-The e2e is `client/e2e/bau-plus-pay.spec.ts`, against the sandbox.
+Motion is a handful of quiet moments (the step settling, the waiting dot and
+draining bar, the seal arriving, the month bar easing in), all in `index.css`
+under `bau-*` and off under reduced motion. The e2e is
+`client/e2e/bau-plus-pay.spec.ts`, against the sandbox.
 
 ## Metrics
 

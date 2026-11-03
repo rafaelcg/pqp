@@ -110,6 +110,13 @@ class BauViewModel(
                     _state.value = _state.value.copy(expandedComments = emptyMap())
                     load()
                 }
+                "permissions-update" -> {
+                    if (frame["serverId"]?.jsonPrimitive?.contentOrNull != serverId) return@collect
+                    // The VIP cargo arrived or left (a payment on the web,
+                    // staff, an expiry): the same posts now open or lock.
+                    _state.value = _state.value.copy(expandedComments = emptyMap())
+                    load()
+                }
             }
         }
     }

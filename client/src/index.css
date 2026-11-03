@@ -5024,11 +5024,11 @@ html[data-immersive-stage] [data-immersive-hide] {
 }
 
 /*
- * Baú+ (the fan paying for VIP, components/bau-plus/). Three moments of
- * motion and nothing else: the step of the pay sheet settling in, a quiet
+ * Baú+ (the fan paying for VIP, components/bau-plus/). A few quiet moments
+ * of motion and nothing else: the step of the pay sheet settling in, a
  * breathing dot while the bank has not answered, and the confirmation (one
- * ring that opens and fades, a check that draws itself). All off under
- * reduced motion, where each state is simply there.
+ * halo that opens and fades behind the VIP seal). All off under reduced
+ * motion, where each state is simply there.
  */
 @keyframes bau-step-in {
   from {
@@ -5073,10 +5073,31 @@ html[data-immersive-stage] [data-immersive-hide] {
   }
 }
 
-@keyframes bau-mark-in {
+.bau-paid-ring {
+  animation: bau-ring 900ms var(--ease-emphasized) 120ms both;
+}
+
+
+/*
+ * The locked post's placeholder: bars shaped like the hidden paragraph (as
+ * many as the text is long), fading into the card under them. Plainly not
+ * words; the real body never reaches the client.
+ */
+.bau-lock-lines {
+  user-select: none;
+  -webkit-mask-image: linear-gradient(to bottom, black 15%, transparent 92%);
+  mask-image: linear-gradient(to bottom, black 15%, transparent 92%);
+}
+
+/*
+ * The VIP seal arriving (`vip-seal.tsx`, the confirmation and the welcome
+ * strip): the tile settles, one band of light crosses it once, the gem
+ * medallion lands a beat later. Once, never looping.
+ */
+@keyframes bau-seal-in {
   from {
     opacity: 0;
-    transform: scale(0.6);
+    transform: scale(0.86);
   }
   to {
     opacity: 1;
@@ -5084,49 +5105,90 @@ html[data-immersive-stage] [data-immersive-hide] {
   }
 }
 
-@keyframes bau-check-draw {
+@keyframes bau-sheen {
+  from {
+    transform: translateX(-120%) skewX(-18deg);
+  }
   to {
-    stroke-dashoffset: 0;
+    transform: translateX(220%) skewX(-18deg);
   }
 }
 
-.bau-paid-ring {
-  animation: bau-ring 900ms var(--ease-emphasized) 120ms both;
+@keyframes bau-medal-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.4) rotate(-25deg);
+  }
+  70% {
+    opacity: 1;
+    transform: scale(1.08) rotate(4deg);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) rotate(0);
+  }
 }
 
-.bau-paid-mark {
-  animation: bau-mark-in 420ms var(--ease-emphasized) both;
+.bau-seal-in {
+  animation: bau-seal-in 480ms var(--ease-emphasized) both;
 }
 
-.bau-paid-check {
-  stroke-dasharray: 30;
-  stroke-dashoffset: 30;
-  animation: bau-check-draw 380ms var(--ease-emphasized) 220ms forwards;
+.bau-seal-sheen {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 45%;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--color-surface-0) 50%,
+    transparent
+  );
+  opacity: 0.55;
+  transform: translateX(-120%) skewX(-18deg);
+  animation: bau-sheen 900ms var(--ease-standard) 380ms both;
 }
 
-/*
- * The locked post's preview: sentence-shaped text the reader cannot read,
- * fading into the card under it (the real body never reaches the client).
- */
-.bau-blur-text {
-  filter: blur(5px);
-  user-select: none;
-  -webkit-mask-image: linear-gradient(to bottom, black 20%, transparent 95%);
-  mask-image: linear-gradient(to bottom, black 20%, transparent 95%);
+.bau-medal-in {
+  animation: bau-medal-in 520ms var(--ease-emphasized) 260ms both;
+}
+
+/* How much of the month is left: eases to its width when it first draws. */
+@keyframes bau-meter-in {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+.bau-meter-fill {
+  transform-origin: left center;
+  animation: bau-meter-in 700ms var(--ease-emphasized) 120ms backwards;
+}
+
+/* The Pix code's time left, draining once a second. */
+.bau-drain {
+  transition: width 1s linear;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .bau-step-in,
   .bau-wait-dot,
   .bau-paid-ring,
-  .bau-paid-mark {
+  .bau-seal-in,
+  .bau-medal-in,
+  .bau-meter-fill {
     animation: none;
+  }
+  .bau-seal-sheen {
+    display: none;
+  }
+  .bau-drain {
+    transition: none;
   }
   .bau-paid-ring {
     opacity: 0;
-  }
-  .bau-paid-check {
-    animation: none;
-    stroke-dashoffset: 0;
   }
 }

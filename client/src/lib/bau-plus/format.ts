@@ -38,3 +38,26 @@ export function formatCountdown(msLeft: number): string {
   const seconds = total % 60;
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
+
+/**
+ * Where a paid month stands: whole days left (rounded up, so the last few
+ * hours still read "1 dia") and how much of the month is still ahead, from 1
+ * (just paid) to 0 (ends now). Null without both ends of the period.
+ */
+export function bauPeriodLeft(
+  periodStart: string | null,
+  periodEnd: string | null,
+  now = Date.now(),
+): { daysLeft: number; remaining: number } | null {
+  if (!periodStart || !periodEnd) return null;
+  const start = new Date(periodStart).getTime();
+  const end = new Date(periodEnd).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+    return null;
+  }
+  const left = Math.max(0, end - now);
+  return {
+    daysLeft: Math.ceil(left / 86_400_000),
+    remaining: Math.min(1, Math.max(0, left / (end - start))),
+  };
+}
