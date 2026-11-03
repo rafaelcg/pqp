@@ -17,6 +17,7 @@ import {
   type Icon as PhosphorGlyph,
 } from "@phosphor-icons/react";
 import { Icon as Glyph } from "@/components/ui/icon";
+import { ChannelIntro, type ChannelIntroInfo } from "@/components/chat/channel-intro";
 import { MessageFold } from "@/components/chat/message-fold";
 import {
   MemberModerationDialog,
@@ -371,6 +372,16 @@ interface MessageListProps {
   historyFailed?: boolean;
   onRetryHistory?: () => void;
   hasMore?: boolean;
+  /**
+   * A server text channel's name (null everywhere else), its topic and what
+   * the viewer may do there: under the redesign, the greeting above the first
+   * message and the empty channel's cards (`channel-intro.tsx`). Separate
+   * props, so the list's memo holds.
+   */
+  introName?: string | null;
+  introTopic?: string | null;
+  onIntroCopyInvite?: () => Promise<void>;
+  onIntroEdit?: () => void;
   /** True while the loaded window stops short of the newest message. */
   hasNewer?: boolean;
   isLoadingOlder?: boolean;
@@ -823,6 +834,10 @@ export const MessageList = memo(function MessageList({
   historyFailed = false,
   onRetryHistory,
   hasMore = false,
+  introName = null,
+  introTopic = null,
+  onIntroCopyInvite,
+  onIntroEdit,
   hasNewer = false,
   isLoadingOlder = false,
   isLoadingNewer = false,
@@ -905,6 +920,13 @@ export const MessageList = memo(function MessageList({
   }, [missingAuthorKey, reportMissingAuthors]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const redesign = useRedesign();
+  const channelIntro = useMemo<ChannelIntroInfo | null>(
+    () =>
+      introName
+        ? { name: introName, topic: introTopic, onCopyInvite: onIntroCopyInvite, onEdit: onIntroEdit }
+        : null,
+    [introName, introTopic, onIntroCopyInvite, onIntroEdit],
+  );
   // Under the redesign the jump pill clears the bot's note: it rises over
   // the footer (the note and the typing line) while it is taller than the
   // typing line alone, and follows the note down as it collapses.
@@ -2314,9 +2336,20 @@ export const MessageList = memo(function MessageList({
           <HistoryFailed compact onRetry={onRetryHistory} />
         )}
 
+        {redesign &&
+          channelIntro &&
+          !forumPost &&
+          !hasMore &&
+          !historyFailed &&
+          messages.length > 0 && <ChannelIntro info={channelIntro} empty={false} />}
+
         {messages.length === 0 ? (
           historyFailed ? (
             <HistoryFailed onRetry={onRetryHistory} />
+          ) : redesign && channelIntro && !forumPost ? (
+            <div className="flex min-h-full flex-col justify-end">
+              <ChannelIntro info={channelIntro} empty />
+            </div>
           ) : (
             <EmptyState onCopyOwnerInvite={onCopyOwnerInvite} />
           )

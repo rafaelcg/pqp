@@ -21,6 +21,7 @@ import {
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
 import { Menu as ActionMenu } from "@/components/ui/menu";
+import { ChannelBellButton, ChannelPinsButton } from "@/components/chat/channel-header-tools";
 import { WatchPartyBarSlot } from "@/components/watch-party/watch-party-bar";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
 import { createPortal } from "react-dom";
@@ -9805,6 +9806,25 @@ function MainAppContent({
     },
     [loadBlocks, loadConversations],
   );
+  // Stable, so the memoized message list keeps its memo: the row's Bloquear
+  // and the channel intro's two buttons (`channel-intro.tsx`).
+  const handleBlockAuthor = useStableCallback((userId: string) => {
+    void handleBlockUser(userId);
+  });
+  const introCopyInvite = useStableCallback(() =>
+    selectedServerId
+      ? copyInvitePaste({ serverId: selectedServerId, locale }).then(() => undefined)
+      : Promise.resolve(),
+  );
+  const introEditChannel = useStableCallback(() => {
+    if (selectedChannelId) {
+      setChannelSettings({
+        channelId: selectedChannelId,
+        section: "overview",
+        forceAdvanced: false,
+      });
+    }
+  });
 
   const handleUnblockUser = useCallback(
     async (userId: string) => {
@@ -11500,15 +11520,40 @@ function MainAppContent({
               </button>
             </Tooltip>
           )}
-          <Tooltip label={t("chrome.pins")}>
-            <button
-              type="button"
-              className={HEADER_ACTION_TILE}
-              onClick={() => setPinsOpen(true)}
-            >
-              <HeaderGlyph off={<Pin className="h-4 w-4" />} on={HeaderPinIcon} />
-            </button>
-          </Tooltip>
+          {(() => {
+            const pinTile = (
+              <Tooltip label={t("chrome.pins")}>
+                <button
+                  type="button"
+                  className={HEADER_ACTION_TILE}
+                  onClick={() => setPinsOpen(true)}
+                >
+                  <HeaderGlyph off={<Pin className="h-4 w-4" />} on={HeaderPinIcon} />
+                </button>
+              </Tooltip>
+            );
+            // Under the redesign a channel with pins says so in words,
+            // "Fixadas 2", and the bell sits beside it.
+            return redesign ? (
+              <>
+                <ChannelPinsButton
+                  channelId={selectedChannel.id}
+                  messages={chat.getMessages()}
+                  onOpen={() => setPinsOpen(true)}
+                  fallback={pinTile}
+                />
+                {selectedChannel.kind === "server" && (
+                  <ChannelBellButton
+                    channel={selectedChannel}
+                    inherits={selectedServer?.name ?? null}
+                    className={HEADER_ACTION_TILE}
+                  />
+                )}
+              </>
+            ) : (
+              pinTile
+            );
+          })()}
           {canViewWatchPartyHistory && selectedChannel.kind === "server" && (
             <Tooltip label={t("chrome.watchPartyHistory")}>
               <button
@@ -11698,7 +11743,17 @@ function MainAppContent({
           {/* A watch party channel with a party on it has its own count on
               the bar ("N assistindo"); a second one here, of the seated
               room, says a different number about the same show. */}
-          {!(isWatchPartySplit && watchParties.byChannel[selectedChannel.id]) && (
+          {!(isWatchPartySplit && watchParties.byChannel[selectedChannel.id]) &&
+            // Under the redesign "N aqui" is dropped while the member list
+            // beside it shows the same people; a topic always shows.
+            !(
+              redesign &&
+              !activeConversation &&
+              !selectedChannel.topic &&
+              memberSidebarAvailable &&
+              memberSidebar.open &&
+              !openThread
+            ) && (
             <p className={cn("truncate text-[11px] text-paper-muted", PANE_HEADER_DETAIL_REDESIGN, "redesign:max-md:text-xs redesign:md:min-w-0 redesign:md:border-l redesign:md:border-[color:var(--pane-header-rule)] redesign:md:pl-3")}>
               {activeConversation
                 ? conversationSubtitle(activeConversation)
@@ -12635,7 +12690,17 @@ function MainAppContent({
         messages={chat.getMessages()}
         participants={activeConversation?.participants}
         moderation={cardModeration}
-        onBlockUser={(userId) => void handleBlockUser(userId)}
+        onBlockUser={handleBlockAuthor}
+        introName={
+          selectedChannel.kind === "server" && selectedChannel.type === "text"
+            ? selectedChannel.name
+            : null
+        }
+        introTopic={selectedChannel.topic ?? null}
+        onIntroCopyInvite={
+          perms.can(Permission.CREATE_INVITE) ? introCopyInvite : undefined
+        }
+        onIntroEdit={canManageChannels ? introEditChannel : undefined}
         currentUserId={user?.id ?? null}
         currentUsername={user?.username ?? null}
         serverId={selectedServerId}
