@@ -909,8 +909,14 @@
   --message-hover-solid: color-mix(in oklab, var(--color-text) 4.5%, var(--color-pane-main));
   /* The system's mention row, tuned per appearance so a mention never reads
      as the selected channel; the hover one step toward the accent. */
-  --message-mention-bg: var(--color-mention-row);
-  --message-mention-hover: color-mix(in oklab, var(--message-mention-bg) 85%, var(--color-accent));
+  /* A row that names you is amber with an amber edge (text channels canvas):
+     lime stays for primary, on and yours, and a mention must not read as
+     selected. */
+  --message-mention-bg: var(--color-warning-soft);
+  --message-mention-hover: color-mix(in oklab, var(--message-mention-bg) 94%, var(--color-text));
+  --message-mention-edge: var(--color-warning);
+  /* A message's avatar: 40 on desktop, 36 on a phone, 32 in a thread. */
+  --message-avatar: 2.5rem;
   /* Your own name on your messages. */
   --message-own-name: var(--color-accent-text);
 
@@ -1418,9 +1424,9 @@
   --message-hover-solid: color-mix(in oklab, var(--color-text) 3%, var(--color-pane-main));
   /* The full soft accent is the selected channel's fill in light; a mention
      sits a step quieter so it never reads as selected. */
-  --message-mention-bg: color-mix(in oklab, var(--color-accent-soft) 70%, var(--color-pane-main));
+  --message-mention-bg: color-mix(in oklab, var(--color-warning-soft) 80%, var(--color-pane-main));
   /* A smaller step than dark, so the @you chip keeps its edge on a hovered row. */
-  --message-mention-hover: color-mix(in oklab, var(--message-mention-bg) 92%, var(--color-accent));
+  --message-mention-hover: color-mix(in oklab, var(--message-mention-bg) 95%, var(--color-text));
   /* Your own name: the lime itself in light, where accent-text is a near-black olive. */
   --message-own-name: var(--color-accent);
   --glass-bg: oklch(0.99 0 0 / 0.72);
@@ -3296,9 +3302,28 @@ h2,
 }
 
 /* Under the redesign a mention is the accent's soft fill, as in the mockup. */
+@media (max-width: 767px) {
+  :root[data-redesign] {
+    --message-avatar: 2.25rem;
+  }
+}
+
+:root[data-redesign] [data-message-surface="thread"] {
+  --message-avatar: 2rem;
+}
+
 :root[data-redesign] .pqp-message-mention {
   background: var(--message-mention-bg);
+  box-shadow: inset 2px 0 0 var(--message-mention-edge);
   --avatar-dot-ring: var(--message-mention-bg);
+}
+
+/* Your own chip on that row takes the amber too, outlined, so the row has
+   one colour. */
+:root[data-redesign] .pqp-message-mention .pqp-mention.pqp-mention-self {
+  background: color-mix(in oklab, var(--message-mention-bg) 82%, var(--color-on-warning-soft));
+  color: var(--color-on-warning-soft);
+  box-shadow: inset 0 0 0 1px var(--color-on-warning-soft);
 }
 
 :root[data-redesign] .pqp-message-mention:hover {
@@ -3344,6 +3369,59 @@ h2,
 
 :root[data-redesign] .markdown-body pre code {
   padding: 0;
+}
+
+/* A code block with Copiar in its corner. The block scrolls sideways, the
+   button stays put. */
+:root[data-redesign] .markdown-body .pqp-code-block {
+  position: relative;
+  max-width: 28rem;
+}
+
+:root[data-redesign] .markdown-body .pqp-code-block pre {
+  max-width: 100%;
+}
+
+:root[data-redesign] .markdown-body .pqp-code-copy {
+  position: absolute;
+  top: 0.375rem;
+  right: 0.375rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  height: 1.5rem;
+  padding: 0 0.5rem;
+  border-radius: 0.375rem;
+  /* Solid, so code that scrolls under it never shows through. */
+  background: color-mix(in oklab, var(--color-text) 12%, var(--color-pane-main));
+  box-shadow: 0 0 0 4px color-mix(in oklab, var(--color-text) 4%, var(--color-pane-main));
+  color: var(--color-text);
+  font-family: var(--font-sans, inherit);
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
+:root[data-redesign] .markdown-body .pqp-code-copy:hover {
+  background: color-mix(in oklab, var(--color-text) 18%, var(--color-pane-main));
+}
+
+:root[data-redesign] .markdown-body .pqp-code-copy:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 1px;
+}
+
+/* A message of one to six emoji, drawn large. */
+:root[data-redesign] .markdown-body.pqp-jumbo {
+  font-size: 2.5rem;
+  line-height: 3rem;
+}
+
+/* Someone else's long message, folded to eight lines until "Mostrar tudo". */
+:root[data-redesign] .pqp-message-folded {
+  max-height: calc(var(--chat-line-height) * 8);
+  overflow: hidden;
+  mask-image: linear-gradient(to bottom, black 70%, transparent);
 }
 
 :root[data-redesign] .markdown-body blockquote {

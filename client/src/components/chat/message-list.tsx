@@ -13,9 +13,12 @@ import {
   WarningCircle as WarningCircleFill,
   WifiSlash,
   ArrowDown as ArrowDownGlyph,
+  EyeSlash,
   type Icon as PhosphorGlyph,
 } from "@phosphor-icons/react";
 import { Icon as Glyph } from "@/components/ui/icon";
+import { MessageFold } from "@/components/chat/message-fold";
+import { isJumboEmoji } from "@/lib/emoji-only";
 import { EmptyState as EmptyStateView } from "@/components/ui/empty-state";
 import {
   CONTENT_CARD_FOCUS_REDESIGN,
@@ -310,6 +313,9 @@ export interface MessageRoleColor {
 
 /** Shared identity, so the default prop does not remount every row each render. */
 const EMPTY_BLOCKED: ReadonlySet<string> = new Set<string>();
+
+/** A run of back-to-back curtained messages; `ids` is shared by the run. */
+type BlockedRun = { lead: boolean; ids: string[] };
 const EMPTY_AUTHORS: ReadonlyMap<string, MessageAuthorInfo> = new Map();
 const EMPTY_ROLES: readonly MessageRoleColor[] = [];
 
@@ -662,6 +668,13 @@ function mentionRowRadius(joinTop: boolean, joinBottom: boolean): string {
  */
 const MESSAGE_ROW_REDESIGN =
   "redesign:mx-2 redesign:rounded-[var(--message-row-radius)] redesign:px-3";
+/*
+ * The avatar's size under the redesign: 40 on desktop, 36 on a phone, 32 in a
+ * thread (`--message-avatar` in index.css). The gutter keeps its 56px, so the
+ * text column does not move between sizes.
+ */
+const MESSAGE_AVATAR_REDESIGN =
+  "redesign:h-[var(--message-avatar)] redesign:w-[var(--message-avatar)]";
 /** The time beside a name and in the gutter. */
 const MESSAGE_TIME_REDESIGN = "redesign:text-xs redesign:text-text-tertiary";
 /*
@@ -1084,6 +1097,35 @@ export const MessageList = memo(function MessageList({
     [rows, currentUsername, currentUserId],
   );
   const rowIds = useMemo(() => rows.map((row) => row.message.id), [rows]);
+  // Under the redesign, back-to-back curtained messages are one line: the
+  // first carries the count and reveals the whole run, the rest stay
+  // registered (a permalink still lands) and draw nothing. A day line ends a
+  // run. With the toggle off every curtained message keeps its own line.
+  const blockedRuns = useMemo(() => {
+    const runs = new Map<string, BlockedRun>();
+    if (!redesign) {
+      return runs;
+    }
+    let lead: BlockedRun | null = null;
+    for (const row of rows) {
+      const id = row.message.id;
+      const curtained =
+        !row.message.systemKind &&
+        row.message.authorId !== currentUserId &&
+        blockedAuthorIds.has(row.message.authorId) &&
+        !revealedIds.has(id);
+      if (!curtained) {
+        lead = null;
+      } else if (lead && !row.dayLabel) {
+        lead.ids.push(id);
+        runs.set(id, { lead: false, ids: lead.ids });
+      } else {
+        lead = { lead: true, ids: [id] };
+        runs.set(id, lead);
+      }
+    }
+    return runs;
+  }, [redesign, rows, currentUserId, blockedAuthorIds, revealedIds]);
   // `rows` (the array, not its contents) gets a new reference on every
   // message arrival even when almost every `Row` inside it is the cached,
   // reused one, so `rowIds` does too. `handleRowNavigate` below only reads
@@ -2337,9 +2379,18 @@ export const MessageList = memo(function MessageList({
                 blockedAuthorIds.has(row.message.authorId) &&
                 !revealedIds.has(rowId)
               }
-              onReveal={stableRowCallback(rowId, "reveal", [], () => () =>
-                setRevealedIds((current) => new Set(current).add(rowId)),
-              )}
+              blockedRun={blockedRuns.get(rowId)}
+              onReveal={stableRowCallback(rowId, "reveal", [blockedRuns.get(rowId)?.ids.length], () => () => {
+                const run = blockedRuns.get(rowId);
+                const ids = run?.lead ? run.ids : [rowId];
+                setRevealedIds((current) => {
+                  const next = new Set(current);
+                  for (const id of ids) {
+                    next.add(id);
+                  }
+                  return next;
+                });
+              })}
               isFlashing={flashId === rowId}
               registerRow={registerRow}
               onJumpToMessage={jumpToMessage}
@@ -3292,6 +3343,8 @@ interface MessageRowProps {
   canModerate: boolean;
   /** True while this message is behind the blocked curtain. */
   isBlocked: boolean;
+  /** Its place in a run of curtained messages (redesign only). */
+  blockedRun?: BlockedRun;
   onReveal: () => void;
   isFlashing: boolean;
   registerRow: (messageId: string, node: HTMLElement | null) => void;
@@ -3382,6 +3435,7 @@ const MessageRow = memo(function MessageRow({
   channelId,
   canModerate,
   isBlocked,
+  blockedRun,
   onReveal,
   isFlashing,
   registerRow,
@@ -3662,6 +3716,21 @@ const MessageRow = memo(function MessageRow({
     };
   }
 
+  if (isBlocked && blockedRun && !blockedRun.lead) {
+    // The rest of a run: registered so a permalink or reply lands, drawn as
+    // nothing because the run's first line already counts it.
+    return (
+      <article
+        ref={(node) => {
+          registerRow(message.id, node);
+        }}
+        tabIndex={-1}
+        aria-hidden
+        className="h-0 overflow-hidden"
+      />
+    );
+  }
+
   if (isBlocked) {
     return (
       <>
@@ -3685,7 +3754,12 @@ const MessageRow = memo(function MessageRow({
           )}
           style={ROW_CONTENT_VISIBILITY}
         >
-          <span className="italic">{t("chat.blocked")}</span>
+          <Glyph icon={EyeSlash} kind="symbol" size="sm" className="hidden shrink-0 redesign:block" />
+          {blockedRun ? (
+            <span>{t("chat.blockedRun", { count: blockedRun.ids.length })}</span>
+          ) : (
+            <span className="italic">{t("chat.blocked")}</span>
+          )}
           <button
             type="button"
             tabIndex={controlTabIndex}
@@ -4017,20 +4091,20 @@ const MessageRow = memo(function MessageRow({
           >
             {stream ? null : startsGroup && !compact ? (
               <div
-                className="flex w-14 shrink-0 items-start justify-end pr-2"
+                className="flex w-14 shrink-0 items-start justify-end pr-2 redesign:pr-3"
                 data-row-gutter=""
               >
-                <div className="relative h-9 w-9 shrink-0">
+                <div className={cn("relative h-9 w-9 shrink-0", MESSAGE_AVATAR_REDESIGN)}>
                   <AuthorButton
                     message={message}
                     author={authorInfo}
                     tabIndex={controlTabIndex}
                     onOpenProfile={openProfile}
-                    className="block h-9 w-9 shrink-0 overflow-hidden rounded-lg leading-none hover:no-underline redesign:rounded-full"
+                    className={cn("block h-9 w-9 shrink-0 overflow-hidden rounded-lg leading-none hover:no-underline redesign:rounded-full", MESSAGE_AVATAR_REDESIGN)}
                   >
                     {message.isAutomod ? (
                       <span
-                        className="grid h-9 w-9 place-items-center rounded-lg bg-accent-soft text-on-accent-soft redesign:rounded-full"
+                        className={cn("grid h-9 w-9 place-items-center rounded-lg bg-accent-soft text-on-accent-soft redesign:rounded-full", MESSAGE_AVATAR_REDESIGN)}
                         title={t("chat.automodPosted")}
                       >
                         <ShieldCheck className="h-5 w-5" aria-hidden />
@@ -4040,7 +4114,7 @@ const MessageRow = memo(function MessageRow({
                         name={message.authorName}
                         avatarUrl={message.authorAvatarUrl}
                         rounded="lg"
-                        className={cn("h-9 w-9", freshBotReply && "bot-face-pop")}
+                        className={cn("h-9 w-9", MESSAGE_AVATAR_REDESIGN, freshBotReply && "bot-face-pop")}
                         fallbackClassName="bg-ink-3 text-sm"
                         botFace={serverBot && (authorGone || authorInfo?.status === "offline") ? "dormindo" : undefined}
                       />
@@ -4097,7 +4171,7 @@ const MessageRow = memo(function MessageRow({
                   data-row-header=""
                 >
                   <span
-                    className="inline-flex items-baseline gap-1"
+                    className="inline-flex items-baseline gap-1 redesign:min-w-0 redesign:max-w-full"
                     data-row-author=""
                   >
                     <AuthorButton
@@ -4107,6 +4181,9 @@ const MessageRow = memo(function MessageRow({
                       onOpenProfile={openProfile}
                       className={cn(
                         "rounded text-[length:var(--chat-font-size)] font-bold leading-[var(--chat-line-height)]",
+                        // A long name stops at 320px with an ellipsis; the
+                        // title carries it whole.
+                        "redesign:min-w-0 redesign:max-w-80 redesign:truncate",
                         !roleColor && (isMine ? "text-signal" : "text-paper"),
                         !roleColor && (isMine ? "redesign:text-[color:var(--message-own-name)]" : "redesign:text-text"),
                         // A role colour has no contrast floor, so its lightness is
@@ -4248,10 +4325,12 @@ const MessageRow = memo(function MessageRow({
                       onClose={() => onClosePoll?.(message.id)}
                     />
                   ) : message.body && !hideBodyForBauCard ? (
+                    <MessageFold enabled={!isMine && !stream}>
                     <div
                       className={cn(
                         "markdown-body text-[length:var(--chat-font-size)] leading-[var(--chat-line-height)] text-paper/90 redesign:text-text",
                         stream && "[&>p]:inline",
+                        !stream && attachments.length === 0 && !message.forward && isJumboEmoji(shownBody) && "pqp-jumbo",
                         // "(editada)" ends the last line it belongs to, never a line of its own:
                         // the marker is the last child, so only a paragraph right before it goes
                         // inline. A body ending in a list, quote or code keeps its block.
@@ -4267,6 +4346,7 @@ const MessageRow = memo(function MessageRow({
                         <EditedMarker editedAt={message.editedAt} />
                       )}
                     </div>
+                    </MessageFold>
                   ) : null}
                   {attachments.length > 0 && (
                     <div>
@@ -5137,7 +5217,7 @@ function ReplyQuote({
     >
       <CornerUpLeft className="h-3 w-3 shrink-0 redesign:hidden" aria-hidden />
       <Glyph icon={ArrowBendUpLeft} kind="symbol" size="sm" className="hidden text-text-tertiary redesign:block" />
-      <span className="shrink-0 font-medium text-accent redesign:font-semibold redesign:text-text">
+      <span className="shrink-0 font-medium text-accent redesign:max-w-40 redesign:truncate redesign:font-semibold redesign:text-text">
         {replyTo.authorName}
       </span>
       <span className="min-w-0 flex-1 truncate">{replyTo.excerpt}</span>
