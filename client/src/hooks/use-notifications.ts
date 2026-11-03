@@ -166,7 +166,14 @@ export function notificationLevelItems(
   if (overridden && inherits) {
     items.push({
       id: `${prefix}-reset`,
-      label: translateMessage("notify.menu.reset", { inherits }),
+      // "server" and "account" are the two levels above a channel or a
+      // conversation, not names, so they get a sentence of their own.
+      label:
+        inherits === "server"
+          ? translateMessage("notify.menu.resetServer")
+          : inherits === "account"
+            ? translateMessage("notify.menu.resetAccount")
+            : translateMessage("notify.menu.reset", { inherits }),
       icon: Undo2,
       onSelect: () => setLevel(null),
     });

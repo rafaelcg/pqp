@@ -2422,7 +2422,7 @@ export const MessageList = memo(function MessageList({
             {isLoadingOlder ? (
               <span className="flex items-center gap-2 text-xs text-paper-muted redesign:text-text-secondary">
                 <Spinner className="h-3 w-3 animate-spin" />
-                Loading older messages…
+                {t("chat.loadingOlder")}
               </span>
             ) : (
               <button
@@ -2430,7 +2430,7 @@ export const MessageList = memo(function MessageList({
                 onClick={loadOlder}
                 className={cn("rounded-full border border-ink-4 px-3 py-1 text-xs text-paper-muted hover:text-paper", LOG_LOAD_REDESIGN)}
               >
-                Load older messages
+                {t("chat.loadOlder")}
               </button>
             )}
           </div>

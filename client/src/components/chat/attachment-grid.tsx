@@ -605,7 +605,7 @@ function DownloadChip({
         <span className="block truncate redesign:font-medium">{attachment.filename}</span>
         <span className="block text-[11px] text-paper-muted redesign:text-xs redesign:text-text-tertiary">
           {unavailable
-            ? "Image unavailable"
+            ? translateMessage("chat.attachmentGone")
             : formatByteSize(attachment.byteSize)}
         </span>
       </span>
