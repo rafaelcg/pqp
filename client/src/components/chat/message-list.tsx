@@ -363,6 +363,25 @@ const MESSAGE_MODERATION_ICON: Record<ProfileModerationAction, LucideIcon> = {
   ban: Gavel,
 };
 
+/** A staff rung's label in the message menu, which names the person. */
+function staffRungLabel(
+  rung: ProfileModerationAction,
+  name: string,
+  deleteAndBan: boolean,
+  t: ReturnType<typeof useTranslation>["t"],
+): string {
+  switch (rung) {
+    case "timeout":
+      return t("chat.menu.timeout", { name });
+    case "kick":
+      return t("chat.menu.kick", { name });
+    case "ban":
+      return deleteAndBan ? t("chat.menu.deleteAndBan") : t("chat.menu.ban", { name });
+    default:
+      return moderationActionLabel(rung, t);
+  }
+}
+
 /** A run of back-to-back curtained messages; `ids` is shared by the run. */
 type BlockedRun = { lead: boolean; ids: string[] };
 const EMPTY_AUTHORS: ReadonlyMap<string, MessageAuthorInfo> = new Map();
@@ -1213,10 +1232,12 @@ export const MessageList = memo(function MessageList({
   const [pendingModeration, setPendingModeration] = useState<{
     action: Exclude<ProfileModerationAction, "endTimeout">;
     subject: ModerationSubject;
+    /** Apagar e banir: the message the ban came from, deleted once it lands. */
+    deleteMessageId?: string;
   } | null>(null);
   const [pendingBlock, setPendingBlock] = useState<ModerationSubject | null>(null);
   const handleModerate = useCallback(
-    (action: ProfileModerationAction, subject: ModerationSubject) => {
+    (action: ProfileModerationAction, subject: ModerationSubject, deleteMessageId?: string) => {
       if (!moderation) {
         return;
       }
@@ -1229,7 +1250,7 @@ export const MessageList = memo(function MessageList({
         }).then(() => moderation.onModerated(), () => {});
         return;
       }
-      setPendingModeration({ action, subject });
+      setPendingModeration({ action, subject, deleteMessageId });
     },
     [moderation],
   );
@@ -2959,6 +2980,10 @@ export const MessageList = memo(function MessageList({
         onDone={() => {
           moderation.onModerated();
           moderation.onRolesChanged?.();
+          const deleteId = pendingModeration?.deleteMessageId;
+          if (deleteId && pendingModeration?.action === "ban" && onDeleteMessage) {
+            void onDeleteMessage(deleteId);
+          }
         }}
         onClose={() => setPendingModeration(null)}
       />
@@ -3562,7 +3587,11 @@ interface MessageRowProps {
   blockedRun?: BlockedRun;
   /** See `MessageListProps.moderation`. */
   moderation?: ProfileModerationContext | null;
-  onModerate?: (action: ProfileModerationAction, subject: ModerationSubject) => void;
+  onModerate?: (
+    action: ProfileModerationAction,
+    subject: ModerationSubject,
+    deleteMessageId?: string,
+  ) => void;
   onBlockAuthor?: (subject: ModerationSubject) => void;
   onReveal: () => void;
   isFlashing: boolean;
@@ -4206,13 +4235,21 @@ const MessageRow = memo(function MessageRow({
                 },
               ]
             : []),
-          ...staffRungs.map((rung) => ({
-            id: `mod-${rung}`,
-            label: moderationActionLabel(rung, t),
-            icon: MESSAGE_MODERATION_ICON[rung],
-            danger: moderationNeedsConfirmation(rung),
-            onSelect: selectAndClose(() => onModerate?.(rung, subject), false),
-          })),
+          ...staffRungs.map((rung) => {
+            // On a message the ban also takes the message with it, when the
+            // reader may delete it (the canvas's "Apagar e banir").
+            const deleteAndBan = rung === "ban" && canDelete;
+            return {
+              id: `mod-${rung}`,
+              label: staffRungLabel(rung, subject.displayName, deleteAndBan, t),
+              icon: MESSAGE_MODERATION_ICON[rung],
+              danger: moderationNeedsConfirmation(rung),
+              onSelect: selectAndClose(
+                () => onModerate?.(rung, subject, deleteAndBan ? message.id : undefined),
+                false,
+              ),
+            };
+          }),
         ],
         isMine,
         t("chat.menu.staff"),
@@ -5034,7 +5071,7 @@ const MessageRow = memo(function MessageRow({
       </ContextMenu>
       <ConfirmDialog
         open={deleteOpen}
-        title={t("chat.delete")}
+        title={t("chat.deleteConfirmTitle")}
         description={t("chat.deleteConfirm")}
         confirmLabel={t("chat.delete")}
         onConfirm={() => onDelete?.()}

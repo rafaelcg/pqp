@@ -18,10 +18,10 @@ describe("orderMessageMenu", () => {
   it("puts the staff block last on somebody else's message, with Apagar in it", () => {
     const built = ["reply", "copy-text", "forward", "pin", "delete", "report", "block", "mod-timeout", "mod-ban"].map(item);
     expect(ids(orderMessageMenu(built, false, "Staff"))).toEqual([
-      "reply", "pin", "forward", "|",
+      "reply", "forward", "pin", "|",
       "copy-text", "|",
       "block", "report", "|",
-      "staff-heading", "mod-timeout", "mod-ban", "delete",
+      "staff-heading", "mod-timeout", "delete", "mod-ban",
     ]);
   });
 

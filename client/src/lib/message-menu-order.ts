@@ -6,7 +6,9 @@ import type { ContextMenuItemDef } from "@/components/ui/context-menu";
  * then what you do about the person, then the staff block under its own
  * heading. With the toggle off the menu keeps the order it is built in.
  */
-const ACT = ["reply", "open-thread", "start-thread", "edit", "pin", "forward", "forum-answer"];
+// Your own message puts Fixar before Encaminhar; somebody else's, after.
+const ACT_MINE = ["reply", "open-thread", "start-thread", "edit", "pin", "forward", "forum-answer"];
+const ACT_OTHER = ["reply", "open-thread", "start-thread", "forward", "pin", "forum-answer"];
 const COPY = ["mark-unread", "mark-read", "copy-text", "copy-link", "copy-id"];
 const PERSON = ["select", "block", "report"];
 const STAFF = ["mod-timeout", "mod-endTimeout", "mod-kick", "mod-ban"];
@@ -27,11 +29,12 @@ export function orderMessageMenu(
       const item = byId.get(id);
       return item ? [item] : [];
     });
-  const known = new Set([...ACT, ...COPY, ...PERSON, ...STAFF, "delete"]);
+  const known = new Set([...ACT_MINE, ...COPY, ...PERSON, ...STAFF, "delete"]);
   const rest = [...byId.values()].filter((item) => !known.has(item.id));
   const person = pick(isMine ? [...PERSON, "delete"] : PERSON);
-  const staff = pick(isMine ? STAFF : [...STAFF, "delete"]);
-  const groups = [pick(ACT), [...pick(COPY), ...rest], person];
+  // Apagar sits before the ban, which on a message is "Apagar e banir".
+  const staff = pick(isMine ? STAFF : ["mod-timeout", "mod-endTimeout", "mod-kick", "delete", "mod-ban"]);
+  const groups = [pick(isMine ? ACT_MINE : ACT_OTHER), [...pick(COPY), ...rest], person];
   const out: ContextMenuItemDef[] = [];
   for (const group of groups) {
     if (group.length === 0) {
