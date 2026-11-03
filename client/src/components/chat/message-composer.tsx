@@ -167,7 +167,8 @@ import {
 import { translateMessage, useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { useRedesign } from "@/lib/redesign";
-import { usePhoneWidth } from "@/lib/phone-tabs";
+import { useMediaQuery } from "@/components/ui/use-media-query";
+import { BELOW_SM_QUERY } from "@/lib/breakpoints";
 import { ComposerStatusBar, textAsFile } from "@/components/chat/composer-status-bar";
 
 export interface ComposerSlashContext {
@@ -501,7 +502,8 @@ export function MessageComposer({
 }: MessageComposerProps) {
   const { t, locale } = useTranslation();
   const redesign = useRedesign();
-  const phone = usePhoneWidth();
+  // A narrow phone: @ suggestions sit above the keyboard as pills.
+  const phone = useMediaQuery(BELOW_SM_QUERY, false);
   const inputPlaceholder = placeholder ?? t("composer.placeholderFallback");
   // The draft outlives the mount: App remounts this component per channel,
   // so what was typed here is read back when the channel is reopened and

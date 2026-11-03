@@ -3434,8 +3434,9 @@ h2,
 /* A message's menu on a phone (the text channels canvas, "Segurando uma
    mensagem"): the same rows, risen from the bottom edge as a sheet instead
    of floating at the finger. Radix writes the wrapper's position inline,
-   hence the !important. The 100vmax ring is the scrim. */
-@media (max-width: 639px) {
+   hence the !important. The 100vmax ring is the scrim. Below `sm`, the
+   width `lib/breakpoints.ts` names and the chat's phone gestures read. */
+@media (max-width: 39.999rem) {
   :root[data-redesign] [data-radix-popper-content-wrapper]:has(> [data-sheet-on-phone]) {
     position: fixed !important;
     inset: auto 0 0 0 !important;

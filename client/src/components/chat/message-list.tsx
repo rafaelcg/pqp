@@ -105,7 +105,8 @@ import {
   type Ref,
 } from "react";
 import { useRedesign } from "@/lib/redesign";
-import { usePhoneWidth } from "@/lib/phone-tabs";
+import { useMediaQuery } from "@/components/ui/use-media-query";
+import { BELOW_SM_QUERY } from "@/lib/breakpoints";
 import { useSwipeToReply } from "@/lib/swipe-to-reply";
 import { ReactionWhoSheet } from "@/components/chat/reaction-who-sheet";
 import { createPortal } from "react-dom";
@@ -3941,7 +3942,8 @@ const MessageRow = memo(function MessageRow({
   }
 
   // Drag right to reply, on a phone under the redesign.
-  const phone = usePhoneWidth();
+  // A narrow phone, the width the menu and the sheets turn into sheets at.
+  const phone = useMediaQuery(BELOW_SM_QUERY, false);
   const swipe = useSwipeToReply(
     redesign && phone && canReply && !selecting && !stream,
     onReply,
@@ -5698,6 +5700,7 @@ function ReactionChip({
   onToggle,
   onHold,
   fresh = false,
+  onSettled,
   tabIndex,
 }: {
   reaction: MessageReaction;
@@ -5707,11 +5710,14 @@ function ReactionChip({
   onHold?: (emoji: string) => void;
   /** Added after the row mounted: pops in under the redesign (index.css). */
   fresh?: boolean;
+  onSettled?: (emoji: string) => void;
   tabIndex: number;
 }) {
   const { t } = useTranslation();
   const [anchor, setAnchor] = useState<DOMRect | null>(null);
   const holdTimer = useRef<number | null>(null);
+  // A mouse keeps the desktop's hover tip and right-click menu at any width.
+  const pointer = useRef<string>("mouse");
   // The click that follows a hold is the end of the hold, not a toggle.
   const held = useRef(false);
   const clearHold = () => {
@@ -5765,9 +5771,10 @@ function ReactionChip({
           // The row's own menu opens on a long press too: a hold on a
           // reaction is about the reaction, so the row never hears it.
           onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => {
-            event.stopPropagation();
+            pointer.current = event.pointerType;
             held.current = false;
             if (event.pointerType !== "mouse") {
+              event.stopPropagation();
               clearHold();
               holdTimer.current = window.setTimeout(hold, REACTION_HOLD_MS);
             }
@@ -5789,6 +5796,9 @@ function ReactionChip({
           },
           // Android sends a contextmenu for the same hold; iOS never does.
           onContextMenu: (event: ReactMouseEvent<HTMLButtonElement>) => {
+            if (pointer.current === "mouse") {
+              return;
+            }
             event.preventDefault();
             event.stopPropagation();
             if (!held.current) {
@@ -5796,9 +5806,10 @@ function ReactionChip({
             }
           },
         })}
-        onPointerEnter={(event) =>
-          setAnchor(event.currentTarget.getBoundingClientRect())
-        }
+        onPointerEnter={(event) => {
+          pointer.current = event.pointerType;
+          setAnchor(event.currentTarget.getBoundingClientRect());
+        }}
         onPointerLeave={() => setAnchor(null)}
         onFocus={(event) =>
           setAnchor(event.currentTarget.getBoundingClientRect())
@@ -5807,6 +5818,7 @@ function ReactionChip({
         aria-pressed={reaction.me}
         aria-label={ariaLabel}
         data-reaction-fresh={fresh ? "" : undefined}
+        onAnimationEnd={fresh ? () => onSettled?.(reaction.emoji) : undefined}
         className={cn(
           "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
           reaction.me
@@ -5821,7 +5833,7 @@ function ReactionChip({
         </span>
         <span className="font-medium tabular-nums">{reaction.count}</span>
       </button>
-      {anchor && !onHold && <ReactionWhoTip anchor={anchor}>{tooltip}</ReactionWhoTip>}
+      {anchor && (!onHold || pointer.current === "mouse") && <ReactionWhoTip anchor={anchor}>{tooltip}</ReactionWhoTip>}
     </>
   );
 }
@@ -5838,11 +5850,15 @@ function ReactionBar({
 }: ReactionBarProps) {
   const { t } = useTranslation();
   const redesign = useRedesign();
-  const phone = usePhoneWidth();
+  // A narrow phone, the width the menu and the sheets turn into sheets at.
+  const phone = useMediaQuery(BELOW_SM_QUERY, false);
   const [whoEmoji, setWhoEmoji] = useState<string | null>(null);
   // A reaction the row already had when it mounted never pops in: loading
   // history and switching channels do not animate.
-  const loaded = useRef<ReadonlySet<string>>(new Set(reactions.map((r) => r.emoji)));
+  // A chip that has popped joins the set, so moving between the two groups
+  // below (which remounts it) never pops it twice.
+  const loaded = useRef(new Set(reactions.map((r) => r.emoji)));
+  const settle = (emoji: string) => loaded.current.add(emoji);
   const onHold = redesign && phone ? setWhoEmoji : undefined;
   const hasReactions = reactions.length > 0;
 
@@ -5860,6 +5876,7 @@ function ReactionBar({
           onToggle={onToggle}
           onHold={onHold}
           fresh={!loaded.current.has(reaction.emoji)}
+          onSettled={settle}
           tabIndex={tabIndex}
         />
       ))}
@@ -5875,6 +5892,7 @@ function ReactionBar({
             onToggle={onToggle}
             onHold={onHold}
             fresh={!loaded.current.has(reaction.emoji)}
+            onSettled={settle}
             tabIndex={tabIndex}
           />
         ))}
