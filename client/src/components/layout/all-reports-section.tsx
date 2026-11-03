@@ -17,7 +17,7 @@ import {
 } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
 import { reportSubjectKey } from "@/lib/report-subject";
-import { cn, formatFullTimestamp } from "@/lib/utils";
+import { formatFullTimestamp } from "@/lib/utils";
 
 /**
  * The instance moderator's view across every queue at once: every server's

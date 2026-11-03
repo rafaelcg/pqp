@@ -20,6 +20,8 @@ const SUBJECT: Record<ReportSummary["subjectType"], MessageKey> = {
   user: "report.mine.subject.user",
   server: "report.mine.subject.server",
   story: "report.mine.subject.story",
+  bau_post: "report.mine.subject.bau_post",
+  bau_comment: "report.mine.subject.bau_comment",
 };
 
 type Load =

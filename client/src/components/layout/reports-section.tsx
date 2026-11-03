@@ -11,7 +11,7 @@ import { ReportContextPanel } from "@/components/layout/report-context-panel";
 import { ApiError, fetchServerReports, resolveReport } from "@/lib/api";
 import { useTranslation } from "@/lib/i18n";
 import { reportSubjectKey } from "@/lib/report-subject";
-import { cn, formatFullTimestamp } from "@/lib/utils";
+import { formatFullTimestamp } from "@/lib/utils";
 
 /**
  * The moderation queue for one server.
