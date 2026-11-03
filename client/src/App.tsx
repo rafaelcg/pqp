@@ -2091,6 +2091,7 @@ function MainAppContent({
       kind: "message",
       messageId: message.id,
       subjectName: message.authorName,
+      authorId: message.authorId,
     });
   }, []);
   const [pinsOpen, setPinsOpen] = useState(false);
@@ -14389,6 +14390,9 @@ function MainAppContent({
       <ReportDialog
         target={reportTarget}
         onClose={() => setReportTarget(null)}
+        onBlock={handleBlockAuthor}
+        isBlocked={(userId) => blockedUserIds.has(userId)}
+        placeName={selection.kind === "server" ? (selectedServer?.name ?? null) : null}
       />
 
       <StoriesHost
