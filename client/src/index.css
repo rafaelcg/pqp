@@ -3423,6 +3423,15 @@ h2,
      canvas, "Não lidas"). The row drops the attribute after HIGHLIGHT_MS. */
   animation: pqp-message-flash 2s var(--ease-standard) forwards;
 }
+@keyframes pqp-count-flash {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  40% {
+    opacity: 0.35;
+  }
+}
 @keyframes pqp-message-flash {
   0%,
   45% {

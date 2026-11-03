@@ -22,6 +22,7 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type React
 import type { Icon as PhosphorIcon } from "@phosphor-icons/react";
 import { Menu as ActionMenu } from "@/components/ui/menu";
 import { ChannelBellButton, ChannelPinsButton } from "@/components/chat/channel-header-tools";
+import { TypingLine } from "@/components/chat/typing-line";
 import { WatchPartyBarSlot } from "@/components/watch-party/watch-party-bar";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
 import { createPortal } from "react-dom";
@@ -4087,6 +4088,9 @@ function MainAppContent({
     }
     const extra: MentionCandidate[] = [];
     const canMass = perms.can(Permission.MENTION_EVERYONE);
+    // How many each mass or role mention reaches, not counting the sender:
+    // the @ list says so under the redesign.
+    const others = serverMembers.filter((member) => member.id !== user?.id);
     if (canMass) {
       extra.push({
         id: "mention:everyone",
@@ -4094,6 +4098,7 @@ function MainAppContent({
         displayName: t("composer.mentionEveryone"),
         avatarUrl: null,
         mentionKind: "mass",
+        reach: others.length,
       });
       extra.push({
         id: "mention:here",
@@ -4101,6 +4106,7 @@ function MainAppContent({
         displayName: t("composer.mentionHere"),
         avatarUrl: null,
         mentionKind: "mass",
+        reach: others.filter((member) => member.status && member.status !== "offline").length,
       });
     }
     for (const role of mentionableRoles) {
@@ -4114,6 +4120,7 @@ function MainAppContent({
           displayName: role.name,
           avatarUrl: null,
           mentionKind: "role",
+          reach: others.filter((member) => member.roleIds?.includes(role.id)).length,
         });
       }
     }
@@ -4130,6 +4137,7 @@ function MainAppContent({
     mentionableRoles,
     perms,
     t,
+    user?.id,
   ]);
 
   // The roster above is the whole server once it has loaded, so a message
@@ -12715,6 +12723,7 @@ function MainAppContent({
         isLoadingOlder={chat.isLoadingOlder()}
         isLoadingNewer={chat.isLoadingNewer()}
         typingUsers={chat.getTypingUsers()}
+        typingInComposer={redesign && !isWatchPartySplit && canSendHere}
         botNotice={chat.getBotNotice()}
         onDismissBotNotice={chat.dismissBotNotice}
         canModerate={canManageMessages}
@@ -12831,6 +12840,7 @@ function MainAppContent({
       <div hidden={!canSendHere}>
       <MessageComposer
         variant={isWatchPartySplit ? "stream" : "default"}
+        typingLine={redesign ? <TypingLine users={chat.getTypingUsers()} /> : null}
         // Remount per channel: the draft is component state, so without this a
         // half-typed message follows you into the next channel, one Enter away
         // from the wrong audience.

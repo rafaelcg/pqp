@@ -389,6 +389,8 @@ interface MessageListProps {
   historyFailed?: boolean;
   onRetryHistory?: () => void;
   hasMore?: boolean;
+  /** People typing show under the composer (the redesign's status line). */
+  typingInComposer?: boolean;
   /**
    * A server text channel's name (null everywhere else), its topic and what
    * the viewer may do there: under the redesign, the greeting above the first
@@ -851,6 +853,7 @@ export const MessageList = memo(function MessageList({
   historyFailed = false,
   onRetryHistory,
   hasMore = false,
+  typingInComposer = false,
   introName = null,
   introTopic = null,
   onIntroCopyInvite,
@@ -2897,7 +2900,7 @@ export const MessageList = memo(function MessageList({
         <Reveal show={!!botNotice}>
           {botNotice && <BotNoticeRow notice={botNotice} onDismiss={() => onDismissBotNotice?.()} />}
         </Reveal>
-        <TypingIndicator users={typingUsers} authors={authors} />
+        <TypingIndicator users={typingUsers} authors={authors} peopleElsewhere={typingInComposer} />
       </div>
 
       {jumpNotice && (
@@ -3250,9 +3253,12 @@ function EmptyState({
 function TypingIndicator({
   users,
   authors,
+  peopleElsewhere = false,
 }: {
   users: TypingUser[];
   authors: ReadonlyMap<string, MessageAuthorInfo>;
+  /** Under the redesign people typing show under the composer instead. */
+  peopleElsewhere?: boolean;
 }) {
   const { t } = useTranslation();
   const retro = useRetroLook();
@@ -3285,7 +3291,7 @@ function TypingIndicator({
   // than jumps when somebody starts or stops typing.
   return (
     <>
-    <Reveal show={people.length > 0}>
+    <Reveal show={people.length > 0 && !peopleElsewhere}>
     <p
       className="px-4 pb-1 text-xs text-paper-muted redesign:px-7 redesign:pb-1.5 redesign:text-text-secondary"
       aria-live="polite"

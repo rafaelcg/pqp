@@ -166,6 +166,8 @@ import {
 } from "@/lib/composer-formatting";
 import { translateMessage, useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { useRedesign } from "@/lib/redesign";
+import { ComposerStatusBar, textAsFile } from "@/components/chat/composer-status-bar";
 
 export interface ComposerSlashContext {
   updateDisplayName: (name: string) => Promise<void>;
@@ -274,6 +276,12 @@ interface MessageComposerProps {
    * own icon-button size. Absent in a thread, a DM, a forum and stream chat.
    */
   appsLauncher?: (buttonClassName: string) => ReactNode;
+  /**
+   * Who is typing, drawn in the status line under the field under the
+   * redesign (`TypingLine`). The list then leaves people out of its own
+   * typing row.
+   */
+  typingLine?: ReactNode;
 }
 
 /**
@@ -486,8 +494,10 @@ export function MessageComposer({
   music,
   appsLauncher,
   embedded = null,
+  typingLine = null,
 }: MessageComposerProps) {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
+  const redesign = useRedesign();
   const inputPlaceholder = placeholder ?? t("composer.placeholderFallback");
   // The draft outlives the mount: App remounts this component per channel,
   // so what was typed here is read back when the channel is reopened and
@@ -515,6 +525,13 @@ export function MessageComposer({
   const [pending, setPending] = useState<PendingAttachment[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [feedback, setFeedback] = useState<SlashFeedback | null>(null);
+  // Under the redesign: the count blinks when Enter is refused past the
+  // limit, a paste that crossed the limit offers a .txt, and a selection
+  // raises the format bar over the field.
+  const [countFlash, setCountFlash] = useState(false);
+  const countFlashTimer = useRef<number | null>(null);
+  const [pasteOffer, setPasteOffer] = useState<{ previous: string } | null>(null);
+  const [hasSelection, setHasSelection] = useState(false);
   const [isRunningSlash, setIsRunningSlash] = useState(false);
   const [menuDismissed, setMenuDismissed] = useState(false);
   const [now, setNow] = useState(() => Date.now());
@@ -792,7 +809,13 @@ export function MessageComposer({
       return mentionMatches.map((member) => ({
         id: member.id,
         primary: `@${member.username}`,
-        secondary: member.displayName,
+        // Under the redesign a mass or role mention says how many it reaches.
+        secondary:
+          redesign && member.reach !== undefined && member.mentionKind === "mass"
+            ? t("composer.mentionReach", { count: member.reach })
+            : redesign && member.reach !== undefined && member.mentionKind === "role"
+              ? t("composer.roleMembers", { count: member.reach })
+              : member.displayName,
         leading: (
           <UserAvatar
             name={member.displayName}
@@ -1022,6 +1045,31 @@ export function MessageComposer({
 
   function syncCaret(input: HTMLTextAreaElement) {
     setCaret(input.selectionStart ?? input.value.length);
+    setHasSelection(
+      input.selectionStart !== null &&
+        input.selectionEnd !== null &&
+        input.selectionEnd > input.selectionStart,
+    );
+  }
+
+  /** Past the limit: the text goes out as a .txt instead. */
+  const overLimit = redesign && body.length > MESSAGE_MAX_LENGTH;
+  function sendBodyAsFile() {
+    if (!body) {
+      return;
+    }
+    addFiles([textAsFile(body, t("composer.pastedFileName"))]);
+    setBody("");
+    setCaret(0);
+    setPasteOffer(null);
+    inputRef.current?.focus();
+  }
+  function refuseOverLimit() {
+    setCountFlash(true);
+    if (countFlashTimer.current !== null) {
+      window.clearTimeout(countFlashTimer.current);
+    }
+    countFlashTimer.current = window.setTimeout(() => setCountFlash(false), 600);
   }
 
   /** Put the caret back where the edit left it, after React repaints. */
@@ -1232,6 +1280,14 @@ export function MessageComposer({
    * into the textarea alongside the upload.
    */
   function handlePaste(event: React.ClipboardEvent<HTMLTextAreaElement>) {
+    if (redesign) {
+      const text = event.clipboardData.getData("text/plain");
+      const input = event.currentTarget;
+      const replaced = (input.selectionEnd ?? 0) - (input.selectionStart ?? 0);
+      if (text && body.length - replaced + text.length > MESSAGE_MAX_LENGTH) {
+        setPasteOffer({ previous: body });
+      }
+    }
     if (!channelId || !attachmentLimits?.enabled) {
       return;
     }
@@ -1345,6 +1401,10 @@ export function MessageComposer({
       return;
     }
     if (slowModeRemaining > 0) {
+      return;
+    }
+    if (overLimit) {
+      refuseOverLimit();
       return;
     }
     const trimmed = body.trim();
@@ -1629,6 +1689,45 @@ export function MessageComposer({
       : null,
   ].filter((item): item is NonNullable<typeof item> => item !== null);
 
+  // One set of format buttons, for the bar inside the field and for the one
+  // a selection raises over it under the redesign.
+  const formatButtons = FORMAT_ACTIONS.map((action) => {
+              return (
+                <Tooltip key={action.id} label={t(action.labelKey)}>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    disabled={disabled || isRunningSlash}
+                  onPointerDown={(event) => {
+                    // Pointer, not mouse: a tap never fires mousedown, and
+                    // without preventDefault the textarea blurs and loses the
+                    // selection before click. Apply here so touch and pen
+                    // wrap once even when the compatibility click is dropped.
+                    event.preventDefault();
+                    formatFromPointerRef.current = true;
+                    applyComposerFormat(action.kind);
+                  }}
+                  onClick={() => {
+                    if (formatFromPointerRef.current) {
+                      formatFromPointerRef.current = false;
+                      return;
+                    }
+                    applyComposerFormat(action.kind);
+                  }}
+                    className="h-7 min-w-7 flex-1 text-text-tertiary hover:text-text sm:w-7 sm:flex-none redesign:h-8 redesign:min-w-8 redesign:rounded-full redesign:text-text-secondary sm:redesign:w-8"
+                  >
+                    <ComposerGlyph old={action.icon} glyph={action.glyph} kind="symbol" size="sm" className="h-4 w-4" />
+                  </Button>
+                </Tooltip>
+              );
+            });
+  const showSelectionFormatBar =
+    redesign && hasSelection && menuKind === null && !isFormatBarOpen && !embedded && variant !== "stream" && !disabled;
+  // Only where a file can go: without attachments the red count says enough.
+  const showPasteOffer =
+    redesign && pasteOffer !== null && overLimit && !embedded && isAttachmentsEnabled;
+
   return (
     <form
       data-chat-composer=""
@@ -1777,6 +1876,7 @@ export function MessageComposer({
         {music}
         <MusicHintHostProvider value={callHintHost}>{dock}</MusicHintHostProvider>
         {(replyTarget ||
+          showPasteOffer ||
           isPollComposerOpen ||
           pending.length > 0 ||
           isFormatBarOpen) && (
@@ -1796,6 +1896,31 @@ export function MessageComposer({
             >
               <ComposerGlyph old={X} glyph={XGlyph} kind="symbol" size="sm" />
             </button>
+          </div>
+        )}
+        {showPasteOffer && (
+          <div
+            data-composer-paste-offer=""
+            className="chat-msg-in mb-2 flex flex-wrap items-center gap-2 rounded-[var(--radius-control)] bg-[color:var(--content-glyph-bg)] px-3 py-1.5 text-[0.8125rem] text-text-secondary"
+          >
+            <span className="min-w-0 flex-1">
+              {t("composer.pasteOffer", { max: new Intl.NumberFormat(locale).format(MESSAGE_MAX_LENGTH) })}
+            </span>
+            <Button type="button" variant="secondary" size="sm" onClick={sendBodyAsFile}>
+              {t("composer.sendAsFile")}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setBody(pasteOffer.previous);
+                restoreCaret(pasteOffer.previous.length);
+                setPasteOffer(null);
+              }}
+            >
+              {t("composer.undoPaste")}
+            </Button>
           </div>
         )}
         {isPollComposerOpen && slashContext && (
@@ -1828,37 +1953,7 @@ export function MessageComposer({
             aria-label={t("composer.format")}
             className="mb-1 flex gap-0.5 border-b border-border/60 pb-1 redesign:border-[color:var(--pane-header-rule)] redesign:pb-1.5"
           >
-            {FORMAT_ACTIONS.map((action) => {
-              return (
-                <Tooltip key={action.id} label={t(action.labelKey)}>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    disabled={disabled || isRunningSlash}
-                  onPointerDown={(event) => {
-                    // Pointer, not mouse: a tap never fires mousedown, and
-                    // without preventDefault the textarea blurs and loses the
-                    // selection before click. Apply here so touch and pen
-                    // wrap once even when the compatibility click is dropped.
-                    event.preventDefault();
-                    formatFromPointerRef.current = true;
-                    applyComposerFormat(action.kind);
-                  }}
-                  onClick={() => {
-                    if (formatFromPointerRef.current) {
-                      formatFromPointerRef.current = false;
-                      return;
-                    }
-                    applyComposerFormat(action.kind);
-                  }}
-                    className="h-7 min-w-7 flex-1 text-text-tertiary hover:text-text sm:w-7 sm:flex-none redesign:h-8 redesign:min-w-8 redesign:rounded-full redesign:text-text-secondary sm:redesign:w-8"
-                  >
-                    <ComposerGlyph old={action.icon} glyph={action.glyph} kind="symbol" size="sm" className="h-4 w-4" />
-                  </Button>
-                </Tooltip>
-              );
-            })}
+            {formatButtons}
           </div>
         )}
         {isFormatBarOpen && (
@@ -1900,6 +1995,7 @@ export function MessageComposer({
                 setBody(nextValue);
                 setCaret(nextCaret);
               }
+              setHasSelection(false);
               const typingFrom = expanded?.value ?? nextValue;
               if (typingFrom.trim() && !typingFrom.startsWith("/")) {
                 onTyping?.();
@@ -1912,7 +2008,9 @@ export function MessageComposer({
             onBlur={() => activityRef.current?.report({ focused: false })}
             onPaste={handlePaste}
             disabled={disabled || isRunningSlash}
-            maxLength={MESSAGE_MAX_LENGTH}
+            // Under the redesign the limit is a count and a refusal, never a
+            // paste cut short without a word.
+            maxLength={redesign ? undefined : MESSAGE_MAX_LENGTH}
             placeholder={inputPlaceholder}
             style={{
               resize: "none",
@@ -2106,6 +2204,25 @@ export function MessageComposer({
         )}
         </div>
       </div>
+      {redesign && !embedded && variant !== "stream" && (
+        <ComposerStatusBar
+          typing={typingLine}
+          length={body.length}
+          max={MESSAGE_MAX_LENGTH}
+          flash={countFlash}
+          onSendAsFile={isAttachmentsEnabled ? sendBodyAsFile : undefined}
+        />
+      )}
+      {showSelectionFormatBar && (
+        <div
+          role="toolbar"
+          aria-label={t("composer.format")}
+          data-composer-selection-format=""
+          className="absolute bottom-full left-3 z-20 mb-2 flex gap-0.5 rounded-full border border-[color:var(--popover-border)] bg-[color:var(--popover-surface)] p-1 shadow-[var(--popover-shadow)] sm:left-4"
+        >
+          {formatButtons}
+        </div>
+      )}
       <p id={holdHintId} role="status" className="sr-only">
         {holdAnnouncement}
       </p>
