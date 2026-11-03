@@ -11534,6 +11534,7 @@ function MainAppContent({
               <Tooltip label={t("chrome.pins")}>
                 <button
                   type="button"
+                  data-channel-header-pins=""
                   className={HEADER_ACTION_TILE}
                   onClick={() => setPinsOpen(true)}
                 >
