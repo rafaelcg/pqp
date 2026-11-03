@@ -36,9 +36,21 @@ export function ReactionWhoSheet({
   const active = reactions.find((reaction) => reaction.emoji === picked) ?? reactions[0];
 
   return (
-    <Dialog open={active !== undefined} title={t("chat.reaction.whoTitle")} onClose={onClose}>
+    <Dialog
+      open={active !== undefined}
+      title={t("chat.reaction.whoTitle")}
+      onClose={onClose}
+      // On a phone the board draws a grab handle and no title band: the title
+      // stays for screen readers, and the backdrop or Escape closes it.
+      headerClassName="redesign:max-sm:sr-only"
+    >
       {active && (
         <div data-reaction-who-sheet="" className="flex flex-col pb-2 pt-3">
+          <span
+            aria-hidden
+            data-sheet-grabber=""
+            className="mx-auto mb-3 hidden h-1 w-9 rounded-full bg-[color:var(--color-border-strong)] redesign:max-sm:block"
+          />
           <div
             role="tablist"
             aria-label={t("chat.reaction.whoTitle")}
