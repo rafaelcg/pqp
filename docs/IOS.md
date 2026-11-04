@@ -1136,6 +1136,39 @@ identity; without that, running the suite would destroy the servers,
 conversations and handle every other test reads. Debug-only, like
 `PQP_API_OVERRIDE`.
 
+## What App Review reads inside the bundle
+
+Settings ends in an **About** section (`Sources/Home/AboutSection.swift`):
+Terms of Service and Privacy Policy (the web's own pages, in the same in-app
+Safari sheet as the sign-in line), "Contact us or report abuse"
+(`mailto:contato@pqp.gg`, the one address the Terms name; there is no contact
+page on the web, so the address is also printed in the row), and the version and
+build. Guidelines 5.1.1(i) and 1.2. The sheet hangs on the screen's
+`NavigationStack`, never on the section (see `YourDataSection`).
+
+- **Privacy manifest.** `pqp/PrivacyInfo.xcprivacy` (app) and
+  `pqp/Broadcast/PrivacyInfo.xcprivacy` (extension, declares nothing), wired in
+  `project.yml`. No tracking, no tracking domains. The one required-reason API
+  the code calls is `UserDefaults.standard` (`CA92.1`, our own defaults only);
+  there is no file-timestamp, boot-time or disk-space call in `Sources/`,
+  `Broadcast/` or `ScreenShare/` (`attributesOfItem` is read for `.size` only).
+  The bundled SDKs (WebRTC, LiveKit, the Rust FFI) ship their own manifests.
+  Collected data types follow the Privacy Policy's "What we collect": email
+  (Clerk), name, user id, device id (push token), photos or videos, audio (voice
+  notes), other user content (messages), feedback, coarse location (the
+  country code, never an IP) and product interaction (the active-days record).
+  All linked to the account, none used for tracking. Change it when the app
+  starts calling a new required-reason API or collecting a new kind of data, and
+  keep the App Store Connect nutrition label in step.
+- **Local network.** `NSLocalNetworkUsageDescription` is set because WebRTC (the
+  mesh and LiveKit alike) gathers host candidates and resolves mDNS ones, which
+  is what makes iOS ask. `NSBonjourServices` is not needed: nothing browses or
+  advertises a Bonjour service.
+- **Background modes.** `audio` only. `voip` was removed in November 2026: it is
+  for PushKit, `PKPushRegistry` is not wired (`docs/IOS_CALLKIT.md`), and the
+  CallKit incoming call needs no background mode when it is reported from the
+  live socket. Put it back in the same change that registers for VoIP pushes.
+
 ## The server list: unread, order, "Mandar um oi"
 
 Four things the hub shares with the web rail (`ServerUnread.swift`, `HomeView.swift`):
