@@ -11379,6 +11379,12 @@
     },
     "seunome" : {
       "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "yourname"
+          }
+        },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",

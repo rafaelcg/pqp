@@ -97,3 +97,21 @@ xcodebuild test -project pqp.xcodeproj -scheme pqp -configuration Debug \
 ```
 
 Swap `en` for `pt-BR` (and the shot dir) for the other locale.
+
+## 2026-11 retake (App Review, Guideline 1.2)
+
+The first set carried test data (QA server names, "Dev User", people stuck on
+"connecting", a Portuguese placeholder in the English settings). It was shot
+again on a scratch database seeded with real-looking people and content, one
+database per language, so the chat is in the language of the shot:
+
+- One server per locale (en-US "Friday Night Crew", pt-BR "Noite de Jogos"),
+  three people in the call, a photo in the transcript, four to five friends
+  with one request waiting, two direct message threads, a claimed handle.
+- Attachments on (local MinIO), so Settings offers "Choose a photo".
+- Voice peers are real: headless Chromium tabs running the web client with a
+  fake microphone join the room, so the stage shows everybody "connected" over
+  genuine WebRTC rather than seats held open by a socket.
+- The simulator status bar is pinned (`simctl status_bar override`, 9:41, full
+  battery) and the language is forced with `-AppleLanguages` / `-AppleLocale`.
+- The app has no Spanish localization yet, so there is no es-MX set.
