@@ -163,4 +163,54 @@ final class BlockedUsersTests: XCTestCase {
         XCTAssertEqual(next.own?.id, me)
         XCTAssertEqual(StoryRules.droppingBlocked(strip, blocked: []), strip)
     }
+
+    // MARK: Reactions, counters, the one-to-one lookup
+
+    func testABlockedPersonsReactionLeavesTheChipAndTheCountDrops() {
+        let reactions = [
+            MessageReaction(emoji: "🎉", count: 2, me: false, users: [
+                ReactionUser(id: "friend", displayName: "Demo Friend"),
+                ReactionUser(id: "other", displayName: "Other"),
+            ]),
+            MessageReaction(emoji: "👍", count: 1, me: false, users: [
+                ReactionUser(id: "friend", displayName: "Demo Friend"),
+            ]),
+        ]
+        let shown = BlockRules.reactions(reactions, blocked: ["friend"])
+        XCTAssertEqual(shown.map(\.emoji), ["🎉"])
+        XCTAssertEqual(shown[0].count, 1)
+        XCTAssertEqual(shown[0].users.map(\.id), ["other"])
+    }
+
+    func testReactionsAreUntouchedWhenNobodyListedIsBlocked() {
+        let reactions = [MessageReaction(emoji: "🎉", count: 3, me: true, users: [])]
+        XCTAssertEqual(BlockRules.reactions(reactions, blocked: ["friend"]), reactions)
+        XCTAssertEqual(BlockRules.reactions(reactions, blocked: []), reactions)
+    }
+
+    func testTheOneToOneLookupFindsThePersonAndNeverAGroup() {
+        let person = PublicUser(id: "u1", displayName: "Demo Friend", username: nil, tag: nil, avatarUrl: nil)
+        let other = PublicUser(id: "u2", displayName: "Other", username: nil, tag: nil, avatarUrl: nil)
+        let unread = DmUnread(count: 0, mentions: 0)
+        let dm = DmSummary(channelId: "c1", kind: "dm", participants: [person], lastMessageAt: nil, unread: unread)
+        let group = DmSummary(channelId: "c2", kind: "group", participants: [person, other], lastMessageAt: nil, unread: unread)
+        XCTAssertEqual([group, dm].oneToOne(with: "u1")?.channelId, "c1")
+        XCTAssertNil([group].oneToOne(with: "u1"))
+        XCTAssertNil([dm].oneToOne(with: "u2"))
+    }
+
+    func testTheBauCommentCounterDropsByTheBlockedCommentsTheCardHolds() throws {
+        let user = #"{"id":"u1","displayName":"Demo Friend","username":null,"tag":null,"avatarUrl":null}"#
+        let post = try Coding.decoder.decode(CommunityHomePost.self, from: Data("""
+        {"id":"p1","serverId":"s1","author":\(user),"title":null,"body":"hi","teaser":"hi",
+         "visibility":"free","locked":false,"likeCount":0,"commentCount":3,
+         "publishedAt":"2026-10-15T12:00:00.000Z","createdAt":"2026-10-15T11:00:00.000Z"}
+        """.utf8))
+        let comment = try Coding.decoder.decode(CommunityHomeComment.self, from: Data("""
+        {"id":"c1","author":\(user),"body":"hello","createdAt":"2026-10-15T12:00:00.000Z"}
+        """.utf8))
+        XCTAssertEqual(post.visibleCommentCount(known: [comment], blocked: ["u1"]), 2)
+        XCTAssertEqual(post.visibleCommentCount(known: [comment], blocked: []), 3)
+        XCTAssertEqual(post.visibleCommentCount(known: [], blocked: ["u1"]), 3)
+    }
 }

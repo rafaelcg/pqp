@@ -16,7 +16,10 @@ open pqp.xcodeproj
 
 Debug builds point at `http://localhost:3001` and authenticate with the
 dev-bypass token, **so the server has to be running** — without it the app lands
-on onboarding with "Could not connect to the server." rather than signing in:
+on onboarding with "Could not connect to the server." rather than signing in.
+(Plain HTTP to localhost is allowed in Debug only: a build phase adds the App
+Transport Security exception to the built Info.plist, `the "Allow local HTTP (Debug only)" phase in `ios/project.yml``,
+so the Release plist, the one App Review reads, has none.)
 
 ```bash
 # root .env

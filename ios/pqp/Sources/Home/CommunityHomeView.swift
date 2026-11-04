@@ -408,6 +408,12 @@ private struct PostCard: View {
         .accessibilityIdentifier("bau.post.menu")
     }
 
+    /// The counter beside the bubble, without the comments of people the
+    /// reader blocked (they are off the card already).
+    private var visibleCommentCount: Int {
+        post.visibleCommentCount(known: expanded ?? post.commentTeaser, blocked: session.blocked.ids)
+    }
+
     private var actions: some View {
         HStack(spacing: 16) {
             Button(action: onToggleLike) {
@@ -429,14 +435,14 @@ private struct PostCard: View {
                 Image(systemName: "bubble.left")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Palette.paperMuted)
-                Text(String(post.commentCount))
+                Text(String(visibleCommentCount))
                     .font(Typography.caption)
                     .monospacedDigit()
                     .foregroundStyle(Palette.paperMuted)
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(Text("Comments"))
-            .accessibilityValue(Text(String(post.commentCount)))
+            .accessibilityValue(Text(String(visibleCommentCount)))
 
             Spacer(minLength: 0)
 

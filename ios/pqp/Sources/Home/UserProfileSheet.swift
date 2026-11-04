@@ -754,12 +754,7 @@ struct UserProfileSheet: View {
         async let conversations = try? await api.conversations()
         friends = await friendsResponse ?? FriendsResponse()
         blockedIds = Set((await blocks ?? []).map(\.id))
-        existingDm = (await conversations ?? []).first { conversation in
-            // A one-to-one DM, not a group: the participant list the server
-            // sends excludes us, so exactly this person and nobody else.
-            conversation.participants.count == 1
-                && conversation.participants[0].id == subject.id
-        }
+        existingDm = (await conversations ?? []).oneToOne(with: subject.id)
         loading = false
         await loadModeration()
         await loadProfileExtras()

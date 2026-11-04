@@ -2611,12 +2611,12 @@
         }
       }
     },
-    "By continuing, you agree to the [Terms](https://pqp.gg/terms) and the [Privacy Policy](https://pqp.gg/privacy)." : {
+    "By continuing you agree to the [Terms](https://pqp.gg/terms) (zero tolerance for objectionable content and abusive users) and the [Privacy Policy](https://pqp.gg/privacy)." : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ao continuar, você concorda com os [Termos](https://pqp.gg/terms) e a [Política de Privacidade](https://pqp.gg/privacy)."
+            "value" : "Ao continuar, tu concorda com os [Termos](https://pqp.gg/terms) (tolerância zero com conteúdo ofensivo e usuários abusivos) e com a [Política de Privacidade](https://pqp.gg/privacy)."
           }
         }
       }
@@ -7697,6 +7697,16 @@
         }
       }
     },
+    "Every message here is by somebody you blocked." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Todas as mensagens daqui são de gente que tu bloqueou."
+          }
+        }
+      }
+    },
     "Every post here is by somebody you blocked." : {
       "localizations" : {
         "pt-BR" : {
@@ -10803,6 +10813,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Você está aqui"
+          }
+        }
+      }
+    },
+    "You can't message this person right now." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu não pode mandar mensagem pra essa pessoa agora."
           }
         }
       }

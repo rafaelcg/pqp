@@ -907,6 +907,18 @@ struct ChatView: View {
                             message: "Nothing here yet. Say something."
                         )
                         .padding(.top, 40)
+                    } else if rows.isEmpty && !model.messages.isEmpty && !model.hasMore
+                                && !model.isLoading && forumPost == nil {
+                        // Everything loaded is by somebody the reader blocked.
+                        // Blank would read as a broken screen; this says why,
+                        // in the same words the Baú feed uses.
+                        EmptyState(
+                            icon: "hand.raised",
+                            title: "Nothing to show",
+                            message: "Every message here is by somebody you blocked."
+                        )
+                        .padding(.top, 40)
+                        .accessibilityIdentifier("chat.allBlocked")
                     }
 
                     // THE ONLY THING THAT ANSWERS "is the tail on screen".

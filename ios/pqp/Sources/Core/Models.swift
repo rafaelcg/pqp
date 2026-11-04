@@ -530,6 +530,16 @@ struct DmLastMessage: Codable, Hashable, Sendable {
     var systemKind: String? = nil
 }
 
+extension Sequence where Element == DmSummary {
+    /// The one-to-one conversation with this person, if the list holds one.
+    ///
+    /// A one-to-one, not a group: the participant list the server sends
+    /// excludes us, so it is exactly this person and nobody else.
+    func oneToOne(with userId: String) -> DmSummary? {
+        first { $0.participants.count == 1 && $0.participants[0].id == userId }
+    }
+}
+
 struct DmSummary: Codable, Identifiable, Hashable, Sendable {
     let channelId: String
     let kind: String
