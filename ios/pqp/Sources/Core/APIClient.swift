@@ -722,9 +722,11 @@ extension APIClient {
     /// setting changed after the chat began) refuses a conversation that exists
     /// and shows in the hub. The list is the authority on what exists, and it
     /// is a read the hub already makes, so it comes first; only a person with no
-    /// conversation yet goes to the create call.
+    /// conversation yet goes to the create call. A failed list read is thrown,
+    /// not read as "none": that would send an existing chat to the create call
+    /// and turn a dropped connection into "cannot message this person".
     func openOrFindConversation(with userId: String) async throws -> DmSummary {
-        if let existing = try? await conversations().oneToOne(with: userId) {
+        if let existing = try await conversations().oneToOne(with: userId) {
             return existing
         }
         return try await openConversation(userIds: [userId])

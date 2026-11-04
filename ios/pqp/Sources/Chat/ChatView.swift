@@ -907,7 +907,7 @@ struct ChatView: View {
                             message: "Nothing here yet. Say something."
                         )
                         .padding(.top, 40)
-                    } else if rows.isEmpty && !model.messages.isEmpty && !model.hasMore
+                    } else if rows.isEmpty && !model.messages.isEmpty && session.blocked.hasLoaded && !model.hasMore
                                 && !model.isLoading && forumPost == nil {
                         // Everything loaded is by somebody the reader blocked.
                         // Blank would read as a broken screen; this says why,
