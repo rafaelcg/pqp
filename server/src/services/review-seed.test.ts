@@ -75,7 +75,10 @@ const { createReport } = await import("./reports.js");
 const { listRoles } = await import("./roles.js");
 const { memberHasPermission } = await import("./permissions.js");
 const { createPostgresBusTransport } = await import("../lib/bus-postgres.js");
+const { listFriendships, sendFriendRequest, acceptFriendRequest } = await import("./friends.js");
+const { listConversations, hideConversation, openConversation } = await import("./dms.js");
 const {
+  REVIEW_DM_MESSAGES,
   REVIEW_FRIEND_LABEL,
   REVIEW_FRIEND_NAME,
   REVIEW_MESSAGES,
@@ -113,6 +116,9 @@ async function snapshot(): Promise<Record<string, number>> {
     "character_accounts",
     "user_blocks",
     "reports",
+    "friendships",
+    "dm_pairs",
+    "channel_members",
   ]) {
     out[name] = await table(name);
   }
@@ -422,6 +428,331 @@ function suite(label: string): void {
       await expect(run({ apply: true })).rejects.toThrow(/must be private/);
     });
 
+    describe("friend and DM", () => {
+      async function realPerson(clerkId: string, name: string): Promise<string> {
+        return (await upsertUser({ clerkId, displayName: name, avatarUrl: null })).id;
+      }
+
+      async function pendingRows(): Promise<number> {
+        return (
+          await getPool().query(`SELECT 1 FROM friendships WHERE status = 'pending'`)
+        ).rowCount!;
+      }
+
+      it("makes Demo Friend an accepted friend and opens a DM with five messages", async () => {
+        const report = await run({ apply: true });
+        const friendId = report.friendUserId!;
+
+        // The friendship row obeys the table's rules and the Friends tab lists it.
+        const [low, high] = demoId < friendId ? [demoId, friendId] : [friendId, demoId];
+        const row = await getPool().query(
+          `SELECT status, requested_by, accepted_at, created_at FROM friendships
+            WHERE low_user_id = $1 AND high_user_id = $2`,
+          [low, high],
+        );
+        expect(row.rows[0]).toMatchObject({ status: "accepted", requested_by: friendId });
+        expect(row.rows[0]!.accepted_at).not.toBeNull();
+        const friendships = await listFriendships(demoId);
+        expect(friendships.friends.map((f) => f.displayName)).toEqual([REVIEW_FRIEND_NAME]);
+        expect(friendships.incoming).toEqual([]);
+        expect(friendships.outgoing).toEqual([]);
+
+        // The conversation: a server-less 'dm' channel, the sorted pair, both members.
+        expect(report.dmChannelId).toBeTruthy();
+        const channel = await getPool().query(
+          `SELECT c.kind, c.server_id, p.low_user_id, p.high_user_id,
+                  (SELECT count(*)::int FROM channel_members WHERE channel_id = c.id) AS members
+             FROM channels c JOIN dm_pairs p ON p.channel_id = c.id WHERE c.id = $1`,
+          [report.dmChannelId],
+        );
+        expect(channel.rows[0]).toMatchObject({
+          kind: "dm",
+          server_id: null,
+          low_user_id: low,
+          high_user_id: high,
+          members: 2,
+        });
+
+        // Four to six messages, alternating authors, oldest first, spread over days,
+        // marked with the nonce no client sends.
+        const messages = await getPool().query<{
+          author_id: string;
+          nonce: string;
+          created_at: Date;
+          body: string;
+        }>(
+          `SELECT author_id, nonce, created_at, body FROM messages
+            WHERE channel_id = $1 ORDER BY created_at, id`,
+          [report.dmChannelId],
+        );
+        expect(messages.rowCount).toBe(REVIEW_DM_MESSAGES.length);
+        expect(messages.rowCount).toBeGreaterThanOrEqual(4);
+        expect(messages.rowCount).toBeLessThanOrEqual(6);
+        const authors = messages.rows.map((m) => m.author_id);
+        authors.forEach((author, i) => {
+          expect(author).toBe(i % 2 === 0 ? friendId : demoId);
+        });
+        expect(messages.rows.every((m) => m.nonce.startsWith(REVIEW_NONCE_PREFIX))).toBe(true);
+        const times = messages.rows.map((m) => m.created_at.getTime());
+        expect([...times].sort((a, b) => a - b)).toEqual(times);
+        const spreadDays = (times.at(-1)! - times[0]!) / 86_400_000;
+        expect(spreadDays).toBeGreaterThan(2);
+        expect(times[0]!).toBeGreaterThan(Date.now() - 6 * 86_400_000);
+        expect(times.at(-1)!).toBeLessThanOrEqual(Date.now());
+        expect(messages.rows.some((m) => /Oi!|Tudo bem|Perfeito/.test(m.body))).toBe(true);
+        expect(messages.rows.some((m) => /nice to meet|Hi!/.test(m.body))).toBe(true);
+
+        // The Chats tab: the real list query returns it with the last message.
+        const chats = await listConversations(demoId);
+        expect(chats).toHaveLength(1);
+        expect(chats[0]!.channelId).toBe(report.dmChannelId);
+        expect(chats[0]!.lastMessage?.preview).toBe(REVIEW_DM_MESSAGES.at(-1)!.body);
+        expect(chats[0]!.lastMessage?.authorName).toBe(REVIEW_FRIEND_NAME);
+
+        // ...and the report says so, before and after.
+        expect(report.chatState!.before).toMatchObject({
+          friends: 0,
+          demoFriendIsFriend: false,
+          conversations: 0,
+          demoFriendDmMessages: 0,
+        });
+        expect(report.chatState!.after).toMatchObject({
+          friends: 1,
+          demoFriendIsFriend: true,
+          pendingIncoming: 0,
+          pendingOutgoing: 0,
+          conversations: 1,
+          demoFriendDmMessages: REVIEW_DM_MESSAGES.length,
+        });
+      });
+
+      it("the dry run projects the same end state and writes nothing", async () => {
+        const lines: string[] = [];
+        const before = await snapshot();
+        const dry = await run({ log: (line: string) => lines.push(line) });
+        expect(await snapshot()).toEqual(before);
+        expect(dry.dmChannelId).toBeNull();
+        expect(dry.chatState!.before.friends).toBe(0);
+        expect(dry.chatState!.after).toMatchObject({
+          friends: 1,
+          demoFriendIsFriend: true,
+          conversations: 1,
+          demoFriendDmMessages: REVIEW_DM_MESSAGES.length,
+        });
+        const text = lines.join("\n");
+        expect(text).toMatch(/before: 0 friend\(s\)/);
+        expect(text).toMatch(/after \(projected\): 1 friend\(s\)/);
+        expect(text).not.toMatch(/@/);
+
+        // A dry run on top of a finished seed projects "no change".
+        await run({ apply: true });
+        const dryAgain = await run();
+        expect(dryAgain.chatState!.after).toEqual(dryAgain.chatState!.before);
+      });
+
+      it("is idempotent: no duplicate friendship, DM or messages, timestamps stay put", async () => {
+        const first = await run({ apply: true });
+        const afterFirst = await snapshot();
+        const stamps = await getPool().query(
+          `SELECT id, created_at FROM messages WHERE channel_id = $1 ORDER BY id`,
+          [first.dmChannelId],
+        );
+
+        const second = await run({ apply: true });
+        expect(await snapshot()).toEqual(afterFirst);
+        expect(second.dmChannelId).toBe(first.dmChannelId);
+        expect(second.actions.some((a) => a.kind === "create" || a.kind === "change")).toBe(false);
+        expect(second.chatState!.after).toEqual(second.chatState!.before);
+        expect(
+          await getPool().query(
+            `SELECT id, created_at FROM messages WHERE channel_id = $1 ORDER BY id`,
+            [first.dmChannelId],
+          ),
+        ).toMatchObject({ rows: stamps.rows });
+        expect((await listConversations(demoId))).toHaveLength(1);
+        expect((await listFriendships(demoId)).friends).toHaveLength(1);
+      });
+
+      it("finishes a run that died after the friendship but before the messages", async () => {
+        const first = await run({ apply: true });
+        const complete = await snapshot();
+        await getPool().query(`DELETE FROM messages WHERE channel_id = $1 AND nonce = $2`, [
+          first.dmChannelId,
+          `${REVIEW_NONCE_PREFIX}dm-3`,
+        ]);
+        await run({ apply: true });
+        expect(await snapshot()).toEqual(complete);
+      });
+
+      it("reopens a conversation the reviewer closed", async () => {
+        const first = await run({ apply: true });
+        expect(await hideConversation(first.dmChannelId!, demoId)).toBe(true);
+        expect(await listConversations(demoId)).toHaveLength(0);
+        const again = await run({ apply: true });
+        expect(again.dmChannelId).toBe(first.dmChannelId);
+        expect(await listConversations(demoId)).toHaveLength(1);
+      });
+
+      it("does not make friends over a block, and says so", async () => {
+        const first = await run({ apply: true });
+        await blockUser(demoId, first.friendUserId!);
+        expect((await listFriendships(demoId)).friends).toHaveLength(0);
+        const again = await run({ apply: true });
+        expect(again.actions.some((a) => a.kind === "blocked" && /block stands/.test(a.what))).toBe(
+          true,
+        );
+        expect((await listFriendships(demoId)).friends).toHaveLength(0);
+      });
+
+      it("accepts a pending request with Demo Friend instead of failing on it", async () => {
+        const first = await run({ apply: true });
+        await getPool().query(`DELETE FROM friendships`);
+        const [low, high] =
+          demoId < first.friendUserId! ? [demoId, first.friendUserId!] : [first.friendUserId!, demoId];
+        await getPool().query(
+          `INSERT INTO friendships (low_user_id, high_user_id, requested_by) VALUES ($1, $2, $3)`,
+          [low, high, demoId],
+        );
+        const report = await run({ apply: true });
+        expect(report.actions.some((a) => a.kind === "change" && /accepted/.test(a.what))).toBe(true);
+        const friendships = await listFriendships(demoId);
+        expect(friendships.friends.map((f) => f.displayName)).toEqual([REVIEW_FRIEND_NAME]);
+        expect(friendships.outgoing).toEqual([]);
+      });
+
+      describe("--clear-pending", () => {
+        let mallory: string;
+        let trent: string;
+        let carol: string;
+        let bob: string;
+
+        beforeEach(async () => {
+          mallory = await realPerson("user_test_mallory", "Mallory");
+          trent = await realPerson("user_test_trent", "Trent");
+          carol = await realPerson("user_test_carol", "Carol");
+          bob = await realPerson("user_test_bob", "Bob");
+          // Pending: one sent by the demo account, one received.
+          expect(await sendFriendRequest(demoId, mallory)).toBe("pending");
+          expect(await sendFriendRequest(trent, demoId)).toBe("pending");
+          // An accepted real friendship of the demo account: must survive.
+          expect(await sendFriendRequest(demoId, carol)).toBe("pending");
+          expect(await acceptFriendRequest(carol, demoId)).toBe(true);
+          // Two other accounts with a pending request between them: not ours.
+          expect(await sendFriendRequest(bob, mallory)).toBe("pending");
+        });
+
+        it("a dry run lists exactly what it would delete and deletes nothing", async () => {
+          const lines: string[] = [];
+          const before = await snapshot();
+          const dry = await run({ clearPending: true, log: (line: string) => lines.push(line) });
+          expect(await snapshot()).toEqual(before);
+          expect(dry.pendingCleared).toBe(2);
+          const text = lines.join("\n");
+          expect(text).toMatch(/would delete pending request to "Mallory" \(sent 0 day/);
+          expect(text).toMatch(/would delete pending request from "Trent" \(received 0 day/);
+          expect(text).not.toMatch(/Bob|Carol/);
+          expect(dry.chatState!.before).toMatchObject({ pendingIncoming: 1, pendingOutgoing: 1 });
+          expect(dry.chatState!.after).toMatchObject({
+            pendingIncoming: 0,
+            pendingOutgoing: 0,
+            friends: 2,
+          });
+          expect(await pendingRows()).toBe(3);
+        });
+
+        it("without the flag, pending requests are left alone and flagged", async () => {
+          const lines: string[] = [];
+          const report = await run({ apply: true, log: (line: string) => lines.push(line) });
+          expect(report.pendingCleared).toBe(0);
+          expect(await pendingRows()).toBe(3);
+          expect(lines.join("\n")).toMatch(/2 pending friend request\(s\) left alone/);
+        });
+
+        it("apply deletes only the demo account's pending rows", async () => {
+          const report = await run({ apply: true, clearPending: true });
+          expect(report.pendingCleared).toBe(2);
+
+          const friendships = await listFriendships(demoId);
+          expect(friendships.incoming).toEqual([]);
+          expect(friendships.outgoing).toEqual([]);
+          expect(friendships.friends.map((f) => f.displayName).sort()).toEqual([
+            "Carol",
+            REVIEW_FRIEND_NAME,
+          ]);
+          // Bob's request to Mallory is another pair's business.
+          expect(await pendingRows()).toBe(1);
+          expect(report.chatState!.after).toMatchObject({ pendingIncoming: 0, pendingOutgoing: 0 });
+
+          // Again: nothing to clear, nothing else changes.
+          const snap = await snapshot();
+          const again = await run({ apply: true, clearPending: true });
+          expect(again.pendingCleared).toBe(0);
+          expect(await snapshot()).toEqual(snap);
+        });
+
+        it("never deletes an accepted row, even one with a person who asked first", async () => {
+          await run({ apply: true, clearPending: true });
+          const accepted = await getPool().query(
+            `SELECT count(*)::int AS n FROM friendships WHERE status = 'accepted'`,
+          );
+          expect(accepted.rows[0]!.n).toBe(2);
+        });
+
+        it("refuses to be combined with --cleanup", async () => {
+          await expect(run({ cleanup: true, clearPending: true })).rejects.toThrow(/separate runs/);
+        });
+      });
+
+      it("--cleanup removes the friendship and the DM with its messages, and nothing real", async () => {
+        const carol = await realPerson("user_test_carol", "Carol");
+        const bob = await realPerson("user_test_bob", "Bob");
+        await sendFriendRequest(demoId, carol);
+        await acceptFriendRequest(carol, demoId);
+        await getPool().query(`DELETE FROM user_blocks`);
+        const realDm = (await openConversation(demoId, [carol])).channelId;
+        await createMessage(
+          realDm,
+          (await getPool().query(`SELECT * FROM users WHERE id = $1`, [demoId])).rows[0],
+          "a real message to a real friend",
+        );
+        const seeded = await run({ apply: true });
+
+        const before = await snapshot();
+        const dry = await run({ cleanup: true });
+        expect(await snapshot()).toEqual(before);
+        expect(dry.actions.some((a) => /would delete the 1:1 conversation/.test(a.what))).toBe(true);
+        expect(dry.actions.some((a) => /would delete the friendship/.test(a.what))).toBe(true);
+
+        await run({ cleanup: true, apply: true });
+        expect(
+          (await getPool().query(`SELECT 1 FROM channels WHERE id = $1`, [seeded.dmChannelId]))
+            .rowCount,
+        ).toBe(0);
+        expect(
+          (await getPool().query(`SELECT 1 FROM messages WHERE nonce LIKE $1`, [
+            `${REVIEW_NONCE_PREFIX}dm-%`,
+          ])).rowCount,
+        ).toBe(0);
+        expect((await getPool().query(`SELECT 1 FROM dm_pairs`)).rowCount).toBe(1);
+        // The real friend and the real conversation are untouched.
+        const friendships = await listFriendships(demoId);
+        expect(friendships.friends.map((f) => f.displayName)).toEqual(["Carol"]);
+        const chats = await listConversations(demoId);
+        expect(chats.map((c) => c.channelId)).toEqual([realDm]);
+        expect(
+          (await getPool().query(`SELECT 1 FROM messages WHERE channel_id = $1`, [realDm])).rowCount,
+        ).toBe(1);
+        expect(
+          (await getPool().query(`SELECT 1 FROM users WHERE id = $1`, [bob])).rowCount,
+        ).toBe(1);
+
+        // And it can be seeded again.
+        const reseed = await run({ apply: true });
+        expect(reseed.dmChannelId).toBeTruthy();
+        expect(await listConversations(demoId)).toHaveLength(2);
+      });
+    });
+
     describe("--leave-others", () => {
       let qg: string;
       let owned: string;
@@ -706,6 +1037,10 @@ describe("seed-review-community argument handling", () => {
       parseArgs(["--user-id", "abc", "--apply", "--leave-others", "--force"]),
     ).toEqual({ help: false, userId: "abc", apply: true, leaveOthers: true, force: true });
     expect(parseArgs(["--cleanup", "--clerk-id", "u"])).toMatchObject({ cleanup: true });
+    expect(parseArgs(["--clerk-id", "u", "--clear-pending"])).toMatchObject({
+      clearPending: true,
+    });
+    expect(parseArgs(["--clerk-id", "u", "--clear-pending"]).apply).toBeUndefined();
     expect(parseArgs(["--help"]).help).toBe(true);
   });
 
