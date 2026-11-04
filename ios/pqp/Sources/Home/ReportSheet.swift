@@ -15,9 +15,16 @@ enum ReportTarget: Identifiable, Hashable {
     /// seen through (that server's queue); nil is Amigos (the instance
     /// queue). A minor in sexual content goes to the instance either way.
     case story(id: String, authorName: String, serverId: String?)
+    /// A Baú post, or one comment under it. Id only: the server reads the
+    /// community, the author and the destination from the post itself (a Baú
+    /// in a community goes to the instance queue, like a community report).
+    case bauPost(id: String, authorName: String)
+    case bauComment(id: String, authorName: String)
 
     var id: String {
         switch self {
+        case .bauPost(let id, _): "bau-post-\(id)"
+        case .bauComment(let id, _): "bau-comment-\(id)"
         case .story(let id, _, _): "story-\(id)"
         case .message(let id, _): "message-\(id)"
         case .user(let id, _, _): "user-\(id)"
@@ -50,6 +57,10 @@ struct ReportSheet: View {
             String(localized: "Report the community \(name)")
         case .story(_, let authorName, _):
             String(localized: "Report a story by \(authorName)")
+        case .bauPost(_, let authorName):
+            String(localized: "Report a post by \(authorName)")
+        case .bauComment(_, let authorName):
+            String(localized: "Report a comment by \(authorName)")
         }
     }
 
@@ -196,6 +207,16 @@ struct ReportSheet: View {
             case .story(let id, _, let serverId):
                 try await session.api.reportStory(
                     storyId: id, serverId: serverId, reason: reason.rawValue,
+                    details: trimmed.isEmpty ? nil : trimmed
+                )
+            case .bauPost(let id, _):
+                try await session.api.reportBauPost(
+                    postId: id, reason: reason.rawValue,
+                    details: trimmed.isEmpty ? nil : trimmed
+                )
+            case .bauComment(let id, _):
+                try await session.api.reportBauComment(
+                    commentId: id, reason: reason.rawValue,
                     details: trimmed.isEmpty ? nil : trimmed
                 )
             }

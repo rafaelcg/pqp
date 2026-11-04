@@ -1391,12 +1391,12 @@
         }
       }
     },
-    "To report a message, a person or a community, open its menu and choose Report." : {
+    "To report a message, a Baú post or comment, a person or a community, open its menu and choose Report." : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Para denunciar uma mensagem, uma pessoa ou uma comunidade, abra o menu e escolha Denunciar."
+            "value" : "Para denunciar uma mensagem, um post ou comentário do Baú, uma pessoa ou uma comunidade, abra o menu e escolha Denunciar."
           }
         }
       }
@@ -7707,12 +7707,32 @@
         }
       }
     },
+    "Report a comment by %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Denunciar um comentário de %@"
+          }
+        }
+      }
+    },
     "Report a message by %@" : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Denunciar uma mensagem de %@"
+          }
+        }
+      }
+    },
+    "Report a post by %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Denunciar um post de %@"
           }
         }
       }

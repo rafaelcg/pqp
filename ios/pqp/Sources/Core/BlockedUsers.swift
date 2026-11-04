@@ -237,27 +237,37 @@ enum BlockRules {
 
 // MARK: - The confirmation, from a message's long-press menu
 
+/// Somebody about to be blocked from a menu that is not a profile: who, what to
+/// call them in the question, and the `surface` token the operators' log line
+/// carries.
+struct BlockPersonTarget: Identifiable, Equatable {
+    let userId: String
+    let name: String
+    let surface: String
+    var id: String { userId }
+}
+
 /// Asks once, then blocks through the shared store: the person disappears from
 /// every list on the tap (`BlockedUsers`), and the operators are told. A
 /// refusal is said in an alert, and the store has already put the person back.
 private struct BlockAuthorConfirmation: ViewModifier {
-    @Binding var target: Message?
+    @Binding var target: BlockPersonTarget?
     @Environment(SessionStore.self) private var session
     @State private var failure: String?
 
     func body(content: Content) -> some View {
         content
             .confirmationDialog(
-                String(localized: "Block \(target?.authorName ?? "")?"),
+                String(localized: "Block \(target?.name ?? "")?"),
                 isPresented: Binding(get: { target != nil }, set: { if !$0 { target = nil } }),
                 titleVisibility: .visible,
                 presenting: target
-            ) { message in
+            ) { person in
                 Button("Block", role: .destructive) {
                     Task {
                         do {
                             try await session.blocked.block(
-                                message.authorId, surface: "message", using: session.api
+                                person.userId, surface: person.surface, using: session.api
                             )
                         } catch {
                             failure = (error as? APIError)?.errorDescription ?? error.localizedDescription
@@ -279,7 +289,20 @@ private struct BlockAuthorConfirmation: ViewModifier {
 }
 
 extension View {
+    /// A message's author, from the long-press menu.
     func blockAuthorConfirmation(_ target: Binding<Message?>) -> some View {
+        blockPersonConfirmation(Binding(
+            get: {
+                target.wrappedValue.map {
+                    BlockPersonTarget(userId: $0.authorId, name: $0.authorName, surface: "message")
+                }
+            },
+            set: { if $0 == nil { target.wrappedValue = nil } }
+        ))
+    }
+
+    /// Anybody else, from a menu that is not a message's (a Baú post or comment).
+    func blockPersonConfirmation(_ target: Binding<BlockPersonTarget?>) -> some View {
         modifier(BlockAuthorConfirmation(target: target))
     }
 }

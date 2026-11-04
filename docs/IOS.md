@@ -128,11 +128,25 @@ optimistically on the tap) is what every list reads: the transcript
 (`ChatModel.visibleMessages`, which also covers threads, group DMs and forum
 posts, live frames included), the Conversas list and hub (`BlockRules.visible`),
 story rings and the open viewer, forum lists, thread lists, Baú comments and
-reply quotes. Blocking is offered on a message's long-press menu, on a profile
-and in Friends; each sends a `surface` token so the operators' log line says
-which. Guideline 1.2; see `docs/CONTENT_SAFETY.md` §"Blocking a person tells the
+reply quotes. Blocking is offered on a message's long-press menu, on a profile,
+in Friends and on a Baú post's or comment's menu; each sends a `surface` token
+(`message`, `profile`, `friends`, `bau`) so the operators' log line says which.
+Guideline 1.2; see `docs/CONTENT_SAFETY.md` §"Blocking a person tells the
 operators". Not hidden on purpose: the member list and the voice roster (a
 roster is who is in a place, not a feed).
+
+**What a reader can report from the phone** (guideline 1.2: every kind of user
+content, two taps). One sheet, `ReportSheet`, one set of reasons and one
+"Report sent" confirmation, keyed on `ReportTarget`: a message (long-press
+menu), a person (profile, members), a community (directory card), a story (the
+viewer), a Baú post and a Baú comment. The Baú ones (`bau_post` / `bau_comment`,
+id only) are the post card's ellipsis and the ellipsis on each comment, both
+beside Block, hidden on your own words, and a locked (VIP) post offers Block
+only because the server refuses to report words the reader cannot see. A Baú in
+a community is filed to the instance queue (`docs/COMMUNITY_HOME.md` §"Reporting
+a post or a comment"). Forum posts are chat messages in a thread, so they take
+the message path. Pinned by `BauReportTests` (request shape) and
+`BauReportUITests` (the flow, seeds its own server).
 
 **`presence-update` uses `name`, every other payload uses `displayName`.** One
 struct cannot serve both, hence `PresenceUser`.

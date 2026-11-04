@@ -369,7 +369,8 @@ are left out of the report-age figures that drive the 12 h and 20 h alerts
 
 ### Reporting a Baú post or comment
 
-`createReportSchema` also takes `bau_post` and `bau_comment` (id only). The
+`createReportSchema` also takes `bau_post` and `bau_comment` (id only), filed
+from the web and from iOS (App Store guideline 1.2, two taps on either). The
 reporter must be able to READ the post (the feed's own VIP lock decides, so a
 members-only post is reportable by staff and VIPs only), and the words are
 copied into `reports.bau_snapshot` so the report outlives the post. **A Baú in
@@ -1001,8 +1002,8 @@ it is the existing report queue plus a clock on it.
 
 A report is one row in `reports` (`createReport`, `server/src/services/reports.ts`),
 filed from `POST /api/reports` by any client, the iOS `ReportSheet` included
-(messages, people, stories, whole communities; the web also reports a Baú post
-or comment). The client never names the destination; it is decided once, from
+(messages, people, stories, whole communities, and a Baú post or comment; forum
+posts are messages in a thread and take the message path). The client never names the destination; it is decided once, from
 the reported thing:
 
 | What was reported | Queue it lands in | Who can read and close it |
