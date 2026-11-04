@@ -128,6 +128,11 @@ sync):
 | **CSAM / sexualisation of a minor** | **Removed on sight, account terminated, reported to the competent authorities. No queue, no timeline caveat, no appeal.** This is the one commitment with no proportionality argument attached to it |
 | Appeals | Read and answered when possible; no promised turnaround; explicitly *not* reviewed by an independent person, because there is no second person |
 
+Server-queue reports are covered too: one a server's owner closes leaves a copy
+in the instance queue with its original clock, and one the owner leaves open is
+in the same list and the same age alert (`CONTENT_SAFETY.md` "Where a report
+lands").
+
 If the 24 hours stops being true (the operator away, a backlog), fix the
 coverage, do not quietly miss it, and do not soften the sentence without
 changing the Terms and the store reply that cites it.

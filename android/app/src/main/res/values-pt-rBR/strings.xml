@@ -552,7 +552,7 @@
     <string name="report_sending">Enviando\u2026</string>
     <string name="report_failed">Não deu para enviar esta denúncia. Tenta de novo daqui a pouco.</string>
     <string name="report_sent_title">Denúncia enviada</string>
-    <string name="report_sent_body">Quem modera vai olhar. Teu nome não aparece pra quem tu denunciou.</string>
+    <string name="report_sent_body">A equipe do pqp analisa as denúncias em até 24 horas. Teu nome não aparece pra quem tu denunciou.</string>
     <string name="report_done">Pronto</string>
 
     <string name="chance_heads">Cara</string>

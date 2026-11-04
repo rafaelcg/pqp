@@ -478,7 +478,7 @@ async function exportReportsFiled(
     `SELECT id::text, created_at, subject_type, context_kind, subject_label,
             channel_label, server_id, reason, details, status, resolved_at
      FROM reports
-     WHERE reporter_id = $1
+     WHERE reporter_id = $1 AND escalated_from IS NULL
      ORDER BY id ASC
      LIMIT $2`,
     [userId, MAX_EXPORT_REPORTS + 1],

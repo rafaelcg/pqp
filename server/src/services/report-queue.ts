@@ -39,7 +39,11 @@ export interface ReportQueueStats {
   open: number;
   actioned: number;
   dismissed: number;
-  /** Filed in the last 24 hours, whatever their status now. */
+  /**
+   * Filed in the last 24 hours, whatever their status now. A second look
+   * (`escalated_from`, a copy of a server report its staff closed) is not a
+   * new filing and is left out.
+   */
   last24h: number;
   /**
    * Age in whole seconds of the oldest report still `open`, or 0 when none is.
@@ -72,6 +76,7 @@ export async function reportQueueStats(): Promise<ReportQueueStats> {
             COUNT(*) FILTER (WHERE status = 'dismissed')::text AS dismissed,
             COUNT(*) FILTER (
               WHERE created_at >= now() - interval '24 hours'
+                AND escalated_from IS NULL
             )::text AS last24h,
             COALESCE(
               floor(extract(epoch FROM now() - MIN(created_at)

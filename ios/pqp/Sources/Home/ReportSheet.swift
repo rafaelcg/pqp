@@ -80,7 +80,7 @@ struct ReportSheet: View {
                         Text("Report sent")
                             .font(Typography.title(20))
                             .foregroundStyle(Palette.paper)
-                        Text("The moderators will take a look. You won't be named to the person you reported.")
+                        Text("The pqp team reviews reports within 24 hours. You won't be named to the person you reported.")
                             .font(Typography.callout)
                             .foregroundStyle(Palette.paperMuted)
                             .multilineTextAlignment(.center)
@@ -116,7 +116,7 @@ struct ReportSheet: View {
                                                     .font(Typography.body)
                                                     .foregroundStyle(Palette.paper)
                                                 if choice == .minorSexual {
-                                                    Text("Goes straight to the pqp team, not the server staff")
+                                                    Text("Goes straight to the pqp team first")
                                                         .font(Typography.caption)
                                                         .foregroundStyle(Palette.paperMuted)
                                                 }

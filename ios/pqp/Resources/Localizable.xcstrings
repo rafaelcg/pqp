@@ -4817,12 +4817,12 @@
         }
       }
     },
-    "Goes straight to the pqp team, not the server staff" : {
+    "Goes straight to the pqp team first" : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Vai direto pra equipe do pqp, não pra staff do servidor"
+            "value" : "Vai direto pra equipe do pqp primeiro"
           }
         }
       }
@@ -9157,12 +9157,12 @@
         }
       }
     },
-    "The moderators will take a look. You won't be named to the person you reported." : {
+    "The pqp team reviews reports within 24 hours. You won't be named to the person you reported." : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "A moderação vai dar uma olhada. A pessoa denunciada não fica sabendo quem denunciou."
+            "value" : "A equipe do pqp analisa as denúncias em até 24 horas. A pessoa denunciada não fica sabendo quem denunciou."
           }
         }
       }
@@ -12157,12 +12157,12 @@
         }
       }
     },
-    "Open source · Free · No card required" : {
+    "Open source · Free · No ads" : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Código aberto · De graça · Feito no Brasil"
+            "value" : "Código aberto · Grátis · Sem anúncios"
           }
         }
       }
