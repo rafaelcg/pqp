@@ -261,18 +261,22 @@ reviewers can open the app. It is **not**:
 2. Suggested email: something like `appstore-review@<inbox you control>`.
 3. Sign in once on **production** (web or TestFlight), complete the **18+ age
    gate** with an adult date of birth.
-4. Give it a small private server with a few messages and a second dummy user
-   (so Report / Block are exercisable) and take it out of every real community:
-   run the seed script, see **Seeding the review community** below.
+4. Give it a small private server with a few messages, a second dummy user
+   (so Report / Block are exercisable), that user as an accepted friend with a
+   short DM, no pending friend requests, and take it out of every real
+   community: run the seed script, see **Seeding the review community** below.
 5. Paste email + password into ASC → TestFlight → **Test Information** → Sign-in
    information.
 6. Notes template (paste and edit):
 
 ```
 18+ age gate already completed on this account.
-After sign-in you land in "pqp review", a small private space with sample
-messages (English and Portuguese), a second member ("Demo Friend") and a voice
-channel (Lobby). This account is not a member of any public community.
+The account is pre-populated. Chats tab: a direct message thread with
+"Demo Friend" (sample messages, English and Portuguese). Friends tab: Demo
+Friend is already a friend, and nothing is pending. After sign-in you can also
+open "pqp review", a small private space with sample messages, a second member
+(the same Demo Friend) and a voice channel (Lobby). This account is not a member
+of any public community.
 UGC: long-press / message menu → Report; tap a member's name → profile → Block.
 Privacy: https://pqp.gg/privacy
 Terms: https://pqp.gg/terms
@@ -303,6 +307,13 @@ audiences, caches and cluster invalidations are the real ones):
   all of that, its token is minted and revoked in the same call (nobody can sign
   in as it), and Report and Block both work on it. The web client draws a small
   "bot" mark beside the name; iOS and Android do not;
+- Demo Friend as an **accepted friend** of the demo account (a `friendships`
+  row, friends since six days ago) and a **1:1 conversation** with them: five
+  short messages in English and pt-BR, alternating authors, spread over the last
+  four days, the last one from Demo Friend so Chats shows an unread badge.
+  Both are written with plain SQL, because `sendFriendRequest` and
+  `openConversation` refuse a character for every real account (`dm_privacy =
+  'nobody'`). The messages carry the same marker nonce as the channel ones;
 - eight messages in `#geral` (welcome, a how-to-try list, replies, "this is a
   test message to report") and one in `#ajuda`, English and pt-BR, written by the
   demo account and Demo Friend, plus four reactions. No real person's data, no
@@ -311,7 +322,9 @@ audiences, caches and cluster invalidations are the real ones):
   post it anywhere.
 
 It is **idempotent** (it looks before it writes: the server by name and owner,
-the friend by label, each message by a nonce no client ever sends) and **dry run
+the friend by label, the friendship and the conversation by their sorted pair,
+each message by a nonce no client ever sends. A conversation the reviewer closed
+is reopened, history intact) and **dry run
 by default**. It does not run in one transaction: the service layer owns its own
 transactions and cache fan-out, and going around it with raw SQL is how a
 seeded room ends up without cargos or with stale audiences on the other API
@@ -333,27 +346,59 @@ On the box, as `pqp` (the demo account's Clerk id is not a secret):
 ssh pqp@<ip>
 cd /opt/pqp
 
-# 1. Dry run: prints what it would create, writes nothing.
+# 1. Dry run: prints what it would create and delete, writes nothing. Read the
+#    "before" / "after (projected)" table at the bottom, and every line marked
+#    "would delete pending request".
 docker compose exec -T api-a node server/dist/scripts/seed-review-community.js \
-  --clerk-id user_3IBapFe9KRlyoVEafdJwHoNsprH --leave-others
+  --clerk-id user_3IBapFe9KRlyoVEafdJwHoNsprH --leave-others --clear-pending
 
-# 2. Same command plus --apply: makes the space, then removes the demo account
-#    from every other server it is in (QG do pqp and the two others).
+# 2. Same command plus --apply: makes the space, the friendship and the DM,
+#    deletes the demo account's pending friend requests, then removes the demo
+#    account from every other server it is in (QG do pqp and the two others).
 docker compose exec -T api-a node server/dist/scripts/seed-review-community.js \
-  --clerk-id user_3IBapFe9KRlyoVEafdJwHoNsprH --apply --leave-others
+  --clerk-id user_3IBapFe9KRlyoVEafdJwHoNsprH --apply --leave-others --clear-pending
 ```
 
-Omit `--leave-others` to only build the space. The account is looked up by
+Already seeded before the friend and the DM existed (the first seed)? The same
+`--apply` command finishes it: everything that exists is left alone and only the
+friendship and the conversation are added.
+
+Omit `--leave-others` to only build the space, and omit `--clear-pending` to keep
+the pending requests (the dry run still says how many there are). The account is looked up by
 `--clerk-id` or `--user-id <uuid>`; an email address will not do, because
 `users` stores verified email domains only, never the address. It fails clearly
 when the row is not there (the account has to have signed in once).
 
+**`--clear-pending`** deletes the demo account's pending friend requests, sent or
+received (Apple's reviewer once found one, sent three weeks earlier, to a real
+person). Only rows with `status = 'pending'` that have the demo account on one
+side: an accepted friendship is never matched, and a request between two other
+accounts cannot be. The dry run prints each one by direction, display name and
+age (never an email; the table has none), and the run prints the same lines with
+"deleted". It is not undone by `--cleanup`: those were real people's requests.
+It is refused together with `--cleanup`. The other side is not told (declining is
+silent in this product too).
+
+If a **block** stands between the demo account and Demo Friend (a reviewer
+testing Block does exactly this, and blocking ends a friendship), the run does
+not friend them over it: it prints a line marked `!` and exits 2. Unblock in the
+app (Settings, Blocked) and run again.
+
+The dry run ends with a short table of what the Chats and Friends tabs show now
+and after:
+
+```
+What the demo account sees
+                     friends  pending in/out  chats  Demo Friend DM
+  before             0        1/1             0      not a friend, 0 message(s)
+  after (projected)  1        0/0             1      friend, 5 message(s)
+```
+
 `--leave-others` prints every other membership first, with its role and member
 count. It only ever removes the demo account's membership: it never deletes a
 server or a message, and it refuses (line marked `!`, exit code 2) a server the
-demo account owns. It also prints, without touching them, how many friendships
-and DM or group conversations the account has, so you know what a reviewer could
-still see. Leaving QG expires its cached member list and audience on both API
+demo account owns. Its dry run also prints the demo account's friend, pending and conversation
+counts, so you know what a reviewer would see. Leaving QG expires its cached member list and audience on both API
 machines for a moment; do it while nobody has the demo account open.
 
 Exit codes: 0 done, 1 refused (account missing, a public server already named
@@ -365,18 +410,25 @@ already-open session does not re-list its servers), then:
 
 1. the server rail shows only **pqp review**; the directory and `pqp.gg/c/...`
    do not list it;
-2. `#geral` has the welcome, how-to and the rest, `#ajuda` has one message, and
+2. **Chats** shows a conversation with Demo Friend (last message "Perfeito,
+   obrigado por testar o pqp!", unread badge) and opening it shows five messages;
+   **Friends** (All) lists Demo Friend; **Pending** is empty and says so;
+3. `#geral` has the welcome, how-to and the rest, `#ajuda` has one message, and
    Lobby is a voice channel;
-3. tap Demo Friend's name, then profile → Block works, and long-pressing "This is
+4. tap Demo Friend's name, then profile → Block works, and long-pressing "This is
    a test message to report" → Report files a report (a report about a server
    channel goes to that server's own moderators, and the demo account is its
    owner, so you will not see it and nothing needs dismissing. Only a report
    filed against a person with no server context goes to the instance queue);
-4. send a message and add a reaction.
+5. send a message and add a reaction.
 
 **Undo.** `--cleanup` removes only what the script made: the `pqp review` server
-(with its channels, messages, reactions and invite) and the Demo Friend account.
-It leaves the demo account and every other server alone, shows what it would do
+(with its channels, messages, reactions and invite), the Demo Friend account, its
+friendship and the 1:1 conversation with its messages (the conversation is a
+channel with no server, so it is deleted by id, only when it is a `dm` whose pair
+is the demo account and Demo Friend; if a reviewer typed in it the dry run says
+how many messages were not seeded). It leaves the demo account, every other
+friend and conversation, and every other server alone, shows what it would do
 without `--apply`, and refuses if somebody besides the two seeded accounts has
 joined, unless `--force`:
 
@@ -396,7 +448,12 @@ DELETE FROM servers
    AND NOT is_community AND NOT is_community_listed
    AND owner_id = (SELECT id FROM users WHERE clerk_id = 'user_3IBapFe9KRlyoVEafdJwHoNsprH')
 RETURNING id, name;
-DELETE FROM users
+DELETE FROM channels c            -- the DM with Demo Friend (kind 'dm', server-less)
+ USING dm_pairs p
+ WHERE p.channel_id = c.id AND c.kind = 'dm'
+   AND (SELECT user_id FROM character_accounts WHERE label = 'review-demo-friend')
+       IN (p.low_user_id, p.high_user_id);
+DELETE FROM users                 -- cascades the friendship and character_accounts
  WHERE is_character
    AND id = (SELECT user_id FROM character_accounts WHERE label = 'review-demo-friend');
 COMMIT;

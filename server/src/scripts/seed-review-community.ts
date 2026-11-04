@@ -3,7 +3,7 @@
  *
  *   node server/dist/scripts/seed-review-community.js --clerk-id user_xxx            # dry run
  *   node server/dist/scripts/seed-review-community.js --clerk-id user_xxx --apply
- *   node server/dist/scripts/seed-review-community.js --clerk-id user_xxx --apply --leave-others
+ *   node server/dist/scripts/seed-review-community.js --clerk-id user_xxx --apply --leave-others --clear-pending
  *   node server/dist/scripts/seed-review-community.js --clerk-id user_xxx --cleanup [--apply]
  *
  * Lives under `src/` (not `server/scripts/`) on purpose: the production image
@@ -35,7 +35,11 @@ export const USAGE = `Usage: seed-review-community.js (--clerk-id <id> | --user-
   --apply           write. Without it, a dry run that changes nothing
   --leave-others    also remove the demo account from every other server
                     (never deletes a server; an owner is never removed)
-  --cleanup         undo: delete the "${REVIEW_SERVER_NAME}" server and the Demo Friend account
+  --clear-pending   also delete the demo account's PENDING friend requests, sent or
+                    received (never an accepted friendship, never anybody else's
+                    rows). The dry run lists each one. Not undone by --cleanup
+  --cleanup         undo: delete the "${REVIEW_SERVER_NAME}" server, the Demo Friend account,
+                    their friendship and their DM
   --force           with --cleanup, even if somebody else joined the server
   --help
 `;
@@ -65,6 +69,9 @@ export function parseArgs(argv: readonly string[]): ReviewSeedOptions & {
         break;
       case "--leave-others":
         out.leaveOthers = true;
+        break;
+      case "--clear-pending":
+        out.clearPending = true;
         break;
       case "--cleanup":
         out.cleanup = true;
@@ -127,6 +134,29 @@ async function main(): Promise<number> {
       console.log(`  invite code  ${report.inviteCode ?? "(not created yet)"}`);
       console.log(`  friend       ${report.friendUserId ?? "(not created yet)"}`);
       console.log(`  messages     ${report.messageCount}`);
+      console.log(`  DM channel   ${report.dmChannelId ?? "(not created yet)"}`);
+      if (options.clearPending) {
+        console.log(`  pending      ${report.pendingCleared} ${options.apply ? "deleted" : "would be deleted"}`);
+      }
+      if (report.chatState) {
+        const { before, after } = report.chatState;
+        const tag = options.apply ? "after" : "after (projected)";
+        console.log("");
+        console.log("What the demo account sees");
+        const width = Math.max(tag.length, "before".length);
+        console.log(`  ${"".padEnd(width)}  friends  pending in/out  chats  Demo Friend DM`);
+        for (const [label, state] of [
+          ["before", before],
+          [tag, after],
+        ] as const) {
+          console.log(
+            `  ${label.padEnd(width)}  ${String(state.friends).padEnd(7)}  ` +
+              `${`${state.pendingIncoming}/${state.pendingOutgoing}`.padEnd(14)}  ` +
+              `${String(state.conversations).padEnd(5)}  ` +
+              `${state.demoFriendIsFriend ? "friend" : "not a friend"}, ${state.demoFriendDmMessages} message(s)`,
+          );
+        }
+      }
     }
     const blocked = report.actions.some((action) => action.kind === "blocked");
     if (!options.apply) {

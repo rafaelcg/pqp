@@ -27,6 +27,14 @@
  *     welcome, a how-to-try list, replies, a message made to be reported) and a
  *     few reactions. No attachments: that would need the storage layer.
  *   * an invite code, so the operator can join and look.
+ *   * an ACCEPTED friendship between the demo account and Demo Friend, and a 1:1
+ *     conversation between them with five short messages spread over a few
+ *     days, so the Chats and Friends tabs are not empty (Guideline 2.1(a)).
+ *     Both are written with plain SQL on purpose: `sendFriendRequest` and
+ *     `openConversation` refuse a character, correctly, for everybody else.
+ *   * with `--clear-pending`, the demo account's PENDING friend requests (to or
+ *     from real people) are deleted. Nothing else: never an accepted row, never
+ *     a row between two other accounts.
  *
  * IDEMPOTENT. Every step looks before it writes: the server by (name, owner),
  * the friend by its character label, each message by a nonce no client ever
@@ -53,6 +61,7 @@ import {
   createCharacterAccount,
   revokeCharacterAccount,
 } from "./characters.js";
+import { restoreDmParticipants } from "./dms.js";
 import { createInvite, listInvites } from "./invites.js";
 import { createMessage } from "./messages.js";
 import { toggleReaction } from "./reactions.js";
@@ -63,7 +72,7 @@ import {
   invalidateServerAudience,
   updateChannel,
 } from "./servers.js";
-import { leaveServer } from "./users.js";
+import { invalidateChannelAccessForChannel, leaveServer } from "./users.js";
 
 /** The marker: a server with this name owned by the demo account is ours. */
 export const REVIEW_SERVER_NAME = "pqp review";
@@ -89,7 +98,13 @@ export interface ReviewSeedOptions {
   apply?: boolean;
   /** Leave every other server the demo account belongs to. */
   leaveOthers?: boolean;
-  /** Undo: delete what this script made (the server and the friend). */
+  /**
+   * Delete the demo account's PENDING friend requests (sent or received). Only
+   * pending rows that involve the demo account; an accepted friendship and every
+   * other account's rows are never touched. A dry run lists them.
+   */
+  clearPending?: boolean;
+  /** Undo: delete what this script made (the server, the friend, their DM). */
   cleanup?: boolean;
   /** Cleanup anyway when somebody besides the two seeded accounts is in it. */
   force?: boolean;
@@ -116,6 +131,20 @@ export interface SeedAction {
   what: string;
 }
 
+/** What the demo account's Chats and Friends tabs would show. */
+export interface ChatState {
+  /** Accepted friendships of the demo account, anybody. */
+  friends: number;
+  /** Whether Demo Friend is one of them. */
+  demoFriendIsFriend: boolean;
+  pendingIncoming: number;
+  pendingOutgoing: number;
+  /** DM or group conversations the demo account is a member of. */
+  conversations: number;
+  /** Messages in the demo account's DM with Demo Friend. */
+  demoFriendDmMessages: number;
+}
+
 export interface ReviewSeedReport {
   apply: boolean;
   mode: "seed" | "cleanup";
@@ -126,6 +155,12 @@ export interface ReviewSeedReport {
   friendUserId: string | null;
   channels: { geral: string | null; ajuda: string | null; lobby: string | null };
   messageCount: number;
+  /** The 1:1 conversation with Demo Friend, null until it exists. */
+  dmChannelId: string | null;
+  /** The state before this run and after it (a projection on a dry run). */
+  chatState: { before: ChatState; after: ChatState } | null;
+  /** Pending requests removed (or that would be), with `--clear-pending`. */
+  pendingCleared: number;
   actions: SeedAction[];
   /** Memberships of the demo account in other servers, with what happened. */
   others: Array<{
@@ -247,6 +282,52 @@ export const REVIEW_REACTIONS: readonly SeedReaction[] = [
   { message: "how-to", by: "owner", emoji: "👍" },
   { message: "thanks", by: "friend", emoji: "🎉" },
   { message: "block", by: "friend", emoji: "👍" },
+];
+
+interface SeedDmMessage {
+  key: string;
+  author: PersonKey;
+  /** Minutes before the moment the seed first writes it. */
+  minutesAgo: number;
+  body: string;
+}
+
+/**
+ * The 1:1 conversation. Alternating authors, English and pt-BR, oldest first,
+ * the last one from Demo Friend so Chats shows an unread badge worth opening.
+ * Timestamps are set once, when the row is made; a re-run never moves them.
+ */
+export const REVIEW_DM_MESSAGES: readonly SeedDmMessage[] = [
+  {
+    key: "dm-1",
+    author: "friend",
+    minutesAgo: 4 * 1440 + 30,
+    body: "Hi! I am Demo Friend. This is a direct message, so you can see how a chat looks. Oi! Eu sou o Demo Friend.",
+  },
+  {
+    key: "dm-2",
+    author: "owner",
+    minutesAgo: 4 * 1440 + 12,
+    body: "Hey, nice to meet you! Tudo bem por aqui.",
+  },
+  {
+    key: "dm-3",
+    author: "friend",
+    minutesAgo: 2 * 1440 + 200,
+    body: "Great. Try sending a message or reacting to this one. Que tal responder em português também?",
+  },
+  {
+    key: "dm-4",
+    author: "owner",
+    minutesAgo: 2 * 1440 + 185,
+    body: "Done! Funcionou direitinho. The app feels fast.",
+  },
+  {
+    key: "dm-5",
+    author: "friend",
+    minutesAgo: 95,
+    body: "Perfeito, obrigado por testar o pqp! Thanks for trying it out.",
+  },
 ];
 
 const GERAL_TOPIC = "Say hi, react, reply, report, block.";
@@ -412,6 +493,12 @@ export async function runReviewSeed(
   if (options.cleanup && options.leaveOthers) {
     throw new ReviewSeedError("--cleanup and --leave-others are separate runs.");
   }
+  if (options.cleanup && options.clearPending) {
+    throw new ReviewSeedError(
+      "--cleanup and --clear-pending are separate runs. --clear-pending deletes the demo " +
+        "account's pending friend requests, which are real people's and cannot be put back.",
+    );
+  }
   if (options.force && !options.cleanup) {
     throw new ReviewSeedError("--force only means something with --cleanup.");
   }
@@ -447,6 +534,9 @@ function emptyReport(
     friendUserId: null,
     channels: { geral: null, ajuda: null, lobby: null },
     messageCount: 0,
+    dmChannelId: null,
+    chatState: null,
+    pendingCleared: 0,
     actions: rec.actions,
     others: [],
   };
@@ -466,7 +556,12 @@ async function seed(
     "info",
     `demo account: ${demo.display_name} (${demo.username ?? "?"}#${demo.discriminator ?? "?"}), id ${demo.id}`,
   );
-  await describeUntouched(demo, rec);
+  const before = await readChatState(demo.id);
+  rec.note("info", `before: ${describeChatState(before)}`);
+  rec.note(
+    "info",
+    `blocks on this account (never touched by this script): ${await countBlocks(demo.id)}`,
+  );
 
   // ---- the server
   const found = await findReviewServers(demo.id);
@@ -696,6 +791,44 @@ async function seed(
     reactionsMade > 0 ? `${reactionsMade} reaction(s)` : "all reactions",
   );
 
+  // ---- friendship and the 1:1 conversation
+  const projected = { ...before };
+  const friendship = await seedFriendship(demo, friend, rec, apply);
+  if (friendship.makesFriend) {
+    projected.friends += 1;
+    projected.demoFriendIsFriend = true;
+    // A pending row with the friend becomes the accepted one.
+    projected.pendingIncoming -= friendship.wasPending === "incoming" ? 1 : 0;
+    projected.pendingOutgoing -= friendship.wasPending === "outgoing" ? 1 : 0;
+  }
+  const conversation = await seedConversation(demo, friend, rec, apply);
+  report.dmChannelId = conversation.channelId;
+  report.messageCount += REVIEW_DM_MESSAGES.length - (apply ? 0 : conversation.newMessages);
+  if (conversation.appears) {
+    projected.conversations += 1;
+  }
+  projected.demoFriendDmMessages += conversation.newMessages;
+
+  // ---- pending requests
+  if (options.clearPending) {
+    const cleared = await clearPendingRequests(demo, friend?.id ?? null, rec, apply);
+    report.pendingCleared = cleared.incoming + cleared.outgoing;
+    projected.pendingIncoming -= cleared.incoming;
+    projected.pendingOutgoing -= cleared.outgoing;
+  } else {
+    const left = projected.pendingIncoming + projected.pendingOutgoing;
+    if (left > 0) {
+      rec.note(
+        "info",
+        `${left} pending friend request(s) left alone. A reviewer would see them under Pending; ` +
+          "add --clear-pending to delete them",
+      );
+    }
+  }
+  const after = apply ? await readChatState(demo.id) : projected;
+  report.chatState = { before, after };
+  rec.note("info", `after${apply ? "" : " (projected)"}: ${describeChatState(after)}`);
+
   // ---- invite
   if (serverId) {
     const invites = await listInvites(serverId);
@@ -749,23 +882,361 @@ async function readChannels(serverId: string) {
   return result.rows;
 }
 
-/** What this script does NOT touch, so the operator knows what a reviewer could still see. */
-async function describeUntouched(demo: SeedUser, rec: Recorder): Promise<void> {
-  const counts = await getPool().query<{ friends: number; chats: number; blocks: number }>(
+async function countBlocks(userId: string): Promise<number> {
+  const result = await getPool().query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM user_blocks WHERE user_id = $1`,
+    [userId],
+  );
+  return result.rows[0]!.n;
+}
+
+function sortedPair(a: string, b: string): [string, string] {
+  return a < b ? [a, b] : [b, a];
+}
+
+/** The demo account's DM channel with `friendId`, by the sorted pair. */
+async function findDmChannel(demoId: string, friendId: string): Promise<string | null> {
+  const [low, high] = sortedPair(demoId, friendId);
+  const result = await getPool().query<{ channel_id: string }>(
+    `SELECT channel_id FROM dm_pairs WHERE low_user_id = $1 AND high_user_id = $2`,
+    [low, high],
+  );
+  return result.rows[0]?.channel_id ?? null;
+}
+
+/** What the Chats and Friends tabs would show the demo account right now. */
+async function readChatState(demoId: string): Promise<ChatState> {
+  const counts = await getPool().query<{
+    friends: number;
+    incoming: number;
+    outgoing: number;
+    conversations: number;
+  }>(
     `SELECT
        (SELECT count(*)::int FROM friendships
-         WHERE low_user_id = $1 OR high_user_id = $1) AS friends,
+         WHERE status = 'accepted' AND (low_user_id = $1 OR high_user_id = $1)) AS friends,
+       (SELECT count(*)::int FROM friendships
+         WHERE status = 'pending' AND requested_by <> $1
+           AND (low_user_id = $1 OR high_user_id = $1)) AS incoming,
+       (SELECT count(*)::int FROM friendships
+         WHERE status = 'pending' AND requested_by = $1
+           AND (low_user_id = $1 OR high_user_id = $1)) AS outgoing,
        (SELECT count(*)::int FROM channel_members cm
           JOIN channels c ON c.id = cm.channel_id
-         WHERE cm.user_id = $1 AND c.kind IN ('dm', 'group')) AS chats,
-       (SELECT count(*)::int FROM user_blocks WHERE user_id = $1) AS blocks`,
-    [demo.id],
+         WHERE cm.user_id = $1 AND c.kind IN ('dm', 'group')) AS conversations`,
+    [demoId],
   );
   const row = counts.rows[0]!;
-  rec.note(
-    "info",
-    `not touched by this script: ${row.friends} friendship row(s), ${row.chats} DM or group conversation(s), ${row.blocks} block(s)`,
+  const friend = await findFriend();
+  let demoFriendIsFriend = false;
+  let demoFriendDmMessages = 0;
+  if (friend) {
+    const [low, high] = sortedPair(demoId, friend.id);
+    demoFriendIsFriend =
+      (
+        await getPool().query(
+          `SELECT 1 FROM friendships
+            WHERE low_user_id = $1 AND high_user_id = $2 AND status = 'accepted'`,
+          [low, high],
+        )
+      ).rowCount === 1;
+    const channelId = await findDmChannel(demoId, friend.id);
+    if (channelId) {
+      const messages = await getPool().query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM messages WHERE channel_id = $1`,
+        [channelId],
+      );
+      demoFriendDmMessages = messages.rows[0]!.n;
+    }
+  }
+  return {
+    friends: row.friends,
+    demoFriendIsFriend,
+    pendingIncoming: row.incoming,
+    pendingOutgoing: row.outgoing,
+    conversations: row.conversations,
+    demoFriendDmMessages,
+  };
+}
+
+export function describeChatState(state: ChatState): string {
+  return (
+    `${state.friends} friend(s)${state.demoFriendIsFriend ? ` (${REVIEW_FRIEND_NAME} is one)` : ""}, ` +
+    `pending ${state.pendingIncoming} incoming / ${state.pendingOutgoing} outgoing, ` +
+    `${state.conversations} conversation(s), ${state.demoFriendDmMessages} message(s) in the ${REVIEW_FRIEND_NAME} DM`
   );
+}
+
+interface FriendshipOutcome {
+  /** The demo account has (or will have) Demo Friend as an accepted friend. */
+  makesFriend: boolean;
+  /** A pending row with the friend that this turns into the accepted one. */
+  wasPending: "incoming" | "outgoing" | null;
+}
+
+/**
+ * Demo Friend as an ACCEPTED friend, by plain SQL: `sendFriendRequest` refuses a
+ * character, as it should for every real account. The row follows the table's
+ * rules (sorted pair, `requested_by` one of the two, `accepted_at` set exactly
+ * when accepted). Friend "asked", the demo account "accepted", six days ago, so
+ * the Friends tab has a plausible "friends since".
+ */
+async function seedFriendship(
+  demo: SeedUser,
+  friend: SeedUser | null,
+  rec: Recorder,
+  apply: boolean,
+): Promise<FriendshipOutcome> {
+  if (!friend) {
+    rec.note("create", `friendship with ${REVIEW_FRIEND_NAME} (accepted)`);
+    return { makesFriend: true, wasPending: null };
+  }
+  const blocked = await getPool().query(
+    `SELECT 1 FROM user_blocks
+      WHERE (user_id = $1 AND blocked_user_id = $2) OR (user_id = $2 AND blocked_user_id = $1)`,
+    [demo.id, friend.id],
+  );
+  if (blocked.rowCount) {
+    rec.note(
+      "blocked",
+      `a block stands between the demo account and ${REVIEW_FRIEND_NAME} (a reviewer's test?). ` +
+        "Not making them friends over it. Unblock in the app (Settings, Blocked) and run again",
+    );
+    return { makesFriend: false, wasPending: null };
+  }
+  const [low, high] = sortedPair(demo.id, friend.id);
+  const existing = await getPool().query<{ status: string; requested_by: string }>(
+    `SELECT status, requested_by FROM friendships WHERE low_user_id = $1 AND high_user_id = $2`,
+    [low, high],
+  );
+  const row = existing.rows[0];
+  if (row?.status === "accepted") {
+    rec.note("exists", `friendship with ${REVIEW_FRIEND_NAME} (accepted)`);
+    return { makesFriend: false, wasPending: null };
+  }
+  if (row) {
+    if (apply) {
+      await getPool().query(
+        `UPDATE friendships
+            SET status = 'accepted', accepted_at = NOW() - INTERVAL '6 days'
+          WHERE low_user_id = $1 AND high_user_id = $2 AND status = 'pending'`,
+        [low, high],
+      );
+    }
+    rec.note(
+      "change",
+      `pending request with ${REVIEW_FRIEND_NAME} ${apply ? "accepted" : "would be accepted"}`,
+    );
+    return {
+      makesFriend: true,
+      wasPending: row.requested_by === demo.id ? "outgoing" : "incoming",
+    };
+  }
+  if (apply) {
+    await getPool().query(
+      `INSERT INTO friendships (low_user_id, high_user_id, status, requested_by, created_at, accepted_at)
+       VALUES ($1, $2, 'accepted', $3, NOW() - INTERVAL '6 days',
+               NOW() - INTERVAL '6 days' + INTERVAL '1 hour')
+       ON CONFLICT (low_user_id, high_user_id) DO NOTHING`,
+      [low, high, friend.id],
+    );
+  }
+  rec.note("create", `friendship with ${REVIEW_FRIEND_NAME} (accepted)`);
+  return { makesFriend: true, wasPending: null };
+}
+
+interface ConversationOutcome {
+  channelId: string | null;
+  /** Messages this run wrote (or would). */
+  newMessages: number;
+  /** The conversation appears in the demo account's list because of this run. */
+  appears: boolean;
+}
+
+/**
+ * The 1:1 conversation with Demo Friend and its five messages. A conversation
+ * is a channel with no server (`kind = 'dm'`) plus the sorted `dm_pairs` row and
+ * a `channel_members` row each, exactly what `openConversation` writes; that
+ * function refuses a character (`dm_privacy = 'nobody'`), so the rows are
+ * written here. Messages go through `createMessage` with a marker nonce, then
+ * get their timestamps spread over the last days. If somebody hid the
+ * conversation, a re-run restores it.
+ */
+async function seedConversation(
+  demo: SeedUser,
+  friend: SeedUser | null,
+  rec: Recorder,
+  apply: boolean,
+): Promise<ConversationOutcome> {
+  if (!friend) {
+    rec.note(
+      "create",
+      `1:1 conversation with ${REVIEW_FRIEND_NAME} and ${REVIEW_DM_MESSAGES.length} messages`,
+    );
+    return { channelId: null, newMessages: REVIEW_DM_MESSAGES.length, appears: true };
+  }
+  let channelId = await findDmChannel(demo.id, friend.id);
+  let appears = false;
+  if (!channelId) {
+    appears = true;
+    if (apply) {
+      const [low, high] = sortedPair(demo.id, friend.id);
+      const client = await getPool().connect();
+      try {
+        await client.query("BEGIN");
+        const channel = await client.query<{ id: string }>(
+          `INSERT INTO channels (server_id, name, type, position, is_private, kind)
+           VALUES (NULL, '', 'text', 0, FALSE, 'dm') RETURNING id`,
+        );
+        channelId = channel.rows[0]!.id;
+        await client.query(
+          `INSERT INTO dm_pairs (low_user_id, high_user_id, channel_id) VALUES ($1, $2, $3)`,
+          [low, high, channelId],
+        );
+        await client.query(
+          `INSERT INTO channel_members (channel_id, user_id)
+           SELECT $1, unnest($2::uuid[]) ON CONFLICT DO NOTHING`,
+          [channelId, [demo.id, friend.id]],
+        );
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+      invalidateChannelAccessForChannel(channelId!);
+    }
+    rec.note(
+      "create",
+      `1:1 conversation with ${REVIEW_FRIEND_NAME}${channelId ? ` (${channelId})` : ""}`,
+    );
+  } else {
+    const members = await getPool().query<{ user_id: string }>(
+      `SELECT user_id FROM channel_members WHERE channel_id = $1`,
+      [channelId],
+    );
+    const have = new Set(members.rows.map((r) => r.user_id));
+    if (have.has(demo.id) && have.has(friend.id)) {
+      rec.note("exists", `1:1 conversation with ${REVIEW_FRIEND_NAME} (${channelId})`);
+    } else {
+      appears = !have.has(demo.id);
+      if (apply) {
+        await restoreDmParticipants(channelId);
+      }
+      rec.note(
+        "change",
+        `1:1 conversation with ${REVIEW_FRIEND_NAME} was closed, ${apply ? "reopened" : "would reopen it"} (${channelId})`,
+      );
+    }
+  }
+
+  const authors: Record<PersonKey, SeedUser> = { owner: demo, friend };
+  let made = 0;
+  let had = 0;
+  for (const message of REVIEW_DM_MESSAGES) {
+    const author = authors[message.author];
+    const nonce = `${REVIEW_NONCE_PREFIX}${message.key}`;
+    const existing = channelId
+      ? await getPool().query(
+          `SELECT 1 FROM messages WHERE channel_id = $1 AND author_id = $2 AND nonce = $3`,
+          [channelId, author.id, nonce],
+        )
+      : null;
+    if (existing?.rowCount) {
+      had += 1;
+      continue;
+    }
+    made += 1;
+    if (!apply || !channelId) {
+      continue;
+    }
+    const created = await createMessage(
+      channelId,
+      author,
+      message.body,
+      null,
+      undefined,
+      undefined,
+      undefined,
+      nonce,
+    );
+    if (!created) {
+      throw new ReviewSeedError(`Message "${message.key}" was not stored.`);
+    }
+    await getPool().query(
+      `UPDATE messages SET created_at = NOW() - make_interval(mins => $2::int) WHERE id = $1`,
+      [created.id, message.minutesAgo],
+    );
+  }
+  rec.note(
+    made > 0 ? "create" : "exists",
+    made > 0
+      ? `${made} direct message(s) (${had} already there), English and pt-BR, over the last few days`
+      : `all ${had} direct messages`,
+  );
+  return { channelId, newMessages: made, appears };
+}
+
+/**
+ * Delete the demo account's PENDING friend requests, and only those. The row
+ * with Demo Friend is left to `seedFriendship`; an accepted row never matches
+ * `status = 'pending'`; a row between two other accounts never matches the
+ * demo id. Names are printed, never emails.
+ */
+async function clearPendingRequests(
+  demo: SeedUser,
+  friendId: string | null,
+  rec: Recorder,
+  apply: boolean,
+): Promise<{ incoming: number; outgoing: number }> {
+  const rows = await getPool().query<{
+    low_user_id: string;
+    high_user_id: string;
+    requested_by: string;
+    display_name: string;
+    age_days: number;
+  }>(
+    `SELECT f.low_user_id, f.high_user_id, f.requested_by, u.display_name,
+            floor(extract(epoch FROM (NOW() - f.created_at)) / 86400)::int AS age_days
+       FROM friendships f
+       JOIN users u ON u.id = CASE WHEN f.low_user_id = $1 THEN f.high_user_id ELSE f.low_user_id END
+      WHERE f.status = 'pending'
+        AND (f.low_user_id = $1 OR f.high_user_id = $1)
+        AND ($2::uuid IS NULL OR u.id <> $2::uuid)
+      ORDER BY f.created_at`,
+    [demo.id, friendId],
+  );
+  let incoming = 0;
+  let outgoing = 0;
+  if (rows.rows.length === 0) {
+    rec.note("exists", "no pending friend requests to clear");
+    return { incoming, outgoing };
+  }
+  for (const row of rows.rows) {
+    const sent = row.requested_by === demo.id;
+    if (apply) {
+      const deleted = await getPool().query(
+        `DELETE FROM friendships
+          WHERE low_user_id = $1 AND high_user_id = $2 AND status = 'pending'`,
+        [row.low_user_id, row.high_user_id],
+      );
+      if (!deleted.rowCount) {
+        continue;
+      }
+    }
+    if (sent) {
+      outgoing += 1;
+    } else {
+      incoming += 1;
+    }
+    rec.note(
+      "leave",
+      `${apply ? "deleted" : "would delete"} pending request ${sent ? "to" : "from"} ` +
+        `"${row.display_name}" (${sent ? "sent" : "received"} ${row.age_days} day(s) ago)`,
+    );
+  }
+  return { incoming, outgoing };
 }
 
 async function leaveOthers(
@@ -907,6 +1378,49 @@ async function cleanup(
     );
   }
   if (friend) {
+    // The 1:1 conversation is a channel with no server, so deleting the friend
+    // does not take it (only its dm_pairs and member rows cascade): the demo
+    // account's own messages would be left in a channel nobody can open.
+    const dmChannelId = await findDmChannel(demo.id, friend.id);
+    if (dmChannelId) {
+      const dm = await getPool().query<{ total: number; seeded: number }>(
+        `SELECT count(*)::int AS total,
+                count(*) FILTER (WHERE nonce LIKE $2)::int AS seeded
+           FROM messages WHERE channel_id = $1`,
+        [dmChannelId, `${REVIEW_NONCE_PREFIX}%`],
+      );
+      const { total, seeded } = dm.rows[0]!;
+      if (apply) {
+        // kind = 'dm' and the pair are re-asserted in the statement itself.
+        await getPool().query(
+          `DELETE FROM channels
+            WHERE id = $1 AND kind = 'dm'
+              AND EXISTS (SELECT 1 FROM dm_pairs WHERE channel_id = $1)`,
+          [dmChannelId],
+        );
+        invalidateChannelAccessForChannel(dmChannelId);
+      }
+      rec.note(
+        "leave",
+        `${apply ? "deleted" : "would delete"} the 1:1 conversation with "${REVIEW_FRIEND_NAME}" ` +
+          `(${dmChannelId}) with ${total} message(s)` +
+          (total > seeded ? `, ${total - seeded} of them typed by somebody, not seeded` : ""),
+      );
+    }
+    const [low, high] = sortedPair(demo.id, friend.id);
+    const hadFriendship = await getPool().query(
+      `SELECT 1 FROM friendships WHERE low_user_id = $1 AND high_user_id = $2`,
+      [low, high],
+    );
+    if (hadFriendship.rowCount) {
+      if (apply) {
+        await getPool().query(
+          `DELETE FROM friendships WHERE low_user_id = $1 AND high_user_id = $2`,
+          [low, high],
+        );
+      }
+      rec.note("leave", `${apply ? "deleted" : "would delete"} the friendship with "${REVIEW_FRIEND_NAME}"`);
+    }
     if (apply) {
       // Cascades character_accounts, memberships and any leftover messages.
       await getPool().query(`DELETE FROM users WHERE id = $1 AND is_character`, [friend.id]);
