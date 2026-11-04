@@ -703,6 +703,23 @@ export const watchPartyOptionsSchema = z.object({
 
 export type WatchPartyOptions = z.infer<typeof watchPartyOptionsSchema>;
 
+/**
+ * The options a request may carry: any subset of them, and a key left out stays
+ * out. `watchPartyOptionsSchema.partial()` is NOT that in zod 4: an optional
+ * wrapper around a `.default()` runs the default for a missing key, so a PATCH
+ * carrying only `guests` would have reset the other seven options to their
+ * defaults. Each field is unwrapped from its default first, so the constraint
+ * is still the one declared above, once.
+ */
+const optionsShape = watchPartyOptionsSchema.shape;
+export const watchPartyOptionsPatchSchema = z.object(
+  Object.fromEntries(
+    Object.entries(optionsShape).map(([key, field]) => [key, field.unwrap().optional()]),
+  ) as {
+    [K in keyof typeof optionsShape]: z.ZodOptional<ReturnType<(typeof optionsShape)[K]["unwrap"]>>;
+  },
+);
+
 export const WATCH_PARTY_DEFAULT_OPTIONS: WatchPartyOptions = Object.freeze({
   voiceEnabled: false,
   stageMode: "hosts_only",
@@ -876,7 +893,7 @@ export function watchPartySpeakAffordance(input: {
 const nameField = z.string().trim().min(1).max(120);
 
 export const watchPartyStagePersonSchema = z.object({
-  userId: z.string().uuid(),
+  userId: z.string().guid(),
   displayName: z.string(),
   avatarUrl: z.string().nullable(),
 });
@@ -971,7 +988,7 @@ export function guestRequestQueue<T extends RaisedHandPerson>(
 }
 
 export const watchPartyCohostSchema = z.object({
-  userId: z.string().uuid(),
+  userId: z.string().guid(),
   displayName: z.string(),
   avatarUrl: z.string().nullable(),
 });
@@ -985,9 +1002,9 @@ export type WatchPartyCohost = z.infer<typeof watchPartyCohostSchema>;
  * does not have, for a viewer who just arrived) to draw it.
  */
 export const watchPartySchema = z.object({
-  id: z.string().uuid(),
-  channelId: z.string().uuid(),
-  serverId: z.string().uuid().nullable(),
+  id: z.string().guid(),
+  channelId: z.string().guid(),
+  serverId: z.string().guid().nullable(),
   /** The name the host typed. Never the channel's name. */
   name: z.string(),
   description: z.string().nullable(),
@@ -996,7 +1013,7 @@ export const watchPartySchema = z.object({
   startsAt: z.string().nullable(),
   wentLiveAt: z.string().nullable(),
   endedAt: z.string().nullable(),
-  hostUserId: z.string().uuid(),
+  hostUserId: z.string().guid(),
   hostDisplayName: z.string(),
   hostAvatarUrl: z.string().nullable(),
   /** Null while the host is connected; ISO 8601 while the grace clock runs. */
@@ -1028,7 +1045,7 @@ export const createWatchPartySchema = z.object({
   description: z.string().trim().max(2000).nullable().optional(),
   /** ISO 8601. Present creates a `scheduled` party, absent creates a `draft`. */
   startsAt: z.string().datetime({ offset: true }).nullable().optional(),
-  options: watchPartyOptionsSchema.partial().optional(),
+  options: watchPartyOptionsPatchSchema.optional(),
 });
 
 export type CreateWatchPartyInput = z.infer<typeof createWatchPartySchema>;
@@ -1037,7 +1054,7 @@ export const updateWatchPartySchema = z.object({
   name: nameField.optional(),
   description: z.string().trim().max(2000).nullable().optional(),
   startsAt: z.string().datetime({ offset: true }).nullable().optional(),
-  options: watchPartyOptionsSchema.partial().optional(),
+  options: watchPartyOptionsPatchSchema.optional(),
 });
 
 export type UpdateWatchPartyInput = z.infer<typeof updateWatchPartySchema>;
@@ -1088,7 +1105,7 @@ export type WatchPartyStateRequest = z.infer<typeof watchPartyStateRequestSchema
 
 /** `POST /api/watch-parties/:id/cohosts`. */
 export const watchPartyCohostRequestSchema = z.object({
-  userId: z.string().uuid(),
+  userId: z.string().guid(),
   /** True promotes, false demotes. */
   cohost: z.boolean(),
 });
@@ -1103,7 +1120,7 @@ export type WatchPartyCohostRequest = z.infer<
  * mutually exclusive in practice; the route authorises them differently.
  */
 export const watchPartyHostRequestSchema = z.object({
-  userId: z.string().uuid().optional(),
+  userId: z.string().guid().optional(),
   claim: z.boolean().optional(),
 });
 
@@ -1254,7 +1271,7 @@ export const watchPartyGuestsRequestSchema = z.preprocess(
   z.union([
     z.object({
       action: z.enum(["invite", "accept", "decline", "remove"]),
-      userId: z.string().uuid(),
+      userId: z.string().guid(),
     }),
     z.object({
       action: z.enum(["request", "withdraw", "join", "leave"]),
@@ -1280,7 +1297,7 @@ export type WatchPartyGuestsRequest = z.infer<
 export const watchPartyStageRequestSchema = z.union([
   z.object({
     action: z.enum(["invite", "remove"]),
-    userId: z.string().uuid(),
+    userId: z.string().guid(),
   }),
   z.object({
     action: z.enum(["raise", "lower"]),

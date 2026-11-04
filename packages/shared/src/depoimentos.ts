@@ -87,7 +87,7 @@ export type WriteDepoimentoRequest = z.infer<typeof writeDepoimentoSchema>;
  * private. There is no `status` string to disagree with it.
  */
 export const depoimentoSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   author: publicUserSchema,
   body: z.string(),
   createdAt: z.string(),
@@ -148,7 +148,7 @@ export const DEPOIMENTOS_PER_DAY = 10;
  * which is the whole reason it can be on by default.
  */
 export const profileCommunitySchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   name: z.string(),
 });
 

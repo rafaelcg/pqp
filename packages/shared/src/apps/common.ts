@@ -97,21 +97,21 @@ export function jsonProblem(value: unknown, depth = 0, budget?: Budget): string 
  */
 export function jsonValueSchema(
   maxBytes?: number,
-): z.ZodType<JsonValue, z.ZodTypeDef, JsonValue> {
+): z.ZodType<JsonValue, JsonValue> {
   return z.unknown().superRefine((value, ctx) => {
     const budget = maxBytes === undefined ? undefined : { used: 0, max: maxBytes };
     const problem = jsonProblem(value, 0, budget);
     if (problem) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: problem });
+      ctx.addIssue({ code: "custom", message: problem });
       return;
     }
     if (maxBytes !== undefined && jsonByteLength(value as JsonValue) > maxBytes) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: `serialized value is larger than ${maxBytes} bytes`,
       });
     }
-  }) as unknown as z.ZodType<JsonValue, z.ZodTypeDef, JsonValue>;
+  }) as unknown as z.ZodType<JsonValue, JsonValue>;
 }
 
 /** Any JSON value, no size cap (use the bounded ones at the edges). */

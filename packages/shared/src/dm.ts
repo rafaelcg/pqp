@@ -53,7 +53,7 @@ export const DM_MAX_RECIPIENTS = DM_MAX_PARTICIPANTS - 1;
  */
 export const createDmSchema = z.object({
   userIds: z
-    .array(z.string().uuid())
+    .array(z.string().guid())
     .min(1)
     .max(DM_MAX_RECIPIENTS)
     .refine(
@@ -77,7 +77,7 @@ export type CreateDmRequest = z.infer<typeof createDmSchema>;
  * before there is anything in it.
  */
 export const dmSummarySchema = z.object({
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
   kind: conversationKindSchema,
   participants: z.array(publicUserSchema).max(DM_MAX_RECIPIENTS),
   lastMessageAt: z.string().nullable(),
@@ -96,7 +96,7 @@ export const dmSummarySchema = z.object({
    */
   lastMessage: z
     .object({
-      authorId: z.string().uuid(),
+      authorId: z.string().guid(),
       authorName: z.string(),
       /** Already redacted and truncated by the server. Never raw markdown. */
       preview: z.string().max(140),
@@ -130,7 +130,7 @@ export const dmListResponseSchema = z.object({
 export type DmListResponse = z.infer<typeof dmListResponseSchema>;
 
 export const createBlockSchema = z.object({
-  userId: z.string().uuid(),
+  userId: z.string().guid(),
   /**
    * Where in the app the block was made ("message", "profile", "friends"),
    * for the operators' log line. Optional and never user content: a short

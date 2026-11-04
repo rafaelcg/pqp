@@ -1502,7 +1502,7 @@ function buildStartRequest(input: {
  * sha256 rather than a library UUID v5: no new dependency for one hash, and
  * the version/variant nibbles below only exist to keep the result shaped
  * like every other id in `hls_sessions.remux_session_id` (a
- * `z.string().uuid()` in the wire contract) — collision resistance comes
+ * `z.string().guid()` in the wire contract) — collision resistance comes
  * from sha256 over the exact (channelId, startedAt) pair, not from the UUID
  * shape.
  */
