@@ -30,30 +30,30 @@ final class BlockUITests: XCTestCase {
     }
 
     /// `bob` says something over the socket, the way another phone would.
+    ///
+    /// Plain completion handlers and a blocking wait on the test thread, with no
+    /// Task and no actor hop: a detached Task capturing the expectation tripped
+    /// the region-based isolation checker on CI's Xcode.
     private func bobSays(_ text: String, in channelId: String) {
-        let done = expectation(description: "bob spoke")
-        Task.detached { [env] in
-            await Self.speak(text, in: channelId, base: env["PQP_TEST_API_BASE"])
-            done.fulfill()
-        }
-        wait(for: [done], timeout: 15)
-    }
-
-    private static func speak(_ text: String, in channelId: String, base: String?) async {
-        guard let base else { return }
-        let url = URL(string: base.replacingOccurrences(of: "http", with: "ws") + "/ws")!
+        guard let base = env["PQP_TEST_API_BASE"],
+              let url = URL(string: base.replacingOccurrences(of: "http", with: "ws") + "/ws")
+        else { return }
         let task = URLSession.shared.webSocketTask(with: url)
         task.resume()
-        func send(_ object: [String: Any]) async {
-            let data = try! JSONSerialization.data(withJSONObject: object)
-            try? await task.send(.string(String(data: data, encoding: .utf8)!))
+        func send(_ object: [String: Any]) {
+            guard let data = try? JSONSerialization.data(withJSONObject: object),
+                  let string = String(data: data, encoding: .utf8) else { return }
+            let sent = DispatchSemaphore(value: 0)
+            task.send(.string(string)) { _ in sent.signal() }
+            _ = sent.wait(timeout: .now() + 5)
         }
-        await send(["type": "auth", "token": "dev-local-token:bob"])
-        try? await Task.sleep(for: .seconds(1))
-        await send(["type": "join-channel", "channelId": channelId])
-        try? await Task.sleep(for: .milliseconds(600))
-        await send(["type": "message-create", "channelId": channelId, "body": text, "nonce": "n\(Int.random(in: 1...999_999))"])
-        try? await Task.sleep(for: .seconds(1))
+        send(["type": "auth", "token": "dev-local-token:bob"])
+        Thread.sleep(forTimeInterval: 1)
+        send(["type": "join-channel", "channelId": channelId])
+        Thread.sleep(forTimeInterval: 0.6)
+        send(["type": "message-create", "channelId": channelId, "body": text,
+              "nonce": "n\(Int.random(in: 1...999_999))"])
+        Thread.sleep(forTimeInterval: 1)
         task.cancel(with: .normalClosure, reason: nil)
     }
 

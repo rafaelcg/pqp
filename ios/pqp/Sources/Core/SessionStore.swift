@@ -448,9 +448,10 @@ final class SessionStore {
         // wizard that is about to cover it.
         await prepareFirstRun()
         phase = .ready
-        // Nothing waits on it: until it lands, the per-message flag the server
-        // stamps on history is still honoured.
-        Task { await blocked.refresh(using: api) }
+        // Retries with backoff until it lands. Until then live frames from other
+        // people are held back (`BlockedUsers`, rule 3): the history fetches carry
+        // the server's per-message flag, the socket frames do not.
+        blocked.startLoading(using: api)
         await uploadPushToken()
         await consumePendingInvite()
     }

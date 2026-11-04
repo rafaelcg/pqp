@@ -401,6 +401,10 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
     /// Client-only. A message sent optimistically has not been acknowledged by
     /// the server yet; the `nonce` echo on `message-broadcast` replaces it.
     var isPending: Bool = false
+    /// Client-only. This copy arrived as a `message-broadcast` frame, which the
+    /// server shares between readers and so cannot stamp `blocked` for any one
+    /// of them. Held back until the block list has loaded (`BlockRules.hides`).
+    var arrivedLive: Bool = false
     /// Client-only. The correlation id sent with `message-create` — the only
     /// way to match a broadcast back to the row we drew ahead of it.
     var pendingNonce: String?

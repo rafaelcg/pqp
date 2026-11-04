@@ -52,6 +52,45 @@ final class BlockedUsersTests: XCTestCase {
         XCTAssertFalse(BlockRules.hides(mine, viewerId: me, blocked: [me]))
     }
 
+    // MARK: - Before the list has loaded
+
+    /// A socket frame is not stamped per reader, so until the list is known it
+    /// is held back: it could be a blocked person's.
+    func testALiveFrameIsHeldBackUntilTheListHasLoaded() throws {
+        var live = try message(author: nuisance)
+        live.arrivedLive = true
+        XCTAssertTrue(BlockRules.hides(live, viewerId: me, blocked: [], listLoaded: false))
+        XCTAssertFalse(BlockRules.hides(live, viewerId: me, blocked: [], listLoaded: true))
+        XCTAssertTrue(BlockRules.hides(live, viewerId: me, blocked: [nuisance], listLoaded: true))
+    }
+
+    /// A page from history carries the server's flag, so it needs no list.
+    func testAFetchedMessageIsNotHeldBackWhileTheListLoads() throws {
+        let fetched = try message(author: friend)
+        XCTAssertFalse(BlockRules.hides(fetched, viewerId: me, blocked: [], listLoaded: false))
+    }
+
+    func testYourOwnLiveEchoIsNeverHeldBack() throws {
+        var mine = try message(author: me)
+        mine.arrivedLive = true
+        XCTAssertFalse(BlockRules.hides(mine, viewerId: me, blocked: [], listLoaded: false))
+    }
+
+    // MARK: - A failed write
+
+    /// Only an answer the server sent and meant is definite. A dropped
+    /// connection or an unreadable reply may have followed a commit, so the
+    /// store asks the server instead of rolling back.
+    func testOnlyDefiniteRefusalsAreRolledBack() {
+        XCTAssertTrue(BlockedUsers.isAmbiguous(APIError.transport("offline")))
+        XCTAssertTrue(BlockedUsers.isAmbiguous(APIError.decoding("bad body")))
+        XCTAssertTrue(BlockedUsers.isAmbiguous(CancellationError()))
+        XCTAssertFalse(BlockedUsers.isAmbiguous(APIError.server(status: 400, message: "no")))
+        XCTAssertFalse(BlockedUsers.isAmbiguous(APIError.notFound("User not found")))
+        XCTAssertFalse(BlockedUsers.isAmbiguous(APIError.unauthorized))
+        XCTAssertFalse(BlockedUsers.isAmbiguous(APIError.rateLimited(retryAfter: 3)))
+    }
+
     // MARK: - The store
 
     func testBlockedSetDrivesVisibilityBothWays() throws {

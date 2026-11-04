@@ -136,6 +136,23 @@ describeDb("telling the operators about a block", () => {
     expect(await openBlockTickets()).toHaveLength(BLOCK_REPORTS_PER_DAY);
   });
 
+  it("counts durable events: block/unblock cycles do not reset the daily cap", async () => {
+    const { unblockUser } = await import("./blocks.js");
+    // One target, blocked and unblocked past the cap. Each new block is an
+    // event even though no `user_blocks` row survives to be counted.
+    for (let i = 0; i <= BLOCK_REPORTS_PER_DAY; i++) {
+      await blockUser(alice.id, nuisance.id);
+      await noteBlockForOperators({ blockerId: alice.id, blockedUserId: nuisance.id });
+      await unblockUser(alice.id, nuisance.id);
+    }
+    expect(blockMetrics().reportsCapped).toBe(1);
+    const rows = await getPool().query(
+      `SELECT n FROM user_block_days WHERE user_id = $1`,
+      [alice.id],
+    );
+    expect(rows.rows).toEqual([{ n: BLOCK_REPORTS_PER_DAY + 1 }]);
+  });
+
   it("never throws: a failing queue write is counted and the block stands", async () => {
     await blockUser(alice.id, nuisance.id);
     const error = vi.spyOn(console, "error").mockImplementation(() => {});

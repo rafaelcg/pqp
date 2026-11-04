@@ -67,12 +67,23 @@ export async function noteBlockForOperators(input: {
   let queued = false;
   let capped = false;
   try {
-    const recent = await getPool().query<{ n: string }>(
-      `SELECT COUNT(*)::text AS n FROM user_blocks
-       WHERE user_id = $1 AND created_at > NOW() - INTERVAL '1 day'`,
+    // A durable per-account, per-UTC-day counter, bumped atomically for every
+    // new block. Counting `user_blocks` rows would let block/unblock cycles
+    // reset the cap, because an unblock deletes the row.
+    const today = await getPool().query<{ n: number }>(
+      `INSERT INTO user_block_days (user_id, day, n)
+       VALUES ($1, (NOW() AT TIME ZONE 'UTC')::date, 1)
+       ON CONFLICT (user_id, day) DO UPDATE SET n = user_block_days.n + 1
+       RETURNING n`,
       [input.blockerId],
     );
-    if (Number(recent.rows[0]?.n ?? 0) > BLOCK_REPORTS_PER_DAY) {
+    // A few days of history is plenty; the table stays a handful of rows.
+    await getPool().query(
+      `DELETE FROM user_block_days
+       WHERE user_id = $1 AND day < (NOW() AT TIME ZONE 'UTC')::date - 7`,
+      [input.blockerId],
+    );
+    if ((today.rows[0]?.n ?? 0) > BLOCK_REPORTS_PER_DAY) {
       capped = true;
       blockStats.reportsCapped += 1;
     } else {

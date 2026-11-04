@@ -17,61 +17,138 @@ import SwiftUI
 /// App Store guideline 1.2 asks that a block removes the content from the feed
 /// instantly, so every list that can show somebody asks `contains` instead.
 ///
-/// The set is optimistic. `block` adds the id BEFORE the request leaves, so the
-/// screen is clean on the tap; a refusal puts it back and rethrows so the sheet
-/// can say why. Observation tracks `ids`, so a view that reads it redraws.
+/// THREE RULES KEEP THE SET HONEST.
+///
+/// 1. Optimistic, but never wrongly undone. `block` adds the id BEFORE the
+///    request leaves. A definite refusal (the server answered with an error)
+///    puts it back; an AMBIGUOUS failure (the connection dropped, or the answer
+///    could not be read, so the server may well have committed) is reconciled
+///    against the server's own list instead of guessed at, and if even that read
+///    fails the screen keeps the safer answer (the person stays hidden) and a
+///    retry loop settles it.
+/// 2. A read can never overwrite a newer write. Every local mutation bumps
+///    `generation`; a list read that began before one is thrown away, so a slow
+///    `GET /api/blocks` cannot un-hide a person blocked a moment ago or hide one
+///    just unblocked.
+/// 3. Until the list has loaded once, a frame that arrived over the socket is not
+///    drawn (`Message.arrivedLive`, `BlockRules.hides`): the server does not stamp
+///    those per reader, so without the list a blocked person's live message
+///    would show. The load retries with backoff until it lands.
 @MainActor
 @Observable
 final class BlockedUsers {
     private(set) var ids: Set<String> = []
-    /// Whether a read of the list has ever landed. Nothing waits on it: until
-    /// then the per-message flag the server stamps is still honoured.
+    /// Whether a read of the list has landed. Until then live frames from other
+    /// people are held back (rule 3).
     private(set) var hasLoaded = false
+
+    /// Bumped at the start and the end of every local block or unblock.
+    @ObservationIgnored private var generation = 0
+    /// A mutation ended ambiguously and the server's list has not been read
+    /// since: the retry loop owes a reconcile.
+    @ObservationIgnored private var needsReconcile = false
+    @ObservationIgnored private var loadTask: Task<Void, Never>?
 
     func contains(_ userId: String) -> Bool { ids.contains(userId) }
 
-    /// The server's list, replacing what is held. A failed read keeps what is on
-    /// screen: a blocked person must not reappear because the network blinked.
-    func refresh(using api: APIClient) async {
-        guard let list = try? await api.blocks() else { return }
-        // A block made while the read was in flight is newer than it is.
-        ids = Set(list.map(\.id)).union(pending)
-        hasLoaded = true
+    /// Read the list at `.ready` and keep trying, with backoff, until it lands
+    /// (and, after an ambiguous write, until it has been reconciled). A second
+    /// call while a loop runs does nothing.
+    func startLoading(using api: APIClient) {
+        guard loadTask == nil else { return }
+        loadTask = Task { [weak self] in
+            var delay = 1
+            while !Task.isCancelled {
+                guard let self else { return }
+                if self.hasLoaded && !self.needsReconcile { break }
+                if await self.refresh(using: api) { break }
+                try? await Task.sleep(for: .seconds(delay))
+                delay = min(delay * 2, 30)
+            }
+            self?.loadTask = nil
+        }
     }
 
-    /// Ids added optimistically whose request has not settled, so a refresh that
-    /// raced it does not briefly un-hide them.
-    @ObservationIgnored private var pending: Set<String> = []
+    /// The server's list, replacing what is held. Returns whether it was applied.
+    /// A failed read keeps what is on screen, and so does one that raced a local
+    /// mutation (rule 2): it is simply read again.
+    @discardableResult
+    func refresh(using api: APIClient) async -> Bool {
+        let started = generation
+        guard let list = try? await api.blocks() else { return false }
+        guard started == generation else { return false }
+        ids = Set(list.map(\.id))
+        hasLoaded = true
+        needsReconcile = false
+        return true
+    }
 
     /// Block, hiding first. `surface` tells the operators where in the app it
     /// happened (a short token, never content).
     func block(_ userId: String, surface: String, using api: APIClient) async throws {
+        generation += 1
         ids.insert(userId)
-        pending.insert(userId)
-        defer { pending.remove(userId) }
         do {
             try await api.setBlocked(userId: userId, blocked: true, surface: surface)
+            generation += 1
         } catch {
-            ids.remove(userId)
-            throw error
+            generation += 1
+            try await settle(error, userId: userId, wantBlocked: true, using: api)
         }
     }
 
     /// Unblock, showing first, same shape as `block`.
     func unblock(_ userId: String, using api: APIClient) async throws {
-        let wasBlocked = ids.remove(userId) != nil
+        generation += 1
+        ids.remove(userId)
         do {
             try await api.setBlocked(userId: userId, blocked: false)
+            generation += 1
         } catch {
-            if wasBlocked { ids.insert(userId) }
-            throw error
+            generation += 1
+            try await settle(error, userId: userId, wantBlocked: false, using: api)
         }
     }
 
-    /// Sign-out: the next account must not inherit this one's list.
+    /// A write failed. A definite refusal restores the old state and rethrows;
+    /// an ambiguous failure asks the server what is true. If the server says the
+    /// write DID land, the failure is swallowed: the person is where the reader
+    /// asked them to be.
+    private func settle(_ error: Error, userId: String, wantBlocked: Bool, using api: APIClient) async throws {
+        guard Self.isAmbiguous(error) else {
+            if wantBlocked { ids.remove(userId) } else { ids.insert(userId) }
+            throw error
+        }
+        if await refresh(using: api) {
+            if ids.contains(userId) == wantBlocked { return }
+            throw error
+        }
+        // Could not even ask. Hidden is the safe side for either direction;
+        // the loop reads the list again and puts the truth right.
+        ids.insert(userId)
+        needsReconcile = true
+        startLoading(using: api)
+        throw error
+    }
+
+    /// Whether the server may have committed despite the error. Only an answer
+    /// the server sent and meant (a status code, a refusal) is definite.
+    static func isAmbiguous(_ error: Error) -> Bool {
+        guard let api = error as? APIError else { return true }
+        switch api {
+        case .transport, .decoding: return true
+        case .unauthorized, .notFound, .rateLimited, .server: return false
+        }
+    }
+
+    /// Sign-out: the next account must not inherit this one's list, and a load
+    /// still retrying for it must not land on the next account's.
     func clear() {
+        generation += 1
+        loadTask?.cancel()
+        loadTask = nil
+        needsReconcile = false
         ids = []
-        pending = []
         hasLoaded = false
     }
 
@@ -87,10 +164,14 @@ enum BlockRules {
     /// A message is drawn only when its author is somebody the reader has not
     /// blocked. The reader's own messages are never hidden: blocking yourself is
     /// not a thing, and a reader hiding their own words reads as data loss.
-    /// The server's per-message flag is honoured too, for the window before the
-    /// list has loaded.
-    static func hides(_ message: Message, viewerId: String?, blocked: Set<String>) -> Bool {
+    /// The server's per-message flag is honoured too. `listLoaded` false means
+    /// the block list has not been read yet: a frame that arrived over the
+    /// socket carries no per-reader flag, so it is held back until it has.
+    static func hides(
+        _ message: Message, viewerId: String?, blocked: Set<String>, listLoaded: Bool = true
+    ) -> Bool {
         guard message.authorId != viewerId else { return false }
+        if !listLoaded && message.arrivedLive { return true }
         return message.blocked || blocked.contains(message.authorId)
     }
 

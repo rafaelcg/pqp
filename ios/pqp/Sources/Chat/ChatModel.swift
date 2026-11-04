@@ -139,7 +139,10 @@ final class ChatModel {
     var visibleMessages: [Message] {
         let blocked = session?.blocked.ids ?? []
         let viewerId = session?.currentUser?.id
-        return messages.filter { !BlockRules.hides($0, viewerId: viewerId, blocked: blocked) }
+        let loaded = session?.blocked.hasLoaded ?? true
+        return messages.filter {
+            !BlockRules.hides($0, viewerId: viewerId, blocked: blocked, listLoaded: loaded)
+        }
     }
 
     func isGrouped(at index: Int, in rows: [Message]) -> Bool {
@@ -826,8 +829,10 @@ final class ChatModel {
     /// tested by feeding the event straight in.
     func apply(_ event: RealtimeEvent) {
         switch event {
-        case .messageCreated(let message, let nonce):
-            guard message.channelId == channelId else { return }
+        case .messageCreated(let received, let nonce):
+            guard received.channelId == channelId else { return }
+            var message = received
+            message.arrivedLive = true
             // A bot's "working" row ends with its message, not with a timer,
             // and so does a notice about that bot.
             if !botWork.isEmpty { botWork[message.authorId] = nil }

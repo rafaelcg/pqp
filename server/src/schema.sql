@@ -301,6 +301,17 @@ CREATE TABLE IF NOT EXISTS user_blocks (
 CREATE INDEX IF NOT EXISTS idx_user_blocks_blocked
   ON user_blocks (blocked_user_id, user_id);
 
+-- How many new blocks an account made per UTC day, for the operator-ticket cap
+-- in services/block-notice.ts. A COUNTER, not a count of `user_blocks` rows:
+-- unblocking deletes the row, so counting rows lets a block/unblock cycle reset
+-- the cap. Holds numbers only, no counterpart, and a few days of history.
+CREATE TABLE IF NOT EXISTS user_block_days (
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  day DATE NOT NULL,
+  n INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (user_id, day)
+);
+
 -- One JSONB blob per user rather than a column per setting: the set of
 -- preferences churns, and a column each would mean a migration each. The shape
 -- is validated by `userPreferencesSchema` before anything is written.
