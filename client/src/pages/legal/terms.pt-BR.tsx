@@ -27,7 +27,7 @@ export const termsPtBr: LegalDocument = {
   description:
     "Termos de uso do serviço hospedado pqp.gg: o que o pqp é de verdade, quem pode usar (18+), uso aceitável, moderação, denúncias e remoção de conteúdo.",
   heading: "Termos de Uso",
-  updated: "27 de setembro de 2026",
+  updated: "4 de novembro de 2026",
   sections: [
     {
       id: "intro",
@@ -159,10 +159,20 @@ export const termsPtBr: LegalDocument = {
     },
     {
       id: "acceptable-use",
-      sourceRev: "1badfc47",
+      sourceRev: "748b4f44",
       heading: "Uso aceitável",
       body: (
         <>
+          <p>
+            <strong>
+              O pqp tem tolerância zero com conteúdo inadequado e com usuários
+              abusivos.
+            </strong>{" "}
+            Qualquer pessoa pode denunciar um conteúdo ou uma pessoa de dentro
+            do app, e qualquer pessoa pode bloquear alguém. A gente analisa
+            toda denúncia em até 24 horas. Quando a violação é confirmada, a
+            gente remove o conteúdo e remove a conta que o publicou.
+          </p>
           <p>Não use o pqp.gg para:</p>
           <ul>
             <li>
@@ -237,7 +247,7 @@ export const termsPtBr: LegalDocument = {
     },
     {
       id: "moderation",
-      sourceRev: "d069ef98",
+      sourceRev: "87aae367",
       heading: "Moderação e aplicação das regras",
       body: (
         <>
@@ -264,10 +274,11 @@ export const termsPtBr: LegalDocument = {
             Dependendo da gravidade e do histórico, isso pode ser: remover
             conteúdo específico, restringir a capacidade de uma conta publicar,
             tirar um servidor do serviço hospedado, suspender uma conta ou
-            encerrar uma conta em definitivo. A gente tenta tomar a medida mais
-            estreita que resolve o problema — mas, para conteúdo envolvendo
-            menores de idade, ameaça crível de violência ou material de abuso
-            sexual infantil, a primeira medida é o encerramento.
+            encerrar uma conta em definitivo. Uma violação confirmada das regras de
+            uso aceitável acima termina com o conteúdo removido e com a conta
+            que o publicou removida. Para conteúdo envolvendo menores de idade,
+            ameaça crível de violência ou material de abuso sexual infantil, isso
+            acontece primeiro e sem aviso.
           </p>
           <p>
             A gente também pode suspender contas ou servidores que coloquem o
@@ -279,7 +290,7 @@ export const termsPtBr: LegalDocument = {
     },
     {
       id: "reporting",
-      sourceRev: "357c1d96",
+      sourceRev: "97a657bd",
       heading: "Como denunciar abuso",
       body: (
         <>
@@ -287,7 +298,8 @@ export const termsPtBr: LegalDocument = {
             Se você tem conta, use a ação <strong>Denunciar</strong> numa
             mensagem, num membro ou no cartão de uma comunidade. Esse é o canal
             de denúncia. Ele manda um recorte do conteúdo denunciado para quem
-            pode agir.
+            pode agir. Dá para bloquear uma pessoa de dentro do app também, o
+            que esconde as mensagens dela para você.
           </p>
           <p>
             Você também pode escrever para <strong>contato@pqp.gg</strong>. É
@@ -307,17 +319,11 @@ export const termsPtBr: LegalDocument = {
             <li>Prints, se você tiver, e mais ou menos quando aconteceu</li>
           </ul>
           <p>
-            <strong>O que acontece depois, sem enfeite.</strong> Uma pessoa lê
-            as denúncias. Não existe equipe de moderação, não existe escala e
-            não existe plantão fora do horário, então a gente não vai publicar
-            prazo de resposta que não consegue cumprir. O que é verdade é isto:
-            as denúncias são lidas e tratadas o mais rápido que uma pessoa
-            razoavelmente consegue, normalmente em alguns dias, e denúncias
-            envolvendo menores de idade, perigo físico iminente ou imagens
-            íntimas sem consentimento furam a fila. Se a gente estiver fora ou
-            afogado, demora mais. Isso não é uma meta que a gente descumpre em
-            silêncio — é o formato de um projeto de uma pessoa só, e você
-            deveria saber disso antes de contar com a gente.
+            <strong>O que acontece depois.</strong> A gente analisa toda denúncia
+            em até 24 horas. Denúncias envolvendo menores de idade, perigo
+            físico iminente ou imagens íntimas sem consentimento furam a fila.
+            Se a denúncia procede, o conteúdo é removido e a conta que o
+            publicou também.
           </p>
           <p>
             <strong>Uma coisa não tem ressalva.</strong> Conteúdo que sexualiza
