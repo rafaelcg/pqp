@@ -128,6 +128,8 @@ targets:
         # light-mode it produces an unreadable half-theme.
         UIUserInterfaceStyle: Dark
       configs:
+        Debug:
+          ENABLE_USER_SCRIPT_SANDBOXING: NO
         Release:
           DEVELOPMENT_TEAM: WXBFUF9WMA
           CODE_SIGNING_REQUIRED: "YES"
@@ -156,6 +158,29 @@ targets:
         inputFiles:
           - $(SRCROOT)/pqp/Resources/Localizable.xcstrings
           - $(SRCROOT)/Scripts/check-localization.py
+    postBuildScripts:
+      # Plain HTTP to a local API is a Debug-only need (the simulator and a
+      # LAN device talk to `pnpm dev`). It is added to the BUILT Info.plist
+      # here and not written in Info.plist because a plist cannot vary by
+      # configuration, and the Release plist, the one App Review reads, must
+      # carry no App Transport Security exception at all. Runs before code
+      # signing, so the signature covers it. Debug turns the user-script
+      # sandbox off (see below): the sandbox cannot be told that a script
+      # edits the product's own Info.plist, and declaring it as an output
+      # collides with the plist task.
+      - script: |
+          if [ "$CONFIGURATION" = "Debug" ]; then
+            plist="$TARGET_BUILD_DIR/$INFOPLIST_PATH"
+            buddy=/usr/libexec/PlistBuddy
+            "$buddy" -c "Delete :NSAppTransportSecurity" "$plist" 2>/dev/null || true
+            "$buddy" -c "Add :NSAppTransportSecurity dict" "$plist"
+            "$buddy" -c "Add :NSAppTransportSecurity:NSAllowsLocalNetworking bool true" "$plist"
+            "$buddy" -c "Add :NSAppTransportSecurity:NSExceptionDomains dict" "$plist"
+            "$buddy" -c "Add :NSAppTransportSecurity:NSExceptionDomains:localhost dict" "$plist"
+            "$buddy" -c "Add :NSAppTransportSecurity:NSExceptionDomains:localhost:NSExceptionAllowsInsecureHTTPLoads bool true" "$plist"
+          fi
+        name: Allow local HTTP (Debug only)
+        basedOnDependencyAnalysis: false
     dependencies:
       # ClerkKit is the client; ClerkKitUI supplies the prebuilt auth flow.
       # The auth UI is used as-shipped rather than rebuilt: it covers email

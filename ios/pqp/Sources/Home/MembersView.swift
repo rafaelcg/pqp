@@ -272,7 +272,7 @@ struct MembersView: View {
         messaging = member.id
         defer { messaging = nil }
         do {
-            let conversation = try await session.api.openConversation(userIds: [member.id])
+            let conversation = try await session.api.openOrFindConversation(with: member.id)
             openedConversation = OpenedConversation(summary: conversation)
         } catch {
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription

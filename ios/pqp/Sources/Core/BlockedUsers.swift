@@ -207,6 +207,28 @@ enum BlockRules {
         return message.blocked && !released.contains(message.authorId)
     }
 
+    /// The reactions a message shows once the blocked person's are taken out.
+    ///
+    /// A chip that still reads "🎉 Demo Friend" after the block is the person
+    /// still on screen. Each reaction loses the blocked users it lists and its
+    /// count drops by exactly that many; a chip left with nobody goes. The
+    /// reader's own reaction is never touched. The server lists who reacted
+    /// (`users`), and where it does not (an older server) there is nothing to
+    /// match a block against, so the reaction stays as it was.
+    static func reactions(
+        _ reactions: [MessageReaction], blocked: Set<String>
+    ) -> [MessageReaction] {
+        guard !blocked.isEmpty else { return reactions }
+        return reactions.compactMap { reaction in
+            let hidden = reaction.users.filter { blocked.contains($0.id) }.count
+            guard hidden > 0 else { return reaction }
+            var next = reaction
+            next.users.removeAll { blocked.contains($0.id) }
+            next.count = max(reaction.count - hidden, 0)
+            return next.count > 0 ? next : nil
+        }
+    }
+
     /// A conversation is hidden from the list when it is a 1:1 with somebody
     /// blocked. A group stays (the other members are not blocked), and its
     /// preview line is dropped when the newest message is the blocked person's.

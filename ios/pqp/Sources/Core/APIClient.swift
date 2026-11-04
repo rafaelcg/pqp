@@ -714,6 +714,24 @@ extension APIClient {
         return response.user
     }
 
+    /// The conversation with one person, reusing the one we already have.
+    ///
+    /// `POST /api/dms` runs its reachability checks even when the pair already
+    /// has a conversation, so a person who cannot be OPENED a conversation (a
+    /// character, whose DMs are closed to everybody, or somebody whose privacy
+    /// setting changed after the chat began) refuses a conversation that exists
+    /// and shows in the hub. The list is the authority on what exists, and it
+    /// is a read the hub already makes, so it comes first; only a person with no
+    /// conversation yet goes to the create call. A failed list read is thrown,
+    /// not read as "none": that would send an existing chat to the create call
+    /// and turn a dropped connection into "cannot message this person".
+    func openOrFindConversation(with userId: String) async throws -> DmSummary {
+        if let existing = try await conversations().oneToOne(with: userId) {
+            return existing
+        }
+        return try await openConversation(userIds: [userId])
+    }
+
     func openConversation(userIds: [String]) async throws -> DmSummary {
         struct Body: Encodable { let userIds: [String] }
         struct Response: Decodable { let conversation: DmSummary }

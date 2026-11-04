@@ -60,6 +60,31 @@ final class AppReviewMetadataTests: XCTestCase {
         XCTAssertFalse(text.contains("\u{2014}"))
     }
 
+    func testTheReleasePlistCarriesNoAppTransportSecurityException() throws {
+        // Plain HTTP to a local API is a Debug-only need, added to the BUILT
+        // plist by the "Allow local HTTP (Debug only)" phase in project.yml.
+        // The source plist is what Release ships, so it must not name ATS.
+        let info = try plist("Info.plist")
+        XCTAssertNil(info["NSAppTransportSecurity"])
+    }
+
+    // MARK: Store listing
+
+    func testTheDescriptionsMakeNoDatedAttendanceClaim() throws {
+        // A "100 people in September 2026" line cannot be checked by a reviewer
+        // (Guideline 2.3.1), so the listing says what watch parties are for.
+        let metadata = Self.appRoot
+            .deletingLastPathComponent()  // …/ios
+            .appending(path: "app-store/metadata")
+        for locale in ["en-US", "pt-BR", "es-MX"] {
+            let text = try String(
+                contentsOf: metadata.appending(path: "\(locale)/description.txt"), encoding: .utf8
+            )
+            XCTAssertFalse(text.contains("100"), locale)
+            XCTAssertFalse(text.lowercased().contains("2026"), locale)
+        }
+    }
+
     // MARK: Privacy manifests
 
     func testTheAppManifestSaysNoTrackingAndNamesUserDefaults() throws {

@@ -145,12 +145,14 @@ final class ChatModel {
             guard !BlockRules.hides(
                 message, viewerId: viewerId, blocked: blocked, listLoaded: loaded, released: released
             ) else { return nil }
+            var shown = message
+            // The blocked person's reactions on everybody else's messages go
+            // with them, and the chip's count drops by theirs.
+            shown.reactions = BlockRules.reactions(message.reactions, blocked: blocked)
             // Fetched while the person was blocked, so it carries the server's
             // stamp; they were unblocked since, and the row must draw in full
             // rather than as the "hidden" placeholder.
-            guard message.blocked, released.contains(message.authorId) else { return message }
-            var shown = message
-            shown.blocked = false
+            if message.blocked, released.contains(message.authorId) { shown.blocked = false }
             return shown
         }
     }

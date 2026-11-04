@@ -29,32 +29,39 @@ enum LegalLinks {
     }
 }
 
-/// "By continuing, you agree to the Terms and the Privacy Policy."
+/// "By continuing you agree to the Terms (zero tolerance for objectionable
+/// content and abusive users) and the Privacy Policy."
 ///
 /// The two links are Markdown inside one localised sentence, so a translation
 /// can order the words as its language needs. They are underlined as well as
 /// tinted: a link that differs from its sentence by colour alone is invisible
 /// to somebody who cannot tell the colours apart.
+///
+/// Round 2 of the App Review mock found the line too small and too dim to
+/// count as a presented agreement, and silent on the one thing 1.2 asks the
+/// terms to say. So it is `subheadline` in the subtle paper tone (the links in
+/// full paper), names the zero tolerance in the sentence itself, and scales
+/// with Dynamic Type.
 struct LegalAgreementLine: View {
     static var text: AttributedString {
         let source = AttributedString(
-            localized: "By continuing, you agree to the [Terms](https://pqp.gg/terms) and the [Privacy Policy](https://pqp.gg/privacy)."
+            localized: "By continuing you agree to the [Terms](https://pqp.gg/terms) (zero tolerance for objectionable content and abusive users) and the [Privacy Policy](https://pqp.gg/privacy)."
         )
         var value = source
         for run in source.runs where run.link != nil {
             value[run.range].underlineStyle = .single
-            value[run.range].foregroundColor = Palette.paperSubtle
+            value[run.range].foregroundColor = Palette.paper
         }
         return value
     }
 
     var body: some View {
         Text(Self.text)
-            .font(.footnote)
-            .foregroundStyle(Palette.paperMuted)
+            .font(.subheadline)
+            .foregroundStyle(Palette.paperSubtle)
             .multilineTextAlignment(.center)
             .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: 420)
+            .frame(maxWidth: 460)
             .frame(maxWidth: .infinity)
             .accessibilityIdentifier("welcome.agreement")
     }

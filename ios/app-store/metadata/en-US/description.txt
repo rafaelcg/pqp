@@ -1,6 +1,6 @@
 pqp is open source voice and text chat for your crew: watch a friend's shared screen with the sound on, join a watch party, and build a community with servers, channels and direct messages. Free, no ads.
 
-A watch party already drew over 100 people watching together in one room, in September 2026. The full source is public on GitHub.
+Watch parties are built for big rooms: everyone sees the same moment of the film at the same time. The full source is public on GitHub.
 
 VOICE AND VIDEO
 Join a voice channel and talk with clear audio: a peer-to-peer connection for small groups, or a dedicated media server for bigger rooms, picked automatically by the app so you never have to think about it. Turn your camera on, watch someone else's shared screen, see who is speaking, mute or deafen yourself, and rate the call quality when you hang up. Ring a friend directly for a one-on-one call.

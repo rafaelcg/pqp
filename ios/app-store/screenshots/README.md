@@ -115,3 +115,5 @@ database per language, so the chat is in the language of the shot:
 - The simulator status bar is pinned (`simctl status_bar override`, 9:41, full
   battery) and the language is forced with `-AppleLanguages` / `-AppleLocale`.
 - The app has no Spanish localization yet, so there is no es-MX set.
+- Each locale folder holds eight shots (01 to 08), not five.
+- 2026-11-04: only `01-onboarding.png` was retaken, because it still said "No card required" while the app now says "No ads", and the welcome now carries the longer agreement line (zero tolerance). Fresh install state, same pinned status bar, `StoreScreenshotUITests/testCaptureOnboarding`.

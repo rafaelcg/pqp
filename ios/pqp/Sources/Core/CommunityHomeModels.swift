@@ -241,6 +241,20 @@ struct CommunityHomePost: Codable, Identifiable, Sendable, Hashable {
     }
 }
 
+extension CommunityHomePost {
+    /// The comment count a card shows once the comments of people the reader
+    /// blocked are off it. `known` is every comment the card holds (the whole
+    /// list once expanded, the teaser before): the server counts all of a
+    /// post comments, and only the ones held here can be matched to a block,
+    /// so a blocked comment the card never loaded still counts, which is the
+    /// honest answer to "how many comments are there".
+    func visibleCommentCount(known: [CommunityHomeComment], blocked: Set<String>) -> Int {
+        guard !blocked.isEmpty else { return commentCount }
+        let hidden = known.filter { blocked.contains($0.author.id) }.count
+        return max(commentCount - hidden, 0)
+    }
+}
+
 struct CommunityHomePostsResponse: Codable, Sendable { let posts: [CommunityHomePost] }
 struct CommunityHomeCommentsResponse: Codable, Sendable { let comments: [CommunityHomeComment] }
 struct CommunityHomeCommentResponse: Codable, Sendable { let comment: CommunityHomeComment }
