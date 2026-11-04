@@ -164,8 +164,16 @@ struct ThreadListView: View {
         loading = true
         // 100 is MESSAGE_PAGE_MAX; asking for more is clamped, not refused.
         if let page = try? await session.api.messages(channelId: channel.id, limit: 100) {
-            threads = ThreadDigest.threads(in: page.messages)
-            origins = ThreadDigest.origins(in: page.messages)
+            // A thread is listed through the message it grew out of, so a
+            // blocked person's messages take their threads with them.
+            let shown = page.messages.filter {
+                !BlockRules.hides(
+                    $0, viewerId: session.currentUser?.id, blocked: session.blocked.ids,
+                    released: session.blocked.released
+                )
+            }
+            threads = ThreadDigest.threads(in: shown)
+            origins = ThreadDigest.origins(in: shown)
         }
         loading = false
     }

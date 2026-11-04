@@ -131,6 +131,16 @@ export type DmListResponse = z.infer<typeof dmListResponseSchema>;
 
 export const createBlockSchema = z.object({
   userId: z.string().uuid(),
+  /**
+   * Where in the app the block was made ("message", "profile", "friends"),
+   * for the operators' log line. Optional and never user content: a short
+   * token, so a client that does not send one is unaffected.
+   */
+  surface: z
+    .string()
+    .max(32)
+    .regex(/^[a-z0-9_.-]+$/)
+    .optional(),
 });
 
 export type CreateBlockRequest = z.infer<typeof createBlockSchema>;

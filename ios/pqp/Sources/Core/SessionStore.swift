@@ -63,6 +63,10 @@ final class SessionStore {
     private(set) var realtimeStatus: RealtimeStatus = .idle
     private(set) var lastError: String?
 
+    /// Who this account has blocked, applied to every list the moment a block is
+    /// made. See `BlockedUsers`.
+    let blocked = BlockedUsers()
+
     /// The one calm sentence the sign-in screen shows after a session ended
     /// under the person ("Your session expired. Sign in again."). Separate from
     /// `lastError`, which is a failure they caused and is drawn as one. Set by
@@ -444,6 +448,10 @@ final class SessionStore {
         // wizard that is about to cover it.
         await prepareFirstRun()
         phase = .ready
+        // Retries with backoff until it lands. Until then live frames from other
+        // people are held back (`BlockedUsers`, rule 3): the history fetches carry
+        // the server's per-message flag, the socket frames do not.
+        blocked.startLoading(using: api)
         await uploadPushToken()
         await consumePendingInvite()
     }
@@ -912,6 +920,7 @@ final class SessionStore {
         eventHandlers.removeValue(forKey: Self.occupancyHandlerKey)
         voiceOccupancy.clear()
         storyPosts.clear()
+        blocked.clear()
         StoryPreloader.shared.reset()
 
         // BEFORE the token is revoked, because this needs an authenticated call,

@@ -885,7 +885,7 @@ struct UserProfileSheet: View {
                 try await session.api.removeFriendship(userId: subject.id)
                 message = nil
             case .unblock:
-                try await session.api.setBlocked(userId: subject.id, blocked: false)
+                try await session.blocked.unblock(subject.id, using: session.api)
                 message = nil
             case .noneAvailable:
                 return
@@ -905,7 +905,9 @@ struct UserProfileSheet: View {
         do {
             // No separate unfriend call: the block's trigger deletes the
             // friendship row itself, and issuing both would race it.
-            try await session.api.setBlocked(userId: subject.id, blocked: true)
+            // Optimistic: every list that can show this person drops them on
+            // the tap (`BlockedUsers`), and the operators are told where.
+            try await session.blocked.block(subject.id, surface: "profile", using: session.api)
             await load()
         } catch {
             note((error as? APIError)?.errorDescription ?? error.localizedDescription, failed: true)

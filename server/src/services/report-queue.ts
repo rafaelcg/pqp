@@ -1,4 +1,5 @@
 import { getPool } from "../db.js";
+import { BLOCK_REPORT_PLACE } from "./block-notice.js";
 
 /**
  * `moderation.reports` on `GET /api/admin/metrics`: how many reports are open,
@@ -18,6 +19,15 @@ import { getPool } from "../db.js";
  * instance moderator has to catch, and `GET /api/reports/all` is the screen
  * that reaches it. Which queue a report is in is not this figure's business;
  * that it is unanswered is.
+ *
+ * ONE EXCEPTION, AND ONLY FOR THE AGE FIGURES: the informational "Bloqueio"
+ * tickets a user's block opens (`services/block-notice.ts`: no reporter, a user
+ * subject, place label `BLOCK_REPORT_PLACE`). They tell an operator that
+ * somebody blocked an account; they are not reports of objectionable content,
+ * and nobody promised to answer them within 24 hours. Left in, one ticket
+ * nobody needs to act on would hold `oldestOpenAgeSeconds` above the 12 h and
+ * 20 h alert lines forever. They still count in `open` (the queue shows them),
+ * and once a moderator closes one it is just another resolved row.
  *
  * Read from Postgres, so both API replicas and the worker agree and the
  * exporter takes it from one replica (`moderation` is a take-first block).
@@ -43,6 +53,10 @@ export interface ReportQueueStats {
   openOver24h: number;
 }
 
+/** The informational block tickets, as a predicate over `reports` ($1 = label). */
+const IS_BLOCK_NOTICE = `(reporter_id IS NULL AND subject_type = 'user'
+                          AND channel_label IS NOT DISTINCT FROM $1)`;
+
 export async function reportQueueStats(): Promise<ReportQueueStats> {
   const result = await getPool().query<{
     open: string;
@@ -61,18 +75,19 @@ export async function reportQueueStats(): Promise<ReportQueueStats> {
             )::text AS last24h,
             COALESCE(
               floor(extract(epoch FROM now() - MIN(created_at)
-                FILTER (WHERE status = 'open'))),
+                FILTER (WHERE status = 'open' AND NOT ${IS_BLOCK_NOTICE}))),
               0
             )::text AS oldest_open_age_seconds,
             COUNT(*) FILTER (
-              WHERE status = 'open'
+              WHERE status = 'open' AND NOT ${IS_BLOCK_NOTICE}
                 AND created_at < now() - interval '12 hours'
             )::text AS open_over_12h,
             COUNT(*) FILTER (
-              WHERE status = 'open'
+              WHERE status = 'open' AND NOT ${IS_BLOCK_NOTICE}
                 AND created_at < now() - interval '24 hours'
             )::text AS open_over_24h
        FROM reports`,
+    [BLOCK_REPORT_PLACE],
   );
   const row = result.rows[0];
   return {

@@ -119,6 +119,21 @@ it would fail on literally every message. `Coding.decoder` tries both formats.
 `Server.role` is genuinely absent (not null) outside `/api/servers`. Both are
 decoded defensively; see the comments in `Models.swift`.
 
+**A block hides the person everywhere, at once, from `session.blocked`.** The
+server enforces what it can (no new DMs, badges, pushes, mentions or stories)
+but keeps a blocked author's rows in a shared channel so paging stays honest, and
+a socket frame is never stamped per reader. So hiding is the client's job, and
+`BlockedUsers` (an observable set on `SessionStore`, loaded at `.ready`, added to
+optimistically on the tap) is what every list reads: the transcript
+(`ChatModel.visibleMessages`, which also covers threads, group DMs and forum
+posts, live frames included), the Conversas list and hub (`BlockRules.visible`),
+story rings and the open viewer, forum lists, thread lists, Baú comments and
+reply quotes. Blocking is offered on a message's long-press menu, on a profile
+and in Friends; each sends a `surface` token so the operators' log line says
+which. Guideline 1.2; see `docs/CONTENT_SAFETY.md` §"Blocking a person tells the
+operators". Not hidden on purpose: the member list and the voice roster (a
+roster is who is in a place, not a feed).
+
 **`presence-update` uses `name`, every other payload uses `displayName`.** One
 struct cannot serve both, hence `PresenceUser`.
 
