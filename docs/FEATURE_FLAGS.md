@@ -115,6 +115,15 @@ both in `docs/CAPACITY.md` §"The video budget is per box"),
 `USER_STATS` (`user_stats`, default **on**: the per-person counts the
 Retrospectiva is built from; off stops every new write, nothing is deleted;
 see `server/src/services/user-stats.ts`),
+`DEFAULT_TEXT_FILTER` (`default_text_filter`, global, default **on**: the
+built-in text filter, a short list of slurs, directed abuse and threats in
+English, Portuguese and Spanish, refused on every message, edit, forum post,
+story, Baú comment and post, direct message and profile name with no AutoMod
+rule written by anybody; each server's owner can switch it off for their own
+server in AutoMod settings (`server_text_filter_settings`), and this flag is
+the operator's switch over all of them; off, nothing is filtered by default and
+the owner's own rules still run. Served as `GET /api/servers/:id/automod/baseline`.
+`docs/CONTENT_SAFETY.md` §"The default text filter"),
 `COMMUNITY_HOME_ENABLED`, `COMMUNITY_HOME_VIP_ENABLED`
 (`community_home_vip`, **per server**: the creator-hub pilot turns VIP on for
 one server at a time with `PUT /api/admin/flag-overrides` or the dashboard's

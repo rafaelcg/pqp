@@ -188,7 +188,9 @@ const AUDIT_ACTION_KEYS: Record<AuditAction, MessageKey> = {
  * the raw kind (`keywords`), not copy, so the name comes from the same strings
  * the AutoMod pane uses for that rule.
  */
-const AUDIT_AUTOMOD_KIND_KEYS: Record<AutomodRuleKind, MessageKey> = {
+const AUDIT_AUTOMOD_KIND_KEYS: Record<AutomodRuleKind | "baseline", MessageKey> = {
+  // The built-in filter's hits are stored with the reason `baseline`.
+  baseline: "automod.baseline.title",
   keywords: "automod.keywords.title",
   invite_links: "automod.inviteLinks.title",
   mention_spam: "automod.mentionSpam.title",

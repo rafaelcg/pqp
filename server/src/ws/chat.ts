@@ -105,7 +105,9 @@ import {
 import { chargeSlowMode, refundSlowMode } from "../services/slow-mode.js";
 import {
   checkAutomod,
+  checkBaselineText,
   recordAutomodHit,
+  recordBaselineHit,
   type AutomodHitEffects,
 } from "../services/automod.js";
 import { listServerChannelIds } from "../services/servers.js";
@@ -2608,6 +2610,30 @@ async function postChannelMessageAttempt(
         ...(verdict.customMessage
           ? { automodMessage: verdict.customMessage }
           : {}),
+      };
+    }
+  } else if (channel && channel.kind !== "server") {
+    // A direct or group message has no server and so no owner's rules, but
+    // pqp's own baseline filter (a short list of slurs, directed abuse and
+    // threats) applies to it too: it is the instance's, not a server's.
+    const verdict = await checkBaselineText(
+      null,
+      input.forward
+        ? [
+            input.forward.comment,
+            input.forward.snapshot.title ?? "",
+            input.forward.snapshot.excerpt,
+          ]
+            .filter((part) => part.length > 0)
+            .join("\n")
+        : input.body,
+    );
+    if (verdict) {
+      recordBaselineHit("dm", input.author.id, verdict);
+      return {
+        ok: false,
+        reason: "automod",
+        automodMessage: verdict.customMessage!,
       };
     }
   }

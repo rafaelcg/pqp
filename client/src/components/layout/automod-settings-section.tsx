@@ -9,8 +9,10 @@ import {
   AUTOMOD_RULE_KINDS,
   AUTOMOD_TIMEOUT_PRESET_MINUTES,
   evaluateAutomod,
+  findBaselineViolation,
   type AutomodRule,
   type AutomodRuleKind,
+  type BaselineStatus,
   type Channel,
 } from "@pqp/shared";
 import {
@@ -38,9 +40,11 @@ import {
   ApiError,
   createAutomodRule,
   deleteAutomodRule,
+  fetchAutomodBaseline,
   fetchAutomodRules,
   fetchChannels,
   fetchRoles,
+  setAutomodBaseline,
   updateAutomodRule,
   type ServerRole,
 } from "@/lib/api";
@@ -417,6 +421,9 @@ export function AutomodSettingsSection({
 }) {
   const { t } = useTranslation();
   const [rules, setRules] = useState<AutomodRule[] | null>(null);
+  /** pqp's built-in filter: on unless the operator or this owner switched it off. */
+  const [baseline, setBaseline] = useState<BaselineStatus | null>(null);
+  const [baselineBusy, setBaselineBusy] = useState(false);
   const [roles, setRoles] = useState<ServerRole[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [editing, setEditing] = useState<AutomodRuleKind | null>(null);
@@ -440,10 +447,13 @@ export function AutomodSettingsSection({
       fetchAutomodRules(serverId),
       fetchRoles(serverId),
       fetchChannels(serverId),
+      // Its own failure must not take the owner's rules down with it.
+      fetchAutomodBaseline(serverId).catch(() => null),
     ])
-      .then(([ruleRes, roleRes, channelRes]) => {
+      .then(([ruleRes, roleRes, channelRes, baselineRes]) => {
         if (cancelled) return;
         setRules(ruleRes.rules);
+        setBaseline(baselineRes);
         setRoles(roleRes.roles.filter((role) => !role.isEveryone));
         setChannels(
           channelRes.channels.filter(
@@ -472,10 +482,39 @@ export function AutomodSettingsSection({
 
   const preview = useMemo(() => {
     if (!rules || !sample.trim()) return null;
+    // The default filter reads first, exactly as the server does.
+    const baselineHit = baseline?.enabled ? findBaselineViolation(sample) : null;
+    if (baselineHit) {
+      return { noRules: false as const, verdict: null, baselineHit };
+    }
     const active = rules.filter((rule) => rule.enabled);
-    if (active.length === 0) return { noRules: true as const, verdict: null };
-    return { noRules: false as const, verdict: evaluateAutomod(sample, active) };
-  }, [rules, sample]);
+    if (active.length === 0 && !baseline?.enabled) {
+      return { noRules: true as const, verdict: null, baselineHit: null };
+    }
+    return {
+      noRules: false as const,
+      verdict: evaluateAutomod(sample, active),
+      baselineHit: null,
+    };
+  }, [rules, sample, baseline]);
+
+  async function toggleBaseline(enabled: boolean) {
+    // One request at a time (the switch is disabled while it is out), so
+    // answers cannot arrive out of order.
+    if (!baseline || baselineBusy) return;
+    const previous = baseline;
+    setBaselineBusy(true);
+    setError(null);
+    setBaseline({ ...baseline, ownerDisabled: !enabled, enabled: baseline.instanceEnabled && enabled });
+    try {
+      setBaseline(await setAutomodBaseline(serverId, enabled));
+    } catch (err) {
+      setBaseline(previous);
+      setError(messageOf(err, t("automod.baseline.saveFailed")));
+    } finally {
+      setBaselineBusy(false);
+    }
+  }
 
   function open(kind: AutomodRuleKind) {
     editorSession.current += 1;
@@ -908,6 +947,51 @@ export function AutomodSettingsSection({
         <p className="text-sm text-text-secondary">{t("automod.readOnly")}</p>
       )}
       <ul className="divide-y divide-border overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface-1">
+        {baseline && (
+          <li
+            className="flex items-center gap-3 px-3 py-3 pr-3"
+            data-testid="automod-row-baseline"
+          >
+            <span
+              className={cn(
+                "grid h-10 w-10 shrink-0 place-items-center rounded-[var(--radius-card)]",
+                baseline.enabled
+                  ? "bg-accent-soft text-on-accent-soft"
+                  : "bg-surface-2 text-text-tertiary",
+              )}
+            >
+              <ShieldCheck className="h-5 w-5" aria-hidden />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-medium text-text">
+                {t("automod.baseline.title")}
+              </span>
+              <span
+                className={cn(
+                  "block text-xs",
+                  baseline.enabled ? "text-text-secondary" : "text-text-tertiary",
+                )}
+              >
+                {!baseline.instanceEnabled
+                  ? t("automod.baseline.summaryInstanceOff")
+                  : baseline.ownerDisabled
+                    ? t("automod.baseline.summaryOff")
+                    : t("automod.baseline.summaryOn")}
+              </span>
+              <span className="mt-0.5 block text-xs text-text-tertiary">
+                {t("automod.baseline.description")}
+              </span>
+            </span>
+            <Switch
+              checked={baseline.enabled}
+              onCheckedChange={(checked) => void toggleBaseline(checked)}
+              disabled={readOnly || !baseline.instanceEnabled || baselineBusy}
+              label={t("automod.baseline.title")}
+              hideLabel
+              className="w-auto shrink-0"
+            />
+          </li>
+        )}
         {AUTOMOD_RULE_KINDS.map((kind) => {
           const meta = KIND_META[kind];
           const rule = ruleFor(kind);
@@ -987,20 +1071,24 @@ export function AutomodSettingsSection({
             data-testid="automod-test-result"
             className={cn(
               "flex items-center gap-2 text-sm",
-              preview.verdict
+              preview.verdict || preview.baselineHit
                 ? "text-danger"
                 : preview.noRules
                   ? "text-text-tertiary"
                   : "text-success",
             )}
           >
-            {preview.verdict ? (
+            {preview.verdict || preview.baselineHit ? (
               <ShieldBan className="h-4 w-4 shrink-0" aria-hidden />
             ) : (
               <ShieldCheck className="h-4 w-4 shrink-0" aria-hidden />
             )}
             <span>
-              {preview.noRules
+              {preview.baselineHit
+                ? t("automod.test.baselineBlocked", {
+                    class: t(`automod.baseline.class.${preview.baselineHit.class}`),
+                  })
+                : preview.noRules
                 ? t("automod.test.noRules")
                 : preview.verdict
                   ? t("automod.test.blocked", {

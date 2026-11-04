@@ -46,15 +46,19 @@ export const termsPtBr: LegalDocument = {
     },
     {
       id: "before-you-move",
-      sourceRev: "11ab44a2",
+      sourceRev: "180beac5",
       heading: "Leia isto antes de trazer a sua galera pra cá",
       body: (
         <>
           <p>
             O pqp é um projeto pessoal, feito por diversão por uma pessoa no
             tempo livre dela, com a família ajudando no produto. Não tem
-            empresa, não tem produto pago e não tem equipe de suporte. Quem lê o
-            seu e-mail é quem escreveu o código. Dá para mandar um presente
+            empresa, não tem produto pago e não tem central de atendimento. Quem
+            lê o seu e-mail é quem escreveu o código, e essa mesma pessoa analisa
+            toda denúncia de abuso em até 24 horas (veja Uso aceitável e
+            Denunciar abuso, mais abaixo). Essa promessa é sobre denúncias; o
+            &quot;no estado em que se encontra&quot; mais adiante é sobre
+            disponibilidade e recursos. Dá para mandar um presente
             para a hospedagem pelo GitHub Sponsors ou Pix, em{" "}
             <Link to="/apoie">/apoie</Link>. Isso não destrava nada: sem selo,
             sem recurso extra, sem reembolso. O serviço é oferecido{" "}
@@ -220,6 +224,57 @@ export const termsPtBr: LegalDocument = {
             Donos e admins de servidor são responsáveis pelas comunidades que
             tocam. Manter um servidor cujo propósito aparente é quebrar estas
             regras já é, por si só, uma violação.
+          </p>
+        </>
+      ),
+    },
+    {
+      id: "filtering",
+      sourceRev: "6a891b3c",
+      heading: "O que a gente filtra automaticamente",
+      body: (
+        <>
+          <p>
+            O pqp confere o que você publica antes de outras pessoas verem.
+            Quando uma conferência recusa algo, você é avisado na hora e o
+            conteúdo não é publicado.
+          </p>
+          <ul>
+            <li>
+              <strong>Texto.</strong> Mensagens e edições, posts de fórum,
+              stories, comentários e posts do Baú, mensagens diretas e os nomes
+              e o recado que você escolhe para si são comparados com uma lista
+              embutida de ofensas discriminatórias, xingamentos dirigidos a uma
+              pessoa e ameaças, em inglês, português e espanhol. Se bater, não é
+              enviado e você vê: &quot;This message was not sent: it breaks
+              pqp&apos;s rules on abusive language.&quot; (no app em português:
+              &quot;Essa mensagem não foi enviada: ela quebra as regras do pqp
+              sobre linguagem abusiva.&quot;). Palavrão do dia a dia não está
+              na lista. O filtro vem ligado em todo servidor. O dono do servidor
+              pode desligar para o servidor dele nas configurações do AutoMod, e
+              pode somar as próprias palavras bloqueadas, links e limites de
+              menção.
+            </li>
+            <li>
+              <strong>Imagens.</strong> Uma imagem nova anexada a uma mensagem,
+              ou publicada no Baú de uma comunidade, é checada por um serviço
+              automático de segurança de imagem antes de qualquer outra pessoa
+              ver. Se não passar, é descartada.
+            </li>
+            <li>
+              <strong>O que nenhum programa confere.</strong> Arquivos de vídeo,
+              áudio e PDF, fotos de perfil e banners, e ícones de servidor não
+              são varridos automaticamente hoje; para esses, o caminho é a
+              denúncia. Chamadas de voz não são escutadas. O nome que vem da
+              sua conta de login quando você se cadastra não passa pelo filtro
+              de texto.
+            </li>
+          </ul>
+          <p>
+            Filtro automático é uma primeira linha, não um moderador. Ele deixa
+            passar coisa, e às vezes pega algo inofensivo. Não substitui a
+            denúncia: se algo passar, denuncie, e a gente analisa toda denúncia
+            em até 24 horas.
           </p>
         </>
       ),

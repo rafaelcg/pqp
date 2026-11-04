@@ -13,6 +13,8 @@ import {
   storyViewsBatchSchema,
   type CommunityHomeContentType,
   AUTOMOD_MENTION_LIMIT_DEFAULT,
+  BASELINE_PROFILE_REJECTION_MESSAGE,
+  setBaselineSchema,
   createAutomodRuleSchema,
   updateAutomodRuleSchema,
   addChannelMemberSchema,
@@ -429,6 +431,10 @@ import {
 import { listAuditLog, logAudit } from "../services/audit.js";
 import {
   checkAutomod,
+  checkBaselineText,
+  getBaselineStatus,
+  recordBaselineHit,
+  setBaselineEnabled,
   createAutomodRule,
   deleteAutomodRule,
   getAutomodRule,
@@ -1884,6 +1890,18 @@ const patchProfileSchema = updateProfileSchema.extend({
 
 router.patch("/api/me", async ({ req, user, ageGate }) => {
   const body = patchProfileSchema.parse(await readJsonBody(req));
+  // pqp's built-in text filter reads the names a person picks for themselves:
+  // display name, tag name, handle and the recado. Before any write, so a
+  // refusal leaves the profile exactly as it was. (A name that arrives from
+  // Clerk at sign-up is not read here: refusing it would refuse the account.)
+  for (const text of [body.displayName, body.username, body.handle, body.customStatus]) {
+    if (typeof text !== "string") continue;
+    const verdict = await checkBaselineText(null, text);
+    if (verdict) {
+      recordBaselineHit("profile", user.id, verdict);
+      throw new HttpError(422, BASELINE_PROFILE_REJECTION_MESSAGE);
+    }
+  }
   if (body.displayName !== undefined) {
     if (body.displayName === user.display_name.trim()) {
       // The stored name sent back unchanged is not an edit, whatever its length.
@@ -10589,6 +10607,14 @@ router.patch("/api/messages/:messageId", async ({ req, user }, { messageId }) =>
         verdict.customMessage ?? "This message was blocked by AutoMod",
       );
     }
+  } else {
+    // An edit in a direct or group conversation: no server rules, but the
+    // instance's baseline filter still reads it (see `postChannelMessage`).
+    const verdict = await checkBaselineText(null, body.body);
+    if (verdict) {
+      recordBaselineHit("dm", user.id, verdict);
+      throw new HttpError(422, verdict.customMessage!);
+    }
   }
 
   const updated = await updateMessageBody(messageId!, body.body);
@@ -12767,6 +12793,32 @@ router.get(
       Permission.MANAGE_MESSAGES,
     ]);
     return { rules: await listAutomodRules(serverId!) };
+  },
+);
+
+// The built-in text filter's switch (`@pqp/shared` `automod-baseline.ts`).
+// Same readers as the rules (a moderator may see what the filter does), and the
+// same writer: only MANAGE_SERVER turns it off for the server. The answer also
+// says whether the operator's flag has it off everywhere, so the page can say
+// so instead of showing a switch that does nothing.
+router.get(
+  "/api/servers/:serverId/automod/baseline",
+  async ({ user }, { serverId }) => {
+    await requireAnyPermission(serverId!, user.id, [
+      Permission.MANAGE_SERVER,
+      Permission.MANAGE_MESSAGES,
+    ]);
+    return getBaselineStatus(serverId!);
+  },
+);
+
+router.put(
+  "/api/servers/:serverId/automod/baseline",
+  async ({ req, user }, { serverId }) => {
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    const body = setBaselineSchema.parse(await readJsonBody(req));
+    // The audit line is written in the same transaction as the switch.
+    return setBaselineEnabled(serverId!, body.enabled, user.id);
   },
 );
 

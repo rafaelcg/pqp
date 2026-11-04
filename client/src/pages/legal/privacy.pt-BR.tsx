@@ -27,7 +27,7 @@ export const privacyPtBr: LegalDocument = {
   description:
     "Como o pqp.gg trata dados pessoais: o que a gente coleta, as bases legais, onde os dados são tratados, por quanto tempo ficam e os seus direitos sob a LGPD e a lei de proteção de dados do Reino Unido.",
   heading: "Política de Privacidade",
-  updated: "18 de outubro de 2026",
+  updated: "4 de novembro de 2026",
   sections: [
     {
       id: "intro",
@@ -138,7 +138,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "what-we-collect",
-      sourceRev: "edf70505",
+      sourceRev: "987153a6",
       heading: "O que a gente coleta",
       body: (
         <>
@@ -227,12 +227,14 @@ export const privacyPtBr: LegalDocument = {
             armazenamento de objetos compatível com S3. Os anexos estão{" "}
             <strong>ligados</strong> no pqp.gg hoje. Um banner de perfil usa o
             mesmo armazenamento. GIFs escolhidos na busca de GIF são guardados
-            como um link para o provedor do GIF, não como cópia. Quando a
-            varredura de imagem está configurada, uma imagem recém-enviada é
-            checada antes de aparecer no canal. Um match pode derrubar o
+            como um link para o provedor do GIF, não como cópia. Uma imagem
+            recém-enviada num canal, ou publicada no Baú de uma comunidade, é
+            checada por um serviço automático de segurança de imagem antes de
+            aparecer para qualquer outra pessoa (a varredura de imagem está
+            ligada no pqp.gg hoje). Um match pode derrubar o
             arquivo sem uma pessoa ler. Isso é uma checagem do arquivo, não uma
-            decisão sobre você como pessoa. Avatares e banners não são
-            varridos hoje.
+            decisão sobre você como pessoa. Arquivos de vídeo, áudio e PDF,
+            avatares e banners não são varridos hoje.
           </p>
           <p>
             <strong>Watch parties.</strong> Uma watch party é uma transmissão,
@@ -534,7 +536,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "what-we-dont-do",
-      sourceRev: "12e5ef01",
+      sourceRev: "91143db9",
       heading: "O que a gente não faz",
       body: (
         <ul>
@@ -591,10 +593,12 @@ export const privacyPtBr: LegalDocument = {
           <li>
             <strong>Sem decisão automatizada sobre você como pessoa.</strong>{" "}
             Nada aqui traça o seu perfil nem decide se você pode ficar com a
-            conta. Moderação de pessoas é feita por uma pessoa. Se a varredura
-            de imagem estiver ligada, um arquivo pode ser derrubado ou
-            sinalizado por essa checagem antes de uma pessoa ver. Isso é uma
-            checagem do arquivo.
+            conta. Moderação de pessoas é feita por uma pessoa. Um arquivo pode
+            ser derrubado ou sinalizado pela checagem de imagem antes de uma
+            pessoa ver, e uma mensagem ou um nome pode ser recusado pelo filtro
+            de texto embutido (uma lista de ofensas, xingamentos e ameaças,
+            comparada com o próprio texto). Isso são checagens do conteúdo, não
+            de você.
           </li>
         </ul>
       ),

@@ -35,8 +35,12 @@ export const termsEn: LegalDocument = {
           <p>
             pqp is a personal project, built for fun by one person in their
             spare time, with family helping on the product. There is no
-            company, no paid product, and no support team. The person who
-            reads your email is the person who wrote the code. People can send
+            company, no paid product, and no call centre or service desk. The
+            person who reads your email is the person who wrote the code, and
+            that same person reviews every abuse report within 24 hours (see
+            Acceptable use and Reporting abuse below). That promise is about
+            reports; the &quot;as is&quot; language further down is about
+            uptime and features. People can send
             a gift toward hosting via GitHub Sponsors or Pix, on{" "}
             <Link to="/apoie">/apoie</Link>. That unlocks nothing: no badge, no
             extra features, no refunds. It is provided{" "}
@@ -189,6 +193,53 @@ export const termsEn: LegalDocument = {
             Server owners and admins are responsible for the communities they
             run. Running a server whose apparent purpose is to break these rules
             is itself a violation.
+          </p>
+        </>
+      ),
+    },
+    {
+      id: "filtering",
+      heading: "What we filter automatically",
+      body: (
+        <>
+          <p>
+            pqp checks what you post before other people see it. When a check
+            refuses something, you are told at that moment and it is not
+            posted.
+          </p>
+          <ul>
+            <li>
+              <strong>Text.</strong> Messages and edits, forum posts, stories,
+              Baú comments and posts, direct messages, and the names and status
+              line you choose for yourself are read against a built-in list of
+              slurs, abuse aimed at a person, and threats, in English,
+              Portuguese and Spanish. A match is not sent, and you see: &quot;This
+              message was not sent: it breaks pqp&apos;s rules on abusive
+              language.&quot; Everyday swearing is not on the list. The filter
+              is on by default on every server. A server&apos;s owner can turn
+              it off for that server in the AutoMod settings, and can add their
+              own blocked words, links and mention limits on top of it.
+            </li>
+            <li>
+              <strong>Images.</strong> A new image attached to a message, or
+              posted to a community&apos;s Baú, is checked by an automated
+              image-safety service before anyone else can see it. If it fails
+              the check it is dropped.
+            </li>
+            <li>
+              <strong>What is not checked by a program.</strong> Video, audio
+              and PDF files, profile pictures and banners, and server icons are
+              not scanned automatically today; reports are how those are dealt
+              with. Voice calls are not listened to. A name that comes from your
+              sign-in account when you first register is not read by the text
+              filter.
+            </li>
+          </ul>
+          <p>
+            Automatic filters are a first line, not a moderator. They miss
+            things, and sometimes they catch something harmless. They do not
+            replace reporting: if something gets through, report it, and we
+            review every report within 24 hours.
           </p>
         </>
       ),

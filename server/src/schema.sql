@@ -5009,6 +5009,20 @@ CREATE TABLE IF NOT EXISTS automod_alert_cooldowns (
   PRIMARY KEY (server_id, author_id)
 );
 
+-- The built-in text filter ("baseline", packages/shared/src/automod-baseline.ts)
+-- is ON for every server by default and has no row here. A server's owner who
+-- switches it off in AutoMod settings writes one row with `disabled = TRUE`;
+-- switching it back on deletes it, so an absent row always means "follows the
+-- instance default" and no existing server is touched by this table. Its own
+-- table rather than a column on `servers`, so adding it does not take the
+-- ACCESS EXCLUSIVE lock on a table every request reads.
+CREATE TABLE IF NOT EXISTS server_text_filter_settings (
+  server_id  UUID PRIMARY KEY REFERENCES servers(id) ON DELETE CASCADE,
+  disabled   BOOLEAN NOT NULL DEFAULT TRUE,
+  updated_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- Watch party live streaming, per server, as DATA rather than configuration.
 --
 -- `LIVE_HLS_SERVER_ALLOWLIST` is a Fly environment variable, so widening it

@@ -26,6 +26,13 @@
  *   * eight messages in #geral and one in #ajuda in English and pt-BR (a
  *     welcome, a how-to-try list, replies, a message made to be reported) and a
  *     few reactions. No attachments: that would need the storage layer.
+ *   * a THIRD account, "Block Me", built the same way (a revoked character), a
+ *     member of the space who posts two mildly annoying but rule-abiding
+ *     messages in #geral. It exists to be blocked: the reviewer is told to try
+ *     Block on it, so Demo Friend keeps the friendship and the DM. It is NOT a
+ *     friend and has NO conversation with the demo account, so blocking it
+ *     removes nothing a reviewer needs (blocking Demo Friend ended the
+ *     friendship and hid the DM, and unblocking does not bring them back).
  *   * an invite code, so the operator can join and look.
  *   * an ACCEPTED friendship between the demo account and Demo Friend, and a 1:1
  *     conversation between them with five short messages spread over a few
@@ -37,8 +44,10 @@
  *     a row between two other accounts.
  *
  * IDEMPOTENT. Every step looks before it writes: the server by (name, owner),
- * the friend by its character label, each message by a nonce no client ever
- * sends, each reaction by its row. Running twice changes nothing the second
+ * each character by its label, each message by a nonce no client ever sends,
+ * each reaction by its row. A seeded message whose text no longer matches the
+ * seed is CORRECTED IN PLACE (body only, no "edited" mark), so a wording fix
+ * reaches a database that was seeded with the old text. Running twice changes nothing the second
  * time, and a run that died half way is finished by running it again. That is
  * the substitute for "one transaction": the service layer owns its own
  * transactions, cache invalidation and cluster fan-out, and bypassing it with
@@ -63,6 +72,7 @@ import {
 } from "./characters.js";
 import { restoreDmParticipants } from "./dms.js";
 import { createInvite, listInvites } from "./invites.js";
+import { clampChatNewlines } from "@pqp/shared";
 import { createMessage } from "./messages.js";
 import { toggleReaction } from "./reactions.js";
 import {
@@ -79,6 +89,9 @@ export const REVIEW_SERVER_NAME = "pqp review";
 /** The friend's stable identity in `character_accounts.label`. */
 export const REVIEW_FRIEND_LABEL = "review-demo-friend";
 export const REVIEW_FRIEND_NAME = "Demo Friend";
+/** The account the reviewer is told to block, so the friend stays intact. */
+export const REVIEW_BLOCKME_LABEL = "review-block-me";
+export const REVIEW_BLOCKME_NAME = "Block Me";
 /**
  * Stored in `messages.nonce`. A client nonce is a uuid, so this can never
  * collide with one, and it is what makes a re-run find its own messages (and
@@ -153,6 +166,8 @@ export interface ReviewSeedReport {
   serverId: string | null;
   inviteCode: string | null;
   friendUserId: string | null;
+  /** The account made to be blocked, null until it exists. */
+  blockMeUserId: string | null;
   channels: { geral: string | null; ajuda: string | null; lobby: string | null };
   messageCount: number;
   /** The 1:1 conversation with Demo Friend, null until it exists. */
@@ -182,7 +197,7 @@ export class ReviewSeedError extends Error {
 // --------------------------------------------------------------------------
 // The content
 
-type PersonKey = "owner" | "friend";
+type PersonKey = "owner" | "friend" | "blockme";
 
 interface SeedMessage {
   key: string;
@@ -244,6 +259,14 @@ export const REVIEW_MESSAGES: readonly SeedMessage[] = [
       "ou fique de fora, tudo bem também.",
   },
   {
+    key: "blockme-1",
+    channel: "geral",
+    author: "blockme",
+    body:
+      "Hello hello hello! Is anybody here? Anybody? " +
+      "Olá, olá, olá! Tem alguém aí? Alguém?",
+  },
+  {
     key: "report-me",
     channel: "geral",
     author: "friend",
@@ -254,12 +277,22 @@ export const REVIEW_MESSAGES: readonly SeedMessage[] = [
       "escolha Denunciar.",
   },
   {
+    key: "blockme-2",
+    channel: "geral",
+    author: "blockme",
+    body:
+      "ME AGAIN. I REALLY LIKE POSTING IN CAPITAL LETTERS. " +
+      "EU DE NOVO. ADORO ESCREVER EM LETRAS MAIÚSCULAS.",
+  },
+  {
     key: "block",
     channel: "geral",
     author: "owner",
     body:
-      "To block someone, open their profile and choose Block. " +
-      "Para bloquear alguém, abra o perfil da pessoa e escolha Bloquear.",
+      "To try Block, open the message menu on one of the Block Me messages above and choose Block. " +
+      "Block Me is here just for this; Demo Friend is your friend, no need to block them.\n" +
+      "Para testar o bloqueio, abra o menu de uma mensagem do Block Me, acima, e escolha Bloquear. " +
+      "O Block Me existe só para isso; o Demo Friend é seu amigo, não precisa bloquear.",
   },
   {
     key: "last",
@@ -286,7 +319,8 @@ export const REVIEW_REACTIONS: readonly SeedReaction[] = [
 
 interface SeedDmMessage {
   key: string;
-  author: PersonKey;
+  /** Block Me has no conversation with the demo account. */
+  author: Exclude<PersonKey, "blockme">;
   /** Minutes before the moment the seed first writes it. */
   minutesAgo: number;
   body: string;
@@ -409,15 +443,104 @@ async function findReviewServers(
   return result.rows;
 }
 
-async function findFriend(): Promise<(SeedUser & { revoked_at: Date | null }) | null> {
-  const result = await getPool().query<SeedUser & { revoked_at: Date | null }>(
+type SeedCharacter = SeedUser & { revoked_at: Date | null };
+
+async function findCharacter(label: string): Promise<SeedCharacter | null> {
+  const result = await getPool().query<SeedCharacter>(
     `SELECT ${USER_COLUMNS.split(", ").map((c) => `u.${c}`).join(", ")}, ca.revoked_at
        FROM character_accounts ca
        JOIN users u ON u.id = ca.user_id
       WHERE ca.label = $1`,
-    [REVIEW_FRIEND_LABEL],
+    [label],
   );
   return result.rows[0] ?? null;
+}
+
+const findFriend = () => findCharacter(REVIEW_FRIEND_LABEL);
+const findBlockMe = () => findCharacter(REVIEW_BLOCKME_LABEL);
+
+/**
+ * One seeded character: look it up by label, finish a run that died between
+ * minting and revoking, or mint it and revoke the token at once. The token is
+ * dropped on the floor on purpose: even a hash collision with a future token
+ * could not authenticate a revoked row.
+ */
+async function ensureCharacter(
+  label: string,
+  displayName: string,
+  rec: Recorder,
+  apply: boolean,
+): Promise<SeedCharacter | null> {
+  let character = await findCharacter(label);
+  if (character && character.revoked_at === null) {
+    // A run that died between minting the account and revoking its token left
+    // a live credential nobody holds. Finish the job rather than call it "exists".
+    if (apply) {
+      const revoked = await revokeCharacterAccount(label);
+      if (!revoked?.revoked_at) {
+        throw new ReviewSeedError(`Could not revoke ${displayName}'s token. Stop and look.`);
+      }
+      character = (await findCharacter(label))!;
+      rec.note("change", `account "${displayName}": token was not revoked, revoked now (id ${character.id})`);
+    } else {
+      rec.note("change", `account "${displayName}": token is not revoked, would revoke it (id ${character.id})`);
+    }
+  } else if (character) {
+    rec.note("exists", `account "${displayName}" (flagged demo/character, id ${character.id})`);
+  } else if (apply) {
+    const minted = await createCharacterAccount({
+      label,
+      displayName,
+      createdBy: "seed-review-community",
+    });
+    const revoked = await revokeCharacterAccount(label);
+    if (!revoked?.revoked_at) {
+      throw new ReviewSeedError(`Could not revoke ${displayName}'s token. Stop and look.`);
+    }
+    character = (await findCharacter(label))!;
+    rec.note(
+      "create",
+      `account "${displayName}" (flagged demo/character, token revoked, id ${minted.user.id})`,
+    );
+  } else {
+    rec.note(
+      "create",
+      `account "${displayName}" (flagged demo/character, nobody can sign in as it)`,
+    );
+  }
+  return character;
+}
+
+/** A character joins the review server as a plain member. */
+async function ensureMember(
+  serverId: string | null,
+  character: SeedCharacter | null,
+  displayName: string,
+  rec: Recorder,
+  apply: boolean,
+): Promise<void> {
+  if (character && serverId) {
+    const member = await getPool().query(
+      `SELECT 1 FROM server_members WHERE server_id = $1 AND user_id = $2`,
+      [serverId, character.id],
+    );
+    if (member.rowCount) {
+      rec.note("exists", `${displayName} is a member`);
+    } else if (apply) {
+      await getPool().query(
+        `INSERT INTO server_members (server_id, user_id, role)
+         VALUES ($1, $2, 'member')
+         ON CONFLICT DO NOTHING`,
+        [serverId, character.id],
+      );
+      invalidateServerAudience(serverId, { joinedUserId: character.id });
+      rec.note("create", `${displayName} joined as a member`);
+    } else {
+      rec.note("create", `${displayName} would join as a member`);
+    }
+  } else {
+    rec.note("create", `${displayName} joins as a member`);
+  }
 }
 
 /**
@@ -533,6 +656,7 @@ function emptyReport(
     inviteCode: null,
     friendUserId: null,
     channels: { geral: null, ajuda: null, lobby: null },
+    blockMeUserId: null,
     messageCount: 0,
     dmChannelId: null,
     chatState: null,
@@ -642,75 +766,18 @@ async function seed(
   }
   report.channels = { geral: geralId, ajuda: ajudaId, lobby: lobbyId };
 
-  // ---- the friend
-  let friend = await findFriend();
-  if (friend && friend.revoked_at === null) {
-    // A run that died between minting the account and revoking its token left
-    // a live credential nobody holds. Finish the job rather than call it "exists".
-    if (apply) {
-      const revoked = await revokeCharacterAccount(REVIEW_FRIEND_LABEL);
-      if (!revoked?.revoked_at) {
-        throw new ReviewSeedError("Could not revoke the friend's token. Stop and look.");
-      }
-      friend = (await findFriend())!;
-      rec.note("change", `account "${REVIEW_FRIEND_NAME}": token was not revoked, revoked now (id ${friend.id})`);
-    } else {
-      rec.note("change", `account "${REVIEW_FRIEND_NAME}": token is not revoked, would revoke it (id ${friend.id})`);
-    }
-  } else if (friend) {
-    rec.note("exists", `account "${REVIEW_FRIEND_NAME}" (flagged demo/character, id ${friend.id})`);
-  } else if (apply) {
-    const minted = await createCharacterAccount({
-      label: REVIEW_FRIEND_LABEL,
-      displayName: REVIEW_FRIEND_NAME,
-      createdBy: "seed-review-community",
-    });
-    // The token in `minted.token` is dropped on the floor on purpose. Revoking
-    // as well means that even a hash collision with a future token could not
-    // authenticate this row.
-    const revoked = await revokeCharacterAccount(REVIEW_FRIEND_LABEL);
-    if (!revoked?.revoked_at) {
-      throw new ReviewSeedError("Could not revoke the friend's token. Stop and look.");
-    }
-    friend = (await findFriend())!;
-    rec.note(
-      "create",
-      `account "${REVIEW_FRIEND_NAME}" (flagged demo/character, token revoked, id ${minted.user.id})`,
-    );
-  } else {
-    rec.note(
-      "create",
-      `account "${REVIEW_FRIEND_NAME}" (flagged demo/character, nobody can sign in as it)`,
-    );
-  }
+  // ---- the friend, and the one made to be blocked
+  const friend = await ensureCharacter(REVIEW_FRIEND_LABEL, REVIEW_FRIEND_NAME, rec, apply);
   report.friendUserId = friend?.id ?? null;
+  const blockMe = await ensureCharacter(REVIEW_BLOCKME_LABEL, REVIEW_BLOCKME_NAME, rec, apply);
+  report.blockMeUserId = blockMe?.id ?? null;
 
   // ---- membership
-  if (friend && serverId) {
-    const member = await getPool().query(
-      `SELECT 1 FROM server_members WHERE server_id = $1 AND user_id = $2`,
-      [serverId, friend.id],
-    );
-    if (member.rowCount) {
-      rec.note("exists", `${REVIEW_FRIEND_NAME} is a member`);
-    } else if (apply) {
-      await getPool().query(
-        `INSERT INTO server_members (server_id, user_id, role)
-         VALUES ($1, $2, 'member')
-         ON CONFLICT DO NOTHING`,
-        [serverId, friend.id],
-      );
-      invalidateServerAudience(serverId, { joinedUserId: friend.id });
-      rec.note("create", `${REVIEW_FRIEND_NAME} joined as a member`);
-    } else {
-      rec.note("create", `${REVIEW_FRIEND_NAME} would join as a member`);
-    }
-  } else {
-    rec.note("create", `${REVIEW_FRIEND_NAME} joins as a member`);
-  }
+  await ensureMember(serverId, friend, REVIEW_FRIEND_NAME, rec, apply);
+  await ensureMember(serverId, blockMe, REVIEW_BLOCKME_NAME, rec, apply);
 
   // ---- messages
-  const authors: Record<PersonKey, SeedUser | null> = { owner: demo, friend };
+  const authors: Record<PersonKey, SeedUser | null> = { owner: demo, friend, blockme: blockMe };
   const channelOf: Record<SeedMessage["channel"], string | null> = {
     geral: geralId,
     ajuda: ajudaId,
@@ -718,14 +785,15 @@ async function seed(
   const messageIds = new Map<string, string>();
   let made = 0;
   let had = 0;
+  let corrected = 0;
   for (const message of REVIEW_MESSAGES) {
     const channelId = channelOf[message.channel];
     const author = authors[message.author];
     const nonce = `${REVIEW_NONCE_PREFIX}${message.key}`;
     const existing =
       channelId && author
-        ? await getPool().query<{ id: string }>(
-            `SELECT id FROM messages
+        ? await getPool().query<{ id: string; body: string }>(
+            `SELECT id, body FROM messages
               WHERE channel_id = $1 AND author_id = $2 AND nonce = $3`,
             [channelId, author.id, nonce],
           )
@@ -734,6 +802,19 @@ async function seed(
     if (existingId) {
       messageIds.set(message.key, existingId);
       had += 1;
+      // A database seeded with older wording gets the current one. Plain SQL,
+      // not `updateMessageBody`: that stamps `edited_at`, and a correction made
+      // by the seed is not an edit anybody should see.
+      const wanted = clampChatNewlines(message.body);
+      if (existing!.rows[0]!.body !== wanted) {
+        corrected += 1;
+        if (apply) {
+          await getPool().query(`UPDATE messages SET body = $2 WHERE id = $1`, [
+            existingId,
+            wanted,
+          ]);
+        }
+      }
       continue;
     }
     made += 1;
@@ -762,6 +843,12 @@ async function seed(
       ? `${made} message(s) (${had} already there), English and pt-BR, in #geral and #ajuda`
       : `all ${had} messages`,
   );
+  if (corrected > 0) {
+    rec.note(
+      "change",
+      `${corrected} message(s) ${apply ? "had" : "would have"} their text updated to the current wording`,
+    );
+  }
 
   // ---- reactions
   let reactionsMade = 0;
@@ -1131,7 +1218,7 @@ async function seedConversation(
     }
   }
 
-  const authors: Record<PersonKey, SeedUser> = { owner: demo, friend };
+  const authors: Record<SeedDmMessage["author"], SeedUser> = { owner: demo, friend };
   let made = 0;
   let had = 0;
   for (const message of REVIEW_DM_MESSAGES) {
@@ -1322,7 +1409,8 @@ async function cleanup(
   const report = emptyReport(demo, apply, "cleanup", rec);
   const found = await findReviewServers(demo.id);
   const friend = await findFriend();
-  if (found.length === 0 && !friend) {
+  const blockMe = await findBlockMe();
+  if (found.length === 0 && !friend && !blockMe) {
     rec.note("exists", "nothing to clean up");
     return report;
   }
@@ -1342,7 +1430,10 @@ async function cleanup(
       [server.id],
     );
     const strangers = members.rows.filter(
-      (row) => row.user_id !== demo.id && row.user_id !== friend?.id,
+      (row) =>
+        row.user_id !== demo.id &&
+        row.user_id !== friend?.id &&
+        row.user_id !== blockMe?.id,
     );
     const messages = await getPool().query<{ n: number }>(
       `SELECT count(*)::int AS n FROM messages m
@@ -1353,7 +1444,7 @@ async function cleanup(
       refused = true;
       rec.note(
         "blocked",
-        `server ${server.id} has ${strangers.length} member(s) besides the two seeded accounts. ` +
+        `server ${server.id} has ${strangers.length} member(s) besides the seeded accounts. ` +
           "Nothing was changed. Re-run with --force to delete it anyway.",
       );
       continue;
@@ -1426,6 +1517,14 @@ async function cleanup(
       await getPool().query(`DELETE FROM users WHERE id = $1 AND is_character`, [friend.id]);
     }
     rec.note("leave", `${apply ? "deleted" : "would delete"} account "${REVIEW_FRIEND_NAME}" (${friend.id})`);
+  }
+  if (blockMe) {
+    if (apply) {
+      // Cascades character_accounts, its membership, its messages and any
+      // block or report that names it.
+      await getPool().query(`DELETE FROM users WHERE id = $1 AND is_character`, [blockMe.id]);
+    }
+    rec.note("leave", `${apply ? "deleted" : "would delete"} account "${REVIEW_BLOCKME_NAME}" (${blockMe.id})`);
   }
   return report;
 }
