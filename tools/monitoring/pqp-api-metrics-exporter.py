@@ -828,6 +828,31 @@ def _vn_label(value: object) -> str:
     return str(value).replace("\\", "").replace('"', "").replace("\n", " ")
 
 
+def render_report_queue(lines: list[str], reports: dict) -> None:
+    """`moderation.reports` (services/report-queue.ts): how many reports are
+    open and how long the oldest has waited. Every queue is counted (a server's
+    own, the instance's, automated scanner hits), because the promise is about
+    the report, not about whose queue it sits in. 0 age means nothing is open."""
+    gauge(
+        lines,
+        "pqp_api_reports_oldest_open_age_seconds",
+        "Age in seconds of the oldest report still open, in any queue (moderation.reports.oldestOpenAgeSeconds). "
+        "0 when none is open. The 24 hour rule alerts on this.",
+        _vn_num(reports.get("oldestOpenAgeSeconds")),
+    )
+    labeled_gauge(
+        lines,
+        "pqp_api_reports_open",
+        "Reports still open (moderation.reports), by how long they have waited: "
+        "age=all is every open report, over_12h and over_24h are the ones past those lines.",
+        [
+            ({"age": "all"}, _vn_num(reports.get("open"))),
+            ({"age": "over_12h"}, _vn_num(reports.get("openOver12h"))),
+            ({"age": "over_24h"}, _vn_num(reports.get("openOver24h"))),
+        ],
+    )
+
+
 def render_voice_notes(lines: list[str], voice_notes: dict) -> None:
     """The `voiceNotes` block (mensagens de voz). All gauges are DB-derived
     rolling windows, except the refusals counter, which is summed across
@@ -1754,6 +1779,15 @@ def render(
     voice_notes = payload.get("voiceNotes")
     if isinstance(voice_notes, dict) and voice_notes:
         render_voice_notes(lines, voice_notes)
+
+    # The report queue, for the 24 hour rule (docs/CONTENT_SAFETY.md "Reports:
+    # the 24 hour rule"). DB-derived and shared, so it is taken from one replica.
+    # Absent on an API older than `moderation.reports.oldestOpenAgeSeconds`, and
+    # then so are the series: an old API is silence, not "nothing is waiting".
+    moderation = payload.get("moderation")
+    reports = moderation.get("reports") if isinstance(moderation, dict) else None
+    if isinstance(reports, dict) and _is_number(reports.get("oldestOpenAgeSeconds")):
+        render_report_queue(lines, reports)
 
     # The 18+ gate's answers. Absent on an API older than the block.
     age = payload.get("age")

@@ -1,0 +1,151 @@
+{
+  "_comment": [
+    "Grafana Alerting file-provisioning layout (apiVersion 1): two always-on",
+    "rules for the 24 hour report promise (Apple Guideline 1.2, and the Terms),",
+    "reading pqp_api_reports_oldest_open_age_seconds from the textfile exporter in",
+    "this directory (pqp-api-metrics-exporter.py, from moderation.reports in",
+    "GET /api/admin/metrics). Meant to stay imported, like",
+    "grafana-alert-rules-growth.json.",
+    "",
+    "Two lines on purpose: a warning at 12 hours and a critical at 20 hours, so",
+    "the person who has to act hears about it with half the window left, and",
+    "again while there are still four hours to act, not after the promise is",
+    "already broken.",
+    "",
+    "The series counts EVERY open report in every queue (a server's own, the",
+    "instance's, automated scanner hits). It is 0 when nothing is open. The 3m",
+    "max_over_time is because the series lands about once a minute.",
+    "",
+    "noDataState is OK: an API older than the field, or an exporter that has not",
+    "been redeployed, is silence, not an incident. Exporter death is the",
+    "readiness rule's job (noDataState Alerting on pqp_api_ready_ok).",
+    "",
+    "Datasource is written as grafanacloud-prom (this stack's built-in",
+    "Prometheus). tools/monitoring/README.md, section 'Report queue age', shows",
+    "how to flatten this file into the per-rule bodies",
+    "POST /api/v1/provisioning/alert-rules wants (folderUID ffxfigbmjr2f4e,",
+    "ruleGroup, X-Disable-Provenance: true). This file is NOT imported anywhere",
+    "until somebody runs those steps."
+  ],
+  "apiVersion": 1,
+  "groups": [
+    {
+      "orgId": 1,
+      "name": "pqp-moderation",
+      "folder": "pqp",
+      "interval": "1m",
+      "rules": [
+        {
+          "uid": "pqp-moderation-report-open-12h",
+          "title": "Reports: one open for more than 12 hours",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "datasourceUid": "grafanacloud-prom",
+              "relativeTimeRange": {
+                "from": 900,
+                "to": 0
+              },
+              "model": {
+                "refId": "A",
+                "expr": "max(max_over_time(pqp_api_reports_oldest_open_age_seconds[3m]))",
+                "instant": true,
+                "range": false
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        43200
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "OK",
+          "for": "5m",
+          "labels": {
+            "severity": "warning",
+            "area": "moderation"
+          },
+          "annotations": {
+            "summary": "A report has been open for more than 12 hours.",
+            "description": "The oldest open report, in any queue, is older than 43200s for 5m. The Terms promise action within 24 hours. Sign in to the app as an instance moderator, open Settings > Moderation (GET /api/reports/all), find the oldest open one and close it: remove the content, terminate the account if it earns it, then resolve with a note. A report in a server owner's own queue counts too, and an instance moderator may close it.",
+            "runbook": "docs/CONTENT_SAFETY.md#reports-the-24-hour-rule"
+          },
+          "notification_settings": {
+            "receiver": "rafael-email"
+          }
+        },
+        {
+          "uid": "pqp-moderation-report-open-20h",
+          "title": "Reports: one open for more than 20 hours",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "datasourceUid": "grafanacloud-prom",
+              "relativeTimeRange": {
+                "from": 900,
+                "to": 0
+              },
+              "model": {
+                "refId": "A",
+                "expr": "max(max_over_time(pqp_api_reports_oldest_open_age_seconds[3m]))",
+                "instant": true,
+                "range": false
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        72000
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "OK",
+          "for": "5m",
+          "labels": {
+            "severity": "critical",
+            "area": "moderation"
+          },
+          "annotations": {
+            "summary": "A report has been open for more than 20 hours: four hours left on the 24 hour promise.",
+            "description": "The oldest open report, in any queue, is older than 72000s for 5m. Act now: Settings > Moderation as an instance moderator, remove the content and terminate the account (Contexto panel), then resolve. If it is a minor in sexual content, follow the illegal-content runbook in docs/CONTENT_SAFETY.md first.",
+            "runbook": "docs/CONTENT_SAFETY.md#reports-the-24-hour-rule"
+          },
+          "notification_settings": {
+            "receiver": "rafael-email"
+          }
+        }
+      ]
+    }
+  ]
+}

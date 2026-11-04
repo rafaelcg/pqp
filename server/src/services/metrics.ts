@@ -39,6 +39,7 @@ import {
 type RoomNameRow = CommunityColumns & { id: string; channel: string; server: string | null };
 import { timingSafeEqual } from "node:crypto";
 import { getPool } from "../db.js";
+import { reportQueueStats, type ReportQueueStats } from "./report-queue.js";
 import { INSTANCE_ID } from "../lib/bus.js";
 import {
   clusterTopologyTracked,
@@ -1213,7 +1214,11 @@ export interface AdminMetrics {
 
   /** Backs the "moderação" tab. */
   moderation: {
-    reports: { open: number; actioned: number; dismissed: number; last24h: number };
+    /**
+     * `oldestOpenAgeSeconds` is the 24 hour promise as a number (0 when
+     * nothing is open); see `services/report-queue.ts`.
+     */
+    reports: ReportQueueStats;
     feedback: { open: number; confirmed: number; closed: number; last24h: number };
     bans: number;
     /** Timeouts that have not expired yet. */
@@ -1635,15 +1640,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
         ORDER BY s.member_count DESC, s.name
         LIMIT 20`,
     ),
-    () => pool.query<{ open: string; actioned: string; dismissed: string; last24h: string }>(
-      `SELECT COUNT(*) FILTER (WHERE status = 'open')::text AS open,
-              COUNT(*) FILTER (WHERE status = 'actioned')::text AS actioned,
-              COUNT(*) FILTER (WHERE status = 'dismissed')::text AS dismissed,
-              COUNT(*) FILTER (
-                WHERE created_at >= now() - interval '24 hours'
-              )::text AS last24h
-         FROM reports`,
-    ),
+    () => reportQueueStats(),
     () => pool.query<{ open: string; confirmed: string; closed: string; last24h: string }>(
       `SELECT COUNT(*) FILTER (WHERE status = 'open')::text AS open,
               COUNT(*) FILTER (WHERE status = 'confirmed')::text AS confirmed,
@@ -2010,12 +2007,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     },
 
     moderation: {
-      reports: {
-        open: Number(reportCounts.rows[0]?.open ?? 0),
-        actioned: Number(reportCounts.rows[0]?.actioned ?? 0),
-        dismissed: Number(reportCounts.rows[0]?.dismissed ?? 0),
-        last24h: Number(reportCounts.rows[0]?.last24h ?? 0),
-      },
+      reports: reportCounts,
       feedback: {
         open: Number(feedbackCounts.rows[0]?.open ?? 0),
         confirmed: Number(feedbackCounts.rows[0]?.confirmed ?? 0),

@@ -959,6 +959,119 @@ add no new regime.
 
 ---
 
+## Reports: the 24 hour rule
+
+Apple Guideline 1.2 asks that a developer "act on objectionable content reports
+within 24 hours by removing the content and ejecting the user who provided the
+offending content", and our Terms say the same. This section is how that is
+kept, and what tells us when it is not. Nothing here is a new moderation system;
+it is the existing report queue plus a clock on it.
+
+### Where a report lands
+
+A report is one row in `reports` (`createReport`, `server/src/services/reports.ts`),
+filed from `POST /api/reports` by any client, the iOS `ReportSheet` included
+(messages, people, stories, whole communities; the web also reports a Baú post
+or comment). The client never names the destination; it is decided once, from
+the reported thing:
+
+| What was reported | Queue it lands in | Who can read and close it |
+|---|---|---|
+| A message or a person, in a server | That server's own queue | The server's owner and staff with KICK, BAN or MODERATE, **and** an instance moderator |
+| A message or a person in a DM or group | The instance queue | Instance moderators only |
+| A story seen through a server | That server's queue | Same as the first row |
+| A friends (Amigos) story | The instance queue | Instance moderators only |
+| A whole community, or a Baú in a community | The instance queue, never the owner's | Instance moderators only |
+| Anything under the reason `minor_sexual` | The instance queue, always | Instance moderators only |
+| An automated scanner hit (`reporter_id` NULL) | The server's queue if it fired in a server, else the instance's | As above |
+
+**An instance moderator** is an account whose Clerk id is in
+`INSTANCE_MODERATOR_CLERK_IDS` (operator configuration, not an in-app role).
+They see every report in one list, `GET /api/reports/all`, which the app shows
+as **Settings > Moderation** (only for them). That list is what closes the gap a
+server queue has: a report sitting in a server owner's queue that the owner
+never reads is still readable, and closable, by the instance moderator.
+
+**Nobody is paged when a report is filed.** The row is written and that is all.
+The dashboard's moderation card shows the open count, and the in-app list is
+where a moderator looks. Closing that gap, per report, is not built; the clock
+below is what covers it.
+
+### The clock
+
+`GET /api/admin/metrics` carries, under `moderation.reports`:
+
+| Field | Meaning |
+|---|---|
+| `open` | Reports still open, in every queue |
+| `oldestOpenAgeSeconds` | Age of the oldest open one. **0 when none is open.** This is the 24 hour promise as a number |
+| `openOver12h`, `openOver24h` | How many open reports are past those lines |
+
+(`server/src/services/report-queue.ts`.) The exporter in `tools/monitoring/`
+turns them into `pqp_api_reports_oldest_open_age_seconds` and
+`pqp_api_reports_open{age}`, and `tools/monitoring/grafana-alert-rules-moderation.json`
+defines two rules on them, both to the `rafael-email` contact point:
+
+* **Warning at 12 hours** open: half the window is gone.
+* **Critical at 20 hours** open: four hours left.
+
+A rule fires after 5 minutes over its line, so a report is mentioned between
+12h and 12h06 and again between 20h and 20h06 after it was filed, give or take
+the exporter's minute of lag. The rules file is in the repo, not in Grafana,
+until somebody imports it (`tools/monitoring/README.md`,
+"Report queue age"). No data (an API or exporter older than the field) is
+treated as silence, not as an incident; the readiness rule watches the exporter
+itself.
+
+Two honest limits. The alert is **email only**, so it reaches a person only as
+fast as that person reads email; if the 24 hour promise is to hold on a night or
+a weekend, route this contact point to something that rings. And the figure is
+the age of the oldest report, so one stale report keeps it high however many
+newer ones were answered; that is the intent.
+
+### The steps, for the person holding the clock
+
+1. Sign in to the app as an instance moderator. **Settings > Moderation** opens
+   the list of every report. (The operator dashboard's "abrir fila completa"
+   link opens the same list at `pqp.gg/app?modAllReports=1`.) Oldest first is
+   the order the alert is about; the list is newest first, so scroll or filter
+   by status `open`.
+2. Open the card's **Contexto** panel to see the account's age, history,
+   sanctions and the messages around the reported one.
+3. **A minor in sexual content, or anything that looks like it:** stop and
+   follow the illegal-content runbook above first. That takes precedence over
+   everything here.
+4. **Remove the content.** On a message report, **Remove message**
+   (`POST /api/reports/:id/remove-message`); on a story report, **Remove story**
+   (`POST /api/reports/:id/remove-story`). Both work for an instance moderator
+   whatever server it is in, and both log `[moderation]` lines. A community's
+   listing is pulled with `is_community_suspended` (see "Runbook: a reported
+   community"). There is no one-click remove for a Baú post or comment: its own
+   staff remove it, or the community is suspended.
+5. **Eject the person.** In the Contexto panel, as far as the case warrants:
+   **Timeout** (a server-rank sanction, needs a real role in that server),
+   **Ban** from that server, or **Terminate account**
+   (`DELETE /api/admin/users/:userId`). Termination deletes the account and
+   everything it wrote and closes its live sockets, and it **refuses with a 409
+   when the account owns a server other people are in**: transfer or delete the
+   server first. Termination is deliberately not on `ADMIN_METRICS_TOKEN`; it
+   needs a signed-in human.
+6. **Resolve the report** with a note saying what was done (`actioned`) or why
+   nothing was (`dismissed`). The oldest-open figure drops the moment the last
+   old report is closed, and the alert resolves on its own.
+
+### What this does not cover
+
+* A report about something no client has a Report button for. Profile
+  bios and usernames are reported through the person (a user report), not the
+  text; there is no text filter on them either, see below.
+* The reporter is not told the outcome today beyond the status shown in their
+  own list (`GET /api/reports/mine`).
+* "Within 24 hours" is kept by a person reading an alert. There is one
+  operator contact point and no second reader.
+
+---
+
 ## Residual risk, stated plainly
 
 Everything below is true with the recommended configuration (`openai`) turned
