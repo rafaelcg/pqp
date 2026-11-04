@@ -46,7 +46,7 @@
     "hls.js": "1.7.3",
     "i18next": "^26.4.0",
     "livekit-client": "^2.21.0",
-    "lucide-react": "^1.65.0",
+    "lucide-react": "^1.66.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-markdown": "^10.1.0",
