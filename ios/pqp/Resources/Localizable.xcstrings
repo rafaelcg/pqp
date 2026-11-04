@@ -7687,6 +7687,26 @@
         }
       }
     },
+    "Nothing to show" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nada pra mostrar"
+          }
+        }
+      }
+    },
+    "Every post here is by somebody you blocked." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Todos os posts daqui são de gente que tu bloqueou."
+          }
+        }
+      }
+    },
     "Report" : {
       "localizations" : {
         "pt-BR" : {

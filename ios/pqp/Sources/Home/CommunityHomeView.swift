@@ -60,6 +60,13 @@ struct CommunityHomeView: View {
                     actionTitle: "Try again",
                     action: { Task { await load() } }
                 )
+            } else if visiblePosts.isEmpty && !posts.isEmpty {
+                // Every post is by somebody the reader blocked: not "nothing yet".
+                EmptyState(
+                    icon: "hand.raised",
+                    title: "Nothing to show",
+                    message: "Every post here is by somebody you blocked."
+                )
             } else if visiblePosts.isEmpty {
                 EmptyState(
                     icon: "archivebox",
