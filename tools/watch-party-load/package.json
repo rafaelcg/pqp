@@ -11,7 +11,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@livekit/rtc-ffi-bindings": "0.13.3",
+    "@livekit/rtc-ffi-bindings": "0.12.73",
     "@livekit/rtc-node": "0.13.34",
     "pg": "^8.23.1",
     "tsx": "^4.23.15",
