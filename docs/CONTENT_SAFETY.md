@@ -358,8 +358,14 @@ report, and it is not filed as an accusation by the blocker. Every NEW block
   queue. Closing the ticket re-arms it.
 
 One account can file at most `BLOCK_REPORTS_PER_DAY` (20) tickets a day this
-way; past that the block is still logged and counted. A flood of blocks is
-therefore a counter, not a denial of moderation.
+way, counted in a durable per-account daily counter (`user_block_days`) so a
+block/unblock cycle cannot reset it; past that the block is still logged and
+counted. A flood of blocks is therefore a counter, not a denial of moderation.
+
+These tickets are informational, not reports of objectionable content, so they
+are left out of the report-age figures that drive the 12 h and 20 h alerts
+(`oldestOpenAgeSeconds`, `openOver12h`, `openOver24h` in
+`services/report-queue.ts`). They still count in `open`.
 
 ### Reporting a Baú post or comment
 

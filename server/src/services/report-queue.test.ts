@@ -128,6 +128,49 @@ describe("reportQueueStats against Postgres", () => {
     expect(stats.openOver24h).toBe(1);
   });
 
+  it("leaves the informational Bloqueio tickets out of the AGE figures", async () => {
+    const { noteBlockForOperators } = await import("./block-notice.js");
+    const { blockUser } = await import("./blocks.js");
+    // A real block ticket, the way a user's block files it, then backdated.
+    await blockUser(reporter, reported[0]!);
+    await noteBlockForOperators({ blockerId: reporter, blockedUserId: reported[0]! });
+    await getPool().query(
+      `UPDATE reports SET created_at = NOW() - interval '30 hours'
+        WHERE channel_label = 'Bloqueio'`,
+    );
+    let stats = await reportQueueStats();
+    // It is in the queue (the dashboard shows it) but it is not a promise.
+    expect(stats.open).toBe(1);
+    expect(stats.oldestOpenAgeSeconds).toBe(0);
+    expect(stats.openOver12h).toBe(0);
+    expect(stats.openOver24h).toBe(0);
+
+    // A real report beside it is the only thing the age figures see.
+    await file(reported[1]!, 14);
+    stats = await reportQueueStats();
+    expect(stats.open).toBe(2);
+    expect(stats.oldestOpenAgeSeconds).toBeGreaterThanOrEqual(14 * 3600);
+    expect(stats.oldestOpenAgeSeconds).toBeLessThan(14 * 3600 + 60);
+    expect(stats.openOver12h).toBe(1);
+    expect(stats.openOver24h).toBe(0);
+  });
+
+  it("still counts a scanner report, and a human report that merely shares the label", async () => {
+    // Same no-reporter shape as the block ticket, different place.
+    await getPool().query(
+      `INSERT INTO reports
+         (reporter_id, subject_type, context_kind, reported_user_id, reason,
+          channel_label, created_at)
+       VALUES (NULL, 'user', 'none', $1, 'illegal_content', 'Baú · Mesa',
+               NOW() - interval '26 hours'),
+              ($2, 'user', 'none', $1, 'harassment', 'Bloqueio',
+               NOW() - interval '27 hours')`,
+      [reported[0], reporter],
+    );
+    const stats = await reportQueueStats();
+    expect(stats.openOver24h).toBe(2);
+  });
+
   it("counts a report in a server's own queue, not only the instance's", async () => {
     const pool = getPool();
     const owner = reported[0]!;
