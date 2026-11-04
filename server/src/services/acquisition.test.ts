@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
  * First-touch acquisition, pinned against a real database.
@@ -20,7 +20,7 @@ if (DATABASE_URL) {
 
 const { getPool, initDb, closePool } = await import("../db.js");
 const { upsertUser } = await import("./users.js");
-const { acquisitionReport, recordAcquisition, retentionBySource } = await import(
+const { acquisitionQuery, acquisitionReport, recordAcquisition, retentionBySource } = await import(
   "./acquisition.js"
 );
 
@@ -218,6 +218,115 @@ describeDb("recordAcquisition", () => {
       { landing: "/tela", signups: 2 },
       { landing: "/", signups: 1 },
     ]);
+  });
+
+  // ---------------------------------------------------------- user.acquired
+
+  describe("the user.acquired log line", () => {
+    let spy: ReturnType<typeof vi.spyOn>;
+    beforeEach(() => {
+      spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    });
+    afterEach(() => {
+      spy.mockRestore();
+    });
+
+    function acquiredLines(): string[] {
+      return spy.mock.calls
+        .map((call: unknown[]) => String(call[0]))
+        .filter((line: string) => line.startsWith("[pqp] user.acquired"));
+    }
+
+    it("logs once, on the first accepted touch, with the labels and the path only", async () => {
+      const user = await freshUser("clerk-log");
+      await recordAcquisition(user.id, {
+        source: "twitch",
+        medium: "social",
+        campaign: "moon party",
+        ref: "reddit",
+        gclid: "SECRET-CLICK-ID",
+        landing: "/c/moonkase?utm_source=x&email=a@b.c#frag",
+        signupSeconds: 40,
+      });
+      const lines = acquiredLines();
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toBe(
+        `[pqp] user.acquired userId=${user.id} source=twitch medium=social campaign=moon_party ref=reddit landing=/c/moonkase gclid=true`,
+      );
+      expect(lines[0]).not.toContain("SECRET-CLICK-ID");
+      expect(lines[0]).not.toContain("?");
+      expect(lines[0]).not.toContain("#");
+    });
+
+    it("says gclid=false and leaves out what was not sent, and cannot split a line", async () => {
+      const user = await freshUser("clerk-log-2");
+      await recordAcquisition(user.id, {
+        source: "a b c=d",
+        landing: "https://pqp.gg/tela?x=1",
+      });
+      const lines = acquiredLines();
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toBe(
+        `[pqp] user.acquired userId=${user.id} source=a_b_c_d landing=/tela gclid=false`,
+      );
+    });
+
+    it("bounds every value", async () => {
+      const user = await freshUser("clerk-log-3");
+      await recordAcquisition(user.id, { source: "x".repeat(100), landing: `/${"p".repeat(199)}` });
+      const line = acquiredLines()[0]!;
+      expect(line).toContain(`source=${"x".repeat(100)} `);
+      expect(line).toContain(`landing=/${"p".repeat(99)} `);
+    });
+
+    it("logs nothing for a repeat, an old account, or an empty payload", async () => {
+      const user = await freshUser("clerk-log-4");
+      expect(await recordAcquisition(user.id, { source: "google" })).toBe(true);
+      expect(acquiredLines()).toHaveLength(1);
+      expect(await recordAcquisition(user.id, { source: "meta" })).toBe(false);
+      expect(await recordAcquisition(user.id, { signupSeconds: 40 })).toBe(false);
+
+      const old = await freshUser("clerk-log-old");
+      await getPool().query(
+        `UPDATE users SET created_at = now() - interval '2 days' WHERE id = $1`,
+        [old.id],
+      );
+      expect(await recordAcquisition(old.id, { source: "google" })).toBe(false);
+
+      const blank = await freshUser("clerk-log-blank");
+      expect(await recordAcquisition(blank.id, { source: "  ", ref: "" })).toBe(false);
+
+      expect(acquiredLines()).toHaveLength(1);
+    });
+  });
+
+  // ---------------------------------------------------------- hours window
+
+  describe("the hours window", () => {
+    it("leaves the default output alone and narrows only when asked", async () => {
+      const recent = await freshUser("clerk-w-recent");
+      const older = await freshUser("clerk-w-older");
+      await recordAcquisition(recent.id, { source: "twitch" });
+      await recordAcquisition(older.id, { source: "google" });
+      await getPool().query(
+        `UPDATE users SET created_at = now() - interval '5 hours' WHERE id = $1`,
+        [older.id],
+      );
+
+      const plain = await acquisitionReport(30);
+      expect(plain.total).toBe(2);
+      expect("hours" in plain).toBe(false);
+
+      const narrow = await acquisitionReport(30, 3);
+      expect(narrow.hours).toBe(3);
+      expect(narrow.total).toBe(1);
+      expect(narrow.rows).toEqual([
+        { source: "twitch", medium: null, campaign: null, ref: null, signups: 1 },
+      ]);
+      expect(acquisitionQuery(new URLSearchParams("hours=0"))).toEqual({ days: 30, hours: 24 });
+      expect(acquisitionQuery(new URLSearchParams("hours=9999"))).toEqual({ days: 30, hours: 168 });
+      expect(acquisitionQuery(new URLSearchParams("days=7"))).toEqual({ days: 7 });
+    });
   });
 
   // ---------------------------------------------------------- retention

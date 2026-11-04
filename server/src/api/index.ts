@@ -849,6 +849,8 @@ import {
 import { recordCallRating } from "../services/call-ratings.js";
 import { placeInDefaultCommunity } from "../services/default-community.js";
 import {
+  ADMIN_ACQUISITION_PATH,
+  acquisitionQuery,
   acquisitionReport,
   recordAcquisition,
 } from "../services/acquisition.js";
@@ -2539,11 +2541,12 @@ router.delete("/api/admin/users/:userId", async ({ user, res }, { userId }) => {
  * services/acquisition.ts. Deliberately NOT on the status page, which carries
  * no user counts of any kind.
  */
-router.get("/api/admin/acquisition", async ({ url, user }) => {
+router.get(ADMIN_ACQUISITION_PATH, async ({ url, user }) => {
   if (!isInstanceModerator(user)) {
     throw new NotFound("Not found");
   }
-  return acquisitionReport(clampLimit(url.searchParams.get("days"), 30, 90));
+  const { days, hours } = acquisitionQuery(url.searchParams);
+  return acquisitionReport(days, hours);
 });
 
 /**
@@ -2895,6 +2898,17 @@ const ADMIN_MACHINE_ROUTES: {
     method: "GET",
     path: ADMIN_USER_ACTIVITY_PATH,
     run: async (_req, query) => userActivityReport(userActivityQuery(query)),
+  },
+  // Signups by source, medium, campaign, ref and landing path. Aggregate
+  // counts only, the same body the moderator's route answers: no row names a
+  // person. `?hours=` narrows the window for a surge.
+  {
+    method: "GET",
+    path: ADMIN_ACQUISITION_PATH,
+    run: async (_req, query) => {
+      const { days, hours } = acquisitionQuery(query);
+      return acquisitionReport(days, hours);
+    },
   },
   // Which app one named person is on (platform, app version, OS and browser
   // family, last seen). Names a person, so it takes a target and is not on
