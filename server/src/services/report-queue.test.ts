@@ -6,18 +6,36 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
  * through `createReport`, which stamps NOW().
  */
 
-const DATABASE_URL = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
-const describeDb = DATABASE_URL ? describe : describe.skip;
-
-if (DATABASE_URL) {
-  process.env.DATABASE_URL = DATABASE_URL;
+/**
+ * This suite TRUNCATEs `users ... CASCADE`, so it never falls back to
+ * DATABASE_URL: it needs TEST_DATABASE_URL (a copy, per CLAUDE.md) and refuses
+ * to run unless that database's name looks disposable. Fails loudly at import,
+ * not by skipping, because a silently skipped suite and a truncated real
+ * database are both worse than a red run. The only names accepted are one
+ * containing "test", or a per-worker database the suite's own setup creates
+ * (`<name>_w<N>`, `PQP_TEST_DB_WORKERS`, which rewrites TEST_DATABASE_URL).
+ */
+const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
+if (!TEST_DATABASE_URL) {
+  throw new Error(
+    "report-queue.test.ts truncates tables: set TEST_DATABASE_URL to a disposable copy (never DATABASE_URL).",
+  );
 }
+const databaseName = new URL(TEST_DATABASE_URL).pathname.replace(/^\//, "");
+const isWorkerDatabase =
+  Boolean(process.env.PQP_TEST_DB_BASE_URL) && /_w\d+$/.test(databaseName);
+if (!/test/i.test(databaseName) && !isWorkerDatabase) {
+  throw new Error(
+    `Refusing to TRUNCATE database "${databaseName}": its name does not look disposable (expected it to contain "test").`,
+  );
+}
+process.env.DATABASE_URL = TEST_DATABASE_URL;
 
 const { getPool, initDb, closePool } = await import("../db.js");
 const { upsertUser } = await import("./users.js");
 const { reportQueueStats } = await import("./report-queue.js");
 
-describeDb("reportQueueStats against Postgres", () => {
+describe("reportQueueStats against Postgres", () => {
   let reporter: string;
   let reported: string[];
 

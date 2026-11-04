@@ -20,6 +20,10 @@
     "been redeployed, is silence, not an incident. Exporter death is the",
     "readiness rule's job (noDataState Alerting on pqp_api_ready_ok).",
     "",
+    "execErrState is Alerting, deliberately unlike the voice-notes rules: if the",
+    "query itself errors (datasource down, bad expression), the 24 hour clock is",
+    "unobservable, and an unobservable promise must page rather than pass quietly.",
+    "",
     "Datasource is written as grafanacloud-prom (this stack's built-in",
     "Prometheus). tools/monitoring/README.md, section 'Report queue age', shows",
     "how to flatten this file into the per-rule bodies",
@@ -75,7 +79,7 @@
             }
           ],
           "noDataState": "OK",
-          "execErrState": "OK",
+          "execErrState": "Alerting",
           "for": "5m",
           "labels": {
             "severity": "warning",
@@ -130,7 +134,7 @@
             }
           ],
           "noDataState": "OK",
-          "execErrState": "OK",
+          "execErrState": "Alerting",
           "for": "5m",
           "labels": {
             "severity": "critical",
