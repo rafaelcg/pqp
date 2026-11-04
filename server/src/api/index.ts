@@ -12817,21 +12817,8 @@ router.put(
   async ({ req, user }, { serverId }) => {
     await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
     const body = setBaselineSchema.parse(await readJsonBody(req));
-    const before = await getBaselineStatus(serverId!);
-    const after = await setBaselineEnabled(serverId!, body.enabled, user.id);
-    if (before.ownerDisabled !== after.ownerDisabled) {
-      await logAudit({
-        serverId: serverId!,
-        actorId: user.id,
-        action: "automod.rule_update",
-        targetType: "automod_rule",
-        changes: [
-          { key: "kind", old: null, new: "baseline" },
-          { key: "enabled", old: !before.ownerDisabled, new: !after.ownerDisabled },
-        ],
-      });
-    }
-    return after;
+    // The audit line is written in the same transaction as the switch.
+    return setBaselineEnabled(serverId!, body.enabled, user.id);
   },
 );
 

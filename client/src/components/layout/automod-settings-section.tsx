@@ -423,6 +423,7 @@ export function AutomodSettingsSection({
   const [rules, setRules] = useState<AutomodRule[] | null>(null);
   /** pqp's built-in filter: on unless the operator or this owner switched it off. */
   const [baseline, setBaseline] = useState<BaselineStatus | null>(null);
+  const [baselineBusy, setBaselineBusy] = useState(false);
   const [roles, setRoles] = useState<ServerRole[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [editing, setEditing] = useState<AutomodRuleKind | null>(null);
@@ -446,7 +447,8 @@ export function AutomodSettingsSection({
       fetchAutomodRules(serverId),
       fetchRoles(serverId),
       fetchChannels(serverId),
-      fetchAutomodBaseline(serverId),
+      // Its own failure must not take the owner's rules down with it.
+      fetchAutomodBaseline(serverId).catch(() => null),
     ])
       .then(([ruleRes, roleRes, channelRes, baselineRes]) => {
         if (cancelled) return;
@@ -497,8 +499,11 @@ export function AutomodSettingsSection({
   }, [rules, sample, baseline]);
 
   async function toggleBaseline(enabled: boolean) {
-    if (!baseline) return;
+    // One request at a time (the switch is disabled while it is out), so
+    // answers cannot arrive out of order.
+    if (!baseline || baselineBusy) return;
     const previous = baseline;
+    setBaselineBusy(true);
     setError(null);
     setBaseline({ ...baseline, ownerDisabled: !enabled, enabled: baseline.instanceEnabled && enabled });
     try {
@@ -506,6 +511,8 @@ export function AutomodSettingsSection({
     } catch (err) {
       setBaseline(previous);
       setError(messageOf(err, t("automod.baseline.saveFailed")));
+    } finally {
+      setBaselineBusy(false);
     }
   }
 
@@ -978,7 +985,7 @@ export function AutomodSettingsSection({
             <Switch
               checked={baseline.enabled}
               onCheckedChange={(checked) => void toggleBaseline(checked)}
-              disabled={readOnly || !baseline.instanceEnabled}
+              disabled={readOnly || !baseline.instanceEnabled || baselineBusy}
               label={t("automod.baseline.title")}
               hideLabel
               className="w-auto shrink-0"

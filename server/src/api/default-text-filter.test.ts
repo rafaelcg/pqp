@@ -291,6 +291,13 @@ describeDb("default text filter", () => {
         [a.serverId],
       );
       expect(audit.rowCount).toBe(1);
+      // Saying "off" again is not a change and is not audited again.
+      await call(owner, "PUT", baselinePath(a.serverId), { enabled: false });
+      const again = await getPool().query(
+        `SELECT 1 FROM audit_log WHERE server_id = $1 AND action = 'automod.rule_update'`,
+        [a.serverId],
+      );
+      expect(again.rowCount).toBe(1);
 
       const on = await call(owner, "PUT", baselinePath(a.serverId), { enabled: true });
       expect(on.body).toEqual({ instanceEnabled: true, ownerDisabled: false, enabled: true });

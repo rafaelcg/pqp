@@ -349,6 +349,8 @@ const cache = new Map<string, { rules: AutomodRule[]; expiresAt: number }>();
  * invalidation, so it crosses the cluster the same way.
  */
 const baselineCache = new Map<string, { disabled: boolean; expiresAt: number }>();
+/** Bumped by every invalidation; a read that began under an older value must not cache. */
+let baselineEpoch = 0;
 
 async function baselineDisabledFor(serverId: string): Promise<boolean> {
   const now = Date.now();
@@ -356,12 +358,15 @@ async function baselineDisabledFor(serverId: string): Promise<boolean> {
   if (hit && hit.expiresAt > now) {
     return hit.disabled;
   }
+  const epoch = baselineEpoch;
   const result = await getPool().query<{ disabled: boolean }>(
     `SELECT disabled FROM server_text_filter_settings WHERE server_id = $1`,
     [serverId],
   );
   const disabled = result.rows[0]?.disabled ?? false;
-  baselineCache.set(serverId, { disabled, expiresAt: now + CACHE_TTL_MS });
+  if (epoch === baselineEpoch) {
+    baselineCache.set(serverId, { disabled, expiresAt: now + CACHE_TTL_MS });
+  }
   return disabled;
 }
 
@@ -376,25 +381,60 @@ export async function getBaselineStatus(serverId: string): Promise<BaselineStatu
   return { instanceEnabled, ownerDisabled, enabled: instanceEnabled && !ownerDisabled };
 }
 
-/** The owner's switch. Off writes the row, on removes it, so "no row" stays "default". */
+/**
+ * The owner's switch. Off writes the row, on removes it, so "no row" stays
+ * "default". The write and its audit line are one transaction: a switch that
+ * took effect is never left unaudited, and an audit that failed leaves the
+ * switch where it was. Only a real change is audited.
+ */
 export async function setBaselineEnabled(
   serverId: string,
   enabled: boolean,
   actorId: string,
 ): Promise<BaselineStatus> {
-  if (enabled) {
-    await getPool().query(
-      `DELETE FROM server_text_filter_settings WHERE server_id = $1`,
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const before = await client.query<{ disabled: boolean }>(
+      `SELECT disabled FROM server_text_filter_settings WHERE server_id = $1 FOR UPDATE`,
       [serverId],
     );
-  } else {
-    await getPool().query(
-      `INSERT INTO server_text_filter_settings (server_id, disabled, updated_by)
-       VALUES ($1, TRUE, $2)
-       ON CONFLICT (server_id) DO UPDATE
-         SET disabled = TRUE, updated_by = EXCLUDED.updated_by, updated_at = NOW()`,
-      [serverId, actorId],
-    );
+    const wasDisabled = before.rows[0]?.disabled ?? false;
+    if (enabled) {
+      await client.query(
+        `DELETE FROM server_text_filter_settings WHERE server_id = $1`,
+        [serverId],
+      );
+    } else {
+      await client.query(
+        `INSERT INTO server_text_filter_settings (server_id, disabled, updated_by)
+         VALUES ($1, TRUE, $2)
+         ON CONFLICT (server_id) DO UPDATE
+           SET disabled = TRUE, updated_by = EXCLUDED.updated_by, updated_at = NOW()`,
+        [serverId, actorId],
+      );
+    }
+    if (wasDisabled === enabled) {
+      await logAudit(
+        {
+          serverId,
+          actorId,
+          action: "automod.rule_update",
+          targetType: "automod_rule",
+          changes: [
+            { key: "kind", old: null, new: "baseline" },
+            { key: "enabled", old: !wasDisabled, new: enabled },
+          ],
+        },
+        client,
+      );
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
   }
   invalidateAutomodCache(serverId);
   return getBaselineStatus(serverId);
@@ -458,6 +498,9 @@ export function recordBaselineHit(
  * members still trip and half no longer do.
  */
 export function invalidateAutomodCacheLocally(serverId?: string): void {
+  // A read already in flight started before this and may carry the old row:
+  // bumping the epoch tells it not to write what it found into the cache.
+  baselineEpoch += 1;
   if (serverId) {
     cache.delete(serverId);
     baselineCache.delete(serverId);

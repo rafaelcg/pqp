@@ -2619,7 +2619,11 @@ async function postChannelMessageAttempt(
     const verdict = await checkBaselineText(
       null,
       input.forward
-        ? [input.forward.comment, input.forward.snapshot.title ?? ""]
+        ? [
+            input.forward.comment,
+            input.forward.snapshot.title ?? "",
+            input.forward.snapshot.excerpt,
+          ]
             .filter((part) => part.length > 0)
             .join("\n")
         : input.body,
