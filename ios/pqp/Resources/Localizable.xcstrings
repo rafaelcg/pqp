@@ -211,6 +211,16 @@
         }
       }
     },
+    "About" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sobre"
+          }
+        }
+      }
+    },
     "Add a comment" : {
       "localizations" : {
         "pt-BR" : {
@@ -277,6 +287,36 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Quem tiver o link pqp.gg/c/… vai poder entrar com um toque, sem convite, e vai ver todos os canais que não são restritos. Denúncia sobre ela vai pra quem cuida do pqp."
+          }
+        }
+      }
+    },
+    "Contact us or report abuse" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fale com a gente ou denuncie abuso"
+          }
+        }
+      }
+    },
+    "Mute, deafen and volume per person." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Silenciar, ensurdecer e volume por pessoa."
+          }
+        }
+      }
+    },
+    "Privacy Policy" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Política de Privacidade"
           }
         }
       }
@@ -1101,6 +1141,16 @@
         }
       }
     },
+    "Terms of Service" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Termos de Serviço"
+          }
+        }
+      }
+    },
     "That address is taken. Try another one." : {
       "localizations" : {
         "pt-BR" : {
@@ -1341,6 +1391,16 @@
         }
       }
     },
+    "To report a message, a person or a community, open its menu and choose Report." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Para denunciar uma mensagem, uma pessoa ou uma comunidade, abra o menu e escolha Denunciar."
+          }
+        }
+      }
+    },
     "Too many forwards. Try again in %llds." : {
       "localizations" : {
         "pt-BR" : {
@@ -1397,6 +1457,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Liga o endereço público primeiro."
+          }
+        }
+      }
+    },
+    "Version" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Versão"
           }
         }
       }
@@ -12233,16 +12303,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Privado"
-          }
-        }
-      }
-    },
-    "Push-to-talk or voice activation, volume per person." : {
-      "localizations" : {
-        "pt-BR" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Push-to-talk ou ativação por voz, volume por pessoa."
           }
         }
       }

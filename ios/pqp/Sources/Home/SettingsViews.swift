@@ -169,6 +169,8 @@ struct AccountSettingsView: View {
                 }
 
                 YourDataSection(exportFile: $exportFile) { confirmingDeletion = true }
+
+                AboutSection()
             }
             .scrollContentBackground(.hidden)
             .background(Palette.ink)
@@ -212,7 +214,10 @@ struct AccountSettingsView: View {
         }
         // ON THE STACK, not on the `Form` alongside the confirmation above.
         // Two `.sheet` modifiers at the same level is a coin flip over which
-        // one is honoured; at different levels both are unambiguous.
+        // one is honoured; at different levels both are unambiguous. The
+        // in-app browser for the About links hangs here too, for the same
+        // reason (and so it outlives the About section scrolling away).
+        .inAppLegalLinks()
         .sheet(item: Binding(
             get: { exportFile.map { ShareItem(url: $0) } },
             set: { if $0 == nil { exportFile = nil } }

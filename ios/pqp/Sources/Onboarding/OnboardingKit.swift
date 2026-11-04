@@ -286,7 +286,7 @@ extension FeatureMoment {
             id: "voice",
             symbol: "waveform",
             title: "Voice that holds the whole room.",
-            detail: "Push-to-talk or voice activation, volume per person."
+            detail: "Mute, deafen and volume per person."
         ),
         FeatureMoment(
             id: "screen",

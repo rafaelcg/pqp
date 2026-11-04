@@ -17,6 +17,11 @@ enum LegalLinks {
     static let terms = URL(string: "https://pqp.gg/terms")!
     static let privacy = URL(string: "https://pqp.gg/privacy")!
 
+    /// The one address the Terms name for support, abuse reports, appeals and
+    /// privacy requests. There is no contact page on the web to link instead.
+    static let contactAddress = "contato@pqp.gg"
+    static let contact = URL(string: "mailto:contato@pqp.gg")!
+
     /// Only these two open in the in-app browser; any other link keeps its
     /// default behaviour.
     static func isLegal(_ url: URL) -> Bool {
