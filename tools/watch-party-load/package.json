@@ -13,16 +13,16 @@
   "dependencies": {
     "@livekit/rtc-ffi-bindings": "0.12.73",
     "@livekit/rtc-node": "0.13.34",
-    "pg": "^8.13.1",
-    "tsx": "^4.19.2",
+    "pg": "^8.23.1",
+    "tsx": "^4.23.15",
     "typescript": "^5.7.3",
     "undici": "^7.10.0",
-    "ws": "^8.18.0"
+    "ws": "^8.22.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
-    "@types/pg": "^8.11.10",
-    "@types/ws": "^8.5.13",
+    "@types/pg": "^8.23.1",
+    "@types/ws": "^8.18.2",
     "vitest": "^4.1.10"
   }
 }
