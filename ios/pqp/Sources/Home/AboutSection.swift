@@ -52,7 +52,7 @@ struct AboutSection: View {
         } header: {
             Text("About")
         } footer: {
-            Text("To report a message, a person or a community, open its menu and choose Report.")
+            Text("To report a message, a Baú post or comment, a person or a community, open its menu and choose Report.")
         }
     }
 

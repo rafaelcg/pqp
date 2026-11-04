@@ -1072,8 +1072,9 @@ own would be the follow-up if authors start posting different edits.
 ## Reporting a post or a comment
 
 A reader can report a Baú post or one comment: "Denunciar" in the card's
-corner menu and in the comment's own menu (web). Hidden on your own words, on a
-locked post, in a draft and in the composer's preview. The public post page
+corner menu and in the comment's own menu (web and iOS: the post's ellipsis and
+the one on each comment, beside "Bloquear"; `docs/IOS.md`). Hidden on your own
+words, on a locked post (iOS keeps Bloquear there), in a draft and in the composer's preview. The public post page
 (`/c/<slug>/p/<id>`) has no signed-in action menu, so there is no report
 button there; the person opens the post in the app to report it.
 

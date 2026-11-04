@@ -35,6 +35,16 @@ struct CommunityHomeView: View {
     /// Encaminhar: the flag, and the post whose picker is up.
     @State private var forwardsEnabled = false
     @State private var forwardSource: ForwardSource?
+    /// Denunciar and Bloquear, from a post's menu or a comment's: the same
+    /// sheet and the same confirmation every other surface uses.
+    @State private var reportTarget: ReportTarget?
+    @State private var blockTarget: BlockPersonTarget?
+
+    /// Without posts by anybody the reader blocked, live: a block made from a
+    /// card (or a profile) takes the rest of that person's posts off the feed.
+    private var visiblePosts: [CommunityHomePost] {
+        posts.filter { !session.blocked.contains($0.author.id) }
+    }
 
     var body: some View {
         ZStack {
@@ -50,7 +60,14 @@ struct CommunityHomeView: View {
                     actionTitle: "Try again",
                     action: { Task { await load() } }
                 )
-            } else if posts.isEmpty {
+            } else if visiblePosts.isEmpty && !posts.isEmpty {
+                // Every post is by somebody the reader blocked: not "nothing yet".
+                EmptyState(
+                    icon: "hand.raised",
+                    title: "Nothing to show",
+                    message: "Every post here is by somebody you blocked."
+                )
+            } else if visiblePosts.isEmpty {
                 EmptyState(
                     icon: "archivebox",
                     title: "Nothing in the Baú yet",
@@ -60,7 +77,7 @@ struct CommunityHomeView: View {
                 ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 12) {
-                        ForEach(posts) { post in
+                        ForEach(visiblePosts) { post in
                             PostCard(
                                 post: post,
                                 vipEnabled: config.vipEnabled,
@@ -75,7 +92,9 @@ struct CommunityHomeView: View {
                                 onCollapse: { expanded.removeValue(forKey: post.id) },
                                 onComment: { body in await addComment(post, body: body) },
                                 onForward: forwardsEnabled
-                                    ? { forwardSource = ForwardSource.bauPost(post) } : nil
+                                    ? { forwardSource = ForwardSource.bauPost(post) } : nil,
+                                onReport: { reportTarget = $0 },
+                                onBlock: { blockTarget = $0 }
                             )
                             .overlay {
                                 if highlightedPostId == post.id {
@@ -145,6 +164,8 @@ struct CommunityHomeView: View {
         // Removed from this server (or it was deleted): the Baú goes with it.
         .dismissWhenServerRemoved(server.id)
         .forwardSheet($forwardSource)
+        .sheet(item: $reportTarget) { target in ReportSheet(target: target) }
+        .blockPersonConfirmation($blockTarget)
         .task { forwardsEnabled = await session.api.forwardConfig().enabled }
         .navigationDestination(item: $openedChannel) { channel in
             chatDestination?(channel) ?? AnyView(EmptyView())
@@ -251,7 +272,12 @@ private struct PostCard: View {
     let onComment: (String) async -> Bool
     /// Encaminhar: nil while the flag is off, which is what hides the menu.
     var onForward: (() -> Void)? = nil
+    /// Denunciar / Bloquear, handed up to the screen that owns the sheet.
+    let onReport: (ReportTarget) -> Void
+    let onBlock: (BlockPersonTarget) -> Void
     @Environment(SessionStore.self) private var session
+
+    private var isMine: Bool { post.author.id == session.currentUser?.id }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -301,7 +327,9 @@ private struct PostCard: View {
                 loadingComments: loadingComments,
                 onLoadAll: onLoadAll,
                 onCollapse: onCollapse,
-                onComment: onComment
+                onComment: onComment,
+                onReport: onReport,
+                onBlock: onBlock
             )
         }
         .padding(14)
@@ -332,19 +360,43 @@ private struct PostCard: View {
                     .foregroundStyle(Palette.paperMuted)
             }
             Spacer(minLength: 0)
-            if let onForward {
-                postMenu(onForward)
+            if onForward != nil || !isMine {
+                postMenu
             }
         }
     }
 
-    /// The post's menu: Encaminhar today, the one place more actions would go.
-    private func postMenu(_ onForward: @escaping () -> Void) -> some View {
+    /// The post's menu: Encaminhar (while the flag is on), then Denunciar and
+    /// Bloquear on anybody's post but your own. App Store guideline 1.2: every
+    /// kind of user content is reportable in two taps, the ellipsis and the
+    /// row. A locked post has no words to report (the server refuses it), so it
+    /// offers Bloquear only.
+    private var postMenu: some View {
         Menu {
-            Button(action: onForward) {
-                Label("Forward", systemImage: "arrowshape.turn.up.right")
+            if let onForward {
+                Button(action: onForward) {
+                    Label("Forward", systemImage: "arrowshape.turn.up.right")
+                }
+                .accessibilityIdentifier("bau.post.forward")
             }
-            .accessibilityIdentifier("bau.post.forward")
+            if !isMine {
+                if !post.locked {
+                    Button {
+                        onReport(.bauPost(id: post.id, authorName: post.author.displayName))
+                    } label: {
+                        Label("Report", systemImage: "flag")
+                    }
+                    .accessibilityIdentifier("bau.post.report")
+                }
+                Button(role: .destructive) {
+                    onBlock(BlockPersonTarget(
+                        userId: post.author.id, name: post.author.displayName, surface: "bau"
+                    ))
+                } label: {
+                    Label("Block", systemImage: "hand.raised")
+                }
+                .accessibilityIdentifier("bau.post.block")
+            }
         } label: {
             Image(systemName: "ellipsis")
                 .font(.system(size: 16, weight: .semibold))
@@ -689,6 +741,8 @@ private struct CommentsBlock: View {
     let onLoadAll: () -> Void
     let onCollapse: () -> Void
     let onComment: (String) async -> Bool
+    let onReport: (ReportTarget) -> Void
+    let onBlock: (BlockPersonTarget) -> Void
 
     @State private var draft = ""
     @State private var submitting = false
@@ -724,6 +778,12 @@ private struct CommentsBlock: View {
                                     .foregroundStyle(Palette.paper)
                             }
                         }
+                        Spacer(minLength: 0)
+                        // Denunciar / Bloquear on somebody else's comment, the
+                        // same two taps as the post's own menu.
+                        if comment.author.id != session.currentUser?.id {
+                            commentMenu(comment)
+                        }
                     }
                 }
             }
@@ -755,6 +815,33 @@ private struct CommentsBlock: View {
                     .foregroundStyle(Palette.paperMuted)
             }
         }
+    }
+
+    private func commentMenu(_ comment: CommunityHomeComment) -> some View {
+        Menu {
+            Button {
+                onReport(.bauComment(id: comment.id, authorName: comment.author.displayName))
+            } label: {
+                Label("Report", systemImage: "flag")
+            }
+            .accessibilityIdentifier("bau.comment.report")
+            Button(role: .destructive) {
+                onBlock(BlockPersonTarget(
+                    userId: comment.author.id, name: comment.author.displayName, surface: "bau"
+                ))
+            } label: {
+                Label("Block", systemImage: "hand.raised")
+            }
+            .accessibilityIdentifier("bau.comment.block")
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Palette.paperMuted)
+                .frame(width: 36, height: 28)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel(Text("More"))
+        .accessibilityIdentifier("bau.comment.menu")
     }
 
     private var composer: some View {
