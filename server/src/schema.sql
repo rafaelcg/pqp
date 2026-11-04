@@ -6407,6 +6407,20 @@ END $$;
 -- The two Baú dedupe indexes are built CONCURRENTLY at boot
 -- (`CONCURRENT_INDEXES` in db.ts).
 
+-- Second look (Apple Guideline 1.2, our Terms: "we review every report within
+-- 24 hours"). A report about a server's channel is filed to that server's own
+-- queue, and its owner or staff may close it. When they do, the pqp team has
+-- not reviewed anything, so the closing writes ONE copy into the instance
+-- queue (`server_id` NULL, `context_kind` 'none', still `open`, `created_at`
+-- kept so the 24 hour clock does not restart). `escalated_from` names the
+-- original: it makes the copy idempotent (unique index built at boot, see
+-- `idx_reports_escalated_from` in db.ts) and lets the reporter's own views, the
+-- flood cap and a moderator's "other reports" skip it instead of counting one
+-- report twice. SET NULL, because the original is pruned 90 days after it is
+-- resolved and an open copy must outlive that.
+ALTER TABLE reports ADD COLUMN IF NOT EXISTS escalated_from BIGINT
+  REFERENCES reports(id) ON DELETE SET NULL;
+
 -- POST_STORIES (bit 25 = 33554432): post a story to the server. On for
 -- @everyone by default, like SEND_MESSAGES, so staff can take it away per
 -- role; listed communities too (they add a 72 h account age rule in code).

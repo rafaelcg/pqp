@@ -1022,6 +1022,23 @@ as **Settings > Moderation** (only for them). That list is what closes the gap a
 server queue has: a report sitting in a server owner's queue that the owner
 never reads is still readable, and closable, by the instance moderator.
 
+**A server's own staff closing a report does not remove pqp's review.** An
+owner or admin who closes a user-filed report from their server's queue
+(`PATCH /api/reports/:id`, not an instance moderator) leaves **one copy** in the
+instance queue, written in the same statement as the close (`resolveReport`,
+`secondLook`): `server_id` NULL, `context_kind` `none`, still `open`, the
+original's `created_at` (the 24 hour clock does not restart), `escalated_from`
+naming the original, and a line in `details` saying what the staff decided. The
+copy is an ordinary instance report: it shows in `GET /api/reports/instance` and
+`/all`, **Contexto** and **Remove message** work on it, and it is counted by the
+age figures below. The server's own queue is unchanged (the owner still sees
+their one report, closed), the reporter still has one report in `/mine`, and the
+flood cap, a moderator's "other reports" list and the data export all skip
+copies (`escalated_from IS NULL`). Closing the copy never copies again. Not
+copied: a report an instance moderator closed, and a scanner's own report
+(`reporter_id` NULL). A report the owner leaves **open** needs no copy: it is
+already in `/all` and the clock.
+
 **Nobody is paged when a report is filed.** The row is written and that is all.
 The dashboard's moderation card shows the open count, and the in-app list is
 where a moderator looks. Closing that gap, per report, is not built; the clock

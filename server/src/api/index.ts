@@ -13494,6 +13494,9 @@ router.patch("/api/reports/:report", async ({ req, user }, { report }) => {
     user.id,
     body.status,
     body.note,
+    // A server's own staff closing a user's report is not the pqp team
+    // reviewing it: leave a second look in the instance queue.
+    { secondLook: !isInstanceModerator(user) },
   );
   if (!resolved) {
     // Someone else closed it between the scope read and the update.

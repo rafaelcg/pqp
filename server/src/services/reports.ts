@@ -251,7 +251,8 @@ function labelFor(row: {
 async function assertUnderFloodCap(reporterId: string): Promise<void> {
   const result = await getPool().query<{ count: string }>(
     `SELECT COUNT(*)::text AS count FROM reports
-     WHERE reporter_id = $1 AND created_at > NOW() - INTERVAL '1 hour'`,
+     WHERE reporter_id = $1 AND escalated_from IS NULL
+       AND created_at > NOW() - INTERVAL '1 hour'`,
     [reporterId],
   );
   if (Number(result.rows[0]?.count ?? 0) >= REPORTS_PER_HOUR) {
@@ -1241,7 +1242,11 @@ export async function listReportsByReporter(
   options: ListReportsOptions,
 ): Promise<{ reports: ReportSummary[]; hasMore: boolean }> {
   const params: unknown[] = [reporterId];
-  const tail = listConditions(options, ["r.reporter_id = $1"], params);
+  const tail = listConditions(
+    options,
+    ["r.reporter_id = $1", "r.escalated_from IS NULL"],
+    params,
+  );
   const result = await getPool().query<ReportRow>(
     `SELECT ${REPORT_COLUMNS} FROM reports r ${REPORT_JOINS} ${tail}`,
     params,
@@ -1305,19 +1310,60 @@ export async function getReportRevealTarget(
  * 409 rather than silently overwriting the first one's note and name. Nothing
  * reopens a report — a recurrence is a new report, which is also what makes
  * "this is the third time" visible in the queue.
+ *
+ * SECOND LOOK. `secondLook` is true when the closer is NOT an instance
+ * moderator (the route knows: a server's owner or staff). A user-filed report
+ * from a server's queue then leaves a copy in the instance queue, in the same
+ * statement as the close, so that "the pqp team reviews every report within 24
+ * hours" does not depend on a server owner leaving the report open. One
+ * statement, so there is no state where the original is closed and the copy
+ * is missing; `status = 'open'` above means only the closer that wins writes
+ * it, and the unique index on `escalated_from` makes a repeat a no-op anyway.
+ * The copy keeps `created_at`, so the 24 hour clock does not restart, and
+ * says in `details` what the server staff decided. It carries no `server_id`,
+ * so the server's own queue is exactly what it was.
  */
 export async function resolveReport(
   id: string,
   resolverId: string,
   status: ReportResolution,
   note?: string | null,
+  options: { secondLook?: boolean } = {},
 ): Promise<Report | null> {
   const result = await getPool().query<{ id: string }>(
-    `UPDATE reports
-     SET status = $2, resolved_by = $3, resolved_at = NOW(), resolution_note = $4
-     WHERE id = $1::bigint AND status = 'open'
-     RETURNING id::text AS id`,
-    [id, status, resolverId, note?.trim() || null],
+    `WITH closed AS (
+       UPDATE reports
+          SET status = $2, resolved_by = $3, resolved_at = NOW(),
+              resolution_note = $4
+        WHERE id = $1::bigint AND status = 'open'
+        RETURNING *
+     ),
+     second_look AS (
+       INSERT INTO reports (
+         reporter_id, subject_type, context_kind, reported_message_id,
+         reported_user_id, server_id, channel_id, content_snapshot,
+         subject_label, channel_label, reason, details, reported_server_id,
+         reported_story_id, story_snapshot, reported_bau_post_id,
+         reported_bau_comment_id, bau_snapshot, created_at, escalated_from
+       )
+       SELECT c.reporter_id, c.subject_type, 'none', c.reported_message_id,
+              c.reported_user_id, NULL, c.channel_id, c.content_snapshot,
+              c.subject_label, c.channel_label, c.reason,
+              concat_ws(E'\n\n', c.details,
+                format('[Second look: server staff closed report #%s as %s.]',
+                       c.id, c.status)),
+              c.reported_server_id, c.reported_story_id, c.story_snapshot,
+              c.reported_bau_post_id, c.reported_bau_comment_id,
+              c.bau_snapshot, c.created_at, c.id
+         FROM closed c
+        WHERE $5::boolean
+          AND c.server_id IS NOT NULL
+          AND c.reporter_id IS NOT NULL
+          AND c.escalated_from IS NULL
+       ON CONFLICT DO NOTHING
+     )
+     SELECT id::text AS id FROM closed`,
+    [id, status, resolverId, note?.trim() || null, options.secondLook === true],
   );
   const row = result.rows[0];
   return row ? getReport(row.id) : null;

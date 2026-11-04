@@ -562,7 +562,7 @@
     <string name="report_sending">Sending\u2026</string>
     <string name="report_failed">Could not send this report. Try again in a moment.</string>
     <string name="report_sent_title">Report sent</string>
-    <string name="report_sent_body">The moderators will take a look. You will not be named to the person you reported.</string>
+    <string name="report_sent_body">The pqp team reviews reports within 24 hours. You will not be named to the person you reported.</string>
     <string name="report_done">Done</string>
 
     <string name="chance_heads">Heads</string>

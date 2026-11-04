@@ -113,7 +113,7 @@ struct OnboardingView: View {
     private var coldHero: some View {
         VStack(alignment: .leading, spacing: 28) {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Open source · Free · No card required")
+                Text("Open source · Free · No ads")
                     .font(FirstRunType.eyebrow)
                     .textCase(.uppercase)
                     .tracking(1.1)
