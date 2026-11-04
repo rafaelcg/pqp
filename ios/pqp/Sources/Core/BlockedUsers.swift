@@ -93,6 +93,7 @@ final class BlockedUsers {
     /// happened (a short token, never content).
     func block(_ userId: String, surface: String, using api: APIClient) async throws {
         generation += 1
+        let before = Snapshot(blocked: ids.contains(userId), released: released.contains(userId))
         ids.insert(userId)
         released.remove(userId)
         do {
@@ -100,13 +101,14 @@ final class BlockedUsers {
             generation += 1
         } catch {
             generation += 1
-            try await settle(error, userId: userId, wantBlocked: true, using: api)
+            try await settle(error, userId: userId, wantBlocked: true, before: before, using: api)
         }
     }
 
     /// Unblock, showing first, same shape as `block`.
     func unblock(_ userId: String, using api: APIClient) async throws {
         generation += 1
+        let before = Snapshot(blocked: ids.contains(userId), released: released.contains(userId))
         ids.remove(userId)
         released.insert(userId)
         do {
@@ -114,22 +116,27 @@ final class BlockedUsers {
             generation += 1
         } catch {
             generation += 1
-            try await settle(error, userId: userId, wantBlocked: false, using: api)
+            try await settle(error, userId: userId, wantBlocked: false, before: before, using: api)
         }
+    }
+
+    /// One person's state before an attempt, so a refusal puts back EXACTLY what
+    /// was there (including whether they were in `released`), not a guess.
+    private struct Snapshot {
+        let blocked: Bool
+        let released: Bool
     }
 
     /// A write failed. A definite refusal restores the old state and rethrows;
     /// an ambiguous failure asks the server what is true. If the server says the
     /// write DID land, the failure is swallowed: the person is where the reader
     /// asked them to be.
-    private func settle(_ error: Error, userId: String, wantBlocked: Bool, using api: APIClient) async throws {
+    private func settle(
+        _ error: Error, userId: String, wantBlocked: Bool, before: Snapshot, using api: APIClient
+    ) async throws {
         guard Self.isAmbiguous(error) else {
-            if wantBlocked {
-                ids.remove(userId)
-            } else {
-                ids.insert(userId)
-                released.remove(userId)
-            }
+            if before.blocked { ids.insert(userId) } else { ids.remove(userId) }
+            if before.released { released.insert(userId) } else { released.remove(userId) }
             throw error
         }
         if await refresh(using: api) {
