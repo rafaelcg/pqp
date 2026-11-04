@@ -72,7 +72,7 @@ export type ForwardMediaKind = z.infer<typeof forwardMediaKindSchema>;
 export const messageForwardSchema = z.object({
   v: z.literal(FORWARD_VERSION),
   kind: forwardKindSchema,
-  sourceServerId: z.string().uuid(),
+  sourceServerId: z.string().guid(),
   sourceServerName: z.string(),
   /**
    * The source server's icon exactly as `servers.icon_url` carries it:
@@ -83,7 +83,7 @@ export const messageForwardSchema = z.object({
   /** `message` only: the channel's name, without the `#`. */
   sourceChannelName: z.string().optional(),
   /** The Baú post id (`bau_post`) or the message id (`message`). */
-  sourceId: z.string().uuid(),
+  sourceId: z.string().guid(),
   /** Who wrote the source: the author's display name (a nickname in a server). */
   authorDisplayName: z.string().optional(),
   /** `bau_post` only: the post's title. */
@@ -126,7 +126,7 @@ export const messageForwardSchema = z.object({
    * B). Clients offer only this server; the server enforces it. Absent on a
    * restricted card from an older build: read it as `sourceServerId`.
    */
-  restrictedToServerId: z.string().uuid().optional(),
+  restrictedToServerId: z.string().guid().optional(),
 });
 
 export type MessageForward = z.infer<typeof messageForwardSchema>;
@@ -147,13 +147,13 @@ export const messageForwardFieldSchema = messageForwardSchema
 export const forwardSourceSchema = z.object({
   kind: forwardKindSchema,
   /** The Baú post id, or the message id. */
-  id: z.string().uuid(),
+  id: z.string().guid(),
   /**
    * `bau_post` only: the server the post is in. Posts are addressed by
    * `(serverId, postId)` everywhere else, and a bare post id cannot be looked
    * up without it. Ignored for `message` (the message knows its channel).
    */
-  serverId: z.string().uuid().optional(),
+  serverId: z.string().guid().optional(),
 }).refine((source) => source.kind !== "bau_post" || source.serverId !== undefined, {
   message: "A Baú post is addressed with serverId",
   path: ["serverId"],
@@ -166,8 +166,8 @@ export const forwardSourceSchema = z.object({
  * reused, under the same rules as `POST /api/dms`).
  */
 export const forwardTargetSchema = z.union([
-  z.object({ channelId: z.string().uuid() }).strict(),
-  z.object({ userId: z.string().uuid() }).strict(),
+  z.object({ channelId: z.string().guid() }).strict(),
+  z.object({ userId: z.string().guid() }).strict(),
 ]);
 export type ForwardTarget = z.infer<typeof forwardTargetSchema>;
 
@@ -237,9 +237,11 @@ export const forwardResultSchema = z.discriminatedUnion("ok", [
   z.object({
     ok: z.literal(true),
     target: forwardTargetSchema,
-    channelId: z.string().uuid(),
-    serverId: z.string().uuid().nullable(),
-    message: z.unknown(),
+    channelId: z.string().guid(),
+    serverId: z.string().guid().nullable(),
+    // `.optional()` for the reason on `auditChangeSchema`: zod 4 wants the key of a
+    // bare `z.unknown()` to be there, zod 3 did not.
+    message: z.unknown().optional(),
   }),
   z.object({
     ok: z.literal(false),
@@ -276,7 +278,7 @@ export type ForwardConfig = z.infer<typeof forwardConfigSchema>;
  * send makes. Slow mode, AutoMod and the like are still decided per send.
  */
 export const forwardDestinationChannelSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   name: z.string(),
   type: z.enum(["text", "voice", "watch_party"]),
 });
@@ -294,9 +296,9 @@ export type ForwardDestinationChannel = z.infer<typeof forwardDestinationChannel
 export const FORWARD_DESTINATION_THREADS_MAX = 30;
 
 export const forwardDestinationThreadSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   name: z.string(),
-  parentId: z.string().uuid(),
+  parentId: z.string().guid(),
   parentName: z.string(),
 });
 export type ForwardDestinationThread = z.infer<typeof forwardDestinationThreadSchema>;

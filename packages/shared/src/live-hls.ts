@@ -30,7 +30,7 @@ export const liveHlsStreamSchema = z.object({
    * predates it or could not name the person, where the count falls back to
    * the peer id alone. Optional, so iOS and Android parse the frame as before.
    */
-  presenterUserId: z.string().uuid().optional(),
+  presenterUserId: z.string().guid().optional(),
   /** What the badge should claim, from the server that started the egress. */
   delaySeconds: z.number().int().positive().optional(),
   /**
@@ -201,7 +201,7 @@ export type LiveHlsStream = z.infer<typeof liveHlsStreamSchema>;
  */
 export const voiceStreamMessageSchema = z.object({
   type: z.literal("voice-stream"),
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
   stream: liveHlsStreamSchema.nullable(),
 });
 
@@ -217,7 +217,7 @@ export type VoiceStreamMessage = z.infer<typeof voiceStreamMessageSchema>;
  */
 export const watchLiveMessageSchema = z.object({
   type: z.literal("watch-live"),
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
   watching: z.boolean(),
 });
 
@@ -237,7 +237,7 @@ export type WatchLiveMessage = z.infer<typeof watchLiveMessageSchema>;
  */
 export const channelLiveMessageSchema = z.object({
   type: z.literal("channel-live"),
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
   stream: liveHlsStreamSchema.nullable(),
   /** Watch-mode viewers without a seat. Room participants are on the roster. */
   watching: z.number().int().nonnegative(),

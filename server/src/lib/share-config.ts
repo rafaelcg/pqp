@@ -68,7 +68,7 @@ export interface ShareConfig {
   linuxDesktopSystemAudio: boolean;
 }
 
-const serverIdSchema = z.string().uuid();
+const serverIdSchema = z.string().guid();
 
 export function shareConfigForServer(rawServerId: string | null): ShareConfig {
   const parsed = serverIdSchema.safeParse(rawServerId);

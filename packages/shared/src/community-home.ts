@@ -696,7 +696,7 @@ export function communityHomeEmbedUrl(
 }
 
 export const communityHomeCommentSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   author: publicUserSchema,
   body: z.string(),
   createdAt: z.string(),
@@ -881,8 +881,8 @@ export function communityHomeReadMinutes(body: string | null): number {
 }
 
 export const communityHomePostSchema = z.object({
-  id: z.string().uuid(),
-  serverId: z.string().uuid(),
+  id: z.string().guid(),
+  serverId: z.string().guid(),
   author: publicUserSchema,
   authorBadge: communityHomeAuthorBadgeSchema.nullable(),
   title: z.string().nullable(),
@@ -987,19 +987,19 @@ export const createCommunityHomePostSchema = z.object({
   visibility: communityHomeVisibilitySchema.default("free"),
   commentsEnabled: z.boolean().optional(),
   /** Claimed media upload id, or omit / null for text-only / a paste URL. */
-  mediaUploadId: z.string().uuid().optional().nullable(),
+  mediaUploadId: z.string().guid().optional().nullable(),
   /**
    * A second claimed upload: the vertical cut phones play. Only with a
    * `mediaUploadId` that is a video, and must be a video itself. Behind the
    * `bau_mobile_rendition` flag.
    */
-  mobileMediaUploadId: z.string().uuid().optional().nullable(),
+  mobileMediaUploadId: z.string().guid().optional().nullable(),
   /**
    * The video's cover: a claimed image upload (JPEG, PNG or WebP, at most
    * `COMMUNITY_HOME_COVER_MAX_BYTES`). Only with a `mediaUploadId` that is a
    * video. Omit for the automatic cover. Behind the `bau_custom_cover` flag.
    */
-  posterUploadId: z.string().uuid().optional().nullable(),
+  posterUploadId: z.string().guid().optional().nullable(),
   /**
    * A YouTube, Twitch, TikTok, or Instagram watch URL. The service
    * classifies which; one field so the composer stays one paste box.
@@ -1017,7 +1017,7 @@ export const createCommunityHomePostSchema = z.object({
    * same server. Best effort; a channel the author cannot send in is skipped
    * and the post still publishes.
    */
-  announceChannelId: z.string().uuid().optional().nullable(),
+  announceChannelId: z.string().guid().optional().nullable(),
 });
 
 export type CreateCommunityHomePostRequest = z.infer<
@@ -1030,7 +1030,7 @@ export const updateCommunityHomePostSchema = z.object({
   teaser: z.string().max(COMMUNITY_HOME_TEASER_MAX).optional().nullable(),
   visibility: communityHomeVisibilitySchema.optional(),
   commentsEnabled: z.boolean().optional(),
-  mediaUploadId: z.string().uuid().optional().nullable(),
+  mediaUploadId: z.string().guid().optional().nullable(),
   youtubeUrl: z.string().max(500).optional().nullable(),
   /** Pass null to clear media (including a paste-URL embed). */
   clearMedia: z.boolean().optional(),
@@ -1039,13 +1039,13 @@ export const updateCommunityHomePostSchema = z.object({
    * main media when that is replaced by something that is not a video or
    * cleared); a claimed upload id replaces it; `null` removes it.
    */
-  mobileMediaUploadId: z.string().uuid().optional().nullable(),
+  mobileMediaUploadId: z.string().guid().optional().nullable(),
   /**
    * The video's cover, same rules as the phone cut: omitted keeps it while the
    * main video stays the same file (a new main video drops it), a claimed
    * image upload id replaces it, `null` goes back to the automatic one.
    */
-  posterUploadId: z.string().uuid().optional().nullable(),
+  posterUploadId: z.string().guid().optional().nullable(),
 });
 
 export type UpdateCommunityHomePostRequest = z.infer<
@@ -1125,7 +1125,7 @@ export type CreateCommunityHomeMediaUploadRequest = z.infer<
 >;
 
 export const createCommunityHomeMediaUploadResponseSchema = z.object({
-  uploadId: z.string().uuid(),
+  uploadId: z.string().guid(),
   key: z.string(),
   uploadUrl: z.string(),
   expiresAt: z.string(),
@@ -1137,7 +1137,7 @@ export type CreateCommunityHomeMediaUploadResponse = z.infer<
 >;
 
 export const claimCommunityHomeMediaSchema = z.object({
-  uploadId: z.string().uuid(),
+  uploadId: z.string().guid(),
 });
 
 export type ClaimCommunityHomeMediaRequest = z.infer<
@@ -1145,7 +1145,7 @@ export type ClaimCommunityHomeMediaRequest = z.infer<
 >;
 
 export const claimCommunityHomeMediaResponseSchema = z.object({
-  uploadId: z.string().uuid(),
+  uploadId: z.string().guid(),
   kind: z.enum(["image", "video", "file"]),
   name: z.string().max(ATTACHMENT_FILENAME_MAX_LENGTH),
   contentType: communityHomeContentTypeSchema,
@@ -1234,7 +1234,7 @@ export type CommunityHomeConfig = z.infer<typeof communityHomeConfigSchema>;
  */
 export const communityHomeUpdateSchema = z.object({
   type: z.literal("community-home-update"),
-  serverId: z.string().uuid(),
+  serverId: z.string().guid(),
   enabled: z.boolean().optional(),
   version: z.number().int().nonnegative().optional(),
 });

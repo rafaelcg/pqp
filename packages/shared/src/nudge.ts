@@ -71,7 +71,7 @@ export type MessageSystemKind = (typeof MESSAGE_SYSTEM_KINDS)[number];
 /** Client to server: nudge the other person in this conversation. */
 export const nudgeFrameSchema = z.object({
   type: z.literal("nudge"),
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
   /**
    * Same idempotency as `message-create`: a replay of a nudge that already
    * landed is answered with the stored message instead of a second shake.
@@ -111,7 +111,7 @@ export type NudgeRefusalReason = (typeof NUDGE_REFUSAL_REASONS)[number];
  */
 export const nudgeRefusedSchema = z.object({
   type: z.literal("nudge-refused"),
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
   /** Echo of the frame's nonce, when it had one. */
   nonce: z.string().min(1).max(64).optional(),
   reason: nudgeRefusalReasonSchema,

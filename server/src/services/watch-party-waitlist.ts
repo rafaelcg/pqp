@@ -435,7 +435,7 @@ export const OPERATOR_WAITLIST_DECLINE_PATH =
   "/api/admin/watch-party-waitlist/decline";
 
 export const declineWatchPartyWaitlistSchema = z.object({
-  serverId: z.string().uuid(),
+  serverId: z.string().guid(),
 });
 
 export interface OperatorWaitlistRequest {

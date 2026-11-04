@@ -227,7 +227,7 @@ export const createCallRatingSchema = z.object({
   transport: z.enum(CALL_TRANSPORTS),
   /** Whether a screen was being shared, which is the feature most likely to be what they are rating. */
   hadScreenShare: z.boolean(),
-  channelId: z.string().uuid().optional(),
+  channelId: z.string().guid().optional(),
   /**
    * Absent on a build that does not collect it yet, and absent whenever the
    * call had no video sender or receiver to sample in the first place --

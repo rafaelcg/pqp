@@ -73,7 +73,7 @@ const i18nKey = z.string().regex(I18N_KEY);
 const bundlePath = z.string().max(200).regex(BUNDLE_PATH);
 const httpsUrl = z.string().regex(HTTPS).url();
 
-function unique<T extends z.ZodTypeAny>(schema: z.ZodArray<T>) {
+function unique<T extends z.ZodType>(schema: z.ZodArray<T>) {
   return schema.refine((items) => new Set(items).size === items.length, {
     message: "Items must be unique",
     params: { pqp: "schema-unique" },
@@ -249,11 +249,11 @@ export type ValidateAppManifestResult<M> =
   | { ok: true; manifest: M }
   | { ok: false; issues: AppManifestIssue[] };
 
-function formatPath(path: ReadonlyArray<string | number>): string {
+function formatPath(path: ReadonlyArray<PropertyKey>): string {
   let out = "";
   for (const part of path) {
     if (typeof part === "number") out += `[${part}]`;
-    else out += out === "" ? part : `.${part}`;
+    else out += out === "" ? String(part) : `.${String(part)}`;
   }
   return out;
 }
@@ -273,17 +273,18 @@ function schemaIssues(error: z.ZodError): AppManifestIssue[] {
         }
         break;
       case "invalid_type":
+        // `reportInput` is asked for at the call, so a key that is not there
+        // (`input` is `undefined`) reads as required and a wrong value as a type.
         issues.push({
           path: base,
-          code: issue.received === "undefined" ? "schema-required" : "schema-type",
+          code: issue.input === undefined ? "schema-required" : "schema-type",
           message: issue.message,
         });
         break;
-      case "invalid_enum_value":
-      case "invalid_literal":
+      case "invalid_value":
         issues.push({ path: base, code: "schema-enum", message: issue.message });
         break;
-      case "invalid_string":
+      case "invalid_format":
         issues.push({ path: base, code: "schema-format", message: issue.message });
         break;
       case "too_small":
@@ -479,7 +480,7 @@ export function validateAppManifest(
   input: unknown,
   opts?: { source?: boolean },
 ): ValidateAppManifestResult<AppManifest> | ValidateAppManifestResult<AppManifestSource> {
-  const parsed = (opts?.source ? appManifestSourceSchema : appManifestSchema).safeParse(input);
+  const parsed = (opts?.source ? appManifestSourceSchema : appManifestSchema).safeParse(input, { reportInput: true });
   if (!parsed.success) return { ok: false, issues: schemaIssues(parsed.error) };
   const issues = ruleIssues(parsed.data);
   if (issues.length > 0) return { ok: false, issues };

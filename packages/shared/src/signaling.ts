@@ -51,7 +51,7 @@ export type VoiceRoomTransport = z.infer<typeof voiceRoomTransportSchema>;
 
 export const voiceParticipantSchema = z.object({
   peerId: z.string(),
-  userId: z.string().uuid(),
+  userId: z.string().guid(),
   displayName: z.string(),
   avatarUrl: z.string().nullable(),
   sharingScreen: z.boolean().default(false),
@@ -426,7 +426,7 @@ export const voiceTransportChangedMessageSchema = z.object({
  */
 export const voiceJoinRefusedMessageSchema = z.object({
   type: z.literal("voice-join-refused"),
-  voiceChannelId: z.string().uuid(),
+  voiceChannelId: z.string().guid(),
   reason: z.enum(["mesh-multi-instance"]).optional(),
 });
 
@@ -471,7 +471,7 @@ export const iceCandidateMessageSchema = z.object({
 
 /** Who is calling, as shown on the incoming-call surface. */
 export const callerSummarySchema = z.object({
-  userId: z.string().uuid(),
+  userId: z.string().guid(),
   displayName: z.string(),
   avatarUrl: z.string().nullable(),
 });
@@ -485,13 +485,13 @@ export const callerSummarySchema = z.object({
  */
 export const callRingMessageSchema = z.object({
   type: z.literal("call-ring"),
-  conversationId: z.string().uuid(),
+  conversationId: z.string().guid(),
 });
 
 /** Callee → server: refuse the ring. Accepting is simply `join-voice-room`. */
 export const callDeclineMessageSchema = z.object({
   type: z.literal("call-decline"),
-  conversationId: z.string().uuid(),
+  conversationId: z.string().guid(),
 });
 
 /**
@@ -517,7 +517,7 @@ export const setCameraMessageSchema = z.object({
 /** Server → callee sockets: someone is calling this conversation. */
 export const callIncomingMessageSchema = z.object({
   type: z.literal("call-incoming"),
-  conversationId: z.string().uuid(),
+  conversationId: z.string().guid(),
   kind: z.enum(["dm", "group"]),
   caller: callerSummarySchema,
 });
@@ -532,15 +532,15 @@ export const callIncomingMessageSchema = z.object({
  */
 export const callRingCancelledMessageSchema = z.object({
   type: z.literal("call-ring-cancelled"),
-  conversationId: z.string().uuid(),
+  conversationId: z.string().guid(),
   reason: z.enum(["answered", "declined", "cancelled", "timeout"]),
 });
 
 /** Server → the room: a rung participant declined, so stop expecting them. */
 export const callDeclinedMessageSchema = z.object({
   type: z.literal("call-declined"),
-  conversationId: z.string().uuid(),
-  userId: z.string().uuid(),
+  conversationId: z.string().guid(),
+  userId: z.string().guid(),
 });
 
 export type CallerSummary = z.infer<typeof callerSummarySchema>;
@@ -577,7 +577,7 @@ export const voiceModerationMessageSchema = z.object({
    * only when it is currently in `voiceChannelId`; consent to be moved is
    * consent already given by being in that server's voice.
    */
-  movedToChannelId: z.string().uuid().optional(),
+  movedToChannelId: z.string().guid().optional(),
   /** The whole sentence, already written — render it verbatim. */
   message: z.string(),
   /**
@@ -763,7 +763,7 @@ export function isClientRelayMessage(
 
 export const joinVoiceRoomMessageSchema = z.object({
   type: z.literal("join-voice-room"),
-  voiceChannelId: z.string().uuid(),
+  voiceChannelId: z.string().guid(),
   /**
    * Which transports this client is able to run. Declared up front so the
    * server can refuse the join *before* creating a peer — a client that cannot
@@ -781,7 +781,7 @@ export const joinVoiceRoomMessageSchema = z.object({
    * omit it and get a new id. The server only honours it with a valid
    * `resumeToken` (same user, same channel, unexpired).
    */
-  resumePeerId: z.string().uuid().optional(),
+  resumePeerId: z.string().guid().optional(),
   /** HMAC issued on `welcome`. Missing or invalid → cold join, never 500. */
   resumeToken: z.string().min(1).optional(),
   /**
@@ -799,7 +799,7 @@ export const leaveVoiceRoomMessageSchema = z.object({
    * the peer. When the socket is new (hangup while `/ws` was down) the server
    * verifies these and removes that orphan instead of waiting out the TTL.
    */
-  resumePeerId: z.string().uuid().optional(),
+  resumePeerId: z.string().guid().optional(),
   resumeToken: z.string().min(1).optional(),
 });
 

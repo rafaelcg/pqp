@@ -214,8 +214,8 @@ export const notificationPreferencesSchema = z.object({
    * "mentions". A plain message in a busy server is never a banner by default.
    */
   serverDefault: notificationLevelSchema.optional(),
-  servers: z.record(z.string().uuid(), notificationLevelSchema).optional(),
-  channels: z.record(z.string().uuid(), notificationLevelSchema).optional(),
+  servers: z.record(z.string().guid(), notificationLevelSchema).optional(),
+  channels: z.record(z.string().guid(), notificationLevelSchema).optional(),
   /** The MSN-style arrival card for a conversation message. Default true. */
   arrivalToast: z.boolean().optional(),
   /**
@@ -229,7 +229,7 @@ export const notificationPreferencesSchema = z.object({
    * large one or a community). Only honoured while the
    * `stream_start_notifications` flag is on for that server.
    */
-  streamAlerts: z.record(z.string().uuid(), z.boolean()).optional(),
+  streamAlerts: z.record(z.string().guid(), z.boolean()).optional(),
 });
 
 export type NotificationPreferences = z.infer<
@@ -466,8 +466,8 @@ export const userPreferencesSchema = z.object({
    */
   favoriteChannels: z
     .record(
-      z.string().uuid(),
-      z.array(z.string().uuid()).max(FAVORITE_CHANNELS_PER_SERVER_MAX),
+      z.string().guid(),
+      z.array(z.string().guid()).max(FAVORITE_CHANNELS_PER_SERVER_MAX),
     )
     .optional(),
   /**
@@ -479,7 +479,7 @@ export const userPreferencesSchema = z.object({
    * the rail from becoming a second DM list.
    */
   pinnedConversations: z
-    .array(z.string().uuid())
+    .array(z.string().guid())
     .max(PINNED_CONVERSATIONS_MAX)
     .optional(),
   /**
@@ -578,7 +578,7 @@ export const ageCheckResponseSchema = z.object({
 export type AgeCheckResponse = z.infer<typeof ageCheckResponseSchema>;
 
 export const userSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   clerkId: z.string(),
   displayName: z.string(),
   username: z.string().nullable(),
@@ -689,7 +689,7 @@ export const userSchema = z.object({
  * presence/last-seen field.
  */
 export const publicUserSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   displayName: z.string(),
   username: z.string().nullable(),
   tag: z.string().nullable(),
@@ -723,9 +723,9 @@ export type PublicUser = z.infer<typeof publicUserSchema>;
 export const MAX_MESSAGE_RETENTION_DAYS = 3650;
 
 export const serverSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   name: z.string(),
-  ownerId: z.string().uuid(),
+  ownerId: z.string().guid(),
   role: memberRoleSchema.optional(),
   createdAt: z.string(),
   /** Null means keep forever. */
@@ -817,13 +817,13 @@ export type UpdateServerCommunityHomeConfig = z.infer<
 >;
 
 export const channelSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   /**
    * Null for a conversation, which belongs to no server. Nullable rather than
    * omitted so every caller that reaches for it to route or to authorise is
    * forced to say what it does when there is no server — that is the point.
    */
-  serverId: z.string().uuid().nullable(),
+  serverId: z.string().guid().nullable(),
   /**
    * Defaulted so a response from an API that predates conversations still
    * parses as what it is: a server channel.
@@ -841,7 +841,7 @@ export const channelSchema = z.object({
    * conversation — defaulted so a client built against this schema still
    * parses a response from an API that predates categories.
    */
-  parentId: z.string().uuid().nullable().default(null),
+  parentId: z.string().guid().nullable().default(null),
   /**
    * Seconds a member must wait between sends. 0 is off. Defaulted so a
    * response from an API that predates slow mode still parses as off.
@@ -883,7 +883,7 @@ export const reactionEmojiSchema = z
   .refine((value) => !CONTROL_CHARS.test(value), "Invalid emoji");
 
 export const reactionUserSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   displayName: z.string().min(1),
 });
 
@@ -907,8 +907,8 @@ export const REPLY_EXCERPT_MAX_LENGTH = 120;
  * still worth showing as "the original message was deleted".
  */
 export const messageReplyRefSchema = z.object({
-  id: z.string().uuid(),
-  authorId: z.string().uuid().nullable(),
+  id: z.string().guid(),
+  authorId: z.string().guid().nullable(),
   authorName: z.string().nullable(),
   excerpt: z.string().max(REPLY_EXCERPT_MAX_LENGTH),
   deleted: z.boolean(),
@@ -938,7 +938,7 @@ export function buildReplyExcerpt(body: string): string {
 /** Who pinned a message. Not just an id: the pin panel names them without a
  * second round trip, and the account can outlive its own display name changing. */
 export const messagePinnedBySchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   displayName: z.string(),
 });
 
@@ -951,9 +951,9 @@ export type MessagePinnedBy = z.infer<typeof messagePinnedBySchema>;
 export const MAX_PINS_PER_CHANNEL = 50;
 
 export const messageSchema = z.object({
-  id: z.string().uuid(),
-  channelId: z.string().uuid(),
-  authorId: z.string().uuid(),
+  id: z.string().guid(),
+  channelId: z.string().guid(),
+  authorId: z.string().guid(),
   authorName: z.string(),
   authorTag: z.string().nullable(),
   authorAvatarUrl: z.string().nullable(),
@@ -1036,7 +1036,7 @@ export const messageSchema = z.object({
    * stops carrying the picture and the caption once the story expires.
    * Absent on the wire for every other message: read it as `storyId ?? null`.
    */
-  storyId: z.string().uuid().nullable().optional(),
+  storyId: z.string().guid().nullable().optional(),
   /**
    * Set when this message is a forward (`POST /api/forwards`): a snapshot of a
    * Baú post or of another message, drawn as a card under `body` (the
@@ -1079,7 +1079,7 @@ export const updateMessageSchema = z.object({
  */
 export const createChannelMessageSchema = z.object({
   body: messageBodySchema,
-  replyToId: z.string().uuid().optional(),
+  replyToId: z.string().guid().optional(),
 });
 export type CreateChannelMessageRequest = z.infer<
   typeof createChannelMessageSchema
@@ -1123,7 +1123,7 @@ export const bulkDeleteMessagesSchema = z.union([
   }),
   z.object({
     messageIds: z
-      .array(z.string().uuid())
+      .array(z.string().guid())
       .min(1)
       .max(MESSAGE_BULK_DELETE_MAX),
     count: z.undefined().optional(),
@@ -1136,7 +1136,7 @@ export type BulkDeleteMessagesRequest = z.infer<
 /** What the route answers with: the ids that actually went. */
 export const bulkDeleteMessagesResponseSchema = z.object({
   deleted: z.number().int().nonnegative(),
-  messageIds: z.array(z.string().uuid()),
+  messageIds: z.array(z.string().guid()),
 });
 export type BulkDeleteMessagesResponse = z.infer<
   typeof bulkDeleteMessagesResponseSchema
@@ -1154,15 +1154,15 @@ export const unreadCountsSchema = z.object({
 export type UnreadCounts = z.infer<typeof unreadCountsSchema>;
 
 export const channelUnreadSchema = unreadCountsSchema.extend({
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
 });
 
 export type ChannelUnread = z.infer<typeof channelUnreadSchema>;
 
 export const inviteSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   code: z.string(),
-  serverId: z.string().uuid(),
+  serverId: z.string().guid(),
   serverName: z.string().optional(),
   maxUses: z.number().nullable(),
   uses: z.number(),
@@ -1253,7 +1253,7 @@ export const createChannelSchema = z
      * loose area that client cannot draw (the legacy-create rule). Every
      * current client sends the key. Never set for a category.
      */
-    parentId: z.string().uuid().nullable().optional(),
+    parentId: z.string().guid().nullable().optional(),
   })
   .transform((value) =>
     value.type === "category" ? { ...value, name: value.name.trim() } : value,
@@ -1261,11 +1261,11 @@ export const createChannelSchema = z
   .superRefine((value, ctx) => {
     const issue = channelNameIssue(value.type, value.name);
     if (issue) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: issue, path: ["name"] });
+      ctx.addIssue({ code: "custom", message: issue, path: ["name"] });
     }
     if (value.type === "category" && value.parentId) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: "A category cannot be nested under another category",
         path: ["parentId"],
       });
@@ -1322,7 +1322,7 @@ export const updateChannelSchema = z.object({
  * not an error.
  */
 export const moveChannelSchema = z.object({
-  parentId: z.string().uuid().nullable(),
+  parentId: z.string().guid().nullable(),
   index: z.number().int().min(0),
   /**
    * A drop ON a row: take that row's slot (after it when the moved channel
@@ -1330,7 +1330,7 @@ export const moveChannelSchema = z.object({
    * index cannot be: the client does not see private siblings, the server
    * does. `index` stays for an older server and an older client.
    */
-  targetId: z.string().uuid().optional(),
+  targetId: z.string().guid().optional(),
 });
 
 /**
@@ -1347,12 +1347,12 @@ export const moveChannelSchema = z.object({
  */
 export const channelLayoutSchema = z.object({
   baseVersion: z.number().int().min(0),
-  categoryIds: z.array(z.string().uuid()).max(100),
+  categoryIds: z.array(z.string().guid()).max(100),
   groups: z
     .array(
       z.object({
-        parentId: z.string().uuid().nullable(),
-        channelIds: z.array(z.string().uuid()).max(500),
+        parentId: z.string().guid().nullable(),
+        channelIds: z.array(z.string().guid()).max(500),
       }),
     )
     .max(101),
@@ -1390,7 +1390,7 @@ export const CHANNEL_LAYOUT_OFF = "channel_layout_off";
  */
 export const channelsUpdateSchema = z.object({
   type: z.literal("channels-update"),
-  serverId: z.string().uuid(),
+  serverId: z.string().guid(),
 });
 
 export type ChannelsUpdate = z.infer<typeof channelsUpdateSchema>;
@@ -1664,12 +1664,12 @@ export const updateMemberRoleSchema = z.object({
 );
 
 export const addChannelMemberSchema = z.object({
-  userId: z.string().uuid(),
+  userId: z.string().guid(),
 });
 
 export const updateServerSchema = z.object({
   name: z.string().min(1).max(100).optional(),
-  ownerId: z.string().uuid().optional(),
+  ownerId: z.string().guid().optional(),
   /** Explicit `null` clears retention back to "keep forever" — absent means
    * "not changing this," the same distinction `imageUrl` already draws on
    * `updateChannelSchema`. */
@@ -1746,7 +1746,7 @@ export function extractMentionUsernames(body: string): string[] {
 }
 
 export const banMemberSchema = z.object({
-  userId: z.string().uuid(),
+  userId: z.string().guid(),
   reason: z.string().max(500).nullable().optional(),
 });
 

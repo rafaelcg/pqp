@@ -94,7 +94,7 @@ export const liveReactionMessageSchema = z.object({
    * the sender actually holds a peer in rather than trusting it, so this is a
    * statement of intent, not an address.
    */
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
   emoji: liveReactionEmojiSchema,
 });
 
@@ -117,7 +117,7 @@ export type LiveReactionCount = z.infer<typeof liveReactionCountSchema>;
  */
 export const liveReactionsMessageSchema = z.object({
   type: z.literal("live-reactions"),
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
   items: z.array(liveReactionCountSchema).min(1),
   seq: z.number().int().nonnegative(),
 });

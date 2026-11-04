@@ -42,7 +42,7 @@ import type { Router } from "../lib/router.js";
  */
 
 const BASE = "/api/apps/pqp-locadora/saves";
-const sessionIdSchema = z.string().uuid();
+const sessionIdSchema = z.string().guid();
 
 function sessionFrom(url: URL): string {
   const parsed = sessionIdSchema.safeParse(url.searchParams.get("sessionId"));

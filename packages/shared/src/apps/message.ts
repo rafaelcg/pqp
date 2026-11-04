@@ -13,7 +13,7 @@ import { appEndReasonSchema, appResultSchema } from "./common.js";
  */
 export const messageAppSessionSchema = z
   .object({
-    id: z.string().uuid(),
+    id: z.string().guid(),
     appId: z.string(),
     appVersion: z.string(),
     status: z.enum(["live", "ended"]),
@@ -26,7 +26,7 @@ export const messageAppSessionSchema = z
       })
       .strip()
       .nullable(),
-    startedBy: z.string().uuid().nullable(),
+    startedBy: z.string().guid().nullable(),
   })
   .strip();
 export type MessageAppSession = z.infer<typeof messageAppSessionSchema>;

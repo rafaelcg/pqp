@@ -1466,7 +1466,7 @@ export const setFeatureFlagSchema = z.object({
 
 export const setFeatureFlagOverrideSchema = z.object({
   key: z.enum(FEATURE_FLAG_KEYS),
-  serverId: z.string().uuid(),
+  serverId: z.string().guid(),
   /** `null` removes the override, so the global answer applies again. */
   enabled: z.boolean().nullable(),
 });

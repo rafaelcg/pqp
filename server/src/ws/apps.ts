@@ -107,11 +107,11 @@ export const APP_ROSTER_COALESCE_MS = 250;
 export const APP_PARTICIPANT_SWEEP_MS = 15_000;
 
 const channelHintSchema = z.object({
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
   immediate: z.boolean().optional(),
 });
 const endedHintSchema = z.object({ frame: appEndedSchema });
-const sessionHintSchema = z.object({ sessionId: z.string().uuid() });
+const sessionHintSchema = z.object({ sessionId: z.string().guid() });
 const eventHintSchema = z.object({ frame: appEventSchema });
 
 // ---------------------------------------------------------------- channel-app
