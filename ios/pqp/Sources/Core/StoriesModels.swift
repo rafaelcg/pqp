@@ -531,6 +531,15 @@ enum StoryRules {
         return next
     }
 
+    /// The strip without the rings of anybody the reader blocked. Their own
+    /// bubble is never dropped.
+    static func droppingBlocked(_ strip: StoryStrip, blocked: Set<String>) -> StoryStrip {
+        guard !blocked.isEmpty else { return strip }
+        var next = strip
+        next.items = strip.items.filter { !blocked.contains($0.author.id) }
+        return next
+    }
+
     /// When the next ring runs out, so the strip can redraw then.
     static func nextExpiry(_ strip: StoryStrip, now: Date = Date()) -> Date? {
         ([strip.own].compactMap { $0 } + strip.items)

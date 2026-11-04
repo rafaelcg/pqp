@@ -532,7 +532,7 @@ final class FriendsModel {
             case .block:
                 // No separate unfriend call: the block's trigger deletes the
                 // friendship row itself, and issuing both would race it.
-                try await session.api.setBlocked(userId: userId, blocked: true)
+                try await session.blocked.block(userId, surface: "friends", using: session.api)
             }
             await refresh()
         } catch {

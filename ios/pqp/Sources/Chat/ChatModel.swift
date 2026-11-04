@@ -130,10 +130,22 @@ final class ChatModel {
         botWork.values.sorted { ($0.name, $0.userId) < ($1.name, $1.userId) }
     }
 
-    func isGrouped(at index: Int) -> Bool {
-        guard index > 0, index < messages.count else { return false }
-        let current = messages[index]
-        let previous = messages[index - 1]
+    /// What the transcript draws: every message except those by somebody this
+    /// account has blocked. The blocked person's rows stay in `messages` (paging,
+    /// pending echoes and the cache all index it) and are dropped only here, so
+    /// a block hides what is already loaded AND what arrives a second later, and
+    /// an unblock brings it back with no refetch. Reads `session.blocked`, so a
+    /// view that calls this redraws when the set changes.
+    var visibleMessages: [Message] {
+        let blocked = session?.blocked.ids ?? []
+        let viewerId = session?.currentUser?.id
+        return messages.filter { !BlockRules.hides($0, viewerId: viewerId, blocked: blocked) }
+    }
+
+    func isGrouped(at index: Int, in rows: [Message]) -> Bool {
+        guard index > 0, index < rows.count else { return false }
+        let current = rows[index]
+        let previous = rows[index - 1]
         guard current.authorId == previous.authorId, !current.isWebhook, !previous.isWebhook else {
             return false
         }
@@ -145,10 +157,10 @@ final class ChatModel {
     /// Whether the message at `index` is the first of its calendar day in the
     /// loaded transcript. The first loaded message always is: the day has to
     /// be named somewhere above it, and the row moves up as history loads.
-    func startsDay(at index: Int) -> Bool {
-        guard index >= 0, index < messages.count else { return false }
+    func startsDay(at index: Int, in rows: [Message]) -> Bool {
+        guard index >= 0, index < rows.count else { return false }
         guard index > 0 else { return true }
-        return !DayLabels.isSameDay(messages[index - 1].createdAt, messages[index].createdAt)
+        return !DayLabels.isSameDay(rows[index - 1].createdAt, rows[index].createdAt)
     }
 
     /// Cache first, then network.
@@ -888,8 +900,11 @@ final class ChatModel {
             }
             messages[index].reactions = reactions
 
-        case .typing(let typingChannelId, _, let displayName):
+        case .typing(let typingChannelId, let typingUserId, let displayName):
             guard typingChannelId == channelId else { return }
+            // The server drops a blocked person's "typing" in a conversation;
+            // in a server channel it is the reader's job, like their messages.
+            guard session?.blocked.contains(typingUserId) != true else { return }
             typingNames[displayName] = Date()
 
         case .botActivity(let activityChannelId, let userId, let displayName, let tool):

@@ -337,6 +337,30 @@ decided once, by `createReport`/`createAutomatedReport`, from the reported
 thing, never by the client. This only widens who may *read and close* what
 was already filed.
 
+### Blocking a person tells the operators
+
+App Store guideline 1.2 asks that blocking "also notify the developer". A block
+is the one moderation act a user performs for themselves, so it is not a
+report, and it is not filed as an accusation by the blocker. Every NEW block
+(`POST /api/blocks`, not a repeat) does three things in
+`services/block-notice.ts`, none of which can fail the block:
+
+- logs `social.block blocker=<id> blocked=<id> surface=<message|profile|friends>
+  queued=<bool> capped=<bool>`: two account ids and where it was made, never a
+  message or a name;
+- counts it under `blocks` on `GET /api/admin/metrics` (`blocks`,
+  `reportsFiled`, `reportsCapped`, `failures`; per process);
+- opens one ticket in the INSTANCE report queue, through the same machinery as
+  the image scanner (`createAutomatedInstanceReport`): no reporter, reason
+  `other`, place label "Bloqueio", one open ticket per blocked person. The
+  context card on that ticket already says how many people blocked the account
+  and shows its recent messages, so a second blocker moves a number, not the
+  queue. Closing the ticket re-arms it.
+
+One account can file at most `BLOCK_REPORTS_PER_DAY` (20) tickets a day this
+way; past that the block is still logged and counted. A flood of blocks is
+therefore a counter, not a denial of moderation.
+
 ### Reporting a Baú post or comment
 
 `createReportSchema` also takes `bau_post` and `bau_comment` (id only). The

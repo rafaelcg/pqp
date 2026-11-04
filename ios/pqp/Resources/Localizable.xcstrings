@@ -3161,6 +3161,16 @@
         }
       }
     },
+    "Could not block" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra bloquear"
+          }
+        }
+      }
+    },
     "Could not build your export" : {
       "localizations" : {
         "pt-BR" : {

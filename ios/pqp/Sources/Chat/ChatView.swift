@@ -117,6 +117,9 @@ struct ChatView: View {
     @State private var actionTarget: Message?
     @State private var reactionTarget: Message?
     @State private var reportTarget: ReportTarget?
+    /// The message whose author the reader is about to block, from the
+    /// long-press menu. Asked once; the block itself is `BlockedUsers.block`.
+    @State private var blockTarget: Message?
     @State private var profileSubject: ProfileSubject?
     @State private var openedConversation: OpenedConversation?
     @State private var pickerItem: PhotosPickerItem?
@@ -673,6 +676,7 @@ struct ChatView: View {
                 Task { await forumPost?.retitle(title) }
             }
         }
+        .blockAuthorConfirmation($blockTarget)
         .confirmationDialog(
             "Delete this post?",
             isPresented: $confirmingForumDelete,
@@ -800,7 +804,10 @@ struct ChatView: View {
                         .padding(.vertical, 12)
                     }
 
-                    ForEach(Array(model.messages.enumerated()), id: \.element.id) { index, message in
+                    // Without anybody the reader blocked, and live: see
+                    // `ChatModel.visibleMessages`.
+                    let rows = model.visibleMessages
+                    ForEach(Array(rows.enumerated()), id: \.element.id) { index, message in
                         // A new calendar day opens with a row that says which
                         // day, the way the web transcript does. The oldest
                         // loaded message always opens one: the day has to be
@@ -812,7 +819,7 @@ struct ChatView: View {
                                 .onAppear { forumDividerOnScreen = true }
                                 .onDisappear { forumDividerOnScreen = false }
                         }
-                        if model.startsDay(at: index) {
+                        if model.startsDay(at: index, in: rows) {
                             DaySeparator(date: message.createdAt)
                         }
                         if message.isNudge {
@@ -836,7 +843,7 @@ struct ChatView: View {
                             // a block, the way the web client groups them — a
                             // repeated avatar every line eats a phone screen.
                             // A day boundary always breaks the block.
-                            isGrouped: model.isGrouped(at: index) && !model.startsDay(at: index)
+                            isGrouped: model.isGrouped(at: index, in: rows) && !model.startsDay(at: index, in: rows)
                                 && !forumBreaksGroup(at: index, message: message),
                             onToggleReaction: { emoji in
                                 Task { await model.toggleReaction(emoji, on: message) }
@@ -1118,6 +1125,8 @@ struct ChatView: View {
             canReport: !model.isMine(message) && !message.isWebhook,
             canForward: canForward(message),
             onForward: { startForward(message) },
+            canBlock: !model.isMine(message) && !message.isWebhook && !message.isNudge,
+            onBlock: { blockTarget = message },
             onReact: { emoji in
                 Task { await model.toggleReaction(emoji, on: message) }
             },
@@ -1804,7 +1813,10 @@ struct MessageRow: View {
                     }
                 }
 
-                if let reply = message.replyTo {
+                // A reply to somebody the reader blocked would quote their words
+                // in a line of its own, so the quote goes with the person.
+                if let reply = message.replyTo,
+                   !(reply.authorId.map { session.blocked.contains($0) } ?? false) {
                     ReplyChip(reply: reply)
                 }
 

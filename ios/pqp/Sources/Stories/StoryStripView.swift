@@ -21,7 +21,16 @@ enum StoryScope: Hashable, Sendable {
 @Observable
 final class StoryStripModel {
     let scope: StoryScope
-    private(set) var strip = StoryStrip.off
+    /// What the server last sent, before anybody blocked is taken out.
+    private(set) var received = StoryStrip.off
+    /// The strip as drawn: without the rings of people this account blocked.
+    /// Computed from `received` and `session.blocked`, so a block made over this
+    /// screen takes the ring off the next frame and an unblock puts it back,
+    /// with no refetch. The server already leaves a blocked person's stories
+    /// out of a fresh read; this is the part that makes it instant.
+    var strip: StoryStrip {
+        StoryRules.droppingBlocked(received, blocked: session?.blocked.ids ?? [])
+    }
     /// "A staff tirou teu story do X", once, at the top of that server.
     private(set) var notices: [StoryNotice] = []
     var composing = false
@@ -73,7 +82,7 @@ final class StoryStripModel {
     }
 
     private func apply(_ next: StoryStrip) {
-        strip = StoryRules.dropExpired(next)
+        received = StoryRules.dropExpired(next)
         scheduleExpiry()
     }
 
@@ -84,7 +93,7 @@ final class StoryStripModel {
             let wait = max(1, next.timeIntervalSinceNow + 0.5)
             try? await Task.sleep(for: .seconds(wait))
             guard !Task.isCancelled, let self else { return }
-            self.apply(self.strip)
+            self.apply(self.received)
         }
     }
 
@@ -95,7 +104,7 @@ final class StoryStripModel {
         Task {
             try? await Task.sleep(for: .milliseconds(120))
             withAnimation(reduceMotion ? .easeOut(duration: 0.15) : .easeInOut(duration: 0.3)) {
-                strip = StoryRules.markingSeen(strip, seenIds: seen)
+                received = StoryRules.markingSeen(received, seenIds: seen)
             }
         }
     }

@@ -694,7 +694,13 @@ private struct CommentsBlock: View {
     @State private var submitting = false
     @State private var failed = false
 
-    private var shown: [CommunityHomeComment] { expanded ?? post.commentTeaser }
+    @Environment(SessionStore.self) private var session
+
+    /// Without comments by anybody the reader blocked: the server leaves them
+    /// out of a fresh read, this takes them off a card already on screen.
+    private var shown: [CommunityHomeComment] {
+        (expanded ?? post.commentTeaser).filter { !session.blocked.contains($0.author.id) }
+    }
     private var hidden: Int { max(0, post.commentCount - post.commentTeaser.count) }
 
     var body: some View {

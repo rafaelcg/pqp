@@ -148,8 +148,11 @@ struct AccountSettingsView: View {
                             Spacer()
                             Button("Unblock") {
                                 Task {
-                                    try? await session.api.setBlocked(userId: user.id, blocked: false)
-                                    blocked.removeAll { $0.id == user.id }
+                                    // Through the shared store, so the person
+                                    // is back in every list at once.
+                                    if (try? await session.blocked.unblock(user.id, using: session.api)) != nil {
+                                        blocked.removeAll { $0.id == user.id }
+                                    }
                                 }
                             }
                             .foregroundStyle(Palette.signal)

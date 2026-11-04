@@ -941,6 +941,7 @@ import {
   SelfBlockError,
   unblockUser,
 } from "../services/blocks.js";
+import { noteBlockForOperators } from "../services/block-notice.js";
 import {
   DmRefusedError,
   getConversation,
@@ -3294,6 +3295,16 @@ router.post("/api/blocks", async ({ req, user }) => {
   }
   try {
     const added = await blockUser(user.id, body.userId);
+    if (added) {
+      // The operators hear about every new block (a log line, a counter and an
+      // instance-queue ticket). Awaited so a test can read it, but it never
+      // throws: the block is already stored and must answer 201 regardless.
+      await noteBlockForOperators({
+        blockerId: user.id,
+        blockedUserId: body.userId,
+        surface: body.surface ?? null,
+      });
+    }
     // Blocking somebody you already blocked is not an error and not a new
     // block, so it answers 200 while the first one answers 201.
     return added ? created({ ok: true }) : { ok: true };

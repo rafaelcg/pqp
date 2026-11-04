@@ -15,6 +15,7 @@ import { livePreviewMetrics } from "./live-preview.js";
 import { appsMetrics, type AppsMetrics } from "../apps/metrics.js";
 import { ageGateMetrics, type AgeGateMetrics } from "./age-gate.js";
 import { nudgeMetrics, type NudgeMetrics } from "./nudge.js";
+import { blockMetrics, type BlockMetrics } from "./block-notice.js";
 import { channelLayoutReport, type ChannelLayoutReport } from "./channel-layout.js";
 import {
   communityHomeTranslationMetrics,
@@ -418,6 +419,14 @@ export interface AdminMetrics {
    * instances read each. Live, never from the 30 s cache.
    */
   age: AgeGateMetrics;
+  /**
+   * User blocks (`services/block-notice.ts`), since this process started: new
+   * blocks, the instance-queue tickets they opened (`reportsFiled`), those held
+   * back by the per-account daily cap, and notifications that threw. Counts
+   * only, never an account. Per process: with two instances read each. Live,
+   * never from the 30 s cache.
+   */
+  blocks: BlockMetrics;
   /**
    * Apps in channels (`apps/metrics.ts`): live sessions and seats from the
    * table, and since this process started the starts, ends by reason, handoffs,
@@ -1320,6 +1329,7 @@ type CachedMetrics = Omit<
   | "livePreview"
   | "nudge"
   | "age"
+  | "blocks"
   | "channelLayout"
   | "apps"
 >;
@@ -2139,6 +2149,7 @@ export async function getAdminMetrics(): Promise<AdminMetrics> {
     livePreview: livePreviewMetrics(),
     nudge: nudgeMetrics(),
     age: ageGateMetrics(),
+    blocks: blockMetrics(),
     channelLayout,
     apps,
   };

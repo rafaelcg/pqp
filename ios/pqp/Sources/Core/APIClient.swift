@@ -1134,10 +1134,12 @@ extension APIClient {
         return response.blocked
     }
 
-    func setBlocked(userId: String, blocked: Bool) async throws {
+    /// `surface` is a short token the operators' log line carries ("message",
+    /// "profile", "friends"): where the block was made, never any content.
+    func setBlocked(userId: String, blocked: Bool, surface: String? = nil) async throws {
         if blocked {
-            struct Body: Encodable { let userId: String }
-            let _: EmptyResponse = try await post("/api/blocks", body: Body(userId: userId))
+            struct Body: Encodable { let userId: String; let surface: String? }
+            let _: EmptyResponse = try await post("/api/blocks", body: Body(userId: userId, surface: surface))
         } else {
             let _: EmptyResponse = try await send(
                 path: "/api/blocks/\(userId)", method: "DELETE", query: [], body: nil
