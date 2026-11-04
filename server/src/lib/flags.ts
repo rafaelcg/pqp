@@ -957,6 +957,19 @@ export const FEATURE_FLAGS = {
     perServer: false,
     clientVia: "GET /api/forwards/config",
   },
+  default_text_filter: {
+    description:
+      "Filtro de texto padrão do pqp (xingamento pesado, ameaça e ofensa dirigida em inglês, português e espanhol) em toda mensagem, post, comentário e nome, sem regra de ninguém. O dono de cada servidor pode desligar nas configurações do AutoMod. Desligado aqui: nenhum servidor filtra por padrão.",
+    env: "DEFAULT_TEXT_FILTER",
+    parseEnv: onUnlessOff,
+    // ON by default: the App Store's 1.2 asks for a filtering method that is
+    // there without anybody setting it up. Global, not per server: the
+    // owner's own switch (`server_text_filter_settings`) is the per-server
+    // lever, and a DM, a profile name and a story have no single server.
+    codeDefault: true,
+    perServer: false,
+    clientVia: "GET /api/servers/:id/automod/baseline",
+  },
   discord_bring_crew: {
     description:
       "Traz tua galera (depois de copiar um Discord): o último passo vira um anúncio pronto pra colar no Discord antigo, e o dono vê quantas pessoas já chegaram, com um lembrete no dia seguinte se veio pouca gente.",

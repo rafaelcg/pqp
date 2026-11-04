@@ -11,7 +11,7 @@ export const privacyEn: LegalDocument = {
   description:
     "How pqp.gg handles personal data: what we collect, our legal bases, where it is processed, retention, and your rights under the LGPD and UK data protection law.",
   heading: "Privacy Policy",
-  updated: "18 October 2026",
+  updated: "4 November 2026",
   sections: [
     {
       id: "intro",
@@ -199,11 +199,13 @@ export const privacyEn: LegalDocument = {
             database, and the file itself in S3-compatible object storage.
             Attachments are <strong>enabled</strong> on pqp.gg today. A profile
             banner uses the same storage. GIFs picked from the GIF search are
-            stored as a link to the GIF provider, not as a copy. When image scanning is configured, a freshly uploaded
-            image is checked before it is visible in a channel. A match can
+            stored as a link to the GIF provider, not as a copy. A freshly uploaded
+            image sent in a channel or posted to a community&apos;s Baú is
+            checked by an automated image-safety service before it is visible
+            to anyone else (image scanning is on at pqp.gg today). A match can
             drop the file without a person reading it. That is a check of the
-            file, not a decision about you as a person. Avatars and banners are
-            not scanned today.
+            file, not a decision about you as a person. Video, audio and PDF
+            files, avatars and banners are not scanned today.
           </p>
           <p>
             <strong>Watch parties.</strong> A watch party is a broadcast, and we
@@ -544,9 +546,11 @@ export const privacyEn: LegalDocument = {
           <li>
             <strong>No automated decisions about you as a person.</strong>{" "}
             Nothing here profiles you or decides whether you may keep an
-            account. Moderation of people is done by a person. If image
-            scanning is on, a file can be dropped or flagged by that check
-            before a person sees it. That is a check of the file.
+            account. Moderation of people is done by a person. A file can be
+            dropped or flagged by the image check before a person sees it, and
+            a message or name can be refused by the built-in text filter (a
+            list of slurs, abuse and threats, matched on the text itself). Those
+            are checks of the content, not of you.
           </li>
         </ul>
       ),

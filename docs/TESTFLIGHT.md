@@ -307,6 +307,16 @@ audiences, caches and cluster invalidations are the real ones):
   all of that, its token is minted and revoked in the same call (nobody can sign
   in as it), and Report and Block both work on it. The web client draws a small
   "bot" mark beside the name; iOS and Android do not;
+- a third account, **Block Me**: a revoked character built the same way
+  (`character_accounts.label = 'review-block-me'`), a member of the space, who
+  posts two mildly annoying but rule-abiding messages in `#geral` (a repeated
+  hello, a message in capital letters). It is **not** a friend and has **no**
+  conversation with the demo account. It exists so that a reviewer testing Block
+  has someone to block: blocking Demo Friend ends the friendship and hides the
+  DM, and unblocking does not bring either back, which is the 2.1(a) "demo account
+  is empty" complaint produced by following our own Notes. The seeded `#geral`
+  message that explains Block now says to open the message menu on a **Block Me**
+  message and choose Block, and that Demo Friend does not need blocking;
 - Demo Friend as an **accepted friend** of the demo account (a `friendships`
   row, friends since six days ago) and a **1:1 conversation** with them: five
   short messages in English and pt-BR, alternating authors, spread over the last
@@ -314,9 +324,12 @@ audiences, caches and cluster invalidations are the real ones):
   Both are written with plain SQL, because `sendFriendRequest` and
   `openConversation` refuse a character for every real account (`dm_privacy =
   'nobody'`). The messages carry the same marker nonce as the channel ones;
-- eight messages in `#geral` (welcome, a how-to-try list, replies, "this is a
-  test message to report") and one in `#ajuda`, English and pt-BR, written by the
-  demo account and Demo Friend, plus four reactions. No real person's data, no
+- ten messages in `#geral` (welcome, a how-to-try list, replies, "this is a
+  test message to report", two from Block Me, how to try Block) and one in
+  `#ajuda`, English and pt-BR, written by the demo account, Demo Friend and Block
+  Me, plus four reactions. **Every word the seed posts must pass the default text
+  filter** (`docs/CONTENT_SAFETY.md`, "The default text filter"); a test fails if it
+  does not. No real person's data, no
   attachments;
 - an invite code (10 uses, no expiry). It is for you to join and look. Do not
   post it anywhere.
@@ -379,9 +392,16 @@ age (never an email; the table has none), and the run prints the same lines with
 It is refused together with `--cleanup`. The other side is not told (declining is
 silent in this product too).
 
-If a **block** stands between the demo account and Demo Friend (a reviewer
-testing Block does exactly this, and blocking ends a friendship), the run does
-not friend them over it: it prints a line marked `!` and exits 2. Unblock in the
+**Re-running on a database seeded earlier.** Each seeded message is found by its
+nonce, and one whose text no longer matches the seed is **updated in place**
+(body only, no "edited" mark; the dry run lists it as "text updated"). That is
+how the older "open their profile and choose Block" line becomes the Block Me
+wording, and Block Me and its two messages are added if they are missing. Nothing
+else about Demo Friend, the friendship or the DM is touched.
+
+If a **block** stands between the demo account and Demo Friend (the reviewer was
+not told to do this any more, but a tester may anyway; blocking ends a friendship),
+the run does not friend them over it: it prints a line marked `!` and exits 2. Unblock in the
 app (Settings, Blocked) and run again.
 
 The dry run ends with a short table of what the Chats and Friends tabs show now
@@ -415,7 +435,8 @@ already-open session does not re-list its servers), then:
    **Friends** (All) lists Demo Friend; **Pending** is empty and says so;
 3. `#geral` has the welcome, how-to and the rest, `#ajuda` has one message, and
    Lobby is a voice channel;
-4. tap Demo Friend's name, then profile → Block works, and long-pressing "This is
+4. long-press a **Block Me** message in `#geral` → Block works, and Demo Friend,
+   the friendship and the DM are still there afterwards; long-pressing "This is
    a test message to report" → Report files a report (a report about a server
    channel goes to that server's own moderators, and the demo account is its
    owner, so you will not see it and nothing needs dismissing. Only a report

@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { Permission } from "@pqp/shared";
+import { findBaselineViolation, Permission } from "@pqp/shared";
 import type { BusFrame } from "../lib/bus.js";
 
 /**
@@ -78,6 +78,8 @@ const { createPostgresBusTransport } = await import("../lib/bus-postgres.js");
 const { listFriendships, sendFriendRequest, acceptFriendRequest } = await import("./friends.js");
 const { listConversations, hideConversation, openConversation } = await import("./dms.js");
 const {
+  REVIEW_BLOCKME_LABEL,
+  REVIEW_BLOCKME_NAME,
   REVIEW_DM_MESSAGES,
   REVIEW_FRIEND_LABEL,
   REVIEW_FRIEND_NAME,
@@ -258,7 +260,7 @@ function suite(label: string): void {
       expect(messages.rows.filter((m) => m.channel === "geral").length).toBeGreaterThanOrEqual(6);
       expect(messages.rows.filter((m) => m.channel === "ajuda").length).toBe(1);
       expect(new Set(messages.rows.map((m) => m.author_id))).toEqual(
-        new Set([demoId, friendId]),
+        new Set([demoId, friendId, report.blockMeUserId]),
       );
       expect(messages.rows.every((m) => m.nonce.startsWith(REVIEW_NONCE_PREFIX))).toBe(true);
       expect(messages.rows.filter((m) => m.reply_to_id).length).toBe(
@@ -275,6 +277,188 @@ function suite(label: string): void {
         [report.inviteCode],
       );
       expect(invite.rows[0]).toMatchObject({ created_by: demoId, max_uses: 10, expires_at: null });
+    });
+
+    describe("Block Me, the account made to be blocked", () => {
+      it("is a revoked character and a member, with two quiet messages in #geral", async () => {
+        const report = await run({ apply: true });
+        const blockMeId = report.blockMeUserId!;
+        expect(blockMeId).toBeTruthy();
+        expect(blockMeId).not.toBe(report.friendUserId);
+        const row = await getPool().query(
+          `SELECT u.display_name, u.is_character, u.dm_privacy, ca.label, ca.revoked_at, sm.role
+             FROM users u
+             JOIN character_accounts ca ON ca.user_id = u.id
+             JOIN server_members sm ON sm.user_id = u.id AND sm.server_id = $2
+            WHERE u.id = $1`,
+          [blockMeId, report.serverId],
+        );
+        expect(row.rows[0]).toMatchObject({
+          display_name: REVIEW_BLOCKME_NAME,
+          is_character: true,
+          dm_privacy: "nobody",
+          label: REVIEW_BLOCKME_LABEL,
+          role: "member",
+        });
+        expect(row.rows[0]!.revoked_at).not.toBeNull();
+
+        const posts = await getPool().query<{ body: string; channel: string }>(
+          `SELECT m.body, c.name AS channel FROM messages m
+             JOIN channels c ON c.id = m.channel_id
+            WHERE m.author_id = $1 ORDER BY m.created_at, m.id`,
+          [blockMeId],
+        );
+        expect(posts.rowCount).toBe(2);
+        expect(posts.rows.every((p) => p.channel === "geral")).toBe(true);
+      });
+
+      it("is NOT a friend and has NO conversation with the demo account", async () => {
+        const report = await run({ apply: true });
+        const blockMeId = report.blockMeUserId!;
+        expect(
+          (
+            await getPool().query(
+              `SELECT 1 FROM friendships WHERE low_user_id = $1 OR high_user_id = $1`,
+              [blockMeId],
+            )
+          ).rowCount,
+        ).toBe(0);
+        expect(
+          (
+            await getPool().query(
+              `SELECT 1 FROM dm_pairs WHERE low_user_id = $1 OR high_user_id = $1`,
+              [blockMeId],
+            )
+          ).rowCount,
+        ).toBe(0);
+        expect(
+          (
+            await getPool().query(
+              `SELECT 1 FROM channel_members cm JOIN channels c ON c.id = cm.channel_id
+                WHERE cm.user_id = $1 AND c.kind IN ('dm', 'group')`,
+              [blockMeId],
+            )
+          ).rowCount,
+        ).toBe(0);
+      });
+
+      it("blocking it, as the reviewer is told to, leaves Demo Friend's friendship and DM alone", async () => {
+        const report = await run({ apply: true });
+        const before = report.chatState!.after;
+        expect(before.demoFriendIsFriend).toBe(true);
+        expect(before.demoFriendDmMessages).toBe(REVIEW_DM_MESSAGES.length);
+
+        expect(await blockUser(demoId, report.blockMeUserId!)).toBe(true);
+        expect((await listBlocks(demoId)).map((b) => b.id)).toEqual([report.blockMeUserId]);
+
+        // The seed run that follows a reviewer's block is not refused either:
+        // the block is on Block Me, not on Demo Friend.
+        const again = await run({ apply: true });
+        expect(again.actions.some((a) => a.kind === "blocked")).toBe(false);
+        expect(again.chatState!.after).toEqual(before);
+        expect(await listConversations(demoId)).toHaveLength(1);
+        expect((await listFriendships(demoId)).friends).toHaveLength(1);
+      });
+
+      it("the how-to-block message points at Block Me and not at Demo Friend, in both languages", () => {
+        const block = REVIEW_MESSAGES.find((m) => m.key === "block")!;
+        expect(block.body).toMatch(/message menu on one of the Block Me messages/);
+        expect(block.body).toMatch(/menu de uma mensagem do Block Me/);
+        expect(block.body).toMatch(/Demo Friend is your friend, no need to block them/);
+        expect(block.body).not.toMatch(/open their profile/);
+        // Block Me posts before the instruction that points at it.
+        const keys = REVIEW_MESSAGES.map((m) => m.key);
+        expect(keys.indexOf("blockme-1")).toBeLessThan(keys.indexOf("block"));
+        expect(keys.indexOf("blockme-2")).toBeLessThan(keys.indexOf("block"));
+      });
+
+      it("updates a database seeded with the old wording, in place, once", async () => {
+        const first = await run({ apply: true });
+        const blockNonce = `${REVIEW_NONCE_PREFIX}block`;
+        const old =
+          "To block someone, open their profile and choose Block. " +
+          "Para bloquear alguém, abra o perfil da pessoa e escolha Bloquear.";
+        await getPool().query(`UPDATE messages SET body = $2 WHERE nonce = $1`, [blockNonce, old]);
+        const idBefore = (
+          await getPool().query<{ id: string }>(`SELECT id FROM messages WHERE nonce = $1`, [blockNonce])
+        ).rows[0]!.id;
+        const counts = await snapshot();
+
+        // A dry run says so and writes nothing.
+        const dry = await run();
+        expect(dry.actions.some((a) => a.kind === "change" && /text updated/.test(a.what))).toBe(true);
+        expect(
+          (await getPool().query<{ body: string }>(`SELECT body FROM messages WHERE nonce = $1`, [blockNonce]))
+            .rows[0]!.body,
+        ).toBe(old);
+
+        const applied = await run({ apply: true });
+        expect(applied.actions.some((a) => a.kind === "change" && /text updated/.test(a.what))).toBe(true);
+        const row = (
+          await getPool().query<{ id: string; body: string; edited_at: Date | null }>(
+            `SELECT id, body, edited_at FROM messages WHERE nonce = $1`,
+            [blockNonce],
+          )
+        ).rows[0]!;
+        expect(row.id).toBe(idBefore);
+        expect(row.body).toMatch(/Block Me/);
+        // A correction by the seed is not shown to anybody as an edit.
+        expect(row.edited_at).toBeNull();
+        expect(await snapshot()).toEqual(counts);
+        expect(applied.serverId).toBe(first.serverId);
+
+        // Idempotent: nothing left to change.
+        const third = await run({ apply: true });
+        expect(third.actions.some((a) => a.kind === "create" || a.kind === "change")).toBe(false);
+      });
+
+      it("adds Block Me to a space that was seeded before it existed", async () => {
+        const first = await run({ apply: true });
+        // Take the account and its messages away, as an older seed would have left it.
+        await getPool().query(`DELETE FROM users WHERE id = $1`, [first.blockMeUserId]);
+        await getPool().query(`DELETE FROM character_accounts WHERE label = $1`, [REVIEW_BLOCKME_LABEL]);
+        const second = await run({ apply: true });
+        expect(second.blockMeUserId).toBeTruthy();
+        expect(second.serverId).toBe(first.serverId);
+        expect(
+          (
+            await getPool().query(`SELECT 1 FROM messages WHERE author_id = $1`, [second.blockMeUserId])
+          ).rowCount,
+        ).toBe(2);
+        // Demo Friend, the friendship and the DM were never touched.
+        expect(second.friendUserId).toBe(first.friendUserId);
+        expect(second.chatState!.after.demoFriendIsFriend).toBe(true);
+      });
+
+      it("a dry run on an old seed writes nothing and says Block Me would be made", async () => {
+        const before = await snapshot();
+        const lines: string[] = [];
+        await run({ log: (line: string) => lines.push(line) });
+        expect(await snapshot()).toEqual(before);
+        expect(lines.join("\n")).toContain(REVIEW_BLOCKME_NAME);
+      });
+
+      it("--cleanup takes Block Me with the rest", async () => {
+        const seeded = await run({ apply: true });
+        await run({ cleanup: true, apply: true });
+        expect(
+          (await getPool().query(`SELECT 1 FROM users WHERE id = $1`, [seeded.blockMeUserId])).rowCount,
+        ).toBe(0);
+        expect(
+          (await getPool().query(`SELECT 1 FROM character_accounts WHERE label = $1`, [REVIEW_BLOCKME_LABEL]))
+            .rowCount,
+        ).toBe(0);
+      });
+    });
+
+    it("every word the seed posts passes pqp's own text filter", () => {
+      const bodies = [
+        ...REVIEW_MESSAGES.map((m) => m.body),
+        ...REVIEW_DM_MESSAGES.map((m) => m.body),
+      ];
+      for (const body of bodies) {
+        expect(findBaselineViolation(body), body).toBeNull();
+      }
     });
 
     it("is idempotent: a second apply changes nothing and reports the same ids", async () => {

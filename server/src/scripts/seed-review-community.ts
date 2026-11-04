@@ -38,8 +38,8 @@ export const USAGE = `Usage: seed-review-community.js (--clerk-id <id> | --user-
   --clear-pending   also delete the demo account's PENDING friend requests, sent or
                     received (never an accepted friendship, never anybody else's
                     rows). The dry run lists each one. Not undone by --cleanup
-  --cleanup         undo: delete the "${REVIEW_SERVER_NAME}" server, the Demo Friend account,
-                    their friendship and their DM
+  --cleanup         undo: delete the "${REVIEW_SERVER_NAME}" server, the Demo Friend and Block Me
+                    accounts, the friendship and the DM
   --force           with --cleanup, even if somebody else joined the server
   --help
 `;
@@ -133,6 +133,7 @@ async function main(): Promise<number> {
       console.log(`  server       ${REVIEW_SERVER_NAME}  ${report.serverId ?? "(not created yet)"}`);
       console.log(`  invite code  ${report.inviteCode ?? "(not created yet)"}`);
       console.log(`  friend       ${report.friendUserId ?? "(not created yet)"}`);
+      console.log(`  block me     ${report.blockMeUserId ?? "(not created yet)"}`);
       console.log(`  messages     ${report.messageCount}`);
       console.log(`  DM channel   ${report.dmChannelId ?? "(not created yet)"}`);
       if (options.clearPending) {

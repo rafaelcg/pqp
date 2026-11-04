@@ -1,7 +1,10 @@
 import {
   AUTOMOD_CLERK_ID,
   AUTOMOD_KIND_LABEL,
+  BASELINE_REJECTION_MESSAGE,
   evaluateAutomod,
+  findBaselineViolation,
+  type BaselineStatus,
   findPqpInviteLinks,
   type AutomodContext,
   Permission,
@@ -16,6 +19,8 @@ import {
   publishToCluster,
   subscribeToCluster,
 } from "../lib/bus.js";
+import { isEnabled } from "../lib/flags.js";
+import { logEvent } from "../lib/log.js";
 import { logAudit } from "./audit.js";
 import { getHydratedMessage, type HydratedMessage } from "./messages.js";
 import { issueTimeout, type IssuedTimeout } from "./sanctions.js";
@@ -323,6 +328,125 @@ function mapRule(row: RuleRow): AutomodRule {
 
 const cache = new Map<string, { rules: AutomodRule[]; expiresAt: number }>();
 
+// ---------------------------------------------------------------------------
+// The baseline text filter
+// ---------------------------------------------------------------------------
+
+/**
+ * pqp's built-in filter (`findBaselineViolation` in `@pqp/shared`): on for
+ * every server unless the operator turns the `default_text_filter` flag off
+ * (all servers) or the server's owner turns it off (that server, one row in
+ * `server_text_filter_settings`). It is not an AutoMod rule: it has no row in
+ * `automod_rules`, no exemptions, no alert and no timeout, so nothing an
+ * existing server configured changes.
+ *
+ * NO STAFF BYPASS, unlike the rules above. A rule is the owner's list and the
+ * owner must never be locked out by their own list; the baseline is the
+ * instance's, and the owner's lever is the switch. It also means the account
+ * that owns a server and types a slur is refused like anybody.
+ *
+ * The owner's choice is cached like the rules and dropped by the same
+ * invalidation, so it crosses the cluster the same way.
+ */
+const baselineCache = new Map<string, { disabled: boolean; expiresAt: number }>();
+
+async function baselineDisabledFor(serverId: string): Promise<boolean> {
+  const now = Date.now();
+  const hit = baselineCache.get(serverId);
+  if (hit && hit.expiresAt > now) {
+    return hit.disabled;
+  }
+  const result = await getPool().query<{ disabled: boolean }>(
+    `SELECT disabled FROM server_text_filter_settings WHERE server_id = $1`,
+    [serverId],
+  );
+  const disabled = result.rows[0]?.disabled ?? false;
+  baselineCache.set(serverId, { disabled, expiresAt: now + CACHE_TTL_MS });
+  return disabled;
+}
+
+/** What the settings page shows: the operator's flag, the owner's choice, and what applies. */
+export async function getBaselineStatus(serverId: string): Promise<BaselineStatus> {
+  const instanceEnabled = isEnabled("default_text_filter");
+  const result = await getPool().query<{ disabled: boolean }>(
+    `SELECT disabled FROM server_text_filter_settings WHERE server_id = $1`,
+    [serverId],
+  );
+  const ownerDisabled = result.rows[0]?.disabled ?? false;
+  return { instanceEnabled, ownerDisabled, enabled: instanceEnabled && !ownerDisabled };
+}
+
+/** The owner's switch. Off writes the row, on removes it, so "no row" stays "default". */
+export async function setBaselineEnabled(
+  serverId: string,
+  enabled: boolean,
+  actorId: string,
+): Promise<BaselineStatus> {
+  if (enabled) {
+    await getPool().query(
+      `DELETE FROM server_text_filter_settings WHERE server_id = $1`,
+      [serverId],
+    );
+  } else {
+    await getPool().query(
+      `INSERT INTO server_text_filter_settings (server_id, disabled, updated_by)
+       VALUES ($1, TRUE, $2)
+       ON CONFLICT (server_id) DO UPDATE
+         SET disabled = TRUE, updated_by = EXCLUDED.updated_by, updated_at = NOW()`,
+      [serverId, actorId],
+    );
+  }
+  invalidateAutomodCache(serverId);
+  return getBaselineStatus(serverId);
+}
+
+function baselineVerdict(body: string): AutomodVerdict | null {
+  const hit = findBaselineViolation(body);
+  return hit
+    ? {
+        kind: "keywords",
+        matched: hit.class,
+        customMessage: BASELINE_REJECTION_MESSAGE,
+        baseline: true,
+      }
+    : null;
+}
+
+/**
+ * The baseline verdict for a text, or null when it may land. `serverId` is
+ * null for a surface with no server (a direct message, a profile name), where
+ * only the operator's flag applies.
+ */
+export async function checkBaselineText(
+  serverId: string | null,
+  body: string,
+): Promise<AutomodVerdict | null> {
+  if (!isEnabled("default_text_filter")) {
+    return null;
+  }
+  const verdict = baselineVerdict(body);
+  if (!verdict) {
+    return null;
+  }
+  if (serverId && (await baselineDisabledFor(serverId))) {
+    return null;
+  }
+  return verdict;
+}
+
+/**
+ * A baseline hit on a surface with no server to audit it on. One log line
+ * with the class and the surface, never the text: the body of a private
+ * message is not ours to keep.
+ */
+export function recordBaselineHit(
+  surface: "dm" | "profile",
+  userId: string,
+  verdict: AutomodVerdict,
+): void {
+  logEvent("automod.baseline", { surface, class: verdict.matched, userId });
+}
+
 /**
  * Drop this process's copy. The half that runs on EVERY instance: the write
  * path calls `invalidateAutomodCache` (below), which calls this and then says
@@ -336,8 +460,10 @@ const cache = new Map<string, { rules: AutomodRule[]; expiresAt: number }>();
 export function invalidateAutomodCacheLocally(serverId?: string): void {
   if (serverId) {
     cache.delete(serverId);
+    baselineCache.delete(serverId);
   } else {
     cache.clear();
+    baselineCache.clear();
   }
 }
 
@@ -548,6 +674,11 @@ export interface AutomodCheckInput {
 export async function checkAutomod(
   input: AutomodCheckInput,
 ): Promise<AutomodVerdict | null> {
+  // The built-in filter first, and for everybody (see its comment above).
+  const baseline = await checkBaselineText(input.serverId, input.body);
+  if (baseline) {
+    return baseline;
+  }
   const rules = await cachedRules(input.serverId);
   if (rules.length === 0) {
     return null;
@@ -691,6 +822,13 @@ export async function recordAutomodHit(
   // null actor as "a departed account", which is the opposite of what
   // happened.
   const actorId = await ensureAutomodUser();
+  if (verdict.baseline) {
+    logEvent("automod.baseline", {
+      surface: "server",
+      serverId: input.serverId,
+      class: verdict.matched,
+    });
+  }
   try {
     await logAudit({
       serverId: input.serverId,
@@ -698,7 +836,9 @@ export async function recordAutomodHit(
       action: "automod.block",
       targetType: "user",
       targetId: input.authorId,
-      reason: verdict.kind,
+      // The rule kind for an owner's rule; `baseline` for the built-in filter,
+      // whose `matched` below is the class, never the word.
+      reason: verdict.baseline ? "baseline" : verdict.kind,
       changes: [
         { key: "channelId", old: null, new: input.channelId },
         { key: "matched", old: null, new: verdict.matched },

@@ -1,4 +1,4 @@
-import type { Message } from "@pqp/shared";
+import { BASELINE_REJECTION_MESSAGE, type Message } from "@pqp/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createChatController,
@@ -286,6 +286,15 @@ describe("optimistic sending", () => {
     expect(
       failedSendCopy({ rejectReason: "automod", automodMessage: "Aqui não." }),
     ).toEqual({ key: "chat.reject.automod", text: "Aqui não." });
+  });
+
+  it("draws pqp's own filter refusal in the reader's language, not as the owner's words", () => {
+    expect(
+      failedSendCopy({
+        rejectReason: "automod",
+        automodMessage: BASELINE_REJECTION_MESSAGE,
+      }),
+    ).toEqual({ key: "chat.reject.baseline" });
   });
 
   it("names a closed forum post and does not offer retry on it", () => {

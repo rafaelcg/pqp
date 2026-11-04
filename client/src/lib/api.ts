@@ -130,6 +130,7 @@ import type {
   RoleSystemKey,
   OutgoingWebhook,
   AutomodRule,
+  BaselineStatus,
   CreateAutomodRuleInput,
   UpdateAutomodRuleInput,
   PublicInvitePreview,
@@ -2319,6 +2320,12 @@ export const updateAutomodRule = (
     `/api/servers/${serverId}/automod/rules/${ruleId}`,
     body,
   );
+
+export const fetchAutomodBaseline = (serverId: string) =>
+  apiFetch<BaselineStatus>(`/api/servers/${serverId}/automod/baseline`);
+
+export const setAutomodBaseline = (serverId: string, enabled: boolean) =>
+  put<BaselineStatus>(`/api/servers/${serverId}/automod/baseline`, { enabled });
 
 export const deleteAutomodRule = (serverId: string, ruleId: string) =>
   del<{ ok: boolean }>(`/api/servers/${serverId}/automod/rules/${ruleId}`);
