@@ -1146,6 +1146,8 @@ Test the API side directly, with the token:
 curl -s -H "Authorization: Bearer $ADMIN_METRICS_TOKEN" https://api.pqp.gg/api/admin/metrics | jq .
 curl -s -H "Authorization: Bearer $ADMIN_METRICS_TOKEN" "https://api.pqp.gg/api/admin/voice-occupancy?days=30" | jq .
 curl -s -H "Authorization: Bearer $ADMIN_METRICS_TOKEN" "https://api.pqp.gg/api/admin/user-activity?days=90&weeks=12" | jq .
+# signups by source in the last 3 hours (aggregate counts; ?hours= is 1 to 168, ?days= up to 90)
+curl -s -H "Authorization: Bearer $ADMIN_METRICS_TOKEN" "https://api.pqp.gg/api/admin/acquisition?hours=3" | jq .
 curl -s -H "Authorization: Bearer $ADMIN_METRICS_TOKEN" "https://api.pqp.gg/api/admin/servers?q=cine" | jq .
 # without it: 404
 ```
