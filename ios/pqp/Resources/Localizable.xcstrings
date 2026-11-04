@@ -2541,6 +2541,16 @@
         }
       }
     },
+    "By continuing, you agree to the [Terms](https://pqp.gg/terms) and the [Privacy Policy](https://pqp.gg/privacy)." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ao continuar, você concorda com os [Termos](https://pqp.gg/terms) e a [Política de Privacidade](https://pqp.gg/privacy)."
+          }
+        }
+      }
+    },
     "By default a notification doesn't say who messaged you or what they said. You can change that in Settings." : {
       "localizations" : {
         "pt-BR" : {

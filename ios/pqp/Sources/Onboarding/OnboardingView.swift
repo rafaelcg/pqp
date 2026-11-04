@@ -69,6 +69,7 @@ struct OnboardingView: View {
                     .padding(.bottom, 12)
             }
         }
+        .inAppLegalLinks()
         .onGeometryChange(for: Bool.self) { $0.size.height < 700 } action: { compact = $0 }
         .animation(FirstRunMotion.step(reduceMotion), value: session.pendingInviteCode)
         .animation(FirstRunMotion.pop(reduceMotion), value: preview)
@@ -95,6 +96,7 @@ struct OnboardingView: View {
         // where being wrong locks everybody out.
         .sheet(item: $authSheet) { sheet in
             AuthView(mode: sheet.mode)
+                .legalAgreementInset()
                 .onDisappear {
                     guard session.hasClerkSession else { return }
                     signingIn = true
@@ -227,6 +229,11 @@ struct OnboardingView: View {
             .frame(minHeight: 44)
             .disabled(signingIn)
             .accessibilityIdentifier("welcome.signIn")
+
+            // Before the account exists, and right where the buttons are:
+            // App Review 1.2 wants the agreement presented ahead of sign-up.
+            LegalAgreementLine()
+                .padding(.top, 2)
         }
     }
 
