@@ -1,4 +1,4 @@
-pqp es un chat de voz y texto de código abierto para tu banda: mira la pantalla que alguien comparte, con el sonido, entra a una watch party y arma tu comunidad con servidores, canales y mensajes directos. Gratis, sin anuncios, hecho por dos hermanos.
+pqp es un chat de voz y texto de código abierto para tu banda: mira la pantalla que alguien comparte, con el sonido, entra a una watch party y arma tu comunidad con servidores, canales y mensajes directos. Gratis y sin anuncios.
 
 Ya hubo una watch party con más de 100 personas viendo juntas en una sola sala, en septiembre de 2026. Todo el código es público en GitHub.
 
@@ -23,4 +23,4 @@ Reporta un mensaje, una persona o una comunidad en pocos toques. Quienes adminis
 CÓDIGO ABIERTO
 pqp es gratis, no tiene anuncios y todo su código es público en GitHub (rafaelcg/pqp) con licencia AGPL. Cualquiera puede leer el código, alojar su propia instancia o contribuir.
 
-Esta app todavía es una beta y por ahora se ve en inglés y portugués. Levantar la mano en una llamada de voz y otras cosas del sitio web aún están llegando a iOS, aunque ya funcionan en el sitio y en la app de escritorio de pqp. Lanzamos mejoras seguido, también en iOS.
+La app está disponible en inglés y portugués, y se actualiza seguido. pqp también funciona en el navegador y en la app de escritorio, con la misma cuenta.
