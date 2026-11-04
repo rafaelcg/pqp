@@ -167,7 +167,10 @@ struct ThreadListView: View {
             // A thread is listed through the message it grew out of, so a
             // blocked person's messages take their threads with them.
             let shown = page.messages.filter {
-                !BlockRules.hides($0, viewerId: session.currentUser?.id, blocked: session.blocked.ids)
+                !BlockRules.hides(
+                    $0, viewerId: session.currentUser?.id, blocked: session.blocked.ids,
+                    released: session.blocked.released
+                )
             }
             threads = ThreadDigest.threads(in: shown)
             origins = ThreadDigest.origins(in: shown)

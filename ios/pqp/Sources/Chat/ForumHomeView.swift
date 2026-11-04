@@ -348,8 +348,23 @@ struct ForumHomeView: View {
         }
     }
 
+    /// Posts are not drawn until the block list is known: a post that arrives
+    /// over the socket is not stamped per reader, so before the list it could be
+    /// a blocked person's (the same gate `ChatModel.visibleMessages` has).
     @ViewBuilder
     private var posts: some View {
+        if session.blocked.hasLoaded {
+            loadedPosts
+        } else {
+            ProgressView()
+                .tint(Palette.paperMuted)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 24)
+        }
+    }
+
+    @ViewBuilder
+    private var loadedPosts: some View {
         // Without posts by anybody the reader blocked, live: the server leaves
         // a forum's list whole (paging counts rows), so the hiding is here.
         let state = hidingBlocked(model.state)
@@ -402,7 +417,19 @@ struct ForumHomeView: View {
         }
         .animation(.channelList(reduceMotion: reduceMotion), value: state.posts.map(\.id))
 
-        if state.posts.isEmpty {
+        if state.posts.isEmpty && state.pinned.isEmpty && !model.state.posts.isEmpty
+            && model.state.nextCursor != nil {
+            // Everything loaded so far is a blocked person's. Keep paging until
+            // a post can be drawn or the list ends: with no row on screen the
+            // "near the end" trigger below would never fire. The task is keyed
+            // on the cursor, so each page asks for the next and a failure (the
+            // cursor does not move) does not spin.
+            ProgressView()
+                .tint(Palette.paperMuted)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 24)
+                .task(id: model.state.nextCursor) { await model.loadMore() }
+        } else if state.posts.isEmpty {
             filteredEmpty
         } else {
             footer

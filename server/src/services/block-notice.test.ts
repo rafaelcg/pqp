@@ -170,5 +170,11 @@ describeDb("telling the operators about a block", () => {
       log.mockRestore();
     }
     expect(blockMetrics().failures).toBe(1);
+    // The counter bump paid for a ticket that never got written: given back.
+    const rows = await getPool().query(
+      `SELECT n FROM user_block_days WHERE user_id = $1`,
+      [alice.id],
+    );
+    expect(rows.rows).toEqual([{ n: 0 }]);
   });
 });

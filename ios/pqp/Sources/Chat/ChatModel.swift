@@ -140,8 +140,18 @@ final class ChatModel {
         let blocked = session?.blocked.ids ?? []
         let viewerId = session?.currentUser?.id
         let loaded = session?.blocked.hasLoaded ?? true
-        return messages.filter {
-            !BlockRules.hides($0, viewerId: viewerId, blocked: blocked, listLoaded: loaded)
+        let released = session?.blocked.released ?? []
+        return messages.compactMap { message in
+            guard !BlockRules.hides(
+                message, viewerId: viewerId, blocked: blocked, listLoaded: loaded, released: released
+            ) else { return nil }
+            // Fetched while the person was blocked, so it carries the server's
+            // stamp; they were unblocked since, and the row must draw in full
+            // rather than as the "hidden" placeholder.
+            guard message.blocked, released.contains(message.authorId) else { return message }
+            var shown = message
+            shown.blocked = false
+            return shown
         }
     }
 

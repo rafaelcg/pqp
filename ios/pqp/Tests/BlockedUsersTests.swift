@@ -76,6 +76,16 @@ final class BlockedUsersTests: XCTestCase {
         XCTAssertFalse(BlockRules.hides(mine, viewerId: me, blocked: [], listLoaded: false))
     }
 
+    /// Fetched while blocked, so it carries the server's stamp for good: after an
+    /// unblock it must draw again without a refetch.
+    func testAnUnblockedPersonsStampedMessagesComeBack() throws {
+        let stamped = try message(author: nuisance, blocked: true)
+        XCTAssertTrue(BlockRules.hides(stamped, viewerId: me, blocked: []))
+        XCTAssertFalse(BlockRules.hides(stamped, viewerId: me, blocked: [], released: [nuisance]))
+        // Blocked again (in the set), the release no longer matters.
+        XCTAssertTrue(BlockRules.hides(stamped, viewerId: me, blocked: [nuisance], released: [nuisance]))
+    }
+
     // MARK: - A failed write
 
     /// Only an answer the server sent and meant is definite. A dropped
@@ -86,6 +96,9 @@ final class BlockedUsersTests: XCTestCase {
         XCTAssertTrue(BlockedUsers.isAmbiguous(APIError.decoding("bad body")))
         XCTAssertTrue(BlockedUsers.isAmbiguous(CancellationError()))
         XCTAssertFalse(BlockedUsers.isAmbiguous(APIError.server(status: 400, message: "no")))
+        // A 5xx may follow a commit (gateway timeout after the write).
+        XCTAssertTrue(BlockedUsers.isAmbiguous(APIError.server(status: 503, message: "later")))
+        XCTAssertTrue(BlockedUsers.isAmbiguous(APIError.server(status: 504, message: "timeout")))
         XCTAssertFalse(BlockedUsers.isAmbiguous(APIError.notFound("User not found")))
         XCTAssertFalse(BlockedUsers.isAmbiguous(APIError.unauthorized))
         XCTAssertFalse(BlockedUsers.isAmbiguous(APIError.rateLimited(retryAfter: 3)))

@@ -42,6 +42,12 @@ final class BlockedUsers {
     /// people are held back (rule 3).
     private(set) var hasLoaded = false
 
+    /// People unblocked during this session. A message fetched while they were
+    /// blocked carries the server's `blocked: true` stamp for good; without this
+    /// it would stay hidden after an unblock until it was refetched. Observed,
+    /// so the transcript redraws on the unblock.
+    private(set) var released: Set<String> = []
+
     /// Bumped at the start and the end of every local block or unblock.
     @ObservationIgnored private var generation = 0
     /// A mutation ended ambiguously and the server's list has not been read
@@ -88,6 +94,7 @@ final class BlockedUsers {
     func block(_ userId: String, surface: String, using api: APIClient) async throws {
         generation += 1
         ids.insert(userId)
+        released.remove(userId)
         do {
             try await api.setBlocked(userId: userId, blocked: true, surface: surface)
             generation += 1
@@ -101,6 +108,7 @@ final class BlockedUsers {
     func unblock(_ userId: String, using api: APIClient) async throws {
         generation += 1
         ids.remove(userId)
+        released.insert(userId)
         do {
             try await api.setBlocked(userId: userId, blocked: false)
             generation += 1
@@ -116,28 +124,40 @@ final class BlockedUsers {
     /// asked them to be.
     private func settle(_ error: Error, userId: String, wantBlocked: Bool, using api: APIClient) async throws {
         guard Self.isAmbiguous(error) else {
-            if wantBlocked { ids.remove(userId) } else { ids.insert(userId) }
+            if wantBlocked {
+                ids.remove(userId)
+            } else {
+                ids.insert(userId)
+                released.remove(userId)
+            }
             throw error
         }
         if await refresh(using: api) {
+            // The list is authoritative now; a stale stamp on a message does
+            // not need overriding for a person the server still has blocked.
+            if ids.contains(userId) { released.remove(userId) }
             if ids.contains(userId) == wantBlocked { return }
             throw error
         }
         // Could not even ask. Hidden is the safe side for either direction;
         // the loop reads the list again and puts the truth right.
         ids.insert(userId)
+        released.remove(userId)
         needsReconcile = true
         startLoading(using: api)
         throw error
     }
 
-    /// Whether the server may have committed despite the error. Only an answer
-    /// the server sent and meant (a status code, a refusal) is definite.
+    /// Whether the server may have committed despite the error. Only a 4xx
+    /// refusal is definite: a 5xx (a gateway timeout after the write, a crash
+    /// after the commit) says nothing about whether the row landed, so it is
+    /// reconciled against the server's list like a dropped connection.
     static func isAmbiguous(_ error: Error) -> Bool {
         guard let api = error as? APIError else { return true }
         switch api {
         case .transport, .decoding: return true
-        case .unauthorized, .notFound, .rateLimited, .server: return false
+        case .server(let status, _): return status >= 500
+        case .unauthorized, .notFound, .rateLimited: return false
         }
     }
 
@@ -149,6 +169,7 @@ final class BlockedUsers {
         loadTask = nil
         needsReconcile = false
         ids = []
+        released = []
         hasLoaded = false
     }
 
@@ -167,12 +188,16 @@ enum BlockRules {
     /// The server's per-message flag is honoured too. `listLoaded` false means
     /// the block list has not been read yet: a frame that arrived over the
     /// socket carries no per-reader flag, so it is held back until it has.
+    /// `released` is who was unblocked this session: their messages fetched
+    /// while blocked still carry the stamp, which no longer applies.
     static func hides(
-        _ message: Message, viewerId: String?, blocked: Set<String>, listLoaded: Bool = true
+        _ message: Message, viewerId: String?, blocked: Set<String>,
+        listLoaded: Bool = true, released: Set<String> = []
     ) -> Bool {
         guard message.authorId != viewerId else { return false }
         if !listLoaded && message.arrivedLive { return true }
-        return message.blocked || blocked.contains(message.authorId)
+        if blocked.contains(message.authorId) { return true }
+        return message.blocked && !released.contains(message.authorId)
     }
 
     /// A conversation is hidden from the list when it is a 1:1 with somebody

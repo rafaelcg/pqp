@@ -66,6 +66,7 @@ export async function noteBlockForOperators(input: {
   blockStats.blocks += 1;
   let queued = false;
   let capped = false;
+  let bumped = false;
   try {
     // A durable per-account, per-UTC-day counter, bumped atomically for every
     // new block. Counting `user_blocks` rows would let block/unblock cycles
@@ -77,6 +78,7 @@ export async function noteBlockForOperators(input: {
        RETURNING n`,
       [input.blockerId],
     );
+    bumped = true;
     // A few days of history is plenty; the table stays a handful of rows.
     await getPool().query(
       `DELETE FROM user_block_days
@@ -101,6 +103,17 @@ export async function noteBlockForOperators(input: {
     }
   } catch (error) {
     blockStats.failures += 1;
+    if (bumped) {
+      // The bump must not burn the cap when the ticket it paid for never got
+      // written: give it back (best effort, and still inside the same swallow).
+      await getPool()
+        .query(
+          `UPDATE user_block_days SET n = GREATEST(n - 1, 0)
+           WHERE user_id = $1 AND day = (NOW() AT TIME ZONE 'UTC')::date`,
+          [input.blockerId],
+        )
+        .catch(() => undefined);
+    }
     console.error(
       "[blocks] operator notification failed:",
       error instanceof Error ? error.message : error,
