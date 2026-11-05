@@ -1991,6 +1991,8 @@
   "voice.share.someone": "Someone",
   "voice.share.youPresenting": "You are presenting",
   "voice.share.youAreSharing": "You are sharing",
+  "voice.share.mirrorGuard": "You are sharing your whole screen. Showing it full size here would show the preview inside the preview, over and over.",
+  "voice.share.mirrorShowAnyway": "Show it anyway",
   "voice.share.ownHiddenStrip": "You are sharing",
   "voice.share.hidePreview": "Hide preview",
   "voice.share.showPreview": "Show preview",

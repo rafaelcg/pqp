@@ -48,6 +48,10 @@ import {
 import type { VideoQuality } from "@/lib/video-quality";
 import type { ScreenFrameRate } from "@/lib/hls-capture-rate";
 import { desktopContext, isDesktopApp } from "@/lib/desktop";
+import {
+  readShareSurfaceHints,
+  shareMayCaptureThisWindow,
+} from "@/lib/share-self-capture";
 import { shareStreamHasAudio } from "@/lib/screen-capture-audio";
 import {
   canControlShareCursor,
@@ -2765,6 +2769,7 @@ function ActiveCall({
               tile={soloTile}
               videoRef={primaryVideoRef}
               isFullscreen
+              stageFullscreen={fullscreen.isFullscreen}
               showName
               onToggleFullscreen={() => fullscreen.toggleScreen(soloTile.peerId)}
               registerPipVideo={registerPipVideo}
@@ -2861,6 +2866,7 @@ function ActiveCall({
                         tile={screenTile}
                         videoRef={videoRef}
                         isFullscreen={false}
+                        stageFullscreen={fullscreen.isFullscreen}
                         showName
                         clickToFullscreen={clickFullscreens}
                         onToggleFullscreen={() => {
@@ -5567,6 +5573,7 @@ export function ScreenTileFrame({
   tile,
   videoRef,
   isFullscreen,
+  stageFullscreen,
   showName = false,
   clickToFullscreen = false,
   onToggleFullscreen,
@@ -5583,6 +5590,12 @@ export function ScreenTileFrame({
   tile: ScreenShareTile;
   videoRef?: RefObject<WebkitFullscreenVideo | null>;
   isFullscreen: boolean;
+  /**
+   * The whole stage fills the window or the screen (the control bar's button,
+   * or this tile alone). Differs from `isFullscreen`, which is only "this
+   * tile is the one alone on it". Defaults to `isFullscreen`.
+   */
+  stageFullscreen?: boolean;
   /**
    * Hands the stage this share's `<video>` while it can go into PiP, so the
    * control bar's button can pop it out. Returns the matching removal. Must
@@ -5635,6 +5648,26 @@ export function ScreenTileFrame({
   const boxRef = useRef<HTMLDivElement>(null);
   const hidePreviewPref = useHideScreenPreview();
   const hideSelfPreview = tile.isSelf && hidePreviewPref;
+  // Our own whole-screen share, blown up: the capture contains this window,
+  // and this window is the capture, so a live picture here is a tunnel of
+  // copies of itself (feedback #130). A still card stands in until the person
+  // asks for the picture anyway. Windowed, the preview is small enough to
+  // read as what it is, and stays live.
+  const windowFilled = stageFullscreen ?? isFullscreen;
+  const mirrorRisk =
+    tile.isSelf &&
+    windowFilled &&
+    !hideSelfPreview &&
+    shareMayCaptureThisWindow(
+      readShareSurfaceHints(tile.stream, isDesktopApp()),
+    );
+  const [mirrorShown, setMirrorShown] = useState(false);
+  useEffect(() => {
+    if (!windowFilled) {
+      setMirrorShown(false);
+    }
+  }, [windowFilled]);
+  const mirrorGuard = mirrorRisk && !mirrorShown;
   // `dismissed?.active` too: declining the share swaps the box for a
   // placeholder, and watching again mounts a new one to measure.
   const insets = useVideoInsets(boxRef, [
@@ -5642,6 +5675,7 @@ export function ScreenTileFrame({
     tile.hlsUrl,
     fit.fit,
     hideSelfPreview,
+    mirrorGuard,
     dismissed?.active,
   ]);
   // A share is what the viewer is watching: the slider is its sound, or the
@@ -5721,7 +5755,7 @@ export function ScreenTileFrame({
   });
 
   const revealed =
-    moreOpen || hideSelfPreview
+    moreOpen || hideSelfPreview || mirrorGuard
       ? "opacity-100"
       : "opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-within:opacity-100";
   const moreButton = (
@@ -5795,6 +5829,23 @@ export function ScreenTileFrame({
           <p className="text-sm text-paper-muted">
             {t("voice.share.youAreSharing")}
           </p>
+        </div>
+      ) : mirrorGuard ? (
+        <div
+          data-self-mirror-guard=""
+          className="flex h-full w-full flex-col items-center justify-center gap-2 bg-ink-2 px-4 text-center"
+        >
+          <p className="text-sm text-paper-muted">
+            {t("voice.share.mirrorGuard")}
+          </p>
+          <Button
+            variant="secondary"
+            size="sm"
+            data-testid="share-mirror-show"
+            onClick={() => setMirrorShown(true)}
+          >
+            {t("voice.share.mirrorShowAnyway")}
+          </Button>
         </div>
       ) : useHls && tile.hlsUrl ? (
         <HlsWatchPlayer

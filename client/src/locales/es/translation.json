@@ -2003,6 +2003,8 @@
   "voice.share.someone": "Alguien",
   "voice.share.youPresenting": "Estás presentando",
   "voice.share.youAreSharing": "Estás compartiendo",
+  "voice.share.mirrorGuard": "Estás compartiendo toda la pantalla. Verla a tamaño completo aquí mostraría la vista previa dentro de la vista previa, una y otra vez.",
+  "voice.share.mirrorShowAnyway": "Mostrar de todos modos",
   "voice.share.ownHiddenStrip": "Estás compartiendo",
   "voice.share.hidePreview": "Ocultar vista previa",
   "voice.share.showPreview": "Mostrar vista previa",
