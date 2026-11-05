@@ -104,7 +104,7 @@ const iphoneProject: E2EProject[] = process.env.PW_WEBKIT
 const projects: E2EProject[] = [
   {
     name: "chromium",
-    use: { ...devices["Desktop Chrome"], screen: DESKTOP_SCREEN },
+    use: { ...devices["Desktop Chrome"], contextOptions: { screen: DESKTOP_SCREEN } },
     // `e2e/stale-bundle/` has its own config (real builds, no API, no
     // database): `playwright.stale-bundle.config.ts`, `pnpm e2e:stale-bundle`.
     // `e2e/share-fast-start/` too (Docker LiveKit, real Chrome, the `lk`
@@ -122,7 +122,7 @@ const projects: E2EProject[] = [
   },
   {
     name: "chromium-media",
-    use: { ...devices["Desktop Chrome"], screen: DESKTOP_SCREEN },
+    use: { ...devices["Desktop Chrome"], contextOptions: { screen: DESKTOP_SCREEN } },
     testMatch: MEDIA_SPEC,
   },
   ...iphoneProject,
