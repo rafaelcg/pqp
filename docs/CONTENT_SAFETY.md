@@ -14,46 +14,55 @@ parts invisible.
 > 'unscanned'` on every attachment and Baú upload row, which is the honest state
 > and not a pass. Turning it on is a variable and a restart —
 > [Turning it on](#turning-it-on). **Text** has its own, separate check that
-> needs no configuration: [The default text filter](#the-default-text-filter).
+> needs no configuration: [The built-in text filter](#the-built-in-text-filter).
 
 ---
 
-## The default text filter
+## The built-in text filter
 
-Image scanning does nothing for words, and AutoMod (below) used to be an empty
-list that an owner had to fill in, so a server nobody configured filtered no
-text at all. App Store Guideline 1.2 asks for "a method for filtering
-objectionable content", and "off until somebody sets it up" is not one. So pqp
-now has a **built-in baseline** that is on for every server with no rule
-written by anybody.
+Image scanning does nothing for words, and AutoMod (below) is an empty list an
+owner has to fill in. App Store Guideline 1.2 asks for "a method for filtering
+objectionable content", so pqp has a **built-in baseline**: a short list of
+slurs and threats that needs no rule written by anybody. **It is OFF by
+default.** Nothing is filtered on any surface until somebody turns it on
+(Rafael's decision, 2026-11-05: friendly text is not ours to filter). It is
+turned on by the operator, globally or for one server, from the dashboard, or by
+a server's owner for their own server in AutoMod settings. The App Review
+demo server ("pqp review", seeded by `review-seed.ts`) has it on.
 
 Code: the list and the matcher are `packages/shared/src/automod-baseline.ts`
 (pure, shared with the web settings page's test box); the enforcement is
 `checkBaselineText` / `checkAutomod` in `server/src/services/automod.ts`.
 
-**Where it runs.** Every surface that already ran AutoMod (a server message and
-its edit, a forum post title and body, a story), plus the ones that never did:
-direct and group messages and their edits, Baú comments and Baú posts (title,
-body, teaser), and the names a person picks for themselves (display name, tag
-name, handle, the recado). It does **not** read: a name that comes from the
-sign-in provider at first registration (refusing it would refuse the account),
-voice, file names, link previews, or a server's own name and channel names.
+**Where it runs, once it is on.** Public surfaces only: every surface that already ran AutoMod
+(a server message and its edit, a forum post title and body, a story), plus the
+ones that never did: Baú comments and Baú posts (title, body, teaser), and the
+names a person picks for themselves (display name, tag name, handle, the
+recado). It does **not** read: **direct messages and group messages, nor their
+edits** (a private conversation between people who chose each other is not read
+by the built-in filter; the owner's own AutoMod rules never applied there
+either, there being no server, and the image scanning, reports and blocking are
+unchanged), a name that comes from the sign-in provider at first registration
+(refusing it would refuse the account), voice, file names, link previews, or a
+server's own name and channel names.
 
-**What is on the list.** Three classes, English, Portuguese and a short Spanish
+**What is on the list.** Two classes, English, Portuguese and a short Spanish
 list, whole words and phrases only:
 
 | Class | What it holds | Examples (the full list is `BASELINE_TEXT_LISTS`) |
 |---|---|---|
 | `slur` | racist, homophobic, transphobic and ableist slurs; hate slogans | `nigger`, `faggot`, `retard`, `viado`, `crioulo`, `maricón`, `white power` |
-| `abuse` | abuse aimed at a person; sexual-abuse words used as insults | `fuck you`, `cunt`, `vai tomar no cu`, `arrombado`, `chinga tu madre` |
 | `threat` | telling somebody to kill themselves, rape threats, calls to kill a group, sexual content about children | `kill yourself`, `kys`, `vou te estuprar`, `te voy a violar`, `vai se matar` |
 
-**What is deliberately not on it.** Ordinary swearing (shit, damn, merda,
-porra, caralho, mierda, joder, "puta que pariu", "filho da puta"), a plain
-"I'll kill you" or "vou te matar" (it is how people trash-talk in a game), and
-every word that is also an ordinary word (veado, macaco, mongol, retrasado,
-Niger, snigger, fagot). A filter that fires on how friends talk gets turned off
-or left; the point is the worst of it. Widening the list is an edit to
+**What is deliberately not on it.** Insults: `fuck you`, `fuck off`, `cunt`,
+`slut`, `vai tomar no cu`, `arrombado`, `chinga tu madre` and their kind were on
+the first version of the list as an `abuse` class and were taken out, because
+banter between friends is not ours to filter. Ordinary swearing (shit, damn,
+merda, porra, caralho, mierda, joder, "puta que pariu", "filho da puta"), a
+plain "I'll kill you" or "vou te matar" (it is how people trash-talk in a
+game), and every word that is also an ordinary word (veado, macaco, mongol,
+retrasado, Niger, snigger, fagot) are not on it either. A filter that fires on
+how friends talk gets turned off or left; the point is the worst of it. Widening the list is an edit to
 `BASELINE_TEXT_LISTS` and a case in `automod-baseline.test.ts`.
 
 **How it matches.** The text is folded by `normalizeForAutomod` (lowercase,
@@ -62,8 +71,8 @@ fullwidth, Cyrillic and Greek look-alikes mapped to Latin, zero-width characters
 dropped) and matched as whole words, never substrings (so "Scunthorpe",
 "assassin" and "viaduto" pass). Then it is read four more ways, and a hit in any
 counts: leetspeak (`n1gg3r`, `f@ggot`, `sh!t`), stretching (`niiiigger`,
-`fuuuuck you`), spelled-out letters (`f u c k  y o u`, `n.i.g.g.e.r`) and
-phrases typed solid (`fuckyou`). It does not catch sarcasm, a quoted slur, a
+`kiiiill yourself`), spelled-out letters (`k i l l  y o u r s e l f`,
+`n.i.g.g.e.r`) and phrases typed solid (`killyourself`). It does not catch sarcasm, a quoted slur, a
 new coinage, another language, or a word censored with `*`. It is a first line.
 
 **What the author sees.** The message is not sent and the sender gets
@@ -75,27 +84,29 @@ Baú comment or post and a profile name answer 400 or 422 with the same sentence
 
 **What is kept.** Never the text. A hit in a server writes the usual
 `automod.block` audit row (visible to the server's admins) with `reason:
-"baseline"` and `matched` set to the **class** (`slur`, `abuse`, `threat`), not
+"baseline"` and `matched` set to the **class** (`slur`, `threat`), not
 the word, plus a `[pqp] automod.baseline surface=... class=...` log line. A hit
-in a DM or a profile name writes the log line only (surface, class, user id): the
-body of a private message is not ours to keep.
+in a profile name writes the log line only (surface, class, user id).
 
-**Who can switch it off, and who is exempt.**
+**Who can switch it on or off, and who is exempt.**
 
-- The **operator**, live, with the runtime flag `default_text_filter` (default
-  on, global; dashboard, controles, interruptores; env `DEFAULT_TEXT_FILTER`).
-  Off, nothing is filtered by default anywhere and owners' own rules still run.
+- The **operator**, live, with the runtime flag `default_text_filter` (**default
+  off**, global or per server; dashboard, controles, interruptores; env
+  `DEFAULT_TEXT_FILTER=true`, only the word `true` turns it on). Precedence is
+  the usual one: the server's override, the global row, the variable, off.
 - A server's **owner** (Manage Server), for their own server, in AutoMod
-  settings (the row at the top, "pqp's default filter"): `PUT
-  /api/servers/:id/automod/baseline {enabled}`. Off writes one row in
-  `server_text_filter_settings`, on deletes it, so an absent row is "the
-  default" and no existing server changed. A Manage Messages cargo can read the
-  state but not change it. It is audited as an `automod.rule_update`.
-- **Nobody is exempt**, owners and admins included: AutoMod's staff bypass
-  exists so an owner is never locked out by their own list, and the baseline is
-  not their list. An owner who wants a channel where it does not apply turns it
-  off for the server. Direct messages and profile names follow only the
-  operator's flag, since they have no server.
+  settings (the row at the top, "pqp's built-in filter"): `PUT
+  /api/servers/:id/automod/baseline {enabled}`. Either direction writes one row
+  in `server_text_filter_settings` (`disabled = FALSE` is on, `TRUE` is off;
+  no row follows the operator's flag), and the owner's row wins for that server,
+  so a later change of the flag never flips a server whose owner chose. A Manage
+  Messages cargo can read the state but not change it. A change is audited as
+  an `automod.rule_update`.
+- **Nobody is exempt** once it is on, owners and admins included: AutoMod's
+  staff bypass exists so an owner is never locked out by their own list, and the
+  baseline is not their list. Profile names have no server, so they follow only
+  the operator's global answer (an owner's opt-in does not reach them). Direct
+  and group messages are not read at all.
 
 ---
 
@@ -114,7 +125,8 @@ the row and is not a pass.
 | Baú video (main file and phone cut) / PDF | skipped | same claim | same |
 | Server icon imported from Discord | **yes** | During the import, before it is set | not recorded; refused icons are discarded |
 | Custom server emoji | **yes** | On `POST /api/servers/:id/emoji`, before the emoji exists | `server_emoji.scan_*`; refused ones in `server_emoji_quarantine` |
-| Chat text, forum posts, Baú comments and posts, DMs, profile names | **yes**, the [default text filter](#the-default-text-filter) | Before the text is stored | `automod.block` audit row (servers) or a log line |
+| Chat text in server channels, forum posts, stories, Baú comments and posts, profile names | **only where it is switched on**, the [built-in text filter](#the-built-in-text-filter) (off by default) | Before the text is stored | `automod.block` audit row (servers) or a log line |
+| Direct and group messages (text) | **no**, by decision: the built-in text filter does not read private conversations | | |
 | Avatars and profile banners (`avatars.ts`) | **no** | | |
 | Server icon / banner / community featured image uploaded in the app (`server-images.ts`) | **no** | | |
 

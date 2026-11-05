@@ -15,6 +15,12 @@
  *     the directory, so it never changes the instance's legal category
  *     (docs/CONTENT_SAFETY.md, "Communities"). Reachable only by an invite code.
  *   * channels #geral and #ajuda (text) and Lobby (voice).
+ *   * pqp's built-in text filter ON for this server only. It is off by default
+ *     everywhere, and Guideline 1.2 needs a filtering method the reviewer can
+ *     see, so the seed uses the owner's own per-server switch
+ *     (`setBaselineEnabled`, a row in `server_text_filter_settings`), never the
+ *     global flag. Direct messages are never filtered. `--cleanup` removes the
+ *     row with the server (ON DELETE CASCADE).
  *   * one second account, "Demo Friend", a revoked CHARACTER row. `users.clerk_id`
  *     is NOT NULL, so a person-shaped row would need a fake Clerk id and would
  *     then be counted as a human by every metric and by the Turma dos 1000
@@ -73,6 +79,7 @@ import {
 import { restoreDmParticipants } from "./dms.js";
 import { createInvite, listInvites } from "./invites.js";
 import { clampChatNewlines } from "@pqp/shared";
+import { setBaselineEnabled } from "./automod.js";
 import { createMessage } from "./messages.js";
 import { toggleReaction } from "./reactions.js";
 import {
@@ -234,7 +241,9 @@ export const REVIEW_MESSAGES: readonly SeedMessage[] = [
       "2. React with an emoji / Reaja com um emoji\n" +
       "3. Reply to a message / Responda a uma mensagem\n" +
       "4. Join the Lobby voice channel / Entre no canal de voz Lobby\n" +
-      "5. Report a message or block a person / Denuncie uma mensagem ou bloqueie uma pessoa",
+      "5. Report a message or block a person / Denuncie uma mensagem ou bloqueie uma pessoa\n" +
+      "6. pqp's text filter is on in this server: type a slur or a threat here and it is refused / " +
+      "O filtro de texto do pqp está ligado neste servidor: escreva uma ofensa ou uma ameaça aqui e ela é recusada",
   },
   {
     key: "thanks",
@@ -290,9 +299,11 @@ export const REVIEW_MESSAGES: readonly SeedMessage[] = [
     author: "owner",
     body:
       "To try Block, open the message menu on one of the Block Me messages above and choose Block. " +
-      "Block Me is here just for this; Demo Friend is your friend, no need to block them.\n" +
+      "Block Me is here just for this; Demo Friend is your friend, no need to block them. " +
+      "Report is in the same menu, on every message. Direct messages are not filtered.\n" +
       "Para testar o bloqueio, abra o menu de uma mensagem do Block Me, acima, e escolha Bloquear. " +
-      "O Block Me existe só para isso; o Demo Friend é seu amigo, não precisa bloquear.",
+      "O Block Me existe só para isso; o Demo Friend é seu amigo, não precisa bloquear. " +
+      "Denunciar fica no mesmo menu, em toda mensagem. Mensagens diretas não são filtradas.",
   },
   {
     key: "last",
@@ -765,6 +776,41 @@ async function seed(
     geralId = after.find((c) => c.name === "geral" && c.type === "text")?.id ?? geralId;
   }
   report.channels = { geral: geralId, ajuda: ajudaId, lobby: lobbyId };
+
+  // ---- the text filter: off everywhere by default, ON here
+  // App Review is told to try an abusive message in #geral and see it refused,
+  // so this server (and only this one) opts in through the same per-server
+  // switch an owner uses (`server_text_filter_settings`, never the global
+  // flag). Direct messages are never read by it. `--cleanup` needs no step of
+  // its own: the row goes with the server (ON DELETE CASCADE).
+  if (serverId) {
+    const setting = await getPool().query<{ disabled: boolean }>(
+      `SELECT disabled FROM server_text_filter_settings WHERE server_id = $1`,
+      [serverId],
+    );
+    const row = setting.rows[0];
+    if (row && !row.disabled) {
+      rec.note("exists", "built-in text filter switched ON for this server");
+    } else if (apply) {
+      await setBaselineEnabled(serverId, true, demo.id);
+      rec.note(
+        row ? "change" : "create",
+        row
+          ? "built-in text filter switched back ON for this server"
+          : "built-in text filter switched ON for this server (this server only)",
+      );
+    } else {
+      rec.note(
+        row ? "change" : "create",
+        "built-in text filter would be switched ON for this server (this server only)",
+      );
+    }
+  } else {
+    rec.note(
+      "create",
+      "built-in text filter switched ON for this server (this server only)",
+    );
+  }
 
   // ---- the friend, and the one made to be blocked
   const friend = await ensureCharacter(REVIEW_FRIEND_LABEL, REVIEW_FRIEND_NAME, rec, apply);

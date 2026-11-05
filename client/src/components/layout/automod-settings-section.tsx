@@ -482,7 +482,7 @@ export function AutomodSettingsSection({
 
   const preview = useMemo(() => {
     if (!rules || !sample.trim()) return null;
-    // The default filter reads first, exactly as the server does.
+    // The built-in filter reads first, exactly as the server does.
     const baselineHit = baseline?.enabled ? findBaselineViolation(sample) : null;
     if (baselineHit) {
       return { noRules: false as const, verdict: null, baselineHit };
@@ -505,7 +505,7 @@ export function AutomodSettingsSection({
     const previous = baseline;
     setBaselineBusy(true);
     setError(null);
-    setBaseline({ ...baseline, ownerDisabled: !enabled, enabled: baseline.instanceEnabled && enabled });
+    setBaseline({ ...baseline, ownerChoice: enabled, enabled });
     try {
       setBaseline(await setAutomodBaseline(serverId, enabled));
     } catch (err) {
@@ -972,11 +972,9 @@ export function AutomodSettingsSection({
                   baseline.enabled ? "text-text-secondary" : "text-text-tertiary",
                 )}
               >
-                {!baseline.instanceEnabled
-                  ? t("automod.baseline.summaryInstanceOff")
-                  : baseline.ownerDisabled
-                    ? t("automod.baseline.summaryOff")
-                    : t("automod.baseline.summaryOn")}
+                {baseline.enabled
+                  ? t("automod.baseline.summaryOn")
+                  : t("automod.baseline.summaryOff")}
               </span>
               <span className="mt-0.5 block text-xs text-text-tertiary">
                 {t("automod.baseline.description")}
@@ -985,7 +983,7 @@ export function AutomodSettingsSection({
             <Switch
               checked={baseline.enabled}
               onCheckedChange={(checked) => void toggleBaseline(checked)}
-              disabled={readOnly || !baseline.instanceEnabled || baselineBusy}
+              disabled={readOnly || baselineBusy}
               label={t("automod.baseline.title")}
               hideLabel
               className="w-auto shrink-0"

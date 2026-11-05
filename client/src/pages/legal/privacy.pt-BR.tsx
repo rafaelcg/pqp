@@ -27,7 +27,7 @@ export const privacyPtBr: LegalDocument = {
   description:
     "Como o pqp.gg trata dados pessoais: o que a gente coleta, as bases legais, onde os dados são tratados, por quanto tempo ficam e os seus direitos sob a LGPD e a lei de proteção de dados do Reino Unido.",
   heading: "Política de Privacidade",
-  updated: "4 de novembro de 2026",
+  updated: "5 de novembro de 2026",
   sections: [
     {
       id: "intro",
@@ -536,7 +536,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "what-we-dont-do",
-      sourceRev: "91143db9",
+      sourceRev: "8b6a1646",
       heading: "O que a gente não faz",
       body: (
         <ul>
@@ -596,8 +596,10 @@ export const privacyPtBr: LegalDocument = {
             conta. Moderação de pessoas é feita por uma pessoa. Um arquivo pode
             ser derrubado ou sinalizado pela checagem de imagem antes de uma
             pessoa ver, e uma mensagem ou um nome pode ser recusado pelo filtro
-            de texto embutido (uma lista de ofensas, xingamentos e ameaças,
-            comparada com o próprio texto). Isso são checagens do conteúdo, não
+            de texto embutido (uma opção, desligada a não ser que seja ligada
+            para um servidor ou pelo pqp; uma lista de ofensas discriminatórias
+            e ameaças, comparada com o próprio texto, e nunca aplicada a
+            mensagens diretas ou de grupo). Isso são checagens do conteúdo, não
             de você.
           </li>
         </ul>

@@ -77,6 +77,8 @@ const { memberHasPermission } = await import("./permissions.js");
 const { createPostgresBusTransport } = await import("../lib/bus-postgres.js");
 const { listFriendships, sendFriendRequest, acceptFriendRequest } = await import("./friends.js");
 const { listConversations, hideConversation, openConversation } = await import("./dms.js");
+const { checkBaselineText, getBaselineStatus, invalidateAutomodCache, setBaselineEnabled } =
+  await import("./automod.js");
 const {
   REVIEW_BLOCKME_LABEL,
   REVIEW_BLOCKME_NAME,
@@ -121,6 +123,7 @@ async function snapshot(): Promise<Record<string, number>> {
     "friendships",
     "dm_pairs",
     "channel_members",
+    "server_text_filter_settings",
   ]) {
     out[name] = await table(name);
   }
@@ -1005,6 +1008,84 @@ function suite(label: string): void {
           [demoId],
         )).rows.map((r) => r.server_id);
         expect(ids).toContain(qg);
+      });
+    });
+
+    describe("the text filter", () => {
+      const slur = "you faggot";
+
+      async function settingRows(serverId: string) {
+        const result = await getPool().query<{ disabled: boolean }>(
+          `SELECT disabled FROM server_text_filter_settings WHERE server_id = $1`,
+          [serverId],
+        );
+        return result.rows;
+      }
+
+      beforeEach(() => {
+        delete process.env.DEFAULT_TEXT_FILTER;
+        invalidateAutomodCache();
+      });
+
+      it("is off by default, and a dry run says it would switch it on without writing", async () => {
+        const dry = await run();
+        const note = dry.actions.find((a) => /text filter/.test(a.what));
+        expect(note?.kind).toBe("create");
+        expect(note?.what).toMatch(/would be switched ON|switched ON/);
+        expect(
+          (await getPool().query(`SELECT 1 FROM server_text_filter_settings`)).rowCount,
+        ).toBe(0);
+        // Seeded, then a dry run reports it as already there.
+        await run({ apply: true });
+        const again = await run();
+        expect(again.actions.find((a) => /text filter/.test(a.what))?.kind).toBe("exists");
+      });
+
+      it("--apply turns it on for the review server only, through the owner's switch", async () => {
+        const other = await createServer("Untouched", demoId);
+        const report = await run({ apply: true });
+        expect(await settingRows(report.serverId!)).toEqual([{ disabled: false }]);
+        expect(await settingRows(other.server.id)).toEqual([]);
+
+        const status = await getBaselineStatus(report.serverId!);
+        expect(status).toEqual({ instanceEnabled: false, ownerChoice: true, enabled: true });
+        expect(await getBaselineStatus(other.server.id)).toEqual({
+          instanceEnabled: false,
+          ownerChoice: null,
+          enabled: false,
+        });
+
+        // A slur is refused in the review server and lets through anywhere else.
+        expect(await checkBaselineText(report.serverId!, slur)).toMatchObject({ baseline: true });
+        expect(await checkBaselineText(other.server.id, slur)).toBeNull();
+        expect(await checkBaselineText(null, slur)).toBeNull();
+        // An insult is not on the list, so it lands even here.
+        expect(await checkBaselineText(report.serverId!, "fuck you")).toBeNull();
+      });
+
+      it("is idempotent, and switches it back on if an owner turned it off", async () => {
+        const first = await run({ apply: true });
+        const afterFirst = await snapshot();
+        const second = await run({ apply: true });
+        expect(await snapshot()).toEqual(afterFirst);
+        expect(second.actions.some((a) => a.kind === "create" || a.kind === "change")).toBe(false);
+        expect(await settingRows(first.serverId!)).toEqual([{ disabled: false }]);
+
+        await setBaselineEnabled(first.serverId!, false, demoId);
+        expect(await settingRows(first.serverId!)).toEqual([{ disabled: true }]);
+        const third = await run({ apply: true });
+        expect(third.actions.find((a) => /text filter/.test(a.what))?.kind).toBe("change");
+        expect(await settingRows(first.serverId!)).toEqual([{ disabled: false }]);
+      });
+
+      it("--cleanup takes the setting away with the server", async () => {
+        const seeded = await run({ apply: true });
+        const other = await createServer("Untouched", demoId);
+        await setBaselineEnabled(other.server.id, true, demoId);
+        await run({ cleanup: true, apply: true });
+        expect(await settingRows(seeded.serverId!)).toEqual([]);
+        // Another server's own choice is left exactly as it was.
+        expect(await settingRows(other.server.id)).toEqual([{ disabled: false }]);
       });
     });
 
