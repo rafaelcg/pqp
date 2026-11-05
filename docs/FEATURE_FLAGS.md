@@ -438,6 +438,16 @@ and the picker says sound is not available yet. Turn it off from controles →
 interruptores if the permission flow or the exclusion misbehaves; the page asks
 again before every share, so there is no reload and no desktop update.
 
+Born as a flag (no old reader): `SHARE_SOUND_PROMOTION`
+(`share_sound_promotion`, default **on**, **global only**, server only). A phone
+that can only send its share's sound on the voice server (the iOS app) says so
+on a new share in a mesh room (`audioNeedsSfu` on `set-sharing-screen`), and the
+server moves the room, a DM call included, through the ordinary promotion so the
+share goes out with its sound. Off returns before anything is read or logged:
+the share stays on mesh, picture only, exactly as before. Global because a DM
+call has no server to name. Read per share, so a flip takes effect on the next
+share. `docs/voice-backends.md` §"The share-sound trigger".
+
 Born as a flag (no old reader): `AUDIENCE_MODE` (`audience_mode`, default off,
 **per server**), "Modo plateia" in voice calls (`docs/plans/AUDIENCE_MODE.md`):
 somebody holding `MUTE_MEMBERS` or `MANAGE_CHANNELS` turns a running call into

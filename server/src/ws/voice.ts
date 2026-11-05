@@ -171,6 +171,7 @@ import {
 } from "../voice/transport-policy.js";
 import {
   blockJoinPromotion,
+  blockShareSoundPromotion,
   decidePromotion,
   decideVideoAdmission,
   estimateSfuLoadMbps,
@@ -395,6 +396,14 @@ interface VoicePeer {
    * which is exactly the split the one-transport rule exists to prevent.
    */
   canPromoteTransport: boolean;
+  /**
+   * `channels.voice_transport === "mesh"`: somebody with Manage Channels chose
+   * "Small, peer-to-peer" for this channel. Resolved once at join beside
+   * `canPromoteTransport`, and read by exactly one thing: the share-sound
+   * trigger (`promoteForShareSound`), which yields to that choice the way the
+   * join triggers do (`blockJoinPromotion`).
+   */
+  meshPinnedByHand: boolean;
   /**
    * The seat is in a `watch_party` channel. Resolved from `channel.type` at
    * join, beside `canStream`, and read by exactly one thing: `pickHlsSharer`,
@@ -8914,6 +8923,7 @@ export async function handleVoiceMessage(
       speakReason,
       watchParty,
       canPromoteTransport,
+      meshPinnedByHand: channel.voice_transport === "mesh",
       canResume: payload.resume === true,
       // Deliberately not carried across a resume and not in the registry row.
       // A measurement is about a link at a moment; a client that reconnects
@@ -9116,6 +9126,17 @@ export async function handleVoiceMessage(
       peer.sourceHeight = null;
     }
     if (payload.sharing) {
+      // THE SHARE'S SOUND. A phone whose sound can only go out on the SFU (the
+      // iOS app) says so on a NEW share in a mesh room, and the room moves
+      // before the share is counted, so the caps below already read the SFU.
+      // A refusal changes nothing: the share goes on, picture only, which is
+      // what it did before this existed. See `promoteForShareSound`.
+      if (payload.audioNeedsSfu === true && !peer.sharingScreen) {
+        await promoteForShareSound(peer, user.id);
+        if (socket.readyState !== 1 || peers.get(existingPeerId) !== peer) {
+          return;
+        }
+      }
       const othersSharing = () =>
         getRoomPeers(peer.voiceChannelId).filter(
           (p) => p.id !== peer.id && p.sharingScreen,
@@ -12471,6 +12492,7 @@ async function promoteRoomPastMeshCap(
   userId: string,
   canPromoteTransport: boolean,
   currentTransport: VoiceRoomTransport = getRoomTransport(voiceChannelId),
+  trigger?: PromotionTrigger,
 ): Promise<boolean> {
   if (currentTransport !== "mesh") {
     return true;
@@ -12493,7 +12515,7 @@ async function promoteRoomPastMeshCap(
   if (existing) {
     return existing;
   }
-  const attempt = attemptPromotion(voiceChannelId, reason, userId).finally(
+  const attempt = attemptPromotion(voiceChannelId, reason, userId, trigger).finally(
     () => {
       pendingPromotions.delete(voiceChannelId);
     },
@@ -12506,6 +12528,7 @@ async function attemptPromotion(
   voiceChannelId: string,
   reason: VoicePromotionReason,
   userId: string,
+  trigger?: PromotionTrigger,
 ): Promise<boolean> {
   const seated = getRoomPeers(voiceChannelId);
   // The box this room would move onto: its own region's, when it has one.
@@ -12567,6 +12590,7 @@ async function attemptPromotion(
       voiceChannelId,
       userId,
       reason,
+      ...(trigger ? { trigger } : {}),
       refusal: verdict.refusal,
       loadMbps: Math.round(verdict.loadMbps),
       addedMbps: Math.round(verdict.addedMbps),
@@ -12617,6 +12641,7 @@ async function attemptPromotion(
         voiceChannelId,
         userId,
         reason,
+        ...(trigger ? { trigger } : {}),
         roomSize: seated.length,
         loadMbps: Math.round(verdict.loadMbps),
         addedMbps: Math.round(verdict.addedMbps),
@@ -12633,6 +12658,7 @@ async function attemptPromotion(
     voiceChannelId,
     userId,
     reason,
+    ...(trigger ? { trigger } : {}),
     roomSize: seated.length,
     loadMbps: Math.round(verdict.loadMbps),
     addedMbps: Math.round(verdict.addedMbps),
@@ -12642,6 +12668,108 @@ async function attemptPromotion(
     peopleOnBox: verdict.peopleOnBox,
   });
   return true;
+}
+
+/**
+ * What asked for a promotion, when it is not the mesh running out of
+ * something. Logged beside `reason` and never sent to a client: the frame and
+ * the bus carry `reason` alone, whose values every shipped client and every
+ * running instance already parses (`voiceTransportFrameSchema`, the web's
+ * `voice-transport-changed` schema). A new `reason` value would be dropped by
+ * a bundle that predates it, and a dropped `voice-transport-changed` is a seat
+ * left on a mesh nobody relays any more.
+ */
+type PromotionTrigger = "share-sound";
+
+/**
+ * A NEW SHARE FROM A PHONE THAT CAN ONLY SEND ITS SOUND ON THE SFU.
+ *
+ * The iOS app shares a screen with its sound on LiveKit and picture only on
+ * mesh: its WebRTC build has no door for app audio short of replacing the
+ * whole audio device (`ScreenShareAppAudio.swift`). DM calls and small servers
+ * are mesh by policy, so the place people most often share from a phone was
+ * the one place it went out silent. Its `set-sharing-screen` now carries
+ * `audioNeedsSfu` on mesh, and this moves the room through the ordinary
+ * promotion path, priced as one more screen exactly like the `screens`
+ * trigger, so every seat follows in place and the phone republishes its
+ * share, now with the sound, on the SFU.
+ *
+ * Runtime flag `share_sound_promotion`, default on. Off returns before
+ * anything is read or logged, so the share goes on picture only exactly as
+ * before. Refused by `blockShareSoundPromotion` (a mesh override, a seat that
+ * would be hung up, another share running) or by the budget, it does the same.
+ *
+ * On the wire it is reason `"screens"`; in the logs it is also
+ * `trigger: "share-sound"`. See `PromotionTrigger` for why.
+ */
+async function promoteForShareSound(
+  peer: VoicePeer,
+  userId: string,
+): Promise<void> {
+  if (!isEnabled("share_sound_promotion")) {
+    return;
+  }
+  const voiceChannelId = peer.voiceChannelId;
+  if (getRoomTransport(voiceChannelId) !== "mesh") {
+    return;
+  }
+  // Other people's shares, across the cluster when the rows can say: in a
+  // call split over two machines the other share may be on the other one.
+  // The local view is the floor, and what a failed read falls back to.
+  let remoteSharing = 0;
+  if (registryOn()) {
+    try {
+      const room = await listVoiceRoster(voiceChannelId);
+      remoteSharing = (room?.peers ?? []).filter(
+        (p) => p.peerId !== peer.id && p.sharingScreen,
+      ).length;
+    } catch (error) {
+      logEvent("voice.registryReadFailed", {
+        op: "shareSoundGate",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    if (peers.get(peer.id) !== peer) {
+      return;
+    }
+  }
+  // Read after the await, so a seat that joined or left meanwhile counts.
+  const others = getRoomPeers(voiceChannelId).filter((p) => p.id !== peer.id);
+  const refusal = blockShareSoundPromotion({
+    channelOverride: peer.meshPinnedByHand ? "mesh" : null,
+    sharerFollows: socketHasCap(peer.socket, SOCKET_CAPS.voiceTransportChanged),
+    seatsThatCannotFollow: others.filter(
+      (p) =>
+        p.orphanedAt === undefined &&
+        !socketHasCap(p.socket, SOCKET_CAPS.voiceTransportChanged),
+    ).length,
+    othersSharing: Math.max(
+      others.filter((p) => p.sharingScreen).length,
+      remoteSharing,
+    ),
+  });
+  if (refusal) {
+    logEvent("voice.transportPromotionRefused", {
+      voiceChannelId,
+      userId,
+      reason: "screens",
+      trigger: "share-sound",
+      refusal,
+      roomSize: others.length + 1,
+    });
+    return;
+  }
+  // The conversation rule is answered above, so `canPromoteTransport` is true
+  // here by design: the `"dm"` pin is a guess about cost, and the person
+  // sharing has just told the server the guess is wrong for this call.
+  await promoteRoomPastMeshCap(
+    voiceChannelId,
+    "screens",
+    userId,
+    true,
+    "mesh",
+    "share-sound",
+  );
 }
 
 // --- end promotion ------------------------------------------------------------

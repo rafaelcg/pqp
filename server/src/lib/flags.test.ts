@@ -120,6 +120,8 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   // New with the flag, so there was no old reader: this is its definition.
   mac_desktop_system_audio: offWords,
   // New with the flag, so there was no old reader: this is its definition.
+  share_sound_promotion: offWords,
+  // New with the flag, so there was no old reader: this is its definition.
   audience_mode: (raw) => raw === "true",
   watch_now_banner: (raw) => raw === "true",
   stream_start_notifications: (raw) => raw === "true",
