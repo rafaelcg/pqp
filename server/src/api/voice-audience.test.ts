@@ -134,6 +134,7 @@ describeDb("audience mode routes", () => {
     expect((await call(owner, "GET", `/api/voice/config?serverId=${serverId}`)).body).toEqual({
       audienceMode: true,
       audioSelfHeal: true,
+      calmDetector: true,
       soundboard: false,
       cleanVoiceDefault: true,
       raisedHandSticky: true,
@@ -142,6 +143,7 @@ describeDb("audience mode routes", () => {
     expect((await call(owner, "GET", `/api/voice/config?serverId=${serverId}`)).body).toEqual({
       audienceMode: false,
       audioSelfHeal: true,
+      calmDetector: true,
       soundboard: false,
       cleanVoiceDefault: true,
       raisedHandSticky: true,
@@ -185,6 +187,26 @@ describeDb("audience mode routes", () => {
         delete process.env.VOICE_AUDIO_SELF_HEAL;
       } else {
         process.env.VOICE_AUDIO_SELF_HEAL = previous;
+      }
+    }
+  });
+
+  it("GET /api/voice/config answers calmDetector without a server, on unless its variable says off", async () => {
+    const previous = process.env.VOICE_CALM_DETECTOR;
+    try {
+      delete process.env.VOICE_CALM_DETECTOR;
+      expect((await call(owner, "GET", "/api/voice/config")).body).toMatchObject({
+        calmDetector: true,
+      });
+      process.env.VOICE_CALM_DETECTOR = "off";
+      expect((await call(owner, "GET", "/api/voice/config")).body).toMatchObject({
+        calmDetector: false,
+      });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.VOICE_CALM_DETECTOR;
+      } else {
+        process.env.VOICE_CALM_DETECTOR = previous;
       }
     }
   });

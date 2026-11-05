@@ -10,9 +10,18 @@ import {
   ringAudienceKey,
   useStoriesUi,
 } from "@/lib/stories/ui-store";
-import { StoryComposer, type ComposerVoiceRoom } from "./story-composer";
+import type { ComposerVoiceRoom } from "./story-composer";
+import { deferredPanel } from "@/components/deferred";
 import type { StoryViewerSelf } from "./story-strip";
-import { StoryViewer } from "./story-viewer";
+
+// The viewer and the composer are 125 KB of script between them and are drawn
+// only while a story is open or being made, so they are fetched then.
+const StoryComposer = deferredPanel(() =>
+  import("./story-composer").then((m) => ({ default: m.StoryComposer })),
+);
+const StoryViewer = deferredPanel(() =>
+  import("./story-viewer").then((m) => ({ default: m.StoryViewer })),
+);
 
 /**
  * The one place the stories modals live. App mounts this once and hands it

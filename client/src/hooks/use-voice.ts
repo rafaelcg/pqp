@@ -196,7 +196,13 @@ import {
   readAnalyserLevel,
   SPEAKING_HANGOVER_MS,
   SPEAKING_THRESHOLD,
+  tuneAnalyserForPoll,
 } from "@/lib/voice-audio";
+import { calmDetectorEnabled } from "@/lib/calm-detector-flag";
+import {
+  createGateClock,
+  createSpeakingScheduler,
+} from "@/lib/speaking-clock";
 import { playCue, stopAllSoundLoops, whenCueSettled } from "@/lib/sounds";
 import {
   createMicRecoveryBudget,
@@ -1730,7 +1736,20 @@ export function createVoiceController(transport: RealtimeTransport) {
   let screenPublishMisses = 0;
   let republishingScreen = false;
   let joinTimeoutId: ReturnType<typeof setTimeout> | null = null;
-  let speakingRaf = 0;
+  // The speaking ring's loop: a frame callback as it always was, or a timer
+  // while `voice_calm_detector` is on (`lib/speaking-clock.ts`).
+  const speakingScheduler = createSpeakingScheduler(calmDetectorEnabled);
+  // The transmit gate's own fast clock, only live while that flag is on.
+  const gateClock = createGateClock({
+    calm: calmDetectorEnabled,
+    eligible: () =>
+      state.inputMode === "voice-activity" &&
+      pipeline != null &&
+      state.canSpeak &&
+      !state.isMuted &&
+      !state.isDeafened,
+    run: () => syncVoiceActivityGate(),
+  });
   let voiceActivityPollId = 0;
   let iceServers: RTCIceServer[] = getDefaultIceServers();
   const remoteAnalysers = new Map<
@@ -3371,10 +3390,8 @@ export function createVoiceController(transport: RealtimeTransport) {
   }
 
   function stopSpeakingLoop() {
-    if (speakingRaf) {
-      cancelAnimationFrame(speakingRaf);
-      speakingRaf = 0;
-    }
+    speakingScheduler.cancel();
+    gateClock.stop();
     stopAudioHealth();
     stopVoiceActivityPoll();
     speakingTracker.clear();
@@ -3390,11 +3407,19 @@ export function createVoiceController(transport: RealtimeTransport) {
     stopSpeakingLoop();
     startVoiceActivityPoll();
     startAudioHealth();
+    gateClock.start();
     const tick = () => {
       const next: string[] = [];
+      // How often the ring's analysers are read from here on: null is the
+      // per-frame loop they were tuned for, a number is the calm timer, and
+      // their smoothing follows it so the ring rises as fast as it did.
+      const pollMs = speakingScheduler.intervalMs();
       // The interval keeps the gate alive on a hidden tab. This rAF path is
-      // the low-latency one while the tab is visible.
-      syncVoiceActivityGate();
+      // the low-latency one while the tab is visible; on the calm timer the
+      // gate has its own clock (`gateClock`) and is not read from here.
+      if (pollMs === null) {
+        syncVoiceActivityGate();
+      }
       // `isTransmitting`, not `!isMuted`: in push-to-talk between presses the
       // mic is live and the analyser still reads a level, but nobody can hear
       // it. Lighting the speaking ring then would be the panel claiming you are
@@ -3409,6 +3434,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       }
 
       for (const [peerId, entry] of remoteAnalysers) {
+        tuneAnalyserForPoll(entry.analyser, pollMs);
         const level = readAnalyserLevel(entry.analyser);
         // A server-muted peer's audio may still be arriving (on a mesh it
         // always is), and the analyser still reads a level. Nobody hears it,
@@ -3431,9 +3457,9 @@ export function createVoiceController(transport: RealtimeTransport) {
         state.speakingPeerIds = next;
         emit();
       }
-      speakingRaf = requestAnimationFrame(tick);
+      speakingScheduler.next(tick);
     };
-    speakingRaf = requestAnimationFrame(tick);
+    speakingScheduler.next(tick);
   }
 
   function toIdentity(participant: VoiceParticipant) {

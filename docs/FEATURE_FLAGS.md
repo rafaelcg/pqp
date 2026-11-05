@@ -238,6 +238,32 @@ the API takes `mediaQuality.audioHealth` on a call rating, which feeds
 `callRatings.audioHealthSinceBoot` on `GET /api/admin/metrics` and the Faro
 event `voice.audioHealth`.
 
+Born as a flag (no old reader): `VOICE_CALM_DETECTOR`
+(`voice_calm_detector`, default **on**, global, client-only, since 2026-11-05), the
+web call's speaking detector on a timer instead of every animation frame
+(`client/src/lib/speaking-clock.ts`, wired in `hooks/use-voice.ts`). The ring
+that lights a speaker, and the music ducking that follows it, were read inside a
+`requestAnimationFrame` callback: the display's refresh rate, 120 times a second
+on a ProMotion laptop, and the only thing waking an idle page in a quiet call.
+On: the same loop runs at 20 Hz (4 Hz while the window is hidden or minimized, so
+the ducking still follows speech), the analysers' smoothing is rescaled so a ring
+rises as fast as before (`analyserSmoothingFor`), and the voice-activity transmit
+gate keeps a 16 ms clock of its own while it has something to decide and the
+window is visible (50 ms interval as always when hidden). Nothing touches the
+audio, the mic, push-to-talk or what the server hears. Served as `calmDetector` on
+the global `GET /api/voice/config`; **unknown is off** (an API older than the flag
+sends no field, a failed ask keeps the last answer), and a flip reaches a call
+already running at the next config refresh, with no reload: the loop picks its
+clock again on every step. Off is the per-frame loop, byte for byte. Your own ring reads the
+local analyser at 20 Hz, which in voice-activity mode is already being read
+every 16 ms by the gate; in push-to-talk it can light a few tens of ms later than
+it used to. Measured in headless Chromium, alone in a silent mesh call
+(`client/bench/startup-and-call.mjs call 60`): 16.4 % of a core across the
+browser's processes with the frame loop, 11.5 % with the timer (GPU process 1.7 %
+to 0, the renderer's main thread 2.3 % to 0.8 %), 120 animation frames a second
+to none. What is left is the RNNoise worklet and the audio service. Only
+`false` / `0` / `off` turn the variable off.
+
 Born as a flag (no old reader): `CLEAN_VOICE_DEFAULT` (`clean_voice_default`,
 default **on**, global, client-only, since 2026-10-20), "Voz limpa" (RNNoise,
 `advanced`) as the microphone's noise suppression for a device that never
