@@ -419,17 +419,19 @@ reads from `/api/share/config`, or one a flag's `clientVia` names, is not on the
 server.
 
 Born as a flag (no old reader): `MAC_DESKTOP_SYSTEM_AUDIO`
-(`mac_desktop_system_audio`, default off, **global only**), the computer's sound
+(`mac_desktop_system_audio`, default **on**, **global only**; `false` / `0` / `off` is the kill switch), the computer's sound
 on a screen share from the macOS desktop app (macOS 14.2+), served by
 `GET /api/share/config` as `macDesktopSystemAudio`. Only does anything in a
 desktop build whose preload publishes `capabilities.macShareAudio`; Chromium's
 CoreAudio Tap does the capture with its own audio process excluded, and the Mac
 asks the person for "System Audio Recording" the first time.
 `docs/DESKTOP.md` §"macOS share audio". Global for the same reason as the Linux
-flag: the client reads the config without a server. Off, a Mac share is video
-only and the picker says sound is not available yet. Turn it on from controles →
-interruptores; the page asks again before every share. Rafael tests it on his own
-Mac before it is turned on for anybody.
+flag: the client reads the config without a server. On by default (Rafael,
+2026-11-05) because a Mac share should carry sound like the other platforms
+(Windows 11, the phones); only Linux ships dark. Off, a Mac share is video only
+and the picker says sound is not available yet. Turn it off from controles →
+interruptores if the permission flow or the exclusion misbehaves; the page asks
+again before every share, so there is no reload and no desktop update.
 
 Born as a flag (no old reader): `AUDIENCE_MODE` (`audience_mode`, default off,
 **per server**), "Modo plateia" in voice calls (`docs/plans/AUDIENCE_MODE.md`):

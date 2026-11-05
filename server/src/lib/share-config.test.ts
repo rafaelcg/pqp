@@ -13,14 +13,14 @@ describe("shareConfigForServer", () => {
     resetFeatureFlagsForTests();
   });
 
-  it("keeps native desktop share audio, the high-motion guard and the game capture hint off by default", () => {
+  it("keeps native desktop share audio, the high-motion guard and the game capture hint off by default, and Mac sound on", () => {
     expect(shareConfigForServer(null)).toEqual({
       desktopShareAudioNative: false,
       shareHighMotionGuard: false,
       shareGameCaptureHint: false,
       shareFastStartQuality: false,
       linuxDesktopSystemAudio: false,
-      macDesktopSystemAudio: false,
+      macDesktopSystemAudio: true,
     });
   });
 
@@ -36,15 +36,18 @@ describe("shareConfigForServer", () => {
     }
   });
 
-  it("keeps Mac desktop system audio off by default and follows its own variable, exact word only", () => {
-    expect(shareConfigForServer(null).macDesktopSystemAudio).toBe(false);
-    process.env.MAC_DESKTOP_SYSTEM_AUDIO = "true";
+  it("keeps Mac desktop system audio ON by default and off only for false, 0 or off", () => {
     expect(shareConfigForServer(null).macDesktopSystemAudio).toBe(true);
-    expect(shareConfigForServer(null).linuxDesktopSystemAudio).toBe(false);
-    for (const word of ["TRUE", "1", "on", "yes", ""]) {
+    for (const word of ["false", "0", "off", "OFF", " False "]) {
       process.env.MAC_DESKTOP_SYSTEM_AUDIO = word;
       expect(shareConfigForServer(null).macDesktopSystemAudio).toBe(false);
     }
+    for (const word of ["true", "1", "on", "yes", ""]) {
+      process.env.MAC_DESKTOP_SYSTEM_AUDIO = word;
+      expect(shareConfigForServer(null).macDesktopSystemAudio).toBe(true);
+    }
+    // Independent of the Linux switch, which stays off.
+    expect(shareConfigForServer(null).linuxDesktopSystemAudio).toBe(false);
   });
 
   it("keeps Linux desktop system audio off by default and follows its own variable, exact word only", () => {

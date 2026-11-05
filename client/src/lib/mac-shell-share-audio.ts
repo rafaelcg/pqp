@@ -12,7 +12,7 @@
  * Three things must all be true before the page asks for sound:
  *   1. the shell says it can (`capabilities.macShareAudio`),
  *   2. the runtime flag `mac_desktop_system_audio` is on
- *      (`GET /api/share/config`), default off,
+ *      (`GET /api/share/config`), default ON (the kill switch),
  *   3. this Mac is on macOS 14.2 or newer (`macShareAudioStatus()`, only asked
  *      once 1 and 2 hold). Below that Chromium has no tap and an audio
  *      request fails the WHOLE capture, picture included.

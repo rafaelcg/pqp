@@ -470,10 +470,13 @@ export const FEATURE_FLAGS = {
   },
   mac_desktop_system_audio: {
     description:
-      "Som do computador no compartilhamento de tela do app desktop no Mac (macOS 14.2 ou mais novo; sem a chamada; pede a permissão Gravação de Áudio do Sistema).",
+      "Som do computador no compartilhamento de tela do app desktop no Mac (macOS 14.2 ou mais novo; sem a chamada; pede a permissão Gravação de Áudio do Sistema). Ligado por padrão: desligar é o interruptor de emergência.",
     env: "MAC_DESKTOP_SYSTEM_AUDIO",
-    parseEnv: exactTrue,
-    codeDefault: false,
+    // ON by default (Rafael, 2026-11-05): a Mac share carries sound like the
+    // other platforms do (Windows 11, the phones). Only Linux ships dark. The
+    // flag is the live kill switch; `false` / `0` / `off` turns it off.
+    parseEnv: onUnlessOff,
+    codeDefault: true,
     // Global on purpose, for the same reason as `linux_desktop_system_audio`:
     // the client reads `GET /api/share/config` without a server and keeps one
     // answer per page, so a per-server override would be accepted by the

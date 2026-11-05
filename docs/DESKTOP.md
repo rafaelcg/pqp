@@ -151,7 +151,7 @@ as "blocked or cancelled" rather than as a failure.
 |---|---|---|
 | Windows 11 (NT build ≥ 22000) | The machine's own output, minus pqp's | `{ video: source, audio: "loopback" }` when the page asked for audio **and** the picker's box was ticked. Electron 43.4+ remaps that to `loopbackWithoutChrome` when the page sent `restrictOwnAudio: true`. `os.release()` is still `10.0.22631` on Windows 11; parse the build, never `major === 11` |
 | Windows 10 | Video only | Chromium cannot exclude this app from the mixer. The handler returns no loopback, the picker hides the audio box, and the page asks for no audio |
-| macOS | Video only, or with `mac_desktop_system_audio` on (macOS 14.2+) the computer's sound minus pqp's | The client asks for no audio track unless the flag is on, the shell publishes `capabilities.macShareAudio` and the Mac is on 14.2 or newer, because an audio request the embedder cannot satisfy rejects the **whole** capture, video included (3 Sep 2026: "o picker fecha e a stream não começa"). With all three, Chromium's CoreAudio Tap carries the sound; see "macOS share audio" below. The picker says plainly on a Mac without it that sound is not available yet |
+| macOS | The computer's sound minus pqp's on macOS 14.2+ with a shell that publishes `capabilities.macShareAudio` and `mac_desktop_system_audio` on (the default); video only otherwise | The client asks for no audio track unless the flag is on, the shell publishes `capabilities.macShareAudio` and the Mac is on 14.2 or newer, because an audio request the embedder cannot satisfy rejects the **whole** capture, video included (3 Sep 2026: "o picker fecha e a stream não começa"). With all three, Chromium's CoreAudio Tap carries the sound; see "macOS share audio" below. The picker says plainly on a Mac without it (before 14.2, an older shell, or the flag switched off) that sound is not available yet |
 | Linux | Video only, or with `linux_desktop_system_audio` on (0.2.3+) the computer's sound minus pqp's | Chromium's loopback carries the call on Linux, so the shell builds its own bus (`electron/lib/linux-share-audio.js`); see "Linux share audio: what is captured and what is not" below. Wayland may hand back one pre-picked surface |
 
 `loopbackWithMute` is deliberately never used. It taps the same output and
@@ -224,7 +224,7 @@ that path stops a track.
 
 ### macOS share audio: what is captured and what is not
 
-Behind `mac_desktop_system_audio` (global, default off), a shell that publishes
+Behind `mac_desktop_system_audio` (global, default **on** since 2026-11-05, the kill switch), a shell that publishes
 `capabilities.macShareAudio` (0.2.10+) and a Mac on macOS 14.2 or newer. Written
 2026-11-05 after a user could not share sound from a Mac; **the capture itself
 was not run on a Mac when it was written**, so §"What was verified" lists what

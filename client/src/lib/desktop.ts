@@ -288,8 +288,8 @@ export interface DesktopShareCapabilities {
    * through Chromium's CoreAudio Tap with its own audio excluded
    * (`electron/lib/mac-share-audio.js`), on macOS 14.2+. A SEPARATE field from
    * `systemAudio`, which stays `"none"` on a Mac so an older page never asks
-   * for audio the shell would reject. Absent in every shell before it, and off
-   * unless the runtime flag says so.
+   * for audio the shell would reject. Absent in every shell before it. Used
+   * unless the runtime flag (default on) is switched off.
    */
   macShareAudio?: boolean;
   /**

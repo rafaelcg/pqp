@@ -58,7 +58,7 @@ import { isEnabled } from "./flags.js";
  * `macDesktopSystemAudio`: the macOS desktop app may carry the computer's
  * sound on a share, through Chromium's CoreAudio Tap loopback with pqp's own
  * audio process excluded (`electron/lib/mac-share-audio.js`). Runtime flag
- * `mac_desktop_system_audio`, default off, `MAC_DESKTOP_SYSTEM_AUDIO` as its
+ * `mac_desktop_system_audio`, default ON (the kill switch), `MAC_DESKTOP_SYSTEM_AUDIO` as its
  * environment default, GLOBAL only, for the reason `linuxDesktopSystemAudio`
  * is. The shell still has to say it can (`capabilities.macShareAudio`) and
  * the Mac has to be on macOS 14.2 or newer, so this does nothing in a

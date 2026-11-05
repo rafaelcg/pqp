@@ -118,7 +118,7 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   // New with the flag, so there was no old reader: this is its definition.
   linux_desktop_system_audio: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
-  mac_desktop_system_audio: (raw) => raw === "true",
+  mac_desktop_system_audio: offWords,
   // New with the flag, so there was no old reader: this is its definition.
   audience_mode: (raw) => raw === "true",
   watch_now_banner: (raw) => raw === "true",
@@ -603,22 +603,24 @@ describeDb("runtime flags against Postgres", () => {
     expect(isCommunityHomeVipEnabled(serverId)).toBe(true);
   });
 
-  it("Mac desktop system audio is switched from the dashboard and served by the share config", async () => {
+  it("Mac desktop system audio is ON by default, and is switched off from the dashboard", async () => {
     const { shareConfigForServer } = await import("./share-config.js");
     await flags.startFeatureFlags();
-    expect(shareConfigForServer(null).macDesktopSystemAudio).toBe(false);
-
-    await flags.setGlobalFlag("mac_desktop_system_audio", true, { kind: "dashboard" });
     expect(shareConfigForServer(null).macDesktopSystemAudio).toBe(true);
-    expect(shareConfigForServer(serverId).macDesktopSystemAudio).toBe(true);
-    // Independent of the Linux switch.
+    // Independent of the Linux switch, which ships dark.
     expect(shareConfigForServer(null).linuxDesktopSystemAudio).toBe(false);
 
-    process.env.MAC_DESKTOP_SYSTEM_AUDIO = "false";
-    expect(shareConfigForServer(null).macDesktopSystemAudio).toBe(true);
+    // The operator's row is the kill switch, with no deploy and no variable.
     await flags.setGlobalFlag("mac_desktop_system_audio", false, { kind: "dashboard" });
+    expect(shareConfigForServer(null).macDesktopSystemAudio).toBe(false);
+    expect(shareConfigForServer(serverId).macDesktopSystemAudio).toBe(false);
+
+    // A row beats a variable that says the opposite.
     process.env.MAC_DESKTOP_SYSTEM_AUDIO = "true";
     expect(shareConfigForServer(null).macDesktopSystemAudio).toBe(false);
+    await flags.setGlobalFlag("mac_desktop_system_audio", true, { kind: "dashboard" });
+    process.env.MAC_DESKTOP_SYSTEM_AUDIO = "false";
+    expect(shareConfigForServer(null).macDesktopSystemAudio).toBe(true);
 
     const entry = (await flags.listFeatureFlags()).flags.find(
       (flag) => flag.key === "mac_desktop_system_audio",
@@ -626,6 +628,7 @@ describeDb("runtime flags against Postgres", () => {
     expect(entry).toMatchObject({
       env: "MAC_DESKTOP_SYSTEM_AUDIO",
       perServer: false,
+      codeDefault: true,
       clientVia: "GET /api/share/config (macDesktopSystemAudio)",
     });
 
