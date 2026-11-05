@@ -12693,12 +12693,12 @@
         }
       }
     },
-    "Watch parties of 100+ people" : {
+    "Watch parties with your crew" : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Watch party com mais de 100 pessoas"
+            "value" : "Watch party com a tua galera"
           }
         }
       }
