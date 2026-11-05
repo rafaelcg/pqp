@@ -73,3 +73,31 @@ export function readShareSurfaceHints(
   }
   return { displaySurface, label, desktopApp };
 }
+
+/** The slice of `window` the fullscreen test reads, so a test can hand one in. */
+export interface ScreenFillView {
+  innerWidth: number;
+  innerHeight: number;
+  screen: { width: number; height: number };
+  document?: { fullscreenElement?: Element | null };
+}
+
+/**
+ * Is the pqp window itself filling its screen (F11, the shell's fullscreen, or
+ * any element fullscreen)? Then a whole-screen share holds a picture of the
+ * preview at full size even though the share tile in the grid is small: the
+ * grid IS the screen. A merely maximized window leaves the taskbar out of the
+ * page, so it does not count. A window fullscreen on another monitor than the
+ * one being shared is not a loop and cannot be told apart from here, which is
+ * why the guard has a "show anyway".
+ */
+export function windowFillsScreen(view: ScreenFillView): boolean {
+  if (view.document?.fullscreenElement) {
+    return true;
+  }
+  const { width, height } = view.screen;
+  if (!(width > 0) || !(height > 0)) {
+    return false;
+  }
+  return view.innerWidth >= width - 1 && view.innerHeight >= height - 1;
+}

@@ -52,6 +52,7 @@ import {
   readShareSurfaceHints,
   shareMayCaptureThisWindow,
 } from "@/lib/share-self-capture";
+import { useWindowFillsScreen } from "@/lib/use-window-fills-screen";
 import { shareStreamHasAudio } from "@/lib/screen-capture-audio";
 import {
   canControlShareCursor,
@@ -5653,7 +5654,11 @@ export function ScreenTileFrame({
   // copies of itself (feedback #130). A still card stands in until the person
   // asks for the picture anyway. Windowed, the preview is small enough to
   // read as what it is, and stays live.
-  const windowFilled = stageFullscreen ?? isFullscreen;
+  // Also when the pqp window itself fills the screen: the grid is then the
+  // whole capture, so even a small "Your screen" tile is the recursion
+  // (feedback #130, follow-up with video).
+  const pqpFillsScreen = useWindowFillsScreen();
+  const windowFilled = (stageFullscreen ?? isFullscreen) || pqpFillsScreen;
   const mirrorRisk =
     tile.isSelf &&
     windowFilled &&
@@ -5833,9 +5838,9 @@ export function ScreenTileFrame({
       ) : mirrorGuard ? (
         <div
           data-self-mirror-guard=""
-          className="flex h-full w-full flex-col items-center justify-center gap-2 bg-ink-2 px-4 text-center"
+          className="flex h-full w-full flex-col items-center justify-center gap-2 overflow-hidden bg-ink-2 px-4 text-center"
         >
-          <p className="text-sm text-paper-muted">
+          <p className="line-clamp-4 text-xs text-paper-muted">
             {t("voice.share.mirrorGuard")}
           </p>
           <Button

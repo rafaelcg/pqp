@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   readShareSurfaceHints,
   shareMayCaptureThisWindow,
+  windowFillsScreen,
 } from "./share-self-capture";
 
 describe("shareMayCaptureThisWindow", () => {
@@ -34,6 +35,31 @@ describe("shareMayCaptureThisWindow", () => {
   it("guesses yes only in the shell when nothing is known", () => {
     expect(shareMayCaptureThisWindow({ desktopApp: true })).toBe(true);
     expect(shareMayCaptureThisWindow({ desktopApp: false })).toBe(false);
+  });
+});
+
+describe("windowFillsScreen", () => {
+  const screen = { width: 1920, height: 1080 };
+  it("is true for a page as big as the screen", () => {
+    expect(windowFillsScreen({ innerWidth: 1920, innerHeight: 1080, screen })).toBe(true);
+  });
+  it("is false for a maximized window that leaves the taskbar out", () => {
+    expect(windowFillsScreen({ innerWidth: 1920, innerHeight: 1009, screen })).toBe(false);
+  });
+  it("is true for any element in fullscreen", () => {
+    expect(
+      windowFillsScreen({
+        innerWidth: 800,
+        innerHeight: 600,
+        screen,
+        document: { fullscreenElement: {} as Element },
+      }),
+    ).toBe(true);
+  });
+  it("is false when the screen size is unknown", () => {
+    expect(
+      windowFillsScreen({ innerWidth: 0, innerHeight: 0, screen: { width: 0, height: 0 } }),
+    ).toBe(false);
   });
 });
 

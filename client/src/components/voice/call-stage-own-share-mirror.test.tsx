@@ -177,7 +177,9 @@ function mount(voiceState: VoiceState) {
 
 const guard = (el: HTMLElement) =>
   el.querySelector("[data-self-mirror-guard]");
-const liveVideos = (el: HTMLElement) => el.querySelectorAll("video");
+const gridTiles = (el: HTMLElement) =>
+  el.querySelectorAll("[data-testid=stage-grid] > li");
+const liveVideos =(el: HTMLElement) => el.querySelectorAll("video");
 const press = (el: HTMLElement, testId: string) => {
   const button = el.querySelector<HTMLButtonElement>(`[data-testid=${testId}]`);
   expect(button, testId).not.toBeNull();
@@ -263,4 +265,88 @@ describe("own whole-screen share, enlarged", () => {
     expect(guard(el)).toBeNull();
   });
 });
+
+/**
+ * The follow-up video: pqp fullscreen on the very monitor being shared, a
+ * 4-up grid, and the small "Your screen" tile is already a tunnel before
+ * anybody presses anything.
+ */
+describe("own whole-screen share in the grid while pqp fills the screen", () => {
+  const original = {
+    w: window.innerWidth,
+    h: window.innerHeight,
+  };
+  const fillScreen = (fill: boolean) => {
+    Object.defineProperty(window, "screen", {
+      configurable: true,
+      value: { width: 1920, height: 1080 },
+    });
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: fill ? 1920 : 1280,
+    });
+    Object.defineProperty(window, "innerHeight", {
+      configurable: true,
+      value: fill ? 1080 : 720,
+    });
+  };
+  afterEach(() => {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: original.w,
+    });
+    Object.defineProperty(window, "innerHeight", {
+      configurable: true,
+      value: original.h,
+    });
+  });
+
+  it("shows the still card on our tile only, with no click needed", () => {
+    fillScreen(true);
+    const el = mount(
+      stateWith({ self: true, friend: true, surface: "monitor" }),
+    );
+    expect(gridTiles(el)).toHaveLength(2);
+    expect(el.querySelectorAll("[data-self-mirror-guard]")).toHaveLength(1);
+    // The friend's picture is still a live video.
+    expect(liveVideos(el)).toHaveLength(1);
+  });
+
+  it("keeps the live preview when the window does not fill the screen", () => {
+    fillScreen(false);
+    const el = mount(
+      stateWith({ self: true, friend: true, surface: "monitor" }),
+    );
+    expect(guard(el)).toBeNull();
+    expect(liveVideos(el)).toHaveLength(2);
+  });
+
+  it("leaves a window or tab share alone", () => {
+    fillScreen(true);
+    for (const surface of ["window", "browser"]) {
+      const el = mount(stateWith({ self: true, friend: true, surface }));
+      expect(guard(el), surface).toBeNull();
+      act(() => root?.unmount());
+      host?.remove();
+    }
+  });
+
+  it("keeps the shell fallback for a track with no surface", () => {
+    fillScreen(true);
+    desktop.app = true;
+    const el = mount(stateWith({ self: true, friend: true }));
+    expect(el.querySelectorAll("[data-self-mirror-guard]")).toHaveLength(1);
+  });
+
+  it("brings the live picture back on request", () => {
+    fillScreen(true);
+    const el = mount(
+      stateWith({ self: true, friend: true, surface: "monitor" }),
+    );
+    press(el, "share-mirror-show");
+    expect(guard(el)).toBeNull();
+    expect(liveVideos(el)).toHaveLength(2);
+  });
+});
+
 
