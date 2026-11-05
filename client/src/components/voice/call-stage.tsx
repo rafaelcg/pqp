@@ -5651,12 +5651,12 @@ export function ScreenTileFrame({
   const hideSelfPreview = tile.isSelf && hidePreviewPref;
   // Our own whole-screen share, blown up: the capture contains this window,
   // and this window is the capture, so a live picture here is a tunnel of
-  // copies of itself (feedback #130). A still card stands in until the person
+  // copies of itself (feedback 130). A still card stands in until the person
   // asks for the picture anyway. Windowed, the preview is small enough to
   // read as what it is, and stays live.
   // Also when the pqp window itself fills the screen: the grid is then the
   // whole capture, so even a small "Your screen" tile is the recursion
-  // (feedback #130, follow-up with video).
+  // (feedback 130, follow-up with video).
   const pqpFillsScreen = useWindowFillsScreen();
   const windowFilled = (stageFullscreen ?? isFullscreen) || pqpFillsScreen;
   const mirrorRisk =

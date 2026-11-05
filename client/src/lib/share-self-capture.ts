@@ -7,7 +7,7 @@
  * is drawn from the previous one, one capture latency deeper, so the picture
  * becomes a tunnel of nested copies that lags, smears and strobes. That is
  * the report "when I click my own preview while sharing my screen it starts
- * bugging" (feedback #130, Windows desktop app, whole screen).
+ * bugging" (feedback 130, Windows desktop app, whole screen).
  *
  * Only the presenter's own local preview is affected. Viewers get the capture
  * as encoded, and the preview is a second decode of it on this machine.

@@ -199,7 +199,7 @@ afterEach(() => {
 });
 
 /**
- * Feedback #130: a presenter sharing the whole screen clicked their own
+ * Feedback 130: a presenter sharing the whole screen clicked their own
  * preview, which fills the window, and the picture "started bugging": the
  * capture contains this window, this window shows the capture, so each frame
  * is a copy of a copy. The still card is what the enlarged tile shows instead.

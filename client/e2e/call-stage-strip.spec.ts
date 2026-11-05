@@ -225,6 +225,14 @@ test("a room bigger than the strip: four faces, a +2, and everyone one tap away"
     // the room (`roomListOnScreen`), so fold the list to its icons first.
     await page.addInitScript(() => {
       localStorage.setItem("pqp:channel-sidebar", "icons");
+      // Playwright's window.screen is the viewport, so every page looks
+      // fullscreen to the whole-screen self-preview guard
+      // (`lib/share-self-capture.ts`), which would swap the share's picture
+      // for its still card. A real desktop is bigger than the window.
+      Object.defineProperty(window, "screen", {
+        configurable: true,
+        value: { width: 3840, height: 2160, availWidth: 3840, availHeight: 2160 },
+      });
     });
     await openApp(page);
     await page.getByRole("button", { name: /lobby/i }).first().dblclick();
