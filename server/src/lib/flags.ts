@@ -959,13 +959,14 @@ export const FEATURE_FLAGS = {
   },
   default_text_filter: {
     description:
-      "Filtro de texto padrão do pqp (xingamento pesado, ameaça e ofensa dirigida em inglês, português e espanhol) em toda mensagem, post, comentário e nome, sem regra de ninguém. O dono de cada servidor pode desligar nas configurações do AutoMod. Desligado aqui: nenhum servidor filtra por padrão.",
+      "Filtro de texto padrão do pqp (ofensa discriminatória e ameaça em inglês, português e espanhol) em mensagem de servidor, post, comentário e nome, sem regra de ninguém. Mensagem direta e de grupo não é lida. O dono de cada servidor pode desligar nas configurações do AutoMod. Desligado aqui: nenhum servidor filtra por padrão.",
     env: "DEFAULT_TEXT_FILTER",
     parseEnv: onUnlessOff,
     // ON by default: the App Store's 1.2 asks for a filtering method that is
     // there without anybody setting it up. Global, not per server: the
     // owner's own switch (`server_text_filter_settings`) is the per-server
-    // lever, and a DM, a profile name and a story have no single server.
+    // lever, and a profile name and a story have no single server. DMs are not
+    // read by it at all.
     codeDefault: true,
     perServer: false,
     clientVia: "GET /api/servers/:id/automod/baseline",

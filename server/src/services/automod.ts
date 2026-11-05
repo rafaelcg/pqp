@@ -454,8 +454,9 @@ function baselineVerdict(body: string): AutomodVerdict | null {
 
 /**
  * The baseline verdict for a text, or null when it may land. `serverId` is
- * null for a surface with no server (a direct message, a profile name), where
- * only the operator's flag applies.
+ * null for a surface with no server (a profile name), where only the
+ * operator's flag applies. Direct and group messages never call this: the
+ * default filter does not read private conversations.
  */
 export async function checkBaselineText(
   serverId: string | null,
@@ -476,11 +477,10 @@ export async function checkBaselineText(
 
 /**
  * A baseline hit on a surface with no server to audit it on. One log line
- * with the class and the surface, never the text: the body of a private
- * message is not ours to keep.
+ * with the class and the surface, never the text.
  */
 export function recordBaselineHit(
-  surface: "dm" | "profile",
+  surface: "profile",
   userId: string,
   verdict: AutomodVerdict,
 ): void {

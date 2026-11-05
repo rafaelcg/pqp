@@ -8,13 +8,6 @@ const blocked = (text: string) => findBaselineViolation(text)?.class ?? null;
 
 describe("baseline text filter: what it blocks", () => {
   it.each([
-    ["fuck you, you stupid idiot", "abuse"],
-    ["Fuck YOU", "abuse"],
-    ["go fuck yourself", "abuse"],
-    ["you are a cunt", "abuse"],
-    ["vai tomar no cu", "abuse"],
-    ["Vai se foder, seu arrombado", "abuse"],
-    ["chinga tu madre", "abuse"],
     ["kill yourself", "threat"],
     ["kys", "threat"],
     ["i will rape you", "threat"],
@@ -37,7 +30,7 @@ describe("baseline text filter: what it blocks", () => {
 
   it("works across Portuguese diacritics and Spanish accents", () => {
     // You can type it with or without the accent, upper or lower.
-    expect(blocked("ARROMBADÃO")).toBeNull(); // not on the list: no stem matching
+    expect(blocked("sapatãozinho")).toBeNull(); // not on the list: no stem matching
     expect(blocked("Mongolóide")).toBe("slur");
     expect(blocked("mongoloide")).toBe("slur");
     expect(blocked("MARICÓN")).toBe("slur");
@@ -50,29 +43,40 @@ describe("baseline text filter: what it blocks", () => {
     expect(blocked("f@ggot")).toBe("slur");
     expect(blocked("v14d0")).toBe("slur");
     expect(blocked("niiiigger")).toBe("slur");
-    expect(blocked("fuuuuck you")).toBe("abuse");
-    expect(blocked("f u c k  y o u")).toBe("abuse");
+    expect(blocked("kiiiill yourself")).toBe("threat");
+    expect(blocked("k i l l  y o u r s e l f")).toBe("threat");
     expect(blocked("n.i.g.g.e.r")).toBe("slur");
     expect(blocked("k y s")).toBe("threat");
-    expect(blocked("fuckyou")).toBe("abuse");
-    expect(blocked("vaitomarnocu")).toBe("abuse");
+    expect(blocked("killyourself")).toBe("threat");
+    expect(blocked("vaisematar")).toBe("threat");
     // Zero-width and fullwidth and Cyrillic lookalikes.
     expect(blocked("ni​gger")).toBe("slur");
     expect(blocked("ｋｉｌｌ ｙｏｕｒｓｅｌｆ")).toBe("threat");
     expect(blocked("fаggot")).toBe("slur"); // Cyrillic а
-    expect(blocked("c.u.n.t")).toBe("abuse");
+    expect(blocked("f.a.g.g.o.t")).toBe("slur");
     expect(blocked("sandnigger")).toBe("slur");
   });
 
   it("blocks inside a longer sentence and across punctuation", () => {
-    expect(blocked("lol you know what, fuck you!!!")).toBe("abuse");
+    expect(blocked("lol you know what, kill yourself!!!")).toBe("threat");
     expect(blocked("Kill-yourself")).toBe("threat");
-    expect(blocked("ola\nvai tomar no cu\nflw")).toBe("abuse");
+    expect(blocked("ola\nvai se matar\nflw")).toBe("threat");
   });
 });
 
 describe("baseline text filter: what it lets through", () => {
   it.each([
+    // Insults are not filtered: banter between friends is not ours to read.
+    "fuck you",
+    "Fuck YOU, you stupid idiot",
+    "go fuck yourself",
+    "fuck off",
+    "you are a cunt",
+    "you slut",
+    "vai tomar no cu",
+    "vai se foder, seu arrombado",
+    "chinga tu madre",
+    "concha de tu madre",
     "this is shit",
     "damn it",
     "what the fuck is this boss",
@@ -144,6 +148,10 @@ describe("baseline text filter: what it lets through", () => {
 });
 
 describe("baseline text filter: the lists themselves", () => {
+  it("has exactly the two classes that were agreed", () => {
+    expect(Object.keys(BASELINE_TEXT_LISTS).sort()).toEqual(["slur", "threat"]);
+  });
+
   it("never states a word as a stem that would catch an ordinary one", () => {
     // Every entry blocks itself, so the lists and the matcher cannot drift.
     for (const [cls, entries] of Object.entries(BASELINE_TEXT_LISTS)) {

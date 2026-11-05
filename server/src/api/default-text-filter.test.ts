@@ -13,11 +13,11 @@ import {
 
 /**
  * The default text filter, end to end on a real Postgres: a server with NO
- * AutoMod rule still refuses a slur or directed abuse, on every surface that
- * carries words (a message, its edit, a story-shaped check, a direct message,
- * a Baú comment, a profile name), the owner can switch it off for their own
- * server, and the operator's `default_text_filter` flag switches it off for
- * everybody. The refusal is the plain sentence the author is meant to read,
+ * AutoMod rule still refuses a slur or a threat, on every public surface that
+ * carries words (a message, its edit, a story-shaped check, a Baú comment, a
+ * profile name), never reads a direct or group message, lets insults and
+ * everyday swearing through, the owner can switch it off for their own server,
+ * and the operator's `default_text_filter` flag switches it off for everybody. The refusal is the plain sentence the author is meant to read,
  * and what the audit log keeps is the class, never the word.
  */
 
@@ -138,12 +138,12 @@ describeDb("default text filter", () => {
 
   const baselinePath = (serverId: string) => `/api/servers/${serverId}/automod/baseline`;
 
-  it("a server with no rule at all refuses abuse and lets everything else through", async () => {
+  it("a server with no rule at all refuses a slur and lets everything else through", async () => {
     const { channelId, serverId } = await makeServer();
     const rules = await getPool().query(`SELECT 1 FROM automod_rules WHERE server_id = $1`, [serverId]);
     expect(rules.rowCount).toBe(0);
 
-    const refused = await send(member, channelId, "fuck you, you stupid idiot");
+    const refused = await send(member, channelId, "you stupid faggot");
     expect(refused).toMatchObject({
       ok: false,
       reason: "automod",
@@ -153,18 +153,21 @@ describeDb("default text filter", () => {
       "This message was not sent: it breaks pqp's rules on abusive language.",
     );
 
-    // Ordinary swearing and ordinary talk land.
+    // Insults, ordinary swearing and ordinary talk land.
+    expect((await send(member, channelId, "fuck you, you stupid idiot")).ok).toBe(true);
+    expect((await send(member, channelId, "vai tomar no cu")).ok).toBe(true);
+    expect((await send(member, channelId, "you are a cunt lol")).ok).toBe(true);
     expect((await send(member, channelId, "this boss is shit")).ok).toBe(true);
     expect((await send(member, channelId, "bom dia, galera")).ok).toBe(true);
     expect((await send(member, channelId, "I'll kill you in this match lol")).ok).toBe(true);
     // A refusal wrote nothing.
     const stored = await getPool().query(`SELECT body FROM messages WHERE channel_id = $1`, [channelId]);
-    expect(stored.rows.map((r: { body: string }) => r.body)).not.toContain("fuck you, you stupid idiot");
+    expect(stored.rows.map((r: { body: string }) => r.body)).not.toContain("you stupid faggot");
   });
 
   it("refuses the owner too: the baseline has no staff bypass", async () => {
     const { channelId } = await makeServer();
-    expect(await send(owner, channelId, "vai tomar no cu")).toMatchObject({
+    expect(await send(owner, channelId, "vai se matar")).toMatchObject({
       ok: false,
       reason: "automod",
     });
@@ -185,31 +188,31 @@ describeDb("default text filter", () => {
     expect(JSON.stringify(audit.rows[0])).not.toMatch(/nigg/i);
   });
 
-  it("an edit into abuse is refused with a 422 and the same sentence", async () => {
+  it("an edit into a threat is refused with a 422 and the same sentence", async () => {
     const { channelId } = await makeServer();
     const posted = await send(member, channelId, "hello");
     expect(posted.ok).toBe(true);
     const messageId = (posted as { ok: true; message: { id: string } }).message.id;
     const edit = await call<{ error: string }>(member, "PATCH", `/api/messages/${messageId}`, {
-      body: "fuck you",
+      body: "kill yourself",
     });
     expect(edit.status).toBe(422);
     expect(edit.body.error).toBe(BASELINE_REJECTION_MESSAGE);
   });
 
-  it("a direct message is read too", async () => {
+  it("a direct or group message is NOT read, on send or on edit", async () => {
     await makeServer(); // member and friend share it, so the DM opens
     const opened = await call<{ conversation: { channelId: string } }>(member, "POST", "/api/dms", {
       userIds: [friend.id],
     });
     expect(opened.status).toBe(201);
     const channelId = opened.body.conversation.channelId;
-    expect(await send(member, channelId, "kill yourself")).toMatchObject({
-      ok: false,
-      reason: "automod",
-      automodMessage: BASELINE_REJECTION_MESSAGE,
-    });
-    expect((await send(member, channelId, "oi, tudo bem?")).ok).toBe(true);
+    const sent = await send(member, channelId, "you faggot, kill yourself");
+    expect(sent.ok).toBe(true);
+    expect((await send(member, channelId, "fuck you, seu arrombado")).ok).toBe(true);
+    const messageId = (sent as { ok: true; message: { id: string } }).message.id;
+    const edit = await call(member, "PATCH", `/api/messages/${messageId}`, { body: "kys" });
+    expect(edit.status).toBe(200);
   });
 
   it("the words of a story go through the same check", async () => {
@@ -220,9 +223,20 @@ describeDb("default text filter", () => {
       parentChannelId: null,
       authorId: member.id,
       memberPerms: 0n,
-      body: "chinga tu madre",
+      body: "te voy a violar",
     });
-    expect(verdict).toMatchObject({ baseline: true, matched: "abuse" });
+    expect(verdict).toMatchObject({ baseline: true, matched: "threat" });
+    // An insult is not a baseline hit.
+    expect(
+      await checkAutomod({
+        serverId,
+        channelId: "",
+        parentChannelId: null,
+        authorId: member.id,
+        memberPerms: 0n,
+        body: "chinga tu madre",
+      }),
+    ).toBeNull();
   });
 
   it("a Baú comment is refused with a 400 and the sentence", async () => {
@@ -234,7 +248,7 @@ describeDb("default text filter", () => {
     });
     expect(post.status).toBe(201);
     const path = `/api/servers/${serverId}/home/posts/${post.body.post.id}/comments`;
-    const bad = await call<{ error: string }>(member, "POST", path, { body: "you are a cunt" });
+    const bad = await call<{ error: string }>(member, "POST", path, { body: "you are a faggot" });
     expect(bad.status).toBe(400);
     expect(bad.body.error).toBe(BASELINE_REJECTION_MESSAGE);
     expect((await call(member, "POST", path, { body: "bom post" })).status).toBe(201);
@@ -253,7 +267,7 @@ describeDb("default text filter", () => {
       { displayName: "nigger lover" },
       { username: "faggot" },
       { handle: "kys" },
-      { customStatus: "vai tomar no cu" },
+      { customStatus: "vai se matar" },
     ]) {
       const res = await call<{ error: string }>(member, "PATCH", "/api/me", patch);
       expect(res.status, JSON.stringify(patch)).toBe(422);
@@ -262,6 +276,9 @@ describeDb("default text filter", () => {
     expect(after!.display_name).toBe(before!.display_name);
     const ok = await call(member, "PATCH", "/api/me", { displayName: "Maya Chen" });
     expect(ok.status).toBe(200);
+    // An insult in a recado is not the baseline's business.
+    const insult = await call(member, "PATCH", "/api/me", { customStatus: "fuck you all" });
+    expect(insult.status).toBe(200);
   });
 
   describe("the owner's switch", () => {
@@ -273,7 +290,7 @@ describeDb("default text filter", () => {
       const off = await call(owner, "PUT", baselinePath(a.serverId), { enabled: false });
       expect(off.status).toBe(200);
       expect(off.body).toEqual({ instanceEnabled: true, ownerDisabled: true, enabled: false });
-      expect((await send(member, a.channelId, "fuck you")).ok).toBe(true);
+      expect((await send(member, a.channelId, "you faggot")).ok).toBe(true);
 
       // Another server is untouched.
       const created = await call<{ server: { id: string }; channels: Array<{ id: string; type: string }> }>(
@@ -283,7 +300,7 @@ describeDb("default text filter", () => {
         { name: "Other" },
       );
       const otherChannel = created.body.channels.find((c) => c.type === "text")!.id;
-      expect(await send(owner, otherChannel, "fuck you")).toMatchObject({ ok: false });
+      expect(await send(owner, otherChannel, "you faggot")).toMatchObject({ ok: false });
 
       // And the switch is its own audit line.
       const audit = await getPool().query(
@@ -301,7 +318,7 @@ describeDb("default text filter", () => {
 
       const on = await call(owner, "PUT", baselinePath(a.serverId), { enabled: true });
       expect(on.body).toEqual({ instanceEnabled: true, ownerDisabled: false, enabled: true });
-      expect(await send(member, a.channelId, "fuck you")).toMatchObject({ ok: false });
+      expect(await send(member, a.channelId, "you faggot")).toMatchObject({ ok: false });
       // Back to "no row": the default, as it was before anybody touched it.
       const rows = await getPool().query(
         `SELECT 1 FROM server_text_filter_settings WHERE server_id = $1`,
@@ -323,13 +340,13 @@ describeDb("default text filter", () => {
         keywords: ["pineapple"],
       });
       await call(owner, "PUT", baselinePath(serverId), { enabled: false });
-      expect((await send(member, channelId, "fuck you")).ok).toBe(true);
+      expect((await send(member, channelId, "you faggot")).ok).toBe(true);
       expect(await send(member, channelId, "pineapple")).toMatchObject({ ok: false, reason: "automod" });
     });
 
-    it("a direct message and a profile name follow only the operator's flag", async () => {
+    it("a profile name follows only the operator's flag", async () => {
       process.env.DEFAULT_TEXT_FILTER = "off";
-      const res = await call(member, "PATCH", "/api/me", { customStatus: "vai tomar no cu" });
+      const res = await call(member, "PATCH", "/api/me", { customStatus: "vai se matar" });
       expect(res.status).toBe(200);
     });
   });
@@ -338,11 +355,11 @@ describeDb("default text filter", () => {
     it("default_text_filter off filters nothing by default, on every surface, and the page says so", async () => {
       const { serverId, channelId } = await makeServer();
       process.env.DEFAULT_TEXT_FILTER = "off";
-      expect((await send(member, channelId, "fuck you")).ok).toBe(true);
+      expect((await send(member, channelId, "you faggot")).ok).toBe(true);
       const status = await call(owner, "GET", baselinePath(serverId));
       expect(status.body).toEqual({ instanceEnabled: false, ownerDisabled: false, enabled: false });
       process.env.DEFAULT_TEXT_FILTER = "on";
-      expect(await send(member, channelId, "fuck you")).toMatchObject({ ok: false });
+      expect(await send(member, channelId, "you faggot")).toMatchObject({ ok: false });
     });
   });
 });

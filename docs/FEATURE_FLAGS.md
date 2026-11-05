@@ -116,10 +116,11 @@ both in `docs/CAPACITY.md` §"The video budget is per box"),
 Retrospectiva is built from; off stops every new write, nothing is deleted;
 see `server/src/services/user-stats.ts`),
 `DEFAULT_TEXT_FILTER` (`default_text_filter`, global, default **on**: the
-built-in text filter, a short list of slurs, directed abuse and threats in
-English, Portuguese and Spanish, refused on every message, edit, forum post,
-story, Baú comment and post, direct message and profile name with no AutoMod
-rule written by anybody; each server's owner can switch it off for their own
+built-in text filter, a short list of slurs and threats (kill-yourself, rape
+threats, child sexual content) in English, Portuguese and Spanish, refused on
+every server message and edit, forum post, story, Baú comment and post and
+profile name with no AutoMod rule written by anybody; insults and everyday
+swearing are not on it, and direct and group messages are never read by it; each server's owner can switch it off for their own
 server in AutoMod settings (`server_text_filter_settings`), and this flag is
 the operator's switch over all of them; off, nothing is filtered by default and
 the owner's own rules still run. Served as `GET /api/servers/:id/automod/baseline`.

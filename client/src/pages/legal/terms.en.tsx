@@ -12,7 +12,7 @@ export const termsEn: LegalDocument = {
   description:
     "Terms for using the hosted pqp.gg service: what pqp actually is, eligibility (18+), acceptable use, moderation, reporting and takedowns.",
   heading: "Terms of Service",
-  updated: "4 November 2026",
+  updated: "5 November 2026",
   sections: [
     {
       id: "intro",
@@ -209,16 +209,19 @@ export const termsEn: LegalDocument = {
           </p>
           <ul>
             <li>
-              <strong>Text.</strong> Messages and edits, forum posts, stories,
-              Baú comments and posts, direct messages, and the names and status
-              line you choose for yourself are read against a built-in list of
-              slurs, abuse aimed at a person, and threats, in English,
-              Portuguese and Spanish. A match is not sent, and you see: &quot;This
-              message was not sent: it breaks pqp&apos;s rules on abusive
-              language.&quot; Everyday swearing is not on the list. The filter
-              is on by default on every server. A server&apos;s owner can turn
-              it off for that server in the AutoMod settings, and can add their
-              own blocked words, links and mention limits on top of it.
+              <strong>Text.</strong> Messages and edits in server channels,
+              forum posts, stories, Baú comments and posts, and the names and
+              status line you choose for yourself are read against a built-in
+              list of slurs and threats (including telling someone to kill
+              themselves, rape threats, and sexual content about children), in
+              English, Portuguese and Spanish. A match is not sent, and you
+              see: &quot;This message was not sent: it breaks pqp&apos;s rules
+              on abusive language.&quot; Insults and everyday swearing are not
+              on the list. Direct messages and group messages are not read by
+              this filter. The filter is on by default on every server. A
+              server&apos;s owner can turn it off for that server in the
+              AutoMod settings, and can add their own blocked words, links and
+              mention limits on top of it.
             </li>
             <li>
               <strong>Images.</strong> A new image attached to a message, or
