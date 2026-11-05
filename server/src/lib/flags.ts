@@ -615,6 +615,21 @@ export const FEATURE_FLAGS = {
     perServer: false,
     clientVia: "GET /api/voice/config (cleanVoiceDefault)",
   },
+  voice_gate: {
+    description:
+      "Porta de voz da Voz limpa: depois do RNNoise, um expansor adaptativo abaixa uns 20 dB o que sobra entre as falas (sem cortar seco, com antecipação pra não comer o começo das palavras). Desligado: a Voz limpa volta a ser só o RNNoise, na hora, até no meio da call.",
+    env: "VOICE_GATE",
+    parseEnv: onUnlessOff,
+    // On: the gate only ever attenuates the gaps and fails open to the plain
+    // RNNoise chain. The switch is for the thing no bench can say, how it
+    // sounds on a real voice in a real room: off bypasses every running gate
+    // on the next config refresh (a message to the worklet, no rebuild, no
+    // rejoin) and builds no new one. Global: the microphone belongs to the
+    // device and a DM call has no server. Client-only.
+    codeDefault: true,
+    perServer: false,
+    clientVia: "GET /api/voice/config (voiceGate)",
+  },
   watch_now_banner: {
     description:
       "Faixa \"Assistir\" (só cliente: quem está num canal de texto vê que alguém compartilha a tela ou que uma watch party está no ar, e entra com um toque, sem microfone).",

@@ -225,6 +225,28 @@ describe("GET /api/voice/config against the client that reads it", () => {
     );
     expect(dashboard).toMatch(/\bclean_voice_default:\s*"/);
   });
+
+  it("voice_gate is global, on by default, read off the global config and handed to every live gate", () => {
+    const def = FEATURE_FLAGS.voice_gate;
+    expect(def.perServer).toBe(false);
+    expect(def.codeDefault).toBe(true);
+    expect(def.clientVia).toBe("GET /api/voice/config (voiceGate)");
+    expect(served).toContain("voiceGate");
+    const flag = readFileSync(path.join(clientSrc, "lib/voice-gate/voice-gate-flag.ts"), "utf8");
+    // The global ask (no server). Absent (an older API) is the code default,
+    // on; only an explicit false is the kill switch.
+    expect(flag).toContain("fetchGlobalVoiceConfig()");
+    expect(flag).toMatch(/answer\.voiceGate !== false/);
+    // The answer reaches a gate that is already running, not only new ones.
+    expect(flag).toContain("setBypass(");
+    const app = readFileSync(path.join(clientSrc, "App.tsx"), "utf8");
+    expect(app).toContain("startVoiceGateFlag()");
+    const dashboard = readFileSync(
+      path.resolve(here, "../../../tools/admin-dashboard/site/novo.js"),
+      "utf8",
+    );
+    expect(dashboard).toMatch(/\bvoice_gate:\s*"/);
+  });
 });
 
 describe("every flag that says it reaches the client", () => {

@@ -37,6 +37,12 @@ import { isEnabled } from "./flags.js";
  * switch: a default is never persisted, so every device that never chose
  * goes back to the browser's suppressor on its next config refresh.
  *
+ * `voiceGate`: Voz limpa's adaptive gate after RNNoise (`docs/NOISE_SUPPRESSION.md`
+ * §"The voice gate"). Runtime flag `voice_gate`, global, on by default,
+ * `VOICE_GATE` as its environment default. Off is the kill switch: every
+ * running gate is bypassed on the client's next config refresh, mid-call, and
+ * none is built, so Voz limpa is plain RNNoise again.
+ *
  * `raisedHandSticky`: a raised hand stays up until the person, a moderator
  * or leaving the call takes it down (`docs/RAISED_HANDS.md` §"What lowers a
  * hand"). Runtime flag `raised_hand_sticky`, global, on by default,
@@ -54,6 +60,7 @@ export interface VoiceConfig {
   audioSelfHeal: boolean;
   soundboard: boolean;
   cleanVoiceDefault: boolean;
+  voiceGate: boolean;
   raisedHandSticky: boolean;
 }
 
@@ -67,6 +74,7 @@ export function voiceConfigForServer(rawServerId: string | null): VoiceConfig {
     audioSelfHeal: isEnabled("voice_audio_self_heal"),
     soundboard: isEnabled("soundboard", { serverId }),
     cleanVoiceDefault: isEnabled("clean_voice_default"),
+    voiceGate: isEnabled("voice_gate"),
     raisedHandSticky: isEnabled("raised_hand_sticky"),
   };
 }

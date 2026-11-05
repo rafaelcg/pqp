@@ -238,6 +238,17 @@ the API takes `mediaQuality.audioHealth` on a call rating, which feeds
 `callRatings.audioHealthSinceBoot` on `GET /api/admin/metrics` and the Faro
 event `voice.audioHealth`.
 
+Born as a flag (no old reader): `VOICE_GATE` (`voice_gate`, default **on**,
+global, client-only), the adaptive gate after RNNoise in "Voz limpa"
+(`client/src/lib/voice-gate/`, `docs/NOISE_SUPPRESSION.md` §"The voice gate").
+Served as `voiceGate` on the global `GET /api/voice/config`; absent (an older
+API) is **on**, which is the code default, and only an explicit `false` is the
+kill switch. Off sends every running gate a bypass message (it stays in the
+chain as a wire and stops expanding), and no new one is built: Voz limpa is plain RNNoise again, mid-call, no rejoin, no
+microphone swap, on the next config refresh. Only `false` / `0` / `off` turn
+the variable off. Turn it off on reports of a voice that fades inside a
+sentence or a word that starts clipped.
+
 Born as a flag (no old reader): `CLEAN_VOICE_DEFAULT` (`clean_voice_default`,
 default **on**, global, client-only, since 2026-10-20), "Voz limpa" (RNNoise,
 `advanced`) as the microphone's noise suppression for a device that never

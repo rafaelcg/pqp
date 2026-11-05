@@ -2678,7 +2678,7 @@
   "settings.voice.processing.noise.off": "Desligada",
   "settings.voice.processing.noise.browser": "Padrão (navegador)",
   "settings.voice.processing.noise.advanced": "Voz limpa",
-  "settings.voice.processing.noise.advancedHint": "Voz limpa: filtro avançado, tira até teclado e cachorro. Usa mais processador e pode cortar o começo de algumas palavras.",
+  "settings.voice.processing.noise.advancedHint": "Voz limpa: filtro avançado, tira até teclado e cachorro e baixa o fundo entre uma frase e outra. Usa mais processador e pode cortar o começo de algumas palavras.",
   "settings.voice.processing.gain": "Nivelar volume automaticamente",
   "settings.voice.processing.gainHint": "Deixa seu volume mais constante, sem picos nem sumiços.",
   "settings.voice.processing.note": "Mudar isso reabre o microfone. Ninguém cai da call.",

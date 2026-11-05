@@ -45,9 +45,10 @@ in `script-src`** or this feature dies silently.
 ## Where the node sits
 
 ```
-getUserMedia  →  [RNNoise worklet]  →  gain  →  analyser (level meter)
-                  only in advanced            →  destination  →  published track
-                                                              →  watch-party mix
+getUserMedia  →  [RNNoise worklet]  →  [voice gate]  →  gain  →  analyser (level meter)
+      │           only in advanced      only in advanced     →  destination  →  published track
+      │                                  ▲ input 1                          →  watch-party mix
+      └──────────────────────────────────┘ the raw microphone, as its sidechain
 ```
 
 `createMicPipeline` in `client/src/hooks/use-voice.ts`. The suppressor goes in
@@ -56,6 +57,12 @@ before the `MediaStreamAudioDestinationNode` whose stream is both what gets
 published *and* what `createScreenMix` carries to a watch party's audience. One
 insertion covers the room and the stream; nothing beside the publish call
 needed to change.
+
+The voice gate (see "The voice gate" below) sits between the suppressor and the
+gain and is wired by the same `connectMicChain`; the rest of this section is
+true of it too: it is built by `createMicPipeline`, so a mode change or a device
+change replaces it with the pipeline, and the mic test in Settings ("Ouvir meu
+microfone") builds the same chain.
 
 Switching modes goes through `swapPipeline`, the same path the device picker
 uses: a new pipeline is built, and only once it exists is the old one stopped
@@ -120,6 +127,8 @@ node nobody asked about a second time would be noise of its own.
 
 ## Measuring it
 
+This section is the RNNoise node alone. The gate's bench is in "The voice gate" above.
+
 ```bash
 cd client && node bench/rnnoise-attenuation.mjs
 ```
@@ -145,6 +154,134 @@ hearing a voice, and a sine wave is something it has every reason to throw
 away. What they prove is that the node is in the chain and is doing work. The
 number that matters is a person in a room with a mechanical keyboard, and that
 one is judged by ear.
+
+## The voice gate
+
+Voz limpa is RNNoise **plus an adaptive gate** since the `voice_gate` flag
+(default on). RNNoise decides frame by frame what is voice; what it cannot do is
+turn the room down BETWEEN sentences, so a breath, a chair, a key click it
+half-believes and the hiss it leaves in a gap all go out at their own level.
+The gate turns those down, and nothing else. Code:
+`client/src/lib/voice-gate/` (DSP in `voice-gate-worklet.js`, the node factory in
+`voice-gate-node.ts`, the kill switch in `voice-gate-flag.ts`).
+
+### What it does
+
+A downward expander, not a mute:
+
+- **Lookahead and sidechain.** The gate node has two inputs: RNNoise's output
+  (the audio it gains) and the RAW microphone (the signal it decides from).
+  RNNoise delays its output by about 20 ms (measured, 977 samples at 48 kHz), so
+  the raw signal is that much ahead of the audio and the gate hears a word
+  about 15 ms before the same word reaches the audio path. The head start is
+  the lookahead, so the gate **adds 0 ms of its own**. Where there is no
+  sidechain (a gate on the raw mic, which the bench does) it delays the audio
+  by `lookaheadMs`, 8 ms.
+- **Level, confirmation, hysteresis, hold.** Per millisecond block RMS in dB. It
+  opens after 5 consecutive blocks above the open threshold (`floor + 10 dB`,
+  never below -56 dBFS), closes when the level (smoothed over 8 ms) has stayed
+  under the close threshold (`floor + 6 dB`) for 150 ms. A run that is already
+  15 dB below its own peak when the confirmation ends is a click dying away,
+  not a voice, and does not open it.
+- **The floor adapts.** Minimum statistics: the quietest stretch of the last
+  3 s of the (30 ms smoothed) level, plus 1.5 dB. It needs no "is this speech"
+  decision, so a room louder than its prior cannot lock it out, and speech never
+  teaches it that speech is the room. Digital silence (a muted or hardware-gated
+  mic) teaches it nothing. Clamped to -80..-42 dBFS.
+- **Gentle.** A closed gate settles at **-20 dB**, never silence, released over
+  60 ms and opened with a 0.6 ms time constant. It starts OPEN (400 ms) so the
+  first words of a call are never held while it learns the room.
+- **Fails open, three ways.** The worklet never throws out of `process` (it
+  becomes a wire), a `processorerror` rewires RNNoise straight to the gain
+  (`connectMicChain`), and a module or node that will not build returns `null`
+  from `createVoiceGate`, which is the chain exactly as it was.
+
+### The kill switch
+
+Runtime flag `voice_gate` (env `VOICE_GATE`, global, code default ON), served as
+`voiceGate` on the global `GET /api/voice/config`. Off sends every running gate
+`{ bypass: true }` on the next config refresh (it stays in the chain as a wire,
+mid-call, no rebuild, no rejoin) and builds none. **Unknown is ON**, unlike
+`clean_voice_default`: this is an improvement that shipped on with plain RNNoise
+as its fallback, so only an explicit `false` takes it away. See
+`docs/FEATURE_FLAGS.md`. **Turn it off on reports of a voice that fades inside a
+sentence or a word that starts clipped.** Adding the flag was a server change
+(`restarts-api`); the gate itself is client-only.
+
+### Why RNNoise and not something newer
+
+Measured and read, November 2026:
+
+| | verdict |
+|---|---|
+| **RNNoise** (kept) | MIT wrapper over Xiph's BSD-3-Clause model, already shipped, 154 kB wasm, ~20 ms delay. About 0.006x real time in the Node harness. |
+| **GTCRN** | MIT, 48 k parameters, **already inside the installed `@sapphi-red/web-noise-suppressor` 0.4.0** (`gtcrn.wasm`, 197 kB, a 48 kHz path), so it is the one free alternative that costs nothing to try. On the bench scene it costs **3 to 4x the CPU of RNNoise** (0.018 to 0.025x real time) and adds **~32 ms** instead of ~20, for gap and key-click reduction that is similar or slightly worse (gap 19.3 / 17.8 / 18.4 dB against RNNoise 18.2 / 9.5 / 24.7, keys 9.3 / 3.2 / 8.8 against 10.3 / 0.8 / 10.4). The paper reports PESQ 2.87 on VCTK-DEMAND and DNSMOS 3.44 on DNS3; those are claims about real speech that a synthetic scene cannot confirm or deny. Not a clear win, so not swapped. It is the first thing to A/B by ear. |
+| **DeepFilterNet3** | MIT / Apache-2.0 upstream, and the best-sounding of the open models by reputation, but the browser builds found are a ~9 to 10 MB wasm that needs SIMD, 10 to 30 ms of model delay (the 10 ms variant is a 36 MB model), and the npm package that wraps it for LiveKit (`deepfilternet3-noise-filter`) fetches its wasm from its author's CDN, built from unpublished sources. None of that was verified here, only read from the packages' own pages and PRs, and a runtime fetch from a stranger's CDN is a no for an AGPL app. Not adopted. |
+| **Krisp** | Excluded (paid and licensed). |
+| **Silero VAD** | Would need onnxruntime-web (megabytes) for a decision the gate already makes from energy and a sidechain. The cleaner next step is RNNoise's OWN voice probability, which its C function returns and the packaged worklet drops: a small custom worklet exposing it would replace the energy test with a real VAD at no extra model. Not done, it needs a build of the wasm glue. |
+
+### Measured
+
+Deterministic scene from `client/src/lib/voice-gate/fixtures.ts` (a seeded
+source-filter voice: six words, two starting with a fricative; a fan at -48 dBFS;
+bursts of keyboard clicks in the gaps), 48 kHz, 14 s.
+
+```bash
+cd client
+node bench/voice-gate-bench.mjs      # the DSP in Node: RNNoise, GTCRN, with and without the gate
+node bench/voice-gate-browser.mjs    # the same wiring in real Chromium (offline render)
+pnpm exec vitest run src/lib/voice-gate   # the assertions
+```
+
+Room: fan -48 dBFS, soft keys (-38 dBFS peak):
+
+| chain | gap dB | key dB | onset dB | word dB | added delay |
+|---|---|---|---|---|---|
+| gate alone (raw mic) | 19.7 | 20.0 | -0.0 | -0.0 | 8.0 ms |
+| RNNoise | 18.2 | 10.3 | n/a | -2.1 | 20.4 ms (its own) |
+| **RNNoise + gate** | **38.0** | **30.3** | **-0.0** | **-0.0** | **0 ms** |
+
+- *gap dB*: how much quieter the nothing-but-room stretches got against the raw
+  mic (the gate adds about its 20 dB range on top of what RNNoise did).
+- *key dB*: the same for the loudest click in those gaps.
+- *onset dB*: energy kept in the first 40 ms of each word against what the stage
+  before the gate delivered. 0 is nothing clipped. RNNoise's own row is not
+  shown because its onset loss is its own: it dropped the synthetic fricatives
+  (-38 dB), which is also why the hint under the setting still says it can clip
+  the start of some words.
+- Loud keys (-28 dBFS peak): RNNoise alone barely touches them (0.8 dB), the gate
+  takes the peak down 20.8 dB. A loud room (fan -40 dBFS): RNNoise + gate 44.6 dB
+  in the gaps with the worst word onset at -0.0.
+- The same chain in Chromium 151 (OfflineAudioContext, 48 kHz): RNNoise 18.9 dB
+  gaps and 7.3 dB keys, RNNoise + gate **38.7 dB and 27.3 dB, onset -0.0**;
+  RNNoise's measured delay 20.4 ms, the gate alone 19.7 / 20.0 exactly as in Node.
+- CPU: the gate is about 0.0005 to 0.0008x real time in Node, a tenth of RNNoise.
+
+**What this cannot tell you.** The voice is synthetic. It says the gate keeps a
+soft onset, a short word and a fricative opening, quiets a fan and a keyboard,
+adds no delay and never goes silent. It does not say how a real voice sounds
+through RNNoise and then the gate, whether a trailing breath fades naturally,
+whether a quiet speaker's soft words stay, or what a laptop fan three metres
+away does to the floor estimate. Those are listening tests, in the PR's QA
+list.
+
+### Limits, said plainly
+
+- A click RNNoise itself passes at voice level, and that is as loud as speech
+  by the time it reaches the gate, is also passed by the gate. The sidechain
+  makes it reject sharp transients that RNNoise smears, but it has no way to
+  tell a loud sustained noise from a voice. In a room louder than about -40 dBFS
+  of steady noise (SNR under ~18 dB against normal speech) it mostly stays open,
+  which is passthrough, not harm.
+- A mic that is silent for a while and then loud (unmute) is opened from the
+  start: the gate begins open and the silence does not count.
+- The gate's decisions assume RNNoise's ~20 ms delay is the sidechain's head
+  start. A different suppressor (GTCRN, 32 ms) only makes the head start larger,
+  and a shorter one would clip onsets: `connectMicChain` is the one place that
+  wires it, and the browser bench is the check.
+- Stereo microphones are mixed to mono at the gate (`channelCount: 1`).
+- Flipping the flag back ON mid-call does not build a gate in a call that has
+  none; it takes effect on the next pipeline (rejoin, device or mode change).
 
 ## The default
 

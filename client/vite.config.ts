@@ -480,6 +480,9 @@ export default defineConfig(({ command }) => ({
           // demand when somebody opens the room, never part of the shell.
           "emulator/**",
           "**/workletProcessor-*.js",
+          // The voice gate's worklet (`src/lib/voice-gate/`) is loaded only by
+          // a Voz limpa microphone, beside the RNNoise worklet above.
+          "**/voice-gate-worklet-*.js",
           "**/sw-build-*.js",
           "**/*-vietnamese-*.woff2",
           "**/*-cyrillic-*.woff2",
