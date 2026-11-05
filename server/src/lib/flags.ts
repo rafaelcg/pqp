@@ -484,6 +484,16 @@ export const FEATURE_FLAGS = {
     perServer: false,
     clientVia: "GET /api/share/config (macDesktopSystemAudio)",
   },
+  share_sound_promotion: {
+    description:
+      "Celular que só manda o som da tela pelo servidor de voz (iPhone) leva a chamada ponto a ponto (DM ou servidor pequeno) pro servidor de voz quando começa a compartilhar, e a tela vai com som (desligado: o celular apresenta só a imagem, como antes).",
+    env: "SHARE_SOUND_PROMOTION",
+    parseEnv: onUnlessOff,
+    codeDefault: true,
+    // Global on purpose: the trigger fires in a DM or group call, which has
+    // no server for a per-server override to name.
+    perServer: false,
+  },
   party_fast_start: {
     description:
       "Primeiro quadro mais rápido no watch party (só cliente: pré-carrega o player, adia a animação de espera e mostra o andamento).",
@@ -604,6 +614,21 @@ export const FEATURE_FLAGS = {
     codeDefault: true,
     perServer: false,
     clientVia: "GET /api/voice/config (cleanVoiceDefault)",
+  },
+  voice_gate: {
+    description:
+      "Porta de voz da Voz limpa: depois do RNNoise, um expansor adaptativo abaixa uns 20 dB o que sobra entre as falas (sem cortar seco, com antecipação pra não comer o começo das palavras). Desligado: a Voz limpa volta a ser só o RNNoise, na hora, até no meio da call.",
+    env: "VOICE_GATE",
+    parseEnv: onUnlessOff,
+    // On: the gate only ever attenuates the gaps and fails open to the plain
+    // RNNoise chain. The switch is for the thing no bench can say, how it
+    // sounds on a real voice in a real room: off bypasses every running gate
+    // on the next config refresh (a message to the worklet, no rebuild, no
+    // rejoin) and builds no new one. Global: the microphone belongs to the
+    // device and a DM call has no server. Client-only.
+    codeDefault: true,
+    perServer: false,
+    clientVia: "GET /api/voice/config (voiceGate)",
   },
   watch_now_banner: {
     description:

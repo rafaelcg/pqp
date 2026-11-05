@@ -238,6 +238,17 @@ the API takes `mediaQuality.audioHealth` on a call rating, which feeds
 `callRatings.audioHealthSinceBoot` on `GET /api/admin/metrics` and the Faro
 event `voice.audioHealth`.
 
+Born as a flag (no old reader): `VOICE_GATE` (`voice_gate`, default **on**,
+global, client-only), the adaptive gate after RNNoise in "Voz limpa"
+(`client/src/lib/voice-gate/`, `docs/NOISE_SUPPRESSION.md` §"The voice gate").
+Served as `voiceGate` on the global `GET /api/voice/config`; absent (an older
+API) is **on**, which is the code default, and only an explicit `false` is the
+kill switch. Off sends every running gate a bypass message (it stays in the
+chain as a wire and stops expanding), and no new one is built: Voz limpa is plain RNNoise again, mid-call, no rejoin, no
+microphone swap, on the next config refresh. Only `false` / `0` / `off` turn
+the variable off. Turn it off on reports of a voice that fades inside a
+sentence or a word that starts clipped.
+
 Born as a flag (no old reader): `CLEAN_VOICE_DEFAULT` (`clean_voice_default`,
 default **on**, global, client-only, since 2026-10-20), "Voz limpa" (RNNoise,
 `advanced`) as the microphone's noise suppression for a device that never
@@ -437,6 +448,16 @@ flag: the client reads the config without a server. On by default (Rafael,
 and the picker says sound is not available yet. Turn it off from controles →
 interruptores if the permission flow or the exclusion misbehaves; the page asks
 again before every share, so there is no reload and no desktop update.
+
+Born as a flag (no old reader): `SHARE_SOUND_PROMOTION`
+(`share_sound_promotion`, default **on**, **global only**, server only). A phone
+that can only send its share's sound on the voice server (the iOS app) says so
+on a new share in a mesh room (`audioNeedsSfu` on `set-sharing-screen`), and the
+server moves the room, a DM call included, through the ordinary promotion so the
+share goes out with its sound. Off returns before anything is read or logged:
+the share stays on mesh, picture only, exactly as before. Global because a DM
+call has no server to name. Read per share, so a flip takes effect on the next
+share. `docs/voice-backends.md` §"The share-sound trigger".
 
 Born as a flag (no old reader): `AUDIENCE_MODE` (`audience_mode`, default off,
 **per server**), "Modo plateia" in voice calls (`docs/plans/AUDIENCE_MODE.md`):

@@ -263,6 +263,31 @@ questions, and the `reason` on every log line and every frame says which:
 | `room-full` | a ninth person at the door of a full mesh | `voice-room-full limit=8` |
 | `room-size` | a room reaching `MESH_ROOM_PROMOTION_SIZE` (4) | nothing; the caps waited to be met |
 | `stale-pin` | a join into a mesh room the policy would now open on the SFU | nothing; the pin won |
+| `screens`, logged `trigger=share-sound` | a phone starting a share whose sound only the SFU carries (`audioNeedsSfu`) | the share went out picture only |
+
+**The share-sound trigger (2026-11-05, runtime flag `share_sound_promotion`,
+default on).** The iOS app sends a share's sound on LiveKit only (its WebRTC
+build has no door for app audio on mesh, see `docs/IOS.md`), so a phone sharing
+in a DM call or a small server went out silent. On mesh it now sets
+`audioNeedsSfu` on a NEW share's `set-sharing-screen`, and `promoteForShareSound`
+moves the room. Unlike every other trigger this one **is allowed in a DM or
+group call**: the `"dm"` pin is a cost guess, and the person sharing has just
+said it is wrong for this call. It moves the room for a feature rather than a
+limit, so it yields to anybody the move would cost (`blockShareSoundPromotion`):
+a channel pinned to mesh by hand, a live seat that did not declare
+`voice-transport-changed` (it would be released, which is a hangup), and
+anybody else sharing (the Android app stops its own share when its room moves),
+read across both machines from the rows. Then the budget, priced as one more
+screen. Every refusal leaves the share on mesh, picture only, exactly as before,
+and logs `voice.transportPromotionRefused trigger=share-sound refusal=...`.
+The frame and the bus carry reason `screens`, because a new reason value would
+be dropped by every bundle that predates it. Web, desktop and Android never send
+the field: their mesh share already carries sound (web and desktop as a separate
+audio track, `screenAudioStreamId`; Android mixed into the mic on Android 10+,
+unverified on a device). Off (`SHARE_SOUND_PROMOTION=off` or the dashboard)
+returns before anything is read or logged. Tests: the last group of
+`server/src/ws/voice-promotion.test.ts`, and two cases in
+`voice-cluster.test.ts` (a DM split over two machines, registry on).
 
 `room-full` and `stale-pin` came out of one incident. At 16:13Z on 2026-09-08 a
 voice channel refused three people in a row with `voice.roomFull limit=8`, one

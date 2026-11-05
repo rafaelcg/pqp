@@ -77,6 +77,8 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   // New with the flag, so there was no old reader: this is its definition.
   clean_voice_default: offWords,
   // New with the flag, so there was no old reader: this is its definition.
+  voice_gate: offWords,
+  // New with the flag, so there was no old reader: this is its definition.
   raised_hand_sticky: offWords,
   // New with the flag, so there was no old reader: this is its definition.
   ws_auth_admission: offWords,
@@ -119,6 +121,8 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   linux_desktop_system_audio: (raw) => raw === "true",
   // New with the flag, so there was no old reader: this is its definition.
   mac_desktop_system_audio: offWords,
+  // New with the flag, so there was no old reader: this is its definition.
+  share_sound_promotion: offWords,
   // New with the flag, so there was no old reader: this is its definition.
   audience_mode: (raw) => raw === "true",
   watch_now_banner: (raw) => raw === "true",
