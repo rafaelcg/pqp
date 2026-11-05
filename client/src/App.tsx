@@ -19,6 +19,38 @@ import {
   Video,
 } from "lucide-react";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+// Second-screen surfaces: each is its own chunk, fetched when first drawn.
+import {
+  BotWizard,
+  BulkPurgeDialog,
+  ChannelSettingsDialog,
+  CommunitiesView,
+  CommunityHomeFeed,
+  ConnectionDoctorDialog,
+  CreateServerDialog,
+  CreateWatchPartyDialog,
+  DmCallStage,
+  ForumPane,
+  ForwardDialog,
+  ForwardPicker,
+  InvitePanel,
+  MembersPanel,
+  NewDmDialog,
+  OnboardingFlow,
+  PinnedMessagesPanel,
+  QuickSwitcher,
+  ReportDialog,
+  ScheduleSessionSheet,
+  ServerSettingsDialog,
+  SettingsModal,
+  ShortcutOverlay,
+  ThreadPanel,
+  VoiceChannelStage,
+  WatchPartyHistoryDialog,
+  WatchPartyPanel,
+  WatchPartyWaitlistDialog,
+  WhatsNewView,
+} from "@/components/deferred-panels";
 import { Menu as ActionMenu } from "@/components/ui/menu";
 import { WatchPartyBarSlot } from "@/components/watch-party/watch-party-bar";
 import type { ContextMenuItemDef } from "@/components/ui/context-menu";
@@ -82,12 +114,8 @@ import {
 } from "@/lib/voice-note-transcript";
 import { adoptVoiceTranscription } from "@/lib/voice-transcription-prefs";
 import { MessageList, type MessageAuthorInfo } from "@/components/chat/message-list";
-import { BulkPurgeDialog } from "@/components/chat/bulk-purge-dialog";
-import { ForwardDialog, type ForwardTarget } from "@/components/chat/forward-dialog";
-import {
-  ForwardPicker,
-  type ForwardedSummary,
-} from "@/components/forward/forward-picker";
+import type { ForwardTarget } from "@/components/chat/forward-dialog";
+import type { ForwardedSummary } from "@/components/forward/forward-picker";
 import { ForwardedToast } from "@/components/forward/forwarded-toast";
 import { NotInServerToast } from "@/components/forward/not-in-server-toast";
 import {
@@ -96,33 +124,22 @@ import {
   useForwardEnabled,
   type ForwardSourceRequest,
 } from "@/lib/forward";
-import { ThreadPanel } from "@/components/chat/thread-panel";
-import {
-  ReportDialog,
-  type ReportTarget,
-} from "@/components/chat/report-dialog";
+import type { ReportTarget } from "@/components/chat/report-dialog";
 import {
   AppBootstrapError,
   AppLoadingShell,
 } from "@/components/layout/app-loading-shell";
 import { ChannelIcon } from "@/components/layout/channel-icon";
-import { ForumPane } from "@/components/forum";
 import { dispatchForumFrame, dispatchForumReconnected } from "@/lib/forum-frames";
 import { emitBauPlusUpdate, onBauPayRequest } from "@/lib/bau-plus/updates";
 import { ChannelList } from "@/components/layout/channel-list";
-import {
-  ChannelSettingsDialog,
-  type ChannelSettingsSectionId,
-} from "@/components/layout/channel-settings-dialog";
-import { DmCallStage } from "@/components/dm/dm-call-stage";
+import type { ChannelSettingsSectionId } from "@/components/layout/channel-settings-dialog";
 import { IncomingCallOverlay } from "@/components/dm/incoming-call-overlay";
 import { ConnectionBanner } from "@/components/layout/connection-banner";
-import { ConnectionDoctorDialog } from "@/components/layout/connection-doctor-dialog";
 import { DmToasts } from "@/components/dm/dm-toasts";
 import { WhatsNewPrompt } from "@/components/layout/whats-new-prompt";
 import { DmList } from "@/components/layout/dm-list";
 import { FriendsView } from "@/components/friends/friends-view";
-import { CommunitiesView } from "@/components/communities/communities-view";
 import { useCommunitiesEnabled } from "@/components/communities/use-communities-enabled";
 import { setProfileVisibility } from "@/components/depoimentos/depoimentos-api";
 import { waitingOnYou } from "@/components/depoimentos/depoimentos-model";
@@ -130,20 +147,14 @@ import {
   FriendsContext,
   useFriendsStore,
 } from "@/components/friends/use-friends";
-import { InvitePanel } from "@/components/layout/invite-panel";
 import { MemberSidebar } from "@/components/layout/member-sidebar";
-import { MembersPanel } from "@/components/layout/members-panel";
 import {
   ProfilePopoverProvider,
   type ProfileWatchPartyContext,
 } from "@/components/user/user-profile-popover";
 import type { ProfileModerationContext } from "@/components/user/profile-relations";
-import { PinnedMessagesPanel } from "@/components/chat/pinned-messages-panel";
 import { ServerRail } from "@/components/layout/server-rail";
-import { WhatsNewView } from "@/components/layout/whats-new-view";
 import { AgeGateDialog } from "@/components/user/age-gate-dialog";
-import { OnboardingFlow } from "@/components/onboarding/onboarding-flow";
-import { NewDmDialog } from "@/components/user/new-dm-dialog";
 import { CargosHint } from "@/components/layout/cargos-hint";
 import {
   SeasonalLookHint,
@@ -216,22 +227,17 @@ import {
   hasUnseenWhatsNew,
   rememberWhatsNewFeed,
 } from "@/lib/whats-new-feed";
-import { ServerSettingsDialog } from "@/components/layout/server-settings-dialog";
-import { BotWizard } from "@/components/bots/bot-wizard";
 import { BotIntroHint } from "@/components/bots/bot-intro-hint";
 import { useBotInvite } from "@/lib/use-bot-invite";
-import { CreateServerDialog } from "@/components/layout/create-server-dialog";
 import { DiscordImportHost } from "@/components/layout/discord-import-host";
 import {
   applyRemotePreferences,
   defaultLocalSettings,
   loadLocalSettings,
   saveLocalSettings,
-  SettingsModal,
   type LocalSettings,
-  type SettingsSectionId,
-} from "@/components/layout/settings-modal";
-import { ShortcutOverlay } from "@/components/layout/shortcut-overlay";
+} from "@/components/settings/local-settings";
+import type { SettingsSectionId } from "@/components/layout/settings-modal";
 import { isApplePlatform } from "@/lib/composer-formatting";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import {
@@ -275,9 +281,7 @@ import {
   setAppsOnline,
   setAppsViewer,
 } from "@/lib/apps/app-sessions-store";
-import { VoiceChannelStage } from "@/components/voice/voice-channel-stage";
 import { CallDockOutlet, CallDockProvider } from "@/components/voice/call-dock";
-import { CreateWatchPartyDialog } from "@/components/watch-party/create-watch-party-dialog";
 import {
   canOfferWatchPartyCreate,
   isWatchPartyChannelType,
@@ -291,8 +295,6 @@ import {
   shouldReleaseAudienceWatchSeat,
   type AudienceSeatClock,
 } from "@/lib/watch-party-seat";
-import { WatchPartyPanel } from "@/components/watch-party/watch-party-panel";
-import { WatchPartyHistoryDialog } from "@/components/watch-party/watch-party-history-dialog";
 import {
   watchPartyHistoryCandidates,
   type WatchPartyHistoryChannel,
@@ -322,7 +324,6 @@ import {
 } from "@/lib/watch-party-draft";
 import { decideGoLiveMicPrompt } from "@/lib/watch-party-go-live";
 import { resetWatchPartyStreamQualityForNewParty } from "@/lib/watch-party-stream-quality";
-import { ScheduleSessionSheet } from "@/components/voice/schedule-session-sheet";
 import { UpcomingSessionCard } from "@/components/voice/upcoming-session-card";
 import { ChannelSessionToasts } from "@/components/voice/channel-session-toasts";
 import {
@@ -492,9 +493,10 @@ import {
   shouldOfferWatchPartyTeaser,
   useWatchPartyWaitlist,
 } from "@/lib/watch-party-waitlist";
-import { WatchPartyWaitlistDialog } from "@/components/watch-party/waitlist/watch-party-waitlist-dialog";
 import { startConfigRefresh } from "@/lib/config-refresh";
 import { startNotifyConfig } from "@/lib/notify-config";
+import { preloadDeferredPanels } from "@/components/deferred";
+import { startCalmDetectorFlag } from "@/lib/calm-detector-flag";
 import { startAudioSelfHealFlag } from "@/lib/audio-self-heal-flag";
 import {
   startCleanVoiceDefaultFlag,
@@ -582,7 +584,6 @@ import {
 } from "@/components/conversations/phone-screens";
 import { clearListTyping, noteListTyping } from "@/lib/conversation-typing";
 import { FriendAcceptedToast } from "@/components/conversations/friend-accepted-toast";
-import { QuickSwitcher } from "@/components/conversations/quick-switcher";
 import { ConversationsEmpty } from "@/components/conversations/conversations-empty";
 import { trackDmOpen, trackDmStart, type DmDoor } from "@/lib/conversation-events";
 import { SEARCH_MESSAGES_EVENT } from "@/components/layout/channel-list";
@@ -680,7 +681,6 @@ import {
 } from "@/components/live-preview/live-preview-auth";
 import { heroHue } from "@/lib/hero-tint";
 import { resolveUploadedImageUrl } from "@/lib/avatar";
-import { CommunityHomeFeed } from "@/components/community-home/community-home-feed";
 import { CommunityHomePostHint } from "@/components/community-home/community-home-post-hint";
 import {
   applyDesktopAuthStart,
@@ -3032,6 +3032,16 @@ function MainAppContent({
   // to wait for an account.
   useEffect(
     () => (notifyConfigUserId ? startAudioSelfHealFlag() : undefined),
+    [notifyConfigUserId],
+  );
+  // The second-screen chunks (settings, forum, watch party panel, call stages)
+  // are fetched one at a time when the browser is idle, a few seconds after the
+  // shell is up, so the first open of any of them is already local.
+  useEffect(() => preloadDeferredPanels(), []);
+  // `voice_calm_detector` (`lib/calm-detector-flag.ts`): the speaking ring's
+  // loop on a timer instead of every frame. Same refresh, same reason to wait.
+  useEffect(
+    () => (notifyConfigUserId ? startCalmDetectorFlag() : undefined),
     [notifyConfigUserId],
   );
   // `clean_voice_default` (`lib/clean-voice-default.ts`): Voz limpa as the

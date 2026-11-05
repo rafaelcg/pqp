@@ -543,6 +543,22 @@ export default defineConfig(({ command }) => ({
   // so the `.map` files are generated for upload without being served publicly.
   build: {
     sourcemap: faroSourcemapPlugin ? "hidden" : false,
+    rollupOptions: {
+      output: {
+        // Every lucide icon is its own tiny module, and one imported by two lazy
+        // chunks became a chunk of its own: about 60 files of 0 to 2 KB requested
+        // one hop after the shell on every cold start. One icons chunk is one
+        // request. (`experimentalMinChunkSize` was tried first and folded the chat
+        // client into an unrelated panel's chunk, which silently drops the `/app`
+        // preload in `deferEntry`.)
+        manualChunks(id) {
+          if (id.includes("/node_modules/lucide-react/")) {
+            return "icons";
+          }
+          return undefined;
+        },
+      },
+    },
   },
   define: {
     // `dev` under `vite dev`: a developer's own tab must never poll for, or be

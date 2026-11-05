@@ -1172,6 +1172,13 @@ export interface VoiceConfig {
    */
   audioSelfHeal?: boolean;
   /**
+   * `voice_calm_detector`: the call's speaking ring is read on a 20 Hz timer
+   * (4 Hz while the window is hidden) instead of on every frame
+   * (`lib/speaking-clock.ts`). Global; absent is off, which is the per-frame
+   * loop this client always had.
+   */
+  calmDetector?: boolean;
+  /**
    * `soundboard`: this server's calls offer the soundboard and its settings
    * tab. Per server, default off. The play gate on the server reads it too.
    */

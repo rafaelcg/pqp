@@ -75,6 +75,8 @@ const OLD_READERS: Record<string, (raw: string | undefined) => boolean> = {
   // New with the flag, so there was no old reader: this is its definition.
   voice_audio_self_heal: offWords,
   // New with the flag, so there was no old reader: this is its definition.
+  voice_calm_detector: offWords,
+  // New with the flag, so there was no old reader: this is its definition.
   clean_voice_default: offWords,
   // New with the flag, so there was no old reader: this is its definition.
   voice_gate: offWords,
