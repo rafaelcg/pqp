@@ -90,6 +90,7 @@ import { CapacityNotice } from "@/components/voice/capacity-notice";
 import { MicFallbackNotice } from "@/components/voice/mic-fallback-notice";
 import { AudioHealthNotice } from "@/components/voice/audio-health-notice";
 import { ShareGameCaptureNotice } from "@/components/voice/share-game-capture-notice";
+import { MacShareAudioPermissionNotice } from "@/components/voice/mac-share-audio-permission-notice";
 import { RaisedHandQueue } from "@/components/voice/raised-hand-queue";
 import {
   HandBadgeActionsContext,
@@ -2327,6 +2328,7 @@ function ActiveCall({
         hint={voiceState.shareCaptureHint}
         visible={!chrome.hidden}
       />
+      <MacShareAudioPermissionNotice visible={!chrome.hidden} />
       <CapacityNotice
         voiceChannelId={voiceState.voiceChannelId}
         transport={voiceState.roomTransport}
