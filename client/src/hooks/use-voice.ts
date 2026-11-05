@@ -94,6 +94,15 @@ import {
   attachLinuxShellShareAudio,
   ensureLinuxShellShareAudio,
 } from "@/lib/linux-shell-share-audio";
+import {
+  armMacShellShareAudio,
+  ensureMacShellShareAudio,
+  settleMacShareAudio,
+} from "@/lib/mac-shell-share-audio";
+import {
+  clearMacShareAudioPermission,
+  raiseMacShareAudioPermission,
+} from "@/lib/mac-share-audio-permission";
 import { rememberShareAudioTrack } from "@/lib/share-audio-probe";
 import {
   canControlShareCursor,
@@ -7258,6 +7267,8 @@ export function createVoiceController(transport: RealtimeTransport) {
       // A share that succeeds supersedes the last one that failed, and the
       // offer to retry without sound has to go with it.
       state.screenShareAudioFailed = false;
+      // Same for the macOS "no sound, allow System Audio Recording" card.
+      clearMacShareAudioPermission();
 
       // The standing "leave my mouse out of it" preference, read from its own
       // store rather than passed down four components (it is remembered per
@@ -7266,6 +7277,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       await Promise.all([
         ensureOsCanExcludeCallAudio(),
         ensureLinuxShellShareAudio(),
+        ensureMacShellShareAudio(),
       ]);
       const hideCursor = intent.hideCursor ?? getShareCursor() === "hide";
       const captureIntent = { ...intent, hideCursor };
@@ -7301,6 +7313,12 @@ export function createVoiceController(transport: RealtimeTransport) {
       // already opened.
       if (captureEnv.shellLinuxShareAudio && askedForAudio && !intent.stream) {
         await armLinuxShellShareAudio();
+      }
+      // MACOS DESKTOP: same rule. The shell answers the display request with
+      // loopback only after this arm; without it the request is video-only,
+      // which is also what an old page gets.
+      if (captureEnv.shellMacShareAudio && askedForAudio && !intent.stream) {
+        await armMacShellShareAudio();
       }
 
       let stream: MediaStream;
@@ -7389,7 +7407,23 @@ export function createVoiceController(transport: RealtimeTransport) {
       }
       // Fail closed before anyone else hears the mixer. Strip only when
       // exclude is known not to have applied; undefined settings stay.
-      if (stripLeakedSystemAudioTracks(stream)) {
+      //
+      // NOT on the macOS shell: there the exclusion is Chromium's tap leaving
+      // its own audio process out, and what `getSettings().restrictOwnAudio`
+      // says about that tap is not something this code can lean on (the
+      // setting was written for the Windows device). The settings are logged
+      // instead, so a leak report comes with the facts.
+      if (captureEnv.shellMacShareAudio && stream.getAudioTracks().length > 0) {
+        try {
+          console.warn(
+            "[share] mac system audio settings",
+            stream.getAudioTracks()[0]?.getSettings?.(),
+          );
+        } catch {
+          // Diagnostics only.
+        }
+      }
+      if (!captureEnv.shellMacShareAudio && stripLeakedSystemAudioTracks(stream)) {
         // A second, separate UA-CH read from `ensureOsCanExcludeCallAudio`
         // above: that one answers "can I offer computer sound", this one
         // answers "do I actually KNOW this is old Windows" -- see
@@ -7428,7 +7462,23 @@ export function createVoiceController(transport: RealtimeTransport) {
         !intent.appAudio &&
         (sharedWithoutSoundAfterFailure || lostSoundToFailure(intent.stream));
       if (lostSound && intent.watchParty !== true) {
-        state.notice = translateMessage("voice.notice.shareAudioFallback");
+        if (captureEnv.shellMacShareAudio) {
+          // On a Mac the usual reason the sound would not open is the System
+          // Audio Recording permission, so the card that opens that pane
+          // replaces the generic line.
+          raiseMacShareAudioPermission();
+        } else {
+          state.notice = translateMessage("voice.notice.shareAudioFallback");
+        }
+      }
+      // MACOS DESKTOP: the capture came back with a sound track that is dead
+      // (`ended`, never a sample): Electron's documented silent failure when
+      // System Audio Recording is not granted. Taken off the stream before it
+      // is published, and the presenter is told why.
+      if (captureEnv.shellMacShareAudio && askedForAudio && !intent.stream) {
+        settleMacShareAudio(stream, () => {
+          raiseMacShareAudioPermission();
+        });
       }
       // The shell's capture joins the stream here, after the strip (it is
       // not the mixer, so there is nothing in it to strip) and before

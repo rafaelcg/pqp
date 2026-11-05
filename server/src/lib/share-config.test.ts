@@ -9,6 +9,7 @@ describe("shareConfigForServer", () => {
     delete process.env.SHARE_GAME_CAPTURE_HINT;
     delete process.env.SHARE_FAST_START_QUALITY;
     delete process.env.LINUX_DESKTOP_SYSTEM_AUDIO;
+    delete process.env.MAC_DESKTOP_SYSTEM_AUDIO;
     resetFeatureFlagsForTests();
   });
 
@@ -19,6 +20,7 @@ describe("shareConfigForServer", () => {
       shareGameCaptureHint: false,
       shareFastStartQuality: false,
       linuxDesktopSystemAudio: false,
+      macDesktopSystemAudio: false,
     });
   });
 
@@ -31,6 +33,17 @@ describe("shareConfigForServer", () => {
     for (const word of ["TRUE", "1", "on", ""]) {
       process.env.SHARE_FAST_START_QUALITY = word;
       expect(shareConfigForServer(null).shareFastStartQuality).toBe(false);
+    }
+  });
+
+  it("keeps Mac desktop system audio off by default and follows its own variable, exact word only", () => {
+    expect(shareConfigForServer(null).macDesktopSystemAudio).toBe(false);
+    process.env.MAC_DESKTOP_SYSTEM_AUDIO = "true";
+    expect(shareConfigForServer(null).macDesktopSystemAudio).toBe(true);
+    expect(shareConfigForServer(null).linuxDesktopSystemAudio).toBe(false);
+    for (const word of ["TRUE", "1", "on", "yes", ""]) {
+      process.env.MAC_DESKTOP_SYSTEM_AUDIO = word;
+      expect(shareConfigForServer(null).macDesktopSystemAudio).toBe(false);
     }
   });
 

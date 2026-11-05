@@ -468,6 +468,19 @@ export const FEATURE_FLAGS = {
     perServer: false,
     clientVia: "GET /api/share/config (linuxDesktopSystemAudio)",
   },
+  mac_desktop_system_audio: {
+    description:
+      "Som do computador no compartilhamento de tela do app desktop no Mac (macOS 14.2 ou mais novo; sem a chamada; pede a permissão Gravação de Áudio do Sistema).",
+    env: "MAC_DESKTOP_SYSTEM_AUDIO",
+    parseEnv: exactTrue,
+    codeDefault: false,
+    // Global on purpose, for the same reason as `linux_desktop_system_audio`:
+    // the client reads `GET /api/share/config` without a server and keeps one
+    // answer per page, so a per-server override would be accepted by the
+    // dashboard and never read.
+    perServer: false,
+    clientVia: "GET /api/share/config (macDesktopSystemAudio)",
+  },
   party_fast_start: {
     description:
       "Primeiro quadro mais rápido no watch party (só cliente: pré-carrega o player, adia a animação de espera e mostra o andamento).",

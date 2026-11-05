@@ -8,10 +8,14 @@
  *
  * `audioState` comes from main (`pickerAudioState` in `lib/display-sources.js`):
  *
- *   "hidden"    macOS and Linux: there is no sound to offer. Nothing is drawn.
+ *   "hidden"    Linux, and a Mac whose version could not be read: there is no
+ *               sound to offer. Nothing is drawn.
  *   "checkbox"  a real choice: the switch is drawn, ON by default.
  *   "explain"   Windows 10 without the native capture: the choice would be a
  *               lie, so the row explains instead and has no switch.
+ *   "explain-mac"      macOS 14.2+ with the shell's sound not switched on: the
+ *               row says the desktop app does not carry sound on a Mac yet.
+ *   "explain-mac-old"  macOS before 14.2: no API for it, says so.
  *
  * WHY ON BY DEFAULT. A missed box was a silent share and "(no sound)" on the
  * viewers' stage, and the box is small enough to miss. The row is prominent
@@ -62,6 +66,28 @@
         checked: false,
         label: strings.shareAudioWin10,
         hint: strings.shareAudioWin10Hint,
+        note: "",
+        icon: "off",
+      };
+    }
+    if (audioState === "explain-mac") {
+      return {
+        visible: true,
+        hasSwitch: false,
+        checked: false,
+        label: strings.shareAudioMac,
+        hint: strings.shareAudioMacHint,
+        note: "",
+        icon: "off",
+      };
+    }
+    if (audioState === "explain-mac-old") {
+      return {
+        visible: true,
+        hasSwitch: false,
+        checked: false,
+        label: strings.shareAudioMacOld,
+        hint: strings.shareAudioMacOldHint,
         note: "",
         icon: "off",
       };
