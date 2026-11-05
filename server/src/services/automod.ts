@@ -333,59 +333,73 @@ const cache = new Map<string, { rules: AutomodRule[]; expiresAt: number }>();
 // ---------------------------------------------------------------------------
 
 /**
- * pqp's built-in filter (`findBaselineViolation` in `@pqp/shared`): on for
- * every server unless the operator turns the `default_text_filter` flag off
- * (all servers) or the server's owner turns it off (that server, one row in
- * `server_text_filter_settings`). It is not an AutoMod rule: it has no row in
- * `automod_rules`, no exemptions, no alert and no timeout, so nothing an
- * existing server configured changes.
+ * pqp's built-in filter (`findBaselineViolation` in `@pqp/shared`): OFF by
+ * default, filtering nothing until somebody turns it on. Two levers, and the
+ * owner's wins for their own server:
+ *
+ * - the operator's `default_text_filter` flag, global or per server, from the
+ *   dashboard (env `DEFAULT_TEXT_FILTER`);
+ * - the server's owner, in AutoMod settings, either way: one row in
+ *   `server_text_filter_settings` (`disabled = FALSE` is "on for my server",
+ *   `TRUE` is "off for my server"; no row follows the flag).
+ *
+ * It is not an AutoMod rule: it has no row in `automod_rules`, no exemptions,
+ * no alert and no timeout, so nothing an existing server configured changes.
  *
  * NO STAFF BYPASS, unlike the rules above. A rule is the owner's list and the
  * owner must never be locked out by their own list; the baseline is the
  * instance's, and the owner's lever is the switch. It also means the account
- * that owns a server and types a slur is refused like anybody.
+ * that owns a server and types a slur is refused like anybody, once it is on.
  *
  * The owner's choice is cached like the rules and dropped by the same
  * invalidation, so it crosses the cluster the same way.
  */
-const baselineCache = new Map<string, { disabled: boolean; expiresAt: number }>();
+const baselineCache = new Map<
+  string,
+  { choice: boolean | null; expiresAt: number }
+>();
 /** Bumped by every invalidation; a read that began under an older value must not cache. */
 let baselineEpoch = 0;
 
-async function baselineDisabledFor(serverId: string): Promise<boolean> {
+/** This server's owner's choice: true on, false off, null no choice made. */
+async function ownerBaselineChoice(serverId: string): Promise<boolean | null> {
   const now = Date.now();
   const hit = baselineCache.get(serverId);
   if (hit && hit.expiresAt > now) {
-    return hit.disabled;
+    return hit.choice;
   }
   const epoch = baselineEpoch;
   const result = await getPool().query<{ disabled: boolean }>(
     `SELECT disabled FROM server_text_filter_settings WHERE server_id = $1`,
     [serverId],
   );
-  const disabled = result.rows[0]?.disabled ?? false;
+  const row = result.rows[0];
+  const choice = row ? !row.disabled : null;
   if (epoch === baselineEpoch) {
-    baselineCache.set(serverId, { disabled, expiresAt: now + CACHE_TTL_MS });
+    baselineCache.set(serverId, { choice, expiresAt: now + CACHE_TTL_MS });
   }
-  return disabled;
+  return choice;
 }
 
-/** What the settings page shows: the operator's flag, the owner's choice, and what applies. */
+/** What the settings page shows: the operator's answer, the owner's choice, and what applies. */
 export async function getBaselineStatus(serverId: string): Promise<BaselineStatus> {
-  const instanceEnabled = isEnabled("default_text_filter");
+  const instanceEnabled = isEnabled("default_text_filter", { serverId });
   const result = await getPool().query<{ disabled: boolean }>(
     `SELECT disabled FROM server_text_filter_settings WHERE server_id = $1`,
     [serverId],
   );
-  const ownerDisabled = result.rows[0]?.disabled ?? false;
-  return { instanceEnabled, ownerDisabled, enabled: instanceEnabled && !ownerDisabled };
+  const row = result.rows[0];
+  const ownerChoice = row ? !row.disabled : null;
+  return { instanceEnabled, ownerChoice, enabled: ownerChoice ?? instanceEnabled };
 }
 
 /**
- * The owner's switch. Off writes the row, on removes it, so "no row" stays
- * "default". The write and its audit line are one transaction: a switch that
- * took effect is never left unaudited, and an audit that failed leaves the
- * switch where it was. Only a real change is audited.
+ * The owner's switch, either direction: always writes the choice (on is
+ * `disabled = FALSE`, off is `TRUE`), so a later change of the operator's flag
+ * never silently flips a server whose owner chose. The write and its audit
+ * line are one transaction: a switch that took effect is never left
+ * unaudited, and an audit that failed leaves the switch where it was. Only a
+ * change of what applies is audited.
  */
 export async function setBaselineEnabled(
   serverId: string,
@@ -399,22 +413,18 @@ export async function setBaselineEnabled(
       `SELECT disabled FROM server_text_filter_settings WHERE server_id = $1 FOR UPDATE`,
       [serverId],
     );
-    const wasDisabled = before.rows[0]?.disabled ?? false;
-    if (enabled) {
-      await client.query(
-        `DELETE FROM server_text_filter_settings WHERE server_id = $1`,
-        [serverId],
-      );
-    } else {
-      await client.query(
-        `INSERT INTO server_text_filter_settings (server_id, disabled, updated_by)
-         VALUES ($1, TRUE, $2)
-         ON CONFLICT (server_id) DO UPDATE
-           SET disabled = TRUE, updated_by = EXCLUDED.updated_by, updated_at = NOW()`,
-        [serverId, actorId],
-      );
-    }
-    if (wasDisabled === enabled) {
+    const row = before.rows[0];
+    const wasEnabled = row
+      ? !row.disabled
+      : isEnabled("default_text_filter", { serverId });
+    await client.query(
+      `INSERT INTO server_text_filter_settings (server_id, disabled, updated_by)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (server_id) DO UPDATE
+         SET disabled = EXCLUDED.disabled, updated_by = EXCLUDED.updated_by, updated_at = NOW()`,
+      [serverId, !enabled, actorId],
+    );
+    if (wasEnabled !== enabled) {
       await logAudit(
         {
           serverId,
@@ -423,7 +433,7 @@ export async function setBaselineEnabled(
           targetType: "automod_rule",
           changes: [
             { key: "kind", old: null, new: "baseline" },
-            { key: "enabled", old: !wasDisabled, new: enabled },
+            { key: "enabled", old: wasEnabled, new: enabled },
           ],
         },
         client,
@@ -454,33 +464,40 @@ function baselineVerdict(body: string): AutomodVerdict | null {
 
 /**
  * The baseline verdict for a text, or null when it may land. `serverId` is
- * null for a surface with no server (a direct message, a profile name), where
- * only the operator's flag applies.
+ * null for a surface with no server (a profile name), where only the global
+ * answer of the `default_text_filter` flag applies. With a server, the owner's
+ * choice wins and the flag (with the server's override) is the fallback.
+ * Direct and group messages never call this: the filter does not read
+ * private conversations.
  */
 export async function checkBaselineText(
   serverId: string | null,
   body: string,
 ): Promise<AutomodVerdict | null> {
-  if (!isEnabled("default_text_filter")) {
+  const flagOn = isEnabled("default_text_filter", { serverId });
+  if (!serverId && !flagOn) {
     return null;
   }
+  // Only a text that hits the list costs the owner-choice lookup.
   const verdict = baselineVerdict(body);
   if (!verdict) {
     return null;
   }
-  if (serverId && (await baselineDisabledFor(serverId))) {
-    return null;
+  if (serverId) {
+    const choice = await ownerBaselineChoice(serverId);
+    if (!(choice ?? flagOn)) {
+      return null;
+    }
   }
   return verdict;
 }
 
 /**
  * A baseline hit on a surface with no server to audit it on. One log line
- * with the class and the surface, never the text: the body of a private
- * message is not ours to keep.
+ * with the class and the surface, never the text.
  */
 export function recordBaselineHit(
-  surface: "dm" | "profile",
+  surface: "profile",
   userId: string,
   verdict: AutomodVerdict,
 ): void {

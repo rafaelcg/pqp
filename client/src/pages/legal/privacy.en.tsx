@@ -11,7 +11,7 @@ export const privacyEn: LegalDocument = {
   description:
     "How pqp.gg handles personal data: what we collect, our legal bases, where it is processed, retention, and your rights under the LGPD and UK data protection law.",
   heading: "Privacy Policy",
-  updated: "4 November 2026",
+  updated: "5 November 2026",
   sections: [
     {
       id: "intro",
@@ -548,9 +548,11 @@ export const privacyEn: LegalDocument = {
             Nothing here profiles you or decides whether you may keep an
             account. Moderation of people is done by a person. A file can be
             dropped or flagged by the image check before a person sees it, and
-            a message or name can be refused by the built-in text filter (a
-            list of slurs, abuse and threats, matched on the text itself). Those
-            are checks of the content, not of you.
+            a message or name can be refused by the built-in text filter (an
+            optional setting, off unless switched on for a server or for pqp; a
+            list of slurs and threats, matched on the text itself, and never
+            applied to direct or group messages). Those are checks of the content, not of
+            you.
           </li>
         </ul>
       ),
