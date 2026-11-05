@@ -10607,15 +10607,9 @@ router.patch("/api/messages/:messageId", async ({ req, user }, { messageId }) =>
         verdict.customMessage ?? "This message was blocked by AutoMod",
       );
     }
-  } else {
-    // An edit in a direct or group conversation: no server rules, but the
-    // instance's baseline filter still reads it (see `postChannelMessage`).
-    const verdict = await checkBaselineText(null, body.body);
-    if (verdict) {
-      recordBaselineHit("dm", user.id, verdict);
-      throw new HttpError(422, verdict.customMessage!);
-    }
   }
+  // An edit in a direct or group conversation is not read by the default text
+  // filter either (see `postChannelMessage`): no server rules, no baseline.
 
   const updated = await updateMessageBody(messageId!, body.body);
   if (!updated) {

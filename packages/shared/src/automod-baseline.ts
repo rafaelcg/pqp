@@ -7,32 +7,38 @@ import {
 } from "./automod.js";
 
 /**
- * The baseline text filter: what pqp refuses on every server, with no rule
- * written by anybody, unless the server's owner switches it off.
+ * The baseline text filter: a short list built into the product that refuses
+ * the worst of it, with no rule written by anybody, WHEN SOMEBODY TURNS IT ON.
+ * It is OFF by default: nothing is filtered until the operator turns the
+ * `default_text_filter` flag on (everywhere or for one server) or a server's
+ * owner turns it on for their own server in AutoMod settings. The owner's
+ * choice, either way, wins for that server.
  *
  * WHY IT EXISTS. AutoMod (`automod.ts`) is a tool for an owner to write their
- * own list, and an owner who wrote none got no filtering at all. App Store
- * Guideline 1.2 asks for "a method for filtering objectionable content", and
- * "opt-in per server, empty by default" is not that. So there is now a short
- * list built into the product, in the same matcher AutoMod uses, applied on
- * the same surfaces (a message and its edit, a forum title, a story, a Baú
- * comment or post, a profile name) and to direct messages, with the same
- * answer on a hit: the text is refused and the author is told why.
+ * own list. App Store Guideline 1.2 asks for "a method for filtering
+ * objectionable content"; this is that method, in the same matcher AutoMod
+ * uses, applied on the same surfaces (a message and its edit, a forum title, a
+ * story, a Baú comment or post, a profile name), with the same answer on a hit:
+ * the text is refused and the author is told why. A profile name has no
+ * server, so it follows only the operator's global answer. It is NEVER applied
+ * to direct or group messages: a private conversation between people who chose
+ * each other is not ours to read, and the reports, blocking and image scanning
+ * that exist for it are unchanged.
  *
  * WHAT IS ON THE LIST, AND WHAT IS NOT. It is deliberately short and
- * deliberately about the worst of it. Three classes:
+ * deliberately about the worst of it. Two classes:
  *
  * - `slur`: racist, homophobic, transphobic and ableist slurs, in English,
  *   Portuguese and Spanish, plus the well-known hate slogans.
- * - `abuse`: abuse aimed at a person (`fuck you`, `vai tomar no cu`,
- *   `chinga tu madre`), and sexual-abuse words used as insults.
  * - `threat`: telling somebody to kill themselves, rape threats, calls to
  *   kill a group, and sexual content about children.
  *
- * Ordinary swearing is NOT here: shit, damn, merda, porra, caralho, mierda,
- * joder, "puta que pariu", "filho da puta" and the like pass, because friends
- * talk like that and a filter that fires on it is a filter people turn off, or
- * leave. A plain "I'll kill you" is not here either (it is how people
+ * Insults are NOT here, on purpose: banter between friends is not ours to
+ * filter. `fuck you`, `fuck off`, `cunt`, `vai tomar no cu`, `chinga tu madre`,
+ * `slut` and the like pass. Ordinary swearing passes too: shit, damn, merda,
+ * porra, caralho, mierda, joder, "puta que pariu", "filho da puta", because
+ * friends talk like that and a filter that fires on it is a filter people turn
+ * off, or leave. A plain "I'll kill you" is not here either (it is how people
  * trash-talk in a game); a rape threat or "kill yourself" is.
  *
  * HOW IT MATCHES. Whole words and phrases only, never substrings, so
@@ -46,10 +52,10 @@ import {
  * 1. leetspeak: `n1gg3r`, `f@ggot`, `sh!t` (digits 0 1 3 4 5 7 and `@ $ !`
  *    inside a word become the letter they stand for);
  * 2. stretching: a run of three or more of one letter shrinks to two, and
- *    separately to one (`niiiigger`, `fuuuuck you`);
+ *    separately to one (`niiiigger`, `kiiiill yourself`);
  * 3. spacing: single letters split by spaces, dots, dashes or stars are
- *    glued back (`f u c k  y o u`, `n.i.g.g.e.r`);
- * 4. squashing: a phrase typed without its spaces (`fuckyou`, `vaitomarnocu`).
+ *    glued back (`k i l l  y o u r s e l f`, `n.i.g.g.e.r`);
+ * 4. squashing: a phrase typed without its spaces (`killyourself`, `vaisematar`).
  *
  * What it does NOT catch, on purpose, is anything that needs judgement:
  * sarcasm, a quoted slur in a news link, a new coinage, a language not listed,
@@ -60,7 +66,7 @@ import {
  * the same code.
  */
 
-export const BASELINE_TEXT_CLASSES = ["slur", "abuse", "threat"] as const;
+export const BASELINE_TEXT_CLASSES = ["slur", "threat"] as const;
 export type BaselineTextClass = (typeof BASELINE_TEXT_CLASSES)[number];
 
 /** What the author is told when a message is refused. Shown as is on mobile. */
@@ -143,31 +149,6 @@ export const BASELINE_TEXT_LISTS: Record<BaselineTextClass, readonly string[]> =
     "negrata",
     "negratas",
   ],
-  abuse: [
-    // English: aimed at a person
-    "fuck you",
-    "fuck u",
-    "fuck yourself",
-    "fuck off",
-    "go fuck yourself",
-    "cunt",
-    "cunts",
-    "slut",
-    "sluts",
-    "whore",
-    "whores",
-    // Portuguese
-    "vai tomar no cu",
-    "vai se foder",
-    "vai se fuder",
-    "arrombado",
-    "arrombada",
-    "arrombados",
-    "arrombadas",
-    // Spanish
-    "chinga tu madre",
-    "concha de tu madre",
-  ],
   threat: [
     // English
     "kys",
@@ -207,7 +188,7 @@ type Compiled = Record<BaselineTextClass, CompiledKeywords>;
 
 let compiled: Compiled | null = null;
 
-/** A phrase typed solid: `fuck you` also catches `fuckyou`. */
+/** A phrase typed solid: `kill yourself` also catches `killyourself`. */
 function squashed(entry: string): string | null {
   if (entry.includes("*")) return null;
   const folded = normalizeForAutomod(entry).replace(/[^\p{L}\p{N}]+/gu, "");
@@ -324,14 +305,15 @@ export function findBaselineViolation(text: string): BaselineHit | null {
 /**
  * `GET` and `PUT /api/servers/:serverId/automod/baseline`.
  *
- * - `instanceEnabled`: the operator's `default_text_filter` flag. Off, the
- *   baseline is off everywhere and the switch below changes nothing.
- * - `ownerDisabled`: this server's owner switched it off.
- * - `enabled`: what actually applies here, `instanceEnabled && !ownerDisabled`.
+ * - `instanceEnabled`: the operator's `default_text_filter` answer for this
+ *   server (its override, else the global row, else the variable, else off).
+ * - `ownerChoice`: this server's owner's choice, `true` on, `false` off, `null`
+ *   not chosen (follows `instanceEnabled`).
+ * - `enabled`: what actually applies here, `ownerChoice ?? instanceEnabled`.
  */
 export const baselineStatusSchema = z.object({
   instanceEnabled: z.boolean(),
-  ownerDisabled: z.boolean(),
+  ownerChoice: z.boolean().nullable(),
   enabled: z.boolean(),
 });
 export type BaselineStatus = z.infer<typeof baselineStatusSchema>;
