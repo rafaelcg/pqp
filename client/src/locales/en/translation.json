@@ -2678,7 +2678,7 @@
   "settings.voice.processing.noise.off": "Off",
   "settings.voice.processing.noise.browser": "Standard (browser)",
   "settings.voice.processing.noise.advanced": "Clean voice",
-  "settings.voice.processing.noise.advancedHint": "Clean voice: an advanced filter that removes even keyboards and barking dogs. Uses more processor and can clip the start of some words.",
+  "settings.voice.processing.noise.advancedHint": "Clean voice: an advanced filter that removes even keyboards and barking dogs and turns the background down between sentences. Uses more processor and can clip the start of some words.",
   "settings.voice.processing.gain": "Even out volume automatically",
   "settings.voice.processing.gainHint": "Keeps your volume steadier, with no spikes or dropouts.",
   "settings.voice.processing.note": "Changing these re-opens the microphone. Nobody is dropped from the call.",

@@ -144,6 +144,7 @@ import {
   createRnnoiseNode,
   loadRnnoiseBinary,
 } from "../lib/noise-suppression";
+import { createVoiceGate } from "../lib/voice-gate/voice-gate-node";
 import {
   isOptimisticVoiceEntry,
   markOptimisticVoiceEntry,
@@ -839,6 +840,11 @@ interface MicPipeline {
    * thread; closing the context alone leaves that to the collector.
    */
   noiseSuppressor: { destroy(): void } | null;
+  /**
+   * The voice gate after the suppressor (`lib/voice-gate/`), when Voz limpa
+   * built one. Held so teardown unregisters it from the kill switch.
+   */
+  voiceGate?: { destroy(): void } | null;
 }
 
 interface IceServerConfig {
@@ -1198,7 +1204,27 @@ async function createMicPipeline(
   // Suppressor first, then gain, then the meter and the published stream —
   // which is also the stream the watch-party mix carries, so one insertion
   // here covers the room and the audience both.
-  connectMicChain({ source, suppressor: noiseSuppressor, gain: gainNode });
+  // The gate only ever follows a suppressor that loaded: its sidechain's head
+  // start is that suppressor's own delay. It fails open to `null`, which is
+  // the chain exactly as it was before the gate existed.
+  const voiceGate = noiseSuppressor ? await createVoiceGate(audioContext) : null;
+  if (noiseSuppressor && isCancelled?.()) {
+    voiceGate?.destroy();
+    try {
+      noiseSuppressor?.destroy();
+    } catch {
+      // Already gone with the context; nothing left to free.
+    }
+    stopStreamTracks(rawStream);
+    void audioContext.close().catch(() => {});
+    throw new MicSetupCancelledError();
+  }
+  connectMicChain({
+    source,
+    suppressor: noiseSuppressor,
+    gain: gainNode,
+    gate: voiceGate?.node ?? null,
+  });
   gainNode.connect(analyser);
   gainNode.connect(destination);
 
@@ -1209,6 +1235,7 @@ async function createMicPipeline(
     gainNode,
     analyser,
     noiseSuppressor,
+    voiceGate,
   };
 }
 
@@ -1227,6 +1254,11 @@ function stopMicTracks(pipeline: MicPipeline | null) {
 function closeMicContext(pipeline: MicPipeline | null) {
   if (!pipeline) {
     return;
+  }
+  try {
+    pipeline.voiceGate?.destroy();
+  } catch {
+    // Already gone with the context; nothing left to free.
   }
   try {
     pipeline.noiseSuppressor?.destroy();

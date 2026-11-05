@@ -502,6 +502,7 @@ import {
   startCleanVoiceDefaultFlag,
   useCleanVoiceDefaultMode,
 } from "@/lib/clean-voice-default";
+import { startVoiceGateFlag } from "@/lib/voice-gate/voice-gate-flag";
 import { withEffectiveNoiseSuppression } from "@/components/settings/local-settings";
 import {
   WatchPartyApprovedToasts,
@@ -3047,6 +3048,12 @@ function MainAppContent({
   // default for a device that never chose. Same refresh, same reason to wait.
   useEffect(
     () => (notifyConfigUserId ? startCleanVoiceDefaultFlag() : undefined),
+    [notifyConfigUserId],
+  );
+  // `voice_gate` (`lib/voice-gate/voice-gate-flag.ts`): the kill switch for the
+  // gate after RNNoise. Same refresh; a flip reaches a call already running.
+  useEffect(
+    () => (notifyConfigUserId ? startVoiceGateFlag() : undefined),
     [notifyConfigUserId],
   );
   // Modo 2005's kill switch (`retro_look`), asked only by a browser that found

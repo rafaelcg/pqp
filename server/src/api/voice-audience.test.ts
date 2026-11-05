@@ -137,6 +137,7 @@ describeDb("audience mode routes", () => {
       calmDetector: true,
       soundboard: false,
       cleanVoiceDefault: true,
+      voiceGate: true,
       raisedHandSticky: true,
     });
     process.env.AUDIENCE_MODE = "false";
@@ -146,6 +147,7 @@ describeDb("audience mode routes", () => {
       calmDetector: true,
       soundboard: false,
       cleanVoiceDefault: true,
+      voiceGate: true,
       raisedHandSticky: true,
     });
   });
@@ -207,6 +209,31 @@ describeDb("audience mode routes", () => {
         delete process.env.VOICE_CALM_DETECTOR;
       } else {
         process.env.VOICE_CALM_DETECTOR = previous;
+      }
+    }
+  });
+
+  it("GET /api/voice/config answers voiceGate without a server, on unless its variable says off", async () => {
+    const { serverId } = await makeServer();
+    const previous = process.env.VOICE_GATE;
+    try {
+      delete process.env.VOICE_GATE;
+      expect((await call(owner, "GET", "/api/voice/config")).body).toMatchObject({
+        voiceGate: true,
+      });
+      process.env.VOICE_GATE = "off";
+      expect((await call(owner, "GET", "/api/voice/config")).body).toMatchObject({
+        voiceGate: false,
+      });
+      // Global: a server in the query answers the same thing.
+      expect(
+        (await call(owner, "GET", `/api/voice/config?serverId=${serverId}`)).body,
+      ).toMatchObject({ voiceGate: false });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.VOICE_GATE;
+      } else {
+        process.env.VOICE_GATE = previous;
       }
     }
   });
