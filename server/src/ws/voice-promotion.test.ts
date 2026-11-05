@@ -1785,3 +1785,238 @@ describe("the calibrated camera price, through the join and camera handlers", ()
     log.mockRestore();
   });
 });
+
+/**
+ * A PHONE'S SHARE TAKES ITS SOUND TO THE SFU (`share_sound_promotion`).
+ *
+ * The iOS app sends a share's sound on LiveKit only. DM calls and small
+ * servers are mesh, so a phone sharing a game in a DM went out picture only
+ * ("Apresentando só a imagem, sem o som"). A new share carrying
+ * `audioNeedsSfu` now moves the mesh room through the ordinary promotion path,
+ * the DM pin included, and yields to everybody it would cost.
+ *
+ * The flag is left exactly as production runs it: no env and no row, so the
+ * code default answers. One test sets the variable to `off` to pin the kill
+ * switch.
+ */
+describe("a phone's share takes its sound to the SFU", () => {
+  let channel: string;
+  const ORIGINAL_FLAG = process.env.SHARE_SOUND_PROMOTION;
+
+  beforeEach(() => {
+    for (const socket of openSockets) {
+      deleteAuthenticatedSocket(socket);
+    }
+    openSockets.length = 0;
+    resetVoicePeers();
+    resetVoiceRateLimits();
+    resetVoiceRoomTransports();
+    resetVoicePromotions();
+    resetVoicePinRechecks();
+    backend.configured = "livekit";
+    rows.memberCount = 5;
+    rows.voiceTransport = null;
+    rows.kind = "dm";
+    channel = randomUUID();
+    delete process.env.VOICE_PROMOTION_MAX_SFU_MBPS;
+    delete process.env.SHARE_SOUND_PROMOTION;
+    process.env.VOICE_PROMOTION_ROOM_SIZE = "0";
+  });
+
+  afterEach(() => {
+    rows.kind = "server";
+    rows.voiceTransport = null;
+    rows.memberCount = 5;
+    if (ORIGINAL_FLAG === undefined) {
+      delete process.env.SHARE_SOUND_PROMOTION;
+    } else {
+      process.env.SHARE_SOUND_PROMOTION = ORIGINAL_FLAG;
+    }
+    if (ORIGINAL_BUDGET === undefined) {
+      delete process.env.VOICE_PROMOTION_MAX_SFU_MBPS;
+    } else {
+      process.env.VOICE_PROMOTION_MAX_SFU_MBPS = ORIGINAL_BUDGET;
+    }
+    if (ORIGINAL_ROOM_SIZE === undefined) {
+      delete process.env.VOICE_PROMOTION_ROOM_SIZE;
+    } else {
+      process.env.VOICE_PROMOTION_ROOM_SIZE = ORIGINAL_ROOM_SIZE;
+    }
+  });
+
+  /** What the iOS app sends on mesh: a share whose sound needs the SFU. */
+  function phoneShareOn(person: Seat): Promise<void> {
+    return handleVoiceMessage(
+      { socket: person.socket, user: person.user },
+      { type: "set-sharing-screen", sharing: true, audioNeedsSfu: true },
+    );
+  }
+
+  async function logged(run: () => Promise<void>): Promise<string[]> {
+    const lines: string[] = [];
+    const spy = vi
+      .spyOn(console, "log")
+      .mockImplementation((...args: unknown[]) => {
+        lines.push(args.join(" "));
+      });
+    try {
+      await run();
+    } finally {
+      spy.mockRestore();
+    }
+    return lines;
+  }
+
+  it("moves a DM call to the SFU, everybody in place, and the share stays up", async () => {
+    const phone = await seat(channel);
+    const friend = await seat(channel);
+    expect(getRoomTransport(channel)).toBe("mesh");
+
+    const lines = await logged(() => phoneShareOn(phone));
+
+    expect(getRoomTransport(channel)).toBe("livekit");
+    for (const person of [phone, friend]) {
+      const told = framesOf(person, "voice-transport-changed");
+      expect(told).toHaveLength(1);
+      // A reason every shipped client and every running instance parses.
+      expect(told[0]).toMatchObject({ transport: "livekit", reason: "screens" });
+      expect(framesOf(person, "voice-transport-unsupported")).toHaveLength(0);
+    }
+    expect(framesOf(friend, "peer-left")).toHaveLength(0);
+    expect(typesOf(phone)).not.toContain("screen-share-denied");
+    expect(sharesOn(friend)).toBe(1);
+    const promoted = lines.filter((line) =>
+      line.startsWith("[pqp] voice.transportPromoted "),
+    );
+    expect(promoted).toHaveLength(1);
+    expect(promoted[0]).toContain("reason=screens");
+    expect(promoted[0]).toContain("trigger=share-sound");
+  });
+
+  it("moves a group call and a small server's room the same way", async () => {
+    rows.kind = "group";
+    const group = [await seat(channel), await seat(channel), await seat(channel)];
+    await phoneShareOn(group[1]!);
+    expect(getRoomTransport(channel)).toBe("livekit");
+
+    rows.kind = "server";
+    const room = randomUUID();
+    const small = [await seat(room), await seat(room)];
+    expect(getRoomTransport(room)).toBe("mesh");
+    await phoneShareOn(small[0]!);
+    expect(getRoomTransport(room)).toBe("livekit");
+  });
+
+  it("changes nothing for a share without the field (web, desktop, Android, iOS 1.0.39)", async () => {
+    const sharer = await seat(channel);
+    const friend = await seat(channel);
+
+    await shareOn(sharer);
+
+    expect(getRoomTransport(channel)).toBe("mesh");
+    expect(framesOf(friend, "voice-transport-changed")).toHaveLength(0);
+    expect(sharesOn(friend)).toBe(1);
+  });
+
+  it("off is the old behaviour byte for byte: mesh, picture only, nothing logged", async () => {
+    process.env.SHARE_SOUND_PROMOTION = "off";
+    const phone = await seat(channel);
+    const friend = await seat(channel);
+
+    const lines = await logged(() => phoneShareOn(phone));
+
+    expect(getRoomTransport(channel)).toBe("mesh");
+    expect(framesOf(friend, "voice-transport-changed")).toHaveLength(0);
+    expect(typesOf(phone)).not.toContain("screen-share-denied");
+    expect(sharesOn(friend)).toBe(1);
+    expect(
+      lines.filter((line) => line.includes("voice.transportPromotion")),
+    ).toHaveLength(0);
+  });
+
+  it("never hangs anybody up for a sound: a seat that cannot follow keeps the call on mesh", async () => {
+    const phone = await seat(channel);
+    const oldApp = await seat(channel, false);
+
+    const lines = await logged(() => phoneShareOn(phone));
+
+    expect(getRoomTransport(channel)).toBe("mesh");
+    expect(framesOf(oldApp, "voice-transport-unsupported")).toHaveLength(0);
+    expect(framesOf(phone, "peer-left")).toHaveLength(0);
+    // The share itself goes on, picture only.
+    expect(sharesOn(oldApp)).toBe(1);
+    const refused = lines.find((line) =>
+      line.startsWith("[pqp] voice.transportPromotionRefused "),
+    );
+    expect(refused).toContain("refusal=seat-cannot-follow");
+    expect(refused).toContain("trigger=share-sound");
+  });
+
+  it("does not stop somebody else's share to give this one sound", async () => {
+    const sharing = await seat(channel);
+    const phone = await seat(channel);
+    await shareOn(sharing);
+
+    const lines = await logged(() => phoneShareOn(phone));
+
+    expect(getRoomTransport(channel)).toBe("mesh");
+    expect(framesOf(sharing, "voice-transport-changed")).toHaveLength(0);
+    expect(
+      lines.find((line) => line.includes("voice.transportPromotionRefused")),
+    ).toContain("refusal=other-share-live");
+  });
+
+  it("yields to a channel pinned to mesh by hand", async () => {
+    rows.kind = "server";
+    rows.voiceTransport = "mesh";
+    const phone = await seat(channel);
+    const friend = await seat(channel);
+
+    const lines = await logged(() => phoneShareOn(phone));
+
+    expect(getRoomTransport(channel)).toBe("mesh");
+    expect(framesOf(friend, "voice-transport-changed")).toHaveLength(0);
+    expect(
+      lines.find((line) => line.includes("voice.transportPromotionRefused")),
+    ).toContain("refusal=mesh-override");
+  });
+
+  it("over the box's budget the share stays on mesh, picture only, never denied", async () => {
+    process.env.VOICE_PROMOTION_MAX_SFU_MBPS = "1";
+    const phone = await seat(channel);
+    const friend = await seat(channel);
+
+    const lines = await logged(() => phoneShareOn(phone));
+
+    expect(getRoomTransport(channel)).toBe("mesh");
+    expect(typesOf(phone)).not.toContain("screen-share-denied");
+    expect(sharesOn(friend)).toBe(1);
+    expect(
+      lines.find((line) => line.includes("voice.transportPromotionRefused")),
+    ).toContain("refusal=budget");
+  });
+
+  it("asks once per share: a re-declare of a live share does not move the room", async () => {
+    const phone = await seat(channel);
+    const friend = await seat(channel);
+    // Already sharing on mesh, picture only, then a re-declare carrying it.
+    await shareOn(phone);
+    await phoneShareOn(phone);
+
+    expect(getRoomTransport(channel)).toBe("mesh");
+    expect(framesOf(friend, "voice-transport-changed")).toHaveLength(0);
+  });
+
+  it("a room already on the SFU just takes the share", async () => {
+    rows.kind = "server";
+    rows.memberCount = 50;
+    const phone = await seat(channel);
+    const friend = await seat(channel);
+    expect(getRoomTransport(channel)).toBe("livekit");
+
+    await phoneShareOn(phone);
+
+    expect(framesOf(friend, "voice-transport-changed")).toHaveLength(0);
+    expect(sharesOn(friend)).toBe(1);
+  });
+});

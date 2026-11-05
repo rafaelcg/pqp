@@ -83,6 +83,7 @@ describe("GET /api/share/config against the client that reads it", () => {
         "shareGameCaptureHint",
         "shareFastStartQuality",
         "linuxDesktopSystemAudio",
+        "macDesktopSystemAudio",
       ]),
     );
     for (const field of read) {

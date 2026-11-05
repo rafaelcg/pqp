@@ -289,6 +289,22 @@ callback. A mesh room stays picture only: Google's WebRTC build has no capture
 hook short of replacing the whole audio device, and the presenter banner says
 "Apresentando só a imagem, sem o som". **Unverified on hardware.**
 
+**So a share on mesh asks for the voice server (2026-11-05).** A DM call and a
+small server are mesh by policy, which made them the one place a phone's share
+went out silent. A new share in a mesh room now sends `audioNeedsSfu: true` on
+`set-sharing-screen` (`shareAudioNeedsSfu`, `RealtimeClient.sharingScreenFrame`),
+and with the runtime flag `share_sound_promotion` on (default) the server moves
+the room to LiveKit through its ordinary promotion. The `voice-transport-changed`
+that follows is the one `followPromotion` already handles: the share is
+republished on the SFU, which opens the sound gate. Refused (an operator's mesh
+pin, a seat that could not follow, somebody else already sharing, the box's
+budget), nothing changes and the banner keeps saying picture only. Builds up to
+1.0.39 never send the field, so they behave exactly as before. Device QA owed:
+the far end hears the game; the call does not drop during the move; and **the
+far end does not hear its own voice echoed back**: ReplayKit's `.audioApp` may
+include this app's own playback of the call, which is PR 1030's open item 5 and
+is unverified.
+
 **The share control follows SPEAK.** `welcome.self.canSpeak` (and the same
 field on every roster entry) is the channel's SPEAK permission, which is the
 screen and camera grant as well as the mic one. The control is hidden when it

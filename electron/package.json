@@ -134,6 +134,7 @@
           }
         ],
         "NSMicrophoneUsageDescription": "pqp needs microphone access for voice channels.",
+        "NSAudioCaptureUsageDescription": "pqp needs to record the computer's sound so the people in your call can hear what you are sharing.",
         "NSCameraUsageDescription": "pqp needs camera access for video in voice channels and for taking photos and clips for stories."
       }
     },

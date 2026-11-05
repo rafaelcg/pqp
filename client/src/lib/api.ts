@@ -1116,6 +1116,11 @@ export interface ShareConfig {
    */
   linuxDesktopSystemAudio?: boolean;
   /**
+   * The macOS desktop app may carry the computer's sound, minus the call
+   * (`lib/mac-shell-share-audio.ts`). Absent on an older API: off.
+   */
+  macDesktopSystemAudio?: boolean;
+  /**
    * The Windows desktop app watches the presenter's share for a dead picture
    * and explains exclusive fullscreen (`lib/share-game-capture-hint.ts`).
    * Absent on an older API: off.

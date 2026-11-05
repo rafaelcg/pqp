@@ -824,7 +824,48 @@ final class ChatModel {
         }
     }
 
+    // MARK: - Refusal banner
+
+    /// How long a refusal stays above the composer when nothing else clears it.
+    var refusalBannerSeconds: Double = 10
+
+    /// The refusal currently on screen, with the draft it handed back. A
+    /// refusal is about one message; once the person moves on (types something
+    /// new, or a later send lands) it is stale and reads as if it were about
+    /// the next one. Only this banner is cleared here: an upload failure or a
+    /// history error set elsewhere is not a refusal and keeps its own life.
+    private var refusalBanner: (text: String, draft: String)?
+    private var refusalBannerTimer: Task<Void, Never>?
+
+    private func armRefusalBanner(_ text: String) {
+        refusalBanner = (text, draft)
+        refusalBannerTimer?.cancel()
+        let seconds = refusalBannerSeconds
+        refusalBannerTimer = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(seconds))
+            guard !Task.isCancelled else { return }
+            self?.clearRefusalBanner()
+        }
+    }
+
+    /// Drops the refusal banner if it is still the one showing.
+    func clearRefusalBanner() {
+        refusalBannerTimer?.cancel()
+        refusalBannerTimer = nil
+        if let banner = refusalBanner, error == banner.text { error = nil }
+        refusalBanner = nil
+    }
+
+    /// The composer's text changed. The refusal restores the refused text into
+    /// the composer, which also reports as a change, so the restored text
+    /// itself does not count: only a draft that differs from it does.
+    func noteDraftEdited() {
+        guard let banner = refusalBanner, draft != banner.draft else { return }
+        clearRefusalBanner()
+    }
+
     func noteTyping() {
+        noteDraftEdited()
         guard let session, let channelId, !draft.isEmpty else { return }
         // The server rate-limits typing to ~1/s and silently drops the rest, so
         // there is no point sending one per keystroke.
@@ -855,6 +896,9 @@ final class ChatModel {
             // dropped instead of overwritten — otherwise the swap would put two
             // rows with the same id in the list.
             if let nonce, let index = messages.firstIndex(where: { $0.pendingNonce == nonce }) {
+                // Our own message went through: the refusal above the composer
+                // was about an earlier one.
+                clearRefusalBanner()
                 settleVoiceRow(messages[index].id, delivered: true)
                 if messages.contains(where: { $0.id == message.id }) {
                     messages.remove(at: index)
@@ -960,7 +1004,9 @@ final class ChatModel {
                 draft = draft.isEmpty ? body : body + "\n" + draft
             }
             // An AutoMod refusal may carry the owner's own words; they win.
-            error = rejection.automodMessage ?? ChatModel.rejectionCopy(for: rejection.reason)
+            let refusal = rejection.automodMessage ?? ChatModel.rejectionCopy(for: rejection.reason)
+            error = refusal
+            armRefusalBanner(refusal)
             // A temporary refusal names its wait; the composer counts it
             // down. A `slow-mode` without one falls back to the channel's
             // interval, which is the most the server would charge.
