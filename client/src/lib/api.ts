@@ -1178,6 +1178,12 @@ export interface VoiceConfig {
    */
   cleanVoiceDefault?: boolean;
   /**
+   * `voice_gate`: Voz limpa's adaptive gate after RNNoise
+   * (`lib/voice-gate/`). Global, on by default; absent (an older API) reads as
+   * ON, the code default, and only an explicit `false` is the kill switch.
+   */
+  voiceGate?: boolean;
+  /**
    * `raised_hand_sticky`: a raised hand stays up until the person, a
    * moderator or leaving takes it down; the call offers to lower your own
    * hand from its badge and a moderator gets "Baixar todas". Global, on by
