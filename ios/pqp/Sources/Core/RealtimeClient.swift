@@ -911,8 +911,22 @@ actor RealtimeClient {
     /// presenting", and what the server checks against the per-transport cap.
     /// The web client sends exactly this (`use-voice.ts`), so a share announced
     /// any other way is invisible to it.
-    func setSharingScreen(_ sharing: Bool) async {
-        await send(raw: ["type": "set-sharing-screen", "sharing": sharing])
+    ///
+    /// `audioNeedsSfu` asks the server to move a mesh room to the voice server
+    /// so the share's sound goes out (see `shareAudioNeedsSfu`).
+    func setSharingScreen(_ sharing: Bool, audioNeedsSfu: Bool = false) async {
+        await send(raw: Self.sharingScreenFrame(sharing: sharing, audioNeedsSfu: audioNeedsSfu))
+    }
+
+    /// The `set-sharing-screen` frame. `audioNeedsSfu` only rides a share that
+    /// is starting, and is left out otherwise, so every other frame is byte
+    /// for byte what this build always sent.
+    static func sharingScreenFrame(sharing: Bool, audioNeedsSfu: Bool) -> [String: Any] {
+        var frame: [String: Any] = ["type": "set-sharing-screen", "sharing": sharing]
+        if sharing && audioNeedsSfu {
+            frame["audioNeedsSfu"] = true
+        }
+        return frame
     }
 
     /// Mute/deafen, for the roster badges people outside the call see. Display

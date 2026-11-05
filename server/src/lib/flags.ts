@@ -468,6 +468,16 @@ export const FEATURE_FLAGS = {
     perServer: false,
     clientVia: "GET /api/share/config (linuxDesktopSystemAudio)",
   },
+  share_sound_promotion: {
+    description:
+      "Celular que só manda o som da tela pelo servidor de voz (iPhone) leva a chamada ponto a ponto (DM ou servidor pequeno) pro servidor de voz quando começa a compartilhar, e a tela vai com som (desligado: o celular apresenta só a imagem, como antes).",
+    env: "SHARE_SOUND_PROMOTION",
+    parseEnv: onUnlessOff,
+    codeDefault: true,
+    // Global on purpose: the trigger fires in a DM or group call, which has
+    // no server for a per-server override to name.
+    perServer: false,
+  },
   party_fast_start: {
     description:
       "Primeiro quadro mais rápido no watch party (só cliente: pré-carrega o player, adia a animação de espera e mostra o andamento).",

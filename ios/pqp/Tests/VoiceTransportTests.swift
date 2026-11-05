@@ -421,4 +421,26 @@ final class VoiceTransportTests: XCTestCase {
         // First welcome of the call: nothing to keep yet.
         XCTAssertFalse(keepsSfuSession(resumed: false, welcomePeerId: "p1", currentPeerId: nil, sfuConnected: false))
     }
+
+    // MARK: - A share's sound, which only the voice server carries
+
+    func testOnlyAMeshShareAsksForTheVoiceServer() {
+        XCTAssertTrue(shareAudioNeedsSfu(transport: .mesh))
+        // Already where the sound goes out: a re-declare must not ask again.
+        XCTAssertFalse(shareAudioNeedsSfu(transport: .livekit))
+        // No `welcome` yet: nothing is known, so nothing is asked.
+        XCTAssertFalse(shareAudioNeedsSfu(transport: nil))
+    }
+
+    func testTheShareFrameCarriesTheAskOnlyOnAStartingShare() {
+        let asking = RealtimeClient.sharingScreenFrame(sharing: true, audioNeedsSfu: true)
+        XCTAssertEqual(asking["audioNeedsSfu"] as? Bool, true)
+        XCTAssertEqual(asking["sharing"] as? Bool, true)
+        // Every other frame is exactly what the app always sent.
+        let plain = RealtimeClient.sharingScreenFrame(sharing: true, audioNeedsSfu: false)
+        XCTAssertNil(plain["audioNeedsSfu"])
+        let stopping = RealtimeClient.sharingScreenFrame(sharing: false, audioNeedsSfu: true)
+        XCTAssertNil(stopping["audioNeedsSfu"])
+        XCTAssertEqual(stopping["type"] as? String, "set-sharing-screen")
+    }
 }

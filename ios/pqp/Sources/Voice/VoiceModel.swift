@@ -828,8 +828,12 @@ final class VoiceModel {
                 guard let self else { return }
                 // Announced first, matching the web client: the roster flag is
                 // what draws "X is presenting", and the track behind it takes a
-                // renegotiation (or a first frame, on the SFU) to arrive.
-                await self.session?.realtime.setSharingScreen(true)
+                // renegotiation (or a first frame, on the SFU) to arrive. On
+                // mesh it also asks for the voice server, so the share can
+                // take its sound (`shareAudioNeedsSfu`).
+                await self.session?.realtime.setSharingScreen(
+                    true, audioNeedsSfu: shareAudioNeedsSfu(transport: self.transport)
+                )
                 if self.transport == .livekit {
                     _ = await self.sfu.startScreenShare(
                         quality: VideoQualitySettings.shared.quality
