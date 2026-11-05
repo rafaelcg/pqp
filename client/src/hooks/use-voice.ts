@@ -3450,6 +3450,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     startAudioHealth();
     gateClock.start();
     const tick = () => {
+      gateClock.sync();
       const next: string[] = [];
       // How often the ring's analysers are read from here on: null is the
       // per-frame loop they were tuned for, a number is the calm timer, and

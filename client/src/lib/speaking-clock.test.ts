@@ -254,11 +254,28 @@ describe("createGateClock", () => {
     expect(fake.pendingTimers()).toBe(1);
   });
 
-  it("is quiet with the flag off: the frame loop reads the gate as it always did", () => {
+  it("is quiet with the flag off: no timer at all, the frame loop reads the gate as it always did", () => {
     const { fake, clock, runs } = setup({ calm: false, eligible: true });
     clock.start();
+    expect(fake.pendingTimers()).toBe(0);
     fake.advance(2000);
     expect(runs()).toBe(0);
+    expect(fake.pendingTimers()).toBe(0);
+  });
+
+  it("sync() arms it when the flag comes on mid-call, and the chain ends when it goes off", () => {
+    const { fake, clock, runs, flags } = setup({ calm: false, eligible: true });
+    clock.start();
+    flags.calm = true;
+    clock.sync();
+    expect(fake.pendingTimers()).toBe(1);
+    clock.sync(); // not doubled
+    expect(fake.pendingTimers()).toBe(1);
+    fake.advance(GATE_IDLE_RECHECK_MS + 5 * GATE_FAST_POLL_MS);
+    expect(runs()).toBeGreaterThan(0);
+    flags.calm = false;
+    fake.advance(GATE_FAST_POLL_MS * 2);
+    expect(fake.pendingTimers()).toBe(0);
   });
 
   it("leaves a hidden window to the 50 ms interval that was always there", () => {

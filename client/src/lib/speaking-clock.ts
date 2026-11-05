@@ -80,7 +80,12 @@ export function browserClockEnv(): ClockEnv {
     },
     clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
     requestAnimationFrame: (fn) => requestAnimationFrame(() => fn()),
-    cancelAnimationFrame: (handle) => cancelAnimationFrame(handle),
+    cancelAnimationFrame: (handle) => {
+      // Absent in a test that swapped the globals out under a running loop.
+      if (typeof cancelAnimationFrame === "function") {
+        cancelAnimationFrame(handle);
+      }
+    },
     isHidden: () =>
       typeof document !== "undefined" && document.visibilityState === "hidden",
     onVisibilityChange: (listener) => {
@@ -195,39 +200,49 @@ export interface GateClockOptions {
 /**
  * A clock for the transmit gate that is as quick as a 60 Hz screen's frame
  * while the gate has something to decide, and idle (one look every 100 ms)
- * when it does not. Only runs while `calm()` is on: off, the gate keeps being
- * read from the frame loop, as it always was.
+ * when it does not. It only exists while `calm()` is on: with the flag off its
+ * chain of timers ends at the next step and nothing is armed, so the old
+ * frame-driven loop is all there is. `sync()` (called by the ring loop on every
+ * step) re-arms it when the flag comes on mid-call.
  */
 export function createGateClock(
   options: GateClockOptions,
   env: ClockEnv = browserClockEnv(),
-): { start(): void; stop(): void } {
+): { start(): void; sync(): void; stop(): void } {
   let timer: unknown = null;
-  let running = false;
+  let active = false;
+
+  function arm(wait: number) {
+    timer = env.setTimeout(step, wait);
+  }
 
   function step() {
     timer = null;
-    if (!running) {
-      return;
+    if (!active || !options.calm()) {
+      return; // the chain ends; `sync()` starts it again if the flag returns
     }
     let wait = GATE_IDLE_RECHECK_MS;
-    if (options.calm() && !env.isHidden() && options.eligible()) {
+    if (!env.isHidden() && options.eligible()) {
       options.run();
       wait = GATE_FAST_POLL_MS;
     }
-    timer = env.setTimeout(step, wait);
+    arm(wait);
+  }
+
+  function sync() {
+    if (active && timer === null && options.calm()) {
+      arm(GATE_IDLE_RECHECK_MS);
+    }
   }
 
   return {
     start() {
-      if (running) {
-        return;
-      }
-      running = true;
-      timer = env.setTimeout(step, GATE_IDLE_RECHECK_MS);
+      active = true;
+      sync();
     },
+    sync,
     stop() {
-      running = false;
+      active = false;
       if (timer !== null) {
         env.clearTimeout(timer);
         timer = null;
