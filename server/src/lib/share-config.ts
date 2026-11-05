@@ -55,6 +55,15 @@ import { isEnabled } from "./flags.js";
  * PipeWire, so this does nothing in a browser, on macOS or Windows, or in an
  * older desktop build.
  *
+ * `macDesktopSystemAudio`: the macOS desktop app may carry the computer's
+ * sound on a share, through Chromium's CoreAudio Tap loopback with pqp's own
+ * audio process excluded (`electron/lib/mac-share-audio.js`). Runtime flag
+ * `mac_desktop_system_audio`, default ON (the kill switch), `MAC_DESKTOP_SYSTEM_AUDIO` as its
+ * environment default, GLOBAL only, for the reason `linuxDesktopSystemAudio`
+ * is. The shell still has to say it can (`capabilities.macShareAudio`) and
+ * the Mac has to be on macOS 14.2 or newer, so this does nothing in a
+ * browser, on Windows or Linux, or in an older desktop build.
+ *
  * `serverId` is the server the call is in, absent for a DM call. A value that
  * is not a uuid is read as absent rather than refused: the answer is one
  * boolean the global flag already gives anybody, and a malformed id must not
@@ -66,6 +75,7 @@ export interface ShareConfig {
   shareGameCaptureHint: boolean;
   shareFastStartQuality: boolean;
   linuxDesktopSystemAudio: boolean;
+  macDesktopSystemAudio: boolean;
 }
 
 const serverIdSchema = z.string().uuid();
@@ -79,5 +89,6 @@ export function shareConfigForServer(rawServerId: string | null): ShareConfig {
     shareGameCaptureHint: isEnabled("share_game_capture_hint", { serverId }),
     shareFastStartQuality: isEnabled("share_fast_start_quality", { serverId }),
     linuxDesktopSystemAudio: isEnabled("linux_desktop_system_audio"),
+    macDesktopSystemAudio: isEnabled("mac_desktop_system_audio"),
   };
 }

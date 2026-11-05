@@ -468,6 +468,32 @@ export const FEATURE_FLAGS = {
     perServer: false,
     clientVia: "GET /api/share/config (linuxDesktopSystemAudio)",
   },
+  mac_desktop_system_audio: {
+    description:
+      "Som do computador no compartilhamento de tela do app desktop no Mac (macOS 14.2 ou mais novo; sem a chamada; pede a permissão Gravação de Áudio do Sistema). Ligado por padrão: desligar é o interruptor de emergência.",
+    env: "MAC_DESKTOP_SYSTEM_AUDIO",
+    // ON by default (Rafael, 2026-11-05): a Mac share carries sound like the
+    // other platforms do (Windows 11, the phones). Only Linux ships dark. The
+    // flag is the live kill switch; `false` / `0` / `off` turns it off.
+    parseEnv: onUnlessOff,
+    codeDefault: true,
+    // Global on purpose, for the same reason as `linux_desktop_system_audio`:
+    // the client reads `GET /api/share/config` without a server and keeps one
+    // answer per page, so a per-server override would be accepted by the
+    // dashboard and never read.
+    perServer: false,
+    clientVia: "GET /api/share/config (macDesktopSystemAudio)",
+  },
+  share_sound_promotion: {
+    description:
+      "Celular que só manda o som da tela pelo servidor de voz (iPhone) leva a chamada ponto a ponto (DM ou servidor pequeno) pro servidor de voz quando começa a compartilhar, e a tela vai com som (desligado: o celular apresenta só a imagem, como antes).",
+    env: "SHARE_SOUND_PROMOTION",
+    parseEnv: onUnlessOff,
+    codeDefault: true,
+    // Global on purpose: the trigger fires in a DM or group call, which has
+    // no server for a per-server override to name.
+    perServer: false,
+  },
   party_fast_start: {
     description:
       "Primeiro quadro mais rápido no watch party (só cliente: pré-carrega o player, adia a animação de espera e mostra o andamento).",

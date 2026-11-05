@@ -116,4 +116,5 @@ database per language, so the chat is in the language of the shot:
   battery) and the language is forced with `-AppleLanguages` / `-AppleLocale`.
 - The app has no Spanish localization yet, so there is no es-MX set.
 - Each locale folder holds eight shots (01 to 08), not five.
+- 2026-11-05: `01-onboarding.png` retaken again in both locales, because the welcome line "Watch parties of 100+ people" is a capacity claim we do not make anywhere else; it now reads "Watch parties with your crew" (pt-BR "Watch party com a tua galera"). Same method as below, iPhone 18 Pro Max simulator, 1320x2868.
 - 2026-11-04: only `01-onboarding.png` was retaken, because it still said "No card required" while the app now says "No ads", and the welcome now carries the longer agreement line (zero tolerance). Fresh install state, same pinned status bar, `StoreScreenshotUITests/testCaptureOnboarding`.

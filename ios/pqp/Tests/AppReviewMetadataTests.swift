@@ -85,6 +85,21 @@ final class AppReviewMetadataTests: XCTestCase {
         }
     }
 
+    func testTheAppMakesNoWatchPartyCapacityClaim() throws {
+        // Same rule as the listing: "100+ people" cannot be promised, and the
+        // welcome screen is the first thing a reviewer reads.
+        let strings = try String(
+            contentsOf: Self.appRoot.appending(path: "Resources/Localizable.xcstrings"), encoding: .utf8
+        )
+        XCTAssertFalse(strings.contains("100+"))
+        XCTAssertFalse(strings.contains("mais de 100"))
+        let welcome = try String(
+            contentsOf: Self.appRoot.appending(path: "Sources/Onboarding/OnboardingKit.swift"), encoding: .utf8
+        )
+        XCTAssertFalse(welcome.contains("100+"))
+        XCTAssertTrue(welcome.contains("Watch parties with your crew"))
+    }
+
     // MARK: Privacy manifests
 
     func testTheAppManifestSaysNoTrackingAndNamesUserDefaults() throws {

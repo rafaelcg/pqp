@@ -60,6 +60,20 @@ describe("screen-share audio is an optional addition to the wire", () => {
     expect(parsed.sourceHeight).toBe(1078);
   });
 
+  it("carries a phone's audioNeedsSfu, and leaves it absent for every other client", () => {
+    const phone = setSharingScreenMessageSchema.parse({
+      type: "set-sharing-screen",
+      sharing: true,
+      audioNeedsSfu: true,
+    });
+    expect(phone.audioNeedsSfu).toBe(true);
+    const web = setSharingScreenMessageSchema.parse({
+      type: "set-sharing-screen",
+      sharing: true,
+    });
+    expect(web.audioNeedsSfu).toBeUndefined();
+  });
+
   it("rejects an id that is not a string, rather than passing it through", () => {
     expect(() =>
       setSharingScreenMessageSchema.parse({
