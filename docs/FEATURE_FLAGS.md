@@ -115,16 +115,20 @@ both in `docs/CAPACITY.md` §"The video budget is per box"),
 `USER_STATS` (`user_stats`, default **on**: the per-person counts the
 Retrospectiva is built from; off stops every new write, nothing is deleted;
 see `server/src/services/user-stats.ts`),
-`DEFAULT_TEXT_FILTER` (`default_text_filter`, global, default **on**: the
-built-in text filter, a short list of slurs and threats (kill-yourself, rape
-threats, child sexual content) in English, Portuguese and Spanish, refused on
-every server message and edit, forum post, story, Baú comment and post and
-profile name with no AutoMod rule written by anybody; insults and everyday
-swearing are not on it, and direct and group messages are never read by it; each server's owner can switch it off for their own
-server in AutoMod settings (`server_text_filter_settings`), and this flag is
-the operator's switch over all of them; off, nothing is filtered by default and
-the owner's own rules still run. Served as `GET /api/servers/:id/automod/baseline`.
-`docs/CONTENT_SAFETY.md` §"The default text filter"),
+`DEFAULT_TEXT_FILTER` (`default_text_filter`, **per server**, default **off**,
+only `true` turns the variable on: the built-in text filter, a short list of
+slurs and threats (kill-yourself, rape threats, child sexual content) in
+English, Portuguese and Spanish, refused on server messages and edits, forum
+posts, stories, Baú comments and posts and profile names with no AutoMod rule
+written by anybody; insults and everyday swearing are not on it, and direct
+and group messages are never read by it. Off by default: nothing is filtered
+until the operator turns it on (globally or for one server, from the
+dashboard) or a server's owner turns it on for their own server in AutoMod
+settings (`server_text_filter_settings`, either direction, the owner's choice
+wins for that server). A profile name has no server and follows only the global
+answer. The App Review server has it on. Served as
+`GET /api/servers/:id/automod/baseline`.
+`docs/CONTENT_SAFETY.md` §"The built-in text filter"),
 `COMMUNITY_HOME_ENABLED`, `COMMUNITY_HOME_VIP_ENABLED`
 (`community_home_vip`, **per server**: the creator-hub pilot turns VIP on for
 one server at a time with `PUT /api/admin/flag-overrides` or the dashboard's

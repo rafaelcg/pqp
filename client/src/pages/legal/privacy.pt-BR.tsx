@@ -536,7 +536,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "what-we-dont-do",
-      sourceRev: "b1dcd36d",
+      sourceRev: "8b6a1646",
       heading: "O que a gente não faz",
       body: (
         <ul>
@@ -596,9 +596,10 @@ export const privacyPtBr: LegalDocument = {
             conta. Moderação de pessoas é feita por uma pessoa. Um arquivo pode
             ser derrubado ou sinalizado pela checagem de imagem antes de uma
             pessoa ver, e uma mensagem ou um nome pode ser recusado pelo filtro
-            de texto embutido (uma lista de ofensas discriminatórias e ameaças,
-            comparada com o próprio texto, e nunca aplicada a mensagens diretas
-            ou de grupo). Isso são checagens do conteúdo, não
+            de texto embutido (uma opção, desligada a não ser que seja ligada
+            para um servidor ou pelo pqp; uma lista de ofensas discriminatórias
+            e ameaças, comparada com o próprio texto, e nunca aplicada a
+            mensagens diretas ou de grupo). Isso são checagens do conteúdo, não
             de você.
           </li>
         </ul>

@@ -7,20 +7,23 @@ import {
 } from "./automod.js";
 
 /**
- * The baseline text filter: what pqp refuses on every server, with no rule
- * written by anybody, unless the server's owner switches it off.
+ * The baseline text filter: a short list built into the product that refuses
+ * the worst of it, with no rule written by anybody, WHEN SOMEBODY TURNS IT ON.
+ * It is OFF by default: nothing is filtered until the operator turns the
+ * `default_text_filter` flag on (everywhere or for one server) or a server's
+ * owner turns it on for their own server in AutoMod settings. The owner's
+ * choice, either way, wins for that server.
  *
  * WHY IT EXISTS. AutoMod (`automod.ts`) is a tool for an owner to write their
- * own list, and an owner who wrote none got no filtering at all. App Store
- * Guideline 1.2 asks for "a method for filtering objectionable content", and
- * "opt-in per server, empty by default" is not that. So there is now a short
- * list built into the product, in the same matcher AutoMod uses, applied on
- * the same surfaces (a message and its edit, a forum title, a story, a Baú
- * comment or post, a profile name), with the same answer on a hit: the text is
- * refused and the author is told why. It is NOT applied to direct or group
- * messages: a private conversation between people who chose each other is not
- * ours to read by default, and the reports, blocking and image scanning that
- * exist for it are unchanged.
+ * own list. App Store Guideline 1.2 asks for "a method for filtering
+ * objectionable content"; this is that method, in the same matcher AutoMod
+ * uses, applied on the same surfaces (a message and its edit, a forum title, a
+ * story, a Baú comment or post, a profile name), with the same answer on a hit:
+ * the text is refused and the author is told why. A profile name has no
+ * server, so it follows only the operator's global answer. It is NEVER applied
+ * to direct or group messages: a private conversation between people who chose
+ * each other is not ours to read, and the reports, blocking and image scanning
+ * that exist for it are unchanged.
  *
  * WHAT IS ON THE LIST, AND WHAT IS NOT. It is deliberately short and
  * deliberately about the worst of it. Two classes:
@@ -302,14 +305,15 @@ export function findBaselineViolation(text: string): BaselineHit | null {
 /**
  * `GET` and `PUT /api/servers/:serverId/automod/baseline`.
  *
- * - `instanceEnabled`: the operator's `default_text_filter` flag. Off, the
- *   baseline is off everywhere and the switch below changes nothing.
- * - `ownerDisabled`: this server's owner switched it off.
- * - `enabled`: what actually applies here, `instanceEnabled && !ownerDisabled`.
+ * - `instanceEnabled`: the operator's `default_text_filter` answer for this
+ *   server (its override, else the global row, else the variable, else off).
+ * - `ownerChoice`: this server's owner's choice, `true` on, `false` off, `null`
+ *   not chosen (follows `instanceEnabled`).
+ * - `enabled`: what actually applies here, `ownerChoice ?? instanceEnabled`.
  */
 export const baselineStatusSchema = z.object({
   instanceEnabled: z.boolean(),
-  ownerDisabled: z.boolean(),
+  ownerChoice: z.boolean().nullable(),
   enabled: z.boolean(),
 });
 export type BaselineStatus = z.infer<typeof baselineStatusSchema>;

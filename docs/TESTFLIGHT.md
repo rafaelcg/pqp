@@ -300,6 +300,21 @@ audiences, caches and cluster invalidations are the real ones):
   touch the instance's legal category (`docs/CONTENT_SAFETY.md`, Communities).
   Reachable only by an invite code;
 - channels `#geral` and `#ajuda` (text) and `Lobby` (voice);
+- **pqp's built-in text filter switched ON for this server, and only this one**
+  (Guideline 1.2 asks for "a method for filtering objectionable material").
+  The filter is OFF by default everywhere on pqp (`default_text_filter`,
+  `docs/CONTENT_SAFETY.md` §"The built-in text filter"), so the seed turns it on
+  through the owner's own per-server switch (`setBaselineEnabled`, one row in
+  `server_text_filter_settings`, never the global flag). Dry run prints it
+  (`built-in text filter would be switched ON for this server`), `--apply` is
+  idempotent (it also turns it back on if somebody switched it off), and
+  `--cleanup` needs no step of its own because the row goes with the server.
+  It refuses slurs and threats, not ordinary insults, and **direct messages are
+  never filtered**. Tell the reviewer, in the Notes: "the pqp review server has
+  the text filter on: type a slur or a threat in #geral and the message is
+  refused with a plain explanation. Block Me is the account to block, and Report
+  is in the menu of every message." The seeded how-to and Block messages in
+  `#geral` say the same, in English and pt-BR;
 - one second account, **Demo Friend**: a revoked character row (`is_character`,
   `character_accounts.label = 'review-demo-friend'`). `users.clerk_id` is NOT
   NULL, so a person-shaped row would need a fake Clerk id and then count as a
@@ -327,8 +342,8 @@ audiences, caches and cluster invalidations are the real ones):
 - ten messages in `#geral` (welcome, a how-to-try list, replies, "this is a
   test message to report", two from Block Me, how to try Block) and one in
   `#ajuda`, English and pt-BR, written by the demo account, Demo Friend and Block
-  Me, plus four reactions. **Every word the seed posts must pass the default text
-  filter** (`docs/CONTENT_SAFETY.md`, "The default text filter"); a test fails if it
+  Me, plus four reactions. **Every word the seed posts must pass the built-in text
+  filter** (`docs/CONTENT_SAFETY.md`, "The built-in text filter"); a test fails if it
   does not. No real person's data, no
   attachments;
 - an invite code (10 uses, no expiry). It is for you to join and look. Do not

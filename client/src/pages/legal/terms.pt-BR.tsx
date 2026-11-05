@@ -230,7 +230,7 @@ export const termsPtBr: LegalDocument = {
     },
     {
       id: "filtering",
-      sourceRev: "0edb23a3",
+      sourceRev: "032c8444",
       heading: "O que a gente filtra automaticamente",
       body: (
         <>
@@ -241,21 +241,23 @@ export const termsPtBr: LegalDocument = {
           </p>
           <ul>
             <li>
-              <strong>Texto.</strong> Mensagens e edições em canais de
-              servidor, posts de fórum, stories, comentários e posts do Baú, e
-              os nomes e o recado que você escolhe para si são comparados com
-              uma lista embutida de ofensas discriminatórias e ameaças
-              (inclusive mandar alguém se matar, ameaça de estupro e conteúdo
-              sexual com crianças), em inglês, português e espanhol. Se bater,
-              não é enviado e você vê: &quot;This message was not sent: it
-              breaks pqp&apos;s rules on abusive language.&quot; (no app em
-              português: &quot;Essa mensagem não foi enviada: ela quebra as
-              regras do pqp sobre linguagem abusiva.&quot;). Xingamento e
-              palavrão do dia a dia não estão na lista. Mensagens diretas e
-              mensagens de grupo não são lidas por esse filtro. O filtro vem
-              ligado em todo servidor. O dono do servidor pode desligar para o
-              servidor dele nas configurações do AutoMod, e pode somar as
-              próprias palavras bloqueadas, links e limites de menção.
+              <strong>Texto.</strong> O pqp tem um filtro de texto embutido, e
+              ele é uma opção: não roda a não ser que tenha sido ligado, pelo
+              dono de um servidor nas configurações do AutoMod daquele servidor
+              ou pelo pqp para um servidor específico. Onde está ligado,
+              mensagens e edições em canais de servidor, posts de fórum,
+              stories, comentários e posts do Baú são comparados com uma lista
+              embutida de ofensas discriminatórias e ameaças (inclusive mandar
+              alguém se matar, ameaça de estupro e conteúdo sexual com
+              crianças), em inglês, português e espanhol. Se bater, não é
+              enviado e você vê: &quot;This message was not sent: it breaks
+              pqp&apos;s rules on abusive language.&quot; (no app em português:
+              &quot;Essa mensagem não foi enviada: ela quebra as regras do pqp
+              sobre linguagem abusiva.&quot;). Xingamento e palavrão do dia a
+              dia não estão na lista. Mensagens diretas e mensagens de grupo
+              nunca são lidas por esse filtro. O dono do servidor também pode
+              somar as próprias palavras bloqueadas, links e limites de
+              menção.
             </li>
             <li>
               <strong>Imagens.</strong> Uma imagem nova anexada a uma mensagem,

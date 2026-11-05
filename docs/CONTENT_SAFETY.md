@@ -14,30 +14,33 @@ parts invisible.
 > 'unscanned'` on every attachment and Baú upload row, which is the honest state
 > and not a pass. Turning it on is a variable and a restart —
 > [Turning it on](#turning-it-on). **Text** has its own, separate check that
-> needs no configuration: [The default text filter](#the-default-text-filter).
+> needs no configuration: [The built-in text filter](#the-built-in-text-filter).
 
 ---
 
-## The default text filter
+## The built-in text filter
 
-Image scanning does nothing for words, and AutoMod (below) used to be an empty
-list that an owner had to fill in, so a server nobody configured filtered no
-text at all. App Store Guideline 1.2 asks for "a method for filtering
-objectionable content", and "off until somebody sets it up" is not one. So pqp
-now has a **built-in baseline** that is on for every server with no rule
-written by anybody.
+Image scanning does nothing for words, and AutoMod (below) is an empty list an
+owner has to fill in. App Store Guideline 1.2 asks for "a method for filtering
+objectionable content", so pqp has a **built-in baseline**: a short list of
+slurs and threats that needs no rule written by anybody. **It is OFF by
+default.** Nothing is filtered on any surface until somebody turns it on
+(Rafael's decision, 2026-11-05: friendly text is not ours to filter). It is
+turned on by the operator, globally or for one server, from the dashboard, or by
+a server's owner for their own server in AutoMod settings. The App Review
+demo server ("pqp review", seeded by `review-seed.ts`) has it on.
 
 Code: the list and the matcher are `packages/shared/src/automod-baseline.ts`
 (pure, shared with the web settings page's test box); the enforcement is
 `checkBaselineText` / `checkAutomod` in `server/src/services/automod.ts`.
 
-**Where it runs.** Public surfaces only: every surface that already ran AutoMod
+**Where it runs, once it is on.** Public surfaces only: every surface that already ran AutoMod
 (a server message and its edit, a forum post title and body, a story), plus the
 ones that never did: Baú comments and Baú posts (title, body, teaser), and the
 names a person picks for themselves (display name, tag name, handle, the
 recado). It does **not** read: **direct messages and group messages, nor their
 edits** (a private conversation between people who chose each other is not read
-by the default filter; the owner's own AutoMod rules never applied there
+by the built-in filter; the owner's own AutoMod rules never applied there
 either, there being no server, and the image scanning, reports and blocking are
 unchanged), a name that comes from the sign-in provider at first registration
 (refusing it would refuse the account), voice, file names, link previews, or a
@@ -85,22 +88,25 @@ Baú comment or post and a profile name answer 400 or 422 with the same sentence
 the word, plus a `[pqp] automod.baseline surface=... class=...` log line. A hit
 in a profile name writes the log line only (surface, class, user id).
 
-**Who can switch it off, and who is exempt.**
+**Who can switch it on or off, and who is exempt.**
 
-- The **operator**, live, with the runtime flag `default_text_filter` (default
-  on, global; dashboard, controles, interruptores; env `DEFAULT_TEXT_FILTER`).
-  Off, nothing is filtered by default anywhere and owners' own rules still run.
+- The **operator**, live, with the runtime flag `default_text_filter` (**default
+  off**, global or per server; dashboard, controles, interruptores; env
+  `DEFAULT_TEXT_FILTER=true`, only the word `true` turns it on). Precedence is
+  the usual one: the server's override, the global row, the variable, off.
 - A server's **owner** (Manage Server), for their own server, in AutoMod
-  settings (the row at the top, "pqp's default filter"): `PUT
-  /api/servers/:id/automod/baseline {enabled}`. Off writes one row in
-  `server_text_filter_settings`, on deletes it, so an absent row is "the
-  default" and no existing server changed. A Manage Messages cargo can read the
-  state but not change it. It is audited as an `automod.rule_update`.
-- **Nobody is exempt**, owners and admins included: AutoMod's staff bypass
-  exists so an owner is never locked out by their own list, and the baseline is
-  not their list. An owner who wants a channel where it does not apply turns it
-  off for the server. Profile names follow only the operator's flag, since they
-  have no server. Direct and group messages are not read at all.
+  settings (the row at the top, "pqp's built-in filter"): `PUT
+  /api/servers/:id/automod/baseline {enabled}`. Either direction writes one row
+  in `server_text_filter_settings` (`disabled = FALSE` is on, `TRUE` is off;
+  no row follows the operator's flag), and the owner's row wins for that server,
+  so a later change of the flag never flips a server whose owner chose. A Manage
+  Messages cargo can read the state but not change it. A change is audited as
+  an `automod.rule_update`.
+- **Nobody is exempt** once it is on, owners and admins included: AutoMod's
+  staff bypass exists so an owner is never locked out by their own list, and the
+  baseline is not their list. Profile names have no server, so they follow only
+  the operator's global answer (an owner's opt-in does not reach them). Direct
+  and group messages are not read at all.
 
 ---
 
@@ -119,8 +125,8 @@ the row and is not a pass.
 | Baú video (main file and phone cut) / PDF | skipped | same claim | same |
 | Server icon imported from Discord | **yes** | During the import, before it is set | not recorded; refused icons are discarded |
 | Custom server emoji | **yes** | On `POST /api/servers/:id/emoji`, before the emoji exists | `server_emoji.scan_*`; refused ones in `server_emoji_quarantine` |
-| Chat text in server channels, forum posts, stories, Baú comments and posts, profile names | **yes**, the [default text filter](#the-default-text-filter) | Before the text is stored | `automod.block` audit row (servers) or a log line |
-| Direct and group messages (text) | **no**, by decision: the default text filter does not read private conversations | | |
+| Chat text in server channels, forum posts, stories, Baú comments and posts, profile names | **only where it is switched on**, the [built-in text filter](#the-built-in-text-filter) (off by default) | Before the text is stored | `automod.block` audit row (servers) or a log line |
+| Direct and group messages (text) | **no**, by decision: the built-in text filter does not read private conversations | | |
 | Avatars and profile banners (`avatars.ts`) | **no** | | |
 | Server icon / banner / community featured image uploaded in the app (`server-images.ts`) | **no** | | |
 

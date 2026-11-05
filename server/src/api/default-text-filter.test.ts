@@ -12,8 +12,11 @@ import {
 } from "vitest";
 
 /**
- * The default text filter, end to end on a real Postgres: a server with NO
- * AutoMod rule still refuses a slur or a threat, on every public surface that
+ * The built-in text filter, end to end on a real Postgres. It is OFF by
+ * default (the last describe block pins that, and that the operator and an
+ * owner can each turn it on); every other test runs with the operator's flag
+ * on globally, which is how a deployment that chose it behaves: a server with
+ * NO AutoMod rule still refuses a slur or a threat, on every public surface that
  * carries words (a message, its edit, a story-shaped check, a Baú comment, a
  * profile name), never reads a direct or group message, lets insults and
  * everyday swearing through, the owner can switch it off for their own server,
@@ -43,6 +46,7 @@ vi.mock("../auth/clerk.js", () => ({
 }));
 
 const { handleApi, resetApiRateLimits } = await import("./index.js");
+const { setGlobalFlag, setServerFlagOverride } = await import("../lib/flags.js");
 const { getPool, initDb, closePool } = await import("../db.js");
 const { upsertUser, getUserById } = await import("../services/users.js");
 const { invalidateAutomodCache, resetAutomodUser, resetAutomodAlertCooldown, checkAutomod } =
@@ -101,7 +105,9 @@ describeDb("default text filter", () => {
     invalidateAutomodCache();
     resetAutomodUser();
     resetAutomodAlertCooldown();
-    delete process.env.DEFAULT_TEXT_FILTER;
+    // The operator's variable, on: every test below but the last block is a
+    // deployment that turned the filter on. `describe("off by default")` unsets it.
+    process.env.DEFAULT_TEXT_FILTER = "true";
     process.env.COMMUNITY_HOME_ENABLED = "true";
     await getPool().query(`TRUNCATE users RESTART IDENTITY CASCADE`);
     owner = await upsertUser({ clerkId: "clerk_owner", displayName: "Owner", avatarUrl: null });
@@ -109,7 +115,8 @@ describeDb("default text filter", () => {
     friend = await upsertUser({ clerkId: "clerk_friend", displayName: "Friend", avatarUrl: null });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await setGlobalFlag("default_text_filter", null, { kind: "dashboard" });
     delete process.env.DEFAULT_TEXT_FILTER;
     delete process.env.COMMUNITY_HOME_ENABLED;
   });
@@ -282,14 +289,14 @@ describeDb("default text filter", () => {
   });
 
   describe("the owner's switch", () => {
-    it("reports the default, and an owner turns it off and on for their server only", async () => {
+    it("reports the operator's answer, and an owner turns it off and on for their server only", async () => {
       const a = await makeServer();
       const first = await call(owner, "GET", baselinePath(a.serverId));
-      expect(first.body).toEqual({ instanceEnabled: true, ownerDisabled: false, enabled: true });
+      expect(first.body).toEqual({ instanceEnabled: true, ownerChoice: null, enabled: true });
 
       const off = await call(owner, "PUT", baselinePath(a.serverId), { enabled: false });
       expect(off.status).toBe(200);
-      expect(off.body).toEqual({ instanceEnabled: true, ownerDisabled: true, enabled: false });
+      expect(off.body).toEqual({ instanceEnabled: true, ownerChoice: false, enabled: false });
       expect((await send(member, a.channelId, "you faggot")).ok).toBe(true);
 
       // Another server is untouched.
@@ -317,14 +324,15 @@ describeDb("default text filter", () => {
       expect(again.rowCount).toBe(1);
 
       const on = await call(owner, "PUT", baselinePath(a.serverId), { enabled: true });
-      expect(on.body).toEqual({ instanceEnabled: true, ownerDisabled: false, enabled: true });
+      expect(on.body).toEqual({ instanceEnabled: true, ownerChoice: true, enabled: true });
       expect(await send(member, a.channelId, "you faggot")).toMatchObject({ ok: false });
-      // Back to "no row": the default, as it was before anybody touched it.
+      // The owner's choice is a row either way, so the operator's flag can no
+      // longer flip this server behind the owner's back.
       const rows = await getPool().query(
-        `SELECT 1 FROM server_text_filter_settings WHERE server_id = $1`,
+        `SELECT disabled FROM server_text_filter_settings WHERE server_id = $1`,
         [a.serverId],
       );
-      expect(rows.rowCount).toBe(0);
+      expect(rows.rows).toEqual([{ disabled: false }]);
     });
 
     it("only Manage Server may change it, and a plain member cannot even read it", async () => {
@@ -344,21 +352,139 @@ describeDb("default text filter", () => {
       expect(await send(member, channelId, "pineapple")).toMatchObject({ ok: false, reason: "automod" });
     });
 
-    it("a profile name follows only the operator's flag", async () => {
-      process.env.DEFAULT_TEXT_FILTER = "off";
+    it("a profile name follows only the operator's global answer", async () => {
+      process.env.DEFAULT_TEXT_FILTER = "false";
       const res = await call(member, "PATCH", "/api/me", { customStatus: "vai se matar" });
       expect(res.status).toBe(200);
     });
   });
 
-  describe("the operator's flag", () => {
-    it("default_text_filter off filters nothing by default, on every surface, and the page says so", async () => {
+  describe("off by default", () => {
+    beforeEach(() => {
+      delete process.env.DEFAULT_TEXT_FILTER;
+    });
+
+    it("with no row and no variable nothing is filtered, on any surface", async () => {
       const { serverId, channelId } = await makeServer();
-      process.env.DEFAULT_TEXT_FILTER = "off";
+      // A server message, an edit, a forum-shaped check, a DM, a Bau comment, a name.
+      expect((await send(member, channelId, "you faggot, kill yourself")).ok).toBe(true);
+      const posted = await send(member, channelId, "hello");
+      const messageId = (posted as { ok: true; message: { id: string } }).message.id;
+      expect((await call(member, "PATCH", `/api/messages/${messageId}`, { body: "kys" })).status).toBe(200);
+      expect(
+        await checkAutomod({
+          serverId,
+          channelId: "",
+          parentChannelId: null,
+          authorId: member.id,
+          memberPerms: 0n,
+          body: "te voy a violar",
+        }),
+      ).toBeNull();
+      const opened = await call<{ conversation: { channelId: string } }>(member, "POST", "/api/dms", {
+        userIds: [friend.id],
+      });
+      expect((await send(member, opened.body.conversation.channelId, "you faggot")).ok).toBe(true);
+      const post = await call<{ post: { id: string } }>(owner, "POST", `/api/servers/${serverId}/home/posts`, {
+        status: "published",
+        title: "Papo",
+        body: "x",
+      });
+      const path = `/api/servers/${serverId}/home/posts/${post.body.post.id}/comments`;
+      expect((await call(member, "POST", path, { body: "you are a faggot" })).status).toBe(201);
+      expect((await call(member, "PATCH", "/api/me", { customStatus: "vai se matar" })).status).toBe(200);
+      expect((await call(owner, "GET", baselinePath(serverId))).body).toEqual({
+        instanceEnabled: false,
+        ownerChoice: null,
+        enabled: false,
+      });
+    });
+
+    it("an owner can turn it on for their server, and it never reaches DMs or other servers", async () => {
+      const a = await makeServer();
+      const on = await call(owner, "PUT", baselinePath(a.serverId), { enabled: true });
+      expect(on.body).toEqual({ instanceEnabled: false, ownerChoice: true, enabled: true });
+      expect(await send(member, a.channelId, "you faggot")).toMatchObject({ ok: false, reason: "automod" });
+      // An insult still lands: only slurs and threats are on the list.
+      expect((await send(member, a.channelId, "fuck you")).ok).toBe(true);
+
+      const created = await call<{ server: { id: string }; channels: Array<{ id: string; type: string }> }>(
+        owner,
+        "POST",
+        "/api/servers",
+        { name: "Other" },
+      );
+      const otherChannel = created.body.channels.find((c) => c.type === "text")!.id;
+      expect((await send(owner, otherChannel, "you faggot")).ok).toBe(true);
+
+      const opened = await call<{ conversation: { channelId: string } }>(member, "POST", "/api/dms", {
+        userIds: [friend.id],
+      });
+      expect((await send(member, opened.body.conversation.channelId, "you faggot")).ok).toBe(true);
+      // A name has no server: the owner's opt-in does not reach it.
+      expect((await call(member, "PATCH", "/api/me", { customStatus: "vai se matar" })).status).toBe(200);
+
+      // And they can turn it back off.
+      await call(owner, "PUT", baselinePath(a.serverId), { enabled: false });
+      expect((await send(member, a.channelId, "you faggot")).ok).toBe(true);
+    });
+
+    it("the operator turns it on for one server from the dashboard, and then for everybody", async () => {
+      const a = await makeServer();
+      const created = await call<{ server: { id: string }; channels: Array<{ id: string; type: string }> }>(
+        owner,
+        "POST",
+        "/api/servers",
+        { name: "Other" },
+      );
+      const b = {
+        serverId: created.body.server.id,
+        channelId: created.body.channels.find((c) => c.type === "text")!.id,
+      };
+      await setServerFlagOverride("default_text_filter", a.serverId, true, { kind: "dashboard" });
+      invalidateAutomodCache();
+      expect(await send(owner, a.channelId, "you faggot")).toMatchObject({ ok: false });
+      expect((await send(owner, b.channelId, "you faggot")).ok).toBe(true);
+      expect((await call(owner, "GET", baselinePath(a.serverId))).body).toEqual({
+        instanceEnabled: true,
+        ownerChoice: null,
+        enabled: true,
+      });
+      // Names have no server, so a per-server override leaves them alone.
+      expect((await call(member, "PATCH", "/api/me", { customStatus: "vai se matar" })).status).toBe(200);
+
+      await setGlobalFlag("default_text_filter", true, { kind: "dashboard" });
+      invalidateAutomodCache();
+      expect(await send(owner, b.channelId, "you faggot")).toMatchObject({ ok: false });
+      expect((await call(member, "PATCH", "/api/me", { customStatus: "vai se matar" })).status).toBe(422);
+
+      // The owner's choice still wins on their own server.
+      await call(owner, "PUT", baselinePath(b.serverId), { enabled: false });
+      expect((await send(owner, b.channelId, "you faggot")).ok).toBe(true);
+    });
+
+    it("only the word true turns the variable on", async () => {
+      const { channelId } = await makeServer();
+      for (const value of ["on", "1", "yes"]) {
+        process.env.DEFAULT_TEXT_FILTER = value;
+        expect((await send(member, channelId, "you faggot")).ok, value).toBe(true);
+      }
+      process.env.DEFAULT_TEXT_FILTER = "true";
+      expect(await send(member, channelId, "you faggot")).toMatchObject({ ok: false });
+    });
+  });
+
+  describe("the operator's flag", () => {
+    it("turned off, nothing is filtered by default, but an owner who opted in still is", async () => {
+      const { serverId, channelId } = await makeServer();
+      process.env.DEFAULT_TEXT_FILTER = "false";
       expect((await send(member, channelId, "you faggot")).ok).toBe(true);
       const status = await call(owner, "GET", baselinePath(serverId));
-      expect(status.body).toEqual({ instanceEnabled: false, ownerDisabled: false, enabled: false });
-      process.env.DEFAULT_TEXT_FILTER = "on";
+      expect(status.body).toEqual({ instanceEnabled: false, ownerChoice: null, enabled: false });
+      process.env.DEFAULT_TEXT_FILTER = "true";
+      expect(await send(member, channelId, "you faggot")).toMatchObject({ ok: false });
+      await call(owner, "PUT", baselinePath(serverId), { enabled: true });
+      process.env.DEFAULT_TEXT_FILTER = "false";
       expect(await send(member, channelId, "you faggot")).toMatchObject({ ok: false });
     });
   });

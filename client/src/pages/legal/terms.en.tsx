@@ -209,19 +209,20 @@ export const termsEn: LegalDocument = {
           </p>
           <ul>
             <li>
-              <strong>Text.</strong> Messages and edits in server channels,
-              forum posts, stories, Baú comments and posts, and the names and
-              status line you choose for yourself are read against a built-in
-              list of slurs and threats (including telling someone to kill
-              themselves, rape threats, and sexual content about children), in
-              English, Portuguese and Spanish. A match is not sent, and you
-              see: &quot;This message was not sent: it breaks pqp&apos;s rules
-              on abusive language.&quot; Insults and everyday swearing are not
-              on the list. Direct messages and group messages are not read by
-              this filter. The filter is on by default on every server. A
-              server&apos;s owner can turn it off for that server in the
-              AutoMod settings, and can add their own blocked words, links and
-              mention limits on top of it.
+              <strong>Text.</strong> pqp has a built-in text filter, and it is
+              an optional setting: it does not run unless it has been switched
+              on, by a server&apos;s owner in that server&apos;s AutoMod
+              settings or by pqp for a particular server. Where it is on, messages
+              and edits in server channels, forum posts, stories, Baú comments
+              and posts are read against a built-in list of slurs and threats
+              (including telling someone to kill themselves, rape threats, and
+              sexual content about children), in English, Portuguese and
+              Spanish. A match is not sent, and you see: &quot;This message was
+              not sent: it breaks pqp&apos;s rules on abusive language.&quot;
+              Insults and everyday swearing are not on the list. Direct
+              messages and group messages are never read by this filter. A
+              server&apos;s owner can also add their own blocked words, links
+              and mention limits.
             </li>
             <li>
               <strong>Images.</strong> A new image attached to a message, or

@@ -548,9 +548,10 @@ export const privacyEn: LegalDocument = {
             Nothing here profiles you or decides whether you may keep an
             account. Moderation of people is done by a person. A file can be
             dropped or flagged by the image check before a person sees it, and
-            a message or name can be refused by the built-in text filter (a
-            list of slurs and threats, matched on the text itself, and never applied to
-            direct or group messages). Those are checks of the content, not of
+            a message or name can be refused by the built-in text filter (an
+            optional setting, off unless switched on for a server or for pqp; a
+            list of slurs and threats, matched on the text itself, and never
+            applied to direct or group messages). Those are checks of the content, not of
             you.
           </li>
         </ul>
