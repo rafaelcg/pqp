@@ -500,6 +500,7 @@ import {
   startCleanVoiceDefaultFlag,
   useCleanVoiceDefaultMode,
 } from "@/lib/clean-voice-default";
+import { startMessageListWindowingFlag } from "@/lib/message-list-windowing";
 import { withEffectiveNoiseSuppression } from "@/components/settings/local-settings";
 import {
   WatchPartyApprovedToasts,
@@ -3037,6 +3038,13 @@ function MainAppContent({
   // default for a device that never chose. Same refresh, same reason to wait.
   useEffect(
     () => (notifyConfigUserId ? startCleanVoiceDefaultFlag() : undefined),
+    [notifyConfigUserId],
+  );
+  // `message_list_windowing` (`lib/message-list-windowing.ts`): the transcript
+  // mounts only the rows near the viewport. On unless the server says off;
+  // same refresh, same reason to wait for an account.
+  useEffect(
+    () => (notifyConfigUserId ? startMessageListWindowingFlag() : undefined),
     [notifyConfigUserId],
   );
   // Modo 2005's kill switch (`retro_look`), asked only by a browser that found

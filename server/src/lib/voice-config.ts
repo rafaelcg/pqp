@@ -46,6 +46,15 @@ import { isEnabled } from "./flags.js";
  * controls (click your own hand to lower it, "Baixar todas" for a moderator),
  * so off hides them and restores the old audience-mode behaviour.
  *
+ * `messageListWindowing`: the chat transcript mounts only the rows near the
+ * viewport and builds a row's hover toolbar on hover or focus instead of up
+ * front (`client/src/lib/message-list-windowing.ts`). Runtime flag
+ * `message_list_windowing`, global, on by default, `MESSAGE_LIST_WINDOWING` as
+ * its environment default. It rides this config only because the client
+ * already asks it globally and refreshes it (`clean_voice_default` does the
+ * same); nothing about it is a voice feature. Off is the kill switch: the
+ * transcript goes back to mounting every loaded row.
+ *
  * `serverId` absent (a DM call) or not a uuid is read as absent: the answer is
  * then the global value, and a DM call has no audience mode anyway.
  */
@@ -55,6 +64,7 @@ export interface VoiceConfig {
   soundboard: boolean;
   cleanVoiceDefault: boolean;
   raisedHandSticky: boolean;
+  messageListWindowing: boolean;
 }
 
 const serverIdSchema = z.string().uuid();
@@ -68,5 +78,6 @@ export function voiceConfigForServer(rawServerId: string | null): VoiceConfig {
     soundboard: isEnabled("soundboard", { serverId }),
     cleanVoiceDefault: isEnabled("clean_voice_default"),
     raisedHandSticky: isEnabled("raised_hand_sticky"),
+    messageListWindowing: isEnabled("message_list_windowing"),
   };
 }

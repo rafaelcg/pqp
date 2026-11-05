@@ -254,6 +254,23 @@ included (the pipeline is swapped in place, no rejoin). It exists for what
 two-hour call: turn it off on reports of choppy audio or hot phones. Only
 `false` / `0` / `off` turn the variable off.
 
+Born as a flag (no old reader): `MESSAGE_LIST_WINDOWING` (`message_list_windowing`,
+default **on**, global, client-only, since 2026-11-05), the transcript
+(`client/src/components/chat/message-list.tsx`) mounting only the rows near the
+viewport plus the few that must stay (the focused row, an edit or open picker, a
+text selection) and building a row's hover toolbar, tooltips and popper anchors
+on first hover or focus instead of up front. Without it every loaded row stays
+mounted: 2,000 messages in the desktop app measured 100,743 DOM nodes and 1.2 GB.
+Served as `messageListWindowing` on the global `GET /api/voice/config` (it rides
+that answer because the client already asks it and refreshes it; nothing about it
+is a voice feature). Unknown, absent (an older API) and a failed first ask all
+read as ON; only an explicit `false` turns it off, so **off is the kill switch**:
+on the next config refresh (window focus, or up to 10 minutes) a tab renders
+every loaded row again, with no reload and nothing to migrate. Turn it off on
+reports of the list jumping while scrolling or loading history, a permalink
+landing on the wrong message, or lost keyboard focus. Only `false` / `0` / `off`
+turn the variable off. Design and limits: `docs/MESSAGE_LIST_WINDOWING.md`.
+
 Born as a flag (no old reader): `RAISED_HAND_STICKY` (`raised_hand_sticky`,
 default **on**, global), a raised hand that stays up until the person, a
 moderator or leaving takes it down (`docs/RAISED_HANDS.md` §"What lowers a
