@@ -1,0 +1,23 @@
+[package]
+name = "pqp-gpui-spike"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "Spike: a native GPUI window that reads a real pqp channel, to measure startup, memory and scrolling next to the Electron shell. Not a product."
+license = "AGPL-3.0-only"
+
+[dependencies]
+# runtime_shaders: compile the Metal shaders at launch instead of at build time,
+# because Xcode 26 ships the offline `metal` compiler as a separate download
+# (`xcodebuild -downloadComponent MetalToolchain`). It costs a little startup
+# time, so the startup this prototype measures is slightly pessimistic.
+gpui = { version = "0.2.2", features = ["runtime_shaders"] }
+ureq = { version = "2", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+futures = "0.3"
+
+[profile.release]
+debug = false
+lto = "thin"
+codegen-units = 16
