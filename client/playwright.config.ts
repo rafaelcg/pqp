@@ -60,6 +60,15 @@ const DATABASE_URL =
 type E2EProject = NonNullable<PlaywrightTestConfig["projects"]>[number];
 
 /**
+ * `window.screen` for the desktop projects. Playwright makes it equal to the
+ * viewport, so every page would look fullscreen to the whole-screen
+ * self-preview guard (`lib/share-self-capture.ts`) and a presenter's own share
+ * would show its still card instead of the picture the specs look for. A real
+ * desktop is bigger than the window.
+ */
+const DESKTOP_SCREEN = { width: 3840, height: 2160 };
+
+/**
  * Phone emulation, for the one spec that is about phones. An iPhone is WebKit
  * with no element fullscreen and Safari's own user agent; a Pixel is Chromium
  * with `isMobile` and a touch screen. Both start in portrait and the spec
@@ -95,7 +104,7 @@ const iphoneProject: E2EProject[] = process.env.PW_WEBKIT
 const projects: E2EProject[] = [
   {
     name: "chromium",
-    use: { ...devices["Desktop Chrome"] },
+    use: { ...devices["Desktop Chrome"], screen: DESKTOP_SCREEN },
     // `e2e/stale-bundle/` has its own config (real builds, no API, no
     // database): `playwright.stale-bundle.config.ts`, `pnpm e2e:stale-bundle`.
     // `e2e/share-fast-start/` too (Docker LiveKit, real Chrome, the `lk`
@@ -113,7 +122,7 @@ const projects: E2EProject[] = [
   },
   {
     name: "chromium-media",
-    use: { ...devices["Desktop Chrome"] },
+    use: { ...devices["Desktop Chrome"], screen: DESKTOP_SCREEN },
     testMatch: MEDIA_SPEC,
   },
   ...iphoneProject,

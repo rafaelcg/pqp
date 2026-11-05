@@ -110,6 +110,13 @@ test("the presenter can put their own share fullscreen", async ({ page }) => {
     .poll(async () => (await measure(page)).fullscreen, { timeout: 10_000 })
     .toBe(true);
 
+  // The fake capture is a whole screen, and our own whole-screen share filling
+  // the window would show itself inside itself (feedback 130), so the stage
+  // holds a still card until the presenter asks for the picture.
+  await expect(page.locator("[data-self-mirror-guard]")).toBeVisible();
+  await page.getByTestId("share-mirror-show").click();
+  await expect(page.locator("[data-self-mirror-guard]")).toHaveCount(0);
+
   const after = await measure(page);
   // The picture has to own the viewport, not sit in a boxed tile inside it.
   expect(after.width).toBe(after.viewport.width);
