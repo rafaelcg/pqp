@@ -1,12 +1,15 @@
 import {
   lazy,
   Suspense,
+  useEffect,
+  useLayoutEffect,
   useState,
   type ComponentProps,
   type ComponentType,
   type ReactNode,
 } from "react";
 import { ContainedChunkBoundary } from "@/components/error-boundary";
+import { captureTypeAheadKey, clearTypeAhead } from "@/lib/type-ahead";
 
 /**
  * Panels and dialogs that are not on the first screen, loaded when they are
@@ -60,6 +63,40 @@ function DeferredFrame({
   );
 }
 
+/**
+ * The fallback of a dialog that takes typing: while its chunk is on the way,
+ * hold what the person types (see `lib/type-ahead.ts`) so the dialog opens with
+ * it in its field. Rendered only while the dialog is wanted; gone when the
+ * chunk arrives (the dialog has already read the buffer by then).
+ */
+function TypeAheadCapture({ active }: { active: boolean }) {
+  useLayoutEffect(() => {
+    if (!active) {
+      return undefined;
+    }
+    clearTypeAhead();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (captureTypeAheadKey(event)) {
+        // Focus may still be in the composer; the dialog will own these keys.
+        event.preventDefault();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [active]);
+  useEffect(
+    () => () => {
+      // Unmounted (chunk arrived or the dialog was dismissed): anything the
+      // dialog did not take is stale.
+      clearTypeAhead();
+    },
+    [],
+  );
+  return null;
+}
+
 /** A panel drawn only while it is wanted. */
 export function deferredPanel<C extends AnyComponent>(
   load: Loader<C>,
@@ -79,11 +116,16 @@ export function deferredPanel<C extends AnyComponent>(
 /**
  * A dialog that stays mounted but is not fetched until it is first asked to
  * open. `wanted` says when that is; it defaults to the `open` prop.
+ * `typeAhead` is for a dialog whose first act is typing (the quick switcher):
+ * keys pressed before its chunk arrives are held and the dialog reads them with
+ * `takeTypeAhead()` when it mounts, so a chord followed at once by a word does
+ * not lose the word.
  */
 export function deferredDialog<C extends AnyComponent>(
   load: Loader<C>,
   wanted: (props: ComponentProps<C>) => boolean = (props) =>
     Boolean((props as { open?: boolean }).open),
+  options: { typeAhead?: boolean } = {},
 ): ComponentType<ComponentProps<C>> {
   registry.push(load);
   const Lazy = lazy(load) as unknown as ComponentType<Record<string, unknown>>;
@@ -99,7 +141,9 @@ export function deferredDialog<C extends AnyComponent>(
       return null;
     }
     return (
-      <DeferredFrame fallback={null}>
+      <DeferredFrame
+        fallback={options.typeAhead ? <TypeAheadCapture active={now} /> : null}
+      >
         <Lazy {...(props as Record<string, unknown>)} />
       </DeferredFrame>
     );
