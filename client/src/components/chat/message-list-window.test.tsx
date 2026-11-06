@@ -122,5 +122,7 @@ describe("windowed transcript shape", () => {
     expect(
       [...articles()].every((one) => !one.hasAttribute("aria-posinset")),
     ).toBe(true);
-  });
+    // Mounting 600 unwindowed rows took 6.7 s on a loaded CI runner, over the
+    // 5 s default; the point of the test is the shape, not the speed.
+  }, 30_000);
 });
