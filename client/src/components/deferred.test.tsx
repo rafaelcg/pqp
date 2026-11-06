@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
-import { act } from "react";
+import { act, useLayoutEffect, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { setInCall } from "@/lib/in-call-state";
 import { setStaleChunkBannerVisible } from "@/lib/stale-chunk-state";
+import { takeTypeAhead } from "@/lib/type-ahead";
 import {
   deferredDialog,
   deferredPanel,
@@ -110,6 +111,72 @@ describe("deferredDialog", () => {
     await render(<Deferred target="msg-1" />);
     await settle();
     expect(document.querySelector('[data-testid="report"]')?.textContent).toBe("msg-1");
+  });
+
+  it("typeAhead: keys pressed while the chunk is still loading start the dialog's field", async () => {
+    let release: (() => void) | null = null;
+    function Typing({ open }: { open: boolean }) {
+      // Read at commit, like the quick switcher: a Suspense reveal can wait
+      // after the first render while the capture is still taking keys.
+      const [text, setText] = useState("");
+      useLayoutEffect(() => {
+        const held = takeTypeAhead();
+        if (held) {
+          setText(held);
+        }
+      }, []);
+      return <input data-testid="field" value={text} readOnly data-open={open} />;
+    }
+    const Deferred = deferredDialog(
+      () =>
+        new Promise<{ default: typeof Typing }>((resolve) => {
+          release = () => resolve({ default: Typing });
+        }),
+      undefined,
+      { typeAhead: true },
+    );
+    await render(<Deferred open={false} />);
+    // The shell's own handler flips `open` (Ctrl/Cmd+K); the chunk is not here.
+    await render(<Deferred open />);
+    expect(document.querySelector('[data-testid="field"]')).toBeNull();
+
+    const press = (key: string, init: KeyboardEventInit = {}) => {
+      const event = new KeyboardEvent("keydown", {
+        key,
+        bubbles: true,
+        cancelable: true,
+        ...init,
+      });
+      window.dispatchEvent(event);
+      return event;
+    };
+    for (const key of "borax") {
+      expect(press(key).defaultPrevented).toBe(true);
+    }
+    press("Backspace");
+    // Chords and named keys are not the dialog's words.
+    expect(press("k", { ctrlKey: true }).defaultPrevented).toBe(false);
+    expect(press("ArrowDown").defaultPrevented).toBe(false);
+
+    release!();
+    await settle();
+    const field = document.querySelector<HTMLInputElement>('[data-testid="field"]');
+    expect(field?.value).toBe("bora");
+
+    // Once loaded, typing is the dialog's own again and nothing lingers.
+    expect(press("z").defaultPrevented).toBe(false);
+    expect(takeTypeAhead()).toBe("");
+  });
+
+  it("typeAhead: holds nothing for a dialog that is not asked to open", async () => {
+    const Deferred = deferredDialog(async () => ({ default: Dialog }), undefined, {
+      typeAhead: true,
+    });
+    await render(<Deferred open={false} label="a" />);
+    const event = new KeyboardEvent("keydown", { key: "a", cancelable: true });
+    window.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+    expect(takeTypeAhead()).toBe("");
   });
 
   it("a chunk that cannot load costs the dialog, not the app, even in a call", async () => {

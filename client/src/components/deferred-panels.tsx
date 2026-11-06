@@ -95,10 +95,15 @@ export const PinnedMessagesPanel = deferredDialog(() =>
     default: m.PinnedMessagesPanel,
   })),
 );
-export const QuickSwitcher = deferredDialog(() =>
-  import("@/components/conversations/quick-switcher").then((m) => ({
-    default: m.QuickSwitcher,
-  })),
+// typeAhead: Ctrl/Cmd+K and then a word, straight after load, must not lose the
+// word to the moment the chunk is still arriving (`lib/type-ahead.ts`).
+export const QuickSwitcher = deferredDialog(
+  () =>
+    import("@/components/conversations/quick-switcher").then((m) => ({
+      default: m.QuickSwitcher,
+    })),
+  undefined,
+  { typeAhead: true },
 );
 export const ShortcutOverlay = deferredDialog(() =>
   import("@/components/layout/shortcut-overlay").then((m) => ({

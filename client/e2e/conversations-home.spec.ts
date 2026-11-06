@@ -397,6 +397,35 @@ test("Ctrl/Cmd+K jumps to a person from a server; message search moved to Ctrl/C
   await page.context().close();
 });
 
+test("Ctrl/Cmd+K and a word typed at once, straight after load, is not lost to the lazy chunk", async ({
+  browser,
+}) => {
+  test.setTimeout(90_000);
+  const { ana, dm } = await pair(Date.now().toString(36));
+  const { server } = (await (
+    await fetch(`${API}/api/servers`, {
+      method: "POST",
+      headers: headers(ana),
+      body: JSON.stringify({ name: `Sala ${Date.now().toString(36)}` }),
+    })
+  ).json()) as { server: { id: string } };
+  // A fresh page: the switcher's chunk has not been fetched, so the dialog
+  // opens behind a fallback and the keys that follow the chord arrive first.
+  const page = await openAs(browser, ana, `/app/server/${server.id}`);
+  await expect(page.getByRole("button", { name: "Search messages" })).toBeVisible({
+    timeout: 20_000,
+  });
+  const mod = process.platform === "darwin" ? "Meta" : "Control";
+  await page.keyboard.press(`${mod}+k`);
+  await page.keyboard.type("bi");
+  const switcher = page.locator("[data-quick-switcher]");
+  await expect(switcher.getByRole("combobox").or(switcher.locator("input")).first()).toHaveValue("bi");
+  await expect(switcher.locator("[data-switcher-active]")).toContainText("Bia");
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(new RegExp(`/app/dm/${dm}`));
+  await page.context().close();
+});
+
 test("phone at 390px: the bottom bar, Servidores first, the stack, and the remembered tab", async ({
   browser,
 }) => {
