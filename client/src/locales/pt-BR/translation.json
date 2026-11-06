@@ -1991,6 +1991,8 @@
   "voice.share.someone": "Alguém",
   "voice.share.youPresenting": "Você está compartilhando",
   "voice.share.youAreSharing": "Você está compartilhando",
+  "voice.share.mirrorGuard": "Tu tá compartilhando a tela inteira. Mostrar ela em tamanho grande aqui faria a prévia aparecer dentro da prévia, sem parar.",
+  "voice.share.mirrorShowAnyway": "Mostrar mesmo assim",
   "voice.share.ownHiddenStrip": "Tu tá compartilhando",
   "voice.share.hidePreview": "Esconder prévia",
   "voice.share.showPreview": "Mostrar prévia",
