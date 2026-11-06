@@ -22,6 +22,15 @@ import { isEnabled } from "./flags.js";
  * `mediaQuality.audioHealth` on a call rating: a client that never heard
  * `true` from here never sends the field.
  *
+ * `calmDetector`: the web call's speaking ring reads its analysers on a timer
+ * (20 Hz, 4 Hz while the window is hidden) instead of on every animation
+ * frame, which woke the renderer and the GPU process 120 times a second alone
+ * in a silent call. Runtime flag `voice_calm_detector`, global, on by default,
+ * `VOICE_CALM_DETECTOR` as its environment default. Client only: nothing on
+ * the server changes with it, and off restores the per-frame loop on the
+ * client's next config refresh, mid-call, with no reload. Global because the
+ * detector belongs to the device, not to a server, and DM calls have none.
+ *
  * `soundboard`: whether this server's calls offer the soundboard and its
  * settings tab. Runtime flag `soundboard`, per server, default off,
  * `SOUNDBOARD` as its environment default. The call's button and the settings
@@ -36,6 +45,12 @@ import { isEnabled } from "./flags.js";
  * the microphone belongs to the device, not to a server. Off is the kill
  * switch: a default is never persisted, so every device that never chose
  * goes back to the browser's suppressor on its next config refresh.
+ *
+ * `voiceGate`: Voz limpa's adaptive gate after RNNoise (`docs/NOISE_SUPPRESSION.md`
+ * §"The voice gate"). Runtime flag `voice_gate`, global, on by default,
+ * `VOICE_GATE` as its environment default. Off is the kill switch: every
+ * running gate is bypassed on the client's next config refresh, mid-call, and
+ * none is built, so Voz limpa is plain RNNoise again.
  *
  * `raisedHandSticky`: a raised hand stays up until the person, a moderator
  * or leaving the call takes it down (`docs/RAISED_HANDS.md` §"What lowers a
@@ -61,8 +76,10 @@ import { isEnabled } from "./flags.js";
 export interface VoiceConfig {
   audienceMode: boolean;
   audioSelfHeal: boolean;
+  calmDetector: boolean;
   soundboard: boolean;
   cleanVoiceDefault: boolean;
+  voiceGate: boolean;
   raisedHandSticky: boolean;
   messageListWindowing: boolean;
 }
@@ -75,8 +92,10 @@ export function voiceConfigForServer(rawServerId: string | null): VoiceConfig {
   return {
     audienceMode: isEnabled("audience_mode", { serverId }),
     audioSelfHeal: isEnabled("voice_audio_self_heal"),
+    calmDetector: isEnabled("voice_calm_detector"),
     soundboard: isEnabled("soundboard", { serverId }),
     cleanVoiceDefault: isEnabled("clean_voice_default"),
+    voiceGate: isEnabled("voice_gate"),
     raisedHandSticky: isEnabled("raised_hand_sticky"),
     messageListWindowing: isEnabled("message_list_windowing"),
   };

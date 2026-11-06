@@ -238,6 +238,43 @@ the API takes `mediaQuality.audioHealth` on a call rating, which feeds
 `callRatings.audioHealthSinceBoot` on `GET /api/admin/metrics` and the Faro
 event `voice.audioHealth`.
 
+Born as a flag (no old reader): `VOICE_CALM_DETECTOR`
+(`voice_calm_detector`, default **on**, global, client-only, since 2026-11-05), the
+web call's speaking detector on a timer instead of every animation frame
+(`client/src/lib/speaking-clock.ts`, wired in `hooks/use-voice.ts`). The ring
+that lights a speaker, and the music ducking that follows it, were read inside a
+`requestAnimationFrame` callback: the display's refresh rate, 120 times a second
+on a ProMotion laptop, and the only thing waking an idle page in a quiet call.
+On: the same loop runs at 20 Hz (4 Hz while the window is hidden or minimized, so
+the ducking still follows speech), the analysers' smoothing is rescaled so a ring
+rises as fast as before (`analyserSmoothingFor`), and the voice-activity transmit
+gate keeps a 16 ms clock of its own while it has something to decide and the
+window is visible (50 ms interval as always when hidden). Nothing touches the
+audio, the mic, push-to-talk or what the server hears. Served as `calmDetector` on
+the global `GET /api/voice/config`; **unknown is off** (an API older than the flag
+sends no field, a failed ask keeps the last answer), and a flip reaches a call
+already running at the next config refresh, with no reload: the loop picks its
+clock again on every step. Off is the per-frame loop, byte for byte. Your own ring reads the
+local analyser at 20 Hz, which in voice-activity mode is already being read
+every 16 ms by the gate; in push-to-talk it can light a few tens of ms later than
+it used to. Measured in headless Chromium, alone in a silent mesh call
+(`client/bench/startup-and-call.mjs call 60`): 16.4 % of a core across the
+browser's processes with the frame loop, 11.5 % with the timer (GPU process 1.7 %
+to 0, the renderer's main thread 2.3 % to 0.8 %), 120 animation frames a second
+to none. What is left is the RNNoise worklet and the audio service. Only
+`false` / `0` / `off` turn the variable off.
+
+Born as a flag (no old reader): `VOICE_GATE` (`voice_gate`, default **on**,
+global, client-only), the adaptive gate after RNNoise in "Voz limpa"
+(`client/src/lib/voice-gate/`, `docs/NOISE_SUPPRESSION.md` §"The voice gate").
+Served as `voiceGate` on the global `GET /api/voice/config`; absent (an older
+API) is **on**, which is the code default, and only an explicit `false` is the
+kill switch. Off sends every running gate a bypass message (it stays in the
+chain as a wire and stops expanding), and no new one is built: Voz limpa is plain RNNoise again, mid-call, no rejoin, no
+microphone swap, on the next config refresh. Only `false` / `0` / `off` turn
+the variable off. Turn it off on reports of a voice that fades inside a
+sentence or a word that starts clipped.
+
 Born as a flag (no old reader): `CLEAN_VOICE_DEFAULT` (`clean_voice_default`,
 default **on**, global, client-only, since 2026-10-20), "Voz limpa" (RNNoise,
 `advanced`) as the microphone's noise suppression for a device that never
@@ -439,6 +476,31 @@ the merge that shipped the client (#866 into desktop 0.2.3);
 `server/src/lib/flag-client-contract.test.ts` now fails when a field the client
 reads from `/api/share/config`, or one a flag's `clientVia` names, is not on the
 server.
+
+Born as a flag (no old reader): `MAC_DESKTOP_SYSTEM_AUDIO`
+(`mac_desktop_system_audio`, default **on**, **global only**; `false` / `0` / `off` is the kill switch), the computer's sound
+on a screen share from the macOS desktop app (macOS 14.2+), served by
+`GET /api/share/config` as `macDesktopSystemAudio`. Only does anything in a
+desktop build whose preload publishes `capabilities.macShareAudio`; Chromium's
+CoreAudio Tap does the capture with its own audio process excluded, and the Mac
+asks the person for "System Audio Recording" the first time.
+`docs/DESKTOP.md` §"macOS share audio". Global for the same reason as the Linux
+flag: the client reads the config without a server. On by default (Rafael,
+2026-11-05) because a Mac share should carry sound like the other platforms
+(Windows 11, the phones); only Linux ships dark. Off, a Mac share is video only
+and the picker says sound is not available yet. Turn it off from controles →
+interruptores if the permission flow or the exclusion misbehaves; the page asks
+again before every share, so there is no reload and no desktop update.
+
+Born as a flag (no old reader): `SHARE_SOUND_PROMOTION`
+(`share_sound_promotion`, default **on**, **global only**, server only). A phone
+that can only send its share's sound on the voice server (the iOS app) says so
+on a new share in a mesh room (`audioNeedsSfu` on `set-sharing-screen`), and the
+server moves the room, a DM call included, through the ordinary promotion so the
+share goes out with its sound. Off returns before anything is read or logged:
+the share stays on mesh, picture only, exactly as before. Global because a DM
+call has no server to name. Read per share, so a flip takes effect on the next
+share. `docs/voice-backends.md` §"The share-sound trigger".
 
 Born as a flag (no old reader): `AUDIENCE_MODE` (`audience_mode`, default off,
 **per server**), "Modo plateia" in voice calls (`docs/plans/AUDIENCE_MODE.md`):

@@ -468,6 +468,32 @@ export const FEATURE_FLAGS = {
     perServer: false,
     clientVia: "GET /api/share/config (linuxDesktopSystemAudio)",
   },
+  mac_desktop_system_audio: {
+    description:
+      "Som do computador no compartilhamento de tela do app desktop no Mac (macOS 14.2 ou mais novo; sem a chamada; pede a permissão Gravação de Áudio do Sistema). Ligado por padrão: desligar é o interruptor de emergência.",
+    env: "MAC_DESKTOP_SYSTEM_AUDIO",
+    // ON by default (Rafael, 2026-11-05): a Mac share carries sound like the
+    // other platforms do (Windows 11, the phones). Only Linux ships dark. The
+    // flag is the live kill switch; `false` / `0` / `off` turns it off.
+    parseEnv: onUnlessOff,
+    codeDefault: true,
+    // Global on purpose, for the same reason as `linux_desktop_system_audio`:
+    // the client reads `GET /api/share/config` without a server and keeps one
+    // answer per page, so a per-server override would be accepted by the
+    // dashboard and never read.
+    perServer: false,
+    clientVia: "GET /api/share/config (macDesktopSystemAudio)",
+  },
+  share_sound_promotion: {
+    description:
+      "Celular que só manda o som da tela pelo servidor de voz (iPhone) leva a chamada ponto a ponto (DM ou servidor pequeno) pro servidor de voz quando começa a compartilhar, e a tela vai com som (desligado: o celular apresenta só a imagem, como antes).",
+    env: "SHARE_SOUND_PROMOTION",
+    parseEnv: onUnlessOff,
+    codeDefault: true,
+    // Global on purpose: the trigger fires in a DM or group call, which has
+    // no server for a per-server override to name.
+    perServer: false,
+  },
   party_fast_start: {
     description:
       "Primeiro quadro mais rápido no watch party (só cliente: pré-carrega o player, adia a animação de espera e mostra o andamento).",
@@ -559,6 +585,21 @@ export const FEATURE_FLAGS = {
     perServer: false,
     clientVia: "GET /api/voice/config (audioSelfHeal)",
   },
+  voice_calm_detector: {
+    description:
+      "Detector de quem está falando no app web, num temporizador (20 vezes por segundo, 4 com a janela escondida) em vez de a cada quadro da tela, que acordava o navegador e a GPU 120 vezes por segundo numa call vazia (desligado: o laço por quadro de antes).",
+    env: "VOICE_CALM_DETECTOR",
+    parseEnv: onUnlessOff,
+    // On: a call alone in a silent room measured 10 % of a core in headless
+    // Chromium with the per-frame loop (the only thing waking the page),
+    // 21-24 % with a repeating tone. The ring, the music ducking and the
+    // transmit gate behave as before (the gate keeps its own 16 ms clock). Off
+    // is the old loop on the client's next config refresh, mid-call. Global:
+    // the detector belongs to the device, and a DM call has no server.
+    codeDefault: true,
+    perServer: false,
+    clientVia: "GET /api/voice/config (calmDetector)",
+  },
   raised_hand_sticky: {
     description:
       "Mão levantada que fica: só quem levantou, quem modera ou sair da call abaixa a mão. Liberar o microfone na plateia não abaixa mais, clicar na própria mão abaixa, e quem modera ganha \"Baixar todas\" (desligado: liberar o microfone na plateia abaixa a mão, sem clique na mão e sem \"Baixar todas\").",
@@ -602,6 +643,21 @@ export const FEATURE_FLAGS = {
     codeDefault: true,
     perServer: false,
     clientVia: "GET /api/voice/config (messageListWindowing)",
+  },
+  voice_gate: {
+    description:
+      "Porta de voz da Voz limpa: depois do RNNoise, um expansor adaptativo abaixa uns 20 dB o que sobra entre as falas (sem cortar seco, com antecipação pra não comer o começo das palavras). Desligado: a Voz limpa volta a ser só o RNNoise, na hora, até no meio da call.",
+    env: "VOICE_GATE",
+    parseEnv: onUnlessOff,
+    // On: the gate only ever attenuates the gaps and fails open to the plain
+    // RNNoise chain. The switch is for the thing no bench can say, how it
+    // sounds on a real voice in a real room: off bypasses every running gate
+    // on the next config refresh (a message to the worklet, no rebuild, no
+    // rejoin) and builds no new one. Global: the microphone belongs to the
+    // device and a DM call has no server. Client-only.
+    codeDefault: true,
+    perServer: false,
+    clientVia: "GET /api/voice/config (voiceGate)",
   },
   watch_now_banner: {
     description:

@@ -48,6 +48,7 @@ const { ALLOW_OVERRIDE_ENV, resolveAppUrlSource } = require("./lib/app-url");
 const {
   THUMBNAIL_SIZE,
   MAC_SCREEN_SETTINGS_URL,
+  MAC_AUDIO_SETTINGS_URL,
   normalizeSources,
   labelSources,
   pickAutomatically,
@@ -58,6 +59,7 @@ const {
   pickerAudioState,
 } = require("./lib/display-sources");
 const { displayRequestAllowed } = require("./lib/display-origin.js");
+const { createMacShareAudio } = require("./lib/mac-share-audio");
 const { createShareSilentRetry, requesterKey } = require("./lib/share-silent-retry");
 const {
   createLinuxShareAudio,
@@ -1017,7 +1019,7 @@ async function explainNoSources() {
  * `shareAudio` is only meaningful on Windows; the handler still ignores it
  * everywhere else. `offersNativeAudio` is true when the shell's own per-process capture is armed for this share, which draws the sound box on any Windows.
  */
-function showSourcePicker(labeled, offersNativeAudio) {
+function showSourcePicker(labeled, offersNativeAudio, macAudioArmed = false) {
   // One at a time. A second voice channel asking mid-decision would stack two
   // identical windows with no way to tell which call each belongs to.
   if (pickerWindow && !pickerWindow.isDestroyed()) {
@@ -1080,7 +1082,10 @@ function showSourcePicker(labeled, offersNativeAudio) {
             // `pickerAudioState` for why this replaced a plain boolean.
             audioState: offersNativeAudio
               ? "checkbox"
-              : pickerAudioState(process.platform, os.release()),
+              : pickerAudioState(process.platform, os.release(), {
+                  version: macShareAudio.status().version,
+                  armed: macAudioArmed,
+                }),
             strings: {
               title: t("share.title"),
               subtitle: t("share.subtitle"),
@@ -1091,10 +1096,17 @@ function showSourcePicker(labeled, offersNativeAudio) {
               confirm: t("share.confirm"),
               empty: t("share.empty"),
               shareAudio: t("share.audio"),
-              shareAudioHint: t("share.audioHint"),
+              shareAudioHint:
+                process.platform === "darwin"
+                  ? t("share.audioHintMac")
+                  : t("share.audioHint"),
               shareAudioOffNote: t("share.audioOffNote"),
               shareAudioWin10: t("share.audioWin10Unavailable"),
               shareAudioWin10Hint: t("share.audioWin10UnavailableHint"),
+              shareAudioMac: t("share.audioMacUnavailable"),
+              shareAudioMacHint: t("share.audioMacUnavailableHint"),
+              shareAudioMacOld: t("share.audioMacOld"),
+              shareAudioMacOldHint: t("share.audioMacOldHint"),
             },
           }
         : null;
@@ -1305,6 +1317,13 @@ const linuxShareAudio =
       })
     : null;
 
+/**
+ * macOS system audio (`lib/mac-share-audio.js`): Chromium's CoreAudio Tap
+ * with this app's own audio process excluded. The object holds only the arm
+ * and the OS-version gate; the capture is Chromium's.
+ */
+const macShareAudio = createMacShareAudio();
+
 let linuxShareAudioStartSeq = 0;
 
 const shareSilentRetry = createShareSilentRetry();
@@ -1372,6 +1391,11 @@ async function chooseDisplaySource(audioRequested, requester = null) {
   // person about, with the runtime flag on. A request that merely carries
   // `audioRequested` (a console probe, a stale page) never builds the bus.
   const linuxAudioArmed = platform === "linux" && linuxShareAudio?.consumeArm() === true;
+  // Same rule on macOS (14.2+): the page arms only with the runtime flag on
+  // and the shell's capability, so a request that merely carries
+  // `audioRequested` is never answered with loopback. Read first and once, for
+  // the same reason as the other two: an arm is good for the next request only.
+  const macAudioArmed = platform === "darwin" && macShareAudio.consumeArm() === true;
   // Whatever the last share left running belongs to a share that is over.
   shareAudioController?.stop();
 
@@ -1421,7 +1445,7 @@ async function chooseDisplaySource(audioRequested, requester = null) {
   const autoId = pickAutomatically(labeled);
   const choice = autoId
     ? { id: autoId, shareAudio: false }
-    : await showSourcePicker(labeled, nativeAudio);
+    : await showSourcePicker(labeled, nativeAudio, macAudioArmed);
   if (!choice) {
     return null;
   }
@@ -1459,11 +1483,16 @@ async function chooseDisplaySource(audioRequested, requester = null) {
   // The picker checkbox is the consent. `audioRequested` is only whether the
   // page asked for a track Chromium will accept; an auto-pick (one surface,
   // no dialog) never attaches loopback, because nobody ticked anything.
+  // macOS needs more than the tick: the page armed it (flag on, shell
+  // capability) AND the Mac is on 14.2+, or the answer stays video-only,
+  // because a loopback Chromium cannot open fails the whole capture.
+  const macAudioWanted = macAudioArmed && audioRequested && choice.shareAudio === true;
   const response = captureResponse(
     source,
     platform,
-    audioRequested && choice.shareAudio === true,
+    platform === "darwin" ? macAudioWanted : audioRequested && choice.shareAudio === true,
     os.release(),
+    platform === "darwin" ? process.getSystemVersion() : undefined,
   );
   if (response?.audio === "loopback") {
     shareSilentRetry.rememberLoopback(source, requester);
@@ -2474,6 +2503,32 @@ if (probingShareAudio) {
     "pqp:linux-share-audio-diagnostics",
     () => (linuxShareAudio ? linuxShareAudio.diagnostics() : null),
     { rejected: null },
+  );
+
+  // macOS share audio. `status` is asked before a share, once the runtime flag
+  // is on, to decide whether to offer the sound at all (macOS 14.2+); `arm`
+  // right before `getDisplayMedia` for a share the person said yes to sound
+  // for; `open-settings` from the notice shown when the System Audio
+  // Recording permission is what stands in the way. All answer "no" off macOS
+  // and to any frame that is not the app.
+  ipcGuard.handle("pqp:mac-share-audio-status", () => macShareAudio.status(), {
+    rejected: { supported: false, version: null },
+  });
+
+  ipcGuard.handle("pqp:mac-share-audio-arm", () => macShareAudio.arm(), {
+    rejected: false,
+  });
+
+  ipcGuard.handle(
+    "pqp:mac-share-audio-open-settings",
+    () => {
+      if (process.platform !== "darwin") {
+        return false;
+      }
+      shell.openExternal(MAC_AUDIO_SETTINGS_URL).catch(() => {});
+      return true;
+    },
+    { rejected: false },
   );
 
   ipcGuard.handle("pqp:get-pending-desktop-auth-ticket", () => desktopAuth.takePendingTicket(), {

@@ -83,6 +83,7 @@ describe("GET /api/share/config against the client that reads it", () => {
         "shareGameCaptureHint",
         "shareFastStartQuality",
         "linuxDesktopSystemAudio",
+        "macDesktopSystemAudio",
       ]),
     );
     for (const field of read) {
@@ -241,11 +242,27 @@ describe("GET /api/voice/config against the client that reads it", () => {
     // The answer reaches the component that renders the rows.
     const list = readFileSync(path.join(clientSrc, "components/chat/message-list.tsx"), "utf8");
     expect(list).toContain("useMessageListWindowing()");
+  it("voice_gate is global, on by default, read off the global config and handed to every live gate", () => {
+    const def = FEATURE_FLAGS.voice_gate;
+    expect(def.perServer).toBe(false);
+    expect(def.codeDefault).toBe(true);
+    expect(def.clientVia).toBe("GET /api/voice/config (voiceGate)");
+    expect(served).toContain("voiceGate");
+    const flag = readFileSync(path.join(clientSrc, "lib/voice-gate/voice-gate-flag.ts"), "utf8");
+    // The global ask (no server). Absent (an older API) is the code default,
+    // on; only an explicit false is the kill switch.
+    expect(flag).toContain("fetchGlobalVoiceConfig()");
+    expect(flag).toMatch(/answer\.voiceGate !== false/);
+    // The answer reaches a gate that is already running, not only new ones.
+    expect(flag).toContain("setBypass(");
+    const app = readFileSync(path.join(clientSrc, "App.tsx"), "utf8");
+    expect(app).toContain("startVoiceGateFlag()");
     const dashboard = readFileSync(
       path.resolve(here, "../../../tools/admin-dashboard/site/novo.js"),
       "utf8",
     );
     expect(dashboard).toMatch(/\bmessage_list_windowing:\s*"/);
+    expect(dashboard).toMatch(/\bvoice_gate:\s*"/);
   });
 });
 

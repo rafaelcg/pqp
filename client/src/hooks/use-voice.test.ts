@@ -133,6 +133,15 @@ vi.mock("@/lib/noise-suppression", async (importOriginal) => {
   };
 });
 
+// The voice gate after RNNoise (`lib/voice-gate/`). Its real factory loads a
+// worklet module into the stubbed context; what this suite pins is whether the
+// pipeline asks for one, wires it in and tears it down.
+const createVoiceGateMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/voice-gate/voice-gate-node", () => ({
+  createVoiceGate: (...args: unknown[]) => createVoiceGateMock(...args),
+  VOICE_GATE_PROCESSOR: "pqp-voice-gate",
+}));
+
 vi.mock("@/lib/peer-connection-manager", () => ({
   getDefaultIceServers: () => [],
   createPeerConnectionManager: vi.fn(() => {
@@ -1938,6 +1947,8 @@ describe("lobby presence sounds", () => {
     advancedNoiseSuppressionSupportedMock.mockReturnValue(false);
     loadRnnoiseBinaryMock.mockReset();
     createRnnoiseNodeMock.mockReset();
+    createVoiceGateMock.mockReset();
+    createVoiceGateMock.mockResolvedValue(null);
   });
 
   it("plays join as soon as you ask, not after welcome", async () => {
@@ -2156,6 +2167,86 @@ describe("lobby presence sounds", () => {
     // The worklet is a mode-"advanced" thing only: falling back means it is
     // never reached at all.
     expect(createRnnoiseNodeMock).not.toHaveBeenCalled();
+  });
+
+  describe("the voice gate after RNNoise", () => {
+    function advancedJoinSetup() {
+      advancedNoiseSuppressionSupportedMock.mockReturnValue(true);
+      loadRnnoiseBinaryMock.mockResolvedValue(new ArrayBuffer(8));
+      const rnnoise = {
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        destroy: vi.fn(),
+      };
+      createRnnoiseNodeMock.mockResolvedValue(rnnoise);
+      const getUserMedia = vi.fn(async () => fakeStream("mic"));
+      Object.defineProperty(globalThis.navigator, "mediaDevices", {
+        configurable: true,
+        value: {
+          getUserMedia,
+          getDisplayMedia: async () => fakeCapture("screen", false),
+        },
+      });
+      return { rnnoise };
+    }
+
+    it("wires RNNoise into the gate's first input, tears both down on leave", async () => {
+      const { rnnoise } = advancedJoinSetup();
+      const gateNode = { connect: vi.fn(), disconnect: vi.fn() };
+      const gate = { node: gateNode, setBypass: vi.fn(), destroy: vi.fn() };
+      createVoiceGateMock.mockResolvedValue(gate);
+
+      const { transport } = createTransport();
+      const voice = createVoiceController(transport);
+      await voice.join(CHANNEL, {
+        processing: { ...defaultMicProcessing, noiseSuppression: "advanced" },
+      });
+
+      expect(createVoiceGateMock).toHaveBeenCalledTimes(1);
+      // RNNoise feeds the gate's audio input (0), not the gain node directly.
+      expect(rnnoise.connect).toHaveBeenCalledWith(gateNode, 0, 0);
+      expect(gateNode.connect).toHaveBeenCalledTimes(1);
+
+      voice.leave();
+      await settle();
+      expect(gate.destroy).toHaveBeenCalled();
+      expect(rnnoise.destroy).toHaveBeenCalled();
+    });
+
+    it("falls back to the chain it was before the gate when there is none", async () => {
+      const { rnnoise } = advancedJoinSetup();
+      createVoiceGateMock.mockResolvedValue(null);
+
+      const { transport, sent } = createTransport();
+      const voice = createVoiceController(transport);
+      await voice.join(CHANNEL, {
+        processing: { ...defaultMicProcessing, noiseSuppression: "advanced" },
+      });
+
+      // The join is an ordinary join, RNNoise wired straight to the gain.
+      expect(voice.getState().error).toBeFalsy();
+      expect(sent.some((m) => m.type === "join-voice-room")).toBe(true);
+      expect(rnnoise.connect).toHaveBeenCalledTimes(1);
+      expect(rnnoise.connect.mock.calls[0]).toHaveLength(1);
+    });
+
+    it("asks for no gate at all on the browser's own suppressor", async () => {
+      advancedNoiseSuppressionSupportedMock.mockReturnValue(true);
+      const getUserMedia = vi.fn(async () => fakeStream("mic"));
+      Object.defineProperty(globalThis.navigator, "mediaDevices", {
+        configurable: true,
+        value: {
+          getUserMedia,
+          getDisplayMedia: async () => fakeCapture("screen", false),
+        },
+      });
+      const { transport } = createTransport();
+      const voice = createVoiceController(transport);
+      await voice.join(CHANNEL, {
+        processing: { ...defaultMicProcessing, noiseSuppression: "browser" },
+      });
+      expect(createVoiceGateMock).not.toHaveBeenCalled();
+    });
   });
 
   it("falls back to the default mic when the saved device is gone, and stops asking for it", async () => {

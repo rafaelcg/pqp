@@ -204,3 +204,55 @@ describe("native share audio (Windows process loopback)", () => {
     assert.ok(pkg.build.win.signExts.includes(".node"));
   });
 });
+
+describe("macOS system audio, read off the source", () => {
+  const macAudio = read("lib", "mac-share-audio.js");
+
+  it("publishes its own capability, never systemAudio: loopback, on a Mac", () => {
+    assert.match(preload, /macShareAudio:\s*process\.platform === "darwin"/);
+    // `systemAudio` is what every deployed page reads as "ask for audio and it
+    // arrives". On a Mac before 14.2 that request fails the whole capture, so
+    // it stays "none" there and the new field is how a new page asks.
+    assert.match(
+      preload,
+      /systemAudio:\s*\n\s*process\.platform === "win32" && canExcludeOwnAudio \? "loopback" : "none"/,
+    );
+  });
+
+  it("declares the permission string macOS needs before it will prompt", () => {
+    const text = pkg.build.mac.extendInfo.NSAudioCaptureUsageDescription;
+    assert.equal(typeof text, "string");
+    assert.ok(text.length > 20);
+    assert.ok(!text.includes("\u2014"));
+  });
+
+  it("only answers loopback to a request the page armed", () => {
+    assert.match(main, /macShareAudio\.consumeArm\(\) === true/);
+    assert.match(main, /const macAudioWanted = macAudioArmed && audioRequested && choice\.shareAudio === true/);
+    assert.match(main, /platform === "darwin" \? process\.getSystemVersion\(\) : undefined/);
+  });
+
+  it("exposes status, arm and the settings shortcut over guarded IPC", () => {
+    for (const channel of ["status", "arm", "open-settings"]) {
+      assert.match(
+        main,
+        new RegExp(`ipcGuard\\.handle\\([^"]*"pqp:mac-share-audio-${channel}"`),
+        channel,
+      );
+      assert.match(preload, new RegExp(`"pqp:mac-share-audio-${channel}"`), channel);
+    }
+  });
+
+  it("states what actually excludes the call, so the claim can be re-checked", () => {
+    assert.match(macAudio, /initStereoGlobalTapButExcludeProcesses/);
+    assert.match(macAudio, /loopbackWithoutChrome/);
+  });
+
+  it("pins an Electron whose Chromium has the Mac tap and the exclude", () => {
+    // CoreAudio Tap by default from Electron 39; `loopbackWithoutChrome` on
+    // IS_MAC in the display-media remap is what keeps the call out.
+    const pinned = pkg.devDependencies?.electron ?? "";
+    const [major] = pinned.replace(/^[^\d]*/, "").split(".");
+    assert.ok(Number(major) >= 40, `electron pinned at ${pinned}`);
+  });
+});

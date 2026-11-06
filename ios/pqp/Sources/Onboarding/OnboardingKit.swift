@@ -297,7 +297,7 @@ extension FeatureMoment {
         FeatureMoment(
             id: "watch",
             symbol: "play.tv",
-            title: "Watch parties of 100+ people",
+            title: "Watch parties with your crew",
             detail: "Same film, same second, one room."
         ),
     ]
