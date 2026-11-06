@@ -25,6 +25,22 @@
     <string name="age_gate_saving">Salvando…</string>
     <string name="age_gate_error_bad_date">Não conseguimos ler esta data. Confere o dia, o mês e o ano.</string>
     <string name="age_gate_error_save">Não foi possível salvar. Verifica a tua conexão e tenta de novo.</string>
+    <string name="age_gate_error_check_year">Confere o ano. Essa data de nascimento não parece certa.</string>
+    <!-- Read-back and blocked screen: same wording as the web's ageGate.readback.* and ageGate.blocked.* keys. -->
+    <string name="age_gate_readback_title">Confere tua data de nascimento</string>
+    <string name="age_gate_readback_born">Tu nasceu em %1$s.</string>
+    <string name="age_gate_readback_check">Confere o dia, o mês e o ano.</string>
+    <string name="age_gate_readback_confirm">Está certo</string>
+    <string name="age_gate_readback_edit">Corrigir</string>
+    <string name="age_gate_blocked_eyebrow">Verificação de idade</string>
+    <string name="age_gate_blocked_title">O pqp é para maiores de %1$d anos</string>
+    <string name="age_gate_blocked_body">Obrigado por responder com honestidade. A data de nascimento que tu informou é de menor de %1$d anos, então esta conta foi encerrada. Isso é uma regra do serviço, não um julgamento sobre ti: o pqp foi feito para adultos e a gente não consegue abrir exceções.</string>
+    <string name="age_gate_blocked_contact_before">Errou a data sem querer? Escreve pra</string>
+    <string name="age_gate_blocked_contact_after">usando o e-mail da conta.</string>
+    <string name="age_gate_blocked_appeal_before">Como funciona o recurso, e como pedir a exclusão da conta e dos dados ligados a ela, está na nossa página de</string>
+    <string name="age_gate_blocked_appeal_link">Termos</string>
+    <string name="age_gate_blocked_appeal_after">.</string>
+    <string name="age_gate_blocked_wait">Por favor, não abre outra conta enquanto isso, a gente prefere resolver esta aqui.</string>
 
     <!-- Servidores -->
     <string name="servers_title">Servidores</string>

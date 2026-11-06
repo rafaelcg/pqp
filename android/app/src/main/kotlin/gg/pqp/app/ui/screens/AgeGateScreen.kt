@@ -1,7 +1,9 @@
 package gg.pqp.app.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -31,10 +33,12 @@ import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -56,7 +60,9 @@ import gg.pqp.app.R
 import gg.pqp.app.core.SessionStore
 import gg.pqp.app.onboarding.OnboardingPath
 import gg.pqp.app.onboarding.FirstRunScreen
-import gg.pqp.app.onboarding.birthDateOf
+import gg.pqp.app.onboarding.AgeCheckFailure
+import gg.pqp.app.onboarding.ContinueOutcome
+import gg.pqp.app.onboarding.continueOutcome
 import gg.pqp.app.onboarding.screenPosition
 import gg.pqp.app.onboarding.ui.PrimaryButton
 import gg.pqp.app.onboarding.ui.StepHeader
@@ -69,7 +75,7 @@ import java.time.format.TextStyle
 import java.util.Locale
 
 /** The age the service is for. The server holds the real rule; this is the copy. */
-private const val MINIMUM_AGE = 18
+internal const val MINIMUM_AGE = 18
 
 /**
  * The one-shot age declaration, and the first screen of first run.
@@ -89,7 +95,18 @@ private const val MINIMUM_AGE = 18
  * a lot of paging, or a mode toggle most people never find, for the first
  * thing the app asks. Day, month and year are three quick answers, and the
  * focus moves itself: two digits of day open the month list, a month moves to
- * the year, and the keyboard's Done submits.
+ * the year, and the keyboard's Done continues.
+ *
+ * THE READ-BACK. A typed date is the one input nobody can take back, and the
+ * usual way it goes wrong is a slip (a swapped day and month, a year that is not
+ * the one meant), not a lie. So, with `ageGateReadback` on, Continue sends
+ * nothing: it says the date back in words ("Tu nasceu em 3 de dezembro de 2008")
+ * and only "Está certo" sends it; "Corrigir" and system back return to the
+ * fields with what was typed still in them. Everybody gets the same step, so it
+ * leaks nothing about the verdict. Off, Continue sends directly, as it always
+ * did. A 400 from the server (a date under the plausibility floor) is the same
+ * kind of slip and never spends the attempt: the fields come back, the year
+ * under the cursor. See `onboarding/AgeGate.kt` for those decisions.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -100,13 +117,20 @@ fun AgeGateScreen(session: SessionStore, arrivedOnInvite: Boolean = false) {
     var monthsOpen by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var submitting by remember { mutableStateOf(false) }
+    // The read-back is a step of this screen, not a screen: the fields' state
+    // lives above it, so "Corrigir" gives the person back exactly what they typed.
+    var readingBack by rememberSaveable { mutableStateOf(false) }
+    var returnFocus by remember { mutableStateOf<ReturnFocus?>(null) }
     val focus = LocalFocusManager.current
     val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     val haptics = rememberOnboardingHaptics()
+    val dayFocus = remember { FocusRequester() }
     val monthFocus = remember { FocusRequester() }
     val yearFocus = remember { FocusRequester() }
+    val readbackFocus = remember { FocusRequester() }
 
     val badDate = stringResource(R.string.age_gate_error_bad_date)
+    val checkYear = stringResource(R.string.age_gate_error_check_year)
     val saveFailed = stringResource(R.string.age_gate_error_save)
     val locale = Locale.getDefault()
     val monthNames = remember(locale) {
@@ -115,23 +139,89 @@ fun AgeGateScreen(session: SessionStore, arrivedOnInvite: Boolean = false) {
         }
     }
     val complete = day.isNotEmpty() && month != null && year.length == 4
+    // Not remembered: the outcome depends on today's date (a birth date after
+    // today is refused), so a cached null would outlive midnight. It is cheap.
+    val readback = continueOutcome(day, month, year, readback = true, locale = locale) as? ContinueOutcome.ReadBack
+    val reading = readingBack && readback != null
 
-    fun submit() {
+    fun submit(date: String) {
         if (submitting) return
-        val date = birthDateOf(day, month, year)
-        if (date == null) {
-            haptics.reject()
-            error = badDate
-            return
-        }
         focus.clearFocus(force = true)
         keyboard?.hide()
         submitting = true
         error = null
-        session.submitAgeCheck(date) { message ->
+        session.submitAgeCheck(date) { failure ->
             submitting = false
-            haptics.reject()
-            error = message.ifBlank { saveFailed }
+            // A 400 is the person's input, never the blocked state, and the
+            // attempt is not spent: back to the fields with the values kept.
+            // Only "Save" (nothing was decided) stays on the step it is on.
+            when (failure) {
+                AgeCheckFailure.CheckYear -> {
+                    haptics.reject()
+                    error = checkYear
+                    readingBack = false
+                    returnFocus = ReturnFocus.Year
+                }
+                AgeCheckFailure.BadDate -> {
+                    haptics.reject()
+                    error = badDate
+                    readingBack = false
+                    returnFocus = ReturnFocus.Day
+                }
+                // Another device answered; the session is already re-reading /api/me.
+                AgeCheckFailure.Stale -> Unit
+                AgeCheckFailure.Save -> {
+                    haptics.reject()
+                    error = saveFailed
+                }
+            }
+        }
+    }
+
+    /** Continue: say the date back first when the switch is on, else send it. */
+    fun onContinue() {
+        if (submitting) return
+        when (val outcome = continueOutcome(day, month, year, session.ageGateReadback, locale)) {
+            ContinueOutcome.BadDate -> {
+                haptics.reject()
+                error = badDate
+            }
+            is ContinueOutcome.Submit -> submit(outcome.isoDate)
+            is ContinueOutcome.ReadBack -> {
+                focus.clearFocus(force = true)
+                keyboard?.hide()
+                error = null
+                readingBack = true
+            }
+        }
+    }
+
+    fun goBack() {
+        if (submitting) return
+        error = null
+        readingBack = false
+        returnFocus = ReturnFocus.Day
+    }
+
+    // System back steps back to the fields and never dismisses the gate. While
+    // the answer is in flight it is swallowed: there is nothing to go back to.
+    BackHandler(enabled = reading) { goBack() }
+
+    // Focus goes to the sentence itself, not to a button: somebody who presses
+    // Enter by reflex as the screen changes must not confirm a date they have
+    // not read, which is what this step exists to prevent.
+    LaunchedEffect(reading) {
+        if (reading) runCatching { readbackFocus.requestFocus() }
+    }
+    // Back on the fields: the year after "Confere o ano", else the day.
+    LaunchedEffect(returnFocus, reading) {
+        if (!reading) {
+            when (returnFocus) {
+                ReturnFocus.Year -> runCatching { yearFocus.requestFocus() }
+                ReturnFocus.Day -> runCatching { dayFocus.requestFocus() }
+                null -> Unit
+            }
+            returnFocus = null
         }
     }
 
@@ -164,13 +254,33 @@ fun AgeGateScreen(session: SessionStore, arrivedOnInvite: Boolean = false) {
         ) {
             StepHeader(
                 eyebrow = stringResource(R.string.age_gate_eyebrow),
-                title = stringResource(R.string.age_gate_title),
-                description = stringResource(R.string.age_gate_body, MINIMUM_AGE),
+                title = stringResource(if (reading) R.string.age_gate_readback_title else R.string.age_gate_title),
+                description = if (reading) null else stringResource(R.string.age_gate_body, MINIMUM_AGE),
                 icon = PqpIcons.Birthday,
             )
             Spacer(Modifier.height(Spacing.xl))
 
-            Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
+            if (reading && readback != null) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .focusRequester(readbackFocus)
+                        .focusable()
+                        .semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
+                    verticalArrangement = Arrangement.spacedBy(Spacing.xs),
+                ) {
+                    Text(
+                        text = stringResource(R.string.age_gate_readback_born, readback.inWords),
+                        style = MaterialTheme.typography.titleLarge,
+                        color = MaterialTheme.colorScheme.onBackground,
+                    )
+                    Text(
+                        text = stringResource(R.string.age_gate_readback_check),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            } else Row(horizontalArrangement = Arrangement.spacedBy(Spacing.sm)) {
                 OutlinedTextField(
                     value = day,
                     onValueChange = { input ->
@@ -193,7 +303,9 @@ fun AgeGateScreen(session: SessionStore, arrivedOnInvite: Boolean = false) {
                         monthsOpen = true
                     }),
                     shape = MaterialTheme.shapes.small,
-                    modifier = Modifier.weight(0.9f),
+                    modifier = Modifier
+                        .weight(0.9f)
+                        .focusRequester(dayFocus),
                 )
 
                 ExposedDropdownMenuBox(
@@ -246,7 +358,7 @@ fun AgeGateScreen(session: SessionStore, arrivedOnInvite: Boolean = false) {
                     singleLine = true,
                     enabled = !submitting,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Done),
-                    keyboardActions = KeyboardActions(onDone = { submit() }),
+                    keyboardActions = KeyboardActions(onDone = { onContinue() }),
                     shape = MaterialTheme.shapes.small,
                     modifier = Modifier
                         .weight(1.1f)
@@ -300,12 +412,34 @@ fun AgeGateScreen(session: SessionStore, arrivedOnInvite: Boolean = false) {
                 .navigationBarsPadding()
                 .padding(horizontal = Spacing.gutter + Spacing.xs, vertical = Spacing.md),
         ) {
-            PrimaryButton(
-                text = stringResource(if (submitting) R.string.age_gate_saving else R.string.age_gate_confirm),
-                onClick = ::submit,
-                enabled = complete,
-                busy = submitting,
-            )
+            if (reading && readback != null) {
+                PrimaryButton(
+                    text = stringResource(if (submitting) R.string.age_gate_saving else R.string.age_gate_readback_confirm),
+                    onClick = { submit(readback.isoDate) },
+                    busy = submitting,
+                )
+                Spacer(Modifier.height(Spacing.sm))
+                OutlinedButton(
+                    onClick = ::goBack,
+                    enabled = !submitting,
+                    shape = MaterialTheme.shapes.small,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 52.dp),
+                ) {
+                    Text(stringResource(R.string.age_gate_readback_edit))
+                }
+            } else {
+                PrimaryButton(
+                    text = stringResource(if (submitting) R.string.age_gate_saving else R.string.age_gate_confirm),
+                    onClick = ::onContinue,
+                    enabled = complete,
+                    busy = submitting,
+                )
+            }
         }
     }
 }
+
+/** Where the cursor goes when the fields come back after the read-back or a refusal. */
+private enum class ReturnFocus { Day, Year }
