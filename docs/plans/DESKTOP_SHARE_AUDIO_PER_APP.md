@@ -115,7 +115,7 @@ ScreenCaptureKit (macOS 13+): `SCStreamConfiguration.capturesAudio = true`, `exc
 
 Proven in Docker with real Electron 44 on PulseAudio 16.1 and PipeWire 1.0.5: the other app is captured and the call is absent (-136 to -145 dB), including new apps mid-share and a device switch. Ruled out: `audio: "loopback"` on Linux records the call too; `restrictOwnAudio` is a no-op on Linux; `getUserMedia` never lists monitor devices. Browser users on Linux stay on "share a Chrome tab".
 
-Needs: AppImage or .deb (Flatpak cannot reach `pactl`), a Pulse or PipeWire session. Left: QA on real GNOME and KDE (Wayland and X11), the watch party setup preview, hiding the `pqp-share-audio` device from the mic picker while sharing, and a ~250 ms echo risk if something makes the share sink the default output. Report: `~/.config/pqp/linux-share-audio-2026-09-27.md`, rig: `~/.config/pqp/linux-share-audio-rig-2026-09-27/`.
+Needs: AppImage or .deb (Flatpak cannot reach `pactl`), a Pulse or PipeWire session. Left: QA on real GNOME and KDE (Wayland and X11), the watch party setup preview (wired 2026-11, see `docs/DESKTOP.md` §"Linux share audio", unverified on hardware), hiding the `pqp-share-audio` device from the mic picker while sharing, and a ~250 ms echo risk if something makes the share sink the default output. Report: `~/.config/pqp/linux-share-audio-2026-09-27.md`, rig: `~/.config/pqp/linux-share-audio-rig-2026-09-27/`.
 
 ### Renderer side (shared by all three)
 
