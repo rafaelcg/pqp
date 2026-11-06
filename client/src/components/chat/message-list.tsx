@@ -1139,6 +1139,13 @@ export const MessageList = memo(function MessageList({
    * the same pixels, which would now be rows nobody is looking at.
    */
   const [viewTop, setViewTop] = useState<ViewTop | null>(null);
+  /**
+   * Bumped when the pane's height changes while the list follows the tail: the
+   * window then comes from the end of the list and nothing else would render
+   * it again, so a pane made much taller would show blank above the mounted
+   * rows until the next scroll.
+   */
+  const [, setViewportTick] = useState(0);
   const [, setKeepEpoch] = useState(0);
   /** The rows holding the two ends of a text selection, kept mounted. */
   const selectionKeepRef = useRef<{ a: string; f: string } | null>(null);
@@ -1572,6 +1579,7 @@ export const MessageList = memo(function MessageList({
       return;
     }
     const viewport = container.clientHeight || FALLBACK_VIEWPORT_PX;
+    const viewportChanged = viewportHeightRef.current !== viewport;
     viewportHeightRef.current = viewport;
     if (offsetsEpochRef.current !== heightsEpochRef.current) {
       offsetsRef.current = computeOffsets(rowIdsRef.current, heightsRef.current);
@@ -1586,6 +1594,11 @@ export const MessageList = memo(function MessageList({
       WINDOW_CONFIG.overscanPx * WINDOW_RECENTER_SLACK,
     );
     if (following) {
+      if (viewportChanged) {
+        // Rendered at once, before paint: the rows the taller pane now shows
+        // must be mounted, not a spacer, in the frame it is drawn.
+        flushSync(() => setViewportTick((tick) => tick + 1));
+      }
       return;
     }
     const wasFollowing = isPinnedRef.current && !hasNewerRef.current;

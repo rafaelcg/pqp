@@ -142,6 +142,40 @@ test.describe("windowed message list", () => {
       ).toBeVisible();
     });
 
+    test("a pane made much taller while following the tail mounts the rows it now shows", async () => {
+      // Maximising a window, a call dock closing, a tablet turning: the list is
+      // on the tail, so the window comes from the end of the list, and nothing
+      // but the height change itself can say it must grow. It used to leave a
+      // blank spacer above the mounted rows until the next scroll.
+      await page.setViewportSize({ width: 1440, height: 600 });
+      await scrollTo(page, "end");
+      await frames(page, 4);
+      const blankAboveRows = () =>
+        page.evaluate(() => {
+          const log = document.querySelector<HTMLElement>('[role="log"]')!;
+          const top = log.getBoundingClientRect().top;
+          const first = Array.from(log.querySelectorAll("[data-row-id]"))
+            .map((row) => row.getBoundingClientRect())
+            .filter((rect) => rect.bottom > top)
+            .sort((a, b) => a.top - b.top)[0];
+          return first ? Math.max(0, first.top - top) : 9999;
+        });
+      try {
+        await page.setViewportSize({ width: 1440, height: 2400 });
+        await frames(page, 4);
+        expect(await blankAboveRows()).toBeLessThan(60);
+        expect(await firstVisibleArticle(page)).not.toBeNull();
+        // Still on the tail, and still bounded.
+        await expect
+          .poll(async () => (await placementOf(page, COUNT))?.distanceFromBottom ?? 9999)
+          .toBeLessThan(40);
+        expect((await domStats(page)).nodes).toBeLessThan(NODE_BUDGET);
+      } finally {
+        await page.setViewportSize({ width: 1440, height: 900 });
+        await frames(page, 2);
+      }
+    });
+
     test("a reply quote jumps to a loaded message far outside the window", async () => {
       await scrollTo(page, "end");
       await frames(page, 4);
