@@ -14,7 +14,7 @@ import { isEnabled } from "./flags.js";
  * `serverId` absent or not a uuid is read as absent: the answer is the global
  * value.
  */
-const serverIdSchema = z.string().uuid();
+const serverIdSchema = z.string().guid();
 
 export interface EmulatorConfig {
   enabled: boolean;

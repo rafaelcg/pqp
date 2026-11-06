@@ -91,7 +91,7 @@ export const reviewAppVersionSchema = z.object({
 });
 
 export const setServerAppSchema = z.object({
-  serverId: z.string().uuid(),
+  serverId: z.string().guid(),
   appId: appIdSchema,
   /** `null` is "not decided", which is off. */
   operatorEnabled: z.boolean().nullable(),
@@ -1000,7 +1000,7 @@ export async function operatorSetServerApp(
 }
 
 export const disableEverywhereSchema = z.object({ appId: appIdSchema });
-export const endSessionSchema = z.object({ sessionId: z.string().uuid() });
+export const endSessionSchema = z.object({ sessionId: z.string().guid() });
 
 export interface DisableEverywhereResult {
   app: AppAdminView | null;

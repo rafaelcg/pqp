@@ -112,8 +112,8 @@ export const executeWebhookSchema = z.preprocess(
 export type ExecuteWebhookBody = z.infer<typeof executeWebhookSchema>;
 
 export const webhookSchema = z.object({
-  id: z.string().uuid(),
-  channelId: z.string().uuid(),
+  id: z.string().guid(),
+  channelId: z.string().guid(),
   name: z.string(),
   avatarUrl: z.string().nullable(),
   /**

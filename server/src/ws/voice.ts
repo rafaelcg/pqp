@@ -12831,21 +12831,21 @@ export const VOICE_HLS_RECONCILE_TOPIC = "voice.hlsReconcile";
 
 const voiceRoomFrameSchema = z.discriminatedUnion("kind", [
   z.object({
-    channelId: z.string().uuid(),
+    channelId: z.string().guid(),
     kind: z.literal("joined"),
     peer: voiceParticipantSchema,
   }),
   z.object({
-    channelId: z.string().uuid(),
+    channelId: z.string().guid(),
     kind: z.literal("left"),
     peerId: z.string().min(1),
   }),
   z.object({
-    channelId: z.string().uuid(),
+    channelId: z.string().guid(),
     kind: z.literal("updated"),
     peer: voiceParticipantSchema,
   }),
-  z.object({ channelId: z.string().uuid(), kind: z.literal("roster") }),
+  z.object({ channelId: z.string().guid(), kind: z.literal("roster") }),
   /**
    * Another instance answers for this peer id now: forget it, say nothing.
    * `hangup` when it went because its person hung up (the tab-close beacon
@@ -12854,7 +12854,7 @@ const voiceRoomFrameSchema = z.discriminatedUnion("kind", [
    * none, and the ring then gets the grace, as it did before.
    */
   z.object({
-    channelId: z.string().uuid(),
+    channelId: z.string().guid(),
     kind: z.literal("adopted"),
     peerId: z.string().min(1),
     hangup: z.boolean().optional(),
@@ -12879,20 +12879,20 @@ type VoiceIdentityFrame = z.infer<typeof voiceIdentityFrameSchema>;
  * needs the bus and nothing else, exactly like `chat.typing`.
  */
 const voiceReactionsFrameSchema = z.object({
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
   items: z.array(liveReactionCountSchema).min(1),
   seq: z.number().int().nonnegative(),
 });
 type VoiceReactionsFrame = z.infer<typeof voiceReactionsFrameSchema>;
 
 const voiceWatchFrameSchema = z.object({
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
   state: watchPartyStateSchema.nullable(),
 });
 type VoiceWatchFrame = z.infer<typeof voiceWatchFrameSchema>;
 
 const voiceLiveFrameSchema = z.object({
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
   stream: liveHlsStreamSchema.nullable(),
   /** The `startedAt` of the session a `null` ends; null when `stream` is set. */
   endsStartedAt: z.number().int().nullable(),
@@ -12903,7 +12903,7 @@ type VoiceLiveFrame = z.infer<typeof voiceLiveFrameSchema>;
 
 /** One channel id, and deliberately nothing else. See `relayHlsReconcile`. */
 const voiceHlsReconcileFrameSchema = z.object({
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
 });
 type VoiceHlsReconcileFrame = z.infer<typeof voiceHlsReconcileFrameSchema>;
 
@@ -12927,7 +12927,7 @@ const relayedLiveAt = new Map<string, number>();
  * whenever somebody next walks in.
  */
 const voiceMusicFrameSchema = z.object({
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
   state: musicStateSchema.nullable(),
   /**
    * The room's clock as the accepting instance holds it. Without this the
@@ -12970,17 +12970,17 @@ const voiceCallFrameSchema = z.discriminatedUnion("kind", [
   }),
   z.object({
     kind: z.literal("room"),
-    channelId: z.string().uuid(),
+    channelId: z.string().guid(),
     frame: callDeclinedMessageSchema,
   }),
   z.object({
     kind: z.literal("decline"),
-    conversationId: z.string().uuid(),
+    conversationId: z.string().guid(),
     userId: z.string().min(1),
   }),
   z.object({
     kind: z.literal("answered"),
-    conversationId: z.string().uuid(),
+    conversationId: z.string().guid(),
     userId: z.string().min(1),
   }),
 ]);
@@ -13008,20 +13008,20 @@ const voiceModerationFrameSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("notify"),
     userId: z.string().min(1),
-    channelId: z.string().uuid(),
+    channelId: z.string().guid(),
     notice: voiceModerationNoticeSchema,
   }),
   z.object({
     kind: z.literal("user"),
     userId: z.string().min(1),
     /** `null` is "wherever they are". */
-    channelIds: z.array(z.string().uuid()).nullable(),
+    channelIds: z.array(z.string().guid()).nullable(),
     notice: voiceModerationNoticeSchema.optional(),
   }),
-  z.object({ kind: z.literal("channel"), channelId: z.string().uuid() }),
+  z.object({ kind: z.literal("channel"), channelId: z.string().guid() }),
   z.object({
     kind: z.literal("except"),
-    channelId: z.string().uuid(),
+    channelId: z.string().guid(),
     allowedUserIds: z.array(z.string().min(1)),
   }),
 ]);
@@ -13062,7 +13062,7 @@ setLiveReactionSink((channelId, items, seq) => {
 
 const voiceSoundboardFrameSchema = z.object({
   type: z.literal("soundboard-play"),
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
   soundId: z.string().min(1),
   userId: z.string().min(1),
   displayName: z.string().min(1).max(64),
@@ -13100,7 +13100,7 @@ subscribeToCluster(VOICE_SOUNDBOARD_TOPIC, (data) => {
  * target's tile change now rather than on the next roster.
  */
 const voiceServerMuteFrameSchema = z.object({
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
   userId: z.string().min(1),
   muted: z.boolean(),
 });
@@ -13114,7 +13114,7 @@ type VoiceServerMuteFrame = z.infer<typeof voiceServerMuteFrameSchema>;
  * bus any more than it can through the local relay.
  */
 const voiceSignalFrameSchema = z.object({
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
   frame: clientRelayMessageSchema,
 });
 type VoiceSignalFrame = z.infer<typeof voiceSignalFrameSchema>;
@@ -13131,7 +13131,7 @@ type VoiceSignalFrame = z.infer<typeof voiceSignalFrameSchema>;
  * the room no longer relays.
  */
 const voiceTransportFrameSchema = z.object({
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
   transport: voiceRoomTransportSchema,
   reason: z.enum(["cameras", "screens", "room-full", "room-size", "stale-pin"]),
 });
@@ -13183,7 +13183,7 @@ subscribeToCluster(VOICE_SIGNAL_TOPIC, (data) => {
  * hint is re-read before it is applied.
  */
 const voiceRaisedHandFrameSchema = z.object({
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
   userId: z.string().min(1),
   raisedAt: z.number().int().nonnegative().nullable(),
 });
@@ -13224,7 +13224,7 @@ subscribeToCluster(VOICE_RAISED_HAND_TOPIC, (data) => {
 });
 
 const voiceAudienceFrameSchema = z.object({
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
   change: voiceAudienceChangeSchema.optional(),
   since: z.number().int().nonnegative().optional(),
   unenforcedUserIds: z.array(z.string()).optional(),

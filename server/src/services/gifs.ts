@@ -75,7 +75,7 @@ const renditionSchema = z
  * One size tier (`hd` / `md` / `sm` / `xs`), holding one rendition per format
  * (`gif` / `webp` / `jpg` / `mp4` / `webm`).
  */
-const tierSchema = z.record(renditionSchema);
+const tierSchema = z.record(z.string(), renditionSchema);
 
 const klipyResponseSchema = z.object({
   result: z.boolean().optional(),
@@ -87,7 +87,7 @@ const klipyResponseSchema = z.object({
             id: z.union([z.string(), z.number()]).optional(),
             title: z.string().optional(),
             type: z.string().optional(),
-            file: z.record(tierSchema).optional(),
+            file: z.record(z.string(), tierSchema).optional(),
           })
           .passthrough(),
       ),

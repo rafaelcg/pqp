@@ -53,7 +53,7 @@ import { logEvent } from "../lib/log.js";
 const here = dirname(fileURLToPath(import.meta.url));
 
 const entrySchema = z.object({
-  manifest: z.unknown(),
+  manifest: z.unknown().optional(),
   manifestSha256: z.string().regex(/^[0-9a-f]{64}$/),
 });
 

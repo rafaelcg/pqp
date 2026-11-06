@@ -134,20 +134,20 @@ const detailsSchema = z
 export const createReportSchema = z.discriminatedUnion("subjectType", [
   z.object({
     subjectType: z.literal("message"),
-    messageId: z.string().uuid(),
+    messageId: z.string().guid(),
     reason: reportReasonSchema,
     details: detailsSchema,
   }),
   z.object({
     subjectType: z.literal("user"),
-    userId: z.string().uuid(),
-    serverId: z.string().uuid().nullable().optional(),
+    userId: z.string().guid(),
+    serverId: z.string().guid().nullable().optional(),
     reason: reportReasonSchema,
     details: detailsSchema,
   }),
   z.object({
     subjectType: z.literal("server"),
-    serverId: z.string().uuid(),
+    serverId: z.string().guid(),
     reason: reportReasonSchema,
     details: detailsSchema,
   }),
@@ -158,22 +158,22 @@ export const createReportSchema = z.discriminatedUnion("subjectType", [
    */
   z.object({
     subjectType: z.literal("story"),
-    storyId: z.string().uuid(),
-    serverId: z.string().uuid().nullable().optional(),
+    storyId: z.string().guid(),
+    serverId: z.string().guid().nullable().optional(),
     reason: reportReasonSchema,
     details: detailsSchema,
   }),
   /** One Baú post. Only the id: the server is read from the post. */
   z.object({
     subjectType: z.literal("bau_post"),
-    postId: z.string().uuid(),
+    postId: z.string().guid(),
     reason: reportReasonSchema,
     details: detailsSchema,
   }),
   /** One Baú comment. Only the id: the post and the server are read from it. */
   z.object({
     subjectType: z.literal("bau_comment"),
-    commentId: z.string().uuid(),
+    commentId: z.string().guid(),
     reason: reportReasonSchema,
     details: detailsSchema,
   }),
@@ -265,7 +265,7 @@ export type ReportAttachmentBlockReason = z.infer<
 >;
 
 export const reportAttachmentSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   kind: reportAttachmentKindSchema,
   contentType: z.string(),
   /** The scanner's verdict, straight off the row. No new scanning. */
@@ -303,7 +303,7 @@ export const reportSchema = z.object({
   status: reportStatusSchema,
   createdAt: z.string(),
 
-  reporterId: z.string().uuid().nullable(),
+  reporterId: z.string().guid().nullable(),
   reporterName: z.string().nullable(),
 
   /**
@@ -318,7 +318,7 @@ export const reportSchema = z.object({
    * a timeout — because timing the owner out of their own server changes
    * nothing about the listing strangers are still walking into.
    */
-  reportedUserId: z.string().uuid().nullable(),
+  reportedUserId: z.string().guid().nullable(),
   /**
    * Snapshot of the subject, taken at report time: a user's name and tag, or —
    * for a `server` report — the community's own name, which is the string a
@@ -327,7 +327,7 @@ export const reportSchema = z.object({
   reportedUserName: z.string().nullable(),
 
   /** Null once the message has been deleted; `contentSnapshot` survives it. */
-  messageId: z.string().uuid().nullable(),
+  messageId: z.string().guid().nullable(),
   /** True when a message report's message is gone — the snapshot is all there is. */
   messageDeleted: z.boolean(),
   /** The reported message body, copied at report time. */
@@ -338,7 +338,7 @@ export const reportSchema = z.object({
    * that is not a message.
    */
   attachments: z.array(reportAttachmentSchema).default([]),
-  channelId: z.string().uuid().nullable(),
+  channelId: z.string().guid().nullable(),
   /** Snapshot of the channel name, so a renamed or deleted channel still reads. */
   channelName: z.string().nullable(),
   /**
@@ -346,15 +346,15 @@ export const reportSchema = z.object({
    * week after it expired, past every hold). `contentSnapshot` then carries
    * its caption or text as it was when reported.
    */
-  storyId: z.string().uuid().nullable().default(null),
+  storyId: z.string().guid().nullable().default(null),
   /**
    * The reported Baú post (for a `bau_post` report) or the post a reported
    * comment sits on (for a `bau_comment` one); null once the post is gone.
    * `contentSnapshot` then carries the title and words as they were reported.
    */
-  bauPostId: z.string().uuid().nullable().default(null),
+  bauPostId: z.string().guid().nullable().default(null),
   /** The reported Baú comment, for a `bau_comment` report; null once deleted. */
-  bauCommentId: z.string().uuid().nullable().default(null),
+  bauCommentId: z.string().guid().nullable().default(null),
 
   resolvedAt: z.string().nullable(),
   resolvedByName: z.string().nullable(),
@@ -422,7 +422,7 @@ export type ReportScanInfo = z.infer<typeof reportScanInfoSchema>;
  * server they opened.
  */
 export const allReportSchema = reportSchema.extend({
-  serverId: z.string().uuid().nullable(),
+  serverId: z.string().guid().nullable(),
   /** Snapshot-free: the server's current name, or null for the instance queue. */
   serverName: z.string().nullable(),
   scan: reportScanInfoSchema.nullable(),
@@ -470,8 +470,8 @@ export const reportContextLensSchema = z.enum(["instance", "server"]);
 export type ReportContextLens = z.infer<typeof reportContextLensSchema>;
 
 export const reportContextMessageSchema = z.object({
-  id: z.string().uuid(),
-  authorId: z.string().uuid(),
+  id: z.string().guid(),
+  authorId: z.string().guid(),
   authorName: z.string(),
   /** `name#1234`, for a tooltip. The name is never replaced by it. */
   authorTag: z.string().nullable(),
@@ -485,8 +485,8 @@ export const reportContextMessageSchema = z.object({
 export type ReportContextMessage = z.infer<typeof reportContextMessageSchema>;
 
 export const reportContextServerMessageSchema = z.object({
-  id: z.string().uuid(),
-  serverId: z.string().uuid(),
+  id: z.string().guid(),
+  serverId: z.string().guid(),
   serverName: z.string(),
   channelName: z.string(),
   isPrivate: z.boolean(),
@@ -518,8 +518,8 @@ const contactCountSchema = z.object({
  * is left.
  */
 export const reportContextBauCommentSchema = z.object({
-  id: z.string().uuid(),
-  authorId: z.string().uuid(),
+  id: z.string().guid(),
+  authorId: z.string().guid(),
   authorName: z.string(),
   body: z.string(),
   createdAt: z.string(),
@@ -529,11 +529,11 @@ export type ReportContextBauComment = z.infer<
 >;
 
 export const reportContextBauSchema = z.object({
-  serverId: z.string().uuid(),
+  serverId: z.string().guid(),
   serverName: z.string(),
   post: z
     .object({
-      id: z.string().uuid(),
+      id: z.string().guid(),
       authorName: z.string(),
       title: z.string().nullable(),
       body: z.string(),
@@ -569,7 +569,7 @@ export const reportContextSchema = z.object({
   /** Null when the reported account no longer exists (or the report names none). */
   account: z
     .object({
-      id: z.string().uuid(),
+      id: z.string().guid(),
       displayName: z.string(),
       tag: z.string().nullable(),
       avatarUrl: z.string().nullable(),
@@ -615,7 +615,7 @@ export const reportContextSchema = z.object({
   sanctions: z.object({
     bans: z.array(
       z.object({
-        serverId: z.string().uuid(),
+        serverId: z.string().guid(),
         serverName: z.string(),
         reason: z.string().nullable(),
         createdAt: z.string(),
@@ -623,7 +623,7 @@ export const reportContextSchema = z.object({
     ),
     timeouts: z.array(
       z.object({
-        serverId: z.string().uuid(),
+        serverId: z.string().guid(),
         serverName: z.string(),
         reason: z.string().nullable(),
         expiresAt: z.string(),
@@ -675,7 +675,7 @@ export const reportContextSchema = z.object({
    */
   messageServer: z
     .object({
-      id: z.string().uuid(),
+      id: z.string().guid(),
       name: z.string(),
       channelName: z.string(),
     })
@@ -686,7 +686,7 @@ export const reportContextSchema = z.object({
 
   ownedServers: z.array(
     z.object({
-      id: z.string().uuid(),
+      id: z.string().guid(),
       name: z.string(),
       memberCount: z.number().int().nonnegative(),
       createdAt: z.string(),
@@ -722,7 +722,7 @@ export const reportContextSchema = z.object({
     /** The report's own server, when it has one and the account is in play. */
     server: z
       .object({
-        id: z.string().uuid(),
+        id: z.string().guid(),
         name: z.string(),
         canBan: z.boolean(),
         canTimeout: z.boolean(),

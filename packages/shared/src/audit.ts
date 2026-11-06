@@ -292,8 +292,11 @@ export type AuditAction = z.infer<typeof auditActionSchema>;
 
 export const auditChangeSchema = z.object({
   key: z.string(),
-  old: z.unknown().nullable(),
-  new: z.unknown().nullable(),
+  // `.optional()`, not just `.nullable()`: zod 4 requires the key of a `z.unknown()`
+  // field to be present, and an `undefined` value never survives JSON, so the
+  // key is simply absent on the wire when there was no old (or new) value.
+  old: z.unknown().nullable().optional(),
+  new: z.unknown().nullable().optional(),
 });
 export type AuditChange = z.infer<typeof auditChangeSchema>;
 
@@ -302,12 +305,12 @@ export const AUDIT_LOG_PAGE_MAX = 100;
 
 export const auditLogEntrySchema = z.object({
   id: z.string(),
-  actorId: z.string().uuid().nullable(),
+  actorId: z.string().guid().nullable(),
   /** Null once the actor's account is gone — see the `ON DELETE SET NULL` note above. */
   actorName: z.string().nullable(),
   action: auditActionSchema,
   targetType: z.string().nullable(),
-  targetId: z.string().uuid().nullable(),
+  targetId: z.string().guid().nullable(),
   reason: z.string().nullable(),
   changes: z.array(auditChangeSchema).nullable(),
   createdAt: z.string(),

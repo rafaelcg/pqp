@@ -72,7 +72,7 @@ import {
 
 export const joinChannelMessageSchema = z.object({
   type: z.literal("join-channel"),
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
 });
 
 export const leaveChannelMessageSchema = z.object({
@@ -81,7 +81,7 @@ export const leaveChannelMessageSchema = z.object({
 
 const messageCreateFrameSchema = z.object({
   type: z.literal("message-create"),
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
   /**
    * Deliberately not `messageBodySchema`: a message that carries attachments is
    * allowed to say nothing, so the floor of one character has to come off. The
@@ -95,7 +95,7 @@ const messageCreateFrameSchema = z.object({
    */
   nonce: z.string().min(1).max(64).optional(),
   /** The message this one answers. Must live in the same channel. */
-  replyToId: z.string().uuid().optional(),
+  replyToId: z.string().guid().optional(),
   /**
    * Rows minted by `POST /api/channels/:channelId/attachments` and not yet
    * claimed by a message.
@@ -105,7 +105,7 @@ const messageCreateFrameSchema = z.object({
    * its own upload into something it is not.
    */
   attachmentIds: z
-    .array(z.string().uuid())
+    .array(z.string().guid())
     .max(MAX_ATTACHMENTS_PER_MESSAGE)
     .optional(),
   /**
@@ -140,7 +140,7 @@ function requireBodyOrAttachment(
 ): void {
   if (frame.chance && frame.poll) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ["chance"],
       message: "A message cannot be both a chance result and a poll",
     });
@@ -153,7 +153,7 @@ function requireBodyOrAttachment(
     !frame.poll
   ) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ["body"],
       message: "A message needs a body or an attachment",
     });
@@ -166,20 +166,20 @@ export const messageCreateMessageSchema = messageCreateFrameSchema.superRefine(
 
 export const typingMessageSchema = z.object({
   type: z.literal("typing"),
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
 });
 
 export const reactionToggleMessageSchema = z.object({
   type: z.literal("reaction-toggle"),
-  channelId: z.string().uuid(),
-  messageId: z.string().uuid(),
+  channelId: z.string().guid(),
+  messageId: z.string().guid(),
   emoji: reactionEmojiSchema,
 });
 
 const broadcastMessageSchema = z.object({
-  id: z.string().uuid(),
-  channelId: z.string().uuid(),
-  authorId: z.string().uuid(),
+  id: z.string().guid(),
+  channelId: z.string().guid(),
+  authorId: z.string().guid(),
   authorName: z.string(),
   authorTag: z.string().nullable().optional(),
   authorAvatarUrl: z.string().nullable(),
@@ -212,22 +212,22 @@ const broadcastMessageSchema = z.object({
   /** A server bot's action card (`bots.ts`). Null on every other message. */
   botCard: botActionCardSchema.nullable().optional().catch(null),
   /** See `messageSchema.storyId`: the story a reply quotes. */
-  storyId: z.string().uuid().nullable().optional(),
+  storyId: z.string().guid().nullable().optional(),
   /** See `messageSchema.forward`: the snapshot a forwarded message carries. */
   forward: messageForwardFieldSchema,
 });
 
 export const pollVoteMessageSchema = z.object({
   type: z.literal("poll-vote"),
-  channelId: z.string().uuid(),
-  messageId: z.string().uuid(),
-  optionId: z.string().uuid(),
+  channelId: z.string().guid(),
+  messageId: z.string().guid(),
+  optionId: z.string().guid(),
 });
 
 export const pollCloseMessageSchema = z.object({
   type: z.literal("poll-close"),
-  channelId: z.string().uuid(),
-  messageId: z.string().uuid(),
+  channelId: z.string().guid(),
+  messageId: z.string().guid(),
 });
 
 /**
@@ -236,11 +236,11 @@ export const pollCloseMessageSchema = z.object({
  */
 export const pollUpdateBroadcastSchema = z.object({
   type: z.literal("poll-update"),
-  channelId: z.string().uuid(),
-  messageId: z.string().uuid(),
+  channelId: z.string().guid(),
+  messageId: z.string().guid(),
   poll: pollSchema,
-  voterId: z.string().uuid().optional(),
-  optionId: z.string().uuid().optional(),
+  voterId: z.string().guid().optional(),
+  optionId: z.string().guid().optional(),
   added: z.boolean().optional(),
 });
 
@@ -302,7 +302,7 @@ export type MessageRejectReason = z.infer<typeof messageRejectReasonSchema>;
 
 export const messageRejectedSchema = z.object({
   type: z.literal("message-rejected"),
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
   /** Echo of the create frame, so the sender can match the optimistic bubble. */
   nonce: z.string().min(1).max(64).optional(),
   reason: messageRejectReasonSchema,
@@ -333,9 +333,9 @@ export const messageUpdateBroadcastSchema = z.object({
  */
 export const voiceNoteTranscriptBroadcastSchema = z.object({
   type: z.literal("voice-note-transcript"),
-  channelId: z.string().uuid(),
-  messageId: z.string().uuid(),
-  attachmentId: z.string().uuid(),
+  channelId: z.string().guid(),
+  messageId: z.string().guid(),
+  attachmentId: z.string().guid(),
   transcript: voiceNoteTranscriptSchema,
 });
 
@@ -348,22 +348,22 @@ export const voiceNoteTranscriptBroadcastSchema = z.object({
  */
 export const voiceNoteUpdatedBroadcastSchema = z.object({
   type: z.literal("voice-note-updated"),
-  channelId: z.string().uuid(),
-  messageId: z.string().uuid(),
-  attachmentId: z.string().uuid(),
+  channelId: z.string().guid(),
+  messageId: z.string().guid(),
+  attachmentId: z.string().guid(),
   playbackReady: z.boolean(),
 });
 
 export const messageDeleteBroadcastSchema = z.object({
   type: z.literal("message-delete"),
-  channelId: z.string().uuid(),
-  messageId: z.string().uuid(),
+  channelId: z.string().guid(),
+  messageId: z.string().guid(),
 });
 
 export const typingBroadcastSchema = z.object({
   type: z.literal("typing-broadcast"),
-  channelId: z.string().uuid(),
-  userId: z.string().uuid(),
+  channelId: z.string().guid(),
+  userId: z.string().guid(),
   displayName: z.string(),
   /**
    * A server bot at work: the tool it is running, or null while it thinks.
@@ -387,14 +387,14 @@ export const channelActivitySchema = z.object({
    * mis-filing it, which costs a live unread badge until that client reloads
    * and never routes a DM's activity into a server.
    */
-  serverId: z.string().uuid().nullable(),
+  serverId: z.string().guid().nullable(),
   /**
    * Which list the badge belongs in — the server sidebar or the conversation
    * list. Derivable from a null `serverId` today, and sent anyway so a client
    * never has to infer a kind from the absence of a field.
    */
   kind: channelKindSchema.default("server"),
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
   mention: z.boolean(),
   /**
    * The message preview, for a conversation only (`kind` of `dm` or `group`).
@@ -415,7 +415,7 @@ export const channelActivitySchema = z.object({
    * list's `lastMessage` in place (own-message/group-author prefixing needs
    * to know who wrote it) without a second round trip.
    */
-  authorId: z.string().uuid().optional(),
+  authorId: z.string().guid().optional(),
   /**
    * Set when the message behind this activity is a system message (`nudge`),
    * so a client that is not looking at the conversation can say "Lu chamou
@@ -428,10 +428,10 @@ export const channelActivitySchema = z.object({
 
 export const reactionBroadcastSchema = z.object({
   type: z.literal("reaction-broadcast"),
-  channelId: z.string().uuid(),
-  messageId: z.string().uuid(),
+  channelId: z.string().guid(),
+  messageId: z.string().guid(),
   emoji: z.string(),
-  userId: z.string().uuid(),
+  userId: z.string().guid(),
   added: z.boolean(),
   /** Server nickname when there is one, otherwise the account display name. */
   displayName: z.string().min(1).optional(),
@@ -439,8 +439,8 @@ export const reactionBroadcastSchema = z.object({
 
 export const messageDeletedBroadcastSchema = z.object({
   type: z.literal("message-deleted"),
-  channelId: z.string().uuid(),
-  messageId: z.string().uuid(),
+  channelId: z.string().guid(),
+  messageId: z.string().guid(),
 });
 
 /**
@@ -457,20 +457,20 @@ export const messageDeletedBroadcastSchema = z.object({
  */
 export const messageBulkDeleteBroadcastSchema = z.object({
   type: z.literal("message-bulk-delete"),
-  channelId: z.string().uuid(),
-  messageIds: z.array(z.string().uuid()).min(1).max(MESSAGE_BULK_DELETE_MAX),
+  channelId: z.string().guid(),
+  messageIds: z.array(z.string().guid()).min(1).max(MESSAGE_BULK_DELETE_MAX),
 });
 
 /** One viewer, as presence names them. `name`, not `displayName`: see below. */
 export const presenceUserSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   name: z.string(),
   avatarUrl: z.string().nullable(),
 });
 
 export const presenceUpdateSchema = z.object({
   type: z.literal("presence-update"),
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
   users: z.array(presenceUserSchema),
   /**
    * Where this snapshot sits in the channel's presence sequence (see
@@ -536,13 +536,13 @@ export const presenceUpdateSchema = z.object({
  */
 export const presenceDeltaSchema = z.object({
   type: z.literal("presence-delta"),
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
   /** This delta's place in the channel's sequence. Apply only when it is held + 1. */
   seq: z.number().int().positive(),
   /** Viewers in the channel once this delta has been applied. */
   size: z.number().int().nonnegative(),
   joined: z.array(presenceUserSchema).optional(),
-  left: z.array(z.string().uuid()).optional(),
+  left: z.array(z.string().guid()).optional(),
 });
 
 /**
@@ -564,7 +564,7 @@ export const presenceDeltaSchema = z.object({
  */
 export const profileUpdateSchema = z.object({
   type: z.literal("profile-update"),
-  userId: z.string().uuid(),
+  userId: z.string().guid(),
   displayName: z.string(),
   username: z.string().nullable(),
   tag: z.string().nullable(),
@@ -645,8 +645,8 @@ export function withProfileUpdate<
  */
 export const channelSessionReminderSchema = z.object({
   type: z.literal("channel-session-reminder"),
-  sessionId: z.string().uuid(),
-  channelId: z.string().uuid(),
+  sessionId: z.string().guid(),
+  channelId: z.string().guid(),
   title: z.string(),
   startsAt: z.string(),
   kind: z.enum(["before", "live"]),
@@ -673,7 +673,7 @@ export type ChannelSessionReminderMessage = z.infer<
  */
 export const watchPartyUpdateSchema = z.object({
   type: z.literal("watch-party-update"),
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
   party: watchPartySchema.nullable(),
 });
 

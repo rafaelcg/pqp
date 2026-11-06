@@ -152,7 +152,7 @@ export type SetWatchPartyMessage = z.infer<typeof setWatchPartyMessageSchema>;
  */
 export const watchPartyMessageSchema = z.object({
   type: z.literal("watch-party"),
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
   state: watchPartyStateSchema.nullable(),
 });
 

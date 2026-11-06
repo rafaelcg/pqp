@@ -32,7 +32,7 @@ import { userStatusSchema } from "./status.js";
 
 /** Body of `POST /api/friends`. */
 export const friendRequestSchema = z.object({
-  userId: z.string().uuid(),
+  userId: z.string().guid(),
 });
 
 export type FriendRequest = z.infer<typeof friendRequestSchema>;

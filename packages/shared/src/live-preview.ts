@@ -19,7 +19,7 @@ export const LIVE_PREVIEW_DEFAULT_SECONDS = 5 * 60;
 
 /** One live channel a signed-out visitor may preview. */
 export const livePreviewChannelSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
   name: z.string(),
 });
 
@@ -83,7 +83,7 @@ export type LivePreviewListing = z.infer<typeof livePreviewListingSchema>;
  * answer handed back, which is what keeps the window from restarting.
  */
 export const livePreviewStartSchema = z.object({
-  channelId: z.string().uuid(),
+  channelId: z.string().guid(),
   ageConfirmed: z.literal(true),
   ticket: z.string().min(1).max(512).optional(),
 });

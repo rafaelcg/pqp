@@ -497,12 +497,12 @@ export const updateRoleSchema = z.object({
 });
 
 export const reorderRolesSchema = z.object({
-  roleIds: z.array(z.string().uuid()).min(1),
+  roleIds: z.array(z.string().guid()).min(1),
 });
 
 export const channelOverwriteSchema = z.object({
   targetType: z.enum(["role", "member"]),
-  targetId: z.string().uuid(),
+  targetId: z.string().guid(),
   allow: permissionBitfieldSchema,
   deny: permissionBitfieldSchema,
 });
@@ -512,8 +512,8 @@ export const updateNicknameSchema = z.object({
 });
 
 export const roleSchema = z.object({
-  id: z.string().uuid(),
-  serverId: z.string().uuid(),
+  id: z.string().guid(),
+  serverId: z.string().guid(),
   name: z.string(),
   color: z.string().nullable(),
   hoist: z.boolean(),
@@ -530,7 +530,7 @@ export type Role = z.infer<typeof roleSchema>;
 export const memberPermissionsSchema = z.object({
   version: z.number().int().nonnegative(),
   server: permissionBitfieldSchema,
-  channels: z.record(z.string().uuid(), permissionBitfieldSchema),
+  channels: z.record(z.string().guid(), permissionBitfieldSchema),
 });
 
 export type MemberPermissions = z.infer<typeof memberPermissionsSchema>;
@@ -541,7 +541,7 @@ export type MemberPermissions = z.infer<typeof memberPermissionsSchema>;
  */
 export const permissionsUpdateSchema = z.object({
   type: z.literal("permissions-update"),
-  serverId: z.string().uuid(),
+  serverId: z.string().guid(),
   version: z.number().int().nonnegative(),
 });
 
