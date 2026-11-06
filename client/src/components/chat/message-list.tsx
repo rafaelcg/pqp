@@ -41,7 +41,6 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import {
-  Fragment,
   memo,
   useCallback,
   useEffect,
@@ -54,7 +53,7 @@ import {
   type ReactNode,
   type Ref,
 } from "react";
-import { createPortal } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useChatDisplay } from "@/hooks/use-chat-display";
 import { useRetroLook } from "@/hooks/use-appearance";
@@ -126,6 +125,20 @@ import { translateMessage, useTranslation, type MessageKey } from "@/lib/i18n";
 import { toggleMessageSelection } from "@/lib/message-selection";
 import { splitArrivals } from "@/lib/message-arrivals";
 import { scrollWithin } from "@/lib/scroll-within";
+import { useMessageListWindowing } from "@/lib/message-list-windowing";
+import {
+  anchorShift,
+  buildOffsets,
+  meanRowHeight,
+  planSegments,
+  selectionKeepRange,
+  topToCenterRow,
+  totalHeightOf,
+  windowPressure,
+  windowRange,
+  WINDOW_CONFIG,
+  type RowRange,
+} from "@/lib/message-window";
 import { hintDietHides, useHintDiet } from "@/lib/hint-diet";
 import { shouldOpenUp } from "@/lib/menu-flip";
 import {
@@ -227,6 +240,64 @@ const ROW_CONTENT_VISIBILITY: CSSProperties = {
   contentVisibility: "auto",
   containIntrinsicSize: "auto 64px",
 };
+
+/**
+ * The windowed transcript (`lib/message-window.ts`, `docs/MESSAGE_LIST_WINDOWING.md`)
+ * mounts a row only near the viewport, so `content-visibility` has nothing left
+ * to do and does harm: an overscan row that the browser skips reports its 64px
+ * placeholder as its height, and the guess that the spacers are built from
+ * would be wrong for every row that has not been on screen. The windowed rows
+ * are laid out in full.
+ */
+/** A selection longer than this many rows is not kept mounted. */
+const SELECTION_KEEP_MAX_ROWS = 300;
+/** The window moves once less than this share of its overscan is left. */
+const WINDOW_RECENTER_SLACK = 0.4;
+/** A change in the scroller's height that is worth re-planning the window for. */
+const VIEWPORT_RESIZE_SLOP_PX = 40;
+/** Used for the viewport height before the scroller has been measured. */
+const FALLBACK_VIEWPORT_PX = 800;
+/** The positions of rows are only ever needed as an array of ids and a number. */
+const NO_OFFSETS = new Float64Array(1);
+
+/**
+ * Row positions from what has been measured: a measured row is its height, an
+ * unmeasured one is the mean of the measured ones.
+ */
+function computeOffsets(
+  ids: readonly string[],
+  heights: ReadonlyMap<string, number>,
+): Float64Array {
+  const guess = meanRowHeight(heights.values());
+  return buildOffsets(ids.length, (index) => heights.get(ids[index]!) ?? guess);
+}
+
+/** A planned scroll position, against the row that was first when it was planned. */
+interface ViewTop {
+  anchorId: string | null;
+  top: number;
+}
+
+/** `top` in today's coordinates: the anchor row may have moved down. */
+function resolveViewTop(
+  viewTop: ViewTop,
+  indexById: ReadonlyMap<string, number>,
+  offsets: Float64Array,
+): number {
+  const index =
+    viewTop.anchorId === null ? undefined : indexById.get(viewTop.anchorId);
+  return (index === undefined ? 0 : (offsets[index] ?? 0)) + viewTop.top;
+}
+
+/** Where the rows area starts inside the scroller's scrolled content. */
+function rowsAreaTop(container: HTMLElement, rowsArea: HTMLElement): number {
+  return (
+    rowsArea.getBoundingClientRect().top -
+    container.getBoundingClientRect().top -
+    container.clientTop +
+    container.scrollTop
+  );
+}
 
 /** First three of `QUICK_REACTIONS`, shown on the hover bar. */
 const HOVER_QUICK_REACTIONS = QUICK_REACTIONS.slice(0, 3);
@@ -430,6 +501,12 @@ interface MessageListProps {
   streamBadges?: { hostUserId: string; cohostIds: ReadonlySet<string> } | null;
   /** A forum post's transcript. See `ForumPostDecor`. */
   forumPost?: ForumPostDecor | null;
+  /**
+   * Window the transcript: mount only the rows near the viewport. Left
+   * undefined it follows the runtime flag `message_list_windowing`
+   * (`lib/message-list-windowing.ts`); a test passes it to pin one mode.
+   */
+  windowing?: boolean;
 }
 
 /**
@@ -694,8 +771,13 @@ export const MessageList = memo(function MessageList({
   variant = "default",
   streamBadges = null,
   forumPost = null,
+  windowing,
 }: MessageListProps) {
   const { t } = useTranslation();
+  const windowingFlag = useMessageListWindowing();
+  const windowed = windowing ?? windowingFlag;
+  const windowedRef = useRef(windowed);
+  windowedRef.current = windowed;
   const reportMissingAuthors = authorGoneCheck?.report;
   // Authors the loaded roster does not hold, for a re-read before any of them
   // reads "saiu" (a person who just joined is missing until the roster
@@ -1037,6 +1119,122 @@ export const MessageList = memo(function MessageList({
   const effectiveActiveId =
     activeIndex >= 0 ? activeMessageId : (rowIds[rowIds.length - 1] ?? null);
 
+  // ---------------------------------------------------------------- windowing
+  // Only the rows near the viewport are mounted, and one spacer stands for each
+  // run of rows that are not (`lib/message-window.ts`, and
+  // `docs/MESSAGE_LIST_WINDOWING.md` for why it is built this way). Everything
+  // below is inert when `windowed` is false: the list renders every row exactly
+  // as it always did.
+  const rowsAreaRef = useRef<HTMLDivElement>(null);
+  /** Each mounted row's measured height (its day line and divider included). */
+  const heightsRef = useRef(new Map<string, number>());
+  /** Bumped when a measured height changes, so the next render re-sums. */
+  const heightsEpochRef = useRef(0);
+  const viewportHeightRef = useRef(0);
+  /**
+   * The scroll position, inside the rows area, that the window was last planned
+   * around. Null before the first scroll: the window then follows the tail.
+   * Held against the first row of the list as it was then, so older history
+   * prepended above it moves the window with the rows instead of leaving it on
+   * the same pixels, which would now be rows nobody is looking at.
+   */
+  const [viewTop, setViewTop] = useState<ViewTop | null>(null);
+  /**
+   * Bumped when the pane's height changes while the list follows the tail: the
+   * window then comes from the end of the list and nothing else would render
+   * it again, so a pane made much taller would show blank above the mounted
+   * rows until the next scroll.
+   */
+  const [, setViewportTick] = useState(0);
+  const [, setKeepEpoch] = useState(0);
+  /** The rows holding the two ends of a text selection, kept mounted. */
+  const selectionKeepRef = useRef<{ a: string; f: string } | null>(null);
+  /**
+   * The row at the top of the viewport and where it sat, so that rows above it
+   * changing height (a guess corrected when a row is first measured, an image
+   * loading) does not move what the reader is looking at.
+   */
+  const viewAnchorRef = useRef<{
+    id: string;
+    offset: number;
+    scrollTop: number;
+  } | null>(null);
+  /** A row to focus once it is mounted (arrow keys from a far-away row). */
+  const pendingFocusRef = useRef<string | null>(null);
+  const rowObserverRef = useRef<ResizeObserver | null>(null);
+  const measuredNodesRef = useRef(new Map<string, Element>());
+  const offsetsRef = useRef<Float64Array>(NO_OFFSETS);
+  const offsetsEpochRef = useRef(-1);
+  const renderedRangeRef = useRef<RowRange>({ start: 0, end: 0 });
+  const renderedIdsRef = useRef<string[]>([]);
+  const indexByIdRef = useRef<ReadonlyMap<string, number>>(new Map());
+
+  const indexById = useMemo(() => {
+    const map = new Map<string, number>();
+    rowIds.forEach((id, index) => map.set(id, index));
+    return map;
+  }, [rowIds]);
+  const heightsEpoch = heightsEpochRef.current;
+  const offsets = useMemo(
+    () => (windowed ? computeOffsets(rowIds, heightsRef.current) : NO_OFFSETS),
+    // `heightsEpoch` is the dependency that makes a re-sum happen.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [windowed, rowIds, heightsEpoch],
+  );
+  const viewportHeight = viewportHeightRef.current || FALLBACK_VIEWPORT_PX;
+  const followingTail = isPinned && !hasNewer;
+  const totalHeight = totalHeightOf(offsets);
+  const planTop = followingTail
+    ? Math.max(0, totalHeight - viewportHeight)
+    : viewTop
+      ? resolveViewTop(viewTop, indexById, offsets)
+      : forumLandAtTop
+        ? 0
+        : Math.max(0, totalHeight - viewportHeight);
+  const windowRows: RowRange = windowed
+    ? windowRange(offsets, planTop, viewportHeight)
+    : { start: 0, end: rows.length };
+  let segments: ReturnType<typeof planSegments> | null = null;
+  if (windowed) {
+    const keep: number[] = [];
+    for (const id of [
+      effectiveActiveId,
+      editingId,
+      pickerMessageId,
+      pendingFocusRef.current,
+    ]) {
+      const index = id ? indexById.get(id) : undefined;
+      if (index !== undefined) {
+        keep.push(index);
+      }
+    }
+    const selection = selectionKeepRef.current;
+    if (selection) {
+      const span = selectionKeepRange(
+        indexById.get(selection.a) ?? -1,
+        indexById.get(selection.f) ?? -1,
+        SELECTION_KEEP_MAX_ROWS,
+      );
+      for (let index = span?.start ?? 0; index < (span?.end ?? 0); index += 1) {
+        keep.push(index);
+      }
+    }
+    segments = planSegments(offsets, windowRows, keep);
+  }
+  // What the scroll handlers read between renders. After the commit, so it is
+  // never a render React threw away.
+  useLayoutEffect(() => {
+    indexByIdRef.current = indexById;
+    offsetsRef.current = offsets;
+    offsetsEpochRef.current = heightsEpoch;
+    renderedRangeRef.current = windowRows;
+    renderedIdsRef.current = segments
+      ? segments.flatMap((segment) =>
+          segment.kind === "row" ? [rowIds[segment.index]!] : [],
+        )
+      : [];
+  });
+
   const markMenuRow = useCallback((id: string | null) => {
     openMenuRowIdRef.current = id;
   }, []);
@@ -1195,6 +1393,13 @@ export const MessageList = memo(function MessageList({
       }
       setActiveMessageId(nextId);
       const node = rowNodes.current.get(nextId);
+      if (!node && windowedRef.current) {
+        // Outside the window (Home and End from the other end of a long
+        // transcript): the render this state change causes keeps it mounted,
+        // and the layout effect on `pendingFocusRef` focuses it then.
+        pendingFocusRef.current = nextId;
+        return;
+      }
       node?.focus({ preventScroll: true });
       if (node && scrollRef.current) {
         scrollWithin(scrollRef.current, node, {
@@ -1216,6 +1421,9 @@ export const MessageList = memo(function MessageList({
     // container's `py-4` still below it, so a send sat almost-at-bottom and a
     // refresh sometimes landed a row short. `scrollHeight` is the real end.
     const top = container.scrollHeight;
+    // Going to the end is not layout shift to undo: the next scroll event takes
+    // the anchor again from wherever this lands.
+    viewAnchorRef.current = null;
     if (behavior === "smooth" && !prefersReducedMotion) {
       container.scrollTo({ top, behavior: "smooth" });
     } else {
@@ -1230,6 +1438,214 @@ export const MessageList = memo(function MessageList({
     } else {
       rowNodes.current.delete(messageId);
     }
+  }, []);
+
+  /** Remember the row at the top of the viewport and where it is. */
+  const captureViewAnchor = useCallback(() => {
+    const container = scrollRef.current;
+    if (!container || !windowedRef.current) {
+      return;
+    }
+    const top = container.getBoundingClientRect().top;
+    for (const id of renderedIdsRef.current) {
+      const rect = rowNodes.current.get(id)?.getBoundingClientRect();
+      if (rect && rect.bottom > top) {
+        viewAnchorRef.current = {
+          id,
+          offset: rect.top - top,
+          scrollTop: container.scrollTop,
+        };
+        return;
+      }
+    }
+    viewAnchorRef.current = null;
+  }, []);
+
+  /**
+   * Undo layout shift above the reader: if the row they were looking at is not
+   * where their own scrolling left it, put it back. This is what keeps a wrong
+   * height guess, an image that has just loaded, or a prepended page above the
+   * viewport from moving the text under their eyes.
+   *
+   * Never while following the tail (the list follows the bottom there), while a
+   * jump is travelling (it re-centres its own target), or in a forum post's
+   * hold at the top.
+   */
+  const applyViewAnchor = useCallback(() => {
+    const container = scrollRef.current;
+    const anchor = viewAnchorRef.current;
+    if (!container || !anchor || !windowedRef.current) {
+      return;
+    }
+    if (
+      jumpingRef.current ||
+      forumHoldTopRef.current ||
+      (isPinnedRef.current && !hasNewerRef.current)
+    ) {
+      return;
+    }
+    const node = rowNodes.current.get(anchor.id);
+    if (!node) {
+      return;
+    }
+    const shift = anchorShift({
+      offsetNow: offsetInViewport(container, node),
+      offsetThen: anchor.offset,
+      scrollTopNow: container.scrollTop,
+      scrollTopThen: anchor.scrollTop,
+    });
+    if (Math.abs(shift) >= 1) {
+      container.scrollTop += shift;
+    }
+  }, []);
+  const applyViewAnchorRef = useRef(applyViewAnchor);
+  applyViewAnchorRef.current = applyViewAnchor;
+
+  /**
+   * Row heights come from one observer over the rows' wrappers, created the
+   * first time a wrapper mounts (a ref callback runs before this component's
+   * effects). A changed height is recorded for the next render's sums and the
+   * view anchor is re-applied now, in the same frame, so a row growing above
+   * the viewport never shows as a jump.
+   */
+  const rowObserver = useCallback((): ResizeObserver | null => {
+    if (rowObserverRef.current) {
+      return rowObserverRef.current;
+    }
+    if (typeof ResizeObserver === "undefined") {
+      return null;
+    }
+    rowObserverRef.current = new ResizeObserver((entries) => {
+      let changed = false;
+      for (const entry of entries) {
+        const target = entry.target as HTMLElement;
+        const id = target.dataset.rowId;
+        if (!id) {
+          continue;
+        }
+        const height =
+          entry.borderBoxSize?.[0]?.blockSize ??
+          target.getBoundingClientRect().height;
+        if (
+          height > 0 &&
+          Math.abs((heightsRef.current.get(id) ?? -1) - height) > 0.5
+        ) {
+          heightsRef.current.set(id, height);
+          changed = true;
+        }
+      }
+      if (changed) {
+        heightsEpochRef.current += 1;
+        applyViewAnchorRef.current();
+      }
+    });
+    return rowObserverRef.current;
+  }, []);
+  const attachRowMeasure = useCallback(
+    (messageId: string, node: HTMLElement | null) => {
+      const nodes = measuredNodesRef.current;
+      const previous = nodes.get(messageId);
+      if (previous && previous !== node) {
+        rowObserverRef.current?.unobserve(previous);
+        nodes.delete(messageId);
+      }
+      if (node) {
+        nodes.set(messageId, node);
+        rowObserver()?.observe(node);
+      }
+    },
+    [rowObserver],
+  );
+  useEffect(
+    () => () => {
+      rowObserverRef.current?.disconnect();
+      rowObserverRef.current = null;
+      measuredNodesRef.current.clear();
+    },
+    [],
+  );
+
+  /**
+   * Plan the window around where the viewport is now, and render it if it has
+   * to move: at once when part of the viewport is past the mounted rows (that
+   * would be blank space on this frame), lazily when the overscan is merely
+   * running low. `following` is whether the list is, or is about to be, on the
+   * tail: the window then comes from the end of the list instead.
+   */
+  const planWindow = useCallback((following: boolean, pinnedNext?: boolean) => {
+    const container = scrollRef.current;
+    const rowsArea = rowsAreaRef.current;
+    if (!windowedRef.current || !container || !rowsArea) {
+      return;
+    }
+    const viewport = container.clientHeight || FALLBACK_VIEWPORT_PX;
+    const viewportChanged = viewportHeightRef.current !== viewport;
+    viewportHeightRef.current = viewport;
+    if (offsetsEpochRef.current !== heightsEpochRef.current) {
+      offsetsRef.current = computeOffsets(rowIdsRef.current, heightsRef.current);
+      offsetsEpochRef.current = heightsEpochRef.current;
+    }
+    const y = container.scrollTop - rowsAreaTop(container, rowsArea);
+    const pressure = windowPressure(
+      offsetsRef.current,
+      renderedRangeRef.current,
+      y,
+      viewport,
+      WINDOW_CONFIG.overscanPx * WINDOW_RECENTER_SLACK,
+    );
+    if (following) {
+      if (viewportChanged) {
+        // Rendered at once, before paint: the rows the taller pane now shows
+        // must be mounted, not a spacer, in the frame it is drawn.
+        flushSync(() => setViewportTick((tick) => tick + 1));
+      }
+      return;
+    }
+    const wasFollowing = isPinnedRef.current && !hasNewerRef.current;
+    if (pressure === "none" && !wasFollowing) {
+      return;
+    }
+    const commit = () => {
+      setViewTop({ anchorId: rowIdsRef.current[0] ?? null, top: y });
+      if (pinnedNext !== undefined) {
+        setIsPinned(pinnedNext);
+      }
+    };
+    if (pressure === "now") {
+      flushSync(commit);
+    } else {
+      commit();
+    }
+  }, []);
+
+  /**
+   * Mount a row that is not in the window and put the viewport on it, for a
+   * jump (permalink, search result, reply quote) to a message that is loaded
+   * but far from the viewport. The window is re-rendered around it at once, so
+   * the row exists when this returns; the caller then runs its usual scroll to
+   * the row, which only has the estimate's error left to correct.
+   */
+  const revealRow = useCallback((messageId: string): HTMLElement | undefined => {
+    const container = scrollRef.current;
+    const rowsArea = rowsAreaRef.current;
+    const index = indexByIdRef.current.get(messageId);
+    if (!windowedRef.current || !container || !rowsArea || index === undefined) {
+      return undefined;
+    }
+    if (offsetsEpochRef.current !== heightsEpochRef.current) {
+      offsetsRef.current = computeOffsets(rowIdsRef.current, heightsRef.current);
+      offsetsEpochRef.current = heightsEpochRef.current;
+    }
+    const viewport = container.clientHeight || FALLBACK_VIEWPORT_PX;
+    const top = topToCenterRow(offsetsRef.current, index, viewport);
+    isPinnedRef.current = false;
+    viewAnchorRef.current = null;
+    flushSync(() => {
+      setIsPinned(false);
+      setViewTop({ anchorId: rowIdsRef.current[0] ?? null, top });
+    });
+    container.scrollTop = rowsAreaTop(container, rowsArea) + top;
+    return rowNodes.current.get(messageId);
   }, []);
 
   const showJumpNotice = useCallback(() => {
@@ -1295,21 +1711,29 @@ export const MessageList = memo(function MessageList({
         if (pinned) {
           setMissedCount(0);
         }
+        // Where the reader is now, for the next layout shift above them.
+        captureViewAnchor();
       }
     };
     pass();
-  }, []);
+  }, [captureViewAnchor]);
 
   /**
    * Scroll a rendered message into view and light it up. False when the message
    * is not in the loaded window.
    */
   const focusRow = useCallback((messageId: string): boolean => {
-    const node = rowNodes.current.get(messageId);
+    // A loaded row that is outside the window is mounted first, with the
+    // viewport already on it: smooth-scrolling across thousands of pixels of
+    // spacer to reach it would mount and measure every row on the way.
+    const node =
+      rowNodes.current.get(messageId) ??
+      (windowedRef.current ? revealRow(messageId) : undefined);
     const container = scrollRef.current;
     if (!node || !container) {
       return false;
     }
+    viewAnchorRef.current = null;
     // A jump parks the reader in history, so the list stops following the
     // tail now, in the ref as well as the state: the ResizeObserver reads the
     // ref and can fire before React has re-rendered. See `jumpingRef`.
@@ -1353,7 +1777,7 @@ export const MessageList = memo(function MessageList({
     }
     flashTimer.current = window.setTimeout(() => setFlashId(null), HIGHLIGHT_MS);
     return true;
-  }, [settleJump]);
+  }, [revealRow, settleJump]);
 
   /**
    * Go to a message wherever it lives: a rendered row is scrolled to directly,
@@ -1540,8 +1964,20 @@ export const MessageList = memo(function MessageList({
     if (!container || typeof ResizeObserver === "undefined") {
       return;
     }
+    if (windowedRef.current) {
+      viewportHeightRef.current = container.clientHeight;
+    }
     const observer = new ResizeObserver(() => {
       setCanScrollDown(distanceFromBottom(container) > SCROLL_END_SLACK_PX);
+      // The pane got taller or shorter (a window resize, the composer growing):
+      // plan the window for the new height.
+      if (
+        windowedRef.current &&
+        Math.abs(container.clientHeight - viewportHeightRef.current) >
+          VIEWPORT_RESIZE_SLOP_PX
+      ) {
+        planWindow(isPinnedRef.current && !hasNewerRef.current);
+      }
       const anchor = scrollAnchorRef.current;
       if (anchor) {
         const node = rowNodes.current.get(anchor.id);
@@ -1566,7 +2002,95 @@ export const MessageList = memo(function MessageList({
       observer.observe(child);
     }
     return () => observer.disconnect();
-  }, [scrollToBottom, messages.length, isLoading]);
+  }, [scrollToBottom, planWindow, messages.length, isLoading]);
+
+  // A channel's measurements are that channel's: heights are per message id,
+  // and the mean of another transcript's rows is a bad guess for this one.
+  // A layout effect, so it runs before the observer reports the new rows.
+  useLayoutEffect(() => {
+    heightsRef.current.clear();
+    heightsEpochRef.current += 1;
+    viewAnchorRef.current = null;
+    selectionKeepRef.current = null;
+    pendingFocusRef.current = null;
+    setViewTop(null);
+  }, [channelId]);
+
+  // After every commit of a windowed list: rows that mounted or changed above
+  // the reader have moved what they are looking at, so put it back. Before the
+  // effects below that scroll on purpose (landing, restoring after a prepend),
+  // which take the anchor again once they have.
+  useLayoutEffect(() => {
+    if (windowed) {
+      applyViewAnchor();
+    }
+  });
+
+  // The row an arrow key asked for from outside the window is mounted now.
+  useLayoutEffect(() => {
+    const id = pendingFocusRef.current;
+    const node = id ? rowNodes.current.get(id) : undefined;
+    if (!id || !node) {
+      return;
+    }
+    pendingFocusRef.current = null;
+    node.focus({ preventScroll: true });
+    if (scrollRef.current) {
+      viewAnchorRef.current = null;
+      scrollWithin(scrollRef.current, node, { block: "nearest" });
+    }
+  });
+
+  // A text selection keeps its rows mounted. Dragging across more rows than
+  // the window holds would otherwise unmount the rows the selection starts in,
+  // and a selection whose ends are gone from the DOM collapses. The rows from
+  // one end to the other stay (up to `SELECTION_KEEP_MAX_ROWS`), which is also
+  // what makes Copy include the ones between. Held by id, so a page prepended
+  // above it moves nothing.
+  useEffect(() => {
+    if (!windowed) {
+      return;
+    }
+    let frame = 0;
+    const rowIdOf = (node: Node | null): string | null => {
+      const element = node instanceof Element ? node : (node?.parentElement ?? null);
+      const container = scrollRef.current;
+      const row = element?.closest("[data-row-id]");
+      return row && container?.contains(row)
+        ? (row as HTMLElement).dataset.rowId ?? null
+        : null;
+    };
+    const read = () => {
+      frame = 0;
+      const selection = document.getSelection();
+      let next: { a: string; f: string } | null = null;
+      if (selection && !selection.isCollapsed) {
+        const a = rowIdOf(selection.anchorNode);
+        const f = rowIdOf(selection.focusNode);
+        if (a && f) {
+          next = { a, f };
+        }
+      }
+      const previous = selectionKeepRef.current;
+      if (previous?.a !== next?.a || previous?.f !== next?.f) {
+        selectionKeepRef.current = next;
+        setKeepEpoch((epoch) => epoch + 1);
+      }
+    };
+    const onChange = () => {
+      if (!frame) {
+        frame = requestAnimationFrame(read);
+      }
+    };
+    document.addEventListener("selectionchange", onChange);
+    return () => {
+      document.removeEventListener("selectionchange", onChange);
+      if (frame) {
+        cancelAnimationFrame(frame);
+      }
+      selectionKeepRef.current = null;
+    };
+  }, [windowed]);
 
   // Land at the bottom after a jump back to the present.
   //
@@ -1676,6 +2200,30 @@ export const MessageList = memo(function MessageList({
     if (unreadSince && unreadId) {
       const node =
         unreadDividerRef.current ?? rowNodes.current.get(unreadId) ?? null;
+      if (!node && windowedRef.current && indexById.has(unreadId)) {
+        // Loaded but outside the window (the NEW rule is higher than the tail
+        // page's window reaches): plan the window around it and land when that
+        // commits. State set in a layout effect renders before paint, and this
+        // effect depends on `viewTop`, so it runs again with the row mounted.
+        const container = scrollRef.current;
+        if (container) {
+          if (offsetsEpochRef.current !== heightsEpochRef.current) {
+            offsetsRef.current = computeOffsets(rowIds, heightsRef.current);
+            offsetsEpochRef.current = heightsEpochRef.current;
+          }
+          isPinnedRef.current = false;
+          setIsPinned(false);
+          setViewTop({
+            anchorId: rowIds[0] ?? null,
+            top: topToCenterRow(
+              offsetsRef.current,
+              indexById.get(unreadId)!,
+              container.clientHeight || FALLBACK_VIEWPORT_PX,
+            ),
+          });
+        }
+        return;
+      }
       if (!node) {
         const frame = requestAnimationFrame(() => {
           if (unreadLandedRef.current === key) {
@@ -1748,6 +2296,10 @@ export const MessageList = memo(function MessageList({
     isLoading,
     forumLandAtTop,
     hasMore,
+    // Windowed: re-run once the window planned around the NEW rule commits.
+    viewTop,
+    indexById,
+    rowIds,
   ]);
 
   useEffect(() => {
@@ -1950,13 +2502,19 @@ export const MessageList = memo(function MessageList({
         anchor.offset = offsetInViewport(container, node);
       }
     }
+    // Where the reader is, for the next layout shift above them (windowed).
+    captureViewAnchor();
     // A jump's own animation: `settleJump` reads the geometry when it lands.
     // Its first frames are still near the bottom and would re-pin the list.
     if (jumpingRef.current) {
+      planWindow(false);
       return;
     }
     const distance = distanceFromBottom(container);
     const pinned = distance <= STICKY_THRESHOLD_PX;
+    // The window moves with the reader (before `setIsPinned`: it carries the
+    // new pin state along when it renders, so the two land in one commit).
+    planWindow(pinned && !hasNewerRef.current, pinned);
     setIsPinned(pinned);
     if (pinned) {
       setMissedCount(0);
@@ -1973,7 +2531,7 @@ export const MessageList = memo(function MessageList({
     if (distance <= LOAD_MORE_THRESHOLD_PX) {
       loadNewer();
     }
-  }, [loadNewer, loadOlder]);
+  }, [captureViewAnchor, loadNewer, loadOlder, planWindow]);
   handleScrollRef.current = handleScroll;
 
   // Who a voice note's "ouviu" names: the conversation's participants, then
@@ -2012,6 +2570,383 @@ export const MessageList = memo(function MessageList({
   if (isLoading) {
     return <MessageListSkeleton />;
   }
+
+  const renderRow = (row: Row, index: number): ReactNode => {
+    const { joinTop, joinBottom } = mentionJoins(
+      rows,
+      mentionMask,
+      index,
+      firstUnreadId,
+    );
+    const rowId = row.message.id;
+    // React's `key`, not `rowId` (every callback and lookup below
+    // stays on the real id): a just-sent message's id changes from
+    // `pending:<nonce>` to the server's real one the moment it is
+    // confirmed (see the `message-broadcast` handler in
+    // `use-chat.ts`), and keying on `id` there would unmount this row
+    // and mount a fresh one mid-interaction — losing an open context
+    // menu, a hover state, an in-flight touch. `use-chat.ts` carries
+    // the nonce onto the confirmed message for exactly this: keying
+    // on it instead keeps the same DOM node across that swap. Every
+    // other message either never had a nonce (loaded from history)
+    // or has since lost it (a later update that does not carry it
+    // forward), so this only changes identity for the message you
+    // just sent, in the seconds after you sent it.
+    const elementKey = row.message.nonce ?? rowId;
+  // The windowed list measures each row's wrapper (its height feeds the
+  // spacers); the ref is stable per row so it is not re-attached every render.
+  const measureRef = windowed
+    ? stableRowCallback(
+        rowId,
+        "measure",
+        [attachRowMeasure],
+        () => (node: HTMLElement | null) => attachRowMeasure(rowId, node),
+      )
+    : undefined;
+    const isOpening = forumOpeningId !== null && rowId === forumOpeningId;
+    if (row.message.systemKind === "app_session") {
+      return (
+        <RowShell key={elementKey} windowed={windowed} rowId={rowId} measureRef={measureRef}>
+          {row.dayLabel ? <DaySeparator label={row.dayLabel} /> : null}
+          <AppSessionTimelineRow
+            messageId={rowId}
+            channelId={row.message.channelId}
+            serverId={serverId ?? null}
+            createdAt={row.message.createdAt}
+            authorName={row.message.authorName}
+            appSession={row.message.appSession}
+            viewerId={currentUserId}
+            authors={authors}
+            registerRow={registerRow}
+          />
+        </RowShell>
+      );
+    }
+    if (row.message.systemKind === "nudge") {
+      const mine = row.message.authorId === currentUserId;
+      const name = mine
+        ? (participants?.find((one) => one.id !== currentUserId)?.displayName ??
+          row.message.authorName)
+        : row.message.authorName;
+      return (
+        <RowShell key={elementKey} windowed={windowed} rowId={rowId} measureRef={measureRef}>
+          {row.dayLabel ? <DaySeparator label={row.dayLabel} /> : null}
+          <NudgeLine
+            messageId={rowId}
+            createdAt={row.message.createdAt}
+            mine={mine}
+            name={name}
+            registerRow={registerRow}
+            onDelete={
+              onDeleteMessage
+                ? stableRowCallback(
+                    rowId,
+                    "delete",
+                    [onDeleteMessage],
+                    () => () => void onDeleteMessage(rowId),
+                  )
+                : undefined
+            }
+            onReport={
+              onReportMessage
+                ? stableRowCallback(
+                    rowId,
+                    "report",
+                    [onReportMessage, row.message],
+                    () => () => onReportMessage(row.message),
+                  )
+                : undefined
+            }
+          />
+        </RowShell>
+      );
+    }
+    return (
+    <RowShell key={elementKey} windowed={windowed} rowId={rowId} measureRef={measureRef}>
+    <ForumOpeningScope active={isOpening}>
+    <MessageRow
+      row={row}
+      windowed={windowed}
+      posInSet={windowed ? index + 1 : undefined}
+      forumOp={
+        forumPost !== null &&
+        forumPost.authorId !== null &&
+        row.message.authorId === forumPost.authorId
+      }
+      forumAnswer={
+        forumPost !== null && forumPost.acceptedAnswerId === rowId
+      }
+      onToggleAnswer={
+        forumPost?.onToggleAnswer && !isOpening && !row.message.pending
+          ? stableRowCallback(
+              rowId,
+              "toggleAnswer",
+              [forumPost.onToggleAnswer],
+              () => () => forumPost.onToggleAnswer?.(rowId),
+            )
+          : undefined
+      }
+      mentionJoinTop={joinTop}
+      mentionJoinBottom={joinBottom}
+      stream={variant === "stream"}
+      streamBadges={streamBadges}
+      zebra={variant === "stream" && index % 2 === 1}
+      currentUserId={currentUserId}
+      currentUsername={currentUsername}
+      serverId={serverId}
+      channelId={channelId}
+      canModerate={canModerate}
+      // Your own message is never curtained: blocking someone who once
+      // shared your account's id is not a thing, and a reader hiding
+      // their own words reads as data loss.
+      isBlocked={
+        row.message.authorId !== currentUserId &&
+        blockedAuthorIds.has(row.message.authorId) &&
+        !revealedIds.has(rowId)
+      }
+      onReveal={stableRowCallback(rowId, "reveal", [], () => () =>
+        setRevealedIds((current) => new Set(current).add(rowId)),
+      )}
+      isFlashing={flashId === rowId}
+      registerRow={registerRow}
+      onJumpToMessage={jumpToMessage}
+      onReply={
+        onReplyTo
+          ? stableRowCallback(
+              rowId,
+              "reply",
+              [onReplyTo, row.message],
+              () => () => onReplyTo(row.message),
+            )
+          : undefined
+      }
+      isPickerOpen={pickerMessageId === rowId}
+      isEditing={editingId === rowId}
+      onOpenPicker={stableRowCallback(
+        rowId,
+        "openPicker",
+        [],
+        () => () => setPickerMessageId(rowId),
+      )}
+      onClosePicker={stableRowCallback(
+        rowId,
+        "closePicker",
+        [],
+        () => () => {
+          setPickerMessageId(null);
+          // The picker unmounts on close; without this, the focus it
+          // held goes to <body> and the keyboard user is adrift.
+          requestAnimationFrame(() => {
+            rowNodes.current.get(rowId)?.focus();
+          });
+        },
+      )}
+      onStartEdit={stableRowCallback(
+        rowId,
+        "startEdit",
+        [],
+        () => () => {
+          setEditingId(rowId);
+          setActiveMessageId(rowId);
+        },
+      )}
+      onCancelEdit={stableRowCallback(
+        rowId,
+        "cancelEdit",
+        [],
+        () => () => setEditingId(null),
+      )}
+      onSubmitEdit={stableRowCallback(
+        rowId,
+        "submitEdit",
+        [onEditMessage],
+        () => async (body: string) => {
+          await onEditMessage?.(rowId, body);
+          setEditingId(null);
+        },
+      )}
+      onDelete={
+        onDeleteMessage
+          ? stableRowCallback(
+              rowId,
+              "delete",
+              [onDeleteMessage],
+              () => () => void onDeleteMessage(rowId),
+            )
+          : undefined
+      }
+      selecting={selecting}
+      selected={selectedIds.has(rowId)}
+      onToggleSelect={
+        selecting
+          ? stableRowCallback(
+              rowId,
+              "toggleSelect",
+              [toggleSelected],
+              () => (extend: boolean) => toggleSelected(rowId, extend),
+            )
+          : undefined
+      }
+      onStartSelect={
+        bulkDeleteEnabled && !selecting
+          ? stableRowCallback(
+              rowId,
+              "startSelect",
+              [startSelecting],
+              () => () => startSelecting(rowId),
+            )
+          : undefined
+      }
+      onPin={
+        onPinMessage
+          ? stableRowCallback(
+              rowId,
+              "pin",
+              [onPinMessage],
+              () => () => void onPinMessage(rowId),
+            )
+          : undefined
+      }
+      onUnpin={
+        onUnpinMessage
+          ? stableRowCallback(
+              rowId,
+              "unpin",
+              [onUnpinMessage],
+              () => () => void onUnpinMessage(rowId),
+            )
+          : undefined
+      }
+      onReport={
+        onReportMessage
+          ? stableRowCallback(
+              rowId,
+              "report",
+              [onReportMessage, row.message],
+              () => () => onReportMessage(row.message),
+            )
+          : undefined
+      }
+      onToggleReaction={onToggleReaction}
+      onVotePoll={onVotePoll}
+      onClosePoll={onClosePoll}
+      onRetry={stableRowCallback(
+        rowId,
+        "retry",
+        [onRetryMessage, row.message.nonce],
+        () => () =>
+          row.message.nonce && onRetryMessage?.(row.message.nonce),
+      )}
+      onDiscard={stableRowCallback(
+        rowId,
+        "discard",
+        [onDiscardMessage, row.message.nonce],
+        () => () =>
+          row.message.nonce && onDiscardMessage?.(row.message.nonce),
+      )}
+      onStartThread={
+        onStartThread
+          ? stableRowCallback(
+              rowId,
+              "startThread",
+              [onStartThread, row.message],
+              () => () => onStartThread(row.message),
+            )
+          : undefined
+      }
+      onOpenThread={
+        onOpenThread && row.message.thread
+          ? stableRowCallback(
+              rowId,
+              "openThread",
+              [onOpenThread, row.message],
+              () => () =>
+                onOpenThread(row.message.thread!, row.message),
+            )
+          : undefined
+      }
+      isThreadOpen={
+        row.message.thread?.channelId != null &&
+        row.message.thread.channelId === activeThreadId
+      }
+      threadUnread={
+        row.message.thread
+          ? unreadThreadIds.has(row.message.thread.channelId)
+          : false
+      }
+      showLinkEmbeds={showLinkEmbeds}
+      isActive={rowId === effectiveActiveId}
+      onFocusRow={stableRowCallback(
+        rowId,
+        "focusRow",
+        [],
+        () => () => setActiveMessageId(rowId),
+      )}
+      onNavigate={handleRowNavigate}
+      onMenuOpenRow={stableRowCallback(
+        rowId,
+        "menuOpenRow",
+        [],
+        () => () => markMenuRow(rowId),
+      )}
+      onMenuClose={stableRowCallback(
+        rowId,
+        "menuClose",
+        [],
+        () => (refocus: boolean) => {
+          markMenuRow(null);
+          if (refocus) {
+            requestAnimationFrame(() => {
+              rowNodes.current.get(rowId)?.focus();
+            });
+          }
+        },
+      )}
+      authors={authors}
+      authorsComplete={
+        authorsComplete &&
+        !!authorGoneCheck?.confirmed.has(row.message.authorId)
+      }
+      roles={roles}
+      unreadHeld={unreadHeld}
+      onForward={
+        onForward
+          ? stableRowCallback(
+              rowId,
+              "forward",
+              [onForward, row.message],
+              () => () => onForward(row.message),
+            )
+          : undefined
+      }
+      onMarkUnread={
+        onMarkUnread
+          ? stableRowCallback(
+              rowId,
+              "markUnread",
+              [onMarkUnread, row.message],
+              () => () => onMarkUnread(row.message),
+            )
+          : undefined
+      }
+      onMarkRead={onMarkRead}
+      showUnreadDivider={rowId === firstUnreadId}
+      afterForumOpening={
+        forumOpeningId !== null &&
+        index > 0 &&
+        rows[index - 1]?.message.id === forumOpeningId &&
+        forumPost?.afterOpening != null
+      }
+      unreadDividerRef={
+        rowId === firstUnreadId ? unreadDividerRef : undefined
+      }
+    />
+    </ForumOpeningScope>
+    {isOpening && forumPost?.afterOpening}
+    </RowShell>
+    );
+  };
+
 
   return (
     <CustomEmojiProvider serverId={serverId}>
@@ -2067,370 +3002,27 @@ export const MessageList = memo(function MessageList({
           ) : (
             <EmptyState onCopyOwnerInvite={onCopyOwnerInvite} />
           )
+        ) : windowed && segments ? (
+          <div
+            ref={rowsAreaRef}
+            data-message-window=""
+            data-mounted-rows={segments.reduce((n, s) => n + (s.kind === "row" ? 1 : 0), 0)}
+          >
+            {segments.map((segment) =>
+              segment.kind === "gap" ? (
+                <div
+                  key={`gap-${segment.from}`}
+                  aria-hidden="true"
+                  data-message-window-gap=""
+                  style={{ height: segment.height }}
+                />
+              ) : (
+                renderRow(rows[segment.index]!, segment.index)
+              ),
+            )}
+          </div>
         ) : (
-          rows.map((row, index) => {
-            const { joinTop, joinBottom } = mentionJoins(
-              rows,
-              mentionMask,
-              index,
-              firstUnreadId,
-            );
-            const rowId = row.message.id;
-            // React's `key`, not `rowId` (every callback and lookup below
-            // stays on the real id): a just-sent message's id changes from
-            // `pending:<nonce>` to the server's real one the moment it is
-            // confirmed (see the `message-broadcast` handler in
-            // `use-chat.ts`), and keying on `id` there would unmount this row
-            // and mount a fresh one mid-interaction — losing an open context
-            // menu, a hover state, an in-flight touch. `use-chat.ts` carries
-            // the nonce onto the confirmed message for exactly this: keying
-            // on it instead keeps the same DOM node across that swap. Every
-            // other message either never had a nonce (loaded from history)
-            // or has since lost it (a later update that does not carry it
-            // forward), so this only changes identity for the message you
-            // just sent, in the seconds after you sent it.
-            const elementKey = row.message.nonce ?? rowId;
-            const isOpening = forumOpeningId !== null && rowId === forumOpeningId;
-            if (row.message.systemKind === "app_session") {
-              return (
-                <Fragment key={elementKey}>
-                  {row.dayLabel ? <DaySeparator label={row.dayLabel} /> : null}
-                  <AppSessionTimelineRow
-                    messageId={rowId}
-                    channelId={row.message.channelId}
-                    serverId={serverId ?? null}
-                    createdAt={row.message.createdAt}
-                    authorName={row.message.authorName}
-                    appSession={row.message.appSession}
-                    viewerId={currentUserId}
-                    authors={authors}
-                    registerRow={registerRow}
-                  />
-                </Fragment>
-              );
-            }
-            if (row.message.systemKind === "nudge") {
-              const mine = row.message.authorId === currentUserId;
-              const name = mine
-                ? (participants?.find((one) => one.id !== currentUserId)?.displayName ??
-                  row.message.authorName)
-                : row.message.authorName;
-              return (
-                <Fragment key={elementKey}>
-                  {row.dayLabel ? <DaySeparator label={row.dayLabel} /> : null}
-                  <NudgeLine
-                    messageId={rowId}
-                    createdAt={row.message.createdAt}
-                    mine={mine}
-                    name={name}
-                    registerRow={registerRow}
-                    onDelete={
-                      onDeleteMessage
-                        ? stableRowCallback(
-                            rowId,
-                            "delete",
-                            [onDeleteMessage],
-                            () => () => void onDeleteMessage(rowId),
-                          )
-                        : undefined
-                    }
-                    onReport={
-                      onReportMessage
-                        ? stableRowCallback(
-                            rowId,
-                            "report",
-                            [onReportMessage, row.message],
-                            () => () => onReportMessage(row.message),
-                          )
-                        : undefined
-                    }
-                  />
-                </Fragment>
-              );
-            }
-            return (
-            <Fragment key={elementKey}>
-            <ForumOpeningScope active={isOpening}>
-            <MessageRow
-              row={row}
-              forumOp={
-                forumPost !== null &&
-                forumPost.authorId !== null &&
-                row.message.authorId === forumPost.authorId
-              }
-              forumAnswer={
-                forumPost !== null && forumPost.acceptedAnswerId === rowId
-              }
-              onToggleAnswer={
-                forumPost?.onToggleAnswer && !isOpening && !row.message.pending
-                  ? stableRowCallback(
-                      rowId,
-                      "toggleAnswer",
-                      [forumPost.onToggleAnswer],
-                      () => () => forumPost.onToggleAnswer?.(rowId),
-                    )
-                  : undefined
-              }
-              mentionJoinTop={joinTop}
-              mentionJoinBottom={joinBottom}
-              stream={variant === "stream"}
-              streamBadges={streamBadges}
-              zebra={variant === "stream" && index % 2 === 1}
-              currentUserId={currentUserId}
-              currentUsername={currentUsername}
-              serverId={serverId}
-              channelId={channelId}
-              canModerate={canModerate}
-              // Your own message is never curtained: blocking someone who once
-              // shared your account's id is not a thing, and a reader hiding
-              // their own words reads as data loss.
-              isBlocked={
-                row.message.authorId !== currentUserId &&
-                blockedAuthorIds.has(row.message.authorId) &&
-                !revealedIds.has(rowId)
-              }
-              onReveal={stableRowCallback(rowId, "reveal", [], () => () =>
-                setRevealedIds((current) => new Set(current).add(rowId)),
-              )}
-              isFlashing={flashId === rowId}
-              registerRow={registerRow}
-              onJumpToMessage={jumpToMessage}
-              onReply={
-                onReplyTo
-                  ? stableRowCallback(
-                      rowId,
-                      "reply",
-                      [onReplyTo, row.message],
-                      () => () => onReplyTo(row.message),
-                    )
-                  : undefined
-              }
-              isPickerOpen={pickerMessageId === rowId}
-              isEditing={editingId === rowId}
-              onOpenPicker={stableRowCallback(
-                rowId,
-                "openPicker",
-                [],
-                () => () => setPickerMessageId(rowId),
-              )}
-              onClosePicker={stableRowCallback(
-                rowId,
-                "closePicker",
-                [],
-                () => () => {
-                  setPickerMessageId(null);
-                  // The picker unmounts on close; without this, the focus it
-                  // held goes to <body> and the keyboard user is adrift.
-                  requestAnimationFrame(() => {
-                    rowNodes.current.get(rowId)?.focus();
-                  });
-                },
-              )}
-              onStartEdit={stableRowCallback(
-                rowId,
-                "startEdit",
-                [],
-                () => () => {
-                  setEditingId(rowId);
-                  setActiveMessageId(rowId);
-                },
-              )}
-              onCancelEdit={stableRowCallback(
-                rowId,
-                "cancelEdit",
-                [],
-                () => () => setEditingId(null),
-              )}
-              onSubmitEdit={stableRowCallback(
-                rowId,
-                "submitEdit",
-                [onEditMessage],
-                () => async (body: string) => {
-                  await onEditMessage?.(rowId, body);
-                  setEditingId(null);
-                },
-              )}
-              onDelete={
-                onDeleteMessage
-                  ? stableRowCallback(
-                      rowId,
-                      "delete",
-                      [onDeleteMessage],
-                      () => () => void onDeleteMessage(rowId),
-                    )
-                  : undefined
-              }
-              selecting={selecting}
-              selected={selectedIds.has(rowId)}
-              onToggleSelect={
-                selecting
-                  ? stableRowCallback(
-                      rowId,
-                      "toggleSelect",
-                      [toggleSelected],
-                      () => (extend: boolean) => toggleSelected(rowId, extend),
-                    )
-                  : undefined
-              }
-              onStartSelect={
-                bulkDeleteEnabled && !selecting
-                  ? stableRowCallback(
-                      rowId,
-                      "startSelect",
-                      [startSelecting],
-                      () => () => startSelecting(rowId),
-                    )
-                  : undefined
-              }
-              onPin={
-                onPinMessage
-                  ? stableRowCallback(
-                      rowId,
-                      "pin",
-                      [onPinMessage],
-                      () => () => void onPinMessage(rowId),
-                    )
-                  : undefined
-              }
-              onUnpin={
-                onUnpinMessage
-                  ? stableRowCallback(
-                      rowId,
-                      "unpin",
-                      [onUnpinMessage],
-                      () => () => void onUnpinMessage(rowId),
-                    )
-                  : undefined
-              }
-              onReport={
-                onReportMessage
-                  ? stableRowCallback(
-                      rowId,
-                      "report",
-                      [onReportMessage, row.message],
-                      () => () => onReportMessage(row.message),
-                    )
-                  : undefined
-              }
-              onToggleReaction={onToggleReaction}
-              onVotePoll={onVotePoll}
-              onClosePoll={onClosePoll}
-              onRetry={stableRowCallback(
-                rowId,
-                "retry",
-                [onRetryMessage, row.message.nonce],
-                () => () =>
-                  row.message.nonce && onRetryMessage?.(row.message.nonce),
-              )}
-              onDiscard={stableRowCallback(
-                rowId,
-                "discard",
-                [onDiscardMessage, row.message.nonce],
-                () => () =>
-                  row.message.nonce && onDiscardMessage?.(row.message.nonce),
-              )}
-              onStartThread={
-                onStartThread
-                  ? stableRowCallback(
-                      rowId,
-                      "startThread",
-                      [onStartThread, row.message],
-                      () => () => onStartThread(row.message),
-                    )
-                  : undefined
-              }
-              onOpenThread={
-                onOpenThread && row.message.thread
-                  ? stableRowCallback(
-                      rowId,
-                      "openThread",
-                      [onOpenThread, row.message],
-                      () => () =>
-                        onOpenThread(row.message.thread!, row.message),
-                    )
-                  : undefined
-              }
-              isThreadOpen={
-                row.message.thread?.channelId != null &&
-                row.message.thread.channelId === activeThreadId
-              }
-              threadUnread={
-                row.message.thread
-                  ? unreadThreadIds.has(row.message.thread.channelId)
-                  : false
-              }
-              showLinkEmbeds={showLinkEmbeds}
-              isActive={rowId === effectiveActiveId}
-              onFocusRow={stableRowCallback(
-                rowId,
-                "focusRow",
-                [],
-                () => () => setActiveMessageId(rowId),
-              )}
-              onNavigate={handleRowNavigate}
-              onMenuOpenRow={stableRowCallback(
-                rowId,
-                "menuOpenRow",
-                [],
-                () => () => markMenuRow(rowId),
-              )}
-              onMenuClose={stableRowCallback(
-                rowId,
-                "menuClose",
-                [],
-                () => (refocus: boolean) => {
-                  markMenuRow(null);
-                  if (refocus) {
-                    requestAnimationFrame(() => {
-                      rowNodes.current.get(rowId)?.focus();
-                    });
-                  }
-                },
-              )}
-              authors={authors}
-              authorsComplete={
-                authorsComplete &&
-                !!authorGoneCheck?.confirmed.has(row.message.authorId)
-              }
-              roles={roles}
-              unreadHeld={unreadHeld}
-              onForward={
-                onForward
-                  ? stableRowCallback(
-                      rowId,
-                      "forward",
-                      [onForward, row.message],
-                      () => () => onForward(row.message),
-                    )
-                  : undefined
-              }
-              onMarkUnread={
-                onMarkUnread
-                  ? stableRowCallback(
-                      rowId,
-                      "markUnread",
-                      [onMarkUnread, row.message],
-                      () => () => onMarkUnread(row.message),
-                    )
-                  : undefined
-              }
-              onMarkRead={onMarkRead}
-              showUnreadDivider={rowId === firstUnreadId}
-              afterForumOpening={
-                forumOpeningId !== null &&
-                index > 0 &&
-                rows[index - 1]?.message.id === forumOpeningId &&
-                forumPost?.afterOpening != null
-              }
-              unreadDividerRef={
-                rowId === firstUnreadId ? unreadDividerRef : undefined
-              }
-            />
-            </ForumOpeningScope>
-            {isOpening && forumPost?.afterOpening}
-            </Fragment>
-            );
-          })
+          rows.map(renderRow)
         )}
 
         {channelId ? (
@@ -2552,6 +3144,39 @@ export const MessageList = memo(function MessageList({
     </CustomEmojiProvider>
   );
 });
+
+/**
+ * One transcript row with whatever hangs on it (its day line, the NEW rule,
+ * the opening message's decoration), as ONE element the windowed list can
+ * measure and replace with a spacer of the same height. Unwindowed it is
+ * nothing at all, so the old list's DOM is exactly what it was.
+ *
+ * `flow-root`, so the wrapper's height includes its first child's top margin
+ * (the gap above a new author's block) and consecutive wrappers add up to the
+ * height of the whole list: nothing collapses through the wrapper. A row's own
+ * margins never meet a sibling's, since rows carry only top margins, so that
+ * changes no spacing.
+ */
+function RowShell({
+  windowed,
+  rowId,
+  measureRef,
+  children,
+}: {
+  windowed: boolean;
+  rowId: string;
+  measureRef?: (node: HTMLElement | null) => void;
+  children: ReactNode;
+}) {
+  if (!windowed) {
+    return <>{children}</>;
+  }
+  return (
+    <div ref={measureRef} data-row-id={rowId} className="flow-root">
+      {children}
+    </div>
+  );
+}
 
 const FAILED_ACTION_TILE =
   "inline-flex h-8 w-full min-w-0 items-center justify-center whitespace-nowrap rounded-md border border-ink-4 bg-ink-3 px-2.5 text-xs font-medium text-paper outline-none hover:border-signal/50 hover:text-signal focus-visible:ring-2 focus-visible:ring-signal/60 disabled:pointer-events-none disabled:opacity-40";
@@ -3194,6 +3819,16 @@ interface MessageRowProps {
   forumAnswer?: boolean;
   /** A forum post: mark (or unmark) this reply as the answer. */
   onToggleAnswer?: () => void;
+  /**
+   * The list is windowed (`message_list_windowing`): the row builds what only
+   * a pointer or the keyboard needs, the hover toolbar and its tooltips and
+   * the delete confirmation, when it is first needed rather than up front, and
+   * is laid out in full instead of `content-visibility` (the window already
+   * keeps off-screen rows out of the DOM).
+   */
+  windowed?: boolean;
+  /** This row's place in the loaded transcript, for `aria-posinset`. */
+  posInSet?: number;
 }
 
 const MessageRow = memo(function MessageRow({
@@ -3257,6 +3892,8 @@ const MessageRow = memo(function MessageRow({
   forumOp = false,
   forumAnswer = false,
   onToggleAnswer,
+  windowed = false,
+  posInSet,
 }: MessageRowProps) {
   const { t, locale } = useTranslation();
   const openProfile = useProfilePopover();
@@ -3465,8 +4102,20 @@ const MessageRow = memo(function MessageRow({
   ) : null;
 
   const [deleteOpen, setDeleteOpen] = useState(false);
+  // The confirmation is a Radix dialog and most rows never open one: windowed,
+  // it is mounted the first time it is asked for and kept so it can animate out.
+  const [deleteMounted, setDeleteMounted] = useState(false);
+  // The hover toolbar is six tooltips, a popper anchor each, and a presence:
+  // windowed, it is built on the first pointer or focus on the row, not for
+  // every row of a long transcript up front. CSS still shows and hides it.
+  const [toolbarArmed, setToolbarArmed] = useState(false);
+  const toolbarBuilt = !windowed || toolbarArmed || moreOpen;
+  const armToolbar =
+    windowed && !toolbarArmed ? () => setToolbarArmed(true) : undefined;
+  const rowContentVisibility = windowed ? undefined : ROW_CONTENT_VISIBILITY;
 
   function confirmDelete() {
+    setDeleteMounted(true);
     setDeleteOpen(true);
   }
 
@@ -3498,10 +4147,16 @@ const MessageRow = memo(function MessageRow({
           }}
           tabIndex={isActive ? 0 : -1}
           aria-label={t("chat.blocked")}
-          onFocus={onFocusRow}
+          onFocus={() => {
+            armToolbar?.();
+            onFocusRow();
+          }}
+          onPointerEnter={armToolbar}
+          aria-posinset={posInSet}
+          aria-setsize={posInSet === undefined ? undefined : -1}
           onKeyDown={(event) => onNavigate(event, message.id)}
           className="group mt-1 flex items-center gap-2 rounded-md px-5 py-1 text-xs text-paper-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
-          style={ROW_CONTENT_VISIBILITY}
+          style={rowContentVisibility}
         >
           <span className="italic">{t("chat.blocked")}</span>
           <button
@@ -3754,7 +4409,13 @@ const MessageRow = memo(function MessageRow({
           }}
           tabIndex={isActive ? 0 : -1}
           aria-label={ariaLabel}
-          onFocus={onFocusRow}
+          onFocus={() => {
+            armToolbar?.();
+            onFocusRow();
+          }}
+          onPointerEnter={armToolbar}
+          aria-posinset={posInSet}
+          aria-setsize={posInSet === undefined ? undefined : -1}
           onKeyDown={(event) => onNavigate(event, message.id)}
           // Merges with the handler Radix's Trigger already attaches (see
           // context-menu.tsx): this only records which row a keyboard-opened
@@ -3822,7 +4483,7 @@ const MessageRow = memo(function MessageRow({
               select overlay stay outside it, everything expensive is inside. */}
           <div
             className="flex min-w-0 flex-1 items-start"
-            style={ROW_CONTENT_VISIBILITY}
+            style={rowContentVisibility}
           >
             {stream ? null : startsGroup && !compact ? (
               <div
@@ -4142,7 +4803,7 @@ const MessageRow = memo(function MessageRow({
           {/* Hidden while picking a set: the toolbar sits above the row's
               select overlay, so leaving it up offers React and Reply on a row
               whose only job right now is to be ticked. */}
-          {isReal && !isEditing && !selecting && (
+          {isReal && !isEditing && !selecting && toolbarBuilt && (
             <div
               className={cn(
                 "absolute -top-3 right-2 z-10 items-center gap-0.5 rounded-md border border-ink-4 bg-ink-2 p-0.5 shadow-sm",
@@ -4395,14 +5056,16 @@ const MessageRow = memo(function MessageRow({
           )}
         </article>
       </ContextMenu>
-      <ConfirmDialog
-        open={deleteOpen}
-        title={t("chat.delete")}
-        description={t("chat.deleteConfirm")}
-        confirmLabel={t("chat.delete")}
-        onConfirm={() => onDelete?.()}
-        onClose={() => setDeleteOpen(false)}
-      />
+      {(!windowed || deleteMounted) && (
+        <ConfirmDialog
+          open={deleteOpen}
+          title={t("chat.delete")}
+          description={t("chat.deleteConfirm")}
+          confirmLabel={t("chat.delete")}
+          onConfirm={() => onDelete?.()}
+          onClose={() => setDeleteOpen(false)}
+        />
+      )}
     </>
   );
 });

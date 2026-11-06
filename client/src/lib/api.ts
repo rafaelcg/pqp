@@ -1202,6 +1202,13 @@ export interface VoiceConfig {
    * default; absent (an older API) reads as off, which is the old behaviour.
    */
   raisedHandSticky?: boolean;
+  /**
+   * `message_list_windowing`: the transcript mounts only the rows near the
+   * viewport (`lib/message-list-windowing.ts`). Global, on by default; only an
+   * explicit `false` turns it off, so an older API that sends no field leaves
+   * it on.
+   */
+  messageListWindowing?: boolean;
 }
 
 export const fetchVoiceConfig = (serverId: string) =>
