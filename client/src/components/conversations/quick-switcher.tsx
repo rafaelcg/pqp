@@ -1,12 +1,13 @@
 import type { UserStatus } from "@pqp/shared";
 import { Hash, Search, Volume2 } from "lucide-react";
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { formatBadgeCount } from "@/components/layout/channel-list";
 import { ServerIcon } from "@/components/layout/server-identity";
 import { Dialog } from "@/components/ui/dialog";
 import { StatusDot } from "@/components/user/status-dot";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useTranslation } from "@/lib/i18n";
+import { takeTypeAhead } from "@/lib/type-ahead";
 import {
   quickSwitcherItems,
   type SwitcherItem,
@@ -59,6 +60,16 @@ export function QuickSwitcher({
   const { t } = useTranslation();
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
+  // Whatever was typed while this chunk was still loading starts the query.
+  // Read at COMMIT, not at the first render: React holds a Suspense reveal back
+  // for up to 300 ms after its fallback painted, and the capture keeps taking
+  // keys until the fallback is actually gone.
+  useLayoutEffect(() => {
+    const held = takeTypeAhead();
+    if (held) {
+      setQuery(held);
+    }
+  }, []);
   const listboxId = useId();
   const listRef = useRef<HTMLDivElement>(null);
 
