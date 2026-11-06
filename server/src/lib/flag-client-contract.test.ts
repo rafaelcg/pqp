@@ -242,6 +242,13 @@ describe("GET /api/voice/config against the client that reads it", () => {
     // The answer reaches the component that renders the rows.
     const list = readFileSync(path.join(clientSrc, "components/chat/message-list.tsx"), "utf8");
     expect(list).toContain("useMessageListWindowing()");
+    const dashboard = readFileSync(
+      path.resolve(here, "../../../tools/admin-dashboard/site/novo.js"),
+      "utf8",
+    );
+    expect(dashboard).toMatch(/\bmessage_list_windowing:\s*"/);
+  });
+
   it("voice_gate is global, on by default, read off the global config and handed to every live gate", () => {
     const def = FEATURE_FLAGS.voice_gate;
     expect(def.perServer).toBe(false);
@@ -261,7 +268,6 @@ describe("GET /api/voice/config against the client that reads it", () => {
       path.resolve(here, "../../../tools/admin-dashboard/site/novo.js"),
       "utf8",
     );
-    expect(dashboard).toMatch(/\bmessage_list_windowing:\s*"/);
     expect(dashboard).toMatch(/\bvoice_gate:\s*"/);
   });
 });
