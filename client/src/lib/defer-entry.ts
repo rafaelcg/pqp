@@ -34,8 +34,28 @@ import { AFTER_FIRST_SCREEN_JS } from "./first-screen-gate";
 /** The single module entry tag Vite emits, as it emits it. */
 const ENTRY_TAG = /<script type="module" crossorigin src="([^"]+)"><\/script>/;
 
-export function deferEntryLoader(src: string, appChunk?: string): string {
+/**
+ * Vite 8 (Rolldown) splits the code the entry shares with the lazy chunks into
+ * several small files and writes a `<link rel="modulepreload">` for each into
+ * the head, where the browser requests them at the very top of the response:
+ * sixteen files, react-dom among them, in front of the stylesheet and the
+ * hero picture, which is exactly what this loader exists to prevent. Vite 6
+ * put all of that in the entry file and wrote none. The tags are taken out of
+ * the head here and the loader adds them when it starts the entry.
+ */
+const VITE_PRELOAD = /[ \t]*<link rel="modulepreload" crossorigin href="([^"]+)">\r?\n?/g;
+
+export function deferEntryLoader(
+  src: string,
+  appChunk?: string,
+  deps: readonly string[] = [],
+): string {
   const url = JSON.stringify(src).replace(/</g, "\\u003c");
+  // The entry's own static imports, requested at the moment the entry is and
+  // never earlier, which is the whole point of the loader.
+  const depPreload = deps.length
+    ? `var deps=${JSON.stringify(deps).replace(/</g, "\\u003c")};deps.forEach(function(h){var l=document.createElement("link");l.rel="modulepreload";l.crossOrigin="";l.href=h;document.head.appendChild(l)});`
+    : "";
   // On `/app` the shell is about to import the chat client (`App-*.js`, 2 MB with
   // everything it imports). The entry only discovers that when it has downloaded
   // and run, which on a first visit is one full round trip later than it could
@@ -45,7 +65,7 @@ export function deferEntryLoader(src: string, appChunk?: string): string {
   const preload = appChunk
     ? `var app=${JSON.stringify(appChunk).replace(/</g, "\\u003c")};if(/^\\/app(\\/|$)/.test(location.pathname)){var link=document.createElement("link");link.rel="modulepreload";link.crossOrigin="";link.href=app;document.head.appendChild(link)}`
     : "";
-  return `<script>(function(){${AFTER_FIRST_SCREEN_JS}${preload}var src=${url};function load(){if(load.d)return;load.d=1;var s=document.createElement("script");s.type="module";s.crossOrigin="";s.src=src;document.head.appendChild(s)}if(document.documentElement.getAttribute("data-route")!=="home"){load();return}afterFirstScreen(load);["pointerdown","keydown","touchstart","wheel"].forEach(function(e){addEventListener(e,load,{once:true,passive:true,capture:true})})})();</script>`;
+  return `<script>(function(){${AFTER_FIRST_SCREEN_JS}${preload}var src=${url};function load(){if(load.d)return;load.d=1;${depPreload}var s=document.createElement("script");s.type="module";s.crossOrigin="";s.src=src;document.head.appendChild(s)}if(document.documentElement.getAttribute("data-route")!=="home"){load();return}afterFirstScreen(load);["pointerdown","keydown","touchstart","wheel"].forEach(function(e){addEventListener(e,load,{once:true,passive:true,capture:true})})})();</script>`;
 }
 
 /**
@@ -66,5 +86,10 @@ export function deferEntryScript(html: string, appChunkFile?: string): string {
     ? entry.slice(0, entry.lastIndexOf("/") + 1) +
       appChunkFile.slice(appChunkFile.lastIndexOf("/") + 1)
     : undefined;
-  return html.replace(match[0], () => deferEntryLoader(entry, appChunk));
+  const deps: string[] = [];
+  const without = html.replace(VITE_PRELOAD, (_all, href: string) => {
+    deps.push(href);
+    return "";
+  });
+  return without.replace(match[0], () => deferEntryLoader(entry, appChunk, deps));
 }
