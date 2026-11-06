@@ -27,14 +27,14 @@
     "smoke:share": "playwright test --config=playwright.share-smoke.config.mjs"
   },
   "dependencies": {
-    "electron-updater": "^6.3.9",
-    "i18next": "^26.4.0",
+    "electron-updater": "^6.8.11",
+    "i18next": "^26.6.0",
     "uiohook-napi": "^1.5.5"
   },
   "devDependencies": {
-    "@playwright/test": "^1.62.1",
+    "@playwright/test": "^1.64.1",
     "electron": "44.9.1",
-    "electron-builder": "^26.16.1"
+    "electron-builder": "^26.18.0"
   },
   "build": {
     "appId": "gg.pqp.app",
