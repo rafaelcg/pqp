@@ -1,0 +1,18 @@
+[package]
+name = "pqp-tauri-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Spike: the pqp web client in a Tauri 2 window (system webview), to measure it next to the Electron shell and probe WebRTC support. Not a product."
+license = "AGPL-3.0-only"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+
+[profile.release]
+debug = false
+lto = "thin"
+codegen-units = 16
