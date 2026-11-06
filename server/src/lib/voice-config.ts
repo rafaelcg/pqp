@@ -22,6 +22,15 @@ import { isEnabled } from "./flags.js";
  * `mediaQuality.audioHealth` on a call rating: a client that never heard
  * `true` from here never sends the field.
  *
+ * `calmDetector`: the web call's speaking ring reads its analysers on a timer
+ * (20 Hz, 4 Hz while the window is hidden) instead of on every animation
+ * frame, which woke the renderer and the GPU process 120 times a second alone
+ * in a silent call. Runtime flag `voice_calm_detector`, global, on by default,
+ * `VOICE_CALM_DETECTOR` as its environment default. Client only: nothing on
+ * the server changes with it, and off restores the per-frame loop on the
+ * client's next config refresh, mid-call, with no reload. Global because the
+ * detector belongs to the device, not to a server, and DM calls have none.
+ *
  * `soundboard`: whether this server's calls offer the soundboard and its
  * settings tab. Runtime flag `soundboard`, per server, default off,
  * `SOUNDBOARD` as its environment default. The call's button and the settings
@@ -58,6 +67,7 @@ import { isEnabled } from "./flags.js";
 export interface VoiceConfig {
   audienceMode: boolean;
   audioSelfHeal: boolean;
+  calmDetector: boolean;
   soundboard: boolean;
   cleanVoiceDefault: boolean;
   voiceGate: boolean;
@@ -72,6 +82,7 @@ export function voiceConfigForServer(rawServerId: string | null): VoiceConfig {
   return {
     audienceMode: isEnabled("audience_mode", { serverId }),
     audioSelfHeal: isEnabled("voice_audio_self_heal"),
+    calmDetector: isEnabled("voice_calm_detector"),
     soundboard: isEnabled("soundboard", { serverId }),
     cleanVoiceDefault: isEnabled("clean_voice_default"),
     voiceGate: isEnabled("voice_gate"),

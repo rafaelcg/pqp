@@ -1,7 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import type { Channel, Server } from "@pqp/shared";
-import { DiscordImportMergeDialog } from "@/components/layout/discord-import-merge-dialog";
+import { deferredPanel } from "@/components/deferred";
 import { subscribeDiscordImport } from "@/lib/discord-import-launcher";
+
+// Drawn only after somebody asks for the import; its preview and the create
+// dialog behind it are not part of the shell.
+const DiscordImportMergeDialog = deferredPanel(() =>
+  import("@/components/layout/discord-import-merge-dialog").then((m) => ({
+    default: m.DiscordImportMergeDialog,
+  })),
+);
 
 /**
  * Listens for `openDiscordImport(...)` (`@/lib/discord-import-launcher`) and
