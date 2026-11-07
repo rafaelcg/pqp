@@ -13,25 +13,24 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 node rust/scripts/gen-resume-vectors.mjs >/dev/null
-node -e 'import("zod").then(
-  () => import("./rust/scripts/ts-register.mjs"),
-  () => { console.error("zod unavailable; skipping proto regen"); process.exit(3) },
-).then(() => import("./rust/scripts/gen-proto-vectors.mjs"))' 2>/dev/null \
-  || node --experimental-strip-types --no-warnings \
-       --import ./rust/scripts/ts-register.mjs rust/scripts/gen-proto-vectors.mjs >/dev/null \
-  || echo "NOTE: zod is not installed, skipping protocol fixture regen. Regenerate
-      after 'pnpm install'; cargo still tests the committed fixtures." >&2
-
-# The value rules pqp-core compiles in, plus the frame each rule was proved
-# against. A throw here is a real failure: it means the schema grew a constraint
-# or a refinement this generator cannot name, which is exactly what must not ship
-# unported. It is skipped only when zod itself is unavailable.
-if node -e 'import("zod").then(() => process.exit(0), () => process.exit(3))' 2>/dev/null; then
+# zod is not hoisted to the workspace root: it lives in packages/shared/
+# node_modules, where the shipped sources resolve it. Asked from the root it
+# always answers "missing", so a probe that runs there skips both generators and
+# still leaves the gate green — a drift check that never drifts. The probe asks
+# from the package that depends on zod.
+if (cd packages/shared && node --input-type=module \
+      -e 'const { z } = await import("zod"); process.exit(z ? 0 : 1)') 2>/dev/null; then
+  # A throw from either generator is fatal, which is the point: it means the
+  # schema grew a field, a constraint or a refinement these generators cannot
+  # name, and that is exactly what must not ship unported.
+  node --experimental-strip-types --no-warnings \
+       --import ./rust/scripts/ts-register.mjs rust/scripts/gen-proto-vectors.mjs >/dev/null
   node --experimental-strip-types --no-warnings \
        --import ./rust/scripts/ts-register.mjs rust/scripts/gen-constraints.mjs >/dev/null
 else
-  echo "NOTE: zod is not installed, skipping the constraint-table regen. Cargo still
-      tests the committed fixture." >&2
+  echo "NOTE: zod is not installed, so neither the protocol fixtures nor the value
+      rule table were regenerated. Run 'pnpm install'. Cargo still tests the
+      committed fixtures." >&2
 fi
 
 if ! git diff --exit-code --quiet rust/fixtures/; then

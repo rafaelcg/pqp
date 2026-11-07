@@ -103,8 +103,18 @@ const candidate = {
  *  object has to be seen both ways, which `build()` enforces rather than
  *  leaving to whoever remembered. */
 const clientExamples = {
-  "join-voice-room": { type: "join-voice-room", voiceChannelId: CH },
-  "leave-voice-room": { type: "leave-voice-room" },
+  // A resume carries the peer id and token from before the drop, and a client
+  // that knows two transports names both. Neither field appears on a plain
+  // join, so the resuming frame is a second vector: without it nothing in the
+  // repo proves the port even reads them.
+  "join-voice-room": [
+    { type: "join-voice-room", voiceChannelId: CH },
+    { type: "join-voice-room", voiceChannelId: CH, transports: ["mesh", "livekit"], resumePeerId: U, resumeToken: "tok" },
+  ],
+  "leave-voice-room": [
+    { type: "leave-voice-room" },
+    { type: "leave-voice-room", resumePeerId: U, resumeToken: "tok" },
+  ],
   "set-sharing-screen": { type: "set-sharing-screen", sharing: true, audioStreamId: "cap-1", uplinkBps: 2_500_000, sourceHeight: 1080, audioNeedsSfu: true },
   offer: { type: "offer", from: PEER, to: "peer-b", sdp: "v=0\r\n" },
   answer: { type: "answer", from: "peer-b", to: PEER, sdp: "v=0\r\n" },
@@ -131,7 +141,7 @@ const clientExamples = {
   // votes on the next position sample). Only a port that reads that difference
   // gets this canonical form right.
   "set-music": [
-    { type: "set-music", state: { ...musicState(), repeat: "all", skipVotes: [U2], autoplay: true } },
+    { type: "set-music", state: { ...musicState(), repeat: "all", skipVotes: [U2], autoplay: true, history: [track("t3")] } },
     { type: "set-music", state: { current: null, queue: [], status: "paused", positionMs: 0, atMs: NOW, rev: 9, actorId: U } },
     { type: "set-music", state: null },
   ],
@@ -143,18 +153,21 @@ const clientExamples = {
 
 /// The join frame as a room with audience mode on sends it. `audience: null`
 /// is the same arm, so it is a second vector rather than a second arm.
-const welcomeFull = { type: "welcome", peerId: PEER, peers: [participant(), participant("peer-b", { userId: U2, muted: true })], voiceChannelId: CH, self: participant(PEER, { canSpeak: true, canStream: false }), transport: "livekit", resumed: true, resumeToken: "tok", canSpeak: true, speakReason: "permission", audience: audience({ unenforcedUserIds: [] }) };
+const welcomeFull = { type: "welcome", peerId: PEER, peers: [participant(), participant("peer-b", { userId: U2, muted: true, handRaisedAt: NOW })], voiceChannelId: CH, self: participant(PEER, { canSpeak: true, canStream: false, handRaisedAt: NOW }), transport: "livekit", resumed: true, resumeToken: "tok", canSpeak: true, speakReason: "permission", audience: audience({ unenforcedUserIds: [] }) };
 
 const serverExamples = {
   welcome: [welcomeFull, { ...welcomeFull, audience: null }],
-  "peer-joined": { type: "peer-joined", peer: participant() },
+  "peer-joined": [
+    { type: "peer-joined", peer: participant() },
+    { type: "peer-joined", peer: participant("peer-b", { userId: U2, handRaisedAt: NOW }) },
+  ],
   "peer-updated": { type: "peer-updated", peer: participant(PEER, { muted: true, handRaisedAt: NOW }) },
   "peer-left": { type: "peer-left", peerId: PEER },
-  "voice-roster": { type: "voice-roster", voiceChannelId: CH, participants: [participant()], transport: "mesh", seq: 12 },
-  "voice-roster-delta": { type: "voice-roster-delta", voiceChannelId: CH, seq: 13, size: 2, transport: "mesh", joined: [participant("peer-b", { userId: U2 })], left: ["peer-c"] },
+  "voice-roster": { type: "voice-roster", voiceChannelId: CH, participants: [participant(), participant("peer-b", { userId: U2, handRaisedAt: NOW })], transport: "mesh", seq: 12 },
+  "voice-roster-delta": { type: "voice-roster-delta", voiceChannelId: CH, seq: 13, size: 2, transport: "mesh", joined: [participant("peer-b", { userId: U2, handRaisedAt: NOW })], updated: [participant(PEER, { handRaisedAt: NOW })], left: ["peer-c"] },
   "voice-room-full": { type: "voice-room-full", voiceChannelId: CH, limit: 500 },
   "voice-transport-unsupported": { type: "voice-transport-unsupported", voiceChannelId: CH, transport: "livekit", reason: "promoted" },
-  "voice-transport-changed": { type: "voice-transport-changed", voiceChannelId: CH, transport: "livekit", reason: "room-size", participants: [participant()] },
+  "voice-transport-changed": { type: "voice-transport-changed", voiceChannelId: CH, transport: "livekit", reason: "room-size", participants: [participant(), participant("peer-b", { userId: U2, handRaisedAt: NOW })] },
   "voice-join-refused": { type: "voice-join-refused", voiceChannelId: CH, reason: "mesh-multi-instance" },
   "screen-share-denied": { type: "screen-share-denied", voiceChannelId: CH },
   "camera-denied": { type: "camera-denied", voiceChannelId: CH },
@@ -213,7 +226,7 @@ const serverExamples = {
   "channel-live": [
     { type: "channel-live", channelId: CH, stream: null, watching: 0, ended: true },
     { type: "channel-live", channelId: CH, stream: null, watching: 2, viewers: 2 },
-    { type: "channel-live", channelId: CH, stream: hlsStream({ presenterUserId: U, mode: "conventional" }), watching: 4, viewers: 11 },
+    { type: "channel-live", channelId: CH, stream: hlsStream({ presenterUserId: U, delaySeconds: 3, topHeight: 1080, topFramerate: 60, hasAudio: true, cameraHlsUrl: "/api/voice/hls-playlist/cam.m3u8", cameraHasVideo: true, cameraHasVoiceAudio: false, mode: "ll", partTargetMs: 200 }), watching: 4, viewers: 11 },
   ],
 };
 

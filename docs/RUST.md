@@ -93,7 +93,7 @@ two reading half of it. Phase 2 onward is its own branch again.)
 |---|---|---|---|
 | 0 | `rust/` cargo workspace, `pqp-core` with the voice protocol and resume tokens, differential gate in CI | Cheapest place to prove the contract, and the two pieces where cross-language interop is already mandatory | Landed, #1561 |
 | 1 | Extend `pqp-core` to the remaining server frames (audience, watch-party, music, soundboard, live, reactions) | Mechanical now that the harness exists; closes the last cross-language surface | Landed, #1561: `pending` empty, all 30 server arms and all 19 client arms round-trip |
-| 1b | Port zod's **value** rules into `pqp-core` — `.uuid()`, length and item bounds, `.url()`, the soundboard `.refine` — as generated data, each proved against a frame zod refused | Structure is not validation: a Rust socket that ends connections has to refuse what Node refuses, or the two disagree about who may be in a room | Landed, #1561: 287 rules over 32 arms, 237 proved, 50 reported unproved |
+| 1b | Port zod's **value** rules into `pqp-core` — `.uuid()`, length and item bounds, `.url()`, the soundboard `.refine` — as generated data, each proved against a frame zod refused | Structure is not validation: a Rust socket that ends connections has to refuse what Node refuses, or the two disagree about who may be in a room | Landed, #1561: 287 rules over 32 arms, every one proved against a frame zod refused |
 | 2 | Rust `/ws` gateway **alongside** Node: it terminates sockets for one canary hall and proxies the rest to Node | Smallest live footprint that exercises the real thing; resume and peer-id rules are the risk and are already pinned by vectors | Canary hall reconnects survive a Rust restart at the same rate as a Node one |
 | 3 | Postgres read path for the frames the gateway can answer itself | Removes Node from the hot path without touching writes | Byte-identical HTTP responses on a recorded corpus |
 | 4 | Desktop: Rust core behind the Electron shell, owning app state and the socket, JS still drawing pixels | This is where the memory claim is testable, and it is reversible | Measured RSS drop on the same scene, both builds |
@@ -188,14 +188,25 @@ no arm and no number: the rules arrive as `fixtures/constraints.json`, generated
 from the shipped schemas by `rust/scripts/gen-constraints.mjs`. A constraint
 added to `packages/shared` is therefore enforced by Rust on the next
 regeneration, and `parity.sh` fails on the stale fixture if nobody regenerates.
+That regeneration nearly shipped as a no-op: it was guarded by a `node -e
+'import("zod")'` probe, and pnpm does not hoist zod to the workspace root, so the
+probe answered "missing" from there, skipped both generators, and left the gate
+green with no drift check behind it. The probe now asks from `packages/shared`,
+the package that depends on zod and where the shipped sources resolve it.
 
 Four decisions in it are load-bearing:
 
 - **The generator proves each violation.** For every rule it builds a frame that
   breaks that rule and only that rule, and shows it to zod; if zod does not
-  refuse it at the path being broken, the generator throws. 237 of the 287 rules
-  have such a frame, and the other 50 are written to the fixture with a reason
-  instead of being quietly dropped.
+  refuse it at the path being broken, the generator throws. All 287 rules have
+  such a frame. Reaching that number fixed two bugs in the probe rather than in
+  the port: a path ending in `[]` walked to the elements and then never assigned
+  the value, and a probe that found the field missing on the first element of an
+  array gave up instead of checking the next one. What stayed unproved after that
+  was an example that simply did not carry the field — a join that resumes, a
+  raised hand, a live stream's tuning, a music `history` — so the vectors now
+  carry them. `tests/value_parity.rs` fails if coverage stops being total, and the
+  generator still writes any rule it cannot prove to `skipped` with a reason.
 - **An unrecognised constraint stops the build.** A `.regex`, `.email` or
   `.multipleOf` added to a schema, or a `.refine` the generator cannot name,
   throws. `Rule` in Rust is a closed enum, so a rule kind the port does not
@@ -215,7 +226,7 @@ Four decisions in it are load-bearing:
   trip test keeps the port's path reader honest about that spelling.
 
 ```
-287 value rules over 32 arms, 237 proved violations, 50 reported unproved
+287 value rules over 32 arms, 287 proved violations, 0 reported unproved
 tests/value_parity.rs 9 tests, validate.rs 7 unit tests
 ./rust/scripts/parity.sh -> pass; clippy, rustfmt and eslint clean
 ```
@@ -227,9 +238,10 @@ value-check before it does.
 
 **What phase 2 now owes.** Call `validate::client` / `validate::server` on the
 same path that closes the socket, with the resume and peer-id rules — already
-pinned by `fixtures/resume-vectors.json` — in front of it. Close the 50 unproved
-rules by giving `gen-proto-vectors.mjs` richer examples rather than by writing
-rules by hand. Then the protocol below: a number, or it is not a win.
+pinned by `fixtures/resume-vectors.json` — in front of it, and keep value
+coverage total: the gate fails if a rule ships without a proved violation, so a
+new field needs an example frame in `gen-proto-vectors.mjs` rather than a rule
+written by hand. Then the protocol below: a number, or it is not a win.
 
 ## Measuring, when a phase claims it
 

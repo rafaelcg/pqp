@@ -282,11 +282,19 @@ function mutate(frame, path, value) {
     const next = [];
     for (const hit of queue) {
       if (seg.each) {
-        if (!Array.isArray(hit.node) || hit.node.length === 0) return null;
+        // One candidate frame is not the only way to reach a path: skip the
+        // ones that do not hold it and keep looking. A row counts as proved
+        // only when zod still refuses at exactly the mutated path, so a
+        // longer search cannot make a weak proof look like a strong one.
+        if (!Array.isArray(hit.node) || hit.node.length === 0) continue;
+        // A path ending in [] names the elements themselves, so the value goes
+        // into the first slot. Breaking one element is enough: zod blames the
+        // index it fails on, and the port has to blame the same one.
+        if (last) { hit.node[0] = value; return copy; }
         hit.node.forEach((node) => next.push({ node }));
         continue;
       }
-      if (!hit.node || typeof hit.node !== "object" || !(seg.key in hit.node)) return null;
+      if (!hit.node || typeof hit.node !== "object" || !(seg.key in hit.node)) continue;
       if (last) { hit.node[seg.key] = value; return copy; }
       next.push({ node: hit.node[seg.key] });
     }

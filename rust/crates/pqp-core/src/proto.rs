@@ -60,14 +60,13 @@
 //! promise, and both layers are what a Rust socket needs before it is allowed to
 //! end a connection on its own.
 //!
-//! Still not exercised: the rules that sit on a path no example frame reaches —
-//! `handRaisedAt`, the `skipVotes[]` and `history[]` bounds, `channel-live`'s
-//! `stream.*`, `updated[].userId`, the `transports[]` enum. They are enforced,
-//! because the table holds them, but no frame proves the port notices them. The
-//! fixture lists each one under `skipped` with its reason, and
-//! `tests/value_parity.rs` fails if that list stops being reported, so the gap
-//! is a number in `constraints.json` rather than a rumour. Closing it means
-//! richer examples in `gen-proto-vectors.mjs`, not more rules here.
+//! Coverage is total: every rule in the table has a frame zod proved as a
+//! violation, including the element rules a path spells `skipVotes[]` and the
+//! fields an earlier set of examples never carried — `handRaisedAt`,
+//! `channel-live`'s `stream.*`, `updated[].userId`, the `transports[]` enum, a
+//! music `history`. `tests/value_parity.rs` fails if a rule ships without a
+//! proved violation, so a schema field no example frame reaches stops the gate
+//! instead of quietly narrowing what the port is known to enforce.
 
 use crate::VoiceRoomTransport;
 use serde::{Deserialize, Serialize};

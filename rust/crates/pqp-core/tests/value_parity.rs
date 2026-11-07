@@ -373,6 +373,24 @@ fn the_table_says_how_much_it_covers() {
         evidence.counts.skipped,
         evidence.skipped.len()
     );
+    assert_eq!(
+        evidence.violations.len(),
+        evidence.counts.rules,
+        "coverage is not total: {} rules in the table, {} frames zod proved as          violations. A rule with no proved violation has to be reached by an          example frame in rust/scripts/gen-proto-vectors.mjs, which is the only          way to learn what zod does with it.",
+        evidence.counts.rules,
+        evidence.violations.len()
+    );
+    assert!(
+        evidence.skipped.is_empty(),
+        "{} rules went unproved: {}. Add an example frame that reaches each path rather than shipping the rule unchecked.",
+        evidence.skipped.len(),
+        evidence
+            .skipped
+            .iter()
+            .map(|s| format!("{}/{} {}", s.union, s.r#type, s.path))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
     assert!(
         !evidence.violations.is_empty(),
         "no rule is proved by a frame zod refused"
@@ -382,6 +400,9 @@ fn the_table_says_how_much_it_covers() {
 /// Each untested rule says why, and is a rule the table really has. Silence here
 /// would be how the value layer stops covering a field without anyone noticing.
 #[test]
+/// On a table with total coverage this walks nothing, and that is the point of
+/// it: the moment a rule goes unproved the report has to name a real path and a
+/// reason, so the gap is visible instead of implied by a missing row.
 fn untested_rules_are_reported_with_a_reason() {
     let rules = table();
     let evidence = doc();
