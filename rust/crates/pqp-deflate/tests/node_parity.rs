@@ -139,12 +139,21 @@ fn the_fixture_is_the_version_of_ws_the_lockfile_pins() {
         f.shipped_policy.zlib_deflate_options.mem_level, 6,
         "shipped memLevel"
     );
-    // The policy asks for something this backend cannot do. Asserted as a fact
-    // rather than left as a comment, because the day flate2 exposes the
-    // parameter is the day the memory claim in docs/RUST.md changes.
+    // The two halves of one claim, asserted together: the shipped policy asks
+    // for 6, this crate's default asks for 6, and 6 is what the backend is
+    // actually opened with (`tests/memory.rs` measures the difference it makes).
+    // While the stream went through `flate2` the third half was false and this
+    // line asserted that, so a Rust gateway would have shipped the policy's
+    // memory choice as a comment.
+    assert_eq!(
+        Params::default().mem_level,
+        f.shipped_policy.zlib_deflate_options.mem_level,
+        "the Rust default drifted from the shipped policy"
+    );
     assert!(
-        !Params::default().mem_level_is_honoured(),
-        "mem_level is now honoured, so the crate docs and the memory table need rewriting"
+        Params::default().mem_level_is_honoured(),
+        "the shipped policy's memLevel is not reaching the backend: a socket costs \
+         ~48 KiB more than the policy asked for, and docs/RUST.md's memory table is wrong"
     );
     assert!(f.shipped_policy.server_no_context_takeover);
     assert!(f.shipped_policy.client_no_context_takeover);

@@ -399,11 +399,14 @@ fn garbage_is_refused_instead_of_returning_noise() {
 }
 
 #[test]
-fn the_memory_level_we_ask_for_is_recorded_as_not_applied() {
-    // `ws-compression.ts` ships memLevel 6, worth ~94 MB across a thousand
-    // sockets, and flate2 passes 8 to deflateInit2 in every backend. This
-    // assertion is the finding: if a future backend honours it, flip it here and
-    // say so in the crate docs, do not quietly delete the test.
-    assert!(!Params::default().mem_level_is_honoured());
+fn the_memory_level_the_policy_asks_for_is_the_one_we_open_with() {
+    // `ws-compression.ts:50` ships memLevel 6 to hold a socket's deflate state
+    // down, and this used to assert that nothing honoured it while the stream
+    // went through `flate2`. The outbound side now calls `zlib-rs` directly, so
+    // the assertion points the other way. It stays a test on purpose: if the
+    // backend changes and the parameter stops reaching `deflateInit2`, the
+    // gateway quietly pays 48 KiB per socket more than it asked for, and nothing
+    // except this line notices. `tests/memory.rs` measures the bytes.
+    assert!(Params::default().mem_level_is_honoured());
     assert_eq!(Params::default().mem_level, 6);
 }

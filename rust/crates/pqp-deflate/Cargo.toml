@@ -19,6 +19,13 @@ publish = false
 # transliteration of zlib, so this stays pure Rust: no libz to link, and the same
 # binary on a developer's mac and the fly machine.
 flate2 = { version = "1", default-features = false, features = ["zlib-rs", "runtime_detection"] }
+# Direct, not only through `flate2`, and that is a memory decision rather than a
+# tidy-up: `flate2` has no way to pass `mem_level` (its zlib-rs backend builds the
+# config from level, header and window -- flate2-1.1.11/src/ffi/zlib_rs.rs:221),
+# and the shipped policy's `memLevel: 6` is worth a measured 48 KiB per socket.
+# Same features `flate2` selects, so the two paths share one build of the crate
+# (`std` implies `rust-allocator`, which keeps it off libc's malloc).
+zlib-rs = { version = "0.6", default-features = false, features = ["std"] }
 base64 = { workspace = true }
 
 [dev-dependencies]

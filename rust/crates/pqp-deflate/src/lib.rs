@@ -21,33 +21,43 @@
 //! * window bits come from the negotiated parameters, defaulting to zlib's 15
 //!   when the peer named none.
 //!
-//! Compression is deliberately not byte-for-byte comparable with Node. This
-//! crate runs `flate2` on the `zlib-rs` backend (see `Cargo.toml` for why the
-//! backend is load-bearing rather than cosmetic) and Node runs zlib; two deflate
+//! Compression is deliberately not byte-for-byte comparable with Node. The
+//! outbound stream is `zlib-rs` driven directly and the inbound stream is
+//! `flate2` on the same backend (see `Cargo.toml` for why the backend is
+//! load-bearing rather than cosmetic); Node runs zlib. Two deflate
 //! implementations legitimately emit different bytes that inflate to the same
-//! text, and `mem_level` differs anyway. So the parity tests cross-decode:
-//! whatever Node compresses, this must inflate, and whatever this compresses,
-//! Node must inflate. A test that demanded identical bytes would be testing the
-//! choice of zlib fork. Negotiation, by contrast, IS byte-compared, because the
+//! text. So the parity tests cross-decode: whatever Node compresses, this must
+//! inflate, and whatever this compresses, Node must inflate. A test that
+//! demanded identical bytes would be testing the choice of zlib fork.
+//! Negotiation, by contrast, IS byte-compared, because the
 //! `Sec-WebSocket-Extensions` response is a string both sides act on.
 //!
-//! THE PART THAT COST MEMORY, AND IS NOT FIXED HERE.
+//! THE PART THAT COSTS MEMORY, MEASURED RATHER THAN QUOTED.
 //!
-//! `server/src/lib/ws-compression.ts` picks `memLevel: 6` over zlib's default 8
-//! because the ratio difference is 0.4% and the per-socket context drops from
-//! 256 KB to 160 KB — about 94 MB across a thousand sockets. `flate2` passes
-//! `mem_level = 8` to `deflateInit2` in every backend and does not expose the
-//! parameter (`flate2-1.1.11/src/ffi/c.rs:364`), so a gateway built on it cannot
-//! make that choice at all. `Params::mem_level` records the intent and
-//! [`Params::mem_level_is_honoured`] says plainly that nothing acts on it. Fixing
-//! it means driving `zlib-rs` or `libz` directly, which is a decision, not a
-//! detail — and it is a memory claim in the direction *against* the rewrite, so
-//! it belongs in the phase's numbers rather than in a footnote.
+//! `server/src/lib/ws-compression.ts:50` picks `memLevel: 6` over zlib's default
+//! 8 for a 0.4% worse ratio, and says the per-socket context drops from 256 KB
+//! to 160 KB. `flate2` cannot make that choice: its zlib-rs backend builds the
+//! config from level, header and window only (`flate2-1.1.11/src/ffi/zlib_rs.rs:221`),
+//! and the three-argument constructor it calls takes `mem_level` from
+//! `DeflateConfig::default()`, which is 8 (`zlib-rs-0.6.8/src/stable.rs:297`).
+//! The backend does honour the number when a caller passes one
+//! (`zlib-rs-0.6.8/src/deflate.rs:321` sizes `lit_bufsize` as `1 << (mem_level + 6)`),
+//! so this crate drives `zlib-rs` directly on the outbound side and
+//! [`Params::mem_level`] is acted on.
+//!
+//! What it is actually worth is smaller than zlib's arithmetic suggests, and the
+//! measured number is the one to quote: 48 KiB per socket, 48 MB across a
+//! thousand, at an unchanged ratio (`tests/memory.rs`). The reason is that the
+//! only allocation `mem_level` scales here is the symbol buffer, so the 256/160
+//! split that Node's zlib reports does not transfer. The same probe puts this
+//! backend at 289 KiB of deflate state per socket at `memLevel` 6, which is more
+//! than the 160 KB the shipped policy reports: a Rust gateway is not a memory win
+//! on this axis, and `docs/RUST.md` carries that instead of a slogan.
 
 use base64::Engine as _;
-use flate2::Compression;
-use flate2::{Compress, Decompress, FlushCompress, FlushDecompress};
+use flate2::{Decompress, FlushDecompress};
 use std::fmt;
+use zlib_rs::{Deflate, DeflateConfig, DeflateFlush, Method, Strategy};
 
 /// The four bytes zlib's `Z_SYNC_FLUSH` appends and RFC 7692 §7.2.1 trims.
 const TRAILER: [u8; 4] = [0x00, 0x00, 0xff, 0xff];
@@ -96,10 +106,15 @@ impl Default for Params {
 }
 
 impl Params {
-    /// False, always, on this backend. A function rather than a comment because
-    /// a comment says what someone hoped and a function says what is true.
+    /// Whether `mem_level` reaches the backend.
+    ///
+    /// True, and checked by `tests/memory.rs`, which measures a socket opened at
+    /// `memLevel` 6 against one opened at 8 in the same process. It was false
+    /// while the outbound stream went through `flate2`, which has no way to pass
+    /// the parameter; the function stays because a caller should not have to read
+    /// the dependency graph to know whether their setting did anything.
     pub fn mem_level_is_honoured(&self) -> bool {
-        false
+        true
     }
 
     /// Window bits the inbound (peer-to-us) inflate is opened with.
@@ -521,11 +536,19 @@ fn check_window_bits(name: &'static str, value: &str) -> Result<u8, NegotiationE
 /// The narrowest window this backend can open a stream at.
 ///
 /// RFC 7692 §7.1.2.1 allows 8, `ws` allows 8, and a peer may genuinely name 8.
-/// `flate2` does not: `new_with_window_bits` asserts `9..=15` and PANICS below it
-/// (`flate2-1.1.11/src/mem.rs:422`), so a gateway that passed a negotiated value
-/// straight through would take down a socket -- or the process, if the panic
-/// escaped a worker -- on a legal header. Both constructors are written against
-/// this constant rather than trusting the backend to be polite.
+/// The inbound stream still goes through `flate2`, whose `new_with_window_bits`
+/// asserts `9..=15` and PANICS below it (`flate2-1.1.11/src/mem.rs:422`), so a
+/// gateway that passed a negotiated value straight through would take down a
+/// socket -- or the process, if the panic escaped a worker -- on a legal header.
+/// Both constructors are written against this constant rather than trusting the
+/// backend to be polite.
+///
+/// The outbound side could go lower now that it calls `zlib-rs` itself: raw
+/// window 8 is accepted there (`zlib-rs-0.6.8/src/deflate.rs:303`) and mapped to
+/// 9 internally, which is what zlib does for the same input. That is a behaviour
+/// change on a negotiated path rather than a memory fix, so it is not taken here:
+/// it needs a fixture where the server encodes at 8 and `ws` decodes it, and
+/// today the narrow case declines compression, which cannot corrupt anything.
 pub const MIN_BACKEND_WINDOW_BITS: u8 = 9;
 
 /// Output buffer per call: the shipped `chunkSize` reasoning
@@ -533,9 +556,28 @@ pub const MIN_BACKEND_WINDOW_BITS: u8 = 9;
 /// roster arrives deflated to about 20 KB.
 const SPARE: usize = 1 << 14;
 
+/// Build the outbound stream's config, clamping everything the backend checks.
+///
+/// `zlib-rs` does not return an error for an out-of-range config: its constructor
+/// is `assert_eq!(ret, ReturnCode::Ok)` (`zlib-rs-0.6.8/src/deflate.rs:137`), so a
+/// level of 200 or a `mem_level` of 0 aborts the process. `Params` fields are
+/// public and a gateway may fill them from a header, so the clamp lives here.
+/// `flate2` used to cap the level for us inside `Compression::new`; that is not a
+/// smaller worry, it is a worry with a new owner.
+fn deflate_config(params: &Params, window_bits: u8) -> DeflateConfig {
+    DeflateConfig {
+        level: i32::from(params.level.min(9)),
+        method: Method::Deflated,
+        // Negative is how zlib spells "raw", which is what permessage-deflate is.
+        window_bits: -i32::from(window_bits.clamp(MIN_BACKEND_WINDOW_BITS, DEFAULT_WINDOW_BITS)),
+        mem_level: i32::from(params.mem_level.clamp(1, 9)),
+        strategy: Strategy::Default,
+    }
+}
+
 /// The outbound direction: one deflate stream for the life of the connection.
 pub struct Deflater {
-    compress: Compress,
+    compress: Deflate,
     no_context_takeover: bool,
     spare: Vec<u8>,
     /// Bytes produced so far, so a peer cannot make us compress forever.
@@ -559,11 +601,7 @@ impl Deflater {
             return Err(DeflateError::WindowTooNarrow(window_bits));
         }
         Ok(Self {
-            compress: Compress::new_with_window_bits(
-                Compression::new(u32::from(params.level)),
-                false,
-                window_bits,
-            ),
+            compress: Deflate::new_with_config(deflate_config(params, window_bits)),
             no_context_takeover: params.server_no_context_takeover,
             spare: vec![0u8; SPARE],
             produced_total: 0,
@@ -586,7 +624,7 @@ impl Deflater {
             let in_before = self.compress.total_in();
             let out_before = self.compress.total_out();
             self.compress
-                .compress(&data[off..], &mut self.spare, FlushCompress::Sync)
+                .compress(&data[off..], &mut self.spare, DeflateFlush::SyncFlush)
                 .map_err(|_| DeflateError::Backend)?;
             let consumed = (self.compress.total_in() - in_before) as usize;
             let produced = (self.compress.total_out() - out_before) as usize;

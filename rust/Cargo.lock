@@ -274,6 +274,7 @@ dependencies = [
  "flate2",
  "serde",
  "serde_json",
+ "zlib-rs",
 ]
 
 [[package]]
