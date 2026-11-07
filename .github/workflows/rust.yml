@@ -1,0 +1,78 @@
+name: rust core
+
+# The pqp-core regression gate: the Rust port against the shipped TypeScript.
+#
+# Separate from ci.yml on purpose. A Rust-only change cannot affect the Node
+# build, and the Node suite cannot catch a Rust change, so one job each and
+# neither waits on the other. ci.yml lists rust/** under paths-ignore so a
+# Rust-only PR does not spend the whole Node matrix.
+#
+# What this actually proves, and why bare `cargo test` is not enough:
+#   1. Every voice frame zod accepts, Rust parses and re-emits byte for byte.
+#   2. Every resume token Rust mints, the Node server honors.
+#   3. The committed fixtures still match what the TypeScript generates today.
+# (2) is the one that decides whether a rolling deploy hangs up a live call, and
+# it only runs here.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "rust/**"
+      - "packages/shared/src/**"
+      - "server/src/ws/voice-resume-token.ts"
+      - ".github/workflows/rust.yml"
+  pull_request:
+    paths:
+      - "rust/**"
+      - "packages/shared/src/**"
+      - "server/src/ws/voice-resume-token.ts"
+      - ".github/workflows/rust.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: rust-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_TARGET_DIR: ${{ github.workspace }}/rust/target
+
+jobs:
+  parity:
+    name: typescript parity
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The fixture generators import the real Zod schemas and the real resume
+      # token module, so the workspace has to be installed. A port that tests
+      # itself against a copy of the schemas tests nothing.
+      - name: Set up workspace
+        uses: ./.github/actions/setup-workspace
+
+      # ubuntu-latest ships a Rust toolchain; only the two components the gate
+      # checks are added. No third-party setup action to pin or trust.
+      - name: Add rustfmt and clippy
+        run: rustup component add rustfmt clippy
+
+      - name: Cache cargo
+        uses: actions/cache@0007b38532a526e57173e5a0f4b2a513f29bbb6f # v4.0.2
+        with:
+          path: |
+            rust/target
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-${{ runner.os }}-${{ hashFiles('rust/Cargo.toml', 'rust/crates/**/Cargo.toml') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Generate fixtures and fail on drift
+        run: node rust/scripts/gen-resume-vectors.mjs
+
+      - name: Test, verify in both directions, lint, format
+        run: ./rust/scripts/parity.sh

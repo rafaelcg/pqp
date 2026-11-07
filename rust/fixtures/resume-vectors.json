@@ -1,0 +1,415 @@
+{
+  "_generatedBy": "rust/scripts/gen-resume-vectors.mjs",
+  "note": "Verdicts come from the shipped TypeScript verifier. Do not edit by hand.",
+  "ttlMs": 28800000,
+  "keys": {
+    "clerk": "ci-secret-key-for-vectors",
+    "dev": "pqp-dev-voice-resume"
+  },
+  "vectors": [
+    {
+      "name": "mesh-no-region",
+      "env": "clerk",
+      "token": "eyJ2IjoxLCJ1IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwicCI6InBlZXItYSIsImMiOiJjaGFuLWEiLCJ0IjoibWVzaCIsImUiOjE3MDAwMjg4MDAwMDB9.aDpV6VzmIBAEMiLulhYEW12eb8Rq-8UBJV-xSZojoww",
+      "now": 1700000000000,
+      "match": {
+        "userId": "11111111-1111-4111-8111-111111111111",
+        "peerId": "peer-a",
+        "voiceChannelId": "chan-a"
+      },
+      "ts": {
+        "ok": true,
+        "userId": "11111111-1111-4111-8111-111111111111",
+        "peerId": "peer-a",
+        "voiceChannelId": "chan-a",
+        "transport": "mesh",
+        "region": null
+      }
+    },
+    {
+      "name": "livekit-with-region",
+      "env": "clerk",
+      "token": "eyJ2IjoxLCJ1IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwicCI6InBlZXItYSIsImMiOiJjaGFuLWEiLCJ0IjoibGl2ZWtpdCIsImUiOjE3MDAwMjg4MDAwMDAsInIiOiJncnUifQ.O6ymM4sGIu83LiZa8rd0-nxaLR7FAPTy4o9Eh5TcBW8",
+      "now": 1700000000000,
+      "match": {
+        "userId": "11111111-1111-4111-8111-111111111111",
+        "peerId": "peer-a",
+        "voiceChannelId": "chan-a"
+      },
+      "ts": {
+        "ok": true,
+        "userId": "11111111-1111-4111-8111-111111111111",
+        "peerId": "peer-a",
+        "voiceChannelId": "chan-a",
+        "transport": "livekit",
+        "region": "gru"
+      }
+    },
+    {
+      "name": "empty-region-is-absent",
+      "env": "clerk",
+      "token": "eyJ2IjoxLCJ1IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwicCI6InBlZXItYSIsImMiOiJjaGFuLWEiLCJ0IjoibWVzaCIsImUiOjE3MDAwMjg4MDAwMDB9.aDpV6VzmIBAEMiLulhYEW12eb8Rq-8UBJV-xSZojoww",
+      "now": 1700000000000,
+      "match": {
+        "userId": "11111111-1111-4111-8111-111111111111",
+        "peerId": "peer-a",
+        "voiceChannelId": "chan-a"
+      },
+      "ts": {
+        "ok": true,
+        "userId": "11111111-1111-4111-8111-111111111111",
+        "peerId": "peer-a",
+        "voiceChannelId": "chan-a",
+        "transport": "mesh",
+        "region": null
+      }
+    },
+    {
+      "name": "dev-bypass-key",
+      "env": "dev",
+      "token": "eyJ2IjoxLCJ1IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwicCI6InBlZXItYSIsImMiOiJjaGFuLWEiLCJ0IjoibWVzaCIsImUiOjE3MDAwMjg4MDAwMDB9.RDoB7vvriVCbCsZ6e-FrNQa2Kde9yOPctV9fQJ8qfS8",
+      "now": 1700000000000,
+      "match": {
+        "userId": "11111111-1111-4111-8111-111111111111",
+        "peerId": "peer-a",
+        "voiceChannelId": "chan-a"
+      },
+      "ts": {
+        "ok": true,
+        "userId": "11111111-1111-4111-8111-111111111111",
+        "peerId": "peer-a",
+        "voiceChannelId": "chan-a",
+        "transport": "mesh",
+        "region": null
+      }
+    },
+    {
+      "name": "no-signing-key",
+      "env": "none",
+      "token": null,
+      "now": 1700000000000,
+      "match": {
+        "userId": "11111111-1111-4111-8111-111111111111",
+        "peerId": "peer-a",
+        "voiceChannelId": "chan-a"
+      },
+      "ts": {
+        "ok": false
+      }
+    },
+    {
+      "name": "expired-by-one-ms",
+      "env": "clerk",
+      "token": "eyJ2IjoxLCJ1IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwicCI6InBlZXItYSIsImMiOiJjaGFuLWEiLCJ0IjoibWVzaCIsImUiOjE3MDAwMjg4MDAwMDB9.aDpV6VzmIBAEMiLulhYEW12eb8Rq-8UBJV-xSZojoww",
+      "now": 1700028800001,
+      "match": {
+        "userId": "11111111-1111-4111-8111-111111111111",
+        "peerId": "peer-a",
+        "voiceChannelId": "chan-a"
+      },
+      "ts": {
+        "ok": false
+      }
+    },
+    {
+      "name": "valid-at-expiry-instant",
+      "env": "clerk",
+      "token": "eyJ2IjoxLCJ1IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwicCI6InBlZXItYSIsImMiOiJjaGFuLWEiLCJ0IjoibWVzaCIsImUiOjE3MDAwMjg4MDAwMDB9.aDpV6VzmIBAEMiLulhYEW12eb8Rq-8UBJV-xSZojoww",
+      "now": 1700028800000,
+      "match": {
+        "userId": "11111111-1111-4111-8111-111111111111",
+        "peerId": "peer-a",
+        "voiceChannelId": "chan-a"
+      },
+      "ts": {
+        "ok": true,
+        "userId": "11111111-1111-4111-8111-111111111111",
+        "peerId": "peer-a",
+        "voiceChannelId": "chan-a",
+        "transport": "mesh",
+        "region": null
+      }
+    },
+    {
+      "name": "tampered-mac",
+      "env": "clerk",
+      "token": "eyJ2IjoxLCJ1IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwicCI6InBlZXItYSIsImMiOiJjaGFuLWEiLCJ0IjoibWVzaCIsImUiOjE3MDAwMjg4MDAwMDB9.aDpV6VzmIBAEMiLulhYEW12eb8Rq-8UBJV-xSZojowA",
+      "now": 1700000000000,
+      "match": {
+        "userId": "11111111-1111-4111-8111-111111111111",
+        "peerId": "peer-a",
+        "voiceChannelId": "chan-a"
+      },
+      "ts": {
+        "ok": false
+      }
+    },
+    {
+      "name": "wrong-user",
+      "env": "clerk",
+      "token": "eyJ2IjoxLCJ1IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwicCI6InBlZXItYSIsImMiOiJjaGFuLWEiLCJ0IjoibWVzaCIsImUiOjE3MDAwMjg4MDAwMDB9.aDpV6VzmIBAEMiLulhYEW12eb8Rq-8UBJV-xSZojoww",
+      "now": 1700000000000,
+      "match": {
+        "userId": "22222222-2222-4222-8222-222222222222",
+        "peerId": "peer-a",
+        "voiceChannelId": "chan-a"
+      },
+      "ts": {
+        "ok": false
+      }
+    },
+    {
+      "name": "wrong-peer",
+      "env": "clerk",
+      "token": "eyJ2IjoxLCJ1IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwicCI6InBlZXItYSIsImMiOiJjaGFuLWEiLCJ0IjoibWVzaCIsImUiOjE3MDAwMjg4MDAwMDB9.aDpV6VzmIBAEMiLulhYEW12eb8Rq-8UBJV-xSZojoww",
+      "now": 1700000000000,
+      "match": {
+        "userId": "11111111-1111-4111-8111-111111111111",
+        "peerId": "peer-b",
+        "voiceChannelId": "chan-a"
+      },
+      "ts": {
+        "ok": false
+      }
+    },
+    {
+      "name": "wrong-channel",
+      "env": "clerk",
+      "token": "eyJ2IjoxLCJ1IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwicCI6InBlZXItYSIsImMiOiJjaGFuLWEiLCJ0IjoibWVzaCIsImUiOjE3MDAwMjg4MDAwMDB9.aDpV6VzmIBAEMiLulhYEW12eb8Rq-8UBJV-xSZojoww",
+      "now": 1700000000000,
+      "match": {
+        "userId": "11111111-1111-4111-8111-111111111111",
+        "peerId": "peer-a",
+        "voiceChannelId": "chan-b"
+      },
+      "ts": {
+        "ok": false
+      }
+    },
+    {
+      "name": "empty-token",
+      "env": "clerk",
+      "token": "",
+      "now": 1700000000000,
+      "match": {
+        "userId": "11111111-1111-4111-8111-111111111111",
+        "peerId": "peer-a",
+        "voiceChannelId": "chan-a"
+      },
+      "ts": {
+        "ok": false
+      }
+    },
+    {
+      "name": "no-dot",
+      "env": "clerk",
+      "token": "abcdef",
+      "now": 1700000000000,
+      "match": {
+        "userId": "11111111-1111-4111-8111-111111111111",
+        "peerId": "peer-a",
+        "voiceChannelId": "chan-a"
+      },
+      "ts": {
+        "ok": false
+      }
+    },
+    {
+      "name": "leading-dot",
+      "env": "clerk",
+      "token": ".abcdef",
+      "now": 1700000000000,
+      "match": {
+        "userId": "11111111-1111-4111-8111-111111111111",
+        "peerId": "peer-a",
+        "voiceChannelId": "chan-a"
+      },
+      "ts": {
+        "ok": false
+      }
+    },
+    {
+      "name": "bad-base64-payload",
+      "env": "clerk",
+      "token": "!!!.abcdef",
+      "now": 1700000000000,
+      "match": {
+        "userId": "11111111-1111-4111-8111-111111111111",
+        "peerId": "peer-a",
+        "voiceChannelId": "chan-a"
+      },
+      "ts": {
+        "ok": false
+      }
+    },
+    {
+      "name": "empty-mac",
+      "env": "clerk",
+      "token": "eyJ2IjoxLCJ1IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwicCI6InBlZXItYSIsImMiOiJjaGFuLWEiLCJ0IjoibWVzaCIsImUiOjE3MDAwMjg4MDAwMDB9.",
+      "now": 1700000000000,
+      "match": {
+        "userId": "11111111-1111-4111-8111-111111111111",
+        "peerId": "peer-a",
+        "voiceChannelId": "chan-a"
+      },
+      "ts": {
+        "ok": false
+      }
+    },
+    {
+      "name": "region-as-number-verifies",
+      "env": "clerk",
+      "token": "eyJ2IjoxLCJ1IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwicCI6InBlZXItYSIsImMiOiJjaGFuLWEiLCJ0IjoibWVzaCIsImUiOjE3MDAwMDAwMDEwMDAsInIiOjd9.5OslXA-q6PLplfZhLTod5mIlCLcrpfxKz-83z0b5H-s",
+      "now": 1700000000000,
+      "match": {
+        "userId": "11111111-1111-4111-8111-111111111111",
+        "peerId": "peer-a",
+        "voiceChannelId": "chan-a"
+      },
+      "ts": {
+        "ok": true,
+        "userId": "11111111-1111-4111-8111-111111111111",
+        "peerId": "peer-a",
+        "voiceChannelId": "chan-a",
+        "transport": "mesh",
+        "region": null
+      }
+    },
+    {
+      "name": "region-empty-string-verifies",
+      "env": "clerk",
+      "token": "eyJ2IjoxLCJ1IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwicCI6InBlZXItYSIsImMiOiJjaGFuLWEiLCJ0IjoibWVzaCIsImUiOjE3MDAwMDAwMDEwMDAsInIiOiIifQ.qwRQA__zovDxFkLqyQYj1t0iZRUnVjjDXX2lV6Yo2xg",
+      "now": 1700000000000,
+      "match": {
+        "userId": "11111111-1111-4111-8111-111111111111",
+        "peerId": "peer-a",
+        "voiceChannelId": "chan-a"
+      },
+      "ts": {
+        "ok": true,
+        "userId": "11111111-1111-4111-8111-111111111111",
+        "peerId": "peer-a",
+        "voiceChannelId": "chan-a",
+        "transport": "mesh",
+        "region": null
+      }
+    },
+    {
+      "name": "unknown-claim-verifies",
+      "env": "clerk",
+      "token": "eyJ2IjoxLCJ1IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwicCI6InBlZXItYSIsImMiOiJjaGFuLWEiLCJ0IjoibWVzaCIsImUiOjE3MDAwMDAwMDEwMDAsInoiOiJmdXR1cmUifQ.8cr0Jc0StiLzY24R366qJA3F1LHDtbjX7zHXVGw9tYw",
+      "now": 1700000000000,
+      "match": {
+        "userId": "11111111-1111-4111-8111-111111111111",
+        "peerId": "peer-a",
+        "voiceChannelId": "chan-a"
+      },
+      "ts": {
+        "ok": true,
+        "userId": "11111111-1111-4111-8111-111111111111",
+        "peerId": "peer-a",
+        "voiceChannelId": "chan-a",
+        "transport": "mesh",
+        "region": null
+      }
+    },
+    {
+      "name": "version-2-refused",
+      "env": "clerk",
+      "token": "eyJ2IjoyLCJ1IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwicCI6InBlZXItYSIsImMiOiJjaGFuLWEiLCJ0IjoibWVzaCIsImUiOjE3MDAwMDAwMDEwMDB9.D7cpMVG_feNMBArL7lQdks-UUBrARmQ_STd5ZiHXmYM",
+      "now": 1700000000000,
+      "match": {
+        "userId": "11111111-1111-4111-8111-111111111111",
+        "peerId": "peer-a",
+        "voiceChannelId": "chan-a"
+      },
+      "ts": {
+        "ok": false
+      }
+    },
+    {
+      "name": "unknown-transport-refused",
+      "env": "clerk",
+      "token": "eyJ2IjoxLCJ1IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwicCI6InBlZXItYSIsImMiOiJjaGFuLWEiLCJ0Ijoic2Z1IiwiZSI6MTcwMDAwMDAwMTAwMH0.buEp3F5dp2KjZzCwidm4okakXX9ooTl9q-SDLp735ao",
+      "now": 1700000000000,
+      "match": {
+        "userId": "11111111-1111-4111-8111-111111111111",
+        "peerId": "peer-a",
+        "voiceChannelId": "chan-a"
+      },
+      "ts": {
+        "ok": false
+      }
+    },
+    {
+      "name": "livekit-transport-verifies",
+      "env": "clerk",
+      "token": "eyJ2IjoxLCJ1IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwicCI6InBlZXItYSIsImMiOiJjaGFuLWEiLCJ0IjoibGl2ZWtpdCIsImUiOjE3MDAwMDAwMDEwMDAsInIiOiJncnUifQ.jjsEkvV4QO--Lrj6NtSSo2SemOe4T67izUumQnToU3g",
+      "now": 1700000000000,
+      "match": {
+        "userId": "11111111-1111-4111-8111-111111111111",
+        "peerId": "peer-a",
+        "voiceChannelId": "chan-a"
+      },
+      "ts": {
+        "ok": true,
+        "userId": "11111111-1111-4111-8111-111111111111",
+        "peerId": "peer-a",
+        "voiceChannelId": "chan-a",
+        "transport": "livekit",
+        "region": "gru"
+      }
+    },
+    {
+      "name": "missing-peer-refused",
+      "env": "clerk",
+      "token": "eyJ2IjoxLCJ1IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwiYyI6ImNoYW4tYSIsInQiOiJtZXNoIiwiZSI6MTcwMDAwMDAwMTAwMH0.jLkw8RNdhnOJwBwvmAweui-pBhIwwawqeNLNTXNnt-Y",
+      "now": 1700000000000,
+      "match": {
+        "userId": "11111111-1111-4111-8111-111111111111",
+        "peerId": "peer-a",
+        "voiceChannelId": "chan-a"
+      },
+      "ts": {
+        "ok": false
+      }
+    },
+    {
+      "name": "peer-as-number-refused",
+      "env": "clerk",
+      "token": "eyJ2IjoxLCJ1IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwicCI6NDIsImMiOiJjaGFuLWEiLCJ0IjoibWVzaCIsImUiOjE3MDAwMDAwMDEwMDB9.to5VGJC4OfHS_bzNytG8t2wFWkvjuc-rP2DyVCjVXi8",
+      "now": 1700000000000,
+      "match": {
+        "userId": "11111111-1111-4111-8111-111111111111",
+        "peerId": "peer-a",
+        "voiceChannelId": "chan-a"
+      },
+      "ts": {
+        "ok": false
+      }
+    },
+    {
+      "name": "non-object-payload-refused",
+      "env": "clerk",
+      "token": "WzEsMiwzXQ.GkwQPgvFh40pcZoGC3Y3XeoWl4r8KjqDzhokJNFzmus",
+      "now": 1700000000000,
+      "match": {
+        "userId": "11111111-1111-4111-8111-111111111111",
+        "peerId": "peer-a",
+        "voiceChannelId": "chan-a"
+      },
+      "ts": {
+        "ok": false
+      }
+    }
+  ],
+  "rustRoundTrip": {
+    "token": "eyJ2IjoxLCJ1IjoiMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExIiwicCI6InBlZXItYSIsImMiOiJjaGFuLWEiLCJ0IjoibGl2ZWtpdCIsImUiOjE3MDAwMjg4MDAwMDUsInIiOiJncnUifQ.Zsw_e7CnVADqs5FH3lwWiAoFJjqDmbNsyOyBh3Sgdcc",
+    "now": 1700000000005,
+    "match": {
+      "userId": "11111111-1111-4111-8111-111111111111",
+      "peerId": "peer-a",
+      "voiceChannelId": "chan-a"
+    }
+  }
+}
