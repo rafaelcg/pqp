@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 const sig = await import(resolve(here, "../../packages/shared/src/signaling.ts"));
 const frames = JSON.parse(
-  readFileSync(resolve(here, "../fixtures/proto-vectors.json"), "utf8"),
+  readFileSync(resolve(here, "../crates/pqp-core/fixtures/proto-vectors.json"), "utf8"),
 );
 
 const TARGET_MS = 1200;

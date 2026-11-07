@@ -1,6 +1,6 @@
 //! Wire-parity test for the voice protocol against zod.
 //!
-//! `rust/fixtures/proto-vectors.json` holds one zod-validated frame per arm of
+//! `fixtures/proto-vectors.json` holds one zod-validated frame per arm of
 //! `voiceClientMessageSchema` and `voiceSignalingMessageSchema`, together with
 //! the canonical form of zod's own parse output. Canonical means: defaults
 //! filled, a field that is nullable and absent written as `null`, a field that
@@ -19,7 +19,7 @@ use pqp_core::proto::{VoiceClientMessage, VoiceSignalingMessage};
 use serde::Deserialize;
 use serde_json::Value;
 
-const FIXTURE: &str = include_str!("../../../fixtures/proto-vectors.json");
+const FIXTURE: &str = include_str!("../fixtures/proto-vectors.json");
 
 #[derive(Deserialize)]
 struct Fixture {

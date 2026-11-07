@@ -93,7 +93,7 @@ for (const vector of minted.vectors) {
 // WORSE per frame and slightly bigger per socket. A number here that drifts far
 // from parity means the backend changed, not that the protocol broke.
 const nodeFixture = JSON.parse(
-  readFileSync(resolve(here, "../fixtures/deflate-vectors.json"), "utf8"),
+  readFileSync(resolve(here, "../crates/pqp-deflate/fixtures/deflate-vectors.json"), "utf8"),
 );
 for (const v of nodeFixture.vectors) {
   for (const f of v.frames) {

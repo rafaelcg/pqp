@@ -244,7 +244,7 @@ pub fn parse_extensions(header: &str) -> Vec<Vec<Parameter>> {
 /// `Sec-WebSocket-Extensions` value than the server it replaces -- still a
 /// working connection, but with context takeover on, which is the per-socket
 /// window growth the shipped policy exists to bound. The fixtures in
-/// `rust/fixtures/deflate-vectors.json` are what caught that: `ws` answers every
+/// `fixtures/deflate-vectors.json` are what caught that: `ws` answers every
 /// bare offer with
 /// `permessage-deflate; server_no_context_takeover; client_no_context_takeover`.
 #[derive(Debug, Clone, PartialEq, Eq)]

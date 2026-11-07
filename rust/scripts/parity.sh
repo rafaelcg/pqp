@@ -51,10 +51,26 @@ else
       regenerated. Run 'pnpm install'. Cargo still tests the committed fixtures." >&2
 fi
 
-if ! git diff --exit-code --quiet rust/fixtures/; then
-  echo "FAIL: fixtures under rust/fixtures/ no longer match the shipped TypeScript." >&2
+# Each fixture lives inside the crate that reads it, because `include_str!` of a
+# path above the crate root cannot be packaged: a `.crate` tarball holds only the
+# crate directory, so a published crate would compile against a file that is not
+# there. That turns this pathspec into a list -- add to it when a crate gains
+# fixtures. A stale pathspec is the failure mode to fear here, because `git diff`
+# is quiet and green about a directory that no longer exists, so the directories are
+# asserted to exist before anything is compared.
+fixtures_dirs=(rust/crates/pqp-core/fixtures rust/crates/pqp-deflate/fixtures)
+for fixtures_dir in "${fixtures_dirs[@]}"; do
+  if [ ! -d "$fixtures_dir" ]; then
+    echo "FAIL: $fixtures_dir is gone, so the fixture drift check would pass on nothing." >&2
+    echo "Point it at the directory the crates actually include_str! from." >&2
+    exit 1
+  fi
+done
+
+if ! git diff --exit-code --quiet -- "${fixtures_dirs[@]}"; then
+  echo "FAIL: fixtures under ${fixtures_dirs[*]} no longer match the shipped TypeScript." >&2
   echo "The port has drifted from the schema. Review the diff and commit it." >&2
-  git --no-pager diff --stat rust/fixtures/ >&2
+  git --no-pager diff --stat -- "${fixtures_dirs[@]}" >&2
   exit 1
 fi
 

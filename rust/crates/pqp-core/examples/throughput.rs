@@ -33,7 +33,7 @@ use serde_json::Value;
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
-const FIXTURE: &str = include_str!("../../../fixtures/proto-vectors.json");
+const FIXTURE: &str = include_str!("../fixtures/proto-vectors.json");
 /// Long enough that timer resolution and cache warm-up stop mattering.
 const TARGET: Duration = Duration::from_millis(1200);
 

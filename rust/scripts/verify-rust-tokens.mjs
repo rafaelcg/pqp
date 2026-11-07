@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const mod = await import(resolve(here, "../../server/src/ws/voice-resume-token.ts"));
-const fixture = JSON.parse(readFileSync(resolve(here, "../fixtures/resume-vectors.json"), "utf8"));
+const fixture = JSON.parse(readFileSync(resolve(here, "../crates/pqp-core/fixtures/resume-vectors.json"), "utf8"));
 
 const path = process.argv[2];
 if (!path) {

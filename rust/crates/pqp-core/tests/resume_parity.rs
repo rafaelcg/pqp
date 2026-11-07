@@ -1,6 +1,6 @@
 //! Differential parity test against the shipped TypeScript implementation.
 //!
-//! Every case in `rust/fixtures/resume-vectors.json` was produced by
+//! Every case in `fixtures/resume-vectors.json` was produced by
 //! `server/src/ws/voice-resume-token.ts` and carries the verdict the
 //! TypeScript verifier reached. This test does not encode what the author
 //! believes a resume token should do; it asserts the Rust port reaches the
@@ -14,7 +14,7 @@ use pqp_core::resume::{
 use serde::Deserialize;
 use std::path::PathBuf;
 
-const FIXTURE: &str = include_str!("../../../fixtures/resume-vectors.json");
+const FIXTURE: &str = include_str!("../fixtures/resume-vectors.json");
 
 #[derive(Deserialize)]
 struct Fixture {

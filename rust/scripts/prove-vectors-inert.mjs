@@ -3,10 +3,10 @@
  * Prove the fixtures are test material and not credentials.
  *
  * GitGuardian flags the 43-char signature half of the tokens in
- * rust/fixtures/resume-vectors.json as "Generic High Entropy Secret". Whoever
- * reads that scanner output should not have to take a developer's word for it,
- * so this script asks the shipped verifier the only three questions that
- * decide whether a string is a credential:
+ * rust/crates/pqp-core/fixtures/resume-vectors.json as "Generic High Entropy
+ * Secret". Whoever reads that scanner output should not have to take a
+ * developer's word for it, so this script asks the shipped verifier the only
+ * three questions that decide whether a string is a credential:
  *
  *   1. Does it still work at today's clock?          -> expiry revoked it
  *   2. Does it work under any key but the fixture's? -> bound to a throwaway
@@ -35,7 +35,7 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixture = JSON.parse(
-  readFileSync(resolve(here, "../fixtures/resume-vectors.json"), "utf8"),
+  readFileSync(resolve(here, "../crates/pqp-core/fixtures/resume-vectors.json"), "utf8"),
 );
 const { verifyVoiceResumeToken } = await import(
   resolve(here, "../../server/src/ws/voice-resume-token.ts")
@@ -169,7 +169,7 @@ for (const [name, value] of Object.entries(fixture.keys)) {
 
 // --- 6. The deflate fixture: nothing in it is text except our own frames ----
 const deflate = JSON.parse(
-  readFileSync(resolve(here, "../fixtures/deflate-vectors.json"), "utf8"),
+  readFileSync(resolve(here, "../crates/pqp-deflate/fixtures/deflate-vectors.json"), "utf8"),
 );
 
 /** Longest run of printable ASCII in a byte buffer. A key, token or PEM block is

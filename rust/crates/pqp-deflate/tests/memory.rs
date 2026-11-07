@@ -100,7 +100,7 @@ fn cost_of_a_thousand_compressed_connections() {
 /// sequential-id roster reporting 9.72x where production gets 5.17x.
 fn largest_frame() -> Vec<u8> {
     let fixture: serde_json::Value =
-        serde_json::from_str(include_str!("../../../fixtures/deflate-vectors.json"))
+        serde_json::from_str(include_str!("../fixtures/deflate-vectors.json"))
             .expect("the fixture parses");
     let mut best: Option<Vec<u8>> = None;
     for frame in fixture["vectors"]

@@ -57,7 +57,7 @@ const { PerMessageDeflate, extension, package: wsPackage } = ws;
  *  the drift check instead of quietly forking the fixture's assumptions. */
 const { WS_PER_MESSAGE_DEFLATE } = await import(resolve(here, "../../server/src/lib/ws-compression.ts"));
 
-const out = resolve(here, "../fixtures/deflate-vectors.json");
+const out = resolve(here, "../crates/pqp-deflate/fixtures/deflate-vectors.json");
 
 /**
  * `deflated` is the only field in this fixture that is not a property of pqp.

@@ -5,8 +5,10 @@ edition.workspace = true
 license.workspace = true
 description = "permessage-deflate (RFC 7692) for pqp, cross-tested against the Node server's ws framing"
 
-# Nothing here is published yet. Same reason as pqp-core: the parity fixtures live
-# above the crate root, so a package tarball would not even build.
+# Same call as pqp-core, and the fixtures no longer argue against it: they live in
+# `fixtures/` inside this crate now, so a package tarball builds. It stays
+# unpublished until the window-bits behaviour is written up as a general RFC 7692
+# implementation instead of as pqp's policy, which is what the fixtures prove.
 publish = false
 
 [dependencies]

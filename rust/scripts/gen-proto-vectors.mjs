@@ -28,7 +28,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const out = resolve(here, "../fixtures/proto-vectors.json");
+const out = resolve(here, "../crates/pqp-core/fixtures/proto-vectors.json");
 const sig = await import(resolve(here, "../../packages/shared/src/signaling.ts"));
 
 const U = "11111111-1111-4111-8111-111111111111";

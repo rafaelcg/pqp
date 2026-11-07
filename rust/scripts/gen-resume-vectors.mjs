@@ -17,7 +17,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const out = resolve(here, "../fixtures/resume-vectors.json");
+const out = resolve(here, "../crates/pqp-core/fixtures/resume-vectors.json");
 const mod = await import(resolve(here, "../../server/src/ws/voice-resume-token.ts"));
 const { mintVoiceResumeToken, verifyVoiceResumeToken } = mod;
 

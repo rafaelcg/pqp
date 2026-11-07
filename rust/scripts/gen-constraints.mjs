@@ -30,8 +30,8 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const vectorsPath = resolve(here, "../fixtures/proto-vectors.json");
-const out = resolve(here, "../fixtures/constraints.json");
+const vectorsPath = resolve(here, "../crates/pqp-core/fixtures/proto-vectors.json");
+const out = resolve(here, "../crates/pqp-core/fixtures/constraints.json");
 const sig = await import(resolve(here, "../../packages/shared/src/signaling.ts"));
 const soundboard = await import(resolve(here, "../../packages/shared/src/soundboard.ts"));
 

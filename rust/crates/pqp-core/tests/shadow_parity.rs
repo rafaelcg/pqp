@@ -12,8 +12,8 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-const CONSTRAINTS: &str = include_str!("../../../fixtures/constraints.json");
-const VECTORS: &str = include_str!("../../../fixtures/proto-vectors.json");
+const CONSTRAINTS: &str = include_str!("../fixtures/constraints.json");
+const VECTORS: &str = include_str!("../fixtures/proto-vectors.json");
 
 #[derive(Deserialize)]
 struct Doc {

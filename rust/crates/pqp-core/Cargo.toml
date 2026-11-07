@@ -4,12 +4,13 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Headless pqp core: wire protocol and voice resume tokens. Byte-for-byte compatible with the Node server."
-# Not on crates.io, and the reason is load-bearing rather than tidy: the value
-# rules are `include_str!`-ed from `rust/fixtures/constraints.json`, which sits
-# ABOVE this crate root, so cargo cannot put it in a package tarball and a
-# published crate would not compile. The fixture is shared with the TypeScript
-# generators in `rust/scripts/`, which is the reason it lives there. What ships
-# is the product built on this crate, not the crate.
+# Not on crates.io -- and the layout no longer forces that. The value rules are
+# `include_str!`-ed from `fixtures/constraints.json`, inside this crate, so
+# `cargo package` now produces a tarball that compiles; publishing is a decision
+# rather than a blocker. It stays unpublished because these rules mirror pqp's own
+# server contract: a crate that builds is not a crate whose promises hold against
+# someone else's server. What ships is the product built on it. Flip this together
+# with the version and support story, not as a side effect of a refactor.
 publish = false
 
 [dependencies]

@@ -1,6 +1,6 @@
 //! Value-parity test: the checks zod applies *after* the shape is right.
 //!
-//! `rust/fixtures/constraints.json` holds the value rules read off the shipped
+//! `fixtures/constraints.json` holds the value rules read off the shipped
 //! zod schemas, and for each one a frame that zod was shown and refused. The
 //! frames matter: a rule recorded in a fixture only means something if the port
 //! turns it into the same accept/reject decision as zod, at the same path, so
@@ -19,8 +19,8 @@ use pqp_core::validate;
 use serde::Deserialize;
 use serde_json::Value;
 
-const CONSTRAINTS: &str = include_str!("../../../fixtures/constraints.json");
-const VECTORS: &str = include_str!("../../../fixtures/proto-vectors.json");
+const CONSTRAINTS: &str = include_str!("../fixtures/constraints.json");
+const VECTORS: &str = include_str!("../fixtures/proto-vectors.json");
 
 /// Limit how many failures one assertion dumps, so a systematic mismatch is
 /// still readable.

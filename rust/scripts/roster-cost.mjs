@@ -45,7 +45,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "../..");
 const sig = await import(resolve(root, "packages/shared/src/signaling.ts"));
 const vectors = JSON.parse(
-  readFileSync(resolve(root, "rust/fixtures/proto-vectors.json"), "utf8"),
+  readFileSync(resolve(root, "rust/crates/pqp-core/fixtures/proto-vectors.json"), "utf8"),
 );
 
 const ROSTER = 250;

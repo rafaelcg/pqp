@@ -448,10 +448,11 @@ a rewrite, not a memory improvement.
 ## The scanner's eight findings, and how to re-check them in a minute
 
 CI reports "8 secrets uncovered" on this branch and fails. They are the signature
-halves of the resume tokens in `rust/fixtures/resume-vectors.json`, and they are
-false positives. That is asserted by a script rather than by a comment
-(`fixtures/resume-vectors.json` does have a comment too), and it is in the Rust gate,
-so a future vector that *was* a usable credential fails CI instead of shipping:
+halves of the resume tokens in
+`rust/crates/pqp-core/fixtures/resume-vectors.json`, and they are false positives.
+That is asserted by a script rather than by a comment (the fixture itself carries a
+note too), and it is in the Rust gate, so a future vector that *was* a usable
+credential fails CI instead of shipping:
 
 ```text
 node --experimental-strip-types --no-warnings \
