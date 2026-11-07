@@ -43,6 +43,10 @@ struct Side {
 #[derive(Deserialize)]
 struct Vector {
     r#type: String,
+    /// Which example of this arm the vector is, e.g. `music#2`. An arm with a
+    /// nullable nested object is tested both filled and null, so one arm can
+    /// own several vectors.
+    label: String,
     input: Value,
     canonical: Value,
 }
@@ -56,34 +60,52 @@ where
     T: serde::de::DeserializeOwned + serde::Serialize,
 {
     let parsed: T = serde_json::from_value(v.input.clone())
-        .unwrap_or_else(|e| panic!("{}: Rust refuses a frame zod accepts: {e}", v.r#type));
+        .unwrap_or_else(|e| panic!("{}: Rust refuses a frame zod accepts: {e}", v.label));
     let out = serde_json::to_value(&parsed)
-        .unwrap_or_else(|e| panic!("{}: Rust cannot re-serialize: {e}", v.r#type));
+        .unwrap_or_else(|e| panic!("{}: Rust cannot re-serialize: {e}", v.label));
     assert_eq!(
         out, v.canonical,
         "{}: Rust's JSON differs from zod's parse output",
-        v.r#type
+        v.label
     );
     // Parsing zod's own output must give the same struct back, which is what
     // makes the null-vs-absent mapping safe to rely on.
     let again: T = serde_json::from_value(v.canonical.clone())
-        .unwrap_or_else(|e| panic!("{}: Rust refuses zod's own output: {e}", v.r#type));
+        .unwrap_or_else(|e| panic!("{}: Rust refuses zod's own output: {e}", v.label));
     assert_eq!(
         serde_json::to_value(&again).unwrap(),
         v.canonical,
         "{}: round trip is not idempotent",
-        v.r#type
+        v.label
     );
+}
+
+/// Every arm the schema has must own at least one vector, and no vector may
+/// belong to an arm the schema does not have. `types` comes from the union
+/// itself, so this fails when somebody adds a message type and only updates
+/// one side of the port.
+fn assert_arm_coverage(types: &[String], vectors: &[Vector], side: &str) {
+    assert!(!types.is_empty(), "{side}: the union is empty");
+    let arms: std::collections::HashSet<&str> = types.iter().map(String::as_str).collect();
+    for arm in types {
+        assert!(
+            vectors.iter().any(|v| &v.r#type == arm),
+            "{side}: {arm} has no vector; the fixture is stale"
+        );
+    }
+    for v in vectors {
+        assert!(
+            arms.contains(v.r#type.as_str()),
+            "{side}: a vector for {} is not an arm of the schema",
+            v.r#type
+        );
+    }
 }
 
 #[test]
 fn client_frames_round_trip_byte_for_byte() {
     let fixture: Fixture = serde_json::from_str(FIXTURE).expect("fixture parses");
-    assert_eq!(
-        fixture.client.types.len(),
-        fixture.client.vectors.len(),
-        "one vector per client message type"
-    );
+    assert_arm_coverage(&fixture.client.types, &fixture.client.vectors, "client");
     for v in &fixture.client.vectors {
         round_trip::<VoiceClientMessage>(v);
     }
@@ -92,22 +114,23 @@ fn client_frames_round_trip_byte_for_byte() {
 #[test]
 fn server_frames_round_trip_byte_for_byte() {
     let fixture: Fixture = serde_json::from_str(FIXTURE).expect("fixture parses");
-    assert_eq!(
-        fixture.server.types.len(),
-        fixture.server.vectors.len(),
-        "one vector per server message type"
-    );
-    let mut ported = 0;
+    assert_arm_coverage(&fixture.server.types, &fixture.server.vectors, "server");
+    let mut ported = std::collections::HashSet::new();
     for v in &fixture.server.vectors {
         if fixture.server.pending.contains(&v.r#type) {
             continue;
         }
         round_trip::<VoiceSignalingMessage>(v);
-        ported += 1;
+        ported.insert(v.r#type.as_str());
     }
-    assert!(
-        ported >= 20,
-        "expected the port to cover the voice lifecycle, got {ported}"
+    // Phase 1 ported the last of the server arms, so the honest claim now is
+    // the whole union, not "enough of it". An arm added to the schema later
+    // has to be ported here or listed as pending in the generator.
+    let arms: std::collections::HashSet<&str> =
+        fixture.server.types.iter().map(String::as_str).collect();
+    assert_eq!(
+        ported, arms,
+        "server arms the port does not speak (subtract the ones listed as pending)"
     );
 }
 
@@ -115,7 +138,9 @@ fn server_frames_round_trip_byte_for_byte() {
 /// understood struct. Silently coercing `channel-live` into something the port
 /// half-reads would surface as a wrong room state; refusing it is loud. When a
 /// pending arm is ported, this test fails until it is removed from the list,
-/// which is what keeps the list honest.
+/// which is what keeps the list honest. Phase 1 emptied the list, so this loop
+/// passes by doing nothing today; it is the guard for the next arm somebody
+/// adds to the schema and cannot port in the same PR.
 #[test]
 fn pending_server_frames_are_refused_not_misread() {
     let fixture: Fixture = serde_json::from_str(FIXTURE).expect("fixture parses");
@@ -158,6 +183,18 @@ fn unknown_and_malformed_frames_are_refused() {
                                      "avatarUrl": null, "canSpeak": null}}),
         serde_json::json!({"type": "voice-roster-delta", "voiceChannelId": "c", "seq": 1}),
         serde_json::json!({"noType": true}),
+        // The arms phase 1 ported, on the cases zod refuses. Value constraints
+        // (a uuid, a max length, a non-empty array) are NOT re-checked here,
+        // only structure — see the limits note in `proto.rs`.
+        serde_json::json!({"type": "channel-live", "channelId": "c", "stream": null,
+                           "watching": 2, "ended": null}),
+        serde_json::json!({"type": "music", "channelId": "c", "state": {}}),
+        serde_json::json!({"type": "voice-audience", "voiceChannelId": "c",
+                           "audience": {"since": 1, "byUserId": "u", "speakerUserIds": []},
+                           "change": {"kind": "sideways"}}),
+        serde_json::json!({"type": "soundboard-play", "channelId": "c"}),
+        serde_json::json!({"type": "voice-stream", "channelId": "c",
+                           "stream": {"startedAt": 1, "presenterPeerId": "p"}}),
     ];
     for frame in bad {
         assert!(

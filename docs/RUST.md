@@ -85,10 +85,14 @@ their own, with the existing suite still green.
 
 Each row is a separate branch and PR. Nothing here blocks the row above it.
 
+(Phases 0 and 1 share #1561: phase 0 sat unreviewed while phase 1 was already
+mechanical, and one reviewer reading a complete protocol port is cheaper than
+two reading half of it. Phase 2 onward is its own branch again.)
+
 | # | Step | Why this order | Done when |
 |---|---|---|---|
-| 0 | `rust/` cargo workspace, `pqp-core` with the voice protocol and resume tokens, differential gate in CI | Cheapest place to prove the contract, and the two pieces where cross-language interop is already mandatory | This PR |
-| 1 | Extend `pqp-core` to the remaining server frames (audience, watch-party, music, soundboard, live, reactions) | Mechanical now that the harness exists; closes the last cross-language surface | `pending` list empty, 30/30 server vectors round-trip |
+| 0 | `rust/` cargo workspace, `pqp-core` with the voice protocol and resume tokens, differential gate in CI | Cheapest place to prove the contract, and the two pieces where cross-language interop is already mandatory | Landed, #1561 |
+| 1 | Extend `pqp-core` to the remaining server frames (audience, watch-party, music, soundboard, live, reactions) | Mechanical now that the harness exists; closes the last cross-language surface | Landed, #1561: `pending` empty, all 30 server arms and all 19 client arms round-trip |
 | 2 | Rust `/ws` gateway **alongside** Node: it terminates sockets for one canary hall and proxies the rest to Node | Smallest live footprint that exercises the real thing; resume and peer-id rules are the risk and are already pinned by vectors | Canary hall reconnects survive a Rust restart at the same rate as a Node one |
 | 3 | Postgres read path for the frames the gateway can answer itself | Removes Node from the hot path without touching writes | Byte-identical HTTP responses on a recorded corpus |
 | 4 | Desktop: Rust core behind the Electron shell, owning app state and the socket, JS still drawing pixels | This is where the memory claim is testable, and it is reversible | Measured RSS drop on the same scene, both builds |
@@ -142,6 +146,46 @@ is on every roster, so after a restart "claim this unused id" would let anyone
 who read the roster take someone else's seat and force the real owner into a
 cold join that drops their audio. Any Rust replacement inherits that threat
 model, not just that format.
+
+## What landed in phase 1
+
+The server union is complete. The eight arms that `pending` excused —
+`voice-audience`, `watch-party`, `music`, `channel-music`, `live-reactions`,
+`soundboard-play`, `voice-stream`, `channel-live` — are now Rust variants, with
+`VoiceAudienceChange`, `MusicState`, `ChannelMusicTrack`, `LiveReactionCount`,
+`LiveHlsStream` and their enums beside them. `pending` is empty.
+
+Three things that only showed up once the frames were actually ported:
+
+- **`music` and `set-music` do not share a state type.** The read form defaults
+  `openControls`, `repeat`, `skipVotes` and `history`, so they always serialize;
+  in the write form the same names mean "unchanged" and must stay absent, or a
+  position sample wipes the room's skip votes. The fixture now pins both, and
+  the sparse write is one of its vectors.
+- **`channel-music` carries a different track shape from `music`.** Video id,
+  title, thumbnail and a listener count — not a `MusicTrack`. Reusing the
+  familiar type here would have been a wrong frame nobody notices.
+- **An arm with a nullable nested object needs two examples.** With one, both
+  wrong ports look right: expanding `null` into an all-`null` object (the
+  `candidate: null` bug from phase 0) and dropping a present object each pass a
+  single-example fixture. The generator now derives the field list from the
+  schema and refuses to write until each one is seen filled and null. It found
+  four arms nobody had thought about — `welcome`, `ice-candidate`,
+  `set-watch-party`, `set-music` — and demanded their second example.
+
+```
+69 vectors over 49 arms (30 server, 19 client), 9 tests
+./rust/scripts/parity.sh → pass; clippy and rustfmt clean
+```
+
+**What phase 2 now owes.** Serde checks structure; zod also checks values
+(`.uuid()`, `.min(1)`, `.max(64)`, `.url()`, the soundboard id `.refine`, array
+bounds). Those are not ported, so `pqp-core` accepts frames the Node server
+would refuse. That is harmless while Rust only reads what Node validated. It is
+not harmless the moment a Rust socket terminates a connection on its own, which
+is exactly what phase 2 does: the two machines would disagree about who may be
+in a room. Phase 2 either ports the constraints or keeps validation on Node and
+says which it did in the PR.
 
 ## Measuring, when a phase claims it
 

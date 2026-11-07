@@ -30,10 +30,34 @@
 //!
 //! # Coverage
 //!
-//! `PROTO_COVERAGE` in the fixture names which server message types are not
-//! ported yet. The test fails on any type the schema carries that is neither
-//! ported nor listed there, so growing the protocol forces an explicit
-//! decision instead of a silent gap.
+//! Both unions here are complete: every arm of `voiceClientMessageSchema` and
+//! `voiceSignalingMessageSchema` has a Rust variant, and the fixture's
+//! `server.pending` list — the arms the port is allowed to refuse — is empty.
+//! The mechanism stays, because the failure that matters is the next one: a
+//! message type added to the schema and not to the port. The generator refuses
+//! to write a fixture without an example for every arm, and
+//! `tests/proto_parity.rs` fails on any arm that is neither ported nor listed
+//! as pending, so growing the protocol forces a decision instead of a gap.
+//!
+//! An arm whose frame can hold a nested object is tested **both** with it and
+//! null. One example either way is not enough: expanding `null` into an
+//! all-`null` object and dropping a present object both look correct against a
+//! single example, and the first one was a real bug here (`candidate: null`
+//! became a bogus ICE frame). The generator derives the list of fields that
+//! need both from the schema, so a newly nullable field demands its own
+//! example.
+//!
+//! # What this port does not check
+//!
+//! Serde checks **structure**; Zod also checks **values** — `.uuid()`,
+//! `.min(1)`, `.max(64)`, `.url()`, `.refine(isSoundboardSoundId)`, array
+//! bounds. Those are not reproduced, so this enum accepts some frames Zod
+//! refuses. That is fine while a Rust process only *reads* frames Node has
+//! already validated, and it is not fine the moment Rust terminates a socket
+//! on its own: a Rust gateway that stops enforcing the value rules would accept
+//! what the Node server hangs up on, and the two machines would disagree about
+//! who may be in a room. Phase 2 has to port the constraints, or keep
+//! validation on the Node side, and say which it did.
 
 use crate::VoiceRoomTransport;
 use serde::{Deserialize, Serialize};
@@ -119,6 +143,54 @@ pub struct VoiceAudienceState {
         skip_serializing_if = "Option::is_none"
     )]
     pub unenforced_user_ids: Option<Vec<String>>,
+}
+
+/// What just happened to audience mode, for the transient notice in the call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum VoiceAudienceChangeKind {
+    On,
+    Off,
+    SpeakerAdded,
+    SpeakerRemoved,
+}
+
+/// Why audience mode switched off by itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum VoiceAudienceEndReason {
+    /// A host turned it off.
+    Host,
+    /// The last person who could run the stage left the call.
+    NoHost,
+    /// The operator turned the feature off for this server.
+    FlagOff,
+}
+
+/// The one-shot explanation that travels beside a `voice-audience` frame.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceAudienceChange {
+    pub kind: VoiceAudienceChangeKind,
+    /// Who did it. `None` when the server did it on its own, which is also
+    /// what an absent field means here: nullable **and** optional, so plain
+    /// `Option` with no `skip_serializing_if` — zod's parse output always
+    /// carries the key.
+    pub by_user_id: Option<String>,
+    /// `speaker-*` only: whom it was about.
+    #[serde(
+        default,
+        deserialize_with = "strict_option::deserialize",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub user_id: Option<String>,
+    /// `off` only: why.
+    #[serde(
+        default,
+        deserialize_with = "strict_option::deserialize",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub reason: Option<VoiceAudienceEndReason>,
 }
 
 /// An ICE candidate, mirroring the browser's `RTCIceCandidateInit`.
@@ -212,6 +284,16 @@ pub enum LiveReaction {
     Fire,
     #[serde(rename = "🎉")]
     Party,
+}
+
+/// One emoji's coalesced total in a `live-reactions` burst. The frame carries
+/// counts only: never who tapped, and nothing is stored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveReactionCount {
+    pub emoji: LiveReaction,
+    /// Always at least one; a zero-count entry is a schema violation.
+    pub count: i64,
 }
 
 /// Frames the client sends on the voice socket.
@@ -651,6 +733,96 @@ pub enum VoiceSignalingMessage {
     },
     #[serde(rename_all = "camelCase")]
     VoiceIdleWarningCancelled { voice_channel_id: String },
+    /// Audience mode ("Liberar o microfone") changed, or the media server's
+    /// confirmation did. The joiner's own grant travels separately on
+    /// `voice-speak-changed`; this is the state everybody draws.
+    #[serde(rename_all = "camelCase")]
+    VoiceAudience {
+        voice_channel_id: String,
+        /// `None` means off.
+        audience: Option<VoiceAudienceState>,
+        /// Only on the frame that announced the change, not on a state sync.
+        #[serde(
+            default,
+            deserialize_with = "strict_option::deserialize",
+            skip_serializing_if = "Option::is_none"
+        )]
+        change: Option<VoiceAudienceChange>,
+    },
+    #[serde(rename_all = "camelCase")]
+    WatchParty {
+        channel_id: String,
+        state: Option<WatchPartyState>,
+    },
+    #[serde(rename_all = "camelCase")]
+    Music {
+        channel_id: String,
+        state: Option<MusicState>,
+        /// The server handing back what it holds because the sender's write
+        /// was refused. The client adopts it whatever its own `rev` says.
+        #[serde(
+            default,
+            deserialize_with = "strict_option::deserialize",
+            skip_serializing_if = "Option::is_none"
+        )]
+        forced: Option<bool>,
+    },
+    /// What a channel is playing, for viewers outside the call.
+    #[serde(rename_all = "camelCase")]
+    ChannelMusic {
+        channel_id: String,
+        track: Option<ChannelMusicTrack>,
+    },
+    /// Coalesced reaction counts for the room. `items` is never empty.
+    #[serde(rename_all = "camelCase")]
+    LiveReactions {
+        channel_id: String,
+        items: Vec<LiveReactionCount>,
+        seq: i64,
+    },
+    /// One clip for the room. Not stored.
+    #[serde(rename_all = "camelCase")]
+    SoundboardPlay {
+        channel_id: String,
+        sound_id: String,
+        user_id: String,
+        display_name: String,
+        emoji: String,
+        played_at: i64,
+    },
+    /// The room's screen-share egress. Reaches sockets inside the room only.
+    #[serde(rename_all = "camelCase")]
+    VoiceStream {
+        channel_id: String,
+        stream: Option<LiveHlsStream>,
+    },
+    /// The channel-level live path: `voice-stream` does not reach a viewer
+    /// without a seat, so the sidebar pill and watch-mode viewers read this.
+    #[serde(rename_all = "camelCase")]
+    ChannelLive {
+        channel_id: String,
+        stream: Option<LiveHlsStream>,
+        /// Watch-mode viewers without a seat, counted by this process.
+        watching: i64,
+        /// Distinct accounts counted across every API machine. Shown in place
+        /// of `watching` by a client that knows it.
+        #[serde(
+            default,
+            deserialize_with = "strict_option::deserialize",
+            skip_serializing_if = "Option::is_none"
+        )]
+        viewers: Option<i64>,
+        /// With `stream: None`, the server is CERTAIN there is no session. A
+        /// client holding a stream must not drop it on a null without this:
+        /// an API machine that is not running the egress says null for a party
+        /// that is live on another one.
+        #[serde(
+            default,
+            deserialize_with = "strict_option::deserialize",
+            skip_serializing_if = "Option::is_none"
+        )]
+        ended: Option<bool>,
+    },
 }
 
 /// Watch party playback state.
@@ -764,10 +936,159 @@ pub enum MusicStatus {
     Paused,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MusicRepeat {
+    /// The Zod default, and therefore the serde default for a read state.
+    #[default]
     Off,
     One,
     All,
+}
+
+/// What the room holds as its music state, as the server sends it.
+///
+/// This is the **read** form and it is not [`MusicStateWrite`]: here
+/// `open_controls`, `repeat`, `skip_votes` and `history` carry Zod defaults,
+/// so they are plain fields that always serialize, while in the write form the
+/// same names are absent-means-unchanged and must not be filled. Confusing the
+/// two would let a position sample wipe a room's skip votes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MusicState {
+    /// `None` beside a non-empty queue is a transient the next write fixes.
+    pub current: Option<MusicTrack>,
+    pub queue: Vec<MusicTrack>,
+    pub status: MusicStatus,
+    pub position_ms: i64,
+    pub at_ms: i64,
+    /// Logical clock. Higher wins; ties break on `actor_id`.
+    pub rev: i64,
+    pub actor_id: String,
+    /// While true, anyone who may speak is treated as a manager.
+    #[serde(default)]
+    pub open_controls: bool,
+    #[serde(default)]
+    pub repeat: MusicRepeat,
+    /// User ids that have voted to skip the current track.
+    #[serde(default)]
+    pub skip_votes: Vec<String>,
+    /// Most recent first.
+    #[serde(default)]
+    pub history: Vec<MusicTrack>,
+    #[serde(
+        default,
+        deserialize_with = "strict_option::deserialize",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub autoplay: Option<bool>,
+}
+
+/// The sidebar's copy of the current track: enough to say what is playing,
+/// with no queue, position or votes to keep in step. Note this is a different
+/// shape from [`MusicTrack`], so `channel-music` cannot reuse it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelMusicTrack {
+    pub video_id: String,
+    pub title: String,
+    pub thumbnail_url: Option<String>,
+    /// Seated peers whose player is on. Absent on an older server.
+    #[serde(
+        default,
+        deserialize_with = "strict_option::deserialize",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub listeners: Option<i64>,
+}
+
+/// How the egress is packaged. Absent means a server that predates the
+/// low-latency ladder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LiveHlsMode {
+    Conventional,
+    Ll,
+}
+
+/// A running screen-share HLS session.
+///
+/// Every field after `presenter_peer_id` is optional because it was added
+/// later and iOS, Android and older web clients still parse this frame: the
+/// port must not invent a value for a field the sender left out.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveHlsStream {
+    /// Either a full public URL or an API-relative path the client prefixes
+    /// with its own API base.
+    pub hls_url: String,
+    pub started_at: i64,
+    pub presenter_peer_id: String,
+    /// The presenting **person**, beside the peer id. A session outlives the
+    /// socket that started it, so for a window after a presenter reloads the
+    /// two name different ids.
+    #[serde(
+        default,
+        deserialize_with = "strict_option::deserialize",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub presenter_user_id: Option<String>,
+    /// What the latency badge should claim.
+    #[serde(
+        default,
+        deserialize_with = "strict_option::deserialize",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub delay_seconds: Option<i64>,
+    /// The tallest rendition this session actually started, in lines.
+    #[serde(
+        default,
+        deserialize_with = "strict_option::deserialize",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub top_height: Option<i64>,
+    /// Highest framerate a started rung actually encodes.
+    #[serde(
+        default,
+        deserialize_with = "strict_option::deserialize",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub top_framerate: Option<i64>,
+    /// Whether this transcode has any audio at all.
+    #[serde(
+        default,
+        deserialize_with = "strict_option::deserialize",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub has_audio: Option<bool>,
+    #[serde(
+        default,
+        deserialize_with = "strict_option::deserialize",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub camera_hls_url: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "strict_option::deserialize",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub camera_has_video: Option<bool>,
+    #[serde(
+        default,
+        deserialize_with = "strict_option::deserialize",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub camera_has_voice_audio: Option<bool>,
+    #[serde(
+        default,
+        deserialize_with = "strict_option::deserialize",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub mode: Option<LiveHlsMode>,
+    #[serde(
+        default,
+        deserialize_with = "strict_option::deserialize",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub part_target_ms: Option<i64>,
 }
