@@ -721,6 +721,138 @@ fn is_uuid(value: &str) -> bool {
 pub fn url_accepts(value: &str) -> bool {
     url::Url::parse(value).is_ok()
 }
+
+/// Shadow accounting: what the edge **would** refuse, refusing nothing.
+///
+/// Phase 2 cannot enforce these rules the day it lands. The socket path today
+/// rate-limits, `JSON.parse`s and dispatches (`server/src/ws/index.ts:407`), and
+/// the only voice guard reads `message.type`
+/// (`server/src/ws/voice.ts:9932`, `packages/shared/src/signaling.ts:754`). So a
+/// frame these rules dislike may well be one a working client sends today, and an
+/// edge that refuses it is not protecting anybody — it is hanging up a call, the
+/// exact failure this crate exists to prevent.
+///
+/// The way to find out is to run the check and say nothing: count per arm, keep a
+/// few example paths, close no socket. Enforcement then arms one arm at a time,
+/// only after that arm's count has stayed empty on live traffic for a full deploy
+/// window. `quiet_for` is the predicate that decides it.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Shadow {
+    /// Frames that reached the value layer, good or bad.
+    pub frames: usize,
+    /// Lines that were not JSON at all. These are *not* refusals: the Node
+    /// handler survives an unparseable frame too, and a shadow run has to
+    /// report the same tolerance it is measured against.
+    pub unparsed: usize,
+    /// Frames the value layer would refuse.
+    pub refused: usize,
+    /// Frames seen per `type`, including types with no rules at all, so an arm
+    /// can never look safe because it was never counted.
+    pub per_type: std::collections::BTreeMap<String, TypeCounts>,
+    /// The first few refusals, paths and all — enough to act on without
+    /// buffering a room's traffic in a debug counter.
+    pub samples: Vec<Sample>,
+}
+
+/// Frames and refusals for one arm.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct TypeCounts {
+    pub frames: usize,
+    pub refused: usize,
+}
+
+/// One refusal, kept so a shadow run says *why* and not only how many.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sample {
+    pub frame_type: String,
+    pub violations: Vec<Violation>,
+}
+
+/// How many refusals a shadow run remembers. Bounded on purpose: this counter
+/// sits on a socket that may be a room's whole fan-out.
+pub const SAMPLE_LIMIT: usize = 20;
+
+impl Shadow {
+    /// Arms that have been seen but never refused — the list enforcement can be
+    /// armed from, in the order an operator would want to read it.
+    #[must_use]
+    pub fn arming_ready(&self) -> Vec<&str> {
+        self.per_type
+            .iter()
+            .filter(|(_, c)| c.frames > 0 && c.refused == 0)
+            .map(|(t, _)| t.as_str())
+            .collect()
+    }
+
+    /// Whether one arm has earned enforcement: seen often enough to mean
+    /// something, and never refused.
+    #[must_use]
+    pub fn quiet_for(&self, frame_type: &str, at_least: usize) -> bool {
+        self.per_type
+            .get(frame_type)
+            .is_some_and(|c| c.frames >= at_least && c.refused == 0)
+    }
+}
+
+/// Audit newline-separated frames — the shape a captured socket log has — without
+/// refusing any of them.
+///
+/// Panics only on an `unwrap`-free path: a line that is not JSON is counted, and a
+/// frame with no usable `type` is counted by [`check`]'s own reading of it, which
+/// is "the structure layer refuses that first".
+pub fn audit<'a>(union: &str, rules: &Rules, lines: impl Iterator<Item = &'a str>) -> Shadow {
+    let mut out = Shadow::default();
+    for line in lines {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(frame) = serde_json::from_str::<Value>(line) else {
+            out.unparsed += 1;
+            continue;
+        };
+        audit_frame(union, rules, &frame, &mut out);
+    }
+    out
+}
+
+/// Audit already-parsed frames. The tests use this over the vectors fixture;
+/// [`audit`] is the same accounting over the bytes a socket saw.
+pub fn audit_frames<'a>(
+    union: &str,
+    rules: &Rules,
+    frames: impl Iterator<Item = &'a Value>,
+) -> Shadow {
+    let mut out = Shadow::default();
+    for frame in frames {
+        audit_frame(union, rules, frame, &mut out);
+    }
+    out
+}
+
+fn audit_frame(union: &str, rules: &Rules, frame: &Value, out: &mut Shadow) {
+    out.frames += 1;
+    // The arm is read the way the dispatcher reads it. A frame with no `type`
+    // still counts as traffic — it reached the edge, and a shadow run that
+    // quietly drops it would understate what enforcement would cost.
+    let named = frame
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("<no type>")
+        .to_owned();
+    let counts = out.per_type.entry(named.clone()).or_default();
+    counts.frames += 1;
+    if let Err(violations) = check(union, rules, frame) {
+        out.refused += 1;
+        counts.refused += 1;
+        if out.samples.len() < SAMPLE_LIMIT {
+            out.samples.push(Sample {
+                frame_type: named,
+                violations,
+            });
+        }
+    }
+}
 /// The interpreter, on a table small enough to read. Everything else in this
 /// crate's tests compares against generated data; these pin the behaviours a
 /// generated probe cannot reach on its own: how a length is counted, what a

@@ -227,20 +227,26 @@ Four decisions in it are load-bearing:
 
 ```
 287 value rules over 32 arms, 287 proved violations, 0 reported unproved
-tests/value_parity.rs 9 tests, validate.rs 7 unit tests
+tests/value_parity.rs 9 tests, tests/shadow_parity.rs 5, validate.rs 7 unit tests
 ./rust/scripts/parity.sh -> pass; clippy, rustfmt and eslint clean
 ```
 
-**Not true yet.** Nothing calls `validate` from a runtime path: the Node server is
-still the only thing that ends a socket. The layer is a gate phase 2 has to open,
-not a behaviour that shipped, and it is worth measuring how long a frame takes to
-value-check before it does.
+**Not true yet.** Nothing in the shipped server calls `validate`. Node is still the
+only thing that ends a socket, and — see "Where zod actually runs" — it refuses
+almost nothing there, which is exactly why the layer cannot simply be switched on.
+What exists now is the instrument for finding out whether it can be: `validate::shadow`
+counts per arm what the value layer would refuse while refusing nothing, and
+`cargo run --release --example shadow -- client < frames.jsonl` prints that table
+for a captured log. `tests/shadow_parity.rs` holds it to the same generated evidence
+as the value layer, so the report phase 2 would arm enforcement from is a tested one.
 
 **What phase 2 now owes.** Validate in **shadow** first — see "Where zod actually
 runs" below: the socket path today refuses almost nothing, so refusing is a
-behaviour change and not a port. Count what `validate::client` would refuse,
-refuse nothing, and arm enforcement per frame type only after the shadow count has
-been empty on live traffic for a full deploy window. In front of it, the resume and
+behaviour change and not a port. `validate::shadow` is that mode and
+`Shadow::quiet_for(arm, at_least)` is the arming predicate: count what
+`validate::client` would refuse, refuse nothing, and arm enforcement per frame type
+only after that arm's count has stayed empty on live traffic for a full deploy
+window. In front of it, the resume and
 peer-id rules already pinned by `fixtures/resume-vectors.json`. Keep value coverage
 total: the gate fails if a rule ships without a proved violation, so a new field
 needs an example frame in `gen-proto-vectors.mjs` rather than a rule written by hand.
