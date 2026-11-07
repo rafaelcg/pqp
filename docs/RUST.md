@@ -1,0 +1,509 @@
+# Rust core
+
+What a Rust rewrite of pqp means, in what order, and what has to be true before
+any of it ships. Started 2026-11-07, after Discord's CTO confirmed Discord is
+rebuilding its desktop client in Rust.
+
+## What Discord actually said
+
+From Stanislav Vishnevskiy (Discord co-founder/CTO) on 2026-11-04, as reported
+by [TechSpot](https://www.techspot.com/news/114462-discord-rebuilding-desktop-app-rust-fix-memory-problem.html),
+[bool.dev](https://bool.dev/news/detail/discord-rust) and
+[Windows Latest](https://www.windowslatest.com/2026-11-05/discord-is-killing-its-electron-app-that-can-eat-4gb-of-ram-on-windows-11-and-the-rust-rebuild-uses-just-290mb/):
+
+- Desktop drops Electron **and** the JS UI. The interface is native Rust on
+  [GPUI](https://www.bool.dev/news/detail/discord-rust), the GPU-accelerated
+  framework from Zed's authors; Discord has local changes and may upstream some.
+- Mobile drops React Native but keeps its native interfaces, sharing
+  application code with desktop through Rust.
+- Embedded experiences (YouTube, Activities) still run in the OS webview.
+- A development build ("Discord Phoenix") showed ~290 MB with two accounts
+  signed in. Their Windows Electron client has been acknowledged to reach ~4 GB.
+- Stated goal is to preserve current appearance and behaviour. User testing is
+  hoped for "soon"; no date.
+
+What is **not** established, and should not be quoted back at us:
+
+- No published benchmark. The 290 MB is one developer's Task Manager, two
+  accounts, against no controlled measurement of the Electron client.
+- The "~5% reduction" figure circulating is from an earlier, different change.
+- Discord's older Rust work is a different workload: the 2020 Read States
+  service moved Go→Rust to escape garbage-collection latency spikes, and Rust
+  already sits in voice, the game SDK, Go Live capture/encode, Elixir NIFs and
+  the updater. None of that measures a UI rewrite.
+
+The transferable part is not "use Rust". It is: put state and protocols in a
+headless core, keep it testable without an app, ship it incrementally, and
+measure.
+
+## Why a big-bang rewrite is not a plan
+
+Measured on `main` today, lines of first-party source:
+
+| Surface | Files | Lines |
+|---|---|---|
+| `client/src` (React 19 SPA) | 1,941 | 505,541 |
+| `server/src` (API, `/ws`, voice signalling) | 675 | 347,740 |
+| `ios` (SwiftUI) | 355 | 111,391 |
+| `android` (Kotlin + Compose) | 451 | 111,564 |
+| `packages/shared` (Zod protocol) | 153 | 43,288 |
+| `electron` (JS shell) | — | 12,139 |
+
+About 1.13 million lines, plus 1,329 test files that encode behaviour nobody
+wants to re-derive. Roughly 13,700 of those lines are `server/src/ws/voice.ts`
+on its own, and that file is mostly accumulated product rules — seats, eviction,
+roster access, resume, transport pinning — not infrastructure.
+
+Rewriting all of it in one branch produces a long-lived fork that diverges
+faster than it can be ported, ships nothing, and loses every regression the test
+suite already encodes. The plan below therefore only allows steps that ship on
+their own, with the existing suite still green.
+
+## The contract every phase owes
+
+1. **Byte-compatible on the wire.** While Node and Rust run side by side behind
+   the same load balancer, a frame or credential produced by one must be
+   accepted by the other. Otherwise a rolling deploy is a hangup, which
+   `docs/VOICE_RESUME.md` exists to prevent.
+2. **Differential regression, not hand-written expectations.** Fixtures are
+   generated from the shipped TypeScript — the real Zod schemas, the real token
+   module — and the port is compared against them. An expectation written from
+   the port tests the port.
+3. **Loud refusal over silent mis-read.** Anything the port cannot honour is
+   refused, and refusing is asserted in a test. A half-parsed frame becomes a
+   wrong room state.
+4. **The existing suite stays green.** 1,329 test files, plus the e2e matrix in
+   `ci.yml`. A phase that cannot show both is not done.
+5. **Labels honestly.** A change that reaches `server/` or `packages/shared` is
+   `restarts-api`. `drops-voice` only when the change itself hangs up a live
+   call after resume, per `AGENTS.md`.
+6. **A number, or it is not a win.** Each phase states the memory or startup
+   measurement it is supposed to improve and how that is measured. "Rewritten in
+   Rust" is not a result.
+
+## Phases
+
+Each row is a separate branch and PR. Nothing here blocks the row above it.
+
+(Phases 0 and 1 share #1561: phase 0 sat unreviewed while phase 1 was already
+mechanical, and one reviewer reading a complete protocol port is cheaper than
+two reading half of it. Phase 2 onward is its own branch again.)
+
+| # | Step | Why this order | Done when |
+|---|---|---|---|
+| 0 | `rust/` cargo workspace, `pqp-core` with the voice protocol and resume tokens, differential gate in CI | Cheapest place to prove the contract, and the two pieces where cross-language interop is already mandatory | Landed, #1561 |
+| 1 | Extend `pqp-core` to the remaining server frames (audience, watch-party, music, soundboard, live, reactions) | Mechanical now that the harness exists; closes the last cross-language surface | Landed, #1561: `pending` empty, all 30 server arms and all 19 client arms round-trip |
+| 1b | Port zod's **value** rules into `pqp-core` — `.uuid()`, length and item bounds, `.url()`, the soundboard `.refine` — as generated data, each proved against a frame zod refused | Structure is not validation. The cluster bus really does enforce these, and a Rust socket that ends connections has to agree with the declared contract, or the two disagree about who may be in a room | Landed, #1561: 287 rules over 32 arms, every one proved against a frame zod refused |
+| 2 | Rust `/ws` gateway **alongside** Node: it terminates sockets for one canary hall and proxies the rest to Node | Smallest live footprint that exercises the real thing; resume and peer-id rules are the risk and are already pinned by vectors | Canary hall reconnects survive a Rust restart at the same rate as a Node one |
+| 3 | Postgres read path for the frames the gateway can answer itself | Removes Node from the hot path without touching writes | Byte-identical HTTP responses on a recorded corpus |
+| 4 | Desktop: Rust core behind the Electron shell, owning app state and the socket, JS still drawing pixels | This is where the memory claim is testable, and it is reversible | Measured RSS drop on the same scene, both builds |
+| 5 | Decide the UI: keep the web UI on a Rust core, or a native GPU UI like Discord's GPUI bet | Only answerable after 4 produces a number | A written go/no-go with measurements, not a preference |
+
+Phase 5 is a genuine fork in the road and the most expensive decision in the
+document. Discord replaced its UI because it could absorb that cost; pqp has one
+fewer order of magnitude of users to amortise it over, and iOS and Android
+already ship native. Do not decide it before phase 4 has a number.
+
+## What landed in phase 0
+
+```
+rust/
+  Cargo.toml                    workspace
+  crates/pqp-core/
+    src/lib.rs                  VoiceRoomTransport
+    src/proto.rs                voice wire protocol, both directions
+    src/resume.rs               HMAC resume tokens
+    tests/proto_parity.rs       frames vs zod
+    tests/resume_parity.rs      tokens vs the shipped module
+  fixtures/                     generated, committed, diffed in CI
+  scripts/                      generators, reverse verifier, gate
+```
+
+Run it:
+
+```bash
+./rust/scripts/parity.sh
+```
+
+That regenerates fixtures from the TypeScript, fails if the committed fixtures
+have gone stale, runs `cargo test`, sends Rust's own tokens back through the
+Node verifier, then clippy and rustfmt. `cargo test` on its own only proves one
+direction, and the missing direction is the one that hangs up calls.
+
+Two fidelity rules the port enforces, both learned from failures the harness
+caught while it was being written:
+
+- `T.optional()` and `T.nullable().optional()` are **not** the same field. A
+  plain Rust `Option<T>` reads `canSpeak: null` as `None`, while zod refuses it:
+  `canSpeak` is optional, not nullable. `cameraStreamId: null` and an absent
+  `cameraStreamId` really do mean the same thing. `proto.rs`'s table is the
+  mapping, and `strict_option` is what makes the first row actually reject null.
+- Resume-token claim order and the absent-vs-empty region rule are part of the
+  wire format, because the payload is hashed as bytes. Rust mints tokens
+  byte-identical to Node, asserted for four claim shapes.
+
+`server/src/ws/voice-resume-token.ts` documents why the token exists: `peerId`
+is on every roster, so after a restart "claim this unused id" would let anyone
+who read the roster take someone else's seat and force the real owner into a
+cold join that drops their audio. Any Rust replacement inherits that threat
+model, not just that format.
+
+## What landed in phase 1
+
+The server union is complete. The eight arms that `pending` excused —
+`voice-audience`, `watch-party`, `music`, `channel-music`, `live-reactions`,
+`soundboard-play`, `voice-stream`, `channel-live` — are now Rust variants, with
+`VoiceAudienceChange`, `MusicState`, `ChannelMusicTrack`, `LiveReactionCount`,
+`LiveHlsStream` and their enums beside them. `pending` is empty.
+
+Three things that only showed up once the frames were actually ported:
+
+- **`music` and `set-music` do not share a state type.** The read form defaults
+  `openControls`, `repeat`, `skipVotes` and `history`, so they always serialize;
+  in the write form the same names mean "unchanged" and must stay absent, or a
+  position sample wipes the room's skip votes. The fixture now pins both, and
+  the sparse write is one of its vectors.
+- **`channel-music` carries a different track shape from `music`.** Video id,
+  title, thumbnail and a listener count — not a `MusicTrack`. Reusing the
+  familiar type here would have been a wrong frame nobody notices.
+- **An arm with a nullable nested object needs two examples.** With one, both
+  wrong ports look right: expanding `null` into an all-`null` object (the
+  `candidate: null` bug from phase 0) and dropping a present object each pass a
+  single-example fixture. The generator now derives the field list from the
+  schema and refuses to write until each one is seen filled and null. It found
+  four arms nobody had thought about — `welcome`, `ice-candidate`,
+  `set-watch-party`, `set-music` — and demanded their second example.
+
+```
+69 vectors over 49 arms (30 server, 19 client), 9 tests
+./rust/scripts/parity.sh → pass; clippy and rustfmt clean
+```
+
+## What landed in phase 1b: the values
+
+Serde answers "is this the right shape". Zod also answers "is this a legal
+value", and the gap between those two is a room where two machines disagree
+about who may stay. `src/validate.rs` is the value layer, and it names no field,
+no arm and no number: the rules arrive as `fixtures/constraints.json`, generated
+from the shipped schemas by `rust/scripts/gen-constraints.mjs`. A constraint
+added to `packages/shared` is therefore enforced by Rust on the next
+regeneration, and `parity.sh` fails on the stale fixture if nobody regenerates.
+That regeneration nearly shipped as a no-op: it was guarded by a `node -e
+'import("zod")'` probe, and pnpm does not hoist zod to the workspace root, so the
+probe answered "missing" from there, skipped both generators, and left the gate
+green with no drift check behind it. The probe now asks from `packages/shared`,
+the package that depends on zod and where the shipped sources resolve it.
+
+Four decisions in it are load-bearing:
+
+- **The generator proves each violation.** For every rule it builds a frame that
+  breaks that rule and only that rule, and shows it to zod; if zod does not
+  refuse it at the path being broken, the generator throws. All 287 rules have
+  such a frame. Reaching that number fixed two bugs in the probe rather than in
+  the port: a path ending in `[]` walked to the elements and then never assigned
+  the value, and a probe that found the field missing on the first element of an
+  array gave up instead of checking the next one. What stayed unproved after that
+  was an example that simply did not carry the field — a join that resumes, a
+  raised hand, a live stream's tuning, a music `history` — so the vectors now
+  carry them. `tests/value_parity.rs` fails if coverage stops being total, and the
+  generator still writes any rule it cannot prove to `skipped` with a reason.
+- **An unrecognised constraint stops the build.** A `.regex`, `.email` or
+  `.multipleOf` added to a schema, or a `.refine` the generator cannot name,
+  throws. `Rule` in Rust is a closed enum, so a rule kind the port does not
+  implement fails to load as well — and a table that fails to load refuses every
+  frame rather than letting them through.
+- **`.refine` is identified by behaviour.** Zod wraps a refinement in its own
+  closure, so a predicate cannot be recognised by identity. The generator runs
+  the schema's refinement and every exported `is*` predicate from `soundboard.ts`
+  against a corpus and takes the one that agrees on every value; ambiguous or
+  unmatched is a throw, never a guess. What zod answered, value by value, ships
+  in the fixture, so the port is pinned to the predicate's behaviour and not to a
+  description of it.
+- **`.max(64)` on an array counts items.** Probing zod showed `skipVotes`,
+  `queue`, `history` and `items` are bounded by item count, not string length, so
+  the rule kinds split: `state.skipVotes` is the array, `state.history[].title`
+  is a field of each element. `[]` binds to the key in front of it, and a round
+  trip test keeps the port's path reader honest about that spelling.
+
+```
+287 value rules over 32 arms, 287 proved violations, 0 reported unproved
+tests/value_parity.rs 9 tests, tests/shadow_parity.rs 5, validate.rs 7 unit tests
+./rust/scripts/parity.sh -> pass; clippy, rustfmt and eslint clean
+```
+
+**Not true yet.** Nothing in the shipped server calls `validate`. Node is still the
+only thing that ends a socket, and — see "Where zod actually runs" — it refuses
+almost nothing there, which is exactly why the layer cannot simply be switched on.
+What exists now is the instrument for finding out whether it can be: `validate::shadow`
+counts per arm what the value layer would refuse while refusing nothing, and
+`cargo run --release --example shadow -- client < frames.jsonl` prints that table
+for a captured log. `tests/shadow_parity.rs` holds it to the same generated evidence
+as the value layer, so the report phase 2 would arm enforcement from is a tested one.
+
+**What phase 2 now owes.** Validate in **shadow** first — see "Where zod actually
+runs" below: the socket path today refuses almost nothing, so refusing is a
+behaviour change and not a port. `validate::shadow` is that mode and
+`Shadow::quiet_for(arm, at_least)` is the arming predicate: count what
+`validate::client` would refuse, refuse nothing, and arm enforcement per frame type
+only after that arm's count has stayed empty on live traffic for a full deploy
+window. In front of it, the resume and
+peer-id rules already pinned by `fixtures/resume-vectors.json`. Keep value coverage
+total: the gate fails if a rule ships without a proved violation, so a new field
+needs an example frame in `gen-proto-vectors.mjs` rather than a rule written by hand.
+
+Proxying is not free of the same kind of trap, and four of them are already
+identified in the code it would sit in front of:
+
+- **Compression.** `permessage-deflate` is negotiated with no
+  `server/clientMaxWindowBits` on purpose — `server/src/lib/ws-compression.ts:20`
+  records that a number there 400s four of the five stacks that connect. A gateway
+  that declines the extension is not broken, it is 5.6x the roster bytes on the
+  wire, which is silent.
+- **Payload cap.** `MAX_WS_PAYLOAD_BYTES` is 128 KiB (`server/src/index.ts:119`)
+  and is the only thing bounding a decompressed frame; the gateway has to hold the
+  same number on both legs, not just one.
+- **Two headers the voice path reads.** `CF-IPCountry` picks the room's SFU region
+  and the user agent is reduced to an app family, both taken from the upgrade
+  request (`server/src/index.ts:424-428`). Dropping either is a region or support
+  regression with no error attached.
+- **Address buckets.** Pre-auth rate limiting reads `x-forwarded-for` by
+  `TRUST_PROXY` hop count (`server/src/lib/rate-limit.ts:199-245`). A gateway is a
+  new hop: leave `TRUST_PROXY` alone and every client shares one bucket; raise it
+  without the gateway present and the header is spoofable.
+
+Then the protocol below: a number, or it is not a win — and "## Measuring" already
+says the validation path is not where that number comes from, so phase 2 has to
+name which number it is chasing before it starts.
+
+## Measuring, when a phase claims it
+
+### Checking one frame, Rust against zod
+
+The corpus is the one the tests already use — the 72 frames in
+`fixtures/proto-vectors.json` — and each stage is billed once per frame: median of
+three runs, macOS aarch64, Node 26.13.0, `pqp-core` in release.
+
+```
+                 json    shape    rules   checked      ns/frame
+zod   client      212      418        -       631
+pqp   client      209       96      150       455
+zod   server      336      873        -      1209
+pqp   server      341      175      206       720
+```
+
+```
+cargo run --release --example throughput
+node --experimental-strip-types --no-warnings \
+     --import ./rust/scripts/ts-register.mjs rust/scripts/frame-throughput.mjs
+```
+
+Read the asymmetry before the totals: zod checks shape and values in one pass, so
+its `shape` column covers both Rust rows. `checked` is the comparable column, and
+the port is **28% faster on client frames and 40% faster on server frames**.
+
+How it got there is the part worth keeping. The first time this was measured the
+port *lost* — 828 against 631 on client frames — and the write-up blamed the design:
+a table-driven validator walks a generic `serde_json::Value`, roughly ten rows per
+arm at two or three segments each, so it must pay a couple of dozen map lookups per
+frame while zod runs a validator compiled per schema. That explanation was wrong,
+and measuring it is what found the real cost: the walk allocated a `Vec` per segment
+per candidate and a path `String` per segment, to describe paths nobody read on a
+frame that was fine. Map lookups were never the story. `collect` walks into one
+scratch buffer reused across the frame and names a path only when a rule actually
+fails, which took `rules` from 522 ns to 150 ns and turned a 30% loss into a 28%
+win. Two things to remember from that:
+
+- A number that confirms the plan is worth a second look; a number that contradicts
+  it is worth the afternoon, because it was the implementation, not the design.
+- Before blaming a data-driven approach for a cost, count what it allocates per
+  frame on the path where nothing is wrong.
+
+Both walks are kept: `collect` for the passing case, `select` (which carries a
+trail) for the failing one, and `check_path` refuses rather than dropping a
+violation if the two ever disagree about how many nodes a path names.
+
+### Where zod actually runs, and what the table above is not
+
+The table compares the port with zod. It does not compare it with what the server
+pays today, because the server barely validates.
+
+On a client socket there is no schema check at all. The message handler
+(`server/src/ws/index.ts:640`) rate-limits by address and by frame type, then
+`JSON.parse`s and nothing else (`index.ts:407`), then dispatches; a frame that is
+not an object survives parsing and reaches the switch. The only guard on the voice
+path is `isClientRelayMessage` (`server/src/ws/voice.ts:9932`), and that is a
+three-way comparison of `message.type` (`packages/shared/src/signaling.ts:754-762`)
+— no value is read. The values that matter are checked by hand, where a handler
+cares: `channelId` is confirmed by `canAccessChannel` against the database,
+`payload.from` against the peer id the socket already owns.
+
+The zod schemas do run, on a different wire. `voice.ts:13159` safeParses a
+`voice.signal` arriving on the cluster bus, and the `clientRelayMessageSchema`
+inside it (`voice.ts:13118`) is the only runtime use of that frame schema in the
+repository. Server-to-server, not client-to-server. Everywhere else the schemas are
+declared, used by `z.infer` for types, and exercised only in tests.
+
+Three consequences, ordered by how much getting them wrong costs:
+
+- **Enforcing the rules at the edge changes behaviour.** A Rust socket that refuses
+  what Node tolerates hangs up clients that work today — the failure this document
+  keeps warning about. Phase 2 validates in shadow before it refuses anything.
+- **The 28% and 40% are measured against a step that is not currently running.**
+  A client frame today costs at least the `json` column — 212 ns — and then the
+  hand-written guards on top of it, which are not measured here. The same frame
+  through `validate::client` costs 455 ns in Rust: about 240 ns a frame *more* than
+  the server spends now at the very least, against about 420 ns more in zod. What the port buys is not a speedup. It is that validating at the edge is
+  affordable enough to be worth considering, which it was not with zod.
+- **The value rules still earn their place.** They are the contract the schemas
+  declare, they are what the bus path actually enforces, and a shadow comparison
+  only means something if both sides are held to the same written rules.
+
+### What the roster costs on the wire, and whether Rust can compress it
+
+Phase 2's shape turns on this measurement, and the measurement was wrong twice
+before it was right.
+
+`voice-roster` is the frame worth compressing: it repeats the same twelve field
+names once per participant and goes to everyone who can *see* the channel, not
+only to the people in the call. `server/src/lib/ws-compression.ts` exists because
+of it. To measure it:
+
+```text
+node --experimental-strip-types --no-warnings \
+     --import ./rust/scripts/ts-register.mjs rust/scripts/roster-cost.mjs
+```
+
+```
+250 participants, level 3 / memLevel 6 (the shipped policy)
+realistic ids     106.8 KB  ->  20.6 KB    5.17x
+sequential ids     79.3 KB  ->   8.2 KB    9.72x
+```
+
+Those two rows are the same room with the same field names, and they differ only in
+the ids. Deflate buys repeats, so a roster generated as `peer-1`, `peer-2`,
+`peer-3` is one word repeated two hundred and fifty times: it collapses to a tenth
+and reports a ratio **1.88x better than production gets**. The first version of
+that script was the lazy one, and 9.9x nearly went into this document. Production
+ids are not compressible like that: `userId` has to be a uuid
+(`packages/shared/src/signaling.ts:54`), `peerId` is filled with `randomUUID()`
+(`server/src/ws/voice.ts:8878`), and an avatar is a long random CDN path. Quote
+**5.2x**, which is the same range as the 5.65x that `ws-compression.ts:47` measured
+against a real roster.
+
+The same frame, checked:
+
+```
+one roster frame, microseconds        parse    zod     total
+Node, cluster bus                      72     250      322
+pqp-core, shadow                                     224
+```
+
+- **The port is about 30% cheaper here, not 1200x.** The small-frame table above
+  says 28% and 40%; on a 106 KB frame the ratio holds, because both sides pay a
+  parse and the parse does not get cheaper because the language changed. An earlier
+  draft of this section said the frame cost "0.2 µs" in Rust, which was microseconds
+  divided by a thousand twice; the tell was that the number was smaller than the time
+  to read the frame off a pipe. That check now lives in the script rather than in the
+  reviewer, and it throws.
+- **Neither line is the egress path.** A roster is encoded once and written to each
+  socket (`server/src/ws/voice.ts:5645`); nothing validates it. The 322 µs is what
+  the cluster bus spends per signal, which is the only place zod touches this frame.
+  Validating rosters at an edge would be a new cost on a path that pays none today.
+- **The argument is bandwidth, not CPU.** 5.2x on 106 KB is roughly 86 KB not sent
+  per recipient per roster, against checking that nobody currently spends at all.
+
+### Whether a Rust gateway can negotiate `permessage-deflate` at all
+
+The compression above is not a detail a gateway can decline. It is also missing from
+the Rust ecosystem, and finding that out after the gateway is written would be
+expensive, so it was checked against the registry and the sources:
+
+- `tungstenite` (50 published versions, current 0.30.0): no compression dependency,
+  and its own README says *"There is no support for permessage-deflate at the
+  moment, but the PRs are welcome"*.
+- `tokio-tungstenite` (40 versions), `async-tungstenite` (58), `loole` (26),
+  `fastwebsockets` (27): current versions carry no `flate2`/`miniz`/`zlib`
+  dependency. `fastwebsockets-0.8.1/src/lib.rs:76` says *"permessage-deflate is not
+  supported yet."* `tokio-websockets-0.13.3` does not mention deflate at all.
+- **`soketto` (paritytech, 18 versions, current 0.8.1) is the exception and
+  implements RFC 7692**: `src/extension.rs` plus `src/extension/deflate.rs`, 473
+  lines, behind a `deflate` feature, negotiating `client_max_window_bits`,
+  `server_max_window_bits` and both `no_context_takeover` flags — precisely the
+  parameters `ws-compression.ts:20` records as unsafe to pin to a number.
+
+So the decision in front of phase 2 is not "implement RFC 7692 or ship 5.2x more
+bytes": it is *build the terminator on soketto* or *write the extension on `flate2`
+with soketto as the reference*. Neither is small enough to leave undecided once the
+gateway crate exists, and neither needs to be settled before phase 2's shadow
+validation ships — which is the part that does not touch framing at all.
+
+### Memory, when a phase claims it
+
+Both builds, same scene: one hall, ten text channels of history loaded, four
+peers in a mesh call, five minutes idle. Linux `smaps_rollup` / macOS
+`footprint`, median of five cold starts, resident set after the five minutes.
+Record the pqp version and the machine. Until a phase can show that table it has
+a rewrite, not a memory improvement.
+
+## The scanner's eight findings, and how to re-check them in a minute
+
+CI reports "8 secrets uncovered" on this branch and fails. They are the signature
+halves of the resume tokens in `rust/fixtures/resume-vectors.json`, and they are
+false positives. That is asserted by a script rather than by a comment
+(`fixtures/resume-vectors.json` does have a comment too), and it is in the Rust gate,
+so a future vector that *was* a usable credential fails CI instead of shipping:
+
+```text
+node --experimental-strip-types --no-warnings \
+     --import ./rust/scripts/ts-register.mjs rust/scripts/prove-vectors-inert.mjs
+```
+
+```
+replay   14 refused / 9 accepted, 0 disagreements with the recorded verdicts
+matrix   12 key/env/clock combinations, 9 accept nothing
+claims   20 decodable payloads, 1 subject id: 11111111-1111-4111-8111-111111111111
+expiry   newest is 2023-11-15T06:13:20Z, 1087 days in the past
+```
+
+- Each token is an HMAC over fake claims, signed with `ci-secret-key-for-vectors`, a
+  literal committed in the generator beside the tokens it signs
+  (`rust/scripts/gen-resume-vectors.mjs:23`). No real `CLERK_SECRET_KEY` reaches that
+  script, and substituting a foreign key accepts none of the tokens — including on
+  the `CLERK_SECRET_KEY` path, which is the one production reads.
+- Every one of them expired on 2023-11-15. The script checks today's clock across
+  all twelve key/environment/clock combinations, so expiry is proved rather than
+  assumed, and `env: none` (a process with no secret at all) accepts nothing.
+- The fixture's other literal, `pqp-dev-voice-resume`, does not come from this
+  branch: it is the `DEV_AUTH_BYPASS` fallback hardcoded in
+  `server/src/ws/voice-resume-token.ts:54` on `main`. It is worth fixing there —
+  with `DEV_AUTH_BYPASS=true` set by mistake and no `CLERK_SECRET_KEY`, resume tokens
+  are minted and verified against a published constant, which is a fail-open — but
+  it is a Node-side change and not this PR's to make.
+- High entropy is not evidence. The same sweep over the whole branch finds 26
+  distinct strings of at least 32 characters and Shannon entropy ≥ 4.0, and the
+  largest group is 53 lines of `rust/Cargo.lock`: sha256 checksums of crates,
+  high-entropy by construction, and not secrets either.
+
+Nothing here is a fix, so nothing here is a fix *waiting*: the eight detections have
+to be marked Invalid in GitGuardian (incident 39776452). `.gitguardian.yaml` does not
+suppress the monitor, only the pre-receive hook, so the check stays red until someone
+with dashboard access clicks it.
+
+## Risks worth naming early
+
+- **Two protocol definitions.** `packages/shared` stays the source of truth;
+  the Rust port is checked against it in CI on every change to
+  `packages/shared/src/**`. A Rust type that diverges fails `rust.yml`, not a
+  user's call.
+- **The port drifts behind the product.** pqp ships continuously. The stale
+  fixture check exists so drift is a red CI rather than a behaviour change in
+  production.
+- **Partial ports that half-work.** Refusal is asserted per pending frame, so a
+  pending arm cannot quietly become a permissive one.
+- **A Rust gateway that silently loses compression.** No mainstream Rust WebSocket
+  stack negotiates `permessage-deflate` — see "Whether a Rust gateway can negotiate
+  `permessage-deflate` at all". A terminator built on `tokio-tungstenite` is correct
+  and 5.2x the roster bytes, with nothing in the logs to say so. `soketto` is the
+  only exception found, and the choice is recorded there rather than made by accident.
+- **Cost of phases 2 and 4.** Both add a runtime to operate (deploy, metrics,
+  on-call). Phase 2 is scoped to one hall for exactly that reason.

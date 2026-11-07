@@ -1,0 +1,24 @@
+[package]
+name = "pqp-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Headless pqp core: wire protocol and voice resume tokens. Byte-for-byte compatible with the Node server."
+# Not on crates.io, and the reason is load-bearing rather than tidy: the value
+# rules are `include_str!`-ed from `rust/fixtures/constraints.json`, which sits
+# ABOVE this crate root, so cargo cannot put it in a package tarball and a
+# published crate would not compile. The fixture is shared with the TypeScript
+# generators in `rust/scripts/`, which is the reason it lives there. What ships
+# is the product built on this crate, not the crate.
+publish = false
+
+[dependencies]
+base64.workspace = true
+hmac.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
