@@ -41,7 +41,7 @@
  * Run: node --experimental-strip-types --no-warnings \
  *        --import ./rust/scripts/ts-register.mjs rust/scripts/gen-deflate-vectors.mjs
  */
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadWs } from "./ws-locate.mjs";
@@ -58,6 +58,67 @@ const { PerMessageDeflate, extension, package: wsPackage } = ws;
 const { WS_PER_MESSAGE_DEFLATE } = await import(resolve(here, "../../server/src/lib/ws-compression.ts"));
 
 const out = resolve(here, "../fixtures/deflate-vectors.json");
+
+/**
+ * `deflated` is the only field in this fixture that is not a property of pqp.
+ * Inflate is exact per RFC 1951, so the bytes below are a portable oracle the
+ * Rust crate can be required to read; deflate is not -- two zlib builds given
+ * the same input, level, window and strategy may both be correct and still
+ * disagree byte for byte. Node on a mac and Node on the Linux runner do not
+ * carry the same zlib (this one reports `process.versions.zlib`), which is how
+ * a green branch turned into a red drift gate over one line nobody changed.
+ *
+ * So a committed deflate string is kept rather than recompressed. The callers
+ * run their read-back check AFTER this, so what survives into the file is what
+ * this environment's ws actually inflated, and a vector that stops inflating
+ * still fails here instead of in a socket.
+ */
+const pinnedDeflate = new Map();
+if (existsSync(out)) {
+  const previous = JSON.parse(readFileSync(out, "utf8"));
+  for (const vector of previous.vectors ?? []) {
+    (vector.frames ?? []).forEach((frame, index) => {
+      pinnedDeflate.set(`${vector.name}\u0000${index}`, frame.deflated ?? null);
+    });
+  }
+}
+let kept = 0;
+let recompressed = 0;
+let minted = 0;
+
+/** Keep the committed deflate string for each frame, keyed by vector name and
+ *  frame index. Whether a frame is compressed at all is NOT overridable: that
+ *  is a ws decision the port has to match, so a disagreement about it is a
+ *  failure rather than something to regenerate over. */
+function keepCommitted(name, frames) {
+  frames.forEach((frame, index) => {
+    const key = `${name}\u0000${index}`;
+    if (!pinnedDeflate.has(key)) {
+      minted += 1;
+      return;
+    }
+    const committed = pinnedDeflate.get(key);
+    if ((committed === null) !== (frame.deflated === null)) {
+      throw new Error(
+        `${name} frame ${index}: ws changed whether this frame is compressed ` +
+          `(committed ${committed === null ? "raw" : "deflated"}, this run ` +
+          `${frame.deflated === null ? "raw" : "deflated"}). That is a behaviour ` +
+          `change in the shipped policy -- fix the port, do not regenerate over it.`,
+      );
+    }
+    if (committed === null) {
+      return;
+    }
+    if (committed !== frame.deflated) {
+      recompressed += 1;
+    }
+    kept += 1;
+    frame.deflated = committed;
+    frame.ends_with_sync_marker = Buffer.from(committed, "base64")
+      .subarray(-4)
+      .equals(Buffer.from([0x00, 0x00, 0xff, 0xff]));
+  });
+}
 
 /** `ws` is callback-based; every call needs this wrapper. */
 function step(instance, method, data, fin) {
@@ -152,6 +213,8 @@ async function record(name, header, texts) {
   };
   pmd.cleanup();
 
+  keepCommitted(name, frames);
+
   // Self-check before anything is written, as a browser would do it: parse the
   // response HEADER TEXT with ws's own parser, hand it to a client-mode
   // instance, and read the frames back in order. This checks three things at
@@ -232,6 +295,10 @@ async function recordInbound(name, header, texts) {
     deflate_resets_each_message: !!params.server_no_context_takeover,
     inflate_resets_each_message: !!params.client_no_context_takeover,
   };
+
+  // Same rule as the outbound direction: the committed deflate string wins, and
+  // the read-back below is what proves it still inflates here.
+  keepCommitted(name, frames);
 
   // Read them back the way the server would: same header, fresh instance.
   const reader = serverInstance();
@@ -352,6 +419,9 @@ for (const [name, header] of [
       ends_with_sync_marker: compressed.subarray(-4).equals(Buffer.from([0x00, 0x00, 0xff, 0xff])),
     });
   }
+  // Pinned before the assertion, so the markers checked here are the markers of
+  // the bytes that go into the file.
+  keepCommitted("fragmented-message", frames);
   if (frames[0].ends_with_sync_marker !== true || frames[2].ends_with_sync_marker !== false) {
     throw new Error("fragmented: sync markers are not where ws leaves them");
   }
@@ -397,7 +467,12 @@ writeFileSync(
         "Compressed by the shipped ws PerMessageDeflate through the same parse/accept/format " +
         "calls websocket-server.js makes, with the shipped WS_PER_MESSAGE_DEFLATE options, " +
         "and read back by a second instance before being written. Test material: the payloads " +
-        "are synthetic frames and the base64 strings are deflate output, not credentials.",
+        "are synthetic frames and the base64 strings are deflate output, not credentials. " +
+        "`deflated` is kept as committed rather than recompressed, because deflate output is " +
+        "not byte-identical across zlib builds while inflate is exact: each string here is the " +
+        "output of whichever zlib build minted that vector, and every one of them is read back " +
+        "through ws before it is written, so a string that no longer inflates fails the " +
+        "generator instead of the socket.",
       wsVersion: wsPackage.version,
       wsResolvedFrom: ws.dir.slice(root.length + 1),
       wsResolvedVia: ws.how,
@@ -413,4 +488,8 @@ writeFileSync(
 console.log(
   `wrote ${vectors.length} deflate vectors and ${refusals.length} refusals ` +
     `(ws ${wsPackage.version} via ${ws.how}) to ${out.slice(root.length + 1)}`,
+);
+console.error(
+  `deflate strings: kept ${kept} as committed (${recompressed} of them recompressed ` +
+    `differently by zlib ${process.versions.zlib}), minted ${minted} new`,
 );

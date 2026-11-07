@@ -1,6 +1,6 @@
 {
   "_generatedBy": "rust/scripts/gen-deflate-vectors.mjs",
-  "note": "Compressed by the shipped ws PerMessageDeflate through the same parse/accept/format calls websocket-server.js makes, with the shipped WS_PER_MESSAGE_DEFLATE options, and read back by a second instance before being written. Test material: the payloads are synthetic frames and the base64 strings are deflate output, not credentials.",
+  "note": "Compressed by the shipped ws PerMessageDeflate through the same parse/accept/format calls websocket-server.js makes, with the shipped WS_PER_MESSAGE_DEFLATE options, and read back by a second instance before being written. Test material: the payloads are synthetic frames and the base64 strings are deflate output, not credentials. `deflated` is kept as committed rather than recompressed, because deflate output is not byte-identical across zlib builds while inflate is exact: each string here is the output of whichever zlib build minted that vector, and every one of them is read back through ws before it is written, so a string that no longer inflates fails the generator instead of the socket.",
   "wsVersion": "8.21.0",
   "wsResolvedFrom": "node_modules/.pnpm/ws@8.21.0/node_modules/ws",
   "wsResolvedVia": "node_modules/.pnpm",
