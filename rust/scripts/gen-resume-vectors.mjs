@@ -140,7 +140,13 @@ const rustRoundTrip = mintVoiceResumeToken({ ...MINT, transport: "livekit", regi
 mkdirSync(dirname(out), { recursive: true });
 writeFileSync(out, JSON.stringify({
   _generatedBy: "rust/scripts/gen-resume-vectors.mjs",
-  note: "Verdicts come from the shipped TypeScript verifier. Do not edit by hand.",
+  note: "Verdicts come from the shipped TypeScript verifier. Do not edit by hand. "
+    + "The `token` values and `keys` here are test material, not credentials: they are "
+    + "HMAC signatures over fixed fake claims, signed with the throwaway `keys.clerk` "
+    + "string in this same file. A real CLERK_SECRET_KEY never reaches this generator "
+    + "(envFor() sets or deletes it on every branch), and none of these tokens verify "
+    + "against production, which derives its key from the real secret. Secret scanners "
+    + "flag the 43-char signature half as a high-entropy credential; it is a false positive.",
   ttlMs: TTL,
   keys: { clerk: CLERK_KEY, dev: DEV_BYPASS_KEY },
   vectors,
