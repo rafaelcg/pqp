@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Prove the resume fixtures are test material and not credentials.
+ * Prove the fixtures are test material and not credentials.
  *
  * GitGuardian flags the 43-char signature half of the tokens in
  * rust/fixtures/resume-vectors.json as "Generic High Entropy Secret". Whoever
@@ -15,6 +15,14 @@
  * A string that cannot be used, and that was never within reach of a real key,
  * is a fixture. The script asserts all three, so a future change that mints a
  * long-lived or production-keyed vector fails here instead of in an incident.
+ *
+ * It then does the same job for `deflate-vectors.json`, which is 360 KB of
+ * high-entropy base64 and therefore the file a generic-entropy scanner is most
+ * likely to like. There the decisive fact is different: not that the strings
+ * cannot be used, but that there is nothing in them to use. Every payload in
+ * that file decodes to one of two things -- a synthetic pqp frame, or the
+ * compressed form of one it sits next to -- and the section below checks exactly
+ * that, byte by byte, rather than asserting it in a comment.
  *
  * Usage:
  *   node --experimental-strip-types --no-warnings \
@@ -159,8 +167,81 @@ for (const [name, value] of Object.entries(fixture.keys)) {
   console.log(`key      ${name}: "${value}" (${value.length} chars) <- ${source}`);
 }
 
+// --- 6. The deflate fixture: nothing in it is text except our own frames ----
+const deflate = JSON.parse(
+  readFileSync(resolve(here, "../fixtures/deflate-vectors.json"), "utf8"),
+);
+
+/** Longest run of printable ASCII in a byte buffer. A key, token or PEM block is
+ * text, so it scores at least its own length; deflate output scores a handful. */
+function longestAsciiRun(bytes) {
+  let best = 0;
+  let run = 0;
+  for (const b of bytes) {
+    if (b >= 0x20 && b < 0x7f) {
+      run += 1;
+      best = Math.max(best, run);
+    } else {
+      run = 0;
+    }
+  }
+  return best;
+}
+
+let frames = 0;
+let messages = 0;
+let compressed = 0;
+let compressedBytes = 0;
+let worstAsciiRun = 0;
+for (const vector of deflate.vectors) {
+  // Reassemble each WEBSOCKET MESSAGE first: `fin` marks its end, so a message
+  // can be one frame or three. Parsing frame by frame would call the fragments of
+  // a roster unparseable, which is a bug in this check and not in the fixture.
+  let message = Buffer.alloc(0);
+  for (const frame of vector.frames) {
+    message = Buffer.concat([message, Buffer.from(frame.text, "base64")]);
+    frames += 1;
+    if (frame.fin) {
+      let parsed;
+      try {
+        parsed = JSON.parse(message.toString("utf8"));
+      } catch {
+        failures.push(`${vector.name}: its frames do not reassemble into a pqp message`);
+      }
+      if (parsed && typeof parsed.type !== "string") {
+        failures.push(`${vector.name}: a reassembled message has no \`type\``);
+      }
+      messages += 1;
+      message = Buffer.alloc(0);
+    }
+    if (frame.deflated == null) continue;
+    const deflated = Buffer.from(frame.deflated, "base64");
+    compressed += 1;
+    compressedBytes += deflated.length;
+    worstAsciiRun = Math.max(worstAsciiRun, longestAsciiRun(deflated));
+    // Binary on purpose: if a compressed payload ever decodes to a long stretch
+    // of text, someone has put real content through the generator.
+    if (longestAsciiRun(deflated) > 32) {
+      failures.push(
+        `${vector.name}: a compressed payload holds ${longestAsciiRun(deflated)} printable ` +
+          `bytes, which is not what deflate output looks like`,
+      );
+    }
+  }
+}
+console.log(
+  `\ndeflate ${messages} messages reassemble into pqp frames (${frames} fragments), and ` +
+    `${compressed} compressed halves ` +
+    `(${compressedBytes} B) hold at most ${worstAsciiRun} printable bytes in a row -- ` +
+    `that is deflate output, not a secret.\n         ws ${deflate.wsVersion} at ` +
+    `${deflate.wsResolvedFrom}`
+);
+
 if (failures.length) {
   console.error(`\nNOT inert: ${failures.join("; ")}`);
   process.exit(1);
 }
-console.log("\ninert: no token in the fixture is usable as a credential today.");
+console.log(
+  "\ninert: no token in the fixtures is usable as a credential today, and the " +
+    "deflate fixture contains nothing but synthetic frames and their compressed forms.",
+);

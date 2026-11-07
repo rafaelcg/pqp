@@ -9,6 +9,11 @@
 # It fails if a committed fixture no longer matches what the TypeScript
 # generates, so a schema change cannot ship with a stale Rust fixture that
 # keeps CI green.
+#
+# For permessage-deflate the fixture comes from `ws` running the shipped policy,
+# and the second leg matters more there than anywhere else in this gate: a
+# compressed stream the peer cannot read fails silently, because both sides
+# believe they compressed successfully.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
@@ -33,6 +38,19 @@ else
       committed fixtures." >&2
 fi
 
+# The deflate fixtures come from `ws` rather than from the schemas, so this probe
+# asks for `ws` and not for zod. Same rule as above: a drift check that cannot
+# run has to say so out loud instead of leaving the gate green.
+if node --input-type=module -e \
+     'const { loadWs } = await import("./rust/scripts/ws-locate.mjs");
+      process.exit(loadWs(process.cwd()).package.version ? 0 : 1)' 2>/dev/null; then
+  node --experimental-strip-types --no-warnings \
+       --import ./rust/scripts/ts-register.mjs rust/scripts/gen-deflate-vectors.mjs >/dev/null
+else
+  echo "NOTE: ws is not installed, so the permessage-deflate fixtures were not
+      regenerated. Run 'pnpm install'. Cargo still tests the committed fixtures." >&2
+fi
+
 if ! git diff --exit-code --quiet rust/fixtures/; then
   echo "FAIL: fixtures under rust/fixtures/ no longer match the shipped TypeScript." >&2
   echo "The port has drifted from the schema. Review the diff and commit it." >&2
@@ -40,12 +58,16 @@ if ! git diff --exit-code --quiet rust/fixtures/; then
   exit 1
 fi
 
-out="$(mktemp -d)/rust-minted.json"
-PQP_RUST_MINTED_OUT="$out" cargo test --manifest-path rust/Cargo.toml --all-targets
+dir="$(mktemp -d)"
+out="$dir/rust-minted.json"
+deflate="$dir/rust-deflate.json"
+PQP_RUST_MINTED_OUT="$out" PQP_RUST_DEFLATE_OUT="$deflate" \
+  cargo test --manifest-path rust/Cargo.toml --all-targets
 node rust/scripts/verify-rust-tokens.mjs "$out"
+node rust/scripts/verify-rust-deflate.mjs "$deflate"
 # The fixtures are test material, and that claim has to be checked rather than
 # commented: no token may verify under a foreign key or at today's clock.
 node rust/scripts/prove-vectors-inert.mjs
 cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
 cargo fmt --manifest-path rust/Cargo.toml --all --check
-echo "PASS: pqp-core agrees with the shipped TypeScript in both directions"
+echo "PASS: pqp-core and pqp-deflate agree with the shipped TypeScript in both directions"

@@ -1,0 +1,26 @@
+[package]
+name = "pqp-deflate"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "permessage-deflate (RFC 7692) for pqp, cross-tested against the Node server's ws framing"
+
+# Nothing here is published yet. Same reason as pqp-core: the parity fixtures live
+# above the crate root, so a package tarball would not even build.
+publish = false
+
+[dependencies]
+# `zlib-rs` rather than the default backend, and that choice is load-bearing:
+# flate2 only exposes `new_with_window_bits` under `#[cfg(feature = "any_zlib")]`
+# (flate2-1.1.11/src/mem.rs:421), and permessage-deflate *is* window-bits
+# negotiation -- `ws-compression.ts:20` documents which peers may name which
+# window. The default `rust_backend` (miniz_oxide) cannot open a stream at a
+# chosen window, so it cannot implement the extension faithfully. `zlib-rs` is a
+# transliteration of zlib, so this stays pure Rust: no libz to link, and the same
+# binary on a developer's mac and the fly machine.
+flate2 = { version = "1", default-features = false, features = ["zlib-rs", "runtime_detection"] }
+base64 = { workspace = true }
+
+[dev-dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }

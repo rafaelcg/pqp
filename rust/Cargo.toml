@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/pqp-core"]
+members = ["crates/pqp-core", "crates/pqp-deflate"]
 
 [workspace.package]
 version = "0.1.0"
