@@ -43,6 +43,9 @@ fi
 out="$(mktemp -d)/rust-minted.json"
 PQP_RUST_MINTED_OUT="$out" cargo test --manifest-path rust/Cargo.toml --all-targets
 node rust/scripts/verify-rust-tokens.mjs "$out"
+# The fixtures are test material, and that claim has to be checked rather than
+# commented: no token may verify under a foreign key or at today's clock.
+node rust/scripts/prove-vectors-inert.mjs
 cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
 cargo fmt --manifest-path rust/Cargo.toml --all --check
 echo "PASS: pqp-core agrees with the shipped TypeScript in both directions"

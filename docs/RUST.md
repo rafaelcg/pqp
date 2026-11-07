@@ -358,6 +358,85 @@ Three consequences, ordered by how much getting them wrong costs:
   declare, they are what the bus path actually enforces, and a shadow comparison
   only means something if both sides are held to the same written rules.
 
+### What the roster costs on the wire, and whether Rust can compress it
+
+Phase 2's shape turns on this measurement, and the measurement was wrong twice
+before it was right.
+
+`voice-roster` is the frame worth compressing: it repeats the same twelve field
+names once per participant and goes to everyone who can *see* the channel, not
+only to the people in the call. `server/src/lib/ws-compression.ts` exists because
+of it. To measure it:
+
+```text
+node --experimental-strip-types --no-warnings \
+     --import ./rust/scripts/ts-register.mjs rust/scripts/roster-cost.mjs
+```
+
+```
+250 participants, level 3 / memLevel 6 (the shipped policy)
+realistic ids     106.8 KB  ->  20.6 KB    5.17x
+sequential ids     79.3 KB  ->   8.2 KB    9.72x
+```
+
+Those two rows are the same room with the same field names, and they differ only in
+the ids. Deflate buys repeats, so a roster generated as `peer-1`, `peer-2`,
+`peer-3` is one word repeated two hundred and fifty times: it collapses to a tenth
+and reports a ratio **1.88x better than production gets**. The first version of
+that script was the lazy one, and 9.9x nearly went into this document. Production
+ids are not compressible like that: `userId` has to be a uuid
+(`packages/shared/src/signaling.ts:54`), `peerId` is filled with `randomUUID()`
+(`server/src/ws/voice.ts:8878`), and an avatar is a long random CDN path. Quote
+**5.2x**, which is the same range as the 5.65x that `ws-compression.ts:47` measured
+against a real roster.
+
+The same frame, checked:
+
+```
+one roster frame, microseconds        parse    zod     total
+Node, cluster bus                      72     250      322
+pqp-core, shadow                                     224
+```
+
+- **The port is about 30% cheaper here, not 1200x.** The small-frame table above
+  says 28% and 40%; on a 106 KB frame the ratio holds, because both sides pay a
+  parse and the parse does not get cheaper because the language changed. An earlier
+  draft of this section said the frame cost "0.2 µs" in Rust, which was microseconds
+  divided by a thousand twice; the tell was that the number was smaller than the time
+  to read the frame off a pipe. That check now lives in the script rather than in the
+  reviewer, and it throws.
+- **Neither line is the egress path.** A roster is encoded once and written to each
+  socket (`server/src/ws/voice.ts:5645`); nothing validates it. The 322 µs is what
+  the cluster bus spends per signal, which is the only place zod touches this frame.
+  Validating rosters at an edge would be a new cost on a path that pays none today.
+- **The argument is bandwidth, not CPU.** 5.2x on 106 KB is roughly 86 KB not sent
+  per recipient per roster, against checking that nobody currently spends at all.
+
+### Whether a Rust gateway can negotiate `permessage-deflate` at all
+
+The compression above is not a detail a gateway can decline. It is also missing from
+the Rust ecosystem, and finding that out after the gateway is written would be
+expensive, so it was checked against the registry and the sources:
+
+- `tungstenite` (50 published versions, current 0.30.0): no compression dependency,
+  and its own README says *"There is no support for permessage-deflate at the
+  moment, but the PRs are welcome"*.
+- `tokio-tungstenite` (40 versions), `async-tungstenite` (58), `loole` (26),
+  `fastwebsockets` (27): current versions carry no `flate2`/`miniz`/`zlib`
+  dependency. `fastwebsockets-0.8.1/src/lib.rs:76` says *"permessage-deflate is not
+  supported yet."* `tokio-websockets-0.13.3` does not mention deflate at all.
+- **`soketto` (paritytech, 18 versions, current 0.8.1) is the exception and
+  implements RFC 7692**: `src/extension.rs` plus `src/extension/deflate.rs`, 473
+  lines, behind a `deflate` feature, negotiating `client_max_window_bits`,
+  `server_max_window_bits` and both `no_context_takeover` flags — precisely the
+  parameters `ws-compression.ts:20` records as unsafe to pin to a number.
+
+So the decision in front of phase 2 is not "implement RFC 7692 or ship 5.2x more
+bytes": it is *build the terminator on soketto* or *write the extension on `flate2`
+with soketto as the reference*. Neither is small enough to leave undecided once the
+gateway crate exists, and neither needs to be settled before phase 2's shadow
+validation ships — which is the part that does not touch framing at all.
+
 ### Memory, when a phase claims it
 
 Both builds, same scene: one hall, ten text channels of history loaded, four
@@ -365,6 +444,50 @@ peers in a mesh call, five minutes idle. Linux `smaps_rollup` / macOS
 `footprint`, median of five cold starts, resident set after the five minutes.
 Record the pqp version and the machine. Until a phase can show that table it has
 a rewrite, not a memory improvement.
+
+## The scanner's eight findings, and how to re-check them in a minute
+
+CI reports "8 secrets uncovered" on this branch and fails. They are the signature
+halves of the resume tokens in `rust/fixtures/resume-vectors.json`, and they are
+false positives. That is asserted by a script rather than by a comment
+(`fixtures/resume-vectors.json` does have a comment too), and it is in the Rust gate,
+so a future vector that *was* a usable credential fails CI instead of shipping:
+
+```text
+node --experimental-strip-types --no-warnings \
+     --import ./rust/scripts/ts-register.mjs rust/scripts/prove-vectors-inert.mjs
+```
+
+```
+replay   14 refused / 9 accepted, 0 disagreements with the recorded verdicts
+matrix   12 key/env/clock combinations, 9 accept nothing
+claims   20 decodable payloads, 1 subject id: 11111111-1111-4111-8111-111111111111
+expiry   newest is 2023-11-15T06:13:20Z, 1087 days in the past
+```
+
+- Each token is an HMAC over fake claims, signed with `ci-secret-key-for-vectors`, a
+  literal committed in the generator beside the tokens it signs
+  (`rust/scripts/gen-resume-vectors.mjs:23`). No real `CLERK_SECRET_KEY` reaches that
+  script, and substituting a foreign key accepts none of the tokens — including on
+  the `CLERK_SECRET_KEY` path, which is the one production reads.
+- Every one of them expired on 2023-11-15. The script checks today's clock across
+  all twelve key/environment/clock combinations, so expiry is proved rather than
+  assumed, and `env: none` (a process with no secret at all) accepts nothing.
+- The fixture's other literal, `pqp-dev-voice-resume`, does not come from this
+  branch: it is the `DEV_AUTH_BYPASS` fallback hardcoded in
+  `server/src/ws/voice-resume-token.ts:54` on `main`. It is worth fixing there —
+  with `DEV_AUTH_BYPASS=true` set by mistake and no `CLERK_SECRET_KEY`, resume tokens
+  are minted and verified against a published constant, which is a fail-open — but
+  it is a Node-side change and not this PR's to make.
+- High entropy is not evidence. The same sweep over the whole branch finds 26
+  distinct strings of at least 32 characters and Shannon entropy ≥ 4.0, and the
+  largest group is 53 lines of `rust/Cargo.lock`: sha256 checksums of crates,
+  high-entropy by construction, and not secrets either.
+
+Nothing here is a fix, so nothing here is a fix *waiting*: the eight detections have
+to be marked Invalid in GitGuardian (incident 39776452). `.gitguardian.yaml` does not
+suppress the monitor, only the pre-receive hook, so the check stays red until someone
+with dashboard access clicks it.
 
 ## Risks worth naming early
 
@@ -377,5 +500,10 @@ a rewrite, not a memory improvement.
   production.
 - **Partial ports that half-work.** Refusal is asserted per pending frame, so a
   pending arm cannot quietly become a permissive one.
+- **A Rust gateway that silently loses compression.** No mainstream Rust WebSocket
+  stack negotiates `permessage-deflate` — see "Whether a Rust gateway can negotiate
+  `permessage-deflate` at all". A terminator built on `tokio-tungstenite` is correct
+  and 5.2x the roster bytes, with nothing in the logs to say so. `soketto` is the
+  only exception found, and the choice is recorded there rather than made by accident.
 - **Cost of phases 2 and 4.** Both add a runtime to operate (deploy, metrics,
   on-call). Phase 2 is scoped to one hall for exactly that reason.
