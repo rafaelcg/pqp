@@ -241,9 +241,58 @@ same path that closes the socket, with the resume and peer-id rules — already
 pinned by `fixtures/resume-vectors.json` — in front of it, and keep value
 coverage total: the gate fails if a rule ships without a proved violation, so a
 new field needs an example frame in `gen-proto-vectors.mjs` rather than a rule
-written by hand. Then the protocol below: a number, or it is not a win.
+written by hand. Then the protocol below: a number, or it is not a win — and
+"## Measuring" already says the validation path is not where that number comes
+from, so phase 2 has to name which number it is chasing before it starts.
 
 ## Measuring, when a phase claims it
+
+### Checking one frame, Rust against zod
+
+The corpus is the one the tests already use — the 72 frames in
+`fixtures/proto-vectors.json` — and each stage is billed once per frame: median of
+three runs, macOS aarch64, Node 26.13.0, `pqp-core` in release.
+
+```
+                 json    shape    rules   checked      ns/frame
+zod   client      208      422        -       630
+pqp   client      217       95      522       828
+zod   server      333      892        -      1225
+pqp   server      347      175      635      1157
+```
+
+```
+cargo run --release --example throughput
+node --experimental-strip-types --no-warnings \
+     --import ./rust/scripts/ts-register.mjs rust/scripts/frame-throughput.mjs
+```
+
+Read the asymmetry before the totals: zod checks shape and values in one pass, so
+its `shape` column covers both Rust rows. `checked` is the comparable column, and
+it does not flatter the port. **On client frames the Rust path is about 30%
+slower than zod; on server frames it is about 6% faster.** Spelling the violation
+path lazily (see `Step` in `validate.rs`) bought a few percent and is worth having,
+and it is not the explanation for the gap either.
+
+Where the time goes is the useful part. `shape` is serde reading a typed struct,
+and it costs about a fifth of what zod spends on the same frames *including* their
+values. `rules` is the generated table walking a generic `serde_json::Value`:
+roughly ten rows per arm at two or three segments each, so a frame pays a couple
+of dozen map lookups plus a trail per candidate. That is the price of being
+data-driven, and zod does not pay it because every schema compiles down to its own
+validator.
+
+Two consequences for phase 2, written down before anyone commits to it:
+
+- Throughput on the validation path is not the argument for a Rust socket. Memory,
+  collection pauses and shipping one binary are the arguments, and the first of
+  those is the table below — which nobody has filled in yet.
+- If phase 2 wants the speed too, the rules have to leave the `Value` walk: check
+  them against the typed frame serde already produced, or generate the checks per
+  arm, then re-measure here. A table-driven validator will not win this race, and
+  the numbers above are the reason to stop assuming it would.
+
+### Memory, when a phase claims it
 
 Both builds, same scene: one hall, ten text channels of history loaded, four
 peers in a mesh call, five minutes idle. Linux `smaps_rollup` / macOS

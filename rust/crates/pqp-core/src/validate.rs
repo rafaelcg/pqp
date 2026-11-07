@@ -462,26 +462,40 @@ pub fn check(union: &str, rules: &Rules, frame: &Value) -> Outcome {
 }
 
 /// Every node a path selects, as `(concrete path, node)`.
-fn select<'a>(frame: &'a Value, path: &[Seg]) -> Vec<(String, &'a Value)> {
-    let mut found = vec![(String::new(), frame)];
+/// One step of a walked path, kept as a borrow.
+///
+/// The common case is a frame with nothing wrong with it, and the old walk built
+/// a `String` for every segment of every rule row on every frame to describe a
+/// path nobody was going to read. Only `check_path`, reporting a violation, pays
+/// for the text now. Worth doing, and worth saying plainly: on the shipped
+/// corpus this moved `validate` by a few percent, so path text was never the
+/// cost. What it costs is the walk itself — a dozen generic `serde_json::Map`
+/// lookups per frame — which `docs/RUST.md` measures against zod.
+#[derive(Clone)]
+enum Step<'a> {
+    Key(&'a str),
+    Index(usize),
+}
+
+fn select<'a>(frame: &'a Value, path: &'a [Seg]) -> Vec<(Vec<Step<'a>>, &'a Value)> {
+    let mut found = vec![(Vec::new(), frame)];
     for seg in path {
         let mut next = Vec::new();
-        for (prefix, node) in &found {
+        for (trail, node) in &found {
             match seg {
                 Seg::Key(key) => {
                     if let Some(child) = node.get(key) {
-                        let path = if prefix.is_empty() {
-                            key.clone()
-                        } else {
-                            format!("{prefix}.{key}")
-                        };
-                        next.push((path, child));
+                        let mut steps = trail.clone();
+                        steps.push(Step::Key(key));
+                        next.push((steps, child));
                     }
                 }
                 Seg::Each => {
                     if let Some(items) = node.as_array() {
                         for (index, item) in items.iter().enumerate() {
-                            next.push((format!("{prefix}[{index}]"), item));
+                            let mut steps = trail.clone();
+                            steps.push(Step::Index(index));
+                            next.push((steps, item));
                         }
                     }
                 }
@@ -495,15 +509,37 @@ fn select<'a>(frame: &'a Value, path: &[Seg]) -> Vec<(String, &'a Value)> {
     found
 }
 
+/// Spell a walked path the way the generated table writes it: `state.queue[2].id`.
+/// Spelled from the trail rather than carried along it, so the walk allocates
+/// nothing per step. A dot separates two keys, including after `]`, because that
+/// is what zod's issue path and the generated table both say.
+fn spell_steps(steps: &[Step<'_>]) -> String {
+    let mut out = String::new();
+    for step in steps {
+        match step {
+            Step::Key(key) => {
+                if !out.is_empty() {
+                    out.push('.');
+                }
+                out.push_str(key);
+            }
+            Step::Index(index) => {
+                out.push_str(&format!("[{index}]"));
+            }
+        }
+    }
+    out
+}
+
 fn check_path(rules: &Rules, row: &FieldRules, frame: &Value, out: &mut Vec<Violation>) {
     // The generated `[]` at the end of a path means "every element"; the rules
     // belong to the element, so they run against the children. Rules written on
     // the array itself (`state.skipVotes`, no `[]`) run against the array.
-    for (path, node) in select(frame, &row.path) {
+    for (trail, node) in select(frame, &row.path) {
         for rule in &row.rules {
             if let Some(rule) = fails(rules, rule, node) {
                 out.push(Violation {
-                    path: path.clone(),
+                    path: spell_steps(&trail),
                     rule,
                 });
             }
