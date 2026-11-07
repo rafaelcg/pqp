@@ -22,6 +22,18 @@ node -e 'import("zod").then(
   || echo "NOTE: zod is not installed, skipping protocol fixture regen. Regenerate
       after 'pnpm install'; cargo still tests the committed fixtures." >&2
 
+# The value rules pqp-core compiles in, plus the frame each rule was proved
+# against. A throw here is a real failure: it means the schema grew a constraint
+# or a refinement this generator cannot name, which is exactly what must not ship
+# unported. It is skipped only when zod itself is unavailable.
+if node -e 'import("zod").then(() => process.exit(0), () => process.exit(3))' 2>/dev/null; then
+  node --experimental-strip-types --no-warnings \
+       --import ./rust/scripts/ts-register.mjs rust/scripts/gen-constraints.mjs >/dev/null
+else
+  echo "NOTE: zod is not installed, skipping the constraint-table regen. Cargo still
+      tests the committed fixture." >&2
+fi
+
 if ! git diff --exit-code --quiet rust/fixtures/; then
   echo "FAIL: fixtures under rust/fixtures/ no longer match the shipped TypeScript." >&2
   echo "The port has drifted from the schema. Review the diff and commit it." >&2

@@ -93,6 +93,7 @@ two reading half of it. Phase 2 onward is its own branch again.)
 |---|---|---|---|
 | 0 | `rust/` cargo workspace, `pqp-core` with the voice protocol and resume tokens, differential gate in CI | Cheapest place to prove the contract, and the two pieces where cross-language interop is already mandatory | Landed, #1561 |
 | 1 | Extend `pqp-core` to the remaining server frames (audience, watch-party, music, soundboard, live, reactions) | Mechanical now that the harness exists; closes the last cross-language surface | Landed, #1561: `pending` empty, all 30 server arms and all 19 client arms round-trip |
+| 1b | Port zod's **value** rules into `pqp-core` — `.uuid()`, length and item bounds, `.url()`, the soundboard `.refine` — as generated data, each proved against a frame zod refused | Structure is not validation: a Rust socket that ends connections has to refuse what Node refuses, or the two disagree about who may be in a room | Landed, #1561: 287 rules over 32 arms, 237 proved, 50 reported unproved |
 | 2 | Rust `/ws` gateway **alongside** Node: it terminates sockets for one canary hall and proxies the rest to Node | Smallest live footprint that exercises the real thing; resume and peer-id rules are the risk and are already pinned by vectors | Canary hall reconnects survive a Rust restart at the same rate as a Node one |
 | 3 | Postgres read path for the frames the gateway can answer itself | Removes Node from the hot path without touching writes | Byte-identical HTTP responses on a recorded corpus |
 | 4 | Desktop: Rust core behind the Electron shell, owning app state and the socket, JS still drawing pixels | This is where the memory claim is testable, and it is reversible | Measured RSS drop on the same scene, both builds |
@@ -178,14 +179,57 @@ Three things that only showed up once the frames were actually ported:
 ./rust/scripts/parity.sh → pass; clippy and rustfmt clean
 ```
 
-**What phase 2 now owes.** Serde checks structure; zod also checks values
-(`.uuid()`, `.min(1)`, `.max(64)`, `.url()`, the soundboard id `.refine`, array
-bounds). Those are not ported, so `pqp-core` accepts frames the Node server
-would refuse. That is harmless while Rust only reads what Node validated. It is
-not harmless the moment a Rust socket terminates a connection on its own, which
-is exactly what phase 2 does: the two machines would disagree about who may be
-in a room. Phase 2 either ports the constraints or keeps validation on Node and
-says which it did in the PR.
+## What landed in phase 1b: the values
+
+Serde answers "is this the right shape". Zod also answers "is this a legal
+value", and the gap between those two is a room where two machines disagree
+about who may stay. `src/validate.rs` is the value layer, and it names no field,
+no arm and no number: the rules arrive as `fixtures/constraints.json`, generated
+from the shipped schemas by `rust/scripts/gen-constraints.mjs`. A constraint
+added to `packages/shared` is therefore enforced by Rust on the next
+regeneration, and `parity.sh` fails on the stale fixture if nobody regenerates.
+
+Four decisions in it are load-bearing:
+
+- **The generator proves each violation.** For every rule it builds a frame that
+  breaks that rule and only that rule, and shows it to zod; if zod does not
+  refuse it at the path being broken, the generator throws. 237 of the 287 rules
+  have such a frame, and the other 50 are written to the fixture with a reason
+  instead of being quietly dropped.
+- **An unrecognised constraint stops the build.** A `.regex`, `.email` or
+  `.multipleOf` added to a schema, or a `.refine` the generator cannot name,
+  throws. `Rule` in Rust is a closed enum, so a rule kind the port does not
+  implement fails to load as well — and a table that fails to load refuses every
+  frame rather than letting them through.
+- **`.refine` is identified by behaviour.** Zod wraps a refinement in its own
+  closure, so a predicate cannot be recognised by identity. The generator runs
+  the schema's refinement and every exported `is*` predicate from `soundboard.ts`
+  against a corpus and takes the one that agrees on every value; ambiguous or
+  unmatched is a throw, never a guess. What zod answered, value by value, ships
+  in the fixture, so the port is pinned to the predicate's behaviour and not to a
+  description of it.
+- **`.max(64)` on an array counts items.** Probing zod showed `skipVotes`,
+  `queue`, `history` and `items` are bounded by item count, not string length, so
+  the rule kinds split: `state.skipVotes` is the array, `state.history[].title`
+  is a field of each element. `[]` binds to the key in front of it, and a round
+  trip test keeps the port's path reader honest about that spelling.
+
+```
+287 value rules over 32 arms, 237 proved violations, 50 reported unproved
+tests/value_parity.rs 9 tests, validate.rs 7 unit tests
+./rust/scripts/parity.sh -> pass; clippy, rustfmt and eslint clean
+```
+
+**Not true yet.** Nothing calls `validate` from a runtime path: the Node server is
+still the only thing that ends a socket. The layer is a gate phase 2 has to open,
+not a behaviour that shipped, and it is worth measuring how long a frame takes to
+value-check before it does.
+
+**What phase 2 now owes.** Call `validate::client` / `validate::server` on the
+same path that closes the socket, with the resume and peer-id rules — already
+pinned by `fixtures/resume-vectors.json` — in front of it. Close the 50 unproved
+rules by giving `gen-proto-vectors.mjs` richer examples rather than by writing
+rules by hand. Then the protocol below: a number, or it is not a win.
 
 ## Measuring, when a phase claims it
 

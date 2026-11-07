@@ -13,6 +13,7 @@
 
 pub mod proto;
 pub mod resume;
+pub mod validate;
 
 /// The media path a voice room runs on.
 ///

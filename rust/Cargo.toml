@@ -9,6 +9,7 @@ license = "AGPL-3.0-only"
 repository = "https://github.com/rafaelcg/pqp"
 
 [workspace.dependencies]
+url = "2"
 base64 = "0.22"
 hmac = "0.12"
 serde = { version = "1", features = ["derive"] }

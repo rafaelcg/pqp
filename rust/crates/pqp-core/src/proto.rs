@@ -47,17 +47,27 @@
 //! need both from the schema, so a newly nullable field demands its own
 //! example.
 //!
-//! # What this port does not check
+//! # What this port checks, and what it does not
 //!
-//! Serde checks **structure**; Zod also checks **values** — `.uuid()`,
+//! Serde checks **structure**: which fields are present, what type they are,
+//! that an unknown key is refused. Zod also checks **values** — `.uuid()`,
 //! `.min(1)`, `.max(64)`, `.url()`, `.refine(isSoundboardSoundId)`, array
-//! bounds. Those are not reproduced, so this enum accepts some frames Zod
-//! refuses. That is fine while a Rust process only *reads* frames Node has
-//! already validated, and it is not fine the moment Rust terminates a socket
-//! on its own: a Rust gateway that stops enforcing the value rules would accept
-//! what the Node server hangs up on, and the two machines would disagree about
-//! who may be in a room. Phase 2 has to port the constraints, or keep
-//! validation on the Node side, and say which it did.
+//! bounds — and those are in [`crate::validate`], which compiles in the rule
+//! table `rust/scripts/gen-constraints.mjs` reads off these same schemas.
+//! `tests/value_parity.rs` then replays every frame zod refused and demands the
+//! same refusal, blaming the same path for the same kind of rule. That is what
+//! makes "Rust enforces what Node enforces" a checked claim instead of a
+//! promise, and both layers are what a Rust socket needs before it is allowed to
+//! end a connection on its own.
+//!
+//! Still not exercised: the rules that sit on a path no example frame reaches —
+//! `handRaisedAt`, the `skipVotes[]` and `history[]` bounds, `channel-live`'s
+//! `stream.*`, `updated[].userId`, the `transports[]` enum. They are enforced,
+//! because the table holds them, but no frame proves the port notices them. The
+//! fixture lists each one under `skipped` with its reason, and
+//! `tests/value_parity.rs` fails if that list stops being reported, so the gap
+//! is a number in `constraints.json` rather than a rumour. Closing it means
+//! richer examples in `gen-proto-vectors.mjs`, not more rules here.
 
 use crate::VoiceRoomTransport;
 use serde::{Deserialize, Serialize};
