@@ -93,7 +93,7 @@ two reading half of it. Phase 2 onward is its own branch again.)
 |---|---|---|---|
 | 0 | `rust/` cargo workspace, `pqp-core` with the voice protocol and resume tokens, differential gate in CI | Cheapest place to prove the contract, and the two pieces where cross-language interop is already mandatory | Landed, #1561 |
 | 1 | Extend `pqp-core` to the remaining server frames (audience, watch-party, music, soundboard, live, reactions) | Mechanical now that the harness exists; closes the last cross-language surface | Landed, #1561: `pending` empty, all 30 server arms and all 19 client arms round-trip |
-| 1b | Port zod's **value** rules into `pqp-core` — `.uuid()`, length and item bounds, `.url()`, the soundboard `.refine` — as generated data, each proved against a frame zod refused | Structure is not validation: a Rust socket that ends connections has to refuse what Node refuses, or the two disagree about who may be in a room | Landed, #1561: 287 rules over 32 arms, every one proved against a frame zod refused |
+| 1b | Port zod's **value** rules into `pqp-core` — `.uuid()`, length and item bounds, `.url()`, the soundboard `.refine` — as generated data, each proved against a frame zod refused | Structure is not validation. The cluster bus really does enforce these, and a Rust socket that ends connections has to agree with the declared contract, or the two disagree about who may be in a room | Landed, #1561: 287 rules over 32 arms, every one proved against a frame zod refused |
 | 2 | Rust `/ws` gateway **alongside** Node: it terminates sockets for one canary hall and proxies the rest to Node | Smallest live footprint that exercises the real thing; resume and peer-id rules are the risk and are already pinned by vectors | Canary hall reconnects survive a Rust restart at the same rate as a Node one |
 | 3 | Postgres read path for the frames the gateway can answer itself | Removes Node from the hot path without touching writes | Byte-identical HTTP responses on a recorded corpus |
 | 4 | Desktop: Rust core behind the Electron shell, owning app state and the socket, JS still drawing pixels | This is where the memory claim is testable, and it is reversible | Measured RSS drop on the same scene, both builds |
@@ -236,14 +236,38 @@ still the only thing that ends a socket. The layer is a gate phase 2 has to open
 not a behaviour that shipped, and it is worth measuring how long a frame takes to
 value-check before it does.
 
-**What phase 2 now owes.** Call `validate::client` / `validate::server` on the
-same path that closes the socket, with the resume and peer-id rules — already
-pinned by `fixtures/resume-vectors.json` — in front of it, and keep value
-coverage total: the gate fails if a rule ships without a proved violation, so a
-new field needs an example frame in `gen-proto-vectors.mjs` rather than a rule
-written by hand. Then the protocol below: a number, or it is not a win — and
-"## Measuring" already says the validation path is not where that number comes
-from, so phase 2 has to name which number it is chasing before it starts.
+**What phase 2 now owes.** Validate in **shadow** first — see "Where zod actually
+runs" below: the socket path today refuses almost nothing, so refusing is a
+behaviour change and not a port. Count what `validate::client` would refuse,
+refuse nothing, and arm enforcement per frame type only after the shadow count has
+been empty on live traffic for a full deploy window. In front of it, the resume and
+peer-id rules already pinned by `fixtures/resume-vectors.json`. Keep value coverage
+total: the gate fails if a rule ships without a proved violation, so a new field
+needs an example frame in `gen-proto-vectors.mjs` rather than a rule written by hand.
+
+Proxying is not free of the same kind of trap, and four of them are already
+identified in the code it would sit in front of:
+
+- **Compression.** `permessage-deflate` is negotiated with no
+  `server/clientMaxWindowBits` on purpose — `server/src/lib/ws-compression.ts:20`
+  records that a number there 400s four of the five stacks that connect. A gateway
+  that declines the extension is not broken, it is 5.6x the roster bytes on the
+  wire, which is silent.
+- **Payload cap.** `MAX_WS_PAYLOAD_BYTES` is 128 KiB (`server/src/index.ts:119`)
+  and is the only thing bounding a decompressed frame; the gateway has to hold the
+  same number on both legs, not just one.
+- **Two headers the voice path reads.** `CF-IPCountry` picks the room's SFU region
+  and the user agent is reduced to an app family, both taken from the upgrade
+  request (`server/src/index.ts:424-428`). Dropping either is a region or support
+  regression with no error attached.
+- **Address buckets.** Pre-auth rate limiting reads `x-forwarded-for` by
+  `TRUST_PROXY` hop count (`server/src/lib/rate-limit.ts:199-245`). A gateway is a
+  new hop: leave `TRUST_PROXY` alone and every client shares one bucket; raise it
+  without the gateway present and the header is spoofable.
+
+Then the protocol below: a number, or it is not a win — and "## Measuring" already
+says the validation path is not where that number comes from, so phase 2 has to
+name which number it is chasing before it starts.
 
 ## Measuring, when a phase claims it
 
@@ -291,6 +315,42 @@ win. Two things to remember from that:
 Both walks are kept: `collect` for the passing case, `select` (which carries a
 trail) for the failing one, and `check_path` refuses rather than dropping a
 violation if the two ever disagree about how many nodes a path names.
+
+### Where zod actually runs, and what the table above is not
+
+The table compares the port with zod. It does not compare it with what the server
+pays today, because the server barely validates.
+
+On a client socket there is no schema check at all. The message handler
+(`server/src/ws/index.ts:640`) rate-limits by address and by frame type, then
+`JSON.parse`s and nothing else (`index.ts:407`), then dispatches; a frame that is
+not an object survives parsing and reaches the switch. The only guard on the voice
+path is `isClientRelayMessage` (`server/src/ws/voice.ts:9932`), and that is a
+three-way comparison of `message.type` (`packages/shared/src/signaling.ts:754-762`)
+— no value is read. The values that matter are checked by hand, where a handler
+cares: `channelId` is confirmed by `canAccessChannel` against the database,
+`payload.from` against the peer id the socket already owns.
+
+The zod schemas do run, on a different wire. `voice.ts:13159` safeParses a
+`voice.signal` arriving on the cluster bus, and the `clientRelayMessageSchema`
+inside it (`voice.ts:13118`) is the only runtime use of that frame schema in the
+repository. Server-to-server, not client-to-server. Everywhere else the schemas are
+declared, used by `z.infer` for types, and exercised only in tests.
+
+Three consequences, ordered by how much getting them wrong costs:
+
+- **Enforcing the rules at the edge changes behaviour.** A Rust socket that refuses
+  what Node tolerates hangs up clients that work today — the failure this document
+  keeps warning about. Phase 2 validates in shadow before it refuses anything.
+- **The 28% and 40% are measured against a step that is not currently running.**
+  A client frame today costs the `json` column plus hand-written guards, about
+  212 ns. The same frame through `validate::client` costs 455 ns in Rust: roughly
+  240 ns a frame *more* than the server spends now, against roughly 420 ns more in
+  zod. What the port buys is not a speedup. It is that validating at the edge is
+  affordable enough to be worth considering, which it was not with zod.
+- **The value rules still earn their place.** They are the contract the schemas
+  declare, they are what the bus path actually enforces, and a shadow comparison
+  only means something if both sides are held to the same written rules.
 
 ### Memory, when a phase claims it
 
