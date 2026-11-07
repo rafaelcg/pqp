@@ -255,10 +255,10 @@ three runs, macOS aarch64, Node 26.13.0, `pqp-core` in release.
 
 ```
                  json    shape    rules   checked      ns/frame
-zod   client      208      422        -       630
-pqp   client      217       95      522       828
-zod   server      333      892        -      1225
-pqp   server      347      175      635      1157
+zod   client      212      418        -       631
+pqp   client      209       96      150       455
+zod   server      336      873        -      1209
+pqp   server      341      175      206       720
 ```
 
 ```
@@ -269,28 +269,28 @@ node --experimental-strip-types --no-warnings \
 
 Read the asymmetry before the totals: zod checks shape and values in one pass, so
 its `shape` column covers both Rust rows. `checked` is the comparable column, and
-it does not flatter the port. **On client frames the Rust path is about 30%
-slower than zod; on server frames it is about 6% faster.** Spelling the violation
-path lazily (see `Step` in `validate.rs`) bought a few percent and is worth having,
-and it is not the explanation for the gap either.
+the port is **28% faster on client frames and 40% faster on server frames**.
 
-Where the time goes is the useful part. `shape` is serde reading a typed struct,
-and it costs about a fifth of what zod spends on the same frames *including* their
-values. `rules` is the generated table walking a generic `serde_json::Value`:
-roughly ten rows per arm at two or three segments each, so a frame pays a couple
-of dozen map lookups plus a trail per candidate. That is the price of being
-data-driven, and zod does not pay it because every schema compiles down to its own
-validator.
+How it got there is the part worth keeping. The first time this was measured the
+port *lost* — 828 against 631 on client frames — and the write-up blamed the design:
+a table-driven validator walks a generic `serde_json::Value`, roughly ten rows per
+arm at two or three segments each, so it must pay a couple of dozen map lookups per
+frame while zod runs a validator compiled per schema. That explanation was wrong,
+and measuring it is what found the real cost: the walk allocated a `Vec` per segment
+per candidate and a path `String` per segment, to describe paths nobody read on a
+frame that was fine. Map lookups were never the story. `collect` walks into one
+scratch buffer reused across the frame and names a path only when a rule actually
+fails, which took `rules` from 522 ns to 150 ns and turned a 30% loss into a 28%
+win. Two things to remember from that:
 
-Two consequences for phase 2, written down before anyone commits to it:
+- A number that confirms the plan is worth a second look; a number that contradicts
+  it is worth the afternoon, because it was the implementation, not the design.
+- Before blaming a data-driven approach for a cost, count what it allocates per
+  frame on the path where nothing is wrong.
 
-- Throughput on the validation path is not the argument for a Rust socket. Memory,
-  collection pauses and shipping one binary are the arguments, and the first of
-  those is the table below — which nobody has filled in yet.
-- If phase 2 wants the speed too, the rules have to leave the `Value` walk: check
-  them against the typed frame serde already produced, or generate the checks per
-  arm, then re-measure here. A table-driven validator will not win this race, and
-  the numbers above are the reason to stop assuming it would.
+Both walks are kept: `collect` for the passing case, `select` (which carries a
+trail) for the failing one, and `check_path` refuses rather than dropping a
+violation if the two ever disagree about how many nodes a path names.
 
 ### Memory, when a phase claims it
 

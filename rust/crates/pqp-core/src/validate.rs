@@ -451,8 +451,9 @@ pub fn check(union: &str, rules: &Rules, frame: &Value) -> Outcome {
         return Ok(());
     };
     let mut out = Vec::new();
+    let mut scratch: Vec<&Value> = Vec::new();
     for row in rows {
-        check_path(rules, row, frame, &mut out);
+        check_path(rules, row, frame, &mut scratch, &mut out);
     }
     if out.is_empty() {
         Ok(())
@@ -467,10 +468,12 @@ pub fn check(union: &str, rules: &Rules, frame: &Value) -> Outcome {
 /// The common case is a frame with nothing wrong with it, and the old walk built
 /// a `String` for every segment of every rule row on every frame to describe a
 /// path nobody was going to read. Only `check_path`, reporting a violation, pays
-/// for the text now. Worth doing, and worth saying plainly: on the shipped
-/// corpus this moved `validate` by a few percent, so path text was never the
-/// cost. What it costs is the walk itself — a dozen generic `serde_json::Map`
-/// lookups per frame — which `docs/RUST.md` measures against zod.
+/// for the text now.
+///
+/// This trail walk is the slow shape of the walk, and it is kept for the failing
+/// case only: `collect` is what a healthy frame pays. Taken together the two are
+/// what turned validation from 30% slower than zod into 28% faster, and
+/// `docs/RUST.md` keeps the numbers and the wrong explanation that came first.
 #[derive(Clone)]
 enum Step<'a> {
     Key(&'a str),
@@ -509,6 +512,30 @@ fn select<'a>(frame: &'a Value, path: &'a [Seg]) -> Vec<(Vec<Step<'a>>, &'a Valu
     found
 }
 
+/// The nodes a path names, in the order zod walks them, without naming any of
+/// them. `select` is the same walk and keeps a trail so a violation can be
+/// blamed on a path; this variant exists because the blamed path is only read on
+/// the rare frame that is wrong, and `select` allocated a `Vec` per segment per
+/// candidate to build one nobody read. `check_path` reuses one scratch buffer
+/// across every row of a frame and pays for `select` only when something failed.
+fn collect<'a>(node: &'a Value, path: &[Seg], out: &mut Vec<&'a Value>) {
+    match path.split_first() {
+        None => out.push(node),
+        Some((Seg::Key(key), rest)) => {
+            if let Some(child) = node.get(key) {
+                collect(child, rest, out);
+            }
+        }
+        Some((Seg::Each, rest)) => {
+            if let Some(items) = node.as_array() {
+                for item in items {
+                    collect(item, rest, out);
+                }
+            }
+        }
+    }
+}
+
 /// Spell a walked path the way the generated table writes it: `state.queue[2].id`.
 /// Spelled from the trail rather than carried along it, so the walk allocates
 /// nothing per step. A dot separates two keys, including after `]`, because that
@@ -531,18 +558,56 @@ fn spell_steps(steps: &[Step<'_>]) -> String {
     out
 }
 
-fn check_path(rules: &Rules, row: &FieldRules, frame: &Value, out: &mut Vec<Violation>) {
+fn check_path<'a>(
+    rules: &Rules,
+    row: &FieldRules,
+    frame: &'a Value,
+    scratch: &mut Vec<&'a Value>,
+    out: &mut Vec<Violation>,
+) {
     // The generated `[]` at the end of a path means "every element"; the rules
     // belong to the element, so they run against the children. Rules written on
     // the array itself (`state.skipVotes`, no `[]`) run against the array.
-    for (trail, node) in select(frame, &row.path) {
+    scratch.clear();
+    collect(frame, &row.path, scratch);
+    let mut broken: Vec<(usize, String)> = Vec::new();
+    for (index, node) in scratch.iter().enumerate() {
         for rule in &row.rules {
             if let Some(rule) = fails(rules, rule, node) {
-                out.push(Violation {
-                    path: spell_steps(&trail),
-                    rule,
-                });
+                broken.push((index, rule));
             }
+        }
+    }
+    if broken.is_empty() {
+        return;
+    }
+    // Only now is a path worth spelling, and only for the nodes that broke.
+    let trails = select(frame, &row.path);
+    debug_assert_eq!(
+        trails.len(),
+        scratch.len(),
+        "select and collect disagree about {}",
+        spell(&row.path)
+    );
+    if trails.len() != scratch.len() {
+        // Should be impossible -- both walks follow the same order. If they ever
+        // diverge, blame the rule's own path rather than dropping the violation:
+        // a value layer that fails open is worse than one that is imprecise about
+        // which element it means.
+        for (_, rule) in broken {
+            out.push(Violation {
+                path: spell(&row.path),
+                rule,
+            });
+        }
+        return;
+    }
+    for (index, rule) in broken {
+        if let Some((trail, _)) = trails.get(index) {
+            out.push(Violation {
+                path: spell_steps(trail),
+                rule,
+            });
         }
     }
 }
