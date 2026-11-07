@@ -349,10 +349,10 @@ Three consequences, ordered by how much getting them wrong costs:
   what Node tolerates hangs up clients that work today — the failure this document
   keeps warning about. Phase 2 validates in shadow before it refuses anything.
 - **The 28% and 40% are measured against a step that is not currently running.**
-  A client frame today costs the `json` column plus hand-written guards, about
-  212 ns. The same frame through `validate::client` costs 455 ns in Rust: roughly
-  240 ns a frame *more* than the server spends now, against roughly 420 ns more in
-  zod. What the port buys is not a speedup. It is that validating at the edge is
+  A client frame today costs at least the `json` column — 212 ns — and then the
+  hand-written guards on top of it, which are not measured here. The same frame
+  through `validate::client` costs 455 ns in Rust: about 240 ns a frame *more* than
+  the server spends now at the very least, against about 420 ns more in zod. What the port buys is not a speedup. It is that validating at the edge is
   affordable enough to be worth considering, which it was not with zod.
 - **The value rules still earn their place.** They are the contract the schemas
   declare, they are what the bus path actually enforces, and a shadow comparison
