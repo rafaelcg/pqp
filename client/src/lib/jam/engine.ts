@@ -92,6 +92,8 @@ export class JamEngine {
       } catch {
         this.lastKey = null;
       }
+      // destroy() may have run during that await and closed `next`
+      if (this.destroyed) throw new Error("jam: engine destroyed while the input was opening");
       return next;
     });
     this.opening = run.catch(() => undefined);
