@@ -315,6 +315,10 @@ export async function loadReleaseCounts(
        SELECT COUNT(*)::int AS total,
               COUNT(*) FILTER (WHERE NOT COALESCE(is_community, FALSE))::int AS plain
          FROM servers
+        -- Only when some app asked for it has the default on: the totals feed
+        -- nothing else, so an instance with no default release never scans.
+        WHERE EXISTS (SELECT 1 FROM apps
+                       WHERE default_operator_enabled ${onlyId ? "AND id = $1" : ""})
      ),
      per AS (
        SELECT sa.app_id,
