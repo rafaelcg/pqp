@@ -7607,6 +7607,8 @@ CREATE INDEX IF NOT EXISTS idx_jam_songs_activity
 CREATE INDEX IF NOT EXISTS idx_jam_songs_created
   ON jam_songs (channel_id, created_at DESC, id DESC) WHERE deleted_at IS NULL;
 -- ON DELETE CASCADE from servers and SET NULL from users probe these.
+-- Every song of a channel, deleted or not (the cascade's key read).
+CREATE INDEX IF NOT EXISTS idx_jam_songs_channel_all ON jam_songs (channel_id);
 CREATE INDEX IF NOT EXISTS idx_jam_songs_server ON jam_songs (server_id);
 CREATE INDEX IF NOT EXISTS idx_jam_songs_author ON jam_songs (author_id) WHERE author_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_jam_songs_nonce
@@ -7655,6 +7657,10 @@ CREATE TABLE IF NOT EXISTS jam_tracks (
     CHECK (jsonb_typeof(peaks) = 'array' AND jsonb_array_length(peaks) <= 400)
 );
 
+-- Every track of a song, deleted or not: the cascade's key read and the
+-- ON DELETE CASCADE from jam_songs (the partial index below cannot answer
+-- either, it holds live tracks only).
+CREATE INDEX IF NOT EXISTS idx_jam_tracks_song_all ON jam_tracks (song_id);
 -- A song's live tracks, oldest first: the detail read, and every count.
 CREATE INDEX IF NOT EXISTS idx_jam_tracks_song
   ON jam_tracks (song_id, created_at, id) WHERE deleted_at IS NULL;
@@ -7691,7 +7697,11 @@ CREATE TABLE IF NOT EXISTS jam_uploads (
   byte_size BIGINT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   -- Set in the transaction that inserts the track.
-  claimed_at TIMESTAMPTZ
+  claimed_at TIMESTAMPTZ,
+  -- Set by the sweep BEFORE it deletes the object: a claim refuses a swept
+  -- upload, so a track can never be committed against an object the sweep is
+  -- about to remove.
+  swept_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_jam_uploads_unclaimed
   ON jam_uploads (created_at) WHERE claimed_at IS NULL;

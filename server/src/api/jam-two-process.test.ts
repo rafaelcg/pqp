@@ -23,7 +23,11 @@ import { jamFrameSchema, type JamFrame } from "@pqp/shared";
  * and a socket that did not join the jam channel hears nothing of it.
  */
 
-const DATABASE_URL = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
+// These suites TRUNCATE. `DATABASE_URL` is only trusted on CI, where the
+// database is a throwaway; anywhere else they need `TEST_DATABASE_URL` and skip
+// rather than touch whatever `DATABASE_URL` points at.
+const DATABASE_URL =
+  process.env.TEST_DATABASE_URL ?? (process.env.CI ? process.env.DATABASE_URL : undefined);
 const describeDb = DATABASE_URL ? describe : describe.skip;
 
 const SERVER_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..");

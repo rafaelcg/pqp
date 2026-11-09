@@ -157,6 +157,22 @@ export async function getJamTrackRow(
   return result.rows[0] ?? null;
 }
 
+/**
+ * The one 404 the jam answers for a missing channel, song or track, to a caller
+ * who may not see it and to one who asked for something that is not there: the
+ * wording must not tell the two apart.
+ */
+export const JAM_NOT_FOUND = "Not found";
+
+/** A summary for a song that was live a moment ago; 404 if a delete got there first. */
+async function requireSummary(songId: string): Promise<JamSongSummary> {
+  const summary = await getJamSongSummary(songId);
+  if (!summary) {
+    throw new HttpError(404, JAM_NOT_FOUND);
+  }
+  return summary;
+}
+
 // ------------------------------------------------------------- mapping
 
 function instrumentRank(instrument: string): number {
@@ -551,9 +567,9 @@ export async function updateJamSong(
     ],
   );
   if ((result.rowCount ?? 0) === 0) {
-    throw new HttpError(404, "Song not found");
+    throw new HttpError(404, JAM_NOT_FOUND);
   }
-  return (await getJamSongSummary(song.id))!;
+  return (await requireSummary(song.id));
 }
 
 /**
@@ -696,7 +712,7 @@ async function findOwnUpload(
     `SELECT id, kind, storage_key, content_type, byte_size, claimed_at
        FROM jam_uploads
       WHERE id = $1 AND song_id = $2 AND uploader_id = $3 AND kind = $4
-        AND claimed_at IS NULL`,
+        AND claimed_at IS NULL AND swept_at IS NULL`,
     [uploadId, song.id, uploaderId, kind],
   );
   return result.rows[0] ?? null;
@@ -766,7 +782,7 @@ export async function addJamTrack(
   if (retry) {
     const track = await getJamTrack(retry);
     if (track) {
-      return { track, song: (await getJamSongSummary(song.id))!, created: false };
+      return { track, song: await requireSummary(song.id), created: false };
     }
   }
 
@@ -800,7 +816,7 @@ export async function addJamTrack(
     );
     const current = locked.rows[0];
     if (!current) {
-      throw new HttpError(404, "Song not found");
+      throw new HttpError(404, JAM_NOT_FOUND);
     }
     // The state the insert lands in, not the state the request was routed on:
     // the author may have closed the song while the files uploaded.
@@ -824,7 +840,8 @@ export async function addJamTrack(
     const claimIds = video ? [audio.id, video.id] : [audio.id];
     const claimed = await client.query(
       `UPDATE jam_uploads SET claimed_at = NOW()
-        WHERE id = ANY($1::uuid[]) AND claimed_at IS NULL AND uploader_id = $2`,
+        WHERE id = ANY($1::uuid[]) AND claimed_at IS NULL AND swept_at IS NULL
+          AND uploader_id = $2`,
       [claimIds, userId],
     );
     if ((claimed.rowCount ?? 0) !== claimIds.length) {
@@ -876,15 +893,21 @@ export async function addJamTrack(
       const existing = await findClaimedTrack(request.audioUploadId, userId, song.id);
       const track = existing ? await getJamTrack(existing) : null;
       if (track) {
-        return { track, song: (await getJamSongSummary(song.id))!, created: false };
+        return { track, song: await requireSummary(song.id), created: false };
       }
     }
     throw error;
   } finally {
     client.release();
   }
-  const track = (await getJamTrack(trackId))!;
-  return { track, song: (await getJamSongSummary(song.id))!, created: true };
+  // The track committed. A concurrent delete of the song may already have
+  // soft-deleted it by the time it is read back: that is a 404 for this
+  // request (the song is gone), never a crash on a null.
+  const track = await getJamTrack(trackId);
+  if (!track) {
+    throw new HttpError(404, JAM_NOT_FOUND);
+  }
+  return { track, song: await requireSummary(song.id), created: true };
 }
 
 /** The `joinMode` rule, as a throw. See `addableInstruments` for the read form. */
@@ -966,13 +989,14 @@ export async function updateJamTrack(
     ],
   );
   if ((result.rowCount ?? 0) === 0) {
-    throw new HttpError(404, "Track not found");
+    throw new HttpError(404, JAM_NOT_FOUND);
   }
   await getPool().query(`UPDATE jam_songs SET updated_at = NOW() WHERE id = $1`, [track.song_id]);
-  return {
-    track: (await getJamTrack(track.id))!,
-    song: (await getJamSongSummary(track.song_id))!,
-  };
+  const fresh = await getJamTrack(track.id);
+  if (!fresh) {
+    throw new HttpError(404, JAM_NOT_FOUND);
+  }
+  return { track: fresh, song: await requireSummary(track.song_id) };
 }
 
 /** Soft-delete a track; its objects go with the sweep a day later. */
@@ -1000,21 +1024,36 @@ export async function setJamVote(
   userId: string,
   voted: boolean,
 ): Promise<{ voteCount: number; changed: boolean }> {
-  const write = voted
-    ? await getPool().query(
-        `INSERT INTO jam_track_votes (track_id, user_id) VALUES ($1, $2)
-         ON CONFLICT DO NOTHING`,
-        [trackId, userId],
-      )
-    : await getPool().query(
-        `DELETE FROM jam_track_votes WHERE track_id = $1 AND user_id = $2`,
-        [trackId, userId],
-      );
-  const count = await getPool().query<{ count: number }>(
-    `SELECT COUNT(*)::int AS count FROM jam_track_votes WHERE track_id = $1`,
-    [trackId],
-  );
-  return { voteCount: count.rows[0]!.count, changed: (write.rowCount ?? 0) > 0 };
+  // One transaction with the track row locked, so the write and the count are
+  // one step and two votes on a track are ordered: the count returned is the
+  // count after exactly this change, and a failed count rolls the vote back
+  // instead of leaving a change nobody was told about.
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(`SELECT 1 FROM jam_tracks WHERE id = $1 FOR UPDATE`, [trackId]);
+    const write = voted
+      ? await client.query(
+          `INSERT INTO jam_track_votes (track_id, user_id) VALUES ($1, $2)
+           ON CONFLICT DO NOTHING`,
+          [trackId, userId],
+        )
+      : await client.query(
+          `DELETE FROM jam_track_votes WHERE track_id = $1 AND user_id = $2`,
+          [trackId, userId],
+        );
+    const count = await client.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count FROM jam_track_votes WHERE track_id = $1`,
+      [trackId],
+    );
+    await client.query("COMMIT");
+    return { voteCount: count.rows[0]!.count, changed: (write.rowCount ?? 0) > 0 };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 // ------------------------------------------------------------------ sweeps
@@ -1036,10 +1075,20 @@ export async function sweepJamMedia(): Promise<number> {
   }
   let done = 0;
 
+  // Mark first, delete after: the mark (`swept_at`) and a claim (`claimed_at`)
+  // are two writes to the same row, each refused once the other is there, so a
+  // track can never be committed against an object this pass is removing. A
+  // row marked on an earlier pass whose object delete failed is picked up
+  // again (the mark is kept, not renewed).
   const orphans = await getPool().query<{ id: string; storage_key: string }>(
-    `SELECT id, storage_key FROM jam_uploads
-      WHERE claimed_at IS NULL AND created_at < NOW() - INTERVAL '${ORPHAN_GRACE}'
-      ORDER BY created_at LIMIT ${SWEEP_BATCH}`,
+    `UPDATE jam_uploads SET swept_at = COALESCE(swept_at, NOW())
+      WHERE id IN (
+        SELECT id FROM jam_uploads
+         WHERE claimed_at IS NULL AND created_at < NOW() - INTERVAL '${ORPHAN_GRACE}'
+         ORDER BY created_at LIMIT ${SWEEP_BATCH}
+           FOR UPDATE SKIP LOCKED)
+        AND claimed_at IS NULL
+      RETURNING id, storage_key`,
   );
   for (const row of orphans.rows) {
     try {
@@ -1051,8 +1100,6 @@ export async function sweepJamMedia(): Promise<number> {
       );
       continue;
     }
-    // Still unclaimed: a claim that slipped in meanwhile keeps its row (and
-    // loses its object, which the HEAD it ran first would already have seen).
     await getPool().query(`DELETE FROM jam_uploads WHERE id = $1 AND claimed_at IS NULL`, [row.id]);
     done += 1;
   }

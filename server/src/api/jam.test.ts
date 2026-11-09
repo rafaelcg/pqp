@@ -35,7 +35,11 @@ import {
  * delivery of those frames is `jam-two-process.test.ts`.
  */
 
-const DATABASE_URL = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
+// These suites TRUNCATE. `DATABASE_URL` is only trusted on CI, where the
+// database is a throwaway; anywhere else they need `TEST_DATABASE_URL` and skip
+// rather than touch whatever `DATABASE_URL` points at.
+const DATABASE_URL =
+  process.env.TEST_DATABASE_URL ?? (process.env.CI ? process.env.DATABASE_URL : undefined);
 const describeDb = DATABASE_URL ? describe : describe.skip;
 
 if (DATABASE_URL) {
@@ -1177,6 +1181,42 @@ describeDb("jam channels", () => {
     expect((await getPool().query(`SELECT 1 FROM jam_uploads WHERE id = $1`, [fresh])).rowCount).toBe(1);
     expect((await detail(alice, song)).tracks).toHaveLength(1);
     expect(await sweepJamMedia()).toBe(0);
+  });
+
+  it("an upload the sweep has picked up can no longer be claimed, even if its object delete failed", async () => {
+    const song = await songId(alice);
+    const upl = await upload(bob, song, "audio");
+    await getPool().query(`UPDATE jam_uploads SET created_at = NOW() - INTERVAL '2 hours'`);
+    storage.failDeletes = true;
+    expect(await sweepJamMedia()).toBe(0);
+    // The object is still in the bucket and the row is still there, marked.
+    expect(objects.size).toBe(1);
+    const claim = await call(bob, "POST", `/api/jam-songs/${song}/tracks`, {
+      instrument: "bass",
+      audioUploadId: upl,
+      durationMs: 5000,
+    });
+    expect(claim.status).toBe(404);
+    expect(claim.body.error).toBe("jam_upload_unknown");
+    // The next pass finishes the job.
+    storage.failDeletes = false;
+    expect(await sweepJamMedia()).toBe(1);
+    expect(objects.size).toBe(0);
+  });
+
+  it("a missing song, track or channel all answer the same 404", async () => {
+    const secret = await createChannel(serverId, "secreta", "jam", true);
+    const hidden = (await createSong(alice, "Escondida", {}, secret.id)).body.song.id;
+    const missing = "11111111-1111-4111-8111-111111111111";
+    const bodies = await Promise.all([
+      call(bob, "GET", `/api/jam-songs/${hidden}`),
+      call(bob, "GET", `/api/jam-songs/${missing}`),
+      call(bob, "GET", `/api/channels/${secret.id}/jam-songs`),
+      call(bob, "GET", `/api/channels/${missing}/jam-songs`),
+      call(bob, "PUT", `/api/jam-tracks/${missing}/vote`),
+    ]);
+    expect(new Set(bodies.map((r) => r.status))).toEqual(new Set([404]));
+    expect(new Set(bodies.map((r) => JSON.stringify(r.body))).size).toBe(1);
   });
 
   it("the sweep deletes a deleted track's objects a day later, then marks it", async () => {

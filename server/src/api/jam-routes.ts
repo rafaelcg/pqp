@@ -26,6 +26,7 @@ import {
   getJamSongRow,
   getJamSongSummary,
   getJamTrackRow,
+  JAM_NOT_FOUND,
   listJamSongs,
   listJamTracks,
   listVotedTrackIds,
@@ -87,7 +88,7 @@ async function requireJamChannel(channelId: string, userId: string): Promise<Jam
     !channel.server_id ||
     !(await canAccessChannel(channelId, userId))
   ) {
-    throw new HttpError(404, "Jam channel not found");
+    throw new HttpError(404, JAM_NOT_FOUND);
   }
   return { id: channel.id, server_id: channel.server_id };
 }
@@ -99,7 +100,7 @@ async function requireSong(
 ): Promise<{ song: JamSongRow; channel: JamChannel }> {
   const song = await getJamSongRow(songId);
   if (!song) {
-    throw new HttpError(404, "Song not found");
+    throw new HttpError(404, JAM_NOT_FOUND);
   }
   const channel = await requireJamChannel(song.channel_id, userId);
   return { song, channel };
@@ -140,7 +141,7 @@ async function vote(
 ): Promise<JamVoteResponse> {
   const track = await getJamTrackRow(trackId);
   if (!track) {
-    throw new HttpError(404, "Track not found");
+    throw new HttpError(404, JAM_NOT_FOUND);
   }
   const channel = await requireJamChannel(track.channel_id, userId);
   if (voted) {
@@ -216,7 +217,7 @@ export function registerJamRoutes(router: Router): void {
       findTimeoutForChannel(user.id, channel.id),
     ]);
     if (!summary) {
-      throw new HttpError(404, "Song not found");
+      throw new HttpError(404, JAM_NOT_FOUND);
     }
     const mine = tracks.filter((track) => track.authorId === user.id).length;
     const open =
@@ -294,6 +295,8 @@ export function registerJamRoutes(router: Router): void {
     requireOn(channel.server_id);
     await assertNotTimedOut(user.id, channel.id);
     const { canPost } = await permsOf(channel, user.id);
+    // Refused before the body is read when the caller may add nothing.
+    assertMayAddAny(song, user.id, canPost);
     const request = addJamTrackSchema.parse(await readJsonBody(req));
     const result = await addJamTrack({ song, userId: user.id, canPost, request });
     if (!result.created) {
@@ -313,7 +316,7 @@ export function registerJamRoutes(router: Router): void {
   router.patch("/api/jam-tracks/:trackId", async ({ req, user }, { trackId }) => {
     const track = await getJamTrackRow(trackId!);
     if (!track) {
-      throw new HttpError(404, "Track not found");
+      throw new HttpError(404, JAM_NOT_FOUND);
     }
     const channel = await requireJamChannel(track.channel_id, user.id);
     requireOn(channel.server_id);
@@ -351,7 +354,7 @@ export function registerJamRoutes(router: Router): void {
   router.delete("/api/jam-tracks/:trackId", async ({ user }, { trackId }) => {
     const track = await getJamTrackRow(trackId!);
     if (!track) {
-      throw new HttpError(404, "Track not found");
+      throw new HttpError(404, JAM_NOT_FOUND);
     }
     const channel = await requireJamChannel(track.channel_id, user.id);
     await assertNotTimedOut(user.id, channel.id);

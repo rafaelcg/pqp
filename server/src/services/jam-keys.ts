@@ -1,6 +1,5 @@
 import type { PoolClient } from "pg";
 import { getPool } from "../db.js";
-import { isStorageConfigured } from "../lib/s3.js";
 
 /**
  * The object keys a jam owns, for the three deletes that cascade the rows
@@ -9,6 +8,12 @@ import { isStorageConfigured } from "../lib/s3.js";
  * they are READ BEFORE the delete and the objects are deleted after it
  * (`deleteObjectsInBackground`). Kept apart from `jam.ts` because `servers.ts`
  * and `account.ts` import it and `jam.ts` imports both of them.
+ *
+ * The keys are read WHATEVER the storage configuration says: a deployment that
+ * turned storage off after recordings existed must not lose the only names of
+ * them to the cascade (the delete then fails loudly and logs each key as a
+ * leaked object, `deleteObjectsInBackground`, which is the record to clean up
+ * from).
  *
  * Every key is read from the ledger (`jam_uploads`, which has a row for every
  * object ever signed, claimed or not) and from the tracks (which name the same
@@ -24,7 +29,7 @@ export async function jamKeysForChannels(
   channelIds: readonly string[],
   db: Db = getPool(),
 ): Promise<string[]> {
-  if (channelIds.length === 0 || !isStorageConfigured()) {
+  if (channelIds.length === 0) {
     return [];
   }
   const result = await db.query<{ key: string }>(
@@ -45,9 +50,6 @@ export async function jamKeysForServer(
   serverId: string,
   db: Db = getPool(),
 ): Promise<string[]> {
-  if (!isStorageConfigured()) {
-    return [];
-  }
   const result = await db.query<{ key: string }>(
     `SELECT u.storage_key AS key FROM jam_uploads u WHERE u.server_id = $1
      UNION
@@ -66,9 +68,6 @@ export async function jamKeysForUser(
   userId: string,
   db: Db = getPool(),
 ): Promise<string[]> {
-  if (!isStorageConfigured()) {
-    return [];
-  }
   const result = await db.query<{ key: string }>(
     `SELECT u.storage_key AS key FROM jam_uploads u WHERE u.uploader_id = $1
      UNION
