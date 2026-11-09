@@ -1389,6 +1389,24 @@
     return h("div", { class: "sw-cell" }, [btn, msg ? h("p", { class: "sw-reason" + (sw.reason ? " blocked" : ""), id: reasonId, text: msg }) : null]);
   }
 
+  /**
+   * "Padrão em todos": the app released on every server that has not decided,
+   * new ones included. Turning it ON asks first (it reaches every server);
+   * turning it off does not (it is the safe direction, and the per server
+   * decisions stay).
+   */
+  function defaultControl(app) {
+    var on = !!app.defaultOperatorEnabled;
+    var noteId = "dr-" + app.id;
+    var btn = h("button", {
+      type: "button", class: "switch", role: "switch", "aria-checked": on ? "true" : "false",
+      "aria-label": app.name + ", padrão em todos os servidores", "aria-describedby": noteId,
+      "data-id": "dsw:" + app.id,
+      onclick: function () { if (on) setDefault(app.id, false); else askDefault(app); }
+    });
+    return h("div", { class: "sw-cell" }, [btn, h("p", { class: "sw-reason", id: noteId, text: M.defaultNote(app) })]);
+  }
+
   function renderAppList(body) {
     var apps = A.list.apps;
     if (!apps.length) {
@@ -1451,7 +1469,7 @@
         var opt = h("option", { value: value, text: M.appStatus(value).label, selected: value === app.status ? true : null, disabled: value === "live" && app.goLiveBlocker && app.status !== "live" ? true : null });
         return opt;
       }));
-    var canDisable = on || app.serversOn > 0 || app.liveSessions > 0;
+    var canDisable = on || app.defaultOperatorEnabled || app.serversOn > 0 || app.liveSessions > 0;
     body.appendChild(h("section", { class: "card", "aria-label": app.name }, [
       h("div", { class: "app-head" }, [
         h("div", { class: "app-id" }, [appTile(app, "lg"), h("div", { class: "app-name" }, [h("b", { text: app.name }), h("span", { text: M.appSubtitle(app) })])]),
@@ -1459,6 +1477,7 @@
         h("div", { class: "grow-space" }),
         h("label", { class: "field" }, [h("span", { text: "Estado" }), statusSelect]),
         h("div", { class: "field" }, [h("span", { text: "Global" }), globalControl(app)]),
+        h("div", { class: "field" }, [h("span", { text: "Padrão em todos" }), defaultControl(app)]),
         h("button", { type: "button", class: "btn warn", "data-id": "disable:" + app.id, "aria-disabled": canDisable ? null : "true",
           onclick: function () { if (canDisable) askDisableEverywhere(app); }, text: "Desligar em todos" })
       ]),
@@ -1498,7 +1517,7 @@
     var list = h("ul", { class: "srv-list" });
     st.rows.forEach(function (row) {
       var m = M.serverRow(row);
-      var on = row.operatorEnabled === true;
+      var on = M.serverReleased(row);
       var btn = h("button", { type: "button", class: "switch", role: "switch", "aria-checked": on ? "true" : "false", "aria-label": row.name + ", " + app.name,
         "aria-disabled": m.locked ? "true" : null, "aria-describedby": m.locked ? "aLockNote" : null, "data-id": "srvsw:" + row.id,
         onclick: function () { if (m.locked) return; setServerSwitch(app.id, row.id, !on); } });
@@ -1700,6 +1719,23 @@
       }
     });
   }
+  function setDefault(appId, on) {
+    appWrite({
+      method: "PUT", path: "/operator/apps", body: { appId: appId, defaultOperatorEnabled: on },
+      reloadServers: true,
+      apply: function () {
+        var app = appById(appId); if (!app) return null;
+        var before = app.defaultOperatorEnabled;
+        app.defaultOperatorEnabled = on;
+        return function () { var a = appById(appId); if (a) a.defaultOperatorEnabled = before; };
+      }
+    });
+  }
+  function askDefault(app) {
+    var spec = M.defaultConfirm(app, serverCount());
+    spec.onConfirm = function () { setDefault(app.id, true); };
+    openDialog(spec, "dsw:" + app.id);
+  }
   function setStatus(appId, status) {
     appWrite({
       method: "PUT", path: "/operator/apps", body: { appId: appId, status: status },
@@ -1715,7 +1751,6 @@
     appWrite({ method: "PUT", path: "/operator/apps", body: { appId: appId, currentVersion: version } });
   }
   function setServerSwitch(appId, serverId, value) {
-    var step = value ? 1 : -1;
     appWrite({
       method: "PUT", path: "/operator/server-apps", body: { serverId: serverId, appId: appId, operatorEnabled: value },
       reloadServers: A.srv.on,
@@ -1723,13 +1758,17 @@
         var app = appById(appId);
         var row = A.srv.rows.filter(function (r) { return r.id === serverId; })[0];
         if (!app || !row) return null;
-        var before = row.operatorEnabled;
+        var before = row.operatorEnabled, wasReleased = M.serverReleased(row);
+        // What the answer will say: an explicit ON releases it, an explicit OFF does not.
+        var step = value === wasReleased ? 0 : (value ? 1 : -1);
         row.operatorEnabled = value;
+        row.released = value;
         app.serversOn = Math.max(0, app.serversOn + step);
         A.srv.enabledCount = Math.max(0, A.srv.enabledCount + step);
         return function () {
           var a = appById(appId);
           row.operatorEnabled = before;
+          row.released = wasReleased;
           if (a) a.serversOn = Math.max(0, a.serversOn - step);
           A.srv.enabledCount = Math.max(0, A.srv.enabledCount - step);
         };

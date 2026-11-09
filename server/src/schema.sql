@@ -7087,6 +7087,15 @@ CREATE TABLE IF NOT EXISTS apps (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- The operator's "released on every server" switch for THIS app. With it on, a
+-- server with no decision of its own (no server_apps row, or operator_enabled
+-- NULL) counts as released, including a server created tomorrow; an explicit
+-- operator_enabled FALSE still wins, and a public community still needs
+-- community_unlocked. Default FALSE is the behaviour before the column existed.
+-- Only an operator write sets it, never the catalog loader (docs/APPS.md).
+-- `apps` is a handful of rows, so this one statement takes no hot table.
+ALTER TABLE apps ADD COLUMN IF NOT EXISTS default_operator_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+
 -- One row per (app, version). The manifest is stored verbatim, validated by
 -- `validateAppManifest` before the insert. A version is immutable: the same
 -- (app_id, version) with a different manifest_sha256 is refused by the loader.
@@ -7128,11 +7137,13 @@ BEGIN
   END IF;
 END $$;
 
--- Per server availability. NULL means "not decided", which is OFF. The owner
+-- Per server availability. NULL means "not decided", which is OFF unless the
+-- app's default_operator_enabled is on (then it is released). The owner
 -- can only switch off what the operator switched on (owner_enabled FALSE),
 -- never the reverse. Availability is: flag `apps` AND apps.status = 'live' AND
--- apps.global_enabled AND operator_enabled IS TRUE AND owner_enabled IS NOT
--- FALSE AND (the server is not a listed community OR apps.community_unlocked).
+-- apps.global_enabled AND COALESCE(operator_enabled, apps.default_operator_enabled)
+-- IS TRUE AND owner_enabled IS NOT FALSE AND (the server is not a listed
+-- community OR apps.community_unlocked).
 CREATE TABLE IF NOT EXISTS server_apps (
   server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
   app_id TEXT NOT NULL REFERENCES apps(id) ON DELETE CASCADE,
@@ -7285,6 +7296,27 @@ CREATE TABLE IF NOT EXISTS app_admin_audit (
   sessions_ended INT NOT NULL DEFAULT 0,
   at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+-- 'default-operator' (the app-wide release switch) joined the list later.
+-- Rewritten only when the constraint does not already allow it, so a boot that
+-- changes nothing does not drop it. `app_admin_audit` is a small table.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conrelid = 'app_admin_audit'::regclass
+       AND conname = 'app_admin_audit_action_check'
+       AND pg_get_constraintdef(oid) LIKE '%default-operator%'
+  ) THEN
+    ALTER TABLE app_admin_audit DROP CONSTRAINT IF EXISTS app_admin_audit_action_check;
+    ALTER TABLE app_admin_audit
+      ADD CONSTRAINT app_admin_audit_action_check
+      CHECK (action IN (
+        'status', 'global', 'operator-server', 'owner-server', 'community-unlock',
+        'review', 'current-version', 'disable-everywhere', 'catalog-load',
+        'default-operator'
+      ));
+  END IF;
+END $$;
 CREATE INDEX IF NOT EXISTS idx_app_admin_audit_app ON app_admin_audit (app_id, at DESC);
 -- Deleting a server or an account sets these to NULL; the lookup is by the column.
 CREATE INDEX IF NOT EXISTS idx_app_admin_audit_server
