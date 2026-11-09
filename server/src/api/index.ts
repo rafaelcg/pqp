@@ -378,6 +378,8 @@ import {
   resetLivePreviewRateLimits,
 } from "./live-preview-routes.js";
 import { registerAppRoutes } from "./app-routes.js";
+import { registerJamRoutes } from "./jam-routes.js";
+import { JAM_CHANNELS_OFF, jamChannelsEnabled } from "../lib/jam-config.js";
 import {
   handleBauPaymentsWebhook,
   registerBauPaymentsRoutes,
@@ -386,7 +388,7 @@ import { noteStaffVipChange } from "../services/bau-payments/vip.js";
 import { endSessionsOfChannel } from "../apps/sweeps.js";
 import { publicAppsConfig } from "../apps/public-config.js";
 import { registerAppOwnerRoutes } from "./app-owner-routes.js";
-import { Created, HttpErrorWithDetail } from "../lib/route-results.js";
+import { Created, HttpErrorWithDetail, NoContent } from "../lib/route-results.js";
 import {
   ADMIN_APP_REVIEW_PATH,
   ADMIN_APP_SERVERS_PATH,
@@ -1542,9 +1544,7 @@ function created(body: unknown): Created {
   return new Created(body);
 }
 
-/** Wrap a handler result to answer 204 with no body. */
-class NoContent {}
-
+/** Wrap a handler result to answer 204 with no body (`NoContent`, in `lib/route-results.ts`). */
 function noContent(): NoContent {
   return new NoContent();
 }
@@ -1731,6 +1731,10 @@ const router = createRouter();
 
 // The apps platform's routes (`app-routes.ts`), behind the `apps` flag.
 registerAppRoutes(router);
+
+// Jam channels' routes (`jam-routes.ts`), behind the `jam_channels` flag for
+// writes only; every read answers whatever the flag says.
+registerJamRoutes(router);
 registerBauPaymentsRoutes(router);
 // The owner's switches for the apps the operator released (`app-owner-routes.ts`).
 registerAppOwnerRoutes(router);
@@ -8208,6 +8212,10 @@ router.post(
     // is what keeps it inert until the runtime flag is on for this server.
     if (body.type === "forum" && !forumChannelsEnabled(serverId!)) {
       throw new Forbidden(FORUM_CHANNELS_OFF);
+    }
+    // Same for a jam channel (`jam_channels`).
+    if (body.type === "jam" && !jamChannelsEnabled(serverId!)) {
+      throw new Forbidden(JAM_CHANNELS_OFF);
     }
     // ABSENT `parentId` is an older client (the legacy-create rule): on a
     // server in the mixed layout its channel goes to the end of the first

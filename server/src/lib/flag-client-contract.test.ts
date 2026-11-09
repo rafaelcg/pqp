@@ -6,6 +6,7 @@ import { FEATURE_FLAGS } from "./flags.js";
 import { shareConfigForServer } from "./share-config.js";
 import { voiceConfigForServer } from "./voice-config.js";
 import { forumConfigForServer } from "./forum-config.js";
+import { jamConfigForServer } from "./jam-config.js";
 import { liveHlsConfig } from "../voice/hls-egress.js";
 
 /**
@@ -572,6 +573,96 @@ describe("forum_channels against the forum config the client reads", () => {
       "utf8",
     );
     expect(dashboard).toMatch(/\bforum_channels:\s*"/);
+  });
+});
+
+/**
+ * `jam_channels`, born with the jam server PR. Per server, off by default,
+ * served as `enabled` on `GET /api/jam/config?serverId=`. No client reads it
+ * yet (the UI is its own PR), so the client half pinned here is the contract
+ * in `@pqp/shared` that the client will import: the config schema names the
+ * same fields the server sends. Every other half is pinned by name like the
+ * forum's: the route, the per-server read, the create guard the flag exists
+ * for, and the guard on every write route.
+ */
+describe("jam_channels against the jam config", () => {
+  it("is per server, off by default, and served as `enabled`", () => {
+    const def = FEATURE_FLAGS.jam_channels;
+    expect(def.perServer).toBe(true);
+    expect(def.codeDefault).toBe(false);
+    expect(def.clientVia).toBe("GET /api/jam/config?serverId= (enabled)");
+    expect(Object.keys(jamConfigForServer(null))).toEqual(["enabled", "uploads"]);
+    expect(jamConfigForServer(null).enabled).toBe(false);
+  });
+
+  it("the shared contract names exactly the fields the server sends", () => {
+    const shared = readFileSync(
+      path.resolve(here, "../../../packages/shared/src/jam.ts"),
+      "utf8",
+    );
+    const body = /export const jamConfigSchema = z\.object\(\{([\s\S]*?)\n\}\);/.exec(shared)?.[1];
+    expect(body, "jamConfigSchema not found in jam.ts").toBeTruthy();
+    const declared = [...body!.matchAll(/^ {2}([A-Za-z]\w*):/gm)].map((match) => match[1]!);
+    expect(declared).toEqual(Object.keys(jamConfigForServer(null)));
+  });
+
+  it("the route is mounted, asked per server, and answers from the flag", () => {
+    const routes = readFileSync(path.join(serverSrc, "api/jam-routes.ts"), "utf8");
+    const route = /router\.get\("\/api\/jam\/config"[\s\S]*?\);/.exec(routes)?.[0];
+    expect(route, "GET /api/jam/config is not mounted").toBeTruthy();
+    expect(route).toContain("jamConfigForServer(");
+    expect(route).toContain('searchParams.get("serverId")');
+    const api = readFileSync(path.join(serverSrc, "api/index.ts"), "utf8");
+    expect(api).toContain("registerJamRoutes(router)");
+    const lib = readFileSync(path.join(serverSrc, "lib/jam-config.ts"), "utf8");
+    expect(lib).toMatch(/isEnabled\("jam_channels",\s*\{\s*serverId\s*\}\)/);
+  });
+
+  it("creating a jam channel is refused unless the flag is on for that server", () => {
+    const api = readFileSync(path.join(serverSrc, "api/index.ts"), "utf8");
+    const route = /router\.post\(\s*"\/api\/servers\/:serverId\/channels"[\s\S]*?\n\);/.exec(
+      api,
+    )?.[0];
+    expect(route, "POST /api/servers/:serverId/channels not found").toBeTruthy();
+    expect(route).toMatch(
+      /body\.type === "jam" && !jamChannelsEnabled\(serverId!\)[\s\S]*?JAM_CHANNELS_OFF/,
+    );
+  });
+
+  it("every write route asks the flag, and only the three removals do not", () => {
+    const routes = readFileSync(path.join(serverSrc, "api/jam-routes.ts"), "utf8");
+    // Every handler registration, cut at the next one.
+    const handlers = routes
+      .split(/\n {2}router\.(?=get|post|patch|put|delete)/)
+      .slice(1)
+      .map((chunk) => ({
+        verb: chunk.slice(0, chunk.indexOf("(")),
+        route: /"(\/api[^"]*)"/.exec(chunk)?.[1],
+        body: chunk,
+      }));
+    expect(handlers.length).toBeGreaterThanOrEqual(11);
+    const ungated = handlers
+      .filter(({ verb, body }) => verb !== "get" && !body.includes("requireOn("))
+      .map(({ verb, route }) => `${verb} ${route}`);
+    // The vote is the one route whose gate is inside the shared helper, so
+    // PUT shows up here through `vote(`; the DELETE of it is the removal.
+    expect(ungated.sort()).toEqual(
+      [
+        "delete /api/jam-songs/:songId",
+        "delete /api/jam-tracks/:trackId",
+        "delete /api/jam-tracks/:trackId/vote",
+        "put /api/jam-tracks/:trackId/vote",
+      ].sort(),
+    );
+    expect(routes).toMatch(/if \(voted\) \{\s*requireOn\(channel\.server_id\);/);
+  });
+
+  it("the dashboard has a note for it", () => {
+    const dashboard = readFileSync(
+      path.resolve(here, "../../../tools/admin-dashboard/site/novo.js"),
+      "utf8",
+    );
+    expect(dashboard).toMatch(/\bjam_channels:\s*"/);
   });
 });
 

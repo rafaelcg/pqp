@@ -7509,3 +7509,203 @@ CREATE TABLE IF NOT EXISTS bau_payment_events (
   PRIMARY KEY (provider, event_id)
 );
 CREATE INDEX IF NOT EXISTS idx_bau_payment_events_received ON bau_payment_events (received_at);
+
+-- jam channels
+--
+-- A JAM IS A CHANNEL THAT HOLDS SONGS, AND A SONG IS A PILE OF RECORDED STEMS.
+-- The channel is `type = 'jam'` and never carries a message. A song is a row
+-- of `jam_songs`; a track (one instrument, one person, one audio object and an
+-- optional video) is a row of `jam_tracks`. The wire contract and every rule
+-- these tables serve are in packages/shared/src/jam.ts; the operator's page is
+-- docs/JAM.md.
+--
+-- Pitfall 22: nothing here adds a column to an existing table. The only
+-- statement that touches one is the type CHECK below, and every table is new.
+-- Every jam table is here, so the feature costs one hash-changing deploy.
+
+-- The type CHECK, written like the forum one above it and for the same reasons
+-- (see the long comment there): no lock when 'jam' is already allowed, DROP and
+-- ADD otherwise, every error out except `check_violation` (a rollback image
+-- meeting rows of a newer type), and no validation scan when the constraint it
+-- replaces was VALIDATED and allows nothing outside this list. The list is the
+-- forum block's plus 'jam'. `db-boot-schema.test.ts` runs it under a held lock.
+DO $$
+DECLARE
+  covered BOOLEAN;
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+      FROM pg_constraint
+     WHERE conrelid = 'channels'::regclass
+       AND conname = 'channels_type_check'
+       AND pg_get_constraintdef(oid) LIKE '%''jam''%'
+  ) THEN
+    SELECT c.convalidated
+           AND pg_get_constraintdef(c.oid)
+               ~ '^CHECK \(\(type = ANY \(ARRAY\[''[a-z_]+''::text(, ''[a-z_]+''::text)*\]\)\)\)$'
+           AND NOT EXISTS (
+             SELECT 1
+               FROM regexp_matches(pg_get_constraintdef(c.oid), '''([a-z_]+)''', 'g') AS m(v)
+              WHERE m.v[1] NOT IN ('text', 'voice', 'category', 'thread', 'watch_party', 'forum', 'jam')
+           )
+      INTO covered
+      FROM pg_constraint c
+     WHERE c.conrelid = 'channels'::regclass
+       AND c.conname = 'channels_type_check';
+    BEGIN
+      ALTER TABLE channels DROP CONSTRAINT IF EXISTS channels_type_check;
+      IF covered THEN
+        ALTER TABLE channels
+          ADD CONSTRAINT channels_type_check
+          CHECK (type IN ('text', 'voice', 'category', 'thread', 'watch_party', 'forum', 'jam'))
+          NOT VALID;
+      ELSE
+        ALTER TABLE channels
+          ADD CONSTRAINT channels_type_check
+          CHECK (type IN ('text', 'voice', 'category', 'thread', 'watch_party', 'forum', 'jam'));
+      END IF;
+    EXCEPTION WHEN check_violation THEN
+      RAISE WARNING 'channels_type_check left as it was: a row has a channel type this schema does not know (a rollback?)';
+    END;
+  END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS jam_songs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  -- The jam channel. Deleting it deletes its songs; the server's delete
+  -- service reads the object keys first (they are only named here).
+  channel_id UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  -- Denormalised copy of channels.server_id (a channel never moves between
+  -- servers), so a permission check starts from the song.
+  server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  -- SET NULL: the song and everybody else's tracks outlive the account
+  -- ("Conta excluída"). The author's OWN tracks do not: see jam_tracks.
+  author_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  title TEXT NOT NULL,
+  -- NULL means an original.
+  artist TEXT,
+  -- open: anybody who can post; wanted: only `wanted_instruments`; closed: the
+  -- author alone. The author may always add. There is no 'private' state: a
+  -- song is as private as its channel.
+  join_mode TEXT NOT NULL DEFAULT 'open'
+    CONSTRAINT jam_songs_join_mode_check CHECK (join_mode IN ('open', 'wanted', 'closed')),
+  -- Empty unless join_mode = 'wanted'. Values are the instruments of
+  -- packages/shared/src/jam.ts; the service validates them (a CHECK on array
+  -- elements would make adding an instrument a schema change).
+  wanted_instruments TEXT[] NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  -- The bump the list sorts on: edit, track added, changed or removed.
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ,
+  -- Idempotent create: a retried POST with the same nonce returns the song.
+  client_nonce TEXT
+);
+
+-- The list, both orders. Keyset on (sort key, id); live songs only.
+CREATE INDEX IF NOT EXISTS idx_jam_songs_activity
+  ON jam_songs (channel_id, updated_at DESC, id DESC) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_jam_songs_created
+  ON jam_songs (channel_id, created_at DESC, id DESC) WHERE deleted_at IS NULL;
+-- ON DELETE CASCADE from servers and SET NULL from users probe these.
+-- Every song of a channel, deleted or not (the cascade's key read).
+CREATE INDEX IF NOT EXISTS idx_jam_songs_channel_all ON jam_songs (channel_id);
+CREATE INDEX IF NOT EXISTS idx_jam_songs_server ON jam_songs (server_id);
+CREATE INDEX IF NOT EXISTS idx_jam_songs_author ON jam_songs (author_id) WHERE author_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_jam_songs_nonce
+  ON jam_songs (channel_id, author_id, client_nonce) WHERE client_nonce IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS jam_tracks (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  song_id UUID NOT NULL REFERENCES jam_songs(id) ON DELETE CASCADE,
+  -- CASCADE, unlike the song: a person's recording is their data and goes with
+  -- their account (the account delete reads the keys first).
+  author_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  -- guitar | bass | drums | vocals | keys | other. Validated in the service.
+  instrument TEXT NOT NULL,
+  label TEXT,
+  -- The audio object, which is required, and the optional video. Objects are
+  -- named by `jam/<server id>/...` keys the server generated at upload mint.
+  audio_key TEXT NOT NULL,
+  audio_content_type TEXT NOT NULL,
+  audio_bytes BIGINT NOT NULL,
+  video_key TEXT,
+  video_content_type TEXT,
+  video_bytes BIGINT,
+  -- The upload that carried the audio: the idempotency of "add track".
+  audio_upload_id UUID,
+  -- The timeline, in the units of packages/shared/src/jam.ts "THE TIMELINE".
+  -- offset_ms may be negative; the trims cut the audio at play time only.
+  offset_ms DOUBLE PRECISION NOT NULL DEFAULT 0,
+  trim_start_ms DOUBLE PRECISION NOT NULL DEFAULT 0,
+  trim_end_ms DOUBLE PRECISION NOT NULL DEFAULT 0,
+  duration_ms INTEGER NOT NULL,
+  gain DOUBLE PRECISION NOT NULL DEFAULT 1,
+  -- At most 400 numbers in 0..1: the waveform, drawn without the audio.
+  peaks JSONB NOT NULL DEFAULT '[]'::jsonb,
+  -- Whether the default mix plays this take. The service sets it true for the
+  -- first live take of an instrument in a song and false after.
+  in_mix BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ,
+  -- Set once the sweep has deleted the objects of a deleted track.
+  media_purged_at TIMESTAMPTZ,
+  CONSTRAINT jam_tracks_gain_check CHECK (gain >= 0 AND gain <= 2),
+  CONSTRAINT jam_tracks_duration_check CHECK (duration_ms > 0),
+  CONSTRAINT jam_tracks_trim_check
+    CHECK (trim_start_ms >= 0 AND trim_end_ms >= 0 AND trim_start_ms + trim_end_ms < duration_ms),
+  CONSTRAINT jam_tracks_peaks_check
+    CHECK (jsonb_typeof(peaks) = 'array' AND jsonb_array_length(peaks) <= 400)
+);
+
+-- Every track of a song, deleted or not: the cascade's key read and the
+-- ON DELETE CASCADE from jam_songs (the partial index below cannot answer
+-- either, it holds live tracks only).
+CREATE INDEX IF NOT EXISTS idx_jam_tracks_song_all ON jam_tracks (song_id);
+-- A song's live tracks, oldest first: the detail read, and every count.
+CREATE INDEX IF NOT EXISTS idx_jam_tracks_song
+  ON jam_tracks (song_id, created_at, id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_jam_tracks_author ON jam_tracks (author_id);
+-- One track per upload: a retried claim finds it instead of adding a second.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_jam_tracks_audio_upload
+  ON jam_tracks (audio_upload_id) WHERE audio_upload_id IS NOT NULL;
+-- The sweep's read: deleted tracks whose objects are still in the bucket.
+CREATE INDEX IF NOT EXISTS idx_jam_tracks_purge
+  ON jam_tracks (deleted_at) WHERE deleted_at IS NOT NULL AND media_purged_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS jam_track_votes (
+  track_id UUID NOT NULL REFERENCES jam_tracks(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (track_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_jam_track_votes_user ON jam_track_votes (user_id);
+
+-- The ledger of signed uploads, the Baú's `community_home_media_uploads` shape:
+-- an upload is minted (this row, with a server-generated key), PUT by the
+-- browser, then claimed by a track in the same transaction that inserts it.
+-- A row nobody claims is swept, object and all, an hour later.
+CREATE TABLE IF NOT EXISTS jam_uploads (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  song_id UUID NOT NULL REFERENCES jam_songs(id) ON DELETE CASCADE,
+  channel_id UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  uploader_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  -- 'audio' | 'video'
+  kind TEXT NOT NULL,
+  storage_key TEXT NOT NULL,
+  content_type TEXT NOT NULL,
+  byte_size BIGINT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  -- Set in the transaction that inserts the track.
+  claimed_at TIMESTAMPTZ,
+  -- Set by the sweep BEFORE it deletes the object: a claim refuses a swept
+  -- upload, so a track can never be committed against an object the sweep is
+  -- about to remove.
+  swept_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_jam_uploads_unclaimed
+  ON jam_uploads (created_at) WHERE claimed_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_jam_uploads_song ON jam_uploads (song_id);
+CREATE INDEX IF NOT EXISTS idx_jam_uploads_channel ON jam_uploads (channel_id);
+CREATE INDEX IF NOT EXISTS idx_jam_uploads_server ON jam_uploads (server_id);
+CREATE INDEX IF NOT EXISTS idx_jam_uploads_uploader ON jam_uploads (uploader_id);

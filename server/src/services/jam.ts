@@ -1,0 +1,1140 @@
+import { randomUUID } from "node:crypto";
+import {
+  JAM_AUDIO_CONTENT_TYPES,
+  JAM_AUDIO_MAX_BYTES,
+  JAM_ERRORS,
+  JAM_INSTRUMENTS,
+  JAM_MAX_TRACKS_PER_AUTHOR,
+  JAM_MAX_TRACKS_PER_SONG,
+  JAM_PAGE_SIZE,
+  JAM_SONGS_PER_WINDOW,
+  JAM_UPLOADS_PER_WINDOW,
+  JAM_VIDEO_CONTENT_TYPES,
+  JAM_VIDEO_MAX_BYTES,
+  JAM_WINDOW_MS,
+  type AddJamTrackRequest,
+  type CreateJamSongRequest,
+  type CreateJamUploadRequest,
+  type JamInstrument,
+  type JamJoinMode,
+  type JamSongSummary,
+  type JamTrack,
+  type JamUploadKind,
+  type JamUploadTicket,
+  type ListJamSongsQuery,
+  type UpdateJamSongRequest,
+  type UpdateJamTrackRequest,
+} from "@pqp/shared";
+import type { PoolClient } from "pg";
+import { getPool } from "../db.js";
+import { sharedRateLimit } from "../lib/cluster-rate-limit.js";
+import { HttpError } from "../lib/http.js";
+import {
+  deleteObject,
+  headObject,
+  isStorageConfigured,
+  presignGet,
+  presignPut,
+} from "../lib/s3.js";
+import { attachmentUrlTtlSeconds } from "./attachments.js";
+
+/**
+ * Jam channels: songs, tracks, votes and the upload ledger. The contract and
+ * the meaning of every field are in `packages/shared/src/jam.ts`; the route
+ * layer (`api/jam-routes.ts`) decides who may do what and calls these, and
+ * the realtime frames are sent from there too, so nothing in this file knows
+ * about a socket.
+ *
+ * Three rules shaped it, all from CLAUDE.md:
+ *  - NOTHING between BEGIN and COMMIT touches the network. The two HEADs that
+ *    verify an upload run before the claim transaction opens, on the pool.
+ *  - Writes are ordered by a row lock, not by hope: adding a track locks the
+ *    song row (`FOR UPDATE`), so the track limits, the `joinMode` check and
+ *    "first take of an instrument" are all decided against the same state the
+ *    insert lands in, even with two API instances.
+ *  - No new column on a hot table (pitfall 22): everything here is a new
+ *    table.
+ */
+
+/** Presigned PUT lifetime, the attachments' number. */
+const UPLOAD_URL_TTL_SECONDS = 15 * 60;
+/** An unclaimed upload is deleted after this. */
+const ORPHAN_GRACE = "1 hour";
+/** A deleted track's objects are kept this long before the sweep deletes them. */
+const PURGE_GRACE = "1 day";
+/** Rows per sweep pass. */
+const SWEEP_BATCH = 100;
+
+const SONG_BUCKET = {
+  bucket: "jam-song",
+  capacity: JAM_SONGS_PER_WINDOW,
+  refillPerSecond: JAM_SONGS_PER_WINDOW / (JAM_WINDOW_MS / 1000),
+} as const;
+const UPLOAD_BUCKET = {
+  bucket: "jam-upload",
+  capacity: JAM_UPLOADS_PER_WINDOW,
+  refillPerSecond: JAM_UPLOADS_PER_WINDOW / (JAM_WINDOW_MS / 1000),
+} as const;
+
+const EXTENSION_BY_CONTENT_TYPE: Record<string, string> = {
+  "audio/webm": ".webm",
+  "audio/ogg": ".ogg",
+  "audio/mp4": ".m4a",
+  "audio/mpeg": ".mp3",
+  "video/webm": ".webm",
+  "video/mp4": ".mp4",
+};
+
+type Db = Pick<PoolClient, "query">;
+
+// ---------------------------------------------------------------- rows
+
+export interface JamSongRow {
+  id: string;
+  channel_id: string;
+  server_id: string;
+  author_id: string | null;
+  title: string;
+  artist: string | null;
+  join_mode: JamJoinMode;
+  wanted_instruments: string[];
+  created_at: Date;
+  updated_at: Date;
+  deleted_at: Date | null;
+}
+
+export interface JamTrackRow {
+  id: string;
+  song_id: string;
+  author_id: string;
+  instrument: string;
+  label: string | null;
+  audio_key: string;
+  audio_content_type: string;
+  audio_bytes: string;
+  video_key: string | null;
+  video_content_type: string | null;
+  video_bytes: string | null;
+  offset_ms: number;
+  trim_start_ms: number;
+  trim_end_ms: number;
+  duration_ms: number;
+  gain: number;
+  peaks: number[];
+  in_mix: boolean;
+  created_at: Date;
+  deleted_at: Date | null;
+}
+
+const SONG_COLUMNS = `s.id, s.channel_id, s.server_id, s.author_id, s.title, s.artist,
+       s.join_mode, s.wanted_instruments, s.created_at, s.updated_at, s.deleted_at`;
+
+/** A live song, or null. The service never returns a deleted one. */
+export async function getJamSongRow(
+  songId: string,
+  db: Db = getPool(),
+): Promise<JamSongRow | null> {
+  const result = await db.query<JamSongRow>(
+    `SELECT ${SONG_COLUMNS} FROM jam_songs s WHERE s.id = $1 AND s.deleted_at IS NULL`,
+    [songId],
+  );
+  return result.rows[0] ?? null;
+}
+
+/** A live track and its live song's ids, or null. */
+export async function getJamTrackRow(
+  trackId: string,
+  db: Db = getPool(),
+): Promise<(JamTrackRow & { channel_id: string; server_id: string; song_author_id: string | null }) | null> {
+  const result = await db.query<
+    JamTrackRow & { channel_id: string; server_id: string; song_author_id: string | null }
+  >(
+    `SELECT t.*, s.channel_id, s.server_id, s.author_id AS song_author_id
+       FROM jam_tracks t JOIN jam_songs s ON s.id = t.song_id
+      WHERE t.id = $1 AND t.deleted_at IS NULL AND s.deleted_at IS NULL`,
+    [trackId],
+  );
+  return result.rows[0] ?? null;
+}
+
+/**
+ * The one 404 the jam answers for a missing channel, song or track, to a caller
+ * who may not see it and to one who asked for something that is not there: the
+ * wording must not tell the two apart.
+ */
+export const JAM_NOT_FOUND = "Not found";
+
+/** A summary for a song that was live a moment ago; 404 if a delete got there first. */
+async function requireSummary(songId: string): Promise<JamSongSummary> {
+  const summary = await getJamSongSummary(songId);
+  if (!summary) {
+    throw new HttpError(404, JAM_NOT_FOUND);
+  }
+  return summary;
+}
+
+// ------------------------------------------------------------- mapping
+
+function instrumentRank(instrument: string): number {
+  const index = (JAM_INSTRUMENTS as readonly string[]).indexOf(instrument);
+  return index === -1 ? JAM_INSTRUMENTS.length : index;
+}
+
+function sortInstruments(list: readonly string[]): JamInstrument[] {
+  return [...list]
+    .sort((a, b) => instrumentRank(a) - instrumentRank(b))
+    .map((one) => ((JAM_INSTRUMENTS as readonly string[]).includes(one) ? one : "other") as JamInstrument);
+}
+
+interface SongSummaryRow extends JamSongRow {
+  author_name: string | null;
+  author_avatar_url: string | null;
+  track_count: number;
+  instruments: string[];
+  contributor_count: number;
+  mix_start: number | null;
+  mix_end: number | null;
+  created_cursor: string;
+  updated_cursor: string;
+}
+
+/**
+ * One query for the summaries of a set of songs (a page, or one): the author's
+ * name as the server shows it (nickname first) and the live-track aggregates,
+ * with a LATERAL so a page of 25 is 25 index probes on
+ * `idx_jam_tracks_song`, not a scan of every track.
+ */
+const SUMMARY_SELECT = `
+  SELECT ${SONG_COLUMNS},
+         COALESCE(NULLIF(sm.nickname, ''), u.display_name) AS author_name,
+         u.avatar_url AS author_avatar_url,
+         agg.track_count, agg.instruments, agg.contributor_count,
+         agg.mix_start, agg.mix_end,
+         -- The keyset cursor carries the timestamps at full microsecond
+         -- precision: a JS Date keeps milliseconds, and two songs written in
+         -- one millisecond would otherwise straddle a page boundary and one
+         -- of them be skipped.
+         to_char(s.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_cursor,
+         to_char(s.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS updated_cursor
+    FROM jam_songs s
+    LEFT JOIN users u ON u.id = s.author_id
+    LEFT JOIN server_members sm ON sm.server_id = s.server_id AND sm.user_id = s.author_id
+    LEFT JOIN LATERAL (
+      SELECT COUNT(*)::int AS track_count,
+             COALESCE(array_agg(DISTINCT t.instrument), '{}') AS instruments,
+             COUNT(DISTINCT t.author_id)::int AS contributor_count,
+             MIN(t.offset_ms) FILTER (WHERE t.in_mix) AS mix_start,
+             MAX(t.offset_ms + t.duration_ms - t.trim_start_ms - t.trim_end_ms)
+               FILTER (WHERE t.in_mix) AS mix_end
+        FROM jam_tracks t
+       WHERE t.song_id = s.id AND t.deleted_at IS NULL
+    ) agg ON TRUE`;
+
+function mapSong(row: SongSummaryRow): JamSongSummary {
+  return {
+    id: row.id,
+    channelId: row.channel_id,
+    serverId: row.server_id,
+    title: row.title,
+    artist: row.artist,
+    joinMode: row.join_mode,
+    wantedInstruments: sortInstruments(row.wanted_instruments),
+    authorId: row.author_id,
+    authorName: row.author_name,
+    authorAvatarUrl: row.author_avatar_url,
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString(),
+    trackCount: row.track_count ?? 0,
+    instruments: sortInstruments(row.instruments ?? []),
+    contributorCount: row.contributor_count ?? 0,
+    mixDurationMs:
+      row.mix_start === null || row.mix_end === null || row.mix_start === undefined
+        ? null
+        : Math.max(0, row.mix_end - row.mix_start),
+  };
+}
+
+/** The summary of one live song, or null. */
+export async function getJamSongSummary(
+  songId: string,
+  db: Db = getPool(),
+): Promise<JamSongSummary | null> {
+  const result = await db.query<SongSummaryRow>(
+    `${SUMMARY_SELECT} WHERE s.id = $1 AND s.deleted_at IS NULL`,
+    [songId],
+  );
+  return result.rows[0] ? mapSong(result.rows[0]) : null;
+}
+
+interface TrackJoinRow extends JamTrackRow {
+  author_name: string | null;
+  author_avatar_url: string | null;
+  vote_count: number;
+}
+
+const TRACK_SELECT = `
+  SELECT t.*,
+         COALESCE(NULLIF(sm.nickname, ''), u.display_name) AS author_name,
+         u.avatar_url AS author_avatar_url,
+         (SELECT COUNT(*)::int FROM jam_track_votes v WHERE v.track_id = t.id) AS vote_count
+    FROM jam_tracks t
+    JOIN jam_songs s ON s.id = t.song_id
+    JOIN users u ON u.id = t.author_id
+    LEFT JOIN server_members sm ON sm.server_id = s.server_id AND sm.user_id = t.author_id`;
+
+function signedUrl(key: string, ttlSeconds: number): string {
+  // A deployment that turned storage off after tracks existed cannot sign:
+  // the track still lists, with no way to play it, instead of failing the read.
+  return isStorageConfigured() ? presignGet(key, { ttlSeconds }) : "";
+}
+
+function mapTrack(row: TrackJoinRow): JamTrack {
+  const ttl = attachmentUrlTtlSeconds();
+  return {
+    id: row.id,
+    songId: row.song_id,
+    authorId: row.author_id,
+    authorName: row.author_name,
+    authorAvatarUrl: row.author_avatar_url,
+    instrument: (JAM_INSTRUMENTS as readonly string[]).includes(row.instrument)
+      ? (row.instrument as JamInstrument)
+      : "other",
+    label: row.label,
+    audioUrl: signedUrl(row.audio_key, ttl),
+    audioContentType: row.audio_content_type,
+    audioBytes: Number(row.audio_bytes),
+    videoUrl: row.video_key ? signedUrl(row.video_key, ttl) : null,
+    videoContentType: row.video_content_type,
+    videoBytes: row.video_bytes === null ? null : Number(row.video_bytes),
+    mediaExpiresAt: new Date(Date.now() + ttl * 1000).toISOString(),
+    offsetMs: row.offset_ms,
+    trimStartMs: row.trim_start_ms,
+    trimEndMs: row.trim_end_ms,
+    durationMs: row.duration_ms,
+    gain: row.gain,
+    peaks: row.peaks,
+    inMix: row.in_mix,
+    voteCount: row.vote_count,
+    createdAt: row.created_at.toISOString(),
+  };
+}
+
+/** One live track, as a viewer reads it, or null. */
+export async function getJamTrack(
+  trackId: string,
+  db: Db = getPool(),
+): Promise<JamTrack | null> {
+  const result = await db.query<TrackJoinRow>(
+    `${TRACK_SELECT} WHERE t.id = $1 AND t.deleted_at IS NULL AND s.deleted_at IS NULL`,
+    [trackId],
+  );
+  return result.rows[0] ? mapTrack(result.rows[0]) : null;
+}
+
+/** A song's live tracks, oldest first. */
+export async function listJamTracks(
+  songId: string,
+  db: Db = getPool(),
+): Promise<JamTrack[]> {
+  const result = await db.query<TrackJoinRow>(
+    `${TRACK_SELECT}
+      WHERE t.song_id = $1 AND t.deleted_at IS NULL AND s.deleted_at IS NULL
+      ORDER BY t.created_at, t.id`,
+    [songId],
+  );
+  return result.rows.map(mapTrack);
+}
+
+/** The tracks (ids) of one song this person has voted for. */
+export async function listVotedTrackIds(
+  songId: string,
+  userId: string,
+): Promise<string[]> {
+  const result = await getPool().query<{ track_id: string }>(
+    `SELECT v.track_id
+       FROM jam_track_votes v JOIN jam_tracks t ON t.id = v.track_id
+      WHERE t.song_id = $1 AND t.deleted_at IS NULL AND v.user_id = $2`,
+    [songId, userId],
+  );
+  return result.rows.map((row) => row.track_id);
+}
+
+// ---------------------------------------------------------------- list
+
+interface ListCursor {
+  at: string;
+  id: string;
+}
+
+function encodeCursor(cursor: ListCursor): string {
+  return Buffer.from(JSON.stringify(cursor)).toString("base64url");
+}
+
+function decodeCursor(raw: string): ListCursor | null {
+  try {
+    const parsed = JSON.parse(Buffer.from(raw, "base64url").toString("utf8")) as ListCursor;
+    return typeof parsed.at === "string" &&
+      !Number.isNaN(Date.parse(parsed.at)) &&
+      typeof parsed.id === "string" &&
+      /^[0-9a-f-]{36}$/i.test(parsed.id)
+      ? parsed
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A page of a channel's songs. A cursor that does not parse is read as page one. */
+export async function listJamSongs(input: {
+  channelId: string;
+  viewerId: string;
+  query: ListJamSongsQuery;
+}): Promise<{ songs: JamSongSummary[]; nextCursor: string | null }> {
+  const { channelId, viewerId, query } = input;
+  const limit = query.limit ?? JAM_PAGE_SIZE;
+  const sortColumn = query.sort === "created" ? "s.created_at" : "s.updated_at";
+  const params: unknown[] = [channelId];
+  const where = [`s.channel_id = $1`, `s.deleted_at IS NULL`];
+
+  if (query.mine) {
+    params.push(viewerId);
+    where.push(`s.author_id = $${params.length}`);
+  }
+  if (query.wanting) {
+    params.push(query.wanting);
+    where.push(`s.join_mode = 'wanted' AND $${params.length}::text = ANY(s.wanted_instruments)`);
+  }
+  if (query.q) {
+    // Case and accent insensitive without the unaccent extension (not
+    // installed everywhere): fold both sides through translate().
+    params.push(`%${escapeLike(fold(query.q))}%`);
+    where.push(
+      `(${FOLD_SQL("s.title")} LIKE $${params.length} ESCAPE '\\'
+        OR ${FOLD_SQL("COALESCE(s.artist, '')")} LIKE $${params.length} ESCAPE '\\')`,
+    );
+  }
+  const cursor = query.cursor ? decodeCursor(query.cursor) : null;
+  if (cursor) {
+    params.push(cursor.at, cursor.id);
+    where.push(`(${sortColumn}, s.id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`);
+  }
+  params.push(limit + 1);
+  const result = await getPool().query<SongSummaryRow>(
+    `${SUMMARY_SELECT}
+      WHERE ${where.join(" AND ")}
+      ORDER BY ${sortColumn} DESC, s.id DESC
+      LIMIT $${params.length}`,
+    params,
+  );
+  const rows = result.rows;
+  const page = rows.slice(0, limit);
+  const last = page[page.length - 1];
+  const more = rows.length > limit && last !== undefined;
+  return {
+    songs: page.map(mapSong),
+    nextCursor: more
+      ? encodeCursor({
+          at: query.sort === "created" ? last.created_cursor : last.updated_cursor,
+          id: last.id,
+        })
+      : null,
+  };
+}
+
+// Accent folding for the title search, without the `unaccent` extension (not
+// installed everywhere). Translated BEFORE lower(), so the result does not
+// depend on the database's locale knowing how to lower an accented capital.
+const ACCENTED = "áàâãäéèêëíìîïóòôõöúùûüçñÁÀÂÃÄÉÈÊËÍÌÎÏÓÒÔÕÖÚÙÛÜÇÑ";
+const PLAIN = "aaaaaeeeeiiiiooooouuuucnAAAAAEEEEIIIIOOOOOUUUUCN";
+
+function fold(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[áàâãä]/g, "a")
+    .replace(/[éèêë]/g, "e")
+    .replace(/[íìîï]/g, "i")
+    .replace(/[óòôõö]/g, "o")
+    .replace(/[úùûü]/g, "u")
+    .replace(/ç/g, "c")
+    .replace(/ñ/g, "n");
+}
+
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (char) => `\\${char}`);
+}
+
+const FOLD_SQL = (expression: string): string =>
+  `lower(translate(${expression}, '${ACCENTED}', '${PLAIN}'))`;
+
+// ----------------------------------------------------------- songs: write
+
+/**
+ * Create a song. A retried POST with the same nonce returns the song it made
+ * (`created: false`) and spends no rate-limit token.
+ */
+export async function createJamSong(input: {
+  channelId: string;
+  serverId: string;
+  authorId: string;
+  request: CreateJamSongRequest;
+}): Promise<{ song: JamSongSummary; created: boolean }> {
+  const { channelId, serverId, authorId, request } = input;
+  if (request.nonce) {
+    const existing = await getPool().query<{ id: string }>(
+      `SELECT id FROM jam_songs WHERE channel_id = $1 AND author_id = $2 AND client_nonce = $3`,
+      [channelId, authorId, request.nonce],
+    );
+    if (existing.rows[0]) {
+      const song = await getJamSongSummary(existing.rows[0].id);
+      if (song) {
+        return { song, created: false };
+      }
+    }
+  }
+  if (!(await sharedRateLimit(SONG_BUCKET, authorId))) {
+    throw new HttpError(429, JAM_ERRORS.rateLimited);
+  }
+  const joinMode = request.joinMode ?? "open";
+  const wanted = joinMode === "wanted" ? (request.wantedInstruments ?? []) : [];
+  let id: string;
+  try {
+    const result = await getPool().query<{ id: string }>(
+      `INSERT INTO jam_songs
+         (channel_id, server_id, author_id, title, artist, join_mode, wanted_instruments, client_nonce)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::text[], $8)
+       RETURNING id`,
+      [
+        channelId,
+        serverId,
+        authorId,
+        request.title,
+        request.artist ?? null,
+        joinMode,
+        wanted,
+        request.nonce ?? null,
+      ],
+    );
+    id = result.rows[0]!.id;
+  } catch (error) {
+    // Two requests with one nonce raced: the loser reads the winner's song.
+    if ((error as { code?: string }).code === "23505" && request.nonce) {
+      const existing = await getPool().query<{ id: string }>(
+        `SELECT id FROM jam_songs WHERE channel_id = $1 AND author_id = $2 AND client_nonce = $3`,
+        [channelId, authorId, request.nonce],
+      );
+      const song = existing.rows[0] ? await getJamSongSummary(existing.rows[0].id) : null;
+      if (song) {
+        return { song, created: false };
+      }
+    }
+    throw error;
+  }
+  const song = await getJamSongSummary(id);
+  return { song: song!, created: true };
+}
+
+/**
+ * Edit a song. The effective join mode and list are computed from the stored
+ * row plus the patch: leaving `wanted` clears the list, and `wanted` with an
+ * empty list (sent, or left over) is 422.
+ */
+export async function updateJamSong(
+  song: JamSongRow,
+  patch: UpdateJamSongRequest,
+): Promise<JamSongSummary> {
+  const joinMode = patch.joinMode ?? song.join_mode;
+  let wanted =
+    patch.wantedInstruments !== undefined ? patch.wantedInstruments : song.wanted_instruments;
+  if (joinMode !== "wanted") {
+    wanted = [];
+  } else if (wanted.length === 0) {
+    throw new HttpError(422, JAM_ERRORS.wantedNeedsInstruments);
+  }
+  const result = await getPool().query(
+    `UPDATE jam_songs
+        SET title = $2,
+            artist = $3,
+            join_mode = $4,
+            wanted_instruments = $5::text[],
+            updated_at = NOW()
+      WHERE id = $1 AND deleted_at IS NULL`,
+    [
+      song.id,
+      patch.title ?? song.title,
+      patch.artist !== undefined ? patch.artist : song.artist,
+      joinMode,
+      wanted,
+    ],
+  );
+  if ((result.rowCount ?? 0) === 0) {
+    throw new HttpError(404, JAM_NOT_FOUND);
+  }
+  return (await requireSummary(song.id));
+}
+
+/**
+ * Soft-delete a song and every live track in it, in one statement pair. The
+ * objects are deleted by the sweep a day later (`sweepJamMedia`), which is
+ * also the window in which a mistaken delete could be recovered by hand.
+ * Returns false when the song was already gone.
+ */
+export async function deleteJamSong(songId: string): Promise<boolean> {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const song = await client.query(
+      `UPDATE jam_songs SET deleted_at = NOW(), updated_at = NOW()
+        WHERE id = $1 AND deleted_at IS NULL`,
+      [songId],
+    );
+    if ((song.rowCount ?? 0) === 0) {
+      await client.query("ROLLBACK");
+      return false;
+    }
+    await client.query(
+      `UPDATE jam_tracks SET deleted_at = NOW() WHERE song_id = $1 AND deleted_at IS NULL`,
+      [songId],
+    );
+    await client.query("COMMIT");
+    return true;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+// ------------------------------------------------------------- permission
+
+/**
+ * Which instruments a person may add a track for in a song, given who they
+ * are. The ONE place the `joinMode` rule is written: the add path enforces it
+ * and the detail read reports it, so the button and the refusal cannot drift.
+ * `canPost` is SEND_MESSAGES on the channel; the author's own right to add is
+ * theirs even in a closed song (they still need to be able to post).
+ */
+export function addableInstruments(input: {
+  song: Pick<JamSongRow, "join_mode" | "wanted_instruments" | "author_id">;
+  userId: string;
+  canPost: boolean;
+}): JamInstrument[] {
+  if (!input.canPost) {
+    return [];
+  }
+  if (input.song.author_id !== null && input.song.author_id === input.userId) {
+    return [...JAM_INSTRUMENTS];
+  }
+  switch (input.song.join_mode) {
+    case "open":
+      return [...JAM_INSTRUMENTS];
+    case "wanted":
+      return sortInstruments(input.song.wanted_instruments);
+    default:
+      return [];
+  }
+}
+
+// ---------------------------------------------------------------- uploads
+
+function storageKeyFor(serverId: string, songId: string, contentType: string): string {
+  return `jam/${serverId}/${songId}/${randomUUID()}${EXTENSION_BY_CONTENT_TYPE[contentType] ?? ""}`;
+}
+
+/** The ceiling for a kind. */
+export function jamMaxBytes(kind: JamUploadKind): number {
+  return kind === "audio" ? JAM_AUDIO_MAX_BYTES : JAM_VIDEO_MAX_BYTES;
+}
+
+/**
+ * Reserve a row and hand back somewhere to put the bytes. The key is generated
+ * here and never accepted from the client (a client-chosen key is a
+ * client-chosen overwrite), the size and type are signed into the URL, and the
+ * ledger row keeps the upload findable until a track claims it or the sweep
+ * collects it.
+ */
+export async function mintJamUpload(input: {
+  song: JamSongRow;
+  uploaderId: string;
+  request: CreateJamUploadRequest;
+}): Promise<JamUploadTicket> {
+  const { song, uploaderId, request } = input;
+  if (!isStorageConfigured()) {
+    throw new HttpError(503, JAM_ERRORS.storageOff);
+  }
+  if (request.byteSize > jamMaxBytes(request.kind)) {
+    throw new HttpError(413, JAM_ERRORS.uploadTooLarge);
+  }
+  if (!(await sharedRateLimit(UPLOAD_BUCKET, uploaderId))) {
+    throw new HttpError(429, JAM_ERRORS.rateLimited);
+  }
+  const key = storageKeyFor(song.server_id, song.id, request.contentType);
+  const result = await getPool().query<{ id: string }>(
+    `INSERT INTO jam_uploads
+       (song_id, channel_id, server_id, uploader_id, kind, storage_key, content_type, byte_size)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     RETURNING id`,
+    [
+      song.id,
+      song.channel_id,
+      song.server_id,
+      uploaderId,
+      request.kind,
+      key,
+      request.contentType,
+      request.byteSize,
+    ],
+  );
+  return {
+    uploadId: result.rows[0]!.id,
+    uploadUrl: presignPut(key, request.contentType, request.byteSize, UPLOAD_URL_TTL_SECONDS),
+    expiresAt: new Date(Date.now() + UPLOAD_URL_TTL_SECONDS * 1000).toISOString(),
+  };
+}
+
+interface UploadRow {
+  id: string;
+  kind: JamUploadKind;
+  storage_key: string;
+  content_type: string;
+  byte_size: string;
+  claimed_at: Date | null;
+}
+
+/** The caller's unclaimed upload of one kind for this song, or null. */
+async function findOwnUpload(
+  uploadId: string,
+  song: JamSongRow,
+  uploaderId: string,
+  kind: JamUploadKind,
+): Promise<UploadRow | null> {
+  const result = await getPool().query<UploadRow>(
+    `SELECT id, kind, storage_key, content_type, byte_size, claimed_at
+       FROM jam_uploads
+      WHERE id = $1 AND song_id = $2 AND uploader_id = $3 AND kind = $4
+        AND claimed_at IS NULL AND swept_at IS NULL`,
+    [uploadId, song.id, uploaderId, kind],
+  );
+  return result.rows[0] ?? null;
+}
+
+/**
+ * What the object store says is there: the length, once it passed the checks,
+ * or null. A HEAD that fails, a missing object, a body over the ceiling or a
+ * stored type that is not the signed one all read as "not verified" (the
+ * signed `Content-Length` bounds the first, this catches a store that ignores
+ * it). Runs OUTSIDE any transaction: a bucket that blackholes packets must not
+ * park a pooled connection for the HEAD's ten-second timeout.
+ */
+async function verifyUpload(row: UploadRow): Promise<number | null> {
+  if (!isStorageConfigured()) {
+    return null;
+  }
+  let head;
+  try {
+    head = await headObject(row.storage_key);
+  } catch (error) {
+    console.error(
+      `[jam] HEAD failed for ${row.storage_key}:`,
+      error instanceof Error ? error.message : error,
+    );
+    return null;
+  }
+  if (!head || head.contentLength <= 0 || head.contentLength > jamMaxBytes(row.kind)) {
+    return null;
+  }
+  if (head.contentType !== row.content_type) {
+    return null;
+  }
+  return head.contentLength;
+}
+
+// ----------------------------------------------------------------- tracks
+
+export interface AddTrackInput {
+  song: JamSongRow;
+  userId: string;
+  /** SEND_MESSAGES on the channel, decided by the caller. */
+  canPost: boolean;
+  request: AddJamTrackRequest;
+}
+
+/**
+ * Add a track. Returns `created: false` with the existing track when the
+ * audio upload was already claimed by THIS caller's earlier call (a retry).
+ *
+ * Order, and why:
+ *  1. A retry probe: a live track already holding this audio upload.
+ *  2. The caller's two upload rows are found and HEAD-verified, off any
+ *     transaction.
+ *  3. One transaction: the song row is locked, the `joinMode` rule and the
+ *     two limits are checked against the locked state, `in_mix` is decided
+ *     (first live take of the instrument), the uploads are claimed (an
+ *     `UPDATE ... WHERE claimed_at IS NULL` that must touch every row it was
+ *     given, or two racing claims cannot both win) and the track inserted.
+ */
+export async function addJamTrack(
+  input: AddTrackInput,
+): Promise<{ track: JamTrack; song: JamSongSummary; created: boolean }> {
+  const { song, userId, request } = input;
+
+  const retry = await findClaimedTrack(request.audioUploadId, userId, song.id);
+  if (retry) {
+    const track = await getJamTrack(retry);
+    if (track) {
+      return { track, song: await requireSummary(song.id), created: false };
+    }
+  }
+
+  // Refused before any HEAD when the caller plainly may not add this
+  // instrument, so a closed song costs the bucket nothing.
+  assertMayAdd(song, userId, input.canPost, request.instrument);
+
+  const audio = await findOwnUpload(request.audioUploadId, song, userId, "audio");
+  const video = request.videoUploadId
+    ? await findOwnUpload(request.videoUploadId, song, userId, "video")
+    : null;
+  if (!audio || (request.videoUploadId && !video)) {
+    throw new HttpError(404, JAM_ERRORS.uploadUnknown);
+  }
+  const [audioBytes, videoBytes] = await Promise.all([
+    verifyUpload(audio),
+    video ? verifyUpload(video) : Promise.resolve(0),
+  ]);
+  if (audioBytes === null || videoBytes === null) {
+    throw new HttpError(422, JAM_ERRORS.uploadNotVerified);
+  }
+
+  const client = await getPool().connect();
+  let trackId: string;
+  try {
+    await client.query("BEGIN");
+    const locked = await client.query<JamSongRow>(
+      `SELECT ${SONG_COLUMNS} FROM jam_songs s
+        WHERE s.id = $1 AND s.deleted_at IS NULL FOR UPDATE`,
+      [song.id],
+    );
+    const current = locked.rows[0];
+    if (!current) {
+      throw new HttpError(404, JAM_NOT_FOUND);
+    }
+    // The state the insert lands in, not the state the request was routed on:
+    // the author may have closed the song while the files uploaded.
+    assertMayAdd(current, userId, input.canPost, request.instrument);
+
+    const counts = await client.query<{ total: number; mine: number; same: number }>(
+      `SELECT COUNT(*)::int AS total,
+              COUNT(*) FILTER (WHERE author_id = $2)::int AS mine,
+              COUNT(*) FILTER (WHERE instrument = $3)::int AS same
+         FROM jam_tracks WHERE song_id = $1 AND deleted_at IS NULL`,
+      [song.id, userId, request.instrument],
+    );
+    const count = counts.rows[0]!;
+    if (count.total >= JAM_MAX_TRACKS_PER_SONG) {
+      throw new HttpError(409, JAM_ERRORS.songFull);
+    }
+    if (count.mine >= JAM_MAX_TRACKS_PER_AUTHOR) {
+      throw new HttpError(409, JAM_ERRORS.authorTrackLimit);
+    }
+
+    const claimIds = video ? [audio.id, video.id] : [audio.id];
+    const claimed = await client.query(
+      `UPDATE jam_uploads SET claimed_at = NOW()
+        WHERE id = ANY($1::uuid[]) AND claimed_at IS NULL AND swept_at IS NULL
+          AND uploader_id = $2`,
+      [claimIds, userId],
+    );
+    if ((claimed.rowCount ?? 0) !== claimIds.length) {
+      throw new HttpError(404, JAM_ERRORS.uploadUnknown);
+    }
+
+    const inserted = await client.query<{ id: string }>(
+      `INSERT INTO jam_tracks
+         (song_id, author_id, instrument, label,
+          audio_key, audio_content_type, audio_bytes, audio_upload_id,
+          video_key, video_content_type, video_bytes,
+          offset_ms, trim_start_ms, trim_end_ms, duration_ms, gain, peaks, in_mix)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17::jsonb, $18)
+       RETURNING id`,
+      [
+        song.id,
+        userId,
+        request.instrument,
+        request.label ?? null,
+        audio.storage_key,
+        audio.content_type,
+        audioBytes,
+        audio.id,
+        video?.storage_key ?? null,
+        video?.content_type ?? null,
+        video ? videoBytes : null,
+        request.offsetMs,
+        request.trimStartMs,
+        request.trimEndMs,
+        Math.round(request.durationMs),
+        request.gain,
+        JSON.stringify(request.peaks),
+        // The first live take of an instrument is in the mix; later takes wait.
+        count.same === 0,
+      ],
+    );
+    trackId = inserted.rows[0]!.id;
+    await client.query(`UPDATE jam_songs SET updated_at = NOW() WHERE id = $1`, [song.id]);
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    // Two retries of one claim raced: the second either hit the unique index
+    // or found the upload already claimed (the first committed while it waited
+    // for the song lock). Either way the first's track is the answer.
+    const lostTheRace =
+      (error as { code?: string }).code === "23505" ||
+      (error instanceof HttpError && error.message === JAM_ERRORS.uploadUnknown);
+    if (lostTheRace) {
+      const existing = await findClaimedTrack(request.audioUploadId, userId, song.id);
+      const track = existing ? await getJamTrack(existing) : null;
+      if (track) {
+        return { track, song: await requireSummary(song.id), created: false };
+      }
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
+  // The track committed. A concurrent delete of the song may already have
+  // soft-deleted it by the time it is read back: that is a 404 for this
+  // request (the song is gone), never a crash on a null.
+  const track = await getJamTrack(trackId);
+  if (!track) {
+    throw new HttpError(404, JAM_NOT_FOUND);
+  }
+  return { track, song: await requireSummary(song.id), created: true };
+}
+
+/** The `joinMode` rule, as a throw. See `addableInstruments` for the read form. */
+function assertMayAdd(
+  song: Pick<JamSongRow, "join_mode" | "wanted_instruments" | "author_id">,
+  userId: string,
+  canPost: boolean,
+  instrument: JamInstrument,
+): void {
+  if (addableInstruments({ song, userId, canPost }).includes(instrument)) {
+    return;
+  }
+  throw refusalFor(song, canPost);
+}
+
+/** For a route that does not know the instrument yet (asking for an upload). */
+export function assertMayAddAny(
+  song: Pick<JamSongRow, "join_mode" | "wanted_instruments" | "author_id">,
+  userId: string,
+  canPost: boolean,
+): void {
+  if (addableInstruments({ song, userId, canPost }).length > 0) {
+    return;
+  }
+  throw refusalFor(song, canPost);
+}
+
+function refusalFor(song: Pick<JamSongRow, "join_mode">, canPost: boolean): HttpError {
+  if (!canPost) {
+    return new HttpError(403, "You cannot post in this channel");
+  }
+  return new HttpError(
+    403,
+    song.join_mode === "closed" ? JAM_ERRORS.closed : JAM_ERRORS.instrumentNotWanted,
+  );
+}
+
+async function findClaimedTrack(
+  audioUploadId: string,
+  userId: string,
+  songId: string,
+): Promise<string | null> {
+  const result = await getPool().query<{ id: string }>(
+    `SELECT id FROM jam_tracks
+      WHERE audio_upload_id = $1 AND author_id = $2 AND song_id = $3 AND deleted_at IS NULL`,
+    [audioUploadId, userId, songId],
+  );
+  return result.rows[0]?.id ?? null;
+}
+
+/**
+ * Edit a track. Which field may be sent by whom is decided by the route; this
+ * validates the trims against the STORED duration (a patch sending one of the
+ * two trims is checked against the other as stored) and writes. The song is
+ * bumped only when the change can alter the list row (`inMix`, offset, trims).
+ */
+export async function updateJamTrack(
+  track: JamTrackRow,
+  patch: UpdateJamTrackRequest,
+): Promise<{ track: JamTrack; song: JamSongSummary }> {
+  const trimStart = patch.trimStartMs ?? track.trim_start_ms;
+  const trimEnd = patch.trimEndMs ?? track.trim_end_ms;
+  if (trimStart + trimEnd >= track.duration_ms) {
+    throw new HttpError(422, JAM_ERRORS.trimInvalid);
+  }
+  const result = await getPool().query(
+    `UPDATE jam_tracks
+        SET label = $2, offset_ms = $3, trim_start_ms = $4, trim_end_ms = $5,
+            gain = $6, in_mix = $7
+      WHERE id = $1 AND deleted_at IS NULL`,
+    [
+      track.id,
+      patch.label !== undefined ? patch.label : track.label,
+      patch.offsetMs ?? track.offset_ms,
+      trimStart,
+      trimEnd,
+      patch.gain ?? track.gain,
+      patch.inMix ?? track.in_mix,
+    ],
+  );
+  if ((result.rowCount ?? 0) === 0) {
+    throw new HttpError(404, JAM_NOT_FOUND);
+  }
+  await getPool().query(`UPDATE jam_songs SET updated_at = NOW() WHERE id = $1`, [track.song_id]);
+  const fresh = await getJamTrack(track.id);
+  if (!fresh) {
+    throw new HttpError(404, JAM_NOT_FOUND);
+  }
+  return { track: fresh, song: await requireSummary(track.song_id) };
+}
+
+/** Soft-delete a track; its objects go with the sweep a day later. */
+export async function deleteJamTrack(track: JamTrackRow): Promise<JamSongSummary | null> {
+  const result = await getPool().query(
+    `UPDATE jam_tracks SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL`,
+    [track.id],
+  );
+  if ((result.rowCount ?? 0) === 0) {
+    return null;
+  }
+  await getPool().query(`UPDATE jam_songs SET updated_at = NOW() WHERE id = $1`, [track.song_id]);
+  return getJamSongSummary(track.song_id);
+}
+
+// ------------------------------------------------------------------ votes
+
+/**
+ * Vote or take a vote back. Idempotent both ways: voting twice is one vote,
+ * unvoting with none is a no-op. Returns the track's count after and whether
+ * the count moved (so the route frames only a real change).
+ */
+export async function setJamVote(
+  trackId: string,
+  userId: string,
+  voted: boolean,
+): Promise<{ voteCount: number; changed: boolean }> {
+  // One transaction with the track row locked, so the write and the count are
+  // one step and two votes on a track are ordered: the count returned is the
+  // count after exactly this change, and a failed count rolls the vote back
+  // instead of leaving a change nobody was told about.
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(`SELECT 1 FROM jam_tracks WHERE id = $1 FOR UPDATE`, [trackId]);
+    const write = voted
+      ? await client.query(
+          `INSERT INTO jam_track_votes (track_id, user_id) VALUES ($1, $2)
+           ON CONFLICT DO NOTHING`,
+          [trackId, userId],
+        )
+      : await client.query(
+          `DELETE FROM jam_track_votes WHERE track_id = $1 AND user_id = $2`,
+          [trackId, userId],
+        );
+    const count = await client.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count FROM jam_track_votes WHERE track_id = $1`,
+      [trackId],
+    );
+    await client.query("COMMIT");
+    return { voteCount: count.rows[0]!.count, changed: (write.rowCount ?? 0) > 0 };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+// ------------------------------------------------------------------ sweeps
+
+/**
+ * The jam's cold path, every minute from `jobs.ts` and safe on two
+ * processes (every statement claims its rows):
+ *
+ *  - an upload nobody claimed within an hour: the object, then the ledger row;
+ *  - a deleted track (or a track of a deleted song) a day after: its objects,
+ *    then `media_purged_at`.
+ *
+ * An object delete that fails leaves its row for the next pass, so a bucket
+ * outage costs time and never a leaked key. Returns how many it finished.
+ */
+export async function sweepJamMedia(): Promise<number> {
+  if (!isStorageConfigured()) {
+    return 0;
+  }
+  let done = 0;
+
+  // Mark first, delete after: the mark (`swept_at`) and a claim (`claimed_at`)
+  // are two writes to the same row, each refused once the other is there, so a
+  // track can never be committed against an object this pass is removing. A
+  // row marked on an earlier pass whose object delete failed is picked up
+  // again (the mark is kept, not renewed).
+  const orphans = await getPool().query<{ id: string; storage_key: string }>(
+    `UPDATE jam_uploads SET swept_at = COALESCE(swept_at, NOW())
+      WHERE id IN (
+        SELECT id FROM jam_uploads
+         WHERE claimed_at IS NULL AND created_at < NOW() - INTERVAL '${ORPHAN_GRACE}'
+         ORDER BY created_at LIMIT ${SWEEP_BATCH}
+           FOR UPDATE SKIP LOCKED)
+        AND claimed_at IS NULL
+      RETURNING id, storage_key`,
+  );
+  for (const row of orphans.rows) {
+    try {
+      await deleteObject(row.storage_key);
+    } catch (error) {
+      console.error(
+        `[jam] could not delete ${row.storage_key}:`,
+        error instanceof Error ? error.message : error,
+      );
+      continue;
+    }
+    await getPool().query(`DELETE FROM jam_uploads WHERE id = $1 AND claimed_at IS NULL`, [row.id]);
+    done += 1;
+  }
+
+  const purge = await getPool().query<{
+    id: string;
+    audio_key: string;
+    video_key: string | null;
+  }>(
+    `SELECT id, audio_key, video_key FROM jam_tracks
+      WHERE deleted_at IS NOT NULL AND media_purged_at IS NULL
+        AND deleted_at < NOW() - INTERVAL '${PURGE_GRACE}'
+      ORDER BY deleted_at LIMIT ${SWEEP_BATCH}`,
+  );
+  for (const row of purge.rows) {
+    try {
+      await deleteObject(row.audio_key);
+      if (row.video_key) {
+        await deleteObject(row.video_key);
+      }
+    } catch (error) {
+      console.error(
+        `[jam] could not purge track ${row.id}:`,
+        error instanceof Error ? error.message : error,
+      );
+      continue;
+    }
+    await getPool().query(`UPDATE jam_tracks SET media_purged_at = NOW() WHERE id = $1`, [row.id]);
+    done += 1;
+  }
+  return done;
+}
+
+/** Content types, exported for the doc and the tests. */
+export const JAM_ALLOWED_TYPES = {
+  audio: JAM_AUDIO_CONTENT_TYPES,
+  video: JAM_VIDEO_CONTENT_TYPES,
+} as const;

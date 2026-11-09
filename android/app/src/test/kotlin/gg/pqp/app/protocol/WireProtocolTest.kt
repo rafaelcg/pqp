@@ -761,11 +761,15 @@ class WireProtocolTest {
     /**
      * The two channel enums, which are different fields with overlapping-
      * looking values. `kind` is what the row *is*; `type` is what it carries.
+     *
+     * `jam` is a type this build does not draw: `drawable` in
+     * `ChannelListRules.kt` leaves any type it does not know out of the list,
+     * so a jam channel is invisible here until a client for it ships.
      */
     @Test
     fun `the channel enums match shared`() {
         assertEquals(
-            listOf("text", "voice", "category", "watch_party", "forum"),
+            listOf("text", "voice", "category", "watch_party", "forum", "jam"),
             RepoSources.enumValues(api, "channelTypeSchema"),
         )
         assertTrue(

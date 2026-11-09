@@ -49,6 +49,7 @@ import { sweepSlowModeClocks } from "./services/slow-mode.js";
 import { sweepClientPlatforms } from "./services/client-platforms.js";
 import { sweepForumPostShells } from "./services/forums.js";
 import { sweepSoundboardUploads } from "./services/soundboard.js";
+import { sweepJamMedia } from "./services/jam.js";
 import { sweepRateLimitBuckets } from "./lib/cluster-rate-limit.js";
 import { sweepExpiredConnectionStates } from "./services/connections.js";
 import {
@@ -165,6 +166,12 @@ export const FORUM_SHELL_SWEEP_INTERVAL_MS = 5 * 60_000;
  * slots until this runs.
  */
 export const SOUNDBOARD_UPLOAD_SWEEP_INTERVAL_MS = 60_000;
+/**
+ * Jam uploads nobody claimed (an hour) and the objects of deleted tracks (a
+ * day): `sweepJamMedia`. Runs whatever the flag says, so turning the feature
+ * off never strands an object.
+ */
+export const JAM_MEDIA_SWEEP_INTERVAL_MS = 60_000;
 
 /**
  * Five minutes rather than daily, and unlike every other sweep in this file
@@ -418,6 +425,9 @@ export function startColdJobs(): ColdJobs {
     every(DAILY_MS, "client-platforms", sweepClientPlatforms),
     every(FORUM_SHELL_SWEEP_INTERVAL_MS, "forum-shells", sweepForumPostShells),
     every(SOUNDBOARD_UPLOAD_SWEEP_INTERVAL_MS, "soundboard-uploads", sweepSoundboardUploads),
+    every(JAM_MEDIA_SWEEP_INTERVAL_MS, "jam-media", async () => {
+      await sweepJamMedia();
+    }),
     every(DAILY_MS, "connections", sweepExpiredConnectionStates),
     // Refilled cluster rate-limit buckets carry no information. Rows, not
     // disk pages: the table is bounded by "subjects who rang somebody in the

@@ -856,6 +856,19 @@ export const FEATURE_FLAGS = {
     perServer: true,
     clientVia: "GET /api/forum/config?serverId= (announce)",
   },
+  jam_channels: {
+    description:
+      "Canais jam: músicas em que cada pessoa grava uma faixa (violão, baixo, voz...) e tudo toca junto (desligado: ninguém cria canal jam, música nem faixa nova; o que já existe continua aberto pra ouvir e dá pra apagar).",
+    env: "JAM_CHANNELS",
+    parseEnv: exactTrue,
+    // Off: one server first (its override), then everybody. See docs/JAM.md.
+    codeDefault: false,
+    // Every reader knows the server: the create-channel route starts from a
+    // server, the jam routes from a channel or a song (which names its
+    // server), and the client asks `GET /api/jam/config?serverId=`.
+    perServer: true,
+    clientVia: "GET /api/jam/config?serverId= (enabled)",
+  },
   report_attachment_preview: {
     description:
       "Moderação: no cartão de uma denúncia, o botão Mostrar que abre, borrado e só com um clique, a imagem ou o gif da mensagem denunciada. Desligado: a lista de anexos (tipo, veredito do scanner) continua aparecendo, só o botão e a rota somem.",
