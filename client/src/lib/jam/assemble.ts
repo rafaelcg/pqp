@@ -22,9 +22,15 @@ export interface Assembled {
  * it is filled with silence rather than closed up, because closing it would
  * shift everything after it off the song's grid.
  */
-export function assembleChunks(chunks: ReadonlyArray<StampedChunk>): Assembled | null {
+export function assembleChunks(
+  chunks: StampedChunk[],
+  options: { release?: boolean } = {},
+): Assembled | null {
   if (chunks.length === 0) return null;
-  const sorted = [...chunks].sort((a, b) => a.frame - b.frame);
+  // `release`: the caller hands the array over; it is sorted in place and
+  // each entry is dropped once copied, so the garbage collector can reclaim
+  // the chunks while the contiguous take is being built.
+  const sorted = options.release ? chunks.sort((a, b) => a.frame - b.frame) : [...chunks].sort((a, b) => a.frame - b.frame);
   const startFrame = sorted[0].frame;
   const nch = sorted.reduce((m, c) => Math.max(m, c.channels.length), 1);
   const last = sorted[sorted.length - 1];
@@ -32,7 +38,9 @@ export function assembleChunks(chunks: ReadonlyArray<StampedChunk>): Assembled |
   const channels = Array.from({ length: nch }, () => new Float32Array(total));
   let covered = 0;
   let expected = startFrame;
-  for (const chunk of sorted) {
+  for (let i = 0; i < sorted.length; i++) {
+    const chunk = sorted[i];
+    if (options.release) (sorted as (StampedChunk | undefined)[])[i] = undefined;
     const at = chunk.frame - startFrame;
     const len = chunk.channels[0]?.length ?? 0;
     for (let c = 0; c < nch; c++) {

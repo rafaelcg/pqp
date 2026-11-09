@@ -64,14 +64,27 @@ export class JamEngine {
     return this.player.context;
   }
 
-  /** Open (or switch) the instrument input. Needs a user gesture on Safari. */
-  async openInput(options: { deviceId?: string } = {}): Promise<JamInput> {
-    this.input?.close();
-    if (this.context.state !== "running") await this.context.resume();
-    this.input = await JamInput.open(this.context, options);
-    this.input.track.addEventListener("ended", this.onDeviceChange);
-    this.lastKey = (await this.latency()).key;
-    return this.input;
+  private opening: Promise<unknown> = Promise.resolve();
+
+  /**
+   * Open (or switch) the instrument input. Needs a user gesture on Safari.
+   * Opens are serialised, and the previous input stays live until the new
+   * one has opened: a refused permission or an unplugged device leaves the
+   * engine on the input it had, never on a closed one.
+   */
+  openInput(options: { deviceId?: string } = {}): Promise<JamInput> {
+    const run = this.opening.then(async () => {
+      if (this.context.state !== "running") await this.context.resume();
+      const next = await JamInput.open(this.context, options);
+      const previous = this.input;
+      this.input = next;
+      previous?.close();
+      next.track.addEventListener("ended", this.onDeviceChange);
+      this.lastKey = (await this.latency()).key;
+      return next;
+    });
+    this.opening = run.catch(() => undefined);
+    return run;
   }
 
   /**
@@ -112,17 +125,26 @@ export class JamEngine {
   async calibrate(method: "loopback", options?: LoopbackOptions): Promise<LatencyResult>;
   async calibrate(method: "tap-along", options?: TapAlongOptions): Promise<LatencyResult>;
   async calibrate(method: "loopback" | "tap-along", options: LoopbackOptions | TapAlongOptions = {}): Promise<LatencyResult> {
-    if (!this.input) throw new Error("jam: open an input first");
+    const input = this.input;
+    if (!input) throw new Error("jam: open an input first");
     this.player.pause();
+    // the pair being measured, fixed now: a device switched mid-calibration
+    // must not have this result filed under it
+    const keyBefore = (await this.latency()).key;
     const result =
       method === "loopback"
-        ? await calibrateLoopback(this.input, options as LoopbackOptions)
-        : await calibrateTapAlong(this.input, options as TapAlongOptions);
+        ? await calibrateLoopback(input, options as LoopbackOptions)
+        : await calibrateTapAlong(input, options as TapAlongOptions);
     result.reportedOutputMs = this.reportedOutputMs();
+    const keyAfter = (await this.latency()).key;
+    if (keyAfter !== keyBefore || this.input !== input) {
+      result.note = "The devices changed during the calibration, so the result was not kept. Run it again.";
+      return result;
+    }
     // Only a result worth recording over is remembered; a low one is shown
     // (with its note) so the person can retry, and the previous value stays.
     if (result.confidence === "high" || result.confidence === "medium") {
-      this.store.save((await this.latency()).key, result);
+      this.store.save(keyBefore, result);
     }
     return result;
   }

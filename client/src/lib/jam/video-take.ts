@@ -124,22 +124,28 @@ export function alignVideoAudio(
   const window = Math.round((options.windowSec ?? 0.75) * sampleRate);
   const minQuality = options.minQuality ?? 0.5;
   if (fileAudio.length < sampleRate * 0.5 || pcm.length < sampleRate * 0.5) return fallback;
-  // the loudest excerpt of the file that also falls inside the PCM by the guess
-  const len = Math.min(excerptLen, fileAudio.length);
+  // The loudest excerpt of the file that also falls inside the PCM by the
+  // guess, scored from a prefix sum of energy so the scan is linear in the
+  // take's length. A short take gets shorter excerpts (down to half a
+  // second) before giving up on content.
+  const prefix = new Float64Array(fileAudio.length + 1);
+  for (let i = 0; i < fileAudio.length; i++) prefix[i + 1] = prefix[i] + fileAudio[i] * fileAudio[i];
   const hop = Math.round(sampleRate * 0.25);
+  let len = Math.min(excerptLen, fileAudio.length);
   let bestStart = -1;
   let bestEnergy = 0;
-  for (let s = 0; s + len <= fileAudio.length; s += hop) {
-    const pcmAt = expectedZero + s;
-    if (pcmAt < 0 || pcmAt + len > pcm.length) continue;
-    let e = 0;
-    for (let i = s; i < s + len; i += 4) e += fileAudio[i] * fileAudio[i];
-    if (e > bestEnergy) {
-      bestEnergy = e;
-      bestStart = s;
+  while (bestStart < 0 && len >= sampleRate * 0.5) {
+    for (let s = 0; s + len <= fileAudio.length; s += hop) {
+      const pcmAt = expectedZero + s;
+      if (pcmAt < 0 || pcmAt + len > pcm.length) continue;
+      const e = prefix[s + len] - prefix[s];
+      if (e > bestEnergy) {
+        bestEnergy = e;
+        bestStart = s;
+      }
     }
+    if (bestStart < 0) len = Math.floor(len / 2);
   }
-  if (bestStart < 0 || bestEnergy === 0) return fallback;
   const needle = fileAudio.subarray(bestStart, bestStart + len);
   const hayStart = Math.max(0, Math.round(expectedZero + bestStart - window));
   const hayEnd = Math.min(pcm.length, Math.round(expectedZero + bestStart + len + window));

@@ -267,6 +267,11 @@ grants `media`)
   two-input interface or averages a real pair), LPC in the FLAC encoder (about
   9 % smaller files), FLAC's MD5 (left as "not computed", which the format
   allows).
+- Aligning a camera take decodes the whole camera file's audio
+  (`decodeAudioData` cannot decode a slice of a WebM or MP4). A five-minute
+  take costs about 60 to 120 MB of decoded audio for a moment at stop. Fine
+  for desktop; a streaming demuxer (WebCodecs) is the fix if phones ever
+  record video.
 - Software monitoring exists (`input.setMonitor`) but is off by default: it
   comes back a full round trip late. An interface's direct monitoring is the
   right tool.

@@ -150,6 +150,23 @@ describe("tap-along analysis", () => {
   });
 });
 
+describe("tap-along: one tap, one click", () => {
+  it("a missed tap does not let the next click's early tap count twice", () => {
+    const beat = 24_000; // 120 BPM
+    const clickFrames = Array.from({ length: 8 }, (_, k) => 24_000 + k * beat);
+    const tap = metronomeClick(SR, true);
+    // taps 60 ms EARLY on clicks 2..7, click 4 missed entirely: its neighbour's
+    // tap sits 440 ms after click 4, inside click 4's 450 ms window
+    const at = clickFrames.filter((_, k) => k >= 2 && k !== 4).map((c) => c - Math.round(0.06 * SR));
+    const captured = pulseTrain(clickFrames[7] + SR, tap, at);
+    const res = analyseTapAlong({ captured, captureStartFrame: 0, clickFrames, sampleRate: SR });
+    // five real taps, each counted once, all at -60 ms
+    expect(res.accepted).toBe(5);
+    expect(res.samples!.length).toBe(5);
+    expect(Math.abs(res.roundTripMs + 60)).toBeLessThan(1);
+  });
+});
+
 describe("the whole take, simulated", () => {
   it("calibrate, record over a backing with a count-in, encode, place: notes land on the clicks", () => {
     const lag = 1873; // 39.02 ms round trip, not a whole ms, not a whole quantum

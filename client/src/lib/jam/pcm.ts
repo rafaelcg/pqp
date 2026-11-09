@@ -50,11 +50,13 @@ export function encodeWav(
   dv.setUint16(34, bits, true);
   tag(36, "data");
   dv.setUint32(40, dataLen, true);
-  const ints = channels.map((c) => quantize(c, bits));
+  // quantised inline, sample by sample: no full-length integer copies
+  const scale = bits === 16 ? 32768 : 8388608;
   let o = 44;
   for (let i = 0; i < n; i++) {
     for (let c = 0; c < nch; c++) {
-      const v = ints[c][i];
+      const q = Math.round(channels[c][i] * scale);
+      const v = q > scale - 1 ? scale - 1 : q < -scale ? -scale : q;
       buf[o++] = v & 0xff;
       buf[o++] = (v >> 8) & 0xff;
       if (bits === 24) buf[o++] = (v >> 16) & 0xff;

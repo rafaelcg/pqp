@@ -114,7 +114,13 @@ export class JamInput {
       audio: instrumentConstraints(options.deviceId),
       video: false,
     });
-    return new JamInput(context, stream);
+    try {
+      return new JamInput(context, stream);
+    } catch (err) {
+      // never leave a microphone running behind a failed open
+      for (const t of stream.getTracks()) t.stop();
+      throw err;
+    }
   }
 
   get deviceId(): string {
@@ -140,19 +146,28 @@ export class JamInput {
     this.node.port.postMessage({ type: "start", atFrame, channels: this.channelCount });
   }
 
-  /** Stop and hand back everything captured, laid out by frame. */
-  async stopCapture(): Promise<Assembled | null> {
+  /**
+   * Stop and hand back everything captured, laid out by frame. `truncated`
+   * is true when the worklet never acknowledged the stop (a suspended or
+   * closed context): the take is what arrived, and its last fraction of a
+   * second may be missing.
+   */
+  async stopCapture(): Promise<(Assembled & { truncated: boolean }) | null> {
     if (!this.capturing) return null;
     this.capturing = false;
-    await new Promise<number>((resolve) => {
+    const ack = await new Promise<number>((resolve) => {
       this.stopWaiter = resolve;
       this.node.port.postMessage({ type: "stop" });
       // a closed or suspended context would never answer
       setTimeout(() => resolve(-1), 2000);
     });
-    const out = assembleChunks(this.chunks);
+    this.stopWaiter = null;
+    // hand the chunk list over and let the assembler release each chunk as
+    // it copies it, so a long take is not held twice at the peak
+    const chunks = this.chunks;
     this.chunks = [];
-    return out;
+    const out = assembleChunks(chunks, { release: true });
+    return out ? { ...out, truncated: ack < 0 } : null;
   }
 
   /**

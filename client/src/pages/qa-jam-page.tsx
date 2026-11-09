@@ -238,6 +238,8 @@ function JamBench() {
       const r = method === "loopback" ? await e.calibrate("loopback") : await e.calibrate("tap-along", { bpm: 100 });
       say(`${describeLatency(r)}${r.note ? ` (${r.note})` : ""}; lags ${(r.samples ?? []).map((v) => v.toFixed(2)).join(", ")}`);
       await refreshLatency();
+    } catch (err) {
+      say(`calibration failed: ${String(err)}`);
     } finally {
       setBusy(null);
     }
@@ -245,24 +247,36 @@ function JamBench() {
 
   const record = async () => {
     const e = engineRef.current!;
-    if (withCamera && !cameraRef.current) {
-      cameraRef.current = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
+    try {
+      if (withCamera && !cameraRef.current) {
+        cameraRef.current = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
+      }
+      const pos = e.player.positionMs();
+      const handle = await e.record({
+        fromMs: pos,
+        countIn: countBars ? { bars: countBars, beatsPerBar, bpm } : null,
+        metronome: metronome ? { bpm, beatsPerBar } : null,
+        camera: withCamera ? cameraRef.current : null,
+      });
+      setRecording(handle);
+      say(`recording from ${fmt(pos)} with ${describeLatency((await e.latency()).current)}`);
+    } catch (err) {
+      say(`could not start recording: ${String(err)}`);
     }
-    const pos = e.player.positionMs();
-    const handle = await e.record({
-      fromMs: pos,
-      countIn: countBars ? { bars: countBars, beatsPerBar, bpm } : null,
-      metronome: metronome ? { bpm, beatsPerBar } : null,
-      camera: withCamera ? cameraRef.current : null,
-    });
-    setRecording(handle);
-    say(`recording from ${fmt(pos)} with ${describeLatency((await e.latency()).current)}`);
   };
 
   const stopRecording = async () => {
     const e = engineRef.current!;
-    const take = await recording!.stop();
-    setRecording(null);
+    let take: JamTake;
+    try {
+      take = await recording!.stop();
+    } catch (err) {
+      say(`recording failed: ${String(err)}`);
+      setRecording(null);
+      return;
+    } finally {
+      setRecording(null);
+    }
     takeCount.current += 1;
     const id = `take ${takeCount.current}`;
     e.addTake(id, take);
@@ -275,7 +289,7 @@ function JamBench() {
     say(
       `${id}: offset ${take.offsetMs} ms, trimStart ${take.trimStartMs.toFixed(0)} ms, ${fmt(take.durationMs)}, ` +
         `latency ${take.latency.roundTripMs.toFixed(2)} ms (${take.latency.method}), input ${take.monoChoice}, ` +
-        `dropped ${take.inputDroppedMs ?? "n/a"} ms, gaps ${take.gapFrames}` +
+        `dropped ${take.inputDroppedMs ?? "n/a"} ms, gaps ${take.gapFrames}${take.captureTruncated ? ", TAIL MAY BE MISSING" : ""}` +
         (take.video
           ? `, video ${take.video.mimeType} aligned by ${take.video.alignment.method} (q ${take.video.alignment.quality.toFixed(2)}, timestamp guess off by ${(((take.video.alignment.timestampGuess - take.video.alignment.zeroFrame) / take.sampleRate) * 1000).toFixed(1)} ms)`
           : take.videoError
@@ -349,6 +363,12 @@ function JamBench() {
                     <Btn
                       onClick={() => {
                         e?.player.removeStem(s.id);
+                        if (x?.video) URL.revokeObjectURL(x.video);
+                        setExtras((xs) => {
+                          const { [s.id]: _gone, ...rest } = xs;
+                          void _gone;
+                          return rest;
+                        });
                         refreshStems();
                       }}
                     >

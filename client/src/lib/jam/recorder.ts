@@ -65,6 +65,8 @@ export interface JamTake {
   monoChoice: MonoChoice;
   /** Frames missing between capture chunks (filled with silence). Should be 0. */
   gapFrames: number;
+  /** The capture never acknowledged the stop (suspended or closed context): the tail may be missing. */
+  captureTruncated: boolean;
   /** Audio the browser dropped on the way in during the take, ms (Chrome only, else null). */
   inputDroppedMs: number | null;
   video: { blob: Blob; mimeType: string; alignment: VideoAlignment } | null;
@@ -87,6 +89,17 @@ export async function startRecording(player: JamPlayer, input: JamInput, options
   const context = player.context;
   if (input.context !== context) throw new Error("jam: the input must be opened on the player's context");
   if (!Number.isFinite(options.latency.roundTripMs)) throw new Error("jam: no usable latency");
+  // validated before anything starts: a tempo of 0 or below would make the
+  // click scheduler below loop forever on the main thread
+  const checkTempo = (t: { bpm: number; beatsPerBar: number } | null | undefined, what: string) => {
+    if (!t) return;
+    if (!Number.isFinite(t.bpm) || t.bpm < 20 || t.bpm > 400) throw new Error(`jam: ${what} tempo must be 20 to 400 BPM`);
+    if (!Number.isInteger(t.beatsPerBar) || t.beatsPerBar < 1 || t.beatsPerBar > 16) {
+      throw new Error(`jam: ${what} beats per bar must be 1 to 16`);
+    }
+  };
+  checkTempo(options.countIn && options.countIn.bars ? options.countIn : null, "count-in");
+  checkTempo(options.metronome, "metronome");
   if (context.state !== "running") await context.resume();
   player.pause();
   const sr = context.sampleRate;
@@ -166,8 +179,8 @@ export async function startRecording(player: JamPlayer, input: JamInput, options
     captureStartFrame: t0,
     async cancel() {
       teardown();
-      await input.stopCapture();
-      if (video) await video.stop();
+      // settle both: a failed capture stop must not leave the camera recording
+      await Promise.allSettled([input.stopCapture(), video ? video.stop() : Promise.resolve(null)]);
     },
     async stop(): Promise<JamTake> {
       teardown();
@@ -226,6 +239,7 @@ export async function startRecording(player: JamPlayer, input: JamInput, options
         },
         monoChoice: mono.choice,
         gapFrames: capture.gapFrames,
+        captureTruncated: capture.truncated,
         inputDroppedMs: droppedBefore !== null && droppedAfter !== null ? droppedAfter - droppedBefore : null,
         video: videoOut,
         videoError,

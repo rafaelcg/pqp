@@ -298,15 +298,16 @@ function encodeSubframe(w: BitWriter, x: Int32Array, bps: number) {
 }
 
 /**
- * Encode float channels (all the same length) to a FLAC file. `yieldEvery`
- * frames the async form hands the main thread back, so a five-minute stem
- * (a second or two of work) does not freeze a playhead.
+ * Encode float channels (all the same length) to a FLAC file. Every
+ * `yieldEvery` frames (16 frames, about 1.4 s of audio and a few ms of work)
+ * the async form hands the main thread back, so encoding a five-minute stem
+ * never freezes a playhead.
  */
 export async function encodeFlacAsync(
   channels: ReadonlyArray<Float32Array>,
   sampleRate: number,
   options: FlacOptions = {},
-  yieldEvery = 64,
+  yieldEvery = 16,
 ): Promise<Uint8Array> {
   const enc = flacFrames(channels, sampleRate, options);
   let step = enc.next();
@@ -336,6 +337,9 @@ function* flacFrames(
 ): Generator<void, Uint8Array, void> {
   const bps = options.bitsPerSample ?? 16;
   const blockSize = options.blockSize ?? 4096;
+  if (!Number.isInteger(blockSize) || blockSize < 16 || blockSize > 65535) {
+    throw new Error("flac: block size must be 16 to 65535");
+  }
   const nch = channels.length;
   if (nch < 1 || nch > 8) throw new Error("flac: 1 to 8 channels");
   if (!Number.isInteger(sampleRate) || sampleRate <= 0 || sampleRate >= 1 << 20) {
@@ -343,7 +347,6 @@ function* flacFrames(
   }
   const total = channels[0].length;
   for (const c of channels) if (c.length !== total) throw new Error("flac: channel lengths differ");
-  const ints = channels.map((c) => quantize(c, bps));
 
   const w = new BitWriter(Math.ceil((total * nch * bps) / 8 / 1.5) + 1024);
   // "fLaC" + STREAMINFO (last metadata block)
@@ -388,7 +391,8 @@ function* flacFrames(
     if (bsCode === 0b0110) w.bits(n - 1, 8);
     else if (bsCode === 0b0111) w.bits(n - 1, 16);
     w.bits(crc8(w.buf, frameStart, w.len), 8);
-    for (let c = 0; c < nch; c++) encodeSubframe(w, ints[c].subarray(start, start + n), bps);
+    // quantised one block at a time: no full-length integer copy of the take
+    for (let c = 0; c < nch; c++) encodeSubframe(w, quantize(channels[c].subarray(start, start + n), bps), bps);
     w.align();
     w.bits(crc16(w.buf, frameStart, w.len), 16);
     const size = w.len - frameStart;
@@ -396,7 +400,8 @@ function* flacFrames(
     if (size > maxFrame) maxFrame = size;
     yield;
   }
-  const out = w.buf.slice(0, w.len);
+  // a view, not a copy: the caller wraps it in a Blob, which copies once
+  const out = w.buf.subarray(0, w.len);
   if (maxFrame > 0) {
     const put24 = (at: number, v: number) => {
       out[at] = (v >> 16) & 0xff;

@@ -108,12 +108,28 @@ export function analyseTapAlong(input: TapAnalysisInput): LatencyResult {
   // A tap can be early: people anticipate a beat by tens of milliseconds.
   const early = 0.08 * sampleRate;
   const onsets = detectOnsets(captured, sampleRate).map((o) => o + captureStartFrame);
+  // Each onset belongs to at most one click, the nearest one whose window it
+  // falls in: a missed tap must not let the next click's tap count twice.
+  const owner = new Map<number, number>();
+  onsets.forEach((o, oi) => {
+    let best = -1;
+    let bestDist = Infinity;
+    clickFrames.forEach((click, ci) => {
+      if (o < click - early || o > click + maxLag) return;
+      const dist = Math.abs(o - click);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = ci;
+      }
+    });
+    if (best >= 0 && !owner.has(best)) owner.set(best, oi);
+  });
   const lags: number[] = [];
   const all: number[] = [];
   clickFrames.forEach((click, i) => {
-    const hit = onsets.find((o) => o >= click - early && o <= click + maxLag);
-    if (hit === undefined) return;
-    const lagMs = ((hit - click) / sampleRate) * 1000;
+    const oi = owner.get(i);
+    if (oi === undefined) return;
+    const lagMs = ((onsets[oi] - click) / sampleRate) * 1000;
     all.push(Math.round(lagMs * 10) / 10);
     if (i >= warmup) lags.push(lagMs);
   });

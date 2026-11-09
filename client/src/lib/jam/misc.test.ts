@@ -180,6 +180,22 @@ describe("video alignment by content", () => {
     expect(a.zeroFrame).toBe(trueZero);
   });
 
+  it("aligns a take shorter than the 3 s excerpt by content, with a shorter excerpt", () => {
+    const sr = 8000;
+    let s = 17;
+    const pcm = Float32Array.from({ length: Math.round(sr * 2.2) }, () => {
+      s = (Math.imul(s, 1103515245) + 12345) >>> 0;
+      return s / 2 ** 32 - 0.5;
+    });
+    // the camera file started 0.1 s into the PCM and runs a little past its end
+    const trueZero = 800;
+    const file = new Float32Array(Math.round(sr * 2.4));
+    file.set(pcm.subarray(trueZero));
+    const a = alignVideoAudio(pcm, file, sr, trueZero + 120);
+    expect(a.method).toBe("content");
+    expect(a.zeroFrame).toBe(trueZero);
+  });
+
   it("falls back to the timestamp when there is nothing to match", () => {
     const a = alignVideoAudio(new Float32Array(48000), new Float32Array(48000), 48000, -120);
     expect(a).toEqual({ zeroFrame: -120, method: "timestamp", quality: 0, timestampGuess: -120 });

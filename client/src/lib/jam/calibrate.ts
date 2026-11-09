@@ -59,8 +59,10 @@ export async function calibrateLoopback(input: JamInput, options: LoopbackOption
   const context = input.context;
   if (context.state !== "running") await context.resume();
   const sr = context.sampleRate;
-  const pulses = options.pulses ?? 10;
+  const pulses = Math.round(options.pulses ?? 10);
   const periodMs = options.periodMs ?? 600;
+  if (!(pulses >= 3 && pulses <= 64)) throw new Error("jam: loopback needs 3 to 64 pulses");
+  if (!(periodMs >= 100 && periodMs <= 5000)) throw new Error("jam: loopback period must be 100 to 5000 ms");
   const maxLatencyMs = Math.min(options.maxLatencyMs ?? 550, periodMs - 30);
   const reference = sweep(sr, { direction: "down", amplitude: options.level ?? 0.5 });
   const t0 = Math.round((context.currentTime + LEAD_SEC) * sr);
@@ -111,8 +113,11 @@ export async function calibrateTapAlong(input: JamInput, options: TapAlongOption
   const context = input.context;
   if (context.state !== "running") await context.resume();
   const sr = context.sampleRate;
-  const clicks = options.clicks ?? 12;
-  const beat = Math.round((60 / (options.bpm ?? 100)) * sr);
+  const clicks = Math.round(options.clicks ?? 12);
+  const bpm = options.bpm ?? 100;
+  if (!(clicks >= 5 && clicks <= 64)) throw new Error("jam: tap-along needs 5 to 64 clicks");
+  if (!(bpm >= 40 && bpm <= 240)) throw new Error("jam: tap-along tempo must be 40 to 240 BPM");
+  const beat = Math.round((60 / bpm) * sr);
   const t0 = Math.round((context.currentTime + LEAD_SEC) * sr);
   const first = Math.round(0.5 * sr);
   const at = Array.from({ length: clicks }, (_, k) => first + k * beat);
