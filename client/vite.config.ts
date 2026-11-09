@@ -483,6 +483,9 @@ export default defineConfig(({ command }) => ({
           // The voice gate's worklet (`src/lib/voice-gate/`) is loaded only by
           // a Voz limpa microphone, beside the RNNoise worklet above.
           "**/voice-gate-worklet-*.js",
+          // The jam capture worklet (`src/lib/jam/`), loaded only by the jam
+          // engine, which nothing in the shell imports yet.
+          "**/capture-worklet-*.js",
           "**/sw-build-*.js",
           "**/*-vietnamese-*.woff2",
           "**/*-cyrillic-*.woff2",
