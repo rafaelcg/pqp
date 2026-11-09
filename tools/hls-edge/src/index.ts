@@ -226,7 +226,7 @@ export interface Env extends SegmentEnv {
  * README.md "Enabling in production" for why that is what answers Farol's
  * "shared rendition cache bypasses viewer revocation" finding.
  */
-const partyPassRevocationGate = new PartyPassRevocationGate();
+const partyPassRevocationGate = new PartyPassRevocationGate({ log: logEvent });
 
 /**
  * How long a rendition's playlist is shared across viewers. The egress
