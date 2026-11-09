@@ -23,11 +23,24 @@ import { jamFrameSchema, type JamFrame } from "@pqp/shared";
  * and a socket that did not join the jam channel hears nothing of it.
  */
 
-// These suites TRUNCATE. `DATABASE_URL` is only trusted on CI, where the
-// database is a throwaway; anywhere else they need `TEST_DATABASE_URL` and skip
-// rather than touch whatever `DATABASE_URL` points at.
-const DATABASE_URL =
-  process.env.TEST_DATABASE_URL ?? (process.env.CI ? process.env.DATABASE_URL : undefined);
+// These suites TRUNCATE, so they only run against a database on this machine
+// (localhost, 127.0.0.1 or ::1): `TEST_DATABASE_URL` first, `DATABASE_URL` only
+// on CI, where the runner's database is a local throwaway. A URL that points
+// anywhere else makes them skip instead of truncating it.
+function localTestDatabase(): string | undefined {
+  const url =
+    process.env.TEST_DATABASE_URL ?? (process.env.CI ? process.env.DATABASE_URL : undefined);
+  if (!url) {
+    return undefined;
+  }
+  try {
+    const host = new URL(url).hostname;
+    return ["localhost", "127.0.0.1", "::1", "[::1]"].includes(host) ? url : undefined;
+  } catch {
+    return undefined;
+  }
+}
+const DATABASE_URL = localTestDatabase();
 const describeDb = DATABASE_URL ? describe : describe.skip;
 
 const SERVER_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..");

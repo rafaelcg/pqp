@@ -35,11 +35,24 @@ import {
  * delivery of those frames is `jam-two-process.test.ts`.
  */
 
-// These suites TRUNCATE. `DATABASE_URL` is only trusted on CI, where the
-// database is a throwaway; anywhere else they need `TEST_DATABASE_URL` and skip
-// rather than touch whatever `DATABASE_URL` points at.
-const DATABASE_URL =
-  process.env.TEST_DATABASE_URL ?? (process.env.CI ? process.env.DATABASE_URL : undefined);
+// These suites TRUNCATE, so they only run against a database on this machine
+// (localhost, 127.0.0.1 or ::1): `TEST_DATABASE_URL` first, `DATABASE_URL` only
+// on CI, where the runner's database is a local throwaway. A URL that points
+// anywhere else makes them skip instead of truncating it.
+function localTestDatabase(): string | undefined {
+  const url =
+    process.env.TEST_DATABASE_URL ?? (process.env.CI ? process.env.DATABASE_URL : undefined);
+  if (!url) {
+    return undefined;
+  }
+  try {
+    const host = new URL(url).hostname;
+    return ["localhost", "127.0.0.1", "::1", "[::1]"].includes(host) ? url : undefined;
+  } catch {
+    return undefined;
+  }
+}
+const DATABASE_URL = localTestDatabase();
 const describeDb = DATABASE_URL ? describe : describe.skip;
 
 if (DATABASE_URL) {
@@ -865,6 +878,13 @@ describeDb("jam channels", () => {
     expect(second.status).toBe(200);
     expect(second.body.track.id).toBe(first.body.track.id);
     expect((await getPool().query(`SELECT 1 FROM jam_tracks`)).rowCount).toBe(1);
+    // A retry still answers after the song was closed meanwhile: the track
+    // exists, so there is nothing left to refuse.
+    await call(alice, "PATCH", `/api/jam-songs/${song}`, { joinMode: "closed" });
+    const late = await call<{ track: JamTrack }>(bob, "POST", `/api/jam-songs/${song}/tracks`, body);
+    expect(late.status).toBe(200);
+    expect(late.body.track.id).toBe(first.body.track.id);
+    await call(alice, "PATCH", `/api/jam-songs/${song}`, { joinMode: "open" });
     // Two concurrent retries land on one track too.
     const audio2 = await upload(bob, song, "audio");
     const racing = await Promise.all(

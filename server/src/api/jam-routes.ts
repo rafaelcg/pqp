@@ -295,8 +295,6 @@ export function registerJamRoutes(router: Router): void {
     requireOn(channel.server_id);
     await assertNotTimedOut(user.id, channel.id);
     const { canPost } = await permsOf(channel, user.id);
-    // Refused before the body is read when the caller may add nothing.
-    assertMayAddAny(song, user.id, canPost);
     const request = addJamTrackSchema.parse(await readJsonBody(req));
     const result = await addJamTrack({ song, userId: user.id, canPost, request });
     if (!result.created) {
