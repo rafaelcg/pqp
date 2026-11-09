@@ -1248,6 +1248,73 @@ Four things the hub shares with the web rail (`ServerUnread.swift`, `HomeView.sw
 Tests: `PhoneGapsTests`; UI journeys in `ServerUnreadUITests` and
 `PhoneGapsUITests` (a local API and a second dev account, not run in CI).
 
+## Jam: the wall and the song
+
+A `jam` channel holds songs, each a stack of recorded stems (`docs/JAM.md`, the
+wire contract in `packages/shared/src/jam.ts`). This build SEES, HEARS and
+REACTS to them; it does not record (`JamPermissions.canRecordHere` is `false`,
+and the song screen says so with a copy-link sheet where the web says "Gravar
+por cima"). Code is in `Sources/Jam/`, tests in `JamContractTests`,
+`JamRulesTests` and `JamEngineTests`.
+
+**Invisible without the flag.** `Channel.isJam` is deliberately not part of
+`isListed`. The channel list draws a jam row only when
+`GET /api/jam/config?serverId=` says `enabled` (`JamListModel`), and asks
+nothing at all on a server that has no jam channel. Flag off, the list is
+exactly what it was.
+
+**The row** has the `music.note.list` glyph, the song count (first page, so a
+full page reads `50+`) and an unread mark. A jam carries no messages and the
+server has no per-person cursor for it, so "unread" is device-local: somebody
+else's bump newer than the newest one this device saw when it last opened the
+wall (`JamUnread`, `JamSeenStore`). It is kept out of `unread`, so it never
+reaches the server tile's badge.
+
+**The wall** is a mosaic (`JamMosaic`: dense first-fit on a 2 column grid, 4 on
+a regular width, the newest or most active song is the only hero). The list
+carries no media, no peaks and no names, so each tile reads its song's detail
+once, lazily, three at a time (`JamPreview`): the mix's loudness for a coloured
+tile's waveform, the people on it, and a poster frame from the first in-mix MP4
+video. Filters are Tudo / Falta alguem (songs that want somebody, open ones
+included) / Prontas.
+
+**The engine** is one `AVAudioEngine` with one `AVAudioPlayerNode` per stem
+(`JamEngine`). Stems are scheduled as file segments (streamed from disk, never
+decoded whole) at a sample time relative to one host start, with the frames
+computed in `JamAlignment`, the only place the contract's timeline is
+arithmetic: a stem plays `audio[trimStart, length - trimEnd]` starting at
+`offsetMs`, the transport's zero is the earliest start, and a negative offset
+is not special. `renderOffline` runs the same graph with no hardware, which is
+how `JamEngineTests` proves, frame by frame, where each stem's first sample
+lands (a negative offset and both trims, FLAC and WAV, 44.1 kHz against 48).
+Gain (0 to 2) times the person's slider goes through a one-band EQ's
+`globalGain`, because a player node's volume stops at 1.
+
+**Formats.** What AVFoundation opens, measured with an impulse at frame 24000
+through `AVAudioFile` (iOS 27 simulator and macOS 27 agree): WAV, FLAC, AAC in
+M4A/MP4 and Opus in Ogg land on frame 24000 exactly; MP3 lands 576 frames (12
+ms) late, the same number the web engine measured in WebKit; **WebM does not
+open at all**. The contract accepts `audio/webm`, so a stem recorded by a
+Chromium `MediaRecorder` is silent on a phone: its row says "Ainda nao toca no
+iPhone" and the others keep playing. Ogg Opus was only verified on iOS 27;
+the deployment target is 17.
+
+**Audio session.** `.playback` with the default mode, taken only when nothing
+else owns the session, by the same rule the watch party, the Bau's video and
+voice notes use (`BauPlaybackPolicy.audioPlan`): a call, or a recording
+category, is left alone and the song plays through the call's session; the lock
+screen is then left to the call. Leaving the song stops it. A route change
+(headphones out) and an interruption pause it and keep the place.
+
+**Video** stems are muted `AVPlayer`s started at the engine's host time plus
+the output latency, and put back with a seek when they drift past 90 ms
+(`JamVideoSync`). MP4 only.
+
+**Not here.** Recording, adding a track, creating a song, comments, a song deep
+link (`JamLinks.song` is shaped like the forum's `/post/` link and is only as
+good as the web route that will answer it), Spanish (the app ships en and pt-BR
+only).
+
 ## Parity with the web client
 
 Both clients talk to the same API — there is no mobile backend and no BFF — so

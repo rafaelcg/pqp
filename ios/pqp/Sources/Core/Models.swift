@@ -219,6 +219,11 @@ struct Channel: Codable, Identifiable, Hashable, Sendable {
     /// A forum: a list of titled posts, each its own thread. Opens the forum
     /// screen, never a chat (a forum carries no messages of its own).
     var isForum: Bool { type == "forum" }
+    /// A jam: a channel of songs, each a stack of recorded stems. Opens the
+    /// jam wall, never a chat. NOT part of `isListed`: a jam row is drawn only
+    /// when the server's flag says so (`JamListModel.isEnabled`), so a server
+    /// without the feature looks exactly as it always did.
+    var isJam: Bool { type == "jam" }
     /// A row this build can open as a chat. `type` decodes as a plain string, so
     /// a type added server-side later arrives here as an unknown one: it is
     /// hidden rather than drawn as a dead "#" row.

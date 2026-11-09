@@ -121,6 +121,16 @@
         }
       }
     },
+    "%@ open" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ livre"
+          }
+        }
+      }
+    },
     "%@ streaming" : {
       "localizations" : {
         "pt-BR" : {
@@ -191,6 +201,126 @@
         }
       }
     },
+    "%lld songs" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld song"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld songs"
+                }
+              }
+            }
+          }
+        },
+        "pt-BR" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld música"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld músicas"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld songs, new activity" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld song, new activity"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld songs, new activity"
+                }
+              }
+            }
+          }
+        },
+        "pt-BR" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld música, tem novidade"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld músicas, tem novidade"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld votes" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld vote"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld votes"
+                }
+              }
+            }
+          }
+        },
+        "pt-BR" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld voto"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld votos"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "1 new reply" : {
       "localizations" : {
         "pt-BR" : {
@@ -207,6 +337,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "1 reação · some em %@"
+          }
+        }
+      }
+    },
+    "A jam is a channel of songs, each built from recordings of different people playing together." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Jam é um canal de músicas, cada uma montada com gravações de gente diferente tocando junto."
           }
         }
       }
@@ -237,6 +377,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Adicionar um story"
+          }
+        }
+      }
+    },
+    "anyone can join" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "qualquer um entra"
+          }
+        }
+      }
+    },
+    "Anyone can join" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Qualquer um entra"
           }
         }
       }
@@ -291,12 +451,202 @@
         }
       }
     },
+    "Back to the songs" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Voltar pras músicas"
+          }
+        }
+      }
+    },
+    "bass" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "baixo"
+          }
+        }
+      }
+    },
     "Contact us or report abuse" : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Fale com a gente ou denuncie abuso"
+          }
+        }
+      }
+    },
+    "Could not load songs" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra carregar as músicas"
+          }
+        }
+      }
+    },
+    "Could not load this song" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra carregar essa música"
+          }
+        }
+      }
+    },
+    "Could not start the audio. Try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra começar o áudio. Tenta de novo."
+          }
+        }
+      }
+    },
+    "Delete song" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apagar música"
+          }
+        }
+      }
+    },
+    "Delete take" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apagar take"
+          }
+        }
+      }
+    },
+    "Delete this song?" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apagar essa música?"
+          }
+        }
+      }
+    },
+    "Delete this take?" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apagar esse take?"
+          }
+        }
+      }
+    },
+    "Does not play on iPhone yet" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ainda não toca no iPhone"
+          }
+        }
+      }
+    },
+    "drums" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "bateria"
+          }
+        }
+      }
+    },
+    "Every take on it goes too. This cannot be undone." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Todos os takes dela vão junto. Não dá pra desfazer."
+          }
+        }
+      }
+    },
+    "Finished" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prontas"
+          }
+        }
+      }
+    },
+    "Getting the tracks %lld of %lld" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Baixando as faixas %lld de %lld"
+          }
+        }
+      }
+    },
+    "guitar" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "guitarra"
+          }
+        }
+      }
+    },
+    "Hearing" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ouvindo"
+          }
+        }
+      }
+    },
+    "keys" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "teclado"
+          }
+        }
+      }
+    },
+    "Listen" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ouvir"
+          }
+        }
+      }
+    },
+    "Listen to a take in place of the one in the mix, and vote for the one that should win." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ouve um take no lugar do que tá na mix e vota no que tem que ganhar."
           }
         }
       }
@@ -311,12 +661,252 @@
         }
       }
     },
+    "needs %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "falta %@"
+          }
+        }
+      }
+    },
+    "Needs someone" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Falta alguém"
+          }
+        }
+      }
+    },
+    "No song matches this filter right now." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nenhuma música bate com esse filtro agora."
+          }
+        }
+      }
+    },
+    "No songs yet" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nenhuma música ainda"
+          }
+        }
+      }
+    },
+    "no takes yet" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sem take ainda"
+          }
+        }
+      }
+    },
+    "No tracks in the mix yet." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ainda não tem faixa na mix."
+          }
+        }
+      }
+    },
+    "Nothing here" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nada por aqui"
+          }
+        }
+      }
+    },
+    "On the computer" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No computador"
+          }
+        }
+      }
+    },
+    "Open this on a computer, put your headphones on and play along. Your take lines up by itself and shows up here as soon as it is done." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abre isso no computador, bota o fone e toca junto. Teu take já entra no tempo certo e aparece aqui quando acabar."
+          }
+        }
+      }
+    },
+    "Opens the song" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abre a música"
+          }
+        }
+      }
+    },
+    "other" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "outro"
+          }
+        }
+      }
+    },
+    "Other takes" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Outros takes"
+          }
+        }
+      }
+    },
+    "Play" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tocar"
+          }
+        }
+      }
+    },
+    "Playhead" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Posição na música"
+          }
+        }
+      }
+    },
+    "Position" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Posição"
+          }
+        }
+      }
+    },
     "Privacy Policy" : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Política de Privacidade"
+          }
+        }
+      }
+    },
+    "Put in the mix" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Colocar na mix"
+          }
+        }
+      }
+    },
+    "ready" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "pronta"
+          }
+        }
+      }
+    },
+    "Record on the computer" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gravar no computador"
+          }
+        }
+      }
+    },
+    "Recording is on the computer for now" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Por enquanto, gravar é no computador"
+          }
+        }
+      }
+    },
+    "Share link" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Compartilhar link"
+          }
+        }
+      }
+    },
+    "Shows the mix controls" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostra os controles da mix"
+          }
+        }
+      }
+    },
+    "Solo" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Solo"
+          }
+        }
+      }
+    },
+    "Some tracks did not download. Tap to try again" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Algumas faixas não baixaram. Toca pra tentar de novo"
+          }
+        }
+      }
+    },
+    "Somebody took it down while you were in it." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alguém tirou do ar enquanto tu tava nela."
           }
         }
       }
@@ -1141,6 +1731,16 @@
         }
       }
     },
+    "Take out of the mix" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tirar da mix"
+          }
+        }
+      }
+    },
     "Terms of Service" : {
       "localizations" : {
         "pt-BR" : {
@@ -1391,6 +1991,26 @@
         }
       }
     },
+    "This song was deleted" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Essa música foi apagada"
+          }
+        }
+      }
+    },
+    "This song was deleted." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Essa música foi apagada."
+          }
+        }
+      }
+    },
     "To report a message, a Baú post or comment, a person or a community, open its menu and choose Report." : {
       "localizations" : {
         "pt-BR" : {
@@ -1427,6 +2047,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Muitas mensagens. Tenta de novo daqui a pouco."
+          }
+        }
+      }
+    },
+    "Tracks" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Faixas"
           }
         }
       }
@@ -1477,6 +2107,36 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ver"
+          }
+        }
+      }
+    },
+    "vocals" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "voz"
+          }
+        }
+      }
+    },
+    "Volume" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Volume"
+          }
+        }
+      }
+    },
+    "Vote for %@ by %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Votar em %@ de %@"
           }
         }
       }
@@ -11093,6 +11753,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Teu story, postar"
+          }
+        }
+      }
+    },
+    "Your turn" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tua vez"
           }
         }
       }
