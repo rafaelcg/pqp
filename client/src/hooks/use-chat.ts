@@ -789,6 +789,36 @@ export function createChatController(
     slowModeHolds.set(id, { until, nonce, timer });
   }
 
+  /**
+   * Sends still waiting on their uploads (`sendMessage` with pending files)
+   * that the reader walked away from. Switching channel empties `messages`,
+   * so without this the upload's answer had nothing to update: a failure was
+   * lost silently, and the bubble was missing on the way back. Keyed by nonce;
+   * each row carries its own `channelId`, and `applyPage` puts it back.
+   */
+  const heldUploadSends = new Map<string, ChatMessage>();
+
+  function updateUploadSend(nonce: string, patch: (message: ChatMessage) => ChatMessage): ChatMessage | null {
+    let found: ChatMessage | null = null;
+    messages = messages.map((message) => {
+      if (message.nonce !== nonce) {
+        return message;
+      }
+      found = patch(message);
+      return found;
+    });
+    if (found) {
+      return found;
+    }
+    const held = heldUploadSends.get(nonce);
+    if (!held) {
+      return null;
+    }
+    const next = patch(held);
+    heldUploadSends.set(nonce, next);
+    return next;
+  }
+
   function startSlowModeHold(nonce: string, durationMs: number) {
     if (!channelId || bypassSlowMode || durationMs <= 0) {
       return;
@@ -956,6 +986,11 @@ export function createChatController(
     typing.clear();
     botNotice = null;
     for (const message of messages) {
+      if (message.uploading && message.nonce) {
+        // Still uploading: keep it, previews and all, for its channel.
+        heldUploadSends.set(message.nonce, message);
+        continue;
+      }
       revokeLocalPreviews(message);
     }
     messages = [];
@@ -1039,6 +1074,16 @@ export function createChatController(
       ...inFlight.filter((message) => !isOptimistic(message)),
     ].sort(byPosition);
     messages = [...settled, ...inFlight.filter(isOptimistic)];
+    // Uploads sent here before the reader left come back as they are now:
+    // still uploading, or failed with the reason on the bubble.
+    for (const [nonce, held] of heldUploadSends) {
+      if (held.channelId === channelId) {
+        heldUploadSends.delete(nonce);
+        if (!messages.some((message) => message.nonce === nonce)) {
+          messages = [...messages, held];
+        }
+      }
+    }
     windowGeneration += 1;
     hasMore = moreAvailable;
     hasNewer = newerAvailable;
@@ -1513,10 +1558,27 @@ export function createChatController(
                 }
               : attachment;
           });
-          messages = messages.map((message) =>
-            message.nonce === nonce ? { ...message, uploading: false, attachments: resolved } : message,
-          );
+          const sent = updateUploadSend(nonce, (message) => ({
+            ...message,
+            uploading: false,
+            attachments: resolved,
+          }));
+          const held = heldUploadSends.get(nonce);
+          if (held) {
+            // Sent from a channel the reader has left: the server keeps it,
+            // and that channel's next page shows it.
+            heldUploadSends.delete(nonce);
+            revokeLocalPreviews(held);
+          }
           emit();
+          if (!sent) {
+            return;
+          }
+          // The server's slow-mode clock starts now, not when Enter was
+          // pressed, so the local hold starts over with it.
+          if (channelId === targetChannelId && !bypassSlowMode && slowModeSeconds > 0) {
+            startSlowModeHold(nonce, slowModeSeconds * 1000);
+          }
           transmit(
             nonce,
             clamped,
@@ -1526,11 +1588,13 @@ export function createChatController(
           );
         },
         () => {
-          messages = messages.map((message) =>
-            message.nonce === nonce
-              ? { ...message, pending: false, uploading: false, failed: true, uploadFailed: true }
-              : message,
-          );
+          updateUploadSend(nonce, (message) => ({
+            ...message,
+            pending: false,
+            uploading: false,
+            failed: true,
+            uploadFailed: true,
+          }));
           emit();
         },
       );
@@ -2106,6 +2170,10 @@ export function createChatController(
 
     dispose() {
       resetChannelState();
+      for (const held of heldUploadSends.values()) {
+        revokeLocalPreviews(held);
+      }
+      heldUploadSends.clear();
       if (typingSweep) {
         clearInterval(typingSweep);
         typingSweep = null;

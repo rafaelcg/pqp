@@ -193,6 +193,65 @@ describe("optimistic sending", () => {
     expect(messageCanRetry(message!)).toBe(false);
   });
 
+  it("keeps a failed upload send for its channel when the reader switches away", async () => {
+    const { chat, sent } = setup();
+    let refuse!: (error: Error) => void;
+    const pending = new Promise<{ attachmentId: string; width: null; height: null }>((_, reject) => {
+      refuse = reject;
+    });
+    chat.sendMessage("o mapa", null, [
+      {
+        attachmentId: "attachment-1",
+        filename: "mapa.png",
+        contentType: "image/png",
+        byteSize: 10,
+        width: null,
+        height: null,
+        previewUrl: "blob:local",
+        pending,
+      },
+    ]);
+    chat.joinChannel("other-channel");
+    expect(chat.getMessages()).toHaveLength(0);
+    const before = sent.length;
+    refuse(new Error("put 500"));
+    await vi.runAllTimersAsync();
+    expect(sent.length).toBe(before);
+
+    chat.joinChannel(CHANNEL);
+    chat.setMessages([], false, false);
+    const [message] = chat.getMessages();
+    expect(message?.body).toBe("o mapa");
+    expect(message?.uploadFailed).toBe(true);
+  });
+
+  it("still sends an upload to its channel after the reader switches away", async () => {
+    const { chat, sent } = setup();
+    let land!: (value: { attachmentId: string; width: number; height: number }) => void;
+    const pending = new Promise<{ attachmentId: string; width: number; height: number }>((resolve) => {
+      land = resolve;
+    });
+    chat.sendMessage("o mapa", null, [
+      {
+        attachmentId: "attachment-1",
+        filename: "mapa.png",
+        contentType: "image/png",
+        byteSize: 10,
+        width: null,
+        height: null,
+        previewUrl: "blob:local",
+        pending,
+      },
+    ]);
+    chat.joinChannel("other-channel");
+    land({ attachmentId: "11111111-1111-4111-8111-111111111111", width: 800, height: 600 });
+    await vi.runAllTimersAsync();
+    const outgoing = sent.at(-1) as { type: string; channelId: string; attachmentIds?: string[] };
+    expect(outgoing.type).toBe("message-create");
+    expect(outgoing.channelId).toBe(CHANNEL);
+    expect(outgoing.attachmentIds).toEqual(["11111111-1111-4111-8111-111111111111"]);
+  });
+
   it("shows the message immediately as pending and sends a nonce", () => {
     const { chat, sent } = setup();
     chat.sendMessage("hi there");
