@@ -35,6 +35,7 @@ lands on the same Worker, so the code is already split along that line:
 | `src/ll-playlist-origin.ts` | `PlaylistOrigin` for an LL session — talks to the remux box directly | No — this is the second-origin seam already, one level below `playlist-origin.ts` |
 | `src/ll-media.ts` | The LL MEDIA route (`L2.3`): part/segment/init bytes off the remux box, immutably cached per colo | No — a second origin would land in `ll-playlist-origin.ts`, not here |
 | `src/viewer-access.ts` | The one credential check (token, party pass, revocation) every route calls | No |
+| `src/party-pass-revocation.js` | The KV revocation gate: one namespace listing per isolate per 30 s, answered from an in-memory index | No, it reads a KV denylist, not a playlist origin |
 | `src/edge-cache.ts` | The Cache API wrapped so losing it never costs a request, and the one definition of a cache key | No |
 | `src/coalesced-fetch.js` | One in-flight fetch per key, shared — with every join bounded and detachable, so a joiner never depends on a request context it does not own | No — it is about promises, not about where the bytes come from |
 | `src/index.ts` | Routing, the cache-or-forward decision, CORS, logging | No, or minimally — it is written against the `PlaylistOrigin` interface, not against "the API" |
@@ -791,6 +792,56 @@ accepted when `LIVE_HLS_PLAYLIST_BASE_URL` first shipped in #559), and a
 party pass is refused outright in production rather than riding its full
 ceiling with nothing checking it — see "The party pass" below, point 3.
 
+**What the gate costs, and why it does not scale with the audience.** The
+gate answers from ONE whole-namespace listing per isolate per 30 s, not from
+a prefixed `kv.list` per viewer. The first check in a window lists every key
+in `HLS_REVOKED_USERS` (no prefix, cursor followed to the end), folds them
+into an in-memory index of `prefix -> newest revokedAtMs`, and every viewer
+and every channel in that window is answered from the index with no KV call.
+Concurrent callers on a cold isolate share the one in-flight listing. This
+replaced a design that listed `<userId>:<channelId>:` per viewer (unique per
+person, so one list per viewer per 30 s per isolate), which Cloudflare billed
+as 1.63M list operations in a month against 7k reads. Now the bill scales
+with isolates: roughly `isolates x 2 listings a minute`, whatever the
+audience. It stays cheap because revocations are rare and every key expires
+(6 h), so the namespace is small.
+
+Decisions did not change, only the cost. In particular:
+
+- **The bound is still 30 s**, measured from when the listing STARTED: a
+  revocation written just after a listing is invisible to that isolate for up
+  to 30 s, exactly the signed-off bound. A viewer first seen late in a window
+  is answered from the window's snapshot and is not fresher than one seen
+  early; both are inside the same bound.
+- **A failed listing fails CLOSED for every caller waiting on it**
+  (`kvError: true`, a 403 on the rendition route), is never cached (the next
+  check lists again), and an expired snapshot is never served in its place.
+  An unbound namespace still fails open outside production and refuses party
+  passes in production (`partyPassRequiresKvInProduction`).
+- **The page cap.** A listing follows the cursor up to 10 pages (10,000
+  keys). The old cap was 10 pages per prefix, so the namespace-wide listing
+  can now hit it where no single prefix would: a namespace past 10,000 live
+  keys, which would take a mass moderation burst inside one 6 h window. An
+  incomplete listing is never trusted as an index. Failing closed would turn
+  that burst into a 403 for EVERY viewer of EVERY party until the keys expire,
+  a new total-outage mode, so the gate instead falls back, for that window, to
+  the previous per-prefix listing (the same answers and the same per-prefix
+  10-page fail-closed rule as before, at the old cost) and logs
+  `hlsEdge.revocationNamespaceOverflow`. It retries the namespace listing when
+  the window closes.
+- **A listing that has been in flight for 10 s is not joined** by new callers
+  (a hung KV call must not pin every later request to it); they start their
+  own, and a late finisher never replaces a newer snapshot.
+
+**Watching it.** `hlsEdge.revocationListed` (`keys`, `pages`, `durationMs`) is
+one line per listing, so its rate is the list rate: expect about two a
+minute per active isolate, never one per viewer. `hlsEdge.revocationListFailed`
+is a failed listing (every waiting request fails closed with it, and
+`hlsEdge.partyPassRevocationCheckError` fires per refused request as before),
+and `hlsEdge.revocationNamespaceOverflow` means the namespace outgrew the cap.
+The `kv.list` count in the Cloudflare dashboard (Workers KV, "List"
+operations) should fall from per-viewer to per-isolate.
+
 The token check that DOES run on every request here (signature, expiry,
 channel, session) is unrelated to revocation and is unaffected by caching at
 all — a stolen or expired token is refused exactly as reliably with this
@@ -840,7 +891,8 @@ Three things worth being precise about:
    audience, which has no fixed viewer list to key per-viewer entries by).
    Each EVICTION writes its OWN key under the relevant prefix —
    `<prefix><revokedAtMs>`, append-only, never overwritten — and the gate
-   `list()`s every key under both prefixes and takes the newest, compared
+   lists the namespace (once per isolate per 30 s, see "What the gate costs"
+   above) and takes the newest key under both prefixes, compared
    against the credential's own `issuedAt` claim — the same "minted before
    or after the most recent eviction" rule `hls-revocation.ts`'s in-memory
    check already applies, so a viewer banned and later un-banned mints a
@@ -961,6 +1013,9 @@ Cloudflare account state:
    `hlsEdge.partyPassRevocationCheckError` should stay at zero; a nonzero
    rate there means the KV binding is provisioned but not reachable, which
    fails CLOSED (refuses the request) rather than silently doing nothing.
+   `hlsEdge.revocationListed` is the list rate (about two a minute per
+   active isolate, not one per viewer), and `hlsEdge.revocationListFailed` /
+   `hlsEdge.revocationNamespaceOverflow` should stay at zero.
 
 **Staging first.** Repeat step 1 against a namespace named distinctly (e.g.
 `HLS_REVOKED_USERS_STAGING`) bound to `pqp-hls-edge`'s staging deploy if one
@@ -1231,6 +1286,10 @@ the work is:
   open for the time it takes one origin round trip, tens of milliseconds
   typically, well inside the 2-4 s poll interval, so it does not compound
   across cycles.
+- **Revocation gate** (when `HLS_REVOKED_USERS` is bound): no KV call at all
+  on a request inside the window; one namespace listing per isolate per 30 s
+  otherwise (one `kv.list` per 1,000 keys, so normally one), shared by every
+  concurrent request. The KV list rate scales with isolates, not viewers.
 - Logging: a JSON line on `console.log` per rejection (rate-limited to one per
   channel/rung/reason per 30 s, same shape as the API's own
   `logHlsPlaylistRejection`) and per origin fetch (already naturally rate

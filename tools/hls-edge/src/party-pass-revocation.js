@@ -32,11 +32,11 @@
  * existing key, so there is no read-modify-write race to lose (Farol,
  * 2026-09-14: an earlier single-mutable-key design let an older write's
  * PUT clobber a newer one that had already landed, on pure network
- * reordering between two concurrent evictions). `kv.list({ prefix })`
- * reads back every key under a prefix and this gate takes the newest
- * `revokedAtMs` suffix among them -- correct regardless of which PUT
- * landed first, because a `list` is a snapshot read, not a race with a
- * writer the way a conditional PUT would be.
+ * reordering between two concurrent evictions). A listing reads back
+ * every key and this gate takes the newest `revokedAtMs` suffix among the
+ * ones under each prefix -- correct regardless of which PUT landed first,
+ * because a `list` is a snapshot read, not a race with a writer the way a
+ * conditional PUT would be.
  *
  * REVOCATION IS A COMPARISON, NOT A PRESENCE CHECK. A credential names its
  * own `issuedAt`; it is revoked when the newest listed timestamp under
@@ -60,42 +60,78 @@
  * shared cache, or (for a `?t=` viewer) the origin's own always-current
  * check.
  *
- * CACHED, NOT LISTED ON EVERY POLL. `PARTY_PASS_REVOCATION_CACHE_TTL_MS`
- * (30 s) bounds how stale a cached answer can be -- the MAX revocation
- * timestamp under a prefix is what gets cached, not a boolean, so the same
- * cache entry answers correctly for two different credentials with two
- * different `issuedAt` claims polling inside the same 30 s window. Without
- * this, a synchronized-expiry event turns into hundreds of KV list calls a
- * second landing on KV instead of the Cache API hit this whole Worker
- * exists to serve (Farol flagged the unbounded version of this as a MEDIUM
- * performance regression).
+ * ONE NAMESPACE LISTING PER ISOLATE PER 30 SECONDS, NOT ONE PER VIEWER.
+ * `PARTY_PASS_REVOCATION_CACHE_TTL_MS` (30 s) bounds how stale an answer can
+ * be, and the unit that is cached is the WHOLE namespace: the first `check()`
+ * in a window lists every key (`kv.list` with no prefix, following the cursor
+ * to the end), folds them into an in-memory index of `prefix -> newest
+ * revokedAtMs`, and every later `check()` for ANY viewer and ANY channel in
+ * the window is answered from that index with no KV call at all. The index
+ * holds the newest timestamp per prefix, not a boolean, so one snapshot
+ * answers correctly for two credentials with two different `issuedAt` claims.
  *
- * LIST FOLLOWS ITS CURSOR TO `list_complete`, UP TO `MAX_LIST_PAGES`. A
- * single `kv.list` call is one PAGE (Cloudflare's default page size is
- * 1,000 keys), not the whole prefix -- reading only the first page would
- * have let a prefix with more revocations than that silently drop the
- * NEWEST one if it landed on a later page, which is a security bug, not a
- * performance shortfall (Farol, 2026-09-14): a party pass issued after the
- * wrongly-visible maximum but before the real one would read as
- * not-revoked. `_readMaxForPrefix` pages through the full result before
- * answering; running out of pages with more still unread fails CLOSED
- * (`kvError: true`) rather than caching a possibly-incomplete answer. In
- * practice a real eviction is a rare, human-triggered event and each key
- * self-expires after the party pass's own 6 h ceiling, so hitting the page
- * cap at all should never happen outside a pathological key-space attack
- * on one (userId, channelId) pair -- but the code no longer ASSUMES that,
- * it verifies it.
+ * WHY THIS REPLACED A PREFIXED LIST PER VIEWER. The gate used to list
+ * `<userId>:<channelId>:` and `channel:<channelId>:` separately and cache each
+ * per prefix. The user prefix is unique per viewer, so the list rate scaled
+ * with the audience (one list per viewer per 30 s per isolate): Cloudflare
+ * billed 1.63M list operations in a month against 7k reads. Revocations are
+ * rare, human-triggered events and every key self-expires after the party
+ * pass ceiling (6 h), so the whole namespace is small, and one listing costs
+ * the same however many people are watching. The index is built so that a
+ * lookup returns EXACTLY what `kv.list({ prefix })` followed by the old
+ * max-suffix scan returned: every colon in a key name is a possible split
+ * point (a user or channel id may itself contain one), and a key is indexed
+ * under each prefix it has, so a query for `a:b:c:` finds the key
+ * `a:b:c:123` whichever way the ids were split. Pinned against a copy of the
+ * old implementation over generated namespaces in
+ * `party-pass-revocation-differential.test.mjs`.
+ *
+ * CONCURRENT CALLERS SHARE ONE LISTING. A cold isolate with a few hundred
+ * viewers arriving together starts ONE listing and every caller awaits it;
+ * only after it settles does a window's worth of callers get an answer. A
+ * listing that has been in flight for `LISTING_JOIN_MAX_MS` is not joined any
+ * more (a hung KV call must not pin every later caller to it; they start
+ * their own, and a stale listing finishing late never overwrites a newer
+ * snapshot).
+ *
+ * A FAILED LISTING IS NEVER CACHED AS "NOTHING IS REVOKED". Every caller
+ * waiting on it fails CLOSED (`kvError: true`), nothing is remembered, and
+ * the next call after it settles starts a fresh listing. An expired snapshot
+ * is never served in place of a failed refresh: that would stretch the signed
+ * off 30 s bound for as long as KV stays down.
+ *
+ * THE PAGE CAP, AND WHAT A NAMESPACE-WIDE LISTING CHANGES ABOUT IT. A single
+ * `kv.list` call is one PAGE (1,000 keys), and stopping at the first page
+ * silently drops the newest revocation if it sits on a later one, which is a
+ * security bug (Farol, 2026-09-14). The listing follows the cursor to
+ * `list_complete`, up to `MAX_LIST_PAGES` (10) pages. The old cap was 10
+ * pages PER PREFIX; the new one is 10 pages for the whole namespace, so a
+ * namespace past 10,000 live keys can now exceed it where no single prefix
+ * ever did. Failing closed there would turn a large moderation burst into a
+ * refusal for EVERY viewer of EVERY party for up to 6 h (the keys' TTL), a
+ * new total-outage mode, so an incomplete listing is NOT trusted and NOT
+ * cached as an index: the gate falls back to the previous per-prefix
+ * listing (`_readMaxForPrefix`, unchanged, with its own 10-page fail-closed
+ * cap) for the rest of the window, which gives the same answers the old gate
+ * did, at the old cost, and logs `hlsEdge.revocationNamespaceOverflow` so the
+ * condition is visible. The listing is retried once the window closes.
+ *
+ * THE BINDING IS PART OF THE CACHE KEY. A snapshot answers only for the
+ * `KVNamespace` object it was read from; being handed a different one (a
+ * test, a rebinding) never reuses another namespace's index.
  */
 
 export const PARTY_PASS_REVOCATION_CACHE_TTL_MS = 30_000;
+/** Bound on the per-prefix fallback cache (`_cache`), used only while a namespace listing overflows. */
 export const PARTY_PASS_REVOCATION_CACHE_MAX_ENTRIES = 10_000;
-
+/** Pages (1,000 keys each) one listing may follow before it is treated as incomplete. */
+export const PARTY_PASS_REVOCATION_MAX_LIST_PAGES = 10;
 /**
- * One instance per Worker isolate (`index.ts` creates it at module scope,
- * same lifetime as the isolate) -- a class rather than module-level `let`s
- * so a test can hold its own instance instead of racing shared state across
- * `node --test`'s parallel test files.
+ * A namespace listing older than this is not joined by a new caller, which
+ * starts its own instead -- see the module doc comment. Well above a healthy
+ * listing (a few round trips) and well below the 30 s window.
  */
+export const PARTY_PASS_REVOCATION_LISTING_JOIN_MAX_MS = 10_000;
 
 /**
  * The `revokedAtMs` suffix of an append-only key, given the prefix it was
@@ -112,10 +148,69 @@ function suffixTimestamp(keyName, prefix) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
+/**
+ * Folds one key name into `index` (prefix -> newest suffix timestamp) under
+ * EVERY prefix of it that ends in a colon. `check()` only ever asks for
+ * prefixes of the form `<userId>:<channelId>:` and `channel:<channelId>:`,
+ * which end in a colon, but ids may contain colons themselves, so the split
+ * between "prefix" and "suffix" is not knowable from the key alone: indexing
+ * every colon position makes a lookup equal `startsWith(prefix)` for any
+ * prefix a query can build, without ever re-scanning the keys.
+ * @param {Map<string, number>} index
+ * @param {string} keyName
+ */
+function indexKey(index, keyName) {
+  for (let i = keyName.indexOf(":"); i !== -1; i = keyName.indexOf(":", i + 1)) {
+    const prefix = keyName.slice(0, i + 1);
+    const ts = suffixTimestamp(keyName, prefix);
+    if (ts > (index.get(prefix) ?? 0)) {
+      index.set(prefix, ts);
+    }
+  }
+}
+
+/**
+ * @typedef {{ list(opts: { prefix?: string, cursor?: string }): Promise<{ keys: { name: string }[], list_complete?: boolean, cursor?: string }> }} KvLike
+ * @typedef {{ status: "index", index: Map<string, number> } | { status: "overflow" } | { status: "error" }} ListingResult
+ * @typedef {{ kv: KvLike, at: number, index: Map<string, number> | null }} Snapshot
+ * @typedef {{ kv: KvLike, startedAt: number, promise: Promise<ListingResult> }} InFlight
+ */
+
+/**
+ * One instance per Worker isolate (`index.ts` creates it at module scope,
+ * same lifetime as the isolate) -- a class rather than module-level `let`s
+ * so a test can hold its own instance instead of racing shared state across
+ * `node --test`'s parallel test files.
+ */
 export class PartyPassRevocationGate {
-  constructor() {
-    /** @type {Map<string, { revokedAt: number; at: number }>} */
+  /**
+   * @param {{ log?: (event: string, fields?: Record<string, unknown>) => void }} [options]
+   *   `log` is the Worker's `logEvent` (this file stays free of `log.ts` so it
+   *   runs under `node --test`); omitted, nothing is logged.
+   */
+  constructor(options = {}) {
+    /** @type {(event: string, fields?: Record<string, unknown>) => void} */
+    this._log = typeof options.log === "function" ? options.log : () => {};
+    /**
+     * Per-prefix cache, used ONLY by the overflow fallback below.
+     * @type {Map<string, { revokedAt: number; at: number }>}
+     */
     this._cache = new Map();
+    /**
+     * The last good namespace listing. `index` is null for an OVERFLOWED
+     * listing (an incomplete one is never trusted, see the module doc).
+     * @type {Snapshot | null}
+     */
+    this._snapshot = null;
+    /** @type {InFlight | null} */
+    this._inflight = null;
+    /**
+     * Cumulative counters, readable by tests and by anything that wants to
+     * surface them. `listCalls` is every `kv.list` this gate has issued, the
+     * number Cloudflare bills; `listings` counts completed namespace
+     * listings, `listingFailures` the ones that failed closed.
+     */
+    this.stats = { listCalls: 0, listings: 0, listingFailures: 0, listingOverflows: 0 };
   }
 
   /**
@@ -146,26 +241,109 @@ export class PartyPassRevocationGate {
   }
 
   /**
-   * The newest revocation timestamp among every key listed under `prefix`,
-   * or 0 if there are none -- 0 rather than `null` because every
+   * One whole-namespace listing: every key, cursor followed to
+   * `list_complete`, at most `PARTY_PASS_REVOCATION_MAX_LIST_PAGES` pages.
+   * Never throws. Out of pages with more still unread is `overflow` (an
+   * incomplete index must never be trusted or cached), a KV error is `error`.
+   * @param {KvLike} kv
+   * @returns {Promise<ListingResult>}
+   */
+  async _listNamespace(kv) {
+    const startedMs = Date.now();
+    const index = new Map();
+    let cursor;
+    let keys = 0;
+    let pages = 0;
+    try {
+      for (let page = 0; page < PARTY_PASS_REVOCATION_MAX_LIST_PAGES; page++) {
+        this.stats.listCalls += 1;
+        pages += 1;
+        const listed = await kv.list(cursor ? { cursor } : {});
+        for (const key of listed?.keys ?? []) {
+          indexKey(index, key.name);
+          keys += 1;
+        }
+        if (listed?.list_complete || !listed?.cursor) {
+          this.stats.listings += 1;
+          this._log("hlsEdge.revocationListed", { keys, pages, durationMs: Date.now() - startedMs });
+          return { status: "index", index };
+        }
+        cursor = listed.cursor;
+      }
+    } catch {
+      // Bound but unreachable: fail CLOSED (see the module doc comment).
+      this.stats.listingFailures += 1;
+      this._log("hlsEdge.revocationListFailed", { keys, pages, durationMs: Date.now() - startedMs });
+      return { status: "error" };
+    }
+    this.stats.listingOverflows += 1;
+    this._log("hlsEdge.revocationNamespaceOverflow", {
+      keys,
+      pages,
+      maxPages: PARTY_PASS_REVOCATION_MAX_LIST_PAGES,
+    });
+    return { status: "overflow" };
+  }
+
+  /**
+   * The listing that answers a call made at `now`: the snapshot while it is
+   * inside the window, else the one already in flight, else a new one. An
+   * error is never remembered (the next call retries); a good result or an
+   * overflow is remembered for the window, stamped with the time the listing
+   * STARTED so the 30 s bound is measured from the earliest the read could
+   * have happened.
+   * @param {KvLike} kv
+   * @param {number} now
+   * @returns {Promise<ListingResult>}
+   */
+  _namespaceFor(kv, now) {
+    const snapshot = this._snapshot;
+    if (snapshot && snapshot.kv === kv && now - snapshot.at < PARTY_PASS_REVOCATION_CACHE_TTL_MS) {
+      return Promise.resolve(
+        snapshot.index ? { status: "index", index: snapshot.index } : { status: "overflow" },
+      );
+    }
+    const inflight = this._inflight;
+    if (
+      inflight &&
+      inflight.kv === kv &&
+      now - inflight.startedAt < PARTY_PASS_REVOCATION_LISTING_JOIN_MAX_MS
+    ) {
+      return inflight.promise;
+    }
+    /** @type {InFlight} */
+    const record = {
+      kv,
+      startedAt: now,
+      promise: this._listNamespace(kv).then((result) => {
+        if (result.status !== "error") {
+          const current = this._snapshot;
+          // A listing that finishes late must not replace a newer one.
+          if (!current || current.kv !== kv || now >= current.at) {
+            this._snapshot = { kv, at: now, index: result.status === "index" ? result.index : null };
+          }
+        }
+        if (this._inflight === record) {
+          this._inflight = null;
+        }
+        return result;
+      }),
+    };
+    this._inflight = record;
+    return record.promise;
+  }
+
+  /**
+   * The PER-PREFIX read this gate used before the namespace listing existed,
+   * unchanged. It is now only the overflow fallback (see the module doc
+   * comment): the newest revocation timestamp among every key listed under
+   * `prefix`, or 0 if there are none -- 0 rather than `null` because every
    * comparison against it is `revokedAt > issuedAt`, and a real `issuedAt`
    * is always a positive epoch millisecond value, so 0 can never itself
-   * read as "revoked".
-   *
-   * FOLLOWS THE CURSOR UNTIL `list_complete`. A single `kv.list` response
-   * is one PAGE, not the whole prefix -- Cloudflare's own default page
-   * size is 1,000 keys, and stopping at the first page silently drops
-   * anything past it. Missing a later page here is not a performance
-   * shortfall, it is a security bug: the newest revocation could be on
-   * that missing page, and a party pass issued after the (wrongly) visible
-   * maximum but before the real one would read as not-revoked (Farol,
-   * 2026-09-14). `MAX_LIST_PAGES` bounds total work per check (a real
-   * eviction burst for ONE (userId, channelId) pair large enough to need
-   * more than a handful of pages inside one 6 h TTL window is not a shape
-   * this design expects to see) -- hitting it fails CLOSED via `kvError`,
-   * the same direction every other "could not find out for sure" case in
-   * this file already fails, rather than silently truncating the answer.
-   * @param {{ list(opts: { prefix: string, cursor?: string }): Promise<{ keys: { name: string }[], list_complete?: boolean, cursor?: string }> }} kv
+   * read as "revoked". Follows the cursor to `list_complete`, up to the page
+   * cap; running out of pages with more still unread fails CLOSED
+   * (`kvError: true`) rather than caching a possibly-incomplete answer.
+   * @param {KvLike} kv
    * @param {string} prefix
    * @param {number} now
    * @returns {Promise<{ revokedAt: number; kvError: boolean }>}
@@ -175,11 +353,11 @@ export class PartyPassRevocationGate {
     if (cached) {
       return { revokedAt: cached.revokedAt, kvError: false };
     }
-    const MAX_LIST_PAGES = 10;
     let revokedAt = 0;
     let cursor;
     try {
-      for (let page = 0; page < MAX_LIST_PAGES; page++) {
+      for (let page = 0; page < PARTY_PASS_REVOCATION_MAX_LIST_PAGES; page++) {
+        this.stats.listCalls += 1;
         const listed = await kv.list(cursor ? { prefix, cursor } : { prefix });
         for (const key of listed?.keys ?? []) {
           const ts = suffixTimestamp(key.name, prefix);
@@ -190,7 +368,7 @@ export class PartyPassRevocationGate {
         if (listed?.list_complete || !listed?.cursor) {
           break;
         }
-        if (page === MAX_LIST_PAGES - 1) {
+        if (page === PARTY_PASS_REVOCATION_MAX_LIST_PAGES - 1) {
           // Ran out of pages to scan with more still unread -- an
           // incomplete answer is exactly the shape that must never be
           // cached or trusted as "not revoked". Fail CLOSED.
@@ -209,7 +387,7 @@ export class PartyPassRevocationGate {
   }
 
   /**
-   * @param {{ list(opts: { prefix: string }): Promise<{ keys: { name: string }[] }> } | null | undefined} kv
+   * @param {KvLike | null | undefined} kv
    * @param {string} userId
    * @param {string} channelId
    * @param {number} issuedAt The credential's own `issuedAt` claim.
@@ -220,10 +398,23 @@ export class PartyPassRevocationGate {
     if (!kv) {
       return { revoked: false, kvError: false };
     }
-    const [user, channel] = await Promise.all([
-      this._readMaxForPrefix(kv, `${userId}:${channelId}:`, now),
-      this._readMaxForPrefix(kv, `channel:${channelId}:`, now),
-    ]);
+    const userPrefix = `${userId}:${channelId}:`;
+    const channelPrefix = `channel:${channelId}:`;
+    const namespace = await this._namespaceFor(kv, now);
+    if (namespace.status === "error") {
+      return { revoked: true, kvError: true };
+    }
+    let user;
+    let channel;
+    if (namespace.status === "index") {
+      user = { revokedAt: namespace.index.get(userPrefix) ?? 0, kvError: false };
+      channel = { revokedAt: namespace.index.get(channelPrefix) ?? 0, kvError: false };
+    } else {
+      [user, channel] = await Promise.all([
+        this._readMaxForPrefix(kv, userPrefix, now),
+        this._readMaxForPrefix(kv, channelPrefix, now),
+      ]);
+    }
     if (user.kvError || channel.kvError) {
       return { revoked: true, kvError: true };
     }
