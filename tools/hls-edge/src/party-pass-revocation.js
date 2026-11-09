@@ -196,6 +196,8 @@ export class PartyPassRevocationGate {
      * @type {Map<string, { revokedAt: number; at: number }>}
      */
     this._cache = new Map();
+    /** @type {KvLike | null} The binding `_cache` was filled from. */
+    this._cacheKv = null;
     /**
      * The last good namespace listing. `index` is null for an OVERFLOWED
      * listing (an incomplete one is never trusted, see the module doc).
@@ -349,6 +351,12 @@ export class PartyPassRevocationGate {
    * @returns {Promise<{ revokedAt: number; kvError: boolean }>}
    */
   async _readMaxForPrefix(kv, prefix, now) {
+    // The per-prefix cache, like the snapshot, answers only for the binding
+    // it was read from (Farol, low): a different namespace starts it over.
+    if (this._cacheKv !== kv) {
+      this._cache.clear();
+      this._cacheKv = kv;
+    }
     const cached = this._cached(prefix, now);
     if (cached) {
       return { revokedAt: cached.revokedAt, kvError: false };

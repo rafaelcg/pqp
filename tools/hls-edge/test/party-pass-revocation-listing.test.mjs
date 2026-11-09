@@ -352,6 +352,16 @@ test("an overflow is remembered for the window, then the namespace is tried agai
   assert.equal(state.prefixed, 3);
 });
 
+test("the overflow fallback's per-prefix cache is scoped to its binding too", async () => {
+  const gate = new PartyPassRevocationGate();
+  const filler = Array.from({ length: 12 }, (_, i) => `filler${i}:c9:${ISSUED_AT - 1_000}`);
+  const clean = countingKv(filler, 1);
+  const revoking = countingKv([...filler, `u1:c1:${ISSUED_AT + 1}`], 1);
+  // Both namespaces overflow, so both answer through the per-prefix read.
+  assert.equal((await gate.check(clean.kv, "u1", "c1", ISSUED_AT, T0)).revoked, false);
+  assert.equal((await gate.check(revoking.kv, "u1", "c1", ISSUED_AT, T0)).revoked, true);
+});
+
 // ---------------------------------------------------------------------------
 // Visibility of the list rate.
 // ---------------------------------------------------------------------------
