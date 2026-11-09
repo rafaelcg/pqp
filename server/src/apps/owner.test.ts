@@ -303,6 +303,17 @@ describeDb("the owner's apps switches", () => {
       ]);
     });
 
+    it("two first switches at once are one change: one audit row, one answer of changed", async () => {
+      const answers = await Promise.all([put(world.owner, false), put(world.manager, false)]);
+      expect(answers.map((a) => a.status)).toEqual([200, 200]);
+      expect(answers.filter((a) => a.body.changed)).toHaveLength(1);
+      const audit = await q(`SELECT 1 FROM app_admin_audit WHERE action = 'owner-server'`);
+      expect(audit.rowCount).toBe(1);
+      expect((await q(`SELECT owner_enabled FROM server_apps WHERE app_id = $1`, [appId])).rows).toEqual([
+        { owner_enabled: false },
+      ]);
+    });
+
     it("a public community stays locked: not listed, not switchable, not startable", async () => {
       await q(`UPDATE servers SET is_community = TRUE WHERE id = $1`, [world.serverId]);
       expect((await list(world.owner)).body.apps).toEqual([]);

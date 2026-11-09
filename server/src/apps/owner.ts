@@ -155,6 +155,16 @@ export async function setOwnerApp(
       [serverId, input.appId],
     );
     const facts = app.rows[0];
+    // One owner write per (server, app) at a time. With no row yet (a server the
+    // default released) there is nothing to lock FOR UPDATE, so two first
+    // switches would both read "undecided", both audit the same transition and
+    // both answer `changed`. This lock makes the second one read the first's
+    // row. It is taken after the app's lock and before the row's, and the
+    // operator's writes (which take the app FOR UPDATE) never take it, so no
+    // cycle is possible.
+    await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [
+      `app-owner:${serverId}:${input.appId}`,
+    ]);
     const decided = await client.query<{
       operator_enabled: boolean | null;
       owner_enabled: boolean | null;

@@ -280,6 +280,89 @@ interface Queryable {
   query: PoolClient["query"];
 }
 
+export interface ReleaseCounts {
+  /** `apps.default_operator_enabled`, read in the same statement as the counts. */
+  defaultOn: boolean;
+  /** Servers the operator's release reaches (see `AppAdminView.serversOn`). */
+  on: number;
+  /** Of those, how many the owner switched off again. */
+  ownerOff: number;
+}
+
+/**
+ * How many servers an app's release reaches, for one app or for every app, in
+ * ONE statement (one snapshot, and the default switch is read in it too, so the
+ * flag and the number can never come from different moments):
+ *
+ *  - an explicit ON counts;
+ *  - with the app's default on, so does every server with no decision of its
+ *    own (no row, or `operator_enabled` NULL), except a public community while
+ *    the app is locked for communities, the lock availability applies;
+ *  - an explicit OFF never does.
+ *
+ * The default part is arithmetic, not a walk over the fleet per app: the
+ * servers that could be reached (all of them, or the non-community ones when
+ * the app is locked) minus the ones that decided, which come out of ONE grouped
+ * pass over `server_apps`. The cost is the table of decisions, however many
+ * apps have the default on.
+ */
+export async function loadReleaseCounts(
+  db: Queryable,
+  onlyId?: string,
+): Promise<Map<string, ReleaseCounts>> {
+  const { rows } = await db.query(
+    `WITH fleet AS (
+       SELECT COUNT(*)::int AS total,
+              COUNT(*) FILTER (WHERE NOT COALESCE(is_community, FALSE))::int AS plain
+         FROM servers
+     ),
+     per AS (
+       SELECT sa.app_id,
+              COUNT(*) FILTER (WHERE sa.operator_enabled IS TRUE)::int AS explicit_on,
+              COUNT(*) FILTER (WHERE sa.operator_enabled IS TRUE
+                                 AND sa.owner_enabled = FALSE)::int AS explicit_owner_off,
+              COUNT(*) FILTER (WHERE sa.operator_enabled IS NOT NULL)::int AS decided_all,
+              COUNT(*) FILTER (WHERE sa.operator_enabled IS NOT NULL
+                                 AND NOT COALESCE(s.is_community, FALSE))::int AS decided_plain,
+              COUNT(*) FILTER (WHERE sa.operator_enabled IS NULL
+                                 AND sa.owner_enabled = FALSE)::int AS undecided_owner_off_all,
+              COUNT(*) FILTER (WHERE sa.operator_enabled IS NULL
+                                 AND sa.owner_enabled = FALSE
+                                 AND NOT COALESCE(s.is_community, FALSE))::int AS undecided_owner_off_plain
+         FROM server_apps sa JOIN servers s ON s.id = sa.server_id
+         ${onlyId ? `WHERE sa.app_id = $1` : ""}
+        GROUP BY sa.app_id
+     )
+     SELECT a.id AS app_id, a.default_operator_enabled, a.community_unlocked,
+            fleet.total, fleet.plain,
+            COALESCE(per.explicit_on, 0) AS explicit_on,
+            COALESCE(per.explicit_owner_off, 0) AS explicit_owner_off,
+            COALESCE(per.decided_all, 0) AS decided_all,
+            COALESCE(per.decided_plain, 0) AS decided_plain,
+            COALESCE(per.undecided_owner_off_all, 0) AS undecided_owner_off_all,
+            COALESCE(per.undecided_owner_off_plain, 0) AS undecided_owner_off_plain
+       FROM apps a CROSS JOIN fleet LEFT JOIN per ON per.app_id = a.id
+      ${onlyId ? `WHERE a.id = $1` : ""}`,
+    onlyId ? [onlyId] : [],
+  );
+  const out = new Map<string, ReleaseCounts>();
+  for (const row of rows as Array<Record<string, unknown>>) {
+    const defaultOn = row.default_operator_enabled === true;
+    const unlocked = row.community_unlocked === true;
+    const n = (key: string): number => Number(row[key] ?? 0);
+    const reachable = unlocked ? n("total") : n("plain");
+    const decided = unlocked ? n("decided_all") : n("decided_plain");
+    out.set(row.app_id as string, {
+      defaultOn,
+      on: n("explicit_on") + (defaultOn ? Math.max(0, reachable - decided) : 0),
+      ownerOff:
+        n("explicit_owner_off") +
+        (defaultOn ? n(unlocked ? "undecided_owner_off_all" : "undecided_owner_off_plain") : 0),
+    });
+  }
+  return out;
+}
+
 async function loadApps(db: Queryable, onlyId?: string): Promise<AppAdminView[]> {
   const filter = onlyId ? `WHERE a.id = $1` : "";
   const params = onlyId ? [onlyId] : [];
@@ -303,34 +386,7 @@ async function loadApps(db: Queryable, onlyId?: string): Promise<AppAdminView[]>
         ORDER BY v.created_at DESC, v.version DESC`,
       params,
     ),
-    // Per app: the explicit ONs, and (only for an app whose default is on) the
-    // servers with no decision of their own. An explicit OFF is in neither, and
-    // a public community counts through the default only when the app is
-    // unlocked for communities, the same lock availability applies.
-    db.query(
-      `SELECT a.id AS app_id,
-              (SELECT COUNT(*)::int FROM server_apps sa
-                WHERE sa.app_id = a.id AND sa.operator_enabled IS TRUE) AS explicit_on,
-              (SELECT COUNT(*)::int FROM server_apps sa
-                WHERE sa.app_id = a.id AND sa.operator_enabled IS TRUE
-                  AND sa.owner_enabled = FALSE) AS explicit_owner_off,
-              CASE WHEN a.default_operator_enabled THEN
-                (SELECT COUNT(*)::int FROM servers s
-                  WHERE (a.community_unlocked OR NOT COALESCE(s.is_community, FALSE))
-                    AND NOT EXISTS (SELECT 1 FROM server_apps sa
-                                     WHERE sa.server_id = s.id AND sa.app_id = a.id
-                                       AND sa.operator_enabled IS NOT NULL))
-              ELSE 0 END AS default_on,
-              CASE WHEN a.default_operator_enabled THEN
-                (SELECT COUNT(*)::int FROM servers s
-                  JOIN server_apps sa ON sa.server_id = s.id AND sa.app_id = a.id
-                 WHERE sa.operator_enabled IS NULL AND sa.owner_enabled = FALSE
-                   AND (a.community_unlocked OR NOT COALESCE(s.is_community, FALSE)))
-              ELSE 0 END AS default_owner_off
-         FROM apps a
-        ${onlyId ? `WHERE a.id = $1` : ""}`,
-      params,
-    ),
+    loadReleaseCounts(db, onlyId),
     db.query(
       `SELECT app_id, COUNT(*)::int AS n FROM app_sessions
         WHERE status = 'live' ${onlyId ? `AND app_id = $1` : ""}
@@ -368,23 +424,7 @@ async function loadApps(db: Queryable, onlyId?: string): Promise<AppAdminView[]>
     });
     versionsByApp.set(appId, list);
   }
-  const onByApp = new Map<string, { on: number; ownerOff: number }>(
-    on.rows.map(
-      (row: {
-        app_id: string;
-        explicit_on: number;
-        explicit_owner_off: number;
-        default_on: number;
-        default_owner_off: number;
-      }) => [
-        row.app_id,
-        {
-          on: row.explicit_on + row.default_on,
-          ownerOff: row.explicit_owner_off + row.default_owner_off,
-        },
-      ],
-    ),
-  );
+  const onByApp = on;
   const sessionsByApp = new Map<string, number>(
     sessions.rows.map((row: { app_id: string; n: number }) => [row.app_id, row.n]),
   );
@@ -405,7 +445,8 @@ async function loadApps(db: Queryable, onlyId?: string): Promise<AppAdminView[]>
       status: row.status as string,
       globalEnabled: row.global_enabled as boolean,
       communityUnlocked: row.community_unlocked as boolean,
-      defaultOperatorEnabled: row.default_operator_enabled as boolean,
+      // From the same statement as the counts beside it, not from the app row read above.
+      defaultOperatorEnabled: onByApp.get(id)?.defaultOn ?? (row.default_operator_enabled as boolean),
       currentVersion: (row.current_version as string | null) ?? null,
       currentApproved: approved,
       goLiveBlocker: approved ? null : "not-reviewed",
@@ -1119,10 +1160,9 @@ export async function operatorDisableEverywhere(
 ): Promise<DisableEverywhereResult> {
   const written = await inAppsTransaction(async (client) => {
     const app = await lockApp(client, input.appId);
-    const on = await client.query<{ n: number }>(
-      `SELECT COUNT(*)::int AS n FROM server_apps WHERE app_id = $1 AND operator_enabled IS TRUE`,
-      [input.appId],
-    );
+    // The servers the release reaches BEFORE it is cleared: explicit ONs and,
+    // with the default on, every server that had not decided.
+    const reached = (await loadReleaseCounts(client, input.appId)).get(input.appId)?.on ?? 0;
     // The app's default goes off with the master switch: "off everywhere" has to
     // stay true for a server created, or an owner decision cleared, after it.
     if (app.global_enabled || app.default_operator_enabled) {
@@ -1139,7 +1179,7 @@ export async function operatorDisableEverywhere(
       before: {
         globalEnabled: app.global_enabled,
         defaultOperatorEnabled: app.default_operator_enabled,
-        serversOn: on.rows[0]?.n ?? 0,
+        serversOn: reached,
       },
       after: { globalEnabled: false, defaultOperatorEnabled: false },
     });

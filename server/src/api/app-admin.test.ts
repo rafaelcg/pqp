@@ -949,7 +949,8 @@ describeDb("operator apps routes", () => {
       expect(await statusOf(session)).toBe("ended");
       const audit = (await auditRows()).filter((r) => r.action === "disable-everywhere");
       expect(audit[0]).toMatchObject({
-        before: { globalEnabled: true, defaultOperatorEnabled: true },
+        // The two private servers the default reached (the community is locked), no explicit row among them.
+        before: { globalEnabled: true, defaultOperatorEnabled: true, serversOn: 2 },
         after: { globalEnabled: false, defaultOperatorEnabled: false },
       });
       await asMachine("PUT", "/api/admin/apps", { appId: "quadro", globalEnabled: true });
