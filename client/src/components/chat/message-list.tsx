@@ -978,10 +978,12 @@ export const MessageList = memo(function MessageList({
   // Under the redesign the jump pill clears the bot's note: it rises over
   // the footer (the note and the typing line) while it is taller than the
   // typing line alone, and follows the note down as it collapses.
-  const logFooterRef = useRef<HTMLDivElement>(null);
+  // A callback ref, not `useRef`: the footer only mounts once history has
+  // loaded, after this effect's first run, and has to be measured then.
+  const [logFooterEl, logFooterRef] = useState<HTMLDivElement | null>(null);
   const [logFooterHeight, setLogFooterHeight] = useState(0);
   useLayoutEffect(() => {
-    const el = logFooterRef.current;
+    const el = logFooterEl;
     if (!redesign || !el) {
       setLogFooterHeight(0);
       return;
@@ -992,7 +994,7 @@ export const MessageList = memo(function MessageList({
     const observer = new ResizeObserver(measure);
     observer.observe(el);
     return () => observer.disconnect();
-  }, [redesign]);
+  }, [redesign, logFooterEl]);
   const [pickerMessageId, setPickerMessageId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isPinned, setIsPinned] = useState(true);

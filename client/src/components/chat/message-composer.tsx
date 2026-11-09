@@ -2138,8 +2138,12 @@ export function MessageComposer({
         <div
           className={cn(
             "flex items-center gap-0.5 px-1.5 pb-1.5 redesign:gap-1 redesign:px-2 redesign:pb-2",
-            oneRow && COMPOSER_TOOLS_ROW_REDESIGN,
-            voiceNoteActive && !voiceNoteHolding && "hidden",
+            // Hidden under a voice note's review. The one-row look's
+            // `redesign:contents` would beat a plain `hidden`, so it is only
+            // added while the row is shown.
+            voiceNoteActive && !voiceNoteHolding
+              ? "hidden"
+              : oneRow && COMPOSER_TOOLS_ROW_REDESIGN,
           )}
         >
           {!voiceNoteHolding && (
