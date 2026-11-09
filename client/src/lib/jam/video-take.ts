@@ -125,26 +125,36 @@ export function alignVideoAudio(
   const minQuality = options.minQuality ?? 0.5;
   if (fileAudio.length < sampleRate * 0.5 || pcm.length < sampleRate * 0.5) return fallback;
   // The loudest excerpt of the file that also falls inside the PCM by the
-  // guess, scored from a prefix sum of energy so the scan is linear in the
-  // take's length. A short take gets shorter excerpts (down to half a
-  // second) before giving up on content.
-  const prefix = new Float64Array(fileAudio.length + 1);
-  for (let i = 0; i < fileAudio.length; i++) prefix[i + 1] = prefix[i] + fileAudio[i] * fileAudio[i];
-  const hop = Math.round(sampleRate * 0.25);
-  let len = Math.min(excerptLen, fileAudio.length);
+  // guess. Energy is summed once per 250 ms block (a few thousand numbers
+  // for a long take, not one per sample) and a window's energy is a sum of
+  // consecutive blocks, so the scan is linear and its memory small. A short
+  // take gets shorter excerpts (down to half a second) before giving up on
+  // content.
+  const hop = Math.max(1, Math.round(sampleRate * 0.25));
+  const blocks = new Float64Array(Math.ceil(fileAudio.length / hop));
+  for (let i = 0; i < fileAudio.length; i++) blocks[(i / hop) | 0] += fileAudio[i] * fileAudio[i];
+  let span = Math.min(Math.floor(excerptLen / hop), Math.floor(fileAudio.length / hop));
+  let len = span * hop;
   let bestStart = -1;
   let bestEnergy = 0;
   while (bestStart < 0 && len >= sampleRate * 0.5) {
-    for (let s = 0; s + len <= fileAudio.length; s += hop) {
+    let e = 0;
+    for (let b = 0; b < span; b++) e += blocks[b];
+    for (let b = 0; b + span <= blocks.length; b++) {
+      if (b > 0) e += (blocks[b + span - 1] ?? 0) - blocks[b - 1];
+      const s = b * hop;
+      if (s + len > fileAudio.length) break;
       const pcmAt = expectedZero + s;
       if (pcmAt < 0 || pcmAt + len > pcm.length) continue;
-      const e = prefix[s + len] - prefix[s];
       if (e > bestEnergy) {
         bestEnergy = e;
         bestStart = s;
       }
     }
-    if (bestStart < 0) len = Math.floor(len / 2);
+    if (bestStart < 0) {
+      span = Math.floor(span / 2);
+      len = span * hop;
+    }
   }
   const needle = fileAudio.subarray(bestStart, bestStart + len);
   const hayStart = Math.max(0, Math.round(expectedZero + bestStart - window));

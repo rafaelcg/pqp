@@ -48,7 +48,7 @@ export class JamEngine {
   private readonly store: LatencyStore;
   private deviceListeners = new Set<(status: LatencyStatus) => void>();
   private lastKey: string | null = null;
-  private readonly onDeviceChange = () => void this.checkDevices();
+  private readonly onDeviceChange = () => void this.checkDevices().catch(() => undefined);
 
   private constructor(player: JamPlayer, store: LatencyStore) {
     this.player = player;
@@ -65,6 +65,7 @@ export class JamEngine {
   }
 
   private opening: Promise<unknown> = Promise.resolve();
+  private destroyed = false;
 
   /**
    * Open (or switch) the instrument input. Needs a user gesture on Safari.
@@ -76,11 +77,21 @@ export class JamEngine {
     const run = this.opening.then(async () => {
       if (this.context.state !== "running") await this.context.resume();
       const next = await JamInput.open(this.context, options);
+      if (this.destroyed) {
+        next.close();
+        throw new Error("jam: engine destroyed while the input was opening");
+      }
       const previous = this.input;
       this.input = next;
       previous?.close();
       next.track.addEventListener("ended", this.onDeviceChange);
-      this.lastKey = (await this.latency()).key;
+      // the input is open whatever happens next; a failed device listing
+      // only means the change detector starts without a baseline
+      try {
+        this.lastKey = (await this.latency()).key;
+      } catch {
+        this.lastKey = null;
+      }
       return next;
     });
     this.opening = run.catch(() => undefined);
@@ -217,6 +228,7 @@ export class JamEngine {
   }
 
   async destroy(): Promise<void> {
+    this.destroyed = true;
     navigator.mediaDevices?.removeEventListener?.("devicechange", this.onDeviceChange);
     this.input?.close();
     this.input = null;
