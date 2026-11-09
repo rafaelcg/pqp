@@ -11872,7 +11872,8 @@ function MainAppContent({
                     channel={selectedChannel}
                     members={serverMembers}
                     channels={channels.filter((c) => c.type === "text" || c.type === "forum")}
-                    shortcut={IS_APPLE_KEYBOARD ? "⌘F" : "Ctrl F"}
+                    shortcutKey={conversationsHome ? "f" : "k"}
+                    shortcut={`${IS_APPLE_KEYBOARD ? "⌘" : "Ctrl "}${conversationsHome ? "F" : "K"}`}
                     tileClassName={HEADER_ACTION_TILE}
                   />
                 )}

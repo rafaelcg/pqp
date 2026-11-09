@@ -47,7 +47,13 @@ export interface HeaderSearchProps {
   members: readonly ServerMember[];
   /** The server's channels a hit can be in, for `em:`. */
   channels: readonly { id: string; name: string }[];
-  /** "Ctrl F" or "⌘F". */
+  /**
+   * The chord's letter, the same one the sidebar's message search uses
+   * (K, or F under Conversas), so the app has one search key and the
+   * browser keeps its own find.
+   */
+  shortcutKey: "f" | "k";
+  /** "Ctrl K" or "⌘K", matching `shortcutKey`. */
   shortcut: string;
   /** The header's icon-tile look, used below 1100 px. */
   tileClassName: string;
@@ -59,6 +65,7 @@ export function HeaderSearch({
   channel,
   members,
   channels,
+  shortcutKey,
   shortcut,
   tileClassName,
 }: HeaderSearchProps) {
@@ -66,14 +73,17 @@ export function HeaderSearch({
   const [open, setOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Ctrl F (⌘F) opens it, before the sidebar's own search can take the key.
+  // The search chord opens it, before the sidebar's own search can take the
+  // key. Not over a dialog: the key belongs to whatever is open on top.
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (
         (event.metaKey || event.ctrlKey) &&
         !event.altKey &&
         !event.shiftKey &&
-        event.key.toLowerCase() === "f"
+        event.key.toLowerCase() === shortcutKey &&
+        !event.defaultPrevented &&
+        !document.querySelector('[role="dialog"][aria-modal="true"], [role="alertdialog"], dialog[open]')
       ) {
         event.preventDefault();
         event.stopPropagation();
@@ -83,7 +93,7 @@ export function HeaderSearch({
     }
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, []);
+  }, [shortcutKey]);
 
   const label = t("search.header.trigger", { name: channel.name });
   return (
