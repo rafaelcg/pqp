@@ -186,6 +186,9 @@ const UiTokensPage = lazy(() =>
 const BotsQaPage = lazy(() =>
   import("./pages/bots-qa-page").then((m) => ({ default: m.BotsQaPage })),
 );
+const QaJamPage = lazy(() =>
+  import("./pages/qa-jam-page").then((m) => ({ default: m.QaJamPage })),
+);
 
 /**
  * `.env.example` ships a placeholder that is truthy, so a copied env would
@@ -450,6 +453,8 @@ function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
         <Route path="/qa/bots" element={<BotsQaPage />} />
         {/* The apps session strip in every state; same gate as the sheet above. */}
         <Route path="/qa/apps" element={<QaAppsPage />} />
+        {/* The jam audio engine's bench (docs/JAM_ENGINE.md); same gate. */}
+        <Route path="/qa/jam" element={<QaJamPage />} />
         <Route
           path="*"
           element={<Navigate to={isDesktopApp() ? "/app" : "/"} replace />}
