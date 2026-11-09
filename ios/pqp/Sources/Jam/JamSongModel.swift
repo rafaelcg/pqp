@@ -54,6 +54,13 @@ final class JamSongModel {
     @ObservationIgnored private var syncGeneration = 0
     @ObservationIgnored private var ticker: Task<Void, Never>?
     @ObservationIgnored private var started = false
+    /// Bumped by `stop`: work that was started before it finds the number
+    /// changed and does nothing (a download finishing after the screen left).
+    @ObservationIgnored private var lifecycle = 0
+    /// Frames that arrive while the detail read is out. The read was produced
+    /// before them, so they are applied on top of its answer.
+    @ObservationIgnored private var bufferedFrames: [JamFrame] = []
+    @ObservationIgnored private var isReading = false
     @ObservationIgnored private var interruptionObserver: NSObjectProtocol?
     @ObservationIgnored private var routeObserver: NSObjectProtocol?
     @ObservationIgnored private var lastNowPlaying = Date.distantPast
@@ -105,6 +112,7 @@ final class JamSongModel {
         self.session = session
         guard !started else { return }
         started = true
+        let mine = lifecycle
         let key = handlerKey
         session.eventHandlers[key] = { [weak self, weak session] event in
             guard let self else {
@@ -116,6 +124,7 @@ final class JamSongModel {
         engine.onInterruption = { [weak self] in self?.engineStopped() }
         observeSystem()
         await load()
+        guard mine == lifecycle else { return }
         await syncEngine()
     }
 
@@ -123,6 +132,8 @@ final class JamSongModel {
     /// the person has gone back to.
     func stop() {
         guard started else { return }
+        lifecycle += 1
+        syncGeneration += 1
         pauseInternal(keepSession: false)
         ticker?.cancel()
         video.stop()
@@ -137,15 +148,37 @@ final class JamSongModel {
 
     func load() async {
         guard let session else { return }
+        isReading = true
+        bufferedFrames = []
+        defer {
+            isReading = false
+            bufferedFrames = []
+        }
         do {
             let detail = try await session.api.jamSong(id: song.id)
-            state = JamSongState(song: detail.song, tracks: detail.tracks, viewer: detail.viewer)
+            var next = JamSongState(song: detail.song, tracks: detail.tracks, viewer: detail.viewer)
+            for frame in bufferedFrames { next.apply(frame) }
+            state = next
             phase = .ready
         } catch {
             if state.tracks.isEmpty {
                 phase = .failed((error as? APIError)?.errorDescription ?? error.localizedDescription)
+            } else if phase == .loading {
+                phase = .ready
             }
         }
+    }
+
+    /// After a vote whose outcome is unknown (the answer never came): ask the
+    /// server where the viewer stands rather than guessing it back.
+    private func reconcileVotes() async {
+        guard let session, let detail = try? await session.api.jamSong(id: song.id) else { return }
+        var next = state
+        for fresh in detail.tracks {
+            if let i = next.tracks.firstIndex(where: { $0.id == fresh.id }) { next.tracks[i].voteCount = fresh.voteCount }
+        }
+        next.viewer.votedTrackIds = detail.viewer.votedTrackIds
+        state = next
     }
 
     // MARK: - Engine
@@ -153,6 +186,7 @@ final class JamSongModel {
     /// Make the engine hold exactly the playing tracks: fetch what is missing,
     /// hand it over, and carry on from where the song was.
     func syncEngine() async {
+        guard started else { return }
         syncGeneration += 1
         let generation = syncGeneration
         let wanted = active
@@ -180,7 +214,7 @@ final class JamSongModel {
             }
             loading = nil
         }
-        guard generation == syncGeneration else { return }
+        guard generation == syncGeneration, started else { return }
 
         let wasPlaying = isPlaying
         let songTime = engine.originMs + engine.positionMs
@@ -242,6 +276,7 @@ final class JamSongModel {
             publishNowPlaying(force: true)
         } catch {
             isPlaying = false
+            audioSession.deactivate()
             notice = String(localized: "Could not start the audio. Try again.")
         }
     }
@@ -356,12 +391,10 @@ final class JamSongModel {
             let answer = try await session.api.setJamVote(trackId: track.id, voted: want)
             state.apply(vote: answer)
         } catch {
-            var back = state
-            back.apply(vote: JamVoteResponse(
-                trackId: track.id, songId: song.id, voteCount: track.voteCount, voted: !want
-            ))
-            state = back
+            // The server may or may not have taken it: do not put a captured
+            // count back over a newer one, ask where things stand.
             notice = Self.message(for: error)
+            await reconcileVotes()
         }
     }
 
@@ -416,12 +449,19 @@ final class JamSongModel {
 
     func apply(_ event: RealtimeEvent) {
         guard case .jam(let frame) = event, frame.channelId == channel.id else { return }
+        if isReading { bufferedFrames.append(frame) }
         var next = state
-        let effect = next.apply(frame)
+        var effect = next.apply(frame)
         guard next != state else { return }
         state = next
         // A track that left must not be the one auditioned.
-        auditioning = auditioning.filter { entry in next.tracks.contains { $0.id == entry.value } }
+        let stillThere = auditioning.filter { entry in next.tracks.contains { $0.id == entry.value } }
+        if stillThere != auditioning {
+            // The take being auditioned was deleted: the in-mix take of its
+            // instrument comes back, which is a change of stems.
+            auditioning = stillThere
+            effect = .reloadStems
+        }
         switch effect {
         case .reloadStems:
             Task { await syncEngine() }

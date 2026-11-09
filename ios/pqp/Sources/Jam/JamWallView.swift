@@ -109,6 +109,16 @@ struct JamWallView: View {
                 }
                 if model.isLoadingMore {
                     ProgressView().tint(Palette.paperMuted).frame(maxWidth: .infinity)
+                } else if model.loadMoreFailed {
+                    Button {
+                        Task { await model.loadMore() }
+                    } label: {
+                        Label("Could not load more songs. Tap to try again", systemImage: "arrow.clockwise")
+                            .font(JamFont.text(13, .semibold))
+                            .foregroundStyle(Palette.warning)
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                    }
+                    .buttonStyle(.plain)
                 }
             }
             .padding(.top, 6)

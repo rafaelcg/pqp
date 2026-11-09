@@ -114,6 +114,18 @@ final class JamContractTests: XCTestCase {
         ])
     }
 
+    func testMediaIsFetchedOverHTTPSOnlyOutsideDebug() {
+        XCTAssertNotNil(JamMediaURL.allowed("https://bucket.example.test/jam/a.m4a?X-Amz-Signature=1"))
+        XCTAssertNil(JamMediaURL.allowed("file:///etc/passwd"))
+        XCTAssertNil(JamMediaURL.allowed("ftp://example.test/a.m4a"))
+        XCTAssertNil(JamMediaURL.allowed("not a url"))
+        #if DEBUG
+        XCTAssertNotNil(JamMediaURL.allowed("http://localhost:9100/jam/a.m4a"), "a local MinIO in a Debug build")
+        #else
+        XCTAssertNil(JamMediaURL.allowed("http://localhost:9100/jam/a.m4a"))
+        #endif
+    }
+
     func testAChannelOfTypeJamIsNeverListedOnItsOwn() throws {
         let channel = try Coding.decoder.decode(Channel.self, from: Data("""
         {"id":"c1","serverId":"s1","kind":"server","name":"jam","type":"jam","position":0,"isPrivate":false}

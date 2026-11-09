@@ -7,6 +7,21 @@ import UIKit
 /// track id, and kept until the system wants the space back. A track's bytes
 /// never change (an edit moves numbers, not the file), so the id is the cache
 /// key and a re-read of the song with fresh presigned URLs reuses it.
+/// Where media may be fetched from. The server mints every stem and video URL
+/// from its own bucket (a client cannot name one), so the check is about the
+/// transport and not a host list that would differ per deployment: https only,
+/// and plain http only in a Debug build pointed at a local MinIO.
+enum JamMediaURL {
+    static func allowed(_ string: String) -> URL? {
+        guard let url = URL(string: string), let scheme = url.scheme?.lowercased(), url.host != nil else { return nil }
+        if scheme == "https" { return url }
+        #if DEBUG
+        if scheme == "http" { return url }
+        #endif
+        return nil
+    }
+}
+
 actor JamMediaCache {
     static let shared = JamMediaCache()
 
@@ -15,6 +30,8 @@ actor JamMediaCache {
     private let directory: URL
     private let session: URLSession
     private var inFlight: [String: Task<URL, Error>] = [:]
+    /// The most stems kept on disk. Past it the least recently written go.
+    static let diskBudgetBytes = 300 * 1024 * 1024
 
     init(session: URLSession = .shared) {
         self.session = session
@@ -46,7 +63,7 @@ actor JamMediaCache {
             return target
         }
         if let running = inFlight[id] { return try await running.value }
-        guard let url = URL(string: remote) else { throw MediaError.noURL }
+        guard let url = JamMediaURL.allowed(remote) else { throw MediaError.noURL }
         let session = self.session
         let task = Task<URL, Error> {
             let (temp, response) = try await session.download(from: url)
@@ -59,7 +76,29 @@ actor JamMediaCache {
         }
         inFlight[id] = task
         defer { inFlight[id] = nil }
-        return try await task.value
+        let result = try await task.value
+        trimToBudget(keeping: result)
+        return result
+    }
+
+    /// Oldest first, until the folder fits. The file just written is never the
+    /// one dropped, so a single stem larger than the budget still plays.
+    private func trimToBudget(keeping keep: URL) {
+        let manager = FileManager.default
+        guard let urls = try? manager.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey]
+        ) else { return }
+        var entries: [(url: URL, date: Date, size: Int)] = urls.compactMap { url in
+            let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+            return (url, values?.contentModificationDate ?? .distantPast, values?.fileSize ?? 0)
+        }
+        var total = entries.reduce(0) { $0 + $1.size }
+        guard total > Self.diskBudgetBytes else { return }
+        entries.sort { $0.date < $1.date }
+        for entry in entries where total > Self.diskBudgetBytes && entry.url != keep {
+            try? manager.removeItem(at: entry.url)
+            total -= entry.size
+        }
     }
 }
 
@@ -69,7 +108,13 @@ actor JamMediaCache {
 @MainActor
 final class JamPosterCache {
     static let shared = JamPosterCache()
-    private let cache = NSCache<NSString, UIImage>()
+    private let cache: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>()
+        // A poster is a decoded bitmap: about 4 bytes a pixel. Budgeted, not
+        // left to memory pressure alone.
+        cache.totalCostLimit = 24 * 1024 * 1024
+        return cache
+    }()
     private var inFlight: [String: Task<UIImage?, Never>] = [:]
 
     func cached(trackId: String) -> UIImage? { cache.object(forKey: trackId as NSString) }
@@ -82,12 +127,12 @@ final class JamPosterCache {
 
     func poster(trackId: String, url: String, contentType: String?, atSeconds: Double = 1) async -> UIImage? {
         if let hit = cached(trackId: trackId) { return hit }
-        guard Self.canPoster(contentType: contentType), let remote = URL(string: url) else { return nil }
+        guard Self.canPoster(contentType: contentType), let remote = JamMediaURL.allowed(url) else { return nil }
         if let running = inFlight[trackId] { return await running.value }
         let task = Task<UIImage?, Never> {
             let generator = AVAssetImageGenerator(asset: AVURLAsset(url: remote))
             generator.appliesPreferredTrackTransform = true
-            generator.maximumSize = CGSize(width: 720, height: 720)
+            generator.maximumSize = CGSize(width: 480, height: 480)
             generator.requestedTimeToleranceBefore = .positiveInfinity
             generator.requestedTimeToleranceAfter = .positiveInfinity
             do {
@@ -102,7 +147,10 @@ final class JamPosterCache {
         inFlight[trackId] = task
         let image = await task.value
         inFlight[trackId] = nil
-        if let image { cache.setObject(image, forKey: trackId as NSString) }
+        if let image {
+            let cost = Int(image.size.width * image.scale * image.size.height * image.scale * 4)
+            cache.setObject(image, forKey: trackId as NSString, cost: cost)
+        }
         return image
     }
 }

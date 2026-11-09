@@ -31,8 +31,15 @@ final class JamVideoSync {
         let durationMs: Double
     }
 
+    /// The stage draws at most this many videos, so no more players exist.
+    static let maxPlayers = 4
+
     private(set) var items: [String: Item] = [:]
     private var order: [String] = []
+    /// Bumped by every play, pause, park and stop. A seek that finishes under
+    /// an older number is a seek nobody is waiting for any more: it must not
+    /// start a video the audio has already stopped.
+    private var generation = 0
 
     static func canPlay(contentType: String?) -> Bool {
         JamPosterCache.canPoster(contentType: contentType)
@@ -42,14 +49,14 @@ final class JamVideoSync {
 
     /// Make these the videos on screen. Existing players are kept.
     func load(_ tracks: [JamTrack]) {
-        let wanted = tracks.filter { $0.hasVideo && Self.canPlay(contentType: $0.videoContentType) }
+        let wanted = Array(tracks.filter { $0.hasVideo && Self.canPlay(contentType: $0.videoContentType) }.prefix(Self.maxPlayers))
         let ids = Set(wanted.map(\.id))
         for id in items.keys where !ids.contains(id) {
             items[id]?.player.pause()
             items.removeValue(forKey: id)
         }
         for track in wanted {
-            guard let urlString = track.videoUrl, let url = URL(string: urlString) else { continue }
+            guard let urlString = track.videoUrl, let url = JamMediaURL.allowed(urlString) else { continue }
             if let existing = items[track.id] {
                 // Same file, maybe a moved offset: keep the player, take the
                 // new numbers.
@@ -81,6 +88,7 @@ final class JamVideoSync {
 
     /// Show the frame for a song time without playing.
     func park(atSongMs songMs: Double) {
+        generation += 1
         for item in items.values {
             item.player.pause()
             item.player.seek(
@@ -97,23 +105,32 @@ final class JamVideoSync {
         func ticks(_ seconds: Double) -> UInt64 {
             UInt64(max(0, seconds) * 1_000_000_000 * Double(timebase.denom) / Double(timebase.numer))
         }
+        generation += 1
+        let token = generation
         for item in items.values {
             let delaySeconds = max(0, (item.offsetMs - songMs) / 1000)
             let fileTime = CMTime(seconds: fileSeconds(item, songMs: songMs), preferredTimescale: 600)
             let at = startHostTime + ticks(latencySeconds + delaySeconds)
-            item.player.seek(to: fileTime, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
-                // Past the host time already (a slow seek): start now, the
-                // drift check below puts it right.
-                item.player.setRate(1, time: fileTime, atHostTime: CMClockMakeHostTimeFromSystemUnits(at))
+            nonisolated(unsafe) let player = item.player
+            player.seek(to: fileTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
+                Task { @MainActor in
+                    // A seek that was cancelled, or that outlived a pause or a
+                    // newer play, starts nothing. Past the host time already
+                    // (a slow seek): start now, the drift check puts it right.
+                    guard finished, let self, self.generation == token else { return }
+                    player.setRate(1, time: fileTime, atHostTime: CMClockMakeHostTimeFromSystemUnits(at))
+                }
             }
         }
     }
 
     func pause() {
+        generation += 1
         for item in items.values { item.player.pause() }
     }
 
     func stop() {
+        generation += 1
         for item in items.values { item.player.pause() }
         items.removeAll()
         order = []
@@ -132,8 +149,13 @@ final class JamVideoSync {
             guard actual.isFinite, abs(actual - expected) * 1000 > Self.driftToleranceMs else { continue }
             moved += 1
             let target = CMTime(seconds: expected, preferredTimescale: 600)
-            item.player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
-                item.player.rate = 1
+            let token = generation
+            nonisolated(unsafe) let player = item.player
+            player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
+                Task { @MainActor in
+                    guard finished, let self, self.generation == token else { return }
+                    player.rate = 1
+                }
             }
         }
         return moved

@@ -481,6 +481,16 @@
         }
       }
     },
+    "Could not load more songs. Tap to try again" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra carregar mais músicas. Toca pra tentar de novo"
+          }
+        }
+      }
+    },
     "Could not load songs" : {
       "localizations" : {
         "pt-BR" : {

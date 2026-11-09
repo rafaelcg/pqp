@@ -25,6 +25,9 @@ import MediaPlayer
 @MainActor
 final class JamAudioSession {
     private var weChangedTheSession = false
+    /// What the session was before this one took it, put back on release so a
+    /// song does not leave the rest of the app on `.playback`.
+    private var previous: (category: AVAudioSession.Category, mode: AVAudioSession.Mode, options: AVAudioSession.CategoryOptions)?
     private(set) var ownsLockScreen = false
 
     /// Take the session when it is free. Returns whether the song may start:
@@ -39,7 +42,9 @@ final class JamAudioSession {
         }
         if audio.category != .playback {
             do {
+                let before = (audio.category, audio.mode, audio.categoryOptions)
                 try audio.setCategory(.playback, mode: .default)
+                if previous == nil { previous = before }
                 weChangedTheSession = true
             } catch {
                 // A song with the wrong routing beats no song.
@@ -48,10 +53,12 @@ final class JamAudioSession {
         do {
             try audio.setActive(true)
             weChangedTheSession = true
+            ownsLockScreen = true
         } catch {
-            // Same.
+            // The song still plays through whatever route there is, but the
+            // lock screen is not ours to draw on without an active session.
+            ownsLockScreen = false
         }
-        ownsLockScreen = true
         return true
     }
 
@@ -60,9 +67,25 @@ final class JamAudioSession {
     func deactivate() {
         ownsLockScreen = false
         guard weChangedTheSession else { return }
+        let audio = AVAudioSession.sharedInstance()
+        // A call (or anything recording) holds it now: not ours to touch, and
+        // nothing of ours is left to give back.
+        guard audio.category == .playback else {
+            weChangedTheSession = false
+            previous = nil
+            return
+        }
+        do {
+            try audio.setActive(false, options: .notifyOthersOnDeactivation)
+        } catch {
+            // Still active: keep what we know so the next release tries again.
+            return
+        }
         weChangedTheSession = false
-        guard AVAudioSession.sharedInstance().category == .playback else { return }
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        if let previous {
+            try? audio.setCategory(previous.category, mode: previous.mode, options: previous.options)
+        }
+        previous = nil
     }
 
     /// Output latency in seconds, for lining a video up with what is HEARD
@@ -125,6 +148,8 @@ enum JamNowPlaying {
         let center = MPRemoteCommandCenter.shared()
         for entry in installedTargets { entry.command.removeTarget(entry.target) }
         installedTargets = []
+        center.playCommand.isEnabled = false
+        center.pauseCommand.isEnabled = false
         center.changePlaybackPositionCommand.isEnabled = false
     }
 

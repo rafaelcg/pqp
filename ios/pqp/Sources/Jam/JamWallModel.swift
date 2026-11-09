@@ -60,6 +60,8 @@ final class JamWallModel {
     private(set) var phase: Phase = .loading
     private(set) var isRefreshing = false
     private(set) var isLoadingMore = false
+    /// The last page request failed: the wall offers a retry at its end.
+    private(set) var loadMoreFailed = false
     private(set) var previews: [String: JamPreview] = [:]
     /// Bumped when a poster frame lands in `JamPosterCache`, which is not
     /// observable itself: tiles read it so they draw again.
@@ -69,6 +71,11 @@ final class JamWallModel {
     @ObservationIgnored private let handlerKey = "jam-wall-\(UUID().uuidString)"
     @ObservationIgnored private var started = false
     @ObservationIgnored private var generation = 0
+    /// Live frames that arrive while a page-one read is in flight. The read's
+    /// answer was produced before them, so replacing the wall with it would
+    /// lose them; they are applied on top of it instead.
+    @ObservationIgnored private var bufferedFrames: [JamFrame] = []
+    @ObservationIgnored private var isReading = false
     @ObservationIgnored private var previewsInFlight: Set<String> = []
     @ObservationIgnored private var previewQueue: [String] = []
     @ObservationIgnored private var previewWorkers = 0
@@ -116,11 +123,22 @@ final class JamWallModel {
         generation += 1
         let request = generation
         if state.isEmpty { phase = .loading } else { isRefreshing = true }
-        defer { if request == generation { isRefreshing = false } }
+        loadMoreFailed = false
+        isReading = true
+        bufferedFrames = []
+        defer {
+            if request == generation {
+                isRefreshing = false
+                isReading = false
+                bufferedFrames = []
+            }
+        }
         do {
             let page = try await session.api.jamSongs(channelId: channel.id)
             guard request == generation else { return }
             state.replace(with: page)
+            // What happened while the read was out, on top of what it says.
+            for frame in bufferedFrames { state.apply(frame, channelId: channel.id) }
             phase = .ready
             markSeen()
         } catch {
@@ -139,13 +157,25 @@ final class JamWallModel {
     }
 
     func loadMoreIfNeeded(after song: JamSongSummary) async {
-        guard let session, let cursor = state.nextCursor, !isLoadingMore,
-              song.id == state.songs.last?.id
-        else { return }
+        guard song.id == state.songs.last?.id else { return }
+        await loadMore()
+    }
+
+    /// The next page. An answer that a refresh has overtaken (the cursor it
+    /// followed is no longer the wall's) is dropped, and a failure leaves a
+    /// retry in place of the end of the wall.
+    func loadMore() async {
+        guard let session, let cursor = state.nextCursor, !isLoadingMore else { return }
+        let request = generation
         isLoadingMore = true
+        loadMoreFailed = false
         defer { isLoadingMore = false }
-        if let page = try? await session.api.jamSongs(channelId: channel.id, cursor: cursor) {
+        do {
+            let page = try await session.api.jamSongs(channelId: channel.id, cursor: cursor)
+            guard request == generation, state.nextCursor == cursor else { return }
             state.append(page: page)
+        } catch {
+            if request == generation { loadMoreFailed = true }
         }
     }
 
@@ -158,6 +188,7 @@ final class JamWallModel {
 
     func apply(_ event: RealtimeEvent) {
         guard case .jam(let frame) = event else { return }
+        if isReading { bufferedFrames.append(frame) }
         let before = state
         if state.apply(frame, channelId: channel.id), before != state {
             // Looking at the wall is reading it.
@@ -238,10 +269,25 @@ final class JamListModel {
             return
         }
         let viewerId = session.currentUser?.id
+        let seen = self.seen
+        let api = session.api
+        // One request per jam channel, all at once (a server has a handful).
+        let answers: [(String, JamSongListResponse?)] = await withTaskGroup(
+            of: (String, JamSongListResponse?).self
+        ) { group in
+            for id in jamChannelIds {
+                group.addTask {
+                    (id, try? await api.jamSongs(channelId: id, limit: JamLimits.pageMax))
+                }
+            }
+            var all: [(String, JamSongListResponse?)] = []
+            for await answer in group { all.append(answer) }
+            return all
+        }
         var next: [String: JamRowSummary] = [:]
-        for id in jamChannelIds {
-            guard let page = try? await session.api.jamSongs(channelId: id, limit: JamLimits.pageMax)
-            else {
+        for (id, page) in answers {
+            guard let page else {
+                // A failed read keeps what the row said.
                 if let old = rows[id] { next[id] = old }
                 continue
             }

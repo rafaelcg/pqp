@@ -252,7 +252,7 @@ struct JamTrack: Decodable, Identifiable, Hashable, Sendable {
 
     var hasVideo: Bool { videoUrl != nil }
 
-    /// What a track draws as: its label, else its person.
+    /// The person (a label is separate: rows show `label ?? displayName`).
     var displayName: String { authorName ?? "?" }
 
     /// `jamTrackPlayedMs` in the contract: the length it plays for.
