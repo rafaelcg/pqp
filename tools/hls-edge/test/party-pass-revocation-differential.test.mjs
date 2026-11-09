@@ -445,6 +445,21 @@ test("cost: a 5 minute party (10 windows) with 200 viewers is 10 listings, not 2
   assert.equal(nextKv.calls, 10);
 });
 
+test("cost: 200 concurrent callers on a cold isolate, old vs new", async () => {
+  const population = viewerPopulation(200, 3);
+  const legacyKv = countingKv([]);
+  const legacy = new LegacyPartyPassRevocationGate();
+  await Promise.all(population.map(({ userId, channelId }) => legacy.check(legacyKv.kv, userId, channelId, BASE, BASE)));
+  const nextKv = countingKv([]);
+  const next = new PartyPassRevocationGate();
+  await Promise.all(population.map(({ userId, channelId }) => next.check(nextKv.kv, userId, channelId, BASE, BASE)));
+  // Old: every concurrent caller starts its own two lists (nothing is cached
+  // yet and nothing is shared). New: the herd shares one.
+  assert.equal(legacyKv.calls, 400);
+  assert.equal(nextKv.calls, 1);
+  console.log(`# list calls, 200 concurrent callers on a cold isolate: old ${legacyKv.calls}, new ${nextKv.calls}`);
+});
+
 test("cost: the same answers while paying for that, per viewer, in the same windows", async () => {
   const keys = [`user_0003:channel-0:${BASE + 5}`, `channel:channel-1:${BASE + 5}`];
   const population = viewerPopulation(60, 3);
