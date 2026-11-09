@@ -157,7 +157,9 @@ final class JamWallModel {
     }
 
     func loadMoreIfNeeded(after song: JamSongSummary) async {
-        guard song.id == state.songs.last?.id else { return }
+        // The last tile ON SCREEN, which under a filter is not the last song
+        // the wall holds.
+        guard song.id == visibleSongs.last?.id else { return }
         await loadMore()
     }
 

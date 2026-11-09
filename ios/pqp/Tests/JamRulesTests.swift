@@ -287,6 +287,14 @@ final class JamRulesTests: XCTestCase {
         XCTAssertEqual(state.apply(.trackDeleted(channelId: "c", song: song("s"), trackId: "t1")), .reloadStems)
     }
 
+    func testDeletingAnAuditionedTakeReloadsTheStemsEvenThoughItWasNeverInTheMix() {
+        var state = openSong()
+        XCTAssertEqual(
+            state.apply(.trackDeleted(channelId: "c", song: song("s"), trackId: "t2"), auditioned: ["t2"]),
+            .reloadStems
+        )
+    }
+
     func testADeletedSongIsFlaggedAndAFrameForAnotherSongIsIgnored() {
         var state = openSong()
         state.apply(.songDeleted(channelId: "c", songId: "other"))

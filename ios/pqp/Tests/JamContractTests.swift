@@ -119,6 +119,14 @@ final class JamContractTests: XCTestCase {
         XCTAssertNil(JamMediaURL.allowed("file:///etc/passwd"))
         XCTAssertNil(JamMediaURL.allowed("ftp://example.test/a.m4a"))
         XCTAssertNil(JamMediaURL.allowed("not a url"))
+        // A phone does not fetch a stem from its own network.
+        XCTAssertNil(JamMediaURL.allowed("https://192.168.0.10/a.m4a"))
+        XCTAssertNil(JamMediaURL.allowed("https://10.1.2.3/a.m4a"))
+        XCTAssertNil(JamMediaURL.allowed("https://172.20.0.1/a.m4a"))
+        XCTAssertNil(JamMediaURL.allowed("https://169.254.1.1/a.m4a"))
+        XCTAssertNil(JamMediaURL.allowed("https://printer.local/a.m4a"))
+        XCTAssertNil(JamMediaURL.allowed("https://localhost/a.m4a"))
+        XCTAssertNotNil(JamMediaURL.allowed("https://172.32.0.1/a.m4a"), "outside 172.16/12")
         #if DEBUG
         XCTAssertNotNil(JamMediaURL.allowed("http://localhost:9100/jam/a.m4a"), "a local MinIO in a Debug build")
         #else

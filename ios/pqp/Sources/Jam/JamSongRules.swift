@@ -118,8 +118,10 @@ struct JamSongState: Equatable, Sendable {
         case levels
     }
 
+    /// `auditioned` is the set of out-of-mix takes this phone is playing in
+    /// place of the mix, so a delete of one of those is a change of stems too.
     @discardableResult
-    mutating func apply(_ frame: JamFrame) -> Effect {
+    mutating func apply(_ frame: JamFrame, auditioned: Set<String> = []) -> Effect {
         switch frame {
         case .songCreated:
             return .none
@@ -159,11 +161,11 @@ struct JamSongState: Equatable, Sendable {
             guard updated.id == song.id else { return .none }
             song = updated
             guard let i = tracks.firstIndex(where: { $0.id == trackId }) else { return .none }
-            let wasInMix = tracks[i].inMix
+            let wasPlaying = tracks[i].inMix || auditioned.contains(trackId)
             tracks.remove(at: i)
             fresh.remove(trackId)
             viewer.votedTrackIds.remove(trackId)
-            return wasInMix ? .reloadStems : .none
+            return wasPlaying ? .reloadStems : .none
         case .trackVotes(_, let songId, let trackId, let count):
             guard songId == song.id, let i = tracks.firstIndex(where: { $0.id == trackId }) else { return .none }
             tracks[i].voteCount = count

@@ -40,7 +40,11 @@ final class JamAudioSession {
             ownsLockScreen = false
             return true
         }
-        if audio.category != .playback {
+        // Somebody else's `.playback` session (a video, a voice note) is theirs:
+        // sharing it is fine, releasing it under them is not, so only a session
+        // THIS song changed is one it gives back.
+        let alreadyPlayback = audio.category == .playback
+        if !alreadyPlayback {
             do {
                 let before = (audio.category, audio.mode, audio.categoryOptions)
                 try audio.setCategory(.playback, mode: .default)
@@ -52,7 +56,7 @@ final class JamAudioSession {
         }
         do {
             try audio.setActive(true)
-            weChangedTheSession = true
+            if !alreadyPlayback { weChangedTheSession = true }
             ownsLockScreen = true
         } catch {
             // The song still plays through whatever route there is, but the

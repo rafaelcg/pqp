@@ -172,6 +172,9 @@ struct JamWallView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 60)
+        // Nothing on this page matches, but a later one might: keep reading
+        // until something does or the wall runs out.
+        .task(id: model.state.songs.count) { await model.loadMore() }
     }
 
     // MARK: Tiles

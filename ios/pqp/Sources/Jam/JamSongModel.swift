@@ -379,12 +379,14 @@ final class JamSongModel {
         busyVotes.insert(track.id)
         defer { busyVotes.remove(track.id) }
         let want = !isVoted(track.id)
-        // Optimistic: the count and the mark move at once, and the answer
-        // (or the failure) settles them.
+        // Optimistic: the count and the mark move at once, from the count as it
+        // is NOW (a frame may have moved it since the row was drawn), and the
+        // answer (or the failure) settles them.
+        let current = state.tracks.first { $0.id == track.id }?.voteCount ?? track.voteCount
         var optimistic = state
         optimistic.apply(vote: JamVoteResponse(
             trackId: track.id, songId: song.id,
-            voteCount: max(0, track.voteCount + (want ? 1 : -1)), voted: want
+            voteCount: max(0, current + (want ? 1 : -1)), voted: want
         ))
         state = optimistic
         do {
@@ -451,7 +453,7 @@ final class JamSongModel {
         guard case .jam(let frame) = event, frame.channelId == channel.id else { return }
         if isReading { bufferedFrames.append(frame) }
         var next = state
-        var effect = next.apply(frame)
+        var effect = next.apply(frame, auditioned: Set(auditioning.values))
         guard next != state else { return }
         state = next
         // A track that left must not be the one auditioned.

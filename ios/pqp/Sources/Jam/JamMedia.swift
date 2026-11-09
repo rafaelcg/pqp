@@ -13,12 +13,27 @@ import UIKit
 /// and plain http only in a Debug build pointed at a local MinIO.
 enum JamMediaURL {
     static func allowed(_ string: String) -> URL? {
-        guard let url = URL(string: string), let scheme = url.scheme?.lowercased(), url.host != nil else { return nil }
-        if scheme == "https" { return url }
+        guard let url = URL(string: string), let scheme = url.scheme?.lowercased(),
+              let host = url.host?.lowercased(), !host.isEmpty
+        else { return nil }
         #if DEBUG
         if scheme == "http" { return url }
         #endif
-        return nil
+        guard scheme == "https", !isLocalHost(host) else { return nil }
+        return url
+    }
+
+    /// A phone has no business fetching a stem from its own network: localhost,
+    /// `.local` names and private or link-local address literals are refused.
+    static func isLocalHost(_ host: String) -> Bool {
+        if host == "localhost" || host.hasSuffix(".local") || host.hasSuffix(".localhost") || host.contains(":") { return true }
+        let parts = host.split(separator: ".").compactMap { Int($0) }
+        guard parts.count == 4 else { return false }
+        switch (parts[0], parts[1]) {
+        case (10, _), (127, _), (169, 254), (192, 168), (0, _): return true
+        case (172, 16...31): return true
+        default: return false
+        }
     }
 }
 
@@ -95,7 +110,10 @@ actor JamMediaCache {
         var total = entries.reduce(0) { $0 + $1.size }
         guard total > Self.diskBudgetBytes else { return }
         entries.sort { $0.date < $1.date }
-        for entry in entries where total > Self.diskBudgetBytes && entry.url != keep {
+        // Anything written in the last ten minutes belongs to a song being
+        // loaded right now: never trimmed out from under it.
+        let recent = Date().addingTimeInterval(-600)
+        for entry in entries where total > Self.diskBudgetBytes && entry.url != keep && entry.date < recent {
             try? manager.removeItem(at: entry.url)
             total -= entry.size
         }
