@@ -995,7 +995,7 @@ The apps platform: small interactive things (Locadora, a game room) that a perso
 starts in a text or voice channel and others join from a live card in the
 timeline. Behind `APPS` (default off, **per server**, born as a flag). It is the
 first of the platform's gates: an app is also released by the operator per server
-(`server_apps.operator_enabled`), and Locadora needs `emulator_room` on top.
+(`server_apps.operator_enabled`, or for every server at once with the app's `default_operator_enabled`, see `docs/APPS.md` §"The operator's release"), and Locadora needs `emulator_room` on top.
 
 Off means nothing renders and every apps route answers 404, except
 `GET /api/apps/config?serverId=` (`enabled`), which answers `{ enabled: false }`

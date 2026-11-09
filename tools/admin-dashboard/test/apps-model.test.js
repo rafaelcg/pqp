@@ -194,10 +194,54 @@ test("the line under an opened app says where it stands, on or off", () => {
   );
 });
 
+test("the app-wide default says what it reaches, and only turning it on asks first", () => {
+  const c = M.defaultConfirm(app(), 3200);
+  assert.equal(c.title, "Ligar Sala de jogos em todos os servidores?");
+  assert.match(c.lines[0], /hoje 3\.200 servidores, e os que forem criados depois também/);
+  assert.match(c.lines[1], /desligado à mão aqui continua desligado/);
+  assert.match(c.lines[1], /Comunidades públicas continuam travadas/);
+  assert.equal(c.confirm, "Ligar em todos");
+  assert.doesNotMatch(M.defaultConfirm(app(), 0).lines[0], /hoje/);
+  assert.match(M.defaultNote(app({ defaultOperatorEnabled: true })), /^Ligado: todo servidor privado/);
+  assert.match(M.defaultNote(app({ defaultOperatorEnabled: true, communityUnlocked: true })), /^Ligado: todo servidor que não/);
+  assert.match(M.defaultNote(app()), /^Desligado: só tem o app o servidor ligado um a um/);
+});
+
+test("a server row follows the API's released flag, falls back to the switch, and a default release is a chip", () => {
+  assert.equal(M.serverReleased({ released: true, operatorEnabled: null }), true);
+  assert.equal(M.serverReleased({ released: false, operatorEnabled: true }), false);
+  assert.equal(M.serverReleased({ operatorEnabled: true }), true, "an API from before the default");
+  assert.equal(M.serverReleased({ operatorEnabled: null }), false);
+  const byDefault = M.serverRow({ name: "Novo", memberCount: 1, isCommunity: false, locked: false, operatorEnabled: null, released: true, ownerEnabled: false, appsFlag: true, liveSessions: 0 });
+  assert.deepEqual(byDefault.chips.map((c) => c.text), ["o dono desligou", "pelo padrão do app"]);
+  const off = M.serverRow({ name: "Fora", memberCount: 1, isCommunity: false, locked: false, operatorEnabled: false, released: false });
+  assert.deepEqual(off.chips.map((c) => c.text), ["desligado à mão"]);
+  // A locked community the default does not reach: its switch is locked; one released explicitly can always go off.
+  assert.equal(M.serverRow({ name: "QG", memberCount: 2, isCommunity: true, locked: true, operatorEnabled: null, released: false }).locked, true);
+  assert.equal(M.serverRow({ name: "QG", memberCount: 2, isCommunity: true, locked: true, operatorEnabled: true, released: true }).locked, false);
+});
+
+test("with the default on, the summary, the history and the disable confirmation say so", () => {
+  assert.equal(
+    M.appSummary(app({ defaultOperatorEnabled: true, serversOn: 3150 }), 3200),
+    "Sala de jogos v1.0.2, no ar. Global: ligado, padrão em todos os servidores: 3.150 de 3.200 servidores com o app.",
+  );
+  assert.equal(
+    M.auditText({ action: "default-operator", before: { defaultOperatorEnabled: false }, after: { defaultOperatorEnabled: true } }),
+    "Padrão em todos os servidores: desligado para ligado",
+  );
+  const c = M.disableConfirm(app({ defaultOperatorEnabled: true }), 1, 3);
+  assert.equal(c.lines.length, 4);
+  assert.match(c.lines[3], /padrão “todos os servidores” também desliga/);
+  assert.equal(M.disableConfirm(app(), 1, 3).lines.length, 3, "unchanged with the default off");
+});
+
 test("no sentence on this screen has an em dash or the word você", () => {
   const all = [
     M.sessionsLine(0), M.LOCK_NOTE, ...M.disableConfirm(app(), 2, 2).lines, ...M.communityConfirm(app(), true).lines,
     ...M.communityConfirm(app(), false).lines, M.appsWriteError("x"), M.appsWriteError("not-reviewed"),
+    ...M.defaultConfirm(app(), 3200).lines, M.defaultNote(app()), M.defaultNote(app({ defaultOperatorEnabled: true })),
+    ...M.disableConfirm(app({ defaultOperatorEnabled: true }), 1, 3).lines,
     M.disableFailure(404).text, M.disableFailure(401).text, M.disableFailure(400).text
   ].join(" ");
   assert.equal(all.includes("—"), false);

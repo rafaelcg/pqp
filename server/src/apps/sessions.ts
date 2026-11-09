@@ -182,9 +182,13 @@ export async function startAppSession(
           -- operator or owner switch, or a community lock, that moved while the
           -- checks above ran stops this insert.
           AND a.global_enabled
-          AND EXISTS (SELECT 1 FROM server_apps sa
-                       WHERE sa.server_id = $1 AND sa.app_id = a.id
-                         AND sa.operator_enabled IS TRUE AND sa.owner_enabled IS NOT FALSE)
+          AND COALESCE(
+                (SELECT sa.operator_enabled FROM server_apps sa
+                  WHERE sa.server_id = $1 AND sa.app_id = a.id),
+                a.default_operator_enabled) IS TRUE
+          AND NOT EXISTS (SELECT 1 FROM server_apps sa
+                           WHERE sa.server_id = $1 AND sa.app_id = a.id
+                             AND sa.owner_enabled IS FALSE)
           AND (a.community_unlocked
                OR NOT COALESCE((SELECT is_community FROM servers WHERE id = $1), FALSE))
        RETURNING id, app_version, started_at`,

@@ -225,6 +225,16 @@ describeDb("apps tables", () => {
   });
 
   describe("apps and versions", () => {
+    it("default_operator_enabled is a NOT NULL boolean that starts FALSE, and the schema re-applies with it", async () => {
+      await seedApp("eco", "1.0.0");
+      expect((await q(`SELECT default_operator_enabled FROM apps WHERE id = 'eco'`)).rows).toEqual([
+        { default_operator_enabled: false },
+      ]);
+      await expect(q(`UPDATE apps SET default_operator_enabled = NULL WHERE id = 'eco'`)).rejects.toMatchObject({
+        code: "23502",
+      });
+    });
+
     it("refuses an id that is not a lowercase slug", async () => {
       for (const bad of ["Eco", "e", "-eco", "eco-", "eco_app", "9eco"]) {
         await expect(
@@ -588,6 +598,9 @@ describeDb("apps tables", () => {
          VALUES ('dashboard', $1, 'operator-server', 'eco', $2)`,
         [otherId, serverId],
       );
+      await q(
+        `INSERT INTO app_admin_audit (actor_kind, action, app_id) VALUES ('dashboard', 'default-operator', 'eco')`,
+      );
       await expect(
         q(`INSERT INTO app_admin_audit (actor_kind, action, app_id) VALUES ('dashboard', 'poof', 'eco')`),
       ).rejects.toMatchObject({ code: "23514" });
@@ -596,7 +609,10 @@ describeDb("apps tables", () => {
       const row = await q<{ server_id: string | null; actor_user_id: string | null }>(
         `SELECT server_id, actor_user_id FROM app_admin_audit`,
       );
-      expect(row.rows).toEqual([{ server_id: null, actor_user_id: null }]);
+      expect(row.rows).toEqual([
+        { server_id: null, actor_user_id: null },
+        { server_id: null, actor_user_id: null },
+      ]);
     });
   });
 });

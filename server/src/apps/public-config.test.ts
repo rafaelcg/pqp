@@ -34,6 +34,7 @@ function row(patch: Partial<AppAvailabilityRow> = {}): AppAvailabilityRow {
     manifest: locadora,
     operator_enabled: null,
     owner_enabled: null,
+    default_operator_enabled: false,
     ...patch,
   };
 }

@@ -36,6 +36,7 @@ let inflight: Promise<AppAvailabilityRow | null> | null = null;
 async function readLocadoraRow(): Promise<AppAvailabilityRow | null> {
   const result = await getPool().query<AppAvailabilityRow>(
     `SELECT a.id, a.status, a.current_version, a.global_enabled, a.community_unlocked,
+            a.default_operator_enabled,
             v.manifest, NULL::boolean AS operator_enabled, NULL::boolean AS owner_enabled
        FROM apps a
        LEFT JOIN app_versions v ON v.app_id = a.id AND v.version = a.current_version

@@ -5,6 +5,7 @@ import { HttpError } from "../lib/http.js";
 import { isEnabled } from "../lib/flags.js";
 import { logEvent } from "../lib/log.js";
 import { publishAppsChanged } from "./changed.js";
+import { operatorReleased } from "./availability.js";
 import { endSessionRow } from "./sessions.js";
 
 /**
@@ -20,8 +21,12 @@ import { endSessionRow } from "./sessions.js";
  *    same way. The refusal is a 409 `not-reviewed` and the dashboard shows it
  *    as the reason under a switch that was never enabled (mock 05 state 3).
  *  - `apps.community_unlocked`: the explicit safety decision for one app.
+ *  - `apps.default_operator_enabled`: "released on every server that has not
+ *    decided": a server with no row (or NULL) counts as released, an explicit
+ *    `server_apps.operator_enabled = FALSE` still wins, and a public community
+ *    is still locked until `community_unlocked`. "Desligar em todos" clears it.
  *  - `server_apps.operator_enabled`: per server, true / false / null (null is
- *    "not decided", which is off). A public community needs the app's
+ *    "not decided", which is off unless the app's default is on). A public community needs the app's
  *    `community_unlocked` first (409 `community-locked`).
  *  - a version's review record.
  *
@@ -60,6 +65,8 @@ export const setAppSchema = z
     status: z.enum(APP_STATUSES).optional(),
     globalEnabled: z.boolean().optional(),
     communityUnlocked: z.boolean().optional(),
+    /** Released on every server that has not decided (see the file header). */
+    defaultOperatorEnabled: z.boolean().optional(),
     currentVersion: versionSchema.optional(),
   })
   .refine(
@@ -67,6 +74,7 @@ export const setAppSchema = z
       body.status !== undefined ||
       body.globalEnabled !== undefined ||
       body.communityUnlocked !== undefined ||
+      body.defaultOperatorEnabled !== undefined ||
       body.currentVersion !== undefined,
     { message: "Nothing to change" },
   );
@@ -93,7 +101,7 @@ export const reviewAppVersionSchema = z.object({
 export const setServerAppSchema = z.object({
   serverId: z.string().uuid(),
   appId: appIdSchema,
-  /** `null` is "not decided", which is off. */
+  /** `null` is "not decided": off, unless the app's default release is on. */
   operatorEnabled: z.boolean().nullable(),
 });
 
@@ -167,13 +175,19 @@ export interface AppAdminView {
   status: string;
   globalEnabled: boolean;
   communityUnlocked: boolean;
+  /** Released on every server that has not decided (`apps.default_operator_enabled`). */
+  defaultOperatorEnabled: boolean;
   currentVersion: string | null;
   /** Whether the CURRENT version is approved: what going live asks for. */
   currentApproved: boolean;
   /** Why the live and global switches cannot be turned on, or null. */
   goLiveBlocker: "not-reviewed" | null;
   category: string | null;
-  /** Servers where the operator switch is on. */
+  /**
+   * Servers the operator's release reaches: an explicit ON, plus, with the
+   * default on, every server that has not decided (a public community not
+   * counted while the app is locked for communities). An explicit OFF never.
+   */
   serversOn: number;
   /** Of those, how many the owner switched off again. */
   serversOwnerOff: number;
@@ -272,6 +286,7 @@ async function loadApps(db: Queryable, onlyId?: string): Promise<AppAdminView[]>
   const [apps, versions, on, sessions] = await Promise.all([
     db.query(
       `SELECT a.id, a.status, a.global_enabled, a.community_unlocked,
+              a.default_operator_enabled,
               a.current_version, a.created_at, a.updated_at,
               p.id AS publisher_id, p.display_name AS publisher_name, p.kind AS publisher_kind
          FROM apps a JOIN app_publishers p ON p.id = a.publisher_id
@@ -288,14 +303,32 @@ async function loadApps(db: Queryable, onlyId?: string): Promise<AppAdminView[]>
         ORDER BY v.created_at DESC, v.version DESC`,
       params,
     ),
+    // Per app: the explicit ONs, and (only for an app whose default is on) the
+    // servers with no decision of their own. An explicit OFF is in neither, and
+    // a public community counts through the default only when the app is
+    // unlocked for communities, the same lock availability applies.
     db.query(
-      `SELECT sa.app_id,
-              COUNT(*)::int AS servers_on,
-              COUNT(*) FILTER (WHERE sa.owner_enabled = FALSE)::int AS owner_off
-         FROM server_apps sa
-        WHERE sa.operator_enabled IS TRUE
-          ${onlyId ? `AND sa.app_id = $1` : ""}
-        GROUP BY sa.app_id`,
+      `SELECT a.id AS app_id,
+              (SELECT COUNT(*)::int FROM server_apps sa
+                WHERE sa.app_id = a.id AND sa.operator_enabled IS TRUE) AS explicit_on,
+              (SELECT COUNT(*)::int FROM server_apps sa
+                WHERE sa.app_id = a.id AND sa.operator_enabled IS TRUE
+                  AND sa.owner_enabled = FALSE) AS explicit_owner_off,
+              CASE WHEN a.default_operator_enabled THEN
+                (SELECT COUNT(*)::int FROM servers s
+                  WHERE (a.community_unlocked OR NOT COALESCE(s.is_community, FALSE))
+                    AND NOT EXISTS (SELECT 1 FROM server_apps sa
+                                     WHERE sa.server_id = s.id AND sa.app_id = a.id
+                                       AND sa.operator_enabled IS NOT NULL))
+              ELSE 0 END AS default_on,
+              CASE WHEN a.default_operator_enabled THEN
+                (SELECT COUNT(*)::int FROM servers s
+                  JOIN server_apps sa ON sa.server_id = s.id AND sa.app_id = a.id
+                 WHERE sa.operator_enabled IS NULL AND sa.owner_enabled = FALSE
+                   AND (a.community_unlocked OR NOT COALESCE(s.is_community, FALSE)))
+              ELSE 0 END AS default_owner_off
+         FROM apps a
+        ${onlyId ? `WHERE a.id = $1` : ""}`,
       params,
     ),
     db.query(
@@ -336,10 +369,21 @@ async function loadApps(db: Queryable, onlyId?: string): Promise<AppAdminView[]>
     versionsByApp.set(appId, list);
   }
   const onByApp = new Map<string, { on: number; ownerOff: number }>(
-    on.rows.map((row: { app_id: string; servers_on: number; owner_off: number }) => [
-      row.app_id,
-      { on: row.servers_on, ownerOff: row.owner_off },
-    ]),
+    on.rows.map(
+      (row: {
+        app_id: string;
+        explicit_on: number;
+        explicit_owner_off: number;
+        default_on: number;
+        default_owner_off: number;
+      }) => [
+        row.app_id,
+        {
+          on: row.explicit_on + row.default_on,
+          ownerOff: row.explicit_owner_off + row.default_owner_off,
+        },
+      ],
+    ),
   );
   const sessionsByApp = new Map<string, number>(
     sessions.rows.map((row: { app_id: string; n: number }) => [row.app_id, row.n]),
@@ -361,6 +405,7 @@ async function loadApps(db: Queryable, onlyId?: string): Promise<AppAdminView[]>
       status: row.status as string,
       globalEnabled: row.global_enabled as boolean,
       communityUnlocked: row.community_unlocked as boolean,
+      defaultOperatorEnabled: row.default_operator_enabled as boolean,
       currentVersion: (row.current_version as string | null) ?? null,
       currentApproved: approved,
       goLiveBlocker: approved ? null : "not-reviewed",
@@ -426,6 +471,12 @@ export interface AppServerRow {
   isCommunityListed: boolean;
   /** What the operator decided for this app here: true, false or null. */
   operatorEnabled: boolean | null;
+  /**
+   * Whether the operator's release reaches this server: its own ON, or no
+   * decision with the app's default on. An explicit OFF is false. It says
+   * nothing about the community lock (`locked`) or the owner's switch.
+   */
+  released: boolean;
   /** The owner's switch: only ever false (off) or null. */
   ownerEnabled: boolean | null;
   /** The operator cannot switch it on: a public community, app not unlocked. */
@@ -439,8 +490,14 @@ export interface AppServersList {
   appId: string;
   servers: AppServerRow[];
   matched: number;
-  /** Servers with the operator switch on, whatever the search says. */
+  /**
+   * Servers the operator's release reaches (an explicit ON, or no decision with
+   * the app's default on, a locked community not counted), whatever the search
+   * says. The same number as `serversOn` on `GET /api/admin/apps`.
+   */
   enabledCount: number;
+  /** `apps.default_operator_enabled`: released on every server that has not decided. */
+  defaultOperatorEnabled: boolean;
   limit: number;
   offset: number;
   communityUnlocked: boolean;
@@ -457,14 +514,27 @@ export async function listAppServersForOperator(
   query: AppServersQuery,
 ): Promise<AppServersList> {
   const pool = getPool();
-  const app = await pool.query<{ community_unlocked: boolean }>(
-    `SELECT community_unlocked FROM apps WHERE id = $1`,
+  const app = await pool.query<{
+    community_unlocked: boolean;
+    default_operator_enabled: boolean;
+  }>(
+    `SELECT community_unlocked, default_operator_enabled FROM apps WHERE id = $1`,
     [query.appId],
   );
   if (app.rowCount === 0) {
     throw new HttpError(404, "App not found");
   }
 
+  const unlocked = app.rows[0]!.community_unlocked;
+  const defaultOn = app.rows[0]!.default_operator_enabled;
+  // The operator's release as SQL, for the filter, the ordering and the count.
+  // Both flags are booleans read from the row above, never request text. A
+  // server that is a locked community is released by an explicit ON only, the
+  // same as the counts on `GET /api/admin/apps`.
+  const released =
+    `(sa.operator_enabled IS TRUE OR (sa.operator_enabled IS NULL AND ` +
+    `${defaultOn ? "TRUE" : "FALSE"} AND ` +
+    `(${unlocked ? "TRUE" : "FALSE"} OR NOT COALESCE(s.is_community, FALSE))))`;
   const where: string[] = [];
   const params: unknown[] = [query.appId];
   if (query.q) {
@@ -477,7 +547,7 @@ export async function listAppServersForOperator(
     }
   }
   if (query.onlyOn) {
-    where.push(`sa.operator_enabled IS TRUE`);
+    where.push(released);
   }
   const filter = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
   const join = `LEFT JOIN server_apps sa ON sa.server_id = s.id AND sa.app_id = $1`;
@@ -492,10 +562,10 @@ export async function listAppServersForOperator(
       // 25-row answer.
       `WITH page AS (
          SELECT s.id, s.name, s.is_community, s.is_community_listed,
-                sa.operator_enabled, sa.owner_enabled
+                sa.operator_enabled, sa.owner_enabled, ${released} AS released
            FROM servers s ${join}
            ${filter}
-          ORDER BY (sa.operator_enabled IS TRUE) DESC, s.name ASC, s.id ASC
+          ORDER BY ${released} DESC, s.name ASC, s.id ASC
           LIMIT ${query.limit} OFFSET ${query.offset}
        )
        SELECT page.*,
@@ -503,7 +573,7 @@ export async function listAppServersForOperator(
               (SELECT COUNT(*)::int FROM app_sessions x
                 WHERE x.server_id = page.id AND x.app_id = $1 AND x.status = 'live') AS live_sessions
          FROM page
-        ORDER BY (page.operator_enabled IS TRUE) DESC, page.name ASC, page.id ASC`,
+        ORDER BY page.released DESC, page.name ASC, page.id ASC`,
       params,
     ),
     pool.query<{ n: string }>(
@@ -511,13 +581,11 @@ export async function listAppServersForOperator(
       params,
     ),
     pool.query<{ n: string }>(
-      `SELECT COUNT(*)::text AS n FROM server_apps
-        WHERE app_id = $1 AND operator_enabled IS TRUE`,
+      `SELECT COUNT(*)::text AS n FROM servers s ${join} WHERE ${released}`,
       [query.appId],
     ),
   ]);
 
-  const unlocked = app.rows[0]!.community_unlocked;
   return {
     appId: query.appId,
     servers: rows.rows.map((row: Record<string, unknown>) => ({
@@ -527,6 +595,7 @@ export async function listAppServersForOperator(
       isCommunity: row.is_community as boolean,
       isCommunityListed: row.is_community_listed as boolean,
       operatorEnabled: (row.operator_enabled as boolean | null) ?? null,
+      released: row.released as boolean,
       ownerEnabled: (row.owner_enabled as boolean | null) ?? null,
       locked: (row.is_community as boolean) && !unlocked,
       appsFlag: isEnabled("apps", { serverId: row.id as string }),
@@ -534,6 +603,7 @@ export async function listAppServersForOperator(
     })),
     matched: Number(matched.rows[0]?.n ?? 0),
     enabledCount: Number(enabled.rows[0]?.n ?? 0),
+    defaultOperatorEnabled: defaultOn,
     limit: query.limit,
     offset: query.offset,
     communityUnlocked: unlocked,
@@ -549,6 +619,7 @@ export interface AuditInput {
     | "operator-server"
     | "owner-server"
     | "community-unlock"
+    | "default-operator"
     | "review"
     | "current-version"
     | "disable-everywhere";
@@ -663,13 +734,15 @@ interface AppRow {
   status: string;
   global_enabled: boolean;
   community_unlocked: boolean;
+  default_operator_enabled: boolean;
   current_version: string | null;
 }
 
 /** Takes the row lock every write to one app starts with. */
 async function lockApp(client: PoolClient, appId: string): Promise<AppRow> {
   const { rows } = await client.query<AppRow>(
-    `SELECT id, status, global_enabled, community_unlocked, current_version
+    `SELECT id, status, global_enabled, community_unlocked, default_operator_enabled,
+            current_version
        FROM apps WHERE id = $1 FOR UPDATE`,
     [appId],
   );
@@ -705,6 +778,8 @@ export async function operatorSetApp(
       status: input.status ?? before.status,
       global_enabled: input.globalEnabled ?? before.global_enabled,
       community_unlocked: input.communityUnlocked ?? before.community_unlocked,
+      default_operator_enabled:
+        input.defaultOperatorEnabled ?? before.default_operator_enabled,
       current_version: input.currentVersion ?? before.current_version,
     };
 
@@ -754,6 +829,14 @@ export async function operatorSetApp(
         after: { communityUnlocked: next.community_unlocked },
       });
     }
+    if (next.default_operator_enabled !== before.default_operator_enabled) {
+      audits.push({
+        action: "default-operator",
+        appId: input.appId,
+        before: { defaultOperatorEnabled: before.default_operator_enabled },
+        after: { defaultOperatorEnabled: next.default_operator_enabled },
+      });
+    }
     if (next.current_version !== before.current_version) {
       audits.push({
         action: "current-version",
@@ -767,7 +850,7 @@ export async function operatorSetApp(
       await client.query(
         `UPDATE apps
             SET status = $2, global_enabled = $3, community_unlocked = $4,
-                current_version = $5, updated_at = NOW()
+                current_version = $5, default_operator_enabled = $6, updated_at = NOW()
           WHERE id = $1`,
         [
           input.appId,
@@ -775,6 +858,7 @@ export async function operatorSetApp(
           next.global_enabled,
           next.community_unlocked,
           next.current_version,
+          next.default_operator_enabled,
         ],
       );
       for (const audit of audits) {
@@ -964,7 +1048,17 @@ export async function operatorSetServerApp(
         after: { operatorEnabled: input.operatorEnabled },
       });
     }
-    return { changed, owner, auditId, wasOn: before === true };
+    // On means released, not only "ON in the row": with the app's default on,
+    // no decision is a release too, so a move from there to an explicit OFF is
+    // taking the app away (sessions end), while a move from an explicit ON to
+    // no decision keeps it released (nothing ends).
+    return {
+      changed,
+      owner,
+      auditId,
+      wasOn: operatorReleased(before, app.default_operator_enabled),
+      stillOn: operatorReleased(input.operatorEnabled, app.default_operator_enabled),
+    };
   });
 
   const progress = { ended: 0 };
@@ -979,7 +1073,7 @@ export async function operatorSetServerApp(
     // Taking an app away from a server ends what is running there, the way the
     // owner's switch and "Desligar em todos" do: a session that outlives the
     // switch that allowed it is a switch that does not mean what it says.
-    if (result.wasOn && input.operatorEnabled !== true) {
+    if (result.wasOn && !result.stillOn) {
       try {
         await endLiveSessions(input.appId, input.serverId, actorUserId(actor), progress);
       } finally {
@@ -1015,6 +1109,9 @@ export interface DisableEverywhereResult {
  * with what really ended (even when ending stopped half way, which an operator
  * re-running it finishes: ending is idempotent). It never touches the per
  * server switches: turning the master back on brings the same servers back.
+ * The app's default release (`default_operator_enabled`) is cleared with it, so
+ * a server that never decided does not keep the app; turning the master back
+ * on does not bring the default back, that is its own switch.
  */
 export async function operatorDisableEverywhere(
   input: z.infer<typeof disableEverywhereSchema>,
@@ -1026,17 +1123,25 @@ export async function operatorDisableEverywhere(
       `SELECT COUNT(*)::int AS n FROM server_apps WHERE app_id = $1 AND operator_enabled IS TRUE`,
       [input.appId],
     );
-    if (app.global_enabled) {
+    // The app's default goes off with the master switch: "off everywhere" has to
+    // stay true for a server created, or an owner decision cleared, after it.
+    if (app.global_enabled || app.default_operator_enabled) {
       await client.query(
-        `UPDATE apps SET global_enabled = FALSE, updated_at = NOW() WHERE id = $1`,
+        `UPDATE apps SET global_enabled = FALSE, default_operator_enabled = FALSE,
+                         updated_at = NOW()
+          WHERE id = $1`,
         [input.appId],
       );
     }
     const auditId = await writeAppAudit(client, actor, {
       action: "disable-everywhere",
       appId: input.appId,
-      before: { globalEnabled: app.global_enabled, serversOn: on.rows[0]?.n ?? 0 },
-      after: { globalEnabled: false },
+      before: {
+        globalEnabled: app.global_enabled,
+        defaultOperatorEnabled: app.default_operator_enabled,
+        serversOn: on.rows[0]?.n ?? 0,
+      },
+      after: { globalEnabled: false, defaultOperatorEnabled: false },
     });
     return { auditId };
   });

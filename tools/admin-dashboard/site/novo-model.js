@@ -554,10 +554,50 @@
           : on === 1 ? "O app some do 1 servidor onde estava ligado."
           : "O app some dos " + fmt(on) + " servidores onde estava ligado.",
         "Pra voltar, liga o interruptor global de novo: os servidores escolhidos continuam como estão. O que mudou fica guardado no histórico."
-      ],
+      ].concat(app.defaultOperatorEnabled
+        ? ["O padrão “todos os servidores” também desliga, então servidor novo não ganha o app. Pra voltar com ele, liga o padrão de novo."]
+        : []),
       confirm: "Desligar tudo",
       cancel: "Cancelar"
     };
+  }
+
+  /**
+   * The app-wide release ("Padrão em todos"): on means every server that has
+   * not decided has the app, new servers included. Only turning it ON asks
+   * first, with the number it reaches; turning it off is the safe direction.
+   */
+  function defaultConfirm(app, serverCount) {
+    var name = app.name || app.id;
+    var n = num(serverCount);
+    return {
+      title: "Ligar " + name + " em todos os servidores?",
+      lines: [
+        "Todo servidor que ainda não decidiu passa a ter o app" + (n ? ", hoje " + fmt(n) + " servidores" : "") + ", e os que forem criados depois também.",
+        "Quem foi desligado à mão aqui continua desligado. Comunidades públicas continuam travadas até o controle “Comunidades” liberar.",
+        "O dono do servidor ainda pode desligar. Pra desfazer, desliga o padrão: os servidores ligados um a um continuam ligados."
+      ],
+      confirm: "Ligar em todos", cancel: "Cancelar"
+    };
+  }
+
+  /** The note under the "Padrão" switch. */
+  function defaultNote(app) {
+    if (app.defaultOperatorEnabled) {
+      return app.communityUnlocked
+        ? "Ligado: todo servidor que não foi desligado à mão tem o app, os novos também."
+        : "Ligado: todo servidor privado que não foi desligado à mão tem o app, os novos também. Comunidades públicas seguem travadas.";
+    }
+    return "Desligado: só tem o app o servidor ligado um a um.";
+  }
+
+  /**
+   * Whether the operator's release reaches a server row: the API says so
+   * (`released`); an API from before the default existed only had the switch.
+   */
+  function serverReleased(row) {
+    if (row && typeof row.released === "boolean") return row.released;
+    return !!row && row.operatorEnabled === true;
   }
 
   /** The confirmation for letting public communities have an app, or taking it back. */
@@ -588,15 +628,18 @@
   /** One server row in an app: subtitle, badge, whether its switch is locked, and chips. */
   function serverRow(row) {
     var chips = [];
-    if (row.operatorEnabled && row.ownerEnabled === false) chips.push({ text: "o dono desligou", tone: "warn" });
-    if (row.operatorEnabled && row.appsFlag === false) chips.push({ text: "flag apps desligada aqui", tone: "warn" });
+    var released = serverReleased(row);
+    if (released && row.ownerEnabled === false) chips.push({ text: "o dono desligou", tone: "warn" });
+    if (released && row.appsFlag === false) chips.push({ text: "flag apps desligada aqui", tone: "warn" });
+    if (released && row.operatorEnabled !== true) chips.push({ text: "pelo padrão do app", tone: "muted" });
+    if (!released && row.operatorEnabled === false) chips.push({ text: "desligado à mão", tone: "muted" });
     if (row.liveSessions > 0) chips.push({ text: plural(row.liveSessions, "sessão ativa", "sessões ativas"), tone: "accent" });
     return {
       initials: initials(row.name),
       subtitle: (row.isCommunity ? "Comunidade" : "Privado") + ", " + plural(row.memberCount || 0, "membro", "membros"),
       badge: row.isCommunity ? { text: "Comunidade", tone: "accent" } : null,
       // A server already on can always be switched off, whatever the lock says.
-      locked: !!row.locked && !row.operatorEnabled,
+      locked: !!row.locked && !released,
       chips: chips
     };
   }
@@ -606,11 +649,12 @@
     var name = app.name || app.id;
     var v = app.currentVersion ? " v" + app.currentVersion : "";
     var st = appStatus(app.status).label.toLowerCase();
+    if (app.globalEnabled && app.defaultOperatorEnabled) return name + v + ", " + st + ". Global: ligado, padrão em todos os servidores: " + serversText(app, serverCount) + " servidores com o app.";
     if (app.globalEnabled) return name + v + ", " + st + ". Global: ligado, " + serversText(app, serverCount) + " servidores escolhidos.";
     return name + v + ", " + st + ". Global: desligado, não aparece em servidor nenhum.";
   }
 
-  var LOCK_NOTE = "Comunidades públicas ficam travadas: ligar um app lá muda o tipo de risco da instância (docs/CONTENT_SAFETY.md). O interruptor só destrava depois de uma decisão explícita, no controle “Comunidades” do app. Servidores privados ligam livremente. O padrão por servidor é desligado. O dono do servidor ainda pode desligar um app que o operador ligou, nunca o contrário.";
+  var LOCK_NOTE = "Comunidades públicas ficam travadas: ligar um app lá muda o tipo de risco da instância (docs/CONTENT_SAFETY.md). O interruptor só destrava depois de uma decisão explícita, no controle “Comunidades” do app. Servidores privados ligam livremente. O padrão por servidor é desligado, a não ser que o app tenha o “Padrão em todos” ligado. O dono do servidor ainda pode desligar um app que o operador ligou, nunca o contrário.";
 
   /** What a refused or failed write says, by the code the API answered with. */
   function appsWriteError(code) {
@@ -646,6 +690,7 @@
     switch (row.action) {
       case "status": return "Estado: " + appStatus(b.status).label + " para " + appStatus(a.status).label;
       case "global": return "Global: " + onOff(b.globalEnabled) + " para " + onOff(a.globalEnabled);
+      case "default-operator": return "Padrão em todos os servidores: " + onOff(b.defaultOperatorEnabled) + " para " + onOff(a.defaultOperatorEnabled);
       case "community-unlock": return "Comunidades: " + (b.communityUnlocked ? "liberadas" : "travadas") + " para " + (a.communityUnlocked ? "liberadas" : "travadas");
       case "current-version": return "Versão atual: " + (b.currentVersion || "nenhuma") + " para " + (a.currentVersion || "nenhuma");
       case "review": return "Revisão da v" + (row.appVersion || "?") + ": " + (a.reviewStatus || "?");
@@ -663,7 +708,7 @@
     activitySeries: activitySeries, adoption: adoption, ratingDistribution: ratingDistribution, liveNow: liveNow, communityBadge: communityBadge,
     appStatus: appStatus, checklistItems: checklistItems, checklistComplete: checklistComplete, currentVersionOf: currentVersionOf,
     appSubtitle: appSubtitle, reviewSummary: reviewSummary, globalSwitch: globalSwitch, serversText: serversText, sessionsLine: sessionsLine,
-    disableConfirm: disableConfirm, communityConfirm: communityConfirm, serverRow: serverRow, initials: initials, appsWriteError: appsWriteError,
+    disableConfirm: disableConfirm, communityConfirm: communityConfirm, defaultConfirm: defaultConfirm, defaultNote: defaultNote, serverReleased: serverReleased, serverRow: serverRow, initials: initials, appsWriteError: appsWriteError,
     disableFailure: disableFailure, auditText: auditText, appSummary: appSummary, LOCK_NOTE: LOCK_NOTE
   };
   root.PQPNovo = api;

@@ -17,7 +17,8 @@ import { appsOrigin } from "./origin.js";
  *  1. `flag-off`           the runtime flag `apps` for the server
  *  2. `not-live`           `apps.status = 'live'` with a current version
  *  3. `global-off`         `apps.global_enabled`, the operator's master switch
- *  4. `not-allowed-here`   `server_apps.operator_enabled IS TRUE`
+ *  4. `not-allowed-here`   `server_apps.operator_enabled IS TRUE`, or NULL / no
+ *                          row while `apps.default_operator_enabled` is on
  *  5. `owner-off`          `server_apps.owner_enabled IS NOT FALSE`
  *  6. `community-locked`   a public community needs `apps.community_unlocked`
  *  7. `emulator-off`       category `emulator` also needs `emulator_room`
@@ -27,6 +28,12 @@ import { appsOrigin } from "./origin.js";
  * The owner can only remove what the operator allowed: `owner_enabled` TRUE
  * does nothing without `operator_enabled`, and NULL (undecided) is on only when
  * the operator allowed it.
+ *
+ * "Allowed" is one rule, `operatorReleased` (and `OPERATOR_RELEASED_SQL` for the
+ * statements that cannot call it): the server's own decision when there is one
+ * (TRUE or FALSE, and an explicit FALSE always wins), otherwise the app's
+ * `default_operator_enabled`. Gates 5 to 9 are not touched by it: a community
+ * is still `community-locked` however the app was released.
  *
  * "A community" is `servers.is_community` (the public address), not only the
  * directory listing: the address already lets any account in with one tap, and
@@ -60,7 +67,28 @@ export interface AppAvailabilityRow {
   manifest: unknown;
   operator_enabled: boolean | null;
   owner_enabled: boolean | null;
+  /** `apps.default_operator_enabled`: released on every server that has not decided. */
+  default_operator_enabled: boolean;
 }
+
+/**
+ * The operator's gate, in one place: this server's own decision, else the app's
+ * default. `null` (no row, or a row with nothing decided) falls to the default;
+ * an explicit `false` is the operator saying no and wins over it.
+ */
+export function operatorReleased(
+  operatorEnabled: boolean | null | undefined,
+  defaultOperatorEnabled: boolean | null | undefined,
+): boolean {
+  return (operatorEnabled ?? defaultOperatorEnabled ?? false) === true;
+}
+
+/**
+ * The same rule as SQL, for the statements that decide in the database. `sa` is
+ * the `server_apps` alias (LEFT JOINed, so a missing row is NULL) and `a` is
+ * `apps`.
+ */
+export const OPERATOR_RELEASED_SQL = `COALESCE(sa.operator_enabled, a.default_operator_enabled) IS TRUE`;
 
 export interface AppServerFacts {
   isCommunity: boolean;
@@ -122,7 +150,7 @@ export function evaluateAvailability(
   if (!row.global_enabled) {
     return off("global-off");
   }
-  if (row.operator_enabled !== true) {
+  if (!operatorReleased(row.operator_enabled, row.default_operator_enabled)) {
     return off("not-allowed-here");
   }
   if (row.owner_enabled === false) {
@@ -149,7 +177,8 @@ export function evaluateAvailability(
 }
 
 const ROW_COLUMNS = `a.id, a.status, a.current_version, a.global_enabled,
-       a.community_unlocked, v.manifest, sa.operator_enabled, sa.owner_enabled`;
+       a.community_unlocked, a.default_operator_enabled, v.manifest,
+       sa.operator_enabled, sa.owner_enabled`;
 const ROW_JOINS = `FROM apps a
   LEFT JOIN app_versions v ON v.app_id = a.id AND v.version = a.current_version
   LEFT JOIN server_apps sa ON sa.server_id = $1 AND sa.app_id = a.id`;

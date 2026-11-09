@@ -229,12 +229,29 @@ An app may run in a place only when every gate holds. `appAvailability(serverId,
 | `flag-off` | The runtime flag `apps` is off for the server. |
 | `not-live` | `apps.status` is not `live`, or the app has no current version. |
 | `global-off` | `apps.global_enabled` (the operator's master switch) is off. |
-| `not-allowed-here` | `server_apps.operator_enabled` is not TRUE for this server. |
+| `not-allowed-here` | The operator did not release the app here: `server_apps.operator_enabled` is not TRUE for this server, and it has no default release to fall back on (see "The operator's release"). |
 | `owner-off` | The server's owner set `server_apps.owner_enabled` to FALSE. The owner can only remove what the operator allowed. |
 | `community-locked` | The server is a public community (`servers.is_community`) and the app has no `community_unlocked` safety decision. |
 | `emulator-off` | `category: "emulator"` also needs the flag `emulator_room` on the server. |
 | `channel-type` | The channel's type (`text` or `voice`) is not in the manifest's `channelTypes`. |
 | `no-origin` | The deployment has no `APPS_ORIGIN`, so no app can run. |
+
+### The operator's release
+
+The operator gate (`not-allowed-here`) is one rule, `operatorReleased` in `availability.ts` (and `OPERATOR_RELEASED_SQL` where a statement decides in the database): **the server's own decision when there is one, otherwise the app's default.**
+
+| `server_apps.operator_enabled` | `apps.default_operator_enabled` | Released here |
+|---|---|---|
+| TRUE | any | yes |
+| FALSE | any | **no**, an explicit FALSE always wins |
+| NULL or no row | FALSE (the column default) | no, exactly as before the column existed |
+| NULL or no row | TRUE | yes, including a server created after the switch went on |
+
+`default_operator_enabled` is the app-wide "released on every server that has not decided" switch. It moves only through `PUT /api/admin/apps` (`defaultOperatorEnabled: true | false`, audited as `default-operator`, no review needed: `status` and `global_enabled` still gate the app, and those do need an approved version). The catalog loader never sets it (insert-only, above), and the dev convenience does not either: it releases one server (the Sandbox), not every server. Every other gate is unchanged and in the same order: a public community is still `community-locked` until the app is `community_unlocked` however the app was released, and `owner-off`, `emulator-off`, `channel-type` and the `apps` flag read as before.
+
+Everything that reads the release agrees with the rule: the config route's `available` (`evaluateAvailability`), a session start (the check and the insert's own gate), the sweep that ends sessions of an app that is no longer allowed (so turning the default off ends the sessions that stood on it within the sweep's interval, and an explicit OFF written for a server ends that server's at once), the owner's list and switch (`server_apps` has no row for a server released by the default, so the owner's first switch creates it), and the operator's counts: `serversOn` on `GET /api/admin/apps` and `enabledCount` on `GET /api/admin/app-servers` are the same number (explicit ONs, plus, with the default on, every server with no decision of its own, minus a public community while the app is locked for communities), and each server row carries `released`, the rule's answer for that row, beside the raw `operatorEnabled` (true, false or null). `GET /api/admin/app-servers?on=1` filters to released servers, defaults included.
+
+"Desligar em todos" (`POST /api/admin/app-disable-everywhere`) turns the master switch AND the default off, so "off everywhere" stays true for a server created afterwards; turning the master back on does not bring the default back, it is its own switch. The per server rows are untouched.
 
 D14: `appShareAllowed(serverId, app)` is true for every app except `category: "emulator"`, which also needs the flag `locadora_share` on the server (per server, default off, waiting for the lawyer's answer). The config carries it as `shareAllowed` and the session engine refuses `share.request` and spectator joins without it.
 
