@@ -61,6 +61,8 @@ import {
   forumPostRemovedSchema,
   forumPostUpsertSchema,
 } from "./forums.js";
+// --- jam ---
+import { JAM_FRAME_TYPES, type JamFrame } from "./jam.js";
 import { chanceRequestSchema, chanceResultSchema } from "./chance.js";
 import { pollRequestSchema, pollSchema } from "./polls.js";
 import { AUTOMOD_CUSTOM_MESSAGE_MAX } from "./automod.js";
@@ -942,6 +944,11 @@ export const CHAT_SERVER_MESSAGE_TYPES = [
   // they reach anybody.
   "voice-note-transcript",
   "voice-note-updated",
+  // --- jam --- songs and tracks of a jam channel (`jam.ts`), for everybody
+  // viewing the channel. Shared by every viewer (nothing about the person), so
+  // the channel relay is the right audience; without these lines a song added
+  // on the sibling instance never reaches the viewers here.
+  ...JAM_FRAME_TYPES,
 ] as const;
 
 export function isChatServerMessage(message: {
@@ -1003,4 +1010,4 @@ export const voiceNoteFrameSchema = z.discriminatedUnion("type", [
 export type VoiceNoteFrame = z.infer<typeof voiceNoteFrameSchema>;
 
 /** Everything the channel relay may fan out: `CHAT_SERVER_MESSAGE_TYPES`. */
-export type ChannelFanoutFrame = ChatServerMessage | VoiceNoteFrame;
+export type ChannelFanoutFrame = ChatServerMessage | VoiceNoteFrame | JamFrame;

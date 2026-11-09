@@ -42,6 +42,10 @@ vi.mock("./services/client-platforms.js", () => ({
 vi.mock("./services/forums.js", () => ({
   sweepForumPostShells: vi.fn(async () => 0),
 }));
+vi.mock("./services/jam.js", () => ({
+  sweepJamMedia: vi.fn(async () => 0),
+}));
+
 vi.mock("./services/soundboard.js", () => ({
   sweepSoundboardUploads: vi.fn(async () => undefined),
 }));
@@ -192,6 +196,7 @@ import { sweepSlowModeClocks } from "./services/slow-mode.js";
 import { sweepClientPlatforms } from "./services/client-platforms.js";
 import { sweepForumPostShells } from "./services/forums.js";
 import { sweepSoundboardUploads } from "./services/soundboard.js";
+import { sweepJamMedia } from "./services/jam.js";
 import { deliverDueOutgoingWebhooks } from "./services/outgoing-webhooks.js";
 import { startOutgoingWebhookPoller } from "./services/outgoing-webhook-poller.js";
 import { startSpeechJobPoller } from "./services/speech-worker.js";
@@ -310,11 +315,12 @@ describe("cold jobs", () => {
     // retention sweep (daily, asserted below); 36 with the apps platform's
     // ended-session retention (daily) and live-session sweep (15 s); 37 with
     // Locadora's account saves sweep (daily, below); 38 with the Baú+
-    // payments sweep (a minute, asserted below).
+    // payments sweep (a minute, asserted below); 39 with the jam media sweep
+    // (a minute, asserted below).
     // Bump this when a job is added, and assert the new job's cadence below
     // rather than only moving the number: a count on its own passes for a
     // job that is registered and never fires.
-    expect(jobs.count).toBe(38);
+    expect(jobs.count).toBe(39);
 
     // The Baú translation sweep: one a minute, none at boot (nothing to
     // catch up on a process that has only just started reading the flag).
@@ -353,6 +359,8 @@ describe("cold jobs", () => {
     expect(runBauFollowTick).toHaveBeenCalledTimes(24);
     // The soundboard upload sweep: a minute, so four, and none at boot.
     expect(sweepSoundboardUploads).toHaveBeenCalledTimes(4);
+    // The jam media sweep: a minute, so four, and none at boot.
+    expect(sweepJamMedia).toHaveBeenCalledTimes(4);
     // The bot reminders: every 30 s, no boot run, so eight in four minutes.
     expect(deliverDueReminders).toHaveBeenCalledTimes(8);
     // The apps live-session sweep: every 15 s, no boot run, so sixteen.

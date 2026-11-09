@@ -961,6 +961,34 @@ once it has done its job. Open tabs follow on the next config refresh (focus or
 10 min). `server/src/lib/flag-client-contract.test.ts` pins the field on both
 sides; `server/src/api/forum-flag.test.ts` pins the answer with rows.
 
+## `jam_channels` (per server)
+
+Jam channels: a channel type, `jam`, whose posts are songs made of recorded
+tracks that play together (`docs/JAM.md`, the wire contract in
+`packages/shared/src/jam.ts`). Behind `JAM_CHANNELS` (default off, **per
+server**, born as a flag). Served as `enabled` on
+`GET /api/jam/config?serverId=` (`server/src/lib/jam-config.ts`), beside
+`uploads` (object storage is configured here).
+
+Off gates **creating and changing**, never reading: `POST
+/api/servers/:id/channels` with `type: "jam"` answers 403 `jam_channels_off`,
+and so does creating or editing a song, asking for an upload, adding or editing
+a track, and voting. A jam and its songs stay readable and playable. The three
+removals (delete a song, delete a track, take a vote back) keep working, so
+turning it off freezes the feature without stranding a moderator or somebody's
+own recording. Nothing is hidden or deleted.
+
+Turn it on for one server with `PUT /api/admin/flag-overrides
+{ key: "jam_channels", serverId, enabled: true }` or from controles →
+interruptores; `enabled: null` returns to the default. Open tabs follow on the
+next config refresh (focus or 10 min). Both phones leave a channel type they do
+not know out of the list (iOS `isListed`, Android `drawable`), so a jam channel
+is invisible there rather than a dead row. Before it goes on, the bucket's CORS
+policy has to allow GET and PUT from the app's origin (`docs/ATTACHMENTS.md`
+section 4), because the audio engine fetches the stems from the browser.
+`server/src/lib/flag-client-contract.test.ts` pins the route, the field and the
+create guard.
+
 ## `apps` (per server)
 
 The apps platform: small interactive things (Locadora, a game room) that a person

@@ -1623,7 +1623,7 @@ export interface DbChannel {
    * `forum` holds posts (each a `thread` under it) and never a message of its
    * own; see packages/shared/src/forums.ts.
    */
-  type: "text" | "voice" | "category" | "thread" | "watch_party" | "forum";
+  type: "text" | "voice" | "category" | "thread" | "watch_party" | "forum" | "jam";
   position: number;
   is_private: boolean;
   topic: string | null;

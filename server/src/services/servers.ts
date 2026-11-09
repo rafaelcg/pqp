@@ -1,3 +1,4 @@
+import { jamKeysForChannels, jamKeysForServer } from "./jam-keys.js";
 import {
   applyServerOrder,
   formatUserTag,
@@ -129,7 +130,7 @@ async function channelAttachmentKeys(
 }
 
 /** Every type that sits in a channel group (loose or inside a category). */
-export const SIDEBAR_CHANNEL_TYPES = ["text", "forum", "voice", "watch_party"];
+export const SIDEBAR_CHANNEL_TYPES = ["text", "forum", "voice", "watch_party", "jam"];
 
 /**
  * The types that share one top-level sibling group (one numbering of
@@ -592,7 +593,7 @@ export async function listChannels(
 export async function createChannel(
   serverId: string,
   name: string,
-  type: "text" | "voice" | "category" | "watch_party" | "forum",
+  type: "text" | "voice" | "category" | "watch_party" | "forum" | "jam",
   isPrivate = false,
   topic: string | null = null,
   parentId: string | null = null,
@@ -986,6 +987,9 @@ export async function deleteChannel(
       )
     ).rows.map((row) => row.id);
     keys = await channelAttachmentKeys([channelId, ...threadIds], client);
+    // A jam channel's recordings: their keys sit only on rows this delete
+    // cascades (docs/JAM.md).
+    keys.push(...(await jamKeysForChannels([channelId], client)));
 
     // Before the orphan read below: with the threads already gone, the
     // category-uncategorising logic can never mistake a thread for a channel
@@ -1120,6 +1124,7 @@ export async function deleteServer(
       // Read under the server lock: an upload ticket takes the same lock, so
       // none can slip in between this read and the cascade.
       keys.push(...(await serverSoundboardKeys(serverId, client)));
+      keys.push(...(await jamKeysForServer(serverId, client)));
       const members = await client.query<{ user_id: string }>(
         `SELECT user_id FROM server_members WHERE server_id = $1`,
         [serverId],

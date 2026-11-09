@@ -61,7 +61,12 @@ export interface ChannelLayoutPayload {
   groups: Array<{ parentId: string | null; channelIds: string[] }>;
 }
 
-/** Old split order for loose channels: text and forums, voice, watch party. */
+/**
+ * Old split order for loose channels: text and forums, voice, watch party.
+ * Any other type (`jam`) falls in the last group, with the watch party rooms;
+ * the iOS and Android ports say the same (`default` / `else`), and the
+ * fixture pins it.
+ */
 export function legacyTypeRank(type: string): number {
   if (type === "text" || type === "forum") {
     return 0;

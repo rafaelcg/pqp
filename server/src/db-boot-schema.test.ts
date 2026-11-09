@@ -165,6 +165,11 @@ describeDb("initDb on a real Postgres", () => {
 
   beforeEach(async () => {
     await other.query("ROLLBACK").catch(() => {});
+    // --- jam channels --- the tests that put an OLDER type list back (the
+    // pre-forum and pre-jam checks) re-add it validated, which a row of a
+    // newer type fails by design ("a rollback"); the jam suites leave their
+    // jam channel behind on a shared database.
+    await getPool().query("DELETE FROM channels WHERE type = 'jam'");
   });
 
   it("records the hash of what it applied", async () => {
@@ -499,6 +504,125 @@ describeDb("initDb on a real Postgres", () => {
       expect(row.rows[0]?.schema_hash).toBe(schemaHash(SCHEMA));
     } finally {
       await other.query("ROLLBACK").catch(() => {});
+    }
+  });
+
+  // --- jam channels --- the newest `channels_type_check` block, written like
+  // the forum one (no lock when it is already there, every lock error out).
+
+  const JAM_TYPE_BLOCK = DO_BLOCKS.find(
+    (block) => block.includes("channels_type_check") && block.includes("'jam'"),
+  );
+  const JAM_TABLES = ["jam_songs", "jam_tracks", "jam_track_votes", "jam_uploads"];
+  /** A database that last ran the schema before jam: the CHECK without 'jam'. */
+  const PRE_JAM_TYPE_CHECK = `
+    ALTER TABLE channels DROP CONSTRAINT IF EXISTS channels_type_check;
+    ALTER TABLE channels ADD CONSTRAINT channels_type_check
+      CHECK (type IN ('text', 'voice', 'category', 'thread', 'watch_party', 'forum')) NOT VALID;`;
+
+  it("the jam DDL runs twice with no change, and the type CHECK carries 'jam'", async () => {
+    await initDb({ mode: "always" });
+    const catalog = async (): Promise<string> => {
+      const columns = await getPool().query(
+        `SELECT table_name, column_name, data_type, is_nullable, column_default
+           FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = ANY($1)
+          ORDER BY table_name, ordinal_position`,
+        [JAM_TABLES],
+      );
+      const indexes = await getPool().query(
+        `SELECT tablename, indexname, indexdef FROM pg_indexes
+          WHERE schemaname = 'public' AND tablename = ANY($1)
+          ORDER BY tablename, indexname`,
+        [JAM_TABLES],
+      );
+      const constraints = await getPool().query(
+        `SELECT conrelid::regclass::text AS tbl, conname, pg_get_constraintdef(oid) AS def
+           FROM pg_constraint
+          WHERE conrelid::regclass::text = ANY($1) OR conname = 'channels_type_check'
+          ORDER BY 1, 2`,
+        [JAM_TABLES],
+      );
+      return JSON.stringify([columns.rows, indexes.rows, constraints.rows]);
+    };
+    const first = await catalog();
+    for (const table of JAM_TABLES) {
+      expect(first, `${table} was not created`).toContain(`"table_name":"${table}"`);
+    }
+    expect(await typeCheckDef()).toContain("'jam'");
+    // The forum block's earlier list is still in the constraint.
+    expect(await typeCheckDef()).toContain("'forum'");
+    await initDb({ mode: "always" });
+    expect(await catalog()).toBe(first);
+  });
+
+  it("the jam type block takes no lock when 'jam' is already allowed", async () => {
+    expect(JAM_TYPE_BLOCK, "jam channels_type_check block not found").toBeTruthy();
+    expect(JAM_TYPE_BLOCK).not.toBe(FORUM_TYPE_BLOCK);
+    expect(await typeCheckDef()).toContain("'jam'");
+    await other.query("BEGIN");
+    await other.query("SELECT 1 FROM channels LIMIT 1");
+    const client = await getPool().connect();
+    try {
+      await client.query("SET lock_timeout = '150ms'");
+      await expect(client.query(JAM_TYPE_BLOCK!)).resolves.toBeDefined();
+    } finally {
+      await client.query("SET lock_timeout = 0").catch(() => {});
+      client.release();
+      await other.query("ROLLBACK");
+    }
+  });
+
+  it("the jam type block lets a lock timeout out, so a contended boot retries instead of recording a CHECK without 'jam'", async () => {
+    await getPool().query(PRE_JAM_TYPE_CHECK);
+    expect(await typeCheckDef()).not.toContain("'jam'");
+    await other.query("BEGIN");
+    await other.query("SELECT 1 FROM channels LIMIT 1");
+    const client = await getPool().connect();
+    try {
+      await client.query("SET lock_timeout = '150ms'");
+      await expect(client.query(JAM_TYPE_BLOCK!)).rejects.toMatchObject({ code: "55P03" });
+      await other.query("ROLLBACK");
+      await client.query("SET lock_timeout = 0");
+      await client.query(JAM_TYPE_BLOCK!);
+      expect(await typeCheckDef()).toContain("'jam'");
+    } finally {
+      await other.query("ROLLBACK").catch(() => {});
+      await client.query("SET lock_timeout = 0").catch(() => {});
+      client.release();
+    }
+  });
+
+  it("the jam type block adds 'jam' without a validation scan from a validated forum-era CHECK", async () => {
+    const client = await getPool().connect();
+    const state = async () =>
+      (
+        await client.query<{ convalidated: boolean; def: string }>(
+          `SELECT convalidated, pg_get_constraintdef(oid) AS def FROM pg_constraint
+            WHERE conrelid = 'channels'::regclass AND conname = 'channels_type_check'`,
+        )
+      ).rows[0]!;
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `DELETE FROM channels WHERE type NOT IN ('text', 'voice', 'category', 'thread', 'watch_party', 'forum')`,
+      );
+      await client.query(PRE_JAM_TYPE_CHECK.replace(" NOT VALID", ""));
+      expect((await state()).convalidated).toBe(true);
+      await client.query(JAM_TYPE_BLOCK!);
+      expect(await state()).toMatchObject({ convalidated: false });
+      expect((await state()).def).toContain("'jam'");
+      await client.query("ROLLBACK");
+
+      // From an unvalidated one nothing is proven, so it validates.
+      await client.query("BEGIN");
+      await client.query(PRE_JAM_TYPE_CHECK);
+      await client.query(JAM_TYPE_BLOCK!);
+      expect(await state()).toMatchObject({ convalidated: true });
+      await client.query("ROLLBACK");
+    } finally {
+      await client.query("ROLLBACK").catch(() => {});
+      client.release();
     }
   });
 });

@@ -28,6 +28,12 @@ import { messageForwardFieldSchema } from "./forward.js";
  * `forum_channels_off` unless the runtime flag `forum_channels` is on for the
  * server. A forum never carries a message of its own; its topic is the
  * forum's guidelines.
+ *
+ * `jam` holds songs instead of messages: each song is a pile of recorded
+ * stems that play together (see `jam.ts`). Creating one is refused 403
+ * `jam_channels_off` unless the runtime flag `jam_channels` is on for the
+ * server. Like a forum it never carries a message. A client that does not know
+ * the type should leave the row out of its channel list; both phones do.
  */
 export const channelTypeSchema = z.enum([
   "text",
@@ -35,6 +41,7 @@ export const channelTypeSchema = z.enum([
   "category",
   "watch_party",
   "forum",
+  "jam",
 ]);
 export type ChannelType = z.infer<typeof channelTypeSchema>;
 
