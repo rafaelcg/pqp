@@ -35,13 +35,13 @@ import {
  * delivery of those frames is `jam-two-process.test.ts`.
  */
 
-// These suites TRUNCATE, so they only run against a database on this machine
-// (localhost, 127.0.0.1 or ::1): `TEST_DATABASE_URL` first, `DATABASE_URL` only
-// on CI, where the runner's database is a local throwaway. A URL that points
-// anywhere else makes them skip instead of truncating it.
+// The repo-wide guard every DB suite uses (`TEST_DATABASE_URL ?? DATABASE_URL`;
+// CI provides `DATABASE_URL`, and the per-worker setup in
+// `test/setup/worker-database-env.ts` points both at a worker database), plus
+// a localhost-only check on top because these suites TRUNCATE: a URL that
+// points anywhere else makes them skip instead of truncating it.
 function localTestDatabase(): string | undefined {
-  const url =
-    process.env.TEST_DATABASE_URL ?? (process.env.CI ? process.env.DATABASE_URL : undefined);
+  const url = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
   if (!url) {
     return undefined;
   }
