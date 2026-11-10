@@ -57,6 +57,7 @@ import gg.pqp.app.R
 import gg.pqp.app.jam.JamBand
 import gg.pqp.app.jam.JamBands
 import gg.pqp.app.jam.JamSongSummary
+import gg.pqp.app.jam.JamTileInfo
 import gg.pqp.app.jam.JamTileSize
 import gg.pqp.app.jam.JamWallFilter
 import gg.pqp.app.jam.JamWallUiState
@@ -236,7 +237,7 @@ private fun Mosaic(
     // Big type is a single column: two tiles side by side leave a title nowhere to go.
     val columns = if (fontScale >= LARGE_TYPE) 1 else 2
     val bands: List<JamBand> = remember(visible, state.previews, columns) {
-        JamBands.build(visible, hasVideo = { song -> state.anyPreview(song)?.hasVideo == true }, columns = columns)
+        JamBands.build(visible, hasVideo = { song -> JamTileInfo.hasVideo(song, state.anyPreview(song)) }, columns = columns)
     }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {

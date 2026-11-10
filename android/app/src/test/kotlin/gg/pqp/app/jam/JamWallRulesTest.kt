@@ -54,6 +54,89 @@ class JamWallRulesTest {
     }
 
     @Test
+    fun `what a wanted song needs comes from missingInstruments when the server sends it, and works out the same when it does not`() {
+        val base = song(joinMode = JamJoinMode.Wanted, wanted = listOf(JamInstrument.Vocals, JamInstrument.Bass), instruments = listOf(JamInstrument.Guitar))
+        // An older server: worked out from the lists.
+        assertEquals(JamNeed.Missing(listOf(JamInstrument.Vocals, JamInstrument.Bass)), JamNeed.of(base))
+        // A server with the preview: its word, even where it is more recent than the lists a frame carried.
+        assertEquals(JamNeed.Missing(listOf(JamInstrument.Vocals)), JamNeed.of(base.copy(missingInstruments = listOf(JamInstrument.Vocals))))
+        assertEquals(JamNeed.Ready, JamNeed.of(base.copy(missingInstruments = emptyList())))
+        // Only a wanted song has a "missing": the preview's empty list on an open one changes nothing.
+        assertEquals(JamNeed.Open, JamNeed.of(song(instruments = listOf(JamInstrument.Guitar)).copy(missingInstruments = emptyList())))
+    }
+
+    private val peaks = listOf(0.2, 0.8, 0.5)
+
+    private fun withPreview(
+        id: String = "p",
+        hasVideo: Boolean = false,
+        names: List<String?> = listOf("rafa", "duda"),
+        count: Int = names.size,
+    ) = song(id, instruments = listOf(JamInstrument.Guitar), contributors = count).copy(
+        previewPeaks = peaks,
+        hasVideo = hasVideo,
+        contributors = names.mapIndexed { i, name -> JamContributor("u$i", name, null) },
+        missingInstruments = emptyList(),
+    )
+
+    private fun legacyPreview() = JamPreview(
+        readAtMs = 0, envelope = listOf(0.9), contributors = listOf("leo"), posterTrackId = null, posterUrl = null, hasVideo = true,
+    )
+
+    @Test
+    fun `a tile draws from the summary when it has the preview, and from the detail when it does not`() {
+        val summary = withPreview(hasVideo = false)
+        // The summary wins and the detail is not needed for any of it.
+        assertEquals(peaks, JamTileInfo.envelope(summary, legacyPreview()))
+        assertEquals(listOf("rafa", "duda"), JamTileInfo.contributorNames(summary, legacyPreview()))
+        assertFalse(JamTileInfo.hasVideo(summary, legacyPreview()))
+        assertTrue(JamTileInfo.hasEnvelope(summary, null))
+        // An older server: nothing on the summary, the detail fills it in once it has been read.
+        val old = song("old", instruments = listOf(JamInstrument.Guitar))
+        assertEquals(emptyList<Double>(), JamTileInfo.envelope(old, null))
+        assertFalse(JamTileInfo.hasEnvelope(old, null))
+        assertEquals(listOf(0.9), JamTileInfo.envelope(old, legacyPreview()))
+        assertEquals(listOf("leo"), JamTileInfo.contributorNames(old, legacyPreview()))
+        assertNull(JamTileInfo.contributorNames(old, null))
+        assertTrue(JamTileInfo.hasVideo(old, legacyPreview()))
+        assertFalse(JamTileInfo.hasVideo(old, null))
+        // A server that looked and found no peaks says empty, and that is an answer, not a reason to ask.
+        assertTrue(JamTileInfo.hasEnvelope(summary.copy(previewPeaks = emptyList()), null))
+    }
+
+    @Test
+    fun `which tiles read their detail`() {
+        // With the preview on the summary: only a tile with video, for the poster's URL.
+        assertFalse(JamTileInfo.needsDetail(withPreview(hasVideo = false)))
+        assertTrue(JamTileInfo.needsDetail(withPreview(hasVideo = true)))
+        // Without it, every tile with something on it; never an empty song.
+        assertTrue(JamTileInfo.needsDetail(song("old", instruments = listOf(JamInstrument.Guitar))))
+        assertFalse(JamTileInfo.needsDetail(song("empty", trackCount = 0)))
+        assertFalse(JamTileInfo.needsDetail(withPreview().copy(trackCount = 0, hasVideo = true)))
+    }
+
+    @Test
+    fun `the people line counts the ones the summary does not list`() {
+        // Four listed of seven: "rafa, duda +5".
+        val s = withPreview(names = listOf("rafa", "duda", "leo", "bia"), count = 7)
+        assertEquals("rafa, duda +5", JamWho.line(s, JamTileInfo.contributorNames(s, null)))
+        // Two of two: both named.
+        val two = withPreview(names = listOf("rafa", "duda"))
+        assertEquals("rafa, duda", JamWho.line(two, JamTileInfo.contributorNames(two, null)))
+        // A person with no name is not a name.
+        val nameless = withPreview(names = listOf("rafa", null), count = 2)
+        assertEquals("rafa", JamWho.line(nameless, JamTileInfo.contributorNames(nameless, null)).substringBefore(" +"))
+    }
+
+    @Test
+    fun `a video song asks for a wide tile from the summary alone`() {
+        val songs = listOf(withPreview("a"), withPreview("b", hasVideo = true))
+        val bands = JamBands.build(songs, hasVideo = { JamTileInfo.hasVideo(it, null) })
+        assertEquals(JamTileSize.Wide, JamMosaic.desiredSize(1, songs[1], JamTileInfo.hasVideo(songs[1], null)))
+        assertEquals(2, bands.flatMap { it.tiles }.size)
+    }
+
+    @Test
     fun `open is anyone can join, closed is ready, and no track yet is empty`() {
         assertEquals(JamNeed.Open, JamNeed.of(song(instruments = listOf(JamInstrument.Guitar))))
         assertEquals(JamNeed.Ready, JamNeed.of(song(joinMode = JamJoinMode.Closed, instruments = listOf(JamInstrument.Guitar))))
@@ -80,7 +163,9 @@ class JamWallRulesTest {
     fun `the who line, with and without the detail`() {
         val s = song(authorName = "rafa", contributors = 4)
         assertEquals("rafa +3", JamWho.line(s, null))
-        assertEquals("rafa, duda", JamWho.line(s, listOf("rafa", "duda")))
+        assertEquals("rafa, duda", JamWho.line(s.copy(contributorCount = 2), listOf("rafa", "duda")))
+        // The summary says four people and only two names are known (an older detail): the rest are counted, not hidden.
+        assertEquals("rafa, duda +2", JamWho.line(s, listOf("rafa", "duda")))
         assertEquals("rafa, duda +2", JamWho.line(s, listOf("rafa", "duda", "leo", "bia")))
         assertEquals("rafa", JamWho.line(song(authorName = "rafa", contributors = 1), null))
         assertEquals("+2", JamWho.line(song(authorName = null, authorId = null, contributors = 2), null))

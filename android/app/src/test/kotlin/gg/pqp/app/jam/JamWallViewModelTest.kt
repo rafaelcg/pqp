@@ -307,6 +307,59 @@ class JamWallViewModelTest {
         assertEquals(7, backend.detailReads.size)
     }
 
+    private fun withPreview(id: String, hasVideo: Boolean) = aSong(id).copy(
+        previewPeaks = listOf(0.3, 0.9),
+        hasVideo = hasVideo,
+        contributors = listOf(JamContributor("u", "rafa", null)),
+        missingInstruments = emptyList(),
+    )
+
+    @Test
+    fun `with the preview on the summaries only a tile with video reads a detail, and an older server still reads them all`() = runTest {
+        // A server that sends the preview: five songs, one with video.
+        val newer = FakeBackend().apply {
+            pages += JamSongListResponse(listOf(withPreview("a", false), withPreview("b", true), withPreview("c", false), withPreview("d", false)), null)
+        }
+        val model = model(newer)
+        model.start()
+        advanceUntilIdle()
+        model.state.value.wall.songs.forEach(model::requestPreview)
+        advanceUntilIdle()
+        assertEquals("the poster's URL is the one thing a summary cannot give", listOf("b"), newer.detailReads)
+        // The tile's data is on the summary, so it is there with no preview at all.
+        val a = model.state.value.wall.songs.first { it.id == "a" }
+        assertEquals(listOf(0.3, 0.9), JamTileInfo.envelope(a, model.state.value.anyPreview(a)))
+
+        // An older server: nothing on the summaries, so every tile reads its detail (lazily, three at a time).
+        val older = FakeBackend().apply {
+            pages += JamSongListResponse(listOf(aSong("a"), aSong("b"), aSong("c"), aSong("d")), null)
+        }
+        val legacy = model(older)
+        legacy.start()
+        advanceUntilIdle()
+        legacy.state.value.wall.songs.forEach(legacy::requestPreview)
+        advanceUntilIdle()
+        assertEquals(listOf("a", "b", "c", "d"), older.detailReads)
+        val oldA = legacy.state.value.wall.songs.first { it.id == "a" }
+        assertEquals(listOf("rafa"), JamTileInfo.contributorNames(oldA, legacy.state.value.anyPreview(oldA)))
+    }
+
+    @Test
+    fun `a song frame carrying the preview updates the tile with no detail read`() = runTest {
+        val backend = FakeBackend().apply { pages += JamSongListResponse(listOf(withPreview("a", false)), null) }
+        val model = model(backend)
+        model.start()
+        advanceUntilIdle()
+        val louder = withPreview("a", false).copy(previewPeaks = listOf(1.0), updatedAt = "2026-11-02T10:00:00.000Z")
+        backend.frameFlow.tryEmit(JamFrame.TrackAdded(channel, louder, JamTrack(id = "t", songId = "a")))
+        advanceUntilIdle()
+        val song = model.state.value.wall.songs.single()
+        assertEquals(listOf(1.0), JamTileInfo.envelope(song, null))
+        model.requestPreview(song)
+        advanceUntilIdle()
+        assertEquals(emptyList<String>(), backend.detailReads)
+    }
+
     @Test
     fun `the channel row asks nothing for a server with no jam channel, and draws nothing when the flag is off`() = runTest {
         val backend = FakeBackend()

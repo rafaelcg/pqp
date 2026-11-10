@@ -265,7 +265,9 @@ class JamWallViewModel(
 
     /** Ask for a song's preview. Queued, bounded, and dropped again by [cancelPreview]. */
     fun requestPreview(song: JamSongSummary) {
-        if (song.trackCount == 0 || _state.value.preview(song) != null) return
+        // A server that sends the preview answers the tile from the list: only a poster (a tile with video) still
+        // needs the detail, for the video's URL. An older server sends none of it and every tile reads it, as before.
+        if (!JamTileInfo.needsDetail(song) || _state.value.preview(song) != null) return
         if (song.id in inFlight || song.id in queue) return
         queue.addLast(song.id)
         pump()

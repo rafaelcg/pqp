@@ -45,8 +45,9 @@ sealed interface JamNeed {
                 JamJoinMode.Open -> Open
                 JamJoinMode.Closed -> Ready
                 JamJoinMode.Wanted -> {
-                    val present = song.instruments.toSet()
-                    val missing = song.wantedInstruments.filter { it !in present }
+                    // The server says what is still missing (`missingInstruments`); an older one does not, and then
+                    // it is worked out from what the song lists and what the author wants. Same answer either way.
+                    val missing = song.missingInstruments ?: song.wantedInstruments.filter { it !in song.instruments.toSet() }
                     if (missing.isEmpty()) Ready else Missing(missing)
                 }
             }
@@ -83,14 +84,54 @@ object JamWho {
             if (author.isEmpty()) return if (rest > 0) "+$rest" else ""
             return if (rest > 0) "$author +$rest" else author
         }
-        if (names.size <= maxNames) return names.joinToString(", ")
+        // The summary lists at most four people while `contributorCount` is the full number: "+N" counts the rest.
+        val total = max(song.contributorCount, names.size)
+        if (total <= maxNames) return names.joinToString(", ")
         val shown = names.take(maxNames - 1)
-        return shown.joinToString(", ") + " +${names.size - shown.size}"
+        return shown.joinToString(", ") + " +${total - shown.size}"
     }
 
     /** The instruments in picker order. */
     fun instruments(song: JamSongSummary): List<JamInstrument> =
         JamInstrument.entries.filter { it in song.instruments }
+}
+
+// --- What a tile draws, from the summary when the server sends the preview, from the detail when it does not ---
+
+/**
+ * One tile's data, from the two places it can come from.
+ *
+ * A server that sends the preview (`previewPeaks`, `hasVideo`, `contributors`, `missingInstruments` on every
+ * summary, in the list, the detail and the song frames) answers a whole wall from the list alone: no request per
+ * tile, and a tile never differs from what a frame says. The ONE thing a summary cannot give is a video's URL, so
+ * a poster still reads the detail, only for a tile with `hasVideo`, and only when it is on or near the screen.
+ * A server that does not send them (an older deployment) leaves them null, and every tile reads its detail, lazily,
+ * exactly as before.
+ */
+object JamTileInfo {
+    /** The waveform a tile draws: the summary's, else the one worked out from the detail's peaks. */
+    fun envelope(song: JamSongSummary, preview: JamPreview?): List<Double> =
+        song.previewPeaks ?: preview?.envelope.orEmpty()
+
+    /** The people on it by name: the summary's list, else the detail's. Null when neither is known yet. */
+    fun contributorNames(song: JamSongSummary, preview: JamPreview?): List<String>? =
+        song.contributors?.mapNotNull { it.name } ?: preview?.contributors
+
+    fun hasVideo(song: JamSongSummary, preview: JamPreview?): Boolean =
+        song.hasVideo ?: (preview?.hasVideo == true)
+
+    /** Whether the waveform is there to draw (so it can draw in): the summary has it, or the detail has been read. */
+    fun hasEnvelope(song: JamSongSummary, preview: JamPreview?): Boolean = song.previewPeaks != null || preview != null
+
+    /**
+     * Whether this tile has to read the song's detail. Never for a song with nothing on it. With the preview on the
+     * summary, only for a poster (a tile with video); without it, always, for everything the summary lacks.
+     */
+    fun needsDetail(song: JamSongSummary): Boolean = when {
+        song.trackCount == 0 -> false
+        song.hasPreview -> song.hasVideo == true
+        else -> true
+    }
 }
 
 // --- The mosaic ---

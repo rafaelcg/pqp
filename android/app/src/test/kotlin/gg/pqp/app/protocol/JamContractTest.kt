@@ -81,6 +81,8 @@ class JamContractTest {
         assertEquals(RepoSources.numberConstant(jam, "JAM_PAGE_MAX"), JamLimits.PAGE_MAX)
         assertEquals(RepoSources.numberConstant(jam, "JAM_MAX_TRACKS_PER_SONG"), JamLimits.MAX_TRACKS_PER_SONG)
         assertEquals(RepoSources.numberConstant(jam, "JAM_PEAKS_MAX"), JamLimits.PEAKS_MAX)
+        assertEquals(RepoSources.numberConstant(jam, "JAM_PREVIEW_PEAKS_MAX"), JamLimits.PREVIEW_PEAKS_MAX)
+        assertEquals(RepoSources.numberConstant(jam, "JAM_PREVIEW_CONTRIBUTORS_MAX"), JamLimits.PREVIEW_CONTRIBUTORS_MAX)
         assertEquals(RepoSources.numberConstant(jam, "JAM_GAIN_MAX"), JamLimits.GAIN_MAX.toInt())
         val source = RepoSources.read(jam)
         listOf(
@@ -112,6 +114,12 @@ class JamContractTest {
          "instruments":["guitar","kazoo"],"contributorCount":2,"mixDurationMs":14000,"somethingNew":true}
     """.trimIndent()
 
+    /** The same summary as a server that sends the preview writes it (jam.ts, "the preview"). */
+    private val previewJson = songJson.removeSuffix("}") + """,
+        "previewPeaks":[0.1,0.9,0.4],"hasVideo":true,
+        "contributors":[{"id":"u1","name":"rafa","avatarUrl":null},{"id":"u2","name":null,"avatarUrl":"https://x/a.png"}],
+        "missingInstruments":["vocals"]}"""
+
     private fun trackJson(id: String = "t1", extra: String = "") = """
         {"id":"$id","songId":"s1","authorId":"u1","authorName":"rafa","authorAvatarUrl":null,"instrument":"guitar",
          "label":null,"audioUrl":"https://bucket/a.flac","audioContentType":"audio/flac","audioBytes":123,
@@ -131,6 +139,71 @@ class JamContractTest {
         val odd = PqpJson.decodeFromString(JamSongSummary.serializer(), songJson.replace("\"wanted\"", "\"secret\""))
         assertEquals(JamJoinMode.Closed, odd.joinMode)
         assertEquals(java.time.Instant.parse("2026-11-02T10:00:00.000Z").toEpochMilli(), song.updatedAtMs)
+    }
+
+    @Test
+    fun `a summary from a server that sends the preview reads all four fields`() {
+        val song = PqpJson.decodeFromString(JamSongSummary.serializer(), previewJson)
+        assertEquals(listOf(0.1, 0.9, 0.4), song.previewPeaks)
+        assertEquals(true, song.hasVideo)
+        assertEquals(listOf("rafa", null), song.contributors!!.map { it.name })
+        assertEquals("https://x/a.png", song.contributors!![1].avatarUrl)
+        assertEquals(listOf(JamInstrument.Vocals), song.missingInstruments)
+        assertTrue(song.hasPreview)
+    }
+
+    @Test
+    fun `a summary from an older server has none of them, and says so with null rather than with empty`() {
+        val song = PqpJson.decodeFromString(JamSongSummary.serializer(), songJson)
+        assertNull(song.previewPeaks)
+        assertNull(song.hasVideo)
+        assertNull(song.contributors)
+        assertNull(song.missingInstruments)
+        assertTrue(!song.hasPreview)
+        // The server that looked and found nothing sends empty values, which are not the same thing.
+        val empty = PqpJson.decodeFromString(
+            JamSongSummary.serializer(),
+            songJson.removeSuffix("}") + ""","previewPeaks":[],"hasVideo":false,"contributors":[],"missingInstruments":[]}""",
+        )
+        assertEquals(emptyList<Double>(), empty.previewPeaks)
+        assertTrue(empty.hasPreview)
+    }
+
+    @Test
+    fun `an instrument in missingInstruments that a newer server invented reads as other`() {
+        val song = PqpJson.decodeFromString(
+            JamSongSummary.serializer(),
+            previewJson.replace("\"vocals\"]}", "\"theremin\"]}"),
+        )
+        assertEquals(listOf(JamInstrument.Other), song.missingInstruments)
+    }
+
+    @Test
+    fun `every song frame carries the preview on its summary, and so does the detail and the track answer`() {
+        val c = "\"channelId\":\"c1\""
+        val created = JamFrame.decode(frame("""{"type":"jam-song-created",$c,"song":$previewJson}""")) as JamFrame.SongCreated
+        assertEquals(listOf(0.1, 0.9, 0.4), created.song.previewPeaks)
+        val updated = JamFrame.decode(frame("""{"type":"jam-song-updated",$c,"song":$previewJson}""")) as JamFrame.SongUpdated
+        assertEquals(true, updated.song.hasVideo)
+        val added = JamFrame.decode(frame("""{"type":"jam-track-added",$c,"song":$previewJson,"track":${trackJson()}}""")) as JamFrame.TrackAdded
+        assertEquals(listOf(JamInstrument.Vocals), added.song.missingInstruments)
+        val updatedTrack = JamFrame.decode(frame("""{"type":"jam-track-updated",$c,"song":$previewJson,"track":${trackJson()}}""")) as JamFrame.TrackUpdated
+        assertEquals(2, updatedTrack.song.contributors!!.size)
+        val deleted = JamFrame.decode(frame("""{"type":"jam-track-deleted",$c,"song":$previewJson,"trackId":"t1"}""")) as JamFrame.TrackDeleted
+        assertTrue(deleted.song.hasPreview)
+        val detail = PqpJson.decodeFromString(
+            JamSongDetailResponse.serializer(),
+            """{"song":$previewJson,"tracks":[${trackJson()}],"viewer":{}}""",
+        )
+        assertTrue(detail.song.hasPreview)
+        val withSong = PqpJson.decodeFromString(
+            JamTrackWithSong.serializer(),
+            """{"track":${trackJson()},"song":$previewJson}""",
+        )
+        assertEquals(listOf(0.1, 0.9, 0.4), withSong.song.previewPeaks)
+        // The same frames from an older server still decode, with the preview absent.
+        val old = JamFrame.decode(frame("""{"type":"jam-song-created",$c,"song":$songJson}""")) as JamFrame.SongCreated
+        assertNull(old.song.previewPeaks)
     }
 
     @Test

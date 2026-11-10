@@ -36,6 +36,8 @@ object JamLimits {
     const val PAGE_MAX = 50
     const val MAX_TRACKS_PER_SONG = 32
     const val PEAKS_MAX = 400
+    const val PREVIEW_PEAKS_MAX = 64
+    const val PREVIEW_CONTRIBUTORS_MAX = 4
     const val GAIN_MAX = 2.0
     const val TRACK_MAX_DURATION_MS = 10 * 60 * 1000
 }
@@ -142,10 +144,33 @@ data class JamSongSummary(
     val contributorCount: Int = 0,
     /** Length of the default mix. Null with no `inMix` track. */
     val mixDurationMs: Double? = null,
+    // The preview, what a wall of songs draws without opening each one (jam.ts, "the preview"). The server added
+    // these after the first release and every one has a default there, so an OLDER server sends none of them. Here
+    // each is NULL when it was not sent and a real value (possibly empty) when it was: null is "ask the detail",
+    // empty is "the server looked and there is nothing". `JamTileInfo` is the one place that tells the two apart.
+    /** The loudest in-mix stem's peaks, at most 64 values in 0..1; empty when no in-mix stem has any. */
+    val previewPeaks: List<Double>? = null,
+    /** At least one live track has a video. */
+    val hasVideo: Boolean? = null,
+    /** Up to four people with a live track, in the order of their first track. [contributorCount] is the full number. */
+    val contributors: List<JamContributor>? = null,
+    /** For a wanted song, the wanted instruments nobody has a live track for yet; empty for every other mode. */
+    val missingInstruments: List<@Serializable(with = JamInstrumentSerializer::class) JamInstrument>? = null,
 ) {
     val updatedAtMs: Long get() = parseJamInstant(updatedAt)
     val createdAtMs: Long get() = parseJamInstant(createdAt)
+
+    /** True when this summary carries the whole preview (a server that has it), so a tile needs no detail read for it. */
+    val hasPreview: Boolean get() = previewPeaks != null && contributors != null && missingInstruments != null && hasVideo != null
 }
+
+/** One person with a live track, as a tile draws them (`jamContributorSchema`). */
+@Serializable
+data class JamContributor(
+    val id: String,
+    val name: String? = null,
+    val avatarUrl: String? = null,
+)
 
 /** What the caller may do in one song. Per viewer: never cached, never framed. */
 @Serializable

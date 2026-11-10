@@ -58,9 +58,11 @@ import gg.pqp.app.jam.JamInstrument
 import gg.pqp.app.jam.JamNeed
 import gg.pqp.app.jam.JamPreview
 import gg.pqp.app.jam.JamSongSummary
+import gg.pqp.app.jam.JamTileInfo
 import gg.pqp.app.jam.JamTileSize
 import gg.pqp.app.jam.JamWho
 import gg.pqp.app.onboarding.ui.rememberReduceMotion
+import gg.pqp.app.ui.theme.PqpIcons
 import gg.pqp.app.ui.theme.Spacing
 import kotlinx.coroutines.launch
 
@@ -137,7 +139,7 @@ fun JamTile(
 
     // The waveform draws in once its numbers arrive.
     val draw = remember { Animatable(if (reduce) 1f else 0f) }
-    val envelopeReady = preview != null
+    val envelopeReady = JamTileInfo.hasEnvelope(song, preview)
     LaunchedEffect(envelopeReady) {
         if (envelopeReady && draw.value < 1f) draw.animateTo(1f, tween(650, easing = FastOutSlowInEasing))
     }
@@ -147,7 +149,7 @@ fun JamTile(
     val lean = remember { Animatable(1f) }
     LaunchedEffect(pressed) { lean.animateTo(if (pressed && !reduce) 0.965f else 1f, spring(dampingRatio = 0.7f, stiffness = 1400f)) }
 
-    val who = JamWho.line(song, preview?.contributors)
+    val who = JamWho.line(song, JamTileInfo.contributorNames(song, preview))
     val subtitle = listOfNotNull(
         song.artist?.takeIf { it.isNotBlank() } ?: stringResource(R.string.jam_original).takeIf { !empty },
         who.takeIf { it.isNotEmpty() },
@@ -208,7 +210,7 @@ fun JamTile(
         } else if (!empty) {
             // The mix's waveform in ink across the upper part of the tile.
             JamWaveform(
-                values = preview?.envelope.orEmpty(),
+                values = JamTileInfo.envelope(song, preview),
                 color = JamInk.copy(alpha = 0.78f),
                 draw = { draw.value },
                 barWidthPx = if (size == JamTileSize.Small) 5f else 7f,
@@ -229,6 +231,10 @@ fun JamTile(
             ) {
                 JamWho.instruments(song).take(5).forEach { instrument ->
                     Icon(instrument.icon(), contentDescription = null, tint = onGround, modifier = Modifier.size(16.dp))
+                }
+                // A camera mark while the poster has not arrived (or cannot be drawn): the song has a video.
+                if (poster == null && JamTileInfo.hasVideo(song, preview)) {
+                    Icon(PqpIcons.Video, contentDescription = null, tint = onGround, modifier = Modifier.size(16.dp))
                 }
             }
         }
