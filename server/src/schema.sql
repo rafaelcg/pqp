@@ -5420,6 +5420,11 @@ CREATE TABLE IF NOT EXISTS user_daily_stats (
   voice_sampled_at TIMESTAMPTZ,
   PRIMARY KEY (user_id, day)
 );
+-- Of `voice_seconds`, the minutes a seat's microphone was live (neither muted
+-- nor deafened), and of `share_seconds` the minutes with no live microphone
+-- anywhere. Counts only, same sampler, same minute. Starts the day it ships.
+ALTER TABLE user_daily_stats ADD COLUMN IF NOT EXISTS open_mic_seconds INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE user_daily_stats ADD COLUMN IF NOT EXISTS share_muted_seconds INTEGER NOT NULL DEFAULT 0;
 
 -- Which watch parties a person watched. Copied from `hls_session_viewers`
 -- before its 24h prune, one row per party (`started_at_ms` survives an
