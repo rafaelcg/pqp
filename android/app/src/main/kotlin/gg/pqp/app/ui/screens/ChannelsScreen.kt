@@ -387,6 +387,7 @@ fun ChannelsScreen(
     // anything drawn: a live one marks its channel's row. Flag off: the list is exactly what it was.
     val activitiesStore = remember(session) { gg.pqp.app.activities.ActivitiesStore.of(session) }
     LaunchedEffect(serverId, retryTick) { activitiesStore.watch(serverId) }
+    LaunchedEffect(serverId, channels) { channels?.let { activitiesStore.knowChannels(serverId, it.map { c -> c.id }) } }
     val activitySessions by activitiesStore.sessions.collectAsStateWithLifecycle()
     val activityConfigs by activitiesStore.configs.collectAsStateWithLifecycle()
     val activityLocale = gg.pqp.app.activities.ui.activityLocale()

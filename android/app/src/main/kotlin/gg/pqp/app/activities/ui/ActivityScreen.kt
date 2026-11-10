@@ -487,6 +487,8 @@ private fun RunningActivity(
                                 haptics.performHapticFeedback(HapticFeedbackType.Confirm)
                                 endedByMe = true
                                 confirmEnd = false
+                                // the server said it is over: the screen says so now, whether or not the frame arrives
+                                host.finish(ActivityEndReason.Host)
                             } else {
                                 haptics.performHapticFeedback(HapticFeedbackType.Reject)
                                 endFailed = true

@@ -9,6 +9,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -57,6 +59,8 @@ class ActivitySeat(
     private var joinTimer: Job? = null
     private val patches = ArrayDeque<CompletableDeferred<Long>>()
     private var lastConnection = true
+    private val patchLock = Mutex()
+    private var resumeJob: Job? = null
 
     private val _snapshot = MutableStateFlow<SeatSnapshot?>(null)
 
@@ -105,16 +109,21 @@ class ActivitySeat(
         settleJoin(ActivityTransportError("unavailable"))
     }
 
-    override suspend fun patchState(patch: JsonElement, baseRev: Long?): Long {
+    override suspend fun patchState(patch: JsonElement, baseRev: Long?): Long = patchLock.withLock {
+        // ONE write in flight at a time. The server coalesces a session's writes into one `app-state`, so two
+        // outstanding patches could be answered by one frame and the second would time out although it was applied;
+        // serialised, each answer is for exactly the write that asked.
         if (!online || !seated) throw ActivityTransportError("unavailable")
         if (!send(ActivityFrame.statePatch(sessionId, patch, baseRev))) throw ActivityTransportError("unavailable")
         val entry = CompletableDeferred<Long>()
         patches.addLast(entry)
-        return try {
+        try {
             withTimeout(patchTimeoutMs) { entry.await() }
         } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
-            patches.remove(entry)
             throw ActivityTransportError("unavailable")
+        } finally {
+            // whatever way this ended (answered, timed out, cancelled), it leaves no waiter to steal a later answer
+            patches.remove(entry)
         }
     }
 
@@ -241,13 +250,30 @@ class ActivitySeat(
             if (seated) notifyConnection(false)
         } else if (seated) {
             // the socket authenticated again: take the same seat back
-            send(ActivityFrame.join(sessionId, asSpectator))
+            resumeSeat()
+        }
+    }
+
+    /**
+     * Asks for the same seat back, and again every couple of seconds while the socket is up and the answer has not
+     * come (a send the socket refused would otherwise leave the seat "reconnecting" until the server's hold ran out).
+     */
+    private fun resumeSeat() {
+        resumeJob?.cancel()
+        resumeJob = scope.launch {
+            repeat(RESUME_ATTEMPTS) {
+                if (!online || !seated || lastConnection) return@launch
+                send(ActivityFrame.join(sessionId, asSpectator))
+                delay(RESUME_RETRY_MS)
+            }
         }
     }
 
     companion object {
         const val JOIN_TIMEOUT_MS = 8_000L
         const val PATCH_TIMEOUT_MS = 6_000L
+        const val RESUME_RETRY_MS = 2_000L
+        const val RESUME_ATTEMPTS = 5
 
         /**
          * What an app is told when the session ended while this phone could not hear: the resume

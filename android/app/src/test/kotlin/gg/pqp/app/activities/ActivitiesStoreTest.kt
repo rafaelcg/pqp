@@ -3,6 +3,7 @@ package gg.pqp.app.activities
 import gg.pqp.app.core.RealtimeState
 import gg.pqp.app.core.ServerMember
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -41,7 +42,7 @@ class ActivitiesStoreTest {
     private class Rig(scope: kotlinx.coroutines.CoroutineScope) {
         val frames = MutableSharedFlow<JsonObject>(extraBufferCapacity = 32)
         val state = MutableStateFlow(RealtimeState.Ready)
-        var config: ActivitiesConfig = on(ActivityApp("pqp-eco", "1.0.2", available = true))
+        var config: ActivitiesConfig? = on(ActivityApp("pqp-eco", "1.0.2", available = true))
         var sessions: List<ChannelSession> = emptyList()
         var sessionsGate: CompletableDeferred<Unit>? = null
         var configReads = 0
@@ -191,6 +192,7 @@ class ActivitiesStoreTest {
     @Test
     fun `somebody who joined after the list was read is found, and a stranger costs one read`() = runTest {
         val r = rig()
+        r.sessions = listOf(ChannelSession(CH_A, session(S1)))
         r.store.watch(SERVER)
         runCurrent()
         assertEquals(1, r.memberReads)
@@ -235,5 +237,80 @@ class ActivitiesStoreTest {
         assertNull(s.handoff?.toUserId)
         assertNull("a frame the phone cannot read is waited out", ActivityFrame.decode(frame("""{"type":"channel-app"}""")))
         assertNull(ActivityFrame.decode(frame("""{"type":"message-broadcast"}""")))
+    }
+
+    @Test
+    fun `a lookup that did not answer is not an off answer and is asked again`() = runTest {
+        val r = rig()
+        r.sessions = listOf(ChannelSession(CH_A, session(S1)))
+        r.store.watch(SERVER)
+        runCurrent()
+        assertEquals(S1, r.store.session(CH_A)?.id)
+        // the next read gets no answer at all: what was known stays, and the server is not marked fresh
+        r.config = null
+        r.clock += ActivitiesStore.CONFIG_TTL_MS + 1
+        r.store.watch(SERVER)
+        runCurrent()
+        assertTrue(r.store.config(SERVER).enabled)
+        assertEquals(S1, r.store.session(CH_A)?.id)
+        val reads = r.configReads
+        r.config = on(ActivityApp("pqp-eco", "1.0.2", available = true))
+        r.store.watch(SERVER) // still stale, so it asks again at once instead of waiting out a TTL
+        runCurrent()
+        assertEquals(reads + 1, r.configReads)
+    }
+
+    @Test
+    fun `a session that ended while the socket was down is retired by the read that follows`() = runTest {
+        val r = rig()
+        r.store.knowChannels(SERVER, listOf(CH_A))
+        r.store.watch(SERVER)
+        runCurrent()
+        // it arrived as a frame (never in a read), and its end frame is lost
+        r.frames.tryEmit(
+            frame(
+                """{"type":"channel-app","channelId":"$CH_A","session":{"id":"$S1","appId":"pqp-eco","appVersion":"1.0.2",
+                "startedBy":"$ME","hostUserId":"$ME","startedAt":"2026-11-10T12:00:00.000Z","participants":[],"players":0,"spectators":0,"handoff":null}}""",
+            ),
+        )
+        runCurrent()
+        assertEquals(S1, r.store.session(CH_A)?.id)
+        r.state.value = RealtimeState.Reconnecting
+        runCurrent()
+        r.state.value = RealtimeState.Ready
+        runCurrent()
+        assertNull(r.store.session(CH_A))
+    }
+
+    @Test
+    fun `the roster is read only when something is running, and one read serves every asker`() = runTest {
+        val r = rig()
+        r.store.watch(SERVER)
+        runCurrent()
+        assertEquals("nothing running, no roster", 0, r.memberReads)
+        r.members = listOf(ServerMember(id = ME, displayName = "Ana"), ServerMember(id = "u2", displayName = "Bia"), ServerMember(id = "u3", displayName = "Caio"))
+        r.clock += ActivitiesStore.MEMBERS_RETRY_MS + 1
+        val a = backgroundScope.async { r.store.resolveMember(SERVER, "u2") }
+        val b = backgroundScope.async { r.store.resolveMember(SERVER, "u3") }
+        val c = backgroundScope.async { r.store.resolveMember(SERVER, ME) }
+        runCurrent()
+        assertEquals("Bia", a.await()?.displayName)
+        assertEquals("Caio", b.await()?.displayName)
+        assertEquals("Ana", c.await()?.displayName)
+        assertEquals(1, r.memberReads)
+    }
+
+    @Test
+    fun `only the latest few servers keep a roster`() = runTest {
+        val r = rig()
+        for (i in 1..6) {
+            r.sessions = listOf(ChannelSession("c$i", session("10000000-0000-4000-8000-00000000000$i")))
+            r.store.watch("srv-$i")
+            runCurrent()
+        }
+        val held = (1..6).count { r.store.memberOf("srv-$it", ME) != null }
+        assertEquals(ActivitiesStore.MEMBERS_SERVERS_KEPT, held)
+        assertNull("the oldest went first", r.store.memberOf("srv-1", ME))
+        assertTrue(r.store.memberOf("srv-6", ME) != null)
     }
 }

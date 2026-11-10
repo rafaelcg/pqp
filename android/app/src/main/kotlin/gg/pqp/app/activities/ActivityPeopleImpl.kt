@@ -65,8 +65,11 @@ class StoreActivityPeople(
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        // Sized by the LARGER side, so a very wide strip of a picture cannot decode at full size.
         var sample = 1
-        while (bounds.outWidth / (sample * 2) >= TARGET_PX && bounds.outHeight / (sample * 2) >= TARGET_PX) sample *= 2
+        while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= TARGET_PX) sample *= 2
+        // and whatever it still weighs once sampled is bounded in pixels, not only in compressed bytes
+        if ((bounds.outWidth / sample).toLong() * (bounds.outHeight / sample) > MAX_DECODED_PIXELS) return null
         val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
             ?: return null
         val scaled = Bitmap.createScaledBitmap(decoded, TARGET_PX, TARGET_PX, true)
@@ -81,6 +84,7 @@ class StoreActivityPeople(
     private companion object {
         const val TARGET_PX = 96
         const val MAX_FETCH_BYTES = 2L * 1024 * 1024
+        const val MAX_DECODED_PIXELS = 1_000_000L
         const val MAX_DATA_URL_CHARS = 60_000
         const val MISSING = ""
         val cache = LruCache<String, String>(64)

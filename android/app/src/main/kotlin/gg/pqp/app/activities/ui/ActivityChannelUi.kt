@@ -87,6 +87,7 @@ fun rememberActivityChannel(
     if (serverId == null || ActivityRules.channelKind(channelType) == null) return null
     val store = remember(session) { ActivitiesStore.of(session) }
     LaunchedEffect(serverId) { store.watch(serverId) }
+    LaunchedEffect(serverId, channelId) { store.knowChannels(serverId, listOf(channelId)) }
     // The flag may flip while a screen is open: asked again when it comes back to the front (a minute's TTL).
     LifecycleResumeEffect(serverId) {
         store.watch(serverId)
@@ -131,6 +132,8 @@ fun ActivityChannelHeader(
     val app = live?.let { s -> config.apps.firstOrNull { it.id == s.appId } }
     val viewerId = ActivitiesStore.viewerId(session)
     val starter = members[state.serverId]?.get(live?.startedBy)
+    // The roster is read only once something runs; the name on the strip is what asks for it.
+    LaunchedEffect(live?.startedBy) { live?.startedBy?.let { store.resolveMember(state.serverId, it) } }
     val context = LocalContext.current
     val hints = remember(context) { ActivitiesHintStore(context) }
     var hintGone by remember { mutableStateOf(hints.seen()) }

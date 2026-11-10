@@ -23,13 +23,14 @@ import kotlinx.serialization.json.jsonPrimitive
  * did not answer draws nothing rather than a button that may 404. A cancelled
  * lookup is not a failure and is rethrown.
  */
-suspend fun ApiClient.activitiesConfig(serverId: String): ActivitiesConfig =
+suspend fun ApiClient.activitiesConfig(serverId: String): ActivitiesConfig? =
     try {
-        getJson("/api/apps/config", mapOf("serverId" to serverId))
+        getJson<ActivitiesConfig>("/api/apps/config", mapOf("serverId" to serverId))
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
-        ActivitiesConfig.Off
+        // NULL, not Off: a lookup that did not answer is unknown, and must never read as "turned off"
+        null
     }
 
 /** `GET /api/servers/:serverId/app-sessions`: every live session in the channels the caller can VIEW. */

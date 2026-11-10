@@ -171,7 +171,7 @@ class ActivityHostSession(
         bridge = makeBridge(
             { text -> postToPage(text) },
             { remove(ActivityFrameStatus.Failed(ActivityFrameStatus.Reason.Flood)) },
-            { reason -> setStatus(ActivityFrameStatus.Ended(reason)) },
+            { reason -> finish(reason) },
         )
         webView.webViewClient = client
         // The console of the page and the frame, in debug builds only, so a bundle that fails to start says why.
@@ -278,6 +278,20 @@ class ActivityHostSession(
         if (status is ActivityFrameStatus.Failed || status is ActivityFrameStatus.Ended) return
         status = next
         onStatus(next)
+    }
+
+    /**
+     * The session is over (the app was told, the phone's seat needs no releasing): the screen draws its ending, and
+     * the frame is taken out of the page so a bundle with timers or animation stops costing anything. Also what the
+     * screen calls when its own End succeeded and the `app-ended` frame has not arrived (the socket may be down).
+     */
+    fun finish(reason: ActivityEndReason) {
+        if (removed || destroyed) return
+        removed = true
+        helloDeadline?.cancel()
+        setStatus(ActivityFrameStatus.Ended(reason))
+        postToPage(ActivityHostPage.CONTROL_REMOVE)
+        bridge.detach()
     }
 
     /** Takes the frame out of the page and stops talking to it; the seat is released. */

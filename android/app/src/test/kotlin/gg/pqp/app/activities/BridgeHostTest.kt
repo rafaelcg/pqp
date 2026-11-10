@@ -8,6 +8,7 @@ import gg.pqp.app.activities.bridge.SeatSnapshot
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -50,17 +51,27 @@ class BridgeHostTest {
         var ended = 0
         var left = 0
         var patchError: String? = null
+        var eventError: String? = null
+        var patchGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+        var endGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
         var nextRev = 5L
 
         override suspend fun join(asSpectator: Boolean): SeatSnapshot = snapshot
         override fun leave() { left += 1 }
         override suspend fun patchState(patch: JsonElement, baseRev: Long?): Long {
             patches += patch to baseRev
+            patchGate?.await()
             patchError?.let { throw ActivityTransportError(it) }
             return nextRev++
         }
-        override fun sendEvent(name: String, data: JsonElement) { events += name to data }
-        override suspend fun end() { ended += 1 }
+        override fun sendEvent(name: String, data: JsonElement) {
+            eventError?.let { throw ActivityTransportError(it) }
+            events += name to data
+        }
+        override suspend fun end() {
+            ended += 1
+            endGate?.await()
+        }
         override fun subscribe(handlers: ActivityTransport.Handlers): () -> Unit {
             this.handlers = handlers
             return { this.handlers = null }
@@ -68,8 +79,11 @@ class BridgeHostTest {
     }
 
     private class FakePeople(val avatars: Map<String, String?> = emptyMap(), val names: Map<String, String> = emptyMap()) : ActivityPeople {
-        override suspend fun describe(userId: String): ActivityPeople.Person? =
-            names[userId]?.let { ActivityPeople.Person(it, avatars[userId]) }
+        var calls = 0
+        override suspend fun describe(userId: String): ActivityPeople.Person? {
+            calls += 1
+            return names[userId]?.let { ActivityPeople.Person(it, avatars[userId]) }
+        }
     }
 
     private class Env(var locale: String = "pt-BR") : BridgeHost.Env {
@@ -441,5 +455,59 @@ class BridgeHostTest {
     fun `an invalid locale falls back to english`() = runTest {
         val r = started(rig(env = Env(locale = "not a locale!")))
         assertEquals("en", r.posted.first { it["type"]?.jsonPrimitive?.content == "hello" }["locale"]!!.jsonPrimitive.content)
+    }
+
+    // --- what the app sends is bounded before it is believed ---
+
+    @Test
+    fun `an oversized message is never parsed, and malformed ones spend the budget too`() = runTest {
+        val r = started(rig())
+        val huge = """{"id":"big1","type":"state.patch","patch":"""" + "x".repeat(BridgeHost.MESSAGE_MAX_CHARS) + """"}"""
+        r.send(huge)
+        advanceUntilIdle()
+        assertEquals("too-large", r.answer("big1")["error"]!!.jsonPrimitive.content)
+        assertTrue(r.transport.patches.isEmpty())
+
+        // garbage is charged to the flood budget like anything else, so it cannot be a free way to burn the main thread
+        repeat(1_000) { r.send("not json $it") }
+        assertEquals("the flood was reported", 1, r.violations.size)
+    }
+
+    @Test
+    fun `requests that wait on the link are bounded, and a screen that goes away drops them`() = runTest {
+        val r = started(rig())
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        r.transport.endGate = gate
+        repeat(40) { r.send(req("x$it", "session.end")) }
+        runCurrent()
+        val refused = (0 until 40).count { r.answers("x$it").any { a -> a["error"]?.jsonPrimitive?.contentOrNull == "rate-limited" } }
+        assertEquals("past 32 in flight, the rest are refused at once", 8, refused)
+
+        // the screen goes away while they wait: nothing is answered, nothing runs on
+        val before = r.posted.size
+        r.bridge.detach()
+        gate.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(before, r.posted.size)
+    }
+
+    @Test
+    fun `an event the link refuses is reported with its own code`() = runTest {
+        val r = started(rig())
+        r.transport.eventError = "rate-limited"
+        r.send(req("e1", "events.send") { put("name", "ping"); put("data", 1) })
+        advanceUntilIdle()
+        assertEquals("rate-limited", r.answer("e1")["error"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `a roster that changes by one seat describes only the new person`() = runTest {
+        val people = FakePeople(names = mapOf(USER_A to "Ana", USER_B to "Beto"))
+        val r = started(rig(people = people))
+        assertEquals(2, people.calls)
+        // the same people again (a resume, a reconnecting flag) costs nothing
+        r.transport.handlers!!.onSession(snapshot())
+        advanceUntilIdle()
+        assertEquals(2, people.calls)
     }
 }

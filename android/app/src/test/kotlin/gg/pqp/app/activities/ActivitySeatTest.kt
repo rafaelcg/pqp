@@ -313,4 +313,57 @@ class ActivitySeatTest {
         }
         advanceUntilIdle()
     }
+
+    @Test
+    fun `two writes are sent one at a time, each answered by its own state`() = runTest {
+        val r = rig()
+        seated(r)
+        val first = backgroundScope.async { r.seat.patchState(buildJsonObject { put("n", 1) }, null) }
+        val second = backgroundScope.async { r.seat.patchState(buildJsonObject { put("n", 2) }, null) }
+        runCurrent()
+        assertEquals("the second waits for the first", listOf("app-state-patch"), r.types())
+        r.emit("""{"type":"app-state","sessionId":"$SESSION","rev":3,"value":{"n":1}}""")
+        runCurrent()
+        assertEquals(3L, first.await())
+        assertEquals(listOf("app-state-patch", "app-state-patch"), r.types())
+        r.emit("""{"type":"app-state","sessionId":"$SESSION","rev":4,"value":{"n":2}}""")
+        runCurrent()
+        assertEquals(4L, second.await())
+    }
+
+    @Test
+    fun `a cancelled write leaves no waiter to steal the next answer`() = runTest {
+        val r = rig()
+        seated(r)
+        val cancelled = backgroundScope.async { r.seat.patchState(JsonNull, null) }
+        runCurrent()
+        cancelled.cancel()
+        runCurrent()
+        val next = backgroundScope.async { r.seat.patchState(JsonNull, null) }
+        runCurrent()
+        r.emit("""{"type":"app-state","sessionId":"$SESSION","rev":9,"value":null}""")
+        runCurrent()
+        assertEquals(9L, next.await())
+    }
+
+    @Test
+    fun `a resume the socket refuses is asked again until the seat answers`() = runTest {
+        val r = rig()
+        seated(r)
+        r.state.value = RealtimeState.Reconnecting
+        runCurrent()
+        r.sendAccepts = false
+        r.state.value = RealtimeState.Ready
+        runCurrent()
+        assertEquals(listOf("app-join"), r.types())
+        r.sendAccepts = true
+        advanceTimeBy(ActivitySeat.RESUME_RETRY_MS + 1)
+        runCurrent()
+        assertEquals("asked again", listOf("app-join", "app-join"), r.types())
+        r.emit(snapshotFrame())
+        runCurrent()
+        advanceTimeBy(ActivitySeat.RESUME_RETRY_MS * 3)
+        runCurrent()
+        assertEquals("and no more once the snapshot is back", 2, r.types().size)
+    }
 }

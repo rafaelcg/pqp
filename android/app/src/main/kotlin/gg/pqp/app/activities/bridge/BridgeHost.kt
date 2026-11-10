@@ -6,6 +6,7 @@ import gg.pqp.app.activities.SeatParticipant
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
@@ -98,6 +99,8 @@ class BridgeHost(
     private var roster: List<BridgeParticipant> = emptyList()
     private var rosterSeq = 0
     private var rosterReady: Deferred<Unit>? = null
+    private val described = HashMap<String, ActivityPeople.Person>()
+    private val handlerJobs = HashSet<Job>()
     private var online = true
     private var endedReason: ActivityEndReason? = null
     private var theme: Map<String, String> = emptyMap()
@@ -181,6 +184,10 @@ class BridgeHost(
         detached = true
         unsubscribe?.invoke()
         unsubscribe = null
+        // Nothing the app asked for may run on after the screen is gone, or race with the seat being released.
+        rosterReady?.cancel()
+        for (job in handlerJobs.toList()) job.cancel()
+        handlerJobs.clear()
     }
 
     /** Releases the seat (not held for the resume window). A session that already ended has nothing to leave. */
@@ -202,6 +209,8 @@ class BridgeHost(
     private fun applySnapshot(next: SeatSnapshot) {
         snapshot = next
         applyState(next.stateRev, next.stateValue)
+        // a newer snapshot supersedes the roster work of the older one: cancel it rather than let it finish unseen
+        rosterReady?.cancel()
         rosterReady = scope.async { refreshRoster(next) }
     }
 
@@ -230,13 +239,8 @@ class BridgeHost(
     }
 
     private suspend fun build(seat: SeatParticipant): BridgeParticipant? {
-        val person = try {
-            people.describe(seat.userId)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            null
-        }
+        // a person is described once per screen: a roster that changes by one seat costs one lookup, not all of them
+        val person = described[seat.userId] ?: describeSafely(seat.userId)?.also { described[seat.userId] = it }
         if (!SEAT_ID.matches(seat.seatId)) return null
         return BridgeParticipant(
             seatId = seat.seatId,
@@ -247,6 +251,14 @@ class BridgeHost(
             connection = seat.connection,
             appUserId = seat.appUserId?.takeIf { APP_USER_ID.matches(it) },
         )
+    }
+
+    private suspend fun describeSafely(userId: String): ActivityPeople.Person? = try {
+        people.describe(userId)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        null
     }
 
     private fun setConnection(nowOnline: Boolean) {
@@ -308,23 +320,28 @@ class BridgeHost(
      */
     fun onPortMessage(raw: String) {
         if (detached) return
-        val parsed = runCatching { kotlinx.serialization.json.Json.parseToJsonElement(raw) }.getOrNull() as? JsonObject
-            ?: return
-        if (!floodBucket.take()) {
+        // The budget is charged BEFORE anything is parsed, malformed messages included, and an oversized one is
+        // never parsed at all: the app is untrusted and this runs on the main thread.
+        val allowed = floodBucket.take()
+        if (!allowed || raw.length > MESSAGE_MAX_CHARS) {
             floodStrikes += 1
-            idOf(parsed)?.let { fail(it, "rate-limited") }
+            idInPrefix(raw)?.let { fail(it, if (allowed) "too-large" else "rate-limited") }
             if (floodStrikes >= FLOOD_STRIKES_BEFORE_VIOLATION && !violated) {
                 violated = true
                 hooks.onViolation()
             }
             return
         }
+        val parsed = runCatching { kotlinx.serialization.json.Json.parseToJsonElement(raw) }.getOrNull() as? JsonObject
+            ?: return
         val request = parseRequest(parsed)
         if (request == null) {
             idOf(parsed)?.let { fail(it, "invalid") }
             return
         }
-        scope.launch {
+        // Requests that wait on the transport are bounded too: a stalled link must not pile coroutines up.
+        if (handlerJobs.size >= MAX_IN_FLIGHT) return fail(request.id, "rate-limited")
+        val job = scope.launch {
             try {
                 handle(request)
             } catch (e: CancellationException) {
@@ -334,7 +351,13 @@ class BridgeHost(
                 fail(request.id, "unavailable")
             }
         }
+        handlerJobs += job
+        job.invokeOnCompletion { handlerJobs -= job }
     }
+
+    /** The request id of a message we will not parse: found in its first characters, or not at all. */
+    private fun idInPrefix(raw: String): String? =
+        ID_IN_PREFIX.find(raw.take(ID_SEARCH_CHARS))?.groupValues?.get(1)?.takeIf { it.length in 1..32 }
 
     private suspend fun handle(request: Request) {
         val id = request.id
@@ -372,7 +395,11 @@ class BridgeHost(
 
             is Request.EventsSend -> {
                 checkEventSend(request.data)?.let { return fail(id, it) }
-                transport.sendEvent(request.name, request.data)
+                try {
+                    transport.sendEvent(request.name, request.data)
+                } catch (e: ActivityTransportError) {
+                    return fail(id, mapTransportError(e.code, forEnd = false))
+                }
                 succeed(id, request.type, JsonNull)
             }
 
@@ -534,6 +561,12 @@ class BridgeHost(
         const val THEME_MAX_TOKENS = 64
         const val UI_MIN_HEIGHT = 120L
         const val UI_MAX_HEIGHT = 2000L
+
+        /** The biggest legal message is a 16 KB state patch; this leaves room for its envelope and for escaping. */
+        const val MESSAGE_MAX_CHARS = 64 * 1024
+        private const val MAX_IN_FLIGHT = 32
+        private const val ID_SEARCH_CHARS = 200
+        private val ID_IN_PREFIX = Regex(""""id"\s*:\s*"([^"\\]{1,32})"""")
         private const val FLOOD_RATE_PER_SECOND = 100
         private const val FLOOD_BURST = 200
         private const val FLOOD_STRIKES_BEFORE_VIOLATION = 500

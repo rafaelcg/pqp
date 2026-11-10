@@ -16,6 +16,8 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 
@@ -40,7 +42,8 @@ class ActivitiesStore(
     private val scope: CoroutineScope,
     frames: Flow<JsonObject>,
     realtimeState: Flow<RealtimeState>,
-    private val fetchConfig: suspend (serverId: String) -> ActivitiesConfig,
+    /** Null when the lookup failed: not "off", just unknown, so the last good answer stays. */
+    private val fetchConfig: suspend (serverId: String) -> ActivitiesConfig?,
     private val fetchSessions: suspend (serverId: String) -> List<ChannelSession>,
     private val fetchMembers: suspend (serverId: String) -> List<ServerMember> = { emptyList() },
     private val now: () -> Long = System::currentTimeMillis,
@@ -68,7 +71,9 @@ class ActivitiesStore(
     private val lock = Any()
     private var seq = 0L
     private val lastFrameSeq = HashMap<String, Long>()
-    private val serverChannels = HashMap<String, Set<String>>()
+    /** Which server each channel we have heard of belongs to: what lets a read of a server retire ITS sessions. */
+    private val channelServer = HashMap<String, String>()
+    private val membersLock = Mutex()
     private val watched = LinkedHashSet<String>()
     private val configAt = HashMap<String, Long>()
     private val membersAt = HashMap<String, Long>()
@@ -120,6 +125,15 @@ class ActivitiesStore(
         refresh(serverId, force = false)
     }
 
+    /**
+     * Tells the store which channels belong to [serverId] (a screen that draws them knows). A `channel-app` frame
+     * names a channel and never its server, so without this a session that ended while the socket was down, its end
+     * frame missed, could not be retired by the read that follows the reconnect.
+     */
+    fun knowChannels(serverId: String, channelIds: Collection<String>) {
+        synchronized(lock) { for (id in channelIds) channelServer[id] = serverId }
+    }
+
     /** A person to draw by user id, when this server's member list holds them. */
     fun memberOf(serverId: String, userId: String?): ServerMember? =
         userId?.let { _members.value[serverId]?.get(it) }
@@ -131,16 +145,10 @@ class ActivitiesStore(
      */
     suspend fun resolveMember(serverId: String, userId: String): ServerMember? {
         memberOf(serverId, userId)?.let { return it }
-        if (now() - (membersAt[serverId] ?: 0L) >= MEMBERS_RETRY_MS) {
-            val list = try {
-                fetchMembers(serverId)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                null
-            }
-            membersAt[serverId] = now()
-            if (list != null) _members.value = _members.value + (serverId to list.associateBy { it.id })
+        // One read serves every asker at once: the others wait on the lock, then find the answer (or the window) there.
+        membersLock.withLock {
+            memberOf(serverId, userId)?.let { return it }
+            if (now() - (membersAt[serverId] ?: 0L) >= MEMBERS_RETRY_MS) fetchMembersLocked(serverId)
         }
         return memberOf(serverId, userId)
     }
@@ -162,13 +170,13 @@ class ActivitiesStore(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            ActivitiesConfig.Off
-        }
-        configAt[serverId] = now()
+            null
+        } ?: return // a lookup that did not answer: keep what was known, and ask again at the next chance
         _configs.value = _configs.value + (serverId to config)
         if (!config.enabled) {
-            // Off for this server: nothing of it may stand on screen.
+            // Off for this server, and that answer is real: nothing of it may stand on screen.
             dropServer(serverId)
+            configAt[serverId] = now()
             return
         }
         val rows = try {
@@ -177,26 +185,46 @@ class ActivitiesStore(
             throw e
         } catch (e: Exception) {
             null
-        }
-        if (rows != null) applyRead(serverId, rows, startSeq)
-        readMembers(serverId)
+        } ?: return // the sessions were not read: what is on screen stays, and the server is not marked fresh
+        applyRead(serverId, rows, startSeq)
+        configAt[serverId] = now()
+        // Names are only needed once somebody is in something; a server with nothing running costs no roster.
+        if (rows.any { it.session != null }) readMembers(serverId)
     }
 
     private suspend fun readMembers(serverId: String) {
-        if (now() - (membersAt[serverId] ?: 0L) < MEMBERS_TTL_MS && _members.value.containsKey(serverId)) return
+        membersLock.withLock {
+            if (now() - (membersAt[serverId] ?: 0L) < MEMBERS_TTL_MS && _members.value.containsKey(serverId)) return
+            fetchMembersLocked(serverId)
+        }
+    }
+
+    /** Reads the roster; the caller holds [membersLock], so concurrent askers share one read. */
+    private suspend fun fetchMembersLocked(serverId: String) {
         val list = try {
             fetchMembers(serverId)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            membersAt[serverId] = now() // a failure is not retried in a tight loop either
             return
         }
         membersAt[serverId] = now()
-        _members.value = _members.value + (serverId to list.associateBy { it.id })
+        putMembers(serverId, list)
+    }
+
+    /** At most [MEMBERS_SERVERS_KEPT] servers' rosters are held, the least recently read dropped first. */
+    private fun putMembers(serverId: String, list: List<ServerMember>) {
+        val next = LinkedHashMap(_members.value)
+        next.remove(serverId)
+        next[serverId] = list.associateBy { it.id }
+        while (next.size > MEMBERS_SERVERS_KEPT) next.remove(next.keys.first())
+        _members.value = next
     }
 
     private fun applyRead(serverId: String, rows: List<ChannelSession>, startSeq: Long) {
         synchronized(lock) {
+            for (row in rows) channelServer[row.channelId] = serverId
             val next = HashMap(_sessions.value)
             val fresh = rows.mapNotNull { it.session?.let { s -> it.channelId to s } }.toMap()
             for ((channelId, session) in fresh) {
@@ -204,21 +232,21 @@ class ActivitiesStore(
                 if ((lastFrameSeq[channelId] ?: 0L) > startSeq) continue
                 next[channelId] = session
             }
-            for (channelId in serverChannels[serverId].orEmpty()) {
-                if (channelId in fresh) continue
+            // The read is the authority for this server's channels: one it does not list is over, however it got here.
+            for (channelId in next.keys.toList()) {
+                if (channelServer[channelId] != serverId || channelId in fresh) continue
                 if ((lastFrameSeq[channelId] ?: 0L) > startSeq) continue
                 next.remove(channelId)
             }
-            serverChannels[serverId] = fresh.keys
             _sessions.value = next
         }
     }
 
     private fun dropServer(serverId: String) {
         synchronized(lock) {
-            val gone = serverChannels.remove(serverId).orEmpty()
+            val gone = _sessions.value.keys.filter { channelServer[it] == serverId }
             if (gone.isEmpty()) return
-            _sessions.value = _sessions.value - gone
+            _sessions.value = _sessions.value - gone.toSet()
         }
     }
 
@@ -230,13 +258,6 @@ class ActivitiesStore(
                 _sessions.value - frame.channelId
             } else {
                 _sessions.value + (frame.channelId to frame.session)
-            }
-            // A frame names a channel, never its server: remember it under the servers we already track so a
-            // later read of that server can retire it when it is gone.
-            for ((serverId, channels) in serverChannels.toMap()) {
-                if (frame.session == null && frame.channelId in channels) {
-                    serverChannels[serverId] = channels - frame.channelId
-                }
             }
         }
     }
@@ -265,7 +286,7 @@ class ActivitiesStore(
             _configs.value = emptyMap()
             _members.value = emptyMap()
             lastFrameSeq.clear()
-            serverChannels.clear()
+            channelServer.clear()
             watched.clear()
             configAt.clear()
             membersAt.clear()
@@ -276,6 +297,7 @@ class ActivitiesStore(
         const val CONFIG_TTL_MS = 60_000L
         const val MEMBERS_TTL_MS = 120_000L
         const val MEMBERS_RETRY_MS = 10_000L
+        const val MEMBERS_SERVERS_KEPT = 4
 
         @Volatile
         private var instance: ActivitiesStore? = null
