@@ -50,6 +50,9 @@ final class ActivitiesChannelModel {
     private(set) var consents: [AppConsentRecord]?
 
     @ObservationIgnored private var consentsAt: Date?
+    /// Bumped when the screen is reused for another channel: an operation that
+    /// began before it is dropped when it comes back (its result belongs to the old one).
+    @ObservationIgnored private var bindEpoch = 0
 
     init(channelId: String, channelName: String, serverId: String, isVoice: Bool, origin: ActivityRunner.Origin) {
         self.channelId = channelId
@@ -62,7 +65,10 @@ final class ActivitiesChannelModel {
     /// The screen was reused for another channel: everything channel-specific
     /// (permissions, consent offers, notices) is dropped, nothing is carried over.
     func rebind(channelId: String, channelName: String, serverId: String, isVoice: Bool) {
+        // A rename keeps everything but the name the launcher shows.
+        self.channelName = channelName
         guard channelId != self.channelId || serverId != self.serverId else { return }
+        bindEpoch += 1
         self.channelId = channelId
         self.channelName = channelName
         self.serverId = serverId
@@ -128,9 +134,15 @@ final class ActivitiesChannelModel {
         startingAppId = app.id
         notice = nil
         defer { startingAppId = nil }
-        switch await session.api.startAppSession(channelId: channelId, appId: app.id) {
+        let epoch = bindEpoch
+        let startedIn = channelId
+        let outcome = await session.api.startAppSession(channelId: startedIn, appId: app.id)
+        // The session exists on the server whichever screen asked: record it under the
+        // channel it was started in, but only act on it if this screen still shows that channel.
+        if case .started(let summary) = outcome { session.apps.noteStarted(summary, channelId: startedIn) }
+        guard epoch == bindEpoch else { return }
+        switch outcome {
         case .started(let summary):
-            session.apps.noteStarted(summary, channelId: channelId)
             await enter(app: app, summary: summary, startedByViewer: true, session: session)
         case .refused(let refusal):
             Haptics.failure()
@@ -152,7 +164,9 @@ final class ActivitiesChannelModel {
     /// consent sheet first when not.
     func enter(app: AppEntry, summary: AppSessionSummary, startedByViewer: Bool = false, session: SessionStore) async {
         enterFailed = false
+        let epoch = bindEpoch
         let accepted = await hasAccepted(app: app, session: session)
+        guard epoch == bindEpoch else { return }
         if accepted {
             launcherOpen = false
             open(app: app, summary: summary, session: session)
@@ -162,6 +176,7 @@ final class ActivitiesChannelModel {
             if launcherOpen {
                 launcherOpen = false
                 try? await Task.sleep(for: .milliseconds(350))
+                guard epoch == bindEpoch else { return }
             }
             joinOffer = JoinOffer(app: app, session: summary, startedByViewer: startedByViewer)
         }
@@ -173,8 +188,10 @@ final class ActivitiesChannelModel {
         entering = true
         enterFailed = false
         defer { entering = false }
+        let epoch = bindEpoch
         do {
             try await session.api.acceptAppConsent(appId: offer.app.id, identityGranted: identityGranted)
+            guard epoch == bindEpoch else { return }
             consents = nil
             consentsAt = nil
             joinOffer = nil
@@ -182,6 +199,7 @@ final class ActivitiesChannelModel {
             // Let the sheet go down before the pane comes up: two presentations
             // changing in one frame drops one of them.
             try? await Task.sleep(for: .milliseconds(350))
+            guard epoch == bindEpoch else { return }
             open(app: offer.app, summary: offer.session, session: session)
         } catch {
             enterFailed = true
