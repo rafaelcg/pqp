@@ -1,6 +1,6 @@
 import type { JamTrack } from "@pqp/shared";
 import { ChevronRight, Loader2, RotateCcw } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { JamEngine } from "@/lib/jam";
 import { useTranslation } from "@/lib/i18n";
@@ -41,11 +41,16 @@ export function TrackAdjust({
   // Not while a save is out: the controls are locked then (`inert` below), and the
   // numbers that come back are the ones just saved; the effect runs again when the
   // save settles.
+  // Only when the stored numbers really moved: a save that FAILED leaves them as they
+  // were, and the person's edits stay for another try.
+  const stored = [track.id, track.offsetMs, track.trimStartMs, track.trimEndMs, track.gain].join(":");
+  const shown = useRef(stored);
   useEffect(() => {
-    if (!busy) {
+    if (!busy && shown.current !== stored) {
+      shown.current = stored;
       setEdits(editsFromTrack(track));
     }
-  }, [busy, track.id, track.offsetMs, track.trimStartMs, track.trimEndMs, track.gain]); // eslint-disable-line react-hooks/exhaustive-deps -- the numbers ARE the dependency
+  }, [busy, stored]); // eslint-disable-line react-hooks/exhaustive-deps -- `stored` carries the track's numbers
 
   const recorded = { offsetMs: track.offsetMs, trimStartMs: 0, trimEndMs: track.trimEndMs, durationMs: track.durationMs };
   const patch = patchFor(track, edits);
