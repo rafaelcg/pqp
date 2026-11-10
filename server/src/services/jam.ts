@@ -715,7 +715,10 @@ function discardCoverUpload(previous: { id: string; storage_key: string } | unde
  * error, and its retry of the same call answers and announces (the claim and the
  * removal are both idempotent).
  */
-async function summaryAfterCommit(songId: string): Promise<JamSongSummary> {
+async function summaryAfterCommit(
+  songId: string,
+  late?: (song: JamSongSummary) => void,
+): Promise<JamSongSummary> {
   const waits = [150, 400];
   for (let attempt = 0; ; attempt += 1) {
     try {
@@ -723,11 +726,37 @@ async function summaryAfterCommit(songId: string): Promise<JamSongSummary> {
     } catch (error) {
       const wait = waits[attempt];
       if (error instanceof HttpError || wait === undefined) {
+        // The change is committed and the caller is about to get an error: the
+        // room is told as soon as the song can be read, so no viewer stays stale
+        // because the caller never retried.
+        if (!(error instanceof HttpError) && late) {
+          announceLate(songId, late);
+        }
         throw error;
       }
       await new Promise((done) => setTimeout(done, wait));
     }
   }
+}
+
+/** How often, and how many times, a summary that could not be read after a commit is tried in the background. */
+const LATE_RETRY_MS = 1000;
+const LATE_RETRIES = 60;
+
+function announceLate(songId: string, announce: (song: JamSongSummary) => void): void {
+  void (async () => {
+    for (let attempt = 0; attempt < LATE_RETRIES; attempt += 1) {
+      await new Promise((done) => setTimeout(done, LATE_RETRY_MS));
+      try {
+        announce(await requireSummary(songId));
+        return;
+      } catch (error) {
+        if (error instanceof HttpError) {
+          return; // the song is gone: nothing to tell
+        }
+      }
+    }
+  })();
 }
 
 /** A cover tied to this caller already (a retried claim): nothing to do twice. */
@@ -755,9 +784,11 @@ export async function setJamCover(input: {
   song: JamSongRow;
   userId: string;
   uploadId: string;
+  /** Called with the summary if it could only be read after this call gave up (see `summaryAfterCommit`). */
+  late?: (song: JamSongSummary) => void;
 }): Promise<{ song: JamSongSummary }> {
-  const { song, userId, uploadId } = input;
-  const unchanged = async () => ({ song: await summaryAfterCommit(song.id) });
+  const { song, userId, uploadId, late } = input;
+  const unchanged = async () => ({ song: await summaryAfterCommit(song.id, late) });
   if (await coverAlreadySet(song.id, uploadId, userId)) {
     return unchanged();
   }
@@ -817,11 +848,14 @@ export async function setJamCover(input: {
     client.release();
   }
   discardCoverUpload(previous);
-  return { song: await summaryAfterCommit(song.id) };
+  return { song: await summaryAfterCommit(song.id, late) };
 }
 
 /** Take the picture off a song. A song that has none answers as it is. */
-export async function removeJamCover(song: JamSongRow): Promise<{ song: JamSongSummary }> {
+export async function removeJamCover(
+  song: JamSongRow,
+  late?: (song: JamSongSummary) => void,
+): Promise<{ song: JamSongSummary }> {
   const client = await getPool().connect();
   let previous: { id: string; storage_key: string } | undefined;
   try {
@@ -850,7 +884,7 @@ export async function removeJamCover(song: JamSongRow): Promise<{ song: JamSongS
     client.release();
   }
   discardCoverUpload(previous);
-  return { song: await summaryAfterCommit(song.id) };
+  return { song: await summaryAfterCommit(song.id, late) };
 }
 
 /**

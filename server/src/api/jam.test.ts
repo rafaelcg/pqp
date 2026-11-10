@@ -1834,6 +1834,37 @@ describeDb("jam channels", () => {
     expect(takeFrames()).toMatchObject([{ type: "jam-song-updated" }]);
   });
 
+  it("a database that stays unreadable for the whole retry window still tells the room once it can read again", async () => {
+    const song = await songId(bob);
+    const id = await coverUpload(bob, song);
+    takeFrames();
+    const pool = getPool();
+    const real = pool.query.bind(pool) as (...args: unknown[]) => Promise<unknown>;
+    let failed = 0;
+    const spy = vi.spyOn(pool, "query").mockImplementation(((...args: unknown[]) => {
+      const text = typeof args[0] === "string" ? args[0] : "";
+      // The summary select: three reads in a row (the call and both its retries).
+      if (failed < 3 && text.includes("LEFT JOIN jam_song_covers") && text.includes("WHERE s.id = $1")) {
+        failed += 1;
+        return Promise.reject(new Error("connection terminated"));
+      }
+      return real(...args);
+    }) as never);
+    try {
+      // The caller is told it failed, though the claim committed...
+      const set = await setCover(bob, song, id);
+      expect(set.status).toBe(500);
+      expect(failed).toBe(3);
+      // ...and the room hears of it by itself once a read works again.
+      await settled(() => stubs.frames.length > 0);
+    } finally {
+      spy.mockRestore();
+    }
+    const frames = takeFrames();
+    expect(frames).toMatchObject([{ type: "jam-song-updated" }]);
+    expect((frames[0] as { song: JamSongSummary }).song.coverUrl).toBeTruthy();
+  });
+
   it("an edit of the title keeps the cover and is announced once, with both", async () => {
     const song = await songId(bob, "Antes");
     await setCover(bob, song, await coverUpload(bob, song));
