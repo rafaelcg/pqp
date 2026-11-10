@@ -276,6 +276,31 @@ class JamWallViewModelTest {
     }
 
     @Test
+    fun `no page is asked for while the first page is being read again`() = runTest {
+        val backend = FakeBackend().apply { pages += JamSongListResponse(listOf(aSong("a")), "c1") }
+        val model = model(backend)
+        model.start()
+        advanceUntilIdle()
+        val gate = CompletableDeferred<Unit>()
+        backend.pageGate += gate
+        backend.pages += JamSongListResponse(listOf(aSong("a")), "c1")
+        model.refresh()
+        runCurrent()
+        val before = backend.cursors.size
+        // A scroll callback in the meantime asks for the next page: it is refused, the old cursor is not followed.
+        model.loadMore()
+        runCurrent()
+        assertEquals(before, backend.cursors.size)
+        gate.complete(Unit)
+        advanceUntilIdle()
+        // The refreshed wall is in, and paging works again.
+        backend.pages += JamSongListResponse(listOf(aSong("b")), null)
+        model.loadMore()
+        advanceUntilIdle()
+        assertEquals(listOf("a", "b"), model.state.value.wall.songs.map { it.id })
+    }
+
+    @Test
     fun `the automatic search under a filter nothing passes stops after a few pages and the person decides`() = runTest {
         val backend = FakeBackend().apply {
             repeat(8) { pages += JamSongListResponse(listOf(aSong("open$it")), if (it < 7) "c$it" else null) }

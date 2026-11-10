@@ -230,7 +230,9 @@ class JamWallViewModel(
     private fun loadMore(auto: Int) {
         val current = _state.value
         val cursor = current.wall.nextCursor ?: return
-        if (current.loadingMore) return
+        // Not while the first page is being read again: its cursor is the old wall's, and an answer for it would be
+        // appended to the wall that read is about to install. Paging resumes once the new wall is in.
+        if (current.loadingMore || reading) return
         val request = generation
         _state.update { it.copy(loadingMore = true, loadMoreFailed = false, chaseStopped = false) }
         pageJob = viewModelScope.launch {
