@@ -1,5 +1,6 @@
 import type { JamTrack } from "@pqp/shared";
 import { JamEngine } from "@/lib/jam";
+import { forgetJamPlayer, followJamPlayer } from "@/lib/jam-now-playing";
 import { inPool } from "@/lib/jam-pool";
 
 /** Stems downloaded and decoded at once: a song of many takes loads in waves, not in a burst. */
@@ -19,10 +20,16 @@ let current: Promise<JamEngine> | null = null;
 
 export function getJamEngine(): Promise<JamEngine> {
   if (!current) {
-    current = JamEngine.create().catch((error: unknown) => {
-      current = null;
-      throw error;
-    });
+    current = JamEngine.create()
+      .then((engine) => {
+        // The sidebar row follows the transport (`jam-now-playing.ts`).
+        followJamPlayer(engine.player);
+        return engine;
+      })
+      .catch((error: unknown) => {
+        current = null;
+        throw error;
+      });
   }
   return current;
 }
@@ -30,6 +37,7 @@ export function getJamEngine(): Promise<JamEngine> {
 export async function releaseJamEngine(): Promise<void> {
   const held = current;
   current = null;
+  forgetJamPlayer();
   if (held) {
     try {
       const engine = await held;

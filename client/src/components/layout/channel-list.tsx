@@ -113,6 +113,9 @@ import { isServerPublic } from "@/lib/community-access";
 import { Menu } from "@/components/ui/menu";
 import { BetaTag } from "@/components/ui/beta-tag";
 import { JamGlyph } from "@/components/jam/jam-art";
+import { JamRowArt, JamRowIcon } from "@/components/jam/jam-row-art";
+import { useJamPlaying } from "@/lib/jam-now-playing";
+import { jamRowMood } from "@/lib/jam-row-state";
 import { ChannelListSkeleton } from "@/components/ui/skeleton";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useIsTruncated } from "@/lib/use-is-truncated";
@@ -3905,6 +3908,17 @@ function ChannelRow({
   );
 
   const muted = notifications.level === "none";
+  const jamPlaying = useJamPlaying();
+  const jamMood = jam
+    ? jamRowMood({
+        selected,
+        playing: jamPlaying,
+        news: jam.news,
+        loaded: jam.loaded,
+        songCount: jam.songCount,
+      })
+    : null;
+  const rowIcon = jamMood ? <JamRowIcon mood={jamMood} /> : icon;
   const hasUnread = !selected && (jam ? jam.news : unread.count > 0);
   const hasDraft = useHasDraft(channel.id) && !selected;
   // A muted channel keeps counting for the read cursor, but nothing about it
@@ -3985,7 +3999,11 @@ function ChannelRow({
         }
       }}
       aria-current={announceCurrent ? "page" : undefined}
-      className="flex min-w-0 flex-1 touch-manipulation items-center gap-1.5 text-left"
+      className={cn(
+        "flex min-w-0 flex-1 touch-manipulation items-center gap-1.5 text-left",
+        // The Jam row draws its focus ring around the whole card (`jam-row.css`).
+        jam && "focus-visible:outline-none",
+      )}
     >
       {/* Private is the glyph, not a word. The pill that used to sit at
           the end of this row was about 50px of a 256px column, which is
@@ -4004,7 +4022,7 @@ function ChannelRow({
             aria-hidden="true"
             className="flex shrink-0 items-center gap-1"
           >
-            {icon}
+            {rowIcon}
             {/* Only when the channel carries its own picture or emoji, in
                 which case `ChannelIcon` drew that instead of the padlock
                 and nothing else in the row would say private. */}
@@ -4017,15 +4035,15 @@ function ChannelRow({
           </span>
         </Tooltip>
       ) : (
-        icon
+        rowIcon
       )}
       {jam ? (
         <span className="flex min-w-0 flex-1 flex-col" data-jam-row="">
-          <span className={cn("truncate", hasUnread && !muted && "font-semibold")}>
+          <span className={cn("truncate font-medium text-text", hasUnread && !muted && "font-semibold")}>
             {channel.name === "jam" ? t("jam.title") : channel.name}
           </span>
           {jam.loaded && (
-            <span className="truncate text-[11px] text-text-tertiary">
+            <span className="truncate text-[11px] text-text-secondary">
               {t("jam.row.songs", {
                 count: jam.songCount,
                 countLabel: jam.more ? `${jam.songCount}+` : String(jam.songCount),
@@ -4166,11 +4184,14 @@ function ChannelRow({
           event.stopPropagation();
           onDrop();
         }}
+        data-jam-card={jam ? "" : undefined}
         className={cn(
           "group relative flex items-center gap-1 rounded-md px-2 py-1.5 text-sm",
-          selected
-            ? "bg-ink-3 text-paper"
-            : "text-paper-muted hover:bg-ink-3/70 hover:text-paper",
+          jam
+            ? "isolate rounded-[var(--radius-card)] text-paper"
+            : selected
+              ? "bg-ink-3 text-paper"
+              : "text-paper-muted hover:bg-ink-3/70 hover:text-paper",
           connected && "bg-signal/10 text-signal ring-1 ring-inset ring-signal/30",
           hasUnread && !muted && !selected && !connected && "text-paper",
           muted && !selected && !connected && "opacity-50",
@@ -4181,6 +4202,9 @@ function ChannelRow({
               : "ring-1 ring-inset ring-signal/60"),
         )}
       >
+        {jam && jamMood && (
+          <JamRowArt mood={jamMood} selected={selected} />
+        )}
         {hasUnread && !muted && (
           <span
             aria-hidden="true"
@@ -4206,9 +4230,16 @@ function ChannelRow({
         {/* Always the same element. Rendering a bare button when there is
             no hint would swap the element type the moment `connected`
             flips, and React would drop keyboard focus on the way. */}
-        <Tooltip label={joinHint ?? channel.name} name={rowName} side="right">
-          {rowButton}
-        </Tooltip>
+        {jam ? (
+          // A Jam row already says its name and its count in full, and a bubble
+          // repeating "jam" would land on the art. It is the same element for
+          // the row's whole life, so focus survives.
+          rowButton
+        ) : (
+          <Tooltip label={joinHint ?? channel.name} name={rowName} side="right">
+            {rowButton}
+          </Tooltip>
+        )}
         {watchParty && live && !connected && (
           /* Watching is select, never a full voice join. The chip is only
              here while the party is live so a draft room is opened by
