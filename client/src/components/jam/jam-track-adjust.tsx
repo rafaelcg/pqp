@@ -27,17 +27,23 @@ import { JamClipEditor } from "./jam-clip-editor";
  */
 export function TrackAdjust({
   track,
+  title,
   band,
   engine,
   clock,
+  previewGain,
   onSave,
   onDone,
 }: {
   track: JamTrack;
+  /** Which track this is, said in the box itself ("Ajustando tua guitarra"). */
+  title: string;
   /** The other in-mix lanes, drawn behind. */
   band: readonly BandLane[];
   engine: JamEngine | null;
   clock?: JamClock;
+  /** Hears the volume before it is stored (see `useJamPlayback`); `null` puts the stored one back. */
+  previewGain: (trackId: string, gain: number | null) => void;
   onSave: (patch: TrackPatch) => Promise<void>;
   /** Close the editor (after a save, or "Fechar"). */
   onDone: () => void;
@@ -57,6 +63,7 @@ export function TrackAdjust({
     if (!busy && shown.current !== stored) {
       shown.current = stored;
       setEdits(editsFromTrack(track));
+      previewGain(track.id, null);
     }
   }, [busy, stored]); // eslint-disable-line react-hooks/exhaustive-deps -- `stored` carries the track's numbers
 
@@ -77,8 +84,10 @@ export function TrackAdjust({
       offsetMs: track.offsetMs + next.nudgeMs,
       trimStartMs: next.trimStartMs,
       trimEndMs: next.trimEndMs,
-      gain: next.gain,
     });
+    // The volume goes through the mix the playback hook owns, not straight to the
+    // engine: a mute or a frame arriving mid-drag rewrites every stem's volume.
+    previewGain(track.id, next.gain);
   }
 
   // Leaving with unsaved edits puts what is stored back in the engine.
@@ -86,10 +95,18 @@ export function TrackAdjust({
   /** A save landed: what the engine plays IS what is stored now, so closing restores nothing. */
   const committed = useRef(false);
   latest.current = { dirty, track };
+  const preview = useRef(previewGain);
+  preview.current = previewGain;
   useEffect(
     () => () => {
       const { dirty: unsaved, track: stored } = latest.current;
+      // The preview is dropped either way: after a save the stored volume IS it.
+      preview.current(stored.id, null);
       if (unsaved && !committed.current) {
+        // The gain is put back here too, and synchronously: the playback hook's own mix
+        // effect writes it on the next render, but when the whole panel goes away under a
+        // studio (the song was deleted mid-recording) the engine's stems stay and that
+        // effect does not, so an unsaved preview would otherwise stay on the stem.
         engine?.player.updateStem(stored.id, {
           offsetMs: stored.offsetMs,
           trimStartMs: stored.trimStartMs,
@@ -139,6 +156,9 @@ export function TrackAdjust({
       }}
     >
       <div className="flex items-center justify-end gap-2 border-b border-border pb-3">
+        <p className="mr-auto min-w-0 truncate text-sm font-bold text-text" data-jam-adjust-title="">
+          {title}
+        </p>
         <Button
           variant="ghost"
           size="sm"

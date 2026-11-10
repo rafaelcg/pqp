@@ -395,6 +395,27 @@ export function JamStudio({
 
               {phase === "setup" && !studio.needsCheck && studio.mic === "ready" && <StudioTip />}
 
+              {/* the camera, on the setup step itself: it used to live behind "Teu som" and went unseen */}
+              {phase === "setup" && (
+                <div
+                  data-jam-video=""
+                  className="flex flex-col gap-1 rounded-[var(--radius-card)] bg-surface-1 px-3 py-1 ring-1 ring-inset ring-border"
+                >
+                  <Switch
+                    checked={studio.wantsVideo}
+                    onCheckedChange={studio.setWantsVideo}
+                    label={t("jam.studio.video")}
+                    description={t("jam.studio.videoHint")}
+                  />
+                  {studio.cameraError && (
+                    <p role="status" className="flex items-center gap-1.5 px-2 pb-2 text-xs text-text-secondary">
+                      <Camera className="h-3.5 w-3.5" aria-hidden />
+                      {t("jam.studio.videoDenied")}
+                    </p>
+                  )}
+                </div>
+              )}
+
               {studio.camera && (phase === "setup" || recording) && (
                 <div className="relative aspect-video max-h-56 overflow-hidden rounded-[var(--radius-card)] bg-surface-1">
                   <video ref={stageVideo} autoPlay muted playsInline aria-label={t("jam.studio.camera")} className="h-full w-full -scale-x-100 object-cover" />
@@ -757,15 +778,6 @@ export function JamStudio({
                         label={t("jam.studio.countIn")}
                         description={t("jam.studio.countInHint")}
                       />
-                      <div className="flex flex-col gap-1.5 py-1">
-                        <Switch checked={studio.wantsVideo} onCheckedChange={studio.setWantsVideo} label={t("jam.studio.video")} />
-                        {studio.cameraError && (
-                          <p role="status" className="flex items-center gap-1.5 pb-2 text-xs text-text-secondary">
-                            <Camera className="h-3.5 w-3.5" aria-hidden />
-                            {t("jam.studio.videoDenied")}
-                          </p>
-                        )}
-                      </div>
                     </div>
                   </div>
                   {!studio.needsCheck && <LatencyCard studio={studio} />}

@@ -12,8 +12,10 @@ import {
   clipReach,
   clipSpan,
   clipWindow,
+  levelOfGain,
   msPerPixel,
   toFraction,
+  volumeDelta,
   type BandLane,
   type ClipSource,
   type ClipWindow,
@@ -115,7 +117,7 @@ export function JamClipEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the window's two numbers are its identity
     [band, view.startMs, view.endMs, width],
   );
-  const loud = Math.min(1.12, 0.3 + 0.7 * edits.gain);
+  const loud = levelOfGain(edits.gain);
 
   // The playhead, written straight to the element from the clock.
   const playhead = useRef<HTMLDivElement | null>(null);
@@ -359,9 +361,7 @@ export function JamClipEditor({
             className="min-w-0 flex-1"
           />
           <span className="w-14 text-right text-xs font-semibold tabular-nums text-text-secondary">
-            {Math.round(edits.gain * 100) === 100
-              ? t("jam.clip.volumeNormal")
-              : `${edits.gain > 1 ? "+" : "-"}${Math.abs(Math.round(edits.gain * 100) - 100)}%`}
+            {volumeDelta(edits.gain) ?? t("jam.clip.volumeNormal")}
           </span>
         </div>
       </div>

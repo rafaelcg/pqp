@@ -43,6 +43,13 @@ export interface JamPlayback {
   toggle: () => void;
   seek: (ms: number) => void;
   setLane: (trackId: string, patch: Partial<JamLaneMix>) => void;
+  /**
+   * Hear a track at a volume that is not stored yet (its author is adjusting it),
+   * or `null` to go back to the stored one. It is part of the mix the effect below
+   * writes onto the engine, so a mute, a solo or a frame arriving while the author
+   * drags cannot put the stored volume back under an editor that says otherwise.
+   */
+  previewGain: (trackId: string, gain: number | null) => void;
   attachVideo: (trackId: string, element: HTMLVideoElement) => () => void;
 }
 
@@ -63,6 +70,9 @@ export function useJamPlayback(
   const [stemStatus, setStemStatus] = useState<Record<string, StemStatus>>({});
   const [lanes, setLanes] = useState<Record<string, JamLaneMix>>({});
   const [audition, setAudition] = useState<string | null>(null);
+  const [previews, setPreviews] = useState<Record<string, number>>({});
+  const previewsRef = useRef(previews);
+  previewsRef.current = previews;
   // What the engine holds: the in-mix tracks, plus the one being auditioned.
   const heard = useMemo(
     () => tracks.map((track) => (track.id === audition ? { ...track, inMix: true } : track)),
@@ -108,6 +118,7 @@ export function useJamPlayback(
     setStemStatus({});
     setLanes({});
     setAudition(null);
+    setPreviews({});
   }, [songId]);
 
   // Load what is in the mix, and again when a track arrives, leaves or moves.
@@ -183,10 +194,30 @@ export function useJamPlayback(
       engine.player.updateStem(track.id, {
         muted: lane.muted || steppedAside,
         solo: lane.solo,
-        gain: track.gain * lane.volume,
+        gain: (previewsRef.current[track.id] ?? track.gain) * lane.volume,
       });
     }
   }, [engine, heard, tracks, audition, lanes, stemStatus]);
+
+  // A volume being previewed: only the stems whose preview moved (or ended) are
+  // written, so a drag costs one stem per input event, not the whole song.
+  const lanesRef = useRef(lanes);
+  lanesRef.current = lanes;
+  const previewed = useRef<ReadonlySet<string>>(new Set());
+  useEffect(() => {
+    if (!engine) {
+      return;
+    }
+    const moved = new Set([...previewed.current, ...Object.keys(previews)]);
+    previewed.current = new Set(Object.keys(previews));
+    for (const id of moved) {
+      const track = tracksRef.current.find((one) => one.id === id);
+      if (!track || !engine.player.stem(id)) {
+        continue;
+      }
+      engine.player.updateStem(id, { gain: (previews[id] ?? track.gain) * (lanesRef.current[id] ?? DEFAULT_LANE).volume });
+    }
+  }, [engine, previews]);
 
   const toggle = useCallback(() => {
     if (!engine) {
@@ -216,6 +247,19 @@ export function useJamPlayback(
     }));
   }, []);
 
+  const previewGain = useCallback((trackId: string, gain: number | null) => {
+    setPreviews((before) => {
+      if (gain === null) {
+        if (!(trackId in before)) {
+          return before;
+        }
+        const { [trackId]: _gone, ...rest } = before;
+        return rest;
+      }
+      return before[trackId] === gain ? before : { ...before, [trackId]: gain };
+    });
+  }, []);
+
   const attachVideo = useCallback(
     (trackId: string, element: HTMLVideoElement) => {
       if (!engine) {
@@ -239,6 +283,7 @@ export function useJamPlayback(
     toggle,
     seek,
     setLane,
+    previewGain,
     attachVideo,
   };
 }

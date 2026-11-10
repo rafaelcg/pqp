@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bandEnvelope, clipBars, clipReach, clipSpan, clipWindow, msPerPixel, toFraction } from "./jam-clip";
+import { bandEnvelope, clipBars, clipReach, clipSpan, clipWindow, levelOfGain, msPerPixel, toFraction, volumeDelta } from "./jam-clip";
 import { NUDGE_LIMIT_MS } from "./jam-take-edit";
 
 // A take as the engine hands it back: the count-in (2.4 s) and a 30 ms round
@@ -64,6 +64,27 @@ describe("the band behind the take", () => {
   it("no lanes, no width: nothing", () => {
     expect(bandEnvelope([], { startMs: 0, endMs: 1000 }, 3)).toEqual([0, 0, 0]);
     expect(bandEnvelope([], { startMs: 0, endMs: 1000 }, 0)).toEqual([]);
+  });
+});
+
+describe("what a take's volume looks like", () => {
+  it("a take as recorded is full height and a quieter one is shorter, never flat", () => {
+    expect(levelOfGain(1)).toBe(1);
+    expect(levelOfGain(0.25)).toBeCloseTo(0.475, 5);
+    expect(levelOfGain(0)).toBe(0.3);
+    expect(levelOfGain(2)).toBe(1.12);
+  });
+
+  it("a number that is not a volume reads as the recorded level", () => {
+    expect(levelOfGain(Number.NaN)).toBe(1);
+    expect(levelOfGain(-3)).toBe(0.3);
+  });
+
+  it("is said as a signed percent, and not at all at the recorded level", () => {
+    expect(volumeDelta(1)).toBeNull();
+    expect(volumeDelta(0.25)).toBe("-75%");
+    expect(volumeDelta(1.2)).toBe("+20%");
+    expect(volumeDelta(1.004)).toBeNull();
   });
 });
 
