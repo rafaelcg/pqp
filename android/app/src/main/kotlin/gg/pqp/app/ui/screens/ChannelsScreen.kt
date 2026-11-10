@@ -382,6 +382,22 @@ fun ChannelsScreen(
         jamRows = jamList.read(serverId, jamChannelIds, jamRows)
     }
     val jamOn = jamRows.config.enabled
+
+    // Activities (docs/APPS.md). Asked once per visit, and only when the server's config says `enabled` is
+    // anything drawn: a live one marks its channel's row. Flag off: the list is exactly what it was.
+    val activitiesStore = remember(session) { gg.pqp.app.activities.ActivitiesStore.of(session) }
+    LaunchedEffect(serverId, retryTick) { activitiesStore.watch(serverId) }
+    val activitySessions by activitiesStore.sessions.collectAsStateWithLifecycle()
+    val activityConfigs by activitiesStore.configs.collectAsStateWithLifecycle()
+    val activityLocale = gg.pqp.app.activities.ui.activityLocale()
+    val activityRows = remember(activitySessions, activityConfigs, channels, activityLocale) {
+        gg.pqp.app.activities.ActivityRules.rowSummaries(
+            config = activityConfigs[serverId] ?: gg.pqp.app.activities.ActivitiesConfig.Off,
+            sessions = activitySessions,
+            channelIds = channels.orEmpty().map { it.id },
+            locale = activityLocale,
+        )
+    }
     // Reorder, create in a category, Criar categoria: MANAGE_CHANNELS
     // server-wide, the same permission the PUT checks.
     val canManageChannels = permissionsConfirmed &&
@@ -793,6 +809,7 @@ fun ChannelsScreen(
                     speakingPeers = speakingPeers,
                     myUserId = me?.id,
                     jamRows = jamRows.rows,
+                    activityRows = activityRows,
                     onOpenChannel = onOpenChannel,
                     onOpenBau = onOpenBau,
                     onToggleCategory = { categoryId ->
@@ -1048,6 +1065,7 @@ private fun LazyListScope.channelListItems(
     speakingPeers: Set<String>,
     myUserId: String?,
     jamRows: Map<String, JamRowSummary>,
+    activityRows: Map<String, gg.pqp.app.activities.ActivityRowSummary>,
     onOpenChannel: (Channel) -> Unit,
     onOpenBau: () -> Unit,
     onToggleCategory: (String) -> Unit,
@@ -1108,6 +1126,7 @@ private fun LazyListScope.channelListItems(
             ChannelEntry(
                 channel = channel,
                 jam = jam,
+                activity = activityRows[channel.id],
                 badge = rowBadge(unread[channel.id], channel.id in muted).let { base ->
                     // A jam channel carries no messages, so the ordinary cursor never moves for it:
                     // its mark is "a song, or a track on one, somebody else made since you looked".
@@ -1184,6 +1203,7 @@ private fun CreateCategoryRow(onClick: () -> Unit, modifier: Modifier = Modifier
 private fun ChannelEntry(
     channel: Channel,
     jam: JamRowSummary?,
+    activity: gg.pqp.app.activities.ActivityRowSummary?,
     badge: gg.pqp.app.ui.screens.channels.RowBadge,
     live: Boolean,
     people: List<VoiceParticipant>,
@@ -1209,6 +1229,10 @@ private fun ChannelEntry(
             // for the microphone. The chat header owns the explicit join.
             onClick = { onOpenChannel(channel) },
             trailingText = jam?.countText,
+            activityLabel = activity?.appName,
+            activityDescription = activity?.let {
+                pluralStringResource(R.plurals.activities_row_description, it.inside, channel.name, it.appName, it.inside)
+            },
             trailingDescription = jam?.let {
                 if (it.hasMore) {
                     stringResource(R.string.jam_row_description_more, channel.name, it.songCount)

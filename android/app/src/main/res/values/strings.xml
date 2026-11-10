@@ -1656,4 +1656,125 @@
     <string name="jam_share_link">Share link</string>
     <string name="jam_link_copied">Link copied</string>
     <string name="jam_close">Close</string>
+
+    <!-- Activities: what happens inside a channel (docs/APPS.md). Product word is "activity", the platform says "app". -->
+    <string name="activities_title">Activities</string>
+    <string name="activities_open_launcher">Start an activity</string>
+    <string name="activities_launcher_subtitle">Do something together in this channel.</string>
+    <string name="activities_close">Close</string>
+    <string name="activities_start">Start</string>
+    <string name="activities_starting">Starting</string>
+    <string name="activities_running_here">Running here</string>
+    <string name="activities_size_up_to">Up to %1$d people</string>
+    <string name="activities_size_solo">One person</string>
+    <string name="activities_phone_watch_only">On the phone you watch</string>
+    <string name="activities_reason_voice_only">Voice channels only</string>
+    <string name="activities_reason_text_only">Text channels only</string>
+    <string name="activities_reason_off_here">Off on this server</string>
+    <string name="activities_reason_community">Not available in communities</string>
+    <string name="activities_reason_unavailable">Not available right now</string>
+    <string name="activities_reason_needs_manage">Only people who manage channels start this</string>
+    <string name="activities_reason_no_permission">You cannot start activities in this channel</string>
+    <string name="activities_empty_title">No activities here yet</string>
+    <string name="activities_empty_body">Nothing has been released for this kind of channel. Whoever runs the server can turn them on.</string>
+    <string name="activities_start_failed">Could not start. Try again in a moment.</string>
+    <string name="activities_start_rate_limited">Easy, try again in a few seconds.</string>
+    <string name="activities_start_cannot">You cannot start activities in this channel. Ask whoever runs the server.</string>
+    <string name="activities_start_unavailable">That activity is not available here right now.</string>
+    <string name="activities_start_live_by">There is already an activity here, started by %1$s.</string>
+    <string name="activities_start_live">There is already an activity running in this channel.</string>
+    <string name="activities_hint_title">New: activities</string>
+    <string name="activities_hint_body">Start something together and everybody in the channel can jump in.</string>
+    <string name="activities_hint_got_it">Got it</string>
+
+    <!-- The strip above a channel with a live activity -->
+    <string name="activities_strip_description">%1$s is running in this channel</string>
+    <string name="activities_strip_started_by">Started by %1$s</string>
+    <string name="activities_strip_started_by_unknown">Somebody started it</string>
+    <string name="activities_strip_nobody">Nobody inside yet</string>
+    <plurals name="activities_strip_inside">
+        <item quantity="one">%d inside</item>
+        <item quantity="other">%d inside</item>
+    </plurals>
+    <plurals name="activities_strip_watching">
+        <item quantity="one">%d watching</item>
+        <item quantity="other">%d watching</item>
+    </plurals>
+    <string name="activities_strip_full">Full</string>
+    <string name="activities_strip_computer_only">Computer only</string>
+    <string name="activities_join">Join</string>
+    <string name="activities_watch">Watch</string>
+    <string name="activities_back_to_app">Back to it</string>
+    <plurals name="activities_row_description">
+        <item quantity="one">%1$s, %2$s running, %3$d inside</item>
+        <item quantity="other">%1$s, %2$s running, %3$d inside</item>
+    </plurals>
+
+    <!-- The sheet before a first join -->
+    <string name="activities_join_title">Join %1$s?</string>
+    <string name="activities_start_title">Start %1$s?</string>
+    <string name="activities_join_started_by">%1$s started it.</string>
+    <string name="activities_join_sees_lead">The activity sees</string>
+    <string name="activities_join_sees">your display name and your photo. Whoever is inside sees them too.</string>
+    <string name="activities_join_keeps_lead">Nothing is kept here:</string>
+    <string name="activities_join_keeps">saves and preferences stay a computer thing for now.</string>
+    <string name="activities_join_not_lead">It does not see</string>
+    <string name="activities_join_not">your email, your pqp id, your chats or the rest of pqp.</string>
+    <string name="activities_join_sandbox">It runs in a closed box, with no access to your account, your cookies or the internet.</string>
+    <string name="activities_join_id_label">Let this activity see my pqp id</string>
+    <string name="activities_join_id_hint">To keep your score between sessions. You can turn it off later.</string>
+    <string name="activities_join_watch_note">This one needs a keyboard or a gamepad, so on the phone you watch.</string>
+    <string name="activities_join_not_now">Not now</string>
+    <string name="activities_join_enter">Join</string>
+    <string name="activities_join_watch">Watch</string>
+    <string name="activities_join_start">Start</string>
+    <string name="activities_join_entering">Joining</string>
+    <string name="activities_join_failed">Could not save that. Check your connection and try again.</string>
+    <string name="activities_join_retry">Try again</string>
+
+    <!-- Inside an activity -->
+    <string name="activities_loading">Opening the room...</string>
+    <string name="activities_leave">Leave activity</string>
+    <string name="activities_end">End activity</string>
+    <string name="activities_end_for_all">End for everybody</string>
+    <string name="activities_end_confirm_title">End %1$s for everybody?</string>
+    <string name="activities_end_confirm_body">Everybody inside leaves and the room closes.</string>
+    <string name="activities_end_keep">Keep it running</string>
+    <string name="activities_end_failed">Could not end it. Try again.</string>
+    <string name="activities_people">Who is inside</string>
+    <string name="activities_people_title">Who is in %1$s</string>
+    <string name="activities_people_host">Host</string>
+    <string name="activities_people_watching">Watching</string>
+    <string name="activities_people_reconnecting">Reconnecting</string>
+    <string name="activities_people_empty">Nobody inside yet</string>
+    <string name="activities_fullscreen">Full screen</string>
+    <string name="activities_exit_fullscreen">Show the bar</string>
+    <string name="activities_reconnecting">No connection. Trying to get back, your seat is held for 90 s.</string>
+    <string name="activities_lost">Your connection dropped and the seat was released.</string>
+    <string name="activities_watching_pill">Watching</string>
+    <string name="activities_phone_watch_note">This one needs a keyboard or a gamepad, so here you watch.</string>
+
+    <!-- Why an activity did not open -->
+    <string name="activities_failed_connection">Could not open it. Check your connection and try again.</string>
+    <string name="activities_failed_not_allowed">You cannot join this activity here.</string>
+    <string name="activities_failed_full">It filled up before you got in.</string>
+    <string name="activities_failed_rate_limited">Too much at once. Try again in a moment.</string>
+    <string name="activities_failed_unavailable">That activity is not available right now.</string>
+    <string name="activities_failed_frame">The activity stopped responding. Try again.</string>
+    <string name="activities_failed_retry">Try again</string>
+    <string name="activities_back_to_channel">Back to the channel</string>
+    <string name="activities_unavailable_title">This activity is not available</string>
+    <string name="activities_unavailable_body">pqp turned it off on this server. Your conversation is still here.</string>
+
+    <!-- How it ended -->
+    <string name="activities_ended_title">%1$s ended</string>
+    <string name="activities_ended_by_host">The host ended it.</string>
+    <string name="activities_ended_by_moderator">A moderator ended it.</string>
+    <string name="activities_ended_idle">It ended for lack of activity.</string>
+    <string name="activities_ended_host_gone">The host did not come back, so it ended.</string>
+    <string name="activities_ended_empty">It was empty, so it ended.</string>
+    <string name="activities_ended_max_duration">It reached the 12 hour limit.</string>
+    <string name="activities_ended_channel_gone">The channel was deleted.</string>
+    <string name="activities_ended_disabled">pqp turned this activity off. Your conversation is still here.</string>
+    <string name="activities_ended_plain">It ended.</string>
 </resources>

@@ -200,6 +200,16 @@ class WireProtocolTest {
             // would play until the token expired and then stop for good.
             "voice-stream",
             "channel-live",
+            // Activities (docs/APPS.md), behind the per-server `apps` flag. `channel-app` is the live
+            // summary that draws the strip and the row; the other five are the seat's own traffic.
+            // Losing `app-session` leaves a join waiting for an answer that already came, and
+            // losing `app-ended` leaves an activity on screen that is over.
+            "channel-app",
+            "app-session",
+            "app-state",
+            "app-event",
+            "app-ended",
+            "app-error",
             // The watch party EVENT, and the reason it is required rather
             // than ignored. `viewerRole` on this frame is the ONLY thing that
             // tells this phone whether it is running a party or watching one
@@ -327,21 +337,6 @@ class WireProtocolTest {
         // yet — same follow-up as the warning itself, and no correctness
         // gap: the phone was never showing a stale countdown to begin with.
         "voice-idle-warning-cancelled" to "no warning banner on the phone yet to cancel; same follow-up as voice-idle-warning",
-        // Apps in channels (docs/APPS.md), behind the per-server `apps` flag
-        // and built for web and desktop first. `channel-app` is the live
-        // summary of the app running in a channel (the card, the strip, the
-        // presence line) and `app-ended` tells its participants it is over.
-        // The phone has no launcher and cannot run the sandboxed page, and
-        // the card falls back to the plain-text system message the server
-        // also writes.
-        "channel-app" to "apps run on web and desktop first; the phone shows the plain-text system message",
-        "app-ended" to "apps run on web and desktop first; the phone never joins a session",
-        // The rest of an app session's traffic, all of it addressed to the
-        // sockets seated in a session, which a phone never is.
-        "app-session" to "the phone never joins an app session",
-        "app-state" to "the phone never joins an app session",
-        "app-event" to "the phone never joins an app session",
-        "app-error" to "the phone never sends an app frame, so it has nothing to be refused",
     )
 
     /**

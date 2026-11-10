@@ -321,6 +321,8 @@ Nothing here draws or requests anything while `GET /api/apps/config?serverId=` a
 - **Consents** (`GET /api/me/app-consents`, `POST` and `DELETE /api/apps/:app/consent`, `server/src/apps/consents.ts`) are per person and per app, not per server, so they are not behind the per-server flag: they only ever hold what the person accepted. The row records the version on the sheet; revoking stamps `revoked_at` and the next Entrar shows the sheet again. A consent is **stale** when the current version's `capabilities` differ from the accepted version's, and the sheet shows again. Configurações, Apps (`components/settings/apps-section.tsx`) lists them and takes them back; the entry only appears for somebody who has accepted one.
 - **The per-app id**: for an app whose manifest says `capabilities.identity: "user-id"`, and only for a participant who ticked "Deixar este app ver o meu id do pqp", the `app-session` frame carries `appUserId = base64url(HMAC-SHA256(key, appId + "\0" + userId))` with `key = HMAC-SHA256(CLERK_SECRET_KEY, "pqp-app-identity")` (`server/src/apps/identity.ts`). Computed on every snapshot, never stored; without the secret there is no id (and with `DEV_AUTH_BYPASS` a fixed dev secret). The page strips the pqp user id before anything reaches the app and passes `appUserId` through.
 
+**On a phone.** The Android client runs the same bundles in a web view and speaks the same bridge and the same `/ws` frames; see `docs/ANDROID.md`, "Activities".
+
 ## The frame host (web client)
 
 The pqp page runs an app in a sandboxed frame and is the only thing that talks to it. Code: `client/src/lib/apps/` (logic) and `client/src/components/apps/app-frame.tsx` (the React wrapper).
