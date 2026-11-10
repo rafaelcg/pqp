@@ -1,8 +1,19 @@
-import type { JamSongSummary, JamTrack } from "@pqp/shared";
+import { jamSongSummarySchema, type JamSongSummary, type JamTrack } from "@pqp/shared";
+
+/**
+ * The fields of a song summary the contract fills with a default (the tile preview
+ * ones), taken from the shared schema itself so a new defaulted field cannot leave
+ * the fixture behind. The ids in these tests are plain strings, so the whole
+ * summary is not parsed (the schema checks them as uuids).
+ */
+const JAM_SUMMARY_DEFAULTS = jamSongSummarySchema
+  .pick({ previewPeaks: true, hasVideo: true, contributors: true, missingInstruments: true })
+  .parse({});
 
 /** Plain song and track values for the jam tests. Not shipped: only a test imports this. */
 export function song(overrides: Partial<JamSongSummary> = {}): JamSongSummary {
   return {
+    ...JAM_SUMMARY_DEFAULTS,
     id: "11111111-1111-4111-8111-111111111111",
     channelId: "22222222-2222-4222-8222-222222222222",
     serverId: "33333333-3333-4333-8333-333333333333",
