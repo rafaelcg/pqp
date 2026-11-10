@@ -162,6 +162,85 @@ class JamPlayerTransportTest {
         player.release()
     }
 
+    /**
+     * A sink with a real clock: what has been written plays out at 48 kHz from `start()`, `headFrames()` is how much
+     * of it has been heard, `timestamp()` pairs that with the time it was heard, and a flush either puts the count
+     * back to zero or does not (the platform makes no promise). The thing the transport has to get right is that
+     * the reported position follows it at exactly 1x, before and after a seek.
+     */
+    private class ClockSink(private val resetsOnFlush: Boolean) : JamSink {
+        private var written = 0L
+        private var counted = 0L
+        private var startedAt = 0L
+        @Volatile private var started = false
+
+        @Synchronized private fun heard(): Long {
+            if (!started) return counted
+            val elapsed = (System.nanoTime() - startedAt) * 48_000 / 1_000_000_000L
+            return minOf(written, counted + elapsed)
+        }
+
+        @Synchronized override fun write(buffer: ShortArray, offset: Int, length: Int): Int {
+            // Room for about 100 ms ahead of what has been heard, like a real track buffer.
+            val ahead = written - heard()
+            if (ahead > 4_800) return 0
+            written += length / 2
+            return length
+        }
+
+        @Synchronized override fun start() {
+            started = true
+            startedAt = System.nanoTime()
+        }
+
+        @Synchronized override fun pause() {
+            counted = heard()
+            started = false
+        }
+
+        @Synchronized override fun flush() {
+            if (resetsOnFlush) {
+                counted = 0
+                written = 0
+            } else {
+                written = counted
+            }
+        }
+
+        @Synchronized override fun headFrames(): Long = heard()
+
+        @Synchronized override fun timestamp(): Pair<Long, Long>? =
+            if (started) heard() to System.nanoTime() else null
+
+        override fun release() = Unit
+    }
+
+    @Test
+    fun `after a seek to T while playing the position starts at T and runs at 1x, whatever a flush does to the counters`() {
+        for (resets in listOf(true, false)) {
+            val player = JamPlayer(JamMixer(), sinkFactory = { ClockSink(resets) })
+            val samples = ShortArray(48_000 * 20)
+            val pcm = ShortArrayPcm(samples)
+            player.load(listOf(checkNotNull(JamAlignment.place(JamStemSpec("a", 0.0, 0.0, 0.0), pcm.frames, 0.0)) to pcm))
+            player.play()
+            Thread.sleep(500)
+            // Before the seek it is at 1x from zero.
+            val before = player.positionMs()
+            assertEquals("resets=$resets before the seek", 500.0, before, 60.0)
+
+            player.seekTo(10_000.0)
+            // The moment after: at T, not at the old position, not at zero.
+            assertEquals("resets=$resets just after the seek", 10_000.0, player.positionMs(), 40.0)
+            Thread.sleep(600)
+            val after = player.positionMs()
+            // 600 ms later: T plus 600 ms (give the output's own start-up its room), never the old count carried over.
+            assertEquals("resets=$resets 600 ms after the seek", 10_600.0, after, 90.0)
+            val rate = (player.positionMs().let { p -> Thread.sleep(400); player.positionMs() - p }) / 400.0
+            assertEquals("resets=$resets runs at 1x", 1.0, rate, 0.12)
+            player.release()
+        }
+    }
+
     @Test
     fun `a sink that cannot be built, or dies mid-song, stops the transport and a later play starts again`() {
         var builds = 0

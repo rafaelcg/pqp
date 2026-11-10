@@ -203,16 +203,7 @@ class JamPlayer(
     }
 
     /** The song position being heard, in milliseconds from the transport's zero. */
-    fun positionMs(): Double {
-        val f = currentFrame()
-        dbgCount += 1
-        if (dbgCount % 30 == 0) {
-            val s = sink
-            android.util.Log.d("pqp.jam", "DBG pos frame=$f base=$baseFrame counterBase=$counterBase head=${s?.headFrames()} ts=${s?.timestamp()} writePos=$writePos")
-        }
-        return JamAlignment.ms(f)
-    }
-    private var dbgCount = 0
+    fun positionMs(): Double = JamAlignment.ms(currentFrame())
 
     private fun currentFrame(): Long {
         val held = seekTarget
@@ -288,11 +279,9 @@ class JamPlayer(
                     play = wantPlay
                 }
                 if (seek >= 0) {
-                    val headBefore = out.headFrames()
                     out.pause()
                     out.flush()
                     counterBase = out.headFrames()
-                    android.util.Log.d("pqp.jam", "DBG flush head $headBefore -> $counterBase, ts=${out.timestamp()}")
                     sinkPlaying = false
                     running = false
                     baseFrame = seek

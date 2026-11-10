@@ -791,7 +791,7 @@ private fun Lane(
         val now = System.nanoTime()
         if (!force && now - lastSeekNanos.longValue < 50_000_000L) return
         lastSeekNanos.longValue = now
-        model.seekTo(JamPlayhead.position(x, widthPx.toFloat(), duration))
+        model.seekToX(x, widthPx.toFloat())
     }
     val currentSeek by rememberUpdatedState(::seekAt)
 
@@ -1071,17 +1071,17 @@ private fun ScrubBar(model: JamSongViewModel, durationMs: Double, description: S
             .height(20.dp)
             .onSizeChanged { widthPx = it.width }
             .pointerInput(durationMs) {
-                detectTapGestures { offset -> model.seekTo(JamPlayhead.position(offset.x, widthPx.toFloat(), durationMs)) }
+                detectTapGestures { offset -> model.seekToX(offset.x, widthPx.toFloat()) }
             }
             .pointerInput(durationMs) {
                 detectHorizontalDragGestures(
-                    onDragStart = { offset -> model.seekTo(JamPlayhead.position(offset.x, widthPx.toFloat(), durationMs)) },
+                    onDragStart = { offset -> model.seekToX(offset.x, widthPx.toFloat()) },
                     onHorizontalDrag = { change, _ ->
                         change.consume()
                         val now = System.nanoTime()
                         if (now - lastSeek.longValue > 50_000_000L) {
                             lastSeek.longValue = now
-                            model.seekTo(JamPlayhead.position(change.position.x, widthPx.toFloat(), durationMs))
+                            model.seekToX(change.position.x, widthPx.toFloat())
                         }
                     },
                 )

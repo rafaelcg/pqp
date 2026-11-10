@@ -320,6 +320,13 @@ class JamSongViewModel(
         if (!resumeOnGain) focus.release()
     }
 
+    /**
+     * A touch at [x] across a row [width] pixels wide. The length is read HERE, from the state the engine last
+     * published, never from a value a gesture handler captured: a handler built before the stems finished loading
+     * held a duration of 0 and sent every tap to the start of the song.
+     */
+    fun seekToX(x: Float, width: Float) = seekTo(JamPlayhead.position(x, width, _ui.value.durationMs))
+
     fun seekTo(ms: Double) {
         player.seekTo(ms)
         positionMs = ms
