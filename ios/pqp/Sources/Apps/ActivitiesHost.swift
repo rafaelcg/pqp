@@ -91,9 +91,21 @@ struct ActivitiesHost: ViewModifier {
                     .preferredColorScheme(.dark)
                     .tint(Palette.signal)
             }
-            .task(id: serverId) {
-                guard serverId != nil else { return }
+            // Keyed by channel as well as server: a screen SwiftUI reuses for another
+            // channel must not keep starting and joining in the old one.
+            .task(id: "\(serverId ?? "")|\(channelId)") {
+                guard let serverId else { return }
+                model.rebind(channelId: channelId, channelName: channelName, serverId: serverId, isVoice: isVoice)
                 await model.load(session: session)
+            }
+            // While the socket is away the strip's clock must move, or the 90 s
+            // "your spot was released" never arrives on a screen nobody touches.
+            .task(id: apps.offlineSince) {
+                now = Date()
+                while apps.offlineSince != nil, !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(5))
+                    now = Date()
+                }
             }
             .onChange(of: apps.reconnectRevision) { _, _ in
                 guard serverId != nil else { return }
@@ -107,7 +119,7 @@ struct ActivitiesHost: ViewModifier {
             // Re-read the config when the screen comes back: the operator flips
             // the flag with no deploy.
             .onChange(of: apps.pane == nil) { _, closed in
-                if closed { Task { await model.load(session: session, force: true) } }
+                if closed, serverId != nil { Task { await session.apps.ensureConfig(serverId: model.serverId, api: session.api, force: true) } }
             }
     }
 

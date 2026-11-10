@@ -184,6 +184,16 @@ final class ActivitiesBridgeTests: XCTestCase {
         XCTAssertTrue(out.isEmpty)
     }
 
+    func testAnOversizedMessageIsRefusedBeforeItIsParsedAndAnsweredWhenItsIdCanBeRead() async {
+        let bridge = makeBridge()
+        let huge = #"{"id":"big1","type":"events.send","name":"ping","data":""# + String(repeating: "z", count: AppBridge.maxMessageBytes) + #""}"#
+        await send(bridge, huge)
+        XCTAssertEqual(last("error"), "too-large")
+        XCTAssertTrue(transport.events.isEmpty)
+        XCTAssertEqual(AppBridge.idFragment(huge), "big1")
+        XCTAssertNil(AppBridge.idFragment("no id in here"))
+    }
+
     // MARK: - what this phone has no grant for
 
     func testFilesStoreSyncAssetsAndShareAreNotAllowedNotInvalid() async {

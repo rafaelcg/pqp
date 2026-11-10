@@ -222,6 +222,13 @@ final class AppBridge {
     /// One message from the page's port, as JSON text.
     func receive(_ text: String) {
         guard !violated else { return }
+        // A request is a few hundred bytes plus, at most, the 16 KB of a state patch.
+        // Anything bigger is refused before it is parsed: the page's relay drops
+        // the same ones, this is the backstop for the one that gets through.
+        guard text.utf8.count <= Self.maxMessageBytes else {
+            if let id = Self.idFragment(text) { fail(id, .tooLarge) }
+            return
+        }
         guard floodBucket.take() else {
             floodStrikes += 1
             if let id = Self.idOf(JSONValue.parse(text)) { fail(id, .rateLimited) }
@@ -403,6 +410,23 @@ final class AppBridge {
             break
         }
         return Request(id: id, type: type, fields: fields)
+    }
+
+    /// The most one request may weigh as text (UTF-8 bytes): the state cap, the
+    /// largest event and the keys around them, with room to spare. A request with
+    /// binary payloads (`store.put`, `files.saveLocal`) is replaced by its sizes in
+    /// the relay, so it is small here too.
+    nonisolated static let maxMessageBytes = 64 * 1024
+
+    /// The request id of a message too large to parse, read from its first bytes
+    /// so it can be answered without building the whole thing.
+    nonisolated static func idFragment(_ text: String) -> String? {
+        let head = String(text.prefix(256))
+        guard let range = head.range(of: #""id":""#) else { return nil }
+        let rest = head[range.upperBound...]
+        guard let end = rest.firstIndex(of: "\"") else { return nil }
+        let id = String(rest[rest.startIndex..<end])
+        return (1...32).contains(id.count) && !id.contains("\\") ? id : nil
     }
 
     nonisolated static func idOf(_ raw: JSONValue?) -> String? {

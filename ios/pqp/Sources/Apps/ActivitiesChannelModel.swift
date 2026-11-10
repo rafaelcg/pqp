@@ -34,10 +34,10 @@ final class ActivitiesChannelModel {
         static func == (a: JoinOffer, b: JoinOffer) -> Bool { a.id == b.id }
     }
 
-    let channelId: String
-    let channelName: String
-    let serverId: String
-    let isVoice: Bool
+    private(set) var channelId: String
+    private(set) var channelName: String
+    private(set) var serverId: String
+    private(set) var isVoice: Bool
     let origin: ActivityRunner.Origin
 
     var launcherOpen = false
@@ -59,6 +59,20 @@ final class ActivitiesChannelModel {
         self.origin = origin
     }
 
+    /// The screen was reused for another channel: everything channel-specific
+    /// (permissions, consent offers, notices) is dropped, nothing is carried over.
+    func rebind(channelId: String, channelName: String, serverId: String, isVoice: Bool) {
+        guard channelId != self.channelId || serverId != self.serverId else { return }
+        self.channelId = channelId
+        self.channelName = channelName
+        self.serverId = serverId
+        self.isVoice = isVoice
+        permissions = nil
+        notice = nil
+        joinOffer = nil
+        launcherOpen = false
+    }
+
     var channelType: LauncherChannelType { isVoice ? .voice : .text }
 
     // MARK: - Reading the world
@@ -67,6 +81,7 @@ final class ActivitiesChannelModel {
     /// the members and this person's permissions. Called when the screen appears
     /// and after every reconnect.
     func load(session: SessionStore, force: Bool = false) async {
+        session.apps.noteChannel(channelId, serverId: serverId)
         let config = await session.apps.ensureConfig(serverId: serverId, api: session.api, force: force)
         guard config.enabled else { return }
         async let sessions: Void = session.apps.catchUp(serverId: serverId, api: session.api)
@@ -101,8 +116,9 @@ final class ActivitiesChannelModel {
         launcherOpen = true
         Haptics.selection()
         // The operator flips the flag with no deploy: what the launcher lists is
-        // read again as it opens, not trusted from a minute ago.
-        Task { await load(session: session, force: true) }
+        // read again as it opens, not trusted from a minute ago. The config only:
+        // sessions, people and permissions are not asked again for a sheet.
+        Task { await session.apps.ensureConfig(serverId: serverId, api: session.api, force: true) }
     }
 
     /// Starts `app` here and, if it started, takes the starter's seat. The fewest

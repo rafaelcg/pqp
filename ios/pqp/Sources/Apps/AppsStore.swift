@@ -45,6 +45,8 @@ final class AppsStore {
     @ObservationIgnored private var frameCounter = 0
     @ObservationIgnored private var peopleLoaded: [String: Date] = [:]
     @ObservationIgnored private var hasBeenReady = false
+    /// Bumped on sign-out: an answer that was in flight belongs to the old account.
+    @ObservationIgnored private var generation = 0
     @ObservationIgnored private var viewerIdProvider: () -> String? = { nil }
     @ObservationIgnored private var endedTimers: [String: Task<Void, Never>] = [:]
 
@@ -87,9 +89,11 @@ final class AppsStore {
         if !force, let at = configAt[serverId], let known = configs[serverId],
            Date().timeIntervalSince(at) < Self.configTTL { return known }
         if let running = configInFlight[serverId] { return await running.value }
+        let epoch = generation
         let task = Task<AppsConfig, Never> { await api.appsConfig(serverId: serverId) }
         configInFlight[serverId] = task
         let config = await task.value
+        guard epoch == generation else { return config }
         configInFlight[serverId] = nil
         configAt[serverId] = Date()
         if configs[serverId] != config { configs[serverId] = config }
@@ -97,13 +101,27 @@ final class AppsStore {
         return config
     }
 
+    // MARK: - Which server a channel is on
+
+    /// A frame names a channel and no server, so the screens that know both say
+    /// so: a catch-up reconciles (and a switched-off server drops) exactly the
+    /// channels registered here, which covers every channel the person has had
+    /// open, the only place a stale strip could be drawn.
+    func noteChannel(_ channelId: String, serverId: String?) {
+        guard let serverId, !serverId.isEmpty else { return }
+        channelServer[channelId] = serverId
+    }
+
+    private func serverId(of channelId: String) -> String? { channelServer[channelId] }
+
     // MARK: - Catch-up
 
     /// Reads the server's live sessions. A failure keeps what the frames said.
     func catchUp(serverId: String, api: APIClient) async {
         guard configs[serverId]?.enabled == true else { return }
         let started = frameCounter
-        guard let rows = try? await api.serverAppSessions(serverId: serverId) else { return }
+        let epoch = generation
+        guard let rows = try? await api.serverAppSessions(serverId: serverId), epoch == generation else { return }
         let byChannel = Dictionary(rows.map { ($0.channelId, $0.session) }, uniquingKeysWith: { _, last in last })
         for channelId in byChannel.keys { channelServer[channelId] = serverId }
         for channelId in sessions.keys where channelServer[channelId] == serverId {
@@ -124,7 +142,8 @@ final class AppsStore {
             people[me.id] = ActivityPerson(userId: me.id, displayName: me.displayName, avatarUrl: me.avatarUrl)
         }
         if let at = peopleLoaded[serverId], Date().timeIntervalSince(at) < 120 { return }
-        guard let members = try? await api.members(serverId: serverId) else { return }
+        let epoch = generation
+        guard let members = try? await api.members(serverId: serverId), epoch == generation else { return }
         peopleLoaded[serverId] = Date()
         for member in members {
             people[member.id] = ActivityPerson(userId: member.id, displayName: member.displayName, avatarUrl: member.avatarUrl)
@@ -196,6 +215,7 @@ final class AppsStore {
     /// A session this phone just started, or the one that refused it (`session_live`):
     /// in the store at once, so the strip and the join do not wait for the frame.
     func noteStarted(_ session: AppSessionSummary, channelId: String) {
+        noteChannel(channelId, serverId: serverId(of: channelId))
         frameCounter += 1
         frameStamp[channelId] = frameCounter
         if sessions[channelId] != session { sessions[channelId] = session }
@@ -275,6 +295,8 @@ final class AppsStore {
 
     /// A signed-out account owns nothing here.
     func clear() {
+        generation += 1
+        configInFlight = [:]
         configs = [:]
         configAt = [:]
         sessions = [:]

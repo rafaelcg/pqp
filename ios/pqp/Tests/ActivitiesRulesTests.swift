@@ -176,6 +176,29 @@ final class ActivitiesRulesTests: XCTestCase {
         XCTAssertEqual(count(5, 0, max: 64), .open(players: 5, watching: 0))
     }
 
+    // MARK: - Avatars
+
+    func testOnlyThisDeploymentsAvatarRouteIsFetchedFromTheDevice() {
+        let backend = Backend.local
+        XCTAssertTrue(AppAvatarCache.isOurAvatarRoute(URL(string: "http://localhost:3001/api/avatars/abc")!, backend: backend))
+        XCTAssertFalse(AppAvatarCache.isOurAvatarRoute(URL(string: "https://evil.example/a.png")!, backend: backend),
+                       "a user-set avatar URL must not make the phone call its owner")
+        XCTAssertFalse(AppAvatarCache.isOurAvatarRoute(URL(string: "http://localhost.evil.example:3001/api/avatars/x")!, backend: backend))
+    }
+
+    func testAnAvatarIsDownsampledFromTheEncodedImageToASmallDataURL() throws {
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 3000, height: 2000))
+        let image = renderer.image { context in
+            UIColor.systemTeal.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 3000, height: 2000))
+        }
+        let png = try XCTUnwrap(image.pngData())
+        let url = try XCTUnwrap(AppAvatarCache.shrunk(png))
+        XCTAssertTrue(url.hasPrefix("data:image/jpeg;base64,"))
+        XCTAssertLessThanOrEqual(url.count, AppLimits.avatarMaxChars)
+        XCTAssertNil(AppAvatarCache.shrunk(Data("not an image".utf8)))
+    }
+
     // MARK: - The frame
 
     func testAnEntryOffTheAppsOriginIsRefusedWithoutAWebView() {

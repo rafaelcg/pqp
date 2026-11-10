@@ -1,4 +1,5 @@
 import Foundation
+import ImageIO
 import UIKit
 
 /// Who a user id is, for drawing a seat: a name and where the avatar lives. The
@@ -10,83 +11,105 @@ struct ActivityPerson: Equatable, Sendable {
 }
 
 /// The avatars an app is handed (`avatar` in a bridge participant): a data URL,
-/// never a link the sandboxed frame could load. Fetched natively, from
-/// addresses `Avatar.resolve` accepts (this deployment's own `/api/avatars/…`
-/// or an https URL), shrunk to a small JPEG, and kept for the life of the
-/// process. A name a user typed into an avatar URL is untrusted, so a redirect
-/// is followed ONLY from this deployment's own avatar route (which answers 302
-/// to the uploaded object in our bucket) and refused everywhere else.
+/// never a link the sandboxed frame could load.
+///
+/// WHICH ADDRESSES. Exactly what the web host fetches (`avatarOrigins` in
+/// `bridge-host.ts`): this deployment's own API (`/api/avatars/<user>`, which
+/// answers 302 to the uploaded object in our bucket). A user can set their avatar
+/// URL to anything, so any other address is NOT fetched from the device (it would
+/// tell its owner the viewer's address and timing) and the app draws its own
+/// fallback. A redirect is followed only from that route, and only to https.
+///
+/// HOW. Streamed with a hard byte cap (the transfer is cancelled the moment it is
+/// passed, nothing buffers an oversized body), then DOWNSAMPLED from the encoded
+/// data to a small JPEG (`CGImageSourceCreateThumbnailAtIndex`, which never
+/// decodes the full picture). Results are kept in a small bounded cache.
 actor AppAvatarCache {
     static let shared = AppAvatarCache()
 
-    /// A data URL of at most `AppLimits.avatarMaxChars`; the shrunk image is a
-    /// few KB, so this is a ceiling a sane avatar never meets.
     private var cache: [String: String?] = [:]
+    private var order: [String] = []
     private var inFlight: [String: Task<String?, Never>] = [:]
 
-    private static let maxDownloadBytes = 1_500_000
-    private static let side: CGFloat = 96
+    static let maxDownloadBytes = 1_500_000
+    static let maxEntries = 200
+    static let side = 96
 
     func dataURL(for raw: String?, backend: Backend = .current) async -> String? {
-        guard let raw, !raw.isEmpty, let url = await MainActor.run(body: { Avatar.resolve(raw, backend: backend) }) else { return nil }
+        guard let raw, !raw.isEmpty,
+              let url = await MainActor.run(body: { Avatar.resolve(raw, backend: backend) }),
+              Self.isOurAvatarRoute(url, backend: backend) else { return nil }
         let key = url.absoluteString
         if let cached = cache[key] { return cached }
         if let running = inFlight[key] { return await running.value }
-        let followsRedirects = url.absoluteString.hasPrefix(backend.apiBaseURL.absoluteString + "/api/avatars/")
-        let task = Task<String?, Never> { await Self.fetch(url, followsRedirects: followsRedirects) }
+        let task = Task<String?, Never> { await Self.fetch(url) }
         inFlight[key] = task
         let value = await task.value
         inFlight[key] = nil
-        cache[key] = .some(value)
+        remember(key, value)
         return value
     }
 
+    /// Only `<api>/api/avatars/…` is fetched.
+    static func isOurAvatarRoute(_ url: URL, backend: Backend) -> Bool {
+        url.absoluteString.hasPrefix(backend.apiBaseURL.absoluteString + "/api/avatars/")
+    }
+
+    private func remember(_ key: String, _ value: String?) {
+        if cache[key] == nil { order.append(key) }
+        cache[key] = .some(value)
+        while order.count > Self.maxEntries {
+            cache.removeValue(forKey: order.removeFirst())
+        }
+    }
+
     private final class RedirectPolicy: NSObject, URLSessionTaskDelegate {
-        let follows: Bool
-        init(follows: Bool) { self.follows = follows }
         func urlSession(
             _ session: URLSession, task: URLSessionTask,
             willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
             completionHandler: @escaping (URLRequest?) -> Void
         ) {
-            // https only, even when redirects are followed: ATS says the same, this says why.
-            completionHandler(follows && request.url?.scheme == "https" ? request : nil)
+            completionHandler(request.url?.scheme == "https" ? request : nil)
         }
     }
 
-    private static func fetch(_ url: URL, followsRedirects: Bool) async -> String? {
+    private static func fetch(_ url: URL) async -> String? {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 6
         configuration.timeoutIntervalForResource = 10
         configuration.httpCookieStorage = nil
         configuration.urlCache = nil
-        let session = URLSession(configuration: configuration, delegate: RedirectPolicy(follows: followsRedirects), delegateQueue: nil)
+        let session = URLSession(configuration: configuration, delegate: RedirectPolicy(), delegateQueue: nil)
         defer { session.finishTasksAndInvalidate() }
-        guard let (data, response) = try? await session.data(from: url),
+        guard let (bytes, response) = try? await session.bytes(from: url),
               let http = response as? HTTPURLResponse, http.statusCode == 200,
-              data.count <= maxDownloadBytes,
-              let image = UIImage(data: data) else { return nil }
-        return shrunk(image)
+              http.expectedContentLength <= Int64(maxDownloadBytes) else { return nil }
+        var data = Data()
+        do {
+            for try await byte in bytes {
+                data.append(byte)
+                if data.count > maxDownloadBytes { return nil }
+            }
+        } catch {
+            return nil
+        }
+        return shrunk(data)
     }
 
-    /// A square JPEG of `side` points at scale 1, as a data URL; nil when it
-    /// would not fit the bridge's cap.
-    static func shrunk(_ image: UIImage) -> String? {
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = 1
-        format.opaque = true
-        let renderer = UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format)
-        let source = image.size
-        let scale = max(side / max(source.width, 1), side / max(source.height, 1))
-        let drawn = CGSize(width: source.width * scale, height: source.height * scale)
-        let jpeg = renderer.jpegData(withCompressionQuality: 0.72) { context in
-            UIColor.black.setFill()
-            context.fill(CGRect(x: 0, y: 0, width: side, height: side))
-            image.draw(in: CGRect(
-                x: (side - drawn.width) / 2, y: (side - drawn.height) / 2,
-                width: drawn.width, height: drawn.height
-            ))
-        }
+    /// A square-ish JPEG data URL of at most `side` pixels, from the ENCODED
+    /// image, never decoding it at its full size; nil when it would not fit the
+    /// bridge's cap or is not an image.
+    static func shrunk(_ data: Data) -> String? {
+        let options: [CFString: Any] = [kCGImageSourceShouldCache: false]
+        guard let source = CGImageSourceCreateWithData(data as CFData, options as CFDictionary) else { return nil }
+        let thumbnail: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: side,
+        ]
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnail as CFDictionary),
+              let jpeg = UIImage(cgImage: image).jpegData(compressionQuality: 0.72) else { return nil }
         let text = "data:image/jpeg;base64," + jpeg.base64EncodedString()
         return text.count <= AppLimits.avatarMaxChars ? text : nil
     }

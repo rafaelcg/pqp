@@ -65,7 +65,7 @@ final class ActivityRunner: Identifiable, AppBridgeTransport {
     @ObservationIgnored private weak var session: SessionStore?
     @ObservationIgnored private var bridge: AppBridge?
     @ObservationIgnored private var joinWaiter: CheckedContinuation<AppSeatSnapshot, Error>?
-    @ObservationIgnored private var patchWaiters: [(id: UUID, continuation: CheckedContinuation<Int, Error>)] = []
+    @ObservationIgnored private var patchWaiters: [(id: UUID, sentAtRev: Int, continuation: CheckedContinuation<Int, Error>)] = []
     @ObservationIgnored private var rosterGeneration = 0
     @ObservationIgnored private var stopped = false
     @ObservationIgnored private var appsOrigin: String?
@@ -172,7 +172,9 @@ final class ActivityRunner: Identifiable, AppBridgeTransport {
     func stop() {
         guard !stopped else { return }
         stopped = true
-        var release = snapshot != nil
+        // A join still in flight may land after this: its seat is released too
+        // (`app-leave` for a seat that does not exist is a no-op on the server).
+        var release = snapshot != nil || phase == .joining
         switch phase {
         case .ended: release = false
         case .failed, .left: break
@@ -304,7 +306,8 @@ final class ActivityRunner: Identifiable, AppBridgeTransport {
         guard let snapshot, let session else { return }
         rosterGeneration += 1
         let generation = rosterGeneration
-        let seats = snapshot.participants
+        // Only the seats the bridge will pass on: avatars are fetched for no more.
+        let seats = Array(snapshot.participants.prefix(AppLimits.maxParticipants))
         let people = seats.map { session.apps.person($0.userId) }
         Task { [weak self] in
             var built: [BridgeParticipant?] = Array(repeating: nil, count: seats.count)
@@ -346,7 +349,7 @@ final class ActivityRunner: Identifiable, AppBridgeTransport {
         let id = sessionId
         let waiterId = UUID()
         return try await withCheckedThrowingContinuation { continuation in
-            patchWaiters.append((waiterId, continuation))
+            patchWaiters.append((waiterId, bridge?.state.rev ?? 0, continuation))
             Task { await session.realtime.appStatePatch(sessionId: id, baseRev: baseRev, patch: patch) }
             Task { [weak self] in
                 try? await Task.sleep(for: .seconds(AppLimits.joinTimeout))
@@ -355,10 +358,18 @@ final class ActivityRunner: Identifiable, AppBridgeTransport {
         }
     }
 
+    /// The server answers a write with the next `app-state` (the whole value goes
+    /// to every seat, the writer included) and does not say whose write it was, so
+    /// the protocol cannot correlate one to one. What is certain is that a frame
+    /// whose revision is not past the one a write was sent at is not its answer;
+    /// every write sent before this frame's revision was reached is answered by it
+    /// (the server applies a window of writes in ONE write and ONE revision, so
+    /// they share it), and a refusal arrives as its own `app-error`, which fails
+    /// the oldest.
     private func resolvePatches(rev: Int) {
-        let waiting = patchWaiters
-        patchWaiters = []
-        for waiter in waiting { waiter.continuation.resume(returning: rev) }
+        let answered = patchWaiters.filter { rev > $0.sentAtRev }
+        patchWaiters.removeAll { rev > $0.sentAtRev }
+        for waiter in answered { waiter.continuation.resume(returning: rev) }
     }
 
     private func expirePatch(_ id: UUID) {

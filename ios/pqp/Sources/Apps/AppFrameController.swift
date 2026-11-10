@@ -61,6 +61,12 @@ final class AppFrameController: NSObject {
     init?(entry: String, appsOrigin: String, title: String, wrapperBase: URL = AppFrameController.defaultWrapperBase) {
         guard let entryURL = URL(string: entry), let origin = URL(string: appsOrigin),
               AppFrameController.isOnOrigin(entryURL, origin: origin) else { return nil }
+        // An app bundle is code the person runs: over the network it must be https
+        // (a Debug build keeps `http://localhost`, the apps dev server). Otherwise
+        // an on-path attacker could swap the bundle and talk to the bridge.
+        #if !DEBUG
+        guard entryURL.scheme == "https" else { return nil }
+        #endif
         self.entryURL = entryURL
         self.wrapperBase = wrapperBase
         self.title = title
@@ -133,8 +139,20 @@ final class AppFrameController: NSObject {
     func attachPort() {
         guard !removed, !portAttached else { return }
         portAttached = true
-        helloTimer?.cancel()
-        run("window.__pqpBridge.attach()")
+        // The hello deadline stays armed until the page confirms the port is out:
+        // a failed evaluation must end in a removed frame, not in a seat with an
+        // app that never gets a bridge.
+        webView.callAsyncJavaScript(
+            "window.__pqpBridge.attach()", arguments: [:], in: nil, in: world
+        ) { [weak self] result in
+            Task { @MainActor [weak self] in
+                guard let self, !self.removed else { return }
+                switch result {
+                case .success: self.helloTimer?.cancel()
+                case .failure: self.remove(.loadFailed)
+                }
+            }
+        }
     }
 
     private var portAttached = false
@@ -231,7 +249,7 @@ final class AppFrameController: NSObject {
           port.onmessage = function (event) {
             var text;
             try { text = JSON.stringify(event.data, replacer); } catch (e) { return; }
-            if (typeof text === "string") tell("message", text);
+            if (typeof text === "string" && text.length <= 65536) tell("message", text);
           };
           el.contentWindow.postMessage({ pqp: "app-port", platformApi: 1 }, "*", [channel.port2]);
         },

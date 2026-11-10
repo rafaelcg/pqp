@@ -89,9 +89,13 @@ extension APIClient {
         }
         guard let (data, status) = try? await rawRequest(
             "/api/channels/\(channelId)/app-sessions", method: "POST", body: Body(appId: appId)
-        ) else { return .refused(.failed) }
-        if status == 201, let session = try? Coding.decoder.decode(AppSessionSummary.self, from: data) {
-            return .started(session)
+        ) else {
+            // The answer may have been lost after the server committed: ask what is live.
+            return await reconcileStart(channelId: channelId, appId: appId)
+        }
+        if status == 201 {
+            if let session = try? Coding.decoder.decode(AppSessionSummary.self, from: data) { return .started(session) }
+            return await reconcileStart(channelId: channelId, appId: appId)
         }
         let refusal = try? Coding.decoder.decode(Refusal.self, from: data)
         switch (status, refusal?.error) {
@@ -103,6 +107,16 @@ extension APIClient {
         case (404, _): return .refused(.notFound)
         default: return .refused(.failed)
         }
+    }
+
+    /// An ambiguous start (the response was lost or unreadable): the channel's own
+    /// live session settles it: the same app live there is taken as the start that
+    /// went through (the person joins it either way); anything else is a failure.
+    private func reconcileStart(channelId: String, appId: String) async -> AppStartOutcome {
+        // `GET /api/channels/:id/app-session` answers the summary itself, or null.
+        guard let live = try? await get("/api/channels/\(channelId)/app-session") as AppSessionSummary?,
+              live.appId == appId else { return .refused(.failed) }
+        return .started(live)
     }
 
     /// `POST /api/app-sessions/:id/end`. `false` means it was already over.
