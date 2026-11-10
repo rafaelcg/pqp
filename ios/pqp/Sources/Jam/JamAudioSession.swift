@@ -89,23 +89,26 @@ final class JamAudioSession {
             do {
                 let before = (driver.category, driver.mode, driver.categoryOptions)
                 try driver.setCategory(.playback, mode: .default, options: [])
+                // Remembered, but NOT yet a claim: holding the session means
+                // having activated it, which is decided below.
                 if previous == nil { previous = before }
-                weChangedTheSession = true
             } catch {
                 // A song with the wrong routing beats no song.
             }
         }
         do {
             try driver.setActive(true, options: [])
+            // Held from here, and only from here: the next release deactivates
+            // it and then puts the category back, in that order.
             if !alreadyPlayback { weChangedTheSession = true }
-            // Held again: the next release deactivates it AND retries the
-            // category, in that order, rather than only restoring.
-            if pendingRestore { weChangedTheSession = true }
             ownsLockScreen = true
         } catch {
             // The song still plays through whatever route there is, but the
-            // lock screen is not ours to draw on without an active session.
+            // lock screen is not ours to draw on without an active session,
+            // and nothing was activated, so nothing is held: only the category
+            // this call changed is put back.
             ownsLockScreen = false
+            if !alreadyPlayback { restorePreviousCategory() }
         }
         return true
     }

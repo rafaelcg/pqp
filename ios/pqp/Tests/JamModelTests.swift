@@ -225,12 +225,31 @@ final class JamAudioSessionOwnershipTests: XCTestCase {
         XCTAssertEqual(driver.category, .ambient)
     }
 
-    func testAFailedActivationDoesNotClaimTheLockScreen() {
+    func testAFailedActivationDoesNotClaimTheLockScreenOrTheSessionAndPutsTheCategoryBack() {
         let driver = FakeAudioDriver(category: .ambient)
         driver.activeTrueError = NSError(domain: NSOSStatusErrorDomain, code: -50)
         let session = JamAudioSession(driver: driver)
         session.activate(callActive: false)
         XCTAssertFalse(session.ownsLockScreen)
+        XCTAssertFalse(session.isHolding, "nothing was activated, so nothing is held")
+        XCTAssertEqual(driver.category, .ambient, "the category this call changed is put back")
+        XCTAssertEqual(session.deactivate(), .notOurs)
+    }
+
+    func testAFailedReactivationWithAPendingRestoreClaimsNothing() {
+        let driver = FakeAudioDriver(category: .ambient)
+        let session = JamAudioSession(driver: driver)
+        session.activate(callActive: false)
+        driver.categoryError = { $0 == .ambient ? NSError(domain: NSOSStatusErrorDomain, code: -50) : nil }
+        session.deactivate()  // restore refused: .playback left, restore pending
+        driver.activeTrueError = NSError(domain: NSOSStatusErrorDomain, code: -50)
+        session.activate(callActive: false)
+        XCTAssertFalse(session.isHolding)
+        XCTAssertFalse(session.ownsLockScreen)
+        driver.activeTrueError = nil
+        driver.categoryError = nil
+        XCTAssertEqual(session.deactivate(), .released, "the pending category is still retried")
+        XCTAssertEqual(driver.category, .ambient)
     }
 }
 
