@@ -1,0 +1,196 @@
+/*
+ * JAM (docs/JAM.md). Motion for the wall, the studio and the post confirmation.
+ * Every class animates `transform` and `opacity` only, ends on the resting
+ * style (so `backwards`, never `both`: a landed tile keeps no transform, which
+ * would be a stacking context), and is switched off under
+ * `prefers-reduced-motion`, where everything is simply there.
+ */
+@keyframes jam-tile-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* A tile that arrives while the wall is open: grows in with a small overshoot. */
+@keyframes jam-tile-arrive {
+  0% {
+    opacity: 0;
+    transform: scale(0.86);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.025);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* The ring that rides along with an arrival and fades. */
+@keyframes jam-arrive-ring {
+  from {
+    opacity: 0.9;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.06);
+  }
+}
+
+@keyframes jam-bar-in {
+  from {
+    transform: scaleY(0.12);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+
+/* A take dropping into the stack of lanes when the recording stops. */
+@keyframes jam-drop-in {
+  0% {
+    opacity: 0;
+    transform: translateY(-28px) scale(1.02);
+  }
+  55% {
+    opacity: 1;
+    transform: translateY(3px) scale(1);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* One beat of the count-in: the number swells in and leaves. */
+@keyframes jam-count-beat {
+  0% {
+    opacity: 0;
+    transform: scale(1.5);
+  }
+  25% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0.15;
+    transform: scale(0.82);
+  }
+}
+
+@keyframes jam-rec-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@keyframes jam-confirm-ring {
+  from {
+    opacity: 0.8;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.9);
+  }
+}
+
+@keyframes jam-confirm-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+  70% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* The how-to's lanes sliding in one after the other, then holding. */
+@keyframes jam-howto-lane {
+  from {
+    opacity: 0;
+    transform: translateX(-18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.jam-tile-in {
+  animation: jam-tile-in 380ms var(--ease-emphasized) backwards;
+  animation-delay: calc(var(--jam-i, 0) * 45ms);
+}
+
+.jam-tile-arrive {
+  animation: jam-tile-arrive 520ms var(--ease-emphasized) backwards;
+}
+
+.jam-arrive-ring {
+  animation: jam-arrive-ring 1100ms var(--ease-standard) 200ms both;
+}
+
+.jam-bar-in {
+  transform-origin: center;
+  animation: jam-bar-in 520ms var(--ease-emphasized) backwards;
+  animation-delay: calc(var(--jam-b, 0) * 12ms);
+}
+
+.jam-drop-in {
+  animation: jam-drop-in 560ms var(--ease-emphasized) backwards;
+}
+
+.jam-count-beat {
+  animation: jam-count-beat var(--jam-beat, 600ms) var(--ease-standard) both;
+}
+
+.jam-rec-dot {
+  animation: jam-rec-pulse 1.1s var(--ease-standard) infinite;
+}
+
+.jam-confirm-ring {
+  animation: jam-confirm-ring 900ms var(--ease-emphasized) both;
+}
+
+.jam-confirm-pop {
+  animation: jam-confirm-pop 480ms var(--ease-emphasized) backwards;
+}
+
+.jam-howto-lane {
+  animation: jam-howto-lane 520ms var(--ease-emphasized) backwards;
+  animation-delay: calc(var(--jam-l, 0) * 220ms + 150ms);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .jam-tile-in,
+  .jam-tile-arrive,
+  .jam-bar-in,
+  .jam-drop-in,
+  .jam-count-beat,
+  .jam-rec-dot,
+  .jam-confirm-pop,
+  .jam-howto-lane {
+    animation: none;
+  }
+  .jam-arrive-ring,
+  .jam-confirm-ring {
+    animation: none;
+    opacity: 0;
+  }
+}

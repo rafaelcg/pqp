@@ -131,6 +131,11 @@ import {
 } from "@/components/layout/app-loading-shell";
 import { ChannelIcon } from "@/components/layout/channel-icon";
 import { dispatchForumFrame, dispatchForumReconnected } from "@/lib/forum-frames";
+import { dispatchJamFrame, dispatchJamReconnected } from "@/lib/jam-frames";
+import { JamPane } from "@/components/jam/jam-pane";
+import { useJamHintContext } from "@/lib/jam-hint-context";
+import { useJamConfig } from "@/hooks/use-jam-config";
+import { useJamSidebar } from "@/hooks/use-jam-sidebar";
 import { emitBauPlusUpdate, onBauPayRequest } from "@/lib/bau-plus/updates";
 import { ChannelList } from "@/components/layout/channel-list";
 import type { ChannelSettingsSectionId } from "@/components/layout/channel-settings-dialog";
@@ -1817,6 +1822,8 @@ function MainAppContent({
     featureHintEligible("channelPin"),
   );
   const [wantsForumHint] = useState(() => featureHintEligible("forum"));
+  const [wantsJamWallHint] = useState(() => featureHintEligible("jamWall"));
+  const [wantsJamStudioHint] = useState(() => featureHintEligible("jamStudio"));
   const [wantsShortcutsHint, setWantsShortcutsHint] = useState(() =>
     featureHintEligible("shortcuts") && supportsKeyBinding(),
   );
@@ -3525,8 +3532,14 @@ function MainAppContent({
     (userId: string, volume: number) => voice.setScreenVolume(userId, volume),
   );
   const stableOnCreateChannel = useStableCallback(
-    (type: ChannelType, isPrivate: boolean, parentId?: string | null) =>
-      setChannelPrompt({ mode: "create", type, isPrivate, parentId: parentId ?? null }),
+    (type: ChannelType, isPrivate: boolean, parentId?: string | null) => {
+      // A Jam is an app you add, not a channel you name: one click, called "jam".
+      if (type === "jam") {
+        void handleCreateJam(parentId ?? null);
+        return;
+      }
+      setChannelPrompt({ mode: "create", type, isPrivate, parentId: parentId ?? null });
+    },
   );
   const stableOnApplyLayout = useStableCallback(
     (layout: SidebarLayout<Channel>, baseVersion: number) =>
@@ -6029,6 +6042,21 @@ function MainAppContent({
             return;
           }
 
+          // --- jam --- songs and tracks of the open jam: straight to the jam
+          // store, which applies each frame by id.
+          if (
+            message.type === "jam-song-created" ||
+            message.type === "jam-song-updated" ||
+            message.type === "jam-song-deleted" ||
+            message.type === "jam-track-added" ||
+            message.type === "jam-track-updated" ||
+            message.type === "jam-track-deleted" ||
+            message.type === "jam-track-votes"
+          ) {
+            dispatchJamFrame(message);
+            return;
+          }
+
           // --- threads --- the chip refresh: reply count and freshness for
           // an origin message in whatever channel the main view is showing.
           if (message.type === "thread-update") {
@@ -6352,6 +6380,8 @@ function MainAppContent({
           // --- forums --- the forum list refetches its first page: frames
           // sent while the socket was down are not replayed.
           dispatchForumReconnected();
+          // --- jam --- the same: re-read the open wall and the sidebar counts.
+          dispatchJamReconnected();
           // Stories frames sent while the socket was down are gone; the
           // strips on screen re-read, after the same jitter.
           setTimeout(
@@ -7066,6 +7096,27 @@ function MainAppContent({
    * overlay, where nobody reads it. Only what fails after the dialog closed
    * still goes to the banner.
    */
+  async function handleCreateJam(parentId: string | null) {
+    if (!selectedServerId) {
+      return;
+    }
+    try {
+      const { channel } = await createChannel(selectedServerId, "jam", "jam", false, undefined, parentId);
+      channelListTickets.created(channel);
+      setChannels((before) => [...before, channel].sort((a, b) => a.position - b.position));
+      setAppError(null);
+      await selectChannel(channel.id);
+    } catch (error) {
+      setAppError(
+        error instanceof ApiError && error.message === "jam_channels_off"
+          ? translateMessage("jam.error.off")
+          : error instanceof Error
+            ? error.message
+            : "Channel action failed",
+      );
+    }
+  }
+
   async function handleChannelPromptConfirm(
     name: string,
     isPrivate?: boolean,
@@ -8545,6 +8596,11 @@ function MainAppContent({
   // `forum_channels` for this server: the "+" menu's Fórum, and whether an
   // open forum takes new posts. Asked here, once, for every surface.
   const forumConfig = useForumConfig(selectedServerId);
+  // `jam_channels` for this server: whether the add menus offer a Jam, and
+  // (with the song counts) what the Jam row in the sidebar says.
+  const jamConfig = useJamConfig(selectedServerId);
+  const jamSidebar = useJamSidebar(channels);
+  const jamHintContext = useJamHintContext();
   // Opening a forum by any route (the list, a link, the card) is the "O fórum
   // abriu" card done for that server: nobody needs to be told about a forum
   // they are reading. Only while the card is live: with the flag off nothing
@@ -11497,6 +11553,9 @@ function MainAppContent({
       Boolean(selectedServerId),
     // The pane gates it further (posts on screen, may post, not paused).
     forum: wantsForumHint && selectedChannel?.type === "forum",
+    // The wall and the studio say when they are on screen (`lib/jam-hint-context.ts`).
+    jamWall: wantsJamWallHint && jamHintContext.wall && !jamHintContext.studio,
+    jamStudio: wantsJamStudioHint && jamHintContext.studio,
   });
   const voiceChannel =
     voiceState.voiceChannelId
@@ -13960,6 +14019,8 @@ function MainAppContent({
           onSetScreenVolume={stableOnSetScreenVolume}
           onCreateChannel={stableOnCreateChannel}
           forumCreateEnabled={forumConfig.enabled}
+          jamCreateEnabled={jamConfig.enabled}
+          jamSidebar={jamSidebar}
           onRenameChannel={stableOnRenameChannel}
           onOpenChannelSettings={stableOnOpenChannelSettings}
           onDeleteChannel={stableOnDeleteChannel}
@@ -14292,6 +14353,41 @@ function MainAppContent({
             The whole pane takes a dropped file as the start of a new post
             (`chatDropVerdict` says when). Everything inside belongs to the
             forum pane; see `components/forum/forum-pane.tsx` for the seam. */}
+        {/* A jam holds songs, not messages, so it never mounts the chat either.
+            The whole pane is `components/jam/jam-pane.tsx`: the wall, the open
+            song and the studio. */}
+        {selectedChannel?.type === "jam" && selectedServerId && (
+          <JamPane
+            key={selectedChannel.id}
+            channel={selectedChannel}
+            server={{ id: selectedServerId, name: selectedServer?.name ?? "" }}
+            viewerId={user?.id ?? null}
+            canPost={canSendHere}
+            onOpenNav={() => setMobileNavOpen(true)}
+            headerActions={
+              canManageChannels || canManageRoles ? (
+                <Tooltip label={t("chrome.channelSettings")}>
+                  <button
+                    type="button"
+                    className="grid h-11 w-11 shrink-0 place-items-center rounded-md text-paper-muted hover:bg-ink-3 hover:text-paper"
+                    data-channel-header-settings=""
+                    aria-label={t("chrome.channelSettings")}
+                    onClick={() =>
+                      setChannelSettings({
+                        channelId: selectedChannel.id,
+                        section: canManageChannels ? "overview" : "permissions",
+                        forceAdvanced: false,
+                      })
+                    }
+                  >
+                    <Settings className="h-4 w-4" />
+                  </button>
+                </Tooltip>
+              ) : undefined
+            }
+          />
+        )}
+
         {selectedChannel?.type === "forum" && selectedServerId && (
           <FileDropZone
             className="flex min-h-0 min-w-0 flex-1 flex-col"

@@ -179,6 +179,28 @@
    */
   --color-on-media: oklch(0.97 0.005 95);
   --color-on-media-muted: oklch(0.8 0.008 95);
+  /* The dark a caption sits on when it is drawn OVER a picture (a Jam tile's
+     video, a label on a camera): dark in every theme, like the film itself. */
+  --color-media-scrim: oklch(0.14 0.012 250);
+
+  /*
+   * JAM INSTRUMENTS. One fill per instrument, for a song tile, a track's
+   * waveform lane and its avatar chip. They are identities, not chrome, so
+   * like the connection marks they do not retint with the theme: the same six
+   * fills in light and dark, each carrying the dark `--color-on-inst`.
+   *
+   * Told apart by LIGHTNESS as well as hue (steps of 0.05 or more, from the
+   * darkest blue to the lightest lime), because hue alone fails for a person
+   * who cannot tell the hues apart, and every one also carries its own icon.
+   * The bench measures `on-inst` on each fill at 4.5.
+   */
+  --color-inst-bass: oklch(0.64 0.15 255);
+  --color-inst-other: oklch(0.71 0.04 295);
+  --color-inst-drums: oklch(0.77 0.15 55);
+  --color-inst-vocals: oklch(0.82 0.12 345);
+  --color-inst-keys: oklch(0.87 0.11 195);
+  --color-inst-guitar: oklch(0.93 0.19 125);
+  --color-on-inst: oklch(0.16 0.012 250);
 
   /* The `* Fallback` names are metric-adjusted local fonts declared in
      fonts.css, so the swap to the real face barely moves the text. */

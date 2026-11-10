@@ -62,6 +62,16 @@ const CONTRAST_PAIRS = [
   { fg: "--color-warning", bg: "--color-surface-1", floor: 3.0, label: "warning on panel" },
   { fg: "--color-success", bg: "--color-surface-1", floor: 3.0, label: "success on panel" },
   { fg: "--color-code-text", bg: "--color-code-bg", floor: 4.5, label: "inline code" },
+  { fg: "--color-on-media", bg: "--color-media-scrim", floor: 4.5, label: "caption over a picture" },
+  { fg: "--color-on-media-muted", bg: "--color-media-scrim", floor: 4.5, label: "quiet caption over a picture" },
+  // Jam instruments: the dark label on each instrument fill (a song tile, a
+  // track lane). The fills are the same in every theme.
+  { fg: "--color-on-inst", bg: "--color-inst-bass", floor: 4.5, label: "text on the bass fill" },
+  { fg: "--color-on-inst", bg: "--color-inst-other", floor: 4.5, label: "text on the other fill" },
+  { fg: "--color-on-inst", bg: "--color-inst-drums", floor: 4.5, label: "text on the drums fill" },
+  { fg: "--color-on-inst", bg: "--color-inst-vocals", floor: 4.5, label: "text on the vocals fill" },
+  { fg: "--color-on-inst", bg: "--color-inst-keys", floor: 4.5, label: "text on the keys fill" },
+  { fg: "--color-on-inst", bg: "--color-inst-guitar", floor: 4.5, label: "text on the guitar fill" },
   { fg: "--color-border-strong", bg: "--color-surface-1", floor: 1.5, label: "visible border on panel" },
   // The soft surfaces. Each on/soft pair is body text on a fill, so the floor
   // is 4.5 — this is the number `bg-danger/20 text-danger` never had, because

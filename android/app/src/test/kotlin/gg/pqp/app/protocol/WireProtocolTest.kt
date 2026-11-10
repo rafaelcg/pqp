@@ -328,6 +328,17 @@ class WireProtocolTest {
         "app-state" to "the phone never joins an app session",
         "app-event" to "the phone never joins an app session",
         "app-error" to "the phone never sends an app frame, so it has nothing to be refused",
+        // Jam channels (docs/JAM.md): songs and tracks, a web feature first.
+        // The phone leaves a `jam` channel out of its list (`drawable`), so it
+        // never joins one and never receives these; they are named here only
+        // because they joined the server-to-client union with the web client.
+        "jam-song-created" to "the phone does not list jam channels, so it never joins one",
+        "jam-song-updated" to "the phone does not list jam channels, so it never joins one",
+        "jam-song-deleted" to "the phone does not list jam channels, so it never joins one",
+        "jam-track-added" to "the phone does not list jam channels, so it never joins one",
+        "jam-track-updated" to "the phone does not list jam channels, so it never joins one",
+        "jam-track-deleted" to "the phone does not list jam channels, so it never joins one",
+        "jam-track-votes" to "the phone does not list jam channels, so it never joins one",
     )
 
     /**

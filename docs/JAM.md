@@ -221,10 +221,11 @@ about the viewer, so a client gets its own votes from the detail read and from t
 answer to its own vote. A change reaches the writer's own socket too: apply a
 frame by id, idempotently.
 
-The frames are in `CHAT_SERVER_MESSAGE_TYPES` (which is what lets the relay
-carry them) but not yet in `chatServerMessageSchema`, the union every client is
-typed against: same arrangement as the voice note frames. Move them in with the
-client PR that handles them.
+The frames are in `CHAT_SERVER_MESSAGE_TYPES` (which is what lets the relay carry
+them) and in `chatServerMessageSchema`, the union every client is typed against.
+The web client applies them in `client/src/lib/jam-store.ts`; both phones leave
+the channel out of their list, so the Android wire test names the seven as
+deliberately ignored.
 
 Frames go out after the write committed, from the route layer; a failure to
 announce never fails the write.
@@ -256,10 +257,10 @@ first.
 
 ## Not in this PR
 
-Comments on songs, publishing a song publicly, server-side mixdown, any client
-UI, audit-log actions for moderator deletes (the audit action list is typed on the
+Comments on songs, publishing a song publicly, server-side mixdown, a native
+client UI (the web one is `docs/JAM_WEB.md`), audit-log actions for moderator deletes (the audit action list is typed on the
 client, so adding `jam.*` is a client change too), hiding a blocked author's
-tracks from the person who blocked them, a sidebar unread dot for new songs, and
+tracks from the person who blocked them, a server-side signal for a new song in a jam nobody has open (the web client polls, `docs/JAM_WEB.md`), and
 a place for a person's tracks in the account data export.
 The two-API proof of the frames is `server/src/api/jam-two-process.test.ts`; the
 rest of the behaviour is `server/src/api/jam.test.ts`, run against a fake object

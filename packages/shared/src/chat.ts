@@ -62,7 +62,17 @@ import {
   forumPostUpsertSchema,
 } from "./forums.js";
 // --- jam ---
-import { JAM_FRAME_TYPES, type JamFrame } from "./jam.js";
+import {
+  JAM_FRAME_TYPES,
+  jamSongCreatedSchema,
+  jamSongDeletedSchema,
+  jamSongUpdatedSchema,
+  jamTrackAddedSchema,
+  jamTrackDeletedSchema,
+  jamTrackUpdatedSchema,
+  jamTrackVotesSchema,
+  type JamFrame,
+} from "./jam.js";
 import { chanceRequestSchema, chanceResultSchema } from "./chance.js";
 import { pollRequestSchema, pollSchema } from "./polls.js";
 import { AUTOMOD_CUSTOM_MESSAGE_MAX } from "./automod.js";
@@ -715,6 +725,15 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   forumPostUpsertSchema,
   forumPostRemovedSchema,
   forumConfigUpdateSchema,
+  // --- jam --- songs and tracks of a jam channel (`jam.ts`), fanned out to
+  // everybody viewing it. Nothing about the person is on any of them.
+  jamSongCreatedSchema,
+  jamSongUpdatedSchema,
+  jamSongDeletedSchema,
+  jamTrackAddedSchema,
+  jamTrackUpdatedSchema,
+  jamTrackDeletedSchema,
+  jamTrackVotesSchema,
   // A refusal is a chat outcome: it is sent over the chat socket, in response
   // to a chat action, and it describes what happened to a message somebody
   // tried to send. It belongs in the type the chat socket is declared to carry,

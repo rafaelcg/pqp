@@ -7,7 +7,8 @@ by itself, so nobody has to cut or nudge anything. The manual tools (scrubber,
 gain, trims, a nudge) exist and are never required.
 
 Code: `client/src/lib/jam/` (entry `index.ts`). Bench: `/qa/jam` (dev auth
-bypass only, like `/qa/ui`). Nothing in the product imports it yet.
+bypass only, like `/qa/ui`). The product screens that use it are described in
+`docs/JAM_WEB.md`.
 
 ## The API
 
