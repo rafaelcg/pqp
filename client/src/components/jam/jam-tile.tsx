@@ -189,7 +189,7 @@ export function JamTile({ song, size, detail, index, fresh, entrance, selected, 
             <CoverWave song={song} big={big} small={small} animate={Boolean(entrance || fresh)} />
             <span
               className={cn(
-                "font-display font-extrabold leading-[1.08] tracking-[-0.01em] text-on-media [text-shadow:0_1px_10px_oklch(0_0_0/0.5)] [text-wrap:balance]",
+                "font-display font-extrabold leading-[1.08] tracking-[-0.01em] text-on-media [text-shadow:0_1px_10px_color-mix(in_oklab,var(--color-media-scrim)_55%,transparent)] [text-wrap:balance]",
                 big ? "line-clamp-2 text-4xl" : small ? "line-clamp-2 text-[17px]" : "line-clamp-2 text-[22px]",
               )}
             >
@@ -432,7 +432,7 @@ function CoverWave({ song, big, small, animate }: { song: JamSongSummary; big: b
   );
   return (
     <span ref={ref} aria-hidden="true" className={cn("mb-1 block", big ? "h-8" : small ? "h-3.5" : "h-5")}>
-      <MirrorBars bars={bars} className={cn("h-full", big ? "gap-[3px]" : "gap-[2px]")} barClassName="bg-on-media/70 drop-shadow-[0_1px_2px_oklch(0_0_0/0.45)]" animate={animate} />
+      <MirrorBars bars={bars} className={cn("h-full", big ? "gap-[3px]" : "gap-[2px]")} barClassName="bg-on-media/70 drop-shadow-[0_1px_2px_color-mix(in_oklab,var(--color-media-scrim)_50%,transparent)]" animate={animate} />
     </span>
   );
 }

@@ -453,9 +453,9 @@ function PreviewTile({
       <span aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-[92%] bg-gradient-to-t from-media-scrim from-30% via-media-scrim/80 via-60% to-transparent" />
       <span aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 flex min-w-0 flex-col gap-1.5 px-4 pb-4">
         <span ref={waveRef} className={cn("block h-4", !photo && "invisible")}>
-          <MirrorBars bars={bars} className="h-full gap-[2px] drop-shadow-[0_1px_2px_oklch(0_0_0/0.5)]" barClassName="bg-on-media/70" />
+          <MirrorBars bars={bars} className="h-full gap-[2px] drop-shadow-[0_1px_2px_color-mix(in_oklab,var(--color-media-scrim)_55%,transparent)]" barClassName="bg-on-media/70" />
         </span>
-        <span className="line-clamp-2 font-display text-[19px] font-extrabold leading-[1.08] tracking-[-0.01em] text-on-media [text-shadow:0_1px_10px_oklch(0_0_0/0.5)] [text-wrap:balance]">
+        <span className="line-clamp-2 font-display text-[19px] font-extrabold leading-[1.08] tracking-[-0.01em] text-on-media [text-shadow:0_1px_10px_color-mix(in_oklab,var(--color-media-scrim)_55%,transparent)] [text-wrap:balance]">
           {title}
         </span>
         <span className="truncate text-xs font-medium text-on-media-muted">{artist ?? t("jam.original")}</span>
