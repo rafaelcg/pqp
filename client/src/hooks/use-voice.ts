@@ -433,6 +433,16 @@ export interface VoiceState {
    */
   isAudienceSeat: boolean;
   /**
+   * Why this seat has no microphone, in words, when the join could not open
+   * one (permission refused, no device, another app holding it); null
+   * otherwise. The same sentence the join's notice carries, kept here
+   * because the notice strip is drawn only over the call stage, and an
+   * audio-only call has none: the call bar reads this one, so a seat that is
+   * listening only says so, and says why, wherever the person is looking.
+   * Optional so a state built by hand (tests) need not name it.
+   */
+  micUnavailableReason?: string | null;
+  /**
    * Whether the room's rules let this person present: `Permission.STREAM`.
    * False hides camera and screen share. Absent on an older server is
    * treated as `canSpeak`.
@@ -2066,6 +2076,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     canUseSoundboard: false,
     canManageSoundboard: false,
     isAudienceSeat: false,
+    micUnavailableReason: null,
     inputMode: "voice-activity",
     // No mic yet, so nothing is going anywhere. `join` recomputes it.
     isTransmitting: false,
@@ -2651,6 +2662,58 @@ export function createVoiceController(transport: RealtimeTransport) {
       startMuted: options?.startMuted ?? false,
       audienceOnly: false,
     });
+  }
+
+  /**
+   * An unmute pressed on a seat that has no microphone: the button, the
+   * keyboard shortcut and the desktop menu all end here.
+   *
+   * Two kinds of seat have none, and they are not the same request.
+   *
+   * AN AUDIENCE SEAT (watch party viewer, "modo plateia") is listen-only on
+   * purpose; the unmute is a request to take the stage and is honoured only
+   * when the room lets this person speak. Unchanged.
+   *
+   * A LISTEN-ONLY JOIN (`micUnavailable`) is a seat whose microphone could not
+   * be opened when the person came in: permission refused, no device, another
+   * app holding it. Nothing in the room made that choice, so a press on
+   * unmute is a person who has since fixed it and wants to be heard. It goes
+   * through the same leave-and-rejoin as the card's "Arrumar" button
+   * (`retakeSeatWithMicrophone`), so the permission prompt, the device
+   * fallbacks, the SFU publish grant and the mesh offers are the join's own,
+   * on both transports. If the microphone still will not open, the join says
+   * why in the notice (`micErrorMessage`: blocked, missing, unreadable) and
+   * the seat lands listen-only again.
+   *
+   * Only a seat that is already connected: during a join the pipeline is
+   * missing because it is still being opened, and a press then must not tear
+   * that join down. A seat the room does not let speak keeps its locked
+   * button.
+   *
+   * A share or camera in progress ends with the rejoin, so a seat that is
+   * presenting is told how to proceed instead of losing the picture on a
+   * single press.
+   */
+  function askForMissingMicrophone(): void {
+    const channelId = state.voiceChannelId;
+    if (!channelId) {
+      return;
+    }
+    if (audienceSeat) {
+      if (state.canSpeak) {
+        void retakeSeatWithMicrophone(channelId);
+      }
+      return;
+    }
+    if (!micUnavailable || state.status !== "connected" || !state.canSpeak) {
+      return;
+    }
+    if (state.isSharingScreen || state.isCameraOn) {
+      state.notice = translateMessage("voice.notice.micRetryEndsShare");
+      emit();
+      return;
+    }
+    void retakeSeatWithMicrophone(channelId);
   }
 
   /**
@@ -5417,6 +5480,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       canUseSoundboard: false,
       canManageSoundboard: false,
       isAudienceSeat: false,
+      micUnavailableReason: null,
       inputMode: state.inputMode,
       isTransmitting: false,
       error: null,
@@ -6735,6 +6799,10 @@ export function createVoiceController(transport: RealtimeTransport) {
           sendJoin(voiceChannelId);
           return;
         }
+        // Per join, not per controller: the flag from a previous call must
+        // not make this seat look like one whose microphone failed.
+        micUnavailable = false;
+        state.micUnavailableReason = null;
         if (options?.audienceOnly) {
           // The audience seat. No prompt, no device, no notice: see
           // `audienceOnly` above. Muted is the truthful state, not a
@@ -6803,6 +6871,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         resolveMicFallback(requestedDeviceId, fellBack, fellBackLabel, next.rawStream);
         pipeline = next;
         micUnavailable = false;
+        state.micUnavailableReason = null;
         watchCurrentMic(next);
         applyMuteToPipeline();
         sendJoin(voiceChannelId);
@@ -6833,9 +6902,9 @@ export function createVoiceController(transport: RealtimeTransport) {
           muteBeforeDeafen = true;
         }
         applyMuteToPipeline();
-        state.notice = translateMessage("voice.notice.listenOnly", {
-          reason: micErrorMessage(err),
-        });
+        const reason = micErrorMessage(err);
+        state.micUnavailableReason = reason;
+        state.notice = translateMessage("voice.notice.listenOnly", { reason });
         sendJoin(voiceChannelId);
       }
     },
@@ -7191,8 +7260,8 @@ export function createVoiceController(transport: RealtimeTransport) {
       if (!pipeline) {
         // Same rule as `toggleMute`: only an explicit unmute asks for a
         // device, and only for a seat the room already lets speak.
-        if (!muted && audienceSeat && state.canSpeak && state.voiceChannelId) {
-          void retakeSeatWithMicrophone(state.voiceChannelId);
+        if (!muted) {
+          askForMissingMicrophone();
         }
         return;
       }
@@ -7208,14 +7277,13 @@ export function createVoiceController(transport: RealtimeTransport) {
     toggleMute() {
       if (!pipeline) {
         // THE BUTTON THAT SAYS UNMUTE HAS TO UNMUTE. A seat with no
-        // microphone (an audience seat, or a join whose device could not be
-        // opened) used to swallow this silently, which is what an invited
+        // microphone used to swallow this silently, which is what an invited
         // guest pressing the on-air strip's mic button experienced: a
-        // control that did nothing, for ever. The room already says they may
-        // speak, so ask for the device.
-        if (audienceSeat && state.canSpeak && state.voiceChannelId) {
-          void retakeSeatWithMicrophone(state.voiceChannelId);
-        }
+        // control that did nothing, for ever. Two seats have none, an
+        // audience seat and a join whose device could not be opened, and
+        // `askForMissingMicrophone` asks for the device for both, when the
+        // room already says this person may speak.
+        askForMissingMicrophone();
         return;
       }
       preservedSelfVoice = null;
