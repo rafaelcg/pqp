@@ -231,6 +231,7 @@ private fun Mosaic(
     onOpenSong: (JamSongSummary) -> Unit,
 ) {
     val visible = state.visible
+    val lastId = visible.lastOrNull()?.id
     val fontScale = LocalDensity.current.fontScale
     // Big type is a single column: two tiles side by side leave a title nowhere to go.
     val columns = if (fontScale >= LARGE_TYPE) 1 else 2
@@ -272,9 +273,9 @@ private fun Mosaic(
                         val song = entry.song
                         val first = settled.add(song.id)
                         val fresh = song.id in state.wall.fresh
-                        LaunchedEffect(song.id) {
+                        LaunchedEffect(song.id, song.id == lastId) {
                             model.requestPreview(song)
-                            model.tileShown(song)
+                            if (song.id == lastId) model.lastTileShown()
                         }
                         androidx.compose.runtime.DisposableEffect(song.id) {
                             onDispose { model.cancelPreview(song.id) }

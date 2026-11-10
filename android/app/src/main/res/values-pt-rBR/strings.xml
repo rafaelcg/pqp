@@ -1638,6 +1638,7 @@
     <string name="jam_notice_vote_failed">Não deu pra registrar teu voto.</string>
     <string name="jam_notice_mix_failed">Não deu pra mexer na mix.</string>
     <string name="jam_notice_delete_failed">Não deu pra apagar.</string>
+    <string name="jam_notice_playback_failed">O som parou. Toca no play pra tentar de novo.</string>
     <string name="jam_record">Gravar por cima</string>
     <string name="jam_record_title">Gravar é no computador por enquanto</string>
     <string name="jam_record_body">Abre essa música no pqp.gg pra gravar a tua parte por cima das outras. Quando terminar, ela aparece aqui.</string>

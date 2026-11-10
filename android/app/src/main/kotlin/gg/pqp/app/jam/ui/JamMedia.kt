@@ -2,6 +2,7 @@ package gg.pqp.app.jam.ui
 
 import android.graphics.Bitmap
 import android.graphics.SurfaceTexture
+import android.os.Build
 import android.media.MediaMetadataRetriever
 import android.util.LruCache
 import android.view.Surface
@@ -58,9 +59,18 @@ object JamPosters {
         return try {
             retriever.setDataSource(absolute, HashMap())
             // Half a second in: past the black first frame most phone clips open on.
-            val frame = retriever.getFrameAtTime(500_000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-                ?: retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-                ?: return null
+            // From API 27 the platform scales while it decodes, so a 4K clip never becomes a 33 MB bitmap first.
+            val width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
+            val height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+            val scaled = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1 && width > MAX_WIDTH && height > 0
+            val targetHeight = if (scaled) height * MAX_WIDTH / width else 0
+            fun frameAt(us: Long): Bitmap? =
+                if (scaled) {
+                    retriever.getScaledFrameAtTime(us, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, MAX_WIDTH, targetHeight)
+                } else {
+                    retriever.getFrameAtTime(us, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                }
+            val frame = frameAt(500_000) ?: frameAt(0) ?: return null
             if (frame.width <= MAX_WIDTH) {
                 frame
             } else {

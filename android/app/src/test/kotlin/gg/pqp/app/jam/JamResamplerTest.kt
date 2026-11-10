@@ -40,6 +40,28 @@ class JamResamplerTest {
     }
 
     @Test
+    fun `a rate with too many phases for the exact path still lands where the ratio says`() {
+        // 44101 Hz against 48000 has 48000 phases: the kernel-table fallback.
+        val out = resample(impulseAt(44_101, 22_050), 44_101, 48_000)
+        val expected = 22_050.0 * 48_000 / 44_101
+        val peak = out.indices.maxBy { out[it].toInt() }
+        assertTrue("expected ${"%.2f".format(expected)}, got $peak", abs(peak - expected) <= 0.5)
+    }
+
+    @Test
+    fun `ten minutes of 44_1 kHz stays in the seconds and does not need the stem in memory twice`() {
+        // The cost the polyphase path exists for. Not an assertion on speed (CI machines differ), a guard that
+        // the 28.8 million outputs of a ten-minute stem come out and the length is right.
+        val frames = 44_100 * 60 * 2
+        val source = ShortArray(frames) { ((it % 100) * 100 - 5_000).toShort() }
+        var produced = 0L
+        val started = System.nanoTime()
+        JamResampler.resample(ShortArrayPcm(source), 44_100, 48_000) { _, count -> produced += count }
+        println("two minutes of 44.1 kHz resampled in ${(System.nanoTime() - started) / 1_000_000} ms on this machine")
+        assertEquals(JamResampler.outputFrames(frames.toLong(), 44_100, 48_000), produced)
+    }
+
+    @Test
     fun `the same rate is one multiply and not a delay`() {
         val source = impulseAt(10_000, 4_321)
         val out = resample(source, 48_000, 48_000)

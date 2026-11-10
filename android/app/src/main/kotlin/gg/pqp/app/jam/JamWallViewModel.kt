@@ -228,10 +228,8 @@ class JamWallViewModel(
         }
     }
 
-    /** A tile came on screen: load more when it is the last one that shows. */
-    fun tileShown(song: JamSongSummary) {
-        if (song.id == _state.value.visible.lastOrNull()?.id) loadMore()
-    }
+    /** The last tile that shows came on screen: the next page is wanted. (The caller knows which is last; no rescan here.) */
+    fun lastTileShown() = loadMore()
 
     private fun markSeen() {
         val newest = _state.value.wall.songs.firstOrNull()?.updatedAtMs ?: return
@@ -274,7 +272,7 @@ class JamWallViewModel(
             viewModelScope.launch {
                 try {
                     val detail = backend.song(id)
-                    _state.update { it.copy(previews = it.previews + (id to JamPreview.of(detail))) }
+                    _state.update { it.copy(previews = boundedPreviews(it.previews + (id to JamPreview.of(detail)))) }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (_: Exception) {
@@ -289,6 +287,13 @@ class JamWallViewModel(
 
     companion object {
         const val PREVIEW_WORKERS = 3
+
+        /** Previews kept: the oldest read go first, so a long scroll does not hold every song it passed. */
+        const val PREVIEW_CACHE = 120
+
+        /** [previews] (insertion order) cut to the newest [PREVIEW_CACHE]. A tile that scrolls back asks again. */
+        internal fun boundedPreviews(previews: Map<String, JamPreview>): Map<String, JamPreview> =
+            if (previews.size <= PREVIEW_CACHE) previews else previews.entries.drop(previews.size - PREVIEW_CACHE).associate { it.toPair() }
 
         fun factory(session: SessionStore, seen: JamSeenStore, serverId: String, channelId: String) =
             object : ViewModelProvider.Factory {
@@ -320,7 +325,15 @@ class JamListModel(
      */
     suspend fun read(serverId: String, jamChannelIds: List<String>, previous: Rows = Rows()): Rows {
         if (jamChannelIds.isEmpty()) return Rows()
-        val config = backend.config(serverId)
+        // A config read that fails (the production client already answers "off" for that, but this seam may throw)
+        // keeps what the row said: a transient outage must not make the row vanish.
+        val config = try {
+            backend.config(serverId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            return previous
+        }
         if (!config.enabled) return Rows(config)
         val viewerId = backend.viewerId
         val rows = coroutineScope {

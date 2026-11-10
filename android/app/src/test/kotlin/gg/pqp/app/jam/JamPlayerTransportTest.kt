@@ -25,14 +25,19 @@ import org.junit.Test
  */
 class JamPlayerTransportTest {
 
-    private class FakeSink : JamSink {
+    private class FakeSink(
+        /** `AudioTrack` does not promise a flush puts its counters back to zero; false is the platform that keeps counting. */
+        private val resetsOnFlush: Boolean = true,
+    ) : JamSink {
         val written = ArrayList<Short>()
         @Volatile var flushes = 0
         @Volatile var started = false
+        @Volatile var failing = false
         @Volatile private var head = 0L
 
         /** Takes at most 1024 samples a call and takes a millisecond over it, so playback is not instant. */
         override fun write(buffer: ShortArray, offset: Int, length: Int): Int {
+            if (failing) return -6 // AudioTrack.ERROR_DEAD_OBJECT
             val taken = minOf(length, 1024)
             synchronized(written) { for (i in 0 until taken) written += buffer[offset + i] }
             head += taken / 2
@@ -44,7 +49,7 @@ class JamPlayerTransportTest {
         override fun pause() { started = false }
         override fun flush() {
             flushes += 1
-            head = 0
+            if (resetsOnFlush) head = 0
         }
         override fun headFrames() = head
         override fun timestamp(): Pair<Long, Long>? = null
@@ -130,6 +135,64 @@ class JamPlayerTransportTest {
         // Contiguous: the only impulse is still the first sample.
         val left = sink.leftChannel()
         assertEquals(listOf(0), left.indices.filter { left[it].toInt() != 0 })
+        player.release()
+    }
+
+    @Test
+    fun `a seek after playing is not thrown off by a sink that keeps counting through a flush`() {
+        val sink = FakeSink(resetsOnFlush = false)
+        // 4 s of stem so there is room to play a while and then jump back.
+        val player = player(sink, impulses = listOf(1_000, 100_000), length = 192_000)
+        player.play()
+        waitFor { sink.leftChannel().size > 20_000 }
+        player.pause()
+        Thread.sleep(40)
+        // Jump back to frame 90000: the position must read the new place, not the old count added to it.
+        player.seekTo(JamAlignment.ms(90_000))
+        assertEquals(JamAlignment.ms(90_000), player.positionMs(), 1e-6)
+        val before = sink.leftChannel().size
+        player.play()
+        waitFor { sink.leftChannel().size > before + 2_000 }
+        val position = player.positionMs()
+        assertTrue("position $position ms is near 90000 frames", position in JamAlignment.ms(90_000)..JamAlignment.ms(90_000 + 30_000))
+        // And the song still ends where it should: the impulse at 100000 is rendered once after the seek.
+        waitFor(6000) { !player.playing.value }
+        val tail = sink.leftChannel().drop(before)
+        assertEquals(listOf(10_000), tail.indices.filter { tail[it].toInt() != 0 })
+        player.release()
+    }
+
+    @Test
+    fun `a sink that cannot be built, or dies mid-song, stops the transport and a later play starts again`() {
+        var builds = 0
+        var broken = true
+        val sink = FakeSink()
+        val player = JamPlayer(JamMixer(), sinkFactory = {
+            builds += 1
+            if (broken) error("no audio device")
+            sink
+        })
+        val pcm = ShortArrayPcm(ShortArray(48_000 * 2).also { it[0] = 9_000 })
+        player.load(listOf(checkNotNull(JamAlignment.place(JamStemSpec("a", 0.0, 0.0, 0.0), pcm.frames, 0.0)) to pcm))
+        val failed = CountDownLatch(1)
+        Thread { runBlocking { player.failures.first(); failed.countDown() } }.start()
+        Thread.sleep(50)
+        player.play()
+        assertTrue(failed.await(3, TimeUnit.SECONDS))
+        assertFalse("the transport says it is stopped", player.playing.value)
+
+        // The device comes back: play() builds a new sink and plays.
+        broken = false
+        player.play()
+        waitFor { sink.leftChannel().size > 2_000 }
+        assertTrue(builds >= 2)
+        // It dies mid-song: the writes error, the transport stops and says so.
+        val failedAgain = CountDownLatch(1)
+        Thread { runBlocking { player.failures.first(); failedAgain.countDown() } }.start()
+        Thread.sleep(50)
+        sink.failing = true
+        assertTrue(failedAgain.await(3, TimeUnit.SECONDS))
+        assertFalse(player.playing.value)
         player.release()
     }
 

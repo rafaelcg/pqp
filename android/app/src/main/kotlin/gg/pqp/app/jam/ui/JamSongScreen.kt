@@ -324,6 +324,7 @@ private fun noticeString(notice: JamNotice): String = stringResource(
         JamNotice.VoteFailed -> R.string.jam_notice_vote_failed
         JamNotice.MixFailed -> R.string.jam_notice_mix_failed
         JamNotice.DeleteFailed -> R.string.jam_notice_delete_failed
+        JamNotice.PlaybackFailed -> R.string.jam_notice_playback_failed
     },
 )
 

@@ -234,6 +234,17 @@ class JamWallRulesTest {
         val mine = JamSongListResponse(listOf(song("m", authorId = "me")), null)
         assertFalse(JamRowSummary.of(mine, viewerId = "me", lastSeenMs = null).isUnread)
         assertEquals("0", JamRowSummary.of(JamSongListResponse(), "me", null).countText)
+        // The viewer's own untouched song on top does not hide somebody else's bump just under it.
+        val seen = java.time.Instant.parse("2026-11-01T10:30:00.000Z").toEpochMilli()
+        val underneath = JamSongListResponse(
+            listOf(
+                song("mine", authorId = "me", updatedAt = "2026-11-01T12:00:00.000Z"),
+                song("theirs", authorId = "them", updatedAt = "2026-11-01T11:00:00.000Z", createdAt = "2026-10-01T10:00:00.000Z"),
+            ),
+            null,
+        )
+        assertTrue(JamRowSummary.of(underneath, viewerId = "me", lastSeenMs = seen).isUnread)
+        assertFalse(JamRowSummary.of(underneath.copy(songs = underneath.songs.take(1)), viewerId = "me", lastSeenMs = seen).isUnread)
     }
 
     // --- peaks ---

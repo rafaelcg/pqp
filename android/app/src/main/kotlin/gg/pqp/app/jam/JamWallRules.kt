@@ -298,13 +298,16 @@ data class JamRowSummary(
          * touched it since (`updatedAt == createdAt`).
          */
         fun of(page: JamSongListResponse, viewerId: String?, lastSeenMs: Long?): JamRowSummary {
-            val newest = page.songs.firstOrNull()
-            val mine = newest != null && viewerId != null && newest.authorId == viewerId &&
-                newest.updatedAt == newest.createdAt
+            // Any song on the page can be the news, not only the newest: the viewer's own untouched song at the
+            // top must not hide somebody else's bump just under it.
+            val unread = page.songs.any { song ->
+                val mine = viewerId != null && song.authorId == viewerId && song.updatedAt == song.createdAt
+                JamUnread.isUnread(song.updatedAtMs, lastSeenMs, mine)
+            }
             return JamRowSummary(
                 songCount = page.songs.size,
                 hasMore = page.nextCursor != null,
-                isUnread = JamUnread.isUnread(newest?.updatedAtMs, lastSeenMs, mine),
+                isUnread = unread,
             )
         }
     }

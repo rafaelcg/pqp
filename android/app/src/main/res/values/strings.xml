@@ -1647,6 +1647,7 @@
     <string name="jam_notice_vote_failed">Could not register your vote.</string>
     <string name="jam_notice_mix_failed">Could not change the mix.</string>
     <string name="jam_notice_delete_failed">Could not delete it.</string>
+    <string name="jam_notice_playback_failed">The sound stopped. Tap play to try again.</string>
     <string name="jam_record">Record over</string>
     <string name="jam_record_title">Recording is on the computer for now</string>
     <string name="jam_record_body">Open this song on pqp.gg to record your part over the others. It shows up here as soon as it is done.</string>

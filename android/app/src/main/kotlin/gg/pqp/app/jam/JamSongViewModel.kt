@@ -28,7 +28,7 @@ import okhttp3.OkHttpClient
 enum class JamStemStatus { Loading, Ready, Unplayable }
 
 /** A one-line thing the screen says and then forgets. */
-enum class JamNotice { CallLive, NoFocus, VoteFailed, MixFailed, DeleteFailed }
+enum class JamNotice { CallLive, NoFocus, VoteFailed, MixFailed, DeleteFailed, PlaybackFailed }
 
 data class JamSongUi(
     val phase: Phase = Phase.Loading,
@@ -113,6 +113,9 @@ class JamSongViewModel(
     fun videoPlayer(trackId: String) = video.player(trackId)
 
     private val results = HashMap<String, JamStemLoader.Result>()
+
+    /** Frames that arrived while the first read of the song was in flight. */
+    private val pendingFrames = ArrayList<JamFrame>()
     private var resumeOnGain = false
     private var ducked = false
     private var lastVideoSyncNanos = 0L
@@ -140,6 +143,14 @@ class JamSongViewModel(
                 video.park(_ui.value.originMs)
             }
         }
+        viewModelScope.launch {
+            player.failures.collect {
+                // The output died (no device, or the track went away): the song is stopped where it was.
+                focus.release()
+                _ui.update { it.copy(playing = false, notice = JamNotice.PlaybackFailed) }
+                video.pause()
+            }
+        }
         load()
     }
 
@@ -150,10 +161,14 @@ class JamSongViewModel(
             try {
                 val detail = backend.song(songId)
                 results.clear()
+                // What changed while the read was out goes on top of what it says (frames are applied by id).
+                var loaded = JamSongState(detail.song, detail.tracks, detail.viewer)
+                pendingFrames.forEach { loaded = loaded.apply(it).state }
+                pendingFrames.clear()
                 _ui.update {
                     it.copy(
-                        phase = JamSongUi.Phase.Ready,
-                        state = JamSongState(detail.song, detail.tracks, detail.viewer),
+                        phase = if (loaded.wasDeleted) JamSongUi.Phase.Gone else JamSongUi.Phase.Ready,
+                        state = loaded,
                         stems = emptyMap(),
                     )
                 }
@@ -172,7 +187,12 @@ class JamSongViewModel(
 
     private fun onFrame(frame: JamFrame) {
         if (frame.channelId != channelId) return
-        val current = _ui.value.state ?: return
+        val current = _ui.value.state
+        if (current == null) {
+            // The detail read is still out and its answer may predate this change: keep the frame for after it.
+            if (_ui.value.phase == JamSongUi.Phase.Loading) pendingFrames += frame
+            return
+        }
         val applied = current.apply(frame, auditioned = _ui.value.auditioning.values.toSet())
         if (applied.state == current) return
         _ui.update {
@@ -215,6 +235,14 @@ class JamSongViewModel(
             _ui.update { it.copy(stems = it.stems + (track.id to JamStemStatus.Loading)) }
             viewModelScope.launch {
                 val result = loader.load(track)
+                // The track may have left the mix while it was loading: its result is of no use and must not be kept.
+                val stillWanted = _ui.value.state?.let { state ->
+                    JamMixRules.activeTracks(state.tracks, _ui.value.auditioning).any { it.id == track.id }
+                } == true
+                if (!stillWanted) {
+                    _ui.update { it.copy(stems = it.stems - track.id) }
+                    return@launch
+                }
                 results[track.id] = result
                 _ui.update {
                     it.copy(
@@ -414,7 +442,11 @@ class JamSongViewModel(
             try {
                 val answer = backend.setInMix(track.id, inMix)
                 // The frame will say the same; applying the answer now makes the switch feel instant and is idempotent.
-                onFrame(JamFrame.TrackUpdated(channelId, answer.song, answer.track))
+                // But not when something newer already landed (another moderator, a frame that outran this answer).
+                val now = _ui.value.state
+                if (now == null || answer.song.updatedAtMs >= now.song.updatedAtMs) {
+                    onFrame(JamFrame.TrackUpdated(channelId, answer.song, answer.track))
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {

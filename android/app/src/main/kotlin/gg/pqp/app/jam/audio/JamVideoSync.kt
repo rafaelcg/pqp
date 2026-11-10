@@ -96,10 +96,16 @@ class JamVideoStage(private val context: Context) {
         }
         for (track in chosen) {
             val existing = items[track.id]
-            if (existing != null) {
+            if (existing != null && existing.track.videoUrl == track.videoUrl) {
                 // Same file, maybe a moved offset: keep the player, take the new numbers.
                 items[track.id] = Item(track, existing.player)
                 continue
+            }
+            // A fresh presigned URL (the detail was read again): the old one expires, so the player is rebuilt on it.
+            if (existing != null) {
+                existing.player.release()
+                items.remove(track.id)
+                speeds.remove(track.id)
             }
             val url = Backend.absolute(track.videoUrl) ?: continue
             val player = ExoPlayer.Builder(context).build().apply {
@@ -145,8 +151,13 @@ class JamVideoStage(private val context: Context) {
                 else -> {
                     val expected = fileMs(item, songMs)
                     if (!player.isPlaying) {
-                        player.seekTo(expected.toLong())
-                        player.play()
+                        // Seek and ask to play once. While it is buffering the intent stands and the player is left
+                        // alone: seeking again on every tick would restart the load and the first frame never comes.
+                        // (A player that reached its end has to be asked again.)
+                        if (!player.playWhenReady || player.playbackState == androidx.media3.common.Player.STATE_ENDED) {
+                            player.seekTo(expected.toLong())
+                            player.play()
+                        }
                     } else {
                         when (val fix = JamVideoPlan.correction(player.currentPosition.toDouble(), expected)) {
                             JamVideoPlan.Correction.None -> setSpeed(id, player, 1f)

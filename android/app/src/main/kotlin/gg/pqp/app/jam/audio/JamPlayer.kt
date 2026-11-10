@@ -19,7 +19,7 @@ import kotlinx.coroutines.flow.asStateFlow
  * Every method is called from the player's one audio thread.
  */
 interface JamSink {
-    /** Non-blocking: how many SAMPLES (interleaved, so two per frame) were taken. */
+    /** Non-blocking: how many SAMPLES (interleaved, so two per frame) were taken, or a negative error (the track died). */
     fun write(buffer: ShortArray, offset: Int, length: Int): Int
     fun start()
     fun pause()
@@ -60,7 +60,7 @@ class AudioTrackSink : JamSink {
     }
 
     override fun write(buffer: ShortArray, offset: Int, length: Int): Int =
-        track.write(buffer, offset, length, AudioTrack.WRITE_NON_BLOCKING).coerceAtLeast(0)
+        track.write(buffer, offset, length, AudioTrack.WRITE_NON_BLOCKING)
 
     override fun start() = track.play()
     override fun pause() = track.pause()
@@ -118,6 +118,15 @@ class JamPlayer(
     /** Emits when playback reached the end; the transport is then paused at zero. */
     val ended: SharedFlow<Unit> = _ended.asSharedFlow()
 
+    private val _failures = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+
+    /**
+     * Emits when the output died under the song (the track could not be built, or a write came back with an
+     * error such as `ERROR_DEAD_OBJECT`). The transport is then paused where it was, and a later [play] builds a
+     * fresh sink.
+     */
+    val failures: SharedFlow<Unit> = _failures.asSharedFlow()
+
     // Guarded by `lock`.
     private var wantPlay = false
     private var pendingSeek = -1L
@@ -132,6 +141,13 @@ class JamPlayer(
     @Volatile private var presentedOnPause = 0L
     @Volatile private var masterLevel = 1f
     @Volatile private var sinkPlaying = false
+
+    /**
+     * What the sink's frame counters read right after the last flush. `AudioTrack` does not promise that a flush
+     * puts its position back to zero, so the counters are taken relative to this and a seek can never carry the
+     * old count into the new position.
+     */
+    @Volatile private var counterBase = 0L
 
     /** Replace the stems (a track came, went, or moved). The position is kept, clamped to the new length. */
     fun load(stems: List<Pair<JamPlacement, PcmSource>>) {
@@ -155,10 +171,11 @@ class JamPlayer(
         synchronized(lock) {
             if (released || mixer.durationFrames <= 0) return
             wantPlay = true
+            // Before the thread starts: one that dies at once (no audio device) then clears it, not the other way round.
+            _playing.value = true
             ensureThread()
             lock.notifyAll()
         }
-        _playing.value = true
     }
 
     fun pause() {
@@ -186,7 +203,16 @@ class JamPlayer(
     }
 
     /** The song position being heard, in milliseconds from the transport's zero. */
-    fun positionMs(): Double = JamAlignment.ms(currentFrame())
+    fun positionMs(): Double {
+        val f = currentFrame()
+        dbgCount += 1
+        if (dbgCount % 30 == 0) {
+            val s = sink
+            android.util.Log.d("pqp.jam", "DBG pos frame=$f base=$baseFrame counterBase=$counterBase head=${s?.headFrames()} ts=${s?.timestamp()} writePos=$writePos")
+        }
+        return JamAlignment.ms(f)
+    }
+    private var dbgCount = 0
 
     private fun currentFrame(): Long {
         val held = seekTarget
@@ -196,9 +222,9 @@ class JamPlayer(
             val stamp = s.timestamp()
             if (stamp != null) {
                 val ahead = (nanoTime() - stamp.second).coerceAtLeast(0) * MIX_RATE / 1_000_000_000L
-                stamp.first + ahead
+                stamp.first + ahead - counterBase
             } else {
-                s.headFrames()
+                s.headFrames() - counterBase
             }
         } else {
             presentedOnPause
@@ -221,10 +247,11 @@ class JamPlayer(
 
     private fun ensureThread() {
         if (thread != null) return
-        thread = Thread({ run() }, "jam-audio").also {
-            it.isDaemon = true
-            it.start()
-        }
+        // Assigned before it starts: a thread that dies at once (no audio device) clears its own reference.
+        val created = Thread({ run() }, "jam-audio")
+        created.isDaemon = true
+        thread = created
+        created.start()
     }
 
     // --- the audio thread ---
@@ -236,9 +263,17 @@ class JamPlayer(
         val acc = FloatArray(CHUNK_FRAMES)
         var chunkOffset = 0
         var chunkLength = 0 // samples still to hand over
-        val out = sinkFactory()
+        val out = try {
+            sinkFactory()
+        } catch (e: Throwable) {
+            // The track could not be built: say so, and leave the player able to try again.
+            fail()
+            return
+        }
         sink = out
+        counterBase = 0
         var running = false
+        var failed = false
         try {
             while (true) {
                 var seek = -1L
@@ -253,8 +288,11 @@ class JamPlayer(
                     play = wantPlay
                 }
                 if (seek >= 0) {
+                    val headBefore = out.headFrames()
                     out.pause()
                     out.flush()
+                    counterBase = out.headFrames()
+                    android.util.Log.d("pqp.jam", "DBG flush head $headBefore -> $counterBase, ts=${out.timestamp()}")
                     sinkPlaying = false
                     running = false
                     baseFrame = seek
@@ -265,7 +303,7 @@ class JamPlayer(
                 }
                 if (!play) {
                     if (running) {
-                        presentedOnPause = out.headFrames()
+                        presentedOnPause = out.headFrames() - counterBase
                         sinkPlaying = false
                         out.pause()
                         running = false
@@ -286,13 +324,17 @@ class JamPlayer(
                 }
                 if (chunkLength > 0) {
                     val taken = out.write(chunk, chunkOffset, chunkLength)
+                    if (taken < 0) {
+                        failed = true
+                        return
+                    }
                     chunkOffset += taken
                     chunkLength -= taken
                     if (taken == 0) sleep(SLEEP_MS)
                     continue
                 }
                 // Everything is written: wait for it to be heard.
-                if (out.headFrames() >= mixer.durationFrames - baseFrame) {
+                if (out.headFrames() - counterBase >= mixer.durationFrames - baseFrame) {
                     finish(out)
                     running = false
                     chunkLength = 0
@@ -301,15 +343,34 @@ class JamPlayer(
                 }
             }
         } finally {
+            if (failed) {
+                // Keep the place the person was at, so the next play() starts a new sink from there.
+                val at = runCatching { currentFrame() }.getOrDefault(baseFrame)
+                baseFrame = at
+                writePos = at
+            }
             sinkPlaying = false
             runCatching { out.release() }
             sink = null
+            if (failed) fail()
+            synchronized(lock) { if (thread === Thread.currentThread()) thread = null }
         }
+    }
+
+    /** The output died: stop, tell the owner, and allow a later [play] to start a new thread and sink. */
+    private fun fail() {
+        synchronized(lock) {
+            wantPlay = false
+            if (thread === Thread.currentThread()) thread = null
+        }
+        _playing.value = false
+        _failures.tryEmit(Unit)
     }
 
     private fun finish(out: JamSink) {
         out.pause()
         out.flush()
+        counterBase = out.headFrames()
         sinkPlaying = false
         baseFrame = 0
         writePos = 0

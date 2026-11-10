@@ -20,13 +20,22 @@ import kotlin.math.sin
  *
  * Windowed sinc (4-term Blackman-Harris, about -92 dB stop band), 16 source
  * taps each side, the cutoff pulled down to the destination's Nyquist when the
- * rate goes down so nothing folds over. The kernel is a table with linear
- * interpolation between entries, so a fractional position costs a multiply, not
- * a `sin`.
+ * rate goes down so nothing folds over.
+ *
+ * COST. A ten-minute stem is 28.8 million output samples at 36 taps each, so the
+ * inner loop has to be a plain multiply-add. For every ratio a recorder produces
+ * (44.1 to 48 kHz is 160/147) the source position repeats after `dst / gcd`
+ * outputs, so each of those phases has its own weights, computed once: the loop
+ * is `window[i] * weights[phase][t]` with no table lookup, no interpolation and
+ * no `abs`. A ratio with more than [MAX_PHASES] phases (nothing a recorder
+ * makes) falls back to a kernel table with linear interpolation.
  */
 object JamResampler {
     private const val HALF_TAPS = 16
     private const val TABLE_RES = 1024
+
+    /** Most distinct source phases the exact polyphase path will hold weights for. */
+    private const val MAX_PHASES = 2048
 
     /** Frames the output has for [srcFrames] at [srcRate] when brought to [dstRate]. */
     fun outputFrames(srcFrames: Long, srcRate: Int, dstRate: Int): Long =
@@ -44,12 +53,94 @@ object JamResampler {
         sink: (block: ShortArray, count: Int) -> Unit,
     ) {
         require(srcRate > 0 && dstRate > 0)
+        val divisor = gcd(srcRate, dstRate)
+        val phases = dstRate / divisor
+        if (phases <= MAX_PHASES) {
+            polyphase(src, srcRate / divisor, phases, srcRate, dstRate, blockFrames, sink)
+        } else {
+            tabled(src, srcRate, dstRate, blockFrames, sink)
+        }
+    }
+
+    private fun gcd(a: Int, b: Int): Int = if (b == 0) a else gcd(b, a % b)
+
+    private fun cutoffOf(srcRate: Int, dstRate: Int) = min(1.0, dstRate.toDouble() / srcRate)
+
+    /** The kernel at distance [d] source samples: windowed sinc, [cutoff] times the Nyquist, [width] samples to a side. */
+    private fun kernel(d: Double, cutoff: Double, width: Double): Double {
+        val a = kotlin.math.abs(d)
+        if (a >= width) return 0.0
+        val x = PI * a * cutoff
+        val sinc = if (x == 0.0) 1.0 else sin(x) / x
+        return cutoff * sinc * blackmanHarris(a / width)
+    }
+
+    // --- exact polyphase ---
+
+    private fun polyphase(
+        src: PcmSource,
+        q: Int,
+        p: Int,
+        srcRate: Int,
+        dstRate: Int,
+        blockFrames: Int,
+        sink: (block: ShortArray, count: Int) -> Unit,
+    ) {
+        val total = outputFrames(src.frames, srcRate, dstRate)
+        val cutoff = cutoffOf(srcRate, dstRate)
+        val width = HALF_TAPS / cutoff
+        val reach = width.toInt() + 1
+        val taps = 2 * reach + 2
+        // Output j sits at source position j * q / p: the whole part picks the window, the remainder picks the weights.
+        val weights = FloatArray(p * taps)
+        for (phase in 0 until p) {
+            val frac = phase.toDouble() / p
+            for (t in 0 until taps) {
+                weights[phase * taps + t] = kernel((t - reach) - frac, cutoff, width).toFloat()
+            }
+        }
+
+        val out = ShortArray(blockFrames)
+        val window = ShortArray((blockFrames.toLong() * q / p).toInt() + taps + 4)
+        var produced = 0L
+        while (produced < total) {
+            val count = min(blockFrames.toLong(), total - produced).toInt()
+            val firstCenter = produced * q / p
+            val lastCenter = (produced + count - 1) * q / p
+            val base = firstCenter - reach
+            val span = (lastCenter + reach + 1 - base + 1).toInt()
+            check(span <= window.size) { "resampler window too small" }
+            src.read(base, window, 0, span)
+            for (j in 0 until count) {
+                val num = (produced + j) * q
+                val center = num / p
+                val weightsAt = (num % p).toInt() * taps
+                val from = (center - reach - base).toInt()
+                var sum = 0f
+                for (t in 0 until taps) sum += window[from + t] * weights[weightsAt + t]
+                out[j] = Math.round(sum).coerceIn(-32768, 32767).toShort()
+            }
+            sink(out, count)
+            produced += count
+        }
+    }
+
+    // --- the fallback: any ratio, a kernel table with linear interpolation ---
+
+    private fun tabled(
+        src: PcmSource,
+        srcRate: Int,
+        dstRate: Int,
+        blockFrames: Int,
+        sink: (block: ShortArray, count: Int) -> Unit,
+    ) {
         val total = outputFrames(src.frames, srcRate, dstRate)
         val ratio = srcRate.toDouble() / dstRate
-        val cutoff = min(1.0, dstRate.toDouble() / srcRate)
+        val cutoff = cutoffOf(srcRate, dstRate)
+        val width = HALF_TAPS / cutoff
         // How many source samples reach each side: the half width grows when the cutoff drops.
-        val reach = (HALF_TAPS / cutoff).toInt() + 1
-        val table = kernelTable(cutoff, HALF_TAPS / cutoff)
+        val reach = width.toInt() + 1
+        val table = DoubleArray((width * TABLE_RES).toInt() + 2) { i -> kernel(i.toDouble() / TABLE_RES, cutoff, width) }
         val tableScale = TABLE_RES.toDouble()
 
         val out = ShortArray(blockFrames)
@@ -57,21 +148,19 @@ object JamResampler {
         var produced = 0L
         while (produced < total) {
             val count = min(blockFrames.toLong(), total - produced).toInt()
-            // The source span this block touches.
             val firstPos = produced * ratio
             val lastPos = (produced + count - 1) * ratio
             val base = firstPos.toLong() - reach
             val span = (lastPos.toLong() + reach + 1 - base + 1).toInt()
-            src.read(base, window, 0, min(span, window.size))
-            if (span > window.size) error("resampler window too small")
+            check(span <= window.size) { "resampler window too small" }
+            src.read(base, window, 0, span)
             for (j in 0 until count) {
                 val pos = (produced + j) * ratio
                 val center = pos.toLong()
                 var sum = 0.0
                 for (k in -reach..reach + 1) {
                     // Distance from the sample to the wanted instant, in source samples.
-                    val d = (center + k) - pos
-                    val index = Math.abs(d) * tableScale
+                    val index = Math.abs((center + k) - pos) * tableScale
                     val i0 = index.toInt()
                     if (i0 >= table.size - 1) continue
                     val w = table[i0] + (table[i0 + 1] - table[i0]) * (index - i0)
@@ -83,21 +172,6 @@ object JamResampler {
             }
             sink(out, count)
             produced += count
-        }
-    }
-
-    /** The kernel at distance `i / TABLE_RES` source samples, for `i` in 0..width*TABLE_RES. */
-    private fun kernelTable(cutoff: Double, width: Double): DoubleArray {
-        val size = (width * TABLE_RES).toInt() + 2
-        return DoubleArray(size) { i ->
-            val d = i.toDouble() / TABLE_RES
-            if (d >= width) {
-                0.0
-            } else {
-                val x = PI * d * cutoff
-                val sinc = if (x == 0.0) 1.0 else sin(x) / x
-                cutoff * sinc * blackmanHarris(d / width)
-            }
         }
     }
 
