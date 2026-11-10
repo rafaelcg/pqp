@@ -7,10 +7,10 @@ import "./jam-row.css";
 /**
  * The art behind the sidebar's Jam row, and the icon in front of it.
  *
- * The row is the door to a music room: a soft wash in the colours of the
- * instruments (the same language as the song covers), which drifts while
- * somebody is on the row or the Jam is open, and faster while a song is
- * playing (the icon turns into an equaliser). Which face it wears is `jamRowMood`
+ * The row is the door to a music room: a wash in the colours of the instruments
+ * (the same language as the song covers) that always drifts, very slowly, and
+ * drifts faster the more is going on: hover, news, the open page, a song playing
+ * (the icon turns into an equaliser). Which face it wears is `jamRowMood`
  * (`lib/jam-row-state.ts`); hover and focus are CSS. Everything here is
  * `aria-hidden`: the row's name, count and "música nova" are real text.
  */
