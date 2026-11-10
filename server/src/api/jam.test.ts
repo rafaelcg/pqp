@@ -12,6 +12,7 @@ import {
   JAM_MAX_TRACKS_PER_AUTHOR,
   JAM_MAX_TRACKS_PER_SONG,
   JAM_AUDIO_MAX_BYTES,
+  JAM_COVER_MAX_BYTES,
   Permission,
   type JamFrame,
   type JamSongSummary,
@@ -27,7 +28,7 @@ import {
  * `startFeatureFlags()` (pitfall 12), never through the environment.
  *
  * What is pinned here: the flag gate (off refuses every write that adds or
- * changes, never a read, and lets the three removals through), who may do
+ * changes, never a read, and lets the four removals through), who may do
  * what, the `joinMode` rule on add-track (including after the song was closed
  * mid-upload), `in_mix` defaults, the track limits, the upload verification,
  * retries, votes, the timeline fields, the sweeps, the object keys read for
@@ -1492,5 +1493,333 @@ describeDb("jam channels", () => {
     expect(left.song.authorId).toBeNull();
     expect(left.song.authorName).toBeNull();
     expect(left.tracks.map((t) => t.instrument)).toEqual(["keys"]);
+  });
+
+  // ----------------------------------------------------------------- covers
+
+  /** The first bytes of a real PNG header (signature, IHDR), enough for the sniff. */
+  const pngBytes = (extra = 8) => {
+    const header = Buffer.alloc(33);
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(header, 0);
+    header.writeUInt32BE(13, 8);
+    header.write("IHDR", 12, "ascii");
+    header.writeUInt32BE(512, 16);
+    header.writeUInt32BE(512, 20);
+    return Buffer.concat([header, Buffer.alloc(extra, 7)]);
+  };
+  /** A minimal JPEG header with a start-of-frame, 1024 x 1024. */
+  const jpegBytes = () =>
+    Buffer.from([
+      0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 0x4a, 0x46, 0xff, 0xc0, 0x00, 0x0b, 0x08, 0x04, 0x00,
+      0x04, 0x00, 0x01, 0x01, 0x11, 0x00, 0xff, 0xd9,
+    ]);
+
+  async function coverUpload(
+    as: Actor,
+    song: string,
+    options: { contentType?: string; bytes?: Buffer; stored?: string } = {},
+  ): Promise<string> {
+    const contentType = options.contentType ?? "image/png";
+    const bytes = options.bytes ?? pngBytes();
+    const ticket = await call(as, "POST", `/api/jam-songs/${song}/uploads`, {
+      kind: "cover",
+      contentType,
+      byteSize: bytes.length,
+    });
+    expect(ticket.status, JSON.stringify(ticket.body)).toBe(201);
+    const parsed = jamUploadTicketSchema.parse(ticket.body);
+    const put = await fetch(parsed.uploadUrl, {
+      method: "PUT",
+      headers: { "Content-Type": options.stored ?? contentType },
+      body: new Uint8Array(bytes),
+    });
+    expect(put.status).toBe(200);
+    return parsed.uploadId;
+  }
+
+  const setCover = (as: Actor, song: string, uploadId: string) =>
+    call<{ song: JamSongSummary; error?: string }>(as, "PUT", `/api/jam-songs/${song}/cover`, {
+      uploadId,
+    });
+  const removeCover = (as: Actor, song: string) =>
+    call<{ song: JamSongSummary; error?: string }>(as, "DELETE", `/api/jam-songs/${song}/cover`);
+
+  async function settled(check: () => boolean | Promise<boolean>): Promise<void> {
+    const deadline = Date.now() + 5000;
+    while (!(await check()) && Date.now() < deadline) {
+      await new Promise((done) => setTimeout(done, 20));
+    }
+    expect(await check()).toBe(true);
+  }
+
+  const keyOf = async (uploadId: string) =>
+    (
+      await getPool().query<{ storage_key: string }>(
+        `SELECT storage_key FROM jam_uploads WHERE id = $1`,
+        [uploadId],
+      )
+    ).rows[0]!.storage_key;
+
+  it("a song has no cover until one is set, and every read says so with null", async () => {
+    const song = await songId(alice);
+    expect((await detail(bob, song)).song.coverUrl).toBeNull();
+    const list = await call(bob, "GET", `/api/channels/${jamId}/jam-songs`);
+    expect(jamSongListResponseSchema.parse(list.body).songs[0]!.coverUrl).toBeNull();
+  });
+
+  it("sets a cover end to end: the picture is on the list, the detail and the frame, and the bytes are fetchable", async () => {
+    const song = await songId(bob, "Com capa");
+    takeFrames();
+    const id = await coverUpload(bob, song);
+    const set = await setCover(bob, song, id);
+    expect(set.status, JSON.stringify(set.body)).toBe(200);
+    const url = set.body.song.coverUrl;
+    expect(url).toBeTruthy();
+    expect((await fetch(url!)).status).toBe(200);
+
+    const frames = takeFrames();
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toMatchObject({ type: "jam-song-updated", channelId: jamId });
+    expect((frames[0] as { song: JamSongSummary }).song.coverUrl).toBeTruthy();
+
+    // Everybody who can see the channel reads it, in the list and in the detail.
+    const list = await call(carol, "GET", `/api/channels/${jamId}/jam-songs`);
+    expect(jamSongListResponseSchema.parse(list.body).songs[0]!.coverUrl).toBeTruthy();
+    expect((await detail(carol, song)).song.coverUrl).toBeTruthy();
+
+    // The same picture signs to the same object: its path is its identity.
+    const again = (await detail(alice, song)).song.coverUrl!;
+    expect(new URL(again).pathname).toBe(new URL(url!).pathname);
+  });
+
+  it("who may set a cover: the author or a moderator, not another member, not somebody who cannot see the channel", async () => {
+    const song = await songId(bob);
+    // Not the author: no ticket either, so a stranger's picture costs the bucket nothing.
+    const denied = await call(carol, "POST", `/api/jam-songs/${song}/uploads`, {
+      kind: "cover",
+      contentType: "image/png",
+      byteSize: 100,
+    });
+    expect(denied.status).toBe(403);
+    // A moderator may, with their own upload.
+    const modUpload = await coverUpload(mod, song);
+    expect((await setCover(mod, song, modUpload)).status).toBe(200);
+    // The song's author's upload cannot be claimed by somebody else.
+    const bobUpload = await coverUpload(bob, song);
+    const stolen = await setCover(mod, song, bobUpload);
+    expect(stolen.status).toBe(404);
+    expect(stolen.body.error).toBe("jam_upload_unknown");
+    // A member who is not the author cannot claim even a valid upload id.
+    expect((await setCover(carol, song, bobUpload)).status).toBe(403);
+    // A stranger does not even learn the song is there.
+    expect((await setCover(eve, song, bobUpload)).status).toBe(404);
+    expect((await removeCover(carol, song)).status).toBe(403);
+    expect((await removeCover(eve, song)).status).toBe(404);
+  });
+
+  it("a cover upload is not a back door: it cannot be claimed as a track, in a closed song or any other", async () => {
+    const song = await songId(bob, "Fechada", { joinMode: "closed" });
+    const id = await coverUpload(bob, song);
+    const track = await call(bob, "POST", `/api/jam-songs/${song}/tracks`, {
+      instrument: "guitar",
+      audioUploadId: id,
+      durationMs: 30_000,
+    });
+    expect(track.status).toBe(404);
+  });
+
+  it("verifies the object: wrong type, not an image, over the limit, never uploaded", async () => {
+    const song = await songId(bob);
+    // Types: only the three pictures, and the size is bounded at the ticket.
+    for (const contentType of ["image/gif", "image/svg+xml", "audio/webm", "text/html"]) {
+      const refused = await call(bob, "POST", `/api/jam-songs/${song}/uploads`, {
+        kind: "cover",
+        contentType,
+        byteSize: 100,
+      });
+      expect(refused.status, contentType).toBe(400);
+    }
+    const huge = await call(bob, "POST", `/api/jam-songs/${song}/uploads`, {
+      kind: "cover",
+      contentType: "image/png",
+      byteSize: JAM_COVER_MAX_BYTES + 1,
+    });
+    expect(huge.status).toBe(413);
+    expect(huge.body.error).toBe("jam_upload_too_large");
+
+    // Bytes that are not the picture they were signed as: HTML in a PNG's clothes.
+    const fake = await coverUpload(bob, song, {
+      bytes: Buffer.from("<script>alert(1)</script>".repeat(4)),
+    });
+    const notImage = await setCover(bob, song, fake);
+    expect(notImage.status).toBe(422);
+    expect(notImage.body.error).toBe("jam_upload_not_verified");
+    // A JPEG stored under a PNG ticket is the wrong format too.
+    const mismatch = await coverUpload(bob, song, { contentType: "image/png", bytes: jpegBytes() });
+    expect((await setCover(bob, song, mismatch)).status).toBe(422);
+    // The object stored with another content type than the signed one.
+    const stored = await coverUpload(bob, song, { contentType: "image/png", stored: "image/jpeg" });
+    expect((await setCover(bob, song, stored)).status).toBe(422);
+    // Never uploaded.
+    const ticket = await call(bob, "POST", `/api/jam-songs/${song}/uploads`, {
+      kind: "cover",
+      contentType: "image/png",
+      byteSize: 50,
+    });
+    const missing = await setCover(bob, song, ticket.body.uploadId as string);
+    expect(missing.status).toBe(422);
+    // Nothing above set a cover.
+    expect((await detail(bob, song)).song.coverUrl).toBeNull();
+
+    // A real JPEG is accepted; a retry of the claim is the same answer and no second frame.
+    const good = await coverUpload(bob, song, { contentType: "image/jpeg", bytes: jpegBytes() });
+    expect((await setCover(bob, song, good)).status).toBe(200);
+    takeFrames();
+    const retried = await setCover(bob, song, good);
+    expect(retried.status).toBe(200);
+    expect(retried.body.song.coverUrl).toBeTruthy();
+    expect(takeFrames()).toHaveLength(0);
+  });
+
+  it("replacing a cover deletes the old object and its ledger row; removing deletes the last one", async () => {
+    const song = await songId(bob);
+    const first = await coverUpload(bob, song);
+    await setCover(bob, song, first);
+    const firstKey = await keyOf(first);
+    expect(objects.has(firstKey)).toBe(true);
+
+    const second = await coverUpload(bob, song, { contentType: "image/jpeg", bytes: jpegBytes() });
+    const replaced = await setCover(bob, song, second);
+    expect(replaced.status).toBe(200);
+    expect(new URL(replaced.body.song.coverUrl!).pathname).toContain(".jpg");
+    await settled(() => !objects.has(firstKey));
+    await settled(
+      async () =>
+        (await getPool().query(`SELECT 1 FROM jam_uploads WHERE id = $1`, [first])).rowCount === 0,
+    );
+    expect(
+      (await getPool().query(`SELECT 1 FROM jam_song_covers WHERE song_id = $1`, [song])).rowCount,
+    ).toBe(1);
+
+    takeFrames();
+    const removed = await removeCover(bob, song);
+    expect(removed.status).toBe(200);
+    expect(removed.body.song.coverUrl).toBeNull();
+    expect(takeFrames()).toMatchObject([{ type: "jam-song-updated" }]);
+    await settled(() => objects.size === 0);
+    expect((await getPool().query(`SELECT 1 FROM jam_song_covers`)).rowCount).toBe(0);
+    // Nothing left to remove: 200, no frame.
+    expect((await removeCover(bob, song)).status).toBe(200);
+    expect(takeFrames()).toHaveLength(0);
+  });
+
+  it("off refuses a ticket and a set for a cover, never a read, and lets the removal through", async () => {
+    const song = await songId(bob);
+    const id = await coverUpload(bob, song);
+    await setCover(bob, song, id);
+    const spare = await coverUpload(bob, song, { bytes: pngBytes(16) });
+    await flag(false);
+    const ticket = await call(bob, "POST", `/api/jam-songs/${song}/uploads`, {
+      kind: "cover",
+      contentType: "image/png",
+      byteSize: 100,
+    });
+    expect(ticket.status).toBe(403);
+    expect(ticket.body.error).toBe("jam_channels_off");
+    expect((await setCover(bob, song, spare)).status).toBe(403);
+    expect((await detail(carol, song)).song.coverUrl).toBeTruthy();
+    // A picture somebody should not see stays removable while the feature is paused.
+    expect((await removeCover(mod, song)).status).toBe(200);
+    expect((await detail(carol, song)).song.coverUrl).toBeNull();
+  });
+
+  it("a timed-out member cannot change the cover", async () => {
+    const song = await songId(bob);
+    const id = await coverUpload(bob, song);
+    await issueTimeout({ serverId, userId: bob.id, issuedBy: alice.id, minutes: 5 });
+    expect((await setCover(bob, song, id)).status).toBe(403);
+    expect((await removeCover(bob, song)).status).toBe(403);
+  });
+
+  it("the sweep collects a cover the song stopped showing, and a deleted song's cover a day later, never a live one", async () => {
+    const song = await songId(bob);
+    const live = await coverUpload(bob, song);
+    await setCover(bob, song, live);
+    const liveKey = await keyOf(live);
+
+    // A claimed cover upload no song names (a failed immediate delete) is collected after the hour.
+    const stray = await coverUpload(bob, song, { bytes: pngBytes(20) });
+    await getPool().query(
+      `UPDATE jam_uploads SET claimed_at = NOW() - INTERVAL '2 hours' WHERE id = $1`,
+      [stray],
+    );
+    const strayKey = await keyOf(stray);
+    expect(await sweepJamMedia()).toBe(1);
+    expect(objects.has(strayKey)).toBe(false);
+    expect(objects.has(liveKey)).toBe(true);
+    expect((await getPool().query(`SELECT 1 FROM jam_uploads WHERE id = $1`, [stray])).rowCount).toBe(0);
+
+    // A deleted song's cover stays for the day, then goes with its rows.
+    expect((await call(bob, "DELETE", `/api/jam-songs/${song}`)).status).toBe(204);
+    expect(await sweepJamMedia()).toBe(0);
+    expect(objects.has(liveKey)).toBe(true);
+    await getPool().query(
+      `UPDATE jam_songs SET deleted_at = NOW() - INTERVAL '2 days' WHERE id = $1`,
+      [song],
+    );
+    expect(await sweepJamMedia()).toBe(1);
+    expect(objects.has(liveKey)).toBe(false);
+    expect((await getPool().query(`SELECT 1 FROM jam_song_covers`)).rowCount).toBe(0);
+  });
+
+  it("a failed delete of the old cover is left for the sweep, not lost", async () => {
+    const song = await songId(bob);
+    const first = await coverUpload(bob, song);
+    await setCover(bob, song, first);
+    storage.failDeletes = true;
+    const second = await coverUpload(bob, song, { bytes: pngBytes(30) });
+    expect((await setCover(bob, song, second)).status).toBe(200);
+    await new Promise((done) => setTimeout(done, 150));
+    // The row is still there for the sweep: claimed, and no song points at it.
+    expect(
+      (await getPool().query(`SELECT 1 FROM jam_uploads WHERE id = $1`, [first])).rowCount,
+    ).toBe(1);
+    await getPool().query(
+      `UPDATE jam_uploads SET claimed_at = NOW() - INTERVAL '2 hours' WHERE id = $1`,
+      [first],
+    );
+    storage.failDeletes = false;
+    expect(await sweepJamMedia()).toBe(1);
+    expect(
+      (await getPool().query(`SELECT 1 FROM jam_uploads WHERE id = $1`, [first])).rowCount,
+    ).toBe(0);
+  });
+
+  it("an account that set a cover on somebody else's song takes the picture with it; the cascades name the cover's key", async () => {
+    const song = await songId(alice, "Da Alice");
+    const id = await coverUpload(mod, song);
+    await setCover(mod, song, id);
+    const keys = await jamKeysForUser(mod.id);
+    expect(keys).toHaveLength(1);
+    expect(await jamKeysForChannels([jamId])).toEqual(expect.arrayContaining(keys));
+    await getPool().query(`DELETE FROM users WHERE id = $1`, [mod.id]);
+    expect((await detail(alice, song)).song.coverUrl).toBeNull();
+    expect((await getPool().query(`SELECT 1 FROM jam_song_covers`)).rowCount).toBe(0);
+  });
+
+  it("an edit of the title keeps the cover and is announced once, with both", async () => {
+    const song = await songId(bob, "Antes");
+    await setCover(bob, song, await coverUpload(bob, song));
+    takeFrames();
+    const renamed = await call<{ song: JamSongSummary }>(bob, "PATCH", `/api/jam-songs/${song}`, {
+      title: "Depois",
+      artist: "Os Cometas",
+    });
+    expect(renamed.status).toBe(200);
+    expect(renamed.body.song).toMatchObject({ title: "Depois", artist: "Os Cometas" });
+    expect(renamed.body.song.coverUrl).toBeTruthy();
+    const frames = takeFrames();
+    expect(frames).toHaveLength(1);
+    expect((frames[0] as { song: JamSongSummary }).song.title).toBe("Depois");
   });
 });

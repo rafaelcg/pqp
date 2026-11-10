@@ -85,6 +85,14 @@ export const deleteJamSong = (songId: string) =>
 export const createJamUpload = (songId: string, body: CreateJamUploadRequest) =>
   apiFetch<JamUploadTicket>(`/api/jam-songs/${songId}/uploads`, json("POST", body));
 
+/** Step 3 of a cover: claim an upload of kind `cover` as the song's picture. */
+export const setJamCover = (songId: string, uploadId: string) =>
+  apiFetch<{ song: JamSongSummary }>(`/api/jam-songs/${songId}/cover`, json("PUT", { uploadId }));
+
+/** Take the picture off a song. */
+export const removeJamCover = (songId: string) =>
+  apiFetch<{ song: JamSongSummary }>(`/api/jam-songs/${songId}/cover`, json("DELETE"));
+
 export const addJamTrack = (songId: string, body: AddJamTrackRequest) =>
   apiFetch<JamTrackWithSong>(`/api/jam-songs/${songId}/tracks`, json("POST", body));
 

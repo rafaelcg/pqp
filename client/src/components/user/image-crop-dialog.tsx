@@ -58,10 +58,12 @@ import { cn } from "@/lib/utils";
  * the preview promise otherwise.
  */
 
-export type ImageCropShape = "avatar" | "banner";
+export type ImageCropShape = "avatar" | "banner" | "cover";
 
 const ASPECT: Record<ImageCropShape, number> = {
   avatar: 1,
+  // A jam song's cover: a square frame with square corners, like the picture it becomes.
+  cover: 1,
   banner: USER_BANNER_WIDTH / USER_BANNER_HEIGHT,
 };
 
@@ -393,9 +395,11 @@ export function ImageCropDialog({
       title={t(
         shape === "avatar"
           ? "settings.profile.crop.avatarTitle"
-          : "settings.profile.crop.bannerTitle",
+          : shape === "cover"
+            ? "jam.edit.cropTitle"
+            : "settings.profile.crop.bannerTitle",
       )}
-      description={t("settings.profile.crop.hint")}
+      description={t(shape === "cover" ? "jam.edit.cropHint" : "settings.profile.crop.hint")}
       size={shape === "banner" ? "lg" : "md"}
       closeOnBackdrop={false}
       onClose={onCancel}
@@ -416,7 +420,8 @@ export function ImageCropDialog({
             className="h-auto min-h-9 w-full min-w-0 whitespace-normal px-2 text-center max-sm:min-h-11"
             onClick={save}
           >
-            {t("common.save")}
+            {/* the cover's crop is a step toward the song's Save, not the save itself */}
+            {shape === "cover" ? t("jam.edit.cropUse") : t("common.save")}
           </Button>
         </div>
       }
@@ -431,7 +436,7 @@ export function ImageCropDialog({
           aria-describedby={keysId}
           className={cn(
             "relative mx-auto w-full touch-none select-none overflow-hidden bg-surface-2 outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset",
-            shape === "avatar"
+            shape === "avatar" || shape === "cover"
               ? "max-w-72 rounded-[var(--radius-card)]"
               : "rounded-[var(--radius-card)]",
             view ? "cursor-grab active:cursor-grabbing" : "cursor-default",

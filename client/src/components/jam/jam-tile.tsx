@@ -17,7 +17,8 @@ import {
 import { cn } from "@/lib/utils";
 import { useBarCount } from "./jam-bars";
 import { useNeedLabel } from "./jam-need";
-import { bandOrder, ContributorStack, Equalizer, MirrorBars, NeedChip } from "./jam-art";
+import { bandOrder, BandStrip, ContributorStack, Equalizer, MirrorBars, NeedChip } from "./jam-art";
+import { JamCoverPhoto, useJamCover } from "./jam-cover";
 
 /**
  * One song on the wall, drawn from the song summary alone. Its picture IS the
@@ -30,6 +31,13 @@ import { bandOrder, ContributorStack, Equalizer, MirrorBars, NeedChip } from "./
  * Only a song WITH a video reads its detail (for the video's address), and only
  * once the tile comes near the screen; its first frame then takes the picture's
  * place and plays muted under the pointer.
+ *
+ * A song WITH a cover photo is drawn from that photo instead, full bleed: the
+ * cover comes first, before the video's poster and the band (what represents
+ * the song in a listing is the owner's choice). The words move onto a scrim that
+ * is dark in every theme, and the waveform and the need chip keep their place on
+ * it. A cover that fails to load falls back to the band, so a tile is never a
+ * broken image; a song with a cover never reads its video.
  */
 
 export interface JamTileProps {
@@ -72,14 +80,16 @@ export function JamTile({ song, size, detail, index, fresh, entrance, selected, 
   const big = size === "hero";
   const wide = size === "wide";
   const small = size === "small";
+  const cover = useJamCover(song.coverUrl);
+  const covered = cover.src !== null && cover.status !== "failed";
 
-  // Near the screen, once: only a tile with a video has anything to read.
+  // Near the screen, once: only a tile with a video (and no cover) has anything to read.
   const tileRef = useRef<HTMLLIElement | null>(null);
   const [near, setNear] = useState(false);
   const storeEpoch = useJamStoreEpoch();
   useEffect(() => {
     const element = tileRef.current;
-    if (!element || near || !song.hasVideo) {
+    if (!element || near || !song.hasVideo || covered) {
       return;
     }
     if (typeof IntersectionObserver === "undefined") {
@@ -97,7 +107,7 @@ export function JamTile({ song, size, detail, index, fresh, entrance, selected, 
     );
     observer.observe(element);
     return () => observer.disconnect();
-  }, [near, song.hasVideo]);
+  }, [near, song.hasVideo, covered]);
   useEffect(() => {
     if (near) {
       onNear?.();
@@ -126,6 +136,97 @@ export function JamTile({ song, size, detail, index, fresh, entrance, selected, 
   const needText = needLabel(need);
   const subtitle = song.artist ?? t("jam.original");
   const label = `${song.title}, ${subtitle}, ${who}, ${needText}${song.joinMode === "closed" ? `, ${t("jam.tile.closed")}` : ""}`;
+
+  if (covered) {
+    return (
+      <li ref={tileRef} className={cn("flex min-w-0", JAM_TILE_SPAN[size])}>
+        <button
+          type="button"
+          onClick={onOpen}
+          aria-label={label}
+          aria-current={selected ? "true" : undefined}
+          data-jam-tile={song.id}
+          data-jam-tile-size={size}
+          data-jam-tile-cover=""
+          data-playing={playing ? "true" : undefined}
+          style={{ "--jam-i": Math.min(index, 6), viewTransitionName: selected ? undefined : `jam-cover-${song.id}` } as CSSProperties}
+          className={cn(
+            "group/cover @container/tile relative isolate h-full w-full min-w-0 cursor-pointer overflow-hidden rounded-[var(--radius-panel)] bg-surface-2 text-left text-on-media outline-none ring-1 ring-inset ring-border",
+            "transition-[transform,box-shadow] duration-[var(--duration-base)] ease-[var(--ease-standard)]",
+            "focus-visible:ring-2 focus-visible:ring-focus-ring",
+            "active:scale-[0.98] motion-safe:hover:-translate-y-1 hover:shadow-[var(--shadow-2)]",
+            selected && "ring-2 ring-text",
+            entrance && "jam-tile-in",
+            fresh && "jam-tile-arrive",
+          )}
+        >
+          <JamCoverPhoto cover={cover} className="motion-safe:group-hover/cover:scale-[1.04] motion-safe:[transition-property:opacity,transform]" />
+          {/* the scrim: the words and the waveform sit on this, whatever the photo is */}
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-x-0 bottom-0 h-[80%] bg-gradient-to-t from-media-scrim from-30% via-media-scrim/80 via-55% to-transparent"
+          />
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-media-scrim/50 to-transparent"
+          />
+          <BandStrip instruments={song.instruments} missing={missing} size="sm" className="absolute left-2 top-2" />
+          {(song.hasVideo || song.joinMode === "closed") && (
+            <span className="absolute right-2 top-2 flex items-center gap-1">
+              {song.hasVideo && (
+                <span className="grid h-6 w-6 place-items-center rounded-full bg-media-scrim/85 text-on-media">
+                  <Video className="h-3.5 w-3.5" />
+                </span>
+              )}
+              {song.joinMode === "closed" && (
+                <span className="grid h-6 w-6 place-items-center rounded-full bg-media-scrim/85 text-on-media">
+                  <Lock className="h-3 w-3" data-jam-tile-closed="" />
+                </span>
+              )}
+            </span>
+          )}
+          <span className={cn("absolute inset-x-0 bottom-0 flex min-w-0 flex-col", big ? "gap-2.5 p-4" : "gap-1.5 p-3")}>
+            <CoverWave song={song} big={big} small={small} animate={Boolean(entrance || fresh)} />
+            <span
+              className={cn(
+                "font-display font-extrabold leading-[1.08] tracking-[-0.01em] text-on-media [text-shadow:0_1px_10px_oklch(0_0_0/0.5)] [text-wrap:balance]",
+                big ? "line-clamp-2 text-4xl" : small ? "line-clamp-2 text-[17px]" : "line-clamp-2 text-[22px]",
+              )}
+            >
+              {song.title}
+            </span>
+            {/* a wide tile is one row high: the title, the waveform and the need are what fit over the photo */}
+            {!small && !wide && (
+              <span className="flex min-w-0 items-center gap-2 text-[13px] font-medium text-on-media-muted">
+                <ContributorStack people={song.contributors} total={song.contributorCount} size={big ? "md" : "sm"} ringClassName="ring-media-scrim" />
+                <span className="truncate">{`${subtitle} · ${who}`}</span>
+              </span>
+            )}
+            <span className="flex min-w-0 items-center justify-between gap-2">
+              <NeedChip need={need} tone="cover" compact={small} className="min-w-0 shrink" />
+              <span
+                aria-hidden="true"
+                className={cn(
+                  // a tile too narrow for the chip and the button keeps the chip: the whole tile is the button
+                  "shrink-0 place-items-center rounded-full transition-[transform,background-color] duration-[var(--duration-base)] ease-[var(--ease-emphasized)]",
+                  big ? "grid h-12 w-12" : playing ? "grid h-8 w-8" : "hidden h-8 w-8 @min-[10.5rem]/tile:grid",
+                  playing ? "bg-accent text-on-accent" : "bg-on-media text-media-scrim group-hover/cover:scale-110",
+                )}
+              >
+                {playing ? <Equalizer /> : <Play className={cn("ml-0.5", big ? "h-5 w-5" : "h-3.5 w-3.5")} fill="currentColor" />}
+              </span>
+            </span>
+          </span>
+          {fresh && (
+            <span
+              aria-hidden="true"
+              className="jam-arrive-ring pointer-events-none absolute inset-0 rounded-[var(--radius-panel)] ring-2 ring-accent"
+            />
+          )}
+        </button>
+      </li>
+    );
+  }
 
   return (
     <li ref={tileRef} className={cn("flex min-w-0", JAM_TILE_SPAN[size])}>
@@ -316,5 +417,22 @@ export function JamInviteTile({
         <span className="text-[13px] text-text-secondary">{t("jam.tile.inviteHint")}</span>
       </button>
     </li>
+  );
+}
+
+/** The waveform along the foot of a photo tile: the song's loudest stem, in the scrim's light. */
+function CoverWave({ song, big, small, animate }: { song: JamSongSummary; big: boolean; small: boolean; animate: boolean }) {
+  const [ref, count] = useBarCount(big ? 7 : 6, 72);
+  const bars = useMemo(
+    () =>
+      count === 0
+        ? []
+        : stretchBars(song.previewPeaks.length > 0 ? barsFromPeaks(song.previewPeaks, count) : seededBars(song.id, count)),
+    [count, song.previewPeaks, song.id],
+  );
+  return (
+    <span ref={ref} aria-hidden="true" className={cn("mb-1 block", big ? "h-8" : small ? "h-3.5" : "h-5")}>
+      <MirrorBars bars={bars} className={cn("h-full", big ? "gap-[3px]" : "gap-[2px]")} barClassName="bg-on-media/70 drop-shadow-[0_1px_2px_oklch(0_0_0/0.45)]" animate={animate} />
+    </span>
   );
 }

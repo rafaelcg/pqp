@@ -7755,3 +7755,21 @@ CREATE INDEX IF NOT EXISTS idx_jam_uploads_song ON jam_uploads (song_id);
 CREATE INDEX IF NOT EXISTS idx_jam_uploads_channel ON jam_uploads (channel_id);
 CREATE INDEX IF NOT EXISTS idx_jam_uploads_server ON jam_uploads (server_id);
 CREATE INDEX IF NOT EXISTS idx_jam_uploads_uploader ON jam_uploads (uploader_id);
+
+-- A song's cover picture: at most one per song, and the object is named by the
+-- ledger row (`jam_uploads`, kind 'cover') it was claimed from. Its own table,
+-- like every other jam table, so the feature adds no column to `jam_songs` and
+-- no lock to a boot (pitfall 22). Both foreign keys CASCADE: a deleted song
+-- takes its cover row, and a deleted uploader takes the ledger row (their
+-- objects are deleted by key, `jam-keys.ts`) and with it the cover they set.
+-- Replaced or removed covers leave an unreferenced 'cover' ledger row that the
+-- sweep collects (`sweepJamMedia`).
+CREATE TABLE IF NOT EXISTS jam_song_covers (
+  song_id UUID PRIMARY KEY REFERENCES jam_songs(id) ON DELETE CASCADE,
+  upload_id UUID NOT NULL REFERENCES jam_uploads(id) ON DELETE CASCADE,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_jam_song_covers_upload ON jam_song_covers (upload_id);
+-- The sweep's read: claimed cover uploads, to find the ones no song points at.
+CREATE INDEX IF NOT EXISTS idx_jam_uploads_cover_claimed
+  ON jam_uploads (claimed_at) WHERE kind = 'cover' AND claimed_at IS NOT NULL;

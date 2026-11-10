@@ -32,8 +32,8 @@ Off gates **creating and changing**, never reading:
 |---|---|
 | `POST /api/servers/:id/channels` with `type: "jam"` | Every read: the song list, a song, its tracks, the media URLs |
 | create a song, edit a song | Delete a song (author or moderator) |
-| ask for an upload ticket, add a track, edit a track | Delete a track (its author, the song's author or a moderator) |
-| vote | Take a vote back |
+| ask for an upload ticket (audio, video or cover), add a track, edit a track | Delete a track (its author, the song's author or a moderator) |
+| set a cover, vote | Remove a cover (author or moderator), take a vote back |
 
 So turning it off freezes the feature without stranding a moderator or
 somebody's own recording. Nothing is hidden or deleted. A client reading
@@ -50,7 +50,10 @@ somebody's own recording. Nothing is hidden or deleted. A client reading
   optional label, the audio object, an optional video object, and the timeline
   fields. Soft-deleted.
 - **Vote** (`jam_track_votes`): one per person per track.
-- **Upload ledger** (`jam_uploads`): a signed upload until a track claims it.
+- **Upload ledger** (`jam_uploads`): a signed upload until a track (or a cover)
+  claims it.
+- **Cover** (`jam_song_covers`): at most one picture per song, naming the
+  ledger row (kind `cover`) whose object it is. See "A song's cover".
 
 There is **no private state on a song**: a song is exactly as private as its
 channel. Whoever can see the channel can read every song, track and media URL in
@@ -124,7 +127,9 @@ All authenticated like the rest of `/api`.
 | `GET /api/jam-songs/:songId` | `{ song, tracks, viewer }` | can see the channel |
 | `PATCH /api/jam-songs/:songId` | `{ song }` | the song's author or a moderator, flag on |
 | `DELETE /api/jam-songs/:songId` | 204 | the song's author or a moderator |
-| `POST /api/jam-songs/:songId/uploads` | 201 `{ uploadId, uploadUrl, expiresAt }` | may add a track, flag on |
+| `POST /api/jam-songs/:songId/uploads` | 201 `{ uploadId, uploadUrl, expiresAt }` | audio and video: may add a track, flag on. Cover: the song's author or a moderator, flag on |
+| `PUT /api/jam-songs/:songId/cover` | `{ song }` | the song's author or a moderator, flag on |
+| `DELETE /api/jam-songs/:songId/cover` | `{ song }` | the song's author or a moderator (allowed while the flag is off) |
 | `POST /api/jam-songs/:songId/tracks` | 201 `{ track, song }`, 200 on a retry | may add a track, flag on |
 | `PATCH /api/jam-tracks/:trackId` | `{ track, song }` | see below, flag on |
 | `DELETE /api/jam-tracks/:trackId` | 204 | the track's author, the song's author or a moderator |
@@ -193,6 +198,7 @@ the Baú's media does.
 |---|---|---|---|
 | audio | `audio/flac` (what the web engine sends), `audio/webm`, `audio/ogg`, `audio/mp4`, `audio/mpeg` | 32 MiB | at most 10 minutes (`durationMs`, the recorder's word) |
 | video | `video/webm`, `video/mp4` | 100 MiB | none enforced |
+| cover | `image/jpeg`, `image/png`, `image/webp` | 4 MiB | none; the web client sends a 1024 px square JPEG (a few hundred KB) |
 
 MediaRecorder output fits (Opus in WebM or Ogg, AAC in MP4). Uncompressed WAV is
 not accepted (ten minutes of it is about 57 MB), so the recorder encodes first.
@@ -207,6 +213,49 @@ stems. The future public site (jam.pqp.gg) needs its origin added.
 Media URLs on a track are presigned GETs valid for `ATTACHMENT_URL_TTL_SECONDS`
 (12 hours by default), carried as `mediaExpiresAt`. A tab that outlives them
 re-reads `GET /api/jam-songs/:songId`.
+
+### A song's cover
+
+A song may carry one picture, shown on its tile and in its panel header.
+`JamSongSummary.coverUrl` is a presigned GET (null for a song with none), minted
+when the summary was built and good for `ATTACHMENT_URL_TTL_SECONDS`, like a
+track's `audioUrl`. Every list, detail and song frame signs it afresh, so the
+query string changes on every read; the object key inside it never changes for a
+given picture, so a client recognises "the same cover" by the URL's path and keeps
+what it already drew (`useJamCover` in the web client). A cover that fails to load
+(an expired signature on a tab that outlived it) falls back to the picture a song
+without one has always had.
+
+The flow is the track's own, with a different last step: `POST .../uploads` with
+`kind: "cover"` (the author or a moderator only, so nobody else costs the bucket a
+signed URL), `PUT` the bytes, then `PUT /api/jam-songs/:songId/cover` with the
+`uploadId`. The claim HEADs the object (size and the signed type, as for a track)
+and then reads the first 256 KB and checks the bytes ARE the picture type that was
+signed (`lib/image-info.ts`, the share card's sniffer): a HEAD only reports what
+the uploader claimed, and this is shown in other people's pages. The claim locks
+the song row, so two covers set at once leave one.
+
+Setting a cover is an edit, so it is gated by the flag, the timeout gate and the
+author-or-moderator rule exactly like `PATCH /api/jam-songs/:songId`. Removing it
+is not gated by the flag (a picture somebody should not see must stay removable
+while the feature is paused): the fourth removal beside deleting a song, deleting
+a track and taking a vote back. Both announce `jam-song-updated`, only when
+something changed, so a retried claim is the same answer with no second frame.
+
+Cleanup. Replacing or removing a cover deletes the old object and its ledger row
+after the commit, best effort and never awaited by the request. The sweep is the
+backstop: a claimed `cover` ledger row that no song names after an hour, and the
+cover of a deleted song after the same day's grace a deleted track's media gets.
+The three cascades (channel, server, account) already name a cover's key, because
+every object ever signed has a ledger row; and `jam_song_covers.upload_id`
+cascades from the ledger, so an account deleted after setting a cover on somebody
+else's song takes that picture with it.
+
+Covers are NOT scanned for explicit content, like avatars, profile banners and
+server pictures (`docs/CONTENT_SAFETY.md`). The author or a moderator can remove
+one at any time, even with the flag off. Phones: both decoders skip unknown keys
+(Kotlin `ignoreUnknownKeys`, Swift `Decodable`), so a shipped build keeps working
+and simply shows no cover; showing one is `coverUrl` on the summary, nothing else.
 
 ## Realtime
 
@@ -233,7 +282,8 @@ announce never fails the write.
 ## Storage lifecycle
 
 - An upload nobody claims within an hour is deleted by the sweep (object, then
-  ledger row). A deleted track, or a track of a deleted song, loses its objects a
+  ledger row; a cover upload too, and a cover a song stopped showing, see "A
+  song's cover"). A deleted track, or a track of a deleted song, loses its objects a
   day after (`media_purged_at`). `sweepJamMedia`, every minute from `jobs.ts`,
   runs whatever the flag says, so switching the feature off never strands an
   object. A bucket outage leaves the row for the next pass.

@@ -19,9 +19,10 @@ import { z } from "zod";
  * sums them. The server's whole job is to keep the pieces, say who may add one,
  * and tell the room when something moved.
  *
- * Storage. Rows live in `jam_songs`, `jam_tracks`, `jam_track_votes` and
- * `jam_uploads` (`server/src/schema.sql`, "jam channels"). Nothing is added to
- * `channels` beyond the `'jam'` entry in its type CHECK (CLAUDE.md pitfall 22).
+ * Storage. Rows live in `jam_songs`, `jam_tracks`, `jam_track_votes`,
+ * `jam_uploads` and `jam_song_covers` (`server/src/schema.sql`, "jam
+ * channels"). Nothing is added to `channels` beyond the `'jam'` entry in its
+ * type CHECK (CLAUDE.md pitfall 22).
  * The audio and video bytes do NOT go through the message attachment path: a
  * stem is longer and bigger than a message attachment may be (10 MiB cap, no
  * duration), and an attachment is tied to a message, which a jam does not have.
@@ -118,8 +119,35 @@ import { z } from "zod";
  *           like every audio and video object in the product
  *           (`docs/CONTENT_SAFETY.md`).
  *
+ *   cover   (a song's picture, not part of a track) JAM_COVER_CONTENT_TYPES,
+ *           at most JAM_COVER_MAX_BYTES. The web client frames it square and
+ *           sends a JPEG of `JAM_COVER_SIZE` pixels. Same three steps with a
+ *           different third one: `PUT /api/jam-songs/:songId/cover` with the
+ *           `uploadId` (see "A SONG'S COVER" below). Not scanned, like the
+ *           avatars and server pictures (`docs/CONTENT_SAFETY.md`).
+ *
  * An upload that is never claimed is deleted, object and ledger row, about an
  * hour later. A deleted track's objects are deleted a day after it.
+ *
+ * -------------------------------------------------------------------------
+ * A SONG'S COVER
+ *
+ * A song may carry one picture, shown on its tile and in its panel. It is
+ * additive and optional: `JamSongSummary.coverUrl` is null for a song with
+ * none, and a client that predates it ignores the key (the phones' decoders
+ * skip unknown keys). The URL is a presigned GET minted when the summary was
+ * built, valid for the deployment's `ATTACHMENT_URL_TTL_SECONDS` like a track's
+ * `audioUrl`; the key inside it never changes for a given picture, so a client
+ * can recognise "the same cover" by the URL's PATH (everything before `?`) and
+ * keep what it already drew. A summary read again (list, detail, any song
+ * frame) carries a fresh signature. A replaced or removed cover is announced
+ * with `jam-song-updated`, the frame an edit of the title already is.
+ *
+ * Who may set or remove it: the song's author or a moderator, the rule for
+ * `PATCH /api/jam-songs/:songId`. Setting is gated by the flag; removing is
+ * NOT (a picture somebody should not see must stay removable while the feature
+ * is paused), so removal joins the other three removals under THE FLAG below. The
+ * replaced object is deleted after the write and, as a backstop, by the sweep.
  *
  * -------------------------------------------------------------------------
  * REST SURFACE (every route authenticated like the rest of `/api`)
@@ -132,7 +160,9 @@ import { z } from "zod";
  * | GET    /api/jam-songs/:songId                 |                             | `JamSongDetailResponse`        | can see the channel (deep links) |
  * | PATCH  /api/jam-songs/:songId                 | `updateJamSongSchema`       | `{ song }`                     | the song's author or a moderator, flag on |
  * | DELETE /api/jam-songs/:songId                 |                             | 204                            | the song's author or a moderator |
- * | POST   /api/jam-songs/:songId/uploads         | `createJamUploadSchema`     | 201 `JamUploadTicket`          | may add a track, flag on |
+ * | POST   /api/jam-songs/:songId/uploads         | `createJamUploadSchema`     | 201 `JamUploadTicket`          | `audio` / `video`: may add a track, flag on. `cover`: the song's author or a moderator, flag on |
+ * | PUT    /api/jam-songs/:songId/cover           | `setJamCoverSchema`         | `{ song }`                     | the song's author or a moderator, flag on |
+ * | DELETE /api/jam-songs/:songId/cover           |                             | `{ song }`                     | the song's author or a moderator |
  * | POST   /api/jam-songs/:songId/tracks          | `addJamTrackSchema`         | 201 `{ track, song }`; 200 on a retry | may add a track (`joinMode`), flag on |
  * | PATCH  /api/jam-tracks/:trackId               | `updateJamTrackSchema`      | `{ track, song }`              | per field, see below, flag on |
  * | DELETE /api/jam-tracks/:trackId               |                             | 204                            | the track's author, the song's author or a moderator |
@@ -153,10 +183,11 @@ import { z } from "zod";
  *
  * THE FLAG. `jam_channels` (per server, default off) gates creating a jam
  * channel and every write that adds or changes something: create and update a
- * song, mint an upload, add and update a track, vote. It NEVER gates a read, and
- * it does not gate the three removals (delete a song, delete a track, take a
- * vote back), so turning it off freezes the feature without stranding anybody's
- * moderation or their own content. Off, a write is 403 `jam_channels_off`.
+ * song, mint an upload, set a cover, add and update a track, vote. It NEVER
+ * gates a read, and it does not gate the four removals (delete a song, delete a
+ * track, take a vote back, remove a cover), so turning it off freezes the
+ * feature without stranding anybody's moderation or their own content. Off, a
+ * write is 403 `jam_channels_off`.
  *
  * ERRORS: `{ error: <JAM_ERRORS value> }`, the house `sendError` shape. A 400
  * for a body that does not parse, 404 for anything the caller may not see (a
@@ -237,6 +268,16 @@ export const JAM_AUDIO_CONTENT_TYPES = [
   "audio/mpeg",
 ] as const;
 export const JAM_VIDEO_CONTENT_TYPES = ["video/webm", "video/mp4"] as const;
+/** A song's cover: the three picture types every browser and phone draws. */
+export const JAM_COVER_CONTENT_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
+/**
+ * Cover object ceiling in bytes: 4 MiB. The web client sends a `JAM_COVER_SIZE`
+ * square JPEG (a few hundred KB); the ceiling is for a client that sends the
+ * picture as it is.
+ */
+export const JAM_COVER_MAX_BYTES = 4 * 1024 * 1024;
+/** The side, in pixels, of the square a client frames and sends. */
+export const JAM_COVER_SIZE = 1024;
 /** Songs a person may create per window, cluster-wide. */
 export const JAM_SONGS_PER_WINDOW = 10;
 /** Upload tickets a person may ask for per window, cluster-wide (a track is one or two). */
@@ -462,6 +503,12 @@ export const jamSongSummarySchema = z.object({
   /** At least one live track has a video: draw a camera badge. */
   hasVideo: z.boolean().default(false),
   /**
+   * The song's cover picture (a presigned GET, see "A SONG'S COVER" in the
+   * header), or null when it has none. Additive: absent from an older server's
+   * answer, so it reads null.
+   */
+  coverUrl: z.string().nullable().default(null),
+  /**
    * Up to `JAM_PREVIEW_CONTRIBUTORS_MAX` people with a live track, in the order
    * of their first track. `contributorCount` is the full number ("+3").
    */
@@ -618,7 +665,7 @@ export const jamSongDetailResponseSchema = z.object({
 });
 export type JamSongDetailResponse = z.infer<typeof jamSongDetailResponseSchema>;
 
-export const jamUploadKindSchema = z.enum(["audio", "video"]);
+export const jamUploadKindSchema = z.enum(["audio", "video", "cover"]);
 export type JamUploadKind = z.infer<typeof jamUploadKindSchema>;
 
 /**
@@ -634,7 +681,11 @@ export const createJamUploadSchema = z
   })
   .superRefine((upload, ctx) => {
     const allowed: readonly string[] =
-      upload.kind === "audio" ? JAM_AUDIO_CONTENT_TYPES : JAM_VIDEO_CONTENT_TYPES;
+      upload.kind === "audio"
+        ? JAM_AUDIO_CONTENT_TYPES
+        : upload.kind === "video"
+          ? JAM_VIDEO_CONTENT_TYPES
+          : JAM_COVER_CONTENT_TYPES;
     if (!allowed.includes(upload.contentType)) {
       ctx.addIssue({
         code: "custom",
@@ -644,6 +695,16 @@ export const createJamUploadSchema = z
     }
   });
 export type CreateJamUploadRequest = z.infer<typeof createJamUploadSchema>;
+
+/**
+ * `PUT /api/jam-songs/:songId/cover`: make an upload of kind `cover`, already
+ * PUT to the bucket, the song's picture. 404 `jam_upload_unknown` for an upload
+ * that is not the caller's, not this song's, not a cover or already used; 422
+ * `jam_upload_not_verified` when the object is missing, over its limit or not
+ * the type that was signed.
+ */
+export const setJamCoverSchema = z.object({ uploadId: uuid });
+export type SetJamCoverRequest = z.infer<typeof setJamCoverSchema>;
 
 export const jamUploadTicketSchema = z.object({
   uploadId: uuid,

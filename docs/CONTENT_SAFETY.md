@@ -129,6 +129,7 @@ the row and is not a pass.
 | Direct and group messages (text) | **no**, by decision: the built-in text filter does not read private conversations | | |
 | Avatars and profile banners (`avatars.ts`) | **no** | | |
 | Server icon / banner / community featured image uploaded in the app (`server-images.ts`) | **no** | | |
+| Jam song cover (`PUT /api/jam-songs/:songId/cover`) | **no** | | The claim checks the bytes are a real JPEG, PNG or WebP, not that they are acceptable. The author or a moderator can remove one at any time, even with the flag off. |
 
 The last two rows are open gaps, not decisions. The community featured image
 in particular is shown on the public `pqp.gg/c/<slug>` page.

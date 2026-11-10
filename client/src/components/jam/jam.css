@@ -133,6 +133,32 @@
   }
 }
 
+/* A freshly picked cover photo landing in the edit sheet: a small pop, then still. */
+@keyframes jam-cover-pop {
+  0% {
+    opacity: 0;
+    transform: scale(1.06);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.jam-cover-pop {
+  animation: jam-cover-pop 360ms var(--ease-emphasized) backwards;
+}
+
+/* The upload ring follows the bytes sent; the dash offset eases between progress events. */
+.jam-cover-ring {
+  transition: stroke-dashoffset 220ms linear;
+}
+
+/* The song panel's header takes the cover's colours, softly, behind the words. */
+.jam-header-wash {
+  animation: jam-cover-pop 600ms var(--ease-standard) backwards;
+}
+
 .jam-tile-in {
   animation: jam-tile-in 380ms var(--ease-emphasized) backwards;
   animation-delay: calc(var(--jam-i, 0) * 45ms);
@@ -361,8 +387,13 @@
   .jam-wave-live,
   .jam-panel-in,
   .jam-howto-you,
-  .jam-lane-in {
+  .jam-lane-in,
+  .jam-cover-pop,
+  .jam-header-wash {
     animation: none;
+  }
+  .jam-cover-ring {
+    transition: none;
   }
   :root[data-jam-transition]::view-transition-group(*),
   :root[data-jam-transition]::view-transition-old(*),
