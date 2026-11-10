@@ -1,0 +1,318 @@
+/*
+ * The sidebar's Jam row: the art behind it and the icon in front of it.
+ *
+ * Rules this file keeps:
+ * - Only transform and opacity are animated. The wash is drawn once on a
+ *   layer of its own and moved by the compositor, so the sidebar is never
+ *   repainted a frame at a time.
+ * - The wash always drifts, very slowly (one loop is about half a minute), so
+ *   the row is alive at a glance; it gets faster with attention: hover, news,
+ *   the open page, a song playing. News also plays a soft sheen three times.
+ *   `--jam-run` is the one switch every animation reads, and an art that is off
+ *   screen or in a hidden tab forces it to `paused`.
+ * - Every colour is a role token (the instrument fills are identities, the
+ *   same in light and dark). The left of the row is washed with its own base
+ *   so the name and the count are read on a plain surface in every theme.
+ * - Reduced motion: no animation at all, and every element has a resting
+ *   position that is a finished picture.
+ */
+
+.jam-row-art {
+  --jam-base: var(--color-surface-2);
+  /* How much colour the wash carries: a bit more in the light themes, where the
+     same fill on a pale surface reads weaker. `--jam-mood-o` is the state's own. */
+  --jam-wash: 0.92;
+  --jam-mood-o: 0.9;
+  --jam-run: running;
+  /* Multiplies the loop's length: 1 is the slow drift at rest, less is faster. */
+  --jam-speed: 1;
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  border-radius: var(--radius-card);
+  background: var(--jam-base);
+  pointer-events: none;
+  contain: paint;
+}
+
+:root[data-theme="light"] .jam-row-art {
+  --jam-wash: 1;
+}
+
+/* The edge is drawn last so the wash never covers it. It only ever carries the
+   focus ring: plain rows have no border, and neither does this one. */
+.jam-row-art::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 0 transparent;
+  transition: box-shadow var(--duration-fast) var(--ease-standard);
+}
+
+[data-jam-card]:hover .jam-row-art,
+[data-jam-card]:focus-within .jam-row-art {
+  --jam-base: color-mix(in oklab, var(--color-text) 5%, var(--color-surface-2));
+  --jam-mood-o: 1;
+  --jam-speed: 0.5;
+}
+
+[data-jam-card]:has(:focus-visible) .jam-row-art::after {
+  box-shadow: inset 0 0 0 2px var(--color-focus-ring);
+}
+
+/* The Jam is the open page: a warm tint, a bar on the left edge, a slow drift. */
+.jam-row-art[data-selected="true"] {
+  --jam-base: color-mix(in oklab, var(--color-inst-guitar) 11%, var(--color-surface-2));
+  --jam-speed: 0.85;
+  --jam-mood-o: 0.95;
+}
+
+[data-jam-card]:hover .jam-row-art[data-selected="true"],
+[data-jam-card]:focus-within .jam-row-art[data-selected="true"] {
+  --jam-speed: 0.5;
+  /* The open page keeps its warm tint while the pointer or focus is on it. */
+  --jam-base: color-mix(
+    in oklab,
+    var(--color-inst-guitar) 11%,
+    color-mix(in oklab, var(--color-text) 5%, var(--color-surface-2))
+  );
+}
+
+.jam-art-here {
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: 0;
+  width: 3px;
+  border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
+  background: var(--color-inst-guitar);
+}
+
+/* News is livelier than hover, and a song playing is the liveliest. */
+.jam-row-art[data-mood="news"] {
+  --jam-mood-o: 1;
+  --jam-speed: 0.4;
+}
+
+.jam-row-art[data-mood="playing"] {
+  --jam-mood-o: 1;
+  --jam-speed: 0.22;
+}
+
+/* The pointer on a row never slows what the state already made livelier. */
+[data-jam-card]:hover .jam-row-art[data-mood="news"],
+[data-jam-card]:focus-within .jam-row-art[data-mood="news"] {
+  --jam-speed: 0.4;
+}
+
+[data-jam-card]:hover .jam-row-art[data-mood="playing"],
+[data-jam-card]:focus-within .jam-row-art[data-mood="playing"] {
+  --jam-speed: 0.22;
+}
+
+.jam-row-art[data-mood="empty"] {
+  --jam-mood-o: 0.3;
+}
+
+/* Off screen or in a hidden tab: nothing runs, whatever the row's state. */
+.jam-row-art[data-alive="false"] {
+  --jam-run: paused !important;
+}
+
+/* ---- the wash: the instruments' colours, drifting ------------------------ */
+
+.jam-aurora {
+  position: absolute;
+  inset: 0 auto 0 0;
+  /* Three tiles of a fixed 256px, so a wide sidebar repeats the palette instead of
+     stretching it into one band. */
+  width: 768px;
+  opacity: calc(var(--jam-wash) * var(--jam-mood-o));
+  /* The whole band: pink, yellow, orange, teal, blue, lilac, and round again. */
+  background-image: linear-gradient(
+    100deg,
+    color-mix(in oklab, var(--color-inst-vocals) 62%, transparent),
+    color-mix(in oklab, var(--color-inst-guitar) 70%, transparent),
+    color-mix(in oklab, var(--color-inst-drums) 68%, transparent),
+    color-mix(in oklab, var(--color-inst-keys) 58%, transparent),
+    color-mix(in oklab, var(--color-inst-bass) 64%, transparent),
+    color-mix(in oklab, var(--color-inst-other) 60%, transparent),
+    color-mix(in oklab, var(--color-inst-vocals) 62%, transparent)
+  );
+  background-size: 256px 100%;
+  /* Stepped, not continuous: at this speed a step is under a pixel, the eye cannot tell, and the
+     compositor only has to produce a frame when the wash actually moved (about 12 a second at rest,
+     not one per display refresh). The faster states step proportionally more often. */
+  animation: jam-row-aurora calc(28s * var(--jam-speed)) steps(336) infinite;
+  animation-play-state: var(--jam-run);
+}
+
+@keyframes jam-row-aurora {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-256px);
+  }
+}
+
+/* The name and the count sit on a plain base; the wash lives on the right. */
+.jam-art-scrim {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, var(--jam-base) 0%, var(--jam-base) 42%, transparent 76%);
+}
+
+/* The pin and the settings cog come in on hover and focus, and stay while the
+   Jam is open: the wash steps back from the right edge so they sit on a plain base. */
+[data-jam-card]:hover .jam-art-scrim,
+[data-jam-card]:focus-within .jam-art-scrim,
+.jam-row-art[data-selected="true"] .jam-art-scrim {
+  background:
+    linear-gradient(270deg, var(--jam-base) 0, var(--jam-base) 52px, transparent 98px),
+    linear-gradient(90deg, var(--jam-base) 0%, var(--jam-base) 42%, transparent 76%);
+}
+
+/* ---- news: one soft band crosses the row, three times ---------------------- */
+
+.jam-art-sheen {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 46%;
+  opacity: 0;
+  transform: translateX(-120%);
+  background: linear-gradient(
+    100deg,
+    transparent 0%,
+    color-mix(in oklab, var(--color-text) 4%, transparent) 25%,
+    color-mix(in oklab, var(--color-text) 14%, transparent) 50%,
+    color-mix(in oklab, var(--color-text) 4%, transparent) 75%,
+    transparent 100%
+  );
+}
+
+.jam-row-art[data-mood="news"] .jam-art-sheen {
+  animation: jam-row-sheen 2.8s var(--ease-standard) 500ms 3 both;
+}
+.jam-row-art[data-mood="news"][data-alive="false"] .jam-art-sheen {
+  animation-play-state: paused;
+}
+
+@keyframes jam-row-sheen {
+  0% {
+    opacity: 0;
+    transform: translateX(-120%);
+  }
+  20%,
+  80% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(520%);
+  }
+}
+
+/* ---- the icon ------------------------------------------------------------ */
+
+.jam-row-icon {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  background: var(--color-inst-guitar);
+  color: var(--color-on-inst);
+}
+
+.jam-row-icon > * {
+  grid-area: 1 / 1;
+}
+
+.jam-icon-eq {
+  display: none;
+  align-items: flex-end;
+  gap: 1.5px;
+  height: 10px;
+}
+
+.jam-icon-eq > span {
+  width: 2px;
+  height: 100%;
+  border-radius: 1px;
+  background: currentColor;
+  transform-origin: bottom;
+  /* Stepped like the wash: a few poses a second, not a frame per refresh. */
+  animation: jam-row-eq-icon 0.9s steps(4) infinite;
+}
+.jam-icon-eq > span:nth-child(2) {
+  animation-delay: -0.3s;
+}
+.jam-icon-eq > span:nth-child(3) {
+  animation-delay: -0.6s;
+}
+
+/* An off-screen or hidden row pauses its icon too (the art next to it knows). */
+[data-jam-card]:has([data-alive="false"]) .jam-icon-eq > span,
+[data-jam-card]:has([data-alive="false"]) .jam-icon-note {
+  animation-play-state: paused;
+}
+
+.jam-row-icon[data-mood="playing"] .jam-icon-note {
+  display: none;
+}
+.jam-row-icon[data-mood="playing"] .jam-icon-eq {
+  display: flex;
+}
+
+.jam-row-icon[data-mood="news"] .jam-icon-note {
+  animation: jam-row-hop 1.8s var(--ease-emphasized) 900ms 3;
+}
+
+@keyframes jam-row-eq-icon {
+  0%,
+  100% {
+    transform: scaleY(0.3);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+@keyframes jam-row-hop {
+  0%,
+  40%,
+  100% {
+    transform: translateY(0);
+  }
+  18% {
+    transform: translateY(-2.5px) rotate(-8deg);
+  }
+  30% {
+    transform: translateY(0) rotate(0deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .jam-art-sheen,
+  .jam-aurora,
+  .jam-icon-eq > span,
+  .jam-icon-note {
+    animation: none !important;
+  }
+  .jam-art-sheen {
+    opacity: 0;
+  }
+  .jam-icon-eq > span:nth-child(1) {
+    transform: scaleY(0.55);
+  }
+  .jam-icon-eq > span:nth-child(3) {
+    transform: scaleY(0.75);
+  }
+  .jam-row-art::after {
+    transition: none;
+  }
+}
