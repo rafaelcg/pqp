@@ -901,6 +901,68 @@ describeDb("jam channels", () => {
     expect((await getPool().query(`SELECT 1 FROM jam_tracks`)).rowCount).toBe(2);
   });
 
+  it("claims fired at once with one upload make exactly one track, and every one of them is answered with it", async () => {
+    // The race this pins: a retry whose probe ("is there already a track for
+    // this upload?") ran before the first claim committed, and whose upload
+    // lookup ran after it, used to find the upload claimed and answer 404
+    // `jam_upload_unknown` for a track that now exists. Many rounds of many
+    // concurrent claims, because it is a window of a few milliseconds.
+    for (let round = 0; round < 12; round += 1) {
+      // The API's own per-person request limiter is not what is tested here.
+      resetApiRateLimits();
+      await resetSharedRateLimit("jam-upload");
+      await resetSharedRateLimit("jam-song");
+      const song = await songId(alice, `Rodada ${round}`);
+      const audioUploadId = await upload(bob, song, "audio");
+      const replies = await Promise.all(
+        Array.from({ length: 8 }, () =>
+          call<{ track: JamTrack; error?: string }>(bob, "POST", `/api/jam-songs/${song}/tracks`, {
+            instrument: round % 2 === 0 ? "keys" : "other",
+            audioUploadId,
+            durationMs: 4000,
+          }),
+        ),
+      );
+      const summary = replies.map((r) => `${r.status}${r.body.error ? ` ${r.body.error}` : ""}`);
+      expect(
+        replies.every((r) => r.status === 200 || r.status === 201),
+        `round ${round}: ${summary.join(", ")}`,
+      ).toBe(true);
+      expect(replies.filter((r) => r.status === 201), `round ${round}`).toHaveLength(1);
+      expect(new Set(replies.map((r) => r.body.track.id)).size, `round ${round}`).toBe(1);
+      const stored = await getPool().query(
+        `SELECT 1 FROM jam_tracks WHERE audio_upload_id = $1`,
+        [audioUploadId],
+      );
+      expect(stored.rowCount, `round ${round}`).toBe(1);
+    }
+  });
+
+  it("a retry of the claim that took the person's last allowed track is answered with it, not a limit error", async () => {
+    const song = await songId(alice);
+    await getPool().query(
+      `INSERT INTO jam_tracks (song_id, author_id, instrument, audio_key, audio_content_type, audio_bytes, duration_ms)
+       SELECT $1, $2, 'other', 'k/' || g, 'audio/webm', 10, 1000 FROM generate_series(1, $3) g`,
+      [song, bob.id, JAM_MAX_TRACKS_PER_AUTHOR - 1],
+    );
+    const audioUploadId = await upload(bob, song, "audio");
+    const body = { instrument: "keys", audioUploadId, durationMs: 4000 };
+    const replies = await Promise.all(
+      Array.from({ length: 6 }, () =>
+        call<{ track: JamTrack; error?: string }>(bob, "POST", `/api/jam-songs/${song}/tracks`, body),
+      ),
+    );
+    const summary = replies.map((r) => `${r.status}${r.body.error ? ` ${r.body.error}` : ""}`).join(", ");
+    expect(replies.every((r) => r.status === 200 || r.status === 201), summary).toBe(true);
+    expect(replies.filter((r) => r.status === 201)).toHaveLength(1);
+    // And the same retry, sequentially, long after: still the track.
+    const late = await call<{ track: JamTrack }>(bob, "POST", `/api/jam-songs/${song}/tracks`, body);
+    expect(late.status).toBe(200);
+    // A genuinely new claim past the limit is still refused.
+    const next = await addTrack(bob, song, "bass");
+    expect(next.status).toBe(409);
+  });
+
   it("mint: only the allowed types and sizes, with a jam limit rather than the attachment one", async () => {
     const song = await songId(alice);
     const mint = (extra: Record<string, unknown>) =>
