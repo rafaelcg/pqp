@@ -400,10 +400,10 @@ enum JamPeaks {
 extension JamTrack {
     /// The envelope at a song time, 0 outside the played slice. `peaks` run
     /// across the whole stored recording, so the position in them is the file
-    /// time: `t - offset + trimStart`.
+    /// time: `t - offset` (the file starts at `offsetMs`, see `JamAlignment`).
     func peak(atSongTimeMs t: Double) -> Double {
         guard !peaks.isEmpty, durationMs > 0, t >= startMs, t < endMs else { return 0 }
-        let fileMs = t - offsetMs + trimStartMs
+        let fileMs = t - offsetMs
         let position = fileMs / durationMs * Double(peaks.count)
         let index = min(peaks.count - 1, max(0, Int(position)))
         return min(1, max(0, peaks[index]))

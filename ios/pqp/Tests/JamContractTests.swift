@@ -46,9 +46,12 @@ final class JamContractTests: XCTestCase {
         XCTAssertEqual(track.offsetMs, -500)
         XCTAssertEqual(track.trimStartMs, 120)
         XCTAssertEqual(track.trimEndMs, 200)
-        // The contract's `jamTrackPlayedMs` and `jamTrackEndMs`.
+        // The contract's `jamTrackPlayedMs`; the heard slice is placed the way
+        // the web recorder writes it (the file starts at `offsetMs`, the head
+        // trim hides 120 ms of it): -500 + 120 to -500 + 10000 - 200.
         XCTAssertEqual(track.playedMs, 9680)
-        XCTAssertEqual(track.endMs, 9180)
+        XCTAssertEqual(track.startMs, -380)
+        XCTAssertEqual(track.endMs, 9300)
         XCTAssertFalse(track.hasVideo)
     }
 
