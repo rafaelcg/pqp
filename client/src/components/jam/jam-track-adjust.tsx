@@ -103,10 +103,15 @@ export function TrackAdjust({
       // The preview is dropped either way: after a save the stored volume IS it.
       preview.current(stored.id, null);
       if (unsaved && !committed.current) {
+        // The gain is put back here too, and synchronously: the playback hook's own mix
+        // effect writes it on the next render, but when the whole panel goes away under a
+        // studio (the song was deleted mid-recording) the engine's stems stay and that
+        // effect does not, so an unsaved preview would otherwise stay on the stem.
         engine?.player.updateStem(stored.id, {
           offsetMs: stored.offsetMs,
           trimStartMs: stored.trimStartMs,
           trimEndMs: stored.trimEndMs,
+          gain: stored.gain,
         });
       }
     },

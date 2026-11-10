@@ -71,6 +71,8 @@ export function useJamPlayback(
   const [lanes, setLanes] = useState<Record<string, JamLaneMix>>({});
   const [audition, setAudition] = useState<string | null>(null);
   const [previews, setPreviews] = useState<Record<string, number>>({});
+  const previewsRef = useRef(previews);
+  previewsRef.current = previews;
   // What the engine holds: the in-mix tracks, plus the one being auditioned.
   const heard = useMemo(
     () => tracks.map((track) => (track.id === audition ? { ...track, inMix: true } : track)),
@@ -192,10 +194,30 @@ export function useJamPlayback(
       engine.player.updateStem(track.id, {
         muted: lane.muted || steppedAside,
         solo: lane.solo,
-        gain: (previews[track.id] ?? track.gain) * lane.volume,
+        gain: (previewsRef.current[track.id] ?? track.gain) * lane.volume,
       });
     }
-  }, [engine, heard, tracks, audition, lanes, stemStatus, previews]);
+  }, [engine, heard, tracks, audition, lanes, stemStatus]);
+
+  // A volume being previewed: only the stems whose preview moved (or ended) are
+  // written, so a drag costs one stem per input event, not the whole song.
+  const lanesRef = useRef(lanes);
+  lanesRef.current = lanes;
+  const previewed = useRef<ReadonlySet<string>>(new Set());
+  useEffect(() => {
+    if (!engine) {
+      return;
+    }
+    const moved = new Set([...previewed.current, ...Object.keys(previews)]);
+    previewed.current = new Set(Object.keys(previews));
+    for (const id of moved) {
+      const track = tracksRef.current.find((one) => one.id === id);
+      if (!track || !engine.player.stem(id)) {
+        continue;
+      }
+      engine.player.updateStem(id, { gain: (previews[id] ?? track.gain) * (lanesRef.current[id] ?? DEFAULT_LANE).volume });
+    }
+  }, [engine, previews]);
 
   const toggle = useCallback(() => {
     if (!engine) {
