@@ -1281,12 +1281,23 @@ included) / Prontas.
 **The engine** is one `AVAudioEngine` with one `AVAudioPlayerNode` per stem
 (`JamEngine`). Stems are scheduled as file segments (streamed from disk, never
 decoded whole) at a sample time relative to one host start, with the frames
-computed in `JamAlignment`, the only place the contract's timeline is
-arithmetic: a stem plays `audio[trimStart, length - trimEnd]` starting at
-`offsetMs`, the transport's zero is the earliest start, and a negative offset
-is not special. `renderOffline` runs the same graph with no hardware, which is
-how `JamEngineTests` proves, frame by frame, where each stem's first sample
-lands (a negative offset and both trims, FLAC and WAV, 44.1 kHz against 48).
+computed in `JamAlignment`, the only place a track's numbers are arithmetic:
+the stored file's FIRST sample sits at `offsetMs` and only
+`audio[trimStart, length - trimEnd]` is heard, so a trim hides audio and never
+moves it. That is how the web recorder writes a take (a count-in stays in the
+file, hidden by `trimStartMs`) and how the web player plays it
+(`planSegment`); the header of `jam.ts` words `offsetMs` as "the first PLAYED
+sample", and following that wording put every web take `trimStartMs` early
+(fixed 2026-11-10: two takes a count-in apart sounded seconds apart). The
+transport's zero is the earliest heard sample, and a negative offset is not
+special. `renderOffline` runs the same graph with no hardware, which is how
+`JamEngineTests` proves, frame by frame, where each stem's first sample lands
+(a negative offset and both trims, FLAC and WAV, 44.1 kHz against 48), and how
+`JamWebTakeAlignmentTests` plays three takes made by the web's own FLAC encoder
+with the recorder's numbers (count-in, head and tail trims, one at 44.1 kHz)
+from the top, after a seek and for four minutes, and then live through the
+hardware with a pause and a resume, tapping the mixer: every click within one
+frame (48 kHz stems) or half a millisecond (the 44.1 kHz one).
 Gain (0 to 2) times the person's slider goes through a one-band EQ's
 `globalGain`, because a player node's volume stops at 1.
 
