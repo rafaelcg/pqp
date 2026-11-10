@@ -7538,6 +7538,7 @@
   "jam.studio.countIn": "Count in before starting",
   "jam.studio.video": "Record video too",
   "jam.studio.videoDenied": "Could not open the camera. Recording sound only.",
+  "jam.studio.videoHint": "Your video plays on your track, in place of your photo.",
   "jam.studio.camera": "Your camera",
   "jam.studio.yourLane": "Your track shows up here",
   "jam.studio.record": "Record",

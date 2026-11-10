@@ -359,17 +359,16 @@ export function JamSongPanel({
 
           {adjusting && (
             <div className="mt-3 flex flex-col gap-2">
-              <p className="text-sm font-bold text-text">
-                {t("jam.take.adjustTitle", {
-                  instrument: t(JAM_INSTRUMENT_LOOK[adjusting.instrument].nameKey as MessageKey).toLowerCase(),
-                })}
-              </p>
               <TrackAdjust
                 key={adjusting.id}
                 track={adjusting}
+                title={t("jam.take.adjustTitle", {
+                  instrument: t(JAM_INSTRUMENT_LOOK[adjusting.instrument].nameKey as MessageKey).toLowerCase(),
+                })}
                 band={bandOf(tracks, adjusting.id)}
                 engine={playback.engine}
                 clock={playback.clock}
+                previewGain={playback.previewGain}
                 onDone={() => setAdjustingId(null)}
                 onSave={async (patch) => {
                   const answer = await updateJamTrack(adjusting.id, patch);

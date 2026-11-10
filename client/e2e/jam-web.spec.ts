@@ -30,6 +30,10 @@ const DEV_TOKEN = "dev-local-token";
 const RUN = Date.now().toString(36);
 const HOST = `jamhost${RUN}`;
 const GUEST = `jamguest${RUN}`;
+// The volume and camera specs at the end have accounts of their own: the first
+// pair already creates ten songs in this file, which is the limit for ten minutes.
+const HOST_B = `jamhostb${RUN}`;
+const GUEST_B = `jamguestb${RUN}`;
 /** One bar of four beats at the studio's default 100 BPM. */
 const COUNT_IN_MS = 2400;
 
@@ -95,14 +99,14 @@ interface Seeded {
   uploads: boolean;
 }
 
-async function seed(): Promise<Seeded> {
-  await materialise(HOST);
-  await materialise(GUEST);
-  const { server } = await call<{ server: { id: string } }>(HOST, "POST", "/api/servers", {
+async function seed(host = HOST, guest = GUEST): Promise<Seeded> {
+  await materialise(host);
+  await materialise(guest);
+  const { server } = await call<{ server: { id: string } }>(host, "POST", "/api/servers", {
     name: `Garagem ${Date.now()}`,
   });
-  const { invite } = await call<{ invite: { code: string } }>(HOST, "POST", `/api/servers/${server.id}/invites`, {});
-  await call(GUEST, "POST", `/api/invites/${invite.code}/join`);
+  const { invite } = await call<{ invite: { code: string } }>(host, "POST", `/api/servers/${server.id}/invites`, {});
+  await call(guest, "POST", `/api/invites/${invite.code}/join`);
   // The operator turns Jam on for THIS server only, the way the dashboard does
   // (a per-server override of `jam_channels`). It is off everywhere else, which
   // keeps every other spec's add menus exactly as they were.
@@ -112,11 +116,11 @@ async function seed(): Promise<Seeded> {
     body: JSON.stringify({ key: "jam_channels", serverId: server.id, enabled: true }),
   });
   expect(flip.status).toBe(200);
-  const { channel } = await call<{ channel: { id: string } }>(HOST, "POST", `/api/servers/${server.id}/channels`, {
+  const { channel } = await call<{ channel: { id: string } }>(host, "POST", `/api/servers/${server.id}/channels`, {
     name: "jam",
     type: "jam",
   });
-  const config = await call<{ enabled: boolean; uploads: boolean }>(HOST, "GET", `/api/jam/config?serverId=${server.id}`);
+  const config = await call<{ enabled: boolean; uploads: boolean }>(host, "GET", `/api/jam/config?serverId=${server.id}`);
   expect(config.enabled, "the per-server override turned it on").toBe(true);
   return { serverId: server.id, jamId: channel.id, uploads: config.uploads };
 }
@@ -173,7 +177,7 @@ async function skipTheLatencyCheck(page: Page): Promise<void> {
   }
 }
 
-/** "Teu som": input, count-in, video and the delay card live behind one button. */
+/** "Teu som": input, count-in and the delay card live behind one button (the camera does not: it is on the setup step). */
 async function openSound(page: Page): Promise<void> {
   await page.locator("[data-jam-sound]").click();
   await expect(page.locator("[data-jam-sound-panel]")).toBeVisible();
@@ -396,8 +400,8 @@ async function addTrackApi(who: string, songId: string, instrument: string, note
   return track;
 }
 
-async function tracksOf(songId: string): Promise<(ApiTrack & { instrument: string })[]> {
-  const detail = await call<{ tracks: (ApiTrack & { instrument: string })[] }>(HOST, "GET", `/api/jam-songs/${songId}`);
+async function tracksOf(songId: string, who = HOST): Promise<(ApiTrack & { instrument: string })[]> {
+  const detail = await call<{ tracks: (ApiTrack & { instrument: string })[] }>(who, "GET", `/api/jam-songs/${songId}`);
   return detail.tracks;
 }
 
@@ -619,4 +623,331 @@ test("a song deleted under an open panel is said, and under a recording the take
   expect(list.songs[0]?.title).toBe("Vai sumir 2");
   expect(list.songs[0]?.trackCount).toBe(1);
   await guest.context().close();
+});
+
+// ---------------------------------------------------------------------------
+// One track's volume is one track's volume.
+
+/**
+ * A probe on the page's Web Audio graph. Every GainNode a stem plays through is
+ * found by what feeds it (a buffer source whose buffer is N seconds long), gets
+ * an analyser hung off its output, and is read back by that duration: so a test
+ * can say what each track's gain IS and how loud each track actually comes out,
+ * not what a screen says. Added before any page script runs.
+ */
+function installAudioProbe(): void {
+  type Tapped = GainNode & { __tap?: { seconds: number; analyser: AnalyserNode; peak: number } };
+  const taps: Tapped[] = [];
+  const connect = AudioNode.prototype.connect as (this: AudioNode, ...args: unknown[]) => unknown;
+  (AudioNode.prototype as unknown as { connect: unknown }).connect = function (this: AudioNode, ...args: unknown[]) {
+    const [to] = args;
+    if (this instanceof AudioBufferSourceNode && to instanceof GainNode && this.buffer && !(to as Tapped).__tap) {
+      const analyser = to.context.createAnalyser();
+      analyser.fftSize = 2048;
+      connect.call(to, analyser);
+      (to as Tapped).__tap = { seconds: Math.round(this.buffer.duration), analyser, peak: 0 };
+      taps.push(to as Tapped);
+    }
+    return connect.apply(this, args);
+  };
+  const scratch = new Float32Array(2048);
+  setInterval(() => {
+    for (const node of taps) {
+      const tap = node.__tap!;
+      tap.analyser.getFloatTimeDomainData(scratch);
+      for (const sample of scratch) {
+        tap.peak = Math.max(tap.peak, Math.abs(sample));
+      }
+    }
+  }, 20);
+  Object.assign(window, {
+    __probeReset: () => {
+      for (const node of taps) node.__tap!.peak = 0;
+    },
+    __probeRead: () =>
+      taps.map((node) => ({ seconds: node.__tap!.seconds, gain: node.gain.value, peak: node.__tap!.peak })),
+  });
+}
+
+interface ProbeRow {
+  seconds: number;
+  gain: number;
+  peak: number;
+}
+
+/** Plays the song for a moment and reports each stem's gain and the loudest sample it put out. */
+async function listen(page: Page, ms = 1300): Promise<Record<number, ProbeRow>> {
+  const play = page.locator("[data-jam-song] [data-jam-play]");
+  await expect(play).toBeEnabled({ timeout: 20_000 });
+  await page.evaluate(() => (window as unknown as { __probeReset: () => void }).__probeReset());
+  if ((await play.getAttribute("data-state")) !== "playing") {
+    await play.click();
+  }
+  await page.waitForTimeout(ms);
+  const rows = await page.evaluate(() => (window as unknown as { __probeRead: () => ProbeRow[] }).__probeRead());
+  await play.click(); // pause
+  await expect(play).toHaveAttribute("data-state", "paused");
+  // the newest node of a duration wins: a stem reloaded after a change replaces its old node
+  const bySeconds: Record<number, ProbeRow> = {};
+  for (const row of rows) bySeconds[row.seconds] = row;
+  return bySeconds;
+}
+
+/** PR screenshots: only when `JAM_SHOTS` names a folder, so an ordinary run writes nothing. */
+async function shot(page: Page, name: string): Promise<void> {
+  const dir = process.env.JAM_SHOTS;
+  if (dir) {
+    await page.screenshot({ path: `${dir}/${name}.png` });
+  }
+}
+
+/** Click a Radix slider at a fraction of its width, with the real mouse. */
+async function clickSliderAt(page: Page, slider: ReturnType<Page["locator"]>, fraction: number): Promise<void> {
+  const root = slider.locator("xpath=ancestor::*[@data-slider][1]");
+  await root.scrollIntoViewIfNeeded();
+  // the editor scrolls itself into view smoothly: click only once it stopped moving
+  let box = (await root.boundingBox())!;
+  for (let settled = 0; settled < 3; ) {
+    await page.waitForTimeout(120);
+    const next = (await root.boundingBox())!;
+    settled = next.x === box.x && next.y === box.y ? settled + 1 : 0;
+    box = next;
+  }
+  await page.mouse.click(box.x + box.width * fraction, box.y + box.height / 2);
+}
+
+test("changing the volume of one of a song's tracks changes that track and no other", async ({ browser }) => {
+  const seeded = await seed(HOST_B, GUEST_B);
+  test.skip(!seeded.uploads, "needs object storage (S3_*): GET /api/jam/config answered uploads:false");
+  const songId = await makeSong(HOST_B, seeded.jamId, "Duas faixas minhas");
+  // Both recorded by the same person, different lengths so each is told apart on the audio graph.
+  const guitar = await addTrackApi(HOST_B, songId, "guitar", 196, 4);
+  const drums = await addTrackApi(HOST_B, songId, "drums", 98, 6);
+  const GUITAR = 4;
+  const DRUMS = 6;
+
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: "dark" });
+  const host = await context.newPage();
+  await host.addInitScript((value) => localStorage.setItem("pqp:dev-user-suffix", value), HOST_B);
+  await host.addInitScript(installAudioProbe);
+  await host.goto(`/app/server/${seeded.serverId}/channel/${seeded.jamId}/song/${songId}?lang=en`);
+  await expect(host.locator("[data-jam-track]")).toHaveCount(2, { timeout: 20_000 });
+
+  const before = await listen(host);
+  await shot(host, "volume-1-two-tracks-before");
+  expect(before[GUITAR]?.gain).toBeCloseTo(1, 2);
+  expect(before[DRUMS]?.gain).toBeCloseTo(1, 2);
+  expect(before[GUITAR]!.peak).toBeGreaterThan(0.05);
+  expect(before[DRUMS]!.peak).toBeGreaterThan(0.05);
+  // what the lanes show: two takes at their recorded level, no volume chip on either
+  const guitarLane = host.locator(`[data-jam-track="${guitar.id}"]`);
+  const drumsLane = host.locator(`[data-jam-track="${drums.id}"]`);
+  await expect(host.locator("[data-jam-gain]")).toHaveCount(0);
+  const tallest = (lane: ReturnType<Page["locator"]>) =>
+    lane.evaluate((element) =>
+      Math.max(...[...element.querySelectorAll<HTMLElement>("span[style*='--jam-b']")].map((bar) => parseFloat(bar.style.height))),
+    );
+  const barsBefore = { guitar: await tallest(guitarLane), drums: await tallest(drumsLane) };
+
+  // ---- while dragging: the guitar goes down to about a quarter -------------------
+  await host.locator(`[data-jam-adjust-open="${guitar.id}"]`).click();
+  const adjust = host.locator(`[data-jam-adjust="${guitar.id}"]`);
+  await expect(adjust).toBeVisible();
+  await clickSliderAt(host, adjust.getByRole("slider", { name: "Take volume" }), 0.125);
+  const heard = await listen(host);
+  await shot(host, "volume-2-guitar-turned-down");
+  test.info().annotations.push({ type: "volume probe", description: JSON.stringify({ before, heard }) });
+  expect(heard[GUITAR]!.gain, "the adjusted track follows the slider").toBeCloseTo(0.25, 1);
+  expect(heard[DRUMS]!.gain, "the other track's gain is untouched").toBeCloseTo(1, 2);
+  expect(heard[GUITAR]!.peak, "the adjusted track is quieter on the audio").toBeLessThan(before[GUITAR]!.peak * 0.5);
+  expect(heard[DRUMS]!.peak, "the other track is as loud as it was").toBeGreaterThan(before[DRUMS]!.peak * 0.9);
+  expect(heard[DRUMS]!.peak).toBeLessThan(before[DRUMS]!.peak * 1.1);
+
+  // ---- saved: one track id, one gain -------------------------------------------------
+  const writes: { url: string; body: string }[] = [];
+  host.on("request", (request) => {
+    if (request.method() === "PATCH" && request.url().includes("/api/jam-tracks/")) {
+      writes.push({ url: request.url(), body: request.postData() ?? "" });
+    }
+  });
+  await adjust.locator("[data-jam-adjust-save]").click();
+  await expect.poll(async () => (await tracksOf(songId, HOST_B)).find((t) => t.id === guitar.id)?.gain).toBeCloseTo(0.25, 1);
+  expect(writes, "one write").toHaveLength(1);
+  expect(writes[0]!.url.endsWith(`/api/jam-tracks/${guitar.id}`)).toBe(true);
+  expect(Object.keys(JSON.parse(writes[0]!.body))).toEqual(["gain"]);
+  expect((await tracksOf(songId, HOST_B)).find((t) => t.id === drums.id)?.gain, "the other track is stored as it was").toBe(1);
+
+  // ---- after save: what is shown and what is heard ---------------------------------
+  await expect(adjust).toHaveCount(0);
+  // the guitar's own lane says so (a chip and shorter bars); the drums' lane is as it was
+  await expect(guitarLane.locator("[data-jam-gain]")).toHaveText("-75%");
+  await expect(drumsLane.locator("[data-jam-gain]")).toHaveCount(0);
+  expect(await tallest(guitarLane), "the turned-down lane is drawn lower").toBeLessThan(barsBefore.guitar * 0.6);
+  expect(await tallest(drumsLane), "the untouched lane is drawn as it was").toBe(barsBefore.drums);
+  const saved = await listen(host);
+  await shot(host, "volume-3-saved");
+  test.info().annotations.push({ type: "volume probe saved", description: JSON.stringify(saved) });
+  expect(saved[GUITAR]!.gain).toBeCloseTo(0.25, 1);
+  expect(saved[DRUMS]!.gain).toBeCloseTo(1, 2);
+  expect(saved[DRUMS]!.peak).toBeGreaterThan(before[DRUMS]!.peak * 0.9);
+
+  // ---- closed and opened again, from the wall -----------------------------------------
+  await host.getByRole("button", { name: "Close", exact: true }).first().click();
+  await expect(host.locator("[data-jam-song]")).toHaveCount(0);
+  await host.locator("[data-jam-tile]").first().click();
+  await expect(host.locator("[data-jam-track]")).toHaveCount(2, { timeout: 20_000 });
+  const reopened = await listen(host);
+  expect(reopened[GUITAR]!.gain).toBeCloseTo(0.25, 1);
+  expect(reopened[DRUMS]!.gain).toBeCloseTo(1, 2);
+  expect(reopened[GUITAR]!.peak).toBeLessThan(before[GUITAR]!.peak * 0.5);
+  expect(reopened[DRUMS]!.peak).toBeGreaterThan(before[DRUMS]!.peak * 0.9);
+  await context.close();
+});
+
+test("the camera is on the setup step, one tap from recording with video, and the take keeps its video", async ({ browser }) => {
+  const seeded = await seed(HOST_B, GUEST_B);
+  test.skip(!seeded.uploads, "needs object storage (S3_*): GET /api/jam/config answered uploads:false");
+  const songId = await makeSong(HOST_B, seeded.jamId, "Com vídeo");
+  const guest = await openAs(browser, GUEST_B, `/app/server/${seeded.serverId}/channel/${seeded.jamId}/song/${songId}`);
+  await guest.locator("[data-jam-record-over]").click();
+  await expect(guest.locator('[data-jam-studio][data-phase="setup"]')).toBeVisible({ timeout: 20_000 });
+  await skipTheLatencyCheck(guest);
+
+  // visible as the studio opens: not behind "Your sound", not in a closed section
+  const video = guest.locator("[data-jam-video]").getByRole("switch", { name: "Record video too" });
+  await expect(video).toBeVisible();
+  await expect(guest.locator("[data-jam-sound-panel]")).toHaveCount(0);
+  await expect(video).toHaveAttribute("aria-checked", "false");
+  await expect(guest.locator("[data-jam-studio] video")).toHaveCount(0);
+  await shot(guest, "camera-1-switch-on-the-setup-step");
+
+  // one tap turns the camera on, and the person sees themselves before recording
+  await video.click();
+  await expect(video).toHaveAttribute("aria-checked", "true");
+  const preview = guest.locator('[data-jam-studio] video[aria-label="Your camera"]');
+  await expect(preview).toBeVisible({ timeout: 15_000 });
+  await expect
+    .poll(() => preview.evaluate((element: HTMLVideoElement) => element.srcObject !== null && element.videoWidth > 0))
+    .toBe(true);
+  await shot(guest, "camera-2-camera-on-before-recording");
+
+  await recordAndStop(guest, 3);
+  await expect(guest.locator('[data-jam-studio][data-phase="review"]')).toBeVisible({ timeout: 20_000 });
+  // the take on review plays its own recorded video, not the live camera
+  await expect(guest.locator('[data-jam-studio] video[aria-label="Your camera"][src]')).toBeVisible({ timeout: 15_000 });
+  await shot(guest, "camera-3-take-with-video-on-review");
+  await guest.locator("[data-jam-post]").click();
+  await expect(guest.locator("[data-jam-done]")).toBeVisible({ timeout: 60_000 });
+
+  const detail = await call<{ tracks: { authorId: string; videoUrl: string | null }[] }>(HOST_B, "GET", `/api/jam-songs/${songId}`);
+  expect(detail.tracks).toHaveLength(1);
+  expect(detail.tracks[0]!.videoUrl, "the posted take has a video").toBeTruthy();
+  await guest.context().close();
+});
+
+test("a volume being adjusted keeps playing as the editor says while the lanes around it are muted and unmuted", async ({ browser }) => {
+  const seeded = await seed(HOST_B, GUEST_B);
+  test.skip(!seeded.uploads, "needs object storage (S3_*): GET /api/jam/config answered uploads:false");
+  const songId = await makeSong(HOST_B, seeded.jamId, "Mexendo no mix");
+  const guitar = await addTrackApi(HOST_B, songId, "guitar", 196, 4);
+  const drums = await addTrackApi(HOST_B, songId, "drums", 98, 6);
+  const GUITAR = 4;
+  const DRUMS = 6;
+
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: "dark" });
+  const host = await context.newPage();
+  await host.addInitScript((value) => localStorage.setItem("pqp:dev-user-suffix", value), HOST_B);
+  await host.addInitScript(installAudioProbe);
+  await host.goto(`/app/server/${seeded.serverId}/channel/${seeded.jamId}/song/${songId}?lang=en`);
+  await expect(host.locator("[data-jam-track]")).toHaveCount(2, { timeout: 20_000 });
+  await listen(host); // the stems are loaded and wired
+
+  await host.locator(`[data-jam-adjust-open="${guitar.id}"]`).click();
+  const adjust = host.locator(`[data-jam-adjust="${guitar.id}"]`);
+  await clickSliderAt(host, adjust.getByRole("slider", { name: "Take volume" }), 0.125);
+  await expect(adjust).toContainText("-75%");
+
+  // somebody mutes the drums and brings them back: the guitar's unsaved volume is still what plays
+  const drumsLane = host.locator(`[data-jam-track="${drums.id}"]`);
+  await drumsLane.locator("[data-jam-mute]").click();
+  await drumsLane.locator("[data-jam-mute]").click();
+  const heard = await listen(host);
+  expect(heard[DRUMS]!.gain).toBeCloseTo(1, 2);
+  expect(heard[GUITAR]!.gain, "the preview is what the editor says, not the stored volume").toBeCloseTo(0.25, 1);
+  await context.close();
+});
+
+test("two takes recorded by the same person in the studio: turning one down leaves the other as recorded", async ({ browser }) => {
+  const seeded = await seed(HOST_B, GUEST_B);
+  test.skip(!seeded.uploads, "needs object storage (S3_*): GET /api/jam/config answered uploads:false");
+  const context = await browser.newContext({
+    viewport: { width: 1440, height: 900 },
+    colorScheme: "dark",
+    permissions: ["microphone", "camera"],
+  });
+  const host = await context.newPage();
+  await host.addInitScript((value) => localStorage.setItem("pqp:dev-user-suffix", value), HOST_B);
+  await host.addInitScript(installAudioProbe);
+  await host.goto(`/app/server/${seeded.serverId}/channel/${seeded.jamId}?lang=en`);
+  await expect(host.getByText("Dev auth bypass")).toBeVisible({ timeout: 20_000 });
+  await expect(host.locator("[data-jam-empty]")).toBeVisible({ timeout: 20_000 });
+
+  // ---- take one: a short guitar, started from the empty wall -------------------------
+  await host.locator("[data-jam-empty-record]").click();
+  await host.locator("[data-jam-start-title]").fill("Duas minhas");
+  await host.locator("[data-jam-start-go]").click();
+  await expect(host.locator('[data-jam-studio][data-phase="setup"]')).toBeVisible({ timeout: 20_000 });
+  await skipTheLatencyCheck(host);
+  await host.locator('[data-jam-instrument="guitar"]').click();
+  await shot(host, "studio-1-setup-with-camera-switch");
+  await recordAndStop(host, 3);
+  await expect(host.locator('[data-jam-studio][data-phase="review"]')).toBeVisible({ timeout: 20_000 });
+  await host.locator("[data-jam-post]").click();
+  await expect(host.locator("[data-jam-done]")).toBeVisible({ timeout: 60_000 });
+  await host.locator("[data-jam-done-action]").click();
+  await expect(host.locator("[data-jam-track]")).toHaveCount(1);
+
+  // ---- take two: a longer bass over it, by the same person ---------------------------
+  await host.locator("[data-jam-record-over]").click();
+  await expect(host.locator('[data-jam-studio][data-phase="setup"]')).toBeVisible({ timeout: 20_000 });
+  await host.locator('[data-jam-instrument="bass"]').click();
+  await recordAndStop(host, 6);
+  await expect(host.locator('[data-jam-studio][data-phase="review"]')).toBeVisible({ timeout: 20_000 });
+  await host.locator("[data-jam-post]").click();
+  await expect(host.locator("[data-jam-done]")).toBeVisible({ timeout: 60_000 });
+  await host.locator("[data-jam-done-action]").click();
+  await expect(host.locator("[data-jam-track]")).toHaveCount(2, { timeout: 20_000 });
+
+  const { songs } = await call<{ songs: { id: string }[] }>(HOST_B, "GET", `/api/channels/${seeded.jamId}/jam-songs`);
+  const songId = songs[0]!.id;
+  const [first, second] = (await tracksOf(songId, HOST_B)).sort((a, b) => a.durationMs - b.durationMs);
+  expect(first!.authorId).toBe(second!.authorId);
+  expect(first!.gain).toBe(1);
+  expect(second!.gain).toBe(1);
+
+  const before = await listen(host);
+  // (the count-in's click is a buffer under a second long: not a take)
+  const takesOnly = (all: Record<number, ProbeRow>) => Object.values(all).filter((row) => row.seconds >= 2).sort((a, b) => a.seconds - b.seconds);
+  const rows = takesOnly(before);
+  expect(rows, "two stems on the graph").toHaveLength(2);
+
+  // ---- turn the short one (the first take) down; the second is untouched ------------------
+  await host.locator(`[data-jam-adjust-open="${first!.id}"]`).click();
+  const adjust = host.locator(`[data-jam-adjust="${first!.id}"]`);
+  await expect(adjust).toBeVisible();
+  await clickSliderAt(host, adjust.getByRole("slider", { name: "Take volume" }), 0.25);
+  const heard = await listen(host);
+  await shot(host, "studio-2-two-takes-first-turned-down");
+  const now = takesOnly(heard);
+  test.info().annotations.push({ type: "two takes probe", description: JSON.stringify({ before: rows, heard: now }) });
+  expect(now[0]!.gain).toBeCloseTo(0.5, 1);
+  expect(now[1]!.gain).toBeCloseTo(1, 2);
+  expect(now[1]!.peak, "the second take is as loud as it was").toBeGreaterThan(rows[1]!.peak * 0.8);
+  await adjust.locator("[data-jam-adjust-save]").click();
+  await expect(adjust).toHaveCount(0);
+  await expect
+    .poll(async () => (await tracksOf(songId, HOST_B)).sort((a, b) => a.durationMs - b.durationMs).map((t) => t.gain))
+    .toEqual([0.5, 1]);
+  await shot(host, "studio-3-saved-lanes");
+  await context.close();
 });
