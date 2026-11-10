@@ -625,4 +625,30 @@ describeDb("initDb on a real Postgres", () => {
       client.release();
     }
   });
+
+  it("the jam song nonce index covers live songs only, and a database with the first version is migrated", async () => {
+    const indexes = async () =>
+      (
+        await getPool().query<{ indexname: string; indexdef: string }>(
+          `SELECT indexname, indexdef FROM pg_indexes
+            WHERE tablename = 'jam_songs' AND indexname LIKE 'idx_jam_songs_nonce%'`,
+        )
+      ).rows;
+    // The state of a database that ran the first version of the schema: the
+    // full unique index, which also covered soft-deleted songs.
+    await getPool().query(`
+      DROP INDEX IF EXISTS idx_jam_songs_nonce_live;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_jam_songs_nonce
+        ON jam_songs (channel_id, author_id, client_nonce) WHERE client_nonce IS NOT NULL;`);
+    expect((await indexes()).map((row) => row.indexname)).toEqual(["idx_jam_songs_nonce"]);
+
+    await initDb({ mode: "always" });
+    const after = await indexes();
+    expect(after.map((row) => row.indexname)).toEqual(["idx_jam_songs_nonce_live"]);
+    expect(after[0]!.indexdef).toContain("UNIQUE");
+    expect(after[0]!.indexdef).toContain("deleted_at IS NULL");
+    // Idempotent: a second boot changes nothing.
+    await initDb({ mode: "always" });
+    expect((await indexes()).map((row) => row.indexname)).toEqual(["idx_jam_songs_nonce_live"]);
+  });
 });

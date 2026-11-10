@@ -2963,7 +2963,7 @@ describe("lobby presence sounds", () => {
     expect(voice.getState().notice).toMatch(/microphone/i);
   });
 
-  it("joins listen-only when the machine has no microphone at all, and cannot unmute", async () => {
+  it("joins listen-only when the machine has no microphone at all, and the unmute asks again", async () => {
     // 2026-09-05: a streamer's watch party lost people on phones that had not
     // granted the mic and laptops without one. Nobody there needed to talk.
     const missing = Object.assign(new Error("Requested device not found"), {
@@ -2994,9 +2994,16 @@ describe("lobby presence sounds", () => {
     expect(voice.getState().isTransmitting).toBe(false);
     expect(voice.getState().notice).toMatch(/microphone/i);
 
-    // No pipeline, so unmuting is a no-op rather than a crash.
+    // Still no microphone on the machine: an unmute asks again (see
+    // use-voice-listen-only-unmute.test.ts), the join says why it still
+    // cannot, and the seat lands listen-only again rather than crashing.
     voice.toggleMute();
+    await settle();
+    voice.handleSignaling(welcome("mesh"));
+    await settle();
     expect(voice.getState().isMuted).toBe(true);
+    expect(voice.getState().error).toBeNull();
+    expect(voice.getState().notice).toMatch(/microphone/i);
   });
 
   it("audio self-repair: a listen-only call offers to fix the mic, and the tap tries the microphone again", async () => {

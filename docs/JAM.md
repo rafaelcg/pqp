@@ -91,6 +91,27 @@ audio downloaded. The server stores what the recorder sends, bounded and clamped
 and never decodes audio. The song's `mixDurationMs` is the latest end of an
 `inMix` track minus the earliest start. Full definitions: the header of `jam.ts`.
 
+### The preview on a song summary
+
+The list, the detail and every song frame carry the same `JamSongSummary`,
+computed by one query, so a wall of songs draws its tiles without a detail
+request per song. Beyond the counts, it carries (all additive, with defaults, so
+an older client ignores them and a client on an older server sees the empty
+value):
+
+| Field | Meaning |
+|---|---|
+| `previewPeaks` | at most 64 values in 0..1: the `peaks` of the `inMix` track with the most signal (the largest sum), each bucket reduced to its loudest value. The loudest single stem, not the mix; empty when no `inMix` track has peaks. |
+| `hasVideo` | at least one live track has a video |
+| `contributors` | up to 4 people with a live track, in the order of their first track: `{ id, name, avatarUrl }`, named as the server names them (nickname first). `contributorCount` is the full number. |
+| `missingInstruments` | for a `wanted` song, the wanted instruments nobody has a live track for yet; empty in every other mode |
+
+The three lookups are lateral joins on `idx_jam_tracks_song`, one probe per song
+on the page, never a query per song. Measured with `EXPLAIN (ANALYZE)` on a
+26-song page where every song has 8 live tracks of 400 peaks: about 9 to 17 ms,
+against about 3 to 8 ms without the preview; the extra cost is summing the peaks
+of the in-mix tracks, done inside the database so no peak crosses the wire.
+
 ## Routes
 
 All authenticated like the rest of `/api`.
@@ -99,7 +120,7 @@ All authenticated like the rest of `/api`.
 |---|---|---|
 | `GET /api/jam/config?serverId=` | `{ enabled, uploads }` | any signed-in account |
 | `GET /api/channels/:channelId/jam-songs` | `{ songs, nextCursor }` | can see the channel |
-| `POST /api/channels/:channelId/jam-songs` | 201 `{ song }`, 200 on a nonce retry | can post, flag on |
+| `POST /api/channels/:channelId/jam-songs` | 201 `{ song }`, 200 on a nonce retry of a live song | can post, flag on |
 | `GET /api/jam-songs/:songId` | `{ song, tracks, viewer }` | can see the channel |
 | `PATCH /api/jam-songs/:songId` | `{ song }` | the song's author or a moderator, flag on |
 | `DELETE /api/jam-songs/:songId` | 204 | the song's author or a moderator |
@@ -129,6 +150,16 @@ Other tokens: `jam_song_closed`, `jam_instrument_not_wanted` (403),
 `jam_wanted_needs_instruments`, `jam_upload_not_verified` (422),
 `jam_upload_unknown` (404), `jam_upload_too_large` (413), `jam_storage_off`
 (503), `jam_rate_limited` (429). A timed-out member takes no part in any write.
+
+**Retry keys.** A song's `nonce` makes a retried create return the same *live*
+song (200). A deleted song's nonce is free: reusing it creates a new song (201),
+because the unique index is partial on live rows (`idx_jam_songs_nonce_live`; the
+first version of the index also covered deleted songs and a reuse answered 500).
+Two creates racing on one nonce resolve to the winner's song; a constraint
+violation never reaches the client as a 500 (`jam_nonce_conflict`, 409, is the
+unreachable last resort). A track claim's key is its `audioUploadId`: a retry
+returns the same track (200), and a retry whose track was since deleted is 404
+`jam_upload_unknown`, the upload being spent.
 
 Limits: 32 live tracks per song, 8 per person per song, 10 new songs and 30
 upload tickets per person per 10 minutes (cluster-wide).

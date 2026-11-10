@@ -7,6 +7,8 @@ import {
   JAM_MAX_TRACKS_PER_AUTHOR,
   JAM_MAX_TRACKS_PER_SONG,
   JAM_PAGE_SIZE,
+  JAM_PREVIEW_CONTRIBUTORS_MAX,
+  JAM_PREVIEW_PEAKS_MAX,
   JAM_SONGS_PER_WINDOW,
   JAM_UPLOADS_PER_WINDOW,
   JAM_VIDEO_CONTENT_TYPES,
@@ -195,6 +197,9 @@ interface SongSummaryRow extends JamSongRow {
   contributor_count: number;
   mix_start: number | null;
   mix_end: number | null;
+  has_video: boolean | null;
+  preview_peaks: number[] | null;
+  contributors: Array<{ id: string; name: string | null; avatarUrl: string | null }> | null;
   created_cursor: string;
   updated_cursor: string;
 }
@@ -210,7 +215,8 @@ const SUMMARY_SELECT = `
          COALESCE(NULLIF(sm.nickname, ''), u.display_name) AS author_name,
          u.avatar_url AS author_avatar_url,
          agg.track_count, agg.instruments, agg.contributor_count,
-         agg.mix_start, agg.mix_end,
+         agg.mix_start, agg.mix_end, agg.has_video,
+         prev.preview_peaks, contrib.contributors,
          -- The keyset cursor carries the timestamps at full microsecond
          -- precision: a JS Date keeps milliseconds, and two songs written in
          -- one millisecond would otherwise straddle a page boundary and one
@@ -226,12 +232,64 @@ const SUMMARY_SELECT = `
              COUNT(DISTINCT t.author_id)::int AS contributor_count,
              MIN(t.offset_ms) FILTER (WHERE t.in_mix) AS mix_start,
              MAX(t.offset_ms + t.duration_ms - t.trim_start_ms - t.trim_end_ms)
-               FILTER (WHERE t.in_mix) AS mix_end
+               FILTER (WHERE t.in_mix) AS mix_end,
+             BOOL_OR(t.video_key IS NOT NULL) AS has_video
         FROM jam_tracks t
        WHERE t.song_id = s.id AND t.deleted_at IS NULL
-    ) agg ON TRUE`;
+    ) agg ON TRUE
+    -- The preview waveform: the in-mix track with the most signal. The sum runs
+    -- over at most 32 tracks x 400 numbers per song, on the rows the aggregate
+    -- above already reads from the same index, and never leaves the database.
+    LEFT JOIN LATERAL (
+      SELECT t.peaks AS preview_peaks
+        FROM jam_tracks t
+       WHERE t.song_id = s.id AND t.deleted_at IS NULL AND t.in_mix
+         AND jsonb_array_length(t.peaks) > 0
+       ORDER BY (SELECT COALESCE(SUM(v::float8), 0) FROM jsonb_array_elements_text(t.peaks) v) DESC,
+                t.created_at, t.id
+       LIMIT 1
+    ) prev ON TRUE
+    -- The first people to add a track, named as the server names them.
+    LEFT JOIN LATERAL (
+      SELECT jsonb_agg(
+               jsonb_build_object('id', c.author_id, 'name', c.name, 'avatarUrl', c.avatar)
+               ORDER BY c.first_at, c.author_id) AS contributors
+        FROM (
+          SELECT t.author_id, MIN(t.created_at) AS first_at,
+                 COALESCE(NULLIF(MAX(sm2.nickname), ''), MAX(u2.display_name)) AS name,
+                 MAX(u2.avatar_url) AS avatar
+            FROM jam_tracks t
+            JOIN users u2 ON u2.id = t.author_id
+            LEFT JOIN server_members sm2 ON sm2.server_id = s.server_id AND sm2.user_id = t.author_id
+           WHERE t.song_id = s.id AND t.deleted_at IS NULL
+           GROUP BY t.author_id
+           ORDER BY MIN(t.created_at), t.author_id
+           LIMIT ${JAM_PREVIEW_CONTRIBUTORS_MAX}
+        ) c
+    ) contrib ON TRUE`;
+
+/**
+ * At most `JAM_PREVIEW_PEAKS_MAX` values: the loudest value of each bucket, so a
+ * short transient survives the reduction. Values are clamped to 0..1 (the
+ * column holds what the recorder sent, already bounded, but a reader should not
+ * have to trust that).
+ */
+export function reducePeaks(peaks: readonly number[], max = JAM_PREVIEW_PEAKS_MAX): number[] {
+  const clean = peaks.map((value) => (Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0));
+  if (clean.length <= max) {
+    return clean;
+  }
+  const out: number[] = [];
+  for (let bucket = 0; bucket < max; bucket += 1) {
+    const from = Math.floor((bucket * clean.length) / max);
+    const to = Math.max(from + 1, Math.floor(((bucket + 1) * clean.length) / max));
+    out.push(Math.max(...clean.slice(from, to)));
+  }
+  return out;
+}
 
 function mapSong(row: SongSummaryRow): JamSongSummary {
+  const present = new Set(row.instruments ?? []);
   return {
     id: row.id,
     channelId: row.channel_id,
@@ -252,6 +310,17 @@ function mapSong(row: SongSummaryRow): JamSongSummary {
       row.mix_start === null || row.mix_end === null || row.mix_start === undefined
         ? null
         : Math.max(0, row.mix_end - row.mix_start),
+    previewPeaks: row.preview_peaks ? reducePeaks(row.preview_peaks) : [],
+    hasVideo: row.has_video === true,
+    contributors: (row.contributors ?? []).map((one) => ({
+      id: one.id,
+      name: one.name,
+      avatarUrl: one.avatarUrl,
+    })),
+    missingInstruments:
+      row.join_mode === "wanted"
+        ? sortInstruments(row.wanted_instruments.filter((one) => !present.has(one)))
+        : [],
   };
 }
 
@@ -470,8 +539,30 @@ const FOLD_SQL = (expression: string): string =>
 // ----------------------------------------------------------- songs: write
 
 /**
- * Create a song. A retried POST with the same nonce returns the song it made
- * (`created: false`) and spends no rate-limit token.
+ * The live song a person already made in a channel with this nonce, or null.
+ * A DELETED song's nonce is free again (the unique index is partial on live
+ * rows), so a deleted song is neither returned nor in the way.
+ */
+async function songForNonce(
+  channelId: string,
+  authorId: string,
+  nonce: string,
+): Promise<JamSongSummary | null> {
+  const existing = await getPool().query<{ id: string }>(
+    `SELECT id FROM jam_songs
+      WHERE channel_id = $1 AND author_id = $2 AND client_nonce = $3 AND deleted_at IS NULL`,
+    [channelId, authorId, nonce],
+  );
+  return existing.rows[0] ? getJamSongSummary(existing.rows[0].id) : null;
+}
+
+/**
+ * Create a song. A retried POST with the same nonce returns the LIVE song it
+ * made (`created: false`) and spends no rate-limit token. A nonce whose song
+ * was deleted is free: the create makes a new song. A constraint is never an
+ * error to the caller: two creates racing on one nonce resolve to the
+ * winner's song, and the rare loser whose winner was deleted before it could
+ * read it inserts once more.
  */
 export async function createJamSong(input: {
   channelId: string;
@@ -481,15 +572,9 @@ export async function createJamSong(input: {
 }): Promise<{ song: JamSongSummary; created: boolean }> {
   const { channelId, serverId, authorId, request } = input;
   if (request.nonce) {
-    const existing = await getPool().query<{ id: string }>(
-      `SELECT id FROM jam_songs WHERE channel_id = $1 AND author_id = $2 AND client_nonce = $3`,
-      [channelId, authorId, request.nonce],
-    );
-    if (existing.rows[0]) {
-      const song = await getJamSongSummary(existing.rows[0].id);
-      if (song) {
-        return { song, created: false };
-      }
+    const existing = await songForNonce(channelId, authorId, request.nonce);
+    if (existing) {
+      return { song: existing, created: false };
     }
   }
   if (!(await sharedRateLimit(SONG_BUCKET, authorId))) {
@@ -497,41 +582,42 @@ export async function createJamSong(input: {
   }
   const joinMode = request.joinMode ?? "open";
   const wanted = joinMode === "wanted" ? (request.wantedInstruments ?? []) : [];
-  let id: string;
-  try {
-    const result = await getPool().query<{ id: string }>(
-      `INSERT INTO jam_songs
-         (channel_id, server_id, author_id, title, artist, join_mode, wanted_instruments, client_nonce)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::text[], $8)
-       RETURNING id`,
-      [
-        channelId,
-        serverId,
-        authorId,
-        request.title,
-        request.artist ?? null,
-        joinMode,
-        wanted,
-        request.nonce ?? null,
-      ],
-    );
-    id = result.rows[0]!.id;
-  } catch (error) {
-    // Two requests with one nonce raced: the loser reads the winner's song.
-    if ((error as { code?: string }).code === "23505" && request.nonce) {
-      const existing = await getPool().query<{ id: string }>(
-        `SELECT id FROM jam_songs WHERE channel_id = $1 AND author_id = $2 AND client_nonce = $3`,
-        [channelId, authorId, request.nonce],
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      const result = await getPool().query<{ id: string }>(
+        `INSERT INTO jam_songs
+           (channel_id, server_id, author_id, title, artist, join_mode, wanted_instruments, client_nonce)
+         VALUES ($1, $2, $3, $4, $5, $6, $7::text[], $8)
+         RETURNING id`,
+        [
+          channelId,
+          serverId,
+          authorId,
+          request.title,
+          request.artist ?? null,
+          joinMode,
+          wanted,
+          request.nonce ?? null,
+        ],
       );
-      const song = existing.rows[0] ? await getJamSongSummary(existing.rows[0].id) : null;
-      if (song) {
-        return { song, created: false };
+      return { song: await requireSummary(result.rows[0]!.id), created: true };
+    } catch (error) {
+      // Two requests with one nonce raced: the loser reads the winner's song.
+      if ((error as { code?: string }).code === "23505" && request.nonce) {
+        const existing = await songForNonce(channelId, authorId, request.nonce);
+        if (existing) {
+          return { song: existing, created: false };
+        }
+        // The winner was deleted between the two statements: the nonce is free
+        // again, so insert once more. A second miss is a 409, never a 500.
+        if (attempt === 0) {
+          continue;
+        }
+        throw new HttpError(409, JAM_ERRORS.nonceConflict);
       }
+      throw error;
     }
-    throw error;
   }
-  const song = await getJamSongSummary(id);
-  return { song: song!, created: true };
 }
 
 /**
@@ -774,17 +860,28 @@ export interface AddTrackInput {
  *     `UPDATE ... WHERE claimed_at IS NULL` that must touch every row it was
  *     given, or two racing claims cannot both win) and the track inserted.
  */
+/** Internal: this request's claim was already made by an earlier request. */
+class ClaimAlreadyMade extends Error {}
+
 export async function addJamTrack(
   input: AddTrackInput,
 ): Promise<{ track: JamTrack; song: JamSongSummary; created: boolean }> {
   const { song, userId, request } = input;
 
-  const retry = await findClaimedTrack(request.audioUploadId, userId, song.id);
+  // The answer for a claim that already made its track: the same track, 200.
+  // Asked at every point a retry can find out it is one (below), because the
+  // first claim can commit at any moment between two of them.
+  const alreadyClaimed = async () => {
+    const id = await findClaimedTrack(request.audioUploadId, userId, song.id);
+    const existing = id ? await getJamTrack(id) : null;
+    return existing
+      ? { track: existing, song: await requireSummary(song.id), created: false as const }
+      : null;
+  };
+
+  const retry = await alreadyClaimed();
   if (retry) {
-    const track = await getJamTrack(retry);
-    if (track) {
-      return { track, song: await requireSummary(song.id), created: false };
-    }
+    return retry;
   }
 
   // Refused before any HEAD when the caller plainly may not add this
@@ -796,6 +893,13 @@ export async function addJamTrack(
     ? await findOwnUpload(request.videoUploadId, song, userId, "video")
     : null;
   if (!audio || (request.videoUploadId && !video)) {
+    // Not found because the FIRST claim of this very upload committed between
+    // the probe above and this lookup (the lookup only sees unclaimed rows):
+    // that is a retry, and its answer is the track, not a 404.
+    const raced = await alreadyClaimed();
+    if (raced) {
+      return raced;
+    }
     throw new HttpError(404, JAM_ERRORS.uploadUnknown);
   }
   const [audioBytes, videoBytes] = await Promise.all([
@@ -819,17 +923,33 @@ export async function addJamTrack(
     if (!current) {
       throw new HttpError(404, JAM_NOT_FOUND);
     }
+    // One query for the duplicate probe and the counts, so the lock is held for
+    // one round trip, not two. A retry that waited on the song lock behind the
+    // claim it duplicates finds that track here: it is answered with it BEFORE
+    // the join mode and the limits are looked at, which describe a track that
+    // is not there yet (the song may have been closed, or this very track may
+    // have been the person's last allowed one, and neither refuses a request
+    // that has nothing left to add).
+    const counts = await client.query<{
+      total: number;
+      mine: number;
+      same: number;
+      duplicate: number;
+    }>(
+      `SELECT COUNT(*)::int AS total,
+              COUNT(*) FILTER (WHERE author_id = $2)::int AS mine,
+              COUNT(*) FILTER (WHERE instrument = $3)::int AS same,
+              COUNT(*) FILTER (WHERE audio_upload_id = $4 AND author_id = $2)::int AS duplicate
+         FROM jam_tracks WHERE song_id = $1 AND deleted_at IS NULL`,
+      [song.id, userId, request.instrument, request.audioUploadId],
+    );
+    if (counts.rows[0]!.duplicate > 0) {
+      throw new ClaimAlreadyMade();
+    }
     // The state the insert lands in, not the state the request was routed on:
     // the author may have closed the song while the files uploaded.
     assertMayAdd(current, userId, input.canPost, request.instrument);
 
-    const counts = await client.query<{ total: number; mine: number; same: number }>(
-      `SELECT COUNT(*)::int AS total,
-              COUNT(*) FILTER (WHERE author_id = $2)::int AS mine,
-              COUNT(*) FILTER (WHERE instrument = $3)::int AS same
-         FROM jam_tracks WHERE song_id = $1 AND deleted_at IS NULL`,
-      [song.id, userId, request.instrument],
-    );
     const count = counts.rows[0]!;
     if (count.total >= JAM_MAX_TRACKS_PER_SONG) {
       throw new HttpError(409, JAM_ERRORS.songFull);
@@ -884,17 +1004,22 @@ export async function addJamTrack(
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK").catch(() => {});
-    // Two retries of one claim raced: the second either hit the unique index
-    // or found the upload already claimed (the first committed while it waited
-    // for the song lock). Either way the first's track is the answer.
+    // Two requests for one claim raced: the second saw the first's track after
+    // waiting on the song lock, hit the unique index, or found the upload
+    // already claimed. Either way the first's track is the answer.
     const lostTheRace =
+      error instanceof ClaimAlreadyMade ||
       (error as { code?: string }).code === "23505" ||
       (error instanceof HttpError && error.message === JAM_ERRORS.uploadUnknown);
     if (lostTheRace) {
-      const existing = await findClaimedTrack(request.audioUploadId, userId, song.id);
-      const track = existing ? await getJamTrack(existing) : null;
-      if (track) {
-        return { track, song: await requireSummary(song.id), created: false };
+      const raced = await alreadyClaimed();
+      if (raced) {
+        return raced;
+      }
+      // The first claim's track was deleted in the meantime: nothing to answer
+      // with, and the upload is spent. Never an internal error.
+      if (error instanceof ClaimAlreadyMade || (error as { code?: string }).code === "23505") {
+        throw new HttpError(404, JAM_ERRORS.uploadUnknown);
       }
     }
     throw error;
