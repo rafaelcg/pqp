@@ -2159,6 +2159,7 @@ export function localLiveSeats(): {
   userId: string;
   voiceChannelId: string;
   sharingScreen: boolean;
+  micOpen: boolean;
 }[] {
   const seats = [];
   for (const peer of peers.values()) {
@@ -2169,6 +2170,7 @@ export function localLiveSeats(): {
       userId: peer.userId,
       voiceChannelId: peer.voiceChannelId,
       sharingScreen: peer.sharingScreen,
+      micOpen: !peer.muted && !peer.deafened,
     });
   }
   return seats;
