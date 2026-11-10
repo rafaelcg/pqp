@@ -243,6 +243,13 @@ data class Channel(
      * chat: a forum carries no message of its own.
      */
     val isForum: Boolean get() = type == "forum"
+
+    /**
+     * Holds songs instead of messages (`packages/shared/src/jam.ts`). The row is
+     * drawn only where `GET /api/jam/config` says `enabled`, so with the flag
+     * off nothing changes anywhere; it opens the jam wall, never a chat.
+     */
+    val isJam: Boolean get() = type == "jam"
 }
 
 @Serializable

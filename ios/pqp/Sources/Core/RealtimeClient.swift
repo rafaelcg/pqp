@@ -242,6 +242,10 @@ enum RealtimeEvent: Sendable {
     /// Staff saved the forum's tags or its settings: the new copy, whichever
     /// half changed, so an open composer follows without reopening.
     case forumConfigUpdate(forumId: String, tags: [ForumTag]?, settings: ForumSettings?)
+    /// One of the seven jam frames (`jam-song-created` ... `jam-track-votes`),
+    /// sent to whoever joined the jam channel. Applied by id, idempotently: a
+    /// change reaches the writer's own socket too.
+    case jam(JamFrame)
     /// `nudge-refused`: a chamar a atenção this socket sent did not land.
     case nudgeRefused(NudgeRefusal)
     /// `stories-update`: content-free, refetch the strip it names. Never sent
@@ -1282,6 +1286,14 @@ actor RealtimeClient {
                   )
             else { return }
             continuation?.yield(.presence(channelId: frame.channelId, users: users))
+            return
+        }
+
+        // The jam frames, before `Envelope` for the same reason as the rest of
+        // this block: they carry `song` and `track` objects the shared envelope
+        // has no field for. A frame this build cannot read is dropped.
+        if JamFrame.types.contains(probe.type) {
+            if let frame = JamFrame.parse(data) { continuation?.yield(.jam(frame)) }
             return
         }
 

@@ -439,6 +439,45 @@ private object Lucide {
     val messageSquare by lucide(
         "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z",
     )
+    // Jam (lucide 0.469). `music` is the channel's glyph and the song's mark; one glyph per instrument.
+    val music by lucide(
+        "M9 18V5l12-2v13",
+        "M3 18a3 3 0 1 0 6 0a3 3 0 1 0 -6 0",
+        "M15 16a3 3 0 1 0 6 0a3 3 0 1 0 -6 0",
+    )
+    val drum by lucide(
+        "m2 2 8 8",
+        "m22 2-8 8",
+        "M2 9a10 5 0 1 0 20 0a10 5 0 1 0 -20 0",
+        "M7 13.4v7.9",
+        "M12 14v8",
+        "M17 13.4v7.9",
+        "M2 9v8a10 5 0 0 0 20 0V9",
+    )
+    val guitar by lucide(
+        "m11.9 12.1 4.514-4.514",
+        "M20.1 2.3a1 1 0 0 0-1.4 0l-1.114 1.114a1 1 0 0 0 0 1.4l1.4 1.4a1 1 0 0 0 1.4 0l1.114-1.114a1 1 0 0 0 0-1.4z",
+        "m6 16 2 2",
+        "M8.23 9.85A3 3 0 0 1 11 8a5 5 0 0 1 5 5 3 3 0 0 1-1.85 2.77l-.92.38A2 2 0 0 0 12 18a4 4 0 0 1-4 4 6 6 0 0 1-6-6 4 4 0 0 1 4-4 2 2 0 0 0 1.85-1.23z",
+    )
+    val piano by lucide(
+        "M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z",
+        "M8 5v8",
+        "M12 13v6",
+        "M16 5v8",
+        "M6 13h4",
+        "M14 13h4",
+    )
+    val thumbsUp by lucide(
+        "M7 10v12",
+        "M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z",
+    )
+    val monitor by lucide(
+        "M4 3h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z",
+        "M8 21h8",
+        "M12 17v4",
+    )
+
     val bookOpen by lucide(
         "M12 7v14",
         "M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z",
@@ -704,6 +743,17 @@ object PqpIcons {
     // Forums. `MessagesSquare` is the web's forum glyph (`channel-icon.tsx`),
     // so a forum reads the same in both sidebars.
     val ForumChannel get() = Lucide.messagesSquare
+
+    // Jam. The channel's glyph, the vote, the "on the computer" sheet and one glyph per instrument.
+    val JamChannel get() = Lucide.music
+    val Vote get() = Lucide.thumbsUp
+    val Computer get() = Lucide.monitor
+    val InstrumentGuitar get() = Lucide.guitar
+    val InstrumentBass get() = Lucide.guitar
+    val InstrumentDrums get() = Lucide.drum
+    val InstrumentVocals get() = Lucide.mic
+    val InstrumentKeys get() = Lucide.piano
+    val InstrumentOther get() = Lucide.music
     val Replies get() = Lucide.messageSquare
     val Guidelines get() = Lucide.bookOpen
     val Sort get() = Lucide.arrowUpDown
