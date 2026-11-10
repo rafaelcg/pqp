@@ -24,18 +24,32 @@ recording.
 
 ## The wall
 
-Songs are tiles of three sizes (`planTiles` in `lib/jam-wall.ts`): the most active
-song is the hero (2 by 2), one in every four after it is wide, the rest small. A
-size follows the position and nothing else, so a tile never changes size under a
-finger when somebody else's song moves. A song with a video shows the video's
-first frame; an audio-only one is a flat tile in its main instrument's colour
-drawing its `peaks`. A tile says the title, who is on it and what it needs
-(`songNeed`: "falta voz", "faltam baixo e bateria", "qualquer um entra", "pronta").
+Songs are tiles of four sizes (`planTiles` in `lib/jam-wall.ts`): the most active
+song is the hero (2 by 2), then a fixed rhythm of small, wide (2 by 1) and tall
+(1 by 2) tiles. A size follows the position and nothing else, so a tile never
+changes size under a finger when somebody else's song moves.
 
-The list read carries neither peaks nor videos, so the wall reads the first dozen
-songs' detail three at a time and the tile fills in (it is complete before that:
-stand-in bars, the author, a count). Filters are Tudo, Falta alguém (everything
-somebody could still add to) and Prontas.
+A tile is drawn from the song SUMMARY alone (the preview fields of `docs/JAM.md`).
+Its picture is the song itself: one band per instrument on it, stacked like the
+song's lanes, each in its instrument's colour with the loudest stem's
+`previewPeaks` running through it (contrast-stretched by `stretchBars` so a song
+that is loud throughout still shows a shape), and a dashed band for each of the
+`missingInstruments`. A riff is one band, a full song four. The `contributors`'
+faces sit by the title, and what it needs is one line ("+ Falta voz" in the
+voice's colour, "Qualquer um entra", "Pronta"). Only a tile with `hasVideo` reads
+its detail, once it comes near the screen, for the video's address; a frame from
+it then takes the picture's place (and plays muted under the pointer). The open
+song's tile dances while it plays, and opening a tile morphs its picture into the
+panel's cover (a View Transition where the browser has one). Filters are Tudo, Falta alguém (everything somebody
+could still add to) and Prontas.
+
+**Tão te chamando.** Above the tiles, one card per instrument a `wanted` song is
+still missing ("Falta voz em In Bloom"), in that instrument's colour. One click
+opens the song behind and the studio over it on that instrument.
+
+**First visit.** An empty Jam shows the how-to picture (three lanes slide in, one
+playhead sweeps across all of them, a dashed "tua parte" lane), the one button and
+three steps in words. The same picture heads the "Como funciona" sheet.
 
 **Sections.** `JamWallSection` is `{ id, songs }`; the wall renders a list of them.
 The public songs from jam.pqp.gg become a second section later. Nothing public is
@@ -59,13 +73,23 @@ route.
 ## The song
 
 All in-mix tracks play through the one engine (`lib/jam-session.ts`, shared with
-the studio so a take is placed against the backing on one clock). One lane per
-track on the song's timeline (so every lane lines up), with person, instrument,
-mute, volume and solo (the listener's own mix, never sent), the videos locked to
-the audio, competing takes (more than one for an instrument) with votes and an
-"Ouvir no lugar" audition, and for the song's author or a moderator the switch
-that puts a take in or out of the mix. "Gravar por cima" is drawn only when
-`viewer.addableInstruments` allows it, and says why not otherwise.
+the studio so a take is placed against the backing on one clock). The panel is a
+header (a small cover, the title, the people), and **the band**, whose sticky
+header holds play and pause right over the lanes: one lane per track as a clip on the song's ONE timeline,
+a ruler to click to jump, and ONE playhead across every lane. A lane has its
+person, instrument, mute, solo and volume (the listener's own mix, never sent);
+competing takes (more than one for an instrument) carry votes and an "Ouvir no
+lugar" audition; the song's author or a moderator gets "Usar este take" (and
+"Tirar da mix" in the lane's menu). A missing instrument is a dashed lane with
+"Gravar a voz", which opens the studio on it. The videos, locked to the audio,
+sit under the band. "Gravar" (named for the missing instrument when there is
+one) is drawn only when `viewer.addableInstruments` allows it, and says why not
+otherwise. Finishing and deleting the song are in the header's menu.
+
+**One sound at a time.** The engine is shared, so opening the studio stops
+whatever the song panel was playing (`use-jam-studio.ts`, at boot) and the
+panel's autoplay never starts under the studio. The studio has its own play and
+pause for the band before recording and for the take after.
 
 ## Mixing: one take per instrument
 
@@ -73,28 +97,52 @@ The server lets several takes of one instrument be in the mix at once. The scree
 treat the mix as one take per instrument: **"Usar este take"** on a take that is
 out puts it in and then takes the other in-mix takes of its instrument out (two
 writes, in that order, so a failure between them leaves both playing and says so,
-never a silent instrument). A track's author can **adjust it after posting**
-(trim, nudge, volume) from the "Ajustar" under their own lane; moving a slider is
-heard at once and "Guardar" sends only what changed (`PATCH /api/jam-tracks/:id`).
+never a silent instrument). A track's author can **adjust it after posting** from
+the "Ajustar" on their own lane, with the same clip editor as the studio (below);
+every drag is heard at once and "Guardar" sends only what changed
+(`PATCH /api/jam-tracks/:id`).
+
+## Adjusting: the clip editor
+
+`components/jam/jam-clip-editor.tsx`, arithmetic in `lib/jam-clip.ts`. The take is
+a clip on the song's timeline with the band's waveform drawn behind it
+(`bandEnvelope`: the loudest moment of any in-mix lane per slice, each lane scaled
+to itself), and a line where the song starts. Drag an end to cut (the cut parts
+stay visible, shaded); drag the middle to move it in time; "Mais cedo" and "Mais
+tarde" move it 10 ms; one volume. "O começo de perto" zooms to the three seconds
+around the take's start, where lining up is decided. Each end and the middle are
+`role="slider"` for the keyboard (arrows; Shift for big steps; Home puts it back).
 
 ## The studio
 
 Pick the instrument (pre-selected by `pickInstrument`: what the song is asking for),
-press the big button, play, stop, listen with the band, send. Everything else on
-the screen (input, level, latency, count-in, tempo, camera, trim, nudge, volume)
-is for when something is wrong.
+press the big button, play, stop, listen with the band, send. Each phase says
+what it is asking in one heading ("O que tu vai tocar?", "Gravando voz", "Ficou
+bom? Manda pra banda."). Everything else on the screen (input, level, latency,
+count-in, camera, adjusting) is for when something is wrong.
 
-- **First use on a pair of devices**: a one-screen explanation of the latency
-  check with two ways to measure and a skip that says what it costs. The engine
-  stores a measurement per device pair, and a skip is remembered per pair too, so
-  nobody meets the full-page screen twice; afterwards only the latency chip and a
-  quiet "Calibrar" remain.
-- **Recording**: count-in (1 or 2 bars, tempo with a tap button), a live waveform
-  growing on the same timeline as the others (`lib/jam-live.ts`: a drawn bar never
-  changes), the level meter beside it.
-- **Review**: the take drops into the mix and plays with the band. Posting needs
-  no edit. Optional: trim start and end, nudge, volume (`lib/jam-take-edit.ts`; a
-  trim never reveals the count-in the engine hid).
+**No tempo, no BPM.** The count-in is a switch, "Contar antes de começar" (four
+clicks at a fixed speed, then the band), on by default. Its speed was a BPM field
+with a tap button; it never changed the song or the placement of a take (the
+engine places a take by the clock, not the beat), so a first-time player was
+asked a number that did nothing for them. The engine still takes any `countIn`.
+
+- **First use on a pair of devices**: one line in the dock above the record
+  button, never a gate: "Quer cravar o tempo?" with "Medir agora" (7 s, by the
+  microphone), tap-along, and "Agora não"; the why is its tooltip. The red button records either
+  way; pressing it with the check pending is the skip (the browser's estimate is
+  used and the skip is remembered for that pair of devices). The engine stores a
+  measurement per device pair, so nobody meets the suggestion twice; afterwards
+  the latency chip and "Calibrar" in "Teu som" (the header button: input, level,
+  count-in, video, delay) remain. The record button's ring follows the microphone
+  level before and during a take.
+- **Recording**: count-in (one bar), a live clip growing on the same timeline as
+  the others with a red edge where it is being written (`lib/jam-live.ts`: a drawn
+  bar never changes), the band's lanes showing where they are, the level meter.
+- **Review**: the take drops into the mix and plays with the band. "Mandar pra
+  banda" is the one big button; posting needs no edit. "Ajustar" is a smaller
+  button that opens the clip editor on the take (`lib/jam-take-edit.ts`; a cut
+  never reveals the count-in the engine hid).
 - **Posting** (`lib/jam-upload.ts`): ticket, `PUT` with progress, claim. The state
   is a value the caller keeps, so a retry continues where the last try stopped and
   reuses the same upload id; a video that will not go can be dropped and the sound
@@ -134,7 +182,7 @@ Measured by `e2e/jam-web.spec.ts`:
 | Flow | Taps |
 |---|---|
 | Server to the studio, over an existing song | 3: the Jam row, the tile, "Gravar por cima" |
-| ...then recording | +1 for the big button (+1 on the first use of a pair of devices: measure or skip) |
+| ...then recording | +1 for the big button (the first use of a pair of devices suggests measuring the delay, and does not block) |
 | Stop to posted | 1: "Mandar pra banda" |
 
 ## Copy, motion, theme

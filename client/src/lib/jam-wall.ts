@@ -70,32 +70,36 @@ export function sortByActivity(songs: readonly JamSongSummary[]): JamSongSummary
   });
 }
 
-export type JamTileSize = "hero" | "wide" | "small";
+export type JamTileSize = "hero" | "wide" | "tall" | "small";
 
 export interface JamTilePlan {
   song: JamSongSummary;
   size: JamTileSize;
 }
 
+/** After the hero, the sizes repeat in this rhythm (a Windows Phone start screen, not a list). */
+const RHYTHM: readonly JamTileSize[] = ["small", "small", "wide", "small", "tall", "small"];
+
 /**
- * How big each tile is. The most active song is the hero (2 by 2), one in
- * every four after it is wide (2 by 1) and the rest are small. A fixed rhythm
- * on purpose: a tile that changed size when somebody else's song moved would
- * make the wall jump under a finger, so a size follows the position and
- * nothing else. With one song the hero stands alone; with a handful the grid
- * (`grid-auto-flow: dense`) fills the gaps the spans leave.
+ * How big each tile is. The most active song is the hero (2 by 2); after it
+ * the sizes follow a fixed rhythm of small, wide (2 by 1) and tall (1 by 2)
+ * tiles. A fixed rhythm on purpose: a tile that changed size when somebody
+ * else's song moved would make the wall jump under a finger, so a size follows
+ * the position and nothing else. With one song the hero stands alone; with a
+ * handful the grid (`grid-auto-flow: dense`) fills the gaps the spans leave.
  */
 export function planTiles(songs: readonly JamSongSummary[]): JamTilePlan[] {
   return songs.map((song, index) => ({
     song,
-    size: index === 0 ? "hero" : index % 4 === 3 ? "wide" : "small",
+    size: index === 0 ? "hero" : RHYTHM[(index - 1) % RHYTHM.length]!,
   }));
 }
 
-/** Tailwind span classes per size; the grid is 2 columns, 3 from md, 4 from lg. */
+/** Tailwind span classes per size; the grid is 2 columns, 3 from md, 4 from xl. */
 export const JAM_TILE_SPAN: Record<JamTileSize, string> = {
   hero: "col-span-2 row-span-2",
   wide: "col-span-2",
+  tall: "row-span-2",
   small: "",
 };
 
@@ -123,6 +127,33 @@ export function barsFromPeaks(peaks: readonly number[], count: number): number[]
   }
   const loudest = Math.max(...out);
   return loudest > 0 ? out.map((value) => value / loudest) : out;
+}
+
+/**
+ * Bars for a small picture of a song: the quietest tenth of them sits near the
+ * floor and the loudest at the top, so a song that is loud all the way through
+ * still shows its shape instead of a barcode of full-height bars.
+ */
+export function stretchBars(bars: readonly number[], floor = 0.12): number[] {
+  if (bars.length === 0) {
+    return [];
+  }
+  const sorted = [...bars].sort((a, b) => a - b);
+  const low = sorted[Math.floor(sorted.length * 0.1)] ?? 0;
+  const high = sorted[sorted.length - 1] ?? 0;
+  if (high - low < 1e-6) {
+    return bars.map(() => (high > 0 ? 0.6 : floor));
+  }
+  return bars.map((value) => floor + (1 - floor) * Math.min(1, Math.max(0, (value - low) / (high - low))));
+}
+
+/** The same bars started further along: one song's shape, told apart per band. */
+export function rotateBars(bars: readonly number[], by: number): number[] {
+  if (bars.length === 0) {
+    return [];
+  }
+  const shift = ((by % bars.length) + bars.length) % bars.length;
+  return [...bars.slice(shift), ...bars.slice(0, shift)];
 }
 
 /**

@@ -190,16 +190,20 @@
    * fills in light and dark, each carrying the dark `--color-on-inst`.
    *
    * Told apart by LIGHTNESS as well as hue (steps of 0.05 or more, from the
-   * darkest blue to the lightest lime), because hue alone fails for a person
+   * darkest blue to the lightest yellow), because hue alone fails for a person
    * who cannot tell the hues apart, and every one also carries its own icon.
    * The bench measures `on-inst` on each fill at 4.5.
+   *
+   * The guitar is a warm yellow, not the lime it started as: lime is the
+   * accent, the colour of every "do this" button, and a lime guitar lane next
+   * to a lime "Gravar" read as one more button.
    */
   --color-inst-bass: oklch(0.64 0.15 255);
   --color-inst-other: oklch(0.71 0.04 295);
   --color-inst-drums: oklch(0.77 0.15 55);
   --color-inst-vocals: oklch(0.82 0.12 345);
   --color-inst-keys: oklch(0.87 0.11 195);
-  --color-inst-guitar: oklch(0.93 0.19 125);
+  --color-inst-guitar: oklch(0.92 0.15 90);
   --color-on-inst: oklch(0.16 0.012 250);
 
   /* The `* Fallback` names are metric-adjusted local fonts declared in

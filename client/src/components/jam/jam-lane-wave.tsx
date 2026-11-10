@@ -44,6 +44,7 @@ export function JamLaneWave({
   dimmed = false,
   className,
   animate = false,
+  playhead = false,
 }: {
   instrument: JamInstrument;
   peaks: readonly number[];
@@ -55,14 +56,20 @@ export function JamLaneWave({
   dimmed?: boolean;
   className?: string;
   animate?: boolean;
+  /**
+   * Draw the song's playhead in this lane too: where lanes are stacked (a phone)
+   * one line cannot cross them all, so each draws its piece at the same place.
+   */
+  playhead?: boolean | "phone";
 }) {
   const look = JAM_INSTRUMENT_LOOK[instrument];
   const total = Math.max(1, timeline.endMs - timeline.startMs);
   const span = laneSpan(timing);
   const left = Math.min(1, Math.max(0, (span.startMs - timeline.startMs) / total));
   const right = Math.min(1, Math.max(left, (span.endMs - timeline.startMs) / total));
-  const [spanRef, count] = useBarCount(5);
+  const [spanRef, count] = useBarCount(4);
   const played = useRef<HTMLDivElement | null>(null);
+  const line = useRef<HTMLDivElement | null>(null);
 
   const bars = useMemo(() => {
     if (count === 0) {
@@ -88,33 +95,46 @@ export function JamLaneWave({
       const length = Math.max(1, span.endMs - span.startMs);
       const progress = Math.min(1, Math.max(0, (positionMs - span.startMs) / length));
       element.style.clipPath = `inset(0 0 0 ${progress * 100}%)`;
+      if (line.current) {
+        line.current.style.left = `${Math.min(1, Math.max(0, (positionMs - timeline.startMs) / total)) * 100}%`;
+      }
     });
-  }, [clock, span.startMs, span.endMs]);
+  }, [clock, span.startMs, span.endMs, timeline.startMs, total]);
 
+  // The lane is the song's whole width, a dark track; the take is a block of its
+  // instrument's colour sitting where it plays (a clip, the way every multitrack
+  // draws one), so a late entrance or an early end is seen at a glance.
   return (
     <div
       className={cn(
-        "relative h-12 overflow-hidden rounded-[var(--radius-control)] transition-opacity duration-[var(--duration-base)]",
-        look.fill,
+        "relative h-12 overflow-hidden rounded-[var(--radius-control)] bg-surface-0/60 transition-opacity duration-[var(--duration-base)]",
         dimmed && "opacity-35",
         className,
       )}
     >
       <div
-        ref={spanRef}
-        className="absolute inset-y-1.5"
-        style={{ left: `${left * 100}%`, width: `${(right - left) * 100}%` }}
+        className={cn("absolute inset-y-0 overflow-hidden rounded-[var(--radius-control)]", look.fill)}
+        style={{ left: `${left * 100}%`, width: `${Math.max(0.5, (right - left) * 100)}%` }}
       >
-        <JamBars bars={bars} className="h-full" barClassName="bg-on-inst" animate={animate} />
+        <div ref={spanRef} className="absolute inset-x-1 inset-y-1.5">
+          <JamBars bars={bars} className="h-full" barClassName="bg-on-inst" animate={animate} />
+        </div>
         {/* The bars are drawn once, at full strength; what is still to be played is
             the lane's own colour laid back over them, so a lane costs one bar tree. */}
         <div
           ref={played}
           aria-hidden
-          className={cn("pointer-events-none absolute inset-0 opacity-55", look.fill)}
+          className={cn("pointer-events-none absolute inset-0 opacity-70", look.fill)}
           style={{ clipPath: "inset(0 0 0 0)" }}
         />
       </div>
+      {playhead && clock && (
+        <div
+          ref={line}
+          aria-hidden
+          className={cn("pointer-events-none absolute inset-y-0 left-0 w-0.5 -translate-x-1/2 bg-text", playhead === "phone" && "sm:hidden")}
+        />
+      )}
     </div>
   );
 }

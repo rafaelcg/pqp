@@ -1,9 +1,11 @@
 import type { JamTrack } from "@pqp/shared";
-import { ChevronRight, Loader2, RotateCcw } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Check, Loader2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import type { JamClock } from "@/hooks/use-jam-playback";
 import type { JamEngine } from "@/lib/jam";
 import { useTranslation } from "@/lib/i18n";
+import type { BandLane, ClipSource } from "@/lib/jam-clip";
 import {
   editsFromTrack,
   patchFor,
@@ -14,35 +16,41 @@ import {
   type TakeEdits,
   type TrackPatch,
 } from "@/lib/jam-take-edit";
-import { EditFields } from "./jam-studio-parts";
+import { JamClipEditor } from "./jam-clip-editor";
 
 /**
- * "Ajustar" on the author's own posted track: the same trim, nudge and volume the
- * review has, applied to a track that is already on the song (the contract lets
- * a track's author change its offset, trims and gain). Moving a slider is heard
- * at once through the engine; nothing is sent until "Guardar", and "Voltar" puts
- * the stored numbers back.
+ * Adjusting the author's own posted track: the same clip editor the studio has,
+ * on a track that is already on the song (the contract lets a track's author
+ * change its offset, trims and gain). Every drag is heard at once through the
+ * engine; nothing is sent until "Guardar", and "Desfazer" puts the stored
+ * numbers back.
  */
 export function TrackAdjust({
   track,
+  band,
   engine,
+  clock,
   onSave,
+  onDone,
 }: {
   track: JamTrack;
+  /** The other in-mix lanes, drawn behind. */
+  band: readonly BandLane[];
   engine: JamEngine | null;
+  clock?: JamClock;
   onSave: (patch: TrackPatch) => Promise<void>;
+  /** Close the editor (after a save, or "Fechar"). */
+  onDone: () => void;
 }) {
   const { t } = useTranslation();
   const [edits, setEdits] = useState<TakeEdits>(() => editsFromTrack(track));
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [saved, setSaved] = useState(false);
 
   // The stored numbers moved (a save landed, or a frame came): start from them.
-  // Not while a save is out: the controls are locked then (`inert` below), and the
-  // numbers that come back are the ones just saved; the effect runs again when the
-  // save settles.
-  // Only when the stored numbers really moved: a save that FAILED leaves them as they
-  // were, and the person's edits stay for another try.
+  // Not while a save is out, and only when they really moved: a save that FAILED
+  // leaves them as they were, and the person's edits stay for another try.
   const stored = [track.id, track.offsetMs, track.trimStartMs, track.trimEndMs, track.gain].join(":");
   const shown = useRef(stored);
   useEffect(() => {
@@ -52,6 +60,11 @@ export function TrackAdjust({
     }
   }, [busy, stored]); // eslint-disable-line react-hooks/exhaustive-deps -- `stored` carries the track's numbers
 
+  // The recorded head is not known for a posted track, so a cut may go back to 0.
+  const source: ClipSource = useMemo(
+    () => ({ baseOffsetMs: track.offsetMs, durationMs: track.durationMs, minTrimStartMs: 0 }),
+    [track.offsetMs, track.durationMs],
+  );
   const recorded = { offsetMs: track.offsetMs, trimStartMs: 0, trimEndMs: track.trimEndMs, durationMs: track.durationMs };
   const patch = patchFor(track, edits);
   const dirty = Object.keys(patch).length > 0;
@@ -59,6 +72,7 @@ export function TrackAdjust({
   function hear(next: TakeEdits) {
     setEdits(next);
     setFailed(false);
+    setSaved(false);
     engine?.player.updateStem(track.id, {
       offsetMs: track.offsetMs + next.nudgeMs,
       trimStartMs: next.trimStartMs,
@@ -67,11 +81,40 @@ export function TrackAdjust({
     });
   }
 
+  // Leaving with unsaved edits puts what is stored back in the engine.
+  const latest = useRef({ dirty, track });
+  /** A save landed: what the engine plays IS what is stored now, so closing restores nothing. */
+  const committed = useRef(false);
+  latest.current = { dirty, track };
+  useEffect(
+    () => () => {
+      const { dirty: unsaved, track: stored } = latest.current;
+      if (unsaved && !committed.current) {
+        engine?.player.updateStem(stored.id, {
+          offsetMs: stored.offsetMs,
+          trimStartMs: stored.trimStartMs,
+          trimEndMs: stored.trimEndMs,
+          gain: stored.gain,
+        });
+      }
+    },
+    [engine],
+  );
+
+  // Opened below the lanes: brought into view with its buttons, not left under the dock.
+  const box = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    box.current?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+  }, []);
+
   async function save() {
     setBusy(true);
     setFailed(false);
     try {
       await onSave(patch);
+      committed.current = true;
+      setSaved(true);
+      onDone();
     } catch {
       setFailed(true);
     } finally {
@@ -80,38 +123,66 @@ export function TrackAdjust({
   }
 
   return (
-    <details className="group text-xs" data-jam-adjust={track.id}>
-      <summary className="flex h-10 cursor-pointer list-none items-center gap-1.5 font-semibold text-text-secondary outline-none hover:text-text focus-visible:ring-2 focus-visible:ring-focus-ring [&::-webkit-details-marker]:hidden">
-        <ChevronRight className="h-3.5 w-3.5 transition-transform duration-[var(--duration-base)] group-open:rotate-90" aria-hidden />
-        {t("jam.review.edit")}
-      </summary>
-      <div className="grid gap-4 pb-2 pt-1">
-        <div inert={busy} aria-busy={busy} className={busy ? "opacity-60" : undefined}>
-        <EditFields
-          take={recorded}
+    <div
+      ref={box}
+      className="jam-drop-in flex flex-col gap-3 rounded-[var(--radius-card)] bg-surface-2 p-3.5 ring-1 ring-inset ring-border"
+      data-jam-adjust={track.id}
+      onKeyDown={(event) => {
+        // Escape closes the editor (putting back what is stored), never the song under it.
+        if (event.key === "Escape") {
+          event.stopPropagation();
+          if (dirty) {
+            hear(editsFromTrack(track));
+          }
+          onDone();
+        }
+      }}
+    >
+      <div className="flex items-center justify-end gap-2 border-b border-border pb-3">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => {
+            if (dirty) {
+              hear(editsFromTrack(track));
+            }
+            onDone();
+          }}
+          disabled={busy}
+          data-jam-adjust-close=""
+        >
+          {dirty ? t("jam.take.adjustBack") : t("jam.song.close")}
+        </Button>
+        <Button size="sm" disabled={!dirty || busy} onClick={() => void save()} data-jam-adjust-save="" className="gap-1.5 rounded-full px-4">
+          {busy ? (
+            <Loader2 className="h-3.5 w-3.5 motion-safe:animate-spin" aria-hidden />
+          ) : saved ? (
+            <Check className="h-3.5 w-3.5" aria-hidden />
+          ) : null}
+          {t("jam.take.adjustSave")}
+        </Button>
+      </div>
+      <div inert={busy} aria-busy={busy} className={busy ? "opacity-60" : undefined}>
+        <JamClipEditor
+          instrument={track.instrument}
+          peaks={track.peaks}
+          source={source}
           edits={edits}
+          band={band}
+          clock={clock}
           onTrimStart={(ms) => hear(withTrimStart(recorded, edits, ms))}
           onTrimEnd={(ms) => hear(withTrimEnd(recorded, edits, ms))}
           onNudge={(ms) => hear(withNudge(edits, ms))}
           onGain={(gain) => hear(withGain(edits, gain))}
+          onReset={() => hear(editsFromTrack(track))}
+          edited={dirty}
         />
-        </div>
-        {failed && (
-          <p role="alert" className="rounded-[var(--radius-control)] bg-danger-soft px-2.5 py-2 text-on-danger-soft">
-            {t("jam.error.other")}
-          </p>
-        )}
-        <div className="flex items-center justify-end gap-2">
-          <Button variant="ghost" size="sm" className="gap-1.5" disabled={!dirty || busy} onClick={() => hear(editsFromTrack(track))}>
-            <RotateCcw className="h-3.5 w-3.5" aria-hidden />
-            {t("jam.take.adjustBack")}
-          </Button>
-          <Button size="sm" disabled={!dirty || busy} onClick={() => void save()} data-jam-adjust-save="" className="gap-1.5">
-            {busy && <Loader2 className="h-3.5 w-3.5 motion-safe:animate-spin" aria-hidden />}
-            {t("jam.take.adjustSave")}
-          </Button>
-        </div>
       </div>
-    </details>
+      {failed && (
+        <p role="alert" className="rounded-[var(--radius-control)] bg-danger-soft px-2.5 py-2 text-xs text-on-danger-soft">
+          {t("jam.error.other")}
+        </p>
+      )}
+    </div>
   );
 }
