@@ -161,6 +161,8 @@ describe("jam requests", () => {
   it("limits what may be uploaded per kind", () => {
     const ok = { kind: "audio", contentType: "audio/webm", byteSize: JAM_AUDIO_MAX_BYTES };
     expect(createJamUploadSchema.safeParse(ok).success).toBe(true);
+    // What the web engine uploads. Refusing it means no browser can post a take.
+    expect(createJamUploadSchema.safeParse({ ...ok, contentType: "audio/flac" }).success).toBe(true);
     expect(createJamUploadSchema.safeParse({ ...ok, contentType: "audio/wav" }).success).toBe(false);
     expect(createJamUploadSchema.safeParse({ ...ok, contentType: "video/mp4" }).success).toBe(false);
     expect(
