@@ -51,6 +51,13 @@ function subscribe(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
-export function useJamPlaying(): boolean {
-  return useSyncExternalStore(subscribe, isJamPlaying, () => false);
+const noSubscribe = () => () => undefined;
+const never = () => false;
+
+/**
+ * `enabled` is false for every row that is not a Jam: it then subscribes to
+ * nothing, so a flip of the transport wakes the Jam row and no other.
+ */
+export function useJamPlaying(enabled = true): boolean {
+  return useSyncExternalStore(enabled ? subscribe : noSubscribe, enabled ? isJamPlaying : never, never);
 }

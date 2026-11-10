@@ -20,16 +20,23 @@ let current: Promise<JamEngine> | null = null;
 
 export function getJamEngine(): Promise<JamEngine> {
   if (!current) {
-    current = JamEngine.create()
+    const created: Promise<JamEngine> = JamEngine.create()
       .then((engine) => {
-        // The sidebar row follows the transport (`jam-now-playing.ts`).
-        followJamPlayer(engine.player);
+        // The sidebar row follows the transport (`jam-now-playing.ts`), but only for
+        // the engine that is still THE engine: one that was released while it was
+        // being created (or replaced by a newer one) must not take the row over.
+        if (current === created) {
+          followJamPlayer(engine.player);
+        }
         return engine;
       })
       .catch((error: unknown) => {
-        current = null;
+        if (current === created) {
+          current = null;
+        }
         throw error;
       });
+    current = created;
   }
   return current;
 }

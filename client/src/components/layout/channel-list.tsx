@@ -3908,7 +3908,7 @@ function ChannelRow({
   );
 
   const muted = notifications.level === "none";
-  const jamPlaying = useJamPlaying();
+  const jamPlaying = useJamPlaying(jam !== undefined);
   const jamMood = jam
     ? jamRowMood({
         selected,
