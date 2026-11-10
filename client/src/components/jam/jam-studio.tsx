@@ -23,11 +23,13 @@ import {
   DoneOverlay,
   InstrumentPicker,
   LatencyCard,
+  LatencyChip,
   LatencyCheck,
   LevelMeter,
   LiveLane,
   ReviewEditor,
   StudioLaneLabel,
+  useLatencyWords,
 } from "./jam-studio-parts";
 import { JamTransport } from "./jam-transport";
 
@@ -74,6 +76,7 @@ export function JamStudio({
     draft,
     initialInstrument,
   });
+  const words = useLatencyWords();
   const { clock, transport, durationMs } = useEngineClock(studio.engine);
   const [confirmLeave, setConfirmLeave] = useState(false);
   const recordRef = useRef<HTMLButtonElement | null>(null);
@@ -206,6 +209,7 @@ export function JamStudio({
           <h2 className="truncate font-display text-lg font-bold text-text">{title}</h2>
           {subtitle && <p className="truncate text-xs text-text-secondary">{subtitle}</p>}
         </div>
+        {phase !== "unsupported" && phase !== "done" && <LatencyChip studio={studio} />}
         {recording && phase === "recording" && (
           <span
             role="timer"
@@ -345,6 +349,15 @@ export function JamStudio({
                     title={t("jam.review.title")}
                   />
                   <ReviewEditor studio={studio} />
+                  {studio.take && (
+                    <p data-jam-take-latency="" className="text-xs tabular-nums text-text-tertiary">
+                      {t("jam.review.latencyUsed", {
+                        ms: Math.round(studio.take.latency.roundTripMs * 10) / 10,
+                        method: words.method(studio.take.latency.method),
+                        confidence: words.confidence(studio.take.latency.confidence),
+                      })}
+                    </p>
+                  )}
                   {studio.take?.videoError && (
                     <p role="status" className="text-xs text-text-tertiary">
                       {t("jam.review.videoLost")}

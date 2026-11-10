@@ -46,6 +46,16 @@ learns of a new song by asking: when the channels load, on window focus and ever
 three minutes (`hooks/use-jam-sidebar.ts`). Opening the wall spends the dot
 (`lib/jam-seen.ts`, per device).
 
+## An address for a song
+
+`/app/server/<serverId>/channel/<jamChannelId>/song/<songId>` (the forum's
+`/post/<postId>` shape; `jamSongRoutePath` and `parseAppRoute` in
+`client/src/lib/app-route.ts`). Opening a tile puts it in the address bar,
+closing the panel puts the Jam's own address back, and a pasted link opens the
+wall with that song open (read by id when it is not on the first page; a song
+that does not exist says so). It survives a sign-up redirect like every `/app`
+route.
+
 ## The song
 
 All in-mix tracks play through the one engine (`lib/jam-session.ts`, shared with
@@ -82,6 +92,19 @@ is for when something is wrong.
 **Starting a song** is the same studio with no backing, behind one small sheet:
 title, optional artist (empty means an original), who may join (anyone, only the
 instruments I am looking for, only me).
+
+## The latency readout
+
+The delay the engine will compensate is always on screen in the studio: a small
+chip in the header ("38 ms", with a dot for how sure it is) whose tooltip and
+accessible name say the source (measured with the microphone, measured by tapping
+along, typed, or estimated by the browser) and the confidence. In the setup
+column the card has "Calibrar" and a details disclosure with the source,
+confidence, the round trip in use, how many measurements were usable and their
+spread, the browser's own estimate, and a field to type the round trip
+(`JamEngine.setManualLatency`, kept per pair of devices, cleared with "Voltar ao
+medido"). After recording, the review says what the take was corrected by and
+from which source. The per-take nudge ("Empurrar o tempo") sits under "Ajustar".
 
 ## Taps
 

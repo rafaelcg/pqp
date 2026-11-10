@@ -57,7 +57,14 @@ export type StudioPhase =
 export type MicState = "opening" | "ready" | "denied" | "none" | "error";
 
 /** The first-use latency screen: not asked yet, measuring, measured, or skipped. */
-export type CheckState = "needed" | "measuring" | "measured" | "failed" | "skipped";
+export type CheckState =
+  | "needed"
+  | "measuring"
+  | "measured"
+  | "failed"
+  | "skipped"
+  /** Somebody with a measurement asked to measure again. */
+  | "again";
 
 export interface NewSongDraft {
   title: string;
@@ -544,9 +551,26 @@ export function useJamStudio(args: UseJamStudioArgs) {
 
   const skipCheck = useCallback(() => setCheck("skipped"), []);
   const recheck = useCallback(() => {
-    setCheck("needed");
+    setCheck("again");
     setCheckResult(null);
   }, []);
+
+  /**
+   * A typed round trip for this pair of devices (`null` clears it). It beats
+   * every measurement (`JamEngine.setManualLatency`), so it is the way to say
+   * "my takes always land early or late by this much".
+   */
+  const setManualLatency = useCallback(
+    async (roundTripMs: number | null) => {
+      const live = engine;
+      if (!live) {
+        return;
+      }
+      await live.setManualLatency(roundTripMs);
+      await refreshLatency(live);
+    },
+    [engine, refreshLatency],
+  );
 
   const chooseDevice = useCallback(
     async (next: string) => {
@@ -611,7 +635,13 @@ export function useJamStudio(args: UseJamStudioArgs) {
     [],
   );
 
-  const needsCheck = mic === "ready" && latency !== null && latency.current.method === "estimate" && check !== "skipped" && check !== "measured";
+  const needsCheck =
+    mic === "ready" &&
+    latency !== null &&
+    (check === "again" ||
+      check === "measuring" ||
+      check === "failed" ||
+      (check === "needed" && latency.current.method === "estimate"));
 
   return {
     phase,
@@ -659,6 +689,7 @@ export function useJamStudio(args: UseJamStudioArgs) {
     measure,
     skipCheck,
     recheck,
+    setManualLatency,
     chooseDevice,
     retryMic,
     tapTempo: tapTempoNow,

@@ -42,6 +42,7 @@ describe("selectionRoutePath", () => {
       channelId: "c1",
       messageId: null,
       postId: null,
+      songId: null,
     });
     expect(parseAppRoute(selectionRoutePath(HOME_SELECTION, "c1"))).toEqual({
       kind: "conversation",

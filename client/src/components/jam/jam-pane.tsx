@@ -13,7 +13,14 @@ import { setJamHintContext } from "@/lib/jam-hint-context";
 import { pickInstrument } from "@/lib/jam-record";
 import { rememberJamSeen } from "@/lib/jam-seen";
 import { releaseJamEngine } from "@/lib/jam-session";
-import { loadJamChannel, loadJamDetail, loadMoreJamSongs, useJamChannel } from "@/lib/jam-store";
+import { fetchJamSong } from "@/lib/jam-api";
+import {
+  loadJamChannel,
+  loadJamDetail,
+  loadMoreJamSongs,
+  putJamSongOnWall,
+  useJamChannel,
+} from "@/lib/jam-store";
 import {
   filterSongs,
   latestActivity,
@@ -50,6 +57,12 @@ export interface JamPaneProps {
   viewerId: string | null;
   /** SEND_MESSAGES on the jam channel: may start a song or add a track. */
   canPost: boolean;
+  /**
+   * The song in the address bar (`/channel/<jamId>/song/<songId>`), the same
+   * arrangement as the forum's post. Omitted, the pane keeps its own.
+   */
+  routeSongId?: string | null;
+  onRouteSongChange?: (songId: string | null) => void;
   onOpenNav: () => void;
   /** The channel header's usual buttons (settings, members). */
   headerActions?: ReactNode;
@@ -61,13 +74,31 @@ type StudioState =
   | { mode: "over"; songId: string; instrument: JamInstrument }
   | { mode: "new"; draft: NewSongDraft; instrument: JamInstrument };
 
-export function JamPane({ channel, server, viewerId, canPost, onOpenNav, headerActions }: JamPaneProps) {
+export function JamPane({
+  channel,
+  server,
+  viewerId,
+  canPost,
+  routeSongId = null,
+  onRouteSongChange,
+  onOpenNav,
+  headerActions,
+}: JamPaneProps) {
   const { t } = useTranslation();
   const channelId = channel.id;
   const state = useJamChannel(channelId);
   const config = useJamConfig(server.id);
   const [filter, setFilter] = useState<JamWallFilter>("all");
-  const [openSongId, setOpenSongId] = useState<string | null>(null);
+  const [openSongId, setOpenSongIdState] = useState<string | null>(routeSongId);
+  const [songGone, setSongGone] = useState(false);
+  const routeChange = useRef(onRouteSongChange);
+  routeChange.current = onRouteSongChange;
+  /** Open or close a song, and say so to the address bar. */
+  function setOpenSongId(songId: string | null) {
+    setOpenSongIdState(songId);
+    setSongGone(false);
+    routeChange.current?.(songId);
+  }
   const [studio, setStudio] = useState<StudioState | null>(null);
   const [startOpen, setStartOpen] = useState(false);
   const [howToOpen, setHowToOpen] = useState(false);
@@ -93,9 +124,20 @@ export function JamPane({ channel, server, viewerId, canPost, onOpenNav, headerA
     rememberJamSeen(channelId, latestActivity(songs));
   }, [channelId, songs]);
 
+  // A link (or back and forward) put a song in the address bar: open it. A song
+  // that is not on the first page is read by id, and one that does not exist
+  // (deleted, or never in this Jam) says so instead of showing an empty panel.
+  useEffect(() => {
+    if (routeSongId === openSongId) {
+      return;
+    }
+    setOpenSongIdState(routeSongId);
+    setSongGone(false);
+  }, [routeSongId]); // eslint-disable-line react-hooks/exhaustive-deps -- follows the address only
+
   // Another channel, another wall.
   useEffect(() => {
-    setOpenSongId(null);
+    setOpenSongIdState(null);
     setStudio(null);
     setFilter("all");
   }, [channelId]);
@@ -169,12 +211,42 @@ export function JamPane({ channel, server, viewerId, canPost, onOpenNav, headerA
 
   const openSong = openSongId ? songs.find((song) => song.id === openSongId) ?? null : null;
   const openDetail = openSong ? state.details[openSong.id] : undefined;
+  const wasThere = useRef<string | null>(null);
   useEffect(() => {
-    // A song deleted under an open panel.
-    if (openSongId && state.status === "ready" && !openSong) {
-      setOpenSongId(null);
+    if (openSong) {
+      wasThere.current = openSong.id;
     }
-  }, [openSongId, openSong, state.status]);
+  }, [openSong]);
+  useEffect(() => {
+    if (!openSongId || state.status !== "ready" || openSong) {
+      return;
+    }
+    // Deleted under an open panel: close it quietly.
+    if (wasThere.current === openSongId) {
+      wasThere.current = null;
+      setOpenSongId(null);
+      return;
+    }
+    // Opened by a link: not on the first page, so read it by id.
+    let cancelled = false;
+    void fetchJamSong(openSongId).then(
+      (answer) => {
+        if (!cancelled && answer.song.channelId === channelId) {
+          putJamSongOnWall(channelId, answer.song);
+        } else if (!cancelled) {
+          setSongGone(true);
+        }
+      },
+      () => {
+        if (!cancelled) {
+          setSongGone(true);
+        }
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [openSongId, openSong, state.status, channelId]);
 
   const studioSong = studio?.mode === "over" ? (songs.find((song) => song.id === studio.songId) ?? null) : null;
   const studioDetail = studio?.mode === "over" ? state.details[studio.songId] : undefined;
@@ -273,6 +345,18 @@ export function JamPane({ channel, server, viewerId, canPost, onOpenNav, headerA
           />
         </header>
 
+        {songGone && (
+          <p
+            role="status"
+            data-jam-song-gone=""
+            className="mx-3 mt-3 flex items-center justify-between gap-3 rounded-[var(--radius-card)] bg-surface-1 px-3.5 py-3 text-sm text-text-secondary sm:mx-5"
+          >
+            {t("jam.wall.songGone")}
+            <Button variant="ghost" size="sm" onClick={() => setOpenSongId(null)}>
+              {t("jam.song.close")}
+            </Button>
+          </p>
+        )}
         {config.loaded && !config.enabled && (
           <p
             role="status"

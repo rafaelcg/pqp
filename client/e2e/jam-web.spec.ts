@@ -263,3 +263,52 @@ test("a song someone else starts grows onto an open wall by itself", async ({ br
   await expect(tile).toHaveClass(/jam-tile-arrive/);
   await host.context().close();
 });
+
+test("a song has an address, and the studio shows and takes a typed latency", async ({ browser }) => {
+  const seeded = await seed();
+  test.skip(!seeded.uploads, "needs object storage (S3_*): GET /api/jam/config answered uploads:false");
+  const { song } = await call<{ song: { id: string } }>(HOST, "POST", `/api/channels/${seeded.jamId}/jam-songs`, {
+    title: "Mar de Rosas",
+  });
+  const jamPath = `/app/server/${seeded.serverId}/channel/${seeded.jamId}`;
+  const songPath = `${jamPath}/song/${song.id}`;
+
+  // ---- a pasted link opens the song; opening and closing move the bar --------
+  const guest = await openAs(browser, GUEST, songPath);
+  await expect(guest.locator(`[data-jam-song="${song.id}"]`)).toBeVisible({ timeout: 20_000 });
+  await expect(guest).toHaveURL(new RegExp(`${songPath}$`));
+  await guest.getByRole("button", { name: "Close", exact: true }).first().click();
+  await expect(guest.locator("[data-jam-song]")).toHaveCount(0);
+  await expect(guest).toHaveURL(new RegExp(`${jamPath}$`));
+  await guest.locator("[data-jam-tile]").first().click();
+  await expect(guest).toHaveURL(new RegExp(`${songPath}$`));
+  // a song that is not there says so instead of an empty panel
+  await guest.goto(`${jamPath}/song/00000000-0000-4000-8000-000000000000?lang=en`);
+  await expect(guest.locator("[data-jam-song-gone]")).toBeVisible({ timeout: 20_000 });
+
+  // ---- the studio: the number, where it came from, and a typed round trip ----
+  await guest.goto(`${songPath}?lang=en`);
+  await expect(guest.locator("[data-jam-record-over]")).toBeVisible({ timeout: 20_000 });
+  await guest.locator("[data-jam-record-over]").click();
+  await skipTheLatencyCheck(guest);
+  const chip = guest.locator("[data-jam-latency-chip]");
+  await expect(chip).toBeVisible();
+  await expect(chip).toHaveAttribute("data-method", "estimate");
+  await guest.locator("[data-jam-latency-details] summary").click();
+  await guest.locator("[data-jam-manual-latency]").fill("55");
+  await guest.locator("[data-jam-manual-use]").click();
+  await expect(chip).toHaveAttribute("data-method", "manual");
+  await expect(chip).toContainText("55");
+
+  // ---- and the take is placed with what was typed ----------------------------
+  await recordAndStop(guest, 3);
+  await expect(guest.locator('[data-jam-studio][data-phase="review"]')).toBeVisible({ timeout: 20_000 });
+  await expect(guest.locator("[data-jam-take-latency]")).toContainText("55");
+  await guest.locator("[data-jam-post]").click();
+  await expect(guest.locator("[data-jam-done]")).toBeVisible({ timeout: 60_000 });
+  const detail = await call<{ tracks: ApiTrack[] }>(HOST, "GET", `/api/jam-songs/${song.id}`);
+  expect(detail.tracks).toHaveLength(1);
+  const behind = -detail.tracks[0]!.offsetMs - COUNT_IN_MS;
+  expect(Math.abs(behind - 55), "count-in plus the typed 55 ms, to the millisecond of rounding").toBeLessThanOrEqual(1);
+  await guest.context().close();
+});

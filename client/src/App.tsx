@@ -455,6 +455,7 @@ import { clearBootPrefetch } from "@/lib/boot-prefetch";
 import {
   channelRoutePath,
   forumPostRoutePath,
+  jamSongRoutePath,
   linkFollowedAt,
   parseAppRoute,
   pickOpenableServer,
@@ -4523,6 +4524,11 @@ function MainAppContent({
     forumId: string;
     postId: string;
   } | null>(null);
+  /** The song in the address bar while a Jam is open (`/song/<songId>`). */
+  const [jamRouteSong, setJamRouteSong] = useState<{
+    jamId: string;
+    songId: string;
+  } | null>(null);
   /** Files dropped on a forum, waiting for the pane to open Novo post with them. */
   const [forumDroppedFiles, setForumDroppedFiles] = useState<File[] | null>(null);
   /**
@@ -4579,6 +4585,7 @@ function MainAppContent({
       // also closes whatever post or drop the last forum had.
       visitReadCursorRef.current = { channelId, cursor: readCursor, taken: false };
       setForumRoutePost(null);
+      setJamRouteSong(null);
       setForumDroppedFiles(null);
 
       try {
@@ -6532,6 +6539,26 @@ function MainAppContent({
           postId
             ? forumPostRoutePath(serverId, forumId, postId)
             : channelRoutePath(serverId, forumId),
+        );
+      }
+    },
+    [syncPath],
+  );
+
+  /**
+   * --- jam --- the Jam's wall opened or closed a song: its own address goes in
+   * the bar (`/channel/<jamId>/song/<songId>`), so a refresh or a copied link
+   * lands on the same song, and closing it puts the Jam's back.
+   */
+  const setJamSongRoute = useCallback(
+    (jamId: string, songId: string | null) => {
+      setJamRouteSong(songId ? { jamId, songId } : null);
+      const serverId = selectedServerIdRef.current;
+      if (serverId && selectedChannelIdRef.current === jamId) {
+        syncPath(
+          songId
+            ? jamSongRoutePath(serverId, jamId, songId)
+            : channelRoutePath(serverId, jamId),
         );
       }
     },
@@ -9009,6 +9036,7 @@ function MainAppContent({
       messageId: string | null = null,
       linkedAt: number = Date.now(),
       postId: string | null = null,
+      songId: string | null = null,
     ) => {
       const known = serversRef.current.map((server) => server.id);
       const openable = pickOpenableServer(serverId, known);
@@ -9017,6 +9045,7 @@ function MainAppContent({
       const targetChannelId = usedFallback ? null : channelId;
       const targetMessageId = usedFallback ? null : messageId;
       const targetPostId = usedFallback ? null : postId;
+      const targetSongId = usedFallback ? null : songId;
       const routeApply = ++routeApplySeqRef.current;
       // Taken before the first wait (the channel list), so a click made while
       // any of this is out wins over the link.
@@ -9094,6 +9123,11 @@ function MainAppContent({
           if (targetPostId && requested.type === "forum" && stillOn(requested.id)) {
             setForumPostRoute(requested.id, targetPostId);
           }
+          // `/channel/<jamId>/song/<songId>`: the Jam, with the song on its
+          // wall. The pane reads the song itself and says so when it is gone.
+          if (targetSongId && requested.type === "jam" && stillOn(requested.id)) {
+            setJamSongRoute(requested.id, targetSongId);
+          }
         } else {
           const targetServer = serversRef.current.find(
             (row) => row.id === targetServerId,
@@ -9137,6 +9171,7 @@ function MainAppContent({
       selectChannel,
       sentSince,
       setForumPostRoute,
+      setJamSongRoute,
     ],
   );
 
@@ -9712,6 +9747,7 @@ function MainAppContent({
       target.messageId,
       linkedAt,
       target.postId,
+      target.songId,
     );
     // applyChannelRoute reads current state; re-running only on path/readiness
     // changes is intentional — selection changes write the URL via syncRoute.
@@ -14363,6 +14399,10 @@ function MainAppContent({
             server={{ id: selectedServerId, name: selectedServer?.name ?? "" }}
             viewerId={user?.id ?? null}
             canPost={canSendHere}
+            routeSongId={
+              jamRouteSong?.jamId === selectedChannel.id ? jamRouteSong.songId : null
+            }
+            onRouteSongChange={(songId) => setJamSongRoute(selectedChannel.id, songId)}
             onOpenNav={() => setMobileNavOpen(true)}
             headerActions={
               canManageChannels || canManageRoles ? (

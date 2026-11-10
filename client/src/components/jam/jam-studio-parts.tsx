@@ -13,7 +13,9 @@ import {
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
+import { Tooltip } from "@/components/ui/tooltip";
 import type { JamStudio } from "@/hooks/use-jam-studio";
+import type { LatencyConfidence, LatencyMethod } from "@/lib/jam";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { JAM_INSTRUMENT_LOOK } from "@/lib/jam-instruments";
 import { levelBar, levelVerdict, type JamLevelVerdict } from "@/lib/jam-level";
@@ -133,14 +135,69 @@ export function LevelMeter({ clock, active }: { clock: JamStudio["levelClock"]; 
 
 /* ------------------------------------------------------------------- latency */
 
+/** "medido pelo microfone", "alta": the source and the trust, in words. */
+export function useLatencyWords() {
+  const { t } = useTranslation();
+  return {
+    method: (method: LatencyMethod) => t(`jam.latency.method.${method}` as MessageKey),
+    confidence: (confidence: LatencyConfidence) => t(`jam.latency.confidence.${confidence}` as MessageKey),
+  };
+}
+
+/**
+ * The number to report: always on screen in the studio, small, with where it
+ * came from and how sure it is in its tooltip and its accessible name.
+ */
+export function LatencyChip({ studio }: { studio: JamStudio }) {
+  const { t } = useTranslation();
+  const words = useLatencyWords();
+  const current = studio.latency?.current;
+  if (!current || !Number.isFinite(current.roundTripMs)) {
+    return null;
+  }
+  const ms = Math.round(current.roundTripMs * 10) / 10;
+  const text = t("jam.latency.chipTitle", {
+    ms,
+    method: words.method(current.method),
+    confidence: words.confidence(current.confidence),
+  });
+  return (
+    <Tooltip label={text}>
+      <span
+        data-jam-latency-chip=""
+        data-method={current.method}
+        data-confidence={current.confidence}
+        tabIndex={0}
+        className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-surface-2 px-2.5 text-xs font-semibold tabular-nums text-text-secondary outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+      >
+        <Headphones className="h-3.5 w-3.5" aria-hidden />
+        {t("jam.latency.chip", { ms })}
+        <span
+          aria-hidden
+          className={cn(
+            "h-1.5 w-1.5 rounded-full",
+            current.confidence === "high" ? "bg-success" : current.confidence === "medium" ? "bg-warning" : "bg-danger",
+          )}
+        />
+      </span>
+    </Tooltip>
+  );
+}
+
 export function LatencyCard({ studio }: { studio: JamStudio }) {
   const { t } = useTranslation();
+  const words = useLatencyWords();
+  const [typed, setTyped] = useState("");
   const latency = studio.latency;
   if (!latency) {
     return null;
   }
-  const ms = Math.round(latency.current.roundTripMs);
-  const measured = latency.current.method !== "estimate";
+  const current = latency.current;
+  const ms = Math.round(current.roundTripMs);
+  const measured = current.method !== "estimate";
+  const typedMs = Number(typed.replace(",", "."));
+  const typedOk = typed.trim() !== "" && Number.isFinite(typedMs) && typedMs >= 0 && typedMs <= 600;
+  const hasManual = latency.stored.some((one) => one.method === "manual");
   return (
     <div className="flex flex-col gap-2.5 rounded-[var(--radius-card)] bg-surface-2 p-3.5" data-jam-latency="">
       <div className="flex items-start gap-2.5">
@@ -157,6 +214,70 @@ export function LatencyCard({ studio }: { studio: JamStudio }) {
       <Button variant="secondary" size="sm" className="self-start" onClick={studio.recheck} disabled={studio.phase !== "setup"}>
         {measured ? t("jam.latency.recalibrate") : t("jam.latency.calibrate")}
       </Button>
+      <details className="group text-xs" data-jam-latency-details="">
+        <summary className="flex h-10 cursor-pointer list-none items-center gap-1.5 font-semibold text-text-secondary outline-none hover:text-text focus-visible:ring-2 focus-visible:ring-focus-ring [&::-webkit-details-marker]:hidden">
+          <ChevronRight className="h-3.5 w-3.5 transition-transform duration-[var(--duration-base)] group-open:rotate-90" aria-hidden />
+          {t("jam.latency.details")}
+        </summary>
+        <dl className="flex flex-col gap-1 pb-2 text-text-secondary">
+          <div className="flex justify-between gap-3">
+            <dt>{t("jam.latency.detail.source")}</dt>
+            <dd className="text-right font-semibold text-text">{words.method(current.method)}</dd>
+          </div>
+          <div className="flex justify-between gap-3">
+            <dt>{t("jam.latency.detail.confidence")}</dt>
+            <dd className="text-right font-semibold text-text">{words.confidence(current.confidence)}</dd>
+          </div>
+          <div className="flex justify-between gap-3">
+            <dt>{t("jam.latency.detail.roundTrip")}</dt>
+            <dd className="text-right font-semibold tabular-nums text-text">{t("jam.latency.chip", { ms: Math.round(current.roundTripMs * 10) / 10 })}</dd>
+          </div>
+          {current.played > 0 && (
+            <div className="flex justify-between gap-3">
+              <dt>{t("jam.latency.detail.pulses")}</dt>
+              <dd className="text-right tabular-nums text-text">
+                {t("jam.latency.detail.pulsesValue", { accepted: current.accepted, played: current.played, spread: Math.round(current.spreadMs * 100) / 100 })}
+              </dd>
+            </div>
+          )}
+          <div className="flex justify-between gap-3">
+            <dt>{t("jam.latency.detail.estimate")}</dt>
+            <dd className="text-right tabular-nums text-text">{t("jam.latency.chip", { ms: Math.round(latency.estimate.roundTripMs * 10) / 10 })}</dd>
+          </div>
+        </dl>
+        <form
+          className="flex flex-col gap-1.5 border-t border-border pt-2.5"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (typedOk) {
+              void studio.setManualLatency(typedMs).then(() => setTyped(""));
+            }
+          }}
+        >
+          <label className="flex flex-col gap-1.5 font-semibold text-text-secondary">
+            {t("jam.latency.manual.label")}
+            <span className="flex items-center gap-2">
+              <input
+                inputMode="decimal"
+                value={typed}
+                onChange={(event) => setTyped(event.target.value)}
+                placeholder={String(ms)}
+                data-jam-manual-latency=""
+                className="h-10 w-24 rounded-[var(--radius-control)] border border-border bg-surface-0 px-2.5 text-sm font-normal tabular-nums text-text outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+              />
+              <Button type="submit" size="sm" disabled={!typedOk} data-jam-manual-use="">
+                {t("jam.latency.manual.use")}
+              </Button>
+              {hasManual && (
+                <Button type="button" variant="ghost" size="sm" onClick={() => void studio.setManualLatency(null)}>
+                  {t("jam.latency.manual.clear")}
+                </Button>
+              )}
+            </span>
+          </label>
+          <p className="font-normal leading-snug text-text-tertiary">{t("jam.latency.manual.hint")}</p>
+        </form>
+      </details>
     </div>
   );
 }
@@ -172,6 +293,8 @@ export function LatencyCheck({ studio }: { studio: JamStudio }) {
   const { t } = useTranslation();
   const measuring = studio.check === "measuring";
   const estimate = Math.round(studio.latency?.estimate.roundTripMs ?? 0);
+  const current = Math.round(studio.latency?.current.roundTripMs ?? 0);
+  const hasMeasure = studio.latency !== null && studio.latency.current.method !== "estimate";
   const failed = studio.check === "failed";
   return (
     <section
@@ -240,11 +363,13 @@ export function LatencyCheck({ studio }: { studio: JamStudio }) {
             data-jam-skip-check=""
             className="h-11 self-start rounded-[var(--radius-control)] px-1 text-sm font-semibold text-text-secondary underline decoration-border-strong underline-offset-4 outline-none hover:text-text focus-visible:ring-2 focus-visible:ring-focus-ring"
           >
-            {t("jam.latency.skip")}
+            {hasMeasure ? t("jam.latency.keep", { ms: current }) : t("jam.latency.skip")}
           </button>
-          <p className="text-xs leading-snug text-text-tertiary [text-wrap:pretty]">
-            {t("jam.latency.skipNote", { ms: estimate })}
-          </p>
+          {!hasMeasure && (
+            <p className="text-xs leading-snug text-text-tertiary [text-wrap:pretty]">
+              {t("jam.latency.skipNote", { ms: estimate })}
+            </p>
+          )}
         </div>
       )}
     </section>
