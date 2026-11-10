@@ -169,14 +169,15 @@ final class JamRulesTests: XCTestCase {
     // MARK: Peaks
 
     func testThePeakAtASongTimeFollowsOffsetAndTrims() {
-        // 1000 ms recording, ten peaks (100 ms each), first 200 ms trimmed,
-        // starting at song time 500: song time 500 is file time 200 (peak 2).
+        // 1000 ms recording starting at song time 500, ten peaks (100 ms
+        // each), first 200 ms trimmed: heard from song time 700, which is
+        // file time 200 (peak 2). A trim hides audio, it does not move it.
         let t = track("t", offset: 500, start: 200, end: 0, duration: 1000,
                       peaks: [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9])
-        XCTAssertEqual(t.peak(atSongTimeMs: 500), 0.2, accuracy: 1e-9)
-        XCTAssertEqual(t.peak(atSongTimeMs: 499), 0, "before the played slice")
-        XCTAssertEqual(t.peak(atSongTimeMs: 1300), 0, "after it (800 ms played)")
-        XCTAssertEqual(t.peak(atSongTimeMs: 1299), 0.9, accuracy: 1e-9)
+        XCTAssertEqual(t.peak(atSongTimeMs: 700), 0.2, accuracy: 1e-9)
+        XCTAssertEqual(t.peak(atSongTimeMs: 699), 0, "before the heard slice")
+        XCTAssertEqual(t.peak(atSongTimeMs: 1500), 0, "after it (800 ms heard)")
+        XCTAssertEqual(t.peak(atSongTimeMs: 1499), 0.9, accuracy: 1e-9)
     }
 
     func testTheMixEnvelopeTakesTheLouderStemAndIgnoresOutOfMixTakes() {
@@ -222,12 +223,12 @@ final class JamRulesTests: XCTestCase {
 
     func testTheTimelineStartsAtTheEarliestStemAndEndsAtTheLatestEnd() {
         let early = track("a", offset: -500, duration: 10_000)           // -500 ... 9500
-        let late = track("b", offset: 40, start: 120, end: 200, duration: 10_000) // 40 ... 9720
+        let late = track("b", offset: 40, start: 120, end: 200, duration: 10_000) // heard 160 ... 9840
         let tl = JamMixRules.timeline(of: [early, late])
         XCTAssertEqual(tl.originMs, -500)
-        XCTAssertEqual(tl.durationMs, 10_220)
+        XCTAssertEqual(tl.durationMs, 10_340)
         let f = JamMixRules.fractions(of: late, originMs: tl.originMs, durationMs: tl.durationMs)
-        XCTAssertEqual(f.start, 540 / 10_220, accuracy: 1e-9)
+        XCTAssertEqual(f.start, 660 / 10_340, accuracy: 1e-9)
         XCTAssertEqual(f.end, 1, accuracy: 1e-9)
     }
 

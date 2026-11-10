@@ -11,11 +11,13 @@ import Foundation
 // optionally with a video. A client plays every track that is `inMix` in sync.
 // Nothing is mixed on the server.
 //
-// THE TIMELINE, ONCE (header of `jam.ts`). A track plays
-// `audio[trimStartMs, durationMs - trimEndMs]` and that slice starts at
-// `offsetMs` on the song timeline (which may be negative). Trims are applied at
-// play time and never touch the stored bytes. `JamAlignment` turns this into
-// frames; nothing else in the app does the arithmetic.
+// THE TIMELINE, ONCE (as the web recorder writes it and the web player plays
+// it, `client/src/lib/jam/timeline.ts`). `offsetMs` is the song time of the
+// stored file's FIRST sample (which may be negative) and only
+// `audio[trimStartMs, durationMs - trimEndMs]` is heard: a trim hides audio and
+// never moves it. Trims are applied at play time and never touch the stored
+// bytes. `JamAlignment` turns this into frames and says why it is not the
+// wording in the header of `jam.ts`.
 
 /// The caps from `jam.ts`. Restated, not imported.
 enum JamLimits {
@@ -295,9 +297,11 @@ struct JamTrack: Decodable, Identifiable, Hashable, Sendable {
 
     /// `jamTrackPlayedMs` in the contract: the length it plays for.
     var playedMs: Double { max(0, durationMs - trimStartMs - trimEndMs) }
-    /// Where its played slice starts and ends on the song timeline.
-    var startMs: Double { offsetMs }
-    var endMs: Double { offsetMs + playedMs }
+    /// Where its heard slice starts and ends on the song timeline: the file
+    /// starts at `offsetMs` and the head trim hides the first `trimStartMs` of
+    /// it (`JamAlignment`).
+    var startMs: Double { offsetMs + trimStartMs }
+    var endMs: Double { startMs + playedMs }
 }
 
 struct JamSongViewer: Decodable, Equatable, Sendable {

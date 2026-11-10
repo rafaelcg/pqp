@@ -12,9 +12,10 @@ import Foundation
 /// which is rare and visible as one dropped frame rather than a lip-sync that
 /// slowly walks away.
 ///
-/// The file time shown at song time `s` is `s - offsetMs + trimStartMs` (the
-/// same slice arithmetic as the audio: a take recorded with a camera is cut so
-/// its sample 0 is the video's first frame, one `offsetMs` places both).
+/// The file time shown at song time `s` is `s - offsetMs`, clamped into the
+/// heard slice (`JamAlignment.fileMs`, the same arithmetic as the audio: a take
+/// recorded with a camera is cut so its sample 0 is the video's first frame,
+/// one `offsetMs` places both).
 ///
 /// AVFoundation opens MP4 and not WebM. A WebM video is simply not given a
 /// player (`canPlay`), and the screen draws the track's colour instead.
@@ -81,10 +82,14 @@ final class JamVideoSync {
     /// File time in seconds of a video at a song time, clamped into the slice
     /// the track actually plays.
     func fileSeconds(_ item: Item, songMs: Double) -> Double {
-        let slice = max(0, item.durationMs - item.trimStartMs - item.trimEndMs)
-        let into = min(slice, max(0, songMs - item.offsetMs))
-        return (item.trimStartMs + into) / 1000
+        JamAlignment.fileMs(
+            atSongMs: songMs, offsetMs: item.offsetMs, trimStartMs: item.trimStartMs,
+            trimEndMs: item.trimEndMs, durationMs: item.durationMs
+        ) / 1000
     }
+
+    /// Song time of the first frame the video shows.
+    static func heardStartMs(_ item: Item) -> Double { item.offsetMs + max(0, item.trimStartMs) }
 
     /// Show the frame for a song time without playing.
     func park(atSongMs songMs: Double) {
@@ -108,7 +113,7 @@ final class JamVideoSync {
         generation += 1
         let token = generation
         for item in items.values {
-            let delaySeconds = max(0, (item.offsetMs - songMs) / 1000)
+            let delaySeconds = max(0, (Self.heardStartMs(item) - songMs) / 1000)
             let fileTime = CMTime(seconds: fileSeconds(item, songMs: songMs), preferredTimescale: 600)
             let at = startHostTime + ticks(latencySeconds + delaySeconds)
             nonisolated(unsafe) let player = item.player
@@ -143,7 +148,7 @@ final class JamVideoSync {
         var moved = 0
         for item in items.values {
             // Before its slice starts it is parked on frame one: nothing to check.
-            guard songMs >= item.offsetMs else { continue }
+            guard songMs >= Self.heardStartMs(item) else { continue }
             let expected = fileSeconds(item, songMs: songMs - latencySeconds * 1000)
             let actual = item.player.currentTime().seconds
             guard actual.isFinite, abs(actual - expected) * 1000 > Self.driftToleranceMs else { continue }

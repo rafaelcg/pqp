@@ -8,10 +8,12 @@ import XCTest
 /// exactly which output frame each stem's first played sample lands on.
 ///
 /// Each stem is an impulse train: one-sample spikes at chosen frames of the
-/// STORED file. A spike inside the played slice must appear at the frame the
-/// contract's timeline predicts; a spike just outside a trim must not appear
-/// at all. Independent of `JamAlignment`: the expectations below are written
-/// out by hand from the contract (`offsetMs` places the first PLAYED sample).
+/// STORED file. A spike inside the heard slice must appear at the frame the
+/// timeline predicts; a spike just outside a trim must not appear at all.
+/// Independent of `JamAlignment`: the expectations below are written out by
+/// hand from the web's timeline (`offsetMs` places the file's FIRST sample and
+/// a trim hides audio without moving it; see `JamAlignment` for why that and
+/// not the wording in `jam.ts`).
 @MainActor
 final class JamEngineTests: XCTestCase {
     private var directory: URL!
@@ -85,14 +87,15 @@ final class JamEngineTests: XCTestCase {
         XCTAssertEqual(render.count, 70_000)
         let found = spikes(in: render)
 
-        // By hand, at 48 kHz (48 frames per ms), relative to the origin:
+        // By hand, at 48 kHz (48 frames per ms), relative to the origin. A
+        // stored frame j sounds at (offset - origin) * 48 + j, trims or not:
         //   B frame 0         at (-250 - -250) * 48        = 0
         //   A frame 0         at (   0 - -250) * 48        = 12_000
-        //   C frame 9_600     at ( 100 - -250) * 48        = 16_800   (first played)
-        //   C frame 33_599    at 16_800 + (33_599 - 9_600) = 40_799   (last played)
+        //   C frame 9_600     at ( 100 - -250) * 48 + 9_600  = 26_400 (first heard)
+        //   C frame 33_599    at 16_800 + 33_599           = 50_399   (last heard)
         //   A frame 47_999    at 12_000 + 47_999           = 59_999
         // and C's frames 9_599 and 33_600 sit just outside the trims: silent.
-        XCTAssertEqual(found, [0, 12_000, 16_800, 40_799, 59_999])
+        XCTAssertEqual(found, [0, 12_000, 26_400, 50_399, 59_999])
     }
 
     func testStartingInTheMiddleSkipsWhatIsBehindAndKeepsTheRest() throws {
@@ -202,7 +205,31 @@ final class JamAlignmentTests: XCTestCase {
 
     func testPlanForAStemThatStartsAfterTheTransport() {
         let plan = JamAlignment.plan(stem: spec(offset: 100, start: 200, end: 300), fileFrames: 48_000, rate: 48_000, originMs: -250, positionMs: 0)
-        XCTAssertEqual(plan, JamStemPlan(delayFrames: 16_800, startFrame: 9_600, frameCount: 24_000))
+        // The file starts at (100 - -250) * 48 = 16_800; the head trim hides its
+        // first 9_600 frames, so the first heard frame waits 26_400.
+        XCTAssertEqual(plan, JamStemPlan(delayFrames: 26_400, startFrame: 9_600, frameCount: 24_000))
+    }
+
+    func testPlanForATransportStartedInsideTheHeadTrimWaitsForTheFirstHeardFrame() {
+        // A web take: one bar of count-in at 120 BPM plus a 23 ms round trip,
+        // so the file starts at -2023 and the first heard sample is song 0.
+        let take = spec(offset: -2023, start: 2023)
+        XCTAssertEqual(JamAlignment.originMs([take]), 0)
+        // From song time -1000 (inside the count-in) the first heard frame is
+        // 1000 ms away and is file frame 2023 * 48.
+        let plan = JamAlignment.plan(stem: take, fileFrames: 480_000, rate: 48_000, originMs: -1000, positionMs: 0)
+        XCTAssertEqual(plan, JamStemPlan(delayFrames: 48_000, startFrame: 97_104, frameCount: 480_000 - 97_104))
+        // From song time 500 it starts at once, 2523 ms into the file.
+        let inside = JamAlignment.plan(stem: take, fileFrames: 480_000, rate: 48_000, originMs: 0, positionMs: 500)
+        XCTAssertEqual(inside, JamStemPlan(delayFrames: 0, startFrame: 121_104, frameCount: 480_000 - 121_104))
+    }
+
+    func testAVideoShowsTheFileTimeTheAudioIsAt() {
+        // The same take with a camera: song time 1000 is 3023 ms into both files,
+        // and before the heard slice the video waits on its first heard frame.
+        XCTAssertEqual(JamAlignment.fileMs(atSongMs: 1000, offsetMs: -2023, trimStartMs: 2023, trimEndMs: 0, durationMs: 10_000), 3023)
+        XCTAssertEqual(JamAlignment.fileMs(atSongMs: -500, offsetMs: -2023, trimStartMs: 2023, trimEndMs: 0, durationMs: 10_000), 2023)
+        XCTAssertEqual(JamAlignment.fileMs(atSongMs: 9000, offsetMs: -2023, trimStartMs: 2023, trimEndMs: 500, durationMs: 10_000), 9500)
     }
 
     func testPlanForATransportStartedInsideTheSlice() {
@@ -224,9 +251,10 @@ final class JamAlignmentTests: XCTestCase {
 
     func testOriginAndDuration() {
         let stems = [spec(offset: -250), spec(offset: 100, start: 200, end: 300)]
+        // Heard from -250 and from 100 + 200 = 300.
         XCTAssertEqual(JamAlignment.originMs(stems), -250)
-        // Ends: -250 + 1000 = 750 and 100 + (1000 - 500) = 600, so 750 - -250.
-        XCTAssertEqual(JamAlignment.durationMs(stems, lengthsMs: [1000, 1000]), 1_000)
+        // Ends: -250 + 1000 = 750 and 100 + 1000 - 300 = 800, so 800 - -250.
+        XCTAssertEqual(JamAlignment.durationMs(stems, lengthsMs: [1000, 1000]), 1_050)
         XCTAssertEqual(JamAlignment.durationMs([], lengthsMs: []), 0)
     }
 }
