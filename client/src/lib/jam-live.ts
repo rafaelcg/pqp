@@ -10,27 +10,13 @@
 
 export const LIVE_PEAK_MS = 80;
 
-export function liveBars(peaks: readonly number[], slotMs: number, pitchMs = LIVE_PEAK_MS): number[] {
-  if (!(slotMs > 0) || peaks.length === 0) {
-    return [];
-  }
-  const elapsed = peaks.length * pitchMs;
-  const count = Math.ceil(elapsed / slotMs);
-  const bars = new Array<number>(count).fill(0);
-  for (let i = 0; i < peaks.length; i++) {
-    const slot = Math.min(count - 1, Math.floor((i * pitchMs) / slotMs));
-    bars[slot] = Math.max(bars[slot] ?? 0, peaks[i] ?? 0);
-  }
-  // A quiet take should still read: scale by a soft ceiling, not by its own max,
-  // so a bar does not jump taller when a louder note arrives later.
-  return bars.map((value) => Math.min(1, Math.sqrt(value)));
-}
-
 /**
- * The same bars, kept as the take grows: only the peaks that arrived since the
- * last call are folded in (a full rescan per 80 ms tick made a long take cost
- * more with every tick). A slot width that changed, or a list that shrank (a new
- * take), rebuilds from the start. The answer equals `liveBars` for the same input.
+ * The bars of the take as it grows: only the peaks that arrived since the last
+ * call are folded in (a full rescan per 80 ms tick made a long take cost more with
+ * every tick). A slot width that changed, or a list that shrank (a new take),
+ * rebuilds from the start. A bar is the loudest peak in its slot, so a bar once
+ * drawn never changes; a quiet take still reads because bars use a soft ceiling
+ * (the square root), not the take's own maximum.
  */
 export function createLiveBars(pitchMs = LIVE_PEAK_MS): (peaks: readonly number[], slotMs: number) => number[] {
   let seen = 0;

@@ -56,7 +56,7 @@ function mixSignature(tracks: readonly JamTrack[]): string {
 export function useJamPlayback(
   songId: string | null,
   tracks: readonly JamTrack[],
-  options: { autoplay?: boolean } = {},
+  options: { autoplay?: boolean; onPlayError?: () => void } = {},
 ): JamPlayback {
   const [engine, setEngine] = useState<JamEngine | null>(null);
   const [status, setStatus] = useState<JamPlayback["status"]>("loading");
@@ -71,6 +71,8 @@ export function useJamPlayback(
   const tracksRef = useRef(heard);
   tracksRef.current = heard;
   const wantAutoplay = useRef(options.autoplay === true);
+  const playErrorRef = useRef(options.onPlayError);
+  playErrorRef.current = options.onPlayError;
   const loadedOnce = useRef(false);
 
   // The engine, once: created on first need, shared with the studio.
@@ -189,11 +191,12 @@ export function useJamPlayback(
       return;
     }
     // Unlock first, synchronously, inside the click.
-    void engine.context.resume();
+    const fail = () => playErrorRef.current?.();
+    engine.context.resume().catch(fail);
     if (engine.player.state === "playing") {
       engine.player.pause();
     } else {
-      void engine.player.play();
+      engine.player.play().catch(fail);
     }
   }, [engine]);
 

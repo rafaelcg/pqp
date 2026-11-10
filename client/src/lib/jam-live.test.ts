@@ -1,5 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { createLiveBars, liveBars, liveTimelineEndMs } from "./jam-live";
+import { createLiveBars, LIVE_PEAK_MS, liveTimelineEndMs } from "./jam-live";
+
+/** The plain full scan, as the reference the incremental fold must equal. Not shipped. */
+function liveBars(peaks: readonly number[], slotMs: number, pitchMs = LIVE_PEAK_MS): number[] {
+  if (!(slotMs > 0) || peaks.length === 0) {
+    return [];
+  }
+  const count = Math.ceil((peaks.length * pitchMs) / slotMs);
+  const bars = new Array<number>(count).fill(0);
+  for (let i = 0; i < peaks.length; i++) {
+    const slot = Math.min(count - 1, Math.floor((i * pitchMs) / slotMs));
+    bars[slot] = Math.max(bars[slot] ?? 0, peaks[i] ?? 0);
+  }
+  return bars.map((value) => Math.min(1, Math.sqrt(value)));
+}
 
 describe("the same bars, folded in as the take grows", () => {
   it("equals the full scan at every step of a growing take", () => {

@@ -371,7 +371,8 @@ export function loadJamDetailLazy(channelId: string, songId: string): void {
 export function loadJamDetail(
   channelId: string,
   songId: string,
-  options: { force?: boolean } = {},
+  // `fresh`: not an answer to a read that began before now (after a write the caller wants to check).
+  options: { force?: boolean; fresh?: boolean } = {},
 ): Promise<JamDetail | null> {
   wire();
   const held = read(channelId).details[songId];
@@ -382,7 +383,9 @@ export function loadJamDetail(
   }
   const pending = detailLoads.get(songId);
   if (pending) {
-    return pending;
+    // A read already out may have been asked before the caller's write; a `fresh`
+    // caller waits for it and asks again.
+    return options.fresh ? pending.then(() => loadJamDetail(channelId, songId, { force: true })) : pending;
   }
   const token = beginRead(channelId);
   const run = fetchJamSong(songId)
@@ -411,6 +414,16 @@ export function loadJamDetail(
     });
   detailLoads.set(songId, run);
   return run;
+}
+
+/**
+ * The song's tracks as the server has them NOW (a read that began after the call),
+ * or `null` when that cannot be read. For checking a write that threw: it may have
+ * landed (see `jam-mix.ts`).
+ */
+export async function rereadJamTracks(channelId: string, songId: string): Promise<JamTrack[] | null> {
+  const detail = await loadJamDetail(channelId, songId, { force: true, fresh: true });
+  return detail ? detail.tracks : null;
 }
 
 /** What the answer to a write already says, applied before its frame arrives. */

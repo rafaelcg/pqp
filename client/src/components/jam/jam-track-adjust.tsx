@@ -38,9 +38,14 @@ export function TrackAdjust({
   const [failed, setFailed] = useState(false);
 
   // The stored numbers moved (a save landed, or a frame came): start from them.
+  // Not while a save is out: the controls are locked then (`inert` below), and the
+  // numbers that come back are the ones just saved; the effect runs again when the
+  // save settles.
   useEffect(() => {
-    setEdits(editsFromTrack(track));
-  }, [track.id, track.offsetMs, track.trimStartMs, track.trimEndMs, track.gain]); // eslint-disable-line react-hooks/exhaustive-deps -- the numbers ARE the dependency
+    if (!busy) {
+      setEdits(editsFromTrack(track));
+    }
+  }, [busy, track.id, track.offsetMs, track.trimStartMs, track.trimEndMs, track.gain]); // eslint-disable-line react-hooks/exhaustive-deps -- the numbers ARE the dependency
 
   const recorded = { offsetMs: track.offsetMs, trimStartMs: 0, trimEndMs: track.trimEndMs, durationMs: track.durationMs };
   const patch = patchFor(track, edits);
@@ -76,6 +81,7 @@ export function TrackAdjust({
         {t("jam.review.edit")}
       </summary>
       <div className="grid gap-4 pb-2 pt-1">
+        <div inert={busy} aria-busy={busy} className={busy ? "opacity-60" : undefined}>
         <EditFields
           take={recorded}
           edits={edits}
@@ -84,6 +90,7 @@ export function TrackAdjust({
           onNudge={(ms) => hear(withNudge(edits, ms))}
           onGain={(gain) => hear(withGain(edits, gain))}
         />
+        </div>
         {failed && (
           <p role="alert" className="rounded-[var(--radius-control)] bg-danger-soft px-2.5 py-2 text-on-danger-soft">
             {t("jam.error.other")}

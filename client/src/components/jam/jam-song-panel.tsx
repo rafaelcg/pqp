@@ -22,6 +22,7 @@ import {
   loadJamChannel,
   loadJamDetail,
   readJamChannel,
+  rereadJamTracks,
   useJamStoreEpoch,
 } from "@/lib/jam-store";
 import type { JamDetail } from "@/lib/jam-state";
@@ -71,7 +72,10 @@ export function JamSongPanel({
   const { t, locale } = useTranslation();
   const needLabel = useNeedLabel();
   const tracks = useMemo(() => orderTracks(detail?.tracks ?? []), [detail?.tracks]);
-  const playback = useJamPlayback(song.id, tracks, { autoplay });
+  const playback = useJamPlayback(song.id, tracks, {
+    autoplay,
+    onPlayError: () => setError(t("jam.studio.playError")),
+  });
   const [error, setError] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<JamTrack | null>(null);
   const [confirmSong, setConfirmSong] = useState(false);
@@ -273,6 +277,7 @@ export function JamSongPanel({
                           track.id,
                           put,
                           () => readJamChannel(channelId).details[song.id]?.tracks ?? tracks,
+                          () => rereadJamTracks(channelId, song.id),
                         );
                         if (outcome === "partial") {
                           setError(t("jam.error.swapPartial"));

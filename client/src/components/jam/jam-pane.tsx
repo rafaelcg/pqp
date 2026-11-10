@@ -550,7 +550,10 @@ export function JamPane({
             song={openSong}
             detail={openDetail}
             viewerId={viewerId}
-            enabled={config.enabled && canPost}
+            // The flag only: recording is gated by what the server says this viewer may
+            // ADD (`viewer.addableInstruments`, which already needs SEND_MESSAGES), so a
+            // song author or moderator without it still manages the mix and their takes.
+            enabled={config.enabled}
             uploads={config.uploads}
             freshTrackId={freshTrackId}
             onRecord={(instrument) => setStudio({ mode: "over", songId: openSong.id, instrument })}

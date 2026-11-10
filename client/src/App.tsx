@@ -133,7 +133,7 @@ import { ChannelIcon } from "@/components/layout/channel-icon";
 import { dispatchForumFrame, dispatchForumReconnected } from "@/lib/forum-frames";
 import { dispatchJamFrame, dispatchJamReconnected } from "@/lib/jam-frames";
 import { JamPane } from "@/components/jam/jam-pane";
-import { jamOutcomeUnknown } from "@/lib/jam-api";
+import { createJamOnce } from "@/lib/jam-create";
 import { setJamViewer } from "@/lib/jam-store";
 import { useJamHintContext } from "@/lib/jam-hint-context";
 import { useJamConfig } from "@/hooks/use-jam-config";
@@ -2086,6 +2086,7 @@ function MainAppContent({
     [],
   );
   const jamCreating = useRef(false);
+  const jamCreateUnsure = useRef<{ serverId: string; known: Set<string> } | null>(null);
   const refreshChannelListRef = useRef<
     (serverId: string, confirmingVanishedId?: string | null) => void
   >(() => {});
@@ -7134,24 +7135,24 @@ function MainAppContent({
     jamCreating.current = true;
     const serverId = selectedServerId;
     try {
-      const known = new Set(channels.map((one) => one.id));
-      let made: Channel | null = null;
-      try {
-        made = (await createChannel(serverId, "jam", "jam", false, undefined, parentId)).channel;
-      } catch (error) {
-        if (jamOutcomeUnknown(error)) {
-          // No answer is not "no": the server may have made the channel and the reply
-          // got lost. Read the list (and wait for it) and take a Jam that is new to
-          // us as the answer, instead of letting a retry make a second one.
-          try {
-            const { channels: fetched } = await fetchChannels(serverId);
-            made = fetched.find((one) => one.type === "jam" && !known.has(one.id)) ?? null;
-          } catch {
-            // the list could not be read either: the error below stands
-          }
-          refreshChannelListRef.current(serverId);
-        }
-        if (!made) {
+      const unsure = jamCreateUnsure.current?.serverId === serverId ? jamCreateUnsure.current.known : null;
+      const result = await createJamOnce<Channel>({
+        known: new Set(channels.map((one) => one.id)),
+        unsure,
+        create: async () => (await createChannel(serverId, "jam", "jam", false, undefined, parentId)).channel,
+        list: async () => (await fetchChannels(serverId)).channels,
+      });
+      jamCreateUnsure.current = result.unsure ? { serverId, known: new Set(result.unsure) } : null;
+      if (result.listed) {
+        refreshChannelListRef.current(serverId);
+      }
+      const made = result.channel;
+      if (!made) {
+        const failure = result.failure;
+        if (failure === "unreadable") {
+          setAppError(translateMessage("jam.error.network"));
+        } else {
+          const error = failure?.error;
           setAppError(
             error instanceof ApiError && error.message === "jam_channels_off"
               ? translateMessage("jam.error.off")
@@ -7159,18 +7160,17 @@ function MainAppContent({
                 ? error.message
                 : "Channel action failed",
           );
-          return;
         }
+        return;
       }
       channelListTickets.created(made);
-      const channel = made;
       setChannels((before) =>
-        before.some((one) => one.id === channel.id)
+        before.some((one) => one.id === made.id)
           ? before
-          : [...before, channel].sort((a, b) => a.position - b.position),
+          : [...before, made].sort((a, b) => a.position - b.position),
       );
       setAppError(null);
-      await selectChannel(channel.id);
+      await selectChannel(made.id);
     } catch (error) {
       setAppError(error instanceof Error ? error.message : "Channel action failed");
     } finally {

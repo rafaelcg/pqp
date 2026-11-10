@@ -262,7 +262,7 @@ export function LatencyCard({ studio }: { studio: JamStudio }) {
           onSubmit={(event) => {
             event.preventDefault();
             if (typedOk) {
-              void studio.setManualLatency(typedMs).then(() => setTyped(""));
+              void studio.setManualLatency(typedMs).then((ok) => ok && setTyped(""));
             }
           }}
         >
@@ -287,6 +287,11 @@ export function LatencyCard({ studio }: { studio: JamStudio }) {
               )}
             </span>
           </label>
+          {studio.manualLatencyFailed && (
+            <p role="alert" className="font-normal leading-snug text-on-danger-soft">
+              {t("jam.error.other")}
+            </p>
+          )}
           <p className="font-normal leading-snug text-text-tertiary">{t("jam.latency.manual.hint")}</p>
         </form>
       </details>

@@ -15,17 +15,20 @@ import { cn } from "@/lib/utils";
 function useClockReadout(clock: JamClock): { positionMs: number; durationMs: number } {
   const [reading, setReading] = useState({ positionMs: 0, durationMs: 0 });
   const last = useRef(0);
+  // The latest duration shown, read by the subscription (a value captured from the
+  // first render would be 0 forever and make every tick look like a change).
+  const shownDuration = useRef(0);
   useEffect(
     () =>
       clock.subscribe((positionMs, durationMs) => {
         const now = performance.now();
-        if (now - last.current < 100 && durationMs === reading.durationMs) {
+        if (now - last.current < 100 && durationMs === shownDuration.current) {
           return;
         }
         last.current = now;
+        shownDuration.current = durationMs;
         setReading({ positionMs, durationMs });
       }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- the readout reads its own last value
     [clock],
   );
   return reading;

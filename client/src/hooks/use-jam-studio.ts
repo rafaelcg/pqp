@@ -16,7 +16,7 @@ import { forgetCheckSkipped, isCheckSkipped, rememberCheckSkipped } from "@/lib/
 import { replaceInMix, takeToReplace } from "@/lib/jam-mix";
 import { createLevelMeter, type JamLevelMeter } from "@/lib/jam-level";
 import { getJamEngine, syncJamStems, TAKE_STEM_ID } from "@/lib/jam-session";
-import { applyJamWrite, jamStoreEpoch, putJamSongOnWall, putJamTrackInSong } from "@/lib/jam-store";
+import { applyJamWrite, jamStoreEpoch, putJamSongOnWall, putJamTrackInSong, rereadJamTracks } from "@/lib/jam-store";
 import {
   asRecorded,
   isEdited,
@@ -586,14 +586,19 @@ export function useJamStudio(args: UseJamStudioArgs) {
       // when they said so (the default): the new one in, then the old one out. The
       // take is posted either way, so a failure here is told, never a failed post.
       if (replaceTake && wantsReplace && !answer.track.inMix) {
-        const outcome = await replaceInMix(answer.track.id, replaceTake.id, async (id, inMix) => {
-          const written = await updateJamTrack(id, { inMix });
-          applyJamWrite(
-            channelId,
-            { type: "jam-track-updated", channelId, song: written.song, track: written.track },
-            asked,
-          );
-        });
+        const outcome = await replaceInMix(
+          answer.track.id,
+          replaceTake.id,
+          async (id, inMix) => {
+            const written = await updateJamTrack(id, { inMix });
+            applyJamWrite(
+              channelId,
+              { type: "jam-track-updated", channelId, song: written.song, track: written.track },
+              asked,
+            );
+          },
+          () => rereadJamTracks(channelId, targetSong),
+        );
         if (outcome !== "replaced") {
           setSwapFailed(true);
         }
@@ -702,14 +707,23 @@ export function useJamStudio(args: UseJamStudioArgs) {
    * every measurement (`JamEngine.setManualLatency`), so it is the way to say
    * "my takes always land early or late by this much".
    */
+  const [manualLatencyFailed, setManualLatencyFailed] = useState(false);
   const setManualLatency = useCallback(
-    async (roundTripMs: number | null) => {
+    async (roundTripMs: number | null): Promise<boolean> => {
       const live = engine;
       if (!live) {
-        return;
+        return false;
       }
-      await live.setManualLatency(roundTripMs);
-      await refreshLatency(live);
+      try {
+        await live.setManualLatency(roundTripMs);
+        await refreshLatency(live);
+        setManualLatencyFailed(false);
+        return true;
+      } catch {
+        // Said, not swallowed: the number that applies may not be the one typed.
+        setManualLatencyFailed(true);
+        return false;
+      }
     },
     [engine, refreshLatency],
   );
@@ -841,6 +855,7 @@ export function useJamStudio(args: UseJamStudioArgs) {
     skipCheck,
     recheck,
     setManualLatency,
+    manualLatencyFailed,
     chooseDevice,
     retryMic,
     tapTempo: tapTempoNow,
