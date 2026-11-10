@@ -270,7 +270,20 @@ struct ChatView: View {
             Color.clear.frame(width: 0, height: 0).dismissWhenServerRemoved(server?.id ?? flagsServerId)
 
             VStack(spacing: 0) {
-                messageList
+                // Activities: the strip while one runs in this channel, the toolbar
+                // entry and the launcher. Nothing at all in a conversation, a thread
+                // or a forum post, or on a server whose `apps` flag is off. Attached
+                // here, not at the end of the screen's modifier chain, which the type
+                // checker cannot take one more link of.
+                messageList.activities(
+                    channelId: channelId,
+                    channelName: voiceChannel?.name ?? (title.hasPrefix("#") ? String(title.dropFirst()) : title),
+                    serverId: conversation == nil && forumPost == nil ? server?.id : nil,
+                    isVoice: voiceChannel != nil,
+                    origin: .channel,
+                    voiceChannel: voiceChannel,
+                    serverName: server?.name
+                )
                 typingRow
                 botActivityRow
                 botNoticeRow

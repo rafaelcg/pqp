@@ -15378,6 +15378,886 @@
           }
         }
       }
+    },
+    "%@ ended" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ terminou"
+          }
+        }
+      }
+    },
+    "%@ ended it." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ encerrou."
+          }
+        }
+      }
+    },
+    "%@ left. %@ takes over in %@." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ saiu. %@ assume em %@."
+          }
+        }
+      }
+    },
+    "%@ left. If they do not come back, you take over in %@." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ saiu. Se não voltar, tu assume em %@."
+          }
+        }
+      }
+    },
+    "%@ left. With nobody to take over, the app ends in %@." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ saiu. Sem ninguém pra assumir, o app termina em %@."
+          }
+        }
+      }
+    },
+    "%@ started it." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ começou."
+          }
+        }
+      }
+    },
+    "%lld in" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld dentro"
+          }
+        }
+      }
+    },
+    "%lld in, %lld watching" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld dentro, %lld assistindo"
+          }
+        }
+      }
+    },
+    "%lld of %lld" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld de %lld"
+          }
+        }
+      }
+    },
+    "%lld of %lld, %lld watching" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld de %lld, %lld assistindo"
+          }
+        }
+      }
+    },
+    "%lld playing. The picture goes through the call." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld jogando. A imagem passa pela call."
+          }
+        }
+      }
+    },
+    "%lld to %lld people" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld a %lld pessoas"
+          }
+        }
+      }
+    },
+    "A moderator ended it." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Um moderador encerrou."
+          }
+        }
+      }
+    },
+    "Activities" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Atividades"
+          }
+        }
+      }
+    },
+    "Activities have not been turned on for this server yet. Whoever runs it can ask for access." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "As atividades ainda não foram liberadas neste servidor. Quem administra pode pedir o acesso."
+          }
+        }
+      }
+    },
+    "An activity is already running in this channel, started by %@." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Já tem uma atividade rolando neste canal, começada por %@."
+          }
+        }
+      }
+    },
+    "Any size" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Qualquer tamanho"
+          }
+        }
+      }
+    },
+    "Back to it" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Voltar"
+          }
+        }
+      }
+    },
+    "Could not end it. Try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra encerrar. Tenta de novo."
+          }
+        }
+      }
+    },
+    "Could not join. Check your connection and try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra entrar. Confere a conexão e tenta de novo."
+          }
+        }
+      }
+    },
+    "Could not start. Try again in a moment." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra começar. Tenta de novo em instantes."
+          }
+        }
+      }
+    },
+    "Do something together in #%@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fazer algo junto em #%@"
+          }
+        }
+      }
+    },
+    "Easy, try again in a few seconds." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Calma, tenta de novo em uns segundos."
+          }
+        }
+      }
+    },
+    "End %@ for everyone?" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Encerrar %@ pra todo mundo?"
+          }
+        }
+      }
+    },
+    "End app" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Encerrar app"
+          }
+        }
+      }
+    },
+    "End the app for everyone" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Encerrar o app pra todos"
+          }
+        }
+      }
+    },
+    "Everyone inside is taken out and the room closes." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quem está dentro sai e a sala fecha."
+          }
+        }
+      }
+    },
+    "Host" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Host"
+          }
+        }
+      }
+    },
+    "Host: %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Host: %@"
+          }
+        }
+      }
+    },
+    "It ended after a while with nobody active." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Terminou por falta de atividade."
+          }
+        }
+      }
+    },
+    "It ended." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Terminou."
+          }
+        }
+      }
+    },
+    "It reached the 12 hour limit." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chegou no limite de 12 horas."
+          }
+        }
+      }
+    },
+    "Join %@?" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Entrar em %@?"
+          }
+        }
+      }
+    },
+    "Keep it" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deixar rodando"
+          }
+        }
+      }
+    },
+    "Keeps things on this device" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Guarda coisas neste aparelho"
+          }
+        }
+      }
+    },
+    "Leave app" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sair do app"
+          }
+        }
+      }
+    },
+    "Let this app see my pqp id" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deixar este app ver o meu id do pqp"
+          }
+        }
+      }
+    },
+    "More app options" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mais opções do app"
+          }
+        }
+      }
+    },
+    "New: activities in the channel" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Novo: atividades no canal"
+          }
+        }
+      }
+    },
+    "No activities here yet" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ainda sem atividades por aqui"
+          }
+        }
+      }
+    },
+    "No connection. Trying to get back" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sem conexão. Tentando voltar"
+          }
+        }
+      }
+    },
+    "No connection. Trying to get back, your spot is kept for 90 s." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sem conexão. Tentando voltar, teu lugar fica guardado por 90 s."
+          }
+        }
+      }
+    },
+    "Nobody in yet" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ninguém dentro ainda"
+          }
+        }
+      }
+    },
+    "Not available in communities" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Indisponível em comunidades"
+          }
+        }
+      }
+    },
+    "Not available right now" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Indisponível agora"
+          }
+        }
+      }
+    },
+    "Off on this server" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desligado neste servidor"
+          }
+        }
+      }
+    },
+    "On the phone you watch it in the call" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No celular, tu assiste na call"
+          }
+        }
+      }
+    },
+    "One activity per channel. End the one that is running first." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Só uma atividade por canal. Encerra a que está rolando primeiro."
+          }
+        }
+      }
+    },
+    "Only on the computer for now" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Só no computador por enquanto"
+          }
+        }
+      }
+    },
+    "Only people who manage channels can start it" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Só quem gerencia canais começa"
+          }
+        }
+      }
+    },
+    "Opening the room..." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abrindo a sala..."
+          }
+        }
+      }
+    },
+    "pqp turned this app off. Your conversation stays here." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O pqp desligou este app. Tua conversa continua aqui."
+          }
+        }
+      }
+    },
+    "Reconnecting" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reconectando"
+          }
+        }
+      }
+    },
+    "Running here" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Em andamento aqui"
+          }
+        }
+      }
+    },
+    "Runs on the player's computer. Open a voice channel to watch." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Roda no computador de quem joga. Abre um canal de voz pra assistir."
+          }
+        }
+      }
+    },
+    "saves and preferences stay here only. pqp does not read or send them." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "saves e preferências ficam só aqui. O pqp não lê nem envia."
+          }
+        }
+      }
+    },
+    "See it in the call" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ver na call"
+          }
+        }
+      }
+    },
+    "See who is in" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ver quem está dentro"
+          }
+        }
+      }
+    },
+    "Somebody got in before you." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alguém entrou antes de ti."
+          }
+        }
+      }
+    },
+    "Start" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Começar"
+          }
+        }
+      }
+    },
+    "Start one and the crew joins from this channel, on the phone or the computer." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Começa uma e a galera entra por este canal, no celular ou no computador."
+          }
+        }
+      }
+    },
+    "Text channels only" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Só em canal de texto"
+          }
+        }
+      }
+    },
+    "The app does not see" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O app não vê"
+          }
+        }
+      }
+    },
+    "The app runs in an isolated box, with no access to your account, your cookies or the internet." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O app roda numa caixa isolada, sem acesso à tua conta, aos teus cookies nem à internet."
+          }
+        }
+      }
+    },
+    "The app sees" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O app vê"
+          }
+        }
+      }
+    },
+    "The app stopped responding. Try again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O app parou de responder. Tenta de novo."
+          }
+        }
+      }
+    },
+    "The channel was deleted." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O canal foi apagado."
+          }
+        }
+      }
+    },
+    "The host did not come back, so it ended." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O host não voltou, então terminou."
+          }
+        }
+      }
+    },
+    "The host ended it." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O host encerrou."
+          }
+        }
+      }
+    },
+    "The room was empty, so it ended." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ficou vazio, então terminou."
+          }
+        }
+      }
+    },
+    "This app already ended" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esse app já terminou"
+          }
+        }
+      }
+    },
+    "This app is not available right now." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esse app não está disponível agora."
+          }
+        }
+      }
+    },
+    "To keep your score between sessions. You can turn it off later in Settings. Unchecked, you join the same way, without saving." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pra guardar o teu placar entre sessões. Dá pra desligar depois em Configurações. Desmarcado, tu entra do mesmo jeito, sem salvar."
+          }
+        }
+      }
+    },
+    "Too much at once. Try again in a moment." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Muita coisa ao mesmo tempo. Tenta de novo em instantes."
+          }
+        }
+      }
+    },
+    "Voice channels only" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Só em canal de voz"
+          }
+        }
+      }
+    },
+    "Watching" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Assistindo"
+          }
+        }
+      }
+    },
+    "Watching. Host: %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Assistindo. Host: %@"
+          }
+        }
+      }
+    },
+    "Who is in %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quem está em %@"
+          }
+        }
+      }
+    },
+    "Whoever starts it is the host and can end it any time." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quem começa vira o host e pode encerrar quando quiser."
+          }
+        }
+      }
+    },
+    "You are the host" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu és o host"
+          }
+        }
+      }
+    },
+    "You cannot join this app here." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu não pode entrar neste app aqui."
+          }
+        }
+      }
+    },
+    "You cannot start activities in this channel. Ask whoever runs it." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu não pode começar atividades neste canal. Pede pra quem administra."
+          }
+        }
+      }
+    },
+    "You ended it." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu encerrou."
+          }
+        }
+      }
+    },
+    "Your connection dropped and your spot was released." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tua conexão caiu e o lugar foi liberado."
+          }
+        }
+      }
+    },
+    "Your display name and photo" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Teu nome de exibição e tua foto"
+          }
+        }
+      }
+    },
+    "your display name and photo. Anyone in the app sees them too." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "teu nome de exibição e tua foto. Quem estiver no app também vê."
+          }
+        }
+      }
+    },
+    "your email, your pqp id, your conversations or the rest of pqp." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "teu e-mail, teu id do pqp, tuas conversas nem o resto do pqp."
+          }
+        }
+      }
+    },
+    "The picture goes through the call." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A imagem passa pela call."
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

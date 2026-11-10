@@ -246,6 +246,11 @@ enum RealtimeEvent: Sendable {
     /// sent to whoever joined the jam channel. Applied by id, idempotently: a
     /// change reaches the writer's own socket too.
     case jam(JamFrame)
+    /// One of the six activity frames (`channel-app`, `app-session`, `app-state`,
+    /// `app-event`, `app-ended`, `app-error`; docs/APPS.md "Sessions"). Only sent
+    /// for a server whose `apps` flag is on, so a server without the feature
+    /// never produces one.
+    case apps(AppsFrame)
     /// `nudge-refused`: a chamar a atenção this socket sent did not land.
     case nudgeRefused(NudgeRefusal)
     /// `stories-update`: content-free, refetch the strip it names. Never sent
@@ -942,6 +947,38 @@ actor RealtimeClient {
 
     /// Chamar a atenção: `{type: "nudge", channelId, nonce}`. No body; the
     /// server writes the message, or answers `nudge-refused`.
+    // MARK: - Activities
+
+    /// `app-join`: take (or resume) a seat. The server answers `app-session`, or
+    /// `app-error` with the reason.
+    func appJoin(sessionId: String, asSpectator: Bool) async {
+        var frame: [String: Any] = ["type": "app-join", "sessionId": sessionId]
+        if asSpectator { frame["asSpectator"] = true }
+        await send(raw: frame)
+    }
+
+    /// `app-leave`: the seat is released, not held for the resume window.
+    func appLeave(sessionId: String) async {
+        await send(raw: ["type": "app-leave", "sessionId": sessionId])
+    }
+
+    /// `app-state-patch`: a JSON Merge Patch over the session state, optionally
+    /// conditional on `baseRev`. Answered by the next `app-state`.
+    func appStatePatch(sessionId: String, baseRev: Int?, patch: JSONValue) async {
+        var frame: [String: Any] = [
+            "type": "app-state-patch", "sessionId": sessionId, "patch": patch.foundationObject,
+        ]
+        if let baseRev { frame["baseRev"] = baseRev }
+        await send(raw: frame)
+    }
+
+    /// `app-event-send`: ephemeral, relayed to the other seats, never stored.
+    func appEventSend(sessionId: String, name: String, data: JSONValue) async {
+        await send(raw: [
+            "type": "app-event-send", "sessionId": sessionId, "name": name, "data": data.foundationObject,
+        ])
+    }
+
     func sendNudge(channelId: String, nonce: String) async {
         await send(raw: ["type": "nudge", "channelId": channelId, "nonce": nonce])
     }
@@ -1294,6 +1331,15 @@ actor RealtimeClient {
         // has no field for. A frame this build cannot read is dropped.
         if JamFrame.types.contains(probe.type) {
             if let frame = JamFrame.parse(data) { continuation?.yield(.jam(frame)) }
+            return
+        }
+
+        // The activity frames, before `Envelope` for the same reason: `session`,
+        // `state` and `value` are objects the shared envelope has no field for,
+        // and `channel-app` carries a whole session summary. A frame this build
+        // cannot read is dropped.
+        if AppsFrame.types.contains(probe.type) {
+            if let frame = AppsFrame.parse(data) { continuation?.yield(.apps(frame)) }
             return
         }
 

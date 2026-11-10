@@ -1315,6 +1315,34 @@ link (`JamLinks.song` is shaped like the forum's `/post/` link and is only as
 the web's own route, `/app/server/<server>/channel/<jam channel>/song/<song>`), Spanish (the app ships en and pt-BR
 only).
 
+## Activities (apps in a channel)
+
+The web's apps platform (`docs/APPS.md`: a sandboxed bundle somebody starts in a
+text or voice channel and others join) on the phone. **Invisible unless the
+server says so:** nothing is drawn or asked until `GET /api/apps/config?serverId=`
+answers `enabled` with an apps origin and at least one app this build can show or
+run (`LauncherRules.offersEntry`). Code: `ios/pqp/Sources/Apps/`.
+
+| File | Role |
+|---|---|
+| `AppsModels.swift` | the config, the session summary and the six frames (`channel-app`, `app-session`, `app-state`, `app-event`, `app-ended`, `app-error`), decoded leniently |
+| `AppsStore.swift` | the one source of truth for "an activity runs in this channel": fed by `GET /api/servers/:id/app-sessions` on open and on every reconnect, and by the frames; a frame that lands during a read wins over the read |
+| `AppsRules.swift` | pure rules: what a phone may do with an app, the launcher's reasons, the strip's states |
+| `AppBridge.swift` | the phone's half of the sandbox message API v1, ported from `bridge-host.ts` (strict parsing, manifest caps on the MERGED state, token buckets, participants built from scratch) |
+| `AppFrameController.swift` | the `WKWebView` and its isolation |
+| `ActivityRunner.swift` | one seat: join, resume on a new socket, state patches answered by the next `app-state`, leave |
+| `ActivitiesChannelModel.swift`, `ActivitiesHost.swift` | per channel: strip, toolbar entry, launcher, consent sheet, pane |
+
+**The isolation, which is the point.** The bundle runs as `<iframe sandbox="allow-scripts" allow="" referrerpolicy="no-referrer">` inside a wrapper document loaded with the pqp web origin as its base URL (what the bundle's `frame-ancestors` names) and a NON-persistent data store. The wrapper has no script of the page's world: the only code is a relay injected into an ISOLATED `WKContentWorld`, where the native message handler is registered, so the app's own scripts cannot see the handler, the port or the wrapper (`ActivitiesFrameIsolationTests` serves a hostile page and fails if the handler is registered in the page world instead, which was checked). The relay answers `app-hello` only from the frame's own window, hands over one `MessageChannel` port, and carries its messages to Swift as JSON text. Swift is the host. Navigation is decided natively: the wrapper loads once, the frame loads its entry once, a second load of the frame is cancelled and the frame removed (`frame-navigated`), popups are refused, no `hello` in 20 s removes it (`timeout`). The apps origin's own `Content-Security-Policy` header applies as on the web because the bundle is fetched from there with its headers. The auth token, user ids, channel and server ids and the socket never exist in the webview.
+
+**What a phone does today (phase A).** `AppPhoneSupport` is a short list in code, because the config does not carry the manifest's `platforms`: `pqp-eco` is playable (join, shared state, events, theme, roster with avatars as data URLs); `pqp-locadora` is watch-only (the strip says it is running and, in a voice channel, "Ver na call" joins the call where the host's share is drawn, with no seat in the app); everything else is dimmed in the launcher as "Só no computador por enquanto". The bridge answers `not-allowed` to `assets`, `files`, `store`, `sync` and `share`, the answer an app already reads as "this host has no such grant". Enquete no longer exists (removed from `apps/` in #1426); Eco is the platform's test app and is not released anywhere in production, so until a phone-first app ships there is no live participation on a phone outside a dev box.
+
+**Consent.** The join sheet shows the first time per app (`GET /api/me/app-consents`, `POST /api/apps/:app/consent`); a consent on file that is not stale goes straight in.
+
+**Copy** is the web's own (`apps.*` keys in `client/src/locales`), so both clients say the same thing; en and pt-BR in `Localizable.xcstrings`.
+
+**Verified** against a local server with `APPS=true` and the apps bundles served by `pnpm apps:dev`, with the web client and a scripted second user as the other participants: start on either side and join on the other, shared counter and events both ways, an end by the host, by somebody else and by the operator switching the app off, a socket drop and resume of the same seat. **Not verified:** a real device, a real Clerk account, any app other than Eco playing on a phone, Locadora's share on a phone (`locadora_share` is off until the legal answer).
+
 ## Parity with the web client
 
 Both clients talk to the same API — there is no mobile backend and no BFF — so
