@@ -103,7 +103,7 @@ const { resetSharedRateLimit } = await import("../lib/cluster-rate-limit.js");
 const { resetFeatureFlagsForTests, setServerFlagOverride, startFeatureFlags } = await import(
   "../lib/flags.js"
 );
-const { sweepJamMedia } = await import("../services/jam.js");
+const { sweepJamMedia, reducePeaks } = await import("../services/jam.js");
 const { jamKeysForChannels, jamKeysForServer, jamKeysForUser } = await import(
   "../services/jam-keys.js"
 );
@@ -511,6 +511,30 @@ describeDb("jam channels", () => {
     expect(second.body.song.id).toBe(first.body.song.id);
     expect((await getPool().query(`SELECT 1 FROM jam_songs`)).rowCount).toBe(1);
     expect(takeFrames()).toHaveLength(1);
+  });
+
+  it("a deleted song's nonce does not block a new song, and a constraint is never a 500", async () => {
+    const first = await createSong(bob, "Apagada", { nonce: "reuse-1" });
+    expect(first.status).toBe(201);
+    expect((await call(bob, "DELETE", `/api/jam-songs/${first.body.song.id}`)).status).toBe(204);
+    // The same nonce again (a client that reuses one, or a retry that arrives
+    // after the delete): a NEW song, not an error and not the deleted one.
+    const second = await createSong(bob, "Nova", { nonce: "reuse-1" });
+    expect(second.status, JSON.stringify(second.body)).toBe(201);
+    expect(second.body.song.id).not.toBe(first.body.song.id);
+    expect(second.body.song.title).toBe("Nova");
+    // And while that one is live the nonce is a retry key again.
+    const retry = await createSong(bob, "Nova", { nonce: "reuse-1" });
+    expect(retry.status).toBe(200);
+    expect(retry.body.song.id).toBe(second.body.song.id);
+    // Two creates with one fresh nonce fired at once: one song, the other
+    // answered with it, never a constraint error.
+    const raced = await Promise.all(
+      [1, 2, 3, 4].map(() => createSong(carol, "Corrida", { nonce: "race-1" })),
+    );
+    expect(raced.every((r) => r.status === 200 || r.status === 201)).toBe(true);
+    expect(new Set(raced.map((r) => r.body.song.id)).size).toBe(1);
+    expect(raced.filter((r) => r.status === 201)).toHaveLength(1);
   });
 
   it("who may create: members who can post; not a muted member, not a stranger, not a non-jam channel", async () => {
@@ -1048,6 +1072,100 @@ describeDb("jam channels", () => {
     expect(full.status).toBe(409);
     expect(full.body.error).toBe("jam_song_full");
     expect((await detail(mod, song)).viewer.addableInstruments).toEqual([]);
+  });
+
+  it("the song preview: waveform, video flag, contributors and missing instruments, in the list, the detail and the frames", async () => {
+    const song = await songId(alice, "Procura-se baixo", {
+      joinMode: "wanted",
+      wantedInstruments: ["bass", "drums"],
+    });
+    // Empty first.
+    const empty = (await detail(carol, song)).song;
+    expect(empty).toMatchObject({
+      previewPeaks: [],
+      hasVideo: false,
+      contributors: [],
+      missingInstruments: ["bass", "drums"],
+    });
+
+    // A quiet guitar (in the mix), a louder second guitar take (NOT in the
+    // mix), then drums with a video: the preview takes the loudest IN-MIX stem.
+    const quiet = Array.from({ length: 400 }, () => 0.1);
+    const loud = Array.from({ length: 400 }, (_, i) => (i === 399 ? 1 : 0.5));
+    const drums = Array.from({ length: 10 }, () => 0.3);
+    await addTrack(alice, song, "guitar", { peaks: quiet });
+    await addTrack(alice, song, "guitar", { peaks: loud }); // later take: not in the mix
+    stubs.frames.length = 0;
+    const withVideo = await addTrack(bob, song, "drums", { peaks: drums }, { video: true });
+    expect(withVideo.status).toBe(201);
+
+    const read = (await detail(carol, song)).song;
+    expect(read.hasVideo).toBe(true);
+    // Drums sum to 3.0, the in-mix guitar to 40: the guitar is the preview, 64 values.
+    expect(read.previewPeaks).toHaveLength(64);
+    expect(read.previewPeaks.every((v) => v === 0.1)).toBe(true);
+    expect(read.contributors.map((c) => c.name)).toEqual(["Alice", "Bob"]);
+    expect(read.contributorCount).toBe(2);
+    // Bass is still missing, drums is covered.
+    expect(read.missingInstruments).toEqual(["bass"]);
+
+    // The same fields in the list, the frame and the add answer: one query.
+    const listed = jamSongListResponseSchema.parse(
+      (await call(carol, "GET", `/api/channels/${jamId}/jam-songs`)).body,
+    ).songs.find((s) => s.id === song)!;
+    expect(listed).toEqual(read);
+    expect(withVideo.body.song).toEqual(read);
+    const added = takeFrames().find((f) => f.type === "jam-track-added")!;
+    expect((added as Extract<JamFrame, { type: "jam-track-added" }>).song).toEqual(read);
+
+    // Turning the loud take on and the quiet one off changes the preview, and a
+    // non-wanted song never lists missing instruments.
+    const tracks = (await detail(alice, song)).tracks.filter((t) => t.instrument === "guitar");
+    await call(alice, "PATCH", `/api/jam-tracks/${tracks[0]!.id}`, { inMix: false });
+    await call(alice, "PATCH", `/api/jam-tracks/${tracks[1]!.id}`, { inMix: true });
+    const swapped = (await detail(carol, song)).song;
+    expect(swapped.previewPeaks[63]).toBe(1);
+    expect(swapped.previewPeaks[0]).toBe(0.5);
+    await call(alice, "PATCH", `/api/jam-songs/${song}`, { joinMode: "open" });
+    expect((await detail(carol, song)).song.missingInstruments).toEqual([]);
+  });
+
+  it("the preview names at most four contributors, nicknames first, and a removed track drops its person", async () => {
+    const song = await songId(alice);
+    const people = [alice, bob, carol, mod, dave];
+    // Dave may not post, so his track goes in directly.
+    for (const person of [alice, bob, carol, mod]) {
+      await trackId(person, song, "other");
+      await new Promise((done) => setTimeout(done, 5));
+    }
+    await getPool().query(
+      `INSERT INTO jam_tracks (song_id, author_id, instrument, audio_key, audio_content_type, audio_bytes, duration_ms)
+       VALUES ($1, $2, 'other', 'k/dave', 'audio/webm', 10, 1000)`,
+      [song, dave.id],
+    );
+    await getPool().query(`UPDATE server_members SET nickname = 'Robertão' WHERE user_id = $1`, [bob.id]);
+    const summary = (await detail(carol, song)).song;
+    expect(people).toHaveLength(5);
+    expect(summary.contributorCount).toBe(5);
+    expect(summary.contributors).toHaveLength(4);
+    expect(summary.contributors.map((c) => c.name)).toEqual(["Alice", "Robertão", "Carol", "Mod"]);
+    const own = (await detail(alice, song)).tracks.find((t) => t.authorId === alice.id)!;
+    await call(alice, "DELETE", `/api/jam-tracks/${own.id}`);
+    expect((await detail(carol, song)).song.contributors.map((c) => c.name)).toEqual([
+      "Robertão",
+      "Carol",
+      "Mod",
+      "Dave",
+    ]);
+  });
+
+  it("reducePeaks keeps the loudest value of each bucket and never exceeds 64", () => {
+    expect(reducePeaks([0.1, 0.2])).toEqual([0.1, 0.2]);
+    const spike = Array.from({ length: 400 }, (_, i) => (i === 123 ? 0.9 : 0.05));
+    const reduced = reducePeaks(spike);
+    expect(reduced).toHaveLength(64);
+    expect(Math.max(...reduced)).toBe(0.9);
+    expect(reducePeaks([2, -1, Number.NaN])).toEqual([1, 0, 0]);
   });
 
   it("trims and the mix length: the played slice, offsets either side of zero", async () => {
