@@ -366,4 +366,23 @@ class ActivitySeatTest {
         runCurrent()
         assertEquals("and no more once the snapshot is back", 2, r.types().size)
     }
+
+    @Test
+    fun `the resume keeps asking, slower, for as long as the socket is up and no snapshot came`() = runTest {
+        val r = rig()
+        seated(r)
+        r.state.value = RealtimeState.Reconnecting
+        runCurrent()
+        r.state.value = RealtimeState.Ready
+        runCurrent()
+        advanceTimeBy(ActivitySeat.RESUME_RETRY_MAX_MS * 12)
+        runCurrent()
+        assertTrue("still asking well past the old five tries (${r.types().size})", r.types().size > 8)
+        r.emit(snapshotFrame())
+        runCurrent()
+        val settled = r.types().size
+        advanceTimeBy(ActivitySeat.RESUME_RETRY_MAX_MS * 3)
+        runCurrent()
+        assertEquals(settled, r.types().size)
+    }
 }

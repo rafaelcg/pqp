@@ -261,10 +261,13 @@ class ActivitySeat(
     private fun resumeSeat() {
         resumeJob?.cancel()
         resumeJob = scope.launch {
-            repeat(RESUME_ATTEMPTS) {
-                if (!online || !seated || lastConnection) return@launch
+            // Until a snapshot confirms the seat or the socket drops again (which starts its own round): giving up
+            // after a fixed count would leave the seat "reconnecting" for good while the socket is perfectly well.
+            var wait = RESUME_RETRY_MS
+            while (online && seated && !lastConnection) {
                 send(ActivityFrame.join(sessionId, asSpectator))
-                delay(RESUME_RETRY_MS)
+                delay(wait)
+                wait = minOf(wait * 2, RESUME_RETRY_MAX_MS)
             }
         }
     }
@@ -273,7 +276,7 @@ class ActivitySeat(
         const val JOIN_TIMEOUT_MS = 8_000L
         const val PATCH_TIMEOUT_MS = 6_000L
         const val RESUME_RETRY_MS = 2_000L
-        const val RESUME_ATTEMPTS = 5
+        const val RESUME_RETRY_MAX_MS = 10_000L
 
         /**
          * What an app is told when the session ended while this phone could not hear: the resume
