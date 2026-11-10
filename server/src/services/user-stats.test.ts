@@ -137,7 +137,12 @@ describeDb("user stats", () => {
   async function seat(
     channelId: string,
     userId: string,
-    options: { sharing?: boolean; orphaned?: boolean } = {},
+    options: {
+      sharing?: boolean;
+      orphaned?: boolean;
+      muted?: boolean;
+      deafened?: boolean;
+    } = {},
   ): Promise<void> {
     await getPool().query(
       `INSERT INTO voice_rooms (channel_id, transport) VALUES ($1, 'mesh')
@@ -146,8 +151,9 @@ describeDb("user stats", () => {
     );
     await getPool().query(
       `INSERT INTO voice_peers
-         (peer_id, channel_id, user_id, instance_id, display_name, sharing_screen, orphaned_at)
-       VALUES ($1, $2, $3, $4, 'x', $5, $6)`,
+         (peer_id, channel_id, user_id, instance_id, display_name, sharing_screen, orphaned_at,
+          muted, deafened)
+       VALUES ($1, $2, $3, $4, 'x', $5, $6, $7, $8)`,
       [
         randomUUID(),
         channelId,
@@ -155,6 +161,8 @@ describeDb("user stats", () => {
         randomUUID(),
         options.sharing ?? false,
         options.orphaned ? new Date() : null,
+        options.muted ?? false,
+        options.deafened ?? false,
       ],
     );
   }
@@ -199,6 +207,56 @@ describeDb("user stats", () => {
 
     await first.sample(new Date("2026-10-10T23:01:05Z"));
     expect((await stats())[ana]).toEqual({ voice: 120, share: 120, music: 0 });
+  });
+
+  it("counts the minutes a microphone was live, and the shared ones without one", async () => {
+    const ana = await person("ana");
+    const bia = await person("bia");
+    const cai = await person("cai");
+    const room = randomUUID();
+    // Ana shares muted, Bia talks, Cai sits deafened (which mutes).
+    await seat(room, ana, { sharing: true, muted: true });
+    await seat(room, bia);
+    await seat(room, cai, { muted: true, deafened: true });
+    // Two tabs: a muted sharing one beside an open one is a person whose
+    // microphone is live, so that shared minute is not a muted one.
+    const tabs = randomUUID();
+    await seat(tabs, bia, { sharing: true, muted: true });
+    await seat(tabs, cai, { muted: true });
+
+    const r = recorder();
+    await r.sample(new Date("2026-10-10T23:00:10Z"));
+    await r.sample(new Date("2026-10-10T23:01:10Z"));
+
+    const rows = await getPool().query<{
+      user_id: string;
+      voice_seconds: number;
+      share_seconds: number;
+      open_mic_seconds: number;
+      share_muted_seconds: number;
+    }>(
+      `SELECT user_id, voice_seconds, share_seconds, open_mic_seconds, share_muted_seconds
+         FROM user_daily_stats`,
+    );
+    const by = Object.fromEntries(rows.rows.map((row) => [row.user_id, row]));
+    expect(by[ana]).toMatchObject({
+      voice_seconds: 120,
+      share_seconds: 120,
+      open_mic_seconds: 0,
+      share_muted_seconds: 120,
+    });
+    expect(by[bia]).toMatchObject({
+      voice_seconds: 120,
+      share_seconds: 120,
+      open_mic_seconds: 120,
+      share_muted_seconds: 0,
+    });
+    expect(by[cai]).toMatchObject({
+      voice_seconds: 120,
+      share_seconds: 0,
+      open_mic_seconds: 0,
+      share_muted_seconds: 0,
+    });
   });
 
   it("counts every tick of one sampler, and never moves the stored time back", async () => {

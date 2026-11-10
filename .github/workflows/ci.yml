@@ -424,6 +424,7 @@ jobs:
             shards: "3 4"
             label: 3+4/4
           # No lanes: camera sync needs no API and no database (about 3 min).
+          # The jam engine rig rides in this job too (about 1 min).
           - suite: camera-sync
             label: synthetic live HLS
             camera: true
@@ -589,6 +590,16 @@ jobs:
         run: |
           command -v ffmpeg || (sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg)
           pnpm --filter @pqp/client e2e:camera-sync
+
+      # The jam audio engine (client/playwright.jam.config.ts): a take recorded
+      # over a backing through a fake microphone must land on the backing,
+      # through FLAC and real-time playback; plus how Chromium decodes each
+      # candidate upload codec (ffmpeg from the step above). Playwright's
+      # Chromium, no API, no database, about a minute.
+      - name: E2E jam engine (fake microphone, placement and playback)
+        if: matrix.camera
+        timeout-minutes: 5
+        run: pnpm --filter @pqp/client e2e:jam --project=chromium
 
       # `cancelled()` too: a step that hit its timeout ends the job as a
       # cancellation, and that is exactly when the output is wanted.

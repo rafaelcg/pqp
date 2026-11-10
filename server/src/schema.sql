@@ -5420,6 +5420,11 @@ CREATE TABLE IF NOT EXISTS user_daily_stats (
   voice_sampled_at TIMESTAMPTZ,
   PRIMARY KEY (user_id, day)
 );
+-- Of `voice_seconds`, the minutes a seat's microphone was live (neither muted
+-- nor deafened), and of `share_seconds` the minutes with no live microphone
+-- anywhere. Counts only, same sampler, same minute. Starts the day it ships.
+ALTER TABLE user_daily_stats ADD COLUMN IF NOT EXISTS open_mic_seconds INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE user_daily_stats ADD COLUMN IF NOT EXISTS share_muted_seconds INTEGER NOT NULL DEFAULT 0;
 
 -- Which watch parties a person watched. Copied from `hls_session_viewers`
 -- before its 24h prune, one row per party (`started_at_ms` survives an
@@ -7643,8 +7648,17 @@ CREATE INDEX IF NOT EXISTS idx_jam_songs_created
 CREATE INDEX IF NOT EXISTS idx_jam_songs_channel_all ON jam_songs (channel_id);
 CREATE INDEX IF NOT EXISTS idx_jam_songs_server ON jam_songs (server_id);
 CREATE INDEX IF NOT EXISTS idx_jam_songs_author ON jam_songs (author_id) WHERE author_id IS NOT NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_jam_songs_nonce
-  ON jam_songs (channel_id, author_id, client_nonce) WHERE client_nonce IS NOT NULL;
+-- The nonce is a retry key for LIVE songs only. The first version of this
+-- index (`idx_jam_songs_nonce`) also covered soft-deleted rows, so a create that
+-- reused the nonce of a deleted song hit it and answered 500. Replaced by the
+-- partial one below; the old one is dropped after the new one exists, so there
+-- is never a moment without the uniqueness a racing retry relies on. Pitfall
+-- 22: `jam_songs` is a small table behind a dark flag, so the build and the
+-- DROP are brief, and DROP INDEX IF EXISTS takes no lock once the index is gone.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_jam_songs_nonce_live
+  ON jam_songs (channel_id, author_id, client_nonce)
+  WHERE client_nonce IS NOT NULL AND deleted_at IS NULL;
+DROP INDEX IF EXISTS idx_jam_songs_nonce;
 
 CREATE TABLE IF NOT EXISTS jam_tracks (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

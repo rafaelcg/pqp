@@ -45,6 +45,8 @@ call with whom.
 |---|---|---|
 | `user_daily_stats` | `voice_seconds` | One-minute sampler over live seats in rooms of two or more real people. |
 | `user_daily_stats` | `share_seconds` | Same sampler, seats with `sharing_screen`. |
+| `user_daily_stats` | `open_mic_seconds` | Same sampler, minutes the person had a live microphone (not muted, not deafened) in any seat. Not for the recap: it exists to tell a call somebody talked in from a call they sat in muted. |
+| `user_daily_stats` | `share_muted_seconds` | Same sampler, minutes sharing a screen with no live microphone in any seat. |
 | `user_daily_stats` | `music_queued` | Noted where a music write is accepted, flushed once a minute. |
 | `user_watch_parties` | one row per party | Copied from `hls_session_viewers` every 15 minutes. |
 

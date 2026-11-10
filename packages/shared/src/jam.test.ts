@@ -46,6 +46,10 @@ const SONG: JamSongSummary = {
   instruments: ["guitar"],
   contributorCount: 1,
   mixDurationMs: 61_000,
+  previewPeaks: [0.2, 0.9],
+  hasVideo: true,
+  contributors: [{ id: ID2, name: "Alice", avatarUrl: null }],
+  missingInstruments: ["bass", "drums"],
 };
 
 const TRACK: JamTrack = {
@@ -117,6 +121,27 @@ describe("jam contract", () => {
     expect(song.instruments).toEqual(["guitar", "other"]);
   });
 
+  it("the song preview is additive: an older server's summary still parses, with empty previews", () => {
+    const {
+      previewPeaks: _peaks,
+      hasVideo: _video,
+      contributors: _contributors,
+      missingInstruments: _missing,
+      ...older
+    } = SONG;
+    const parsed = jamSongSummarySchema.parse(older);
+    expect(parsed).toMatchObject({
+      previewPeaks: [],
+      hasVideo: false,
+      contributors: [],
+      missingInstruments: [],
+    });
+    // And a newer one's instrument it does not know reads as `other`.
+    expect(
+      jamSongSummarySchema.parse({ ...SONG, missingInstruments: ["theremin"] }).missingInstruments,
+    ).toEqual(["other"]);
+  });
+
   it("does the timeline arithmetic the header states", () => {
     expect(jamTrackPlayedMs(TRACK)).toBe(60_850);
     expect(jamTrackEndMs(TRACK)).toBe(60_600);
@@ -161,6 +186,8 @@ describe("jam requests", () => {
   it("limits what may be uploaded per kind", () => {
     const ok = { kind: "audio", contentType: "audio/webm", byteSize: JAM_AUDIO_MAX_BYTES };
     expect(createJamUploadSchema.safeParse(ok).success).toBe(true);
+    // What the web engine uploads. Refusing it means no browser can post a take.
+    expect(createJamUploadSchema.safeParse({ ...ok, contentType: "audio/flac" }).success).toBe(true);
     expect(createJamUploadSchema.safeParse({ ...ok, contentType: "audio/wav" }).success).toBe(false);
     expect(createJamUploadSchema.safeParse({ ...ok, contentType: "video/mp4" }).success).toBe(false);
     expect(

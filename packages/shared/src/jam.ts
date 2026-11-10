@@ -210,6 +210,10 @@ export const JAM_GAIN_MAX = 2;
 export const JAM_TRACK_MAX_DURATION_MS = 10 * 60 * 1000;
 /** Shorter than this is a tap on the record button. */
 export const JAM_TRACK_MIN_DURATION_MS = 300;
+/** `previewPeaks` on a song summary: at most this many values. */
+export const JAM_PREVIEW_PEAKS_MAX = 64;
+/** `contributors` on a song summary: at most this many people. */
+export const JAM_PREVIEW_CONTRIBUTORS_MAX = 4;
 /** `|offsetMs|` may not exceed this: ten minutes either side of the song's zero. */
 export const JAM_OFFSET_MAX_MS = 10 * 60 * 1000;
 /** Audio object ceiling in bytes: 32 MiB. Ten minutes at 320 kbps is ~24 MB. */
@@ -219,8 +223,14 @@ export const JAM_VIDEO_MAX_BYTES = 100 * 1024 * 1024;
 /**
  * What a recorder may upload as audio, bare (no `;codecs=`): the claim HEAD
  * compares the stored type with the signed one exactly.
+ *
+ * `audio/flac` is what the web engine (`client/src/lib/jam/upload.ts`) sends,
+ * and the one every client decodes without moving a sample: MP3 lands 12 ms
+ * late in WebKit and on iOS, and iOS cannot open WebM at all
+ * (`docs/JAM_ENGINE.md`). The lossy types stay for a file somebody uploads.
  */
 export const JAM_AUDIO_CONTENT_TYPES = [
+  "audio/flac",
   "audio/webm",
   "audio/ogg",
   "audio/mp4",
@@ -263,6 +273,12 @@ export const JAM_ERRORS = {
   uploadTooLarge: "jam_upload_too_large",
   /** 503: object storage is not configured on this deployment. */
   storageOff: "jam_storage_off",
+  /**
+   * 409: a create whose nonce kept colliding with a song deleted under it. Not
+   * reachable in practice (a deleted song's nonce is free); it exists so a
+   * constraint can never surface as a 500.
+   */
+  nonceConflict: "jam_nonce_conflict",
   /** 429: too many songs or uploads in the window. */
   rateLimited: "jam_rate_limited",
 } as const;
@@ -387,6 +403,18 @@ export type JamConfig = z.infer<typeof jamConfigSchema>;
 // ----------------------------------------------------------------- songs
 
 /**
+ * One person with a live track in a song, as a song tile draws them: a name and
+ * a face, and nothing else. Same naming as `JamTrack.authorName` (the server
+ * nickname first).
+ */
+export const jamContributorSchema = z.object({
+  id: uuid,
+  name: z.string().nullable(),
+  avatarUrl: z.string().nullable(),
+});
+export type JamContributor = z.infer<typeof jamContributorSchema>;
+
+/**
  * One song as every viewer who can see the channel sees it. Carried by the
  * list, the detail, and the song frames, so it never holds anything about the
  * viewer. Arrays carry no `.max()` on purpose: an older client must not reject a
@@ -417,6 +445,33 @@ export const jamSongSummarySchema = z.object({
   contributorCount: z.number().int().nonnegative(),
   /** Length of the default mix, see the header. Null with no `inMix` track. */
   mixDurationMs: z.number().nonnegative().nullable(),
+  // ---- the preview: what a wall of songs draws without opening each one.
+  // Additive: every field has a default, so a client reading an older server
+  // sees the empty value, and a client that predates them ignores them. The
+  // list, the detail and the song frames all carry them, computed by the same
+  // query, so a tile never differs between the three.
+  /**
+   * A waveform for the tile: the `peaks` of the `inMix` track with the most
+   * signal (the largest sum of peaks), reduced to at most
+   * `JAM_PREVIEW_PEAKS_MAX` values by taking the loudest value of each bucket,
+   * each in 0..1. Empty when no `inMix` track has peaks. It is the loudest
+   * single stem, not a sum of the mix: the tile is a hint, and the real
+   * waveforms are in the detail.
+   */
+  previewPeaks: z.array(z.number()).default([]),
+  /** At least one live track has a video: draw a camera badge. */
+  hasVideo: z.boolean().default(false),
+  /**
+   * Up to `JAM_PREVIEW_CONTRIBUTORS_MAX` people with a live track, in the order
+   * of their first track. `contributorCount` is the full number ("+3").
+   */
+  contributors: z.array(jamContributorSchema).default([]),
+  /**
+   * For a `wanted` song, the wanted instruments nobody has a live track for
+   * yet, in `JAM_INSTRUMENTS` order ("procura baixo"). Empty for every other
+   * mode and once every wanted instrument is covered.
+   */
+  missingInstruments: z.array(jamInstrumentSchema.catch("other")).default([]),
 });
 export type JamSongSummary = z.infer<typeof jamSongSummarySchema>;
 
