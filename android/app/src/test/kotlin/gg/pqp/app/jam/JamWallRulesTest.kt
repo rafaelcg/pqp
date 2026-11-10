@@ -242,8 +242,9 @@ class JamWallRulesTest {
     fun `empty songs do not take the hero from the first song with something on it`() {
         val songs = listOf(song("e1", trackCount = 0), song("e2", trackCount = 0), song("a", instruments = listOf(JamInstrument.Guitar)))
         val bands = JamBands.build(songs, hasVideo = { false })
-        assertEquals(listOf(listOf("e1", "e2"), listOf("a")), bands.map { band -> band.tiles.map { it.song.id } })
-        assertEquals(2, bands[1].rows)
+        // The hero goes first and the empty songs fill in after it, still in the server's order among themselves.
+        assertEquals(listOf(listOf("a"), listOf("e1", "e2")), bands.map { band -> band.tiles.map { it.song.id } })
+        assertEquals(2, bands[0].rows)
     }
 
     // --- the list a wall holds, and a live frame ---

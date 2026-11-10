@@ -238,8 +238,12 @@ object JamBands {
      * spans both columns too, so nothing can start beside it on its second row
      * and every band is independent: a list item per band, no overlap, no hole.
      */
-    fun build(songs: List<JamSongSummary>, hasVideo: (JamSongSummary) -> Boolean, columns: Int = 2): List<JamBand> {
-        // The hero is the first song that has something on it: empty songs are small and do not count in the rhythm.
+    fun build(all: List<JamSongSummary>, hasVideo: (JamSongSummary) -> Boolean, columns: Int = 2): List<JamBand> {
+        // The hero is the first song that has something on it. Songs nobody has recorded on yet are small and do not
+        // count in the rhythm, and they do not push the hero down: one that sits above it in the server's order goes
+        // after it, where a hole it would leave beside a small tile cannot swallow the hero's place.
+        val firstWithTracks = all.indexOfFirst { it.trackCount > 0 }
+        val songs = if (firstWithTracks > 0) listOf(all[firstWithTracks]) + all.filterIndexed { i, _ -> i != firstWithTracks } else all
         var rank = 0
         val sizes = songs.map { song ->
             if (song.trackCount == 0) JamTileSize.Small else JamMosaic.desiredSize(rank++, song, hasVideo(song))
