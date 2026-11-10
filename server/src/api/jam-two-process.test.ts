@@ -360,7 +360,18 @@ describeDb("jam frames between two API processes on the Postgres bus", () => {
     const added = await next("jam-track-added", "the new track on api-b");
     expect(added).toMatchObject({
       type: "jam-track-added",
-      song: { id: songId, trackCount: 1, instruments: ["guitar"] },
+      // The preview fields cross the bus with the summary: the waveform of the
+      // one in-mix track, no video, who added it, and the wanted bass nobody
+      // has given yet.
+      song: {
+        id: songId,
+        trackCount: 1,
+        instruments: ["guitar"],
+        previewPeaks: [0.2, 0.7],
+        hasVideo: false,
+        contributors: [{ name: "Alice", avatarUrl: null }],
+        missingInstruments: ["bass"],
+      },
       track: { id: trackId, instrument: "guitar", inMix: true, peaks: [0.2, 0.7] },
     });
     // The URL that crossed the bus is a working one, from b's point of view.

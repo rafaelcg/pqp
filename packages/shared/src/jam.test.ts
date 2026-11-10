@@ -46,6 +46,10 @@ const SONG: JamSongSummary = {
   instruments: ["guitar"],
   contributorCount: 1,
   mixDurationMs: 61_000,
+  previewPeaks: [0.2, 0.9],
+  hasVideo: true,
+  contributors: [{ id: ID2, name: "Alice", avatarUrl: null }],
+  missingInstruments: ["bass", "drums"],
 };
 
 const TRACK: JamTrack = {
@@ -115,6 +119,27 @@ describe("jam contract", () => {
     expect(track.instrument).toBe("other");
     const song = jamSongSummarySchema.parse({ ...SONG, instruments: ["guitar", "theremin"] });
     expect(song.instruments).toEqual(["guitar", "other"]);
+  });
+
+  it("the song preview is additive: an older server's summary still parses, with empty previews", () => {
+    const {
+      previewPeaks: _peaks,
+      hasVideo: _video,
+      contributors: _contributors,
+      missingInstruments: _missing,
+      ...older
+    } = SONG;
+    const parsed = jamSongSummarySchema.parse(older);
+    expect(parsed).toMatchObject({
+      previewPeaks: [],
+      hasVideo: false,
+      contributors: [],
+      missingInstruments: [],
+    });
+    // And a newer one's instrument it does not know reads as `other`.
+    expect(
+      jamSongSummarySchema.parse({ ...SONG, missingInstruments: ["theremin"] }).missingInstruments,
+    ).toEqual(["other"]);
   });
 
   it("does the timeline arithmetic the header states", () => {
