@@ -102,7 +102,7 @@ data class ChannelLayoutPayload(
 
 /** Old split order for loose channels: text and forums, voice, watch party. */
 fun legacyTypeRank(type: String): Int = when (type) {
-    "text", "forum" -> 0
+    "text", "forum", "jam" -> 0
     "voice" -> 1
     else -> 2
 }
@@ -249,8 +249,8 @@ fun applyLayoutToChannels(channels: List<Channel>, layout: SidebarLayout<LayoutR
 }
 
 /** The mixed list from a server's channels: categories and every type this build draws, never a watch party room. */
-fun mixedLayoutOf(channels: List<Channel>): SidebarLayout<LayoutRow> = buildSidebarLayout(
-    channels.filter { it.isCategory || it.isText || it.isForum || it.type == "voice" }.map(::LayoutRow),
+fun mixedLayoutOf(channels: List<Channel>, includeJam: Boolean = false): SidebarLayout<LayoutRow> = buildSidebarLayout(
+    channels.filter { drawable(it, includeJam) }.map(::LayoutRow),
     mixed = true,
 )
 

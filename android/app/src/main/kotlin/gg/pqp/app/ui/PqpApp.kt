@@ -202,9 +202,22 @@ private const val CHANNEL_LOOKUP_MS = 1_200L
 )
 
 /**
- * Where a channel row goes: a forum to its list, anything else to its chat.
- * One function so the channel list, a `#channel` in a Baú post and the
- * arrival banner cannot disagree about it.
+ * A jam channel: its wall, and a song opened out of it ([songId], from a song
+ * link). The song is state of the screen, not a route of its own; see
+ * `JamScreen`.
+ */
+@Serializable data class JamRoute(
+    val serverId: String,
+    val channelId: String,
+    val channelName: String = "",
+    val serverName: String = "",
+    val songId: String? = null,
+)
+
+/**
+ * Where a channel row goes: a forum to its list, a jam to its wall, anything
+ * else to its chat. One function so the channel list, a `#channel` in a Baú
+ * post and the arrival banner cannot disagree about it.
  */
 internal fun androidx.navigation.NavHostController.openChannel(
     channel: gg.pqp.app.core.Channel,
@@ -213,6 +226,10 @@ internal fun androidx.navigation.NavHostController.openChannel(
 ) {
     if (channel.isForum) {
         navigate(ForumRoute(serverId, channel.id, channel.name, serverName, channel.topic))
+        return
+    }
+    if (channel.isJam) {
+        navigate(JamRoute(serverId, channel.id, channel.name, serverName))
         return
     }
     navigate(
@@ -702,6 +719,20 @@ private fun SignedInNav(
                     )
                     }
                 }
+                composable<JamRoute> { entry ->
+                    val route = entry.toRoute<JamRoute>()
+                    gg.pqp.app.jam.ui.JamScreen(
+                        session = session,
+                        serverId = route.serverId,
+                        serverName = route.serverName.ifEmpty {
+                            session.servers.value.firstOrNull { it.id == route.serverId }?.name.orEmpty()
+                        },
+                        channelId = route.channelId,
+                        channelName = route.channelName,
+                        initialSongId = route.songId,
+                        onBack = nav::popBackStack,
+                    )
+                }
                 composable<ForumPostRoute> { entry ->
                     val route = entry.toRoute<ForumPostRoute>()
                     CompositionLocalProvider(LocalEmojiServerId provides route.serverId) {
@@ -1050,6 +1081,7 @@ private fun NavBackStackEntry.serverIdOrNull(): String? = when {
     destination.hasRoute<ChannelsRoute>() -> toRoute<ChannelsRoute>().serverId
     destination.hasRoute<BauRoute>() -> toRoute<BauRoute>().serverId
     destination.hasRoute<ForumRoute>() -> toRoute<ForumRoute>().serverId
+    destination.hasRoute<JamRoute>() -> toRoute<JamRoute>().serverId
     destination.hasRoute<ForumPostRoute>() -> toRoute<ForumPostRoute>().serverId
     destination.hasRoute<ForumComposerRoute>() -> toRoute<ForumComposerRoute>().serverId
     destination.hasRoute<ChatRoute>() -> toRoute<ChatRoute>().serverId

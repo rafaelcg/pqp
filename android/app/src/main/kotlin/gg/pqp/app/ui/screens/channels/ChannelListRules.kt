@@ -254,9 +254,14 @@ const val VOICE_SECTION = "voice"
 /** Key of the mixed list's loose channels: above the first category, no heading. */
 const val LOOSE_SECTION = "loose"
 
-/** A row this build can draw: text, forum and voice. Never a watch party room, never an unknown type. */
-private fun drawable(channel: Channel): Boolean =
-    channel.isCategory || channel.isText || channel.isForum || channel.type == "voice"
+/**
+ * A row this build can draw: text, forum and voice, and a jam channel only
+ * when [includeJam] (the server's `jam_channels` flag says so). Never a watch
+ * party room, never an unknown type.
+ */
+internal fun drawable(channel: Channel, includeJam: Boolean = false): Boolean =
+    channel.isCategory || channel.isText || channel.isForum || channel.type == "voice" ||
+        (includeJam && channel.isJam)
 
 /**
  * The list's sections, from the shared layout rules (`ChannelLayout.kt`).
@@ -285,8 +290,9 @@ fun sectionsOf(
     voiceTitle: String = "",
     mixed: Boolean = false,
     keepEmptyCategories: Boolean = false,
+    includeJam: Boolean = false,
 ): List<ChannelSection> {
-    val layout = buildSidebarLayout(all.filter(::drawable).map(::LayoutRow), mixed = mixed)
+    val layout = buildSidebarLayout(all.filter { drawable(it, includeJam) }.map(::LayoutRow), mixed = mixed)
     val sections = mutableListOf<ChannelSection>()
 
     fun categories() = layout.categories.forEach { entry ->
@@ -308,7 +314,7 @@ fun sectionsOf(
         categories()
         return sections
     }
-    val text = loose.filter { it.isText || it.isForum }
+    val text = loose.filter { it.isText || it.isForum || it.isJam }
     val voice = loose.filter { it.isVoice }
     if (text.isNotEmpty()) {
         sections += ChannelSection(TEXT_SECTION, textTitle, TEXT_SECTION.takeIf { textTitle.isNotBlank() }, text)

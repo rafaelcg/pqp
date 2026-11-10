@@ -275,4 +275,31 @@ class ChannelListRulesTest {
         assertEquals(listOf(LOOSE_SECTION, "cat-canais", "cat-cinema"), manager.map { it.key })
         assertTrue(manager.last().channels.isEmpty())
     }
+
+    /**
+     * Jam: with the flag off (the default, `includeJam = false`) the list is
+     * exactly what it was, jam channels included in the server's answer or not.
+     * On, the channel sits with the text channels in the old list and in its
+     * own place in the mixed one.
+     */
+    @Test
+    fun `a jam channel is drawn only when the server's flag says so`() {
+        val all = listOf(
+            ch("general", "text", pos = 0.0),
+            ch("jam", "jam", pos = 1.0),
+            ch("lobby", "voice", pos = 2.0),
+        )
+        val off = sectionsOf(all, textTitle = "Texto", voiceTitle = "Voz")
+        assertEquals(listOf("general"), channelsInCategory(off, TEXT_SECTION).map { it.id })
+        assertEquals(listOf("general", "lobby"), off.flatMap { it.channels }.map { it.id })
+        assertEquals(off, sectionsOf(all.filter { it.type != "jam" }, textTitle = "Texto", voiceTitle = "Voz"))
+
+        val on = sectionsOf(all, textTitle = "Texto", voiceTitle = "Voz", includeJam = true)
+        assertEquals(listOf("general", "jam"), channelsInCategory(on, TEXT_SECTION).map { it.id })
+        assertEquals(listOf("lobby"), channelsInCategory(on, VOICE_SECTION).map { it.id })
+
+        val mixed = sectionsOf(all, mixed = true, includeJam = true)
+        assertEquals(listOf("general", "jam", "lobby"), mixed.single().channels.map { it.id })
+        assertEquals(listOf("general", "lobby"), sectionsOf(all, mixed = true).single().channels.map { it.id })
+    }
 }
