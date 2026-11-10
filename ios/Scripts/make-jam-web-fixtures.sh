@@ -55,5 +55,9 @@ for (const take of takes) {
   console.log(take.name, samples.length, "frames");
 }
 TS
-node "$work/make.ts" "$out"
+# Encode into the scratch folder first and move the set over only once all
+# three exist, so a failed run never leaves a half-replaced fixture set.
+mkdir -p "$work/out"
+node "$work/make.ts" "$work/out"
+mv "$work/out/"*.flac "$out/"
 ls -l "$out"
