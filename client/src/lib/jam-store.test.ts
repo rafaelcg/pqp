@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { song } from "./jam-test-fixtures";
+import { song, track } from "./jam-test-fixtures";
 
 vi.mock("@/lib/jam-api", () => ({
   fetchJamSongs: vi.fn(),
@@ -9,9 +9,15 @@ vi.mock("@/lib/jam-api", () => ({
 import { fetchJamSong, fetchJamSongs } from "@/lib/jam-api";
 import { dispatchJamFrame } from "./jam-frames";
 import {
+  JAM_FRESH_MS,
+  applyJamVote,
   applyJamWrite,
+  dropJamChannels,
+  jamStoreEpoch,
   loadJamChannel,
   loadJamDetail,
+  loadMoreJamSongs,
+  putJamSongOnWall,
   readJamChannel,
   resetJamStoreForTests,
   setJamViewer,
@@ -153,3 +159,159 @@ describe("a read is a snapshot, a frame is newer", () => {
     await reading;
   });
 });
+
+describe("a read of the previous identity cannot touch the new one's bookkeeping", () => {
+  it("does not end the new account's journal registration: frames during its read still survive", async () => {
+    setJamViewer("first");
+    const oldRead = deferred<ReturnType<typeof page>>();
+    list.mockReturnValueOnce(oldRead.promise);
+    const first = loadJamChannel(channelId);
+
+    setJamViewer("second");
+    const newRead = deferred<ReturnType<typeof page>>();
+    list.mockReturnValueOnce(newRead.promise);
+    const second = loadJamChannel(channelId);
+
+    // the old read finishes while the new one is out: it must not take the new one's registration
+    oldRead.resolve(page());
+    await first;
+    dispatchJamFrame({ type: "jam-song-created", channelId, song: song({ id: "live-for-second" }) });
+
+    newRead.resolve(page(song({ id: "from-page" })));
+    await second;
+    expect(readJamChannel(channelId).songs.map((s) => s.id).sort()).toEqual(["from-page", "live-for-second"]);
+  });
+
+  it("does not let a reset clear the registration of a read that began after it", async () => {
+    setJamViewer("first");
+    const oldRead = deferred<ReturnType<typeof page>>();
+    list.mockReturnValueOnce(oldRead.promise);
+    void loadJamChannel(channelId);
+    setJamViewer("second"); // clears the registrations
+    const newRead = deferred<ReturnType<typeof page>>();
+    list.mockReturnValueOnce(newRead.promise);
+    const second = loadJamChannel(channelId);
+    oldRead.reject(new Error("late"));
+    await Promise.resolve();
+    dispatchJamFrame({ type: "jam-song-created", channelId, song: song({ id: "kept" }) });
+    newRead.resolve(page());
+    await second;
+    expect(readJamChannel(channelId).songs.map((s) => s.id)).toEqual(["kept"]);
+  });
+
+  it("drops the answer to a write made under the previous identity", () => {
+    setJamViewer("first");
+    const asked = jamStoreEpoch();
+    setJamViewer("second");
+    putJamSongOnWall(channelId, song({ id: "from-first" }), asked);
+    expect(readJamChannel(channelId).songs).toHaveLength(0);
+  });
+
+  it("drops a second page asked for by the previous identity", async () => {
+    setJamViewer("first");
+    list.mockResolvedValueOnce({ songs: [song({ id: "a" })], nextCursor: "more" });
+    await loadJamChannel(channelId);
+    const late = deferred<ReturnType<typeof page>>();
+    list.mockReturnValueOnce(late.promise);
+    const more = loadMoreJamSongs(channelId);
+    setJamViewer("second");
+    late.resolve(page(song({ id: "second-page-of-first" })));
+    await more;
+    expect(readJamChannel(channelId).songs).toHaveLength(0);
+  });
+
+  it("signing out empties the store too", async () => {
+    setJamViewer("first");
+    list.mockResolvedValueOnce(page(song({ id: "a" })));
+    await loadJamChannel(channelId);
+    setJamViewer(null);
+    expect(readJamChannel(channelId).songs).toHaveLength(0);
+  });
+});
+
+describe("losing access without changing account", () => {
+  it("answers a quiet ask from the store only while the server's confirmation is fresh", async () => {
+    vi.useFakeTimers();
+    try {
+      list.mockResolvedValue(page(song({ id: "a" })));
+      await loadJamChannel(channelId);
+      await loadJamChannel(channelId); // quiet, fresh
+      expect(list).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(JAM_FRESH_MS + 1);
+      list.mockRejectedValueOnce(refusal(404));
+      await loadJamChannel(channelId); // quiet but stale: goes to the API, which says no
+      expect(list).toHaveBeenCalledTimes(2);
+      expect(readJamChannel(channelId).songs).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does the same for a song's detail", async () => {
+    vi.useFakeTimers();
+    try {
+      list.mockResolvedValue(page(song({ id: "a" })));
+      await loadJamChannel(channelId);
+      one.mockResolvedValue({ song: song({ id: "a" }), tracks: [], viewer: viewerOf() });
+      await loadJamDetail(channelId, "a");
+      await loadJamDetail(channelId, "a");
+      expect(one).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(JAM_FRESH_MS + 1);
+      one.mockRejectedValueOnce(refusal(403));
+      await loadJamDetail(channelId, "a");
+      expect(one).toHaveBeenCalledTimes(2);
+      expect(readJamChannel(channelId).details["a"]).toBeUndefined();
+      expect(readJamChannel(channelId).songs).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("forgets a channel at once when it leaves the server's list, and a read still out cannot bring it back", async () => {
+    list.mockResolvedValueOnce(page(song({ id: "a" })));
+    await loadJamChannel(channelId);
+    const late = deferred<ReturnType<typeof page>>();
+    list.mockReturnValueOnce(late.promise);
+    const reading = loadJamChannel(channelId, { force: true });
+    dropJamChannels([channelId]);
+    expect(readJamChannel(channelId).songs).toHaveLength(0);
+    late.resolve(page(song({ id: "a" })));
+    await reading;
+    expect(readJamChannel(channelId).songs).toHaveLength(0);
+  });
+});
+
+describe("a detail answer and what happened while it was out", () => {
+  it("keeps a vote cast while the detail was being read", async () => {
+    list.mockResolvedValueOnce(page(song({ id: "a" })));
+    await loadJamChannel(channelId);
+    const t1 = track({ id: "t1", songId: "a" });
+    one.mockResolvedValueOnce({ song: song({ id: "a" }), tracks: [t1], viewer: viewerOf() });
+    await loadJamDetail(channelId, "a");
+
+    const slow = deferred<{ song: ReturnType<typeof song>; tracks: ReturnType<typeof track>[]; viewer: ReturnType<typeof viewerOf> }>();
+    one.mockReturnValueOnce(slow.promise);
+    const reading = loadJamDetail(channelId, "a", { force: true });
+    applyJamVote(channelId, { songId: "a", trackId: "t1", voteCount: 1, voted: true });
+    // the answer was computed before the vote
+    slow.resolve({ song: song({ id: "a" }), tracks: [t1], viewer: viewerOf() });
+    await reading;
+    expect(readJamChannel(channelId).details["a"]?.viewer.votedTrackIds).toEqual(["t1"]);
+  });
+
+  it("stays stale when a frame moved who may add while the detail was out", async () => {
+    list.mockResolvedValueOnce(page(song({ id: "a", joinMode: "open" })));
+    await loadJamChannel(channelId);
+    const slow = deferred<{ song: ReturnType<typeof song>; tracks: ReturnType<typeof track>[]; viewer: ReturnType<typeof viewerOf> }>();
+    one.mockReturnValueOnce(slow.promise);
+    const reading = loadJamDetail(channelId, "a");
+    dispatchJamFrame({ type: "jam-song-updated", channelId, song: song({ id: "a", joinMode: "closed" }) });
+    slow.resolve({ song: song({ id: "a", joinMode: "open" }), tracks: [], viewer: viewerOf() });
+    await reading;
+    expect(readJamChannel(channelId).details["a"]?.viewerStale).toBe(true);
+  });
+});
+
+function viewerOf() {
+  return { isAuthor: false, canModerate: false, addableInstruments: ["bass" as const], votedTrackIds: [] as string[] };
+}

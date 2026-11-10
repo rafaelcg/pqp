@@ -2085,6 +2085,7 @@ function MainAppContent({
     },
     [],
   );
+  const jamCreating = useRef(false);
   const refreshChannelListRef = useRef<
     (serverId: string, confirmingVanishedId?: string | null) => void
   >(() => {});
@@ -7125,29 +7126,55 @@ function MainAppContent({
    * still goes to the banner.
    */
   async function handleCreateJam(parentId: string | null) {
-    if (!selectedServerId) {
+    if (!selectedServerId || jamCreating.current) {
       return;
     }
+    // One create at a time, and no second one until the first is settled: a retry
+    // that races an answer still on its way is how a second channel gets made.
+    jamCreating.current = true;
+    const serverId = selectedServerId;
     try {
-      const { channel } = await createChannel(selectedServerId, "jam", "jam", false, undefined, parentId);
-      channelListTickets.created(channel);
-      setChannels((before) => [...before, channel].sort((a, b) => a.position - b.position));
+      const known = new Set(channels.map((one) => one.id));
+      let made: Channel | null = null;
+      try {
+        made = (await createChannel(serverId, "jam", "jam", false, undefined, parentId)).channel;
+      } catch (error) {
+        if (jamOutcomeUnknown(error)) {
+          // No answer is not "no": the server may have made the channel and the reply
+          // got lost. Read the list (and wait for it) and take a Jam that is new to
+          // us as the answer, instead of letting a retry make a second one.
+          try {
+            const { channels: fetched } = await fetchChannels(serverId);
+            made = fetched.find((one) => one.type === "jam" && !known.has(one.id)) ?? null;
+          } catch {
+            // the list could not be read either: the error below stands
+          }
+          refreshChannelListRef.current(serverId);
+        }
+        if (!made) {
+          setAppError(
+            error instanceof ApiError && error.message === "jam_channels_off"
+              ? translateMessage("jam.error.off")
+              : error instanceof Error
+                ? error.message
+                : "Channel action failed",
+          );
+          return;
+        }
+      }
+      channelListTickets.created(made);
+      const channel = made;
+      setChannels((before) =>
+        before.some((one) => one.id === channel.id)
+          ? before
+          : [...before, channel].sort((a, b) => a.position - b.position),
+      );
       setAppError(null);
       await selectChannel(channel.id);
     } catch (error) {
-      if (jamOutcomeUnknown(error)) {
-        // No answer is not "no": the server may have made the channel and the reply
-        // got lost. Read the list again so a retry meets the channel that exists
-        // instead of making a second one.
-        refreshChannelListRef.current(selectedServerId);
-      }
-      setAppError(
-        error instanceof ApiError && error.message === "jam_channels_off"
-          ? translateMessage("jam.error.off")
-          : error instanceof Error
-            ? error.message
-            : "Channel action failed",
-      );
+      setAppError(error instanceof Error ? error.message : "Channel action failed");
+    } finally {
+      jamCreating.current = false;
     }
   }
 

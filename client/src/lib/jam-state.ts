@@ -156,9 +156,11 @@ export function applyJamFrame(state: JamChannelState, frame: JamFrame): JamChann
 export interface ReadChanges {
   songs: ReadonlyMap<string, JamSongSummary | null>;
   tracks: ReadonlyMap<string, JamTrack | null>;
+  /** The viewer's own votes cast while the read was out: track id to voted. */
+  votes?: ReadonlyMap<string, boolean>;
 }
 
-export const NO_CHANGES: ReadChanges = { songs: new Map(), tracks: new Map() };
+export const NO_CHANGES: ReadChanges = { songs: new Map(), tracks: new Map(), votes: new Map() };
 
 /** A song read by id becomes a detail (and refreshes the summary on the wall). */
 export function withDetail(
@@ -191,6 +193,26 @@ export function withDetail(
       merged.set(trackId, change);
     }
   }
+  // The viewer is the answer's, with the votes cast since the read began on top
+  // (a vote is a write the answer cannot have seen).
+  const voted = new Set(response.viewer.votedTrackIds);
+  for (const [trackId, isVoted] of changes.votes ?? []) {
+    if (!merged.has(trackId)) {
+      continue;
+    }
+    if (isVoted) {
+      voted.add(trackId);
+    } else {
+      voted.delete(trackId);
+    }
+  }
+  // What the viewer may add depends on the song's join mode and wanted
+  // instruments. When a frame changed those while the read was out, the answer's
+  // `viewer` was computed from the older song: it stays stale and is read again.
+  const addabilityMoved =
+    summary !== response.song &&
+    (summary.joinMode !== response.song.joinMode ||
+      summary.wantedInstruments.join(",") !== response.song.wantedInstruments.join(","));
   return {
     ...state,
     songs: known ? state.songs.map((one) => (one.id === songId ? summary : one)) : state.songs,
@@ -198,8 +220,8 @@ export function withDetail(
       ...state.details,
       [songId]: {
         tracks: [...merged.values()],
-        viewer: response.viewer,
-        viewerStale: false,
+        viewer: { ...response.viewer, votedTrackIds: [...voted] },
+        viewerStale: addabilityMoved,
       },
     },
   };

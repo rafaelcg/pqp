@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { oneAtATime, switchTakeIn, takesToTakeOut, takeToReplace } from "./jam-mix";
+import { oneAtATime, replaceInMix, switchTakeIn, takesToTakeOut, takeToReplace } from "./jam-mix";
 import { track } from "./jam-test-fixtures";
 
 const a = track({ id: "a", instrument: "guitar", inMix: true, authorId: "me" });
@@ -43,6 +43,58 @@ describe("the take a new recording would replace", () => {
 
   it("is nobody's for another instrument", () => {
     expect(takeToReplace([a], { instrument: "bass", viewerId: "me", canSwitchMix: true })).toBeNull();
+  });
+});
+
+describe("a new take replacing the old one", () => {
+  it("is new in, old out", async () => {
+    const calls: Array<[string, boolean]> = [];
+    expect(await replaceInMix("new", "old", async (id, inMix) => void calls.push([id, inMix]))).toBe("replaced");
+    expect(calls).toEqual([["new", true], ["old", false]]);
+  });
+
+  it("tries the take-out again, and succeeds", async () => {
+    let failed = false;
+    const outcome = await replaceInMix("new", "old", async (id) => {
+      if (id === "old" && !failed) {
+        failed = true;
+        throw new Error("blip");
+      }
+    });
+    expect(outcome).toBe("replaced");
+  });
+
+  it("puts the new take back out when the old one will not leave: never both in the mix", async () => {
+    const state = new Map([["old", true], ["new", false]]);
+    const outcome = await replaceInMix("new", "old", async (id, inMix) => {
+      if (id === "old") {
+        throw new Error("down");
+      }
+      state.set(id, inMix);
+    });
+    expect(outcome).toBe("kept-old");
+    expect(state.get("new")).toBe(false);
+    expect(state.get("old")).toBe(true);
+  });
+
+  it("changes nothing when the first write fails", async () => {
+    const calls: string[] = [];
+    const outcome = await replaceInMix("new", "old", async (id) => {
+      calls.push(id);
+      throw new Error("down");
+    });
+    expect(outcome).toBe("kept-old");
+    expect(calls).toEqual(["new"]);
+  });
+
+  it("says both only when even the undo fails", async () => {
+    expect(
+      await replaceInMix("new", "old", async (id, inMix) => {
+        if (id === "old" || !inMix) {
+          throw new Error("down");
+        }
+      }),
+    ).toBe("both");
   });
 });
 

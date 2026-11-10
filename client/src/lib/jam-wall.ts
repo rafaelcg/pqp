@@ -222,6 +222,43 @@ export function competingInstruments(tracks: readonly Pick<JamTrack, "instrument
 }
 
 /**
+ * The jam channels that were in a server's channel list and are not any more
+ * (deleted, hidden by a lost VIEW, or the person was removed): what the store
+ * holds for them must go. Only a server whose list is present is judged, so
+ * switching servers (a different list) never reads as everything vanishing.
+ */
+export function jamChannelsGone(
+  before: ReadonlyMap<string, ReadonlySet<string>>,
+  channels: readonly { id: string; type: string; serverId: string | null }[],
+): { gone: string[]; next: Map<string, Set<string>> } {
+  const next = new Map<string, Set<string>>([...before].map(([serverId, ids]) => [serverId, new Set(ids)]));
+  const seenServers = new Set<string>();
+  const nowJam = new Map<string, Set<string>>();
+  for (const channel of channels) {
+    if (!channel.serverId) {
+      continue;
+    }
+    seenServers.add(channel.serverId);
+    if (channel.type === "jam") {
+      const ids = nowJam.get(channel.serverId) ?? new Set<string>();
+      ids.add(channel.id);
+      nowJam.set(channel.serverId, ids);
+    }
+  }
+  const gone: string[] = [];
+  for (const serverId of seenServers) {
+    const now = nowJam.get(serverId) ?? new Set<string>();
+    for (const id of before.get(serverId) ?? []) {
+      if (!now.has(id)) {
+        gone.push(id);
+      }
+    }
+    next.set(serverId, now);
+  }
+  return { gone, next };
+}
+
+/**
  * The song's timeline as the lanes draw it: from 0 to the end of the latest
  * in-mix track (the engine's own rule, `songDurationMs`), at least a second so
  * an empty song still has a width.

@@ -1,8 +1,8 @@
 import type { Channel } from "@pqp/shared";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { jamSeenAt, useJamSeenVersion } from "@/lib/jam-seen";
-import { loadJamChannel, readJamChannel, useJamStoreEpoch, useJamStoreVersion } from "@/lib/jam-store";
-import { jamHasNews, latestActivity } from "@/lib/jam-wall";
+import { dropJamChannels, loadJamChannel, readJamChannel, useJamStoreEpoch, useJamStoreVersion } from "@/lib/jam-store";
+import { jamChannelsGone, jamHasNews, latestActivity } from "@/lib/jam-wall";
 
 /**
  * What the sidebar's Jam row says: how many songs, and whether anything moved
@@ -26,13 +26,24 @@ export interface JamSidebarRow {
 
 const REFRESH_MS = 3 * 60_000;
 
-export function useJamSidebar(channels: readonly Pick<Channel, "id" | "type">[]): Record<string, JamSidebarRow> {
+export function useJamSidebar(channels: readonly Pick<Channel, "id" | "type" | "serverId">[]): Record<string, JamSidebarRow> {
   const ids = channels
     .filter((channel) => channel.type === "jam")
     .map((channel) => channel.id)
     .join(",");
   // Another account emptied the store: ask again for these channels.
   const storeEpoch = useJamStoreEpoch();
+
+  // A jam channel that was in its server's list and is not any more (deleted, hidden
+  // by a lost VIEW, the person removed from the server) is forgotten at once.
+  const listed = useRef<Map<string, Set<string>>>(new Map());
+  useEffect(() => {
+    const { gone, next } = jamChannelsGone(listed.current, channels);
+    listed.current = next;
+    if (gone.length > 0) {
+      dropJamChannels(gone);
+    }
+  }, [channels, storeEpoch]);
 
   useEffect(() => {
     if (!ids) {

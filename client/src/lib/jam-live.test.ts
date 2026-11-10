@@ -1,5 +1,45 @@
 import { describe, expect, it } from "vitest";
-import { liveBars, liveTimelineEndMs } from "./jam-live";
+import { createLiveBars, liveBars, liveTimelineEndMs } from "./jam-live";
+
+describe("the same bars, folded in as the take grows", () => {
+  it("equals the full scan at every step of a growing take", () => {
+    const fold = createLiveBars();
+    const peaks: number[] = [];
+    for (let i = 0; i < 400; i++) {
+      peaks.push(Math.abs(Math.sin(i / 7)) * Math.min(1, i / 100));
+      expect(fold(peaks, 240)).toEqual(liveBars(peaks, 240));
+    }
+  });
+
+  it("rebuilds when the slot width changes and when a new take starts", () => {
+    const fold = createLiveBars();
+    const first = [0.2, 0.4, 0.9, 0.1, 0.3];
+    expect(fold(first, 160)).toEqual(liveBars(first, 160));
+    expect(fold(first, 400)).toEqual(liveBars(first, 400));
+    const second = [0.5, 0.5, 0.5, 0.5, 0.5, 0.5];
+    expect(fold(second, 400)).toEqual(liveBars(second, 400));
+  });
+
+  it("does only the new peaks' work per update", () => {
+    const fold = createLiveBars();
+    const peaks: number[] = [];
+    let reads = 0;
+    const counted = new Proxy(peaks, {
+      get(target, key, receiver) {
+        if (typeof key === "string" && /^\d+$/.test(key)) {
+          reads += 1;
+        }
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    for (let i = 0; i < 200; i++) {
+      peaks.push(0.5);
+      fold(counted, 240);
+    }
+    // one element read per update after the first folds (not k per update)
+    expect(reads).toBeLessThan(400);
+  });
+});
 
 describe("the waveform that grows while recording", () => {
   it("has no bars before anything is heard", () => {

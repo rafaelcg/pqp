@@ -40,8 +40,35 @@ const loads = new Map<string, Promise<void>>();
 const detailLoads = new Map<string, Promise<JamDetail | null>>();
 let wired = false;
 let viewer: string | null = null;
-/** Bumped when the store is emptied: an answer asked for before it is not ours any more. */
+/**
+ * The identity epoch: bumped when the store is emptied (another account, sign-out).
+ * EVERY read and every write that completes later carries the epoch it started in,
+ * and one that comes back with a stale epoch is dropped: it may not write state,
+ * and may not touch the bookkeeping (journal registrations, pending slots) of the
+ * epoch that replaced it.
+ */
 let epoch = 0;
+
+/** The epoch now, for a caller that will write after an await (see `applyJamWrite`). */
+export function jamStoreEpoch(): number {
+  return epoch;
+}
+
+/**
+ * How long what was read under this identity may answer a quiet ask (a sidebar
+ * refresh, a tile) without asking the server again. Past it, even a quiet ask goes
+ * to the API, so a channel or song this account lost access to cannot go on
+ * painting from the store for longer than this. Opening a wall or a song asks
+ * regardless, and every refusal drops what was held.
+ */
+export const JAM_FRESH_MS = 60_000;
+/** When each channel (`c:<id>`) and song detail (`d:<id>`) was last confirmed by the server in this epoch. */
+const verifiedAt = new Map<string, number>();
+
+function fresh(key: string): boolean {
+  const at = verifiedAt.get(key);
+  return at !== undefined && Date.now() - at < JAM_FRESH_MS;
+}
 
 let version = 0;
 
@@ -115,23 +142,66 @@ function record(channelId: string, frame: JamFrame): void {
   }
 }
 
-/** Starts a read: what changed from here on is what the answer must not undo. */
-function beginRead(channelId: string): number {
-  readsOut.set(channelId, (readsOut.get(channelId) ?? 0) + 1);
-  return seq;
+/** The viewer's own votes cast while a read of the channel was out. */
+const voteJournal = new Map<string, Map<string, JournalEntry<boolean>>>();
+
+function recordVote(channelId: string, trackId: string, voted: boolean): void {
+  if (!readsOut.get(channelId)) {
+    return;
+  }
+  seq += 1;
+  journalFor(voteJournal, channelId).set(trackId, { seq, value: voted });
 }
 
-function changesSince(channelId: string, since: number): ReadChanges {
+/** Bumped when one channel is dropped (see `dropJamChannels`): a read of it from before is not ours any more. */
+const gens = new Map<string, number>();
+
+/** A read in flight: which channel, which identity epoch and which generation of the channel asked. */
+interface ReadToken {
+  channelId: string;
+  epoch: number;
+  gen: number;
+  since: number;
+}
+
+/** Starts a read: what changed from here on is what the answer must not undo. */
+function beginRead(channelId: string): ReadToken {
+  readsOut.set(channelId, (readsOut.get(channelId) ?? 0) + 1);
+  return { channelId, epoch, gen: gens.get(channelId) ?? 0, since: seq };
+}
+
+/** Whether an answer for this read may still be applied: same identity, channel not dropped since. */
+function current(token: ReadToken): boolean {
+  return token.epoch === epoch && token.gen === (gens.get(token.channelId) ?? 0);
+}
+
+function changesSince(token: ReadToken): ReadChanges {
+  const { channelId, since } = token;
   const pick = <T,>(all: Map<string, Map<string, JournalEntry<T>>>) =>
     new Map(
       [...(all.get(channelId) ?? new Map<string, JournalEntry<T>>())]
         .filter(([, entry]) => entry.seq > since)
         .map(([id, entry]) => [id, entry.value] as const),
     );
-  return { songs: pick(songJournal), tracks: pick(trackJournal) };
+  const votes = new Map<string, boolean>();
+  for (const [trackId, value] of pick(voteJournal)) {
+    if (value !== null) {
+      votes.set(trackId, value);
+    }
+  }
+  return { songs: pick(songJournal), tracks: pick(trackJournal), votes };
 }
 
-function endRead(channelId: string): void {
+/**
+ * Ends a read. Only a read of THIS epoch holds a registration: the reset that moved
+ * the epoch already cleared them all, and a stale read ending late must not take
+ * one from the new epoch's read of the same channel.
+ */
+function endRead(token: ReadToken): void {
+  if (!current(token)) {
+    return;
+  }
+  const { channelId } = token;
   const left = (readsOut.get(channelId) ?? 0) - 1;
   if (left > 0) {
     readsOut.set(channelId, left);
@@ -140,6 +210,7 @@ function endRead(channelId: string): void {
   readsOut.delete(channelId);
   songJournal.delete(channelId);
   trackJournal.delete(channelId);
+  voteJournal.delete(channelId);
 }
 
 function refused(error: unknown): boolean {
@@ -164,8 +235,12 @@ function wire(): void {
   subscribeJamReconnected(() => {
     // One at a time with a breath between: a reconnect is when everybody asks.
     const ids = [...channels.keys()];
+    const mine = epoch;
     void (async () => {
       for (const channelId of ids) {
+        if (mine !== epoch || !channels.has(channelId)) {
+          return; // another account now, or the channel was dropped meanwhile
+        }
         await loadJamChannel(channelId, { force: true });
         await new Promise((resolve) => setTimeout(resolve, 150 + Math.random() * 350));
       }
@@ -195,7 +270,9 @@ export function setJamViewer(userId: string | null): void {
 export function loadJamChannel(channelId: string, options: { force?: boolean } = {}): Promise<void> {
   wire();
   const held = read(channelId);
-  if (!options.force && held.status === "ready") {
+  // A quiet ask is answered from the store only when the SERVER confirmed this
+  // channel to this identity within `JAM_FRESH_MS`; anything older goes to the API.
+  if (!options.force && held.status === "ready" && fresh(`c:${channelId}`)) {
     return Promise.resolve();
   }
   const pending = loads.get(channelId);
@@ -205,22 +282,23 @@ export function loadJamChannel(channelId: string, options: { force?: boolean } =
   if (held.status === "idle" || held.status === "error") {
     write(channelId, { ...held, status: "loading" });
   }
-  const since = beginRead(channelId);
-  const mine = epoch;
+  const token = beginRead(channelId);
   const run = fetchJamSongs(channelId, { sort: "activity", limit: PAGE })
     .then((page) => {
-      if (mine !== epoch) {
+      if (!current(token)) {
         return;
       }
-      write(channelId, mergeFirstPage(read(channelId), page, changesSince(channelId, since)));
+      write(channelId, mergeFirstPage(read(channelId), page, changesSince(token)));
+      verifiedAt.set(`c:${channelId}`, Date.now());
     })
     .catch((error: unknown) => {
-      if (mine !== epoch) {
+      if (!current(token)) {
         return;
       }
       if (refused(error)) {
         // No longer ours to show.
         channels.delete(channelId);
+        verifiedAt.delete(`c:${channelId}`);
         write(channelId, { ...EMPTY_JAM_CHANNEL, status: "error" });
         return;
       }
@@ -229,7 +307,7 @@ export function loadJamChannel(channelId: string, options: { force?: boolean } =
       write(channelId, { ...now, status: now.songs.length > 0 ? "ready" : "error" });
     })
     .finally(() => {
-      endRead(channelId);
+      endRead(token);
       // Not a newer load's entry: the store may have been emptied meanwhile.
       if (loads.get(channelId) === run) {
         loads.delete(channelId);
@@ -244,8 +322,13 @@ export async function loadMoreJamSongs(channelId: string): Promise<void> {
   if (!held.nextCursor) {
     return;
   }
+  const mine = epoch;
+  const gen = gens.get(channelId) ?? 0;
   try {
     const page = await fetchJamSongs(channelId, { sort: "activity", limit: PAGE, cursor: held.nextCursor });
+    if (mine !== epoch || gen !== (gens.get(channelId) ?? 0)) {
+      return; // asked by an identity the store no longer holds for, or for a channel since dropped
+    }
     const now = read(channelId);
     const known = new Set(now.songs.map((song) => song.id));
     write(channelId, {
@@ -267,7 +350,7 @@ let lazyActive = 0;
 const lazyQueue: Array<() => void> = [];
 
 export function loadJamDetailLazy(channelId: string, songId: string): void {
-  if (read(channelId).details[songId]) {
+  if (read(channelId).details[songId] && fresh(`d:${songId}`)) {
     return;
   }
   const run = () => {
@@ -292,33 +375,36 @@ export function loadJamDetail(
 ): Promise<JamDetail | null> {
   wire();
   const held = read(channelId).details[songId];
-  if (held && !options.force && !held.viewerStale) {
+  // As for the list: only what the server confirmed to this identity recently
+  // answers without asking.
+  if (held && !options.force && !held.viewerStale && fresh(`d:${songId}`)) {
     return Promise.resolve(held);
   }
   const pending = detailLoads.get(songId);
   if (pending) {
     return pending;
   }
-  const since = beginRead(channelId);
-  const mine = epoch;
+  const token = beginRead(channelId);
   const run = fetchJamSong(songId)
     .then((response) => {
-      if (mine !== epoch) {
+      if (!current(token)) {
         return null;
       }
-      write(channelId, withDetail(read(channelId), response, changesSince(channelId, since)));
+      write(channelId, withDetail(read(channelId), response, changesSince(token)));
+      verifiedAt.set(`d:${songId}`, Date.now());
       return read(channelId).details[songId] ?? null;
     })
     .catch((error: unknown) => {
-      if (mine === epoch && refused(error)) {
+      if (current(token) && refused(error)) {
         const now = read(channelId);
         const { [songId]: _gone, ...details } = now.details;
+        verifiedAt.delete(`d:${songId}`);
         write(channelId, { ...now, songs: now.songs.filter((one) => one.id !== songId), details });
       }
       return null;
     })
     .finally(() => {
-      endRead(channelId);
+      endRead(token);
       if (detailLoads.get(songId) === run) {
         detailLoads.delete(songId);
       }
@@ -328,22 +414,29 @@ export function loadJamDetail(
 }
 
 /** What the answer to a write already says, applied before its frame arrives. */
-export function applyJamWrite(channelId: string, frame: JamFrame): void {
+export function applyJamWrite(channelId: string, frame: JamFrame, asked?: number): void {
+  if (asked !== undefined && asked !== epoch) {
+    return; // the answer to a write another identity made
+  }
   wire();
   record(channelId, frame);
   write(channelId, applyJamFrame(read(channelId), frame));
 }
 
-export function applyJamVote(channelId: string, vote: JamVoteResponse): void {
+export function applyJamVote(channelId: string, vote: JamVoteResponse, asked?: number): void {
+  if (asked !== undefined && asked !== epoch) {
+    return;
+  }
+  recordVote(channelId, vote.trackId, vote.voted);
   write(channelId, withVote(read(channelId), vote));
 }
 
-export function putJamSongOnWall(channelId: string, song: JamSongSummary): void {
-  applyJamWrite(channelId, { type: "jam-song-created", channelId, song });
+export function putJamSongOnWall(channelId: string, song: JamSongSummary, asked?: number): void {
+  applyJamWrite(channelId, { type: "jam-song-created", channelId, song }, asked);
 }
 
-export function putJamTrackInSong(channelId: string, song: JamSongSummary, track: JamTrack): void {
-  applyJamWrite(channelId, { type: "jam-track-added", channelId, song, track });
+export function putJamTrackInSong(channelId: string, song: JamSongSummary, track: JamTrack, asked?: number): void {
+  applyJamWrite(channelId, { type: "jam-track-added", channelId, song, track }, asked);
 }
 
 /** What the sidebar says about a jam channel's songs. */
@@ -405,13 +498,50 @@ export function useJamChannel(channelId: string | null): JamChannelState {
   return state;
 }
 
-/** Empties the store (a different account, and the tests). */
+/**
+ * Forget these channels: the person can no longer see them (the channel left the
+ * server's list, they were removed from the server, the jam flag went off). What
+ * was held is gone at once, not at the next read, and a read that is out for one
+ * of them is not allowed to bring it back.
+ */
+export function dropJamChannels(channelIds: Iterable<string>): void {
+  let changed = false;
+  for (const channelId of channelIds) {
+    const held = channels.get(channelId);
+    if (held) {
+      for (const songId of Object.keys(held.details)) {
+        verifiedAt.delete(`d:${songId}`);
+        detailLoads.delete(songId);
+      }
+      changed = true;
+    }
+    channels.delete(channelId);
+    verifiedAt.delete(`c:${channelId}`);
+    loads.delete(channelId);
+    readsOut.delete(channelId);
+    songJournal.delete(channelId);
+    trackJournal.delete(channelId);
+    voteJournal.delete(channelId);
+    gens.set(channelId, (gens.get(channelId) ?? 0) + 1);
+  }
+  if (changed) {
+    emit();
+  }
+}
+
+
+/** Empties the store for another account, a sign-out, and the tests. */
 export function resetJamStoreForTests(): void {
   channels.clear();
   loads.clear();
   detailLoads.clear();
   songJournal.clear();
   trackJournal.clear();
+  voteJournal.clear();
+  verifiedAt.clear();
+  gens.clear();
+
+  lazyQueue.length = 0;
   seq = 0;
   readsOut.clear();
   epoch += 1;

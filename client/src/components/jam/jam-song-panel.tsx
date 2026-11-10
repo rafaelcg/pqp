@@ -1,4 +1,4 @@
-import type { JamInstrument, JamSongSummary, JamTrack } from "@pqp/shared";
+import type { JamFrame, JamInstrument, JamSongSummary, JamTrack, JamVoteResponse } from "@pqp/shared";
 import { ArrowLeft, Lock, LockOpen, Mic, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -77,6 +77,10 @@ export function JamSongPanel({
   const [confirmSong, setConfirmSong] = useState(false);
   const serial = useRef(oneAtATime()).current;
   const storeEpoch = useJamStoreEpoch();
+  // What an answer writes into the store carries the identity epoch of the render
+  // that asked: an answer that lands after another account took over is dropped.
+  const writeFrame = (frame: JamFrame) => applyJamWrite(channelId, frame, storeEpoch);
+  const writeVote = (vote: JamVoteResponse) => applyJamVote(channelId, vote, storeEpoch);
 
   // The detail: read when the panel opens, and again when a join-mode change
   // made what the viewer may add out of date.
@@ -245,7 +249,7 @@ export function JamSongPanel({
                   onVote={() =>
                     void guard(async () => {
                       const answer = await voteJamTrack(track.id, !votedIds.has(track.id));
-                      applyJamVote(channelId, answer);
+                      writeVote(answer);
                     })
                   }
                   onSwitchMix={() =>
@@ -254,7 +258,7 @@ export function JamSongPanel({
                       guard(async () => {
                         const put = async (id: string, inMix: boolean) => {
                           const answer = await updateJamTrack(id, { inMix });
-                          applyJamWrite(channelId, {
+                          writeFrame({
                             type: "jam-track-updated",
                             channelId,
                             song: answer.song,
@@ -282,7 +286,7 @@ export function JamSongPanel({
                           engine: playback.engine,
                           onSave: async (patch) => {
                             const answer = await updateJamTrack(track.id, patch);
-                            applyJamWrite(channelId, {
+                            writeFrame({
                               type: "jam-track-updated",
                               channelId,
                               song: answer.song,
@@ -339,7 +343,7 @@ export function JamSongPanel({
                     joinMode: song.joinMode === "closed" ? "open" : "closed",
                     ...(song.joinMode === "closed" ? { wantedInstruments: [] } : {}),
                   });
-                  applyJamWrite(channelId, { type: "jam-song-updated", channelId, song: answer.song });
+                  writeFrame({ type: "jam-song-updated", channelId, song: answer.song });
                 })
               }
             >
@@ -399,7 +403,7 @@ export function JamSongPanel({
             await deleteJamTrack(track.id);
             // Deleted is deleted: the lane goes at once, and the refreshes below are
             // best effort (their failing must not make a done delete look undone).
-            applyJamWrite(channelId, { type: "jam-track-deleted", channelId, song, trackId: track.id });
+            writeFrame({ type: "jam-track-deleted", channelId, song, trackId: track.id });
             try {
               await loadJamDetail(channelId, song.id, { force: true });
               await loadJamChannel(channelId, { force: true });
@@ -420,7 +424,7 @@ export function JamSongPanel({
           setConfirmSong(false);
           void guard(async () => {
             await deleteJamSong(song.id);
-            applyJamWrite(channelId, { type: "jam-song-deleted", channelId, songId: song.id });
+            writeFrame({ type: "jam-song-deleted", channelId, songId: song.id });
             onClose();
           });
         }}

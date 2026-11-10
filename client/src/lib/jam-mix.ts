@@ -40,6 +40,39 @@ export function takeToReplace(
 }
 
 /**
+ * A new take replacing the poster's old one in the mix: the new one in, then the
+ * old one out. The mix must not be left half done, so a failed take-out is tried
+ * once more and then COMPENSATED: the new take goes back out and the old one
+ * stays, which is "nothing changed" (told, and the person may use the new take
+ * by hand). `both` is only the case where even the compensation failed.
+ */
+export async function replaceInMix(
+  newId: string,
+  oldId: string,
+  put: (id: string, inMix: boolean) => Promise<void>,
+): Promise<"replaced" | "kept-old" | "both"> {
+  try {
+    await put(newId, true);
+  } catch {
+    return "kept-old"; // nothing changed
+  }
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      await put(oldId, false);
+      return "replaced";
+    } catch {
+      // once more, then undo
+    }
+  }
+  try {
+    await put(newId, false);
+    return "kept-old";
+  } catch {
+    return "both";
+  }
+}
+
+/**
  * Runs one thing at a time: a call made while another is running is dropped and
  * answers `undefined`. Two quick taps on competing takes would otherwise each
  * read the same snapshot of the mix and leave both of them in.

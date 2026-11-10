@@ -19,6 +19,7 @@ import {
   loadJamDetail,
   loadJamDetailLazy,
   loadMoreJamSongs,
+  jamStoreEpoch,
   putJamSongOnWall,
   useJamChannel,
 } from "@/lib/jam-store";
@@ -238,10 +239,11 @@ export function JamPane({
     }
     // Opened by a link: not on the first page, so read it by id.
     let cancelled = false;
+    const asked = jamStoreEpoch();
     void fetchJamSong(openSongId).then(
       (answer) => {
         if (!cancelled && answer.song.channelId === channelId) {
-          putJamSongOnWall(channelId, answer.song);
+          putJamSongOnWall(channelId, answer.song, asked);
         } else if (!cancelled) {
           setSongGone(true);
         }

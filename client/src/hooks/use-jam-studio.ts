@@ -13,10 +13,10 @@ import {
 } from "@/lib/jam";
 import { createJamSong, jamErrorKind, updateJamTrack, type JamErrorKind } from "@/lib/jam-api";
 import { forgetCheckSkipped, isCheckSkipped, rememberCheckSkipped } from "@/lib/jam-latency-skip";
-import { takeToReplace } from "@/lib/jam-mix";
+import { replaceInMix, takeToReplace } from "@/lib/jam-mix";
 import { createLevelMeter, type JamLevelMeter } from "@/lib/jam-level";
 import { getJamEngine, syncJamStems, TAKE_STEM_ID } from "@/lib/jam-session";
-import { applyJamWrite, putJamSongOnWall, putJamTrackInSong } from "@/lib/jam-store";
+import { applyJamWrite, jamStoreEpoch, putJamSongOnWall, putJamTrackInSong } from "@/lib/jam-store";
 import {
   asRecorded,
   isEdited,
@@ -161,6 +161,14 @@ export function useJamStudio(args: UseJamStudioArgs) {
 
   /** True from teardown until the next boot: a late answer is not wanted. */
   const torn = useRef(false);
+  /** The pending "hear it with the band" start after a stop: dropped when the take or the studio goes. */
+  const reviewTimer = useRef<number | null>(null);
+  const clearReviewTimer = useCallback(() => {
+    if (reviewTimer.current !== null) {
+      window.clearTimeout(reviewTimer.current);
+      reviewTimer.current = null;
+    }
+  }, []);
 
   const refreshLatency = useCallback(async (live: JamEngine) => {
     try {
@@ -268,9 +276,10 @@ export function useJamStudio(args: UseJamStudioArgs) {
     return () => {
       cancelled = true;
       torn.current = true;
+      clearReviewTimer();
       detach?.();
     };
-  }, [openMic]);
+  }, [openMic, clearReviewTimer]);
 
   // The backing follows the song while the studio is open (a track arrives).
   const backingSignature = backing
@@ -387,6 +396,7 @@ export function useJamStudio(args: UseJamStudioArgs) {
       return;
     }
     setStartError(null);
+    clearReviewTimer();
     try {
       // The click that got us here is the gesture the audio needs.
       await live.context.resume();
@@ -414,7 +424,7 @@ export function useJamStudio(args: UseJamStudioArgs) {
     } catch {
       setStartError("start");
     }
-  }, [engine, mic, countIn, wantsVideo, resetPeaks]);
+  }, [engine, mic, countIn, wantsVideo, resetPeaks, clearReviewTimer]);
 
   const stopRecording = useCallback(async () => {
     const live = engine;
@@ -435,18 +445,21 @@ export function useJamStudio(args: UseJamStudioArgs) {
       setEdits(asRecorded(done));
       setPhase("review");
       // Hear it with the band straight away: stopping was the gesture.
-      window.setTimeout(() => {
+      clearReviewTimer();
+      reviewTimer.current = window.setTimeout(() => {
+        reviewTimer.current = null;
         live.player.play(0).catch(() => setPlayError(true));
       }, 380);
     } catch {
       setStartError("stop");
       setPhase("setup");
     }
-  }, [engine]);
+  }, [engine, clearReviewTimer]);
   stopRef.current = stopRecording;
 
   const discardTake = useCallback(() => {
     const live = engine;
+    clearReviewTimer();
     live?.player.stop();
     live?.player.removeStem(TAKE_STEM_ID);
     if (takeUrl.current) {
@@ -461,7 +474,7 @@ export function useJamStudio(args: UseJamStudioArgs) {
     job.current = null;
     setPostError(null);
     setPhase("setup");
-  }, [engine, resetPeaks]);
+  }, [engine, resetPeaks, clearReviewTimer]);
 
   const cancelRecording = useCallback(async () => {
     const running = handle.current;
@@ -511,6 +524,9 @@ export function useJamStudio(args: UseJamStudioArgs) {
       return;
     }
     posting.current = true;
+    // The identity this post is made under: its answers are not written into the
+    // store if another account has taken over by the time they land.
+    const asked = jamStoreEpoch();
     setPostError(null);
     setPhase("posting");
     setProgress({ stage: "uploading", fraction: 0 });
@@ -531,7 +547,7 @@ export function useJamStudio(args: UseJamStudioArgs) {
         const { song } = await createJamSong(channelId, body);
         createdSongId.current = song.id;
         targetSong = song.id;
-        putJamSongOnWall(channelId, song);
+        putJamSongOnWall(channelId, song, asked);
       }
       if (!job.current) {
         const at = placed(take, edits);
@@ -565,17 +581,20 @@ export function useJamStudio(args: UseJamStudioArgs) {
         state: job.current.state,
         onProgress: setProgress,
       });
-      putJamTrackInSong(channelId, answer.song, answer.track);
+      putJamTrackInSong(channelId, answer.song, answer.track, asked);
       // A new take of an instrument the poster already has in the mix replaces it
       // when they said so (the default): the new one in, then the old one out. The
       // take is posted either way, so a failure here is told, never a failed post.
       if (replaceTake && wantsReplace && !answer.track.inMix) {
-        try {
-          const swapIn = await updateJamTrack(answer.track.id, { inMix: true });
-          applyJamWrite(channelId, { type: "jam-track-updated", channelId, song: swapIn.song, track: swapIn.track });
-          const swapOut = await updateJamTrack(replaceTake.id, { inMix: false });
-          applyJamWrite(channelId, { type: "jam-track-updated", channelId, song: swapOut.song, track: swapOut.track });
-        } catch {
+        const outcome = await replaceInMix(answer.track.id, replaceTake.id, async (id, inMix) => {
+          const written = await updateJamTrack(id, { inMix });
+          applyJamWrite(
+            channelId,
+            { type: "jam-track-updated", channelId, song: written.song, track: written.track },
+            asked,
+          );
+        });
+        if (outcome !== "replaced") {
           setSwapFailed(true);
         }
       }

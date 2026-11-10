@@ -21,7 +21,7 @@ import type { LatencyConfidence, LatencyMethod } from "@/lib/jam";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { JAM_INSTRUMENT_LOOK } from "@/lib/jam-instruments";
 import { judgeLevel, levelBar, type JamLevelVerdict, type SilenceClock } from "@/lib/jam-level";
-import { liveBars } from "@/lib/jam-live";
+import { createLiveBars } from "@/lib/jam-live";
 import { audibleMs, MIN_AUDIBLE_MS, NUDGE_LIMIT_MS, signedSeconds, type TakeEdits } from "@/lib/jam-take-edit";
 import { formatClock } from "@/lib/jam-wall";
 import { cn } from "@/lib/utils";
@@ -461,8 +461,10 @@ export function LiveLane({
   const look = JAM_INSTRUMENT_LOOK[instrument];
   const [ref, count] = useBarCount(5, 400);
   const slotMs = count > 0 ? timelineEndMs / count : 0;
+  const fold = useRef<ReturnType<typeof createLiveBars> | null>(null);
+  fold.current ??= createLiveBars();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- `version` is the change signal for the mutable list
-  const bars = useMemo(() => liveBars(peaks, slotMs), [peaks, version, slotMs]);
+  const bars = useMemo(() => fold.current!(peaks, slotMs), [peaks, version, slotMs]);
   return (
     <div
       ref={ref}

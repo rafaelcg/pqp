@@ -5,6 +5,7 @@ import {
   competingInstruments,
   filterSongs,
   formatClock,
+  jamChannelsGone,
   jamHasNews,
   latestActivity,
   orderTracks,
@@ -177,5 +178,28 @@ describe("the lanes of an open song", () => {
     const out = track({ offsetMs: 0, durationMs: 999999, inMix: false });
     expect(songTimeline([early, late, out])).toEqual({ startMs: 0, endMs: 50000 });
     expect(songTimeline([])).toEqual({ startMs: 0, endMs: 1000 });
+  });
+});
+
+describe("jam channels that left their server's list", () => {
+  const ch = (id: string, serverId: string | null, type = "jam") => ({ id, type, serverId });
+
+  it("names a jam channel that was listed and is not now", () => {
+    const first = jamChannelsGone(new Map(), [ch("j1", "s1"), ch("j2", "s1"), ch("t1", "s1", "text")]);
+    expect(first.gone).toEqual([]);
+    const second = jamChannelsGone(first.next, [ch("j1", "s1"), ch("t1", "s1", "text")]);
+    expect(second.gone).toEqual(["j2"]);
+  });
+
+  it("judges only a server whose list is present: another server's list is not 'everything vanished'", () => {
+    const first = jamChannelsGone(new Map(), [ch("j1", "s1")]);
+    const other = jamChannelsGone(first.next, [ch("x1", "s2")]);
+    expect(other.gone).toEqual([]);
+    expect(jamChannelsGone(other.next, [ch("j1", "s1")]).gone).toEqual([]);
+  });
+
+  it("an empty list says nothing", () => {
+    const first = jamChannelsGone(new Map(), [ch("j1", "s1")]);
+    expect(jamChannelsGone(first.next, []).gone).toEqual([]);
   });
 });

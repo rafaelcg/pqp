@@ -131,7 +131,11 @@ export function useJamPlayback(
       setStatus("ready");
       if (!loadedOnce.current) {
         loadedOnce.current = true;
-        if (wantAutoplay.current && engine.context.state === "running") {
+        // The request is spent on the song it was made for: another song opened
+        // on this hook does not start by itself.
+        const autoplayNow = wantAutoplay.current;
+        wantAutoplay.current = false;
+        if (autoplayNow && engine.context.state === "running") {
           void engine.player.play(0);
         }
       }

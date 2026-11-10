@@ -1,5 +1,9 @@
 import type { JamTrack } from "@pqp/shared";
 import { JamEngine } from "@/lib/jam";
+import { inPool } from "@/lib/jam-pool";
+
+/** Stems downloaded and decoded at once: a song of many takes loads in waves, not in a burst. */
+const STEM_LOADS_AT_ONCE = 4;
 
 /**
  * The one audio engine the jam screens share. A song panel plays through it,
@@ -155,7 +159,7 @@ export async function syncJamStems(
     }
   }
 
-  await Promise.all(wanted.map(settle));
+  await inPool(wanted, STEM_LOADS_AT_ONCE, settle);
 }
 
 /** Take every stem out (leaving a song). The take, if any, goes too. */
