@@ -59,6 +59,9 @@ final class JamAudioSession {
     /// song does not leave the rest of the app on `.playback`.
     private var previous: (category: AVAudioSession.Category, mode: AVAudioSession.Mode, options: AVAudioSession.CategoryOptions)?
     private(set) var ownsLockScreen = false
+    /// The category could not be put back after the session was released: the
+    /// next release tries again, so the rest of the app is not left on it.
+    private var pendingRestore = false
     /// Whether this song holds the session right now (changed it, or is the
     /// one that activated it). Only a holder may release it.
     var isHolding: Bool { weChangedTheSession }
@@ -109,10 +112,16 @@ final class JamAudioSession {
     @discardableResult
     func deactivate() -> JamSessionRelease {
         ownsLockScreen = false
+        if pendingRestore, !weChangedTheSession {
+            restorePreviousCategory()
+            return pendingRestore ? .stillActive : .released
+        }
         guard weChangedTheSession else { return .notOurs }
         // A call (or anything recording) holds it now: not ours to touch, and
-        // nothing of ours is left to give back.
-        guard driver.category == .playback else {
+        // nothing of ours is left to give back. A category that is merely not
+        // `.playback` (our own category change was refused) is still ours to
+        // deactivate: leaving it active would hold the session with no song.
+        guard !WatchAudioSession.wouldInterruptACall(driver.category) else {
             weChangedTheSession = false
             previous = nil
             return .takenOver
@@ -131,11 +140,29 @@ final class JamAudioSession {
             return .stillActive
         }
         weChangedTheSession = false
-        if let previous {
-            try? driver.setCategory(previous.category, mode: previous.mode, options: previous.options)
-        }
-        previous = nil
+        restorePreviousCategory()
         return .released
+    }
+
+    /// Put the old category back. A refusal keeps it for the next release.
+    private func restorePreviousCategory() {
+        guard let previous else {
+            pendingRestore = false
+            return
+        }
+        guard driver.category == .playback else {
+            // Already something else (a call, or never changed): nothing to undo.
+            self.previous = nil
+            pendingRestore = false
+            return
+        }
+        do {
+            try driver.setCategory(previous.category, mode: previous.mode, options: previous.options)
+            self.previous = nil
+            pendingRestore = false
+        } catch {
+            pendingRestore = true
+        }
     }
 
     /// Output latency in seconds, for lining a video up with what is HEARD

@@ -90,10 +90,13 @@ final class FakeAudioDriver: JamAudioSessionDriver {
     var log: [String] = []
     var activeFalseError: Error?
     var activeTrueError: Error?
+    /// Refuses a category change when it answers an error for it.
+    var categoryError: ((AVAudioSession.Category) -> Error?)?
 
     init(category: AVAudioSession.Category = .ambient) { self.category = category }
 
     func setCategory(_ category: AVAudioSession.Category, mode: AVAudioSession.Mode, options: AVAudioSession.CategoryOptions) throws {
+        if let error = categoryError?(category) { throw error }
         log.append("category:\(category.rawValue)")
         self.category = category
         self.mode = mode
@@ -180,6 +183,30 @@ final class JamAudioSessionOwnershipTests: XCTestCase {
         XCTAssertTrue(session.isHolding)
         driver.activeFalseError = nil
         XCTAssertEqual(session.deactivate(), .released)
+    }
+
+    func testARefusedCategoryChangeDoesNotLeaveTheActivatedSessionActive() {
+        let driver = FakeAudioDriver(category: .ambient)
+        driver.categoryError = { $0 == .playback ? NSError(domain: NSOSStatusErrorDomain, code: -50) : nil }
+        let session = JamAudioSession(driver: driver)
+        session.activate(callActive: false)
+        XCTAssertEqual(driver.category, .ambient, "the change was refused")
+        XCTAssertTrue(session.isHolding, "but the session did get activated by this song")
+        XCTAssertEqual(session.deactivate(), .released)
+        XCTAssertEqual(driver.log.last, "active:false", "so it is deactivated, not left active with no song")
+    }
+
+    func testACategoryThatCouldNotBePutBackIsRetriedOnTheNextRelease() {
+        let driver = FakeAudioDriver(category: .ambient)
+        let session = JamAudioSession(driver: driver)
+        session.activate(callActive: false)
+        driver.categoryError = { $0 == .ambient ? NSError(domain: NSOSStatusErrorDomain, code: -50) : nil }
+        XCTAssertEqual(session.deactivate(), .released)
+        XCTAssertEqual(driver.category, .playback, "the restore was refused")
+        driver.categoryError = nil
+        XCTAssertEqual(session.deactivate(), .released)
+        XCTAssertEqual(driver.category, .ambient, "and the next release puts it back")
+        XCTAssertEqual(session.deactivate(), .notOurs, "then there is nothing left to do")
     }
 
     func testAFailedActivationDoesNotClaimTheLockScreen() {
