@@ -302,10 +302,10 @@ struct JamInstrumentChips: View {
     var body: some View {
         FlowLayout(spacing: 6) {
             ForEach(present, id: \.self) { instrument in
-                let names = tracks.filter { $0.instrument == instrument }.compactMap(\.authorName)
                 HStack(spacing: 6) {
                     Circle().fill(instrument.color).frame(width: 8, height: 8)
-                    Text(verbatim: ([instrument.title] + Array(Set(names)).sorted().prefix(1)).joined(separator: " \u{00B7} "))
+                    Text(verbatim: JamTrackNaming.chip(instrument: instrument, tracks: tracks))
+                        .lineLimit(1)
                 }
                 .font(JamFont.text(12, .bold))
                 .foregroundStyle(Palette.paper)

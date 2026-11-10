@@ -18,6 +18,13 @@ struct JamStageView: View {
         model.active.filter { model.video.player(for: $0.id) != nil }.prefix(4).map { $0 }
     }
 
+    /// A video this phone cannot play (WebM, what Chrome and Firefox record):
+    /// the song still plays, its audio is a separate stem, and the stage says
+    /// why there is no picture instead of showing a frame that never loads.
+    private var hasUnplayableVideo: Bool {
+        model.active.contains { $0.hasVideo && !JamVideoSync.canPlay(contentType: $0.videoContentType) }
+    }
+
     private var artTint: Color {
         (model.stack.first?.instrument ?? JamWho.instruments(of: model.song).first ?? .other).color
     }
@@ -33,7 +40,7 @@ struct JamStageView: View {
         .frame(maxWidth: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: Metrics.cornerRadius, style: .continuous))
         .padding(.horizontal, Metrics.hPadding)
-        .accessibilityHidden(true)
+        .accessibilityHidden(!(hasUnplayableVideo && videoTracks.isEmpty))
     }
 
     private var videoGrid: some View {
@@ -76,6 +83,17 @@ struct JamStageView: View {
             .frame(height: 84)
             .frame(maxHeight: .infinity, alignment: .center)
             .padding(.horizontal, 18)
+            if hasUnplayableVideo {
+                Label("The video does not play on iPhone yet", systemImage: "video.slash")
+                    .font(JamFont.text(12, .semibold))
+                    .foregroundStyle(Palette.ink.opacity(0.85))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Capsule().fill(Palette.ink.opacity(0.14)))
+                    .padding(12)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .accessibilityHidden(false)
+            }
             HStack(spacing: -8) {
                 ForEach(model.active.prefix(5)) { track in
                     Avatar(name: track.displayName, seed: track.authorId, size: 28, url: track.authorAvatarUrl)
@@ -269,7 +287,7 @@ struct JamTrackRow: View {
     }
 
     private var voteLabel: Text {
-        Text("Vote for \(track.instrument.title) by \(track.displayName)")
+        Text("Vote for \(JamTrackNaming.spoken(track))")
     }
 
     // MARK: Gutter
@@ -287,9 +305,11 @@ struct JamTrackRow: View {
                     Text(verbatim: track.instrument.title)
                         .font(JamFont.text(13, .bold))
                         .foregroundStyle(Palette.paper)
-                    Text(verbatim: track.label ?? track.displayName)
+                    Text(verbatim: JamTrackNaming.caption(track))
                         .font(JamFont.text(11))
                         .foregroundStyle(Palette.paperMuted)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
@@ -299,7 +319,7 @@ struct JamTrackRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(Text(verbatim: "\(track.instrument.title), \(track.label ?? track.displayName)"))
+        .accessibilityLabel(Text(verbatim: JamTrackNaming.spoken(track)))
         .accessibilityHint(Text("Shows the mix controls"))
         .accessibilityAddTraits(expanded ? [.isSelected] : [])
     }
@@ -549,7 +569,7 @@ struct JamOtherTakesView: View {
             JamVoteButton(
                 count: track.voteCount, voted: model.isVoted(track.id),
                 busy: model.busyVotes.contains(track.id),
-                label: Text("Vote for \(track.instrument.title) by \(track.displayName)")
+                label: Text("Vote for \(JamTrackNaming.spoken(track))")
             ) { Task { await model.vote(track) } }
         }
         .padding(.horizontal, Metrics.hPadding)

@@ -21,6 +21,11 @@ struct JamWallView: View {
     /// uses the transition instead.
     @State private var hasEntered = false
     @Namespace private var zoomSpace
+    /// The width the mosaic has, to size its cells.
+    @State private var contentWidth: CGFloat = UIScreen.main.bounds.width
+
+    private static let gap: CGFloat = 10
+    private static let cellAspect: CGFloat = 0.92
 
     init(channel: Channel, server: Server) {
         _model = State(initialValue: JamWallModel(channel: channel, server: server))
@@ -97,15 +102,9 @@ struct JamWallView: View {
                 if songs.isEmpty {
                     noMatch
                 } else {
-                    JamMosaicLayout(columns: columns) {
-                        ForEach(Array(songs.enumerated()), id: \.element.id) { index, song in
-                            tile(song, index: index, hasVideo: model.anyPreview(for: song)?.hasVideo == true)
-                        }
-                        recordTile
-                            .jamTileSize(.small)
-                    }
-                    .padding(.horizontal, Metrics.hPadding)
-                    .animation(.jam(reduceMotion: reduceMotion), value: songs.map(\.id))
+                    mosaic(songs)
+                        .padding(.horizontal, Metrics.hPadding)
+                        .animation(.jam(reduceMotion: reduceMotion), value: songs.map(\.id))
                 }
                 if model.isLoadingMore {
                     ProgressView().tint(Palette.paperMuted).frame(maxWidth: .infinity)
@@ -125,7 +124,53 @@ struct JamWallView: View {
             .padding(.bottom, 28)
         }
         .refreshable { await model.refresh() }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { contentWidth = $0 }
         .onAppear { hasEntered = true }
+    }
+
+    // MARK: The mosaic, in lazy bands
+
+    /// Cells are square-ish; a tile spans whole cells plus the gaps between
+    /// them, so a 2 x 2 is exactly four cells and nothing drifts.
+    private func mosaic(_ songs: [JamSongSummary]) -> some View {
+        let columns = self.columns
+        let width = max(1, contentWidth - Metrics.hPadding * 2)
+        let cellW = max(1, (width - Self.gap * CGFloat(columns - 1)) / CGFloat(columns))
+        let cellH = cellW * Self.cellAspect
+        var sizes = songs.enumerated().map { index, song in
+            JamMosaic.desiredSize(index: index, song: song, hasVideo: JamTileFacts.resolve(song: song, preview: model.anyPreview(for: song)).hasVideo)
+        }
+        sizes.append(.small)  // the "your turn" tile closes the grid
+        let bands = JamMosaic.bands(JamMosaic.layout(sizes: sizes, columns: columns))
+        return LazyVStack(alignment: .leading, spacing: Self.gap) {
+            ForEach(bands.indices, id: \.self) { b in
+                let band = bands[b]
+                let firstRow = band.map(\.row).min() ?? 0
+                let rows = (band.map { $0.row + $0.rows }.max() ?? firstRow) - firstRow
+                ZStack(alignment: .topLeading) {
+                    ForEach(band, id: \.index) { p in
+                        let w = CGFloat(p.columns) * cellW + CGFloat(p.columns - 1) * Self.gap
+                        let h = CGFloat(p.rows) * cellH + CGFloat(p.rows - 1) * Self.gap
+                        Group {
+                            if p.index < songs.count {
+                                tile(songs[p.index], size: sizes[p.index], index: p.index)
+                            } else {
+                                recordTile
+                            }
+                        }
+                        .frame(width: w, height: h)
+                        .offset(
+                            x: CGFloat(p.column) * (cellW + Self.gap),
+                            y: CGFloat(p.row - firstRow) * (cellH + Self.gap)
+                        )
+                    }
+                }
+                .frame(
+                    width: width, height: CGFloat(rows) * cellH + CGFloat(max(0, rows - 1)) * Self.gap,
+                    alignment: .topLeading
+                )
+            }
+        }
     }
 
     // MARK: Filters
@@ -197,8 +242,7 @@ struct JamWallView: View {
     // MARK: Tiles
 
     @ViewBuilder
-    private func tile(_ song: JamSongSummary, index: Int, hasVideo: Bool) -> some View {
-        let size = JamMosaic.desiredSize(index: index, song: song, hasVideo: hasVideo)
+    private func tile(_ song: JamSongSummary, size: JamTileSize, index: Int) -> some View {
         let preview = model.anyPreview(for: song)
         let _ = model.posterRevision
         Button {
@@ -213,7 +257,6 @@ struct JamWallView: View {
             )
         }
         .buttonStyle(JamTilePressStyle(reduceMotion: reduceMotion))
-        .jamTileSize(size)
         .jamMatchedSource(id: song.id, in: zoomSpace, enabled: !reduceMotion)
         .modifier(JamEntrance(index: index, entered: hasEntered, reduceMotion: reduceMotion))
         .transition(reduceMotion ? .opacity : .scale(scale: 0.9).combined(with: .opacity))
@@ -339,9 +382,9 @@ enum JamLinks {
         URL(string: "https://pqp.gg/app/server/\(serverId)/channel/\(channelId)")
     }
 
-    /// A song's permalink, shaped like the forum's post link
-    /// (`.../channel/<id>/post/<id>`). The web screens are built in parallel;
-    /// until they answer this path the channel link is where it lands.
+    /// A song's permalink: `/app/server/<serverId>/channel/<jamChannelId>/song/<songId>`,
+    /// the route the web answers (shaped like the forum's `/post/` link). The
+    /// copy and share links of the song screen are exactly this.
     static func song(serverId: String, channelId: String, songId: String) -> URL? {
         URL(string: "https://pqp.gg/app/server/\(serverId)/channel/\(channelId)/song/\(songId)")
     }

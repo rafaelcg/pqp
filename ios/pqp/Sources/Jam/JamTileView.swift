@@ -24,6 +24,7 @@ struct JamTileView: View {
     @State private var drawn = false
 
     private var need: JamNeed { JamNeed.of(song) }
+    private var facts: JamTileFacts { JamTileFacts.resolve(song: song, preview: preview) }
     private var tint: Color { (JamWho.instruments(of: song).first ?? .other).color }
     private var hasPoster: Bool { poster != nil }
     private var isEmptySong: Bool { song.trackCount == 0 }
@@ -38,7 +39,7 @@ struct JamTileView: View {
     private var onTint: Bool { !hasPoster && !isEmptySong }
 
     private var whoText: String {
-        JamWho.line(song: song, contributors: preview?.contributors)
+        JamWho.line(song: song, contributors: facts.contributorNames)
     }
 
     var body: some View {
@@ -77,7 +78,7 @@ struct JamTileView: View {
             .clipped()
         } else if isEmptySong {
             Palette.surface
-        } else if preview?.hasVideo == true && preview?.envelope.isEmpty != false {
+        } else if facts.hasVideo && facts.envelope.isEmpty {
             Palette.surfaceRaised
         } else {
             tint
@@ -87,7 +88,7 @@ struct JamTileView: View {
     private var waveLayer: some View {
         VStack {
             JamWaveform(
-                values: preview?.envelope ?? [],
+                values: facts.envelope,
                 color: Palette.ink,
                 draw: drawn || reduceMotion ? 1 : 0,
                 barWidth: isHero ? 4 : 3,
@@ -95,8 +96,8 @@ struct JamTileView: View {
             )
             .frame(height: isHero ? 72 : 34)
             .padding(.top, 16)
-            .opacity(preview == nil ? 0.35 : 1)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.5), value: preview != nil)
+            .opacity(facts.isReady ? 1 : 0.35)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.5), value: facts.isReady)
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 14)
@@ -201,67 +202,5 @@ struct JamTileView: View {
         if let artist = song.artist, !artist.isEmpty { text = text + Text(verbatim: ", \(artist)") }
         if !whoText.isEmpty { text = text + Text(verbatim: ", \(whoText)") }
         return text + Text(verbatim: ", \(need.text)")
-    }
-}
-
-// MARK: - The mosaic as a layout
-
-private struct JamTileSizeKey: LayoutValueKey {
-    static let defaultValue: JamTileSize = .small
-}
-
-extension View {
-    func jamTileSize(_ size: JamTileSize) -> some View {
-        layoutValue(key: JamTileSizeKey.self, value: size)
-    }
-}
-
-/// Places tiles on the grid `JamMosaic.layout` decided. A cell is square-ish
-/// (`aspect` is its height over its width) and a tile spans whole cells plus
-/// the gaps between them, so a 2 x 2 is exactly four cells and nothing drifts.
-struct JamMosaicLayout: Layout {
-    var columns: Int
-    var spacing: CGFloat = 10
-    var aspect: CGFloat = 0.92
-
-    struct Cache {
-        var placements: [JamPlacement] = []
-    }
-
-    func makeCache(subviews: Subviews) -> Cache { Cache() }
-
-    private func resolve(_ subviews: Subviews) -> [JamPlacement] {
-        JamMosaic.layout(sizes: subviews.map { $0[JamTileSizeKey.self] }, columns: columns)
-    }
-
-    private func cell(width: CGFloat) -> CGSize {
-        let w = (width - spacing * CGFloat(columns - 1)) / CGFloat(columns)
-        return CGSize(width: max(1, w), height: max(1, w * aspect))
-    }
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
-        let width = proposal.width ?? 320
-        cache.placements = resolve(subviews)
-        let rows = JamMosaic.rowCount(cache.placements)
-        let c = cell(width: width)
-        let height = rows == 0 ? 0 : CGFloat(rows) * c.height + CGFloat(rows - 1) * spacing
-        return CGSize(width: width, height: height)
-    }
-
-    func placeSubviews(
-        in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache
-    ) {
-        if cache.placements.count != subviews.count { cache.placements = resolve(subviews) }
-        let c = cell(width: bounds.width)
-        for placement in cache.placements {
-            let x = bounds.minX + CGFloat(placement.column) * (c.width + spacing)
-            let y = bounds.minY + CGFloat(placement.row) * (c.height + spacing)
-            let w = CGFloat(placement.columns) * c.width + CGFloat(placement.columns - 1) * spacing
-            let h = CGFloat(placement.rows) * c.height + CGFloat(placement.rows - 1) * spacing
-            subviews[placement.index].place(
-                at: CGPoint(x: x, y: y), anchor: .topLeading,
-                proposal: ProposedViewSize(width: w, height: h)
-            )
-        }
     }
 }

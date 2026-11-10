@@ -101,6 +101,64 @@ extension JamNeed {
     }
 }
 
+/// HOW A TRACK IS NAMED, in one place. Three facts name a track: its
+/// instrument, an optional label its author typed ("take 2, com pedal"), and
+/// the person. They always read in that order, separated by a middle dot, and a
+/// missing label is simply absent (never an empty slot, and never the label
+/// glued onto the name):
+///
+///     Bass                     (the instrument alone, in a row's first line)
+///     take 2, com pedal . Bia  (a row's second line: label, then person)
+///     Bass . take 2, com pedal . Bia   (the whole name)
+///
+/// A chip that stands for several tracks of one instrument names the people
+/// instead. VoiceOver says the same thing in words ("Bass, take 2, com pedal,
+/// by Bia"). Every place that names a track asks this enum.
+enum JamTrackNaming {
+    static let separator = " \u{00B7} "
+
+    /// A row's second line: the label, then the person.
+    static func caption(_ track: JamTrack) -> String {
+        [cleaned(track.label), cleaned(track.authorName)].compactMap { $0 }.joined(separator: separator)
+    }
+
+    /// Instrument, label, person.
+    static func full(_ track: JamTrack) -> String {
+        ([track.instrument.title] + [cleaned(track.label), cleaned(track.authorName)].compactMap { $0 })
+            .joined(separator: separator)
+    }
+
+    /// What VoiceOver reads.
+    static func spoken(_ track: JamTrack) -> String {
+        var parts = [track.instrument.title]
+        if let label = cleaned(track.label) { parts.append(label) }
+        if let person = cleaned(track.authorName) { parts.append(String(localized: "by \(person)")) }
+        return parts.joined(separator: ", ")
+    }
+
+    /// The song header's chip for one instrument: with a single track it is the
+    /// whole name; with several it lists the people (two, then "+N").
+    static func chip(instrument: JamInstrument, tracks: [JamTrack]) -> String {
+        let mine = tracks.filter { $0.instrument == instrument }
+        if mine.count == 1, let only = mine.first { return full(only) }
+        var people: [String] = []
+        for track in mine {
+            if let person = cleaned(track.authorName), !people.contains(person) { people.append(person) }
+        }
+        var parts = [instrument.title]
+        if !people.isEmpty {
+            let shown = people.prefix(2).joined(separator: ", ")
+            parts.append(people.count > 2 ? "\(shown) +\(people.count - 2)" : shown)
+        }
+        return parts.joined(separator: separator)
+    }
+
+    private static func cleaned(_ text: String?) -> String? {
+        guard let text = text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
+        return text
+    }
+}
+
 enum JamTime {
     /// 2:14, the way the design writes it. Tabular, so a running clock does
     /// not shimmer.

@@ -96,8 +96,13 @@ final class JamWallModel {
     /// Once per appearance. The handler holds this model weakly and removes
     /// itself once the model is gone, so it stays registered while a song is
     /// pushed on top (the wall keeps up) and does not outlive the screen.
+    /// Hand the model its session without opening the socket slot: what a test
+    /// uses to drive `load`, `loadMore` and the frames against a stubbed
+    /// network. `start` calls it too.
+    func attach(session: SessionStore) { self.session = session }
+
     func start(session: SessionStore) async {
-        self.session = session
+        attach(session: session)
         if started {
             await session.realtime.join(channelId: channel.id)
             await refresh()
@@ -217,7 +222,7 @@ final class JamWallModel {
     /// Ask for a song's preview. Queued and at most three at a time, so a fast
     /// scroll over twenty tiles is three requests in flight, not twenty.
     func requestPreview(for song: JamSongSummary) {
-        guard song.trackCount > 0, preview(for: song) == nil else { return }
+        guard JamPreviewPolicy.needsDetail(song: song, hasCurrentPreview: preview(for: song) != nil) else { return }
         guard !previewsInFlight.contains(song.id), !previewQueue.contains(song.id) else { return }
         previewQueue.append(song.id)
         pumpPreviews()

@@ -28,6 +28,11 @@ enum JamNeed: Equatable, Sendable {
         case .closed:
             return .ready
         case .wanted:
+            // The server says it outright since #1579; before that it is
+            // worked out from the wanted list and who is there.
+            if let missing = song.missingInstruments {
+                return missing.isEmpty ? .ready : .missing(missing)
+            }
             let present = Set(song.instruments)
             let missing = song.wantedInstruments.filter { !present.contains($0) }
             return missing.isEmpty ? .ready : .missing(missing)
@@ -74,15 +79,55 @@ enum JamWho {
             if author.isEmpty { return rest > 0 ? "+\(rest)" : "" }
             return rest > 0 ? "\(author) +\(rest)" : author
         }
-        if names.count <= maxNames { return names.joined(separator: ", ") }
+        // The summary names at most four people but counts them all.
+        let total = max(song.contributorCount, names.count)
+        if total <= maxNames {
+            let unnamed = total - names.count
+            return names.joined(separator: ", ") + (unnamed > 0 ? " +\(unnamed)" : "")
+        }
         let shown = names.prefix(maxNames - 1)
-        return shown.joined(separator: ", ") + " +\(names.count - shown.count)"
+        return shown.joined(separator: ", ") + " +\(total - shown.count)"
     }
 
     /// One instrument per person is the common case: "so baixo", "voz e violao"
     /// reads off the instrument list. Returns the instruments in picker order.
     static func instruments(of song: JamSongSummary) -> [JamInstrument] {
         JamInstrument.allCases.filter { song.instruments.contains($0) }
+    }
+}
+
+// MARK: - What a tile draws, from the summary or from the detail
+
+/// What a tile needs: the mix's waveform, whether the song has video, and who is
+/// on it. Taken from the SUMMARY when the server carries those fields (#1579),
+/// else from the lazily read detail (`JamPreview`), the path every server had.
+struct JamTileFacts: Equatable, Sendable {
+    let envelope: [Double]
+    let hasVideo: Bool
+    let contributorNames: [String]?
+    /// There is something real to draw (the waveform is not a placeholder yet).
+    let isReady: Bool
+
+    static func resolve(song: JamSongSummary, preview: JamPreview?) -> JamTileFacts {
+        JamTileFacts(
+            envelope: song.previewPeaks ?? preview?.envelope ?? [],
+            hasVideo: song.hasVideo ?? preview?.hasVideo ?? false,
+            contributorNames: song.contributors.map { $0.compactMap(\.name) } ?? preview?.contributors,
+            isReady: song.previewPeaks != nil || preview != nil
+        )
+    }
+}
+
+/// When a tile has to read its song's detail.
+enum JamPreviewPolicy {
+    /// A song that answers in its summary needs the detail only for a video
+    /// poster (the video URL lives on the track); an older server's song needs
+    /// it for everything. `hasCurrentPreview` is a detail read at or after the
+    /// song's last bump.
+    static func needsDetail(song: JamSongSummary, hasCurrentPreview: Bool) -> Bool {
+        guard song.trackCount > 0, !hasCurrentPreview else { return false }
+        if song.answersPreview { return song.hasVideo == true }
+        return true
     }
 }
 
@@ -170,6 +215,27 @@ enum JamMosaic {
             placements.append(JamPlacement(index: index, column: column, row: row, columns: w, rows: h))
         }
         return placements
+    }
+
+    /// The placements cut into horizontal BANDS: runs of rows that no tile
+    /// crosses the bottom of. A 2 x 2 hero and what sits beside it are one band;
+    /// a row of small tiles is one. The wall draws bands in a lazy stack, so
+    /// only the bands near the screen are built (and only their tiles ask for a
+    /// preview or a poster), however many pages have been read.
+    static func bands(_ placements: [JamPlacement]) -> [[JamPlacement]] {
+        var result: [[JamPlacement]] = []
+        var current: [JamPlacement] = []
+        var bandEnd = 0
+        for p in placements.sorted(by: { ($0.row, $0.column) < ($1.row, $1.column) }) {
+            if !current.isEmpty, p.row >= bandEnd {
+                result.append(current)
+                current = []
+            }
+            current.append(p)
+            bandEnd = max(bandEnd, p.row + p.rows)
+        }
+        if !current.isEmpty { result.append(current) }
+        return result
     }
 
     /// The height of the grid in rows.

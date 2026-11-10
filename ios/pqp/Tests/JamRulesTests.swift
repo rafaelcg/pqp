@@ -59,7 +59,7 @@ final class JamRulesTests: XCTestCase {
 
     func testTheWhoLineNamesPeopleThenCounts() {
         let s = song(contributors: 5)
-        XCTAssertEqual(JamWho.line(song: s, contributors: ["rafa", "duda", "leo"]), "rafa, duda, leo")
+        XCTAssertEqual(JamWho.line(song: song(contributors: 3), contributors: ["rafa", "duda", "leo"]), "rafa, duda, leo")
         XCTAssertEqual(JamWho.line(song: s, contributors: ["a", "b", "c", "d", "e"]), "a, b +3")
         XCTAssertEqual(JamWho.line(song: s, contributors: nil), "rafa +4", "before the detail is read, the author stands in")
         XCTAssertEqual(JamWho.line(song: song(contributors: 1), contributors: nil), "rafa")

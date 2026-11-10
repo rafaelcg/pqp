@@ -85,6 +85,14 @@ struct JamConfig: Decodable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey { case enabled, uploads }
 }
 
+/// A person with a track in a song, as the summary names them (`contributors`).
+struct JamContributor: Decodable, Hashable, Sendable {
+    let id: String
+    /// Nil once the account is gone.
+    let name: String?
+    let avatarUrl: String?
+}
+
 struct JamSongSummary: Decodable, Identifiable, Hashable, Sendable {
     let id: String
     let channelId: String
@@ -108,12 +116,31 @@ struct JamSongSummary: Decodable, Identifiable, Hashable, Sendable {
     /// Length of the default mix. Nil with no `inMix` track.
     var mixDurationMs: Double?
 
+    // What a tile draws, carried by the summary since server PR #1579. Each is
+    // NIL when the server predates it (the key is absent), which is how this
+    // build tells "no peaks" (an empty array) from "ask the detail": the old
+    // lazy path stays as the fallback and nothing here assumes a new server.
+    /// Up to 64 values 0...1: the loudest in-mix stem's peaks.
+    var previewPeaks: [Double]?
+    /// At least one live track has a video.
+    var hasVideo: Bool?
+    /// Up to 4 people, in the order of each one's first track.
+    var contributors: [JamContributor]?
+    /// For a `wanted` song, the wanted instruments with no live track yet.
+    var missingInstruments: [JamInstrument]?
+
+    /// The summary answers what a tile draws, so no detail read is needed for
+    /// the waveform or the names.
+    var answersPreview: Bool { previewPeaks != nil && hasVideo != nil && contributors != nil }
+
     init(
         id: String, channelId: String, serverId: String, title: String, artist: String? = nil,
         joinMode: JamJoinMode = .open, wantedInstruments: [JamInstrument] = [],
         authorId: String? = nil, authorName: String? = nil, authorAvatarUrl: String? = nil,
         createdAt: Date = Date(), updatedAt: Date = Date(), trackCount: Int = 0,
-        instruments: [JamInstrument] = [], contributorCount: Int = 0, mixDurationMs: Double? = nil
+        instruments: [JamInstrument] = [], contributorCount: Int = 0, mixDurationMs: Double? = nil,
+        previewPeaks: [Double]? = nil, hasVideo: Bool? = nil, contributors: [JamContributor]? = nil,
+        missingInstruments: [JamInstrument]? = nil
     ) {
         self.id = id
         self.channelId = channelId
@@ -131,12 +158,17 @@ struct JamSongSummary: Decodable, Identifiable, Hashable, Sendable {
         self.instruments = instruments
         self.contributorCount = contributorCount
         self.mixDurationMs = mixDurationMs
+        self.previewPeaks = previewPeaks
+        self.hasVideo = hasVideo
+        self.contributors = contributors
+        self.missingInstruments = missingInstruments
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, channelId, serverId, title, artist, joinMode, wantedInstruments, authorId
         case authorName, authorAvatarUrl, createdAt, updatedAt, trackCount, instruments
         case contributorCount, mixDurationMs
+        case previewPeaks, hasVideo, contributors, missingInstruments
     }
 
     init(from decoder: Decoder) throws {
@@ -157,6 +189,12 @@ struct JamSongSummary: Decodable, Identifiable, Hashable, Sendable {
         instruments = try c.decodeIfPresent([JamInstrument].self, forKey: .instruments) ?? []
         contributorCount = try c.decodeIfPresent(Int.self, forKey: .contributorCount) ?? 0
         mixDurationMs = try c.decodeIfPresent(Double.self, forKey: .mixDurationMs)
+        // Lenient: a field this build cannot read is "not answered", which
+        // sends the tile down the detail path, not out of the list.
+        previewPeaks = (try? c.decodeIfPresent([Double].self, forKey: .previewPeaks)) ?? nil
+        hasVideo = (try? c.decodeIfPresent(Bool.self, forKey: .hasVideo)) ?? nil
+        contributors = (try? c.decodeIfPresent([JamContributor].self, forKey: .contributors)) ?? nil
+        missingInstruments = (try? c.decodeIfPresent([JamInstrument].self, forKey: .missingInstruments)) ?? nil
     }
 }
 

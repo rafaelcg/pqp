@@ -47,7 +47,10 @@ final class JamSongModel {
 
     @ObservationIgnored let engine = JamEngine()
     @ObservationIgnored let video = JamVideoSync()
-    @ObservationIgnored private let audioSession = JamAudioSession()
+    @ObservationIgnored let audioSession: JamAudioSession
+    /// Starts the engine at a position and answers its host start time. The
+    /// real one is `engine.play`; a test hands in one that throws.
+    @ObservationIgnored var startEngine: ((Double) throws -> UInt64)?
     @ObservationIgnored private weak var session: SessionStore?
     @ObservationIgnored private let handlerKey = "jam-song-\(UUID().uuidString)"
     @ObservationIgnored private var files: [String: URL] = [:]
@@ -61,13 +64,20 @@ final class JamSongModel {
     /// before them, so they are applied on top of its answer.
     @ObservationIgnored private var bufferedFrames: [JamFrame] = []
     @ObservationIgnored private var isReading = false
+    /// How many batches of stem downloads this screen has started. A screen
+    /// that was left before its first read finished starts none.
+    @ObservationIgnored private(set) var downloadBatches = 0
     @ObservationIgnored private var interruptionObserver: NSObjectProtocol?
     @ObservationIgnored private var routeObserver: NSObjectProtocol?
     @ObservationIgnored private var lastNowPlaying = Date.distantPast
 
-    init(song: JamSongSummary, channel: Channel, server: Server) {
+    init(
+        song: JamSongSummary, channel: Channel, server: Server,
+        audioSession: JamAudioSession = JamAudioSession()
+    ) {
         self.channel = channel
         self.server = server
+        self.audioSession = audioSession
         state = JamSongState(song: song, tracks: [], viewer: .none)
     }
 
@@ -194,6 +204,7 @@ final class JamSongModel {
         let missing = wanted.filter { files[$0.id] == nil }
         downloadFailed = false
         if !missing.isEmpty {
+            downloadBatches += 1
             loading = (0, missing.count)
             var done = 0
             await withTaskGroup(of: (String, URL?).self) { group in
@@ -251,8 +262,13 @@ final class JamSongModel {
         guard !isPlaying else { return }
         guard engine.durationMs > 0 else {
             // Nothing loaded yet: load, then play.
+            let mine = lifecycle
             Task {
                 await syncEngine()
+                // The screen may have gone while the stems downloaded: a song
+                // that started after its screen left would take the audio
+                // session with nobody there to release it.
+                guard mine == lifecycle, started else { return }
                 if engine.durationMs > 0 { startPlayback(from: engine.positionMs >= engine.durationMs ? 0 : engine.positionMs) }
             }
             return
@@ -262,10 +278,11 @@ final class JamSongModel {
         startPlayback(from: from)
     }
 
-    private func startPlayback(from positionMs: Double) {
+    func startPlayback(from positionMs: Double) {
+        guard started else { return }
         audioSession.activate(callActive: callActive)
         do {
-            let host = try engine.play(from: positionMs)
+            let host = try startEngine?(positionMs) ?? engine.play(from: positionMs)
             isPlaying = true
             video.play(
                 atSongMs: engine.originMs + positionMs, startHostTime: host,

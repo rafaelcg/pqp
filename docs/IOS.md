@@ -1312,7 +1312,7 @@ the output latency, and put back with a seek when they drift past 90 ms
 
 **Not here.** Recording, adding a track, creating a song, comments, a song deep
 link (`JamLinks.song` is shaped like the forum's `/post/` link and is only as
-good as the web route that will answer it), Spanish (the app ships en and pt-BR
+the web's own route, `/app/server/<server>/channel/<jam channel>/song/<song>`), Spanish (the app ships en and pt-BR
 only).
 
 ## Parity with the web client

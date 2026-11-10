@@ -22,20 +22,56 @@ import MediaPlayer
  right for a film and wrong here: it lets the system change the audio for the
  content (dynamic range) and a band mix is not content to be normalised.
  */
+/// The part of `AVAudioSession` this song touches, so the ownership rules can be
+/// tested against a fake that records every call and can refuse like the real
+/// one does (a simulator will grant any category and never says "busy").
+protocol JamAudioSessionDriver: AnyObject {
+    var category: AVAudioSession.Category { get }
+    var mode: AVAudioSession.Mode { get }
+    var categoryOptions: AVAudioSession.CategoryOptions { get }
+    var outputLatency: TimeInterval { get }
+    func setCategory(_ category: AVAudioSession.Category, mode: AVAudioSession.Mode, options: AVAudioSession.CategoryOptions) throws
+    func setActive(_ active: Bool, options: AVAudioSession.SetActiveOptions) throws
+}
+
+extension AVAudioSession: JamAudioSessionDriver {}
+
+/// What a release did.
+enum JamSessionRelease: Equatable {
+    /// Nothing of ours to give back.
+    case notOurs
+    /// A call (or a recording category) holds the session now: left alone.
+    case takenOver
+    /// Something in this process is still playing through it (iOS says
+    /// "busy"): left running, and nothing is restored under it.
+    case busy
+    /// The release was refused for another reason: still active, still ours,
+    /// the next release tries again.
+    case stillActive
+    case released
+}
+
 @MainActor
 final class JamAudioSession {
+    private let driver: any JamAudioSessionDriver
     private var weChangedTheSession = false
     /// What the session was before this one took it, put back on release so a
     /// song does not leave the rest of the app on `.playback`.
     private var previous: (category: AVAudioSession.Category, mode: AVAudioSession.Mode, options: AVAudioSession.CategoryOptions)?
     private(set) var ownsLockScreen = false
+    /// Whether this song holds the session right now (changed it, or is the
+    /// one that activated it). Only a holder may release it.
+    var isHolding: Bool { weChangedTheSession }
+
+    init(driver: any JamAudioSessionDriver = AVAudioSession.sharedInstance()) {
+        self.driver = driver
+    }
 
     /// Take the session when it is free. Returns whether the song may start:
     /// always, since a call's session is played through rather than refused.
     @discardableResult
     func activate(callActive: Bool) -> Bool {
-        let audio = AVAudioSession.sharedInstance()
-        let plan = BauPlaybackPolicy.audioPlan(callActive: callActive, category: audio.category)
+        let plan = BauPlaybackPolicy.audioPlan(callActive: callActive, category: driver.category)
         guard plan == .takePlayback else {
             ownsLockScreen = false
             return true
@@ -43,11 +79,11 @@ final class JamAudioSession {
         // Somebody else's `.playback` session (a video, a voice note) is theirs:
         // sharing it is fine, releasing it under them is not, so only a session
         // THIS song changed is one it gives back.
-        let alreadyPlayback = audio.category == .playback
+        let alreadyPlayback = driver.category == .playback
         if !alreadyPlayback {
             do {
-                let before = (audio.category, audio.mode, audio.categoryOptions)
-                try audio.setCategory(.playback, mode: .default)
+                let before = (driver.category, driver.mode, driver.categoryOptions)
+                try driver.setCategory(.playback, mode: .default, options: [])
                 if previous == nil { previous = before }
                 weChangedTheSession = true
             } catch {
@@ -55,7 +91,7 @@ final class JamAudioSession {
             }
         }
         do {
-            try audio.setActive(true)
+            try driver.setActive(true, options: [])
             if !alreadyPlayback { weChangedTheSession = true }
             ownsLockScreen = true
         } catch {
@@ -67,36 +103,44 @@ final class JamAudioSession {
     }
 
     /// Give the session back, but only if it is still ours: a call may have
-    /// taken it since, and a blind deactivate would end that call's audio.
-    func deactivate() {
+    /// taken it since, and a blind deactivate would end that call's audio. The
+    /// caller stops its engine first; iOS then refuses (busy) while anything
+    /// else in the process is still playing, and that refusal is respected.
+    @discardableResult
+    func deactivate() -> JamSessionRelease {
         ownsLockScreen = false
-        guard weChangedTheSession else { return }
-        let audio = AVAudioSession.sharedInstance()
+        guard weChangedTheSession else { return .notOurs }
         // A call (or anything recording) holds it now: not ours to touch, and
         // nothing of ours is left to give back.
-        guard audio.category == .playback else {
+        guard driver.category == .playback else {
             weChangedTheSession = false
             previous = nil
-            return
+            return .takenOver
         }
         do {
-            try audio.setActive(false, options: .notifyOthersOnDeactivation)
+            try driver.setActive(false, options: .notifyOthersOnDeactivation)
         } catch {
-            // Still active: keep what we know so the next release tries again.
-            return
+            if (error as NSError).code == AVAudioSession.ErrorCode.isBusy.rawValue {
+                // Another player is on it: step aside, restore nothing.
+                weChangedTheSession = false
+                previous = nil
+                return .busy
+            }
+            // Still active for some other reason: keep what we know so the
+            // next release tries again.
+            return .stillActive
         }
         weChangedTheSession = false
         if let previous {
-            try? audio.setCategory(previous.category, mode: previous.mode, options: previous.options)
+            try? driver.setCategory(previous.category, mode: previous.mode, options: previous.options)
         }
         previous = nil
+        return .released
     }
 
     /// Output latency in seconds, for lining a video up with what is HEARD
     /// rather than what is scheduled. Zero is a fine answer (the simulator).
-    var outputLatencySeconds: Double {
-        AVAudioSession.sharedInstance().outputLatency
-    }
+    var outputLatencySeconds: Double { driver.outputLatency }
 }
 
 /// The lock screen and Control Center, while a song is playing. Not touched

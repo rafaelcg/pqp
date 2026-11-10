@@ -1801,6 +1801,16 @@
         }
       }
     },
+    "The video does not play on iPhone yet" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O vídeo ainda não toca no iPhone"
+          }
+        }
+      }
+    },
     "This can only go inside this server." : {
       "localizations" : {
         "pt-BR" : {
@@ -2147,6 +2157,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Volume"
+          }
+        }
+      }
+    },
+    "Vote for %@" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Votar em %@"
           }
         }
       }
