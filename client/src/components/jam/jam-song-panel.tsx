@@ -206,7 +206,7 @@ export function JamSongPanel({
             <ContributorStack people={song.contributors} total={song.contributorCount} size="sm" ringClassName="ring-border-strong" />
             <span className="truncate">
               {song.artist ?? t("jam.original")}
-              <span className="max-sm:hidden"> · {t("jam.song.startedBy", { name: song.authorName ?? t("jam.tile.anonymous") })}</span>
+              <span className="max-sm:hidden"> · {viewer?.isAuthor ? t("jam.song.startedByYou") : t("jam.song.startedBy", { name: song.authorName ?? t("jam.tile.anonymous") })}</span>
             </span>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -347,7 +347,7 @@ export function JamSongPanel({
                     key={instrument}
                     instrument={instrument}
                     index={tracks.length + index}
-                    who={song.authorName ?? t("jam.tile.anonymous")}
+                    who={viewer?.isAuthor ? null : (song.authorName ?? t("jam.tile.anonymous"))}
                     canRecord={reason === null && addable.includes(instrument)}
                     onRecord={() => onRecord(instrument, true)}
                   />
@@ -578,7 +578,8 @@ function MissingLane({
 }: {
   instrument: JamInstrument;
   index: number;
-  who: string;
+  /** Who is looking for this part; null when it is the person looking at it. */
+  who: string | null;
   canRecord: boolean;
   onRecord: () => void;
 }) {
@@ -597,7 +598,7 @@ function MissingLane({
         </span>
         <span className="flex min-w-0 flex-col leading-tight">
           <span className="truncate text-sm font-extrabold text-text">{t(look.nameKey as MessageKey)}</span>
-          <span className="truncate text-xs text-text-secondary">{t("jam.song.looking", { name: who })}</span>
+          <span className="truncate text-xs text-text-secondary">{who === null ? t("jam.song.lookingYou") : t("jam.song.looking", { name: who })}</span>
         </span>
       </div>
       {/* the empty lane is itself the button: where the part goes is where you press */}

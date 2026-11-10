@@ -45,7 +45,7 @@ export function InstrumentPicker({
     <div
       role="radiogroup"
       aria-label={t("jam.studio.instrument")}
-      className="-mx-3 flex gap-2 overflow-x-auto px-3 pb-1 [scrollbar-width:none] sm:mx-0 sm:grid sm:grid-cols-6 sm:overflow-visible sm:px-0 sm:pb-0"
+      className="-mx-3 flex gap-2 overflow-x-auto px-3 pb-1 pt-2.5 [scrollbar-width:none] sm:mx-0 sm:grid sm:grid-cols-6 sm:overflow-visible sm:px-0 sm:pb-0"
     >
       {options.map((instrument) => {
         const look = JAM_INSTRUMENT_LOOK[instrument];
@@ -75,7 +75,7 @@ export function InstrumentPicker({
             {asked && (
               <span
                 className={cn(
-                  "absolute right-1.5 top-1.5 rounded-full px-1.5 py-px text-[11px] font-bold",
+                  "absolute -top-2 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full px-1.5 py-px text-[11px] font-bold shadow-[var(--shadow-2)]",
                   on ? "bg-on-inst text-on-media" : "bg-accent-soft text-on-accent-soft",
                 )}
               >
@@ -196,7 +196,7 @@ export function LatencyChip({ studio }: { studio: JamStudio }) {
         className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-surface-2 px-2.5 text-xs font-semibold tabular-nums text-text-secondary outline-none focus-visible:ring-2 focus-visible:ring-focus-ring max-sm:hidden"
       >
         <Headphones className="h-3.5 w-3.5" aria-hidden />
-        {t("jam.latency.chip", { ms })}
+        {t("jam.latency.chipLabel", { ms })}
         {current.method !== "estimate" && <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-accent" />}
       </span>
     </Tooltip>

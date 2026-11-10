@@ -7713,5 +7713,8 @@
   "jam.wall.songCount_other": "{countLabel} songs",
   "jam.wall.people_one": "{countLabel} person playing",
   "jam.wall.people_other": "{countLabel} people playing",
-  "jam.clip.yourTake": "your take"
+  "jam.clip.yourTake": "your take",
+  "jam.latency.chipLabel": "delay {ms} ms",
+  "jam.song.startedByYou": "started by you",
+  "jam.song.lookingYou": "you are looking for this one"
 }

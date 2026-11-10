@@ -412,7 +412,8 @@ export function JamPane({
                 <h1 className="font-display text-2xl font-extrabold tracking-[-0.01em] text-text">{t("jam.title")}</h1>
                 {songs.length > 0 && (
                   <p className="truncate text-[13px] font-semibold text-text-tertiary max-sm:hidden" data-jam-wall-count="">
-                    {t("jam.wall.songCount", { count: songs.length, countLabel: songs.length })} · {t("jam.wall.people", { count: people, countLabel: people })}
+                    {t("jam.wall.songCount", { count: songs.length, countLabel: songs.length })}
+                    {people > 0 && ` · ${t("jam.wall.people", { count: people, countLabel: people })}`}
                   </p>
                 )}
               </div>

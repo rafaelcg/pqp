@@ -313,7 +313,7 @@ export function JamStudio({
             </p>
           </div>
         ) : (
-          <div className="mx-auto my-auto flex w-full max-w-3xl flex-col gap-6 p-3 pb-10 sm:p-6 sm:pb-12">
+          <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 p-3 pb-10 sm:p-6 sm:pb-12">
             <div className="@container flex min-w-0 flex-col gap-5">
               {micProblem && (
                 <div role="alert" className="flex flex-col items-start gap-3 rounded-[var(--radius-card)] bg-danger-soft p-4 text-on-danger-soft">
@@ -867,7 +867,7 @@ function YourLaneHead({
             <span
               tabIndex={0}
               data-jam-take-latency=""
-              className="flex w-fit items-center gap-1 rounded-full text-xs font-semibold text-text-secondary outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+              className="flex w-fit items-center gap-1 whitespace-nowrap rounded-full text-xs font-semibold text-text-secondary outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
             >
               <Check className="h-3.5 w-3.5 text-accent" strokeWidth={3} aria-hidden />
               {review.edited ? t("jam.review.editedShort") : t("jam.review.onTimeShort")}

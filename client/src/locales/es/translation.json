@@ -7785,5 +7785,8 @@
   "jam.wall.songCount_other": "{countLabel} canciones",
   "jam.wall.people_one": "{countLabel} persona tocando",
   "jam.wall.people_other": "{countLabel} personas tocando",
-  "jam.clip.yourTake": "tu toma"
+  "jam.clip.yourTake": "tu toma",
+  "jam.latency.chipLabel": "retraso {ms} ms",
+  "jam.song.startedByYou": "empezada por ti",
+  "jam.song.lookingYou": "tú la estás buscando"
 }
