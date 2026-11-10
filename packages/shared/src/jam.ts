@@ -219,8 +219,14 @@ export const JAM_VIDEO_MAX_BYTES = 100 * 1024 * 1024;
 /**
  * What a recorder may upload as audio, bare (no `;codecs=`): the claim HEAD
  * compares the stored type with the signed one exactly.
+ *
+ * `audio/flac` is what the web engine (`client/src/lib/jam/upload.ts`) sends,
+ * and the one every client decodes without moving a sample: MP3 lands 12 ms
+ * late in WebKit and on iOS, and iOS cannot open WebM at all
+ * (`docs/JAM_ENGINE.md`). The lossy types stay for a file somebody uploads.
  */
 export const JAM_AUDIO_CONTENT_TYPES = [
+  "audio/flac",
   "audio/webm",
   "audio/ogg",
   "audio/mp4",

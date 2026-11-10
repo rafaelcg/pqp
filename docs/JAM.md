@@ -160,7 +160,7 @@ the Baú's media does.
 
 | | Types | Ceiling | Length |
 |---|---|---|---|
-| audio | `audio/webm`, `audio/ogg`, `audio/mp4`, `audio/mpeg` | 32 MiB | at most 10 minutes (`durationMs`, the recorder's word) |
+| audio | `audio/flac` (what the web engine sends), `audio/webm`, `audio/ogg`, `audio/mp4`, `audio/mpeg` | 32 MiB | at most 10 minutes (`durationMs`, the recorder's word) |
 | video | `video/webm`, `video/mp4` | 100 MiB | none enforced |
 
 MediaRecorder output fits (Opus in WebM or Ogg, AAC in MP4). Uncompressed WAV is

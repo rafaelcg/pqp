@@ -77,6 +77,7 @@ const UPLOAD_BUCKET = {
 } as const;
 
 const EXTENSION_BY_CONTENT_TYPE: Record<string, string> = {
+  "audio/flac": ".flac",
   "audio/webm": ".webm",
   "audio/ogg": ".ogg",
   "audio/mp4": ".m4a",
