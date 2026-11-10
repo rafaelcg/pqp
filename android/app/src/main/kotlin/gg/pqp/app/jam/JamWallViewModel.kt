@@ -149,7 +149,12 @@ class JamWallViewModel(
         backend.leave(channelId)
     }
 
-    fun setFilter(filter: JamWallFilter) = _state.update { it.copy(filter = filter) }
+    fun setFilter(filter: JamWallFilter) {
+        _state.update { it.copy(filter = filter) }
+        // Nothing on this page passes it and there is more: no tile would ever ask, so ask.
+        val now = _state.value
+        if (now.visible.isEmpty() && now.wall.nextCursor != null) loadMore()
+    }
 
     fun clearFresh(id: String) = _state.update { it.copy(wall = it.wall.clearFresh(id)) }
 
@@ -219,7 +224,13 @@ class JamWallViewModel(
                     _state.update { it.copy(loadingMore = false) }
                     return@launch
                 }
+                val before = _state.value.visible.size
                 _state.update { it.copy(wall = it.wall.append(page), loadingMore = false) }
+                // A filter that none of this page's songs pass adds no tile, so nothing on screen would ask for the
+                // next page and everything after it would be out of reach: ask for it here until something shows or the
+                // list ends.
+                val now = _state.value
+                if (now.filter != JamWallFilter.All && now.visible.size == before && now.wall.nextCursor != null) loadMore()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

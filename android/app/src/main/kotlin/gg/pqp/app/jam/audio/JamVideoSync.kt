@@ -49,6 +49,32 @@ object JamVideoPlan {
         }
     }
 
+    /** What to do with a video whose slice is on and that is not playing right now. */
+    enum class Start {
+        /** It was already asked to play and is loading: leave it alone, a seek now would restart the load. */
+        Wait,
+
+        /** Seek to where the audio is and play. */
+        SeekAndPlay,
+
+        /** It died (a load or decoder error leaves it idle with the play intent still set): prepare it again, then seek and play. */
+        Reprepare,
+    }
+
+    /**
+     * [state] is `Player.getPlaybackState()` (1 idle, 2 buffering, 3 ready, 4 ended). A player that is merely
+     * buffering is Wait: ExoPlayer says `isPlaying == false` for the whole load, and seeking on every tick (the
+     * clock calls this every 250 ms) would cancel it each time and the first frame would never come.
+     */
+    fun start(playWhenReady: Boolean, state: Int): Start = when {
+        state == STATE_IDLE -> Start.Reprepare
+        state == STATE_ENDED || !playWhenReady -> Start.SeekAndPlay
+        else -> Start.Wait
+    }
+
+    const val STATE_IDLE = 1
+    const val STATE_ENDED = 4
+
     /** True while the song position has not reached the video's slice yet: it waits on its first frame. */
     fun waiting(songMs: Double, track: JamTrack): Boolean = songMs < track.offsetMs
 
@@ -81,6 +107,7 @@ class JamVideoStage(private val context: Context) {
 
     private val items = LinkedHashMap<String, Item>()
     private var speeds = HashMap<String, Float>()
+    private val preparedAt = HashMap<String, Long>()
 
     val tracks: List<JamTrack> get() = items.values.map { it.track }
 
@@ -154,9 +181,22 @@ class JamVideoStage(private val context: Context) {
                         // Seek and ask to play once. While it is buffering the intent stands and the player is left
                         // alone: seeking again on every tick would restart the load and the first frame never comes.
                         // (A player that reached its end has to be asked again.)
-                        if (!player.playWhenReady || player.playbackState == androidx.media3.common.Player.STATE_ENDED) {
-                            player.seekTo(expected.toLong())
-                            player.play()
+                        when (JamVideoPlan.start(player.playWhenReady, player.playbackState)) {
+                            JamVideoPlan.Start.Wait -> Unit
+                            JamVideoPlan.Start.SeekAndPlay -> {
+                                player.seekTo(expected.toLong())
+                                player.play()
+                            }
+                            JamVideoPlan.Start.Reprepare -> {
+                                // At most once in a while: a URL that is gone stays gone, and trying every tick is noise.
+                                val now = System.nanoTime()
+                                if (now - (preparedAt[id] ?: 0L) >= REPREPARE_NANOS) {
+                                    preparedAt[id] = now
+                                    player.prepare()
+                                    player.seekTo(expected.toLong())
+                                    player.play()
+                                }
+                            }
                         }
                     } else {
                         when (val fix = JamVideoPlan.correction(player.currentPosition.toDouble(), expected)) {
@@ -191,5 +231,6 @@ class JamVideoStage(private val context: Context) {
 
     companion object {
         const val MAX_PLAYERS = 4
+        private const val REPREPARE_NANOS = 3_000_000_000L
     }
 }

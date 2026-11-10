@@ -228,6 +228,45 @@ class JamWallViewModelTest {
     }
 
     @Test
+    fun `a filter that a whole page fails keeps asking for pages until something shows or the list ends`() = runTest {
+        val backend = FakeBackend().apply {
+            pages += JamSongListResponse(listOf(aSong("open1")), "c1")
+            pages += JamSongListResponse(listOf(aSong("open2")), "c2")
+            pages += JamSongListResponse(listOf(aSong("closed").copy(joinMode = JamJoinMode.Closed)), null)
+        }
+        val model = model(backend)
+        model.start()
+        advanceUntilIdle()
+        // Page one has nothing finished on it: choosing the filter asks for the next, which has nothing either, and so on.
+        model.setFilter(JamWallFilter.Finished)
+        advanceUntilIdle()
+        assertEquals(listOf<String?>(null, "c1", "c2"), backend.cursors)
+        assertEquals(listOf("closed"), model.state.value.visible.map { it.id })
+        assertNull(model.state.value.wall.nextCursor)
+    }
+
+    @Test
+    fun `the preview cache is bounded and drops the oldest`() {
+        val previews = (1..JamWallViewModel.PREVIEW_CACHE + 30).associate { "s$it" to JamPreview(0, emptyList(), emptyList(), null, null, false) }
+        val kept = JamWallViewModel.boundedPreviews(previews)
+        assertEquals(JamWallViewModel.PREVIEW_CACHE, kept.size)
+        assertTrue("s1" !in kept)
+        assertTrue("s${JamWallViewModel.PREVIEW_CACHE + 30}" in kept)
+        val small = previews.entries.take(5).associate { it.toPair() }
+        assertEquals(small, JamWallViewModel.boundedPreviews(small))
+    }
+
+    @Test
+    fun `a config read that throws keeps the row the way it was`() = runTest {
+        val backend = FakeBackend()
+        val list = JamListModel(object : JamBackend by backend {
+            override suspend fun config(serverId: String): JamConfig = error("offline")
+        }, seen = { null })
+        val before = JamListModel.Rows(JamConfig(enabled = true, uploads = true), mapOf(channel to JamRowSummary(3, false, true)))
+        assertEquals(before, list.read("srv", listOf(channel), previous = before))
+    }
+
+    @Test
     fun `previews are read at most three at a time, a tile that left the screen is dropped, and a stale one is read again`() = runTest {
         val backend = FakeBackend()
         val songs = (1..8).map { aSong("s$it") }

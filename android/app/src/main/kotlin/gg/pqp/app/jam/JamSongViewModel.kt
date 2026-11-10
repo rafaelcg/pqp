@@ -162,8 +162,7 @@ class JamSongViewModel(
                 val detail = backend.song(songId)
                 results.clear()
                 // What changed while the read was out goes on top of what it says (frames are applied by id).
-                var loaded = JamSongState(detail.song, detail.tracks, detail.viewer)
-                pendingFrames.forEach { loaded = loaded.apply(it).state }
+                val loaded = JamSongState.loaded(detail, pendingFrames.toList())
                 pendingFrames.clear()
                 _ui.update {
                     it.copy(
@@ -451,7 +450,7 @@ class JamSongViewModel(
                 // The frame will say the same; applying the answer now makes the switch feel instant and is idempotent.
                 // But not when something newer already landed (another moderator, a frame that outran this answer).
                 val now = _ui.value.state
-                if (now == null || answer.song.updatedAtMs >= now.song.updatedAtMs) {
+                if (now == null || now.accepts(answer.song)) {
                     onFrame(JamFrame.TrackUpdated(channelId, answer.song, answer.track))
                 }
             } catch (e: CancellationException) {

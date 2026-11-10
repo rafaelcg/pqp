@@ -155,6 +155,48 @@ class JamSongRulesTest {
         assertEquals("New name", renamed.song.title)
     }
 
+    @Test
+    fun `the first read of a song has the frames that arrived during it put on top`() {
+        // The read answered with one track; while it was out a second was added and the first was voted for.
+        val detail = JamSongDetailResponse(song(tracks = 1), listOf(track("a")), JamSongViewer())
+        val pending = listOf(
+            JamFrame.TrackAdded(channel, song(tracks = 2), track("b", JamInstrument.Bass)),
+            // One the read already contains: by id, so nothing doubles.
+            JamFrame.TrackAdded(channel, song(tracks = 2), track("a")),
+            JamFrame.TrackVotes(channel, "s", "a", 3),
+        )
+        val state = JamSongState.loaded(detail, pending)
+        assertEquals(listOf("a", "b"), state.tracks.map { it.id })
+        assertEquals(3, state.tracks.first { it.id == "a" }.voteCount)
+        assertEquals(setOf("b"), state.fresh)
+        // The song deleted while the read was out is a deleted song.
+        assertTrue(JamSongState.loaded(detail, listOf(JamFrame.SongDeleted(channel, "s"))).wasDeleted)
+        assertEquals(1, JamSongState.loaded(detail, emptyList()).tracks.size)
+    }
+
+    @Test
+    fun `the answer to your own write is not applied over something newer`() {
+        val held = open(track("a")).copy(song = song().copy(updatedAt = "2026-11-01T12:00:00.000Z"))
+        // A newer frame already landed (another moderator): the older answer is dropped.
+        assertFalse(held.accepts(song().copy(updatedAt = "2026-11-01T11:59:59.000Z")))
+        // The same instant or later is applied.
+        assertTrue(held.accepts(song().copy(updatedAt = "2026-11-01T12:00:00.000Z")))
+        assertTrue(held.accepts(song().copy(updatedAt = "2026-11-01T12:00:01.000Z")))
+    }
+
+    @Test
+    fun `a video that is only buffering is left alone, one that died is prepared again`() {
+        val buffering = 2
+        val ready = 3
+        assertEquals(JamVideoPlan.Start.Wait, JamVideoPlan.start(playWhenReady = true, state = buffering))
+        assertEquals(JamVideoPlan.Start.Wait, JamVideoPlan.start(playWhenReady = true, state = ready))
+        assertEquals(JamVideoPlan.Start.SeekAndPlay, JamVideoPlan.start(playWhenReady = false, state = ready))
+        assertEquals(JamVideoPlan.Start.SeekAndPlay, JamVideoPlan.start(playWhenReady = true, state = JamVideoPlan.STATE_ENDED))
+        // A load or decoder error leaves it idle with the play intent still set: left alone it froze for the rest of the song.
+        assertEquals(JamVideoPlan.Start.Reprepare, JamVideoPlan.start(playWhenReady = true, state = JamVideoPlan.STATE_IDLE))
+        assertEquals(JamVideoPlan.Start.Reprepare, JamVideoPlan.start(playWhenReady = false, state = JamVideoPlan.STATE_IDLE))
+    }
+
     // --- who may do what ---
 
     @Test

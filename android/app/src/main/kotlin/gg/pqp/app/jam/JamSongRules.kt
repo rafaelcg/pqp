@@ -116,6 +116,26 @@ data class JamSongState(
     data class Applied(val state: JamSongState, val effect: JamEffect)
 
     /**
+     * Whether the answer to one of this person's own writes (a summary dated [answer]) is at least as new as what
+     * is held. A frame from somebody else's later write can outrun the answer to an earlier one; applying the answer
+     * then would put the older value back.
+     */
+    fun accepts(answer: JamSongSummary): Boolean = answer.updatedAtMs >= song.updatedAtMs
+
+    companion object {
+        /**
+         * The song as its first read says it, with the frames that arrived while that read was in flight put on top:
+         * the answer was produced before them, and applying by id is idempotent, so the result is right whichever side
+         * of the read a frame fell on.
+         */
+        fun loaded(detail: JamSongDetailResponse, pending: List<JamFrame>): JamSongState {
+            var state = JamSongState(detail.song, detail.tracks, detail.viewer)
+            pending.forEach { state = state.apply(it).state }
+            return state
+        }
+    }
+
+    /**
      * [auditioned] is the set of out-of-mix takes this phone is playing in
      * place of the mix, so a delete of one of those is a change of stems too.
      */
