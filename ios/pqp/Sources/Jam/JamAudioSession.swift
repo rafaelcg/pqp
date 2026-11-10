@@ -113,7 +113,10 @@ final class JamAudioSession {
             // and nothing was activated, so nothing is held: only the category
             // this call changed is put back.
             ownsLockScreen = false
-            if let changedHere, driver.category == .playback {
+            // Only if the configuration is still exactly what this call installed
+            // (it is one synchronous main-actor call, so nobody can have changed it,
+            // but the check costs nothing and keeps the rule honest).
+            if let changedHere, driver.category == .playback, driver.mode == .default, driver.categoryOptions.isEmpty {
                 do {
                     try driver.setCategory(changedHere.category, mode: changedHere.mode, options: changedHere.options)
                     if !hadPrevious { previous = nil }
