@@ -229,6 +229,20 @@ class WireProtocolTest {
             // by staff, and the removed state).
             "forum-post-upsert",
             "forum-post-removed",
+            // The seven jam frames (`JamFrame.decode`). They are not in
+            // `chatServerMessageSchema` yet, so the "every frame the server
+            // sends" scan below cannot see them; `JamContractTest` checks all
+            // seven against `JAM_FRAME_TYPES`, and they are named here too so
+            // that deleting a branch fails this floor. Losing any one freezes
+            // the wall or an open song: a song that never appears, a track
+            // that never moves, a vote count that never changes.
+            "jam-song-created",
+            "jam-song-updated",
+            "jam-song-deleted",
+            "jam-track-added",
+            "jam-track-updated",
+            "jam-track-deleted",
+            "jam-track-votes",
             // handshake
             "ready",
         )
@@ -762,9 +776,9 @@ class WireProtocolTest {
      * The two channel enums, which are different fields with overlapping-
      * looking values. `kind` is what the row *is*; `type` is what it carries.
      *
-     * `jam` is a type this build does not draw: `drawable` in
-     * `ChannelListRules.kt` leaves any type it does not know out of the list,
-     * so a jam channel is invisible here until a client for it ships.
+     * `jam` is drawn only where the server's `jam_channels` flag is on
+     * (`drawable(channel, includeJam)` in `ChannelListRules.kt`); any other type
+     * this build does not know is left out of the list.
      */
     @Test
     fun `the channel enums match shared`() {

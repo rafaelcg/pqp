@@ -22,6 +22,14 @@ sealed interface DeepLinkTarget {
     data class ForumPost(val serverId: String, val forumId: String, val postId: String) : DeepLinkTarget
 
     /**
+     * A jam song's own link (`Copiar link` on any client, and the one the
+     * "recording is on the computer" sheet hands out):
+     * `/app/server/<sid>/channel/<jamChannelId>/song/<songId>`. Opens the
+     * channel's wall with the song on top of it.
+     */
+    data class JamSong(val serverId: String, val channelId: String, val songId: String) : DeepLinkTarget
+
+    /**
      * A DM or a group. `channelId` really is a channel id: a conversation is a
      * `channels` row with `kind` of `dm` or `group`, and `/app/dm/<id>` carries
      * that id, not a separate conversation id.
@@ -57,6 +65,7 @@ val DeepLinkTarget.channelId: String?
         is DeepLinkTarget.Channel -> channelId
         // The post is the channel being read.
         is DeepLinkTarget.ForumPost -> postId
+        is DeepLinkTarget.JamSong -> channelId
         is DeepLinkTarget.Conversation -> channelId
         is DeepLinkTarget.Server, is DeepLinkTarget.Bau, is DeepLinkTarget.Invite -> null
     }
@@ -109,6 +118,12 @@ object DeepLink {
                 segments[3] == "channel" &&
                 segments[5] == "post" ->
                 DeepLinkTarget.ForumPost(segments[2], segments[4], segments[6])
+
+            segments.size >= 7 &&
+                segments[1] == "server" &&
+                segments[3] == "channel" &&
+                segments[5] == "song" ->
+                DeepLinkTarget.JamSong(segments[2], segments[4], segments[6])
 
             segments.size >= 5 &&
                 segments[1] == "server" &&

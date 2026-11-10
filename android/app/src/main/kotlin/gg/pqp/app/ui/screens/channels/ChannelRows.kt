@@ -84,6 +84,14 @@ fun ChannelRow(
     occupants: Int,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    /**
+     * A jam channel's song count, in the slot a voice room keeps its head
+     * count; null for every other row. [trailingDescription] is what TalkBack
+     * says for it ("jam, 12 songs"), because a bare number after a name is
+     * not a sentence.
+     */
+    trailingText: String? = null,
+    trailingDescription: String? = null,
 ) {
     val interactions = remember { MutableInteractionSource() }
     val pressed by interactions.collectIsPressedAsState()
@@ -128,6 +136,7 @@ fun ChannelRow(
         null
     }
     val state = listOfNotNull(
+        trailingDescription,
         unreadLabel.takeIf { unread },
         mentionsLabel,
         mutedLabel.takeIf { muted },
@@ -186,6 +195,14 @@ fun ChannelRow(
                     tint = colors.onSurfaceVariant,
                     modifier = Modifier.size(16.dp).testTag("channels.muted"),
                 )
+            } else if (trailingText != null) {
+                Spacer(Modifier.width(Spacing.sm))
+                Text(
+                    text = trailingText,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = colors.onSurfaceVariant,
+                    modifier = Modifier.testTag("channels.jamCount"),
+                )
             } else if (channel.isVoice && occupants > 0 && !inCall) {
                 Spacer(Modifier.width(Spacing.sm))
                 Text(
@@ -236,6 +253,7 @@ internal fun ChannelGlyph(channel: Channel, tint: Color) {
             imageVector = when {
                 channel.isVoice -> PqpIcons.VoiceChannel
                 channel.isForum -> PqpIcons.ForumChannel
+                channel.isJam -> PqpIcons.JamChannel
                 else -> PqpIcons.TextChannel
             },
             contentDescription = null,
