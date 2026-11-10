@@ -439,6 +439,24 @@ private object Lucide {
     val messageSquare by lucide(
         "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z",
     )
+    // Activities (lucide 0.469): `shapes` is the launcher, the other two are what an app's manifest icon id maps to.
+    val shapes by lucide(
+        "M8.3 10a.7.7 0 0 1-.626-1.079L11.4 3a.7.7 0 0 1 1.198-.043L16.3 8.9a.7.7 0 0 1-.572 1.1z",
+        "M4 14h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-5a1 1 0 0 1 1-1z",
+        "M14 17.5a3.5 3.5 0 1 0 7 0a3.5 3.5 0 1 0 -7 0",
+    )
+    val gamepad2 by lucide(
+        "M6 11h4",
+        "M8 9v4",
+        "M15 12h.01",
+        "M18 10h.01",
+        "M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z",
+    )
+    val poll by lucide(
+        "m9 12 2 2 4-4",
+        "M5 7c0-1.1.9-2 2-2h10a2 2 0 0 1 2 2v12H5V7z",
+        "M22 19H2",
+    )
     // Jam (lucide 0.469). `music` is the channel's glyph and the song's mark; one glyph per instrument.
     val music by lucide(
         "M9 18V5l12-2v13",
@@ -746,6 +764,9 @@ object PqpIcons {
 
     // Jam. The channel's glyph, the vote, the "on the computer" sheet and one glyph per instrument.
     val JamChannel get() = Lucide.music
+    val Activities get() = Lucide.shapes
+    val ActivityGamepad get() = Lucide.gamepad2
+    val ActivityPoll get() = Lucide.poll
     val Vote get() = Lucide.thumbsUp
     val Computer get() = Lucide.monitor
     val InstrumentGuitar get() = Lucide.guitar

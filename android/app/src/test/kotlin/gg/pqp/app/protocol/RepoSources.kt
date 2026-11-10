@@ -95,12 +95,13 @@ object RepoSources {
      * declares.
      */
     fun sharedFrameTypeLiterals(): Set<String> =
-        File(root, "packages/shared/src")
-            .listFiles()
-            .orEmpty()
-            .filter { it.isFile && it.name.endsWith(".ts") && !it.name.endsWith(".test.ts") }
-            .sortedBy { it.name }
-            .flatMap { frameTypeLiterals("packages/shared/src/${it.name}") }
+        // The apps platform keeps its frames one folder down (`apps/frames.ts`), the same folder
+        // `sharedFrameSchemas` already reads, so a phone that handles `app-session` is checked against it.
+        (File(root, "packages/shared/src").listFiles().orEmpty().toList().map { it to "" } +
+            File(root, "packages/shared/src/apps").listFiles().orEmpty().toList().map { it to "apps/" })
+            .filter { (file, _) -> file.isFile && file.name.endsWith(".ts") && !file.name.endsWith(".test.ts") }
+            .sortedBy { (file, folder) -> folder + file.name }
+            .flatMap { (file, folder) -> frameTypeLiterals("packages/shared/src/$folder${file.name}") }
             .toSet()
 
     /**

@@ -3906,3 +3906,43 @@ pause on leaving the app, and the flag off. **Not verified, needs a real phone**
   time and memory for a ten-minute, eight-stem song;
 - AAC and Opus decoders on other vendors' codec builds (the table above is one
   Google image).
+
+## Activities (the apps platform on a phone)
+
+Product word "activity", platform word "app": `docs/APPS.md` is the contract, this is the phone's half. Invisible unless
+`GET /api/apps/config?serverId=` says `enabled` and something is released for the kind of channel (text or voice; a
+forum, a jam, a watch party and every conversation draw nothing). Code: `app/src/main/kotlin/gg/pqp/app/activities/`.
+
+- **What a person sees.** A lime chip with the app's name on the channel row while one runs; above the transcript, a
+  strip (who started it, how many are in, one button: Entrar, Assistir or Voltar pra ela); an app-bar button that opens
+  the picker (a sheet, one tap on a tile starts it, the consent sheet comes first the first time per app); a one-time
+  "Novo: atividades" card; and the full-screen activity (`ui/ActivityScreen.kt`) with a quiet bar (who is in, full screen,
+  leave, end). Every failure has its own face: refused seat, ended, no answer in 20 s, a dropped link (the seat is held 90 s
+  and taken back by the same `app-join`).
+- **Frames.** `ActivityFrame` decodes the six server frames of `packages/shared/src/apps/frames.ts` and builds the four the
+  phone sends. `channel-app` reaches every socket that can VIEW the channel, so the row and strip need no subscription;
+  `ActivitiesStore` seeds from `GET /api/servers/:id/app-sessions` on open and after a reconnect and a frame that lands
+  during a read wins over it. `ActivitySeat` is the seat over `/ws` (join answered by `app-session` or `app-error`, a write
+  answered by the next `app-state`, resume on reconnect). `WireProtocolTest` no longer ignores these frames.
+- **The sandbox.** The SDK's `connect()` refuses a page that is its own parent, so the bundle runs as on the web, in
+  `<iframe sandbox="allow-scripts">` (opaque origin, its own CSP), inside a thin first-party wrapper page loaded with
+  `loadDataWithBaseURL("https://pqp.gg/")` (the bundles' `frame-ancestors` already lists that origin, so no change to
+  `tools/apps-build`, the API or the apps site; `ActivityContractTest` fails if that list moves). The wrapper does the web
+  host's handshake (the frame's hello is answered only from `iframe.contentWindow`) and relays the message port to Kotlin
+  through ONE `WebMessagePort` handed to the MAIN frame with `WebView.postWebMessage`: there is no `addJavascriptInterface`
+  (it is injected into every frame, the sandboxed one included), and the page takes the native port only from a message
+  whose source is null. All validation is Kotlin (`BridgeHost`, strict like `bridge-host.ts`: unknown key is `invalid`,
+  caps enforced again, a flood answered `rate-limited`, no user id or token ever built into a message). The web view
+  fetches only the apps origin (`shouldInterceptRequest`), never navigates its main frame, has no storage, files or popups,
+  and the API client is not reachable from anything the app can touch. The page tells the app the phone's design tokens
+  (`ActivityTheme`, the web host's allowlist, checked by a test) and follows light and dark.
+- **What a phone has not.** The device store, local files, Saves na conta, share sound and a pane share: the wrapper
+  answers `unavailable` (`share.*` `not-allowed`) without a byte reaching Kotlin, as the contract says an older host does.
+- **Eco is played, Locadora is watched.** Any app that is not `category: "emulator"` gets a full seat. Locadora needs a
+  keyboard or a gamepad, so a phone joins it as a spectator (which the server allows only where `locadora_share` is on;
+  off, the strip says "Só no computador"). Its picture arrives through the call's screen share, which the phone's call
+  already receives; the frame shows who plays.
+- **Debug.** In debug builds the page and frame console go to logcat (tag `pqp.activities`) and the web view is
+  inspectable (`chrome://inspect`). The rig: `APPS=true`, `APPS_ORIGIN=http://localhost:5175`, `pnpm apps:dev`, and
+  `adb reverse` for the API and 5175 (the apps origin is plain http on a dev box, so mixed content is allowed there only;
+  an https origin keeps `MIXED_CONTENT_NEVER_ALLOW`).
