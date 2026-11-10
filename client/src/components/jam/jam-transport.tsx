@@ -46,6 +46,7 @@ export function JamTransport({
   size = "md",
   caption,
   label,
+  scrubber = true,
 }: {
   clock: JamClock;
   playing: boolean;
@@ -62,6 +63,11 @@ export function JamTransport({
   caption?: string;
   /** A word beside the button ("Ouvir a banda"), for a transport that is not obviously a player. */
   label?: string;
+  /**
+   * Draw the position bar. Off where the lanes already have a ruler and a playhead
+   * across them: two indicators of one position, at two x's, disagree.
+   */
+  scrubber?: boolean;
 }) {
   const { t } = useTranslation();
   const reading = useClockReadout(clock);
@@ -92,6 +98,15 @@ export function JamTransport({
         )}
         {label && <span className="text-sm font-extrabold">{label}</span>}
       </button>
+      {!scrubber ? (
+        <div className="flex min-w-0 flex-1 items-baseline justify-between gap-3">
+          <span className="text-sm font-semibold tabular-nums text-text">
+            {formatClock(reading.positionMs)}
+            <span className="text-text-tertiary"> / {formatClock(length)}</span>
+          </span>
+          {caption && <span className="truncate text-[13px] font-semibold text-text-secondary">{caption}</span>}
+        </div>
+      ) : (
       <div className="flex min-w-0 flex-1 flex-col gap-2">
         <Slider
           variant="scrub"
@@ -111,6 +126,7 @@ export function JamTransport({
           {caption && <span className="truncate font-semibold text-text-tertiary">{caption}</span>}
         </span>
       </div>
+      )}
     </div>
   );
 }

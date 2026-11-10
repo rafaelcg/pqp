@@ -7715,13 +7715,15 @@
   "jam.review.editTitle": "Ajustar o take",
   "jam.review.editDone": "Pronto",
   "jam.review.edited": "Tu mexeu no take",
-  "jam.latency.explain.short": "Mede o atraso do teu fone uma vez (7 s). Dá pra gravar agora de qualquer jeito.",
+  "jam.latency.explain.short": "Mede o atraso do teu fone uma vez (7 s), ou só grava.",
   "jam.latency.explain.why": "Por quê?",
   "jam.studio.rec": "Gravando",
-  "jam.review.onTime": "Caiu no tempo sozinho",
   "jam.clip.volumeNormal": "normal",
   "jam.clip.band": "a banda",
   "jam.latency.notNow": "Agora não",
   "jam.needs.missingCount_one": "Falta {countLabel} parte",
-  "jam.needs.missingCount_other": "Faltam {countLabel} partes"
+  "jam.needs.missingCount_other": "Faltam {countLabel} partes",
+  "jam.song.slotHint": "Falta {instrument}. Tua vez?",
+  "jam.review.onTimeShort": "no tempo",
+  "jam.review.editedShort": "ajustado"
 }

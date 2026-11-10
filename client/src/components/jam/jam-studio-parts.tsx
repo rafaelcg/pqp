@@ -193,13 +193,7 @@ export function LatencyChip({ studio }: { studio: JamStudio }) {
       >
         <Headphones className="h-3.5 w-3.5" aria-hidden />
         {t("jam.latency.chip", { ms })}
-        <span
-          aria-hidden
-          className={cn(
-            "h-1.5 w-1.5 rounded-full",
-            current.confidence === "high" ? "bg-success" : "bg-warning",
-          )}
-        />
+        {current.method !== "estimate" && <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-accent" />}
       </span>
     </Tooltip>
   );
@@ -318,87 +312,67 @@ export function LatencyCard({ studio }: { studio: JamStudio }) {
 export function LatencyCheck({ studio }: { studio: JamStudio }) {
   const { t } = useTranslation();
   const measuring = studio.check === "measuring";
-  const estimate = Math.round(studio.latency?.estimate.roundTripMs ?? 0);
   const current = Math.round(studio.latency?.current.roundTripMs ?? 0);
   const hasMeasure = studio.latency !== null && studio.latency.current.method !== "estimate";
   const failed = studio.check === "failed";
-  const [why, setWhy] = useState(false);
-  // A suggestion, not a gate: the red button records either way (with the
-  // browser's estimate), and this says how to make the take land exactly.
+  // One line in the dock, right above the button it is about. A suggestion, not a
+  // gate: the red button records either way (with the browser's estimate).
   return (
     <section
       aria-label={t("jam.latency.explain.title")}
       data-jam-latency-check=""
-      className="flex flex-col gap-3 rounded-[var(--radius-panel)] bg-accent-soft/40 p-4 ring-1 ring-inset ring-accent/30"
+      className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-[var(--radius-card)] bg-surface-2/70 px-3 py-2 ring-1 ring-inset ring-border"
     >
-      <div className="flex items-start gap-3">
-        <span className="relative grid h-10 w-10 shrink-0 place-items-center rounded-full bg-accent-soft text-on-accent-soft">
-          {measuring && <span aria-hidden className="absolute inset-0 rounded-full bg-accent/40 motion-safe:animate-ping" />}
-          <Headphones className="relative h-5 w-5" aria-hidden />
-        </span>
-        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <h3 className="text-[15px] font-extrabold leading-snug text-text">{t("jam.latency.explain.title")}</h3>
-          <p className="text-[13px] leading-snug text-text-secondary [text-wrap:pretty]">
-            {measuring
-              ? studio.checkMethod === "tap-along"
-                ? t("jam.latency.measuring.tap")
-                : t("jam.latency.measuring.mic")
-              : t("jam.latency.explain.short")}{" "}
-            {!measuring && (
-              <button
-                type="button"
-                onClick={() => setWhy((open) => !open)}
-                aria-expanded={why}
-                className="font-semibold text-text underline decoration-border-strong underline-offset-4 outline-none hover:decoration-text focus-visible:ring-2 focus-visible:ring-focus-ring"
-              >
-                {t("jam.latency.explain.why")}
-              </button>
-            )}
-          </p>
-          {why && !measuring && (
-            <p className="mt-1 text-[13px] leading-relaxed text-text-secondary [text-wrap:pretty]">
-              {t("jam.latency.explain.body")} {hasMeasure ? "" : t("jam.latency.skipNote", { ms: estimate })}
-            </p>
+      <span className="relative grid h-8 w-8 shrink-0 place-items-center rounded-full bg-accent-soft text-on-accent-soft">
+        {measuring && <span aria-hidden className="absolute inset-0 rounded-full bg-accent/40 motion-safe:animate-ping" />}
+        <Headphones className="relative h-4 w-4" aria-hidden />
+      </span>
+      <Tooltip label={t("jam.latency.explain.body")}>
+        <p tabIndex={0} className="min-w-0 flex-1 text-[13px] leading-snug text-text outline-none focus-visible:ring-2 focus-visible:ring-focus-ring">
+          {measuring ? (
+            studio.checkMethod === "tap-along" ? t("jam.latency.measuring.tap") : t("jam.latency.measuring.mic")
+          ) : failed ? (
+            <span role="alert">{studio.checkMethod === "tap-along" ? t("jam.latency.failed.tap") : t("jam.latency.failed")}</span>
+          ) : (
+            <>
+              <span className="font-bold">{t("jam.latency.explain.title")}</span> {t("jam.latency.explain.short")}
+            </>
           )}
-        </div>
-        {measuring && <Loader2 className="mt-2 h-4 w-4 shrink-0 text-text-secondary motion-safe:animate-spin" aria-hidden />}
-      </div>
-
-      {failed && !measuring && (
-        <p role="alert" className="rounded-[var(--radius-control)] bg-warning-soft px-3 py-2 text-sm leading-snug text-on-warning-soft">
-          {studio.checkMethod === "tap-along" ? t("jam.latency.failed.tap") : t("jam.latency.failed")}
         </p>
-      )}
-
-      {!measuring && (
-        <div className="flex flex-wrap items-center gap-2 pl-[3.25rem]">
+      </Tooltip>
+      {measuring ? (
+        <Loader2 className="h-4 w-4 shrink-0 text-text-secondary motion-safe:animate-spin" aria-hidden />
+      ) : (
+        <span className="flex shrink-0 items-center gap-1">
           <button
             type="button"
             onClick={() => void studio.measure("loopback")}
             data-jam-measure="loopback"
-            className="flex h-10 items-center gap-2 rounded-full bg-text px-4 text-sm font-bold text-surface-0 outline-none transition-transform duration-[var(--duration-fast)] focus-visible:ring-2 focus-visible:ring-focus-ring motion-safe:hover:scale-[1.02] active:scale-[0.97]"
+            className="flex h-9 items-center gap-1.5 rounded-full px-3 text-[13px] font-bold text-text outline-none ring-1 ring-inset ring-border-strong transition-colors hover:bg-surface-3 focus-visible:ring-2 focus-visible:ring-focus-ring"
           >
-            <Mic className="h-4 w-4" aria-hidden />
+            <Mic className="h-3.5 w-3.5" aria-hidden />
             {t("jam.latency.measure.mic")}
           </button>
-          <button
-            type="button"
-            onClick={() => void studio.measure("tap-along")}
-            data-jam-measure="tap-along"
-            className="flex h-10 items-center gap-1.5 rounded-full px-3 text-sm font-semibold text-text outline-none transition-colors hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-focus-ring"
-          >
-            <Volume2 className="h-4 w-4" aria-hidden />
-            {t("jam.latency.measure.tap")}
-          </button>
+          <Tooltip label={t("jam.latency.measure.tapHint")}>
+            <button
+              type="button"
+              onClick={() => void studio.measure("tap-along")}
+              data-jam-measure="tap-along"
+              aria-label={t("jam.latency.measure.tap")}
+              className="grid h-9 w-9 place-items-center rounded-full text-text-secondary outline-none transition-colors hover:bg-surface-3 hover:text-text focus-visible:ring-2 focus-visible:ring-focus-ring"
+            >
+              <Volume2 className="h-4 w-4" aria-hidden />
+            </button>
+          </Tooltip>
           <button
             type="button"
             onClick={studio.skipCheck}
             data-jam-skip-check=""
-            className="ml-auto h-10 rounded-full px-3 text-sm font-semibold text-text-secondary outline-none transition-colors hover:bg-surface-2 hover:text-text focus-visible:ring-2 focus-visible:ring-focus-ring"
+            className="h-9 rounded-full px-3 text-[13px] font-semibold text-text-secondary outline-none transition-colors hover:bg-surface-3 hover:text-text focus-visible:ring-2 focus-visible:ring-focus-ring"
           >
             {hasMeasure ? t("jam.latency.keep", { ms: current }) : t("jam.latency.notNow")}
           </button>
-        </div>
+        </span>
       )}
     </section>
   );
@@ -487,7 +461,7 @@ export function LiveLane({
       role="img"
       aria-label={label}
       data-jam-live-lane=""
-      className="relative h-12 overflow-hidden rounded-[var(--radius-control)] bg-surface-0/60 ring-2 ring-inset ring-danger"
+      className="relative h-14 overflow-hidden rounded-[var(--radius-control)] bg-surface-0/60 ring-2 ring-inset ring-danger"
     >
       {/* the take grows as a clip from song time 0, with a red edge where it is being written */}
       <div
@@ -595,9 +569,9 @@ export function LevelRing({ clock }: { clock: JamStudio["levelClock"] }) {
       const element = ring.current;
       if (element) {
         element.style.transform = `scale(${1 + Math.min(1, levelBar(shown)) * 0.16})`;
-        element.style.opacity = String(0.25 + Math.min(1, levelBar(shown)) * 0.5);
+        element.style.opacity = String(Math.min(1, levelBar(shown)) * 0.7);
       }
     });
   }, [clock]);
-  return <span ref={ring} aria-hidden className="pointer-events-none absolute -inset-1 rounded-full bg-danger/50" style={{ opacity: 0.25 }} />;
+  return <span ref={ring} aria-hidden className="pointer-events-none absolute -inset-1 rounded-full bg-danger/50" style={{ opacity: 0 }} />;
 }

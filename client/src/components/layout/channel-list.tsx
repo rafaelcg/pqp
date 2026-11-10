@@ -5,7 +5,6 @@ import {
   Archive,
   CheckCheck,
   ChevronDown,
-  AudioLines,
   CirclePlus,
   Gamepad2,
   Copy,
@@ -113,6 +112,7 @@ import { PublicBadge } from "@/components/communities/public-badge";
 import { isServerPublic } from "@/lib/community-access";
 import { Menu } from "@/components/ui/menu";
 import { BetaTag } from "@/components/ui/beta-tag";
+import { JamGlyph } from "@/components/jam/jam-art";
 import { ChannelListSkeleton } from "@/components/ui/skeleton";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useIsTruncated } from "@/lib/use-is-truncated";
@@ -1986,7 +1986,7 @@ export const ChannelList = memo(function ChannelList({
               id: "create-jam",
               label: t("chrome.addJam"),
               detail: t("jam.add.detail"),
-              icon: AudioLines,
+              icon: JamGlyph,
               trailing: <BetaTag />,
               onSelect: () => onCreateChannel("jam", false, categoryId),
             },
@@ -2201,7 +2201,7 @@ export const ChannelList = memo(function ChannelList({
             aria-describedby="create-jam-detail"
             className="mt-2 flex w-full items-center gap-2 rounded-[var(--radius-control)] px-2 py-1.5 text-left text-sm text-text-tertiary hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
           >
-            <AudioLines className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            <JamGlyph className="h-3.5 w-3.5 shrink-0" />
             <span className="min-w-0 flex-1 truncate">{t("chrome.createJam")}</span>
             <BetaTag />
             <span id="create-jam-detail" className="sr-only">
@@ -3113,7 +3113,7 @@ export function textSectionAddMenu({
       id: "create-jam",
       label: jamLabel,
       detail: jamDetail,
-      icon: AudioLines,
+      icon: JamGlyph,
       trailing: <BetaTag />,
       onSelect: onJam,
     });
@@ -3197,7 +3197,7 @@ function ChannelSection({
                 // The tooltip wraps the menu's trigger, not the other way
                 // round: Radix's trigger is `asChild`, and a Tooltip inside it
                 // would swallow the click that opens the menu.
-                <Menu items={addMenu} align="end">
+                <Menu items={addMenu} align="start">
                   <button
                     type="button"
                     data-channel-section-add=""

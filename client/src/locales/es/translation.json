@@ -7787,13 +7787,15 @@
   "jam.review.editTitle": "Ajustar la toma",
   "jam.review.editDone": "Listo",
   "jam.review.edited": "Cambiaste la toma",
-  "jam.latency.explain.short": "Mide el retraso de tus auriculares una vez (7 s). Puedes grabar ya de todas formas.",
+  "jam.latency.explain.short": "Mide el retraso de tus auriculares una vez (7 s), o solo graba.",
   "jam.latency.explain.why": "¿Por qué?",
   "jam.studio.rec": "Grabando",
-  "jam.review.onTime": "Cayó a tiempo sola",
   "jam.clip.volumeNormal": "normal",
   "jam.clip.band": "la banda",
   "jam.latency.notNow": "Ahora no",
   "jam.needs.missingCount_one": "Falta {countLabel} parte",
-  "jam.needs.missingCount_other": "Faltan {countLabel} partes"
+  "jam.needs.missingCount_other": "Faltan {countLabel} partes",
+  "jam.song.slotHint": "Falta {instrument}. ¿Te animas?",
+  "jam.review.onTimeShort": "a tiempo",
+  "jam.review.editedShort": "ajustada"
 }

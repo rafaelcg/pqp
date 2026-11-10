@@ -1,5 +1,5 @@
 import type { JamInstrument, JamContributor } from "@pqp/shared";
-import { Check, Plus, Users } from "lucide-react";
+import { Check, Plus, Users, type LucideIcon } from "lucide-react";
 import type { CSSProperties, ReactNode } from "react";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
@@ -50,6 +50,22 @@ const RING: Record<JamInstrument, string> = {
   other: "ring-inst-other",
 };
 export const INST_RING = RING;
+
+/**
+ * The Jam's glyph: three lanes of a song, each in an instrument's colour, drawn
+ * like a lucide icon (24 grid, round 2.5 strokes) so it sits in a menu row's icon
+ * slot with the same size and weight as its siblings' "#" and still says "Jam".
+ */
+function JamLanesGlyph({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" strokeWidth={3} strokeLinecap="round" aria-hidden="true" className={className}>
+      <path d="M4 6h11" className="stroke-inst-guitar" />
+      <path d="M4 12h16" className="stroke-inst-bass" />
+      <path d="M4 18h8" className="stroke-inst-vocals" />
+    </svg>
+  );
+}
+export const JamGlyph = JamLanesGlyph as unknown as LucideIcon;
 
 /** The instruments on a song in the band's order, the colours of its cover. */
 export function bandOrder(instruments: readonly JamInstrument[]): JamInstrument[] {

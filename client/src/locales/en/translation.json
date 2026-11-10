@@ -7715,13 +7715,15 @@
   "jam.review.editTitle": "Adjust the take",
   "jam.review.editDone": "Done",
   "jam.review.edited": "You changed the take",
-  "jam.latency.explain.short": "Measure your headphones' delay once (7 s). You can record now either way.",
+  "jam.latency.explain.short": "Measure your headphones' delay once (7 s), or just record.",
   "jam.latency.explain.why": "Why?",
   "jam.studio.rec": "Recording",
-  "jam.review.onTime": "Landed in time by itself",
   "jam.clip.volumeNormal": "normal",
   "jam.clip.band": "the band",
   "jam.latency.notNow": "Not now",
   "jam.needs.missingCount_one": "{countLabel} part missing",
-  "jam.needs.missingCount_other": "{countLabel} parts missing"
+  "jam.needs.missingCount_other": "{countLabel} parts missing",
+  "jam.song.slotHint": "{instrument} is missing. Your turn?",
+  "jam.review.onTimeShort": "in time",
+  "jam.review.editedShort": "adjusted"
 }

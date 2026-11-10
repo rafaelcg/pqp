@@ -29,6 +29,9 @@ export function useEngineClock(engine: JamEngine | null): {
     if (!engine) {
       return;
     }
+    // Start from what the engine is doing NOW: a second screen on the shared engine
+    // (the studio over a playing song) must not say "paused" while it plays.
+    setTransport(engine.player.state);
     return engine.player.subscribe((tick) => {
       last.current = { positionMs: tick.positionMs, durationMs: tick.durationMs };
       for (const listener of listeners.current) {

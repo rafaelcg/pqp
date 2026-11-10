@@ -1,5 +1,5 @@
 import type { JamInstrument, JamSongSummary, JamTrack } from "@pqp/shared";
-import { ArrowLeft, Camera, Check, ChevronDown, Loader2, MicOff, RotateCcw, Send, SlidersHorizontal, Square } from "lucide-react";
+import { ArrowLeft, Camera, Check, ChevronDown, Loader2, MicOff, RotateCcw, Send, SlidersHorizontal, Square, Volume2, VolumeX } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -103,6 +103,18 @@ export function JamStudio({
   const [confirmLeave, setConfirmLeave] = useState<"recording" | "take" | null>(null);
   const [editing, setEditing] = useState(false);
   const [soundOpen, setSoundOpen] = useState(false);
+  /** Lanes of the band the person muted in their ear (never sent anywhere). */
+  const [mutedLanes, setMutedLanes] = useState<ReadonlySet<string>>(new Set());
+  function toggleLaneMute(trackId: string) {
+    setMutedLanes((before) => {
+      const next = new Set(before);
+      const muted = !next.has(trackId);
+      if (muted) next.add(trackId);
+      else next.delete(trackId);
+      studio.engine?.player.updateStem(trackId, { muted });
+      return next;
+    });
+  }
   const recordRef = useRef<HTMLButtonElement | null>(null);
   const scroller = useRef<HTMLDivElement | null>(null);
   // The delay suggestion answered (measured or "Agora não"): back to the top,
@@ -293,7 +305,7 @@ export function JamStudio({
         )}
       </header>
 
-      <div ref={scroller} className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain">
+      <div ref={scroller} className="relative flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain">
         {phase === "unsupported" ? (
           <div className="grid min-h-full place-items-center p-8 text-center">
             <p role="alert" className="max-w-sm text-sm leading-relaxed text-text-secondary">
@@ -301,7 +313,7 @@ export function JamStudio({
             </p>
           </div>
         ) : (
-          <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 p-3 pb-10 sm:p-6 sm:pb-12">
+          <div className="mx-auto my-auto flex w-full max-w-3xl flex-col gap-6 p-3 pb-10 sm:p-6 sm:pb-12">
             <div className="@container flex min-w-0 flex-col gap-5">
               {micProblem && (
                 <div role="alert" className="flex flex-col items-start gap-3 rounded-[var(--radius-card)] bg-danger-soft p-4 text-on-danger-soft">
@@ -411,6 +423,7 @@ export function JamStudio({
                     onSeek={(ms) => studio.engine?.player.seek(ms)}
                     title={reviewing ? t("jam.review.title") : t("jam.studio.hearBand")}
                     caption={reviewing ? t("jam.studio.withBand") : t("jam.studio.hearBandHint")}
+                    scrubber={false}
                   />
                 )}
                 {studio.playError && (
@@ -425,7 +438,24 @@ export function JamStudio({
                     data-jam-your-lane=""
                     className="flex flex-col gap-1.5 sm:grid sm:grid-cols-[var(--lane-head)_minmax(0,1fr)] sm:items-center sm:gap-3 sm:px-1.5"
                   >
-                    <YourLaneHead instrument={studio.instrument} recording={recording} />
+                    <YourLaneHead
+                      instrument={studio.instrument}
+                      recording={recording}
+                      review={
+                        phase === "review" && studio.take
+                          ? {
+                              latency: t("jam.review.latencyUsed", {
+                                ms: Math.round(studio.take.latency.roundTripMs),
+                                method: words.method(studio.take.latency.method),
+                                confidence: words.confidence(studio.take.latency.confidence),
+                              }),
+                              editing,
+                              edited: studio.edited,
+                              onAdjust: () => setEditing((open) => !open),
+                            }
+                          : null
+                      }
+                    />
                     <div className="min-w-0">
                       {phase === "setup" || phase === "boot" ? (
                         <div
@@ -472,7 +502,12 @@ export function JamStudio({
                       style={{ "--jam-l": index } as CSSProperties}
                       className="jam-lane-in flex flex-col gap-1.5 sm:grid sm:grid-cols-[var(--lane-head)_minmax(0,1fr)] sm:items-center sm:gap-3 sm:px-1.5"
                     >
-                      <StudioLaneHead track={track} mine={viewerId !== null && track.authorId === viewerId} />
+                      <StudioLaneHead
+                        track={track}
+                        mine={viewerId !== null && track.authorId === viewerId}
+                        muted={mutedLanes.has(track.id)}
+                        onMute={() => toggleLaneMute(track.id)}
+                      />
                       <JamLaneWave
                         instrument={track.instrument}
                         peaks={track.peaks}
@@ -480,6 +515,8 @@ export function JamStudio({
                         timeline={timeline}
                         clock={playingNow || reviewing || recording ? clock : undefined}
                         seed={track.id}
+                        dimmed={mutedLanes.has(track.id)}
+                        className={recording ? "h-14" : undefined}
                       />
                     </li>
                   ))}
@@ -488,7 +525,6 @@ export function JamStudio({
                 </div>
               </div>
 
-              {phase === "setup" && studio.needsCheck && <LatencyCheck studio={studio} />}
 
 
 
@@ -532,41 +568,8 @@ export function JamStudio({
                             edited={studio.edited}
                           />
                         </div>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => setEditing(true)}
-                          data-jam-edit-open=""
-                          className="flex h-12 items-center gap-3 self-start rounded-full bg-surface-1 pl-2 pr-5 text-sm font-bold text-text outline-none ring-1 ring-inset ring-border transition-colors hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-focus-ring"
-                        >
-                          <span className="grid h-8 w-8 place-items-center rounded-full bg-surface-2">
-                            <SlidersHorizontal className="h-4 w-4" aria-hidden />
-                          </span>
-                          <span className="flex flex-col items-start leading-tight">
-                            {t("jam.review.edit")}
-                            <span className="text-xs font-medium text-text-tertiary">{studio.edited ? t("jam.review.edited") : t("jam.review.auto")}</span>
-                          </span>
-                        </button>
-                      )}
+                      ) : null}
                     </div>
-                  )}
-                  {studio.take && (
-                    <Tooltip
-                      label={t("jam.review.latencyUsed", {
-                        ms: Math.round(studio.take.latency.roundTripMs),
-                        method: words.method(studio.take.latency.method),
-                        confidence: words.confidence(studio.take.latency.confidence),
-                      })}
-                    >
-                      <span
-                        tabIndex={0}
-                        data-jam-take-latency=""
-                        className="flex w-fit items-center gap-1.5 rounded-full text-[13px] font-semibold text-text-secondary outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
-                      >
-                        <Check className="h-4 w-4 text-success" aria-hidden />
-                        {t("jam.review.onTime")}
-                      </span>
-                    </Tooltip>
                   )}
                   {studio.take?.videoError && (
                     <p role="status" className="text-xs text-text-tertiary">
@@ -599,6 +602,11 @@ export function JamStudio({
       </div>
 
       <footer className={cn("safe-pb relative border-t border-border bg-surface-1 px-3 py-4 sm:px-6", phase === "done" && "hidden")}>
+        {phase === "setup" && studio.needsCheck && (
+          <div className="mx-auto mb-3 max-w-3xl">
+            <LatencyCheck studio={studio} />
+          </div>
+        )}
         {phase === "setup" && (
           <div className="mx-auto flex max-w-md flex-col items-center gap-1.5">
             <button
@@ -791,10 +799,23 @@ export function JamStudio({
 }
 
 /** Who plays a backing lane: their face with the instrument on it. */
-function StudioLaneHead({ track, mine }: { track: JamTrack; mine: boolean }) {
+function StudioLaneHead({
+  track,
+  mine,
+  muted,
+  onMute,
+}: {
+  track: JamTrack;
+  mine: boolean;
+  muted: boolean;
+  onMute: () => void;
+}) {
   const { t } = useTranslation();
   const look = JAM_INSTRUMENT_LOOK[track.instrument];
   const Icon = look.icon;
+  const instrument = t(look.nameKey as MessageKey);
+  const person = mine ? t("jam.lane.you") : (track.authorName ?? t("jam.tile.anonymous"));
+  const name = `${instrument}, ${person}`;
   return (
     <div className="flex min-w-0 items-center gap-2.5">
       <span className="relative shrink-0">
@@ -803,16 +824,38 @@ function StudioLaneHead({ track, mine }: { track: JamTrack; mine: boolean }) {
           <Icon className="h-2.5 w-2.5" />
         </span>
       </span>
-      <span className="flex min-w-0 flex-col leading-tight">
-        <span className="truncate text-sm font-bold text-text">{t(look.nameKey as MessageKey)}</span>
-        <span className="truncate text-xs text-text-secondary">{mine ? t("jam.lane.you") : (track.authorName ?? t("jam.tile.anonymous"))}</span>
+      <span className="flex min-w-0 flex-1 flex-col leading-tight">
+        <span className="truncate text-sm font-bold text-text">{instrument}</span>
+        <span className="truncate text-xs text-text-secondary">{person}</span>
       </span>
+      <Tooltip label={muted ? t("jam.lane.unmute", { name }) : t("jam.lane.mute", { name })}>
+        <button
+          type="button"
+          aria-pressed={muted}
+          onClick={onMute}
+          data-jam-studio-mute=""
+          className={cn(
+            "grid h-8 w-8 shrink-0 place-items-center rounded-full outline-none transition-colors hover:bg-surface-3 focus-visible:ring-2 focus-visible:ring-focus-ring",
+            muted ? "bg-warning-soft text-on-warning-soft" : "text-text-secondary",
+          )}
+        >
+          {muted ? <VolumeX className="h-4 w-4" aria-hidden /> : <Volume2 className="h-4 w-4" aria-hidden />}
+        </button>
+      </Tooltip>
     </div>
   );
 }
 
-/** The person recording: their instrument, and "gravando" in red while it is. */
-function YourLaneHead({ instrument, recording }: { instrument: JamInstrument; recording: boolean }) {
+function YourLaneHead({
+  instrument,
+  recording,
+  review,
+}: {
+  instrument: JamInstrument;
+  recording: boolean;
+  /** After the take: it landed in time (the numbers in the tooltip), and "Ajustar". */
+  review: { latency: string; editing: boolean; edited: boolean; onAdjust: () => void } | null;
+}) {
   const { t } = useTranslation();
   const look = JAM_INSTRUMENT_LOOK[instrument];
   const Icon = look.icon;
@@ -822,12 +865,40 @@ function YourLaneHead({ instrument, recording }: { instrument: JamInstrument; re
         {recording && <span aria-hidden className="jam-rec-ring absolute inset-0 rounded-full bg-danger" />}
         <Icon className="relative h-4 w-4" aria-hidden />
       </span>
-      <span className="flex min-w-0 flex-col leading-tight">
+      <span className="flex min-w-0 flex-1 flex-col leading-tight">
         <span className="truncate text-sm font-bold text-text">{t(look.nameKey as MessageKey)}</span>
-        <span className={cn("truncate text-xs", recording ? "font-bold text-danger" : "text-text-secondary")}>
-          {recording ? t("jam.lane.recording") : t("jam.lane.you")}
-        </span>
+        {review ? (
+          <Tooltip label={review.latency}>
+            <span
+              tabIndex={0}
+              data-jam-take-latency=""
+              className="flex w-fit items-center gap-1 rounded-full text-xs font-semibold text-text-secondary outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+            >
+              <Check className="h-3.5 w-3.5 text-accent" strokeWidth={3} aria-hidden />
+              {review.edited ? t("jam.review.editedShort") : t("jam.review.onTimeShort")}
+            </span>
+          </Tooltip>
+        ) : (
+          <span className={cn("truncate text-xs", recording ? "font-bold text-danger" : "text-text-secondary")}>
+            {recording ? t("jam.lane.recording") : t("jam.lane.you")}
+          </span>
+        )}
       </span>
+      {review && (
+        <button
+          type="button"
+          onClick={review.onAdjust}
+          aria-pressed={review.editing}
+          data-jam-edit-open=""
+          className={cn(
+            "flex h-7 shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-bold outline-none transition-colors duration-[var(--duration-fast)] focus-visible:ring-2 focus-visible:ring-focus-ring",
+            review.editing ? "bg-text text-surface-0" : "bg-surface-3 text-text hover:bg-border-strong",
+          )}
+        >
+          <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden />
+          {t("jam.take.adjust")}
+        </button>
+      )}
     </div>
   );
 }

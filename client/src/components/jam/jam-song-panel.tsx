@@ -30,7 +30,7 @@ import {
 import type { JamDetail } from "@/lib/jam-state";
 import { barsFromPeaks, competingInstruments, formatClock, orderTracks, seededBars, songNeed, songTimeline } from "@/lib/jam-wall";
 import { cn } from "@/lib/utils";
-import { BandStrip, ContributorStack, coverGradient, Equalizer, MirrorBars } from "./jam-art";
+import { ContributorStack, coverGradient, Equalizer, MirrorBars } from "./jam-art";
 import { useBarCount } from "./jam-bars";
 import { TrackAdjust } from "./jam-track-adjust";
 import { JamTrackRow } from "./jam-track-row";
@@ -205,11 +205,11 @@ export function JamSongPanel({
           <div className="flex min-w-0 items-center gap-2 text-[13px] font-semibold text-text-secondary">
             <ContributorStack people={song.contributors} total={song.contributorCount} size="sm" ringClassName="ring-border-strong" />
             <span className="truncate">
-              {song.artist ?? t("jam.original")} · {t("jam.song.startedBy", { name: song.authorName ?? t("jam.tile.anonymous") })}
+              {song.artist ?? t("jam.original")}
+              <span className="max-sm:hidden"> · {t("jam.song.startedBy", { name: song.authorName ?? t("jam.tile.anonymous") })}</span>
             </span>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <BandStrip instruments={song.instruments} missing={missingSlots} size="sm" />
             {song.joinMode === "closed" && (
               <span data-jam-closed-line="" className="flex items-center gap-1 text-xs text-text-secondary">
                 <Lock className="h-3 w-3 shrink-0" aria-hidden />
@@ -261,6 +261,7 @@ export function JamSongPanel({
               onToggle={playback.toggle}
               onSeek={playback.seek}
               title={song.title}
+              scrubber={false}
             />
           </div>
 
@@ -533,7 +534,7 @@ export function Ruler({ timeline, onSeek }: { timeline: { startMs: number; endMs
         />
         {marks.map((at) => (
           <span key={at} className="pointer-events-none absolute bottom-0 flex flex-col items-start" style={{ left: `${(at / length) * 100}%` }}>
-            <span className="text-[10px] font-semibold tabular-nums text-text-tertiary">{formatClock(at)}</span>
+            <span className="text-xs font-semibold tabular-nums text-text-secondary">{formatClock(at)}</span>
             <span className="h-1.5 w-px bg-border-strong" />
           </span>
         ))}
@@ -607,13 +608,11 @@ function MissingLane({
           type="button"
           onClick={onRecord}
           data-jam-slot-record={instrument}
-          className={cn(
-            "group flex h-14 w-full items-center justify-center gap-2 rounded-[var(--radius-control)] border-2 border-dashed border-current text-sm font-bold outline-none transition-[background-color,border-color,color] duration-[var(--duration-base)] hover:border-accent hover:bg-accent-soft hover:text-on-accent-soft focus-visible:ring-2 focus-visible:ring-focus-ring",
-            look.ink,
-          )}
+          aria-label={t(`jam.song.recordAs.${instrument}` as MessageKey)}
+          className="group flex h-14 w-full items-center justify-center gap-2 rounded-[var(--radius-control)] border-2 border-dashed border-border-strong text-[13px] font-semibold text-text-secondary outline-none transition-[background-color,border-color,color] duration-[var(--duration-base)] hover:border-accent hover:bg-accent-soft hover:text-on-accent-soft focus-visible:ring-2 focus-visible:ring-focus-ring"
         >
           <Mic className="h-4 w-4 transition-transform duration-[var(--duration-base)] motion-safe:group-hover:scale-110" aria-hidden />
-          {t(`jam.song.recordAs.${instrument}` as MessageKey)}
+          {t("jam.song.slotHint", { instrument: t(look.nameKey as MessageKey).toLowerCase() })}
         </button>
       ) : (
         <div className={cn("flex h-14 items-center justify-center rounded-[var(--radius-control)] border-2 border-dashed border-current text-xs font-bold", look.ink)}>

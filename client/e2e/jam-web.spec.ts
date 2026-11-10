@@ -378,8 +378,8 @@ async function makeSong(who: string, jamId: string, title: string, body: object 
   return song.id;
 }
 
-async function addTrackApi(who: string, songId: string, instrument: string, note = 196): Promise<ApiTrack & { id: string }> {
-  const bytes = wavBytes(4, note);
+async function addTrackApi(who: string, songId: string, instrument: string, note = 196, seconds = 4): Promise<ApiTrack & { id: string }> {
+  const bytes = wavBytes(seconds, note);
   const ticket = await call<{ uploadId: string; uploadUrl: string }>(who, "POST", `/api/jam-songs/${songId}/uploads`, {
     kind: "audio",
     contentType: "audio/flac",
@@ -390,7 +390,7 @@ async function addTrackApi(who: string, songId: string, instrument: string, note
   const { track } = await call<{ track: ApiTrack & { id: string } }>(who, "POST", `/api/jam-songs/${songId}/tracks`, {
     instrument,
     audioUploadId: ticket.uploadId,
-    durationMs: 4000,
+    durationMs: seconds * 1000,
     peaks: [0.2, 0.8, 0.5, 0.9, 0.3],
   });
   return track;
@@ -467,8 +467,9 @@ test("'Gravar por cima' while the song plays silences it, and the studio's own p
   const seeded = await seed();
   test.skip(!seeded.uploads, "needs object storage (S3_*): GET /api/jam/config answered uploads:false");
   const songId = await makeSong(HOST, seeded.jamId, "Tocando");
-  await addTrackApi(HOST, songId, "guitar");
-  await addTrackApi(HOST, songId, "drums", 98);
+  // long enough to still be playing when the studio opens (the bug needs a song that is playing)
+  await addTrackApi(HOST, songId, "guitar", 196, 30);
+  await addTrackApi(HOST, songId, "drums", 98, 30);
   const guest = await openAs(browser, GUEST, `/app/server/${seeded.serverId}/channel/${seeded.jamId}/song/${songId}`);
 
   // the song plays in its panel
@@ -487,8 +488,11 @@ test("'Gravar por cima' while the song plays silences it, and the studio's own p
   const bandPlay = studio.locator("[data-jam-play]");
   await expect(bandPlay).toBeVisible({ timeout: 20_000 });
   await expect(bandPlay).toHaveAttribute("data-state", "paused");
+  // the song panel behind (inert, out of reach) reads the same engine: it stopped too
+  await expect(songPlay, "the song behind the studio is not still playing").toHaveAttribute("data-state", "paused");
   await guest.waitForTimeout(800);
   await expect(bandPlay, "nothing starts playing by itself under the studio").toHaveAttribute("data-state", "paused");
+  await expect(songPlay).toHaveAttribute("data-state", "paused");
 
   // the studio's own transport: play, then pause, each a click
   await bandPlay.click();
