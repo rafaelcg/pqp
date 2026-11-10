@@ -210,6 +210,8 @@ class BridgeHost(
         snapshot = next
         applyState(next.stateRev, next.stateValue)
         // a newer snapshot supersedes the roster work of the older one: cancel it rather than let it finish unseen
+        // descriptions are kept only for the people who are in the room now: churn cannot grow this without bound
+        described.keys.retainAll(next.participants.map { it.userId }.toSet())
         rosterReady?.cancel()
         rosterReady = scope.async { refreshRoster(next) }
     }
