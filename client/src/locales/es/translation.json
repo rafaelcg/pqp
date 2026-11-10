@@ -2085,7 +2085,7 @@
   "voice.notice.noiseSuppressionUnsupported": "Tu navegador todavía no soporta Voz limpia; la supresión estándar sigue activada.",
   "voice.notice.voiceTrackNeedsMic": "No tienes ningún micrófono abierto, así que \"separada\" no tiene nada que enviar. Te quedas en \"con la transmisión\".",
   "voice.notice.listenOnly": "Entraste sin micrófono, así que puedes escuchar pero no hablar. {reason}",
-  "voice.notice.micRetryEndsShare": "Para activar el micrófono se rehace la conexión de la llamada y eso corta tu transmisión. Detén la transmisión y vuelve a pulsar el micrófono.",
+  "voice.notice.micRetryEndsShare": "Para activar el micrófono se rehace la conexión de la llamada y eso corta tu transmisión o tu cámara. Apágala y vuelve a pulsar el micrófono.",
   "voice.notice.micMixFailed": "No se pudo meter tu micrófono en el stream. La sala te escucha; quienes ven desde afuera, no.",
   "voice.notice.nativeShareAudioFailed": "La app no pudo capturar el sonido de esa ventana, así que estás compartiendo sin sonido. El próximo vuelve al método de antes.",
   "voice.notice.nativeShareAudioEnded": "La app perdió la captura de sonido de esta transmisión, así que ahora sale sin sonido. El próximo vuelve al método de antes.",

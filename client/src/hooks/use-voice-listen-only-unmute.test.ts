@@ -351,7 +351,7 @@ describe.each(["mesh", "livekit"] as const)("%s: unmute on a listen-only seat", 
     expect(joins(sent)).toBe(1);
     expect(leaves(sent)).toBe(0);
     expect(voice.getState().isSharingScreen).toBe(true);
-    expect(voice.getState().notice).toMatch(/ends your share/i);
+    expect(voice.getState().notice).toMatch(/ends your share or camera/i);
   });
 });
 
