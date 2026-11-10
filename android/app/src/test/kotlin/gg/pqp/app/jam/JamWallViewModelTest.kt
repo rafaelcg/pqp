@@ -246,6 +246,31 @@ class JamWallViewModelTest {
     }
 
     @Test
+    fun `the automatic search under a filter nothing passes stops after a few pages and the person decides`() = runTest {
+        val backend = FakeBackend().apply {
+            repeat(8) { pages += JamSongListResponse(listOf(aSong("open$it")), if (it < 7) "c$it" else null) }
+        }
+        val model = model(backend)
+        model.start()
+        advanceUntilIdle()
+        model.setFilter(JamWallFilter.Finished)
+        advanceUntilIdle()
+        // The first page plus AUTO_PAGES more, and then it waits: a channel with nothing under the filter is not read to the end.
+        assertEquals(1 + JamWallViewModel.AUTO_PAGES, backend.cursors.size)
+        assertTrue(model.state.value.chaseStopped)
+        assertTrue(model.state.value.visible.isEmpty())
+        assertTrue(model.state.value.wall.nextCursor != null)
+        // "Procurar mais": one more round of the same size, and nothing else moves on its own.
+        model.loadMore()
+        advanceUntilIdle()
+        assertEquals(1 + JamWallViewModel.AUTO_PAGES + JamWallViewModel.AUTO_PAGES, backend.cursors.size)
+        assertTrue(model.state.value.chaseStopped)
+        // Choosing another filter starts over and clears the stop.
+        model.setFilter(JamWallFilter.All)
+        assertTrue(!model.state.value.chaseStopped)
+    }
+
+    @Test
     fun `the preview cache is bounded and drops the oldest`() {
         val previews = (1..JamWallViewModel.PREVIEW_CACHE + 30).associate { "s$it" to JamPreview(0, emptyList(), emptyList(), null, null, false) }
         val kept = JamWallViewModel.boundedPreviews(previews)

@@ -331,6 +331,19 @@ private fun Footer(state: JamWallUiState, onRetry: () -> Unit) {
         state.loadingMore -> Box(Modifier.fillMaxWidth().padding(Spacing.lg), contentAlignment = Alignment.Center) {
             CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
         }
+        // The automatic search under a filter gave up: the person decides whether to read further.
+        state.chaseStopped -> Text(
+            text = stringResource(R.string.jam_look_further),
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.primary,
+            textAlign = TextAlign.Center,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onRetry)
+                .padding(Spacing.lg)
+                .testTag("jam.lookFurther"),
+        )
         state.loadMoreFailed -> Text(
             text = stringResource(R.string.jam_more_failed),
             style = MaterialTheme.typography.bodyMedium,

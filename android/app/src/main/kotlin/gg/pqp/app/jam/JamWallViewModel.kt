@@ -67,6 +67,11 @@ data class JamWallUiState(
     val loadingMore: Boolean = false,
     /** The last page request failed: the wall offers a retry at its end. */
     val loadMoreFailed: Boolean = false,
+    /**
+     * Under a filter nothing on the loaded pages passes, there are more pages, and the automatic search for a match
+     * gave up after [JamWallViewModel.AUTO_PAGES]: the wall offers "look further" instead of reading the whole channel.
+     */
+    val chaseStopped: Boolean = false,
     val previews: Map<String, JamPreview> = emptyMap(),
 ) {
     enum class Phase { Loading, Ready, Failed }
@@ -150,10 +155,10 @@ class JamWallViewModel(
     }
 
     fun setFilter(filter: JamWallFilter) {
-        _state.update { it.copy(filter = filter) }
-        // Nothing on this page passes it and there is more: no tile would ever ask, so ask.
+        _state.update { it.copy(filter = filter, chaseStopped = false) }
+        // Nothing on this page passes it and there is more: no tile would ever ask, so ask (a few pages, see loadMore).
         val now = _state.value
-        if (now.visible.isEmpty() && now.wall.nextCursor != null) loadMore()
+        if (now.visible.isEmpty() && now.wall.nextCursor != null) loadMore(auto = 0)
     }
 
     fun clearFresh(id: String) = _state.update { it.copy(wall = it.wall.clearFresh(id)) }
@@ -211,12 +216,15 @@ class JamWallViewModel(
      * followed is no longer the wall's) is dropped, and a failure leaves a retry
      * in place of the end of the wall.
      */
-    fun loadMore() {
+    fun loadMore() = loadMore(auto = 0)
+
+    /** [auto] is how many pages in a row the wall has asked for by itself under a filter that nothing passes. */
+    private fun loadMore(auto: Int) {
         val current = _state.value
         val cursor = current.wall.nextCursor ?: return
         if (current.loadingMore) return
         val request = generation
-        _state.update { it.copy(loadingMore = true, loadMoreFailed = false) }
+        _state.update { it.copy(loadingMore = true, loadMoreFailed = false, chaseStopped = false) }
         viewModelScope.launch {
             try {
                 val page = backend.songs(channelId, cursor = cursor)
@@ -227,10 +235,13 @@ class JamWallViewModel(
                 val before = _state.value.visible.size
                 _state.update { it.copy(wall = it.wall.append(page), loadingMore = false) }
                 // A filter that none of this page's songs pass adds no tile, so nothing on screen would ask for the
-                // next page and everything after it would be out of reach: ask for it here until something shows or the
-                // list ends.
+                // next page and everything after it would be out of reach: ask for it here until something shows, the
+                // list ends, or AUTO_PAGES have gone by. Past that it stops and offers "look further": a channel with
+                // nothing under this filter must not be read to its end, page by page, behind one tap.
                 val now = _state.value
-                if (now.filter != JamWallFilter.All && now.visible.size == before && now.wall.nextCursor != null) loadMore()
+                if (now.filter != JamWallFilter.All && now.visible.size == before && now.wall.nextCursor != null) {
+                    if (auto + 1 < AUTO_PAGES) loadMore(auto + 1) else _state.update { it.copy(chaseStopped = true) }
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -300,6 +311,9 @@ class JamWallViewModel(
 
     companion object {
         const val PREVIEW_WORKERS = 3
+
+        /** Pages the wall asks for by itself, in a row, under a filter nothing passes. */
+        const val AUTO_PAGES = 3
 
         /** Previews kept: the oldest read go first, so a long scroll does not hold every song it passed. */
         const val PREVIEW_CACHE = 120

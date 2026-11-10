@@ -1600,6 +1600,7 @@
     <string name="jam_wall_failed">Could not load the songs.</string>
     <string name="jam_retry">Try again</string>
     <string name="jam_more_failed">Could not load more. Tap to try again.</string>
+    <string name="jam_look_further">Look further</string>
     <string name="jam_back">Back</string>
     <string name="jam_play">Play</string>
     <string name="jam_pause">Pause</string>

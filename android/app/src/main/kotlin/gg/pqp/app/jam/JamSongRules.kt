@@ -130,8 +130,24 @@ data class JamSongState(
          */
         fun loaded(detail: JamSongDetailResponse, pending: List<JamFrame>): JamSongState {
             var state = JamSongState(detail.song, detail.tracks, detail.viewer)
-            pending.forEach { state = state.apply(it).state }
+            pending.forEach { frame -> if (happenedAfter(frame, detail.song)) state = state.apply(frame).state }
             return state
+        }
+
+        /**
+         * Whether a frame that arrived while the read was out describes something LATER than what the read says. The
+         * read may have been produced after the frame's change (another moderator's, say), and applying the older frame
+         * over it would put the old value back. Every frame that carries the song's summary carries its `updatedAt`,
+         * which every write bumps, so it orders; a song's deletion is final whenever it came; a vote count has no date,
+         * so it is not applied (the next frame, or the next read, carries the current number).
+         */
+        internal fun happenedAfter(frame: JamFrame, snapshot: JamSongSummary): Boolean = when (frame) {
+            is JamFrame.SongDeleted -> true
+            is JamFrame.TrackVotes, is JamFrame.SongCreated -> false
+            is JamFrame.SongUpdated -> frame.song.updatedAtMs > snapshot.updatedAtMs
+            is JamFrame.TrackAdded -> frame.song.updatedAtMs > snapshot.updatedAtMs
+            is JamFrame.TrackUpdated -> frame.song.updatedAtMs > snapshot.updatedAtMs
+            is JamFrame.TrackDeleted -> frame.song.updatedAtMs > snapshot.updatedAtMs
         }
     }
 

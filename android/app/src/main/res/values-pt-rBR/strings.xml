@@ -1591,6 +1591,7 @@
     <string name="jam_wall_failed">Não deu pra carregar as músicas.</string>
     <string name="jam_retry">Tentar de novo</string>
     <string name="jam_more_failed">Não deu pra carregar mais. Toca pra tentar de novo.</string>
+    <string name="jam_look_further">Procurar mais</string>
     <string name="jam_back">Voltar</string>
     <string name="jam_play">Tocar</string>
     <string name="jam_pause">Pausar</string>

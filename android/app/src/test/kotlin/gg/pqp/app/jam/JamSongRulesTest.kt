@@ -156,22 +156,29 @@ class JamSongRulesTest {
     }
 
     @Test
-    fun `the first read of a song has the frames that arrived during it put on top`() {
-        // The read answered with one track; while it was out a second was added and the first was voted for.
+    fun `the first read of a song has the frames that arrived during it put on top, the newer ones only`() {
+        // The read was produced at 10:00:00 with one track. While it was out: a track was added AFTER it (10:00:05),
+        // and a frame for a change the read already includes (09:59:59) arrived late.
+        val at = { time: String -> song(tracks = 2).copy(updatedAt = "2026-11-01T$time.000Z") }
         val detail = JamSongDetailResponse(song(tracks = 1), listOf(track("a")), JamSongViewer())
         val pending = listOf(
-            JamFrame.TrackAdded(channel, song(tracks = 2), track("b", JamInstrument.Bass)),
-            // One the read already contains: by id, so nothing doubles.
-            JamFrame.TrackAdded(channel, song(tracks = 2), track("a")),
+            JamFrame.TrackAdded(channel, at("10:00:05"), track("b", JamInstrument.Bass)),
+            // Older than the read: its change is already in it, and applying it would put the old value back.
+            JamFrame.TrackUpdated(channel, at("09:59:59"), track("a", gain = 0.1)),
+            JamFrame.TrackAdded(channel, at("09:59:58"), track("c", JamInstrument.Keys)),
+            // A vote count has no date: not applied, the next frame or read carries the number.
             JamFrame.TrackVotes(channel, "s", "a", 3),
         )
         val state = JamSongState.loaded(detail, pending)
         assertEquals(listOf("a", "b"), state.tracks.map { it.id })
-        assertEquals(3, state.tracks.first { it.id == "a" }.voteCount)
+        assertEquals(1.0, state.tracks.first { it.id == "a" }.gain, 0.0)
+        assertEquals(0, state.tracks.first { it.id == "a" }.voteCount)
         assertEquals(setOf("b"), state.fresh)
-        // The song deleted while the read was out is a deleted song.
+        // The song deleted while the read was out is a deleted song, whenever it was.
         assertTrue(JamSongState.loaded(detail, listOf(JamFrame.SongDeleted(channel, "s"))).wasDeleted)
         assertEquals(1, JamSongState.loaded(detail, emptyList()).tracks.size)
+        // A frame at the very instant of the read is already in it.
+        assertEquals(1, JamSongState.loaded(detail, listOf(JamFrame.TrackAdded(channel, song(tracks = 2), track("d")))).tracks.size)
     }
 
     @Test
