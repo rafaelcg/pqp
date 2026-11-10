@@ -1,5 +1,5 @@
 import { JAM_ARTIST_MAX, JAM_TITLE_MAX, type JamInstrument, type JamJoinMode } from "@pqp/shared";
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogBody } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -7,6 +7,7 @@ import { RadioGroup } from "@/components/ui/radio-group";
 import type { NewSongDraft } from "@/hooks/use-jam-studio";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { JAM_INSTRUMENT_LOOK, JAM_INSTRUMENT_ORDER } from "@/lib/jam-instruments";
+import { newJamNonce } from "@/lib/jam-nonce";
 import { cn } from "@/lib/utils";
 
 /**
@@ -19,12 +20,6 @@ export interface JamStartResult {
   draft: NewSongDraft;
   /** What the author records first. */
   instrument: JamInstrument;
-}
-
-function newNonce(): string {
-  return typeof crypto !== "undefined" && "randomUUID" in crypto
-    ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 export function JamStartSheet({
@@ -43,6 +38,18 @@ export function JamStartSheet({
   const [joinMode, setJoinMode] = useState<JamJoinMode>("open");
   const [wanted, setWanted] = useState<JamInstrument[]>([]);
   const [touched, setTouched] = useState(false);
+
+  // The sheet stays mounted between songs: every time it opens it is a blank
+  // sheet for a new song, not the last song's answers.
+  useEffect(() => {
+    if (open) {
+      setTitle("");
+      setArtist("");
+      setJoinMode("open");
+      setWanted([]);
+      setTouched(false);
+    }
+  }, [open]);
 
   const cleanTitle = title.replace(/\s+/g, " ").trim();
   const titleMissing = cleanTitle.length === 0;
@@ -66,7 +73,7 @@ export function JamStartSheet({
         wantedInstruments: joinMode === "wanted" ? wanted : [],
         // One per draft: a retried create of THIS song lands on one song, and a
         // song started later from the same sheet is a different one.
-        nonce: newNonce(),
+        nonce: newJamNonce(),
       },
       instrument: joinMode === "wanted" ? mine : "guitar",
     });
@@ -134,7 +141,10 @@ export function JamStartSheet({
             label={t("jam.start.who")}
             variant="list"
             value={joinMode}
-            onValueChange={setJoinMode}
+            onValueChange={(next) => {
+              setJoinMode(next);
+              setTouched(false);
+            }}
             options={[
               { value: "open", label: t("jam.start.open"), description: t("jam.start.openHint") },
               { value: "wanted", label: t("jam.start.wanted"), description: t("jam.start.wantedHint") },

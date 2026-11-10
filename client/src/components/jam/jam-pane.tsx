@@ -29,6 +29,7 @@ import {
   type JamWallFilter,
   type JamWallSection,
 } from "@/lib/jam-wall";
+import { escapeOwnedByOverlay } from "@/lib/escape-unless-overlay";
 import { cn } from "@/lib/utils";
 import "./jam.css";
 import { JamHowToDialog, JamHowToHero } from "./jam-howto";
@@ -142,6 +143,22 @@ export function JamPane({
     setSongError(false);
   }, [routeSongId]); // eslint-disable-line react-hooks/exhaustive-deps -- follows the address only
 
+  // Escape closes the open song, like every other panel, unless a dialog or the
+  // studio owns the key.
+  useEffect(() => {
+    if (!openSongId || studio !== null) {
+      return;
+    }
+    function onKey(event: KeyboardEvent) {
+      if (event.key !== "Escape" || escapeOwnedByOverlay(event)) {
+        return;
+      }
+      setOpenSongId(null);
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [openSongId, studio]);
+
   // Another channel, another wall.
   useEffect(() => {
     setOpenSongIdState(null);
@@ -199,18 +216,23 @@ export function JamPane({
   const openSong = openSongId ? songs.find((song) => song.id === openSongId) ?? null : null;
   const openDetail = openSong ? state.details[openSong.id] : undefined;
   const wasThere = useRef<string | null>(null);
+  const lastTitle = useRef("");
+  /** The title of a song that was deleted while it was open. */
+  const [deletedTitle, setDeletedTitle] = useState<string | null>(null);
   useEffect(() => {
     if (openSong) {
       wasThere.current = openSong.id;
+      lastTitle.current = openSong.title;
     }
   }, [openSong]);
   useEffect(() => {
     if (!openSongId || state.status !== "ready" || openSong) {
       return;
     }
-    // Deleted under an open panel: close it quietly.
+    // Deleted under an open panel: close it, and say so.
     if (wasThere.current === openSongId) {
       wasThere.current = null;
+      setDeletedTitle(lastTitle.current);
       setOpenSongId(null);
       return;
     }
@@ -243,8 +265,24 @@ export function JamPane({
     };
   }, [openSongId, openSong, state.status, channelId, songTry]);
 
-  const studioSong = studio?.mode === "over" ? (songs.find((song) => song.id === studio.songId) ?? null) : null;
-  const studioDetail = studio?.mode === "over" ? state.details[studio.songId] : undefined;
+  const liveStudioSong = studio?.mode === "over" ? (songs.find((song) => song.id === studio.songId) ?? null) : null;
+  const liveStudioDetail = studio?.mode === "over" ? state.details[studio.songId] : undefined;
+  // What the studio last knew of its song: when somebody deletes the song under a
+  // recording, the studio keeps its title and its backing and says what happened,
+  // instead of turning into "Nova música" and losing the band in the person's ear.
+  const studioMemory = useRef<{ id: string; song: typeof liveStudioSong; detail: typeof liveStudioDetail } | null>(null);
+  if (studio?.mode === "over") {
+    if (liveStudioSong && liveStudioDetail) {
+      studioMemory.current = { id: studio.songId, song: liveStudioSong, detail: liveStudioDetail };
+    }
+  } else {
+    studioMemory.current = null;
+  }
+  const remembered = studio?.mode === "over" && studioMemory.current?.id === studio.songId ? studioMemory.current : null;
+  const studioSong = liveStudioSong ?? remembered?.song ?? null;
+  const studioDetail = liveStudioDetail ?? remembered?.detail;
+  const studioSongDeleted =
+    studio?.mode === "over" && !liveStudioSong && remembered !== null && state.status === "ready";
 
   function beginSong() {
     setStartOpen(true);
@@ -284,7 +322,7 @@ export function JamPane({
       data-jam-pane={channelId}
       data-jam-uploads={config.uploads ? "on" : "off"}
     >
-      <section className="flex min-h-0 min-w-0 flex-1 flex-col" aria-label={t("jam.title")}>
+      <section className="flex min-h-0 min-w-0 flex-1 flex-col" aria-label={t("jam.title")} inert={studio !== null}>
         {/* One row on a wide screen. On a phone: the menu, the title and the one
             button on top, then the filters with the two small tools beside them
             (`order` and a full-width break do it without a second copy). */}
@@ -340,6 +378,18 @@ export function JamPane({
           />
         </header>
 
+        {deletedTitle !== null && (
+          <p
+            role="status"
+            data-jam-song-deleted-notice=""
+            className="mx-3 mt-3 flex items-center justify-between gap-3 rounded-[var(--radius-card)] bg-surface-1 px-3.5 py-3 text-sm text-text-secondary sm:mx-5"
+          >
+            {t("jam.wall.songDeleted", { title: deletedTitle })}
+            <Button variant="ghost" size="sm" onClick={() => setDeletedTitle(null)}>
+              {t("jam.song.close")}
+            </Button>
+          </p>
+        )}
         {songGone && (
           <p
             role="status"
@@ -490,6 +540,7 @@ export function JamPane({
         <div
           className="absolute inset-0 z-20 bg-surface-1 lg:static lg:z-auto lg:w-[26rem] lg:shrink-0 lg:border-l lg:border-border"
           data-jam-song-panel=""
+          inert={studio !== null}
         >
           <JamSongPanel
             key={openSong.id}
@@ -512,6 +563,9 @@ export function JamPane({
           song={studio.mode === "over" ? studioSong : null}
           tracks={studio.mode === "over" ? (studioDetail?.tracks ?? []) : []}
           draft={studio.mode === "new" ? studio.draft : null}
+          viewerId={viewerId}
+          canSwitchMix={studioDetail ? studioDetail.viewer.isAuthor || studioDetail.viewer.canModerate : false}
+          songDeleted={studioSongDeleted}
           addable={
             studio.mode === "over"
               ? (studioDetail?.viewer.addableInstruments ?? [studio.instrument])

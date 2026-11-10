@@ -1825,7 +1825,6 @@ function MainAppContent({
   );
   const [wantsForumHint] = useState(() => featureHintEligible("forum"));
   const [wantsJamWallHint] = useState(() => featureHintEligible("jamWall"));
-  const [wantsJamStudioHint] = useState(() => featureHintEligible("jamStudio"));
   const [wantsShortcutsHint, setWantsShortcutsHint] = useState(() =>
     featureHintEligible("shortcuts") && supportsKeyBinding(),
   );
@@ -11596,7 +11595,6 @@ function MainAppContent({
     forum: wantsForumHint && selectedChannel?.type === "forum",
     // The wall and the studio say when they are on screen (`lib/jam-hint-context.ts`).
     jamWall: wantsJamWallHint && jamHintContext.wall && !jamHintContext.studio,
-    jamStudio: wantsJamStudioHint && jamHintContext.studio,
   });
   const voiceChannel =
     voiceState.voiceChannelId
@@ -11771,7 +11769,10 @@ function MainAppContent({
   // update prompt already gets. The card records no impression while it
   // yields (`docs/ONBOARDING.md` §Adding a card, rule 3): `enabled` goes
   // false below, which every corner card already treats as "never rendered".
-  const effectiveCornerHint = dmToastActive ? null : cornerHint;
+  // Nothing in the corner while the Jam studio is open: a standing card there can
+  // sit over the end of "Mandar pra banda" (and the studio says its own first-run
+  // words inline).
+  const effectiveCornerHint = dmToastActive || jamHintContext.studio ? null : cornerHint;
   const liveAttachedHint =
     !hintsQuiet &&
     (effectiveCornerHint === null || effectiveCornerHint === "shortcuts")

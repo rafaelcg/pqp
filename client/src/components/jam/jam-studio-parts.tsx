@@ -9,18 +9,20 @@ import {
   RotateCcw,
   Sparkles,
   Volume2,
+  X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Tooltip } from "@/components/ui/tooltip";
+import { featureHintEligible, rememberFeatureHint } from "@/lib/feature-hints";
 import type { JamStudio } from "@/hooks/use-jam-studio";
 import type { LatencyConfidence, LatencyMethod } from "@/lib/jam";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { JAM_INSTRUMENT_LOOK } from "@/lib/jam-instruments";
-import { levelBar, levelVerdict, type JamLevelVerdict } from "@/lib/jam-level";
+import { judgeLevel, levelBar, type JamLevelVerdict, type SilenceClock } from "@/lib/jam-level";
 import { liveBars } from "@/lib/jam-live";
-import { audibleMs, MIN_AUDIBLE_MS, NUDGE_LIMIT_MS } from "@/lib/jam-take-edit";
+import { audibleMs, MIN_AUDIBLE_MS, NUDGE_LIMIT_MS, signedSeconds, type TakeEdits } from "@/lib/jam-take-edit";
 import { formatClock } from "@/lib/jam-wall";
 import { cn } from "@/lib/utils";
 import { JamBars, useBarCount } from "./jam-bars";
@@ -79,14 +81,18 @@ export function InstrumentPicker({
 export function LevelMeter({ clock, active }: { clock: JamStudio["levelClock"]; active: boolean }) {
   const { t } = useTranslation();
   const bar = useRef<HTMLDivElement | null>(null);
-  const [verdict, setVerdict] = useState<JamLevelVerdict>("silent");
+  // null: nothing to say (the input is not open yet, or it is only between notes)
+  const [verdict, setVerdict] = useState<JamLevelVerdict | null>(null);
   useEffect(() => {
     if (!active) {
+      setVerdict(null);
       return;
     }
     let shown = 0;
     let windowPeak = 0;
     let since = performance.now();
+    let silence: SilenceClock = { silentSince: null };
+    let said: JamLevelVerdict | null = null;
     const off = clock.subscribe((peak) => {
       shown = Math.max(peak, shown * 0.88);
       windowPeak = Math.max(windowPeak, peak);
@@ -94,11 +100,17 @@ export function LevelMeter({ clock, active }: { clock: JamStudio["levelClock"]; 
         bar.current.style.transform = `scaleX(${levelBar(shown)})`;
       }
       const now = performance.now();
+      // Judged on the loudest of the last 300 ms, so a note's tail is not silence;
+      // and silence only counts once it has lasted (`judgeLevel`).
       if (now - since > 300) {
-        const next = levelVerdict(windowPeak);
-        setVerdict((before) => (before === next ? before : next));
+        const step = judgeLevel(silence, windowPeak, now);
+        silence = step.clock;
         windowPeak = 0;
         since = now;
+        if (step.verdict !== said) {
+          said = step.verdict;
+          setVerdict(step.verdict);
+        }
       }
     });
     return off;
@@ -117,7 +129,7 @@ export function LevelMeter({ clock, active }: { clock: JamStudio["levelClock"]; 
       <div
         role="meter"
         aria-label={t("jam.studio.level")}
-        aria-valuetext={t(`jam.studio.level.${verdict}` as MessageKey)}
+        aria-valuetext={verdict ? t(`jam.studio.level.${verdict}` as MessageKey) : undefined}
         className="h-3 overflow-hidden rounded-full bg-surface-2"
       >
         <div
@@ -126,8 +138,8 @@ export function LevelMeter({ clock, active }: { clock: JamStudio["levelClock"]; 
           style={{ transform: "scaleX(0)" }}
         />
       </div>
-      <span className="text-xs text-text-tertiary" aria-live="polite">
-        {t(`jam.studio.level.${verdict}` as MessageKey)}
+      <span className="min-h-4 text-xs text-text-tertiary" aria-live="polite">
+        {verdict ? t(`jam.studio.level.${verdict}` as MessageKey) : ""}
       </span>
     </div>
   );
@@ -351,7 +363,7 @@ export function LatencyCheck({ studio }: { studio: JamStudio }) {
 
       {failed && !measuring && (
         <p role="alert" className="rounded-[var(--radius-control)] bg-warning-soft px-3 py-2 text-sm leading-snug text-on-warning-soft">
-          {t("jam.latency.failed")}
+          {studio.checkMethod === "tap-along" ? t("jam.latency.failed.tap") : t("jam.latency.failed")}
         </p>
       )}
 
@@ -373,6 +385,57 @@ export function LatencyCheck({ studio }: { studio: JamStudio }) {
         </div>
       )}
     </section>
+  );
+}
+
+/* ---------------------------------------------------------------------- tip */
+
+/**
+ * The studio's first-run guidance, drawn IN the studio rather than through the
+ * corner queue. The queue gives its one slot to older standing cards first, and a
+ * card that sits over the corner can cover "Mandar pra banda"; this one lives in
+ * the page it explains, once, through the same store as every other hint
+ * (`lib/feature-hints.ts`, id `jamStudio`).
+ */
+export function StudioTip() {
+  const { t } = useTranslation();
+  const [shown, setShown] = useState(() => featureHintEligible("jamStudio"));
+  useEffect(() => {
+    if (shown) {
+      // Seen is seen: showing it is the impression, as for every other hint.
+      rememberFeatureHint("jamStudio");
+    }
+  }, [shown]);
+  if (!shown) {
+    return null;
+  }
+  return (
+    <aside
+      data-jam-studio-tip=""
+      aria-label={t("jam.hint.studio.title")}
+      className="relative flex items-start gap-3 rounded-[var(--radius-card)] bg-accent-soft p-4 pr-12 text-on-accent-soft"
+    >
+      <Headphones className="mt-0.5 h-5 w-5 shrink-0" aria-hidden />
+      <div className="flex min-w-0 flex-col gap-1">
+        <h3 className="text-sm font-bold">{t("jam.hint.studio.title")}</h3>
+        <p className="text-sm leading-snug [text-wrap:pretty]">{t("jam.hint.studio.body")}</p>
+        <button
+          type="button"
+          onClick={() => setShown(false)}
+          className="mt-1 h-10 self-start rounded-full bg-on-accent-soft px-4 text-xs font-bold text-accent-soft outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+        >
+          {t("featureHint.gotIt")}
+        </button>
+      </div>
+      <button
+        type="button"
+        aria-label={t("featureHint.dismiss")}
+        onClick={() => setShown(false)}
+        className="absolute right-1.5 top-1.5 grid h-10 w-10 place-items-center rounded-full outline-none hover:bg-accent/20 focus-visible:ring-2 focus-visible:ring-focus-ring"
+      >
+        <X className="h-4 w-4" aria-hidden />
+      </button>
+    </aside>
   );
 }
 
@@ -477,7 +540,7 @@ export function Countdown({ beat, total, beatMs }: { beat: number; total: number
 
 /* ------------------------------------------------------------- review editor */
 
-function Field({ label, value, children }: { label: string; value: string; children: ReactNode }) {
+export function Field({ label, value, children }: { label: string; value: string; children: ReactNode }) {
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-baseline justify-between gap-2 text-xs">
@@ -489,6 +552,89 @@ function Field({ label, value, children }: { label: string; value: string; child
   );
 }
 
+export interface EditFieldsProps {
+  /** The recording's own timing: its length, and the head a trim may not go below. */
+  take: { trimStartMs: number; durationMs: number };
+  edits: TakeEdits;
+  onTrimStart: (ms: number) => void;
+  onTrimEnd: (ms: number) => void;
+  onNudge: (ms: number) => void;
+  onGain: (gain: number) => void;
+}
+
+/** Trim the start and the end, nudge the timing, change the volume. */
+export function EditFields({ take, edits, onTrimStart, onTrimEnd, onNudge, onGain }: EditFieldsProps) {
+  const { t } = useTranslation();
+  const startMax = Math.max(take.trimStartMs, take.durationMs - edits.trimEndMs - MIN_AUDIBLE_MS);
+  const endMax = Math.max(0, take.durationMs - edits.trimStartMs - MIN_AUDIBLE_MS);
+  return (
+    <>
+      <Field label={t("jam.review.trimStart")} value={signedSeconds(edits.trimStartMs - take.trimStartMs)}>
+        <Slider
+          variant="volume"
+          min={take.trimStartMs}
+          max={Math.round(startMax)}
+          step={10}
+          value={Math.round(edits.trimStartMs)}
+          onValueChange={onTrimStart}
+          aria-label={t("jam.review.trimStart")}
+        />
+      </Field>
+      <Field label={t("jam.review.trimEnd")} value={signedSeconds(-edits.trimEndMs)}>
+        <Slider
+          variant="volume"
+          min={0}
+          max={Math.round(endMax)}
+          step={10}
+          value={Math.round(edits.trimEndMs)}
+          onValueChange={onTrimEnd}
+          aria-label={t("jam.review.trimEnd")}
+        />
+      </Field>
+      <Field label={t("jam.review.nudge")} value={t("jam.review.nudgeValue", { ms: `${edits.nudgeMs > 0 ? "+" : ""}${edits.nudgeMs}` })}>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            aria-label={t("jam.review.nudgeEarlier")}
+            onClick={() => onNudge(edits.nudgeMs - 5)}
+            className="grid h-10 w-10 shrink-0 place-items-center rounded-[var(--radius-control)] bg-surface-2 text-text outline-none hover:bg-border focus-visible:ring-2 focus-visible:ring-focus-ring"
+          >
+            <ChevronLeft className="h-4 w-4" aria-hidden />
+          </button>
+          <Slider
+            variant="volume"
+            min={-NUDGE_LIMIT_MS}
+            max={NUDGE_LIMIT_MS}
+            step={1}
+            value={edits.nudgeMs}
+            onValueChange={onNudge}
+            aria-label={t("jam.review.nudge")}
+          />
+          <button
+            type="button"
+            aria-label={t("jam.review.nudgeLater")}
+            onClick={() => onNudge(edits.nudgeMs + 5)}
+            className="grid h-10 w-10 shrink-0 place-items-center rounded-[var(--radius-control)] bg-surface-2 text-text outline-none hover:bg-border focus-visible:ring-2 focus-visible:ring-focus-ring"
+          >
+            <ChevronRight className="h-4 w-4" aria-hidden />
+          </button>
+        </div>
+      </Field>
+      <Field label={t("jam.review.volume")} value={`${Math.round(edits.gain * 100)}%`}>
+        <Slider
+          variant="volume"
+          min={0}
+          max={200}
+          step={1}
+          value={Math.round(edits.gain * 100)}
+          onValueChange={(value) => onGain(value / 100)}
+          aria-label={t("jam.review.volume")}
+        />
+      </Field>
+    </>
+  );
+}
+
 /** Trim, nudge and volume. Everything here is optional: posting needs none of it. */
 export function ReviewEditor({ studio }: { studio: JamStudio }) {
   const { t } = useTranslation();
@@ -497,9 +643,6 @@ export function ReviewEditor({ studio }: { studio: JamStudio }) {
   if (!take || !edits) {
     return null;
   }
-  const startMax = Math.max(take.trimStartMs, take.durationMs - edits.trimEndMs - MIN_AUDIBLE_MS);
-  const endMax = Math.max(0, take.durationMs - edits.trimStartMs - MIN_AUDIBLE_MS);
-  const seconds = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
   return (
     <details
       className="group rounded-[var(--radius-card)] bg-surface-1 ring-1 ring-inset ring-border"
@@ -511,68 +654,14 @@ export function ReviewEditor({ studio }: { studio: JamStudio }) {
       </summary>
       <div className="grid gap-4 px-4 pb-4 @lg:grid-cols-2">
         <p className="text-xs leading-snug text-text-tertiary @lg:col-span-2">{t("jam.review.auto")}</p>
-        <Field label={t("jam.review.trimStart")} value={`+${seconds(edits.trimStartMs - take.trimStartMs)}`}>
-          <Slider
-            variant="volume"
-            min={take.trimStartMs}
-            max={Math.round(startMax)}
-            step={10}
-            value={Math.round(edits.trimStartMs)}
-            onValueChange={studio.setTrimStart}
-            aria-label={t("jam.review.trimStart")}
-          />
-        </Field>
-        <Field label={t("jam.review.trimEnd")} value={`-${seconds(edits.trimEndMs)}`}>
-          <Slider
-            variant="volume"
-            min={0}
-            max={Math.round(endMax)}
-            step={10}
-            value={Math.round(edits.trimEndMs)}
-            onValueChange={studio.setTrimEnd}
-            aria-label={t("jam.review.trimEnd")}
-          />
-        </Field>
-        <Field label={t("jam.review.nudge")} value={t("jam.review.nudgeValue", { ms: `${edits.nudgeMs > 0 ? "+" : ""}${edits.nudgeMs}` })}>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              aria-label={t("jam.review.nudgeEarlier")}
-              onClick={() => studio.setNudge(edits.nudgeMs - 5)}
-              className="grid h-10 w-10 shrink-0 place-items-center rounded-[var(--radius-control)] bg-surface-2 text-text outline-none hover:bg-border focus-visible:ring-2 focus-visible:ring-focus-ring"
-            >
-              <ChevronLeft className="h-4 w-4" aria-hidden />
-            </button>
-            <Slider
-              variant="volume"
-              min={-NUDGE_LIMIT_MS}
-              max={NUDGE_LIMIT_MS}
-              step={1}
-              value={edits.nudgeMs}
-              onValueChange={studio.setNudge}
-              aria-label={t("jam.review.nudge")}
-            />
-            <button
-              type="button"
-              aria-label={t("jam.review.nudgeLater")}
-              onClick={() => studio.setNudge(edits.nudgeMs + 5)}
-              className="grid h-10 w-10 shrink-0 place-items-center rounded-[var(--radius-control)] bg-surface-2 text-text outline-none hover:bg-border focus-visible:ring-2 focus-visible:ring-focus-ring"
-            >
-              <ChevronRight className="h-4 w-4" aria-hidden />
-            </button>
-          </div>
-        </Field>
-        <Field label={t("jam.review.volume")} value={`${Math.round(edits.gain * 100)}%`}>
-          <Slider
-            variant="volume"
-            min={0}
-            max={200}
-            step={1}
-            value={Math.round(edits.gain * 100)}
-            onValueChange={(value) => studio.setGain(value / 100)}
-            aria-label={t("jam.review.volume")}
-          />
-        </Field>
+        <EditFields
+          take={take}
+          edits={edits}
+          onTrimStart={studio.setTrimStart}
+          onTrimEnd={studio.setTrimEnd}
+          onNudge={studio.setNudge}
+          onGain={studio.setGain}
+        />
         <div className="flex items-center justify-between gap-2 @lg:col-span-2">
           <span className="text-xs tabular-nums text-text-tertiary">
             {formatClock(audibleMs(take, edits))}

@@ -4,7 +4,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Switch } from "@/components/ui/switch";
-import { FeatureHint, useFeatureHintEnabled } from "@/components/layout/feature-hint";
 import { useEngineClock } from "@/hooks/use-jam-clock";
 import { useJamStudio, type NewSongDraft } from "@/hooks/use-jam-studio";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
@@ -16,6 +15,7 @@ import { placed } from "@/lib/jam-take-edit";
 import { computePeaks } from "@/lib/jam";
 import { cn } from "@/lib/utils";
 import { setJamHintContext } from "@/lib/jam-hint-context";
+import { newJamNonce } from "@/lib/jam-nonce";
 import { JamLaneWave } from "./jam-lane-wave";
 import { formatList } from "./jam-need";
 import {
@@ -29,6 +29,7 @@ import {
   LiveLane,
   ReviewEditor,
   StudioLaneLabel,
+  StudioTip,
   useLatencyWords,
 } from "./jam-studio-parts";
 import { JamTransport } from "./jam-transport";
@@ -52,6 +53,11 @@ export interface JamStudioProps {
   /** What this person may record, and what they start on. */
   addable: readonly JamInstrument[];
   initialInstrument: JamInstrument;
+  viewerId: string | null;
+  /** May put takes in and out of the mix: the song's author or a moderator. */
+  canSwitchMix: boolean;
+  /** The song went away while the studio was open. */
+  songDeleted: boolean;
   onClose: () => void;
   /** The take is on the song: go and look at it. */
   onPosted: (posted: { songId: string; trackId: string }) => void;
@@ -64,23 +70,33 @@ export function JamStudio({
   draft,
   addable,
   initialInstrument,
+  viewerId,
+  canSwitchMix,
+  songDeleted,
   onClose,
   onPosted,
 }: JamStudioProps) {
   const { t, locale } = useTranslation();
   const backing = useMemo(() => tracks.filter((track) => track.inMix), [tracks]);
+  const known = useRef<JamSongSummary | null>(song);
+  if (song) {
+    known.current = song;
+  }
   const studio = useJamStudio({
     channelId,
     songId: song?.id ?? null,
     backing: tracks,
     draft,
     initialInstrument,
+    viewerId,
+    canSwitchMix,
+    songDeleted,
   });
   const words = useLatencyWords();
   const { clock, transport, durationMs } = useEngineClock(studio.engine);
-  const [confirmLeave, setConfirmLeave] = useState(false);
+  /** Which question the leave dialog is asking: a live recording, or a take not sent. */
+  const [confirmLeave, setConfirmLeave] = useState<"recording" | "take" | null>(null);
   const recordRef = useRef<HTMLButtonElement | null>(null);
-  const hintOn = useFeatureHintEnabled("jamStudio");
 
   useEffect(() => {
     setJamHintContext({ studio: true });
@@ -90,8 +106,18 @@ export function JamStudio({
   const phase = studio.phase;
   const recording = phase === "countdown" || phase === "recording";
   const names = Array.from(new Set(backing.map((track) => track.authorName ?? t("jam.tile.anonymous"))));
-  const title = song ? t("jam.studio.over", { names: formatList(names, locale) || song.title }) : t("jam.studio.new");
-  const subtitle = song ? `${song.title}${song.artist ? ` · ${song.artist}` : ""}` : (draft?.title ?? "");
+  // A new song is "Música nova" until it exists, and is itself once it does.
+  const created = phase === "done" && !song && draft !== null;
+  const title = song
+    ? t("jam.studio.over", { names: formatList(names, locale) || song.title })
+    : created
+      ? draft!.title
+      : t("jam.studio.new");
+  const subtitle = song
+    ? `${song.title}${song.artist ? ` · ${song.artist}` : ""}`
+    : created
+      ? (draft?.artist ?? t("jam.original"))
+      : (draft?.title ?? "");
   const backingEnd = songTimeline(backing).endMs;
   const takeEnd =
     studio.take && studio.edits
@@ -128,12 +154,14 @@ export function JamStudio({
   }, [studio.engine, studio.takeVideoUrl, phase]);
 
   function requestClose() {
-    if (phase === "review" || phase === "posting") {
-      setConfirmLeave(true);
+    // A live recording is as much somebody's work as a take waiting to be sent:
+    // both ask first.
+    if (recording) {
+      setConfirmLeave("recording");
       return;
     }
-    if (recording) {
-      void studio.cancelRecording().then(onClose);
+    if (phase === "review" || phase === "posting") {
+      setConfirmLeave("take");
       return;
     }
     onClose();
@@ -142,7 +170,7 @@ export function JamStudio({
   // Escape leaves, the way every other panel does, after the same question.
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape" && !confirmLeave && phase !== "done") {
+      if (event.key === "Escape" && confirmLeave === null && phase !== "done") {
         const target = event.target as HTMLElement | null;
         if (target?.closest("[role=dialog][aria-modal=true] [role=dialog]")) {
           return;
@@ -243,6 +271,48 @@ export function JamStudio({
                   </Button>
                 </div>
               )}
+
+              {studio.songGone && (
+                <div
+                  role="alert"
+                  data-jam-song-deleted=""
+                  className="flex flex-col gap-3 rounded-[var(--radius-card)] bg-warning-soft p-4 text-on-warning-soft"
+                >
+                  <p className="text-sm font-semibold leading-snug">{t("jam.studio.songDeleted")}</p>
+                  {(phase === "review" || phase === "posting") && (
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        size="sm"
+                        data-jam-post-as-new=""
+                        onClick={() =>
+                          studio.postAsNewSong({
+                            title: known.current?.title ?? t("jam.studio.new"),
+                            artist: known.current?.artist ?? null,
+                            joinMode: "open",
+                            wantedInstruments: [],
+                            nonce: newJamNonce(),
+                          })
+                        }
+                      >
+                        {t("jam.studio.postAsNew")}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        data-jam-discard-take=""
+                        onClick={() => {
+                          studio.discardTake();
+                          onClose();
+                        }}
+                      >
+                        {t("jam.studio.discardTake")}
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {phase === "setup" && !studio.needsCheck && studio.mic === "ready" && <StudioTip />}
 
               {phase === "setup" && studio.needsCheck && <LatencyCheck studio={studio} />}
 
@@ -348,6 +418,17 @@ export function JamStudio({
                     <p role="alert" className="rounded-[var(--radius-control)] bg-danger-soft px-3 py-2 text-sm text-on-danger-soft">
                       {t("jam.studio.playError")}
                     </p>
+                  )}
+                  {studio.replaceTake && (
+                    <div data-jam-replace="" className="rounded-[var(--radius-card)] bg-surface-1 px-4 py-1 ring-1 ring-inset ring-border">
+                      <Switch
+                        checked={studio.wantsReplace}
+                        onCheckedChange={studio.setWantsReplace}
+                        label={t("jam.review.replace", {
+                          instrument: t(JAM_INSTRUMENT_LOOK[studio.instrument].nameKey as MessageKey).toLowerCase(),
+                        })}
+                      />
+                    </div>
                   )}
                   <ReviewEditor studio={studio} />
                   {studio.take && (
@@ -469,7 +550,7 @@ export function JamStudio({
         {phase === "done" && studio.posted && (
           <DoneOverlay
             title={song ? t("jam.post.doneTitle") : t("jam.post.doneNewTitle")}
-            body={t("jam.post.doneBody")}
+            body={studio.swapFailed ? t("jam.post.swapFailed") : t("jam.post.doneBody")}
             action={t("jam.post.view")}
             onAction={() => onPosted(studio.posted!)}
           />
@@ -497,14 +578,6 @@ export function JamStudio({
                   ? t("jam.studio.checkFirst")
                   : t("jam.studio.recordHint")}
             </p>
-            <div className="absolute bottom-full left-1/2 mb-3 -translate-x-1/2">
-              <FeatureHint
-                id="jamStudio"
-                enabled={hintOn && canRecord}
-                title={t("jam.hint.studio.title")}
-                body={t("jam.hint.studio.body")}
-              />
-            </div>
           </div>
         )}
 
@@ -599,15 +672,20 @@ export function JamStudio({
       </footer>
 
       <ConfirmDialog
-        open={confirmLeave}
-        title={t("jam.studio.leaveTitle")}
-        description={t("jam.studio.leaveBody")}
+        open={confirmLeave !== null}
+        title={confirmLeave === "recording" ? t("jam.studio.leaveRecordingTitle") : t("jam.studio.leaveTitle")}
+        description={confirmLeave === "recording" ? t("jam.studio.leaveRecordingBody") : t("jam.studio.leaveBody")}
         confirmLabel={t("jam.studio.leave")}
-        cancelLabel={t("jam.keep")}
-        onClose={() => setConfirmLeave(false)}
+        cancelLabel={confirmLeave === "recording" ? t("jam.studio.keepRecording") : t("jam.keep")}
+        onClose={() => setConfirmLeave(null)}
         onConfirm={() => {
-          setConfirmLeave(false);
-          onClose();
+          const wasRecording = confirmLeave === "recording";
+          setConfirmLeave(null);
+          if (wasRecording) {
+            void studio.cancelRecording().then(onClose);
+          } else {
+            onClose();
+          }
         }}
       />
     </div>

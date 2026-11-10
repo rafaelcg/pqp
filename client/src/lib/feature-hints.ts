@@ -92,13 +92,12 @@ export const ATTACHED_FEATURE_HINT_ORDER = [
   // both fire for anyone in any call, and share is the older, less
   // discoverable control.
   "music",
-  // The Jam's two tips are moments in the screen that owns the control they
-  // point at (`components/jam/`): the wall the first time somebody opens it,
-  // the studio the first time somebody is about to record. Like the watch party
-  // hints they come BEFORE the standing tips below, which are wanted by anyone
-  // anywhere in the app and would otherwise hold the one slot for as long as
-  // they stay undismissed. The studio first: it is the later, narrower moment.
-  "jamStudio",
+  // The Jam wall's tip is a moment in the screen that owns the control it points
+  // at: like the watch party hints it comes BEFORE the standing tips below,
+  // which are wanted by anyone anywhere in the app and would otherwise hold the
+  // one slot for as long as they stay undismissed. (The studio's own tip is not
+  // in this queue at all: it is drawn inside the studio, `StudioTip`, through the
+  // same store, so a card in the corner can never cover the post button.)
   "jamWall",
   "composerFormat",
   "channelPin",

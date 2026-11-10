@@ -15,11 +15,12 @@ import {
 } from "@/lib/jam-api";
 import { JAM_INSTRUMENT_LOOK } from "@/lib/jam-instruments";
 import { cannotRecordReason, pickInstrument } from "@/lib/jam-record";
+import { takesToTakeOut } from "@/lib/jam-mix";
 import { applyJamVote, applyJamWrite, loadJamChannel, loadJamDetail } from "@/lib/jam-store";
 import type { JamDetail } from "@/lib/jam-state";
 import { competingInstruments, orderTracks, songNeed, songTimeline } from "@/lib/jam-wall";
 import { cn } from "@/lib/utils";
-import { useNeedLabel } from "./jam-need";
+import { formatList, useNeedLabel } from "./jam-need";
 import { JamTrackRow } from "./jam-track-row";
 import { JamTransport } from "./jam-transport";
 
@@ -60,7 +61,7 @@ export function JamSongPanel({
   freshTrackId,
   autoplay = true,
 }: JamSongPanelProps) {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const needLabel = useNeedLabel();
   const tracks = useMemo(() => orderTracks(detail?.tracks ?? []), [detail?.tracks]);
   const playback = useJamPlayback(song.id, tracks, { autoplay });
@@ -147,6 +148,22 @@ export function JamSongPanel({
           <span className="mt-0.5 inline-flex w-fit items-center rounded-full bg-surface-2 px-2.5 py-0.5 text-[11px] font-bold text-text">
             {needLabel(need)}
           </span>
+          {song.joinMode === "wanted" && song.wantedInstruments.length > 0 && (
+            <p data-jam-wanted-line="" className="text-xs text-text-secondary">
+              {t("jam.song.wantedLine", {
+                list: formatList(
+                  song.wantedInstruments.map((one) => t(JAM_INSTRUMENT_LOOK[one].nameKey as MessageKey).toLowerCase()),
+                  locale,
+                ),
+              })}
+            </p>
+          )}
+          {song.joinMode === "closed" && (
+            <p data-jam-closed-line="" className="flex items-center gap-1 text-xs text-text-secondary">
+              <Lock className="h-3 w-3 shrink-0" aria-hidden />
+              {t("jam.song.closedLine")}
+            </p>
+          )}
         </div>
         <button
           type="button"
@@ -223,14 +240,48 @@ export function JamSongPanel({
                   }
                   onSwitchMix={() =>
                     void guard(async () => {
-                      const answer = await updateJamTrack(track.id, { inMix: !track.inMix });
-                      applyJamWrite(channelId, {
-                        type: "jam-track-updated",
-                        channelId,
-                        song: answer.song,
-                        track: answer.track,
-                      });
+                      const put = async (id: string, inMix: boolean) => {
+                        const answer = await updateJamTrack(id, { inMix });
+                        applyJamWrite(channelId, {
+                          type: "jam-track-updated",
+                          channelId,
+                          song: answer.song,
+                          track: answer.track,
+                        });
+                      };
+                      if (track.inMix) {
+                        await put(track.id, false);
+                        return;
+                      }
+                      // "Usar este take" is a swap: this one in, then the others of its
+                      // instrument out. Two writes, in that order, so a failure between
+                      // them leaves both playing (told) and never a silent instrument.
+                      await put(track.id, true);
+                      for (const otherId of takesToTakeOut(tracks, track.id)) {
+                        try {
+                          await put(otherId, false);
+                        } catch {
+                          setError(t("jam.error.swapPartial"));
+                          return;
+                        }
+                      }
                     })
+                  }
+                  adjust={
+                    isMine && enabled
+                      ? {
+                          engine: playback.engine,
+                          onSave: async (patch) => {
+                            const answer = await updateJamTrack(track.id, patch);
+                            applyJamWrite(channelId, {
+                              type: "jam-track-updated",
+                              channelId,
+                              song: answer.song,
+                              track: answer.track,
+                            });
+                          },
+                        }
+                      : undefined
                   }
                   onDelete={() => setPendingDelete(track)}
                   onAudition={() => playback.setAudition(playback.audition === track.id ? null : track.id)}

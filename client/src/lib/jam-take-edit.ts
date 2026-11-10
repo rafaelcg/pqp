@@ -76,3 +76,42 @@ export function isEdited(take: TakeTiming, edits: TakeEdits): boolean {
     edits.gain !== 1
   );
 }
+
+/**
+ * A posted track, for the author's own "Ajustar". The recorded head the engine
+ * hid is not known here, so the start trim may go back to 0: the person is
+ * listening while they move it.
+ */
+export function editsFromTrack(track: { trimStartMs: number; trimEndMs: number; gain: number }): TakeEdits {
+  return { trimStartMs: track.trimStartMs, trimEndMs: track.trimEndMs, nudgeMs: 0, gain: track.gain };
+}
+
+export interface TrackPatch {
+  offsetMs?: number;
+  trimStartMs?: number;
+  trimEndMs?: number;
+  gain?: number;
+}
+
+/** The `PATCH /api/jam-tracks/:id` body for what changed, and only that. Empty when nothing did. */
+export function patchFor(
+  track: { offsetMs: number; trimStartMs: number; trimEndMs: number; gain: number },
+  edits: TakeEdits,
+): TrackPatch {
+  const patch: TrackPatch = {};
+  const offset = Math.round(track.offsetMs + edits.nudgeMs);
+  if (offset !== Math.round(track.offsetMs)) patch.offsetMs = offset;
+  if (Math.round(edits.trimStartMs) !== Math.round(track.trimStartMs)) patch.trimStartMs = Math.round(edits.trimStartMs);
+  if (Math.round(edits.trimEndMs) !== Math.round(track.trimEndMs)) patch.trimEndMs = Math.round(edits.trimEndMs);
+  if (Math.abs(edits.gain - track.gain) > 0.005) patch.gain = Math.round(edits.gain * 100) / 100;
+  return patch;
+}
+
+/** "+1.5 s", "-0.3 s", and "0 s" for anything that would round to a signed zero. */
+export function signedSeconds(ms: number): string {
+  const tenths = Math.round(ms / 100);
+  if (tenths === 0) {
+    return "0 s";
+  }
+  return `${tenths > 0 ? "+" : "-"}${(Math.abs(tenths) / 10).toFixed(1)} s`;
+}

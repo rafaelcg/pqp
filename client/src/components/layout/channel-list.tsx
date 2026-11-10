@@ -1985,6 +1985,7 @@ export const ChannelList = memo(function ChannelList({
             {
               id: "create-jam",
               label: t("chrome.addJam"),
+              detail: t("jam.add.detail"),
               icon: Music2,
               trailing: <BetaTag />,
               onSelect: () => onCreateChannel("jam", false, categoryId),
@@ -2197,8 +2198,13 @@ export const ChannelList = memo(function ChannelList({
             className="mt-1 flex w-full items-center gap-2 rounded-[var(--radius-control)] px-2 py-1.5 text-sm text-text-tertiary hover:bg-surface-2 hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
           >
             <Music2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-            {t("chrome.addJam")}
-            <BetaTag />
+            <span className="flex min-w-0 flex-col items-start leading-tight">
+              <span className="flex items-center gap-1.5">
+                {t("chrome.addJam")}
+                <BetaTag />
+              </span>
+              <span className="text-[11px] text-text-tertiary">{t("jam.add.detail")}</span>
+            </span>
           </button>
         )}
         {canManage && (
@@ -2644,6 +2650,7 @@ export const ChannelList = memo(function ChannelList({
                       onText: () => onCreateChannel("text", false),
                       onForum: forumCreateEnabled ? () => onCreateChannel("forum", false) : undefined,
                       jamLabel: jamOffered ? t("chrome.addJam") : undefined,
+                      jamDetail: jamOffered ? t("jam.add.detail") : undefined,
                       onJam: jamOffered ? () => onCreateChannel("jam", false) : undefined,
                     })
                   : undefined
@@ -3074,6 +3081,7 @@ export function textSectionAddMenu({
   onText,
   onForum,
   jamLabel,
+  jamDetail,
   onJam,
 }: {
   textLabel: string;
@@ -3082,6 +3090,8 @@ export function textSectionAddMenu({
   onForum?: () => void;
   /** A Jam, offered once per server while `jam_channels` is on. */
   jamLabel?: string;
+  /** One line under "Jam": what it is, for somebody who has never seen one. */
+  jamDetail?: string;
   onJam?: () => void;
 }): ContextMenuItemDef[] {
   const items: ContextMenuItemDef[] = [
@@ -3100,6 +3110,7 @@ export function textSectionAddMenu({
     items.push({
       id: "create-jam",
       label: jamLabel,
+      detail: jamDetail,
       icon: Music2,
       trailing: <BetaTag />,
       onSelect: onJam,

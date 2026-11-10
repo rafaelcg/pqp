@@ -7,7 +7,10 @@ import type { JamClock, JamLaneMix } from "@/hooks/use-jam-playback";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { JAM_INSTRUMENT_LOOK } from "@/lib/jam-instruments";
 import { cn } from "@/lib/utils";
+import type { JamEngine } from "@/lib/jam";
+import type { TrackPatch } from "@/lib/jam-take-edit";
 import { JamLaneWave, type JamTimeline } from "./jam-lane-wave";
+import { TrackAdjust } from "./jam-track-adjust";
 
 /**
  * One track of an open song: who, on what, the waveform on the song's timeline,
@@ -39,6 +42,8 @@ export interface JamTrackRowProps {
   onLane: (patch: Partial<JamLaneMix>) => void;
   onVote: () => void;
   onSwitchMix: () => void;
+  /** The author's own track: "Ajustar" is drawn, and saves through this. */
+  adjust?: { engine: JamEngine | null; onSave: (patch: TrackPatch) => Promise<void> };
   onDelete: () => void;
   onAudition: () => void;
 }
@@ -61,6 +66,7 @@ export function JamTrackRow({
   onLane,
   onVote,
   onSwitchMix,
+  adjust,
   onDelete,
   onAudition,
 }: JamTrackRowProps) {
@@ -87,7 +93,7 @@ export function JamTrackRow({
       <div className="flex min-w-0 items-center gap-2">
         <span className="relative shrink-0">
           <UserAvatar
-            name={person}
+            name={track.authorName ?? t("jam.tile.anonymous")}
             avatarUrl={track.authorAvatarUrl}
             rounded="full"
             className="h-8 w-8"
@@ -103,14 +109,18 @@ export function JamTrackRow({
           </span>
         </span>
         <span className="flex min-w-0 flex-1 flex-col leading-tight">
-          <span className="truncate text-sm font-bold text-text">
-            {instrumentName}
-            {track.label ? <span className="font-medium text-text-secondary"> · {track.label}</span> : null}
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate text-sm font-bold text-text">
+              {instrumentName}
+              {track.label ? <span className="font-medium text-text-secondary"> · {track.label}</span> : null}
+            </span>
+            {outOfMix && (
+              <span className="shrink-0 rounded-full bg-surface-2 px-1.5 py-px text-[10px] font-semibold text-text-tertiary">
+                {t("jam.take.out")}
+              </span>
+            )}
           </span>
-          <span className="truncate text-xs text-text-secondary">
-            {person}
-            {outOfMix && <span className="text-text-tertiary"> · {t("jam.take.out")}</span>}
-          </span>
+          <span className="truncate text-xs text-text-secondary">{person}</span>
         </span>
 
         {outOfMix && (
@@ -149,7 +159,7 @@ export function JamTrackRow({
         )}
 
         {canSwitchMix && (
-          <Tooltip label={track.inMix ? t("jam.take.takeOut") : t("jam.take.putIn")}>
+          <Tooltip label={track.inMix ? t("jam.take.takeOut") : t("jam.take.useThis")}>
             <button
               type="button"
               onClick={onSwitchMix}
@@ -163,7 +173,7 @@ export function JamTrackRow({
               )}
             >
               {track.inMix ? <CircleMinus className="h-4 w-4 @[22rem]:hidden" aria-hidden /> : <CirclePlus className="h-4 w-4 @[22rem]:hidden" aria-hidden />}
-              <span className="@max-[22rem]:hidden">{track.inMix ? t("jam.take.takeOut") : t("jam.take.putIn")}</span>
+              <span className="@max-[22rem]:hidden">{track.inMix ? t("jam.take.takeOut") : t("jam.take.useThis")}</span>
             </button>
           </Tooltip>
         )}
@@ -240,6 +250,7 @@ export function JamTrackRow({
           </Tooltip>
         </div>
       )}
+      {adjust && <TrackAdjust track={track} engine={adjust.engine} onSave={adjust.onSave} />}
     </li>
   );
 }

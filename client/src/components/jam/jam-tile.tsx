@@ -1,5 +1,5 @@
 import type { JamSongSummary } from "@pqp/shared";
-import { Plus } from "lucide-react";
+import { Lock, Plus } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useTranslation } from "@/lib/i18n";
 import type { JamDetail } from "@/lib/jam-state";
@@ -123,7 +123,7 @@ export function JamTile({ song, size, detail, index, fresh, entrance, selected, 
   const who = whoLine(song, detail, t);
   const needText = needLabel(need);
   const subtitle = song.artist ?? t("jam.original");
-  const label = `${song.title}, ${who}, ${needText}`;
+  const label = `${song.title}, ${who}, ${needText}${song.joinMode === "closed" ? `, ${t("jam.tile.closed")}` : ""}`;
 
   return (
     <li ref={tileRef} className={cn("flex min-w-0", JAM_TILE_SPAN[size])}>
@@ -187,6 +187,7 @@ export function JamTile({ song, size, detail, index, fresh, entrance, selected, 
           )}
         >
           <span className="flex shrink-0 items-center gap-0.5" aria-hidden="true">
+            {song.joinMode === "closed" && <Lock className="h-3.5 w-3.5" data-jam-tile-closed="" />}
             {song.instruments.slice(0, 4).map((one) => {
               const Icon = JAM_INSTRUMENT_LOOK[one].icon;
               return <Icon key={one} className="h-3.5 w-3.5" />;

@@ -67,6 +67,16 @@ the audio, competing takes (more than one for an instrument) with votes and an
 that puts a take in or out of the mix. "Gravar por cima" is drawn only when
 `viewer.addableInstruments` allows it, and says why not otherwise.
 
+## Mixing: one take per instrument
+
+The server lets several takes of one instrument be in the mix at once. The screens
+treat the mix as one take per instrument: **"Usar este take"** on a take that is
+out puts it in and then takes the other in-mix takes of its instrument out (two
+writes, in that order, so a failure between them leaves both playing and says so,
+never a silent instrument). A track's author can **adjust it after posting**
+(trim, nudge, volume) from the "Ajustar" under their own lane; moving a slider is
+heard at once and "Guardar" sends only what changed (`PATCH /api/jam-tracks/:id`).
+
 ## The studio
 
 Pick the instrument (pre-selected by `pickInstrument`: what the song is asking for),
@@ -76,7 +86,9 @@ is for when something is wrong.
 
 - **First use on a pair of devices**: a one-screen explanation of the latency
   check with two ways to measure and a skip that says what it costs. The engine
-  stores the result per device pair, so it is asked once.
+  stores a measurement per device pair, and a skip is remembered per pair too, so
+  nobody meets the full-page screen twice; afterwards only the latency chip and a
+  quiet "Calibrar" remain.
 - **Recording**: count-in (1 or 2 bars, tempo with a tap button), a live waveform
   growing on the same timeline as the others (`lib/jam-live.ts`: a drawn bar never
   changes), the level meter beside it.
@@ -88,6 +100,15 @@ is for when something is wrong.
   reuses the same upload id; a video that will not go can be dropped and the sound
   posted alone. A new song is created at post time, not before, so an abandoned
   studio leaves nothing on the wall.
+
+- **Leaving**: "Voltar" asks before it throws away a live recording, as it does for a take not sent.
+- **Replacing a take**: when the poster may switch the mix and already has a take of
+  that instrument in it, review asks in one line whether the new one replaces it
+  (default yes); after posting the new take goes in and the old one out.
+- **The song disappears**: if somebody deletes the song under a recording the studio
+  keeps its title and its band, says so, and offers to post the take as a song of its
+  own (the recording is kept; only the upload tickets are asked for again) or to
+  discard it.
 
 **Starting a song** is the same studio with no backing, behind one small sheet:
 title, optional artist (empty means an original), who may join (anyone, only the

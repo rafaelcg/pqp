@@ -75,3 +75,33 @@ export function createLevelMeter(context: AudioContext, stream: MediaStream): Ja
     },
   };
 }
+
+/** Silence has to last this long, with the input open, before the meter says so. */
+export const SILENCE_WARN_MS = 3000;
+
+export interface SilenceClock {
+  /** When the current run of silence began, or null while something is coming in. */
+  silentSince: number | null;
+}
+
+/**
+ * What the meter says, given the peak just read: nothing at all until the input
+ * has been quiet for `SILENCE_WARN_MS` (between two notes, or before the first,
+ * is not "nothing is coming in"), then the warning; "low", "good" and "hot"
+ * speak at once. `quiet` returns the clock to carry into the next reading.
+ */
+export function judgeLevel(
+  clock: SilenceClock,
+  peak: number,
+  nowMs: number,
+): { verdict: JamLevelVerdict | null; clock: SilenceClock } {
+  const verdict = levelVerdict(peak);
+  if (verdict !== "silent") {
+    return { verdict, clock: { silentSince: null } };
+  }
+  const since = clock.silentSince ?? nowMs;
+  return {
+    verdict: nowMs - since >= SILENCE_WARN_MS ? "silent" : null,
+    clock: { silentSince: since },
+  };
+}

@@ -114,6 +114,7 @@ export type JamErrorKind =
   | "storageOff"
   | "rateLimited"
   | "network"
+  | "gone"
   | "other";
 
 export function jamErrorKind(error: unknown): JamErrorKind {
@@ -140,6 +141,9 @@ export function jamErrorKind(error: unknown): JamErrorKind {
     }
     if (error.status === 0) {
       return "network";
+    }
+    if (error.status === 404) {
+      return "gone";
     }
     return "other";
   }

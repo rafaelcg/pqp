@@ -1,6 +1,7 @@
 import type { JamTrack } from "@pqp/shared";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { JamEngine, TransportState } from "@/lib/jam";
+import { isJamStudioOpen } from "@/lib/jam-hint-context";
 import { getJamEngine, syncJamStems, TAKE_STEM_ID, type StemStatus } from "@/lib/jam-session";
 import { useEngineClock, type JamClock } from "./use-jam-clock";
 
@@ -114,7 +115,11 @@ export function useJamPlayback(
       return;
     }
     let cancelled = false;
-    setStatus((before) => (before === "ready" ? before : "loading"));
+    // Loading again on EVERY sync, not only the first: a take arriving (or leaving)
+    // changes which stems the engine holds, and a Play pressed in that window
+    // started a run over a song with no length, which ended at once. The button
+    // waits for the stems; nothing is lost, it is a spinner for a moment.
+    setStatus("loading");
     void syncJamStems(engine, tracksRef.current, (trackId, next) => {
       if (!cancelled) {
         setStemStatus((before) => (before[trackId] === next ? before : { ...before, [trackId]: next }));
@@ -139,7 +144,9 @@ export function useJamPlayback(
   // Leaving the song: stop and let the stems go.
   useEffect(() => {
     return () => {
-      if (!engine) {
+      // The studio plays the band in the person's ear while they record. A song
+      // panel going away under it (the song was deleted) must not stop that.
+      if (!engine || isJamStudioOpen()) {
         return;
       }
       engine.player.stop();

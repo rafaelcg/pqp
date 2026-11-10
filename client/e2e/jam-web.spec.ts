@@ -26,8 +26,10 @@ import { FAKE_MIC_WAV } from "../playwright.jam.config";
 
 const API = process.env.E2E_API_URL ?? "http://localhost:3101";
 const DEV_TOKEN = "dev-local-token";
-const HOST = "jamhost";
-const GUEST = "jamguest";
+// Fresh accounts every run: song creation is rate limited per person (10 per 10 minutes).
+const RUN = Date.now().toString(36);
+const HOST = `jamhost${RUN}`;
+const GUEST = `jamguest${RUN}`;
 /** One bar of four beats at the studio's default 100 BPM. */
 const COUNT_IN_MS = 2400;
 
@@ -80,6 +82,9 @@ async function call<T>(suffix: string, method: string, path: string, body?: unkn
   });
   if (!response.ok) {
     throw new Error(`${method} ${path} -> ${response.status} ${await response.text()}`);
+  }
+  if (response.status === 204) {
+    return undefined as T;
   }
   return (await response.json()) as T;
 }
@@ -320,5 +325,234 @@ test("a song has an address, and the studio shows and takes a typed latency", as
   expect(detail.tracks).toHaveLength(1);
   const behind = -detail.tracks[0]!.offsetMs - COUNT_IN_MS;
   expect(Math.abs(behind - 55), "count-in plus the typed 55 ms, to the millisecond of rounding").toBeLessThanOrEqual(1);
+  await guest.context().close();
+});
+
+// ---------------------------------------------------------------------------
+// Helpers for the tests below: a song with real (small) audio, made through the API.
+
+/** A few seconds of a plucked line as a WAV, which every browser decodes whatever the label says. */
+function wavBytes(seconds = 4, note = 196): Uint8Array {
+  const rate = 22050;
+  const frames = Math.floor(seconds * rate);
+  const out = new Uint8Array(44 + frames * 2);
+  const view = new DataView(out.buffer);
+  const text = (at: number, value: string) => [...value].forEach((c, i) => view.setUint8(at + i, c.charCodeAt(0)));
+  text(0, "RIFF");
+  view.setUint32(4, 36 + frames * 2, true);
+  text(8, "WAVEfmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, rate, true);
+  view.setUint32(28, rate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  text(36, "data");
+  view.setUint32(40, frames * 2, true);
+  for (let i = 0; i < frames; i++) {
+    const t = i / rate;
+    const v = Math.sin(2 * Math.PI * note * t) * Math.exp(-(t % 0.5) * 6) * 0.5;
+    view.setInt16(44 + i * 2, Math.round(v * 32767), true);
+  }
+  return out;
+}
+
+async function makeSong(who: string, jamId: string, title: string, body: object = {}): Promise<string> {
+  const { song } = await call<{ song: { id: string } }>(who, "POST", `/api/channels/${jamId}/jam-songs`, { title, ...body });
+  return song.id;
+}
+
+async function addTrackApi(who: string, songId: string, instrument: string, note = 196): Promise<ApiTrack & { id: string }> {
+  const bytes = wavBytes(4, note);
+  const ticket = await call<{ uploadId: string; uploadUrl: string }>(who, "POST", `/api/jam-songs/${songId}/uploads`, {
+    kind: "audio",
+    contentType: "audio/flac",
+    byteSize: bytes.length,
+  });
+  const put = await fetch(ticket.uploadUrl, { method: "PUT", headers: { "Content-Type": "audio/flac" }, body: bytes });
+  expect(put.ok).toBe(true);
+  const { track } = await call<{ track: ApiTrack & { id: string } }>(who, "POST", `/api/jam-songs/${songId}/tracks`, {
+    instrument,
+    audioUploadId: ticket.uploadId,
+    durationMs: 4000,
+    peaks: [0.2, 0.8, 0.5, 0.9, 0.3],
+  });
+  return track;
+}
+
+async function tracksOf(songId: string): Promise<(ApiTrack & { instrument: string })[]> {
+  const detail = await call<{ tracks: (ApiTrack & { instrument: string })[] }>(HOST, "GET", `/api/jam-songs/${songId}`);
+  return detail.tracks;
+}
+
+test("a second song in the same visit is a second song, and a skipped latency check stays skipped", async ({ browser }) => {
+  const seeded = await seed();
+  test.skip(!seeded.uploads, "needs object storage (S3_*): GET /api/jam/config answered uploads:false");
+  const host = await openAs(browser, HOST, `/app/server/${seeded.serverId}/channel/${seeded.jamId}`);
+  await expect(host.locator("[data-jam-empty]")).toBeVisible({ timeout: 20_000 });
+
+  async function startAndPost(title: string, firstTime: boolean) {
+    await host.locator(firstTime ? "[data-jam-empty-record]" : "[data-jam-new-song]").click();
+    // a blank sheet every time, not the last song's answers
+    await expect(host.locator("[data-jam-start-title]")).toHaveValue("");
+    await host.locator("[data-jam-start-title]").fill(title);
+    await host.locator("[data-jam-start-go]").click();
+    await expect(host.locator('[data-jam-studio][data-phase="setup"]')).toBeVisible({ timeout: 20_000 });
+    if (firstTime) {
+      await skipTheLatencyCheck(host);
+    } else {
+      // skipped before on this pair of devices: no full-page explainer, just the chip
+      await expect(host.locator("[data-jam-latency]")).toBeVisible({ timeout: 20_000 });
+      await expect(host.locator("[data-jam-latency-check]")).toHaveCount(0);
+      await expect(host.locator("[data-jam-latency-chip]")).toBeVisible();
+    }
+    await recordAndStop(host, 3);
+    await expect(host.locator('[data-jam-studio][data-phase="review"]')).toBeVisible({ timeout: 20_000 });
+    await host.locator("[data-jam-post]").click();
+    await expect(host.locator("[data-jam-done]")).toBeVisible({ timeout: 60_000 });
+    await host.locator("[data-jam-done-action]").click();
+    await expect(host.locator("[data-jam-song]")).toBeVisible();
+  }
+
+  await startAndPost("Primeira", true);
+  await host.getByRole("button", { name: "Close", exact: true }).first().click();
+  await startAndPost("Segunda", false);
+
+  const list = await call<{ songs: { id: string; title: string; trackCount: number }[] }>(
+    HOST,
+    "GET",
+    `/api/channels/${seeded.jamId}/jam-songs`,
+  );
+  expect(list.songs.map((one) => one.title).sort()).toEqual(["Primeira", "Segunda"]);
+  expect(list.songs.map((one) => one.trackCount)).toEqual([1, 1]);
+  await host.context().close();
+});
+
+test("leaving a live recording asks first, and keeps recording when told to", async ({ browser }) => {
+  const seeded = await seed();
+  test.skip(!seeded.uploads, "needs object storage (S3_*): GET /api/jam/config answered uploads:false");
+  const songId = await makeSong(HOST, seeded.jamId, "Para gravar");
+  const guest = await openAs(browser, GUEST, `/app/server/${seeded.serverId}/channel/${seeded.jamId}/song/${songId}`);
+  await guest.locator("[data-jam-record-over]").click();
+  await skipTheLatencyCheck(guest);
+  await expect(guest.locator("[data-jam-record]")).toBeEnabled({ timeout: 20_000 });
+  await guest.locator("[data-jam-record]").click();
+  await expect(guest.locator("[data-jam-stop]")).toBeVisible({ timeout: 15_000 });
+  await guest.getByRole("button", { name: "Back", exact: true }).click();
+  await expect(guest.getByRole("dialog").filter({ hasText: "Stop and discard the recording?" })).toBeVisible();
+  await guest.getByRole("button", { name: "Keep recording" }).click();
+  await expect(guest.locator("[data-jam-stop]")).toBeVisible();
+  await guest.getByRole("button", { name: "Back", exact: true }).click();
+  await guest.getByRole("button", { name: "Discard" }).click();
+  await expect(guest.locator("[data-jam-studio]")).toHaveCount(0);
+  await guest.context().close();
+});
+
+test("using a take swaps the mix, a posted take can be adjusted, and the wall says what it should", async ({ browser }) => {
+  const seeded = await seed();
+  test.skip(!seeded.uploads, "needs object storage (S3_*): GET /api/jam/config answered uploads:false");
+  const songId = await makeSong(HOST, seeded.jamId, "Duas guitarras");
+  const first = await addTrackApi(HOST, songId, "guitar");
+  const second = await addTrackApi(GUEST, songId, "guitar", 262);
+  expect(first.inMix).toBe(true);
+  expect(second.inMix).toBe(false);
+
+  // ---- the host puts the second take in: the first one goes out ---------------
+  const host = await openAs(browser, HOST, `/app/server/${seeded.serverId}/channel/${seeded.jamId}/song/${songId}`);
+  const lane = host.locator(`[data-jam-track="${second.id}"]`);
+  await expect(lane).toBeVisible({ timeout: 20_000 });
+  await lane.locator("[data-jam-mix-switch]").click();
+  await expect
+    .poll(async () => (await tracksOf(songId)).map((t) => [t.id === first.id ? "first" : "second", t.inMix]))
+    .toEqual([["first", false], ["second", true]]);
+
+  // ---- the guest adjusts their own take after posting -----------------------------
+  const guest = await openAs(browser, GUEST, `/app/server/${seeded.serverId}/channel/${seeded.jamId}/song/${songId}`);
+  const own = guest.locator(`[data-jam-adjust="${second.id}"]`);
+  await expect(own).toBeVisible({ timeout: 20_000 });
+  await expect(guest.locator(`[data-jam-adjust="${first.id}"]`)).toHaveCount(0); // not somebody else's
+  await own.locator("summary").click();
+  await own.getByRole("button", { name: "Later" }).click();
+  await own.getByRole("button", { name: "Later" }).click();
+  await own.locator("[data-jam-adjust-save]").click();
+  await expect
+    .poll(async () => (await tracksOf(songId)).find((t) => t.id === second.id)?.offsetMs)
+    .toBe(second.offsetMs + 10);
+  await host.context().close();
+  await guest.context().close();
+});
+
+test("recording over your own take of an instrument offers to replace it, and play works after posting", async ({ browser }) => {
+  const seeded = await seed();
+  test.skip(!seeded.uploads, "needs object storage (S3_*): GET /api/jam/config answered uploads:false");
+  const songId = await makeSong(HOST, seeded.jamId, "Regravar");
+  const old = await addTrackApi(HOST, songId, "guitar");
+  await addTrackApi(GUEST, songId, "bass", 98);
+  const host = await openAs(browser, HOST, `/app/server/${seeded.serverId}/channel/${seeded.jamId}/song/${songId}`);
+  await host.locator("[data-jam-record-over]").click();
+  await skipTheLatencyCheck(host);
+  await host.locator('[data-jam-instrument="guitar"]').click();
+  await recordAndStop(host, 3);
+  await expect(host.locator('[data-jam-studio][data-phase="review"]')).toBeVisible({ timeout: 20_000 });
+  await expect(host.locator("[data-jam-replace]")).toContainText("guitar"); // asked, in one line, default yes
+  await host.locator("[data-jam-post]").click();
+  await expect(host.locator("[data-jam-done]")).toBeVisible({ timeout: 60_000 });
+  await expect
+    .poll(async () => {
+      const all = await tracksOf(songId);
+      return {
+        oldIn: all.find((t) => t.id === old.id)?.inMix,
+        newIn: all.filter((t) => t.id !== old.id && t.instrument === "guitar").map((t) => t.inMix),
+      };
+    })
+    .toEqual({ oldIn: false, newIn: [true] });
+
+  // back on the song, Play plays (it once did nothing after posting into a song with several tracks)
+  await host.locator("[data-jam-done-action]").click();
+  const play = host.locator("[data-jam-play]");
+  await expect(play).toBeEnabled({ timeout: 20_000 });
+  await play.click();
+  await expect(play).toHaveAttribute("aria-label", "Pause", { timeout: 10_000 });
+  await host.context().close();
+});
+
+test("a song deleted under an open panel is said, and under a recording the take can go to a new song", async ({ browser }) => {
+  const seeded = await seed();
+  test.skip(!seeded.uploads, "needs object storage (S3_*): GET /api/jam/config answered uploads:false");
+  const watched = await makeSong(HOST, seeded.jamId, "Vai sumir");
+  const guest = await openAs(browser, GUEST, `/app/server/${seeded.serverId}/channel/${seeded.jamId}/song/${watched}`);
+  await expect(guest.locator(`[data-jam-song="${watched}"]`)).toBeVisible({ timeout: 20_000 });
+  // Escape closes the panel (and the song is reachable again by its tile)
+  await guest.keyboard.press("Escape");
+  await expect(guest.locator("[data-jam-song]")).toHaveCount(0);
+  await guest.locator("[data-jam-tile]").first().click();
+  await expect(guest.locator(`[data-jam-song="${watched}"]`)).toBeVisible();
+  await call(HOST, "DELETE", `/api/jam-songs/${watched}`).catch(() => undefined);
+  await expect(guest.locator("[data-jam-song-deleted-notice]")).toContainText("Vai sumir", { timeout: 15_000 });
+
+  // ---- a recording over a song that then disappears --------------------------------
+  const doomed = await makeSong(HOST, seeded.jamId, "Vai sumir 2");
+  await guest.locator("[data-jam-tile]").filter({ hasText: "Vai sumir 2" }).click();
+  await guest.locator("[data-jam-record-over]").click();
+  await skipTheLatencyCheck(guest);
+  // while the studio is open the wall behind it is out of reach of Tab
+  await expect(guest.locator('section[aria-label="Jam"]')).toHaveAttribute("inert", "");
+  await recordAndStop(guest, 3);
+  await expect(guest.locator('[data-jam-studio][data-phase="review"]')).toBeVisible({ timeout: 20_000 });
+  await call(HOST, "DELETE", `/api/jam-songs/${doomed}`);
+  await expect(guest.locator("[data-jam-song-deleted]")).toBeVisible({ timeout: 15_000 });
+  // the header keeps the song's name instead of turning into "New song"
+  await expect(guest.locator("[data-jam-studio] h2")).not.toHaveText("New song");
+  await guest.locator("[data-jam-post-as-new]").click();
+  await expect(guest.locator("[data-jam-done]")).toBeVisible({ timeout: 60_000 });
+  const list = await call<{ songs: { id: string; title: string; trackCount: number }[] }>(
+    HOST,
+    "GET",
+    `/api/channels/${seeded.jamId}/jam-songs`,
+  );
+  expect(list.songs).toHaveLength(1);
+  expect(list.songs[0]?.title).toBe("Vai sumir 2");
+  expect(list.songs[0]?.trackCount).toBe(1);
   await guest.context().close();
 });

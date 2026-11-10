@@ -4,8 +4,11 @@ import {
   NUDGE_LIMIT_MS,
   asRecorded,
   audibleMs,
+  editsFromTrack,
   isEdited,
+  patchFor,
   placed,
+  signedSeconds,
   withGain,
   withNudge,
   withTrimEnd,
@@ -72,5 +75,36 @@ describe("nudge and volume", () => {
     expect(withGain(asRecorded(take), 5).gain).toBe(2);
     expect(withGain(asRecorded(take), -1).gain).toBe(0);
     expect(withGain(asRecorded(take), 0.5).gain).toBe(0.5);
+  });
+});
+
+describe("adjusting a posted track", () => {
+  const posted = { offsetMs: -2440, trimStartMs: 2440, trimEndMs: 0, gain: 1 };
+
+  it("sends nothing when nothing moved", () => {
+    expect(patchFor(posted, editsFromTrack(posted))).toEqual({});
+  });
+
+  it("sends only what changed, in whole milliseconds", () => {
+    const edits = { ...editsFromTrack(posted), nudgeMs: 12, trimEndMs: 1500.4, gain: 0.8 };
+    expect(patchFor(posted, edits)).toEqual({ offsetMs: -2428, trimEndMs: 1500, gain: 0.8 });
+  });
+
+  it("lets the start trim go back to the recording's head", () => {
+    const edits = withTrimStart({ ...posted, offsetMs: -2440, trimStartMs: 0, durationMs: 60000 }, editsFromTrack(posted), 0);
+    expect(patchFor(posted, edits)).toEqual({ trimStartMs: 0 });
+  });
+});
+
+describe("the trim readouts", () => {
+  it("never print a signed zero", () => {
+    expect(signedSeconds(0)).toBe("0 s");
+    expect(signedSeconds(40)).toBe("0 s");
+    expect(signedSeconds(-40)).toBe("0 s");
+  });
+
+  it("print tenths with their sign", () => {
+    expect(signedSeconds(1500)).toBe("+1.5 s");
+    expect(signedSeconds(-300)).toBe("-0.3 s");
   });
 });

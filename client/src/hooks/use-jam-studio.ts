@@ -11,10 +11,12 @@ import {
   type LatencyStatus,
   type RecordingHandle,
 } from "@/lib/jam";
-import { createJamSong, jamErrorKind, type JamErrorKind } from "@/lib/jam-api";
+import { createJamSong, jamErrorKind, updateJamTrack, type JamErrorKind } from "@/lib/jam-api";
+import { forgetCheckSkipped, isCheckSkipped, rememberCheckSkipped } from "@/lib/jam-latency-skip";
+import { takeToReplace } from "@/lib/jam-mix";
 import { createLevelMeter, type JamLevelMeter } from "@/lib/jam-level";
 import { getJamEngine, syncJamStems, TAKE_STEM_ID } from "@/lib/jam-session";
-import { putJamSongOnWall, putJamTrackInSong } from "@/lib/jam-store";
+import { applyJamWrite, putJamSongOnWall, putJamTrackInSong } from "@/lib/jam-store";
 import {
   asRecorded,
   isEdited,
@@ -89,6 +91,11 @@ export interface UseJamStudioArgs {
   backing: readonly JamTrack[];
   draft: NewSongDraft | null;
   initialInstrument: JamInstrument;
+  /** The viewer, and whether they may put takes in and out of the mix (for "replace my old take"). */
+  viewerId: string | null;
+  canSwitchMix: boolean;
+  /** The song was deleted while the studio was open (the pane saw it go). */
+  songDeleted: boolean;
 }
 
 const DEFAULT_BPM = 100;
@@ -97,7 +104,7 @@ const BEATS_PER_BAR = 4;
 const AUTO_STOP_MS = JAM_TRACK_MAX_DURATION_MS - 5000;
 
 export function useJamStudio(args: UseJamStudioArgs) {
-  const { channelId, songId, backing, draft } = args;
+  const { channelId, songId, backing, draft, viewerId, canSwitchMix } = args;
   const [phase, setPhase] = useState<StudioPhase>("boot");
   const [engine, setEngine] = useState<JamEngine | null>(null);
   const [mic, setMic] = useState<MicState>("opening");
@@ -131,6 +138,11 @@ export function useJamStudio(args: UseJamStudioArgs) {
   const [postError, setPostError] = useState<JamErrorKind | null>(null);
   const [posted, setPosted] = useState<{ songId: string; trackId: string } | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
+  /** The song went away under a take: post it as a song of its own instead. */
+  const [detached, setDetached] = useState<NewSongDraft | null>(null);
+  const [goneOnPost, setGoneOnPost] = useState(false);
+  const [wantsReplace, setWantsReplace] = useState(true);
+  const [swapFailed, setSwapFailed] = useState(false);
 
   const handle = useRef<RecordingHandle | null>(null);
   const meter = useRef<JamLevelMeter | null>(null);
@@ -205,6 +217,9 @@ export function useJamStudio(args: UseJamStudioArgs) {
       // A stored measurement for this pair of devices is the end of the check.
       if (status && status.current.method !== "estimate") {
         setCheck("measured");
+      } else if (status && isCheckSkipped(status.key)) {
+        // Skipped before on this very pair: only the chip and the quiet "Calibrar".
+        setCheck("skipped");
       }
     },
     [refreshLatency],
@@ -485,6 +500,11 @@ export function useJamStudio(args: UseJamStudioArgs) {
   const setGain = useCallback((gain: number) => edit((e) => withGain(e, gain)), [edit]);
   const resetEdits = useCallback(() => edit((_, t) => asRecorded(t)), [edit]);
 
+  const replaceTake = useMemo(
+    () => takeToReplace(backing, { instrument, viewerId, canSwitchMix }),
+    [backing, instrument, viewerId, canSwitchMix],
+  );
+
   const posting = useRef(false);
   const post = useCallback(async () => {
     if (!take || !edits || phaseRef.current === "done" || posting.current) {
@@ -495,17 +515,18 @@ export function useJamStudio(args: UseJamStudioArgs) {
     setPhase("posting");
     setProgress({ stage: "uploading", fraction: 0 });
     try {
-      let targetSong = songId ?? createdSongId.current;
+      let targetSong = detached ? createdSongId.current : (songId ?? createdSongId.current);
       if (!targetSong) {
-        if (!draft) {
+        const source = detached ?? draft;
+        if (!source) {
           throw new Error("jam: no song to post into");
         }
         const body: CreateJamSongRequest = {
-          title: draft.title,
-          artist: draft.artist,
-          joinMode: draft.joinMode,
-          wantedInstruments: draft.joinMode === "wanted" ? draft.wantedInstruments : [],
-          nonce: draft.nonce,
+          title: source.title,
+          artist: source.artist,
+          joinMode: source.joinMode,
+          wantedInstruments: source.joinMode === "wanted" ? source.wantedInstruments : [],
+          nonce: source.nonce,
         };
         const { song } = await createJamSong(channelId, body);
         createdSongId.current = song.id;
@@ -545,14 +566,55 @@ export function useJamStudio(args: UseJamStudioArgs) {
         onProgress: setProgress,
       });
       putJamTrackInSong(channelId, answer.song, answer.track);
+      // A new take of an instrument the poster already has in the mix replaces it
+      // when they said so (the default): the new one in, then the old one out. The
+      // take is posted either way, so a failure here is told, never a failed post.
+      if (replaceTake && wantsReplace && !answer.track.inMix) {
+        try {
+          const swapIn = await updateJamTrack(answer.track.id, { inMix: true });
+          applyJamWrite(channelId, { type: "jam-track-updated", channelId, song: swapIn.song, track: swapIn.track });
+          const swapOut = await updateJamTrack(replaceTake.id, { inMix: false });
+          applyJamWrite(channelId, { type: "jam-track-updated", channelId, song: swapOut.song, track: swapOut.track });
+        } catch {
+          setSwapFailed(true);
+        }
+      }
       setPosted({ songId: targetSong, trackId: answer.track.id });
       setPhase("done");
     } catch (failure) {
+      // The song is not there any more: the take is kept, and the person chooses.
+      if ((failure as { status?: unknown } | null)?.status === 404 && songId && !detached) {
+        setGoneOnPost(true);
+      }
       setPostError(jamErrorKind(failure));
     } finally {
       posting.current = false;
     }
-  }, [take, edits, songId, draft, channelId, instrument]);
+  }, [take, edits, songId, draft, detached, channelId, instrument, replaceTake, wantsReplace]);
+
+  /**
+   * Post the take as a song of its own (the one it was recorded over is gone).
+   * The recording is kept; only the destination changes, so the upload tickets,
+   * which belong to the old song, are asked for again.
+   */
+  const postAsNewSong = useCallback(
+    (next: NewSongDraft) => {
+      job.current = null;
+      createdSongId.current = null;
+      setDetached(next);
+      setGoneOnPost(false);
+      setPostError(null);
+      setPhase("review");
+    },
+    [],
+  );
+  useEffect(() => {
+    // `post` closes over `detached`: once it is set, post (the click's second half).
+    if (detached && phaseRef.current === "review" && !posting.current) {
+      void post();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fires once when the draft is set
+  }, [detached]);
 
   /** The picture would not go: post the sound alone, which is already stored. */
   const postWithoutVideo = useCallback(() => {
@@ -602,11 +664,19 @@ export function useJamStudio(args: UseJamStudioArgs) {
     }
   }, [engine]);
 
-  const skipCheck = useCallback(() => setCheck("skipped"), []);
+  const skipCheck = useCallback(() => {
+    if (latency) {
+      rememberCheckSkipped(latency.key);
+    }
+    setCheck("skipped");
+  }, [latency]);
   const recheck = useCallback(() => {
+    if (latency) {
+      forgetCheckSkipped(latency.key);
+    }
     setCheck("again");
     setCheckResult(null);
-  }, []);
+  }, [latency]);
 
   /**
    * A typed round trip for this pair of devices (`null` clears it). It beats
@@ -728,6 +798,12 @@ export function useJamStudio(args: UseJamStudioArgs) {
     takeVideoUrl,
     progress,
     postError,
+    songGone: (args.songDeleted || goneOnPost) && !detached && songId !== null,
+    postAsNewSong,
+    replaceTake,
+    wantsReplace,
+    setWantsReplace,
+    swapFailed,
     posted,
     startError,
     levelClock,

@@ -29,6 +29,11 @@ export function setJamHintContext(patch: Partial<JamHintContext>): void {
   }
 }
 
+/** Is the studio on screen right now (for code that must not stop the band under a recording). */
+export function isJamStudioOpen(): boolean {
+  return current.studio;
+}
+
 export function useJamHintContext(): JamHintContext {
   return useSyncExternalStore(
     (listener) => {
